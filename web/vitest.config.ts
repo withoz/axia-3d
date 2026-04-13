@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { resolve } from 'path';
 
 export default defineConfig({
   test: {
@@ -10,14 +11,12 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['src/wasm/**', 'src/**/*.test.ts', 'src/**/*.d.ts'],
     },
-    // Mock Three.js and WASM modules that can't run in Node
-    alias: {
-      'three': './src/__mocks__/three.ts',
-    },
   },
   resolve: {
-    alias: {
-      '@': '/src',
-    },
+    alias: [
+      { find: '@', replacement: '/src' },
+      // Mock Three.js — exact match only so three/examples/... still resolves from node_modules
+      { find: /^three$/, replacement: resolve(__dirname, 'src/__mocks__/three.ts') },
+    ],
   },
 });
