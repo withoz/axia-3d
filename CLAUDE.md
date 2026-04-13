@@ -278,13 +278,37 @@ interface GroupInfo {
 7. **Three.js geometry 누수** — PrimitivePreviewManager.ts
    - updateRadiusCircle/updateHeightAxis에서 이전 geometry .dispose() 추가
 
-### ⏭ 보류 (다음 세션)
+### ⏭ 보류
 4. **`as any` 27개** — WasmBridge 8개는 Rust 빌드 필요, 나머지 의도적 캐스팅 (위험도 낮음)
 8. **dist/ 오래된 빌드 파일** — worktree에는 빌드 없음, 메인 repo에서 배포 전 수동 정리
 
+## Phase D 완료 내역 (2026-04-13, PR #2)
+
+### ✅ 테스트 확충 (6개 suite, 62개 테스트)
+- ServiceContainer.test.ts (12) — DI 컨테이너 register/get/freeze
+- SnapManager.test.ts (17) — 스냅 모드/토글/오버라이드
+- SelectionManager.test.ts (9) — 클릭/Shift/Ctrl 선택, onChange
+- FileManager.test.ts (7) — AXIA 포맷 파싱, 파일명 관리
+- DxfExporter.test.ts (8) — DXF 출력 포맷 검증
+- FileImporter.test.ts (9) — 포맷 감지, 구조 검증
+- vitest.config.ts Three.js alias 수정 (subpath import 지원)
+
+### ✅ OBJ/GLTF/STL Export 완성
+- OBJExporter → text OBJ 다운로드
+- GLTFExporter → binary GLB 다운로드
+- STLExporter → binary STL 다운로드
+- 모두 lazy import (번들 최적화)
+- ExportUtils.ts 공유 유틸 (downloadText, downloadBlob, timestampedName)
+- MenuBar.ts 스텁 → 실제 export 동작으로 교체
+
+### ✅ Material UI 확인
+- XiaInspector에서 재질 드롭다운 선택 → assignToFaces() → Viewport 색상 동기화 이미 완성
+- MaterialPropertiesPanel.ts (248줄) — 재질 속성 편집 UI 완성
+- 물리 속성 (밀도/질량/무게) 계산 + 표시 완성
+
 ## 향후 과제
-- Material / Texture
+- Material / Texture (텍스처 이미지 매핑 미구현)
 - Constraint Solver (수직, 평행, 거리 고정)
-- File I/O: OBJ/GLTF export, STEP/IGES 지원
+- STEP/IGES 지원
 - Electron/Tauri 데스크톱 앱
 - Boundary Extraction (Solid → Face)
