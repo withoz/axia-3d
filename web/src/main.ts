@@ -10,7 +10,7 @@ import { ToolManager } from './tools/ToolManagerRefactored';
 import { WasmBridge } from './bridge/WasmBridge';
 import { UnitSystem } from './units/UnitSystem';
 import { SettingsPanel } from './units/SettingsPanel';
-import { FileImporter } from './import/FileImporter';
+// FileImporter is now lazy-loaded via MenuBar (dynamic import on first use)
 import { ComponentPanel } from './ui/ComponentPanel';
 import { FileManager } from './file/FileManager';
 import { MaterialLibrary } from './materials/MaterialLibrary';
@@ -61,10 +61,7 @@ async function main() {
     });
   }
 
-  // 3b. Initialize file importer
-  const fileImporter = new FileImporter(viewport.scene);
-
-  // 3c. Initialize file manager
+  // 3b. Initialize file manager (FileImporter is lazy-loaded on first import)
   const fileManager = new FileManager(bridge);
 
   // 3d. Initialize material library and link to file manager
@@ -89,7 +86,6 @@ async function main() {
   container.register('panelManager', panelManager);
   container.register('fileManager', fileManager);
   container.register('materialLibrary', materialLibrary);
-  container.register('fileImporter', fileImporter);
 
   // 파일명 상태바 업데이트 함수
   const updateFileStatus = (fileName: string) => {
@@ -187,7 +183,7 @@ async function main() {
   const { saveProject, openProject } = initProjectSerializer({ bridge, viewport, toolManager, units });
 
   // ═══ 4a. CAD Menu Bar — see ui/MenuBar.ts ═══
-  initMenuBar({ viewport, bridge, toolManager, fileImporter, fileManager, saveProject, openProject, openOsnapPanel });
+  initMenuBar({ viewport, bridge, toolManager, scene: viewport.scene, fileManager, saveProject, openProject, openOsnapPanel });
 
   // 4b. Wire toolbar buttons
   const toolbar = document.getElementById('toolbar')!;

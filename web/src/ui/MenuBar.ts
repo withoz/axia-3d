@@ -6,11 +6,10 @@
  * to the appropriate service calls.
  */
 
+import * as THREE from 'three';
 import { Viewport } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
-import { FileImporter } from '../import/FileImporter';
-import { DxfExporter } from '../export/DxfExporter';
 import { FileManager } from '../file/FileManager';
 import { startBooleanOp } from './BooleanHandler';
 
@@ -18,7 +17,8 @@ export interface MenuBarDeps {
   viewport: Viewport;
   bridge: WasmBridge;
   toolManager: ToolManager;
-  fileImporter: FileImporter;
+  /** Three.js scene for lazy FileImporter construction */
+  scene: THREE.Scene;
   fileManager: FileManager;
   /** Project save callback (replaces window.__axia_save) */
   saveProject?: () => void;
@@ -36,8 +36,23 @@ const toolNames: Record<string, string> = {
 };
 
 export function initMenuBar(deps: MenuBarDeps): void {
-  const { viewport, bridge, toolManager, fileImporter, fileManager,
+  const { viewport, bridge, toolManager, scene, fileManager,
           saveProject, openProject, openOsnapPanel } = deps;
+
+  // ── Lazy-loaded modules (deferred until first use) ──
+  let _fileImporter: any = null;
+  const getFileImporter = async () => {
+    if (!_fileImporter) {
+      const { FileImporter } = await import('../import/FileImporter');
+      _fileImporter = new FileImporter(scene);
+    }
+    return _fileImporter;
+  };
+
+  const lazyExportDxf = async (scene3d: THREE.Scene, fileName: string) => {
+    const { DxfExporter } = await import('../export/DxfExporter');
+    DxfExporter.downloadDxf(scene3d, fileName);
+  };
 
   const menubar = document.getElementById('menubar');
   if (!menubar) return;
@@ -137,23 +152,23 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'import-dwg':
       case 'import-skp': {
         const format = act === 'import-all' ? undefined : act.replace('import-', '');
-        fileImporter.openFileDialog(format as any).catch((err: Error) => {
+        getFileImporter().then(fi => fi.openFileDialog(format as any)).catch((err: Error) => {
           console.error(`[MenuBar] Import ${format || 'all'} 실패:`, err);
         });
         break;
       }
 
       // ── 내보내기 (Export) ──
-      case 'export-dxf':
-        try {
-          const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
-          DxfExporter.downloadDxf(viewport.scene, `AXiA_3D_${timestamp}.dxf`);
-          console.log('[MenuBar] DXF 내보내기 완료');
-        } catch (err) {
-          console.error('[MenuBar] DXF 내보내기 실패:', err);
-          alert('DXF 내보내기에 실패했습니다');
-        }
+      case 'export-dxf': {
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
+        lazyExportDxf(viewport.scene, `AXiA_3D_${timestamp}.dxf`)
+          .then(() => console.log('[MenuBar] DXF 내보내기 완료'))
+          .catch((err) => {
+            console.error('[MenuBar] DXF 내보내기 실패:', err);
+            alert('DXF 내보내기에 실패했습니다');
+          });
         break;
+      }
       case 'export-obj':
         console.info('[MenuBar] OBJ 내보내기: 준비 중...');
         alert('OBJ 내보내기는 준비 중입니다');
