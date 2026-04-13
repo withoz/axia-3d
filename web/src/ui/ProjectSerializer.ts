@@ -1,0 +1,182 @@
+/**
+ * Project Serializer — .xia project file Save / Load
+ *
+ * Extracted from main.ts (lines 1231-1385).
+ * Handles project export (snapshot + fallback) and import with camera/style restoration.
+ */
+
+import { WasmBridge } from '../bridge/WasmBridge';
+import { Viewport } from '../viewport/Viewport';
+import { ToolManager } from '../tools/ToolManagerRefactored';
+import { UnitSystem } from '../units/UnitSystem';
+
+export interface ProjectSerializerDeps {
+  bridge: WasmBridge;
+  viewport: Viewport;
+  toolManager: ToolManager;
+  units: UnitSystem;
+}
+
+/** Uint8Array → base64 문자열 */
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/** base64 → Uint8Array */
+function fromBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+export interface ProjectSerializerAPI {
+  saveProject: () => void;
+  openProject: () => void;
+}
+
+export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSerializerAPI {
+  const { bridge, viewport, toolManager, units } = deps;
+
+  /** WASM export 불가 시 fallback: 메시 버퍼를 직접 저장 */
+  const saveFallback = () => {
+    const buffers = bridge.getMeshBuffers();
+    const edgeLines = bridge.getEdgeLines();
+
+    const project = {
+      format: 'xia',
+      version: '1.0.0-fallback',
+      engine: 'AXiA 3D',
+      created: new Date().toISOString(),
+      units: {
+        unit: units.unit,
+        precision: units.precision,
+      },
+      camera: viewport.getCameraState(),
+      style: viewport.getStyleSettings(),
+      buffers: buffers ? {
+        positions: Array.from(buffers.positions),
+        normals: Array.from(buffers.normals),
+        indices: Array.from(buffers.indices),
+        faceMap: Array.from(buffers.faceMap),
+      } : null,
+      edgeLines: edgeLines ? Array.from(edgeLines) : null,
+    };
+
+    const json = JSON.stringify(project);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `AXiA_Project_${new Date().toISOString().slice(0, 10)}.xia`;
+    a.click();
+    URL.revokeObjectURL(url);
+    console.log('[Save] Fallback project saved:', json.length, 'bytes');
+  };
+
+  /** .xia 프로젝트 파일 저장 */
+  const saveProject = () => {
+    const snapshot = bridge.exportSnapshot();
+    if (!snapshot) {
+      console.warn('[Save] WASM export_snapshot not available (WASM rebuild needed)');
+      saveFallback();
+      return;
+    }
+
+    const project = {
+      format: 'xia',
+      version: '1.0.0',
+      engine: 'AXiA 3D',
+      created: new Date().toISOString(),
+      units: {
+        unit: units.unit,
+        precision: units.precision,
+      },
+      camera: viewport.getCameraState(),
+      style: viewport.getStyleSettings(),
+      mesh: toBase64(snapshot),
+    };
+
+    const json = JSON.stringify(project, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `AXiA_Project_${new Date().toISOString().slice(0, 10)}.xia`;
+    a.click();
+    URL.revokeObjectURL(url);
+    console.log('[Save] Project saved:', json.length, 'bytes');
+  };
+
+  /** .xia 프로젝트 파일 열기 */
+  const openProject = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xia';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const project = JSON.parse(text);
+
+        if (project.format !== 'xia') {
+          alert('올바른 .xia 파일이 아닙니다.');
+          return;
+        }
+
+        // 메시 복원
+        if (project.mesh) {
+          const data = fromBase64(project.mesh);
+          const ok = bridge.importSnapshot(data);
+          if (ok) {
+            toolManager.syncMesh();
+            console.log('[Open] Mesh restored from snapshot');
+          } else {
+            console.error('[Open] importSnapshot failed');
+          }
+        }
+
+        // 단위 복원
+        if (project.units) {
+          units.unit = project.units.unit;
+          if (project.units.precision !== undefined) {
+            units.precision = project.units.precision;
+          }
+        }
+
+        // 카메라 복원
+        if (project.camera) {
+          viewport.setCameraState(project.camera);
+        }
+
+        // 스타일 복원
+        if (project.style) {
+          const s = project.style;
+          viewport.updateBackground(s.bgMode, s.bgSkyColor, s.bgGroundColor, s.bgMidColor);
+          if (s.frontColor !== undefined) viewport.setFaceColors(s.frontColor, s.backColor);
+          if (s.edgeColor !== undefined) viewport.setEdgeStyle({ color: s.edgeColor, visible: s.edgeVisible });
+          if (s.gridVisible !== undefined) viewport.setGridVisible(s.gridVisible);
+          if (s.axisVisible !== undefined) viewport.setAxisVisible(s.axisVisible);
+        }
+
+        console.log('[Open] Project loaded:', file.name);
+      } catch (e) {
+        console.error('[Open] Failed to load project:', e);
+        alert('파일을 불러오는데 실패했습니다.');
+      }
+    });
+    input.click();
+  };
+
+  return { saveProject, openProject };
+}
