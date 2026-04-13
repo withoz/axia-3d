@@ -171,9 +171,9 @@ describe('MaterialLibrary', () => {
       expect(state).toBe(GeometryState.Face);
     });
 
-    it('should return Face for open 3D geometry', () => {
+    it('should return Volume for open 3D geometry with height', () => {
       const state = lib.determineState({ faceCount: 5, isSolid: false, height: 100 }, [1, 2, 3, 4, 5]);
-      expect(state).toBe(GeometryState.Face);
+      expect(state).toBe(GeometryState.Volume);
     });
 
     it('should return Volume for solid without material', () => {
