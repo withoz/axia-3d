@@ -24,7 +24,7 @@ export function initOsnapPanel(deps: OsnapPanelDeps): OsnapPanelAPI {
   const { snap, snapVisual, updateOsnapUI } = deps;
 
   const osnapPanel = document.getElementById('osnap-panel');
-  if (!osnapPanel) return;
+  if (!osnapPanel) return { openOsnapPanel: () => {} };
 
   const masterCheck = document.getElementById('osnap-master') as HTMLInputElement;
   const modeChecks = osnapPanel.querySelectorAll<HTMLInputElement>('input[data-mode]');

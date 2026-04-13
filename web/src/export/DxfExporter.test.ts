@@ -14,12 +14,13 @@ import { DxfExporter } from './DxfExporter';
 // The mock's setIndex stores the raw value, but DxfExporter expects { array }.
 // Override setIndex to wrap plain arrays into an object with .array.
 const origSetIndex = THREE.BufferGeometry.prototype.setIndex;
-THREE.BufferGeometry.prototype.setIndex = function (index: any) {
+THREE.BufferGeometry.prototype.setIndex = function (index: any): THREE.BufferGeometry {
   if (Array.isArray(index)) {
-    this.index = { array: new Uint16Array(index) };
+    this.index = { array: new Uint16Array(index) } as any;
   } else {
     origSetIndex.call(this, index);
   }
+  return this;
 };
 
 /** Helper: build a single-triangle indexed Mesh */
