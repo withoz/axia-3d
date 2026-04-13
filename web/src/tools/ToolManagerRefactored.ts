@@ -130,6 +130,7 @@ export class ToolManager {
       clearAxisGuide: () => this.clearAxisGuide(),
       pickBox: this.pickBox,
       getDrawPlane: (e: MouseEvent) => this.getDrawPlane(e),
+      getRay: (e: MouseEvent) => this.getRay(e),
     };
 
     // Register all tools

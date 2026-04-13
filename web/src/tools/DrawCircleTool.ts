@@ -3,16 +3,20 @@
  *
  * Flow:
  *   1st click → detect drawing plane (face normal or ground) + set center
- *   mouse move → preview circle on detected plane
- *   2nd click → commit circle to engine
+ *   mouse move → ray ∩ drawing plane → preview circle
+ *   2nd click → ray ∩ drawing plane → commit circle to engine
  *
- * The drawing plane is determined by what's under the cursor at the first click:
- *   - On an existing face → use that face's DCEL normal
- *   - On empty space → use default ground plane (Y-up, XZ plane)
+ * After the first click establishes a plane, ALL subsequent mouse positions
+ * are computed by intersecting the camera ray with that plane. This ensures
+ * the radius point always lies on the drawing plane regardless of where the
+ * mouse is pointing in 3D space.
  */
 
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
+
+/** Max distance from center to prevent runaway geometry when ray grazes the plane */
+const MAX_DRAW_DISTANCE = 50000;
 
 export class DrawCircleTool implements ITool {
   readonly name = 'circle';
@@ -24,6 +28,7 @@ export class DrawCircleTool implements ITool {
 
   // Drawing plane (detected at first click)
   private plane: DrawPlaneInfo | null = null;
+  private drawPlane3: THREE.Plane | null = null; // Three.js Plane for ray intersection
 
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
@@ -38,17 +43,28 @@ export class DrawCircleTool implements ITool {
   }
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (!point) return;
-
     if (!this.circleCenter) {
       // ═══ First click: detect drawing plane + set center ═══
+      if (!point) return;
       this.plane = this.ctx.getDrawPlane(e);
       this.circleCenter = point.clone();
+
+      // Build Three.js Plane from normal + coplanar point for future ray intersections
+      this.drawPlane3 = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        this.plane.normal, this.circleCenter,
+      );
+
       this.ctx.snap.setReferencePoint(point);
     } else {
-      // ═══ Second click: create circle on the detected plane ═══
-      const radius = this.computeRadius(this.circleCenter, point);
-      if (radius > 1 && this.plane) {
+      // ═══ Second click: intersect ray with drawing plane → create circle ═══
+      const planePoint = this.getPointOnDrawPlane(e);
+      if (!planePoint || !this.plane) {
+        this.cleanup();
+        return;
+      }
+
+      const radius = this.circleCenter.distanceTo(planePoint);
+      if (radius > 1) {
         const n = this.plane.normal;
         this.ctx.bridge.drawCircle(
           this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
@@ -62,20 +78,26 @@ export class DrawCircleTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (!this.circleCenter || !point || !this.plane) {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
+    if (!this.circleCenter || !this.plane) {
       this.removePreview();
       return;
     }
 
-    const radius = this.computeRadius(this.circleCenter, point);
+    // Always use drawing plane intersection (not raw 3D point)
+    const planePoint = this.getPointOnDrawPlane(e);
+    if (!planePoint) {
+      this.removePreview();
+      return;
+    }
+
+    const radius = this.circleCenter.distanceTo(planePoint);
     if (radius > 0.1) {
       this.updatePreview(this.circleCenter, radius);
 
-      // Dimension label: from center to current point
-      const labelEnd = this.computeRadiusEndPoint(this.circleCenter, point, radius);
+      // Dimension label: from center to current point on plane
       this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-        { from: this.circleCenter.clone(), to: labelEnd, text: 'R ' + this.ctx.units.format(radius), color: '#da77f2' },
+        { from: this.circleCenter.clone(), to: planePoint, text: 'R ' + this.ctx.units.format(radius), color: '#da77f2' },
       ]);
     }
   }
@@ -114,46 +136,54 @@ export class DrawCircleTool implements ITool {
   cleanup(): void {
     this.circleCenter = null;
     this.plane = null;
+    this.drawPlane3 = null;
     this.removePreview();
     this.ctx.dimLabel.clear();
     this.ctx.snap.setReferencePoint(null);
   }
 
   // ═══════════════════════════════════════════════════
-  //  Radius Computation
+  //  Drawing Plane Ray Intersection
   // ═══════════════════════════════════════════════════
 
   /**
-   * Compute the radius by projecting the delta onto the drawing plane.
-   * This ensures mouse movement along the plane normal doesn't affect radius.
+   * Get a point on the drawing plane by intersecting the camera ray with it.
+   * Returns null if the ray is nearly parallel to the plane (grazing angle)
+   * or if the intersection is too far from the center point.
    */
-  private computeRadius(center: THREE.Vector3, point: THREE.Vector3): number {
-    if (!this.plane) return center.distanceTo(point);
+  private getPointOnDrawPlane(e: MouseEvent): THREE.Vector3 | null {
+    if (!this.drawPlane3 || !this.circleCenter) return null;
 
-    const delta = new THREE.Vector3().subVectors(point, center);
-    // Project delta onto the plane (remove normal component)
-    const normalComponent = delta.dot(this.plane.normal);
-    const projected = delta.clone().addScaledVector(this.plane.normal, -normalComponent);
-    return projected.length();
+    // First check snap — if there's a snap point, project it onto the plane
+    const rawPt = this.ctx.get3DPoint(e);
+    const snapped = this.ctx.getSnappedPoint(e, rawPt);
+    if (snapped) {
+      return this.projectOntoPlane(snapped);
+    }
+
+    // No snap — intersect camera ray with drawing plane
+    const ray = this.ctx.getRay(e);
+    const target = new THREE.Vector3();
+    const hit = ray.ray.intersectPlane(this.drawPlane3, target);
+
+    if (!hit) return null; // Ray parallel to plane
+
+    // Guard against grazing angles producing points far away
+    const dist = target.distanceTo(this.circleCenter);
+    if (dist > MAX_DRAW_DISTANCE) return null;
+
+    return target;
   }
 
   /**
-   * Compute the end point for the radius dimension label,
-   * projected onto the drawing plane from center toward current mouse point.
+   * Project a 3D point onto the drawing plane (along the plane normal).
    */
-  private computeRadiusEndPoint(center: THREE.Vector3, point: THREE.Vector3, radius: number): THREE.Vector3 {
-    if (!this.plane) return point.clone();
-
-    const delta = new THREE.Vector3().subVectors(point, center);
-    const normalComponent = delta.dot(this.plane.normal);
-    const projected = delta.clone().addScaledVector(this.plane.normal, -normalComponent);
-    const len = projected.length();
-    if (len < 0.001) {
-      // Mouse is directly above/below center — use plane's right as fallback
-      return center.clone().addScaledVector(this.plane.right, radius);
-    }
-    projected.normalize().multiplyScalar(radius);
-    return center.clone().add(projected);
+  private projectOntoPlane(point: THREE.Vector3): THREE.Vector3 {
+    if (!this.drawPlane3) return point.clone();
+    const projected = point.clone();
+    const dist = this.drawPlane3.distanceToPoint(projected);
+    projected.addScaledVector(this.drawPlane3.normal, -dist);
+    return projected;
   }
 
   // ═══════════════════════════════════════════════════
@@ -175,7 +205,6 @@ export class DrawCircleTool implements ITool {
       const angle = (i / segments) * Math.PI * 2;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-      // Point = center + cos*right*radius + sin*up*radius + small normal offset
       points.push(
         center.clone()
           .addScaledVector(r, cos * radius)

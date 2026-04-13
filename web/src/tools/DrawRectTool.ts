@@ -3,16 +3,20 @@
  *
  * Flow:
  *   1st click → detect drawing plane (face normal or ground) + set start point
- *   mouse move → preview rectangle on detected plane
- *   2nd click → commit rectangle to engine
+ *   mouse move → ray ∩ drawing plane → preview rectangle
+ *   2nd click → ray ∩ drawing plane → commit rectangle to engine
  *
- * The drawing plane is determined by what's under the cursor at the first click:
- *   - On an existing face → use that face's DCEL normal
- *   - On empty space → use default ground plane (Y-up, XZ plane)
+ * After the first click establishes a plane, ALL subsequent mouse positions
+ * are computed by intersecting the camera ray with that plane. This ensures
+ * the second point always lies on the drawing plane regardless of where the
+ * mouse is pointing in 3D space.
  */
 
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
+
+/** Max distance from first click to prevent runaway geometry when ray grazes the plane */
+const MAX_DRAW_DISTANCE = 50000;
 
 export class DrawRectTool implements ITool {
   readonly name = 'rect';
@@ -24,6 +28,7 @@ export class DrawRectTool implements ITool {
 
   // Drawing plane (detected at first click)
   private plane: DrawPlaneInfo | null = null;
+  private drawPlane3: THREE.Plane | null = null; // Three.js Plane for ray intersection
 
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
@@ -38,55 +43,71 @@ export class DrawRectTool implements ITool {
   }
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (!point) return;
-
     if (!this.rectStart) {
       // ═══ First click: detect drawing plane + set start point ═══
+      if (!point) return;
       this.plane = this.ctx.getDrawPlane(e);
       this.rectStart = point.clone();
+
+      // Build Three.js Plane from normal + coplanar point for future ray intersections
+      this.drawPlane3 = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        this.plane.normal, this.rectStart,
+      );
+
       this.ctx.snap.setReferencePoint(point);
     } else {
-      // ═══ Second click: create rectangle on the detected plane ═══
-      if (point && this.plane) {
-        const { width, height } = this.computeLocalSize(this.rectStart, point);
+      // ═══ Second click: intersect ray with drawing plane → create rect ═══
+      const planePoint = this.getPointOnDrawPlane(e);
+      if (!planePoint || !this.plane) {
+        this.cleanup();
+        return;
+      }
 
-        if (Math.abs(width) > 1 && Math.abs(height) > 1) {
-          const center = this.computeCenter(this.rectStart, point);
-          const n = this.plane.normal;
-          const u = this.plane.up;
+      const { width, height } = this.computeLocalSize(this.rectStart, planePoint);
 
-          this.ctx.bridge.drawRect(
-            center.x, center.y, center.z,
-            n.x, n.y, n.z,
-            u.x, u.y, u.z,
-            Math.abs(width), Math.abs(height),
-          );
-          console.log(`[Rect] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): ${Math.abs(width).toFixed(2)} x ${Math.abs(height).toFixed(2)}`);
-          this.ctx.syncMesh();
-        }
+      if (Math.abs(width) > 1 && Math.abs(height) > 1) {
+        const center = this.computeCenter(this.rectStart, planePoint);
+        const n = this.plane.normal;
+        const u = this.plane.up;
+
+        this.ctx.bridge.drawRect(
+          center.x, center.y, center.z,
+          n.x, n.y, n.z,
+          u.x, u.y, u.z,
+          Math.abs(width), Math.abs(height),
+        );
+        console.log(`[Rect] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): ${Math.abs(width).toFixed(2)} x ${Math.abs(height).toFixed(2)}`);
+        this.ctx.syncMesh();
       }
       this.cleanup();
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (!this.rectStart || !point || !this.plane) {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
+    if (!this.rectStart || !this.plane) {
       this.removePreview();
       return;
     }
 
-    const { width, height } = this.computeLocalSize(this.rectStart, point);
+    // Always use drawing plane intersection (not raw 3D point)
+    const planePoint = this.getPointOnDrawPlane(e);
+    if (!planePoint) {
+      this.removePreview();
+      return;
+    }
+
+    const { width, height } = this.computeLocalSize(this.rectStart, planePoint);
     const absW = Math.abs(width);
     const absH = Math.abs(height);
 
     if (absW < 0.001 && absH < 0.001) return;
 
     // Update preview mesh on the detected plane
-    this.updatePreview(this.rectStart, point, absW, absH);
+    this.updatePreview(this.rectStart, planePoint, absW, absH);
 
     // Dimension labels
     if (absW > 0.1 || absH > 0.1) {
-      this.updateDimLabels(this.rectStart, point, absW, absH);
+      this.updateDimLabels(this.rectStart, planePoint, absW, absH);
     }
   }
 
@@ -130,9 +151,55 @@ export class DrawRectTool implements ITool {
   cleanup(): void {
     this.rectStart = null;
     this.plane = null;
+    this.drawPlane3 = null;
     this.removePreview();
     this.ctx.dimLabel.clear();
     this.ctx.snap.setReferencePoint(null);
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  Drawing Plane Ray Intersection
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * Get a point on the drawing plane by intersecting the camera ray with it.
+   * Returns null if the ray is nearly parallel to the plane (grazing angle)
+   * or if the intersection is too far from the start point.
+   */
+  private getPointOnDrawPlane(e: MouseEvent): THREE.Vector3 | null {
+    if (!this.drawPlane3 || !this.rectStart) return null;
+
+    // First check snap — if there's a snap point, project it onto the plane
+    const rawPt = this.ctx.get3DPoint(e);
+    const snapped = this.ctx.getSnappedPoint(e, rawPt);
+    if (snapped) {
+      // Project snap point onto drawing plane
+      return this.projectOntoPlane(snapped);
+    }
+
+    // No snap — intersect camera ray with drawing plane
+    const ray = this.ctx.getRay(e);
+    const target = new THREE.Vector3();
+    const hit = ray.ray.intersectPlane(this.drawPlane3, target);
+
+    if (!hit) return null; // Ray parallel to plane
+
+    // Guard against grazing angles producing points far away
+    const dist = target.distanceTo(this.rectStart);
+    if (dist > MAX_DRAW_DISTANCE) return null;
+
+    return target;
+  }
+
+  /**
+   * Project a 3D point onto the drawing plane (along the plane normal).
+   */
+  private projectOntoPlane(point: THREE.Vector3): THREE.Vector3 {
+    if (!this.drawPlane3) return point.clone();
+    const projected = point.clone();
+    const dist = this.drawPlane3.distanceToPoint(projected);
+    projected.addScaledVector(this.drawPlane3.normal, -dist);
+    return projected;
   }
 
   // ═══════════════════════════════════════════════════
@@ -226,7 +293,6 @@ export class DrawRectTool implements ITool {
     const { width, height } = this.computeLocalSize(start, end);
     const r = this.plane.right;
     const u = this.plane.up;
-    const n = this.plane.normal;
     const hw = width / 2;
     const hh = height / 2;
 

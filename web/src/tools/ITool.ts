@@ -57,6 +57,12 @@ export interface ToolContext {
    * Used by Rect/Circle tools to draw on arbitrary planes.
    */
   getDrawPlane: (e: MouseEvent) => DrawPlaneInfo;
+
+  /**
+   * Get a camera ray from a mouse event.
+   * Used by tools to intersect custom planes (e.g., drawing plane for Rect/Circle).
+   */
+  getRay: (e: MouseEvent) => THREE.Raycaster;
 }
 
 /** Drawing plane information for Rect/Circle tools */
