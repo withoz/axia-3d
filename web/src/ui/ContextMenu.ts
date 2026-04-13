@@ -15,10 +15,13 @@ export interface ContextMenuDeps {
   bridge: WasmBridge;
   toolManager: ToolManager;
   viewModeBar: HTMLElement | null;
+  /** OSNAP settings panel open callback */
+  openOsnapPanel?: () => void;
 }
 
 export function initContextMenu(deps: ContextMenuDeps): void {
-  const { viewport, bridge, toolManager, viewModeBar } = deps;
+  const { viewport, bridge, toolManager, viewModeBar, openOsnapPanel } = deps;
+  const snapManager = toolManager.snap;
 
   const ctxMenu = document.getElementById('context-menu');
   if (!ctxMenu) return;
@@ -218,13 +221,12 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       ctxMenu.classList.remove('visible');
 
       if (snapType === 'none') {
-        (window as any).__axia_snap_override = 'none';
+        snapManager.setOverride('none');
       } else if (snapType === 'settings') {
-        const openFn = (window as any).__axia_openOsnapPanel;
-        if (openFn) openFn();
+        openOsnapPanel?.();
       } else if (snapType) {
         console.log('[OSNAP] Override snap:', snapType);
-        (window as any).__axia_snap_override = snapType;
+        snapManager.setOverride(snapType);
       }
     });
   }

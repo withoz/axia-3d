@@ -198,6 +198,22 @@ export class SnapManager {
   get showMarker(): boolean { return this.config.showMarker; }
   set showMarker(v: boolean) { this.config.showMarker = v; }
 
+  // ═══ Snap Override (replaces window.__axia_snap_override) ═══
+  private _snapOverride: string | undefined;
+
+  /** Set a one-shot snap override (from context menu) */
+  setOverride(type: string): void { this._snapOverride = type; }
+
+  /** Get current snap override without consuming it */
+  getOverride(): string | undefined { return this._snapOverride; }
+
+  /** Get and clear the current snap override (consume on use) */
+  consumeOverride(): string | undefined {
+    const v = this._snapOverride;
+    this._snapOverride = undefined;
+    return v;
+  }
+
   toggleMode(mode: SnapType): boolean {
     if (this.config.modes.has(mode)) {
       this.config.modes.delete(mode);

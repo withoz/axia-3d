@@ -357,14 +357,13 @@ export class ToolManager {
   private getSnappedPoint(e: MouseEvent, rawGroundPoint: THREE.Vector3 | null, consumeOverride = false): THREE.Vector3 | null {
     const canvas = this.viewport.renderer.domElement;
 
-    const overrideType = (window as any).__axia_snap_override as string | undefined;
+    const overrideType = consumeOverride
+      ? this.snap.consumeOverride()
+      : this.snap.getOverride();
     let snapResult;
 
     if (overrideType === 'none') {
       snapResult = null;
-      if (consumeOverride) {
-        delete (window as any).__axia_snap_override;
-      }
     } else if (overrideType) {
       snapResult = this.snap.findSnapOverride(
         overrideType as any,
@@ -373,9 +372,6 @@ export class ToolManager {
         canvas,
         rawGroundPoint,
       );
-      if (consumeOverride) {
-        delete (window as any).__axia_snap_override;
-      }
     } else {
       snapResult = this.snap.findSnap(
         e.clientX, e.clientY,

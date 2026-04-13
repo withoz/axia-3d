@@ -5,13 +5,9 @@
  * Enable debug mode by setting `window.__AXIA_DEBUG = true` in the console.
  */
 
-import { UnitSystem } from '../units/UnitSystem';
-
 declare global {
   interface Window {
     __AXIA_DEBUG?: boolean;
-    __axia_units?: UnitSystem;
-    __axia_snap_override?: string;
   }
 }
 

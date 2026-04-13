@@ -23,9 +23,19 @@ export class FileManager {
   private bridge: WasmBridge;
   private currentFileName: string = 'untitled.xia';
   private materialLibrary: any = null;  // MaterialLibrary reference
+  private _onFileChangeCallbacks: Array<() => void> = [];
 
   constructor(bridge: WasmBridge) {
     this.bridge = bridge;
+  }
+
+  /** Register a callback for file name changes (save/open) */
+  onFileChange(cb: () => void): void {
+    this._onFileChangeCallbacks.push(cb);
+  }
+
+  private notifyFileChange(): void {
+    this._onFileChangeCallbacks.forEach(cb => cb());
   }
 
   /** Set material library reference for serialization */
@@ -71,6 +81,7 @@ export class FileManager {
       // Trigger download
       this.downloadFile(fileData, this.currentFileName);
       Toast.success(`저장 완료: ${this.currentFileName}`);
+      this.notifyFileChange();
       return true;
     } catch (err) {
       console.error('[FileManager] 저장 실패:', err);
@@ -156,6 +167,7 @@ export class FileManager {
             const success = this.bridge.importSnapshot(snapshot);
             if (success) {
               Toast.success(`로드 완료: ${this.currentFileName}`);
+              this.notifyFileChange();
               resolve(true);
             } else {
               Toast.error('프로젝트 로드 실패');
@@ -230,6 +242,7 @@ export class FileManager {
       const success = this.bridge.importSnapshot(snapshot);
       if (success) {
         console.log(`[FileManager] 로드 완료: ${this.currentFileName}`);
+        this.notifyFileChange();
         return true;
       }
       console.error('[FileManager] importSnapshot 실패');

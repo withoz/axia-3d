@@ -20,7 +20,6 @@ import { ServiceContainer } from './core/ServiceContainer';
 import { initCommandRegistry } from './ui/CommandRegistry';
 import { initOsnapPanel } from './ui/OsnapPanel';
 import { initStylePanel } from './ui/StylePanel';
-import { importDxfFile } from './ui/DxfImportHandler';
 import { initProjectSerializer } from './ui/ProjectSerializer';
 import { initMenuBar } from './ui/MenuBar';
 import { initVCB } from './ui/VCB';
@@ -92,22 +91,6 @@ async function main() {
   container.register('materialLibrary', materialLibrary);
   container.register('fileImporter', fileImporter);
 
-  // Setup file operation handlers (will reference services from container)
-  // These are called by UI, so we keep them on window for HTML onclick handlers
-  (window as any).__axia_open = async () => {
-    const fm = container.get<FileManager>('fileManager');
-    const tm = container.get<ToolManager>('toolManager');
-    const success = await fm.openProject();
-    if (success) {
-      tm.syncMesh();
-    }
-  };
-
-  (window as any).__axia_save = async () => {
-    const fm = container.get<FileManager>('fileManager');
-    await fm.saveProject();
-  };
-
   // 파일명 상태바 업데이트 함수
   const updateFileStatus = (fileName: string) => {
     const statFileEl = document.getElementById('stat-file');
@@ -116,24 +99,8 @@ async function main() {
     }
   };
 
-  // FileManager에 콜백 추가 (파일 열기/저장 후 업데이트)
-  const originalOpenProject = fileManager.openProject.bind(fileManager);
-  fileManager.openProject = async () => {
-    const success = await originalOpenProject();
-    if (success) {
-      updateFileStatus(fileManager.getCurrentFileName());
-    }
-    return success;
-  };
-
-  const originalSaveProject = fileManager.saveProject.bind(fileManager);
-  fileManager.saveProject = async (fileName?: string) => {
-    const success = await originalSaveProject(fileName);
-    if (success) {
-      updateFileStatus(fileManager.getCurrentFileName());
-    }
-    return success;
-  };
+  // FileManager 파일명 변경 콜백 등록
+  fileManager.onFileChange(() => updateFileStatus(fileManager.getCurrentFileName()));
 
   // 초기 파일명 표시
   updateFileStatus(fileManager.getCurrentFileName());
@@ -189,8 +156,38 @@ async function main() {
     }
   });
 
+  // 5a. OSNAP toggle (F3) and status bar click
+  const osnapToggle = document.getElementById('osnap-toggle');
+  const statOsnap = document.getElementById('stat-osnap');
+
+  const updateOsnapUI = () => {
+    const on = toolManager.snap.enabled;
+    if (statOsnap) {
+      statOsnap.textContent = on ? 'ON' : 'OFF';
+      statOsnap.style.color = on ? '#44ff88' : '#ff4444';
+    }
+  };
+
+  if (osnapToggle) {
+    osnapToggle.addEventListener('click', () => {
+      toolManager.snap.toggle();
+      updateOsnapUI();
+    });
+  }
+
+  // ═══ OSNAP 설정 패널 (제도 설정값) — MenuBar/ContextMenu보다 먼저 초기화 ═══
+  const osnapAPI = initOsnapPanel({
+    snap: toolManager.snap,
+    snapVisual: toolManager.snapVisual,
+    updateOsnapUI,
+  });
+  const { openOsnapPanel } = osnapAPI;
+
+  // ═══ Project Save/Load (.xia) — MenuBar/KeyboardShortcuts보다 먼저 초기화 ═══
+  const { saveProject, openProject } = initProjectSerializer({ bridge, viewport, toolManager, units });
+
   // ═══ 4a. CAD Menu Bar — see ui/MenuBar.ts ═══
-  initMenuBar({ viewport, bridge, toolManager, fileImporter, fileManager });
+  initMenuBar({ viewport, bridge, toolManager, fileImporter, fileManager, saveProject, openProject, openOsnapPanel });
 
   // 4b. Wire toolbar buttons
   const toolbar = document.getElementById('toolbar')!;
@@ -225,25 +222,6 @@ async function main() {
       toolLabel.textContent = names[tool] || tool;
     }
   });
-
-  // 5a. OSNAP toggle (F3) and status bar click
-  const osnapToggle = document.getElementById('osnap-toggle');
-  const statOsnap = document.getElementById('stat-osnap');
-
-  const updateOsnapUI = () => {
-    const on = toolManager.snap.enabled;
-    if (statOsnap) {
-      statOsnap.textContent = on ? 'ON' : 'OFF';
-      statOsnap.style.color = on ? '#44ff88' : '#ff4444';
-    }
-  };
-
-  if (osnapToggle) {
-    osnapToggle.addEventListener('click', () => {
-      toolManager.snap.toggle();
-      updateOsnapUI();
-    });
-  }
 
   // 5+6. Keyboard Shortcuts + View Mode — see ui/KeyboardShortcuts.ts
   const viewModeBar = document.getElementById('view-mode-bar');
@@ -280,24 +258,7 @@ async function main() {
   initVCB({ toolManager, units });
 
   // ═══ Context Menu — see ui/ContextMenu.ts ═══
-  initContextMenu({ viewport, bridge, toolManager, viewModeBar });
-
-  // ═══ OSNAP 설정 패널 (제도 설정값) ═══
-  initOsnapPanel({
-    snap: toolManager.snap,
-    snapVisual: toolManager.snapVisual,
-    updateOsnapUI,
-  });
-
-  // ═══ 10. Project Save/Load (.xia) — see ui/ProjectSerializer.ts ═══
-  const { saveProject, openProject } = initProjectSerializer({ bridge, viewport, toolManager, units });
-
-  // ═══ 10b. DXF Import — see ui/DxfImportHandler.ts ═══
-  // ═══ Boolean Operations — see ui/BooleanHandler.ts ═══
-
-  // 글로벌 접근용
-  (window as any).__axia_save = saveProject;
-  (window as any).__axia_open = openProject;
+  initContextMenu({ viewport, bridge, toolManager, viewModeBar, openOsnapPanel });
 
   // Keyboard Shortcuts (depends on saveProject/openProject)
   initKeyboardShortcuts({ toolManager, viewport, toolbar, viewModeBar, saveProject, openProject });
@@ -333,8 +294,6 @@ async function main() {
         },
       },
     );
-
-    (window as any).__axia_componentPanel = componentPanel;
 
     // 키보드 O → Component Panel 토글
     window.addEventListener('keydown', (e) => {

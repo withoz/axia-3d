@@ -15,7 +15,12 @@ export interface OsnapPanelDeps {
   updateOsnapUI: () => void;
 }
 
-export function initOsnapPanel(deps: OsnapPanelDeps): void {
+export interface OsnapPanelAPI {
+  /** Open the OSNAP settings panel */
+  openOsnapPanel: () => void;
+}
+
+export function initOsnapPanel(deps: OsnapPanelDeps): OsnapPanelAPI {
   const { snap, snapVisual, updateOsnapUI } = deps;
 
   const osnapPanel = document.getElementById('osnap-panel');
@@ -133,10 +138,9 @@ export function initOsnapPanel(deps: OsnapPanelDeps): void {
     if (e.key === 'Escape') closeOsnapPanel();
   });
 
-  // Expose for snap override menu and status bar
-  (window as any).__axia_openOsnapPanel = openOsnapPanelWithSize;
-
   // Status bar double-click to open
   const osnapToggle = document.getElementById('osnap-toggle');
   osnapToggle?.addEventListener('dblclick', openOsnapPanelWithSize);
+
+  return { openOsnapPanel: openOsnapPanelWithSize };
 }
