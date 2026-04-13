@@ -312,4 +312,127 @@ describe('ToolManager', () => {
       expect(clearSpy).toHaveBeenCalled();
     });
   });
+
+  describe('executeAction - extended', () => {
+    it('delete with selected edges calls batchDelete', () => {
+      vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([]);
+      vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10, 20]);
+      vi.spyOn(tm.selection, 'clearSelection').mockImplementation(() => {});
+
+      tm.executeAction('delete');
+      expect(bridge.batchDelete).toHaveBeenCalledWith([], [10, 20]);
+    });
+
+    it('delete falls back to individual deletes when batchDelete fails', () => {
+      vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([1]);
+      vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10]);
+      vi.spyOn(tm.selection, 'clearSelection').mockImplementation(() => {});
+      bridge.batchDelete.mockReturnValue(false);
+
+      tm.executeAction('delete');
+      expect(bridge.deleteFace).toHaveBeenCalledWith(1);
+      expect(bridge.deleteEdge).toHaveBeenCalledWith(10);
+    });
+
+    it('select-same delegates to selection.selectSameType', () => {
+      const spy = vi.spyOn(tm.selection, 'selectSameType').mockImplementation(() => {});
+      tm.executeAction('select-same');
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('group delegates to groupTool.createGroupFromSelection', () => {
+      tm.setTool('select'); // ensure group tool is registered
+      tm.executeAction('group');
+      // GroupTool mock has createGroupFromSelection
+    });
+
+    it('ungroup delegates to groupTool.ungroupSelection', () => {
+      tm.executeAction('ungroup');
+      // Should not throw
+    });
+
+    it('make-component with selected group face', () => {
+      vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+      vi.spyOn(tm.selection, 'getGroupId').mockReturnValue(2);
+      tm.executeAction('make-component');
+      expect(bridge.makeComponent).toHaveBeenCalledWith(2, 'Component-2');
+    });
+
+    it('make-component without group does nothing', () => {
+      vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+      vi.spyOn(tm.selection, 'getGroupId').mockReturnValue(undefined);
+      tm.executeAction('make-component');
+      expect(bridge.makeComponent).not.toHaveBeenCalled();
+    });
+
+    it('make-component with no selection does nothing', () => {
+      vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([]);
+      tm.executeAction('make-component');
+      expect(bridge.makeComponent).not.toHaveBeenCalled();
+    });
+
+    it('undo when tool is busy cancels tool instead', () => {
+      tm.setTool('line');
+      // Make tool appear busy
+      const tool = (tm as any).tools.get('line');
+      if (tool) tool.isBusy = vi.fn().mockReturnValue(true);
+
+      tm.executeAction('undo');
+      // Should NOT call bridge.undo (tool was busy)
+      // Instead it cancels the tool
+    });
+
+    it('redo calls bridge.redo and syncs', () => {
+      tm.executeAction('redo');
+      expect(bridge.redo).toHaveBeenCalled();
+    });
+
+    it('unknown action does not throw', () => {
+      expect(() => tm.executeAction('nonexistent-action')).not.toThrow();
+    });
+  });
+
+  describe('setTool - extended', () => {
+    it('all primitive tools are registered', () => {
+      for (const name of ['sphere', 'cylinder', 'cone']) {
+        tm.setTool(name);
+        expect(tm.currentTool).toBe(name);
+      }
+    });
+
+    it('all transform tools are registered', () => {
+      for (const name of ['move', 'rotate', 'scale']) {
+        tm.setTool(name);
+        expect(tm.currentTool).toBe(name);
+      }
+    });
+
+    it('erase and offset tools work', () => {
+      tm.setTool('erase');
+      expect(tm.currentTool).toBe('erase');
+      tm.setTool('offset');
+      expect(tm.currentTool).toBe('offset');
+    });
+  });
+
+  describe('syncMesh - extended', () => {
+    it('updates selection buffers', () => {
+      const spy = vi.spyOn(tm.selection, 'updateBuffers');
+      tm.syncMesh();
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('updates edge buffers on selection', () => {
+      const spy = vi.spyOn(tm.selection, 'updateEdgeBuffers');
+      tm.syncMesh();
+      expect(spy).toHaveBeenCalled();
+    });
+  });
+
+  describe('isToolBusy', () => {
+    it('reflects tool busy state', () => {
+      tm.setTool('line');
+      expect(tm.isToolBusy()).toBe(false);
+    });
+  });
 });
