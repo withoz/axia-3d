@@ -21,6 +21,11 @@ export class Vector3 {
   add(v: Vector3) { this.x += v.x; this.y += v.y; this.z += v.z; return this; }
   sub(v: Vector3) { this.x -= v.x; this.y -= v.y; this.z -= v.z; return this; }
   multiplyScalar(s: number) { this.x *= s; this.y *= s; this.z *= s; return this; }
+  divideScalar(s: number) { this.x /= s; this.y /= s; this.z /= s; return this; }
+  subVectors(a: Vector3, b: Vector3) { this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this; }
+  crossVectors(a: Vector3, b: Vector3) { this.x = a.y*b.z - a.z*b.y; this.y = a.z*b.x - a.x*b.z; this.z = a.x*b.y - a.y*b.x; return this; }
+  lengthSq() { return this.x*this.x + this.y*this.y + this.z*this.z; }
+  applyMatrix4(_m: any) { return this; }
   dot(v: Vector3) { return this.x * v.x + this.y * v.y + this.z * v.z; }
   cross(v: Vector3) {
     const ax = this.x, ay = this.y, az = this.z;
