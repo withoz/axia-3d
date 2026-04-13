@@ -1,0 +1,167 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as THREE from 'three';
+import { MoveTool } from './MoveTool';
+
+vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+
+function mockToolContext() {
+  return {
+    bridge: {
+      facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
+      translateFaces: vi.fn(),
+    },
+    viewport: {
+      activeCamera: new THREE.PerspectiveCamera(),
+    },
+    selection: {
+      getSelectedFaces: vi.fn().mockReturnValue([1, 2]),
+    },
+    getSelectedFaces: vi.fn().mockReturnValue([1, 2]),
+    syncMesh: vi.fn(),
+    dimLabel: {
+      update: vi.fn(),
+      clear: vi.fn(),
+    },
+    units: {
+      format: vi.fn().mockReturnValue('100mm'),
+    },
+    axisLock: null as string | null,
+    inferredAxis: null as string | null,
+    get3DPoint: vi.fn(),
+    getFaceId: vi.fn(),
+    edgeMap: null,
+  } as any;
+}
+
+describe('MoveTool', () => {
+  let ctx: ReturnType<typeof mockToolContext>;
+  let tool: MoveTool;
+
+  beforeEach(() => {
+    ctx = mockToolContext();
+    tool = new MoveTool(ctx);
+  });
+
+  describe('name', () => {
+    it('is "move"', () => {
+      expect(tool.name).toBe('move');
+    });
+  });
+
+  describe('isBusy', () => {
+    it('defaults to false', () => {
+      expect(tool.isBusy()).toBe(false);
+    });
+
+    it('becomes true during drag', () => {
+      const point = new THREE.Vector3(10, 0, 0);
+      tool.onMouseDown({ button: 0 } as any, point);
+      expect(tool.isBusy()).toBe(true);
+    });
+  });
+
+  describe('onMouseDown', () => {
+    it('starts transform when faces selected and point exists', () => {
+      const point = new THREE.Vector3(10, 0, 0);
+      tool.onMouseDown({} as MouseEvent, point);
+      expect(tool.isBusy()).toBe(true);
+    });
+
+    it('does nothing when no faces selected', () => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
+      expect(tool.isBusy()).toBe(false);
+    });
+
+    it('does nothing when point is null', () => {
+      tool.onMouseDown({} as MouseEvent, null);
+      expect(tool.isBusy()).toBe(false);
+    });
+
+    it('does nothing when already active', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      ctx.bridge.facesCentroid.mockClear();
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(20, 0, 0));
+      expect(ctx.bridge.facesCentroid).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onMouseMove', () => {
+    it('translates faces during drag', () => {
+      const startPt = new THREE.Vector3(0, 0, 0);
+      tool.onMouseDown({} as MouseEvent, startPt);
+
+      const movePt = new THREE.Vector3(100, 0, 0);
+      tool.onMouseMove({} as MouseEvent, movePt);
+
+      expect(ctx.bridge.translateFaces).toHaveBeenCalled();
+      expect(ctx.syncMesh).toHaveBeenCalled();
+      expect(ctx.dimLabel.update).toHaveBeenCalled();
+    });
+
+    it('does nothing when not active', () => {
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(100, 0, 0));
+      expect(ctx.bridge.translateFaces).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onMouseUp', () => {
+    it('ends transform', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      expect(tool.isBusy()).toBe(true);
+
+      tool.onMouseUp({} as MouseEvent);
+      expect(tool.isBusy()).toBe(false);
+      expect(ctx.dimLabel.clear).toHaveBeenCalled();
+    });
+  });
+
+  describe('applyVCBValue', () => {
+    it('translates along x axis by default', () => {
+      tool.applyVCBValue(500);
+      expect(ctx.bridge.translateFaces).toHaveBeenCalledWith([1, 2], 500, 0, 0);
+      expect(ctx.syncMesh).toHaveBeenCalled();
+    });
+
+    it('translates along locked axis', () => {
+      ctx.axisLock = 'y';
+      tool.applyVCBValue(300);
+      expect(ctx.bridge.translateFaces).toHaveBeenCalledWith([1, 2], 0, 300, 0);
+    });
+
+    it('translates along z axis', () => {
+      ctx.axisLock = 'z';
+      tool.applyVCBValue(200);
+      expect(ctx.bridge.translateFaces).toHaveBeenCalledWith([1, 2], 0, 0, 200);
+    });
+
+    it('uses inferred axis when no lock', () => {
+      ctx.inferredAxis = 'y';
+      tool.applyVCBValue(100);
+      expect(ctx.bridge.translateFaces).toHaveBeenCalledWith([1, 2], 0, 100, 0);
+    });
+
+    it('does nothing when no faces selected', () => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      tool.applyVCBValue(500);
+      expect(ctx.bridge.translateFaces).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onKeyDown', () => {
+    it('Escape cleans up', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
+      tool.onKeyDown({ key: 'Escape' } as KeyboardEvent);
+      expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  describe('cleanup', () => {
+    it('resets state and clears dim label', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
+      tool.cleanup();
+      expect(tool.isBusy()).toBe(false);
+      expect(ctx.dimLabel.clear).toHaveBeenCalled();
+    });
+  });
+});
