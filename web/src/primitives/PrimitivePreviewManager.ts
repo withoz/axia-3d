@@ -64,9 +64,10 @@ export class PrimitivePreviewManager {
    * Segments: 32 (balance between visual quality and performance)
    */
   private updateRadiusCircle(radius: number): void {
-    // Remove old geometry
+    // Remove old geometry and dispose
     if (this.session.preview.radiusCircle) {
       this.scene.remove(this.session.preview.radiusCircle);
+      this.session.preview.radiusCircle.geometry.dispose();
     }
 
     if (radius <= 0 || !this.session.anchor) return;
@@ -116,9 +117,10 @@ export class PrimitivePreviewManager {
    * Shows direction and magnitude of height
    */
   private updateHeightAxis(height: number): void {
-    // Remove old geometry
+    // Remove old geometry and dispose
     if (this.session.preview.heightAxis) {
       this.scene.remove(this.session.preview.heightAxis);
+      this.session.preview.heightAxis.geometry.dispose();
     }
 
     if (height <= 0 || !this.session.anchor) return;
