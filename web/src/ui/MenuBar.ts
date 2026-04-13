@@ -13,6 +13,7 @@ import { ToolManager } from '../tools/ToolManagerRefactored';
 import { FileManager } from '../file/FileManager';
 import { startBooleanOp } from './BooleanHandler';
 import { debugLog } from '../utils/debug';
+import { timestampedName } from '../export/ExportUtils';
 
 export interface MenuBarDeps {
   viewport: Viewport;
@@ -53,6 +54,29 @@ export function initMenuBar(deps: MenuBarDeps): void {
   const lazyExportDxf = async (scene3d: THREE.Scene, fileName: string) => {
     const { DxfExporter } = await import('../export/DxfExporter');
     DxfExporter.downloadDxf(scene3d, fileName);
+  };
+
+  const lazyExportObj = async (scene3d: THREE.Scene, fileName: string) => {
+    const { OBJExporter } = await import('three/examples/jsm/exporters/OBJExporter.js');
+    const { downloadText } = await import('../export/ExportUtils');
+    const result = new OBJExporter().parse(scene3d);
+    downloadText(result, fileName, 'text/plain');
+  };
+
+  const lazyExportGltf = async (scene3d: THREE.Scene, fileName: string) => {
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+    const { downloadBlob } = await import('../export/ExportUtils');
+    const exporter = new GLTFExporter();
+    const glb = await exporter.parseAsync(scene3d, { binary: true });
+    downloadBlob(new Blob([glb as ArrayBuffer], { type: 'model/gltf-binary' }), fileName);
+  };
+
+  const lazyExportStl = async (scene3d: THREE.Scene, fileName: string) => {
+    const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
+    const { downloadBlob } = await import('../export/ExportUtils');
+    const exporter = new STLExporter();
+    const buffer = exporter.parse(scene3d, { binary: true });
+    downloadBlob(new Blob([buffer], { type: 'model/stl' }), fileName);
   };
 
   const menubar = document.getElementById('menubar');
@@ -161,8 +185,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
 
       // ── 내보내기 (Export) ──
       case 'export-dxf': {
-        const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
-        lazyExportDxf(viewport.scene, `AXiA_3D_${timestamp}.dxf`)
+        lazyExportDxf(viewport.scene, timestampedName('dxf'))
           .then(() => debugLog('[MenuBar] DXF 내보내기 완료'))
           .catch((err) => {
             console.error('[MenuBar] DXF 내보내기 실패:', err);
@@ -170,18 +193,27 @@ export function initMenuBar(deps: MenuBarDeps): void {
           });
         break;
       }
-      case 'export-obj':
-        debugLog('[MenuBar] OBJ 내보내기: 준비 중...');
-        alert('OBJ 내보내기는 준비 중입니다');
+      case 'export-obj': {
+        const objName = timestampedName('obj');
+        lazyExportObj(viewport.scene, objName)
+          .then(() => debugLog('[MenuBar] OBJ 내보내기 완료'))
+          .catch((err) => { console.error('[MenuBar] OBJ 내보내기 실패:', err); alert('OBJ 내보내기에 실패했습니다'); });
         break;
-      case 'export-gltf':
-        debugLog('[MenuBar] glTF 내보내기: 준비 중...');
-        alert('glTF 내보내기는 준비 중입니다');
+      }
+      case 'export-gltf': {
+        const glbName = timestampedName('glb');
+        lazyExportGltf(viewport.scene, glbName)
+          .then(() => debugLog('[MenuBar] glTF 내보내기 완료'))
+          .catch((err) => { console.error('[MenuBar] glTF 내보내기 실패:', err); alert('glTF 내보내기에 실패했습니다'); });
         break;
-      case 'export-stl':
-        debugLog('[MenuBar] STL 내보내기: 준비 중...');
-        alert('STL 내보내기는 준비 중입니다');
+      }
+      case 'export-stl': {
+        const stlName = timestampedName('stl');
+        lazyExportStl(viewport.scene, stlName)
+          .then(() => debugLog('[MenuBar] STL 내보내기 완료'))
+          .catch((err) => { console.error('[MenuBar] STL 내보내기 실패:', err); alert('STL 내보내기에 실패했습니다'); });
         break;
+      }
 
       // ── 편집 ──
       case 'undo': toolManager.executeAction('undo'); break;
