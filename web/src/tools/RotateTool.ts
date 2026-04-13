@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
+import { debugLog } from '../utils/debug';
 
 export class RotateTool implements ITool {
   readonly name = 'rotate';
@@ -19,7 +20,7 @@ export class RotateTool implements ITool {
   }
 
   onActivate(): void {
-    console.log('[RotateTool] Activated');
+    debugLog('[RotateTool] Activated');
   }
 
   onDeactivate(): void {
@@ -41,7 +42,7 @@ export class RotateTool implements ITool {
         const dz = point.z - centroid.z;
         this.transformStartAngle = Math.atan2(dz, dx);
 
-        console.log(`[Rotate] Start drag, ${selected.length} faces, centroid=`,
+        debugLog(`[Rotate] Start drag, ${selected.length} faces, centroid=`,
           centroid.x.toFixed(1), centroid.y.toFixed(1), centroid.z.toFixed(1));
       }
     }
@@ -79,7 +80,7 @@ export class RotateTool implements ITool {
 
   onMouseUp(e: MouseEvent): void {
     if (this.transformActive) {
-      console.log('[Rotate] End drag');
+      debugLog('[Rotate] End drag');
       this.transformActive = false;
       this.transformStartPt = null;
       this.transformCentroid = null;
@@ -101,7 +102,7 @@ export class RotateTool implements ITool {
         this.ctx.bridge.rotateFaces(selected,
           centroid.x, centroid.y, centroid.z,
           0, 1, 0, value);
-        console.log(`[VCB/Rotate] Applied: ${value}° Y-axis`);
+        debugLog(`[VCB/Rotate] Applied: ${value}° Y-axis`);
         this.ctx.syncMesh();
       }
     }

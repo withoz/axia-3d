@@ -10,6 +10,7 @@
  */
 
 import * as THREE from 'three';
+import { debugLog, debugWarn } from '../utils/debug';
 
 export interface SelectionState {
   /** 현재 선택된 Rust FaceId 집합 */
@@ -482,7 +483,7 @@ export class SelectionManager {
     // 그룹 바운딩 박스 표시
     this.rebuildGroupBBox(faces);
 
-    console.log(`[SelectionManager] 그룹 편집 모드 진입: Group-${groupId}`);
+    debugLog(`[SelectionManager] 그룹 편집 모드 진입: Group-${groupId}`);
     return true;
   }
 
@@ -494,7 +495,7 @@ export class SelectionManager {
     this.editingGroupId = null;
     this.clearGroupBBox();
 
-    console.log(`[SelectionManager] 그룹 편집 모드 종료: Group-${gid}`);
+    debugLog(`[SelectionManager] 그룹 편집 모드 종료: Group-${gid}`);
     return true;
   }
 
@@ -930,9 +931,9 @@ export class SelectionManager {
       }
     }
 
-    console.log(`[SmoothGroup] seed=${seedFaceId}, totalFaces=${faceTriangles.size}, adjacency entries=${adjacency.size}`);
+    debugLog(`[SmoothGroup] seed=${seedFaceId}, totalFaces=${faceTriangles.size}, adjacency entries=${adjacency.size}`);
     const seedAdj = adjacency.get(seedFaceId);
-    console.log(`[SmoothGroup] seed neighbors=${seedAdj ? seedAdj.size : 0}`);
+    debugLog(`[SmoothGroup] seed neighbors=${seedAdj ? seedAdj.size : 0}`);
 
     // 5) BFS: 인접 면의 법선 각도 < threshold이면 확장
     const group = new Set<number>([seedFaceId]);
@@ -960,7 +961,7 @@ export class SelectionManager {
       }
     }
 
-    console.log(`[SmoothGroup] result: ${group.size} faces selected`);
+    debugLog(`[SmoothGroup] result: ${group.size} faces selected`);
     return group;
   }
 
@@ -978,13 +979,13 @@ export class SelectionManager {
     if (this.bridge) {
       const connected = this.bridge.getConnectedFaces(seedFaceId);
       if (connected.length > 0) {
-        console.log('[Selection] DCEL connected faces:', connected.length, 'from seed:', seedFaceId);
+        debugLog('[Selection] DCEL connected faces:', connected.length, 'from seed:', seedFaceId);
         return new Set(connected);
       }
     }
 
     // ② Fallback: faceMap만 있으면 seed face만 반환 (안전한 최소 동작)
-    console.warn('[Selection] No DCEL bridge — returning seed face only');
+    debugWarn('[Selection] No DCEL bridge — returning seed face only');
     return new Set([seedFaceId]);
   }
 

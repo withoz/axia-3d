@@ -80,7 +80,7 @@ export class ScaleTool implements ITool {
         }
       }
 
-      console.log('[Scale] End drag');
+      debugLog('[Scale] End drag');
       this.transformActive = false;
       this.transformStartPt = null;
       this.transformCentroid = null;
@@ -102,7 +102,7 @@ export class ScaleTool implements ITool {
         this.ctx.bridge.scaleFaces(selected,
           centroid.x, centroid.y, centroid.z,
           value, value, value);
-        console.log(`[VCB/Scale] Applied: ×${value}`);
+        debugLog(`[VCB/Scale] Applied: ×${value}`);
         this.ctx.syncMesh();
       }
     }

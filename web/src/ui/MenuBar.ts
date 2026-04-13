@@ -12,6 +12,7 @@ import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { FileManager } from '../file/FileManager';
 import { startBooleanOp } from './BooleanHandler';
+import { debugLog } from '../utils/debug';
 
 export interface MenuBarDeps {
   viewport: Viewport;
@@ -162,7 +163,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'export-dxf': {
         const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
         lazyExportDxf(viewport.scene, `AXiA_3D_${timestamp}.dxf`)
-          .then(() => console.log('[MenuBar] DXF 내보내기 완료'))
+          .then(() => debugLog('[MenuBar] DXF 내보내기 완료'))
           .catch((err) => {
             console.error('[MenuBar] DXF 내보내기 실패:', err);
             alert('DXF 내보내기에 실패했습니다');
@@ -170,15 +171,15 @@ export function initMenuBar(deps: MenuBarDeps): void {
         break;
       }
       case 'export-obj':
-        console.info('[MenuBar] OBJ 내보내기: 준비 중...');
+        debugLog('[MenuBar] OBJ 내보내기: 준비 중...');
         alert('OBJ 내보내기는 준비 중입니다');
         break;
       case 'export-gltf':
-        console.info('[MenuBar] glTF 내보내기: 준비 중...');
+        debugLog('[MenuBar] glTF 내보내기: 준비 중...');
         alert('glTF 내보내기는 준비 중입니다');
         break;
       case 'export-stl':
-        console.info('[MenuBar] STL 내보내기: 준비 중...');
+        debugLog('[MenuBar] STL 내보내기: 준비 중...');
         alert('STL 내보내기는 준비 중입니다');
         break;
 

@@ -9,6 +9,7 @@
 import { WasmBridge } from '../bridge/WasmBridge';
 import { FileManager } from '../file/FileManager';
 import { ToolManager } from '../tools/ToolManagerRefactored';
+import { debugLog } from '../utils/debug';
 
 export interface InitialSceneDeps {
   bridge: WasmBridge;
@@ -21,7 +22,7 @@ export interface InitialSceneDeps {
 export function loadInitialScene(deps: InitialSceneDeps): void {
   const { bridge, fileManager, toolManager, updateFileStatus } = deps;
 
-  console.log('[Init] Loading initial scene from saved project...');
+  debugLog('[Init] Loading initial scene from saved project...');
 
   fetch('/assets/AXiA_Project_2026-04-13.xia')
     .then(response => {
@@ -30,14 +31,14 @@ export function loadInitialScene(deps: InitialSceneDeps): void {
     })
     .then(async (arrayBuffer) => {
       const fileData = new Uint8Array(arrayBuffer);
-      console.log(`[Init] Initial scene file loaded: ${fileData.length} bytes`);
+      debugLog(`[Init] Initial scene file loaded: ${fileData.length} bytes`);
 
       // FileManager의 파싱 로직 재사용 (중복 제거)
       const success = await fileManager.loadFromArrayBuffer(fileData);
 
       if (success) {
         updateFileStatus(fileManager.getCurrentFileName());
-        console.log('[Init] Initial scene loaded successfully');
+        debugLog('[Init] Initial scene loaded successfully');
       } else {
         console.error('[Init] Failed to import snapshot');
       }
@@ -47,7 +48,7 @@ export function loadInitialScene(deps: InitialSceneDeps): void {
     })
     .catch(err => {
       console.error('[Init] Failed to load initial scene:', err);
-      console.log('[Init] Creating fallback scene with default shapes...');
+      debugLog('[Init] Creating fallback scene with default shapes...');
 
       // Fallback: 기본 도형 생성 (파일 로드 실패 시)
       try {

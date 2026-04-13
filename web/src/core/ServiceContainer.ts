@@ -14,6 +14,8 @@
  *   if (container.has('viewport')) { ... }
  */
 
+import { debugLog } from '../utils/debug';
+
 export class ServiceContainer {
   private services: Map<string, any> = new Map();
   private frozen: boolean = false;
@@ -38,7 +40,7 @@ export class ServiceContainer {
     }
 
     this.services.set(key, instance);
-    console.debug(`[ServiceContainer] Registered service: ${key}`);
+    debugLog(`[ServiceContainer] Registered service: ${key}`);
   }
 
   /**
@@ -81,7 +83,7 @@ export class ServiceContainer {
    */
   freeze(): void {
     this.frozen = true;
-    console.debug('[ServiceContainer] Container frozen - no more registrations allowed');
+    debugLog('[ServiceContainer] Container frozen - no more registrations allowed');
   }
 
   /**
@@ -99,7 +101,7 @@ export class ServiceContainer {
   unregister(key: string): void {
     if (this.services.has(key)) {
       this.services.delete(key);
-      console.debug(`[ServiceContainer] Unregistered service: ${key}`);
+      debugLog(`[ServiceContainer] Unregistered service: ${key}`);
     }
   }
 
@@ -109,7 +111,7 @@ export class ServiceContainer {
   clear(): void {
     const count = this.services.size;
     this.services.clear();
-    console.debug(`[ServiceContainer] Cleared ${count} service(s)`);
+    debugLog(`[ServiceContainer] Cleared ${count} service(s)`);
   }
 
   /**
@@ -132,10 +134,10 @@ export class ServiceContainer {
    * Print debug info about registered services.
    */
   debug(): void {
-    console.log('[ServiceContainer] Registered services:');
+    debugLog('[ServiceContainer] Registered services:');
     for (const [key, service] of this.services) {
       const type = service?.constructor?.name ?? typeof service;
-      console.log(`  ${key}: ${type}`);
+      debugLog(`  ${key}: ${type}`);
     }
   }
 }

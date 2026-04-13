@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { ToolContext } from '../tools/ITool';
 import { BasePrimitiveTool } from './BasePrimitiveTool';
+import { debugLog } from '../utils/debug';
 
 export class SphereTool extends BasePrimitiveTool {
   readonly name = 'sphere';
@@ -26,7 +27,7 @@ export class SphereTool extends BasePrimitiveTool {
     const { radius } = this.session.params;
     const anchor = this.session.anchor!;
 
-    console.log(`[Sphere] Creating sphere: radius=${radius.toFixed(2)}, center=${anchor.toArray()}`);
+    debugLog(`[Sphere] Creating sphere: radius=${radius.toFixed(2)}, center=${anchor.toArray()}`);
 
     try {
       // Call WASM to create sphere primitive (returns a face ID for Push/Pull)
@@ -47,7 +48,7 @@ export class SphereTool extends BasePrimitiveTool {
       // Synchronize WASM mesh to Three.js viewport
       this.ctx.syncMesh();
 
-      console.log(`[Sphere] ✓ Created: faceId=${faceId}, ready for Push/Pull`);
+      debugLog(`[Sphere] ✓ Created: faceId=${faceId}, ready for Push/Pull`);
     } catch (err) {
       console.error('[Sphere] ✗ Creation failed:', err);
     }

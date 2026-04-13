@@ -9,6 +9,7 @@ import { WasmBridge } from '../bridge/WasmBridge';
 import { Viewport } from '../viewport/Viewport';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { UnitSystem } from '../units/UnitSystem';
+import { debugLog } from '../utils/debug';
 
 export interface ProjectSerializerDeps {
   bridge: WasmBridge;
@@ -78,7 +79,7 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
     a.download = `AXiA_Project_${new Date().toISOString().slice(0, 10)}.xia`;
     a.click();
     URL.revokeObjectURL(url);
-    console.log('[Save] Fallback project saved:', json.length, 'bytes');
+    debugLog('[Save] Fallback project saved:', json.length, 'bytes');
   };
 
   /** .xia 프로젝트 파일 저장 */
@@ -113,7 +114,7 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
     a.download = `AXiA_Project_${new Date().toISOString().slice(0, 10)}.xia`;
     a.click();
     URL.revokeObjectURL(url);
-    console.log('[Save] Project saved:', json.length, 'bytes');
+    debugLog('[Save] Project saved:', json.length, 'bytes');
   };
 
   /** .xia 프로젝트 파일 열기 */
@@ -140,7 +141,7 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
           const ok = bridge.importSnapshot(data);
           if (ok) {
             toolManager.syncMesh();
-            console.log('[Open] Mesh restored from snapshot');
+            debugLog('[Open] Mesh restored from snapshot');
           } else {
             console.error('[Open] importSnapshot failed');
           }
@@ -169,7 +170,7 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
           if (s.axisVisible !== undefined) viewport.setAxisVisible(s.axisVisible);
         }
 
-        console.log('[Open] Project loaded:', file.name);
+        debugLog('[Open] Project loaded:', file.name);
       } catch (e) {
         console.error('[Open] Failed to load project:', e);
         alert('파일을 불러오는데 실패했습니다.');

@@ -7,6 +7,7 @@
 
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
+import { debugLog } from '../utils/debug';
 
 export interface BooleanHandlerDeps {
   bridge: WasmBridge;
@@ -40,7 +41,7 @@ export function startBooleanOp(
   const facesA = selection.slice(0, mid);
   const facesB = selection.slice(mid);
 
-  console.log(`[Boolean] ${op}: A=${facesA.length} faces, B=${facesB.length} faces`);
+  debugLog(`[Boolean] ${op}: A=${facesA.length} faces, B=${facesB.length} faces`);
 
   const result = bridge.booleanOp(facesA, facesB, op);
   if (!result) {
@@ -54,7 +55,7 @@ export function startBooleanOp(
   }
 
   toolManager.syncMesh();
-  console.log(
+  debugLog(
     `[Boolean] ${op} 완료: 결과 면 ${result.resultFaces?.length ?? 0}개, ` +
     `총 정점 ${result.totalVerts}, 총 면 ${result.totalFaces}`
   );

@@ -13,6 +13,7 @@ import { SnapVisual } from '../snap/SnapVisual';
 import { SelectionManager } from './SelectionManager';
 import { PickBox } from '../ui/PickBox';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
+import { debugLog } from '../utils/debug';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
@@ -203,7 +204,7 @@ export class ToolManager {
     if (!axis) {
       this.clearAxisGuide();
     }
-    console.log('[AxisLock]', axis ? `${axis.toUpperCase()}축 잠금` : '해제');
+    debugLog('[AxisLock]', axis ? `${axis.toUpperCase()}축 잠금` : '해제');
   }
 
   applyVCBValue(value: number, value2?: number): void {
@@ -216,19 +217,19 @@ export class ToolManager {
   executeAction(action: string): void {
     if (action === 'undo') {
       if (this.isToolBusy()) {
-        console.log('[Action] undo blocked — tool is active, cancelling tool instead');
+        debugLog('[Action] undo blocked — tool is active, cancelling tool instead');
         this.cancelCurrentTool();
         return;
       }
       const result = this.bridge.undo();
-      console.log('[Action] undo =>', result);
+      debugLog('[Action] undo =>', result);
       if (result) {
         this.syncMesh();
         getMaterialLibrary().syncFromRust();
       }
     } else if (action === 'redo') {
       const result = this.bridge.redo();
-      console.log('[Action] redo =>', result);
+      debugLog('[Action] redo =>', result);
       if (result) {
         this.syncMesh();
         getMaterialLibrary().syncFromRust();
@@ -250,14 +251,14 @@ export class ToolManager {
         }
         this.selection.clearSelection();
         this.syncMesh();
-        console.log('[Action] delete', selectedFaces.length, 'faces,', selectedEdges.length, 'edges');
+        debugLog('[Action] delete', selectedFaces.length, 'faces,', selectedEdges.length, 'edges');
       }
     } else if (action === 'select-all') {
       this.selection.selectEverything(this.faceMap, this.edgeMap);
-      console.log('[Action] select-all');
+      debugLog('[Action] select-all');
     } else if (action === 'select-same') {
       this.selection.selectSameType(this.faceMap, this.edgeMap);
-      console.log('[Action] select-same');
+      debugLog('[Action] select-same');
     } else if (action === 'group') {
       const groupTool = this.tools.get('group') as GroupTool;
       if (groupTool) {
@@ -265,7 +266,7 @@ export class ToolManager {
       } else {
         const gid = this.selection.groupSelected();
         if (gid != null) {
-          console.log(`[Action] group created: Group-${gid}, faces:`, this.selection.getSelectedFaces());
+          debugLog(`[Action] group created: Group-${gid}, faces:`, this.selection.getSelectedFaces());
         }
       }
     } else if (action === 'ungroup') {
@@ -274,7 +275,7 @@ export class ToolManager {
         groupTool.ungroupSelection();
       } else {
         const result = this.selection.ungroupSelected();
-        console.log('[Action] ungroup =>', result);
+        debugLog('[Action] ungroup =>', result);
       }
     } else if (action === 'make-component') {
       // 선택된 그룹을 컴포넌트로 변환
@@ -284,10 +285,10 @@ export class ToolManager {
         if (groupId !== undefined) {
           const defId = this.bridge.makeComponent(groupId, `Component-${groupId}`);
           if (defId > 0) {
-            console.log(`[Action] make-component: Group-${groupId} → Component def ${defId}`);
+            debugLog(`[Action] make-component: Group-${groupId} → Component def ${defId}`);
           }
         } else {
-          console.log('[Action] make-component — 먼저 그룹을 선택하세요');
+          debugLog('[Action] make-component — 먼저 그룹을 선택하세요');
         }
       }
     }
@@ -303,7 +304,7 @@ export class ToolManager {
       const deltaApplied = this.viewport.applyDelta(delta);
       if (deltaApplied) {
         // ✅ Delta successfully applied — only updated changed vertices
-        console.debug('[ToolManager] Delta applied:', {
+        debugLog('[ToolManager] Delta applied:', {
           modifiedFaces: delta.modifiedFaceIds.length,
           positions: delta.positions.length,
           savings: '~90% vs full buffer',
@@ -317,7 +318,7 @@ export class ToolManager {
     }
 
     // ════ Fallback: Full buffer update (slow path) ════
-    console.debug('[ToolManager] Using full buffer update (delta unavailable or failed)');
+    debugLog('[ToolManager] Using full buffer update (delta unavailable or failed)');
     const buffers = this.bridge.getMeshBuffers();
 
     if (buffers) {

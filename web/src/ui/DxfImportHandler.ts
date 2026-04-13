@@ -7,6 +7,7 @@
 
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
+import { debugLog } from '../utils/debug';
 
 export interface DxfImportDeps {
   bridge: WasmBridge;
@@ -27,7 +28,7 @@ export function importDxfFile(deps: DxfImportDeps): void {
     document.body.removeChild(input);
     if (!file) return;
 
-    console.log(`[DXF Import] 파일: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
+    debugLog(`[DXF Import] 파일: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
 
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -58,8 +59,8 @@ export function importDxfFile(deps: DxfImportDeps): void {
         result.splines && `스플라인 ${result.splines}`,
       ].filter(Boolean).join(', ');
 
-      console.log(`[DXF Import] 완료: ${summary}`);
-      console.log(`[DXF Import] 총 정점: ${result.totalVerts}, 총 면: ${result.totalFaces}, 스킵: ${result.skipped}`);
+      debugLog(`[DXF Import] 완료: ${summary}`);
+      debugLog(`[DXF Import] 총 정점: ${result.totalVerts}, 총 면: ${result.totalFaces}, 스킵: ${result.skipped}`);
 
     } catch (err) {
       console.error('[DXF Import] 오류:', err);

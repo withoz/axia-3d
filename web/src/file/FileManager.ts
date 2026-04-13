@@ -8,6 +8,7 @@
 import { WasmBridge } from '../bridge/WasmBridge';
 import { Toast } from '../ui/Toast';
 import { Material } from '../materials/MaterialLibrary';
+import { debugLog } from '../utils/debug';
 
 const AXIA_MAGIC = 0x41584941;  // 'AXIA' in ASCII
 const AXIA_VERSION = 2;  // Bumped version to support materials
@@ -50,7 +51,7 @@ export class FileManager {
         this.currentFileName = fileName;
       }
 
-      console.log(`[FileManager] 프로젝트 저장 중: ${this.currentFileName}`);
+      debugLog(`[FileManager] 프로젝트 저장 중: ${this.currentFileName}`);
 
       // Get binary snapshot from engine
       const snapshotData = this.bridge.exportSnapshot();
@@ -71,7 +72,7 @@ export class FileManager {
         const customMaterials = this.materialLibrary.getCustom();
         if (customMaterials && customMaterials.length > 0) {
           metadata.materials = customMaterials;
-          console.log(`[FileManager] 재질 ${customMaterials.length}개 저장됨`);
+          debugLog(`[FileManager] 재질 ${customMaterials.length}개 저장됨`);
         }
       }
 
@@ -201,8 +202,8 @@ export class FileManager {
     try {
       const { metadata, snapshot } = this.parseAxiaFile(data);
 
-      console.log('[FileManager] 메타데이터:', metadata);
-      console.log(`[FileManager] 스냅샷 크기: ${snapshot.length} bytes`);
+      debugLog('[FileManager] 메타데이터:', metadata);
+      debugLog(`[FileManager] 스냅샷 크기: ${snapshot.length} bytes`);
 
       // 파일명 설정
       if (fileName) {
@@ -226,7 +227,7 @@ export class FileManager {
       // 스냅샷 로드
       const success = this.bridge.importSnapshot(snapshot);
       if (success) {
-        console.log(`[FileManager] 로드 완료: ${this.currentFileName}`);
+        debugLog(`[FileManager] 로드 완료: ${this.currentFileName}`);
         this.notifyFileChange();
         return true;
       }

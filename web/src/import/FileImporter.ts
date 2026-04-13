@@ -20,6 +20,7 @@ import { TDSLoader } from 'three/examples/jsm/loaders/TDSLoader.js';
 import { parseString as parseDxf } from 'dxf';
 import { convertDwgToDxf, init as initDwgDxf } from 'dwgdxf';
 import JSZip from 'jszip';
+import { debugLog } from '../utils/debug';
 
 export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp';
 
@@ -176,7 +177,7 @@ export class FileImporter {
       throw new Error(`지원하지 않는 파일 형식입니다: .${ext}`);
     }
 
-    console.log(`[FileImporter] ${FORMAT_LABEL[format]} 가져오기: ${file.name}`);
+    debugLog(`[FileImporter] ${FORMAT_LABEL[format]} 가져오기: ${file.name}`);
 
     const arrayBuffer = await file.arrayBuffer();
 
@@ -224,7 +225,7 @@ export class FileImporter {
 
     this._importedItems.push(result);
 
-    console.log(
+    debugLog(
       `[FileImporter] 완료: ${file.name} — ` +
       `${meshCount} 메시, ${vertexCount} 정점, ${Math.floor(faceCount)} 면`
     );
@@ -366,12 +367,12 @@ export class FileImporter {
   // ─── DXF ──────────────────────────────────────────────
   private async loadDXF(file: File): Promise<THREE.Group> {
     const text = await file.text();
-    console.log(`[FileImporter] DXF 파싱 시작: ${file.name}`);
+    debugLog(`[FileImporter] DXF 파싱 시작: ${file.name}`);
 
     let dxfData: any;
     try {
       dxfData = parseDxf(text);
-      console.log('[FileImporter] DXF 파싱 완료');
+      debugLog('[FileImporter] DXF 파싱 완료');
     } catch (err) {
       console.error('[FileImporter] DXF 파싱 실패:', err);
       throw new Error(`DXF 파일 파싱 실패: ${(err as Error).message}`);
@@ -386,10 +387,10 @@ export class FileImporter {
         ? dxfData.entities
         : (dxfData.entities.value || []);
 
-      console.log(`[FileImporter] DXF 엔티티 개수: ${entities.length}`);
+      debugLog(`[FileImporter] DXF 엔티티 개수: ${entities.length}`);
 
       for (const entity of entities) {
-        console.log(`[FileImporter] DXF 엔티티 처리: type=${entity.type}`);
+        debugLog(`[FileImporter] DXF 엔티티 처리: type=${entity.type}`);
         const mesh = this.convertDxfEntityToMesh(entity);
         if (mesh) {
           group.add(mesh);
@@ -397,7 +398,7 @@ export class FileImporter {
       }
     } else {
       console.warn('[FileImporter] DXF 데이터에 entities가 없습니다');
-      console.log('[FileImporter] DXF 데이터 구조:', Object.keys(dxfData));
+      debugLog('[FileImporter] DXF 데이터 구조:', Object.keys(dxfData));
     }
 
     // 그룹이 비어있으면 기본 경고
@@ -558,7 +559,7 @@ export class FileImporter {
   // ─── SKP (SketchUp) ──────────────────────────────────────
   private async loadSKP(buffer: ArrayBuffer, name: string): Promise<THREE.Group> {
     try {
-      console.log(`[FileImporter] SKP 파일 처리 중: ${name}`);
+      debugLog(`[FileImporter] SKP 파일 처리 중: ${name}`);
 
       const group = new THREE.Group();
       group.name = `import-skp-${name}`;
@@ -576,7 +577,7 @@ export class FileImporter {
 
       // SKP 내부 파일 목록 확인
       const files = Object.keys(skpZip.files);
-      console.log(`[FileImporter] SKP 파일 목록: ${files.length}개 항목`);
+      debugLog(`[FileImporter] SKP 파일 목록: ${files.length}개 항목`);
 
       // 메타데이터 파일 찾기
       let metadataContent: string | null = null;
@@ -596,7 +597,7 @@ export class FileImporter {
             const content = await skpZip.files[fileName].async('string');
             if (content.length > 0) {
               foundGeometry = true;
-              console.log(`[FileImporter] 형상 데이터 찾음: ${fileName}`);
+              debugLog(`[FileImporter] 형상 데이터 찾음: ${fileName}`);
             }
           } catch (e) {
             // 파일 읽기 실패
@@ -628,7 +629,7 @@ export class FileImporter {
       backMesh.name = `skp-back-${name}`;
       group.add(backMesh);
 
-      console.log(
+      debugLog(
         `[FileImporter] SKP 완료: ${name} — 메타데이터 추출됨` +
         (foundGeometry ? ' (형상 데이터 감지)' : ' (기본 형상 표시)')
       );
@@ -646,7 +647,7 @@ export class FileImporter {
   // ─── DWG (dwgdxf 변환 → DXF 파싱 + libredwg 메타데이터) ──
   private async loadDWG(buffer: ArrayBuffer, name: string): Promise<THREE.Group> {
     try {
-      console.log(`[FileImporter] DWG 처리 시작: ${name}`);
+      debugLog(`[FileImporter] DWG 처리 시작: ${name}`);
 
       // dwgdxf 초기화
       try {
@@ -656,10 +657,10 @@ export class FileImporter {
       }
 
       // Phase 1: DWG → DXF 변환 (dwgdxf, MIT 라이선스)
-      console.log('[FileImporter] DWG → DXF 변환 중...');
+      debugLog('[FileImporter] DWG → DXF 변환 중...');
       const dxfBytes = await convertDwgToDxf(new Uint8Array(buffer));
       const dxfText = new TextDecoder('utf-8').decode(dxfBytes);
-      console.log(`[FileImporter] DXF 변환 완료 (${dxfText.length} bytes)`);
+      debugLog(`[FileImporter] DXF 변환 완료 (${dxfText.length} bytes)`);
 
       // Phase 2: DXF 파싱 및 기하 생성
       const group = await this.loadDXFFromText(dxfText, name);
@@ -709,7 +710,7 @@ export class FileImporter {
       metadata.author = extractVar('AUTHOR');
       metadata.keywords = extractVar('KEYWORDS');
 
-      console.log('[FileImporter] DXF 메타데이터 추출 완료:', metadata);
+      debugLog('[FileImporter] DXF 메타데이터 추출 완료:', metadata);
     } catch (err) {
       console.warn('[FileImporter] DXF 메타데이터 추출 중 오류:', err);
     }
@@ -719,11 +720,11 @@ export class FileImporter {
 
   /** DXF 텍스트로부터 로드 (DWG 변환 결과 처리용) */
   private async loadDXFFromText(dxfText: string, sourceFile: string): Promise<THREE.Group> {
-    console.log(`[FileImporter] DXF 텍스트 파싱: ${sourceFile}`);
+    debugLog(`[FileImporter] DXF 텍스트 파싱: ${sourceFile}`);
     let dxfData: any;
     try {
       dxfData = parseDxf(dxfText);
-      console.log('[FileImporter] DXF 텍스트 파싱 완료');
+      debugLog('[FileImporter] DXF 텍스트 파싱 완료');
     } catch (err) {
       console.error('[FileImporter] DXF 텍스트 파싱 실패:', err);
       throw new Error(`DXF 파싱 실패: ${(err as Error).message}`);
