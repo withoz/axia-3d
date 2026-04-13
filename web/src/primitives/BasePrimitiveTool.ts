@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { ITool, ToolContext } from '../tools/ITool';
 import { PrimitiveSession, PrimitiveType, PrimitiveParams } from './PrimitiveSession';
 import { PrimitivePreviewManager } from './PrimitivePreviewManager';
+import { debugLog } from '../utils/debug';
 
 export abstract class BasePrimitiveTool implements ITool {
   // ITool requirement
@@ -37,10 +38,10 @@ export abstract class BasePrimitiveTool implements ITool {
     };
 
     this.session.onStateChange = (state) => {
-      console.log(`[${primitiveType}] state → ${state}`);
+      debugLog(`[${primitiveType}] state → ${state}`);
 
       // ═══ Debug: Before clearing VCB state ═══
-      console.log(
+      debugLog(
         `[${primitiveType}] [DEBUG-1] Before VCB clear: radius=${this.session.params.radius?.toFixed(2) ?? '?'}, height=${this.session.params.height?.toFixed(2) ?? '?'}`
       );
 
@@ -53,7 +54,7 @@ export abstract class BasePrimitiveTool implements ITool {
       }
 
       // ═══ Debug: Before commit ═══
-      console.log(
+      debugLog(
         `[${primitiveType}] [DEBUG-2] After VCB clear: radius=${this.session.params.radius?.toFixed(2) ?? '?'}, height=${this.session.params.height?.toFixed(2) ?? '?'}`
       );
 
@@ -124,7 +125,7 @@ export abstract class BasePrimitiveTool implements ITool {
     this.session.setAnchor(point, axis);
     this.session.nextState(); // → sizing1
 
-    console.log(`[${this.name}] anchor set, waiting for radius...`);
+    debugLog(`[${this.name}] anchor set, waiting for radius...`);
   }
 
   /**
@@ -166,7 +167,7 @@ export abstract class BasePrimitiveTool implements ITool {
     const param = this.session.getActiveSizingParam();
     if (param) {
       const value = this.session.params[param] ?? 0;
-      console.log(`[${this.name}] ${param}: ${value.toFixed(2)}`);
+      debugLog(`[${this.name}] ${param}: ${value.toFixed(2)}`);
     }
   }
 
@@ -239,7 +240,7 @@ export abstract class BasePrimitiveTool implements ITool {
       );
     }
 
-    console.log(`[${this.name}] VCB input ${paramLabel}: ${this.vcbBuffer}`);
+    debugLog(`[${this.name}] VCB input ${paramLabel}: ${this.vcbBuffer}`);
   }
 
   /**
@@ -254,7 +255,7 @@ export abstract class BasePrimitiveTool implements ITool {
         // (setParam() checks inputLock and returns early if locked)
         this.session.inputLock = false;
         this.session.setParam(param, parsedValue);
-        console.log(`[${this.name}] Applied ${param}: ${parsedValue}`);
+        debugLog(`[${this.name}] Applied ${param}: ${parsedValue}`);
       }
     }
 
@@ -305,7 +306,7 @@ export abstract class BasePrimitiveTool implements ITool {
    * Cancel tool: undo and return to idle
    */
   protected cancel(): void {
-    console.log(`[${this.session.primitiveType}] cancelled`);
+    debugLog(`[${this.session.primitiveType}] cancelled`);
     this.ctx.bridge.undo();
     this.cleanup();
   }
@@ -322,7 +323,7 @@ export abstract class BasePrimitiveTool implements ITool {
   cleanup(): void {
     this.previewManager.dispose();
     this.session.dispose();
-    console.log(`[${this.name}] cleanup`);
+    debugLog(`[${this.name}] cleanup`);
   }
 
   /**
@@ -341,6 +342,6 @@ export abstract class BasePrimitiveTool implements ITool {
    */
   onActivate(): void {
     this.session.reset();
-    console.log(`[${this.name}] activated, click to place anchor`);
+    debugLog(`[${this.name}] activated, click to place anchor`);
   }
 }

@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
+import { debugLog } from '../utils/debug';
 
 /** Max distance from first click to prevent runaway geometry when ray grazes the plane */
 const MAX_DRAW_DISTANCE = 50000;
@@ -35,7 +36,7 @@ export class DrawRectTool implements ITool {
   }
 
   onActivate(): void {
-    console.log('[DrawRectTool] Activated');
+    debugLog('[DrawRectTool] Activated');
   }
 
   onDeactivate(): void {
@@ -76,7 +77,7 @@ export class DrawRectTool implements ITool {
           u.x, u.y, u.z,
           Math.abs(width), Math.abs(height),
         );
-        console.log(`[Rect] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): ${Math.abs(width).toFixed(2)} x ${Math.abs(height).toFixed(2)}`);
+        debugLog(`[Rect] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): ${Math.abs(width).toFixed(2)} x ${Math.abs(height).toFixed(2)}`);
         this.ctx.syncMesh();
       }
       this.cleanup();
@@ -139,7 +140,7 @@ export class DrawRectTool implements ITool {
       plane.up.x, plane.up.y, plane.up.z,
       w, h,
     );
-    console.log(`[VCB/Rect] ${w}×${h}`);
+    debugLog(`[VCB/Rect] ${w}×${h}`);
     this.cleanup();
     this.ctx.syncMesh();
   }

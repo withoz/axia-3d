@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
+import { debugLog } from '../utils/debug';
 
 export class OffsetTool implements ITool {
   readonly name = 'offset';
@@ -31,7 +32,7 @@ export class OffsetTool implements ITool {
   onActivate(): void {
     const canvas = this.ctx.viewport.renderer.domElement;
     canvas.style.cursor = 'none';
-    console.log('[OffsetTool] Activated');
+    debugLog('[OffsetTool] Activated');
   }
 
   onDeactivate(): void {
@@ -47,7 +48,7 @@ export class OffsetTool implements ITool {
       if (picked) {
         this.offsetPhase = 1;
         this.removeOffsetHover();
-        console.log('[Offset] Phase 1: object selected,',
+        debugLog('[Offset] Phase 1: object selected,',
           picked.type === 'edge' ? 'edgeId=' + this.offsetEdgeId : 'faceId=' + this.offsetFaceId);
       }
     } else if (this.offsetPhase === 1) {
@@ -75,7 +76,7 @@ export class OffsetTool implements ITool {
           const result = this.ctx.bridge.offsetEdge(this.offsetEdgeId, dist, planeN);
           if (result && result.ok) {
             this.lastOffsetDist = Math.abs(dist);
-            console.log('[Offset/Edge] Applied: dist=', dist.toFixed(1), 'newEdge=', result.newEdge);
+            debugLog('[Offset/Edge] Applied: dist=', dist.toFixed(1), 'newEdge=', result.newEdge);
           }
         }
       } else if (this.offsetFaceId >= 0) {
@@ -89,7 +90,7 @@ export class OffsetTool implements ITool {
           const result = this.ctx.bridge.offsetFace(this.offsetFaceId, dist);
           if (result && result.ok) {
             this.lastOffsetDist = Math.abs(dist);
-            console.log('[Offset/Face] Applied: dist=', dist.toFixed(1), 'innerFace=', result.innerFace);
+            debugLog('[Offset/Face] Applied: dist=', dist.toFixed(1), 'innerFace=', result.innerFace);
           }
         }
       }
@@ -199,7 +200,7 @@ export class OffsetTool implements ITool {
   applyVCBValue(value: number): void {
     if (this.offsetPhase === 0) {
       this.lastOffsetDist = value;
-      console.log('[VCB/Offset] Distance set:', value);
+      debugLog('[VCB/Offset] Distance set:', value);
     } else if (this.offsetPhase === 1) {
       const signedValue = value * this.offsetCurrentSign;
       if (this.offsetEdgeId >= 0) {
@@ -209,13 +210,13 @@ export class OffsetTool implements ITool {
         const result = this.ctx.bridge.offsetEdge(this.offsetEdgeId, signedValue, planeN);
         if (result && result.ok) {
           this.lastOffsetDist = value;
-          console.log('[VCB/Offset/Edge] Applied:', signedValue, 'newEdge=', result.newEdge);
+          debugLog('[VCB/Offset/Edge] Applied:', signedValue, 'newEdge=', result.newEdge);
         }
       } else if (this.offsetFaceId >= 0) {
         const result = this.ctx.bridge.offsetFace(this.offsetFaceId, signedValue);
         if (result && result.ok) {
           this.lastOffsetDist = value;
-          console.log('[VCB/Offset/Face] Applied:', signedValue, 'innerFace=', result.innerFace);
+          debugLog('[VCB/Offset/Face] Applied:', signedValue, 'innerFace=', result.innerFace);
         }
       }
       this.ctx.syncMesh();

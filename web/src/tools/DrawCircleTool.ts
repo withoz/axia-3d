@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
+import { debugLog } from '../utils/debug';
 
 /** Max distance from center to prevent runaway geometry when ray grazes the plane */
 const MAX_DRAW_DISTANCE = 50000;
@@ -35,7 +36,7 @@ export class DrawCircleTool implements ITool {
   }
 
   onActivate(): void {
-    console.log('[DrawCircleTool] Activated');
+    debugLog('[DrawCircleTool] Activated');
   }
 
   onDeactivate(): void {
@@ -71,7 +72,7 @@ export class DrawCircleTool implements ITool {
           n.x, n.y, n.z,
           radius, 24,
         );
-        console.log(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
+        debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
         this.ctx.syncMesh();
       }
       this.cleanup();
@@ -124,7 +125,7 @@ export class DrawCircleTool implements ITool {
       n.x, n.y, n.z,
       value, 24,
     );
-    console.log(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    debugLog(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
     this.cleanup();
     this.ctx.syncMesh();
   }

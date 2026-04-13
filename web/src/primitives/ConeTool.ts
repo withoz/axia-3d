@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { ToolContext } from '../tools/ITool';
 import { BasePrimitiveTool } from './BasePrimitiveTool';
+import { debugLog } from '../utils/debug';
 
 export class ConeTool extends BasePrimitiveTool {
   readonly name = 'cone';
@@ -29,7 +30,7 @@ export class ConeTool extends BasePrimitiveTool {
     const { radius, height } = this.session.params;
     const anchor = this.session.anchor!;
 
-    console.log(
+    debugLog(
       `[Cone] Creating cone: radius=${radius.toFixed(2)}, height=${height.toFixed(2)}, center=${anchor.toArray()}`
     );
 
@@ -52,7 +53,7 @@ export class ConeTool extends BasePrimitiveTool {
       // Synchronize WASM mesh to Three.js viewport
       this.ctx.syncMesh();
 
-      console.log(`[Cone] ✓ Created: baseFaceId=${baseFaceId}, ready for Push/Pull`);
+      debugLog(`[Cone] ✓ Created: baseFaceId=${baseFaceId}, ready for Push/Pull`);
     } catch (err) {
       console.error('[Cone] ✗ Creation failed:', err);
     }

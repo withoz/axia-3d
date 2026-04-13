@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import init, { AxiaEngine } from '../wasm/axia_wasm';
 import { Toast } from '../ui/Toast';
+import { debugLog } from '../utils/debug';
 
 export interface MeshBuffers {
   positions: Float32Array;
@@ -112,12 +113,12 @@ export class WasmBridge {
     try {
       await init();
       this.engine = new AxiaEngine() as unknown as AxiaEngineExtended;
-      console.log('[WasmBridge] ✓ Engine initialized.');
+      debugLog('[WasmBridge] ✓ Engine initialized.');
     } catch (e) {
       console.warn('[WasmBridge] ⚠ WASM initialization failed (will use basic mode):', e);
       // Allow app to continue without WASM - Three.js rendering still works
       // WASM is optional for Sphere tool which uses simple THREE.IcosahedronGeometry
-      console.log('[WasmBridge] Continuing with basic Three.js mode...');
+      debugLog('[WasmBridge] Continuing with basic Three.js mode...');
     }
   }
 

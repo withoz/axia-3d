@@ -27,10 +27,11 @@ import { initKeyboardShortcuts } from './ui/KeyboardShortcuts';
 import { initContextMenu } from './ui/ContextMenu';
 import { loadInitialScene } from './ui/InitialScene';
 import { initXiaInspector } from './ui/XiaInspector';
+import { debugLog } from './utils/debug';
 import './ui/DraggablePanels.css';
 
 async function main() {
-  console.log('AXiA 3D starting...');
+  debugLog('AXiA 3D starting...');
 
   // 1. Initialize WASM engine
   const bridge = new WasmBridge();
@@ -41,7 +42,7 @@ async function main() {
   if (!bridge.isReady()) {
     console.warn('⚠ WASM engine not ready - continuing with basic Three.js mode');
   } else {
-    console.log('✓ WASM engine ready');
+    debugLog('WASM engine ready');
   }
 
   // 2. Initialize viewport (always required)
@@ -130,7 +131,7 @@ async function main() {
 
   // Export single container to window (replaces all window.__axia_* globals)
   (window as any).__axia = container;
-  console.log('[Main] ServiceContainer initialized with services:', container.keys());
+  debugLog('[Main] ServiceContainer initialized with services:', container.keys());
 
   // Register commands (line, help, backtick toggle)
   initCommandRegistry({ commandInput, bridge, toolManager });
@@ -239,7 +240,7 @@ async function main() {
   const undoBtn = toolbar.querySelector('[data-tool="undo"]');
   const redoBtn = toolbar.querySelector('[data-tool="redo"]');
 
-  setInterval(() => {
+  const statsIntervalId = setInterval(() => {
     const stats = bridge.getStats();
     document.getElementById('stat-verts')!.textContent = String(stats.verts);
     document.getElementById('stat-faces')!.textContent = String(stats.faces);
@@ -249,6 +250,13 @@ async function main() {
     if (undoBtn) undoBtn.classList.toggle('disabled', stats.canUndo === false);
     if (redoBtn) redoBtn.classList.toggle('disabled', stats.canRedo === false);
   }, 200);
+
+  // Cleanup on page unload
+  window.addEventListener('beforeunload', () => {
+    clearInterval(statsIntervalId);
+    viewport.stop();
+    viewport.dispose();
+  });
 
   // 9. VCB (Value Control Box) — see ui/VCB.ts
   initVCB({ toolManager, units });
@@ -274,14 +282,14 @@ async function main() {
       {
         onGroupSelect: (groupId) => {
           toolManager.selection.selectGroup(groupId);
-          console.log(`[ComponentPanel] Group-${groupId} selected`);
+          debugLog(`[ComponentPanel] Group-${groupId} selected`);
         },
         onGroupDoubleClick: (groupId) => {
           toolManager.selection.enterGroupEdit(groupId);
-          console.log(`[ComponentPanel] Group-${groupId} edit mode`);
+          debugLog(`[ComponentPanel] Group-${groupId} edit mode`);
         },
         onGroupDelete: (groupId) => {
-          console.log(`[ComponentPanel] Group-${groupId} deleted`);
+          debugLog(`[ComponentPanel] Group-${groupId} deleted`);
         },
         onRefresh: () => {
           // 선택된 면으로 그룹 생성
@@ -307,7 +315,7 @@ async function main() {
     });
   }
 
-  console.log('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner');
+  debugLog('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner');
 }
 
 main().catch(console.error);

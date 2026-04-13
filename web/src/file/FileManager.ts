@@ -8,6 +8,7 @@
 import { WasmBridge } from '../bridge/WasmBridge';
 import { Toast } from '../ui/Toast';
 import { Material } from '../materials/MaterialLibrary';
+import { debugLog } from '../utils/debug';
 
 const AXIA_MAGIC = 0x41584941;  // 'AXIA' in ASCII
 const AXIA_VERSION = 2;  // Bumped version to support materials
@@ -50,7 +51,7 @@ export class FileManager {
         this.currentFileName = fileName;
       }
 
-      console.log(`[FileManager] 프로젝트 저장 중: ${this.currentFileName}`);
+      debugLog(`[FileManager] 프로젝트 저장 중: ${this.currentFileName}`);
 
       // Get binary snapshot from engine
       const snapshotData = this.bridge.exportSnapshot();
@@ -71,7 +72,7 @@ export class FileManager {
         const customMaterials = this.materialLibrary.getCustom();
         if (customMaterials && customMaterials.length > 0) {
           metadata.materials = customMaterials;
-          console.log(`[FileManager] 재질 ${customMaterials.length}개 저장됨`);
+          debugLog(`[FileManager] 재질 ${customMaterials.length}개 저장됨`);
         }
       }
 
@@ -119,51 +120,42 @@ export class FileManager {
         input.style.display = 'none';
         document.body.appendChild(input);
 
-        console.log('[FileManager] 프로젝트 열기 대화 표시');
+        // Cleanup helper — removes DOM element and listeners exactly once
+        let cleaned = false;
+        const cleanup = () => {
+          if (cleaned) return;
+          cleaned = true;
+          input.removeEventListener('change', onChange);
+          input.removeEventListener('cancel', onCancel);
+          if (input.parentNode) input.parentNode.removeChild(input);
+        };
 
-        input.addEventListener('change', async (event) => {
+        const onChange = async (event: Event) => {
           const files = (event.target as HTMLInputElement).files;
           const file = files?.[0];
-
-          try {
-            document.body.removeChild(input);
-          } catch (e) {
-            // 이미 제거된 경우 무시
-          }
+          cleanup();
 
           if (!file) {
-            console.log('[FileManager] 파일 선택 취소됨');
             resolve(false);
             return;
           }
 
           try {
-            console.log(`[FileManager] 파일 선택됨: ${file.name}`);
             this.currentFileName = file.name;
 
-            // Read file as ArrayBuffer
             const arrayBuffer = await file.arrayBuffer();
             const fileData = new Uint8Array(arrayBuffer);
-
-            // Parse AXIA file format
             const { metadata, snapshot } = this.parseAxiaFile(fileData);
-
-            console.log('[FileManager] 메타데이터:', metadata);
-            console.log(`[FileManager] 스냅샷 크기: ${snapshot.length} bytes`);
 
             // Restore custom materials if available
             if (metadata.materials && this.materialLibrary && typeof this.materialLibrary.addCustom === 'function') {
               for (const material of metadata.materials) {
                 try {
                   this.materialLibrary.addCustom(material);
-                  console.log(`[FileManager] 재질 복원: ${material.name}`);
-                } catch (err) {
-                  console.warn(`[FileManager] 재질 복원 실패: ${material.name}`, err);
-                }
+                } catch (_) { /* skip failed material */ }
               }
             }
 
-            // Load snapshot into engine
             const success = this.bridge.importSnapshot(snapshot);
             if (success) {
               Toast.success(`로드 완료: ${this.currentFileName}`);
@@ -178,17 +170,15 @@ export class FileManager {
             Toast.error(`파일 읽기 실패: ${(err as Error).message}`);
             resolve(false);
           }
-        });
+        };
 
-        input.addEventListener('cancel', () => {
-          console.log('[FileManager] 파일 선택 대화 취소됨');
-          try {
-            document.body.removeChild(input);
-          } catch (e) {
-            // 무시
-          }
+        const onCancel = () => {
+          cleanup();
           resolve(false);
-        });
+        };
+
+        input.addEventListener('change', onChange);
+        input.addEventListener('cancel', onCancel);
 
         // Trigger file picker
         setTimeout(() => {
@@ -196,11 +186,7 @@ export class FileManager {
             input.click();
           } catch (e) {
             console.error('[FileManager] 파일 선택 대화 실패:', e);
-            try {
-              document.body.removeChild(input);
-            } catch (ex) {
-              // 무시
-            }
+            cleanup();
             resolve(false);
           }
         }, 50);
@@ -216,8 +202,8 @@ export class FileManager {
     try {
       const { metadata, snapshot } = this.parseAxiaFile(data);
 
-      console.log('[FileManager] 메타데이터:', metadata);
-      console.log(`[FileManager] 스냅샷 크기: ${snapshot.length} bytes`);
+      debugLog('[FileManager] 메타데이터:', metadata);
+      debugLog(`[FileManager] 스냅샷 크기: ${snapshot.length} bytes`);
 
       // 파일명 설정
       if (fileName) {
@@ -241,7 +227,7 @@ export class FileManager {
       // 스냅샷 로드
       const success = this.bridge.importSnapshot(snapshot);
       if (success) {
-        console.log(`[FileManager] 로드 완료: ${this.currentFileName}`);
+        debugLog(`[FileManager] 로드 완료: ${this.currentFileName}`);
         this.notifyFileChange();
         return true;
       }

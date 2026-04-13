@@ -38,7 +38,7 @@ export class SelectTool implements ITool {
 
     if (hit && hit.faceIndex != null && hit.faceIndex !== undefined) {
       const fid = this.ctx.getFaceId(hit.faceIndex);
-      console.log('[HIT] faceId=', fid, 'triIndex=', hit.faceIndex);
+      debugLog('[HIT] faceId=', fid, 'triIndex=', hit.faceIndex);
 
       // ── Multi-click detection ──
       if (fid === this.lastClickFaceId) {

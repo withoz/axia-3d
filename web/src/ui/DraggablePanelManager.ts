@@ -13,6 +13,8 @@
  * - Event-driven lifecycle (onActivate, onDeactivate, onDrag, onResize)
  */
 
+import { debugLog } from '../utils/debug';
+
 enum PanelState {
   Floating = 'floating',
   Docked = 'docked',
@@ -232,7 +234,7 @@ export class DraggablePanelManager {
     if (isValid && newState !== currentState) {
       panel.state = newState;
       this.applyPanelState(panelId);
-      console.log(`[Panel State] ${panelId}: ${currentState} → ${newState}`);
+      debugLog(`[Panel State] ${panelId}: ${currentState} → ${newState}`);
       return true;
     }
 

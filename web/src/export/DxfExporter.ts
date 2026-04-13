@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { DxfWriter } from './DxfWriter';
+import { debugLog } from '../utils/debug';
 
 export interface ExportOptions {
   name?: string;
@@ -30,7 +31,7 @@ export class DxfExporter {
   exportScene(scene: THREE.Scene, options: ExportOptions = {}): string {
     const { precision = 1 } = options;
 
-    console.log('[DxfExporter] DXF 내보내기 시작...');
+    debugLog('[DxfExporter] DXF 내보내기 시작...');
 
     // 씬의 모든 메시 순회
     scene.traverse((object) => {
@@ -44,7 +45,7 @@ export class DxfExporter {
     });
 
     const dxfContent = this.writer.export();
-    console.log('[DxfExporter] DXF 내보내기 완료');
+    debugLog('[DxfExporter] DXF 내보내기 완료');
 
     return dxfContent;
   }
@@ -124,7 +125,7 @@ export class DxfExporter {
       }
     }
 
-    console.log(
+    debugLog(
       `[DxfExporter] 메시 '${layerName}' 추출 완료: ${Math.floor(posArray.length / 9)} 삼각형`
     );
   }
@@ -162,7 +163,7 @@ export class DxfExporter {
       this.writer.addLine(start, end, { layer: layerName });
     }
 
-    console.log(`[DxfExporter] 선 '${layerName}' 추출 완료: ${posArray.length / 6} 선`);
+    debugLog(`[DxfExporter] 선 '${layerName}' 추출 완료: ${posArray.length / 6} 선`);
   }
 
   /**
@@ -193,7 +194,7 @@ export class DxfExporter {
       this.writer.addCircle(center, 1, { layer: layerName });
     }
 
-    console.log(
+    debugLog(
       `[DxfExporter] 점 '${layerName}' 추출 완료: ${posArray.length / 3} 점`
     );
   }
@@ -231,6 +232,6 @@ export class DxfExporter {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    console.log(`[DxfExporter] 다운로드 완료: ${filename}`);
+    debugLog(`[DxfExporter] 다운로드 완료: ${filename}`);
   }
 }

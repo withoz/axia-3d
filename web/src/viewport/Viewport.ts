@@ -48,6 +48,7 @@ export class Viewport {
   // Cleanup references
   private _resizeObserver: ResizeObserver | null = null;
   private _boundHandlers: { target: EventTarget; type: string; handler: EventListener }[] = [];
+  private _frameId: number | null = null;
 
   // Camera control state
   private isOrbiting = false;
@@ -383,8 +384,14 @@ export class Viewport {
     const RIGHT_CLICK_THRESHOLD = 300;  // ms
     const RIGHT_MOVE_THRESHOLD = 5;     // px
 
+    // Helper to track event listeners for cleanup
+    const track = (target: EventTarget, type: string, handler: EventListener, options?: AddEventListenerOptions) => {
+      target.addEventListener(type, handler, options);
+      this._boundHandlers.push({ target, type, handler });
+    };
+
     // ── Mouse Down ──
-    canvas.addEventListener('mousedown', (e) => {
+    track(canvas, 'mousedown', ((e: MouseEvent) => {
       // 휠(중간) 버튼: 회전 (3D) / 팬 (2D)
       if (e.button === 1) {
         if (this._viewMode !== '3d') {
@@ -402,10 +409,10 @@ export class Viewport {
         this.lastMouse.set(e.clientX, e.clientY);
         e.preventDefault();
       }
-    });
+    }) as EventListener);
 
     // ── Mouse Move ──
-    window.addEventListener('mousemove', (e) => {
+    track(window, 'mousemove', ((e: MouseEvent) => {
       const dx = e.clientX - this.lastMouse.x;
       const dy = e.clientY - this.lastMouse.y;
       this.lastMouse.set(e.clientX, e.clientY);
@@ -435,10 +442,10 @@ export class Viewport {
           this.isPanning = true;
         }
       }
-    });
+    }) as EventListener);
 
     // ── Mouse Up ──
-    window.addEventListener('mouseup', (e) => {
+    track(window, 'mouseup', ((e: MouseEvent) => {
       // 오른쪽 버튼 놓기: 짧게 눌렀으면 컨텍스트 메뉴
       if (e.button === 2) {
         const elapsed = Date.now() - rightDownTime;
@@ -450,10 +457,10 @@ export class Viewport {
       }
       this.isOrbiting = false;
       this.isPanning = false;
-    });
+    }) as EventListener);
 
     // ── Wheel: 줌 ──
-    canvas.addEventListener('wheel', (e) => {
+    track(canvas, 'wheel', ((e: WheelEvent) => {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 1.1 : 0.9;
       if (this._viewMode !== '3d') {
@@ -464,10 +471,10 @@ export class Viewport {
           this.spherical.radius * factor));
         this.updateCameraFromSpherical();
       }
-    }, { passive: false });
+    }) as EventListener, { passive: false });
 
     // 오른쪽 클릭 기본 메뉴 차단 (document 전체)
-    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    track(document, 'contextmenu', (e) => e.preventDefault());
   }
 
   /** 오른쪽 클릭 컨텍스트 메뉴 콜백 등록 */
@@ -482,6 +489,8 @@ export class Viewport {
 
   /** Cleanup all resources — call when Viewport is destroyed */
   dispose(): void {
+    // Stop render loop
+    this.stop();
     // Disconnect ResizeObserver
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
@@ -1310,9 +1319,17 @@ export class Viewport {
 
   start() {
     const animate = () => {
-      requestAnimationFrame(animate);
+      this._frameId = requestAnimationFrame(animate);
       this.renderer.render(this.scene, this.activeCamera);
     };
     animate();
+  }
+
+  /** Stop the render loop */
+  stop() {
+    if (this._frameId !== null) {
+      cancelAnimationFrame(this._frameId);
+      this._frameId = null;
+    }
   }
 }

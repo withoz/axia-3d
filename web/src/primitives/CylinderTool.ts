@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { ToolContext } from '../tools/ITool';
 import { BasePrimitiveTool } from './BasePrimitiveTool';
+import { debugLog } from '../utils/debug';
 
 export class CylinderTool extends BasePrimitiveTool {
   readonly name = 'cylinder';
@@ -29,7 +30,7 @@ export class CylinderTool extends BasePrimitiveTool {
     const { radius, height } = this.session.params;
     const anchor = this.session.anchor!;
 
-    console.log(
+    debugLog(
       `[Cylinder] Creating cylinder: radius=${radius.toFixed(2)}, height=${height.toFixed(2)}, center=${anchor.toArray()}`
     );
 
@@ -52,7 +53,7 @@ export class CylinderTool extends BasePrimitiveTool {
       // Synchronize WASM mesh to Three.js viewport
       this.ctx.syncMesh();
 
-      console.log(`[Cylinder] ✓ Created: baseFaceId=${baseFaceId}, ready for Push/Pull`);
+      debugLog(`[Cylinder] ✓ Created: baseFaceId=${baseFaceId}, ready for Push/Pull`);
     } catch (err) {
       console.error('[Cylinder] ✗ Creation failed:', err);
     }

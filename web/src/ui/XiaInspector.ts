@@ -9,6 +9,7 @@
 import { WasmBridge } from '../bridge/WasmBridge';
 import { Viewport } from '../viewport/Viewport';
 import { ToolManager } from '../tools/ToolManagerRefactored';
+import { debugLog } from '../utils/debug';
 
 export interface XiaInspectorDeps {
   bridge: WasmBridge;
@@ -153,7 +154,7 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     const materialId = matSelect.value;
     const selectedNow = toolManager.selection.getSelectedFaces();
     const targetFaces = selectedNow.length > 0 ? selectedNow : currentFaceIds;
-    console.log('[Material] assign to faces:', targetFaces, 'material:', materialId);
+    debugLog('[Material] assign to faces:', targetFaces, 'material:', materialId);
     if (targetFaces.length > 0 && materialId) {
       matLib.assignToFaces(targetFaces, materialId);
     } else if (targetFaces.length > 0 && !materialId) {

@@ -257,34 +257,30 @@ interface GroupInfo {
 - vite.config.ts manualChunks (three-loaders, file-io-libs)
 - 초기 JS 번들: 1,116KB → 252KB (77% 감소)
 
-## 다음 작업 목록 (Phase C: 안정성/품질)
+## Phase C 완료 내역 (2026-04-13, PR #1)
 
-### CRITICAL — 메모리 누수
+### ✅ CRITICAL — 메모리 누수 (완료)
 1. **파일 다이얼로그 DOM/리스너 누수** — FileManager.ts, FileImporter.ts
-   - `document.body.appendChild(input)` 후 취소 시 리스너 미제거
-   - 해결: input.remove() + removeEventListener 보장
-2. **setInterval 참조 없음** — main.ts:242
-   - `setInterval(() => {...}, 200)` ID 미저장 → 정리 불가
-   - 해결: intervalId 변수에 저장
+   - cleanup() 헬퍼로 DOM 제거 + 리스너 해제 보장 (change/cancel/error 모든 경로)
+2. **setInterval 참조 없음** — main.ts
+   - statsIntervalId에 ID 저장 + beforeunload에서 clearInterval
 
-### HIGH — 프로덕션 품질
-3. **console.log 208개 정리** — 프로덕션 코드에 디버그 로그 잔류
-   - FileImporter(24개), WasmBridge(42개) 등
-   - 해결: debugLog() 래퍼 사용 또는 제거
-4. **`as any` 25개 제거** — WasmBridge(8개) 최대 위험
-   - 해결: proper type guard 또는 `unknown` + narrowing
-5. **window 이벤트 리스너 정리** — main.ts keydown, ContextMenu mousedown
-   - 해결: AbortController 또는 명시적 cleanup
+### ✅ HIGH — 프로덕션 품질 (완료)
+3. **console.log 220개 → debugLog 전환** — 27개 파일
+   - utils/debug.ts의 debugLog/debugWarn 래퍼 사용 (window.__AXIA_DEBUG=true로 활성화)
+   - console.error + 유효한 console.warn 유지
+5. **window 이벤트 리스너 정리** — Viewport.ts
+   - track() 헬퍼로 5개 리스너 모두 _boundHandlers에 등록, dispose()에서 정리
 
-### MEDIUM — 안정성
-6. **렌더 루프 정지 불가** — Viewport.start()에 취소 메커니즘 없음
-   - 해결: animationFrameId 저장 + stop() 메서드
-7. **Three.js geometry 누수** — DrawLineTool 등 프리뷰 geometry .dispose() 누락 경로
-8. **dist/ 오래된 빌드 파일** — `--emptyOutDir false`로 이전 빌드 12개(~13MB) 잔류
-   - 해결: 배포 전 수동 정리 또는 빌드 스크립트에 정리 추가
+### ✅ MEDIUM — 안정성 (완료)
+6. **렌더 루프 정지** — Viewport.ts
+   - _frameId + stop() + cancelAnimationFrame 추가, dispose()에서 stop() 호출
+7. **Three.js geometry 누수** — PrimitivePreviewManager.ts
+   - updateRadiusCircle/updateHeightAxis에서 이전 geometry .dispose() 추가
 
-### 추천 작업 순서
-① → ② (메모리 누수, 코드 변경 작음) → ③ (console 정리, 기계적) → ④⑤ (타입/이벤트) → ⑥⑦⑧
+### ⏭ 보류 (다음 세션)
+4. **`as any` 27개** — WasmBridge 8개는 Rust 빌드 필요, 나머지 의도적 캐스팅 (위험도 낮음)
+8. **dist/ 오래된 빌드 파일** — worktree에는 빌드 없음, 메인 repo에서 배포 전 수동 정리
 
 ## 향후 과제
 - Material / Texture

@@ -7,6 +7,7 @@
 
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { UnitSystem } from '../units/UnitSystem';
+import { debugLog, debugWarn } from '../utils/debug';
 
 export interface VCBDeps {
   toolManager: ToolManager;
@@ -78,7 +79,7 @@ export function initVCB(deps: VCBDeps): void {
         if (tool === 'rect' && (raw.includes(',') || raw.includes(' '))) {
           const parts = raw.split(/[,\s]+/).map(s => units.parseInput(s.trim()));
           if (parts.length === 2 && parts[0] !== null && parts[1] !== null) {
-            console.log(`[VCB] rect: ${parts[0]}×${parts[1]} mm`);
+            debugLog(`[VCB] rect: ${parts[0]}×${parts[1]} mm`);
             toolManager.applyVCBValue(parts[0]!, parts[1]!);
             deactivateVCB();
             return;
@@ -87,12 +88,12 @@ export function initVCB(deps: VCBDeps): void {
 
         const mm = units.parseInput(raw);
         if (mm !== null) {
-          console.log(`[VCB] ${tool}: "${raw}" → ${mm.toFixed(2)} mm`);
+          debugLog(`[VCB] ${tool}: "${raw}" → ${mm.toFixed(2)} mm`);
           toolManager.applyVCBValue(mm);
           cmdInput.placeholder = units.format(mm);
           deactivateVCB();
         } else {
-          console.warn(`[VCB] Invalid: "${raw}"`);
+          debugWarn(`[VCB] Invalid: "${raw}"`);
           cmdInput.value = '';
         }
       }
