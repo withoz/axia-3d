@@ -20,6 +20,12 @@ export interface MenuBarDeps {
   toolManager: ToolManager;
   fileImporter: FileImporter;
   fileManager: FileManager;
+  /** Project save callback (replaces window.__axia_save) */
+  saveProject?: () => void;
+  /** Project open callback (replaces window.__axia_open) */
+  openProject?: () => void;
+  /** OSNAP settings panel open callback (replaces window.__axia_openOsnapPanel) */
+  openOsnapPanel?: () => void;
 }
 
 /** Tool name → display name mapping */
@@ -30,7 +36,8 @@ const toolNames: Record<string, string> = {
 };
 
 export function initMenuBar(deps: MenuBarDeps): void {
-  const { viewport, bridge, toolManager, fileImporter, fileManager } = deps;
+  const { viewport, bridge, toolManager, fileImporter, fileManager,
+          saveProject, openProject, openOsnapPanel } = deps;
 
   const menubar = document.getElementById('menubar');
   if (!menubar) return;
@@ -109,10 +116,10 @@ export function initMenuBar(deps: MenuBarDeps): void {
         }
         break;
       case 'file-open':
-        (window as any).__axia_open?.();
+        openProject?.();
         break;
       case 'file-save':
-        (window as any).__axia_save?.();
+        saveProject?.();
         break;
       case 'file-saveas':
         fileManager.saveAsProject();
@@ -232,7 +239,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
         document.getElementById('style-btn')?.click();
         break;
       case 'format-osnap':
-        (window as any).__axia_openOsnapPanel?.();
+        openOsnapPanel?.();
         break;
 
       // ── 도움말 ──
