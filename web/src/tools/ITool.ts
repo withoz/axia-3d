@@ -49,6 +49,26 @@ export interface ToolContext {
   clearAxisGuide: () => void;
   /** Optional pickbox for CAD cursor (used by OffsetTool) */
   pickBox?: PickBox | null;
+
+  /**
+   * Detect the drawing plane from a mouse event.
+   * If clicking on an existing face → returns that face's DCEL normal and computed up vector.
+   * If clicking empty space → returns default ground plane (Y-up).
+   * Used by Rect/Circle tools to draw on arbitrary planes.
+   */
+  getDrawPlane: (e: MouseEvent) => DrawPlaneInfo;
+}
+
+/** Drawing plane information for Rect/Circle tools */
+export interface DrawPlaneInfo {
+  /** Plane normal (unit vector) */
+  normal: THREE.Vector3;
+  /** Up direction on the plane (unit vector, perpendicular to normal) */
+  up: THREE.Vector3;
+  /** Right direction on the plane (cross(up, normal), unit vector) */
+  right: THREE.Vector3;
+  /** Whether this came from an existing face (true) or default plane (false) */
+  onFace: boolean;
 }
 
 /**

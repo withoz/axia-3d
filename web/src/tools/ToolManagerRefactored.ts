@@ -12,13 +12,14 @@ import { SnapManager } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
 import { SelectionManager } from './SelectionManager';
 import { PickBox } from '../ui/PickBox';
-import { ITool, ToolContext } from './ITool';
+import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
 
 // Import all tools
 import { SelectTool } from './SelectTool';
+import { DrawLineTool } from './DrawLineTool';
 import { DrawRectTool } from './DrawRectTool';
 import { DrawCircleTool } from './DrawCircleTool';
 import { PushPullTool } from './PushPullTool';
@@ -128,10 +129,12 @@ export class ToolManager {
       updateAxisGuide: (origin: THREE.Vector3, axis: 'x' | 'y' | 'z' | 'free', endPt: THREE.Vector3) => this.updateAxisGuide(origin, axis, endPt),
       clearAxisGuide: () => this.clearAxisGuide(),
       pickBox: this.pickBox,
+      getDrawPlane: (e: MouseEvent) => this.getDrawPlane(e),
     };
 
     // Register all tools
     this.tools.set('select', new SelectTool(this.toolContext));
+    this.tools.set('line', new DrawLineTool(this.toolContext));
     this.tools.set('rect', new DrawRectTool(this.toolContext));
     this.tools.set('circle', new DrawCircleTool(this.toolContext));
     this.tools.set('pushpull', new PushPullTool(this.toolContext));
@@ -605,6 +608,52 @@ export class ToolManager {
     }
   }
 
+  /**
+   * Detect drawing plane from mouse position.
+   * If cursor is on an existing face → use that face's DCEL normal.
+   * If cursor is on empty space → use default ground plane (Y-up).
+   */
+  private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
+    const DEFAULT_NORMAL = new THREE.Vector3(0, 1, 0);
+    const DEFAULT_UP = new THREE.Vector3(0, 0, 1);
+    const DEFAULT_RIGHT = new THREE.Vector3(1, 0, 0);
+    const defaultPlane: DrawPlaneInfo = {
+      normal: DEFAULT_NORMAL, up: DEFAULT_UP, right: DEFAULT_RIGHT, onFace: false,
+    };
+
+    const hit = this.viewport.pick(e.clientX, e.clientY);
+    if (!hit || hit.faceIndex == null) return defaultPlane;
+
+    const fid = this.getFaceId(hit.faceIndex);
+    if (fid < 0) return defaultPlane;
+
+    // Get DCEL face normal (more accurate than Three.js interpolated normal)
+    const [nx, ny, nz] = this.bridge.getFaceNormal(fid);
+    const normal = new THREE.Vector3(nx, ny, nz);
+    if (normal.lengthSq() < 0.001) return defaultPlane;
+    normal.normalize();
+
+    // Compute up and right vectors for this plane
+    // Strategy: pick the world axis least parallel to the normal as the reference
+    const absN = new THREE.Vector3(Math.abs(normal.x), Math.abs(normal.y), Math.abs(normal.z));
+    let ref: THREE.Vector3;
+    if (absN.y >= absN.x && absN.y >= absN.z) {
+      // Normal is mostly Y → use world Z as reference
+      ref = new THREE.Vector3(0, 0, 1);
+    } else if (absN.x >= absN.y && absN.x >= absN.z) {
+      // Normal is mostly X → use world Y as reference
+      ref = new THREE.Vector3(0, 1, 0);
+    } else {
+      // Normal is mostly Z → use world Y as reference
+      ref = new THREE.Vector3(0, 1, 0);
+    }
+
+    const right = new THREE.Vector3().crossVectors(ref, normal).normalize();
+    const up = new THREE.Vector3().crossVectors(normal, right).normalize();
+
+    return { normal, up, right, onFace: true };
+  }
+
   private getFaceId(faceIndex: number): number {
     if (faceIndex >= 0 && faceIndex < this.faceMap.length) {
       return this.faceMap[faceIndex];
@@ -649,6 +698,20 @@ export class ToolManager {
           }
           // 일반 더블클릭 → face + edge 선택
           this.selection.selectFaceWithEdges(fid);
+        }
+      }
+    });
+
+    // ===== CONTEXT MENU (Right Click) =====
+    canvas.addEventListener('contextmenu', (e) => {
+      // If the current tool is busy, right click cancels the operation
+      if (this.isToolBusy()) {
+        e.preventDefault();
+        const tool = this.tools.get(this._currentTool);
+        // Create a synthetic right-click MouseEvent for the tool
+        if (tool?.onMouseDown) {
+          const synth = new MouseEvent('mousedown', { button: 2, clientX: e.clientX, clientY: e.clientY });
+          tool.onMouseDown(synth, null);
         }
       }
     });

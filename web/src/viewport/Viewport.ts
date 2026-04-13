@@ -694,13 +694,38 @@ export class Viewport {
       backMesh.name = 'back-mesh';
       this.meshGroup.add(backMesh);
 
-      // 엣지 렌더링: EdgesGeometry 사용 (30° threshold)
-      // 30°로 설정하면 원통 인접면(15°)은 부드럽게, 직각 모서리(90°)는 표시
-      const edgesMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
-      const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
-      const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-      edges.visible = this._edgeVisible;
-      this.meshGroup.add(edges);
+      // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback
+      if (edgeLines && edgeLines.length > 0) {
+        // DCEL 기반 edge lines (coplanar edge 자동 숨김, Line 도구 선 포함)
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
+        const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
+        const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
+        lineSegs.name = 'dcel-edges';
+        lineSegs.visible = this._edgeVisible;
+        this.meshGroup.add(lineSegs);
+      } else {
+        // Fallback: EdgesGeometry (30° threshold)
+        const edgesMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
+        const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
+        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+        edges.visible = this._edgeVisible;
+        this.meshGroup.add(edges);
+      }
+    }
+
+    // ── 4) Standalone edge lines (면 없이 Line 도구로 그린 선) ──
+    if (positions.length === 0 && edgeLines && edgeLines.length > 0) {
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
+      const lineMat = new THREE.LineBasicMaterial({
+        color: this._edgeColor,
+        linewidth: 1,
+      });
+      const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
+      lineSegs.name = 'standalone-edges';
+      lineSegs.visible = this._edgeVisible;
+      this.meshGroup.add(lineSegs);
     }
   }
 
