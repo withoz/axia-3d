@@ -161,17 +161,25 @@ export class DrawLineTool implements ITool {
     }
   }
 
-  private updateLinePreview(start: THREE.Vector3, end: THREE.Vector3, color: number = 0x74c0fc): void {
+  private updateLinePreview(start: THREE.Vector3, end: THREE.Vector3, color: number = 0x333366): void {
     this.removeLinePreview();
 
-    const offset = 0.5;
     const points = [
-      new THREE.Vector3(start.x, start.y + offset, start.z),
-      new THREE.Vector3(end.x, end.y + offset, end.z),
+      start.clone(),
+      end.clone(),
     ];
     const geo = new THREE.BufferGeometry().setFromPoints(points);
-    const mat = new THREE.LineBasicMaterial({ color, linewidth: 1 });
+    const mat = new THREE.LineBasicMaterial({
+      color,
+      fog: false,
+      depthTest: true,
+      depthWrite: false,
+      linewidth: 1,
+    });
     this.linePreview = new THREE.Line(geo, mat);
+    this.linePreview.renderOrder = 10;
+    // 라인 스케일을 증가하여 WebGL 1px 제한 극복
+    this.linePreview.scale.set(3, 3, 1);
     this.ctx.viewport.scene.add(this.linePreview);
   }
 }

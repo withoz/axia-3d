@@ -1,6 +1,0 @@
-node_modules/
-web/dist/assets/*.wasm
-web/dist/assets/*.js
-*.log
-.DS_Store
-Thumbs.db
