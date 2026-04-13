@@ -1,0 +1,323 @@
+/**
+ * XIA Inspector Panel — Point → Line → Face → Volume → XIA state machine
+ *
+ * Extracted from main.ts (section 12, lines 307-618).
+ * Manages geometry state classification, material assignment, physical properties,
+ * and the inspector panel UI with tab switching and keyboard shortcuts.
+ */
+
+import { WasmBridge } from '../bridge/WasmBridge';
+import { Viewport } from '../viewport/Viewport';
+import { ToolManager } from '../tools/ToolManagerRefactored';
+
+export interface XiaInspectorDeps {
+  bridge: WasmBridge;
+  viewport: Viewport;
+  toolManager: ToolManager;
+}
+
+export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
+  const { bridge, viewport, toolManager } = deps;
+
+  const xiPanel = document.getElementById('xia-inspector');
+  const xiBtn = document.getElementById('inspector-btn');
+  const xiClose = document.getElementById('xi-close');
+
+  // MaterialLibrary import (동적)
+  const { getMaterialLibrary, GeometryState, GEOMETRY_STATES } = await import('../materials/MaterialLibrary');
+  const matLib = getMaterialLibrary();
+  matLib.setBridge(bridge); // Rust 엔진과 재질 동기화 연결
+
+  let nextXiaNum = 1;
+  let currentFaceIds: number[] = [];
+  let currentVolumeMM3 = 0;
+
+  // 재질 드롭다운 채우기
+  const matSelect = document.getElementById('xi-material') as HTMLSelectElement | null;
+  if (matSelect) {
+    const allMats = matLib.getAll();
+    for (const mat of allMats) {
+      const opt = document.createElement('option');
+      opt.value = mat.id;
+      opt.textContent = `${mat.name} (${mat.nameEn})`;
+      matSelect.appendChild(opt);
+    }
+  }
+
+  const toggleInspector = () => {
+    if (xiPanel) xiPanel.classList.toggle('open');
+  };
+
+  xiBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleInspector();
+  });
+  xiClose?.addEventListener('click', () => xiPanel?.classList.remove('open'));
+
+  // 탭 전환
+  xiPanel?.querySelectorAll('.xi-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      xiPanel.querySelectorAll('.xi-tab').forEach(t => t.classList.remove('active'));
+      xiPanel.querySelectorAll('.xi-tab-content').forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      const target = (tab as HTMLElement).dataset.tab;
+      document.getElementById(`xi-tab-${target}`)?.classList.add('active');
+    });
+  });
+
+  const formatNum = (n: number, decimals = 0): string => {
+    if (decimals === 0) return Math.round(n).toLocaleString();
+    return n.toFixed(decimals).replace(/\B(?=(\d{3})+\.)/g, ',');
+  };
+
+  // ── 기하 상태 단계 인디케이터 업데이트 ──
+  const updateStateSteps = (state: string) => {
+    const stepsEl = document.getElementById('xi-state-steps');
+    if (!stepsEl) return;
+
+    const order = ['point', 'line', 'face', 'volume', 'xia'];
+    const activeIdx = order.indexOf(state);
+
+    stepsEl.querySelectorAll('.xi-step').forEach(step => {
+      const s = (step as HTMLElement).dataset.state || '';
+      const idx = order.indexOf(s);
+      step.classList.remove('active', 'passed');
+      if (idx === activeIdx) step.classList.add('active');
+      else if (idx < activeIdx) step.classList.add('passed');
+    });
+
+    stepsEl.querySelectorAll('.xi-step-line').forEach((line, i) => {
+      line.classList.toggle('passed', i < activeIdx);
+    });
+  };
+
+  // 초기 상태: Point 활성화
+  updateStateSteps('point');
+
+  // ── 물리 속성 패널 업데이트 ──
+  const updatePhysicalPanel = (materialId: string | null) => {
+    const hintEl = document.getElementById('xi-material-hint');
+    const propsEl = document.getElementById('xi-material-props');
+    const badgeEl = document.getElementById('xi-phys-badge');
+    const assignBtn = document.getElementById('xi-assign-btn');
+
+    if (!materialId || materialId === '') {
+      // Appearance 상태 (재질 없음)
+      if (hintEl) hintEl.style.display = '';
+      if (propsEl) propsEl.style.display = 'none';
+      if (badgeEl) { badgeEl.textContent = 'Appearance'; badgeEl.style.background = 'rgba(156, 39, 176, 0.15)'; badgeEl.style.color = '#ce93d8'; }
+      assignBtn?.classList.remove('assigned');
+      return;
+    }
+
+    const mat = matLib.get(materialId);
+    if (!mat) return;
+
+    // XIA 상태 (재질 있음)
+    if (hintEl) hintEl.style.display = 'none';
+    if (propsEl) propsEl.style.display = '';
+    if (badgeEl) { badgeEl.textContent = 'XIA (물체)'; badgeEl.style.background = 'rgba(76, 175, 80, 0.15)'; badgeEl.style.color = '#81c784'; }
+    assignBtn?.classList.add('assigned');
+
+    // 물리 속성 채우기
+    const densityEl = document.getElementById('xi-density') as HTMLInputElement;
+    const thermalEl = document.getElementById('xi-thermal') as HTMLInputElement;
+    if (densityEl) densityEl.value = mat.physical.density.toLocaleString();
+    if (thermalEl) thermalEl.value = String(mat.physical.thermalConductivity);
+
+    // 화재 등급
+    xiPanel?.querySelectorAll('.xi-fire-btn').forEach(b => {
+      b.classList.toggle('active', (b as HTMLElement).dataset.fire === mat.physical.fireRating);
+    });
+
+    // 질량/무게 계산
+    const physics = matLib.computePhysics(currentVolumeMM3, materialId);
+    const massEl = document.getElementById('xi-mass');
+    const weightNEl = document.getElementById('xi-weight-n');
+    if (physics) {
+      if (massEl) massEl.textContent = formatNum(physics.mass, 1);
+      if (weightNEl) weightNEl.textContent = formatNum(physics.weight, 1);
+    }
+  };
+
+  // ── 재질 변경 → Viewport 색상 갱신 ──
+  const refreshViewportColors = () => {
+    viewport.refreshMaterialColors();
+  };
+
+  // MaterialLibrary 변경 이벤트 → Viewport 동기화
+  matLib.onChange(refreshViewportColors);
+
+  // ── 재질 변경 이벤트 ──
+  matSelect?.addEventListener('change', () => {
+    const materialId = matSelect.value;
+    const selectedNow = toolManager.selection.getSelectedFaces();
+    const targetFaces = selectedNow.length > 0 ? selectedNow : currentFaceIds;
+    console.log('[Material] assign to faces:', targetFaces, 'material:', materialId);
+    if (targetFaces.length > 0 && materialId) {
+      matLib.assignToFaces(targetFaces, materialId);
+    } else if (targetFaces.length > 0 && !materialId) {
+      matLib.unassignFromFaces(targetFaces);
+    }
+    currentFaceIds = targetFaces;
+    updatePhysicalPanel(materialId || null);
+    updateInspector(currentFaceIds);
+  });
+
+  // ── 재질 부여/해제 버튼 ──
+  document.getElementById('xi-assign-btn')?.addEventListener('click', () => {
+    if (!matSelect || currentFaceIds.length === 0) return;
+    if (matLib.hasMaterial(currentFaceIds)) {
+      matLib.unassignFromFaces(currentFaceIds);
+      matSelect.value = '';
+      updatePhysicalPanel(null);
+    } else if (matSelect.value) {
+      matLib.assignToFaces(currentFaceIds, matSelect.value);
+      updatePhysicalPanel(matSelect.value);
+    }
+    updateInspector(currentFaceIds);
+  });
+
+  // ── Inspector 메인 업데이트 ──
+  const updateInspector = (faceIds: number[]) => {
+    currentFaceIds = faceIds;
+    const emptyEl = document.getElementById('xi-empty');
+    const contentEl = document.getElementById('xi-content');
+
+    if (faceIds.length === 0) {
+      if (emptyEl) emptyEl.style.display = '';
+      if (contentEl) contentEl.style.display = 'none';
+      updateStateSteps('point');
+      return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = '';
+
+    if (xiPanel && !xiPanel.classList.contains('open')) {
+      xiPanel.classList.add('open');
+    }
+
+    // Rust에서 XIA 정보 가져오기
+    const info = bridge.getXiaInfo(faceIds);
+
+    // ID & Name
+    const idEl = document.getElementById('xi-id');
+    const nameEl = document.getElementById('xi-name') as HTMLInputElement;
+    if (idEl) idEl.textContent = `XIA-${String(nextXiaNum).padStart(4, '0')}`;
+
+    if (info && !info.empty) {
+      // ── 기하 상태 판정 (Point → Line → Face → Volume → XIA) ──
+      const geoState = matLib.determineState(
+        { faceCount: info.faceCount || 0, isSolid: info.isSolid || false, height: info.height || 0 },
+        faceIds
+      );
+      const stateInfo = GEOMETRY_STATES[geoState];
+
+      updateStateSteps(geoState);
+
+      // 상태 표시
+      const dotEl = document.getElementById('xi-solid-dot');
+      const labelEl = document.getElementById('xi-solid-label');
+      const subEl = document.getElementById('xi-solid-sub');
+      const shapeEl = document.getElementById('xi-shape-type');
+
+      if (dotEl) dotEl.className = 'xi-solid-dot ' + geoState;
+      if (labelEl) labelEl.textContent = `${stateInfo.icon} ${stateInfo.labelEn}`;
+      if (subEl) subEl.textContent = stateInfo.description;
+      if (shapeEl) shapeEl.textContent = `\u25a1 ${info.shapeType || ''}`;
+
+      // 기하학적 속성 — mm 단위
+      const lengthEl = document.getElementById('xi-length');
+      const widthEl = document.getElementById('xi-width');
+      const heightEl = document.getElementById('xi-height');
+      if (lengthEl) lengthEl.textContent = formatNum(info.length || 0);
+      if (widthEl) widthEl.textContent = formatNum(info.width || 0);
+      if (heightEl) heightEl.textContent = formatNum(info.height || 0);
+
+      // 면적 mm² → m²
+      const areaEl = document.getElementById('xi-area');
+      const areaM2 = (info.surfaceArea || 0) / 1e6;
+      if (areaEl) areaEl.textContent = formatNum(areaM2, 1);
+
+      // 부피/무게: Volume 이상만 표시
+      const volBox = document.getElementById('xi-volume')?.closest('.xi-computed-box') as HTMLElement | null;
+      const weightBox = document.getElementById('xi-weight')?.closest('.xi-computed-box') as HTMLElement | null;
+
+      if (geoState === GeometryState.Volume || geoState === GeometryState.Xia) {
+        if (volBox) volBox.style.display = '';
+        if (weightBox) weightBox.style.display = '';
+
+        const volEl = document.getElementById('xi-volume');
+        const volM3 = (info.volume || 0) / 1e9;
+        if (volEl) volEl.textContent = formatNum(volM3, 1);
+
+        currentVolumeMM3 = info.volume || 0;
+      } else {
+        if (volBox) volBox.style.display = 'none';
+        if (weightBox) weightBox.style.display = 'none';
+        currentVolumeMM3 = 0;
+      }
+
+      // 물리적 속성 섹션: Volume/Xia에서만 Material 드롭다운 활성화
+      const physSection = document.getElementById('xi-physical-section');
+      if (physSection) {
+        if (geoState === GeometryState.Volume || geoState === GeometryState.Xia) {
+          physSection.style.display = '';
+          physSection.style.opacity = '1';
+          physSection.style.pointerEvents = '';
+        } else {
+          physSection.style.display = '';
+          physSection.style.opacity = '0.35';
+          physSection.style.pointerEvents = 'none';
+        }
+      }
+
+      // 재질 상태 반영
+      const commonMat = matLib.getCommonMaterial(faceIds);
+      if (matSelect) {
+        matSelect.value = commonMat ? commonMat.id : '';
+      }
+      updatePhysicalPanel(commonMat ? commonMat.id : null);
+
+      // 스냅 포인트
+      const snapEl = document.getElementById('xi-snap-count');
+      if (snapEl) snapEl.textContent = String(info.snapPoints || 0);
+
+      // 이름 자동 설정
+      if (nameEl && !nameEl.dataset.edited) {
+        if (geoState === GeometryState.Xia && commonMat) {
+          nameEl.value = `${commonMat.name} ${info.shapeType || '객체'}`;
+        } else {
+          nameEl.value = `${stateInfo.label} ${info.shapeType || ''}`.trim();
+        }
+      }
+    } else {
+      const lengthEl = document.getElementById('xi-length');
+      const widthEl = document.getElementById('xi-width');
+      const heightEl = document.getElementById('xi-height');
+      if (lengthEl) lengthEl.textContent = '-';
+      if (widthEl) widthEl.textContent = '-';
+      if (heightEl) heightEl.textContent = '-';
+      updateStateSteps('face');
+    }
+  };
+
+  // 이름 수동 편집 표시
+  document.getElementById('xi-name')?.addEventListener('input', (e) => {
+    (e.target as HTMLInputElement).dataset.edited = 'true';
+  });
+
+  // Selection 변경 시 Inspector 업데이트
+  toolManager.selection.onChange((faces: number[]) => {
+    updateInspector(faces);
+    if (faces.length > 0) nextXiaNum++;
+  });
+
+  // 키보드 I → Inspector 토글
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    if (e.key === 'i' || e.key === 'I') toggleInspector();
+    if (e.key === 'Escape' && xiPanel?.classList.contains('open')) xiPanel.classList.remove('open');
+  });
+}

@@ -199,6 +199,47 @@ export class FileManager {
     });
   }
 
+  /** Load project from raw ArrayBuffer (e.g., fetched from URL) */
+  async loadFromArrayBuffer(data: Uint8Array, fileName?: string): Promise<boolean> {
+    try {
+      const { metadata, snapshot } = this.parseAxiaFile(data);
+
+      console.log('[FileManager] 메타데이터:', metadata);
+      console.log(`[FileManager] 스냅샷 크기: ${snapshot.length} bytes`);
+
+      // 파일명 설정
+      if (fileName) {
+        this.currentFileName = fileName;
+      } else if (metadata.name) {
+        const name = metadata.name;
+        this.currentFileName = name.endsWith('.xia') ? name : `${name}.xia`;
+      }
+
+      // 재질 복원
+      if (metadata.materials && this.materialLibrary && typeof this.materialLibrary.addCustom === 'function') {
+        for (const material of metadata.materials) {
+          try {
+            this.materialLibrary.addCustom(material);
+          } catch (err) {
+            console.warn(`[FileManager] 재질 복원 실패: ${material.name}`, err);
+          }
+        }
+      }
+
+      // 스냅샷 로드
+      const success = this.bridge.importSnapshot(snapshot);
+      if (success) {
+        console.log(`[FileManager] 로드 완료: ${this.currentFileName}`);
+        return true;
+      }
+      console.error('[FileManager] importSnapshot 실패');
+      return false;
+    } catch (err) {
+      console.error('[FileManager] ArrayBuffer 파싱 실패:', err);
+      return false;
+    }
+  }
+
   /** Get current file name */
   getCurrentFileName(): string {
     return this.currentFileName;
