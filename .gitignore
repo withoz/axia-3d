@@ -1,0 +1,43 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# WASM binary (wasm-pack으로 재생성, 용량 큼)
+web/src/wasm/*.wasm
+
+# Node
+web/node_modules/
+
+# Build output assets (재빌드 가능, 용량 큼)
+web/dist/assets/*.js
+web/dist/assets/*.wasm
+web/dist/assets/*.css
+
+# Backup folders
+backup_*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Misc
+*.tmp
+*.bak
+
+# Large backup files
+*.tar.gz
+backups/
+node_modules/
+dist/
+

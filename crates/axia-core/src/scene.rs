@@ -1,0 +1,875 @@
+//! Scene — the top-level container for all XIA entities and the geometry mesh.
+
+use std::collections::HashMap;
+use glam::DVec3;
+use anyhow::Result;
+
+use axia_geo::{Mesh, MaterialId};
+use axia_transaction::TransactionManager;
+
+use crate::xia::{Xia, XiaId, XiaState};
+use crate::commands::{Command, CommandResult};
+use crate::lifecycle;
+use crate::group::{GroupManager, Transform3D};
+use crate::material::MaterialLibrary;
+
+/// Snapshot format version
+const SNAPSHOT_VERSION: u32 = 1;
+
+/// Magic bytes for .axia file identification
+const AXIA_MAGIC: [u8; 4] = [b'A', b'X', b'I', b'A'];
+
+/// The AXiA scene — owns the geometry mesh and all XIA entities.
+pub struct Scene {
+    /// The geometry kernel mesh
+    pub mesh: Mesh,
+    /// All XIA entities in the scene
+    pub xias: HashMap<XiaId, Xia>,
+    /// Next XIA ID counter
+    next_xia_id: u64,
+    /// Transaction manager for undo/redo
+    pub transactions: TransactionManager,
+    /// Material library (all available materials)
+    pub material_library: MaterialLibrary,
+    /// Default material
+    pub default_material: MaterialId,
+    /// Group / Component manager
+    pub groups: GroupManager,
+}
+
+impl Scene {
+    pub fn new() -> Self {
+        Self {
+            mesh: Mesh::new(),
+            xias: HashMap::new(),
+            next_xia_id: 1,
+            transactions: TransactionManager::new(100),
+            material_library: MaterialLibrary::new(),
+            default_material: MaterialId::new(0),
+            groups: GroupManager::new(),
+        }
+    }
+
+    /// Create a new XIA entity in the scene.
+    fn create_xia(&mut self, name: String) -> XiaId {
+        let id = self.next_xia_id;
+        self.next_xia_id += 1;
+        let xia = Xia::new(id, name);
+        self.xias.insert(id, xia);
+        id
+    }
+
+    /// Execute a command and return the result.
+    pub fn execute(&mut self, cmd: Command) -> CommandResult {
+        match cmd {
+            Command::DrawLine { start, end, surface_normal } => {
+                self.exec_draw_line(start, end, surface_normal)
+            }
+            Command::DrawRect { center, normal, up, width, height } => {
+                self.exec_draw_rect(center, normal, up, width, height)
+            }
+            Command::DrawCircle { center, normal, radius, segments } => {
+                self.exec_draw_circle(center, normal, radius, segments)
+            }
+            Command::PushPull { face_id, dist } => {
+                self.exec_push_pull(face_id, dist)
+            }
+            Command::Undo => {
+                if let Some(frame) = self.transactions.undo() {
+                    let snapshot = frame.before_snapshot.clone();
+                    if !snapshot.is_empty() {
+                        self.mesh.restore_snapshot(&snapshot);
+                    }
+                    CommandResult::MeshUpdated
+                } else {
+                    CommandResult::None
+                }
+            }
+            Command::Redo => {
+                if let Some(frame) = self.transactions.redo() {
+                    let snapshot = frame.after_snapshot.clone();
+                    if !snapshot.is_empty() {
+                        self.mesh.restore_snapshot(&snapshot);
+                    }
+                    CommandResult::MeshUpdated
+                } else {
+                    CommandResult::None
+                }
+            }
+            Command::Select { xia_id, additive } => {
+                if !additive {
+                    for xia in self.xias.values_mut() {
+                        xia.selected = false;
+                    }
+                }
+                if let Some(xia) = self.xias.get_mut(&xia_id) {
+                    xia.selected = true;
+                }
+                CommandResult::None
+            }
+            Command::DeselectAll => {
+                for xia in self.xias.values_mut() {
+                    xia.selected = false;
+                }
+                CommandResult::None
+            }
+            Command::Move { xia_ids, delta } => {
+                self.exec_move(xia_ids, delta)
+            }
+
+            // ── Group / Component ──
+            Command::CreateGroup { name, face_ids } => {
+                let gid = self.groups.create_group(name, face_ids);
+                CommandResult::GroupUpdated(gid)
+            }
+            Command::DeleteGroup { group_id } => {
+                if self.groups.delete_group(group_id) {
+                    CommandResult::GroupUpdated(group_id)
+                } else {
+                    CommandResult::Error(format!("Group {} not found", group_id))
+                }
+            }
+            Command::RenameGroup { group_id, new_name } => {
+                if let Some(g) = self.groups.groups.get_mut(&group_id) {
+                    g.name = new_name;
+                    CommandResult::GroupUpdated(group_id)
+                } else {
+                    CommandResult::Error(format!("Group {} not found", group_id))
+                }
+            }
+            Command::ToggleGroupVisibility { group_id } => {
+                if let Some(g) = self.groups.groups.get_mut(&group_id) {
+                    g.visible = !g.visible;
+                    CommandResult::GroupUpdated(group_id)
+                } else {
+                    CommandResult::Error(format!("Group {} not found", group_id))
+                }
+            }
+            Command::ToggleGroupLock { group_id } => {
+                if let Some(g) = self.groups.groups.get_mut(&group_id) {
+                    g.locked = !g.locked;
+                    CommandResult::GroupUpdated(group_id)
+                } else {
+                    CommandResult::Error(format!("Group {} not found", group_id))
+                }
+            }
+            Command::MakeComponent { group_id, name } => {
+                match self.groups.make_component(group_id, name) {
+                    Some(_def_id) => CommandResult::GroupUpdated(group_id),
+                    None => CommandResult::Error(format!("Group {} not found", group_id)),
+                }
+            }
+            Command::PlaceComponent { def_id, position } => {
+                // TODO: 실제 geometry 복제 구현 필요
+                // 현재는 인스턴스 메타데이터만 생성
+                let transform = Transform3D::new().with_position(position);
+                match self.groups.create_instance(def_id, "Instance".into(), vec![], transform) {
+                    Some(inst_id) => CommandResult::GroupUpdated(inst_id),
+                    None => CommandResult::Error(format!("ComponentDef {} not found", def_id)),
+                }
+            }
+
+            // ── Material commands ──
+            Command::AssignMaterial { face_ids, material_id } => {
+                if self.material_library.get(material_id).is_none() {
+                    return CommandResult::Error(format!("Material {} not found", material_id.raw()));
+                }
+                // Update face material in mesh
+                for face_id in face_ids.iter() {
+                    if let Some(face) = self.mesh.faces.get_mut(*face_id) {
+                        face.set_material(material_id);
+                    }
+                }
+                // Volume → Xia 자동 승격: 재질이 부여된 face를 소유한 XIA 엔티티 찾기
+                for xia in self.xias.values_mut() {
+                    if xia.state == XiaState::Volume {
+                        // XIA의 face 중 하나라도 이번 할당 대상에 포함되면 승격
+                        let overlaps = xia.face_ids.iter().any(|f| face_ids.contains(f));
+                        if overlaps {
+                            let _ = lifecycle::promote_to_xia(xia);
+                        }
+                    }
+                }
+                CommandResult::MaterialAssigned {
+                    face_count: face_ids.len(),
+                }
+            }
+
+            Command::RemoveMaterial { face_ids } => {
+                let default_mat = self.default_material;
+                // Revert to default material
+                for face_id in face_ids.iter() {
+                    if let Some(face) = self.mesh.faces.get_mut(*face_id) {
+                        face.set_material(default_mat);
+                    }
+                }
+                // Xia → Volume 자동 강등: 재질이 해제된 face를 소유한 XIA 엔티티
+                for xia in self.xias.values_mut() {
+                    if xia.state == XiaState::Xia {
+                        let overlaps = xia.face_ids.iter().any(|f| face_ids.contains(f));
+                        if overlaps {
+                            // 모든 face가 default material이면 강등
+                            let all_default = xia.face_ids.iter().all(|fid| {
+                                self.mesh.faces.get(*fid)
+                                    .map(|f| f.material() == default_mat || f.material().raw() == 0)
+                                    .unwrap_or(true)
+                            });
+                            if all_default {
+                                let _ = lifecycle::demote_to_volume(xia);
+                            }
+                        }
+                    }
+                }
+                CommandResult::MaterialRemoved {
+                    face_count: face_ids.len(),
+                }
+            }
+
+            Command::CreateMaterial {
+                name,
+                name_en,
+                category,
+                physical,
+                visual,
+            } => {
+                let material_id = self.material_library.create_material(
+                    name,
+                    name_en,
+                    category,
+                    physical,
+                    visual,
+                );
+                CommandResult::MaterialCreated(material_id)
+            }
+        }
+    }
+
+    fn exec_draw_line(
+        &mut self,
+        start: DVec3,
+        end: DVec3,
+        surface_normal: Option<DVec3>,
+    ) -> CommandResult {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.mesh.snapshot());
+
+        match self.mesh.draw_line(start, end) {
+            Ok((_v0, _v1, _edge_id)) => {
+                let xia_id = self.create_xia("Line".to_string());
+                if let Some(xia) = self.xias.get_mut(&xia_id) {
+                    xia.state = XiaState::Line;
+                    xia.position = start;
+                    xia.surface_normal = surface_normal;
+                }
+                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.commit();
+                CommandResult::EntityCreated(xia_id)
+            }
+            Err(e) => {
+                self.transactions.cancel();
+                CommandResult::Error(e.to_string())
+            }
+        }
+    }
+
+    fn exec_draw_rect(
+        &mut self,
+        center: DVec3,
+        normal: DVec3,
+        up: DVec3,
+        width: f64,
+        height: f64,
+    ) -> CommandResult {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.mesh.snapshot());
+
+        match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
+            Ok((face_id, _verts)) => {
+                let xia_id = self.create_xia("Rectangle".to_string());
+                if let Some(xia) = self.xias.get_mut(&xia_id) {
+                    xia.state = XiaState::Face;
+                    xia.position = center;
+                    xia.surface_normal = Some(normal);
+                    xia.face_ids.push(face_id);
+                }
+                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.commit();
+                CommandResult::EntityCreated(xia_id)
+            }
+            Err(e) => {
+                self.transactions.cancel();
+                CommandResult::Error(e.to_string())
+            }
+        }
+    }
+
+    fn exec_draw_circle(
+        &mut self,
+        center: DVec3,
+        normal: DVec3,
+        radius: f64,
+        segments: u32,
+    ) -> CommandResult {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.mesh.snapshot());
+
+        match self.mesh.draw_circle(center, normal, radius, segments, self.default_material) {
+            Ok((face_id, _verts)) => {
+                let xia_id = self.create_xia("Circle".to_string());
+                if let Some(xia) = self.xias.get_mut(&xia_id) {
+                    xia.state = XiaState::Face;
+                    xia.position = center;
+                    xia.surface_normal = Some(normal);
+                    xia.face_ids.push(face_id);
+                }
+                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.commit();
+                CommandResult::EntityCreated(xia_id)
+            }
+            Err(e) => {
+                self.transactions.cancel();
+                CommandResult::Error(e.to_string())
+            }
+        }
+    }
+
+    fn exec_push_pull(
+        &mut self,
+        face_id: axia_geo::FaceId,
+        dist: f64,
+    ) -> CommandResult {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.mesh.snapshot());
+
+        match self.mesh.push_pull(face_id, dist, self.default_material) {
+            Ok(result) => {
+                // Update owning XIA's face list
+                let owning_xia = self.xias.values_mut().find(|xia| {
+                    xia.face_ids.contains(&face_id)
+                });
+
+                if let Some(xia) = owning_xia {
+                    let _ = lifecycle::promote_to_volume(xia);
+                    // If base was removed (inward push), drop it from XIA
+                    if result.base_removed {
+                        xia.face_ids.retain(|&f| f != face_id);
+                    }
+                    // Add new faces
+                    xia.face_ids.push(result.top_face);
+                    xia.face_ids.extend(result.side_faces.iter());
+                }
+
+                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.commit();
+                CommandResult::PushPullDone {
+                    sides_created: result.side_faces.len(),
+                    adj_splits: result.adjacent_splits,
+                    base_removed: result.base_removed,
+                    split_debug: result.split_debug,
+                }
+            }
+            Err(e) => {
+                self.transactions.cancel();
+                CommandResult::Error(e.to_string())
+            }
+        }
+    }
+
+    fn exec_move(&mut self, _xia_ids: Vec<XiaId>, _delta: DVec3) -> CommandResult {
+        // TODO: Implement move by updating vertex positions in the mesh
+        CommandResult::None
+    }
+
+    /// Export the mesh buffers for GPU rendering.
+    pub fn export_mesh_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>)> {
+        self.mesh.export_buffers()
+    }
+
+    /// Export hard edge line segments for wireframe rendering.
+    /// Coplanar edges (angle ≤ threshold) are hidden — like SketchUp's soft/smooth edges.
+    pub fn export_edge_lines(&self, angle_threshold_deg: f64) -> Vec<f32> {
+        self.mesh.export_edge_lines(angle_threshold_deg)
+    }
+
+    /// Export edge lines + edge ID map (segment index → EdgeId raw)
+    pub fn export_edge_lines_with_map(&self, angle_threshold_deg: f64) -> (Vec<f32>, Vec<u32>) {
+        self.mesh.export_edge_lines_with_map(angle_threshold_deg)
+    }
+
+    /// Orient all faces for consistent normals (SketchUp "Orient Faces").
+    pub fn orient_faces(&mut self) -> (usize, usize) {
+        match self.mesh.orient_faces() {
+            Ok(r) => (r.flipped, r.visited),
+            Err(_) => (0, 0),
+        }
+    }
+
+    /// Get mesh statistics.
+    pub fn stats(&self) -> SceneStats {
+        SceneStats {
+            xia_count: self.xias.len(),
+            vert_count: self.mesh.vert_count(),
+            edge_count: self.mesh.edge_count(),
+            face_count: self.mesh.face_count(),
+            group_count: self.groups.group_count(),
+            component_count: self.groups.component_def_count(),
+            can_undo: self.transactions.can_undo(),
+            can_redo: self.transactions.can_redo(),
+        }
+    }
+
+    /// Export scene state with version header
+    pub fn export_versioned_snapshot(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&AXIA_MAGIC);
+        buf.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
+        let mesh_data = bincode::serialize(&self.mesh)?;
+        buf.extend_from_slice(&(mesh_data.len() as u32).to_le_bytes());
+        buf.extend(mesh_data);
+        Ok(buf)
+    }
+
+    /// Import scene state with version validation
+    pub fn import_versioned_snapshot(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() < 12 {
+            // Try legacy format (no header)
+            return self.import_legacy_snapshot(data);
+        }
+        if &data[0..4] != &AXIA_MAGIC {
+            // Legacy format without header
+            return self.import_legacy_snapshot(data);
+        }
+        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        match version {
+            1 => {
+                let mesh_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+                if data.len() < 12 + mesh_len {
+                    anyhow::bail!("Snapshot data is truncated");
+                }
+                let mesh_data = &data[12..12+mesh_len];
+                self.mesh = bincode::deserialize(mesh_data)?;
+                Ok(())
+            }
+            _ => anyhow::bail!("Unsupported snapshot version: {}", version),
+        }
+    }
+
+    /// Import legacy snapshot format (no version header, direct bincode)
+    fn import_legacy_snapshot(&mut self, data: &[u8]) -> Result<()> {
+        self.mesh = bincode::deserialize(data)?;
+        Ok(())
+    }
+}
+
+impl Default for Scene {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SceneStats {
+    pub xia_count: usize,
+    pub vert_count: usize,
+    pub edge_count: usize,
+    pub face_count: usize,
+    pub group_count: usize,
+    pub component_count: usize,
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scene_creation() {
+        let scene = Scene::new();
+        assert_eq!(scene.xias.len(), 0, "new scene should have no XIAs");
+        assert_eq!(scene.mesh.vert_count(), 0, "new scene should have empty mesh");
+        assert_eq!(scene.mesh.face_count(), 0);
+        assert!(!scene.transactions.can_undo(), "new scene should not have undo");
+    }
+
+    #[test]
+    fn test_scene_default() {
+        let scene = Scene::default();
+        assert_eq!(scene.xias.len(), 0);
+        assert_eq!(scene.mesh.vert_count(), 0);
+    }
+
+    #[test]
+    fn test_scene_stats_empty() {
+        let scene = Scene::new();
+        let stats = scene.stats();
+        assert_eq!(stats.xia_count, 0);
+        assert_eq!(stats.vert_count, 0);
+        assert_eq!(stats.edge_count, 0);
+        assert_eq!(stats.face_count, 0);
+        assert!(!stats.can_undo);
+        assert!(!stats.can_redo);
+    }
+
+    #[test]
+    fn test_draw_rectangle_creates_xia() {
+        let mut scene = Scene::new();
+        let center = DVec3::new(0.0, 0.0, 0.0);
+        let normal = DVec3::Z;
+        let up = DVec3::Y;
+
+        let result = scene.execute(Command::DrawRect {
+            center,
+            normal,
+            up,
+            width: 2.0,
+            height: 2.0,
+        });
+
+        match result {
+            CommandResult::EntityCreated(xia_id) => {
+                assert!(scene.xias.contains_key(&xia_id), "XIA should be created");
+                assert_eq!(scene.mesh.face_count(), 1, "should have 1 face");
+                let xia = &scene.xias[&xia_id];
+                assert_eq!(xia.face_ids.len(), 1, "XIA should own the face");
+            }
+            _ => panic!("expected EntityCreated result"),
+        }
+    }
+
+    #[test]
+    fn test_draw_line_creates_edge() {
+        let mut scene = Scene::new();
+        let start = DVec3::ZERO;
+        let end = DVec3::X;
+
+        let result = scene.execute(Command::DrawLine {
+            start,
+            end,
+            surface_normal: None,
+        });
+
+        match result {
+            CommandResult::EntityCreated(xia_id) => {
+                assert!(scene.xias.contains_key(&xia_id), "XIA should be created");
+                assert_eq!(scene.mesh.vert_count(), 2, "should create 2 vertices");
+            }
+            _ => panic!("expected EntityCreated result"),
+        }
+    }
+
+    #[test]
+    fn test_draw_circle_creates_face() {
+        let mut scene = Scene::new();
+        let center = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let radius = 1.0;
+        let segments = 8;
+
+        let result = scene.execute(Command::DrawCircle {
+            center,
+            normal,
+            radius,
+            segments,
+        });
+
+        match result {
+            CommandResult::EntityCreated(xia_id) => {
+                assert!(scene.xias.contains_key(&xia_id));
+                assert_eq!(scene.mesh.face_count(), 1);
+                let xia = &scene.xias[&xia_id];
+                assert!(!xia.face_ids.is_empty());
+            }
+            _ => panic!("expected EntityCreated result"),
+        }
+    }
+
+    #[test]
+    fn test_push_pull_creates_faces() {
+        let mut scene = Scene::new();
+        // First, create a rectangle
+        let center = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let up = DVec3::Y;
+        let result = scene.execute(Command::DrawRect {
+            center,
+            normal,
+            up,
+            width: 2.0,
+            height: 2.0,
+        });
+
+        let xia_id = match result {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        // Get the face ID
+        let face_id = scene.xias[&xia_id].face_ids[0];
+
+        // Push/pull the face
+        let pp_result = scene.execute(Command::PushPull {
+            face_id,
+            dist: 2.0,
+        });
+
+        match pp_result {
+            CommandResult::PushPullDone { sides_created, .. } => {
+                assert!(sides_created > 0, "should create side faces");
+                // Original rectangle + top + sides = 6 faces (box)
+                assert_eq!(scene.mesh.face_count(), 6, "box should have 6 faces");
+            }
+            _ => panic!("expected PushPullDone result"),
+        }
+    }
+
+    #[test]
+    fn test_undo_rectangle() {
+        let mut scene = Scene::new();
+        let center = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let up = DVec3::Y;
+
+        scene.execute(Command::DrawRect {
+            center,
+            normal,
+            up,
+            width: 2.0,
+            height: 2.0,
+        });
+
+        assert_eq!(scene.mesh.face_count(), 1);
+        assert!(scene.transactions.can_undo(), "should have undo after draw");
+
+        // Undo
+        let result = scene.execute(Command::Undo);
+        match result {
+            CommandResult::MeshUpdated => {
+                assert_eq!(scene.mesh.face_count(), 0, "undo should remove face");
+            }
+            _ => panic!("expected MeshUpdated result"),
+        }
+    }
+
+    #[test]
+    fn test_undo_redo_sequence() {
+        let mut scene = Scene::new();
+        let center = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let up = DVec3::Y;
+
+        // Draw rect
+        scene.execute(Command::DrawRect {
+            center,
+            normal,
+            up,
+            width: 2.0,
+            height: 2.0,
+        });
+        assert_eq!(scene.mesh.face_count(), 1);
+
+        // Undo
+        scene.execute(Command::Undo);
+        assert_eq!(scene.mesh.face_count(), 0);
+
+        // Redo
+        let result = scene.execute(Command::Redo);
+        match result {
+            CommandResult::MeshUpdated => {
+                assert_eq!(scene.mesh.face_count(), 1, "redo should restore face");
+            }
+            _ => panic!("expected MeshUpdated result"),
+        }
+    }
+
+    #[test]
+    fn test_push_pull_and_undo() {
+        let mut scene = Scene::new();
+
+        // Create rectangle
+        let result = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let xia_id = match result {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        let face_id = scene.xias[&xia_id].face_ids[0];
+        assert_eq!(scene.mesh.face_count(), 1);
+
+        // Push/pull
+        scene.execute(Command::PushPull {
+            face_id,
+            dist: 2.0,
+        });
+        assert_eq!(scene.mesh.face_count(), 6);
+
+        // Undo push/pull
+        scene.execute(Command::Undo);
+        assert_eq!(scene.mesh.face_count(), 1, "undo should restore to rectangle");
+    }
+
+    #[test]
+    fn test_selection_single() {
+        let mut scene = Scene::new();
+
+        // Create two rectangles
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let xia_id_1 = match r1 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        let r2 = scene.execute(Command::DrawRect {
+            center: DVec3::new(3.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let xia_id_2 = match r2 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        // Select first
+        scene.execute(Command::Select {
+            xia_id: xia_id_1,
+            additive: false,
+        });
+        assert!(scene.xias[&xia_id_1].selected);
+        assert!(!scene.xias[&xia_id_2].selected);
+
+        // Select second (non-additive)
+        scene.execute(Command::Select {
+            xia_id: xia_id_2,
+            additive: false,
+        });
+        assert!(!scene.xias[&xia_id_1].selected);
+        assert!(scene.xias[&xia_id_2].selected);
+    }
+
+    #[test]
+    fn test_selection_additive() {
+        let mut scene = Scene::new();
+
+        // Create two rectangles
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let xia_id_1 = match r1 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        let r2 = scene.execute(Command::DrawRect {
+            center: DVec3::new(3.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let xia_id_2 = match r2 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        // Select first
+        scene.execute(Command::Select {
+            xia_id: xia_id_1,
+            additive: false,
+        });
+
+        // Select second additive
+        scene.execute(Command::Select {
+            xia_id: xia_id_2,
+            additive: true,
+        });
+        assert!(scene.xias[&xia_id_1].selected, "first should still be selected");
+        assert!(scene.xias[&xia_id_2].selected, "second should be selected");
+    }
+
+    #[test]
+    fn test_deselect_all() {
+        let mut scene = Scene::new();
+
+        // Create and select rectangles
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let xia_id_1 = match r1 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        scene.execute(Command::Select {
+            xia_id: xia_id_1,
+            additive: false,
+        });
+        assert!(scene.xias[&xia_id_1].selected);
+
+        // Deselect all
+        scene.execute(Command::DeselectAll);
+        assert!(!scene.xias[&xia_id_1].selected);
+    }
+
+    #[test]
+    fn test_multiple_operations_consistency() {
+        let mut scene = Scene::new();
+
+        // Draw rectangle
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        let _xia_id = match r1 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("expected EntityCreated"),
+        };
+
+        // Draw circle
+        scene.execute(Command::DrawCircle {
+            center: DVec3::new(5.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 1.0,
+            segments: 16,
+        });
+
+        assert_eq!(scene.xias.len(), 2, "should have 2 XIAs");
+        assert_eq!(scene.mesh.face_count(), 2, "should have 2 faces");
+
+        // Undo both
+        scene.execute(Command::Undo);
+        scene.execute(Command::Undo);
+
+        assert_eq!(scene.mesh.face_count(), 0, "undo should clear all");
+
+        // Redo
+        scene.execute(Command::Redo);
+        scene.execute(Command::Redo);
+
+        assert_eq!(scene.mesh.face_count(), 2, "redo should restore all");
+    }
+}

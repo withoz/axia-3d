@@ -1,0 +1,34 @@
+{
+  "name": "axia-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "wasm:build": "cd ../crates/axia-wasm && wasm-pack build --target web --out-dir ../../web/src/wasm",
+    "wasm:verify": "node scripts/verify-wasm.mjs"
+  },
+  "dependencies": {
+    "@mlightcad/libredwg-web": "^0.6.10",
+    "dwgdxf": "^1.0.5",
+    "dxf": "^5.3.1",
+    "jszip": "^3.10.1",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vite-plugin-wasm": "^3.4.1",
+    "vitest": "^3.2.4"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.60.1"
+  }
+}
