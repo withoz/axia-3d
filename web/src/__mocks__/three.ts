@@ -37,6 +37,7 @@ export class Vector3 {
   length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); }
   normalize() { const l = this.length() || 1; return this.multiplyScalar(1 / l); }
   distanceTo(v: Vector3) { return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z); }
+  addScaledVector(v: Vector3, s: number) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
   project(_camera: any) { return this; }
   toArray() { return [this.x, this.y, this.z]; }
 }
@@ -69,6 +70,7 @@ export class BufferGeometry {
   setIndex(index: any) { this.index = index; }
   dispose() {}
   computeVertexNormals() {}
+  setFromPoints(_points: any[]) { return this; }
 }
 
 export class BufferAttribute {
@@ -81,6 +83,7 @@ export class Material { dispose() {} }
 export class MeshStandardMaterial extends Material { color = new Color(); }
 export class MeshBasicMaterial extends Material { color = new Color(); }
 export class LineBasicMaterial extends Material { color = new Color(); }
+export class PointsMaterial extends Material { color = new Color(); size = 1; }
 
 export class Object3D {
   children: Object3D[] = [];
@@ -111,6 +114,16 @@ export class Mesh extends Object3D {
   }
 }
 
+export class Line extends Object3D {
+  geometry: BufferGeometry;
+  material: Material;
+  constructor(geometry?: BufferGeometry, material?: Material) {
+    super();
+    this.geometry = geometry || new BufferGeometry();
+    this.material = material || new Material();
+  }
+}
+
 export class LineSegments extends Object3D {
   geometry: BufferGeometry;
   material: Material;
@@ -121,7 +134,19 @@ export class LineSegments extends Object3D {
   }
 }
 
-export class Group extends Object3D {}
+export class Points extends Object3D {
+  geometry: BufferGeometry;
+  material: Material;
+  constructor(geometry?: BufferGeometry, material?: Material) {
+    super();
+    this.geometry = geometry || new BufferGeometry();
+    this.material = material || new Material();
+  }
+}
+
+export class Group extends Object3D {
+  clear() { this.children.length = 0; return this; }
+}
 
 export class Scene extends Object3D {}
 
@@ -141,16 +166,6 @@ export class WebGLRenderer {
   setPixelRatio() {}
   render() {}
   dispose() {}
-}
-
-export class Points extends Object3D {
-  geometry: BufferGeometry;
-  material: Material;
-  constructor(geometry?: BufferGeometry, material?: Material) {
-    super();
-    this.geometry = geometry || new BufferGeometry();
-    this.material = material || new Material();
-  }
 }
 
 export const DoubleSide = 2;
