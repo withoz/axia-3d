@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DXF Parse Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    #output { background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 4px; max-height: 500px; overflow-y: auto; white-space: pre-wrap; }
+    button { padding: 10px 20px; margin: 10px 0; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>DXF Parser Test</h1>
+  <button onclick="testDXFParser()">Test DXF Parsing</button>
+  <div id="output">Waiting for test...</div>
+
+  <script type="module">
+    // Import the DXF parser
+    import { parseString } from 'https://cdn.jsdelivr.net/npm/dxf@5.3.1/dist/dxf.js';
+
+    window.testDXFParser = function() {
+      const output = document.getElementById('output');
+      output.textContent = 'Testing DXF parser...\n';
+
+      const dxfContent = `999
+Test DXF File
+0
+SECTION
+2
+HEADER
+9
+$ACADVER
+1
+AC1015
+9
+$EXTMIN
+10
+0.0
+20
+0.0
+30
+0.0
+9
+$EXTMAX
+10
+1000.0
+20
+1000.0
+30
+0.0
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+LINE
+8
+0
+10
+0.0
+20
+0.0
+30
+0.0
+11
+1000.0
+21
+0.0
+31
+0.0
+0
+CIRCLE
+8
+0
+10
+500.0
+20
+500.0
+30
+0.0
+40
+200.0
+0
+LINE
+8
+0
+10
+100.0
+20
+100.0
+30
+0.0
+11
+900.0
+21
+900.0
+31
+0.0
+0
+ENDSEC
+0
+EOF
+`;
+
+      try {
+        output.textContent += 'Calling parseString()...\n';
+        const dxfData = parseString(dxfContent);
+        output.textContent += 'SUCCESS! Parsing completed.\n';
+        output.textContent += 'Result:\n' + JSON.stringify(dxfData, null, 2);
+      } catch (err) {
+        output.textContent += 'ERROR:\n' + err.toString() + '\n' + err.stack;
+      }
+    };
+
+    // Auto-run test on load
+    window.addEventListener('load', () => {
+      window.testDXFParser();
+    });
+  </script>
+</body>
+</html>

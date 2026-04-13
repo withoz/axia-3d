@@ -1,0 +1,237 @@
+/* Material Properties Panel Styles */
+
+.material-properties-panel {
+  background: #2a2e37;
+  color: #e8e8e8;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 12px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.mat-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #3a3f48;
+}
+
+.mat-panel-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.mat-panel-built-in {
+  font-size: 10px;
+  background: #4a5f8f;
+  color: #e0e8ff;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* 섹션 */
+.mat-panel-section {
+  margin-bottom: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid #3a3f48;
+}
+
+.mat-panel-section:last-child {
+  border-bottom: none;
+}
+
+.mat-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #a8b0b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+/* 행 */
+.mat-panel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  padding: 4px 0;
+}
+
+.mat-panel-row label {
+  flex: 0 0 auto;
+  width: 80px;
+  font-size: 11px;
+  color: #9a9fa8;
+  font-weight: 500;
+}
+
+/* 입력 필드 */
+.mat-input {
+  flex: 1;
+  background: #1e2228;
+  border: 1px solid #3a3f48;
+  color: #e8e8e8;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+.mat-input:focus {
+  outline: none;
+  border-color: #5b9bd5;
+  background: #252b32;
+}
+
+.mat-input-number {
+  flex: 1;
+  background: #1e2228;
+  border: 1px solid #3a3f48;
+  color: #e8e8e8;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  text-align: right;
+}
+
+.mat-input-number:focus {
+  outline: none;
+  border-color: #5b9bd5;
+  background: #252b32;
+}
+
+.mat-select {
+  flex: 1;
+  background: #1e2228;
+  border: 1px solid #3a3f48;
+  color: #e8e8e8;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-left: 8px;
+  cursor: pointer;
+}
+
+.mat-select:focus {
+  outline: none;
+  border-color: #5b9bd5;
+}
+
+.mat-select option {
+  background: #1e2228;
+  color: #e8e8e8;
+}
+
+/* 단위 및 값 */
+.mat-input-unit {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.mat-unit {
+  font-size: 10px;
+  color: #7a8090;
+  width: 50px;
+  text-align: left;
+}
+
+.mat-value {
+  font-size: 10px;
+  color: #5b9bd5;
+  width: 40px;
+  text-align: right;
+  font-weight: 500;
+}
+
+/* Range slider */
+.mat-input-slider {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #3a3f48 0%, #5b9bd5 100%);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.mat-input-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #5b9bd5;
+  cursor: pointer;
+  border: 1px solid #3a8fd9;
+  box-shadow: 0 0 3px rgba(91, 155, 213, 0.5);
+}
+
+.mat-input-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #5b9bd5;
+  cursor: pointer;
+  border: 1px solid #3a8fd9;
+  box-shadow: 0 0 3px rgba(91, 155, 213, 0.5);
+}
+
+/* 색상 선택 */
+.mat-color-picker {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.mat-input-color {
+  width: 30px;
+  height: 24px;
+  border: 1px solid #3a3f48;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.mat-input-color:focus {
+  outline: none;
+  border-color: #5b9bd5;
+  box-shadow: 0 0 4px rgba(91, 155, 213, 0.3);
+}
+
+.mat-color-hex {
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  color: #9a9fa8;
+  min-width: 50px;
+}
+
+/* 스크롤바 커스텀 */
+.material-properties-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.material-properties-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.material-properties-panel::-webkit-scrollbar-thumb {
+  background: #3a3f48;
+  border-radius: 3px;
+}
+
+.material-properties-panel::-webkit-scrollbar-thumb:hover {
+  background: #4a5059;
+}

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DXF Upload Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      border-bottom: 3px solid #007bff;
+      padding-bottom: 10px;
+    }
+    input[type="file"] {
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 10px 5px 10px 0;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    #console {
+      background: #1e1e1e;
+      color: #00ff00;
+      padding: 15px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      height: 400px;
+      overflow-y: auto;
+      margin-top: 20px;
+      border: 1px solid #333;
+    }
+    .log {
+      margin: 2px 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .log-info { color: #00ff00; }
+    .log-error { color: #ff4444; }
+    .log-success { color: #44ff44; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 DXF Upload Test</h1>
+
+    <div>
+      <label>Select a DXF file:</label>
+      <input type="file" id="dxfFile" accept=".dxf" />
+      <button onclick="testDXFUpload()">Test Upload</button>
+      <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <div id="console"></div>
+  </div>
+
+  <script type="module">
+    const consoleEl = document.getElementById('console');
+
+    window.log = function(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString('ko-KR');
+      const logEl = document.createElement('div');
+      logEl.className = `log log-${type}`;
+      logEl.textContent = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
+      consoleEl.appendChild(logEl);
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+      console.log(`[${type}] ${message}`);
+    };
+
+    window.clearLog = function() {
+      consoleEl.innerHTML = '';
+      window.log('Console cleared', 'info');
+    };
+
+    window.testDXFUpload = async function() {
+      const fileInput = document.getElementById('dxfFile');
+      const file = fileInput.files[0];
+
+      if (!file) {
+        window.log('Please select a DXF file first', 'error');
+        return;
+      }
+
+      window.log(`Testing DXF file: ${file.name}`, 'info');
+      window.log(`File size: ${(file.size / 1024).toFixed(2)} KB`, 'info');
+
+      try {
+        // Read file as text
+        window.log('Reading file...', 'info');
+        const text = await file.text();
+        window.log(`File read successfully, ${text.length} characters`, 'success');
+
+        // Test parseString function
+        window.log('Importing DXF module...', 'info');
+        const dxfModule = await import('/dist/assets/index-7PkFbUUR.js');
+
+        // Since we can't directly import parseString, let's test parsing manually
+        // This is a simple DXF structure test
+        if (text.includes('SECTION') && text.includes('ENTITIES')) {
+          window.log('✓ Valid DXF file structure detected', 'success');
+
+          // Count entity types
+          const lineCount = (text.match(/^0\nLINE$/gm) || []).length;
+          const circleCount = (text.match(/^0\nCIRCLE$/gm) || []).length;
+          const arcCount = (text.match(/^0\nARC$/gm) || []).length;
+
+          window.log(`Found ${lineCount} LINEs`, 'info');
+          window.log(`Found ${circleCount} CIRCLEs`, 'info');
+          window.log(`Found ${arcCount} ARCs`, 'info');
+          window.log(`Total entities: ${lineCount + circleCount + arcCount}`, 'success');
+        } else {
+          window.log('✗ Invalid DXF file structure', 'error');
+        }
+
+      } catch (err) {
+        window.log(`Error: ${err.message}`, 'error');
+        window.log(`Stack: ${err.stack}`, 'error');
+      }
+    };
+
+    // Log on page load
+    window.addEventListener('load', () => {
+      window.log('DXF Upload Test Page Ready', 'success');
+      window.log('Select a DXF file and click "Test Upload" to begin', 'info');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+[package]
+name = "axia-geo"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "AXiA 3D geometry kernel — Half-Edge DCEL topology, mesh operations, triangulation"
+
+[dependencies]
+glam = { workspace = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true }
+bitflags = { workspace = true }
+earcutr = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+bytemuck = { workspace = true }
+axia-transaction = { workspace = true }

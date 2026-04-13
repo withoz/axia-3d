@@ -1,0 +1,16 @@
+[package]
+name = "axia-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "AXiA 3D core — XIA object model, lifecycle, command pattern"
+
+[dependencies]
+glam = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+axia-geo = { workspace = true }
+axia-transaction = { workspace = true }
+dxf = { workspace = true }

@@ -1,0 +1,25 @@
+[package]
+name = "axia-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "AXiA 3D WASM bridge — wasm-bindgen exports for Three.js viewport"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+axia-core = { workspace = true }
+axia-geo = { workspace = true }
+axia-transaction = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+glam = { workspace = true }
+uuid = { workspace = true }
+getrandom = { version = "0.2", features = ["js"] }
