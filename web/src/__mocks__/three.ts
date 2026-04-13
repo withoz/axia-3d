@@ -8,6 +8,8 @@ export class Vector2 {
   constructor(x = 0, y = 0) { this.x = x; this.y = y; }
   set(x: number, y: number) { this.x = x; this.y = y; return this; }
   copy(v: Vector2) { this.x = v.x; this.y = v.y; return this; }
+  length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+  normalize() { const l = this.length() || 1; this.x /= l; this.y /= l; return this; }
   distanceTo(v: Vector2) { return Math.hypot(this.x - v.x, this.y - v.y); }
 }
 
@@ -38,6 +40,7 @@ export class Vector3 {
   normalize() { const l = this.length() || 1; return this.multiplyScalar(1 / l); }
   distanceTo(v: Vector3) { return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z); }
   addScaledVector(v: Vector3, s: number) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
+  setFromMatrixColumn(_matrix: any, _index: number) { return this; }
   project(_camera: any) { return this; }
   toArray() { return [this.x, this.y, this.z]; }
 }
@@ -53,7 +56,11 @@ export class Plane {
 }
 
 export class Raycaster {
-  ray = { origin: new Vector3(), direction: new Vector3() };
+  ray = {
+    origin: new Vector3(),
+    direction: new Vector3(),
+    intersectPlane(_plane: any, target: Vector3) { return target; },
+  };
   setFromCamera(_coords: Vector2, _camera: any) {}
 }
 
