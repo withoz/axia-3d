@@ -239,7 +239,7 @@ async function main() {
   const undoBtn = toolbar.querySelector('[data-tool="undo"]');
   const redoBtn = toolbar.querySelector('[data-tool="redo"]');
 
-  setInterval(() => {
+  const statsIntervalId = setInterval(() => {
     const stats = bridge.getStats();
     document.getElementById('stat-verts')!.textContent = String(stats.verts);
     document.getElementById('stat-faces')!.textContent = String(stats.faces);
@@ -249,6 +249,13 @@ async function main() {
     if (undoBtn) undoBtn.classList.toggle('disabled', stats.canUndo === false);
     if (redoBtn) redoBtn.classList.toggle('disabled', stats.canRedo === false);
   }, 200);
+
+  // Cleanup on page unload
+  window.addEventListener('beforeunload', () => {
+    clearInterval(statsIntervalId);
+    viewport.stop();
+    viewport.dispose();
+  });
 
   // 9. VCB (Value Control Box) — see ui/VCB.ts
   initVCB({ toolManager, units });

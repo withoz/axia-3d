@@ -108,32 +108,29 @@ export class FileImporter {
         input.type = 'file';
         input.accept = accept;
         input.style.display = 'none';
-        input.style.visibility = 'hidden';
-        input.style.position = 'absolute';
-        input.style.left = '-9999px';
-
-        // DOM에 추가
         document.body.appendChild(input);
-        console.log(`[FileImporter] 파일 선택 대화 열기: ${format || '모든 형식'}`);
 
-        input.addEventListener('change', async (event) => {
+        // Cleanup helper — removes DOM element and listeners exactly once
+        let cleaned = false;
+        const cleanup = () => {
+          if (cleaned) return;
+          cleaned = true;
+          input.removeEventListener('change', onChange);
+          input.removeEventListener('cancel', onCancel);
+          if (input.parentNode) input.parentNode.removeChild(input);
+        };
+
+        const onChange = async (event: Event) => {
           const files = (event.target as HTMLInputElement).files;
           const file = files?.[0];
-
-          try {
-            document.body.removeChild(input);
-          } catch (e) {
-            // 이미 제거된 경우 무시
-          }
+          cleanup();
 
           if (!file) {
-            console.log('[FileImporter] 파일 선택 취소됨');
             resolve(null);
             return;
           }
 
           try {
-            console.log(`[FileImporter] 파일 선택됨: ${file.name}`);
             const result = await this.importFile(file, format);
             resolve(result);
           } catch (err) {
@@ -141,30 +138,23 @@ export class FileImporter {
             alert(`파일 가져오기 실패: ${(err as Error).message}`);
             resolve(null);
           }
-        });
+        };
 
-        input.addEventListener('cancel', () => {
-          console.log('[FileImporter] 파일 선택 대화 취소됨');
-          try {
-            document.body.removeChild(input);
-          } catch (e) {
-            // 이미 제거된 경우 무시
-          }
+        const onCancel = () => {
+          cleanup();
           resolve(null);
-        });
+        };
+
+        input.addEventListener('change', onChange);
+        input.addEventListener('cancel', onCancel);
 
         // 약간의 딜레이 후 클릭 (브라우저 호환성)
         setTimeout(() => {
           try {
             input.click();
-            console.log('[FileImporter] 파일 선택 대화 트리거 완료');
           } catch (e) {
             console.error('[FileImporter] 파일 선택 대화 실패:', e);
-            try {
-              document.body.removeChild(input);
-            } catch (ex) {
-              // 무시
-            }
+            cleanup();
             resolve(null);
           }
         }, 50);
