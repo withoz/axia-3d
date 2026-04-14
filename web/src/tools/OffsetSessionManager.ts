@@ -122,17 +122,13 @@ export class OffsetSessionManager {
       const faceId = faceIds[i];
       
       // 면의 centroid 구하기
-      const centroidData = this.ctx.bridge.facesCentroid(new Uint32Array([faceId]));
+      const centroidData = this.ctx.bridge.facesCentroid([faceId]);
       const normal = this.ctx.bridge.getFaceNormal(faceId);
 
       if (!centroidData || !normal) continue;
 
-      // centroidData는 Float32Array 또는 Float64Array
-      const centroid = new THREE.Vector3(
-        centroidData[0] as number,
-        centroidData[1] as number,
-        centroidData[2] as number
-      );
+      // centroidData는 Vector3
+      const centroid = centroidData.clone();
 
       const n = new THREE.Vector3(normal[0], normal[1], normal[2]).normalize();
       const length = Math.abs(distance) || 5;

@@ -244,7 +244,7 @@ describe('WasmBridge', () => {
     });
 
     it('scaleFaces returns true', () => {
-      expect(bridge.scaleFaces([1], 0, 0, 0, 2.0)).toBe(true);
+      expect(bridge.scaleFaces([1], 0, 0, 0, 2.0, 2.0, 2.0)).toBe(true);
     });
   });
 
@@ -259,7 +259,7 @@ describe('WasmBridge', () => {
     it('offsetFace returns result with ok', () => {
       const result = bridge.offsetFace(1, 10);
       expect(result).toBeTruthy();
-      expect(result.ok).toBe(true);
+      expect(result!.ok).toBe(true);
     });
 
     it('offsetEdge returns result', () => {
@@ -272,15 +272,15 @@ describe('WasmBridge', () => {
     it('getXiaInfo returns parsed JSON', () => {
       const info = bridge.getXiaInfo([1]);
       expect(info).toBeTruthy();
-      expect(info.isSolid).toBe(true);
+      expect(info!.isSolid).toBe(true);
     });
   });
 
   describe('boolean operations', () => {
     it('booleanOp returns result', () => {
-      const result = bridge.booleanOp('union', [1], [2]);
+      const result = bridge.booleanOp([1], [2], 'union');
       expect(result).toBeTruthy();
-      expect(result.ok).toBe(true);
+      expect(result!.ok).toBe(true);
     });
   });
 
@@ -297,7 +297,7 @@ describe('WasmBridge', () => {
     it('getGroupInfo returns parsed JSON', () => {
       const info = bridge.getGroupInfo(1);
       expect(info).toBeTruthy();
-      expect(info.id).toBe(1);
+      expect(info!.id).toBe(1);
     });
 
     it('getAllGroups returns array', () => {

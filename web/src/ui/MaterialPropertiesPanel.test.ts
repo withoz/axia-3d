@@ -5,6 +5,7 @@ import { Material } from '../materials/MaterialLibrary';
 function createMaterial(): Material {
   return {
     id: 'test-mat',
+    rustId: 99,
     name: '테스트 재질',
     nameEn: 'Test Material',
     category: 'concrete',

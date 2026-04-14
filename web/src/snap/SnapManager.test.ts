@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as THREE from 'three';
 import { SnapManager } from './SnapManager';
 import type { SnapType } from './SnapManager';
 
@@ -130,7 +131,7 @@ describe('SnapManager', () => {
   // ── setReferencePoint ──
 
   it('setReferencePoint accepts Vector3', () => {
-    const { Vector3 } = require('three');
+    const { Vector3 } = THREE;
     snap.setReferencePoint(new Vector3(10, 20, 30));
     // Should not throw
   });
@@ -143,7 +144,7 @@ describe('SnapManager', () => {
   // ── addTrackPoint / clearTrackPoints ──
 
   it('addTrackPoint and clearTrackPoints', () => {
-    const { Vector3 } = require('three');
+    const { Vector3 } = THREE;
     snap.addTrackPoint(new Vector3(1, 0, 0));
     snap.addTrackPoint(new Vector3(0, 1, 0));
     // Should not throw
@@ -154,7 +155,7 @@ describe('SnapManager', () => {
   // ── setMid2pFirst ──
 
   it('setMid2pFirst accepts Vector3 or null', () => {
-    const { Vector3 } = require('three');
+    const { Vector3 } = THREE;
     snap.setMid2pFirst(new Vector3(5, 5, 5));
     snap.setMid2pFirst(null);
     // Should not throw
@@ -163,7 +164,7 @@ describe('SnapManager', () => {
   // ── setParallelRef ──
 
   it('setParallelRef accepts Vector3 or null', () => {
-    const { Vector3 } = require('three');
+    const { Vector3 } = THREE;
     snap.setParallelRef(new Vector3(1, 0, 0));
     snap.setParallelRef(null);
     // Should not throw

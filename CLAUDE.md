@@ -282,16 +282,77 @@ interface GroupInfo {
 4. **`as any` 27개** — WasmBridge 8개는 Rust 빌드 필요, 나머지 의도적 캐스팅 (위험도 낮음)
 8. **dist/ 오래된 빌드 파일** — worktree에는 빌드 없음, 메인 repo에서 배포 전 수동 정리
 
-## Phase D 완료 내역 (2026-04-13, PR #2)
+## Phase D 완료 내역 (2026-04-14, PR #2)
 
-### ✅ 테스트 확충 (6개 suite, 62개 테스트)
+### ✅ 테스트 확충 (51개 suite, 837개 테스트)
+
+**Core / Bridge / File:**
+- WasmBridge.test.ts (39) — WASM 통신, 메시 버퍼, draw/push_pull/undo/redo, 그룹, boolean, DXF
 - ServiceContainer.test.ts (12) — DI 컨테이너 register/get/freeze
-- SnapManager.test.ts (17) — 스냅 모드/토글/오버라이드
-- SelectionManager.test.ts (9) — 클릭/Shift/Ctrl 선택, onChange
-- FileManager.test.ts (7) — AXIA 포맷 파싱, 파일명 관리
-- DxfExporter.test.ts (8) — DXF 출력 포맷 검증
+- FileManager.test.ts (14) — AXIA 포맷 파싱, 저장/로드, 콜백, 재질 라이브러리
 - FileImporter.test.ts (9) — 포맷 감지, 구조 검증
-- vitest.config.ts Three.js alias 수정 (subpath import 지원)
+
+**Tools:**
+- ToolManagerRefactored.test.ts (39) — 도구 전환, 액션 디스패치, syncMesh, 프리미티브 등록
+- SelectionManager.test.ts (39) — 면/엣지 선택, 그룹 CRUD, 그룹 편집 모드, onChange
+- DrawLineTool.test.ts (14) — 상태 머신 (Idle→Armed→Drawing), VCB 입력
+- DrawRectTool.test.ts (8) — 첫 클릭 시작점, isBusy, activate/deactivate
+- DrawCircleTool.test.ts (8) — 첫 클릭 중심점, isBusy, activate/deactivate
+- PushPullTool.test.ts (15) — 면 선택, VCB 입력, smooth group
+- OffsetTool.test.ts (13) — 면 선택, VCB 입력, 커서 변경
+- OffsetSessionManager.test.ts (15) — start, isActive, distance, session, dispose
+- MoveTool.test.ts (14) — 이동 도구 활성화/비활성화, 면 선택
+- RotateTool.test.ts (14) — 회전 도구, 축 설정
+- ScaleTool.test.ts (14) — 스케일 도구, 균일/비균일
+- EraseTool.test.ts (15) — 삭제 도구, 면/엣지 삭제
+- SelectTool.test.ts (13) — 선택 도구, 드래그 선택
+- GroupTool.test.ts (18) — 그룹 생성/편집/해제
+
+**Primitives:**
+- SphereTool.test.ts (7) — 이름, isBusy, 생성 플로우
+- ConeTool.test.ts (9) — 3클릭 플로우 (앵커→반지름→높이)
+- CylinderTool.test.ts (8) — 3클릭 플로우
+- PrimitivePreviewManager.test.ts (10) — 반지름 원, 높이 축, dispose
+- PrimitiveSession.test.ts (17) — 상태 머신 idle→sizing1→sizing2→done
+
+**Snap:**
+- SnapManager.test.ts (28) — 모드/토글/오버라이드, 참조점, 트랙포인트
+- SnapVisual.test.ts (12) — 스냅 시각화 마커/라인
+
+**UI:**
+- Toast.test.ts (7) — 싱글톤, show, static 메서드
+- DimensionLabel.test.ts (7) — 오버레이/캔버스 생성, update/clear
+- MenuBar.test.ts (18) — 메뉴 열기/닫기, export 항목
+- CommandInput.test.ts (17) — 명령 파싱/실행, 히스토리
+- CommandRegistry.test.ts (9) — 명령 등록/실행/별칭
+- KeyboardShortcuts.test.ts (22) — 키 바인딩, 도구 전환, undo/redo
+- ContextMenu.test.ts (14) — 우클릭 메뉴, 항목 실행
+- ProjectSerializer.test.ts (18) — 프로젝트 직렬화/역직렬화
+- VCB.test.ts (9) — 값 입력 박스 업데이트/콜백
+- StylePanel.test.ts (14) — 스타일 패널 렌더링/토글
+- OsnapPanel.test.ts (8) — OSNAP 패널 체크박스 동기화
+- BooleanHandler.test.ts (9) — 불리언 연산 핸들러
+- ComponentPanel.test.ts (18) — 그룹 트리 패널 표시/토글
+- DxfImportHandler.test.ts (9) — DXF 임포트 핸들러
+- InitialScene.test.ts (9) — 초기 씬 생성
+- MaterialPropertiesPanel.test.ts (8) — 재질 속성 패널
+- DraggablePanelManager.test.ts (12) — 드래그 패널 관리자
+- PickBox.test.ts (6) — 선택 박스 표시/숨기기
+
+**Materials / Units / Export / Utils:**
+- MaterialLibrary.test.ts (37) — 12개 내장 재질, 할당/해제, 물리 계산, 직렬화
+- UnitSystem.test.ts (12) — 단위 변환, 포맷팅
+- SettingsPanel.test.ts (9) — 설정 패널 렌더링
+- DxfExporter.test.ts (8) — DXF 출력 포맷 검증
+- DxfWriter.test.ts (13) — DXF 문자열 생성
+- ExportUtils.test.ts (8) — downloadText/downloadBlob/timestampedName
+- GeometryPool.test.ts (10) — 오브젝트 풀 acquire/release
+- debug.test.ts (8) — debugLog/debugWarn 래퍼
+
+**테스트 인프라:**
+- vitest.config.ts Three.js alias (subpath import 지원)
+- `__mocks__/three.ts` — Three.js 종합 모킹 (Vector2/3, BufferGeometry, Raycaster 등)
+- `wasm/axia_wasm.ts` — WASM 스텁 (Rust 빌드 없이 테스트 가능)
 
 ### ✅ OBJ/GLTF/STL Export 완성
 - OBJExporter → text OBJ 다운로드
