@@ -10,7 +10,7 @@ use axia_transaction::TransactionManager;
 use crate::xia::{Xia, XiaId, XiaState};
 use crate::commands::{Command, CommandResult};
 use crate::lifecycle;
-use crate::group::{GroupManager, Transform3D};
+use crate::group::{GroupId, GroupManager, Transform3D};
 use crate::material::MaterialLibrary;
 
 /// Snapshot format version
@@ -131,6 +131,35 @@ impl Scene {
         id
     }
 
+    /// 그룹 가시성을 재귀적으로 적용 (자식 그룹 + face)
+    fn set_group_visibility_recursive(&mut self, group_id: GroupId, visible: bool) {
+        if let Some(g) = self.groups.groups.get_mut(&group_id) {
+            g.visible = visible;
+            let face_ids = g.face_ids.clone();
+            let children = g.children.clone();
+
+            for fid in &face_ids {
+                if let Some(face) = self.mesh.faces.get_mut(*fid) {
+                    face.set_visible(visible);
+                }
+            }
+
+            for child_id in children {
+                self.set_group_visibility_recursive(child_id, visible);
+            }
+        }
+    }
+
+    /// 그룹 잠금 시 face 선택 가능 여부 확인
+    pub fn is_face_locked(&self, face_id: axia_geo::FaceId) -> bool {
+        if let Some(gid) = self.groups.get_group_for_face(face_id) {
+            if let Some(g) = self.groups.groups.get(&gid) {
+                return g.locked;
+            }
+        }
+        false
+    }
+
     /// Execute a command and return the result.
     pub fn execute(&mut self, cmd: Command) -> CommandResult {
         match cmd {
@@ -211,7 +240,23 @@ impl Scene {
             }
             Command::ToggleGroupVisibility { group_id } => {
                 if let Some(g) = self.groups.groups.get_mut(&group_id) {
-                    g.visible = !g.visible;
+                    let new_visible = !g.visible;
+                    g.visible = new_visible;
+
+                    // 해당 그룹의 모든 face에 가시성 반영
+                    let face_ids = g.face_ids.clone();
+                    for fid in &face_ids {
+                        if let Some(face) = self.mesh.faces.get_mut(*fid) {
+                            face.set_visible(new_visible);
+                        }
+                    }
+
+                    // 재귀: 자식 그룹에도 동일 적용
+                    let children = g.children.clone();
+                    for child_id in children {
+                        self.set_group_visibility_recursive(child_id, new_visible);
+                    }
+
                     CommandResult::GroupUpdated(group_id)
                 } else {
                     CommandResult::Error(format!("Group {} not found", group_id))

@@ -429,4 +429,39 @@ describe('SelectionManager', () => {
     // Still has 5 selected (no change)
     expect(sm.getSelectedFaces()).toEqual([5]);
   });
+
+  // ── Lock enforcement ──
+
+  it('handleClick blocks selection of locked face', () => {
+    const bridge = {
+      getConnectedFaces: () => [],
+      isFaceLocked: vi.fn((fid: number) => fid === 5),
+    };
+    sm.setBridge(bridge);
+
+    sm.handleClick(5, false, false);
+    expect(sm.getSelectedFaces()).toEqual([]);
+    expect(bridge.isFaceLocked).toHaveBeenCalledWith(5);
+  });
+
+  it('handleClick allows selection of unlocked face with bridge', () => {
+    const bridge = {
+      getConnectedFaces: () => [],
+      isFaceLocked: vi.fn(() => false),
+    };
+    sm.setBridge(bridge);
+
+    sm.handleClick(3, false, false);
+    expect(sm.getSelectedFaces()).toContain(3);
+  });
+
+  it('handleClick works normally when bridge has no isFaceLocked', () => {
+    const bridge = {
+      getConnectedFaces: () => [],
+    };
+    sm.setBridge(bridge);
+
+    sm.handleClick(7, false, false);
+    expect(sm.getSelectedFaces()).toContain(7);
+  });
 });

@@ -651,6 +651,16 @@ export class WasmBridge {
     }
   }
 
+  /** face가 잠긴 그룹에 속하는지 확인 */
+  isFaceLocked(faceId: number): boolean {
+    if (!this.engine) return false;
+    try {
+      return (this.engine as any).is_face_locked?.(faceId) ?? false;
+    } catch {
+      return false;
+    }
+  }
+
   /** 그룹 잠금 토글 */
   toggleGroupLock(groupId: number): boolean {
     if (!this.engine) return false;

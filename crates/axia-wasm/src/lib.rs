@@ -1546,7 +1546,19 @@ impl AxiaEngine {
     pub fn toggle_group_visibility(&mut self, group_id: u64) -> bool {
         let cmd = Command::ToggleGroupVisibility { group_id };
         let result = self.scene.execute(cmd);
-        matches!(result, CommandResult::GroupUpdated(_))
+        if matches!(result, CommandResult::GroupUpdated(_)) {
+            self.mark_topology_changed();
+            self.invalidate_cache();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// face가 잠긴 그룹에 속하는지 확인
+    pub fn is_face_locked(&self, face_id_raw: u32) -> bool {
+        let fid = axia_geo::FaceId::new(face_id_raw);
+        self.scene.is_face_locked(fid)
     }
 
     /// 그룹 잠금 토글

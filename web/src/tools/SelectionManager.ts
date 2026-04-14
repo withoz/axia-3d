@@ -60,7 +60,10 @@ export class SelectionManager {
   private edgeMap: Uint32Array | null = null;       // segment → EdgeId
 
   // ── WASM Bridge (DCEL topology 접근용) ──
-  private bridge: { getConnectedFaces(seedFaceId: number): number[] } | null = null;
+  private bridge: {
+    getConnectedFaces(seedFaceId: number): number[];
+    isFaceLocked?(faceId: number): boolean;
+  } | null = null;
 
   // ── 콜백 (다중 리스너 지원) ──
   private selectionChangeListeners: Array<(faces: number[]) => void> = [];
@@ -79,7 +82,10 @@ export class SelectionManager {
   }
 
   /** WASM Bridge 연결 — DCEL topology 기반 연결 탐색 활성화 */
-  setBridge(bridge: { getConnectedFaces(seedFaceId: number): number[] }): void {
+  setBridge(bridge: {
+    getConnectedFaces(seedFaceId: number): number[];
+    isFaceLocked?(faceId: number): boolean;
+  }): void {
     this.bridge = bridge;
   }
 
@@ -142,6 +148,12 @@ export class SelectionManager {
     if (faceId < 0) {
       // 빈 공간 클릭 → 전체 해제
       this.clearSelection();
+      return;
+    }
+
+    // 잠긴 그룹의 면은 선택 불가
+    if (this.bridge?.isFaceLocked?.(faceId)) {
+      debugLog(`[Selection] Face ${faceId} is locked — selection blocked`);
       return;
     }
 

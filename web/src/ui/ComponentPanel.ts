@@ -19,6 +19,8 @@ export interface ComponentPanelCallbacks {
   onGroupDoubleClick?: (groupId: number) => void;
   onGroupDelete?: (groupId: number) => void;
   onRefresh?: () => void;
+  /** 가시성 토글 후 뷰포트 갱신 */
+  syncMesh?: () => void;
 }
 
 export class ComponentPanel {
@@ -231,6 +233,7 @@ export class ComponentPanel {
     switch (action) {
       case 'vis':
         this.bridge.toggleGroupVisibility(groupId);
+        this.callbacks.syncMesh?.();
         this.refresh();
         break;
       case 'lock':
