@@ -9,7 +9,8 @@ use anyhow::Result;
 use std::io::Cursor;
 
 use crate::scene::Scene;
-use axia_geo::MaterialId;
+use crate::xia::XiaState;
+use axia_geo::{MaterialId, FaceId};
 
 /// DXF 가져오기 결과 통계
 #[derive(Clone, Debug, Default)]
@@ -58,13 +59,69 @@ impl Scene {
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
         for entity in drawing.entities() {
+            // face 수 비교로 새로 생성된 face 추적
+            let faces_before: std::collections::HashSet<FaceId> =
+                self.mesh.faces.iter().map(|(k, _)| k).collect();
+            let entity_name = Self::dxf_entity_name(&entity.specific);
+            let entity_position = Self::dxf_entity_position(&entity.specific);
+
             self.import_single_entity(&entity.specific, mat, &mut stats);
+
+            // 새로 생성된 face가 있으면 XIA 생성
+            let new_faces: Vec<FaceId> = self.mesh.faces.iter()
+                .map(|(k, _)| k)
+                .filter(|k| !faces_before.contains(k))
+                .collect();
+            if !new_faces.is_empty() {
+                let state = if new_faces.len() >= 3 { XiaState::Volume } else { XiaState::Face };
+                self.create_xia_with_faces(entity_name, state, entity_position, new_faces);
+            }
         }
 
         self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();
 
         Ok(stats)
+    }
+
+    /// DXF 엔티티 타입명
+    fn dxf_entity_name(specific: &dxf::entities::EntityType) -> String {
+        use dxf::entities::EntityType;
+        match specific {
+            EntityType::Line(_) => "DXF-Line".into(),
+            EntityType::LwPolyline(_) => "DXF-Polyline".into(),
+            EntityType::Polyline(_) => "DXF-Polyline".into(),
+            EntityType::Circle(_) => "DXF-Circle".into(),
+            EntityType::Arc(_) => "DXF-Arc".into(),
+            EntityType::Face3D(_) => "DXF-3DFace".into(),
+            EntityType::Solid(_) => "DXF-Solid".into(),
+            EntityType::Ellipse(_) => "DXF-Ellipse".into(),
+            EntityType::Spline(_) => "DXF-Spline".into(),
+            EntityType::ModelPoint(_) => "DXF-Point".into(),
+            _ => "DXF-Entity".into(),
+        }
+    }
+
+    /// DXF 엔티티의 대표 위치
+    fn dxf_entity_position(specific: &dxf::entities::EntityType) -> DVec3 {
+        use dxf::entities::EntityType;
+        match specific {
+            EntityType::Line(l) => cv(l.p1.x, l.p1.y, l.p1.z),
+            EntityType::Circle(c) => cv(c.center.x, c.center.y, c.center.z),
+            EntityType::Arc(a) => cv(a.center.x, a.center.y, a.center.z),
+            EntityType::Ellipse(e) => cv(e.center.x, e.center.y, e.center.z),
+            EntityType::Face3D(f) => cv(f.first_corner.x, f.first_corner.y, f.first_corner.z),
+            EntityType::Solid(s) => cv(s.first_corner.x, s.first_corner.y, s.first_corner.z),
+            EntityType::LwPolyline(lw) => {
+                if let Some(v) = lw.vertices.first() { cv(v.x, v.y, 0.0) } else { DVec3::ZERO }
+            }
+            EntityType::Polyline(pl) => {
+                if let Some(v) = pl.vertices().next() {
+                    cv(v.location.x, v.location.y, v.location.z)
+                } else { DVec3::ZERO }
+            }
+            _ => DVec3::ZERO,
+        }
     }
 
     fn import_single_entity(

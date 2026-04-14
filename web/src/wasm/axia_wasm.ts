@@ -24,6 +24,8 @@ export class AxiaEngine {
   vert_count(): number { return 0; }
   can_undo(): boolean { return false; }
   can_redo(): boolean { return false; }
+  get_xia_for_face(_faceId: number): number { return 0xFFFFFFFF; }
+  is_face_locked(_faceId: number): boolean { return false; }
 }
 
 export default async function init(): Promise<void> {}

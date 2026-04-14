@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use glam::DVec3;
 use anyhow::Result;
 
-use axia_geo::{Mesh, MaterialId};
+use axia_geo::{Mesh, MaterialId, FaceId};
 use axia_transaction::TransactionManager;
 
 use crate::xia::{Xia, XiaId, XiaState};
@@ -25,6 +25,8 @@ pub struct Scene {
     pub mesh: Mesh,
     /// All XIA entities in the scene
     pub xias: HashMap<XiaId, Xia>,
+    /// Reverse index: FaceId → XiaId (O(1) lookup)
+    face_to_xia: HashMap<FaceId, XiaId>,
     /// Next XIA ID counter
     next_xia_id: u64,
     /// Transaction manager for undo/redo
@@ -42,6 +44,7 @@ impl Scene {
         Self {
             mesh: Mesh::new(),
             xias: HashMap::new(),
+            face_to_xia: HashMap::new(),
             next_xia_id: 1,
             transactions: TransactionManager::new(100),
             material_library: MaterialLibrary::new(),
@@ -120,6 +123,9 @@ impl Scene {
         if offset + 8 <= data.len() {
             self.next_xia_id = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap_or([0; 8]));
         }
+
+        // 5. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
+        self.rebuild_face_to_xia_index();
     }
 
     /// Create a new XIA entity in the scene.
@@ -129,6 +135,48 @@ impl Scene {
         let xia = Xia::new(id, name);
         self.xias.insert(id, xia);
         id
+    }
+
+    /// Create a XIA and assign face IDs (public — for primitives/import)
+    pub fn create_xia_with_faces(&mut self, name: String, state: XiaState, position: DVec3, face_ids: Vec<FaceId>) -> XiaId {
+        let xia_id = self.create_xia(name);
+        if let Some(xia) = self.xias.get_mut(&xia_id) {
+            xia.state = state;
+            xia.position = position;
+            xia.face_ids = face_ids.clone();
+        }
+        // 역인덱스 갱신
+        for &fid in &face_ids {
+            self.face_to_xia.insert(fid, xia_id);
+        }
+        xia_id
+    }
+
+    /// Register face→XIA mapping in the reverse index
+    fn register_faces_to_xia(&mut self, xia_id: XiaId, face_ids: &[FaceId]) {
+        for &fid in face_ids {
+            self.face_to_xia.insert(fid, xia_id);
+        }
+    }
+
+    /// Remove face from reverse index
+    fn unregister_face_from_xia(&mut self, face_id: FaceId) {
+        self.face_to_xia.remove(&face_id);
+    }
+
+    /// Find the XIA that owns a face (O(1) lookup)
+    pub fn get_xia_for_face(&self, face_id: FaceId) -> Option<XiaId> {
+        self.face_to_xia.get(&face_id).copied()
+    }
+
+    /// Rebuild reverse index from all XIAs (after snapshot restore)
+    fn rebuild_face_to_xia_index(&mut self) {
+        self.face_to_xia.clear();
+        for (xia_id, xia) in &self.xias {
+            for &fid in &xia.face_ids {
+                self.face_to_xia.insert(fid, *xia_id);
+            }
+        }
     }
 
     /// 그룹 가시성을 재귀적으로 적용 (자식 그룹 + face)
@@ -297,12 +345,16 @@ impl Scene {
                         face.set_material(material_id);
                     }
                 }
-                // Volume → Xia 자동 승격: 재질이 부여된 face를 소유한 XIA 엔티티 찾기
-                for xia in self.xias.values_mut() {
-                    if xia.state == XiaState::Volume {
-                        // XIA의 face 중 하나라도 이번 할당 대상에 포함되면 승격
-                        let overlaps = xia.face_ids.iter().any(|f| face_ids.contains(f));
-                        if overlaps {
+                // Volume → Xia 자동 승격: 역인덱스로 관련 XIA O(1) 조회
+                let mut affected_xia_ids = std::collections::HashSet::new();
+                for fid in &face_ids {
+                    if let Some(&xia_id) = self.face_to_xia.get(fid) {
+                        affected_xia_ids.insert(xia_id);
+                    }
+                }
+                for xia_id in affected_xia_ids {
+                    if let Some(xia) = self.xias.get_mut(&xia_id) {
+                        if xia.state == XiaState::Volume {
                             let _ = lifecycle::promote_to_xia(xia);
                         }
                     }
@@ -320,12 +372,16 @@ impl Scene {
                         face.set_material(default_mat);
                     }
                 }
-                // Xia → Volume 자동 강등: 재질이 해제된 face를 소유한 XIA 엔티티
-                for xia in self.xias.values_mut() {
-                    if xia.state == XiaState::Xia {
-                        let overlaps = xia.face_ids.iter().any(|f| face_ids.contains(f));
-                        if overlaps {
-                            // 모든 face가 default material이면 강등
+                // Xia → Volume 자동 강등: 역인덱스로 관련 XIA O(1) 조회
+                let mut affected_xia_ids = std::collections::HashSet::new();
+                for fid in &face_ids {
+                    if let Some(&xia_id) = self.face_to_xia.get(fid) {
+                        affected_xia_ids.insert(xia_id);
+                    }
+                }
+                for xia_id in affected_xia_ids {
+                    if let Some(xia) = self.xias.get_mut(&xia_id) {
+                        if xia.state == XiaState::Xia {
                             let all_default = xia.face_ids.iter().all(|fid| {
                                 self.mesh.faces.get(*fid)
                                     .map(|f| f.material() == default_mat || f.material().raw() == 0)
@@ -409,6 +465,7 @@ impl Scene {
                     xia.surface_normal = Some(normal);
                     xia.face_ids.push(face_id);
                 }
+                self.register_faces_to_xia(xia_id, &[face_id]);
                 self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
                 CommandResult::EntityCreated(xia_id)
@@ -439,6 +496,7 @@ impl Scene {
                     xia.surface_normal = Some(normal);
                     xia.face_ids.push(face_id);
                 }
+                self.register_faces_to_xia(xia_id, &[face_id]);
                 self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
                 CommandResult::EntityCreated(xia_id)
@@ -460,20 +518,26 @@ impl Scene {
 
         match self.mesh.push_pull(face_id, dist, self.default_material) {
             Ok(result) => {
-                // Update owning XIA's face list
-                let owning_xia = self.xias.values_mut().find(|xia| {
-                    xia.face_ids.contains(&face_id)
-                });
+                // O(1) reverse index lookup instead of O(N) scan
+                let owning_xia_id = self.face_to_xia.get(&face_id).copied();
 
-                if let Some(xia) = owning_xia {
-                    let _ = lifecycle::promote_to_volume(xia);
-                    // If base was removed (inward push), drop it from XIA
-                    if result.base_removed {
-                        xia.face_ids.retain(|&f| f != face_id);
+                if let Some(xia_id) = owning_xia_id {
+                    if let Some(xia) = self.xias.get_mut(&xia_id) {
+                        let _ = lifecycle::promote_to_volume(xia);
+                        // If base was removed (inward push), drop it from XIA
+                        if result.base_removed {
+                            xia.face_ids.retain(|&f| f != face_id);
+                            self.face_to_xia.remove(&face_id);
+                        }
+                        // Add new faces
+                        xia.face_ids.push(result.top_face);
+                        xia.face_ids.extend(result.side_faces.iter());
                     }
-                    // Add new faces
-                    xia.face_ids.push(result.top_face);
-                    xia.face_ids.extend(result.side_faces.iter());
+                    // 역인덱스 갱신: 새 face들 등록
+                    self.face_to_xia.insert(result.top_face, xia_id);
+                    for &side in &result.side_faces {
+                        self.face_to_xia.insert(side, xia_id);
+                    }
                 }
 
                 self.transactions.set_after_snapshot(self.scene_snapshot());

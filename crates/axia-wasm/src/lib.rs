@@ -346,8 +346,9 @@ impl AxiaEngine {
         radius: f64, height: f64,
         segments: u32,
     ) -> f64 {
+        let position = DVec3::new(cx, cy, cz);
         match self.scene.mesh.create_cylinder(
-            DVec3::new(cx, cy, cz),
+            position,
             radius,
             height,
             segments,
@@ -356,8 +357,15 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
+                // XIA 생성 (Volume 상태 — 닫힌 솔리드)
+                let xia_id = self.scene.create_xia_with_faces(
+                    "Cylinder".to_string(),
+                    axia_core::xia::XiaState::Volume,
+                    position,
+                    faces.clone(),
+                );
                 if let Some(&base_face) = faces.first() {
-                    console_log!("[RUST] create_cylinder: faces={} base_id={}", faces.len(), base_face.raw());
+                    console_log!("[RUST] create_cylinder: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
                     base_face.raw() as f64
                 } else {
                     -1.0
@@ -378,8 +386,9 @@ impl AxiaEngine {
         radius: f64, height: f64,
         segments: u32,
     ) -> f64 {
+        let position = DVec3::new(cx, cy, cz);
         match self.scene.mesh.create_cone(
-            DVec3::new(cx, cy, cz),
+            position,
             radius,
             height,
             segments,
@@ -388,8 +397,15 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
+                // XIA 생성 (Volume 상태)
+                let xia_id = self.scene.create_xia_with_faces(
+                    "Cone".to_string(),
+                    axia_core::xia::XiaState::Volume,
+                    position,
+                    faces.clone(),
+                );
                 if let Some(&base_face) = faces.first() {
-                    console_log!("[RUST] create_cone: faces={} base_id={}", faces.len(), base_face.raw());
+                    console_log!("[RUST] create_cone: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
                     base_face.raw() as f64
                 } else {
                     -1.0
@@ -411,8 +427,9 @@ impl AxiaEngine {
         u_segments: u32,
         v_segments: u32,
     ) -> f64 {
+        let position = DVec3::new(cx, cy, cz);
         match self.scene.mesh.create_sphere(
-            DVec3::new(cx, cy, cz),
+            position,
             radius,
             u_segments,
             v_segments,
@@ -421,8 +438,15 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
+                // XIA 생성 (Volume 상태)
+                let xia_id = self.scene.create_xia_with_faces(
+                    "Sphere".to_string(),
+                    axia_core::xia::XiaState::Volume,
+                    position,
+                    faces.clone(),
+                );
                 if let Some(&first_face) = faces.first() {
-                    console_log!("[RUST] create_sphere: faces={} first_id={}", faces.len(), first_face.raw());
+                    console_log!("[RUST] create_sphere: faces={} first_id={} xia={}", faces.len(), first_face.raw(), xia_id);
                     first_face.raw() as f64
                 } else {
                     -1.0
@@ -449,6 +473,13 @@ impl AxiaEngine {
             }
         }
         u32::MAX
+    }
+
+    /// face가 속한 XIA의 ID 반환 (O(1) 역인덱스)
+    /// 없으면 u64::MAX 반환
+    pub fn get_xia_for_face(&self, face_id_raw: u32) -> u64 {
+        let fid = FaceId::new(face_id_raw);
+        self.scene.get_xia_for_face(fid).unwrap_or(u64::MAX)
     }
 
     // ========================================================================

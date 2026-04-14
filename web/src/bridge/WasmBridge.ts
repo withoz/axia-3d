@@ -661,6 +661,18 @@ export class WasmBridge {
     }
   }
 
+  /** face가 속한 XIA ID 조회 (O(1) 역인덱스, 없으면 -1) */
+  getXiaForFace(faceId: number): number {
+    if (!this.engine) return -1;
+    try {
+      const result = (this.engine as any).get_xia_for_face?.(faceId);
+      // u64::MAX(18446744073709551615)이면 없음
+      return (result === undefined || result >= 0xFFFFFFFF) ? -1 : result;
+    } catch {
+      return -1;
+    }
+  }
+
   /** 그룹 잠금 토글 */
   toggleGroupLock(groupId: number): boolean {
     if (!this.engine) return false;

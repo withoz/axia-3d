@@ -79,7 +79,6 @@ pub struct Xia {
     /// Material ID
     pub material: MaterialId,
     /// Face IDs owned by this XIA (in the geometry mesh)
-    #[serde(skip)]
     pub face_ids: Vec<FaceId>,
     /// Visibility
     pub visible: bool,
