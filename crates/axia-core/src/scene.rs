@@ -50,6 +50,78 @@ impl Scene {
         }
     }
 
+    // ════════════════════════════════════════════════
+    // 통합 스냅샷 (Mesh + XIA + Groups)
+    // ════════════════════════════════════════════════
+
+    /// 전체 씬 상태를 직렬화 (Undo/Redo 용)
+    pub fn scene_snapshot(&self) -> Vec<u8> {
+        let mesh_data = self.mesh.snapshot();
+        let xia_data = bincode::serialize(&self.xias).unwrap_or_default();
+        let group_data = bincode::serialize(&self.groups).unwrap_or_default();
+        let next_xia = self.next_xia_id;
+
+        // [mesh_len:u64][mesh_data][xia_len:u64][xia_data][group_len:u64][group_data][next_xia_id:u64]
+        let mut buf = Vec::with_capacity(
+            8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8,
+        );
+        buf.extend_from_slice(&(mesh_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&mesh_data);
+        buf.extend_from_slice(&(xia_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&xia_data);
+        buf.extend_from_slice(&(group_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&group_data);
+        buf.extend_from_slice(&next_xia.to_le_bytes());
+        buf
+    }
+
+    /// 스냅샷으로부터 씬 상태 복원 (Undo/Redo 용)
+    pub fn restore_scene_snapshot(&mut self, data: &[u8]) {
+        let mut offset = 0usize;
+
+        // Helper: read u64 length prefix
+        let read_len = |data: &[u8], off: &mut usize| -> usize {
+            if *off + 8 > data.len() { return 0; }
+            let len = u64::from_le_bytes(data[*off..*off + 8].try_into().unwrap_or([0; 8])) as usize;
+            *off += 8;
+            len
+        };
+
+        // 1. Mesh
+        let mesh_len = read_len(data, &mut offset);
+        if mesh_len > 0 && offset + mesh_len <= data.len() {
+            self.mesh.restore_snapshot(&data[offset..offset + mesh_len]);
+            offset += mesh_len;
+        } else {
+            // 레거시 스냅샷 (mesh만 포함) — 하위 호환
+            self.mesh.restore_snapshot(data);
+            return;
+        }
+
+        // 2. XIAs
+        let xia_len = read_len(data, &mut offset);
+        if xia_len > 0 && offset + xia_len <= data.len() {
+            if let Ok(restored) = bincode::deserialize::<HashMap<XiaId, Xia>>(&data[offset..offset + xia_len]) {
+                self.xias = restored;
+            }
+            offset += xia_len;
+        }
+
+        // 3. Groups
+        let group_len = read_len(data, &mut offset);
+        if group_len > 0 && offset + group_len <= data.len() {
+            if let Ok(restored) = bincode::deserialize::<GroupManager>(&data[offset..offset + group_len]) {
+                self.groups = restored;
+            }
+            offset += group_len;
+        }
+
+        // 4. next_xia_id
+        if offset + 8 <= data.len() {
+            self.next_xia_id = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap_or([0; 8]));
+        }
+    }
+
     /// Create a new XIA entity in the scene.
     fn create_xia(&mut self, name: String) -> XiaId {
         let id = self.next_xia_id;
@@ -78,7 +150,7 @@ impl Scene {
                 if let Some(frame) = self.transactions.undo() {
                     let snapshot = frame.before_snapshot.clone();
                     if !snapshot.is_empty() {
-                        self.mesh.restore_snapshot(&snapshot);
+                        self.restore_scene_snapshot(&snapshot);
                     }
                     CommandResult::MeshUpdated
                 } else {
@@ -89,7 +161,7 @@ impl Scene {
                 if let Some(frame) = self.transactions.redo() {
                     let snapshot = frame.after_snapshot.clone();
                     if !snapshot.is_empty() {
-                        self.mesh.restore_snapshot(&snapshot);
+                        self.restore_scene_snapshot(&snapshot);
                     }
                     CommandResult::MeshUpdated
                 } else {
@@ -251,7 +323,7 @@ impl Scene {
         surface_normal: Option<DVec3>,
     ) -> CommandResult {
         self.transactions.begin();
-        self.transactions.set_before_snapshot(self.mesh.snapshot());
+        self.transactions.set_before_snapshot(self.scene_snapshot());
 
         match self.mesh.draw_line(start, end) {
             Ok((_v0, _v1, _edge_id)) => {
@@ -261,7 +333,7 @@ impl Scene {
                     xia.position = start;
                     xia.surface_normal = surface_normal;
                 }
-                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
                 CommandResult::EntityCreated(xia_id)
             }
@@ -281,7 +353,7 @@ impl Scene {
         height: f64,
     ) -> CommandResult {
         self.transactions.begin();
-        self.transactions.set_before_snapshot(self.mesh.snapshot());
+        self.transactions.set_before_snapshot(self.scene_snapshot());
 
         match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
             Ok((face_id, _verts)) => {
@@ -292,7 +364,7 @@ impl Scene {
                     xia.surface_normal = Some(normal);
                     xia.face_ids.push(face_id);
                 }
-                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
                 CommandResult::EntityCreated(xia_id)
             }
@@ -311,7 +383,7 @@ impl Scene {
         segments: u32,
     ) -> CommandResult {
         self.transactions.begin();
-        self.transactions.set_before_snapshot(self.mesh.snapshot());
+        self.transactions.set_before_snapshot(self.scene_snapshot());
 
         match self.mesh.draw_circle(center, normal, radius, segments, self.default_material) {
             Ok((face_id, _verts)) => {
@@ -322,7 +394,7 @@ impl Scene {
                     xia.surface_normal = Some(normal);
                     xia.face_ids.push(face_id);
                 }
-                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
                 CommandResult::EntityCreated(xia_id)
             }
@@ -339,7 +411,7 @@ impl Scene {
         dist: f64,
     ) -> CommandResult {
         self.transactions.begin();
-        self.transactions.set_before_snapshot(self.mesh.snapshot());
+        self.transactions.set_before_snapshot(self.scene_snapshot());
 
         match self.mesh.push_pull(face_id, dist, self.default_material) {
             Ok(result) => {
@@ -359,7 +431,7 @@ impl Scene {
                     xia.face_ids.extend(result.side_faces.iter());
                 }
 
-                self.transactions.set_after_snapshot(self.mesh.snapshot());
+                self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
                 CommandResult::PushPullDone {
                     sides_created: result.side_faces.len(),

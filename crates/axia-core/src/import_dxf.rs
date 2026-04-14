@@ -55,13 +55,13 @@ impl Scene {
         let mat = self.default_material;
 
         self.transactions.begin();
-        self.transactions.set_before_snapshot(self.mesh.snapshot());
+        self.transactions.set_before_snapshot(self.scene_snapshot());
 
         for entity in drawing.entities() {
             self.import_single_entity(&entity.specific, mat, &mut stats);
         }
 
-        self.transactions.set_after_snapshot(self.mesh.snapshot());
+        self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();
 
         Ok(stats)

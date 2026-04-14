@@ -828,7 +828,7 @@ impl AxiaEngine {
         }
 
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         // First, find and remove any faces sharing this edge
         let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
@@ -849,7 +849,7 @@ impl AxiaEngine {
         // Clean up isolated vertices
         self.scene.mesh.remove_isolated_verts();
 
-        self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
         self.scene.transactions.commit();
         self.mark_topology_changed();
         self.invalidate_cache();
@@ -865,7 +865,7 @@ impl AxiaEngine {
         }
 
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         // Delete faces first
         for &fid_raw in face_ids {
@@ -900,7 +900,7 @@ impl AxiaEngine {
         // Clean up isolated vertices
         self.scene.mesh.remove_isolated_verts();
 
-        self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
         self.scene.transactions.commit();
         self.mark_topology_changed();
         self.invalidate_cache();
@@ -1295,14 +1295,14 @@ impl AxiaEngine {
 
         // 트랜잭션 래핑
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         let mat = self.scene.default_material;
         let result = self.scene.mesh.boolean(&fids_a, &fids_b, bool_op, mat);
 
         match result {
             Ok(res) => {
-                self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
                 self.invalidate_cache();
@@ -1338,12 +1338,12 @@ impl AxiaEngine {
         let delta = DVec3::new(dx, dy, dz);
 
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         match self.scene.mesh.translate_faces(&fids, delta) {
             Ok(res) => {
                 console_log!("[RUST] translate: moved {} verts, {} faces", res.verts_moved, res.faces_affected);
-                self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 // Use topology_changed for full rebuild: shared vertices between
                 // selected and adjacent faces make partial delta unreliable.
@@ -1372,12 +1372,12 @@ impl AxiaEngine {
         let angle_rad = angle_deg.to_radians();
 
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         match self.scene.mesh.rotate_faces(&fids, center, axis, angle_rad) {
             Ok(res) => {
                 console_log!("[RUST] rotate: {} verts, {:.1}°", res.verts_moved, angle_deg);
-                self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 // Use topology_changed for full rebuild: shared vertices between
                 // selected and adjacent faces make partial delta unreliable.
@@ -1404,12 +1404,12 @@ impl AxiaEngine {
         let scale = DVec3::new(sx, sy, sz);
 
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         match self.scene.mesh.scale_faces(&fids, center, scale) {
             Ok(res) => {
                 console_log!("[RUST] scale: {} verts, ({:.2},{:.2},{:.2})", res.verts_moved, sx, sy, sz);
-                self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 // Use topology_changed for full rebuild: shared vertices between
                 // selected and adjacent faces make partial delta unreliable.
@@ -1431,11 +1431,11 @@ impl AxiaEngine {
 
         // 트랜잭션 시작
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         match self.scene.mesh.offset_face(fid, dist) {
             Ok(result) => {
-                self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
                 self.invalidate_cache();
@@ -1471,11 +1471,11 @@ impl AxiaEngine {
         let plane_normal = glam::DVec3::new(pnx, pny, pnz);
 
         self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.mesh.snapshot());
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
         match self.scene.mesh.offset_edge(eid, dist, plane_normal) {
             Ok(result) => {
-                self.scene.transactions.set_after_snapshot(self.scene.mesh.snapshot());
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
                 self.invalidate_cache();

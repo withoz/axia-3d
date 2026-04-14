@@ -53,6 +53,9 @@ export class CylinderTool extends BasePrimitiveTool {
       // Synchronize WASM mesh to Three.js viewport
       this.ctx.syncMesh();
 
+      // Auto-group + auto-select the new primitive
+      this.autoGroupAndSelect(baseFaceId, 'Cylinder');
+
       debugLog(`[Cylinder] ✓ Created: baseFaceId=${baseFaceId}, ready for Push/Pull`);
     } catch (err) {
       console.error('[Cylinder] ✗ Creation failed:', err);

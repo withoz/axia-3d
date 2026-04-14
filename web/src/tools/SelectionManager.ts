@@ -368,6 +368,18 @@ export class SelectionManager {
     this.notifyChange();
   }
 
+  /** 프로그래밍적으로 face를 선택에 추가 (UI 이벤트 없이) */
+  addFace(faceId: number): void {
+    this.selected.add(faceId);
+  }
+
+  /** 프로그래밍적으로 여러 face를 선택 + 시각화 갱신 */
+  selectFaces(faceIds: number[]): void {
+    for (const fid of faceIds) this.selected.add(fid);
+    this.rebuildSelectionMesh();
+    this.notifyChange();
+  }
+
   /** 현재 선택된 face ID 배열 */
   getSelectedFaces(): number[] {
     return Array.from(this.selected);

@@ -318,6 +318,37 @@ export abstract class BasePrimitiveTool implements ITool {
   protected abstract commit(): void;
 
   /**
+   * Post-commit: auto-group + auto-select the newly created primitive.
+   * Call from subclass commit() after WASM creation + syncMesh().
+   * @param seedFaceId — any face ID returned by the WASM create call
+   * @param label — human-readable name for the group (e.g. "Sphere", "Cone")
+   */
+  protected autoGroupAndSelect(seedFaceId: number, label: string): void {
+    try {
+      // 1. Collect all connected faces from the seed
+      const allFaces = this.ctx.bridge.getConnectedFaces(seedFaceId);
+      if (!allFaces || allFaces.length === 0) {
+        debugLog(`[${this.name}] autoGroup: no connected faces from seed ${seedFaceId}`);
+        return;
+      }
+
+      // 2. Create group
+      const groupId = this.ctx.bridge.createGroup(label, allFaces);
+      if (groupId > 0) {
+        debugLog(`[${this.name}] ✓ Group created: id=${groupId}, name="${label}", faces=${allFaces.length}`);
+      }
+
+      // 3. Auto-select the created faces
+      this.ctx.selection.clearSelection();
+      this.ctx.selection.selectFaces(allFaces);
+
+      debugLog(`[${this.name}] ✓ Auto-selected ${allFaces.length} faces`);
+    } catch (err) {
+      console.error(`[${this.name}] autoGroupAndSelect failed:`, err);
+    }
+  }
+
+  /**
    * Cleanup: dispose preview and reset session
    */
   cleanup(): void {
