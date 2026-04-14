@@ -117,4 +117,110 @@ describe('SnapManager', () => {
   it('lastSnap starts as null', () => {
     expect(snap.lastSnap).toBeNull();
   });
+
+  // ── enabled setter ──
+
+  it('enabled setter works', () => {
+    snap.enabled = false;
+    expect(snap.enabled).toBe(false);
+    snap.enabled = true;
+    expect(snap.enabled).toBe(true);
+  });
+
+  // ── setReferencePoint ──
+
+  it('setReferencePoint accepts Vector3', () => {
+    const { Vector3 } = require('three');
+    snap.setReferencePoint(new Vector3(10, 20, 30));
+    // Should not throw
+  });
+
+  it('setReferencePoint accepts null', () => {
+    snap.setReferencePoint(null);
+    // Should not throw
+  });
+
+  // ── addTrackPoint / clearTrackPoints ──
+
+  it('addTrackPoint and clearTrackPoints', () => {
+    const { Vector3 } = require('three');
+    snap.addTrackPoint(new Vector3(1, 0, 0));
+    snap.addTrackPoint(new Vector3(0, 1, 0));
+    // Should not throw
+    snap.clearTrackPoints();
+    // Should not throw
+  });
+
+  // ── setMid2pFirst ──
+
+  it('setMid2pFirst accepts Vector3 or null', () => {
+    const { Vector3 } = require('three');
+    snap.setMid2pFirst(new Vector3(5, 5, 5));
+    snap.setMid2pFirst(null);
+    // Should not throw
+  });
+
+  // ── setParallelRef ──
+
+  it('setParallelRef accepts Vector3 or null', () => {
+    const { Vector3 } = require('three');
+    snap.setParallelRef(new Vector3(1, 0, 0));
+    snap.setParallelRef(null);
+    // Should not throw
+  });
+
+  // ── onSnapChange callback ──
+
+  it('onSnapChange registers callback', () => {
+    const cb = vi.fn();
+    snap.onSnapChange(cb);
+    // Callback is registered for future snap events
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  // ── multiple mode toggles ──
+
+  it('can enable all modes', () => {
+    const modes: SnapType[] = [
+      'endpoint', 'midpoint', 'intersection', 'apparent', 'extension',
+      'center', 'geometric', 'quadrant', 'tangent',
+      'perpendicular', 'parallel',
+      'node', 'insertion', 'nearest',
+    ];
+    for (const m of modes) {
+      snap.setMode(m, true);
+      expect(snap.isActive(m)).toBe(true);
+    }
+  });
+
+  it('can disable all modes', () => {
+    snap.setMode('endpoint', false);
+    snap.setMode('intersection', false);
+    snap.setMode('center', false);
+    snap.setMode('perpendicular', false);
+    expect(snap.isActive('endpoint')).toBe(false);
+    expect(snap.isActive('intersection')).toBe(false);
+    expect(snap.isActive('center')).toBe(false);
+    expect(snap.isActive('perpendicular')).toBe(false);
+  });
+
+  // ── override with various types ──
+
+  it('setOverride with various snap types', () => {
+    snap.setOverride('endpoint');
+    expect(snap.getOverride()).toBe('endpoint');
+
+    snap.setOverride('midpoint');
+    expect(snap.getOverride()).toBe('midpoint');
+
+    snap.setOverride('intersection');
+    expect(snap.getOverride()).toBe('intersection');
+  });
+
+  it('consumeOverride only consumes once', () => {
+    snap.setOverride('center');
+    expect(snap.consumeOverride()).toBe('center');
+    expect(snap.consumeOverride()).toBeUndefined();
+    expect(snap.consumeOverride()).toBeUndefined();
+  });
 });

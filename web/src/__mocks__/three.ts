@@ -8,6 +8,8 @@ export class Vector2 {
   constructor(x = 0, y = 0) { this.x = x; this.y = y; }
   set(x: number, y: number) { this.x = x; this.y = y; return this; }
   copy(v: Vector2) { this.x = v.x; this.y = v.y; return this; }
+  length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+  normalize() { const l = this.length() || 1; this.x /= l; this.y /= l; return this; }
   distanceTo(v: Vector2) { return Math.hypot(this.x - v.x, this.y - v.y); }
 }
 
@@ -21,6 +23,11 @@ export class Vector3 {
   add(v: Vector3) { this.x += v.x; this.y += v.y; this.z += v.z; return this; }
   sub(v: Vector3) { this.x -= v.x; this.y -= v.y; this.z -= v.z; return this; }
   multiplyScalar(s: number) { this.x *= s; this.y *= s; this.z *= s; return this; }
+  divideScalar(s: number) { this.x /= s; this.y /= s; this.z /= s; return this; }
+  subVectors(a: Vector3, b: Vector3) { this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this; }
+  crossVectors(a: Vector3, b: Vector3) { this.x = a.y*b.z - a.z*b.y; this.y = a.z*b.x - a.x*b.z; this.z = a.x*b.y - a.y*b.x; return this; }
+  lengthSq() { return this.x*this.x + this.y*this.y + this.z*this.z; }
+  applyMatrix4(_m: any) { return this; }
   dot(v: Vector3) { return this.x * v.x + this.y * v.y + this.z * v.z; }
   cross(v: Vector3) {
     const ax = this.x, ay = this.y, az = this.z;
@@ -32,6 +39,8 @@ export class Vector3 {
   length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); }
   normalize() { const l = this.length() || 1; return this.multiplyScalar(1 / l); }
   distanceTo(v: Vector3) { return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z); }
+  addScaledVector(v: Vector3, s: number) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
+  setFromMatrixColumn(_matrix: any, _index: number) { return this; }
   project(_camera: any) { return this; }
   toArray() { return [this.x, this.y, this.z]; }
 }
@@ -47,7 +56,11 @@ export class Plane {
 }
 
 export class Raycaster {
-  ray = { origin: new Vector3(), direction: new Vector3() };
+  ray = {
+    origin: new Vector3(),
+    direction: new Vector3(),
+    intersectPlane(_plane: any, target: Vector3) { return target; },
+  };
   setFromCamera(_coords: Vector2, _camera: any) {}
 }
 
@@ -64,6 +77,7 @@ export class BufferGeometry {
   setIndex(index: any) { this.index = index; }
   dispose() {}
   computeVertexNormals() {}
+  setFromPoints(_points: any[]) { return this; }
 }
 
 export class BufferAttribute {
@@ -76,6 +90,7 @@ export class Material { dispose() {} }
 export class MeshStandardMaterial extends Material { color = new Color(); }
 export class MeshBasicMaterial extends Material { color = new Color(); }
 export class LineBasicMaterial extends Material { color = new Color(); }
+export class PointsMaterial extends Material { color = new Color(); size = 1; }
 
 export class Object3D {
   children: Object3D[] = [];
@@ -106,6 +121,16 @@ export class Mesh extends Object3D {
   }
 }
 
+export class Line extends Object3D {
+  geometry: BufferGeometry;
+  material: Material;
+  constructor(geometry?: BufferGeometry, material?: Material) {
+    super();
+    this.geometry = geometry || new BufferGeometry();
+    this.material = material || new Material();
+  }
+}
+
 export class LineSegments extends Object3D {
   geometry: BufferGeometry;
   material: Material;
@@ -116,7 +141,19 @@ export class LineSegments extends Object3D {
   }
 }
 
-export class Group extends Object3D {}
+export class Points extends Object3D {
+  geometry: BufferGeometry;
+  material: Material;
+  constructor(geometry?: BufferGeometry, material?: Material) {
+    super();
+    this.geometry = geometry || new BufferGeometry();
+    this.material = material || new Material();
+  }
+}
+
+export class Group extends Object3D {
+  clear() { this.children.length = 0; return this; }
+}
 
 export class Scene extends Object3D {}
 
@@ -136,16 +173,6 @@ export class WebGLRenderer {
   setPixelRatio() {}
   render() {}
   dispose() {}
-}
-
-export class Points extends Object3D {
-  geometry: BufferGeometry;
-  material: Material;
-  constructor(geometry?: BufferGeometry, material?: Material) {
-    super();
-    this.geometry = geometry || new BufferGeometry();
-    this.material = material || new Material();
-  }
 }
 
 export const DoubleSide = 2;

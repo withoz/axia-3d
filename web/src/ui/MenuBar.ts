@@ -75,7 +75,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
     const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js');
     const { downloadBlob } = await import('../export/ExportUtils');
     const exporter = new STLExporter();
-    const buffer = exporter.parse(scene3d, { binary: true });
+    const buffer = exporter.parse(scene3d, { binary: true }) as unknown as ArrayBuffer;
     downloadBlob(new Blob([buffer], { type: 'model/stl' }), fileName);
   };
 

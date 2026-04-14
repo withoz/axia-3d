@@ -191,4 +191,137 @@ describe('WasmBridge', () => {
       expect(uninitBridge.undo()).toBe(false);
     });
   });
+
+  describe('delete operations', () => {
+    it('deleteFace returns true', () => {
+      expect(bridge.deleteFace(1)).toBe(true);
+    });
+
+    it('deleteEdge returns true', () => {
+      expect(bridge.deleteEdge(5)).toBe(true);
+    });
+  });
+
+  describe('face normal', () => {
+    it('getFaceNormal returns 3-element array', () => {
+      const normal = bridge.getFaceNormal(1);
+      expect(normal).toBeTruthy();
+      expect(normal.length).toBe(3);
+    });
+  });
+
+  describe('edge data', () => {
+    it('getEdgeLines returns Float32Array', () => {
+      const lines = bridge.getEdgeLines();
+      expect(lines).toBeInstanceOf(Float32Array);
+    });
+
+    it('getEdgeMap returns Uint32Array', () => {
+      const map = bridge.getEdgeMap();
+      expect(map).toBeInstanceOf(Uint32Array);
+    });
+  });
+
+  describe('snapshot', () => {
+    it('exportSnapshot returns Uint8Array', () => {
+      const data = bridge.exportSnapshot();
+      expect(data).toBeInstanceOf(Uint8Array);
+    });
+
+    it('importSnapshot returns boolean', () => {
+      const data = new Uint8Array([65, 88, 73, 65]);
+      expect(bridge.importSnapshot(data)).toBe(true);
+    });
+  });
+
+  describe('transform operations', () => {
+    it('translateFaces returns true', () => {
+      expect(bridge.translateFaces([1, 2], 10, 0, 0)).toBe(true);
+    });
+
+    it('rotateFaces returns true', () => {
+      expect(bridge.rotateFaces([1], 0, 0, 0, 0, 1, 0, Math.PI / 4)).toBe(true);
+    });
+
+    it('scaleFaces returns true', () => {
+      expect(bridge.scaleFaces([1], 0, 0, 0, 2.0)).toBe(true);
+    });
+  });
+
+  describe('facesCentroid', () => {
+    it('returns Vector3-like with xyz', () => {
+      const centroid = bridge.facesCentroid([1, 2]);
+      expect(centroid).toBeTruthy();
+    });
+  });
+
+  describe('offset operations', () => {
+    it('offsetFace returns result with ok', () => {
+      const result = bridge.offsetFace(1, 10);
+      expect(result).toBeTruthy();
+      expect(result.ok).toBe(true);
+    });
+
+    it('offsetEdge returns result', () => {
+      const result = bridge.offsetEdge(5, 10, [0, 1, 0]);
+      expect(result).toBeTruthy();
+    });
+  });
+
+  describe('XIA info', () => {
+    it('getXiaInfo returns parsed JSON', () => {
+      const info = bridge.getXiaInfo([1]);
+      expect(info).toBeTruthy();
+      expect(info.isSolid).toBe(true);
+    });
+  });
+
+  describe('boolean operations', () => {
+    it('booleanOp returns result', () => {
+      const result = bridge.booleanOp('union', [1], [2]);
+      expect(result).toBeTruthy();
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe('group operations', () => {
+    it('createGroup returns group id', () => {
+      const gid = bridge.createGroup('Test', [1, 2, 3]);
+      expect(gid).toBe(1);
+    });
+
+    it('deleteGroup returns boolean', () => {
+      expect(bridge.deleteGroup(1)).toBe(true);
+    });
+
+    it('getGroupInfo returns parsed JSON', () => {
+      const info = bridge.getGroupInfo(1);
+      expect(info).toBeTruthy();
+      expect(info.id).toBe(1);
+    });
+
+    it('getAllGroups returns array', () => {
+      const groups = bridge.getAllGroups();
+      expect(Array.isArray(groups)).toBe(true);
+    });
+
+    it('groupCount returns number', () => {
+      expect(bridge.groupCount()).toBe(1);
+    });
+  });
+
+  describe('DXF import', () => {
+    it('importDxf returns result', () => {
+      const result = bridge.importDxf(new Uint8Array([0]));
+      expect(result).toBeTruthy();
+    });
+  });
+
+  describe('getStats extended', () => {
+    it('getStats returns structured stats', () => {
+      const stats = bridge.getStats();
+      expect(stats).toHaveProperty('faces');
+      expect(stats).toHaveProperty('verts');
+    });
+  });
 });
