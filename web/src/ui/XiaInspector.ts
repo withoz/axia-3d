@@ -210,7 +210,7 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     if (info && !info.empty) {
       // ── 기하 상태 판정 (Point → Line → Face → Volume → XIA) ──
       const geoState = matLib.determineState(
-        { faceCount: info.faceCount || 0, isSolid: info.isSolid || false, height: info.height || 0 },
+        { faceCount: info.faceCount || 0, edgeCount: info.edgeCount || 0, isSolid: info.isSolid || false, height: info.height || 0 },
         faceIds
       );
       const stateInfo = GEOMETRY_STATES[geoState];

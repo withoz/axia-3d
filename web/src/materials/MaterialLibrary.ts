@@ -391,10 +391,13 @@ export class MaterialLibrary {
    */
   determineState(info: {
     faceCount: number;
+    edgeCount: number;
     isSolid: boolean;
     height: number;
   }, faceIds: number[]): GeometryState {
-    if (info.faceCount === 0) return GeometryState.Point;
+    if (info.faceCount === 0) {
+      return info.edgeCount > 0 ? GeometryState.Line : GeometryState.Point;
+    }
 
     // 단일 면 = Face
     if (info.faceCount === 1) return GeometryState.Face;

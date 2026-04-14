@@ -161,36 +161,45 @@ describe('MaterialLibrary', () => {
   });
 
   describe('determineState', () => {
-    it('should return Point for zero faces', () => {
-      const state = lib.determineState({ faceCount: 0, isSolid: false, height: 0 }, []);
+    it('should return Point for zero faces and zero edges', () => {
+      const state = lib.determineState({ faceCount: 0, edgeCount: 0, isSolid: false, height: 0 }, []);
       expect(state).toBe(GeometryState.Point);
     });
 
+    it('should return Line for zero faces but with edges', () => {
+      const state = lib.determineState({ faceCount: 0, edgeCount: 3, isSolid: false, height: 0 }, []);
+      expect(state).toBe(GeometryState.Line);
+    });
+
+    it('should return Line for single edge', () => {
+      const state = lib.determineState({ faceCount: 0, edgeCount: 1, isSolid: false, height: 0 }, []);
+      expect(state).toBe(GeometryState.Line);
+    });
+
     it('should return Face for 2D geometry', () => {
-      const state = lib.determineState({ faceCount: 1, isSolid: false, height: 0 }, [1]);
+      const state = lib.determineState({ faceCount: 1, edgeCount: 4, isSolid: false, height: 0 }, [1]);
       expect(state).toBe(GeometryState.Face);
     });
 
     it('should return Volume for open 3D geometry with height', () => {
-      const state = lib.determineState({ faceCount: 5, isSolid: false, height: 100 }, [1, 2, 3, 4, 5]);
+      const state = lib.determineState({ faceCount: 5, edgeCount: 8, isSolid: false, height: 100 }, [1, 2, 3, 4, 5]);
       expect(state).toBe(GeometryState.Volume);
     });
 
     it('should return Volume for solid without material', () => {
-      const state = lib.determineState({ faceCount: 6, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
+      const state = lib.determineState({ faceCount: 6, edgeCount: 12, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
       expect(state).toBe(GeometryState.Volume);
     });
 
     it('should return Xia for solid with material', () => {
       lib.assignToFaces([1, 2, 3, 4, 5, 6], 'steel');
-      const state = lib.determineState({ faceCount: 6, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
+      const state = lib.determineState({ faceCount: 6, edgeCount: 12, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
       expect(state).toBe(GeometryState.Xia);
     });
 
     it('should return Xia only if some face has material', () => {
       lib.assignToFaces([1, 2], 'wood');
-      // hasMaterial checks if ANY face has material, which is true
-      const state = lib.determineState({ faceCount: 6, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
+      const state = lib.determineState({ faceCount: 6, edgeCount: 12, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
       expect(state).toBe(GeometryState.Xia);
     });
   });
