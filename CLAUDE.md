@@ -241,6 +241,7 @@ interface GroupInfo {
 | DXF | ✅ | parseString + DxfWriter |
 | DWG | ✅ | dwgdxf + DXF 파이프라인 |
 | SKP | ✅ | JSZip + XML parser |
+| 3DM | ✅ | Three.js Rhino3dmLoader + rhino3dm.wasm |
 
 ## Delta Buffer 시스템 (Phase 1 — 2026-04-13 완성)
 

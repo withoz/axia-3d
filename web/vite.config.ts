@@ -16,10 +16,11 @@ export default defineConfig({
           if (id.includes('three/examples/jsm/loaders/')) {
             return 'three-loaders';
           }
-          // dxf/dwgdxf/jszip → import/export 청크
+          // dxf/dwgdxf/jszip/rhino3dm → import/export 청크
           if (id.includes('node_modules/dxf') ||
               id.includes('node_modules/dwgdxf') ||
-              id.includes('node_modules/jszip')) {
+              id.includes('node_modules/jszip') ||
+              id.includes('node_modules/rhino3dm')) {
             return 'file-io-libs';
           }
         },

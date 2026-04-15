@@ -41,9 +41,9 @@ describe('FileImporter', () => {
   // --- getSupportedFormats ---
 
   describe('getSupportedFormats', () => {
-    it('returns all 9 supported formats', () => {
+    it('returns all 10 supported formats', () => {
       const formats = FileImporter.getSupportedFormats();
-      expect(formats).toHaveLength(9);
+      expect(formats).toHaveLength(10);
     });
 
     it('each entry has format, label, and accept fields', () => {
@@ -70,6 +70,7 @@ describe('FileImporter', () => {
       expect(keys).toContain('dxf');
       expect(keys).toContain('dwg');
       expect(keys).toContain('skp');
+      expect(keys).toContain('3dm');
     });
   });
 

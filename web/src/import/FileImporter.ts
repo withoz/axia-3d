@@ -22,7 +22,7 @@ import { convertDwgToDxf, init as initDwgDxf } from 'dwgdxf';
 import JSZip from 'jszip';
 import { debugLog } from '../utils/debug';
 
-export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp';
+export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp' | '3dm';
 
 export interface ImportResult {
   format: ImportFormat;
@@ -54,6 +54,7 @@ const FORMAT_ACCEPT: Record<ImportFormat, string> = {
   'dxf':  '.dxf',
   'dwg':  '.dwg',
   'skp':  '.skp',
+  '3dm':  '.3dm',
 };
 
 /** 포맷별 표시 이름 */
@@ -67,6 +68,7 @@ const FORMAT_LABEL: Record<ImportFormat, string> = {
   'dxf':  'AutoCAD DXF',
   'dwg':  'AutoCAD DWG',
   'skp':  'SketchUp',
+  '3dm':  'Rhino 3DM',
 };
 
 /** 모든 지원 확장자 */
@@ -192,6 +194,7 @@ export class FileImporter {
       case 'dxf':   group = await this.loadDXF(file); break;
       case 'dwg':   group = await this.loadDWG(arrayBuffer, file.name); break;
       case 'skp':   group = await this.loadSKP(arrayBuffer, file.name); break;
+      case '3dm':   group = await this.load3DM(arrayBuffer, file.name); break;
       default:      throw new Error(`지원하지 않는 포맷: ${format}`);
     }
 
@@ -245,6 +248,7 @@ export class FileImporter {
       case 'dxf':  return 'dxf';
       case 'dwg':  return 'dwg';
       case 'skp':  return 'skp';
+      case '3dm':  return '3dm';
       default:     return null;
     }
   }
@@ -749,6 +753,81 @@ export class FileImporter {
 
     if (group.children.length === 0) {
       console.warn('[FileImporter] DXF에서 렌더링 가능한 엔티티를 찾을 수 없습니다');
+    }
+
+    return group;
+  }
+
+  // ─── 3DM (Rhino 3D) ─────────────────────────────────────
+  private async load3DM(buffer: ArrayBuffer, name: string): Promise<THREE.Group> {
+    debugLog(`[FileImporter] Rhino 3DM 처리 중: ${name}`);
+
+    const { Rhino3dmLoader } = await import('three/examples/jsm/loaders/3DMLoader.js');
+
+    const loader = new Rhino3dmLoader();
+
+    // rhino3dm.js + rhino3dm.wasm 경로 설정
+    // 배포 시 public/libs/rhino3dm/ 에서 제공
+    loader.setLibraryPath('/libs/rhino3dm/');
+
+    const group = new THREE.Group();
+    group.name = `import-3dm-${name}`;
+
+    try {
+      // ArrayBuffer → Blob URL 변환 (Rhino3dmLoader는 URL 기반 로드)
+      const blob = new Blob([buffer], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+
+      const object = await new Promise<THREE.Object3D>((resolve, reject) => {
+        loader.load(
+          url,
+          (obj: THREE.Object3D) => resolve(obj),
+          undefined,
+          (err: unknown) => reject(err)
+        );
+      });
+
+      // Blob URL 해제
+      URL.revokeObjectURL(url);
+
+      // Rhino 객체를 group에 추가
+      while (object.children.length > 0) {
+        const child = object.children[0];
+        object.remove(child);
+        group.add(child);
+      }
+
+      // BREP 렌더 메시 없음 감지
+      let meshCount = 0;
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh) meshCount++;
+      });
+
+      if (meshCount === 0) {
+        console.warn(
+          '[FileImporter] 3DM 파일에서 렌더링 가능한 메시를 찾을 수 없습니다. ' +
+          'Rhino에서 "Save Small" 옵션 없이 저장한 파일을 사용해 주세요.'
+        );
+      }
+
+      // Rhino Layer/Material 메타데이터 저장
+      if (object.userData) {
+        (group as any).__metadata = {
+          layers: object.userData.layers,
+          materials: object.userData.materials,
+          groups: object.userData.groups,
+        };
+      }
+
+      debugLog(
+        `[FileImporter] 3DM 완료: ${name} — ${meshCount} 메시 로드됨`
+      );
+    } catch (err) {
+      console.error('[FileImporter] 3DM 로드 실패:', err);
+      throw new Error(`Rhino 3DM 파일 처리 실패: ${(err as Error).message}`);
+    } finally {
+      // Worker 정리 (메모리 누수 방지)
+      loader.dispose();
     }
 
     return group;

@@ -175,7 +175,8 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'import-3ds':
       case 'import-dxf':
       case 'import-dwg':
-      case 'import-skp': {
+      case 'import-skp':
+      case 'import-3dm': {
         const format = act === 'import-all' ? undefined : act.replace('import-', '');
         getFileImporter().then(fi => fi.openFileDialog(format as any)).catch((err: Error) => {
           console.error(`[MenuBar] Import ${format || 'all'} 실패:`, err);

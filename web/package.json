@@ -18,6 +18,7 @@
     "dwgdxf": "^1.0.5",
     "dxf": "^5.3.1",
     "jszip": "^3.10.1",
+    "rhino3dm": "^8.17.0",
     "three": "^0.170.0"
   },
   "devDependencies": {
