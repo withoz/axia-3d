@@ -392,20 +392,41 @@ export class ToolManager {
     return rawGroundPoint;
   }
 
+  /** Get the drawing plane normal based on current view mode.
+   *  - 3d / top / bottom → Y=0 plane (XZ ground)
+   *  - front / back → Z=0 plane (XY wall)
+   *  - right / left → X=0 plane (YZ wall)
+   */
+  private getWorkPlane(): THREE.Plane {
+    const vm = this.viewport.viewMode;
+    switch (vm) {
+      case 'front':
+      case 'back':
+        return new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // Z=0
+      case 'right':
+      case 'left':
+        return new THREE.Plane(new THREE.Vector3(1, 0, 0), 0); // X=0
+      default: // '3d', 'top', 'bottom'
+        return new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // Y=0
+    }
+  }
+
   private getGroundPoint(e: MouseEvent): THREE.Vector3 | null {
     const ray = this.getRay(e);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const plane = this.getWorkPlane();
     const target = new THREE.Vector3();
     return ray.ray.intersectPlane(plane, target);
   }
 
   private get3DPoint(e: MouseEvent): THREE.Vector3 | null {
+    // 1st: try hitting an object face (exact surface point)
     const hit = this.viewport.pick(e.clientX, e.clientY);
     if (hit && hit.point) {
       return hit.point.clone();
     }
+    // 2nd: fall back to view-adaptive work plane
     const ray = this.getRay(e);
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const groundPlane = this.getWorkPlane();
     const target = new THREE.Vector3();
     return ray.ray.intersectPlane(groundPlane, target);
   }

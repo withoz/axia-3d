@@ -330,8 +330,8 @@ export class DrawLineTool implements ITool {
     }
 
     if (this.state === LineDrawState.Drawing && this.startPoint) {
-      // Second click: snap > axis inference
-      const rawPt = this.ctx.getGroundPoint(e);
+      // Second click: snap > surface hit > axis inference
+      const rawPt = this.ctx.get3DPoint(e);  // mesh surface or work plane
       const snapPt = this.ctx.getSnappedPoint(e, rawPt, true);
 
       if (snapPt && rawPt && snapPt.distanceTo(rawPt) > 0.01) {
@@ -339,7 +339,7 @@ export class DrawLineTool implements ITool {
       }
 
       const inferred = this.ctx.getAxisInferredPoint(e, this.startPoint);
-      return inferred ? inferred.point : fallback;
+      return inferred ? inferred.point : (rawPt ?? fallback);
     }
 
     return fallback;
@@ -353,7 +353,7 @@ export class DrawLineTool implements ITool {
       return fallback;
     }
 
-    const rawPt = this.ctx.getGroundPoint(e);
+    const rawPt = this.ctx.get3DPoint(e);  // mesh surface or work plane
     const snapPt = this.ctx.getSnappedPoint(e, rawPt);
 
     if (snapPt && rawPt && snapPt.distanceTo(rawPt) > 0.01) {
@@ -367,7 +367,7 @@ export class DrawLineTool implements ITool {
       return inferred.point;
     }
 
-    return fallback;
+    return rawPt ?? fallback;
   }
 
   // ═══════════════════════════════════════════════════
