@@ -1,10 +1,12 @@
-//! AXiA Core — XIA Object Model, Lifecycle, Command Pattern
+//! AXiA Core — XIA Object Model, Scene, Command Pattern
 //!
-//! This crate defines the high-level modeling concepts:
-//! - XIA Lifecycle: Point → Line → Face → Volume → Xia state transitions
+//! This crate defines the Semantic Layer concepts:
+//! - **Object (= XIA)**: owns geometry (face_ids), has material, name, visibility
+//! - **Geometry state**: computed from owned geometry (Point → Edge → Face → Volume)
+//! - **Material**: property of Object, not a state trigger
+//! - **Group**: UI-only selection set, references faces but doesn't own them
 //! - Command Pattern: Preview → Commit pipeline
 //! - Scene Graph: Collection of XIA entities with relations
-//! - Material System: Physical and visual properties
 
 pub mod xia;
 pub mod lifecycle;

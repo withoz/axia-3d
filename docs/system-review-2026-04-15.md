@@ -133,54 +133,55 @@ XIA와 Group은 직접 연결 없음 — 둘 다 독립적으로 Face를 참조
 
 ---
 
-## 3. XIA 라이프사이클 — 차원 상태 머신
+## 3. XIA 기하 상태 — 계산형 모델 (2026-04-15 리팩토링 완료)
 
 ### 3.1 상태 정의
 
+상태는 **저장하지 않고 `geometry_state()`로 계산**한다.
+
 ```
-  Dissolved ←→ Point ←→ Line ←→ Face ←→ Volume ←→ Xia
-    (-1D)      (0D)     (1D)    (2D)     (3D)    (3D+M)
+Geometry Layer:  Point(0D) → Edge(1D) → Face(2D) → Volume(3D)
+Semantic Layer:  Object(=XIA), Material(속성), Group(UI 참조)
 ```
 
-| 상태 | 차원 | 설명 | has_material |
-|------|------|------|--------------|
-| Dissolved | -1 | 삭제/해제됨 | false |
-| Point | 0 | 공간의 한 점 | false |
-| Line | 1 | 선분 (Edge) | false |
-| Face | 2 | 평면 다각형 | false |
-| Volume | 3 | 닫힌 솔리드 (기하만) | false |
-| Xia | 3+M | 물리 객체 (기하 + 재질) | **true** |
+| 상태 | 차원 | 설명 | 계산 기준 |
+|------|------|------|----------|
+| Dissolved | -1 | 기하 없음 | face_ids=0, standalone_edge=없음 |
+| Point | 0 | 공간의 한 점 | (예약, 현재 미사용) |
+| Edge | 1 | 독립 선분 | face_ids=0, standalone_edge=있음 |
+| Face | 2 | 평면 다각형 | face_ids=1~2 |
+| Volume | 3 | 닫힌 솔리드 | face_ids=3+ |
 
-### 3.2 상태 전이 규칙
+**Material**은 Object(XIA)의 **속성**이며, 상태 전이를 유발하지 않는다.
 
-- ±1 차원 이동 허용 (예: Face→Volume, Volume→Face)
-- 어떤 상태에서든 Dissolved로 전이 가능
-- Volume→Xia 특별 허용 (재질 부여)
+### 3.2 상태 계산 규칙
 
-### 3.3 전이 트리거 위치
+- 상태는 `Xia::geometry_state()` 메서드로 계산 (저장 필드 없음)
+- face_ids.len() + standalone_edge_id 기반 자동 판별
+- Face 삭제 시 face_ids가 비면 자동 Dissolved
+- Face 기반 edge는 `edges_for_xia()`로 계산 (저장 안 함, B안)
 
-| 전이 | 트리거 | 코드 위치 |
-|------|--------|----------|
-| →Line | DrawLine 커맨드 | scene.rs `exec_draw_line()` |
-| →Face | DrawRect, DrawCircle | scene.rs `exec_draw_rect()`, `exec_draw_circle()` |
-| Face→Volume | PushPull | scene.rs `exec_push_pull()` → `lifecycle::promote_to_volume()` |
-| →Volume | Primitive 생성 | lib.rs `create_cylinder/cone/sphere()` → `create_xia_with_faces()` |
-| →Volume/Face | DXF Import | import_dxf.rs → 면 수 기반 자동 판별 |
-| Volume→Xia | Material 할당 | scene.rs `AssignMaterial` → `lifecycle::promote_to_xia()` |
-| Xia→Volume | Material 해제 | scene.rs `RemoveMaterial` → `lifecycle::demote_to_volume()` |
-| →Dissolved | 삭제 | lifecycle.rs `dissolve()` |
+### 3.3 기하 생성 경로
+
+| 연산 | 결과 상태 | 코드 위치 |
+|------|----------|----------|
+| DrawLine | Edge | scene.rs `exec_draw_line()` → standalone_edge_id 설정 |
+| DrawRect, DrawCircle | Face | scene.rs → face_ids에 1개 추가 |
+| PushPull | Volume | scene.rs `exec_push_pull()` → face_ids에 N개 추가 |
+| Primitive 생성 | Volume | lib.rs `create_cylinder/cone/sphere()` → `create_xia_with_faces()` |
+| DXF Import | Face/Volume | import_dxf.rs → 면 수 기반 자동 계산 |
+| Face 삭제 | Dissolved | `unregister_face_from_xia()` → face_ids 비면 dissolve |
+| Material 할당 | (변화 없음) | 속성만 변경, 상태 전이 없음 |
 
 ### 3.4 라이프사이클 관리 모듈
 
 ```
-crates/axia-core/src/lifecycle.rs (53줄)
-├── edges_form_loop()       — 닫힌 루프 판별 (Line→Face 전제조건)
-├── promote_to_face()       — Line→Face (현재 미사용)
-├── promote_to_volume()     — Face→Volume (PushPull 시)
-├── promote_to_xia()        — Volume→Xia (재질 할당 시)
-├── demote_to_volume()      — Xia→Volume (재질 해제 시)
-└── dissolve()              — Any→Dissolved (삭제)
+crates/axia-core/src/lifecycle.rs (19줄)
+├── edges_form_loop()       — 닫힌 루프 판별 (Edge→Face 전제조건)
+└── dissolve()              — 기하 참조 해제 (face_ids + standalone_edge_id 클리어)
 ```
+
+promote/demote 함수는 제거됨 — 상태가 계산형이므로 불필요.
 
 ---
 

@@ -211,6 +211,31 @@ impl Scene {
         }
     }
 
+    /// Compute the set of boundary edges for a XIA (from its face_ids).
+    /// Does NOT include standalone_edge_id — that's tracked separately.
+    /// Returns empty set if faces have no valid edges.
+    pub fn edges_for_xia(&self, xia_id: XiaId) -> Vec<axia_geo::EdgeId> {
+        let Some(xia) = self.xias.get(&xia_id) else { return vec![] };
+        let mut edges = std::collections::HashSet::new();
+        for &fid in &xia.face_ids {
+            if let Ok(face_edges) = self.mesh.face_outer_edges(fid) {
+                for eid in face_edges {
+                    edges.insert(eid);
+                }
+            }
+        }
+        edges.into_iter().collect()
+    }
+
+    /// Get the total edge count for a XIA (computed from faces + standalone).
+    pub fn edge_count_for_xia(&self, xia_id: XiaId) -> usize {
+        let standalone = self.xias.get(&xia_id)
+            .and_then(|x| x.standalone_edge_id)
+            .map(|_| 1usize)
+            .unwrap_or(0);
+        self.edges_for_xia(xia_id).len() + standalone
+    }
+
     /// 그룹 가시성을 재귀적으로 적용 (자식 그룹 + face)
     fn set_group_visibility_recursive(&mut self, group_id: GroupId, visible: bool) {
         if let Some(g) = self.groups.groups.get_mut(&group_id) {
@@ -428,13 +453,13 @@ impl Scene {
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
         match self.mesh.draw_line(start, end) {
-            Ok((_v0, _v1, _edge_id)) => {
-                // XIA created with no face_ids → geometry_state() = Dissolved (edge-only)
-                // TODO (Step 3): add edge_ids tracking for Edge state
+            Ok((_v0, _v1, edge_id)) => {
                 let xia_id = self.create_xia("Line".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.position = start;
                     xia.surface_normal = surface_normal;
+                    xia.standalone_edge_id = Some(edge_id);
+                    // geometry_state() = Edge (standalone edge, no faces)
                 }
                 self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();

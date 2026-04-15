@@ -1,10 +1,11 @@
 //! Shell entity — a connected set of faces forming a closed or open surface.
 //!
-//! In the AXiA geometry hierarchy:
-//!   Point → Line → Face → **Shell** → Volume → XIA
+//! In the Geometry Layer:
+//!   Point → Edge → Face → Volume
 //!
 //! A Shell groups faces that share edges (topologically connected).
-//! A closed Shell (all edges shared by exactly 2 faces) = Volume candidate.
+//! A closed Shell (all edges shared by exactly 2 faces) constitutes a Volume.
+//! Shell is a DCEL implementation detail, not a user-facing geometry state.
 
 use super::id::FaceId;
 use serde::{Serialize, Deserialize};

@@ -28,11 +28,12 @@ Semantic Layer (의미):       Object(=XIA), Material, Group
 7. **Group**은 UI 전용 선택 집합이며 face를 참조할 뿐 소유하지 않는다.
 
 ### 참조 관계
-- Object → face_ids, edge_ids (소유)
-- Object → Material (속성, Option)
+- Object → face_ids (소유), standalone_edge_id (draw_line 전용)
+- Object → Material (속성, Option — 상태 전이 유발 안 함)
 - Group → face_ids (참조, Object 경계 무관)
 - face_to_xia: HashMap<FaceId, XiaId> (O(1) 역인덱스)
-- geometry_state(): face_ids/edge_ids로부터 계산 (Point|Edge|Face|Volume)
+- geometry_state(): face_ids.len() + standalone_edge_id로 계산 (Dissolved|Point|Edge|Face|Volume)
+- edges_for_xia(): face_ids → face_outer_edges() 계산 (저장 안 함, B안)
 
 ## 빌드 방법
 ```bash

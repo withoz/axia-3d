@@ -8,11 +8,11 @@
 
 ## 1. 제안 개요
 
-### 1.1 현재 구조 (단일 계층, 6단계 상태 머신)
+### 1.1 리팩토링 이전 구조 (단일 계층, 6단계 상태 머신)
 
 ```
-Dissolved ←→ Point ←→ Line ←→ Face ←→ Volume ←→ Xia
-  (-1D)       (0D)     (1D)    (2D)     (3D)    (3D+M)
+[이전] Dissolved ←→ Point ←→ Line ←→ Face ←→ Volume ←→ Xia
+         (-1D)       (0D)     (1D)    (2D)     (3D)    (3D+M)
 ```
 
 - 기하와 의미가 하나의 상태 체인에 혼재
@@ -20,17 +20,19 @@ Dissolved ←→ Point ←→ Line ←→ Face ←→ Volume ←→ Xia
 - Material 해제가 상태 강등을 유발 (Xia→Volume)
 - "XIA"가 최종 상태이자 프로젝트 이름이자 엔티티 타입 — 의미 과적
 
-### 1.2 제안 구조 (2계층 분리)
+### 1.2 확정된 구조 (2계층 분리, 2026-04-15 구현 완료)
 
 ```
 Geometry Layer (기하 계층):
-  Point → Edge → Face → Volume = Object (기하의 완성)
+  Point(0D) → Edge(1D) → Face(2D) → Volume(3D)
 
 Semantic Layer (의미 계층):
-  XIA      = 기하에 속성/성질을 부여한 것
-  Material = XIA의 property (속성 전이가 아닌 속성 할당)
-  Group    = UI 전용 선택 집합 (소유가 아닌 참조)
+  Object(=XIA) = 기하를 소유하고, 속성/성질을 부여
+  Material     = Object의 property (상태 전이 유발 안 함)
+  Group        = UI 전용 선택 집합 (소유가 아닌 참조)
 ```
+
+Volume ≠ Object. Object는 Semantic Layer에만 존재한다.
 
 ---
 
@@ -258,58 +260,58 @@ pub struct Xia {
 #### xia.rs — 상태 enum 재정의
 
 ```
-변경 전 (6개 상태):
+변경 전 (6개 상태, 저장형):
   pub enum XiaState {
       Dissolved, Point, Line, Face, Volume, Xia
   }
 
-변경 후 (4개 상태):
-  pub enum GeometryState {
-      Point,    // 0D
-      Edge,     // 1D (현재 Line)
-      Face,     // 2D
-      Volume,   // 3D = Object (기하의 완성)
+변경 후 (5개 상태, 계산형 — 구현 완료):
+  pub enum XiaState {
+      Dissolved, // 기하 없음
+      Point,     // 0D (예약)
+      Edge,      // 1D — standalone_edge_id 있음
+      Face,      // 2D — face_ids 1~2개
+      Volume,    // 3D — face_ids 3+개
   }
 
-별도 분리:
-  pub dissolved: bool    // 삭제 플래그 (상태에서 분리)
+Volume ≠ Object. Object(=XIA)는 Semantic Layer에만 존재.
+state 필드 제거 → geometry_state() 메서드로 계산.
 ```
 
-| 항목 | 영향 |
+| 항목 | 결과 |
 |------|------|
+| state 필드 | **제거** → geometry_state() 계산 메서드 |
 | dimension() | 유지 (Point=0, Edge=1, Face=2, Volume=3) |
-| has_material() | **삭제** (Material은 property) |
-| can_transition_to() | 단순화 (±1 차원만, Volume→Xia 특례 제거) |
-| transition() | 단순화 |
+| has_material() | XIA 속성 체크 (material.raw() != 0) |
+| can_transition_to() | **제거** (상태는 계산형, 전이 불필요) |
+| transition() | **제거** |
 
-#### lifecycle.rs — 전이 함수 정리
+#### lifecycle.rs — 전이 함수 정리 (구현 완료)
 
 ```
 변경 전 (5개 함수):
   edges_form_loop()      유지
-  promote_to_face()      유지 (Edge→Face)
-  promote_to_volume()    유지 → 이름 변경: promote_to_object()
-  promote_to_xia()       삭제
-  demote_to_volume()     삭제
+  promote_to_face()      삭제 (상태는 계산형)
+  promote_to_volume()    삭제 (상태는 계산형)
+  promote_to_xia()       삭제 (Material은 속성)
+  demote_to_volume()     삭제 (Material은 속성)
   dissolve()             유지
 
-변경 후 (4개 함수):
-  edges_form_loop()
-  promote_to_face()
-  promote_to_object()    (Face→Volume)
-  dissolve()
+변경 후 (2개 함수):
+  edges_form_loop()      — 닫힌 루프 판별
+  dissolve()             — 기하 참조 해제 (face_ids + standalone_edge_id 클리어)
 ```
 
-#### scene.rs — 커맨드 핸들러 변경
+#### scene.rs — 커맨드 핸들러 변경 (구현 완료)
 
-| 커맨드 | 현재 | 변경 후 |
+| 커맨드 | 이전 | 현재 (구현 완료) |
 |--------|------|---------|
-| DrawLine | state = Line | state = Edge |
-| DrawRect | state = Face | state = Face (동일) |
-| DrawCircle | state = Face | state = Face (동일) |
-| PushPull | promote_to_volume() | promote_to_object() |
-| AssignMaterial | promote_to_xia() 호출 | 속성 할당만 (상태 변경 없음) |
-| RemoveMaterial | demote_to_volume() 호출 | 속성 해제만 (상태 변경 없음) |
+| DrawLine | state = Line | standalone_edge_id 설정 → Edge 자동 계산 |
+| DrawRect | state = Face | face_ids 추가 → Face 자동 계산 |
+| DrawCircle | state = Face | face_ids 추가 → Face 자동 계산 |
+| PushPull | promote_to_volume() | face_ids 추가 → Volume 자동 계산 |
+| AssignMaterial | promote_to_xia() | 속성 할당만 (상태 변경 없음) |
+| RemoveMaterial | demote_to_volume() | 속성 해제만 (상태 변경 없음) |
 
 #### import_dxf.rs — 상태 판별 변경
 
@@ -620,18 +622,20 @@ Object는 Geometry Layer가 아닌 **Semantic Layer**에 속합니다.
 │  Vertex         Edge          Face         (닫힌3D)   │
 │                                                       │
 │  규칙: 상태는 기하에서 "계산"됨, 저장하지 않음         │
+│  Volume ≠ Object (Volume은 순수 기하 상태)             │
 └────────────────────┬──────────────────────────────────┘
-                     │ 소유 (face_ids, edge_ids)
+                     │ 소유 (face_ids, standalone_edge_id)
                      ▼
 ┌─ Semantic Layer (의미, 사용자 모델) ─────────────────┐
 │                                                       │
 │  Object (= XIA)                                      │
-│    소유: face_ids, edge_ids                           │
-│    계산: geometry_state() → Point|Edge|Face|Volume    │
+│    소유: face_ids, standalone_edge_id                 │
+│    계산: geometry_state() → Dissolved|Point|Edge|Face|Volume │
 │    속성: material (Option), name, position            │
+│    Edge 계산: edges_for_xia() — face 경계에서 추출    │
 │                                                       │
 │  MaterialLibrary (재질 정의 카탈로그)                  │
-│    Object.material이 참조                             │
+│    Object.material이 참조 (속성, 상태 전이 안 함)     │
 │                                                       │
 │  Group (UI 선택 집합)                                 │
 │    참조: face_ids (Object 경계 무관)                   │
@@ -642,26 +646,28 @@ Object는 Geometry Layer가 아닌 **Semantic Layer**에 속합니다.
 
 ---
 
-## 12. 구현 계획 (확정)
+## 12. 구현 계획 (전체 완료)
 
-### Step 1. 설계 공식화
+### Step 1. 설계 공식화 ✅
 - 아키텍처 결정을 CLAUDE.md 및 보고서에 반영
 - 설계 논쟁 종료
 
-### Step 2. #1·#2 버그 수정 (가장 안전, 효과 큼)
-- Face 삭제 시 face_to_xia 정리
-- XIA 상태 → 계산형으로 전환
-- face_ids 비면 Dissolved 처리
+### Step 2. #1·#2 버그 수정 ✅
+- Face 삭제 시 face_to_xia 정리 (delete_face/delete_edge/batch_delete)
+- XIA state 필드 제거 → geometry_state() 계산형 전환
+- face_ids 비면 자동 Dissolved 처리
+- promote_to_xia/demote_to_volume/promote_to_volume/promote_to_face 제거
 
-### Step 3. Edge 상태 보완
-- XIA에 `edge_ids: Vec<EdgeId>` 추가
-- DrawLine 시 edge를 Object에 등록
-- geometry_state() 계산에 edge 반영
+### Step 3. Edge 상태 보완 (B안) ✅
+- standalone_edge_id: Option<EdgeId> — draw_line 전용 최소 저장
+- edges_for_xia(): face_ids → face_outer_edges() 계산 (저장 안 함)
+- geometry_state()에서 Edge 상태 반환 가능
 
-### Step 4. "Volume = Object" 잔여 개념 제거
-- 코드/주석/변수명에서 Object가 Geometry처럼 취급되는 부분 제거
-- Object는 UI/Inspector/XIA만 담당
+### Step 4. "Volume = Object" 잔여 개념 제거 ✅
+- 코드/주석에서 Volume=Object 혼용 완전 제거
+- Object는 Semantic Layer에만 존재 확정
+- shell.rs, lib.rs, lifecycle.rs, CLAUDE.md, 보고서 전부 정리
 
 ---
 
-*이 보고서는 커밋 dce2a52 기준으로 작성되었으며, 11장 Architecture Decision은 2026-04-15 확정되었습니다.*
+*이 보고서는 커밋 dce2a52 기준으로 작성되었으며, Step 1~4 구현은 2026-04-15 완료되었습니다.*

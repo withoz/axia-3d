@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use glam::DVec3;
-use axia_geo::{FaceId, MaterialId};
+use axia_geo::{EdgeId, FaceId, MaterialId};
 
 /// Geometry state of a XIA entity — computed from owned geometry.
 /// This replaces the old stored `XiaState` (which included `Xia` as a separate state).
@@ -58,12 +58,17 @@ pub type XiaId = u64;
 /// - **face_ids**: owned faces in the geometry mesh
 /// - **visible / selected**: UI state
 ///
-/// State is **computed** via `geometry_state()` from `face_ids.len()`:
+/// State is **computed** via `geometry_state()`:
 /// ```text
-/// 0 faces → Dissolved
+/// 0 faces, 0 edges → Dissolved
+/// 0 faces, 1+ edges → Edge (standalone edges from draw_line)
 /// 1-2 faces → Face
 /// 3+ faces → Volume
 /// ```
+///
+/// Edge tracking (B안 — 계산 기반):
+/// - Face가 있는 XIA: edge는 face_outer_edges()로 계산 (저장 안 함)
+/// - draw_line XIA: standalone_edge_id로 독립 edge 최소 추적
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Xia {
     /// Unique identifier
@@ -78,6 +83,9 @@ pub struct Xia {
     pub material: MaterialId,
     /// Face IDs owned by this XIA (in the geometry mesh)
     pub face_ids: Vec<FaceId>,
+    /// Standalone edge ID (draw_line only — not shared, no face)
+    /// Face-based edges are computed via face_outer_edges(), not stored.
+    pub standalone_edge_id: Option<EdgeId>,
     /// Visibility
     pub visible: bool,
     /// Selection state
@@ -93,18 +101,20 @@ impl Xia {
             surface_normal: None,
             material: MaterialId::new(0),
             face_ids: Vec::new(),
+            standalone_edge_id: None,
             visible: true,
             selected: false,
         }
     }
 
-    /// Compute the geometry state from owned faces.
-    /// This replaces the old stored `state` field.
+    /// Compute the geometry state from owned geometry.
+    /// Face-based edges are computed externally (not stored).
     pub fn geometry_state(&self) -> XiaState {
-        match self.face_ids.len() {
-            0 => XiaState::Dissolved,
-            1 | 2 => XiaState::Face,
-            _ => XiaState::Volume, // 3+ faces
+        match (self.face_ids.len(), self.standalone_edge_id.is_some()) {
+            (0, false) => XiaState::Dissolved,
+            (0, true)  => XiaState::Edge,     // draw_line only
+            (1 | 2, _) => XiaState::Face,
+            _          => XiaState::Volume,   // 3+ faces
         }
     }
 
