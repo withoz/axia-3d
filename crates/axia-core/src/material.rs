@@ -121,7 +121,7 @@ impl MaterialLibrary {
     pub fn new() -> Self {
         let mut lib = Self {
             materials: HashMap::new(),
-            next_id: 1,
+            next_id: 0,
         };
         lib.init_builtins();
         lib
