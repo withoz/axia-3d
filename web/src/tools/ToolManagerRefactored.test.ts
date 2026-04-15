@@ -142,6 +142,7 @@ function mockBridge() {
       faceMap: new Uint32Array([1]),
     }),
     getEdgeLines: vi.fn().mockReturnValue(new Float32Array([0, 0, 0, 1, 0, 0])),
+    getSnapVerticesF64: vi.fn().mockReturnValue(null),
     getEdgeMap: vi.fn().mockReturnValue(new Uint32Array([1])),
     getDeltaBuffers: vi.fn().mockReturnValue(null),
     getStats: vi.fn().mockReturnValue({ verts: 3, faces: 1 }),

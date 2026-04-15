@@ -685,6 +685,49 @@ impl AxiaEngine {
         self.cached_edge_map.clone()
     }
 
+    /// Get unique vertex positions in f64 precision for snap system.
+    /// Returns flat [x0,y0,z0, x1,y1,z1, ...] as Float64Array.
+    /// Snap system should use these instead of the f32 render buffers.
+    #[wasm_bindgen(js_name = "getSnapVerticesF64")]
+    pub fn get_snap_vertices_f64(&self) -> Vec<f64> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        for (_fid, face) in self.scene.mesh.faces.iter() {
+            if !face.is_active() || !face.is_visible() { continue; }
+            let start = face.outer().start;
+            if start.is_null() { continue; }
+            if let Ok(verts) = self.scene.mesh.collect_loop_verts(start) {
+                for vid in verts {
+                    if seen.insert(vid) {
+                        if let Ok(pos) = self.scene.mesh.vertex_pos(vid) {
+                            result.push(pos.x);
+                            result.push(pos.y);
+                            result.push(pos.z);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also include standalone edge vertices
+        for (_eid, edge) in self.scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            for &vid in &[edge.v_small(), edge.v_large()] {
+                if seen.insert(vid) {
+                    if let Ok(pos) = self.scene.mesh.vertex_pos(vid) {
+                        result.push(pos.x);
+                        result.push(pos.y);
+                        result.push(pos.z);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // Delta Buffer Export (Phase 1 Optimization)
     // ════════════════════════════════════════════════════════════════════════

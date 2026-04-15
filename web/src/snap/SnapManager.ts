@@ -280,6 +280,7 @@ export class SnapManager {
     indices: Uint32Array,
     faceMap: Uint32Array,
     edgeLines?: Float32Array | null,
+    snapVerticesF64?: Float64Array | null,
   ) {
     this.vertices = [];
     this.edges = [];
@@ -288,8 +289,21 @@ export class SnapManager {
 
     const vertSet = new Map<string, THREE.Vector3>();
 
-    // ── 1) Unique vertices from face positions (끝점 스냅용) ──
-    if (positions.length > 0) {
+    // ── 1) Unique vertices — prefer f64 precision for exact snap ──
+    if (snapVerticesF64 && snapVerticesF64.length >= 3) {
+      // Use f64 vertex positions from WASM (exact DCEL coordinates, no f32 loss)
+      const vertCount = snapVerticesF64.length / 3;
+      for (let i = 0; i < vertCount; i++) {
+        const v = new THREE.Vector3(
+          snapVerticesF64[i * 3],
+          snapVerticesF64[i * 3 + 1],
+          snapVerticesF64[i * 3 + 2],
+        );
+        const key = `${v.x.toFixed(1)},${v.y.toFixed(1)},${v.z.toFixed(1)}`;
+        if (!vertSet.has(key)) vertSet.set(key, v);
+      }
+    } else if (positions.length > 0) {
+      // Fallback: f32 render buffer (precision loss possible)
       const vertCount = positions.length / 3;
       for (let i = 0; i < vertCount; i++) {
         const v = new THREE.Vector3(

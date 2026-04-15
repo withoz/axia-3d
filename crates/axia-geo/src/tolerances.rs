@@ -3,11 +3,11 @@
 //! Refined from buildragon's tolerances.rs with clearer naming.
 
 /// Vertex coincidence tolerance (positions closer than this are merged).
-/// 0.01mm — practical CAD precision for snap/click coordinate matching.
-pub const VERTEX_TOLERANCE: f64 = 0.01;
+/// 1e-7 — sub-micron CAD precision (snap provides exact f64 coordinates).
+pub const VERTEX_TOLERANCE: f64 = 1e-7;
 
 /// Edge coincidence tolerance
-pub const EDGE_TOLERANCE: f64 = 0.01;
+pub const EDGE_TOLERANCE: f64 = 1e-7;
 
 /// Face tolerance
 pub const FACE_TOLERANCE: f64 = 1e-6;

@@ -46,6 +46,7 @@ export interface DeltaBuffers {
  */
 type AxiaEngineExtended = AxiaEngine & {
   get_edge_lines?(): Float32Array;
+  getSnapVerticesF64?(): Float64Array;
   delete_edge?(edgeId: number): boolean;
   batch_delete?(faceIds: Uint32Array, edgeIds: Uint32Array): boolean;
   get_connected_faces?(seedFaceId: number): Uint32Array;
@@ -321,6 +322,18 @@ export class WasmBridge {
       return null;
     } catch {
       return null; // WASM not rebuilt yet — fallback to EdgesGeometry
+    }
+  }
+
+  /** Get unique vertex positions in f64 precision for snap system.
+   *  Returns flat [x0,y0,z0, x1,y1,z1, ...] as Float64Array.
+   *  These are the exact coordinates stored in the DCEL — no f32 truncation. */
+  getSnapVerticesF64(): Float64Array | null {
+    if (!this.engine) return null;
+    try {
+      return this.engine.getSnapVerticesF64?.() ?? null;
+    } catch {
+      return null;
     }
   }
 

@@ -332,9 +332,11 @@ export class ToolManager {
       this.selection.updateBuffers(buffers.positions, buffers.indices, buffers.faceMap);
       this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
 
+      // Get f64 precision vertices for snap (avoids f32 truncation)
+      const snapF64 = this.bridge.getSnapVerticesF64();
       this.snap.updateFromMesh(
         buffers.positions, buffers.indices, buffers.faceMap,
-        edgeLines,
+        edgeLines, snapF64,
       );
     } else {
       this.viewport.updateMesh(
@@ -347,7 +349,7 @@ export class ToolManager {
       this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
       this.snap.updateFromMesh(
         new Float32Array(0), new Uint32Array(0), new Uint32Array(0),
-        edgeLines,
+        edgeLines, null,
       );
     }
 
