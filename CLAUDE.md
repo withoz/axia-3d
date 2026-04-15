@@ -10,6 +10,30 @@ CAD를 대치하는 가벼운 동작의 모델링 프로그램.
 - **TypeScript + Vite**: 프론트엔드 빌드
 - **wasm-pack + vite-plugin-wasm**: WASM 로딩
 
+## Architecture Decision (2026-04-15 확정)
+
+### 개념 모델 — Geometry Layer / Semantic Layer 분리
+
+```
+Geometry Layer (순수 기하):  Point(0D) → Edge(1D) → Face(2D) → Volume(3D 닫힌 솔리드)
+Semantic Layer (의미):       Object(=XIA), Material, Group
+```
+
+1. **Geometry Layer**는 Point / Edge / Face / Volume만 포함한다.
+2. **Volume**은 "닫힌 기하 상태"이며 Object가 아니다.
+3. **Object**는 Semantic Layer에 속하며 XIA와 동일 개념이다.
+4. Object/XIA는 기하를 "소유"하고, 기하 상태는 소유한 기하에서 "계산"된다.
+5. XIA.state는 저장하지 않으며, `geometry_state()`로 계산한다.
+6. **Material**은 Object의 속성(property)이며 상태 전이를 유발하지 않는다.
+7. **Group**은 UI 전용 선택 집합이며 face를 참조할 뿐 소유하지 않는다.
+
+### 참조 관계
+- Object → face_ids, edge_ids (소유)
+- Object → Material (속성, Option)
+- Group → face_ids (참조, Object 경계 무관)
+- face_to_xia: HashMap<FaceId, XiaId> (O(1) 역인덱스)
+- geometry_state(): face_ids/edge_ids로부터 계산 (Point|Edge|Face|Volume)
+
 ## 빌드 방법
 ```bash
 # WASM 빌드 (Rust 툴체인 필요)
