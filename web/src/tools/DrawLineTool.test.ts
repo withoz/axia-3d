@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       drawLine: vi.fn().mockReturnValue(0),
+      faceCount: vi.fn().mockReturnValue(0),
     },
     viewport: {
       scene: { add: vi.fn(), remove: vi.fn() },

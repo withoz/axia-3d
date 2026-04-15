@@ -236,12 +236,27 @@ export class DrawLineTool implements ITool {
         // Preview will be updated by MouseMove events
         break;
 
-      case LineDrawState.Confirmed:
+      case LineDrawState.Confirmed: {
         // *** Engine call happens ONLY here ***
-        this.commitLine();
-        // Continuous drawing: end → next start → back to Drawing
-        this.continuousReenter();
+        const faceCreated = this.commitLine();
+        if (faceCreated) {
+          // Face auto-created from closed loop → stop continuous drawing
+          this.removeLinePreview();
+          this.removeStartDot();
+          this.startPoint = null;
+          this.previewEnd = null;
+          this.ctx.clearAxisGuide();
+          this.ctx.dimLabel.clear();
+          this.ctx.axisLock = null;
+          this.ctx.snap.setReferencePoint(null);
+          this.state = LineDrawState.Armed;
+          debugLog('[Line] Loop closed → returning to Armed');
+        } else {
+          // Continuous drawing: end → next start → back to Drawing
+          this.continuousReenter();
+        }
         break;
+      }
     }
   }
 
@@ -252,19 +267,32 @@ export class DrawLineTool implements ITool {
   /**
    * Commit the line to the WASM engine.
    * This is the ONLY place where the engine is called.
+   * Returns true if a face was auto-created (closed loop detected).
    */
-  private commitLine(): void {
-    if (!this.startPoint || !this.previewEnd) return;
+  private commitLine(): boolean {
+    if (!this.startPoint || !this.previewEnd) return false;
 
     const len = this.startPoint.distanceTo(this.previewEnd);
-    if (len <= 1) return; // Too short, ignore
+    if (len <= 1) return false; // Too short, ignore
+
+    const facesBefore = this.ctx.bridge.faceCount();
 
     this.ctx.bridge.drawLine(
       this.startPoint.x, this.startPoint.y, this.startPoint.z,
       this.previewEnd.x, this.previewEnd.y, this.previewEnd.z,
     );
-    debugLog(`[Line] Created: ${len.toFixed(2)} mm`);
+
+    const facesAfter = this.ctx.bridge.faceCount();
+    const faceCreated = facesAfter > facesBefore;
+
+    if (faceCreated) {
+      debugLog(`[Line] Closed loop → face created! (${len.toFixed(2)} mm)`);
+    } else {
+      debugLog(`[Line] Created: ${len.toFixed(2)} mm`);
+    }
+
     this.ctx.syncMesh();
+    return faceCreated;
   }
 
   /**

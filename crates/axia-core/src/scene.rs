@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use glam::DVec3;
 use anyhow::Result;
 
-use axia_geo::{Mesh, MaterialId, FaceId};
+use axia_geo::{Mesh, MaterialId, FaceId, EdgeId};
 use axia_transaction::TransactionManager;
 
 use crate::xia::{Xia, XiaId};
@@ -453,7 +453,58 @@ impl Scene {
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
         match self.mesh.draw_line(start, end) {
-            Ok((_v0, _v1, edge_id)) => {
+            Ok((v0, v1, edge_id)) => {
+                // ── Auto-face: check if this edge closes a loop ──
+                if let Some(loop_verts) = self.mesh.detect_free_edge_loop(v0, v1, edge_id) {
+                    // Collect all edges forming the loop (for XIA cleanup)
+                    let loop_edge_ids: Vec<EdgeId> = (0..loop_verts.len())
+                        .filter_map(|i| {
+                            let va = loop_verts[i];
+                            let vb = loop_verts[(i + 1) % loop_verts.len()];
+                            self.mesh.find_edge(va, vb)
+                        })
+                        .collect();
+
+                    // Create the face from the closed loop
+                    match self.mesh.add_face(&loop_verts, self.default_material) {
+                        Ok(face_id) => {
+                            // Remove all standalone-edge XIAs whose edge is part of this loop
+                            let xias_to_remove: Vec<XiaId> = self.xias.iter()
+                                .filter(|(_, x)| {
+                                    if let Some(eid) = x.standalone_edge_id {
+                                        loop_edge_ids.contains(&eid)
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .map(|(&id, _)| id)
+                                .collect();
+
+                            for xid in &xias_to_remove {
+                                self.xias.remove(xid);
+                            }
+
+                            // Create new XIA owning the face
+                            let xia_id = self.create_xia("Face".to_string());
+                            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                                xia.position = start;
+                                xia.surface_normal = surface_normal;
+                                xia.face_ids.push(face_id);
+                                // geometry_state() = Face (1 face, no standalone edge)
+                            }
+                            self.register_faces_to_xia(xia_id, &[face_id]);
+
+                            self.transactions.set_after_snapshot(self.scene_snapshot());
+                            self.transactions.commit();
+                            return CommandResult::EntityCreated(xia_id);
+                        }
+                        Err(_) => {
+                            // Face creation failed — fall through to edge-only path
+                        }
+                    }
+                }
+
+                // ── No loop detected (or face creation failed) — create edge XIA ──
                 let xia_id = self.create_xia("Line".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.position = start;
@@ -790,6 +841,70 @@ mod tests {
             }
             _ => panic!("expected EntityCreated result"),
         }
+    }
+
+    #[test]
+    fn test_draw_lines_triangle_auto_face() {
+        // Drawing 3 lines that form a closed triangle should auto-create a face
+        let mut scene = Scene::new();
+        let a = DVec3::ZERO;
+        let b = DVec3::new(2.0, 0.0, 0.0);
+        let c = DVec3::new(1.0, 2.0, 0.0);
+
+        // Line 1: A→B (edge only)
+        let r1 = scene.execute(Command::DrawLine { start: a, end: b, surface_normal: None });
+        match &r1 {
+            CommandResult::EntityCreated(xid) => {
+                let xia = &scene.xias[xid];
+                assert!(xia.standalone_edge_id.is_some(), "First line should be edge");
+                assert!(xia.face_ids.is_empty(), "First line should have no face");
+            }
+            _ => panic!("expected EntityCreated"),
+        }
+
+        // Line 2: B→C (edge only)
+        let r2 = scene.execute(Command::DrawLine { start: b, end: c, surface_normal: None });
+        match &r2 {
+            CommandResult::EntityCreated(xid) => {
+                let xia = &scene.xias[xid];
+                assert!(xia.standalone_edge_id.is_some(), "Second line should be edge");
+            }
+            _ => panic!("expected EntityCreated"),
+        }
+        assert_eq!(scene.mesh.face_count(), 0, "No face yet with 2 lines");
+
+        // Line 3: C→A — closes the loop → auto-creates face!
+        let r3 = scene.execute(Command::DrawLine { start: c, end: a, surface_normal: None });
+        match &r3 {
+            CommandResult::EntityCreated(xid) => {
+                let xia = &scene.xias[xid];
+                assert!(!xia.face_ids.is_empty(), "Third line should create face");
+                assert!(xia.standalone_edge_id.is_none(), "Face XIA should not have standalone edge");
+            }
+            _ => panic!("expected EntityCreated"),
+        }
+        assert_eq!(scene.mesh.face_count(), 1, "Triangle face should be created");
+
+        // The old edge-only XIAs should be cleaned up
+        let edge_xias: Vec<_> = scene.xias.values()
+            .filter(|x| x.standalone_edge_id.is_some())
+            .collect();
+        assert_eq!(edge_xias.len(), 0, "Old edge XIAs should be removed");
+    }
+
+    #[test]
+    fn test_draw_lines_no_auto_face_open() {
+        // Drawing 2 lines (open chain) should NOT create a face
+        let mut scene = Scene::new();
+        let a = DVec3::ZERO;
+        let b = DVec3::X;
+        let c = DVec3::new(2.0, 0.0, 0.0);
+
+        scene.execute(Command::DrawLine { start: a, end: b, surface_normal: None });
+        scene.execute(Command::DrawLine { start: b, end: c, surface_normal: None });
+
+        assert_eq!(scene.mesh.face_count(), 0, "Open chain should not create face");
+        assert_eq!(scene.xias.len(), 2, "Should have 2 edge XIAs");
     }
 
     #[test]

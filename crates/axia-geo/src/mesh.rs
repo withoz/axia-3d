@@ -540,6 +540,136 @@ impl Mesh {
     }
 
     // ========================================================================
+    // Closed-loop detection (auto-face creation)
+    // ========================================================================
+
+    /// Detect if adding edge v0–v1 completes a closed loop of free edges.
+    ///
+    /// Searches for a path from v1 back to v0 using only free edges
+    /// (edges with at least one unassigned half-edge), excluding the
+    /// newly created edge `new_edge_id`.
+    ///
+    /// Returns the loop vertices in winding order (suitable for `add_face`)
+    /// if a coplanar closed loop of 3+ edges is found.
+    pub fn detect_free_edge_loop(
+        &self,
+        v0: VertId,
+        v1: VertId,
+        new_edge_id: EdgeId,
+    ) -> Option<Vec<VertId>> {
+        use std::collections::VecDeque;
+
+        // Build adjacency graph of free edges (excluding the new edge)
+        let mut adj: FxHashMap<VertId, Vec<VertId>> = FxHashMap::default();
+
+        for (edge_id, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            if edge_id == new_edge_id { continue; }
+
+            // Only include edges that have at least one free half-edge
+            if !self.edge_has_free_he(edge_id) { continue; }
+
+            let va = edge.v_small();
+            let vb = edge.v_large();
+            adj.entry(va).or_default().push(vb);
+            adj.entry(vb).or_default().push(va);
+        }
+
+        // BFS from v1 looking for v0
+        let mut parent: FxHashMap<VertId, VertId> = FxHashMap::default();
+        parent.insert(v1, VertId::NULL); // sentinel: start of path
+        let mut queue = VecDeque::new();
+        queue.push_back(v1);
+
+        while let Some(current) = queue.pop_front() {
+            if let Some(neighbors) = adj.get(&current) {
+                for &next in neighbors {
+                    if parent.contains_key(&next) { continue; }
+                    parent.insert(next, current);
+
+                    if next == v0 {
+                        // Reconstruct path: v0 ← parent ← ... ← v1
+                        let mut path = Vec::new();
+                        let mut node = v0;
+                        loop {
+                            path.push(node);
+                            let p = parent[&node];
+                            if p.is_null() { break; } // reached v1 sentinel
+                            node = p;
+                        }
+                        // path = [v0, ..., v1] (reverse BFS order)
+                        // Face loop order: v0 →(new edge)→ v1 →(free edges)→ ... → v0
+                        // So face vertices = [v0, v1, intermediates...]
+                        // From path [v0, mid_n, ..., mid_1, v1]:
+                        //   take v0, then reverse the rest
+                        if path.len() < 3 { return None; }
+
+                        let mut face_verts = Vec::with_capacity(path.len());
+                        face_verts.push(path[0]); // v0
+                        for i in (1..path.len()).rev() {
+                            face_verts.push(path[i]);
+                        }
+                        // face_verts = [v0, v1, mid_1, ..., mid_n]
+
+                        // Verify coplanarity
+                        if self.are_verts_coplanar(&face_verts) {
+                            return Some(face_verts);
+                        } else {
+                            return None;
+                        }
+                    }
+
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        None // no loop found
+    }
+
+    /// Check if an edge has at least one half-edge not assigned to a face.
+    fn edge_has_free_he(&self, edge_id: EdgeId) -> bool {
+        let start_he = self.edges[edge_id].any_he();
+        if start_he.is_null() { return false; }
+
+        let mut he_id = start_he;
+        loop {
+            if self.hes[he_id].face().is_null() {
+                return true;
+            }
+            he_id = self.hes[he_id].next_rad();
+            if he_id == start_he { break; }
+        }
+        false
+    }
+
+    /// Check if all vertices lie on the same plane (within tolerance).
+    /// Triangles (3 vertices) are always coplanar.
+    fn are_verts_coplanar(&self, verts: &[VertId]) -> bool {
+        if verts.len() <= 3 { return true; }
+
+        let p0 = self.verts[verts[0]].pos();
+        let p1 = self.verts[verts[1]].pos();
+        let p2 = self.verts[verts[2]].pos();
+
+        let normal = (p1 - p0).cross(p2 - p0);
+        let normal_len = normal.length();
+        if normal_len < 1e-10 { return false; } // degenerate
+        let normal = normal / normal_len;
+
+        const COPLANAR_TOL: f64 = 1e-3; // 1mm tolerance for drawn lines
+
+        for &vid in &verts[3..] {
+            let p = self.verts[vid].pos();
+            let dist = (p - p0).dot(normal).abs();
+            if dist > COPLANAR_TOL {
+                return false;
+            }
+        }
+        true
+    }
+
+    // ========================================================================
     // Mesh export (for sending to Three.js)
     // ========================================================================
 

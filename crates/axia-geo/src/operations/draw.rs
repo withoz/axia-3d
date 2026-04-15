@@ -134,6 +134,89 @@ mod tests {
     }
 
     #[test]
+    fn test_triangle_loop_detected() {
+        // Draw 3 lines forming a triangle: A→B, B→C, C→A
+        let mut mesh = Mesh::new();
+        let a = DVec3::ZERO;
+        let b = DVec3::new(1.0, 0.0, 0.0);
+        let c = DVec3::new(0.5, 1.0, 0.0);
+
+        let (_v0, _v1, _e1) = mesh.draw_line(a, b).unwrap();
+        let (_v2, _v3, _e2) = mesh.draw_line(b, c).unwrap();
+        let (v4, v5, e3) = mesh.draw_line(c, a).unwrap();
+
+        assert_eq!(mesh.vert_count(), 3); // dedup: only 3 unique vertices
+        assert_eq!(mesh.edge_count(), 3);
+
+        // Detect loop after third edge
+        let loop_verts = mesh.detect_free_edge_loop(v4, v5, e3);
+        assert!(loop_verts.is_some(), "Should detect triangle loop");
+        let verts = loop_verts.unwrap();
+        assert_eq!(verts.len(), 3, "Triangle has 3 vertices");
+
+        // The loop can be used to create a face
+        let face_id = mesh.add_face(&verts, MaterialId::new(0)).unwrap();
+        assert_eq!(mesh.face_count(), 1);
+        let _ = face_id;
+    }
+
+    #[test]
+    fn test_quad_loop_detected() {
+        // Draw 4 lines forming a square on XY plane
+        let mut mesh = Mesh::new();
+        let pts = [
+            DVec3::ZERO,
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+        ];
+
+        mesh.draw_line(pts[0], pts[1]).unwrap();
+        mesh.draw_line(pts[1], pts[2]).unwrap();
+        mesh.draw_line(pts[2], pts[3]).unwrap();
+        let (v0, v1, eid) = mesh.draw_line(pts[3], pts[0]).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_some(), "Should detect quad loop");
+        assert_eq!(loop_verts.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_no_loop_with_two_edges() {
+        // Two edges don't form a loop
+        let mut mesh = Mesh::new();
+        let a = DVec3::ZERO;
+        let b = DVec3::new(1.0, 0.0, 0.0);
+        let c = DVec3::new(2.0, 0.0, 0.0);
+
+        mesh.draw_line(a, b).unwrap();
+        let (v0, v1, eid) = mesh.draw_line(b, c).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_none(), "Two edges cannot form a loop");
+    }
+
+    #[test]
+    fn test_no_loop_non_coplanar() {
+        // 4 edges forming a non-coplanar "loop" (3D zigzag)
+        let mut mesh = Mesh::new();
+        let pts = [
+            DVec3::ZERO,
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(0.0, 1.0, 5.0), // far out of plane
+        ];
+
+        mesh.draw_line(pts[0], pts[1]).unwrap();
+        mesh.draw_line(pts[1], pts[2]).unwrap();
+        mesh.draw_line(pts[2], pts[3]).unwrap();
+        let (v0, v1, eid) = mesh.draw_line(pts[3], pts[0]).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_none(), "Non-coplanar quad should not form face");
+    }
+
+    #[test]
     fn test_draw_circle() {
         let mut mesh = Mesh::new();
         let segments = 24;
