@@ -357,10 +357,9 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
-                // XIA 생성 (Volume 상태 — 닫힌 솔리드)
+                // XIA 생성 — state는 face_ids.len()에서 자동 계산
                 let xia_id = self.scene.create_xia_with_faces(
                     "Cylinder".to_string(),
-                    axia_core::xia::XiaState::Volume,
                     position,
                     faces.clone(),
                 );
@@ -397,10 +396,9 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
-                // XIA 생성 (Volume 상태)
+                // XIA 생성 — state는 face_ids.len()에서 자동 계산
                 let xia_id = self.scene.create_xia_with_faces(
                     "Cone".to_string(),
-                    axia_core::xia::XiaState::Volume,
                     position,
                     faces.clone(),
                 );
@@ -438,10 +436,9 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
-                // XIA 생성 (Volume 상태)
+                // XIA 생성 — state는 face_ids.len()에서 자동 계산
                 let xia_id = self.scene.create_xia_with_faces(
                     "Sphere".to_string(),
-                    axia_core::xia::XiaState::Volume,
                     position,
                     faces.clone(),
                 );
@@ -835,6 +832,8 @@ impl AxiaEngine {
     pub fn delete_face(&mut self, face_id_raw: u32) -> bool {
         let fid = FaceId::new(face_id_raw);
         if self.scene.mesh.faces.contains(fid) {
+            // Clean up face_to_xia reverse index + XIA face_ids
+            self.scene.unregister_face_from_xia(fid);
             // Try proper removal first
             let _ = self.scene.mesh.remove_face(fid);
             // Force-remove from storage even if remove_face had issues
@@ -863,6 +862,9 @@ impl AxiaEngine {
 
         // First, find and remove any faces sharing this edge
         let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+        // Clean up face_to_xia for all affected faces
+        let face_ids: Vec<FaceId> = faces.iter().copied().collect();
+        self.scene.unregister_faces_from_xia(&face_ids);
         for fid in faces {
             let _ = self.scene.mesh.remove_face(fid);
             if self.scene.mesh.faces.contains(fid) {
@@ -898,10 +900,14 @@ impl AxiaEngine {
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
+        // Collect all face IDs to unregister (direct + edge-sharing)
+        let mut all_removed_faces: Vec<FaceId> = Vec::new();
+
         // Delete faces first
         for &fid_raw in face_ids {
             let fid = FaceId::new(fid_raw);
             if self.scene.mesh.faces.contains(fid) {
+                all_removed_faces.push(fid);
                 let _ = self.scene.mesh.remove_face(fid);
                 if self.scene.mesh.faces.contains(fid) {
                     self.scene.mesh.faces.remove(fid);
@@ -916,6 +922,9 @@ impl AxiaEngine {
                 continue;
             }
             let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+            for fid in &faces {
+                all_removed_faces.push(*fid);
+            }
             for fid in faces {
                 let _ = self.scene.mesh.remove_face(fid);
                 if self.scene.mesh.faces.contains(fid) {
@@ -927,6 +936,9 @@ impl AxiaEngine {
                 self.scene.mesh.edges.remove(eid);
             }
         }
+
+        // Batch clean up face_to_xia for all removed faces
+        self.scene.unregister_faces_from_xia(&all_removed_faces);
 
         // Clean up isolated vertices
         self.scene.mesh.remove_isolated_verts();

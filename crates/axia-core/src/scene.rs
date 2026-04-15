@@ -7,7 +7,7 @@ use anyhow::Result;
 use axia_geo::{Mesh, MaterialId, FaceId};
 use axia_transaction::TransactionManager;
 
-use crate::xia::{Xia, XiaId, XiaState};
+use crate::xia::{Xia, XiaId};
 use crate::commands::{Command, CommandResult};
 use crate::lifecycle;
 use crate::group::{GroupId, GroupManager, Transform3D};
@@ -137,11 +137,11 @@ impl Scene {
         id
     }
 
-    /// Create a XIA and assign face IDs (public — for primitives/import)
-    pub fn create_xia_with_faces(&mut self, name: String, state: XiaState, position: DVec3, face_ids: Vec<FaceId>) -> XiaId {
+    /// Create a XIA and assign face IDs (public — for primitives/import).
+    /// State is computed from face_ids.len() — no explicit state parameter needed.
+    pub fn create_xia_with_faces(&mut self, name: String, position: DVec3, face_ids: Vec<FaceId>) -> XiaId {
         let xia_id = self.create_xia(name);
         if let Some(xia) = self.xias.get_mut(&xia_id) {
-            xia.state = state;
             xia.position = position;
             xia.face_ids = face_ids.clone();
         }
@@ -159,9 +159,41 @@ impl Scene {
         }
     }
 
-    /// Remove face from reverse index
-    fn unregister_face_from_xia(&mut self, face_id: FaceId) {
-        self.face_to_xia.remove(&face_id);
+    /// Remove face from reverse index and from owning XIA's face_ids.
+    /// If the XIA's face_ids becomes empty, dissolve the XIA.
+    pub fn unregister_face_from_xia(&mut self, face_id: FaceId) {
+        if let Some(xia_id) = self.face_to_xia.remove(&face_id) {
+            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                xia.face_ids.retain(|&f| f != face_id);
+                // 2-3: face_ids가 비면 Dissolved 처리
+                if xia.face_ids.is_empty() {
+                    lifecycle::dissolve(xia);
+                }
+            }
+        }
+    }
+
+    /// Batch unregister multiple faces from their owning XIAs.
+    /// More efficient than calling unregister_face_from_xia() one by one.
+    pub fn unregister_faces_from_xia(&mut self, face_ids: &[FaceId]) {
+        // Collect affected XIAs
+        let mut affected: HashMap<XiaId, Vec<FaceId>> = HashMap::new();
+        for &fid in face_ids {
+            if let Some(xia_id) = self.face_to_xia.remove(&fid) {
+                affected.entry(xia_id).or_default().push(fid);
+            }
+        }
+        // Remove faces from each XIA and dissolve if empty
+        for (xia_id, removed_fids) in affected {
+            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                for fid in &removed_fids {
+                    xia.face_ids.retain(|&f| f != *fid);
+                }
+                if xia.face_ids.is_empty() {
+                    lifecycle::dissolve(xia);
+                }
+            }
+        }
     }
 
     /// Find the XIA that owns a face (O(1) lookup)
@@ -345,20 +377,8 @@ impl Scene {
                         face.set_material(material_id);
                     }
                 }
-                // Volume → Xia 자동 승격: 역인덱스로 관련 XIA O(1) 조회
-                let mut affected_xia_ids = std::collections::HashSet::new();
-                for fid in &face_ids {
-                    if let Some(&xia_id) = self.face_to_xia.get(fid) {
-                        affected_xia_ids.insert(xia_id);
-                    }
-                }
-                for xia_id in affected_xia_ids {
-                    if let Some(xia) = self.xias.get_mut(&xia_id) {
-                        if xia.state == XiaState::Volume {
-                            let _ = lifecycle::promote_to_xia(xia);
-                        }
-                    }
-                }
+                // Material is a property — no state transition needed.
+                // XIA.has_material() checks material ID.
                 CommandResult::MaterialAssigned {
                     face_count: face_ids.len(),
                 }
@@ -372,27 +392,8 @@ impl Scene {
                         face.set_material(default_mat);
                     }
                 }
-                // Xia → Volume 자동 강등: 역인덱스로 관련 XIA O(1) 조회
-                let mut affected_xia_ids = std::collections::HashSet::new();
-                for fid in &face_ids {
-                    if let Some(&xia_id) = self.face_to_xia.get(fid) {
-                        affected_xia_ids.insert(xia_id);
-                    }
-                }
-                for xia_id in affected_xia_ids {
-                    if let Some(xia) = self.xias.get_mut(&xia_id) {
-                        if xia.state == XiaState::Xia {
-                            let all_default = xia.face_ids.iter().all(|fid| {
-                                self.mesh.faces.get(*fid)
-                                    .map(|f| f.material() == default_mat || f.material().raw() == 0)
-                                    .unwrap_or(true)
-                            });
-                            if all_default {
-                                let _ = lifecycle::demote_to_volume(xia);
-                            }
-                        }
-                    }
-                }
+                // Material is a property — no state transition needed.
+                // XIA.has_material() checks material ID.
                 CommandResult::MaterialRemoved {
                     face_count: face_ids.len(),
                 }
@@ -428,9 +429,10 @@ impl Scene {
 
         match self.mesh.draw_line(start, end) {
             Ok((_v0, _v1, _edge_id)) => {
+                // XIA created with no face_ids → geometry_state() = Dissolved (edge-only)
+                // TODO (Step 3): add edge_ids tracking for Edge state
                 let xia_id = self.create_xia("Line".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
-                    xia.state = XiaState::Line;
                     xia.position = start;
                     xia.surface_normal = surface_normal;
                 }
@@ -460,10 +462,10 @@ impl Scene {
             Ok((face_id, _verts)) => {
                 let xia_id = self.create_xia("Rectangle".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
-                    xia.state = XiaState::Face;
                     xia.position = center;
                     xia.surface_normal = Some(normal);
                     xia.face_ids.push(face_id);
+                    // geometry_state() = Face (1 face)
                 }
                 self.register_faces_to_xia(xia_id, &[face_id]);
                 self.transactions.set_after_snapshot(self.scene_snapshot());
@@ -491,10 +493,10 @@ impl Scene {
             Ok((face_id, _verts)) => {
                 let xia_id = self.create_xia("Circle".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
-                    xia.state = XiaState::Face;
                     xia.position = center;
                     xia.surface_normal = Some(normal);
                     xia.face_ids.push(face_id);
+                    // geometry_state() = Face (1 face)
                 }
                 self.register_faces_to_xia(xia_id, &[face_id]);
                 self.transactions.set_after_snapshot(self.scene_snapshot());
@@ -523,7 +525,7 @@ impl Scene {
 
                 if let Some(xia_id) = owning_xia_id {
                     if let Some(xia) = self.xias.get_mut(&xia_id) {
-                        let _ = lifecycle::promote_to_volume(xia);
+                        // State is computed — adding faces automatically promotes Face→Volume
                         // If base was removed (inward push), drop it from XIA
                         if result.base_removed {
                             xia.face_ids.retain(|&f| f != face_id);

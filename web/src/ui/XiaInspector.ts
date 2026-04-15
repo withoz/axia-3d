@@ -245,7 +245,7 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
       const volBox = document.getElementById('xi-volume')?.closest('.xi-computed-box') as HTMLElement | null;
       const weightBox = document.getElementById('xi-weight')?.closest('.xi-computed-box') as HTMLElement | null;
 
-      if (geoState === GeometryState.Volume || geoState === GeometryState.Xia) {
+      if (geoState === GeometryState.Volume) {
         if (volBox) volBox.style.display = '';
         if (weightBox) weightBox.style.display = '';
 
@@ -263,7 +263,7 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
       // 물리적 속성 섹션: Volume/Xia에서만 Material 드롭다운 활성화
       const physSection = document.getElementById('xi-physical-section');
       if (physSection) {
-        if (geoState === GeometryState.Volume || geoState === GeometryState.Xia) {
+        if (geoState === GeometryState.Volume) {
           physSection.style.display = '';
           physSection.style.opacity = '1';
           physSection.style.pointerEvents = '';
@@ -287,7 +287,8 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
 
       // 이름 자동 설정
       if (nameEl && !nameEl.dataset.edited) {
-        if (geoState === GeometryState.Xia && commonMat) {
+        // Material is a property — no special "Xia" naming
+        if (commonMat && commonMat.id) {
           nameEl.value = `${commonMat.name} ${info.shapeType || '객체'}`;
         } else {
           nameEl.value = `${stateInfo.label} ${info.shapeType || ''}`.trim();
