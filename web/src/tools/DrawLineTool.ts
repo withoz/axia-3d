@@ -60,6 +60,9 @@ export class DrawLineTool implements ITool {
   private startPoint: THREE.Vector3 | null = null;
   private previewEnd: THREE.Vector3 | null = null;
 
+  // Chain tracking — first point of continuous drawing chain (for loop close detection)
+  private chainStartPoint: THREE.Vector3 | null = null;
+
   // Three.js preview objects
   private linePreview: THREE.Line | null = null;
   private startDot: THREE.Points | null = null;
@@ -89,6 +92,13 @@ export class DrawLineTool implements ITool {
     }
     if (e.button !== 0) return;
 
+    // Check loop close first (higher priority than regular snap)
+    const loopClosePoint = this.checkLoopClose(e);
+    if (loopClosePoint) {
+      this.handle(LineDrawEvent.LeftClick, loopClosePoint);
+      return;
+    }
+
     // Compute precise click point with snap and axis inference
     const clickPoint = this.computeClickPoint(e, point);
     if (!clickPoint) return;
@@ -97,6 +107,13 @@ export class DrawLineTool implements ITool {
   }
 
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+    // Check for loop close proximity (snap to chain start point)
+    const loopClosePoint = this.checkLoopClose(e);
+    if (loopClosePoint) {
+      this.handle(LineDrawEvent.MouseMove, loopClosePoint);
+      return;
+    }
+
     // Compute preview point with snap and axis inference
     const movePoint = this.computeMovePoint(e, point);
     this.handle(LineDrawEvent.MouseMove, movePoint);
@@ -158,6 +175,10 @@ export class DrawLineTool implements ITool {
       case LineDrawState.Armed:
         if (event === LineDrawEvent.LeftClick && point) {
           this.startPoint = point.clone();
+          // Track chain origin for loop close detection
+          if (!this.chainStartPoint) {
+            this.chainStartPoint = point.clone();
+          }
           this.ctx.snap.setReferencePoint(point);
           this.ctx.axisLock = null;
           this.ctx.inferredAxis = 'free';
@@ -218,6 +239,7 @@ export class DrawLineTool implements ITool {
       case LineDrawState.Idle:
         this.startPoint = null;
         this.previewEnd = null;
+        this.chainStartPoint = null;
         this.removeLinePreview();
         this.removeStartDot();
         this.ctx.clearAxisGuide();
@@ -245,6 +267,7 @@ export class DrawLineTool implements ITool {
           this.removeStartDot();
           this.startPoint = null;
           this.previewEnd = null;
+          this.chainStartPoint = null;
           this.ctx.clearAxisGuide();
           this.ctx.dimLabel.clear();
           this.ctx.axisLock = null;
@@ -325,18 +348,20 @@ export class DrawLineTool implements ITool {
    */
   private computeClickPoint(e: MouseEvent, fallback: THREE.Vector3 | null): THREE.Vector3 | null {
     if (this.state === LineDrawState.Armed) {
-      // First click: use snapped point directly
-      return fallback;
+      // First click: try snap first, then fallback
+      const rawPt = this.ctx.get3DPoint(e);
+      const snapPt = this.ctx.getSnappedPoint(e, rawPt, true);
+      // Snap fires → use exact snap position (f64 precision)
+      if (snapPt) return snapPt;
+      return rawPt ?? fallback;
     }
 
     if (this.state === LineDrawState.Drawing && this.startPoint) {
-      // Second click: snap > surface hit > axis inference
-      const rawPt = this.ctx.get3DPoint(e);  // mesh surface or work plane
+      // Second+ click: snap > axis inference > raw
+      const rawPt = this.ctx.get3DPoint(e);
       const snapPt = this.ctx.getSnappedPoint(e, rawPt, true);
-
-      if (snapPt && rawPt && snapPt.distanceTo(rawPt) > 0.01) {
-        return snapPt;
-      }
+      // Snap fires → always use it (exact coordinate match for loop close)
+      if (snapPt) return snapPt;
 
       const inferred = this.ctx.getAxisInferredPoint(e, this.startPoint);
       return inferred ? inferred.point : (rawPt ?? fallback);
@@ -353,10 +378,11 @@ export class DrawLineTool implements ITool {
       return fallback;
     }
 
-    const rawPt = this.ctx.get3DPoint(e);  // mesh surface or work plane
+    const rawPt = this.ctx.get3DPoint(e);
     const snapPt = this.ctx.getSnappedPoint(e, rawPt);
 
-    if (snapPt && rawPt && snapPt.distanceTo(rawPt) > 0.01) {
+    // Snap fires → always use exact snap position
+    if (snapPt) {
       this.ctx.inferredAxis = 'free';
       return snapPt;
     }
@@ -368,6 +394,52 @@ export class DrawLineTool implements ITool {
     }
 
     return rawPt ?? fallback;
+  }
+
+  /**
+   * Check if mouse is near the chain start point (loop close).
+   * Returns the exact chainStartPoint if within screen pixel threshold,
+   * and sets a loopClose snap override for visual feedback.
+   */
+  private checkLoopClose(e: MouseEvent): THREE.Vector3 | null {
+    if (this.state !== LineDrawState.Drawing || !this.chainStartPoint || !this.startPoint) {
+      return null;
+    }
+
+    // Need at least 2 segments to form a loop (startPoint ≠ chainStartPoint)
+    if (this.startPoint.distanceTo(this.chainStartPoint) < 1) {
+      return null; // Still on first segment — no loop possible
+    }
+
+    // Project chainStartPoint to screen space
+    const camera = this.ctx.viewport.activeCamera;
+    const container = this.ctx.viewport.container;
+    if (!camera || !container) return null;
+
+    const projected = this.chainStartPoint.clone().project(camera);
+    if (projected.z < -1 || projected.z > 1) return null; // Behind camera
+
+    const rect = container.getBoundingClientRect();
+    const screenX = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
+    const screenY = (-projected.y * 0.5 + 0.5) * rect.height + rect.top;
+
+    // Screen distance from mouse to chain start
+    const dx = e.clientX - screenX;
+    const dy = e.clientY - screenY;
+    const screenDist = Math.sqrt(dx * dx + dy * dy);
+
+    const LOOP_CLOSE_THRESHOLD_PX = 15;
+    if (screenDist > LOOP_CLOSE_THRESHOLD_PX) return null;
+
+    // Show loop close visual feedback (green filled circle)
+    this.ctx.snapVisual.update({
+      type: 'loopClose',
+      position: this.chainStartPoint.clone(),
+      screenPos: new THREE.Vector2(screenX, screenY),
+      distance: screenDist,
+    }, this.ctx.viewport.activeCamera);
+
+    return this.chainStartPoint.clone();
   }
 
   // ═══════════════════════════════════════════════════

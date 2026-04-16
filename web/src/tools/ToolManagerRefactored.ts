@@ -384,6 +384,15 @@ export class ToolManager {
       );
     }
 
+    // SketchUp-style: if normal snap didn't fire, always-on endpoint inference kicks in
+    if (!snapResult) {
+      snapResult = this.snap.findNearestEndpoint(
+        e.clientX, e.clientY,
+        this.viewport.activeCamera,
+        canvas,
+      );
+    }
+
     this.snapVisual.update(snapResult, this.viewport.activeCamera);
 
     if (snapResult) {
@@ -522,11 +531,19 @@ export class ToolManager {
   } {
     const ray = this.getRay(e);
 
-    const axes: { dir: THREE.Vector3; name: 'x' | 'y' | 'z' }[] = [
+    // In orthographic views, exclude the viewing axis (parallel to camera ray → unusable)
+    const allAxes: { dir: THREE.Vector3; name: 'x' | 'y' | 'z' }[] = [
       { dir: new THREE.Vector3(1, 0, 0), name: 'x' },
       { dir: new THREE.Vector3(0, 1, 0), name: 'y' },
       { dir: new THREE.Vector3(0, 0, 1), name: 'z' },
     ];
+    const vm = this.viewport.viewMode;
+    const axes = allAxes.filter(ax => {
+      if ((vm === 'top' || vm === 'bottom') && ax.name === 'y') return false;
+      if ((vm === 'front' || vm === 'back') && ax.name === 'z') return false;
+      if ((vm === 'right' || vm === 'left') && ax.name === 'x') return false;
+      return true;
+    });
 
     const forcedAxis = this.axisLock;
     let bestAxis: 'x' | 'y' | 'z' = 'x';

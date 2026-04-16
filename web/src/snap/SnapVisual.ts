@@ -121,6 +121,7 @@ export class SnapVisual {
       case 'extension':    this.drawExtensionMarker(x, y, s, color); break;
       case 'apparent':     this.drawApparent(x, y, s, color); break;
       case 'geometric':    this.drawGeometric(x, y, s, color); break;
+      case 'filledCircle': this.drawFilledCircle(x, y, s, color); break;
     }
   }
 
@@ -268,6 +269,22 @@ export class SnapVisual {
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.2;
     ctx.strokeRect(x - s, y - s, s * 2, s * 2);
+  }
+
+  /** ● Filled Circle — 루프 닫기 (녹색 채운 원) */
+  private drawFilledCircle(x: number, y: number, s: number, color: string) {
+    const ctx = this.ctx;
+    // Outer glow ring
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, s + 2, 0, Math.PI * 2);
+    ctx.stroke();
+    // Filled inner circle
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, s * 0.7, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   /** □· Geometric Center — 사각형 + 중심점 */

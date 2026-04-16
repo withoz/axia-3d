@@ -3,7 +3,8 @@
 //! Refined from buildragon's tolerances.rs with clearer naming.
 
 /// Vertex coincidence tolerance (positions closer than this are merged).
-/// 1e-7 — sub-micron CAD precision (snap provides exact f64 coordinates).
+/// 1e-7 — CAD precision (FreeDesignX/buildragon 동일).
+/// Always-on endpoint inference + f64 snap channel이 정확한 좌표를 보장.
 pub const VERTEX_TOLERANCE: f64 = 1e-7;
 
 /// Edge coincidence tolerance

@@ -217,6 +217,92 @@ mod tests {
     }
 
     #[test]
+    fn test_pentagon_loop_detected() {
+        // Draw 5 lines forming a regular pentagon on XY plane
+        let mut mesh = Mesh::new();
+        let n = 5;
+        let radius = 100.0;
+        let pts: Vec<DVec3> = (0..n).map(|i| {
+            let angle = std::f64::consts::TAU * (i as f64) / (n as f64);
+            DVec3::new(radius * angle.cos(), radius * angle.sin(), 0.0)
+        }).collect();
+
+        for i in 0..(n - 1) {
+            mesh.draw_line(pts[i], pts[i + 1]).unwrap();
+        }
+        // Close the loop
+        let (v0, v1, eid) = mesh.draw_line(pts[n - 1], pts[0]).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_some(), "Should detect pentagon loop");
+        assert_eq!(loop_verts.unwrap().len(), 5);
+    }
+
+    #[test]
+    fn test_hexagon_loop_detected() {
+        // Draw 6 lines forming a regular hexagon on XZ plane (ground)
+        let mut mesh = Mesh::new();
+        let n = 6;
+        let radius = 50.0;
+        let pts: Vec<DVec3> = (0..n).map(|i| {
+            let angle = std::f64::consts::TAU * (i as f64) / (n as f64);
+            DVec3::new(radius * angle.cos(), 0.0, radius * angle.sin())
+        }).collect();
+
+        for i in 0..(n - 1) {
+            mesh.draw_line(pts[i], pts[i + 1]).unwrap();
+        }
+        let (v0, v1, eid) = mesh.draw_line(pts[n - 1], pts[0]).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_some(), "Should detect hexagon loop");
+        assert_eq!(loop_verts.unwrap().len(), 6);
+    }
+
+    #[test]
+    fn test_octagon_loop_detected() {
+        // 8-sided polygon on YZ plane
+        let mut mesh = Mesh::new();
+        let n = 8;
+        let radius = 200.0;
+        let pts: Vec<DVec3> = (0..n).map(|i| {
+            let angle = std::f64::consts::TAU * (i as f64) / (n as f64);
+            DVec3::new(0.0, radius * angle.cos(), radius * angle.sin())
+        }).collect();
+
+        for i in 0..(n - 1) {
+            mesh.draw_line(pts[i], pts[i + 1]).unwrap();
+        }
+        let (v0, v1, eid) = mesh.draw_line(pts[n - 1], pts[0]).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_some(), "Should detect octagon loop");
+        assert_eq!(loop_verts.unwrap().len(), 8);
+    }
+
+    #[test]
+    fn test_l_shape_no_loop() {
+        // L-shape: 5 edges that don't close
+        let mut mesh = Mesh::new();
+        let pts = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(0.5, 1.0, 0.0),
+            DVec3::new(0.5, 0.5, 0.0),
+            DVec3::new(0.0, 0.5, 0.0), // doesn't connect back to (0,0,0)
+        ];
+
+        for i in 0..4 {
+            mesh.draw_line(pts[i], pts[i + 1]).unwrap();
+        }
+        let (v0, v1, eid) = mesh.draw_line(pts[4], pts[5]).unwrap();
+
+        let loop_verts = mesh.detect_free_edge_loop(v0, v1, eid);
+        assert!(loop_verts.is_none(), "Open L-shape should not form a loop");
+    }
+
+    #[test]
     fn test_draw_circle() {
         let mut mesh = Mesh::new();
         let segments = 24;

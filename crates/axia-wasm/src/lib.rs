@@ -249,17 +249,35 @@ impl AxiaEngine {
         x1: f64, y1: f64, z1: f64,
         nx: f64, ny: f64, nz: f64,
     ) -> f64 {
+        let start = DVec3::new(x0, y0, z0);
+        let end = DVec3::new(x1, y1, z1);
         let surface_normal = if nx == 0.0 && ny == 0.0 && nz == 0.0 {
             None
         } else {
             Some(DVec3::new(nx, ny, nz))
         };
+
+        let verts_before = self.scene.mesh.vert_count();
+        let faces_before = self.scene.mesh.face_count();
+        let edges_before = self.scene.mesh.edge_count();
+
+        console_log!("[RUST] draw_line: ({:.4},{:.4},{:.4})→({:.4},{:.4},{:.4}) verts={} edges={} faces={}",
+            x0, y0, z0, x1, y1, z1, verts_before, edges_before, faces_before);
+
         let cmd = Command::DrawLine {
-            start: DVec3::new(x0, y0, z0),
-            end: DVec3::new(x1, y1, z1),
+            start,
+            end,
             surface_normal,
         };
         let result = self.scene.execute(cmd);
+
+        let verts_after = self.scene.mesh.vert_count();
+        let faces_after = self.scene.mesh.face_count();
+        let edges_after = self.scene.mesh.edge_count();
+
+        console_log!("[RUST] draw_line result: verts={} edges={} faces={} (new_verts={} new_edges={} new_faces={})",
+            verts_after, edges_after, faces_after,
+            verts_after - verts_before, edges_after - edges_before, faces_after - faces_before);
 
         match result {
             axia_core::commands::CommandResult::EntityCreated(xia_id) => {

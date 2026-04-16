@@ -57,12 +57,14 @@ export type SnapType =
   // 특수
   | 'tempTrack'       // 임시 추적점
   | 'from'            // 시작점 (기준점)
-  | 'mid2p';          // 2점 사이의 중간
+  | 'mid2p'           // 2점 사이의 중간
+  | 'loopClose';      // 루프 닫기 (녹색)
 
 // ═══ Snap marker shape definitions ═══
 export interface SnapMarkerDef {
   shape: 'square' | 'triangle' | 'x' | 'circle' | 'diamond' | 'perpendicular'
-       | 'parallel' | 'dot' | 'plus' | 'extension' | 'apparent' | 'geometric';
+       | 'parallel' | 'dot' | 'plus' | 'extension' | 'apparent' | 'geometric'
+       | 'filledCircle';
   color: string;
   label: string;        // Korean tooltip label
   labelEn: string;      // English label
@@ -91,6 +93,7 @@ export const SNAP_MARKERS: Record<SnapType, SnapMarkerDef> = {
   tempTrack:     { shape: 'plus',          color: Y, label: '임시 추적점',   labelEn: 'Temp Track' },
   from:          { shape: 'dot',           color: M, label: '시작점',       labelEn: 'From' },
   mid2p:         { shape: 'triangle',      color: Y, label: '2점 중간',     labelEn: 'Mid 2 Points' },
+  loopClose:     { shape: 'filledCircle',  color: '#00CC44', label: '루프 닫기', labelEn: 'Close Loop' },
 };
 
 export interface SnapPoint {
@@ -136,6 +139,7 @@ const SNAP_PRIORITY: Record<SnapType, number> = {
   tempTrack: 14,
   from: 16,
   mid2p: 17,
+  loopClose: -1,    // highest priority — loop close overrides all
 };
 
 export class SnapManager {
@@ -267,6 +271,45 @@ export class SnapManager {
   /** Register snap change callback */
   onSnapChange(cb: (snap: SnapPoint | null) => void) {
     this._onSnapChange = cb;
+  }
+
+  // ═══ Always-On Endpoint Inference (SketchUp-style) ═══
+
+  /**
+   * Find the nearest endpoint regardless of snap enabled/disabled state.
+   * SketchUp's inference engine always pulls toward endpoints.
+   * Returns the exact f64 vertex position if within pixel threshold, or null.
+   */
+  findNearestEndpoint(
+    mx: number, my: number,
+    camera: THREE.Camera,
+    canvas: HTMLElement,
+    threshold?: number,
+  ): SnapPoint | null {
+    const pxThreshold = threshold ?? this.config.pixelThreshold;
+    const rect = canvas.getBoundingClientRect();
+    let best: SnapPoint | null = null;
+    let bestDist = pxThreshold;
+
+    for (const v of this.vertices) {
+      const projected = v.clone().project(camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+      const sx = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
+      const sy = (-projected.y * 0.5 + 0.5) * rect.height + rect.top;
+      const dx = mx - sx;
+      const dy = my - sy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = {
+          type: 'endpoint',
+          position: v.clone(),
+          screenPos: new THREE.Vector2(sx, sy),
+          distance: dist,
+        };
+      }
+    }
+    return best;
   }
 
   // ═══ Geometry Update ═══

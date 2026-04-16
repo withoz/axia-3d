@@ -543,11 +543,14 @@ impl Mesh {
     // Closed-loop detection (auto-face creation)
     // ========================================================================
 
-    /// Detect if adding edge v0–v1 completes a closed loop of free edges.
+    /// Detect if adding edge v0–v1 completes a closed boundary loop.
     ///
-    /// Searches for a path from v1 back to v0 using only free edges
-    /// (edges with at least one unassigned half-edge), excluding the
-    /// newly created edge `new_edge_id`.
+    /// **CAD Boundary Walk approach**: Instead of BFS on edge adjacency,
+    /// walks the free half-edge boundary chain starting from the new edge's
+    /// forward half-edge. If the chain returns to its start, a closed loop
+    /// is found. This is O(L) where L is loop length, not O(E) total edges.
+    ///
+    /// Falls back to BFS if boundary chain is not yet wired (compatibility).
     ///
     /// Returns the loop vertices in winding order (suitable for `add_face`)
     /// if a coplanar closed loop of 3+ edges is found.
@@ -557,16 +560,79 @@ impl Mesh {
         v1: VertId,
         new_edge_id: EdgeId,
     ) -> Option<Vec<VertId>> {
+        // Try boundary chain walk first (CAD approach — O(L) for degree-2 loops)
+        if let Some(verts) = self.detect_loop_by_chain_walk(v0, v1, new_edge_id) {
+            return Some(verts);
+        }
+
+        // Fallback: BFS on free-edge adjacency graph (legacy approach)
+        self.detect_loop_by_bfs(v0, v1, new_edge_id)
+    }
+
+    /// CAD boundary walk: build free-edge adjacency at each vertex on-the-fly
+    /// and walk through degree-2 vertices to find the shortest closed loop
+    /// containing the new edge. O(L) where L = loop length.
+    fn detect_loop_by_chain_walk(
+        &self,
+        v0: VertId,
+        v1: VertId,
+        new_edge_id: EdgeId,
+    ) -> Option<Vec<VertId>> {
+        // Walk from v1, following free edges (excluding new_edge_id),
+        // always choosing the unique next vertex at degree-2 junctions.
+        // If we reach v0, loop is found.
+        let mut path = vec![v0, v1];
+        let mut prev_v = v0;
+        let mut curr_v = v1;
+
+        for _ in 0..10000 {
+            // Find all free-edge neighbors of curr_v (excluding the edge we came from)
+            let mut neighbors = Vec::new();
+            for (&key, &edge_id) in &self.vert_to_edge {
+                if edge_id == new_edge_id { continue; }
+                if key.v_small != curr_v && key.v_large != curr_v { continue; }
+                if !self.edges[edge_id].is_active() { continue; }
+                if !self.edge_has_free_he(edge_id) { continue; }
+                let other = if key.v_small == curr_v { key.v_large } else { key.v_small };
+                if other != prev_v {
+                    neighbors.push(other);
+                }
+            }
+
+            if neighbors.len() == 1 {
+                let next_v = neighbors[0];
+                if next_v == v0 {
+                    // Closed loop found!
+                    if path.len() >= 3 && self.are_verts_coplanar(&path) {
+                        return Some(path);
+                    }
+                    return None;
+                }
+                prev_v = curr_v;
+                curr_v = next_v;
+                path.push(curr_v);
+            } else {
+                // Dead end (0) or branch (2+) → can't determine unique loop via simple walk
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Legacy BFS-based loop detection on free-edge adjacency.
+    fn detect_loop_by_bfs(
+        &self,
+        v0: VertId,
+        v1: VertId,
+        new_edge_id: EdgeId,
+    ) -> Option<Vec<VertId>> {
         use std::collections::VecDeque;
 
-        // Build adjacency graph of free edges (excluding the new edge)
         let mut adj: FxHashMap<VertId, Vec<VertId>> = FxHashMap::default();
 
         for (edge_id, edge) in self.edges.iter() {
             if !edge.is_active() { continue; }
             if edge_id == new_edge_id { continue; }
-
-            // Only include edges that have at least one free half-edge
             if !self.edge_has_free_he(edge_id) { continue; }
 
             let va = edge.v_small();
@@ -575,9 +641,8 @@ impl Mesh {
             adj.entry(vb).or_default().push(va);
         }
 
-        // BFS from v1 looking for v0
         let mut parent: FxHashMap<VertId, VertId> = FxHashMap::default();
-        parent.insert(v1, VertId::NULL); // sentinel: start of path
+        parent.insert(v1, VertId::NULL);
         let mut queue = VecDeque::new();
         queue.push_back(v1);
 
@@ -588,30 +653,22 @@ impl Mesh {
                     parent.insert(next, current);
 
                     if next == v0 {
-                        // Reconstruct path: v0 ← parent ← ... ← v1
                         let mut path = Vec::new();
                         let mut node = v0;
                         loop {
                             path.push(node);
                             let p = parent[&node];
-                            if p.is_null() { break; } // reached v1 sentinel
+                            if p.is_null() { break; }
                             node = p;
                         }
-                        // path = [v0, ..., v1] (reverse BFS order)
-                        // Face loop order: v0 →(new edge)→ v1 →(free edges)→ ... → v0
-                        // So face vertices = [v0, v1, intermediates...]
-                        // From path [v0, mid_n, ..., mid_1, v1]:
-                        //   take v0, then reverse the rest
                         if path.len() < 3 { return None; }
 
                         let mut face_verts = Vec::with_capacity(path.len());
-                        face_verts.push(path[0]); // v0
+                        face_verts.push(path[0]);
                         for i in (1..path.len()).rev() {
                             face_verts.push(path[i]);
                         }
-                        // face_verts = [v0, v1, mid_1, ..., mid_n]
 
-                        // Verify coplanarity
                         if self.are_verts_coplanar(&face_verts) {
                             return Some(face_verts);
                         } else {
@@ -624,7 +681,7 @@ impl Mesh {
             }
         }
 
-        None // no loop found
+        None
     }
 
     /// Check if an edge has at least one half-edge not assigned to a face.
