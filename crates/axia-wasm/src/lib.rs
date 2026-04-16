@@ -109,6 +109,7 @@ struct FaceRange {
 pub struct AxiaEngine {
     scene: Scene,
     cached_positions: Vec<f32>,
+    cached_positions_f64: Vec<f64>,  // CAD-grade f64 positions (parallel to cached_positions)
     cached_normals: Vec<f32>,
     cached_indices: Vec<u32>,
     cached_face_map: Vec<u32>, // triangle index → FaceId
@@ -136,6 +137,7 @@ impl AxiaEngine {
         Self {
             scene: Scene::new(),
             cached_positions: Vec::new(),
+            cached_positions_f64: Vec::new(),
             cached_normals: Vec::new(),
             cached_indices: Vec::new(),
             cached_face_map: Vec::new(),
@@ -154,14 +156,16 @@ impl AxiaEngine {
             return;
         }
         match self.scene.export_mesh_buffers() {
-            Ok((p, n, i, fm)) => {
+            Ok((p, n, i, fm, p64)) => {
                 self.cached_positions = p;
+                self.cached_positions_f64 = p64;
                 self.cached_normals = n;
                 self.cached_indices = i;
                 self.cached_face_map = fm;
             }
             Err(_) => {
                 self.cached_positions.clear();
+                self.cached_positions_f64.clear();
                 self.cached_normals.clear();
                 self.cached_indices.clear();
                 self.cached_face_map.clear();
@@ -669,6 +673,15 @@ impl AxiaEngine {
     pub fn get_positions(&mut self) -> Vec<f32> {
         self.rebuild_cache();
         self.cached_positions.clone()
+    }
+
+    /// Get vertex positions in f64 precision (CAD-grade).
+    /// Same layout as get_positions() but Float64Array — no f32 truncation.
+    /// Use for dimension display, snap matching, and precision-sensitive operations.
+    #[wasm_bindgen(js_name = "getPositionsF64")]
+    pub fn get_positions_f64(&mut self) -> Vec<f64> {
+        self.rebuild_cache();
+        self.cached_positions_f64.clone()
     }
 
     pub fn get_normals(&mut self) -> Vec<f32> {

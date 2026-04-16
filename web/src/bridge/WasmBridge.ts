@@ -10,6 +10,7 @@ import { debugLog } from '../utils/debug';
 
 export interface MeshBuffers {
   positions: Float32Array;
+  positionsF64?: Float64Array;  // CAD-grade f64 positions (same layout as positions)
   normals: Float32Array;
   indices: Uint32Array;
   faceMap: Uint32Array; // triangle index → Rust FaceId
@@ -208,8 +209,23 @@ export class WasmBridge {
     const indices = this.engine.get_indices();
     const faceMap = this.engine.get_face_map();
     if (positions.length === 0) return null;
+    // Fetch f64 positions for CAD-grade precision
+    const positionsF64 = (this.engine as any).getPositionsF64?.() as Float64Array | undefined;
     this.bufferCache = { positions, normals, indices, faceMap, edgeLines: null, edgeMap: null, dirty: false };
-    return { positions, normals, indices, faceMap };
+    return { positions, normals, indices, faceMap, positionsF64 };
+  }
+
+  /** Get CAD-grade f64 vertex positions (Float64Array).
+   *  Same layout as positions (flat [x,y,z,...]) but without f32 truncation.
+   *  Returns null if engine not available.
+   */
+  getPositionsF64(): Float64Array | null {
+    if (!this.engine) return null;
+    try {
+      return (this.engine as any).getPositionsF64?.() as Float64Array ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Get delta buffers from WASM (Phase 1 Optimization).

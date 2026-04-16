@@ -732,8 +732,12 @@ impl Mesh {
 
     /// Export mesh as flat vertex/index buffers for GPU rendering.
     /// Returns (positions, normals, indices, face_id_per_triangle)
-    pub fn export_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>)> {
+    /// Export mesh as flat vertex/index buffers for GPU rendering.
+    /// Returns (positions_f32, normals_f32, indices, face_map, positions_f64)
+    /// positions_f64 has the same layout/indexing as positions_f32 but in full f64 precision.
+    pub fn export_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
         let mut positions: Vec<f32> = Vec::new();
+        let mut positions_f64: Vec<f64> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut face_map: Vec<u32> = Vec::new(); // one FaceId per triangle
@@ -823,11 +827,15 @@ impl Mesh {
                 }
             }
 
-            // Emit vertices
+            // Emit vertices (f32 for GPU + f64 for precision)
             for pos in &positions_3d {
                 positions.push(pos.x as f32);
                 positions.push(pos.y as f32);
                 positions.push(pos.z as f32);
+
+                positions_f64.push(pos.x);
+                positions_f64.push(pos.y);
+                positions_f64.push(pos.z);
 
                 normals.push(normal.x as f32);
                 normals.push(normal.y as f32);
@@ -848,7 +856,7 @@ impl Mesh {
             vert_offset += positions_3d.len() as u32;
         }
 
-        Ok((positions, normals, indices, face_map))
+        Ok((positions, normals, indices, face_map, positions_f64))
     }
 
     /// Choose the best 2D projection axes based on the face normal.
@@ -1333,8 +1341,9 @@ mod tests {
 
         mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
 
-        let (positions, normals, indices, _face_map) = mesh.export_buffers().unwrap();
+        let (positions, normals, indices, _face_map, positions_f64) = mesh.export_buffers().unwrap();
         assert_eq!(positions.len(), 9); // 3 verts × 3 components
+        assert_eq!(positions_f64.len(), 9); // same count, f64 precision
         assert_eq!(normals.len(), 9);
         assert_eq!(indices.len(), 3); // 1 triangle
     }

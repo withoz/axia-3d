@@ -640,7 +640,8 @@ impl Scene {
     }
 
     /// Export the mesh buffers for GPU rendering.
-    pub fn export_mesh_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>)> {
+    /// Returns (positions_f32, normals_f32, indices, face_map, positions_f64)
+    pub fn export_mesh_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
         self.mesh.export_buffers()
     }
 

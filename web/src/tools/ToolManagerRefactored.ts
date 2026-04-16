@@ -491,11 +491,15 @@ export class ToolManager {
 
     const edgeMap = new Map<string, { a: THREE.Vector3; b: THREE.Vector3; count: number }>();
 
-    const getVert = (idx: number) => new THREE.Vector3(
-      buffers.positions[idx * 3],
-      buffers.positions[idx * 3 + 1],
-      buffers.positions[idx * 3 + 2],
-    );
+    // Use f64 positions for CAD-grade precision (no f32 truncation)
+    const pf64 = buffers.positionsF64 ?? this.bridge.getPositionsF64();
+    const getVert = pf64
+      ? (idx: number) => new THREE.Vector3(pf64[idx * 3], pf64[idx * 3 + 1], pf64[idx * 3 + 2])
+      : (idx: number) => new THREE.Vector3(
+          buffers.positions[idx * 3],
+          buffers.positions[idx * 3 + 1],
+          buffers.positions[idx * 3 + 2],
+        );
 
     const edgeKey = (a: THREE.Vector3, b: THREE.Vector3) => {
       const ka = `${a.x.toFixed(5)},${a.y.toFixed(5)},${a.z.toFixed(5)}`;
