@@ -283,13 +283,15 @@ export class DimensionLabel {
     input.className = 'dim-edit-input';
     // Extract numeric value from formatted text (e.g. "1,234.56 mm" → "1234.56")
     const rawLength = line.from.distanceTo(line.to);
-    input.value = rawLength.toFixed(2);
+    // Show empty input with placeholder = current value (user types new value directly)
+    input.value = '';
+    input.placeholder = rawLength.toFixed(1);
     input.style.cssText = `
       position: absolute;
       left: ${left}px;
       top: ${top}px;
       transform: translate(-50%, -50%);
-      width: 80px;
+      width: 90px;
       padding: 2px 6px;
       font-size: 12px;
       font-family: 'Segoe UI', sans-serif;
@@ -341,6 +343,11 @@ export class DimensionLabel {
     if (this.editingIndex < 0 || !this.editInput) return;
 
     const raw = this.editInput.value.trim();
+    if (!raw) {
+      // Empty input → cancel (no change)
+      this.cancelEdit();
+      return;
+    }
     const newValue = parseFloat(raw);
     if (isNaN(newValue) || newValue <= 0) {
       this.cancelEdit();

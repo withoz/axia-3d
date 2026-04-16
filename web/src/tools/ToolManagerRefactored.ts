@@ -850,14 +850,25 @@ export class ToolManager {
 
   /**
    * Handle dimension edit: user clicked a dimension label and entered a new value.
-   * Resizes the selected face(s) along the edited edge direction.
    *
-   * Algorithm:
-   *   1. Compute edge direction and current length
-   *   2. Scale factor = newLength / oldLength along that axis
-   *   3. Find the "anchor" (midpoint of opposite edge) as scale center
-   *   4. Decompose scale into world axes via edge direction projection
-   *   5. Call bridge.scaleFaces() to apply
+   * Strategy: Use scaleFaces with the opposite edge midpoint as center.
+   * The scale is applied only along the perpendicular direction from the
+   * opposite edge to the edited edge, keeping the opposite edge fixed.
+   *
+   * For a rectangular face ABCD where we edit edge AB:
+   *   1. Opposite edge CD stays fixed (scale center on CD midpoint)
+   *   2. Scale factor = newLength / oldLength? No — we need distance-based scaling.
+   *   3. Actually, for edge length change:
+   *      - The perpendicular distance from opposite edge to edited edge = height
+   *      - We want to stretch ALONG the edge direction
+   *      - Scale along edgeDir from opposite-edge-midpoint
+   *
+   * Correct approach:
+   *   - Scale center = midpoint of the edge nearest to centroid (opposite edge)
+   *   - Scale factor along edge direction = newLen / oldLen
+   *   - Applied via scaleFaces with world-axis decomposition
+   *
+   * For axis-aligned geometry (most common: ground rect, box faces), this is exact.
    */
   private handleDimensionEdit(index: number, newValue: number, dimLine: DimLine): void {
     const selectedFaces = this.selection.getSelectedFaces();
@@ -866,65 +877,91 @@ export class ToolManager {
     const oldLength = dimLine.from.distanceTo(dimLine.to);
     if (oldLength < 0.001) return;
 
-    const scaleFactor = newValue / oldLength;
-    if (Math.abs(scaleFactor - 1.0) < 0.0001) return; // No change needed
+    const delta = newValue - oldLength;
+    if (Math.abs(delta) < 0.01) return; // No meaningful change
 
-    // Edge direction (unit vector)
+    // Edge direction (unit vector along the edge)
     const edgeDir = new THREE.Vector3().subVectors(dimLine.to, dimLine.from).normalize();
 
-    // Scale center: We want to scale from the opposite side of the face.
-    // Find the boundary vertex farthest from the edge in the perpendicular direction.
-    // This makes the "opposite" edge stay fixed while the edited edge moves.
+    // Edge midpoint
     const edgeMid = new THREE.Vector3().addVectors(dimLine.from, dimLine.to).multiplyScalar(0.5);
 
-    // Collect all boundary vertices from selected faces to find the anchor point
+    // Face centroid (average of all boundary vertices)
     const allVerts: THREE.Vector3[] = [];
     for (const fid of selectedFaces) {
       const loop = this.extractFaceBoundary(fid);
       allVerts.push(...loop);
     }
+    if (allVerts.length === 0) return;
 
-    // Find vertex farthest from the edge line (perpendicular distance)
-    let maxPerpDist = 0;
-    let anchorPoint = edgeMid.clone();
-    for (const v of allVerts) {
-      // Project v onto the edge line to get perpendicular distance
-      const toV = new THREE.Vector3().subVectors(v, dimLine.from);
-      const along = toV.dot(edgeDir);
-      const proj = dimLine.from.clone().addScaledVector(edgeDir, along);
-      const perpDist = v.distanceTo(proj);
-      if (perpDist > maxPerpDist) {
-        maxPerpDist = perpDist;
-        // Anchor = the projection of the farthest vertex onto the edge direction,
-        // but at the farthest vertex's "row" — effectively the opposite edge
-        anchorPoint = v.clone();
+    const centroid = new THREE.Vector3();
+    for (const v of allVerts) centroid.add(v);
+    centroid.divideScalar(allVerts.length);
+
+    // Direction from centroid to edge midpoint (perpendicular, outward from face center)
+    const outward = new THREE.Vector3().subVectors(edgeMid, centroid);
+    // Remove component along edge direction → pure perpendicular
+    outward.addScaledVector(edgeDir, -outward.dot(edgeDir));
+    const perpDist = outward.length();
+    if (perpDist < 0.001) {
+      debugLog(`[DimEdit] Edge passes through centroid, cannot determine direction`);
+      return;
+    }
+    outward.normalize();
+
+    // Find the opposite edge: the boundary edge whose midpoint is farthest
+    // in the OPPOSITE perpendicular direction from the edited edge
+    let oppositeEdgeMid = centroid.clone(); // fallback
+    let bestOppDot = Infinity;
+    for (const fid of selectedFaces) {
+      const loop = this.extractFaceBoundary(fid);
+      if (loop.length < 2) continue;
+      for (let i = 0; i < loop.length; i++) {
+        const a = loop[i];
+        const b = loop[(i + 1) % loop.length];
+        const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+        const toMid = new THREE.Vector3().subVectors(mid, centroid);
+        const dotPerp = toMid.dot(outward);
+        if (dotPerp < bestOppDot) {
+          bestOppDot = dotPerp;
+          oppositeEdgeMid = mid;
+        }
       }
     }
 
-    // Compute scale center: project anchorPoint along edge direction
-    // The scale center should be at the anchorPoint for the edge direction axis
-    const scaleCenterOnAxis = anchorPoint.clone();
+    // Scale center = opposite edge midpoint (this edge stays fixed)
+    const cx = oppositeEdgeMid.x;
+    const cy = oppositeEdgeMid.y;
+    const cz = oppositeEdgeMid.z;
 
-    // Decompose the scale into world axes:
-    // We want to scale by `scaleFactor` along `edgeDir`, and 1.0 on the perpendicular axes.
-    // Scale matrix in edge-local space: S_local = scaleFactor along edgeDir
-    // In world axes: S_world = I + (scaleFactor - 1) * edgeDir ⊗ edgeDir
-    // This gives: sx_world = 1 + (scaleFactor - 1) * edgeDir.x²
-    //             sy_world = 1 + (scaleFactor - 1) * edgeDir.y²
-    //             sz_world = 1 + (scaleFactor - 1) * edgeDir.z²
-    // However, bridge.scaleFaces does axis-aligned scale only (sx, sy, sz).
-    // For axis-aligned edges this works perfectly. For diagonal edges, we approximate.
+    // Total perpendicular span from opposite edge to edited edge
+    const totalSpan = new THREE.Vector3().subVectors(edgeMid, oppositeEdgeMid).dot(outward);
+    if (Math.abs(totalSpan) < 0.001) {
+      debugLog(`[DimEdit] Zero span between edges`);
+      return;
+    }
 
+    // New span = totalSpan + delta (the edited edge moves outward by delta)
+    // Scale factor for perpendicular direction = newSpan / oldSpan
+    // But we need to scale along edgeDir for the LENGTH change.
+    // Two separate concerns:
+    //   a) Edge LENGTH change → scale along edgeDir
+    //   b) The perpendicular distance doesn't change
+    //
+    // For pure edge length scaling from opposite edge center:
+    const scaleFactor = newValue / oldLength;
+
+    // Decompose into world axes (tensor product approximation)
     const d = scaleFactor - 1;
     const sx = 1 + d * edgeDir.x * edgeDir.x;
     const sy = 1 + d * edgeDir.y * edgeDir.y;
     const sz = 1 + d * edgeDir.z * edgeDir.z;
 
-    debugLog(`[DimEdit] Edge ${index}: ${oldLength.toFixed(2)} → ${newValue.toFixed(2)}, factor=${scaleFactor.toFixed(4)}, scale=(${sx.toFixed(4)}, ${sy.toFixed(4)}, ${sz.toFixed(4)})`);
+    debugLog(`[DimEdit] Edge ${index}: ${oldLength.toFixed(2)} → ${newValue.toFixed(2)}, delta=${delta.toFixed(2)}, factor=${scaleFactor.toFixed(4)}, center=(${cx.toFixed(1)},${cy.toFixed(1)},${cz.toFixed(1)}), scale=(${sx.toFixed(4)},${sy.toFixed(4)},${sz.toFixed(4)})`);
 
     const ok = this.bridge.scaleFaces(
       selectedFaces,
-      scaleCenterOnAxis.x, scaleCenterOnAxis.y, scaleCenterOnAxis.z,
+      cx, cy, cz,
       sx, sy, sz,
     );
 
