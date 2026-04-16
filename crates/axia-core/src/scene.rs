@@ -60,8 +60,14 @@ impl Scene {
     /// 전체 씬 상태를 직렬화 (Undo/Redo 용)
     pub fn scene_snapshot(&self) -> Vec<u8> {
         let mesh_data = self.mesh.snapshot();
-        let xia_data = bincode::serialize(&self.xias).unwrap_or_default();
-        let group_data = bincode::serialize(&self.groups).unwrap_or_default();
+        let xia_data = bincode::serialize(&self.xias).unwrap_or_else(|e| {
+            eprintln!("[Scene] XIA serialize failed: {}", e);
+            Vec::new()
+        });
+        let group_data = bincode::serialize(&self.groups).unwrap_or_else(|e| {
+            eprintln!("[Scene] Group serialize failed: {}", e);
+            Vec::new()
+        });
         let next_xia = self.next_xia_id;
 
         // [mesh_len:u64][mesh_data][xia_len:u64][xia_data][group_len:u64][group_data][next_xia_id:u64]
@@ -131,7 +137,7 @@ impl Scene {
     /// Create a new XIA entity in the scene.
     fn create_xia(&mut self, name: String) -> XiaId {
         let id = self.next_xia_id;
-        self.next_xia_id += 1;
+        self.next_xia_id = self.next_xia_id.saturating_add(1);
         let xia = Xia::new(id, name);
         self.xias.insert(id, xia);
         id

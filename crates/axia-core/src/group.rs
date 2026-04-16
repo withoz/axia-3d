@@ -252,7 +252,7 @@ impl GroupManager {
     /// 새 그룹 생성. face_ids를 그룹에 할당.
     pub fn create_group(&mut self, name: String, face_ids: Vec<FaceId>) -> GroupId {
         let id = self.next_group_id;
-        self.next_group_id += 1;
+        self.next_group_id = self.next_group_id.saturating_add(1);
 
         // 기존 그룹에서 이 face들 제거
         for &fid in &face_ids {
@@ -320,9 +320,10 @@ impl GroupManager {
                 }
             }
             // 현재 그룹에 추가 (중복 방지)
-            let group = self.groups.get_mut(&group_id).unwrap();
-            if !group.face_ids.contains(&fid) {
-                group.face_ids.push(fid);
+            if let Some(group) = self.groups.get_mut(&group_id) {
+                if !group.face_ids.contains(&fid) {
+                    group.face_ids.push(fid);
+                }
             }
             self.face_to_group.insert(fid.raw(), group_id);
         }
@@ -413,7 +414,7 @@ impl GroupManager {
         let group = self.groups.get_mut(&group_id)?;
 
         let def_id = self.next_def_id;
-        self.next_def_id += 1;
+        self.next_def_id = self.next_def_id.saturating_add(1);
 
         let def = ComponentDef::new(def_id, name, group.face_ids.clone());
         self.component_defs.insert(def_id, def);
@@ -436,7 +437,7 @@ impl GroupManager {
         def.instance_count += 1;
 
         let inst_id = self.next_instance_id;
-        self.next_instance_id += 1;
+        self.next_instance_id = self.next_instance_id.saturating_add(1);
 
         let mut inst = ComponentInstance::new(inst_id, def_id, name, face_ids);
         inst.transform = transform;

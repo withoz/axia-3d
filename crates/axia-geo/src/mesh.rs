@@ -79,7 +79,13 @@ impl Mesh {
 
     /// 현재 메시 상태를 바이트로 직렬화 (스냅샷 저장)
     pub fn snapshot(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("Mesh snapshot serialize failed")
+        match bincode::serialize(self) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("[Mesh] snapshot serialize failed: {}", e);
+                Vec::new()
+            }
+        }
     }
 
     /// 바이트에서 메시 상태 복원 (스냅샷 적용)

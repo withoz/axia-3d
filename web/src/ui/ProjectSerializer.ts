@@ -122,8 +122,23 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.xia';
-    input.addEventListener('change', async () => {
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    // Cleanup helper — removes DOM element and listeners exactly once
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      input.removeEventListener('change', onChange);
+      input.removeEventListener('cancel', onCancel);
+      if (input.parentNode) input.parentNode.removeChild(input);
+    };
+
+    const onChange = async () => {
       const file = input.files?.[0];
+      cleanup();
+
       if (!file) return;
 
       try {
@@ -175,7 +190,14 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
         console.error('[Open] Failed to load project:', e);
         alert('파일을 불러오는데 실패했습니다.');
       }
-    });
+    };
+
+    const onCancel = () => {
+      cleanup();
+    };
+
+    input.addEventListener('change', onChange);
+    input.addEventListener('cancel', onCancel);
     input.click();
   };
 
