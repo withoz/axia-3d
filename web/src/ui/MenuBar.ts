@@ -7,12 +7,13 @@
  */
 
 import * as THREE from 'three';
-import { Viewport } from '../viewport/Viewport';
+import { Viewport, ViewMode } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { FileManager } from '../file/FileManager';
 import { startBooleanOp } from './BooleanHandler';
 import { debugLog } from '../utils/debug';
+import type { ImportFormat } from '../import/FileImporter';
 import { timestampedName } from '../export/ExportUtils';
 
 export interface MenuBarDeps {
@@ -132,7 +133,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
   };
 
   const setActiveView = (view: string) => {
-    viewport.setViewMode(view as any);
+    viewport.setViewMode(view as ViewMode);
     const vmBar = document.getElementById('view-mode-bar');
     vmBar?.querySelectorAll('.view-btn').forEach(b =>
       b.classList.toggle('active', (b as HTMLElement).dataset.view === view)
@@ -178,7 +179,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'import-skp':
       case 'import-3dm': {
         const format = act === 'import-all' ? undefined : act.replace('import-', '');
-        getFileImporter().then(fi => fi.openFileDialog(format as any)).catch((err: Error) => {
+        getFileImporter().then(fi => fi.openFileDialog(format as ImportFormat | undefined)).catch((err: Error) => {
           console.error(`[MenuBar] Import ${format || 'all'} 실패:`, err);
         });
         break;

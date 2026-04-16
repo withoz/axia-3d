@@ -25,7 +25,7 @@ export interface PrimitiveParams {
  * Preview visualization data
  */
 export interface PreviewGeometry {
-  radiusCircle?: THREE.Line; // Sizing1: radius circle preview
+  radiusCircle?: THREE.Line | THREE.LineSegments; // Sizing1: radius circle preview
   heightAxis?: THREE.Line;   // Sizing2: height axis guide
   silhouette?: THREE.Line;   // Optional: cylinder/cone outline
 }

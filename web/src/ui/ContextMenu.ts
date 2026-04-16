@@ -10,6 +10,7 @@ import { Viewport, ViewMode } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { debugLog } from '../utils/debug';
+import type { SnapType } from '../snap/SnapManager';
 
 export interface ContextMenuDeps {
   viewport: Viewport;
@@ -227,7 +228,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         openOsnapPanel?.();
       } else if (snapType) {
         debugLog('[OSNAP] Override snap:', snapType);
-        snapManager.setOverride(snapType);
+        snapManager.setOverride(snapType as SnapType);
       }
     });
   }

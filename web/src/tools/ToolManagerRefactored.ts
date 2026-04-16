@@ -402,7 +402,7 @@ export class ToolManager {
       snapResult = null;
     } else if (overrideType) {
       snapResult = this.snap.findSnapOverride(
-        overrideType as any,
+        overrideType,
         e.clientX, e.clientY,
         this.viewport.activeCamera,
         canvas,

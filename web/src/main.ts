@@ -46,7 +46,8 @@ async function main() {
   }
 
   // 2. Initialize viewport (always required)
-  const viewportEl = document.getElementById('viewport')!;
+  const viewportEl = document.getElementById('viewport');
+  if (!viewportEl) throw new Error('Missing #viewport element');
   const viewport = new Viewport(viewportEl);
 
   // 3. Initialize unit system & settings
@@ -187,7 +188,8 @@ async function main() {
   initMenuBar({ viewport, bridge, toolManager, scene: viewport.scene, fileManager, saveProject, openProject, openOsnapPanel });
 
   // 4b. Wire toolbar buttons
-  const toolbar = document.getElementById('toolbar')!;
+  const toolbar = document.getElementById('toolbar');
+  if (!toolbar) throw new Error('Missing #toolbar element');
   toolbar.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.tool-btn') as HTMLElement;
     if (!btn) return;
@@ -242,9 +244,12 @@ async function main() {
 
   const statsIntervalId = setInterval(() => {
     const stats = bridge.getStats();
-    document.getElementById('stat-verts')!.textContent = String(stats.verts);
-    document.getElementById('stat-faces')!.textContent = String(stats.faces);
-    document.getElementById('stat-tool')!.textContent = toolManager.currentTool;
+    const sv = document.getElementById('stat-verts');
+    const sf = document.getElementById('stat-faces');
+    const st = document.getElementById('stat-tool');
+    if (sv) sv.textContent = String(stats.verts);
+    if (sf) sf.textContent = String(stats.faces);
+    if (st) st.textContent = toolManager.currentTool;
 
     // Undo/Redo 버튼 활성/비활성 (canUndo/canRedo가 없으면 항상 활성)
     if (undoBtn) undoBtn.classList.toggle('disabled', stats.canUndo === false);
@@ -318,4 +323,23 @@ async function main() {
   debugLog('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner');
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error('[AXiA 3D] Fatal startup error:', err);
+  // Show visible error to user instead of blank screen
+  const errorDiv = document.createElement('div');
+  errorDiv.style.cssText = `
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#1a1a2e;color:#ff6b6b;padding:32px;border-radius:12px;
+    font-family:'Segoe UI',sans-serif;text-align:center;z-index:99999;
+    border:1px solid #ff6b6b33;max-width:480px;
+  `;
+  errorDiv.innerHTML = `
+    <h2 style="margin:0 0 12px">AXiA 3D 시작 실패</h2>
+    <p style="color:#ccc;margin:0 0 16px">${err instanceof Error ? err.message : String(err)}</p>
+    <button onclick="location.reload()" style="
+      background:#4ac1ff;color:#fff;border:none;padding:8px 24px;
+      border-radius:6px;cursor:pointer;font-size:14px;
+    ">새로고침</button>
+  `;
+  document.body.appendChild(errorDiv);
+});

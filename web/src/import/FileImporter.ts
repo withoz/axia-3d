@@ -468,7 +468,7 @@ export class FileImporter {
 
     const segments = Math.max(16, Math.ceil(radius * 2));
     const geo = new THREE.CircleGeometry(radius, segments);
-    const mesh = new THREE.Mesh(geo, this.defaultEdgeMat as any);
+    const mesh = new THREE.Mesh(geo, this.defaultFrontMat);
     mesh.position.set(centerX, centerY, centerZ);
     mesh.name = `dxf-circle-${entity.id}`;
     return mesh;
@@ -639,7 +639,7 @@ export class FileImporter {
       );
 
       // 메타데이터 저장
-      (group as any).__metadata = metadata;
+      group.userData.metadata = metadata;
 
       return group;
     } catch (err) {
@@ -672,7 +672,7 @@ export class FileImporter {
       // Phase 3: DXF 헤더에서 메타데이터 추출 (GPL-free)
       const metadata = this.extractMetadataFromDxf(dxfText);
       if (Object.keys(metadata).length > 0) {
-        (group as any).__metadata = metadata;
+        group.userData.metadata = metadata;
       }
 
       return group;
@@ -812,7 +812,7 @@ export class FileImporter {
 
       // Rhino Layer/Material 메타데이터 저장
       if (object.userData) {
-        (group as any).__metadata = {
+        group.userData.metadata = {
           layers: object.userData.layers,
           materials: object.userData.materials,
           groups: object.userData.groups,

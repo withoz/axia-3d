@@ -4,7 +4,7 @@
  * 스크린샷 형식: 일반/물리/시각 속성 섹션별 표시
  */
 
-import { Material, PhysicalProperties, VisualProperties, MaterialCategory } from '../materials/MaterialLibrary';
+import { Material, PhysicalProperties, VisualProperties, MaterialCategory, FireRating } from '../materials/MaterialLibrary';
 import { Toast } from './Toast';
 
 export class MaterialPropertiesPanel {
@@ -216,12 +216,12 @@ export class MaterialPropertiesPanel {
       const newMaterial = { ...this.material };
 
       if (field === 'name' || field === 'nameEn' || field === 'category') {
-        (newMaterial as any)[field] = target.value;
+        newMaterial[field as 'name' | 'nameEn' | 'category'] = target.value as string & MaterialCategory;
       } else if (['density', 'friction', 'restitution', 'specificGravity', 'thermalConductivity'].includes(field)) {
         const numValue = parseFloat((target as HTMLInputElement).value);
         newMaterial.physical = { ...newMaterial.physical, [field]: numValue };
       } else if (field === 'fireRating') {
-        newMaterial.physical = { ...newMaterial.physical, fireRating: target.value as any };
+        newMaterial.physical = { ...newMaterial.physical, fireRating: target.value as FireRating };
       } else if (field === 'color') {
         const hexColor = (target as HTMLInputElement).value;
         const colorNum = parseInt(hexColor.replace('#', ''), 16);
