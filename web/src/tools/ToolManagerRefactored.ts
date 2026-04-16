@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { Viewport } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
-import { DimensionLabel, DimLine, DimEditCallback } from '../ui/DimensionLabel';
+import { DimensionLabel, DimLine } from '../ui/DimensionLabel';
 import { UnitSystem } from '../units/UnitSystem';
 import { SnapManager } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
@@ -926,25 +926,28 @@ export class ToolManager {
         debugLog(`[DimEdit] Non-axis: rotate ${angleDeg.toFixed(2)}° around (${rotAxis.x.toFixed(3)},${rotAxis.y.toFixed(3)},${rotAxis.z.toFixed(3)}), scale X×${scaleFactor.toFixed(4)}, rotate back`);
 
         // Step 1: Rotate to align edge with X-axis
+        let stepsCompleted = 0;
         const r1 = this.bridge.rotateFaces(
           selectedFaces, cx, cy, cz,
           rotAxis.x, rotAxis.y, rotAxis.z, angleDeg,
         );
         if (r1) {
+          stepsCompleted++;
           // Step 2: Scale along X-axis (now exact)
           const s = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, scaleFactor, 1, 1);
           if (s) {
+            stepsCompleted++;
             // Step 3: Rotate back
             ok = this.bridge.rotateFaces(
               selectedFaces, cx, cy, cz,
               rotAxis.x, rotAxis.y, rotAxis.z, -angleDeg,
             );
+            if (ok) stepsCompleted++;
           }
         }
         if (!ok) {
-          debugLog(`[DimEdit] Rotate-scale-rotate failed, attempting undo`);
-          this.bridge.undo(); // Roll back partial operations
-          this.bridge.undo();
+          debugLog(`[DimEdit] Rotate-scale-rotate failed at step ${stepsCompleted + 1}/3, undoing ${stepsCompleted} ops`);
+          for (let u = 0; u < stepsCompleted; u++) this.bridge.undo();
         }
       }
     }

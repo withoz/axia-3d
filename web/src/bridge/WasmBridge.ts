@@ -103,13 +103,14 @@ export class WasmBridge {
   /** Cached mesh buffer management to avoid redundant WASM→JS copies */
   private bufferCache: {
     positions: Float32Array | null;
+    positionsF64: Float64Array | null;
     normals: Float32Array | null;
     indices: Uint32Array | null;
     faceMap: Uint32Array | null;
     edgeLines: Float32Array | null;
     edgeMap: Uint32Array | null;
     dirty: boolean;
-  } = { positions: null, normals: null, indices: null, faceMap: null, edgeLines: null, edgeMap: null, dirty: true };
+  } = { positions: null, positionsF64: null, normals: null, indices: null, faceMap: null, edgeLines: null, edgeMap: null, dirty: true };
 
   async init(): Promise<void> {
     try {
@@ -199,6 +200,7 @@ export class WasmBridge {
     if (!this.bufferCache.dirty && this.bufferCache.positions) {
       return {
         positions: this.bufferCache.positions,
+        positionsF64: this.bufferCache.positionsF64 ?? undefined,
         normals: this.bufferCache.normals!,
         indices: this.bufferCache.indices!,
         faceMap: this.bufferCache.faceMap!,
@@ -211,7 +213,7 @@ export class WasmBridge {
     if (positions.length === 0) return null;
     // Fetch f64 positions for CAD-grade precision
     const positionsF64 = (this.engine as any).getPositionsF64?.() as Float64Array | undefined;
-    this.bufferCache = { positions, normals, indices, faceMap, edgeLines: null, edgeMap: null, dirty: false };
+    this.bufferCache = { positions, positionsF64: positionsF64 ?? null, normals, indices, faceMap, edgeLines: null, edgeMap: null, dirty: false };
     return { positions, normals, indices, faceMap, positionsF64 };
   }
 
