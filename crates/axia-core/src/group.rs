@@ -29,13 +29,13 @@ use axia_geo::FaceId;
 // ════════════════════════════════════════════════════════════════
 
 /// 그룹 고유 식별자
-pub type GroupId = u64;
+pub type GroupId = u32;
 
 /// 컴포넌트 정의 고유 식별자
-pub type ComponentDefId = u64;
+pub type ComponentDefId = u32;
 
 /// 컴포넌트 인스턴스 고유 식별자
-pub type ComponentInstanceId = u64;
+pub type ComponentInstanceId = u32;
 
 // ════════════════════════════════════════════════════════════════
 // Transform3D
@@ -213,9 +213,9 @@ pub struct GroupManager {
     pub component_defs: HashMap<ComponentDefId, ComponentDef>,
     pub component_instances: HashMap<ComponentInstanceId, ComponentInstance>,
 
-    next_group_id: u64,
-    next_def_id: u64,
-    next_instance_id: u64,
+    next_group_id: u32,
+    next_def_id: u32,
+    next_instance_id: u32,
 
     /// face → group 역인덱스 (빠른 조회)
     #[serde(skip)]
@@ -488,7 +488,7 @@ impl GroupManager {
     pub fn export_group_info(&self, group_id: GroupId) -> Option<String> {
         let group = self.groups.get(&group_id)?;
         let face_ids: Vec<u32> = group.face_ids.iter().map(|f| f.raw()).collect();
-        let children: Vec<u64> = group.children.clone();
+        let children: Vec<u32> = group.children.clone();
 
         Some(format!(
             r#"{{"id":{},"name":"{}","faceIds":{:?},"children":{:?},"visible":{},"locked":{},"parent":{},"isComponent":{}}}"#,

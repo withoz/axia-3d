@@ -485,7 +485,7 @@ impl AxiaEngine {
     /// Returns the first face ID owned by the given XIA ID.
     /// draw_rect/draw_circle return XIA IDs; push_pull expects face IDs.
     /// Returns u32::MAX on failure.
-    pub fn get_xia_face(&self, xia_id: u64) -> u32 {
+    pub fn get_xia_face(&self, xia_id: u32) -> u32 {
         if let Some(xia) = self.scene.xias.get(&xia_id) {
             if let Some(&fid) = xia.face_ids.first() {
                 return fid.raw();
@@ -495,10 +495,10 @@ impl AxiaEngine {
     }
 
     /// face가 속한 XIA의 ID 반환 (O(1) 역인덱스)
-    /// 없으면 u64::MAX 반환
-    pub fn get_xia_for_face(&self, face_id_raw: u32) -> u64 {
+    /// 없으면 u32::MAX 반환
+    pub fn get_xia_for_face(&self, face_id_raw: u32) -> u32 {
         let fid = FaceId::new(face_id_raw);
-        self.scene.get_xia_for_face(fid).unwrap_or(u64::MAX)
+        self.scene.get_xia_for_face(fid).unwrap_or(u32::MAX)
     }
 
     // ========================================================================
@@ -1643,14 +1643,14 @@ impl AxiaEngine {
     }
 
     /// 그룹 해제
-    pub fn delete_group(&mut self, group_id: u64) -> bool {
+    pub fn delete_group(&mut self, group_id: u32) -> bool {
         let cmd = Command::DeleteGroup { group_id };
         let result = self.scene.execute(cmd);
         matches!(result, CommandResult::GroupUpdated(_))
     }
 
     /// 그룹 이름 변경
-    pub fn rename_group(&mut self, group_id: u64, new_name: &str) -> bool {
+    pub fn rename_group(&mut self, group_id: u32, new_name: &str) -> bool {
         let cmd = Command::RenameGroup {
             group_id,
             new_name: new_name.to_string(),
@@ -1660,7 +1660,7 @@ impl AxiaEngine {
     }
 
     /// 그룹 가시성 토글
-    pub fn toggle_group_visibility(&mut self, group_id: u64) -> bool {
+    pub fn toggle_group_visibility(&mut self, group_id: u32) -> bool {
         let cmd = Command::ToggleGroupVisibility { group_id };
         let result = self.scene.execute(cmd);
         if matches!(result, CommandResult::GroupUpdated(_)) {
@@ -1679,7 +1679,7 @@ impl AxiaEngine {
     }
 
     /// 그룹 잠금 토글
-    pub fn toggle_group_lock(&mut self, group_id: u64) -> bool {
+    pub fn toggle_group_lock(&mut self, group_id: u32) -> bool {
         let cmd = Command::ToggleGroupLock { group_id };
         let result = self.scene.execute(cmd);
         matches!(result, CommandResult::GroupUpdated(_))
@@ -1695,7 +1695,7 @@ impl AxiaEngine {
     }
 
     /// 그룹의 모든 face ID 반환 (재귀적)
-    pub fn get_group_faces(&self, group_id: u64) -> Vec<u32> {
+    pub fn get_group_faces(&self, group_id: u32) -> Vec<u32> {
         self.scene.groups.get_all_faces_recursive(group_id)
             .iter()
             .map(|f| f.raw())
@@ -1703,25 +1703,25 @@ impl AxiaEngine {
     }
 
     /// 그룹에 face 추가
-    pub fn add_faces_to_group(&mut self, group_id: u64, face_ids: &[u32]) -> bool {
+    pub fn add_faces_to_group(&mut self, group_id: u32, face_ids: &[u32]) -> bool {
         let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
         self.scene.groups.add_faces_to_group(group_id, &fids)
     }
 
     /// 그룹에서 face 제거
-    pub fn remove_faces_from_group(&mut self, group_id: u64, face_ids: &[u32]) -> bool {
+    pub fn remove_faces_from_group(&mut self, group_id: u32, face_ids: &[u32]) -> bool {
         let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
         self.scene.groups.remove_faces_from_group(group_id, &fids)
     }
 
     /// 중첩 그룹 설정
-    pub fn set_group_parent(&mut self, child_id: u64, parent_id: f64) -> bool {
-        let parent = if parent_id <= 0.0 { None } else { Some(parent_id as u64) };
+    pub fn set_group_parent(&mut self, child_id: u32, parent_id: f64) -> bool {
+        let parent = if parent_id <= 0.0 { None } else { Some(parent_id as u32) };
         self.scene.groups.set_parent(child_id, parent)
     }
 
     /// 그룹을 컴포넌트로 변환
-    pub fn make_component(&mut self, group_id: u64, name: &str) -> f64 {
+    pub fn make_component(&mut self, group_id: u32, name: &str) -> f64 {
         match self.scene.groups.make_component(group_id, name.to_string()) {
             Some(def_id) => {
                 console_log!("[RUST] make_component: group={} def={}", group_id, def_id);
@@ -1732,7 +1732,7 @@ impl AxiaEngine {
     }
 
     /// 그룹 정보 JSON 반환
-    pub fn get_group_info(&self, group_id: u64) -> String {
+    pub fn get_group_info(&self, group_id: u32) -> String {
         match self.scene.groups.export_group_info(group_id) {
             Some(json) => json,
             None => r#"{"error":"group not found"}"#.to_string(),

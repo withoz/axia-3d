@@ -41,29 +41,49 @@ export interface DeltaBuffers {
 }
 
 /**
- * Extended engine type for safe access to optional and WASM-provided methods.
- * This is NOT an extension of AxiaEngine because the WASM .d.ts uses bigint
- * for group IDs while we use number, so we use type-unsafe 'any' internally.
+ * Extended engine type for safe access to optional WASM-provided methods.
+ * All IDs are now u32 (number) — no bigint mismatch.
+ * Methods marked optional (?) may not exist in older WASM builds.
  */
+interface WasmDeltaBuffers {
+  isTopologyChanged(): boolean;
+  getModifiedFaceIds(): Uint32Array;
+  getPositions(): Float32Array;
+  getNormals(): Float32Array;
+  getFaceVertOffsets(): Uint32Array;
+  getFaceVertCounts(): Uint32Array;
+  getCacheVersion(): number;
+}
+
 type AxiaEngineExtended = AxiaEngine & {
+  // Edge/geometry queries
   get_edge_lines?(): Float32Array;
+  get_edge_map?(): Uint32Array;
   getSnapVerticesF64?(): Float64Array;
+  getPositionsF64?(): Float64Array;
   delete_edge?(edgeId: number): boolean;
   batch_delete?(faceIds: Uint32Array, edgeIds: Uint32Array): boolean;
   get_connected_faces?(seedFaceId: number): Uint32Array;
+  // Snapshot / Import
   export_snapshot?(): Uint8Array;
   import_snapshot?(data: Uint8Array): boolean;
   import_dxf?(data: Uint8Array): string;
+  // Transform operations
   translate_faces?(ids: Uint32Array, dx: number, dy: number, dz: number): boolean;
   rotate_faces?(ids: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
   scale_faces?(ids: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
   faces_centroid?(ids: Uint32Array): Float32Array | Float64Array;
+  // Offset
   offset_face?(faceId: number, dist: number): string;
   offset_edge?(edgeId: number, dist: number, nx: number, ny: number, nz: number): string;
-  get_edge_map?(): Uint32Array;
+  // XIA
   get_xia_info?(ids: Uint32Array): string;
+  get_xia_face?(xia_id: number): number;
+  get_xia_for_face?(face_id_raw: number): number;
+  is_face_locked?(face_id_raw: number): boolean;
+  // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
-  // Group / Component (using number instead of bigint for convenience)
+  // Group / Component
   create_group?(name: string, faceIds: Uint32Array): number;
   delete_group?(groupId: number): boolean;
   rename_group?(groupId: number, newName: string): boolean;
@@ -78,22 +98,20 @@ type AxiaEngineExtended = AxiaEngine & {
   get_group_info?(groupId: number): string;
   get_all_groups?(): string;
   group_count?(): number;
-  // XIA → Face ID lookup
-  get_xia_face?(xia_id: number): number;
   // Material operations
   assign_material?(faceIds: Uint32Array, materialIdRaw: number): boolean;
   remove_material?(faceIds: Uint32Array): boolean;
   get_face_material?(faceIdRaw: number): number;
   get_all_materials?(): string;
-  // Seamless Offset Push-Pull for Smooth Groups (Rhino style)
+  // Smooth Group Push-Pull
   push_pull_smooth_group_seamless?(faceIds: Uint32Array, distance: number): boolean;
-  // Primitive shapes (Cylinder, Cone, Sphere)
+  // Primitive shapes
   create_cylinder?(cx: number, cy: number, cz: number, radius: number, height: number, segments: number): number;
   create_cone?(cx: number, cy: number, cz: number, radius: number, height: number, segments: number): number;
   create_sphere?(cx: number, cy: number, cz: number, radius: number, u_segments: number, v_segments: number): number;
-  // Delta Buffer Export (Phase 1 Optimization)
-  get_dirty_face_buffers?(): DeltaBuffers | undefined;
-  get_cache_version?(): number;
+  // Delta Buffer Export
+  getDirtyFaceBuffers?(): WasmDeltaBuffers | undefined;
+  getCacheVersion?(): number;
   get_dirty_face_count?(): number;
 };
 
@@ -212,7 +230,7 @@ export class WasmBridge {
     const faceMap = this.engine.get_face_map();
     if (positions.length === 0) return null;
     // Fetch f64 positions for CAD-grade precision
-    const positionsF64 = (this.engine as any).getPositionsF64?.() as Float64Array | undefined;
+    const positionsF64 = this.engine.getPositionsF64?.();
     this.bufferCache = { positions, positionsF64: positionsF64 ?? null, normals, indices, faceMap, edgeLines: null, edgeMap: null, dirty: false };
     return { positions, normals, indices, faceMap, positionsF64 };
   }
@@ -224,7 +242,7 @@ export class WasmBridge {
   getPositionsF64(): Float64Array | null {
     if (!this.engine) return null;
     try {
-      return (this.engine as any).getPositionsF64?.() as Float64Array ?? null;
+      return this.engine.getPositionsF64?.() ?? null;
     } catch {
       return null;
     }
@@ -239,21 +257,17 @@ export class WasmBridge {
     if (!this.engine) return null;
 
     try {
-      const delta = (this.engine as any).getDirtyFaceBuffers?.();
+      const delta = this.engine.getDirtyFaceBuffers?.();
       if (!delta) return null;  // No changes
 
-      // wasm-bindgen methods: try JS method names first, fall back to property access
-      const topologyChanged: boolean =
-        (delta as any).isTopologyChanged?.() ?? (delta as any).topology_changed ?? true;
-
       return {
-        topologyChanged,
-        modifiedFaceIds: (delta as any).getModifiedFaceIds?.() ?? new Uint32Array(0),
-        positions: (delta as any).getPositions?.() ?? new Float32Array(0),
-        normals: (delta as any).getNormals?.() ?? new Float32Array(0),
-        faceVertOffsets: (delta as any).getFaceVertOffsets?.() ?? new Uint32Array(0),
-        faceVertCounts: (delta as any).getFaceVertCounts?.() ?? new Uint32Array(0),
-        cacheVersion: (delta as any).getCacheVersion?.() ?? 0,
+        topologyChanged: delta.isTopologyChanged(),
+        modifiedFaceIds: delta.getModifiedFaceIds(),
+        positions: delta.getPositions(),
+        normals: delta.getNormals(),
+        faceVertOffsets: delta.getFaceVertOffsets(),
+        faceVertCounts: delta.getFaceVertCounts(),
+        cacheVersion: delta.getCacheVersion(),
       };
     } catch (e) {
       console.warn('[WasmBridge] getDeltaBuffers failed:', e);
@@ -686,7 +700,7 @@ export class WasmBridge {
   isFaceLocked(faceId: number): boolean {
     if (!this.engine) return false;
     try {
-      return (this.engine as any).is_face_locked?.(faceId) ?? false;
+      return this.engine.is_face_locked?.(faceId) ?? false;
     } catch {
       return false;
     }
@@ -696,8 +710,8 @@ export class WasmBridge {
   getXiaForFace(faceId: number): number {
     if (!this.engine) return -1;
     try {
-      const result = (this.engine as any).get_xia_for_face?.(faceId);
-      // u64::MAX(18446744073709551615)이면 없음
+      const result = this.engine.get_xia_for_face?.(faceId);
+      // u32::MAX (4294967295) 이면 없음
       return (result === undefined || result >= 0xFFFFFFFF) ? -1 : result;
     } catch {
       return -1;

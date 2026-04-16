@@ -48,7 +48,7 @@ impl XiaState {
 }
 
 /// Unique XIA entity identifier.
-pub type XiaId = u64;
+pub type XiaId = u32;
 
 /// A XIA modeling entity — the fundamental Object in the Semantic Layer.
 ///

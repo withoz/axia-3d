@@ -28,7 +28,7 @@ pub struct Scene {
     /// Reverse index: FaceId → XiaId (O(1) lookup)
     face_to_xia: HashMap<FaceId, XiaId>,
     /// Next XIA ID counter
-    next_xia_id: u64,
+    next_xia_id: u32,
     /// Transaction manager for undo/redo
     pub transactions: TransactionManager,
     /// Material library (all available materials)
@@ -74,7 +74,7 @@ impl Scene {
         buf.extend_from_slice(&xia_data);
         buf.extend_from_slice(&(group_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&group_data);
-        buf.extend_from_slice(&next_xia.to_le_bytes());
+        buf.extend_from_slice(&(next_xia as u64).to_le_bytes()); // u64 for snapshot backward compat
         buf
     }
 
@@ -121,7 +121,7 @@ impl Scene {
 
         // 4. next_xia_id
         if offset + 8 <= data.len() {
-            self.next_xia_id = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap_or([0; 8]));
+            self.next_xia_id = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap_or([0; 8])) as u32; // u64→u32 for backward compat
         }
 
         // 5. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
