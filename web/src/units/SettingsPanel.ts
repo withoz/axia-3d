@@ -13,22 +13,30 @@ import { UnitSystem, UnitType } from './UnitSystem';
 export class SettingsPanel {
   private panel: HTMLElement;
   private isOpen = false;
+  private readonly _onMouseDown: (e: MouseEvent) => void;
 
   constructor(private units: UnitSystem) {
     this.panel = this.createPanel();
     document.body.appendChild(this.panel);
 
-    // 패널 밖 클릭 시 닫기
-    document.addEventListener('mousedown', (e) => {
+    // 패널 밖 클릭 시 닫기 (named reference for cleanup)
+    this._onMouseDown = (e: MouseEvent) => {
       if (this.isOpen &&
           !this.panel.contains(e.target as Node) &&
           !(e.target as HTMLElement).closest('#settings-btn')) {
         this.close();
       }
-    });
+    };
+    document.addEventListener('mousedown', this._onMouseDown);
 
     // 단위 변경 시 UI 갱신
     units.onChange(() => this.updateDisplay());
+  }
+
+  /** Remove DOM and listeners (defensive cleanup) */
+  dispose() {
+    document.removeEventListener('mousedown', this._onMouseDown);
+    this.panel.remove();
   }
 
   toggle() {
