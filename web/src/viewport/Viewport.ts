@@ -168,6 +168,7 @@ export class Viewport {
       });
       const line = new Line2(geo, mat);
       line.computeLineDistances();
+      line.frustumCulled = false;
       this.scene.add(line);
       this.axisLines.push(line);
     }
@@ -284,6 +285,7 @@ export class Viewport {
       });
       const lineX = new Line2(geoX, matX);
       lineX.computeLineDistances();
+      lineX.frustumCulled = false;
       lineX.userData.noPick = true;
       gridGroup.add(lineX);
 
@@ -299,6 +301,7 @@ export class Viewport {
       });
       const lineZ = new Line2(geoZ, matZ);
       lineZ.computeLineDistances();
+      lineZ.frustumCulled = false;
       lineZ.userData.noPick = true;
       gridGroup.add(lineZ);
     }
@@ -320,6 +323,7 @@ export class Viewport {
       });
       const lineX = new Line2(geoX, matX);
       lineX.computeLineDistances();
+      lineX.frustumCulled = false;
       lineX.userData.noPick = true;
       gridGroup.add(lineX);
 
@@ -334,6 +338,7 @@ export class Viewport {
       });
       const lineZ = new Line2(geoZ, matZ);
       lineZ.computeLineDistances();
+      lineZ.frustumCulled = false;
       lineZ.userData.noPick = true;
       gridGroup.add(lineZ);
     }
@@ -546,8 +551,13 @@ export class Viewport {
       this.updateCameraFromSpherical();
     } else {
       // 2D 직교 뷰 설정
-      const dist = 500;  // 직교 카메라는 거리가 크기에 무관, near/far(1~1000) 범위 안에 배치
+      // 직교 카메라는 거리가 크기에 무관 — near/far 범위 안에만 배치하면 됨
+      const dist = 500;
       const cam = this.orthoCamera;
+
+      // near/far를 dist 기준으로 설정: 카메라 앞뒤 충분한 범위 확보
+      cam.near = 0.1;
+      cam.far = dist * 2;
 
       // Match ortho zoom to 3D perspective view's visible area
       // orthoZoom = radius * tan(FOV/2) gives equivalent screen coverage
@@ -556,11 +566,11 @@ export class Viewport {
 
       switch (mode) {
         case 'top':    // Numpad 7 — 위에서 내려다봄
-          cam.position.set(this.orbitTarget.x, dist, this.orbitTarget.z);
+          cam.position.set(this.orbitTarget.x, this.orbitTarget.y + dist, this.orbitTarget.z);
           cam.up.set(0, 0, -1);
           break;
         case 'bottom': // Ctrl+Numpad 7 — 아래에서 올려다봄
-          cam.position.set(this.orbitTarget.x, -dist, this.orbitTarget.z);
+          cam.position.set(this.orbitTarget.x, this.orbitTarget.y - dist, this.orbitTarget.z);
           cam.up.set(0, 0, 1);
           break;
         case 'front':  // Numpad 1 — 정면 (X축이 오른쪽)
