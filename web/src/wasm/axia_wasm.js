@@ -787,6 +787,21 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * Test if a 3D point lies within a face's boundary.
+     *
+     * Returns true if the point is on the face's plane and inside its edges.
+     * Useful for determining if a draw operation should trigger face split.
+     * @param {number} face_id_raw
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     * @returns {boolean}
+     */
+    pointInFace(face_id_raw, x, y, z) {
+        const ret = wasm.axiaengine_pointInFace(this.__wbg_ptr, face_id_raw, x, y, z);
+        return ret !== 0;
+    }
+    /**
      * Push/Pull a face along its normal.
      * dist > 0 = extrude outward (face kept)
      * dist < 0 = recess inward  (face removed)
@@ -906,6 +921,44 @@ export class AxiaEngine {
     set_group_parent(child_id, parent_id) {
         const ret = wasm.axiaengine_set_group_parent(this.__wbg_ptr, child_id, parent_id);
         return ret !== 0;
+    }
+    /**
+     * Split a face by drawing a line segment across it.
+     *
+     * Both endpoints should be on the face's boundary (on an edge or at a vertex).
+     * Creates two new faces from the original face.
+     *
+     * # Parameters
+     * - face_id_raw: the face to split
+     * - x0, y0, z0: line start point
+     * - x1, y1, z1: line end point
+     *
+     * # Returns
+     * JSON string with split result info, or empty string on failure.
+     * @param {number} face_id_raw
+     * @param {number} x0
+     * @param {number} y0
+     * @param {number} z0
+     * @param {number} x1
+     * @param {number} y1
+     * @param {number} z1
+     * @returns {string}
+     */
+    splitFaceByLine(face_id_raw, x0, y0, z0, x1, y1, z1) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_splitFaceByLine(retptr, this.__wbg_ptr, face_id_raw, x0, y0, z0, x1, y1, z1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * 그룹 잠금 토글
@@ -1097,6 +1150,9 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_6b64449b9b9ed33c: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_error_2001591ad2463697: function(arg0) {
+            console.error(getObject(arg0));
+        },
         __wbg_getRandomValues_d49329ff89a07af1: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
@@ -1107,9 +1163,6 @@ function __wbg_get_imports() {
         __wbg_getTimezoneOffset_31f57a5389d0d57c: function(arg0) {
             const ret = getObject(arg0).getTimezoneOffset();
             return ret;
-        },
-        __wbg_log_7e1aa9064a1dbdbd: function(arg0) {
-            console.log(getObject(arg0));
         },
         __wbg_new_0_4d657201ced14de3: function() {
             const ret = new Date();

@@ -54,6 +54,7 @@ export const axiaengine_new: () => number;
 export const axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_orient_faces: (a: number) => number;
+export const axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_push_pull: (a: number, b: number, c: number) => number;
 export const axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_redo: (a: number) => number;
@@ -63,6 +64,7 @@ export const axiaengine_rename_group: (a: number, b: number, c: number, d: numbe
 export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+export const axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const axiaengine_toggle_group_lock: (a: number, b: number) => number;
 export const axiaengine_toggle_group_visibility: (a: number, b: number) => number;
 export const axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;

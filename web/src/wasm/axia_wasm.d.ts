@@ -218,6 +218,13 @@ export class AxiaEngine {
      */
     orient_faces(): number;
     /**
+     * Test if a 3D point lies within a face's boundary.
+     *
+     * Returns true if the point is on the face's plane and inside its edges.
+     * Useful for determining if a draw operation should trigger face split.
+     */
+    pointInFace(face_id_raw: number, x: number, y: number, z: number): boolean;
+    /**
      * Push/Pull a face along its normal.
      * dist > 0 = extrude outward (face kept)
      * dist < 0 = recess inward  (face removed)
@@ -263,6 +270,21 @@ export class AxiaEngine {
      * 중첩 그룹 설정
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
+    /**
+     * Split a face by drawing a line segment across it.
+     *
+     * Both endpoints should be on the face's boundary (on an edge or at a vertex).
+     * Creates two new faces from the original face.
+     *
+     * # Parameters
+     * - face_id_raw: the face to split
+     * - x0, y0, z0: line start point
+     * - x1, y1, z1: line end point
+     *
+     * # Returns
+     * JSON string with split result info, or empty string on failure.
+     */
+    splitFaceByLine(face_id_raw: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): string;
     /**
      * 그룹 잠금 토글
      */
@@ -376,6 +398,7 @@ export interface InitOutput {
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;
+    readonly axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_push_pull: (a: number, b: number, c: number) => number;
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;
@@ -385,6 +408,7 @@ export interface InitOutput {
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+    readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
     readonly axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;

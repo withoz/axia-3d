@@ -12,10 +12,18 @@ use axia_core::commands::CommandResult;
 use axia_geo::{FaceId, EdgeId};
 use axia_geo::operations::boolean::BoolOp;
 
-// Console logging from Rust WASM
-macro_rules! console_log {
+// Console logging from Rust WASM — debug only (stripped in release builds)
+macro_rules! debug_log {
     ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
         web_sys::console::log_1(&format!($($arg)*).into())
+    }
+}
+
+// Error logging — always active (even in release builds)
+macro_rules! console_error {
+    ($($arg:tt)*) => {
+        web_sys::console::error_1(&format!($($arg)*).into())
     }
 }
 
@@ -265,7 +273,7 @@ impl AxiaEngine {
         let faces_before = self.scene.mesh.face_count();
         let edges_before = self.scene.mesh.edge_count();
 
-        console_log!("[RUST] draw_line: ({:.4},{:.4},{:.4})→({:.4},{:.4},{:.4}) verts={} edges={} faces={}",
+        debug_log!("[RUST] draw_line: ({:.4},{:.4},{:.4})→({:.4},{:.4},{:.4}) verts={} edges={} faces={}",
             x0, y0, z0, x1, y1, z1, verts_before, edges_before, faces_before);
 
         let cmd = Command::DrawLine {
@@ -279,7 +287,7 @@ impl AxiaEngine {
         let faces_after = self.scene.mesh.face_count();
         let edges_after = self.scene.mesh.edge_count();
 
-        console_log!("[RUST] draw_line result: verts={} edges={} faces={} (new_verts={} new_edges={} new_faces={})",
+        debug_log!("[RUST] draw_line result: verts={} edges={} faces={} (new_verts={} new_edges={} new_faces={})",
             verts_after, edges_after, faces_after,
             verts_after - verts_before, edges_after - edges_before, faces_after - faces_before);
 
@@ -318,7 +326,7 @@ impl AxiaEngine {
                 self.invalidate_cache();
 
                 let face_count = self.scene.mesh.face_count();
-                console_log!("[RUST] draw_rect: xia={} faces={} input_normal=({},{},{})",
+                debug_log!("[RUST] draw_rect: xia={} faces={} input_normal=({},{},{})",
                     xia_id, face_count, nx, ny, nz);
                 xia_id as f64
             },
@@ -386,14 +394,14 @@ impl AxiaEngine {
                     faces.clone(),
                 );
                 if let Some(&base_face) = faces.first() {
-                    console_log!("[RUST] create_cylinder: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
+                    debug_log!("[RUST] create_cylinder: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
                     base_face.raw() as f64
                 } else {
                     -1.0
                 }
             }
             Err(e) => {
-                console_log!("[RUST] create_cylinder error: {}", e);
+                console_error!("[RUST] create_cylinder error: {}", e);
                 -1.0
             }
         }
@@ -425,14 +433,14 @@ impl AxiaEngine {
                     faces.clone(),
                 );
                 if let Some(&base_face) = faces.first() {
-                    console_log!("[RUST] create_cone: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
+                    debug_log!("[RUST] create_cone: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
                     base_face.raw() as f64
                 } else {
                     -1.0
                 }
             }
             Err(e) => {
-                console_log!("[RUST] create_cone error: {}", e);
+                console_error!("[RUST] create_cone error: {}", e);
                 -1.0
             }
         }
@@ -465,14 +473,14 @@ impl AxiaEngine {
                     faces.clone(),
                 );
                 if let Some(&first_face) = faces.first() {
-                    console_log!("[RUST] create_sphere: faces={} first_id={} xia={}", faces.len(), first_face.raw(), xia_id);
+                    debug_log!("[RUST] create_sphere: faces={} first_id={} xia={}", faces.len(), first_face.raw(), xia_id);
                     first_face.raw() as f64
                 } else {
                     -1.0
                 }
             }
             Err(e) => {
-                console_log!("[RUST] create_sphere error: {}", e);
+                console_error!("[RUST] create_sphere error: {}", e);
                 -1.0
             }
         }
@@ -523,7 +531,7 @@ impl AxiaEngine {
         } else {
             "N/A".to_string()
         };
-        console_log!("[RUST] push_pull faceId={} dist={:.3} normal={} faces_before={}",
+        debug_log!("[RUST] push_pull faceId={} dist={:.3} normal={} faces_before={}",
             face_id_raw, dist, face_normal, faces_before);
 
         let cmd = Command::PushPull {
@@ -538,22 +546,22 @@ impl AxiaEngine {
             axia_core::commands::CommandResult::PushPullDone {
                 sides_created, adj_splits, base_removed, ref split_debug
             } => {
-                console_log!(
+                debug_log!(
                     "[RUST] after: faces={} (delta={:+}) sides={} adj_splits={} base_removed={}",
                     faces_after, faces_after as i64 - faces_before as i64,
                     sides_created, adj_splits, base_removed
                 );
                 for msg in split_debug {
-                    console_log!("[SPLIT] {}", msg);
+                    debug_log!("[SPLIT] {}", msg);
                 }
                 true
             }
             axia_core::commands::CommandResult::Error(e) => {
-                console_log!("[RUST] push_pull ERROR: {}", e);
+                console_error!("[RUST] push_pull ERROR: {}", e);
                 false
             }
             _ => {
-                console_log!("[RUST] after: faces={} (delta={:+})",
+                debug_log!("[RUST] after: faces={} (delta={:+})",
                     faces_after, faces_after as i64 - faces_before as i64);
                 false
             }
@@ -599,7 +607,7 @@ impl AxiaEngine {
             .map(|&id| FaceId::new(id))
             .collect();
 
-        console_log!(
+        debug_log!(
             "[RUST] push_pull_smooth_group_seamless: {} faces, dist={:.3}",
             smooth_group.len(),
             dist
@@ -615,7 +623,7 @@ impl AxiaEngine {
         ) {
             Ok(pp_result) => {
                 let faces_after = self.scene.mesh.face_count();
-                console_log!(
+                debug_log!(
                     "[RUST] seamless offset done: {} → {} faces (delta={}), {} wall faces",
                     faces_before,
                     faces_after,
@@ -623,12 +631,12 @@ impl AxiaEngine {
                     pp_result.side_faces.len()
                 );
                 for msg in &pp_result.split_debug {
-                    console_log!("[SEAMLESS] {}", msg);
+                    debug_log!("[SEAMLESS] {}", msg);
                 }
                 true
             }
             Err(e) => {
-                console_log!("[RUST] push_pull_smooth_group_seamless ERROR: {}", e);
+                console_error!("[RUST] push_pull_smooth_group_seamless ERROR: {}", e);
                 false
             }
         };
@@ -638,6 +646,90 @@ impl AxiaEngine {
         }
         self.invalidate_cache();
         result
+    }
+
+    // ========================================================================
+    // Face Split — draw line on face to subdivide it
+    // ========================================================================
+
+    /// Split a face by drawing a line segment across it.
+    ///
+    /// Both endpoints should be on the face's boundary (on an edge or at a vertex).
+    /// Creates two new faces from the original face.
+    ///
+    /// # Parameters
+    /// - face_id_raw: the face to split
+    /// - x0, y0, z0: line start point
+    /// - x1, y1, z1: line end point
+    ///
+    /// # Returns
+    /// JSON string with split result info, or empty string on failure.
+    #[wasm_bindgen(js_name = "splitFaceByLine")]
+    pub fn split_face_by_line(
+        &mut self,
+        face_id_raw: u32,
+        x0: f64, y0: f64, z0: f64,
+        x1: f64, y1: f64, z1: f64,
+    ) -> String {
+        use axia_geo::operations::face_split;
+
+        let fid = FaceId::new(face_id_raw);
+        let line_start = DVec3::new(x0, y0, z0);
+        let line_end = DVec3::new(x1, y1, z1);
+
+        // Snapshot for undo
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let faces_before = self.scene.mesh.face_count();
+
+        match face_split::split_face_by_line(&mut self.scene.mesh, fid, line_start, line_end) {
+            Ok(result) => {
+                let faces_after = self.scene.mesh.face_count();
+                debug_log!("[RUST] split_face_by_line: face {} → {} new faces, {} new verts, faces {}->{} (delta {:+})",
+                    face_id_raw, result.new_faces.len(), result.new_verts.len(),
+                    faces_before, faces_after, faces_after as i64 - faces_before as i64);
+
+                for msg in &result.debug {
+                    debug_log!("[SPLIT] {}", msg);
+                }
+
+                // Commit undo frame
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+
+                self.mark_topology_changed();
+                self.invalidate_cache();
+
+                // Return JSON with result info
+                let face_ids: Vec<u32> = result.new_faces.iter().map(|f| f.raw()).collect();
+                let vert_ids: Vec<u32> = result.new_verts.iter().map(|v| v.raw()).collect();
+                format!("{{\"faces\":{:?},\"verts\":{:?},\"edges\":{}}}",
+                    face_ids, vert_ids, result.new_edges.len())
+            }
+            Err(e) => {
+                console_error!("[RUST] split_face_by_line ERROR: {}", e);
+                // No commit — transaction will be discarded
+                String::new()
+            }
+        }
+    }
+
+    /// Test if a 3D point lies within a face's boundary.
+    ///
+    /// Returns true if the point is on the face's plane and inside its edges.
+    /// Useful for determining if a draw operation should trigger face split.
+    #[wasm_bindgen(js_name = "pointInFace")]
+    pub fn point_in_face(&self, face_id_raw: u32, x: f64, y: f64, z: f64) -> bool {
+        use axia_geo::operations::face_split;
+
+        let fid = FaceId::new(face_id_raw);
+        let point = DVec3::new(x, y, z);
+
+        match face_split::point_in_face(&self.scene.mesh, fid, point) {
+            Ok(result) => result,
+            Err(_) => false,
+        }
     }
 
     // ========================================================================
@@ -1309,11 +1401,11 @@ impl AxiaEngine {
     pub fn export_snapshot(&self) -> Vec<u8> {
         match self.scene.export_versioned_snapshot() {
             Ok(data) => {
-                console_log!("[RUST] export_snapshot: {} bytes", data.len());
+                debug_log!("[RUST] export_snapshot: {} bytes", data.len());
                 data
             }
             Err(e) => {
-                console_log!("[RUST] export_snapshot ERROR: {}", e);
+                console_error!("[RUST] export_snapshot ERROR: {}", e);
                 Vec::new()
             }
         }
@@ -1325,12 +1417,12 @@ impl AxiaEngine {
             Ok(()) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
-                console_log!("[RUST] import_snapshot: verts={} faces={}",
+                debug_log!("[RUST] import_snapshot: verts={} faces={}",
                     self.scene.mesh.vert_count(), self.scene.mesh.face_count());
                 true
             }
             Err(e) => {
-                console_log!("[RUST] import_snapshot ERROR: {}", e);
+                console_error!("[RUST] import_snapshot ERROR: {}", e);
                 false
             }
         }
@@ -1340,7 +1432,7 @@ impl AxiaEngine {
     /// Returns number of faces flipped.
     pub fn orient_faces(&mut self) -> usize {
         let (flipped, visited) = self.scene.orient_faces();
-        console_log!("[RUST] orient_faces: flipped={} visited={}", flipped, visited);
+        debug_log!("[RUST] orient_faces: flipped={} visited={}", flipped, visited);
         self.mark_topology_changed();
         self.invalidate_cache();
         flipped
@@ -1353,14 +1445,14 @@ impl AxiaEngine {
     /// DXF 파일 바이트를 파싱하여 DCEL 메시로 가져오기
     /// 반환: JSON 문자열 (통계 정보)
     pub fn import_dxf(&mut self, data: &[u8]) -> String {
-        console_log!("[RUST] import_dxf: {} bytes", data.len());
+        debug_log!("[RUST] import_dxf: {} bytes", data.len());
 
         match self.scene.import_dxf(data) {
             Ok(stats) => {
                 let verts = self.scene.mesh.vert_count();
                 let faces = self.scene.mesh.face_count();
-                console_log!("[RUST] DXF import done: {}", stats);
-                console_log!("[RUST] Mesh now: verts={} faces={}", verts, faces);
+                debug_log!("[RUST] DXF import done: {}", stats);
+                debug_log!("[RUST] Mesh now: verts={} faces={}", verts, faces);
                 self.mark_topology_changed();
                 self.invalidate_cache();
 
@@ -1373,7 +1465,7 @@ impl AxiaEngine {
                 )
             }
             Err(e) => {
-                console_log!("[RUST] DXF import ERROR: {}", e);
+                console_error!("[RUST] DXF import ERROR: {}", e);
                 format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
             }
         }
@@ -1405,7 +1497,7 @@ impl AxiaEngine {
             }
         };
 
-        console_log!(
+        debug_log!(
             "[RUST] boolean: op={} A={} faces, B={} faces",
             op, fids_a.len(), fids_b.len()
         );
@@ -1425,7 +1517,7 @@ impl AxiaEngine {
                 self.invalidate_cache();
 
                 for msg in &res.debug {
-                    console_log!("[BOOL] {}", msg);
+                    debug_log!("[BOOL] {}", msg);
                 }
 
                 let face_ids: Vec<u32> = res.faces.iter().map(|f| f.raw()).collect();
@@ -1439,7 +1531,7 @@ impl AxiaEngine {
                 )
             }
             Err(e) => {
-                console_log!("[RUST] boolean ERROR: {}", e);
+                console_error!("[RUST] boolean ERROR: {}", e);
                 format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
             }
         }
@@ -1459,7 +1551,7 @@ impl AxiaEngine {
 
         match self.scene.mesh.translate_faces(&fids, delta) {
             Ok(res) => {
-                console_log!("[RUST] translate: moved {} verts, {} faces", res.verts_moved, res.faces_affected);
+                debug_log!("[RUST] translate: moved {} verts, {} faces", res.verts_moved, res.faces_affected);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 // Use topology_changed for full rebuild: shared vertices between
@@ -1469,7 +1561,7 @@ impl AxiaEngine {
                 true
             }
             Err(e) => {
-                console_log!("[RUST] translate ERROR: {}", e);
+                console_error!("[RUST] translate ERROR: {}", e);
                 false
             }
         }
@@ -1493,7 +1585,7 @@ impl AxiaEngine {
 
         match self.scene.mesh.rotate_faces(&fids, center, axis, angle_rad) {
             Ok(res) => {
-                console_log!("[RUST] rotate: {} verts, {:.1}°", res.verts_moved, angle_deg);
+                debug_log!("[RUST] rotate: {} verts, {:.1}°", res.verts_moved, angle_deg);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 // Use topology_changed for full rebuild: shared vertices between
@@ -1503,7 +1595,7 @@ impl AxiaEngine {
                 true
             }
             Err(e) => {
-                console_log!("[RUST] rotate ERROR: {}", e);
+                console_error!("[RUST] rotate ERROR: {}", e);
                 false
             }
         }
@@ -1525,7 +1617,7 @@ impl AxiaEngine {
 
         match self.scene.mesh.scale_faces(&fids, center, scale) {
             Ok(res) => {
-                console_log!("[RUST] scale: {} verts, ({:.2},{:.2},{:.2})", res.verts_moved, sx, sy, sz);
+                debug_log!("[RUST] scale: {} verts, ({:.2},{:.2},{:.2})", res.verts_moved, sx, sy, sz);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 // Use topology_changed for full rebuild: shared vertices between
@@ -1535,7 +1627,7 @@ impl AxiaEngine {
                 true
             }
             Err(e) => {
-                console_log!("[RUST] scale ERROR: {}", e);
+                console_error!("[RUST] scale ERROR: {}", e);
                 false
             }
         }
@@ -1570,7 +1662,7 @@ impl AxiaEngine {
                 )
             }
             Err(e) => {
-                console_log!("[RUST] offset ERROR: {}", e);
+                console_error!("[RUST] offset ERROR: {}", e);
                 format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
             }
         }
@@ -1605,7 +1697,7 @@ impl AxiaEngine {
                 )
             }
             Err(e) => {
-                console_log!("[RUST] offset_edge ERROR: {}", e);
+                console_error!("[RUST] offset_edge ERROR: {}", e);
                 format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
             }
         }
@@ -1635,7 +1727,7 @@ impl AxiaEngine {
         let result = self.scene.execute(cmd);
         match result {
             CommandResult::GroupUpdated(gid) => {
-                console_log!("[RUST] create_group: id={} name={}", gid, name);
+                debug_log!("[RUST] create_group: id={} name={}", gid, name);
                 gid as f64
             }
             _ => 0.0,
@@ -1724,7 +1816,7 @@ impl AxiaEngine {
     pub fn make_component(&mut self, group_id: u32, name: &str) -> f64 {
         match self.scene.groups.make_component(group_id, name.to_string()) {
             Some(def_id) => {
-                console_log!("[RUST] make_component: group={} def={}", group_id, def_id);
+                debug_log!("[RUST] make_component: group={} def={}", group_id, def_id);
                 def_id as f64
             }
             None => 0.0,

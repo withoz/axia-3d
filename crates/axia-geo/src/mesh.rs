@@ -8,7 +8,7 @@
 use glam::DVec3;
 use rustc_hash::FxHashMap;
 use serde::{Serialize, Deserialize};
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::entities::*;
@@ -440,6 +440,337 @@ impl Mesh {
         // Remove the face from storage
         self.faces.remove(face_id);
         Ok(())
+    }
+
+    // ========================================================================
+    // Edge splitting
+    // ========================================================================
+
+    /// Get the source (origin) vertex of a half-edge.
+    ///
+    /// A half-edge stores only its destination. The source is the edge's
+    /// other vertex (the one that isn't dst).
+    pub fn he_src(&self, he_id: HeId) -> Result<VertId> {
+        let he = self.hes.get(he_id)
+            .ok_or_else(|| anyhow::anyhow!("HalfEdge {:?} not found", he_id))?;
+        let edge = self.edges.get(he.edge())
+            .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", he.edge()))?;
+        if he.dst() == edge.v_small() {
+            Ok(edge.v_large())
+        } else {
+            Ok(edge.v_small())
+        }
+    }
+
+    /// Split an edge at a given position, inserting a new vertex.
+    ///
+    /// Given edge A──B and position P on it:
+    /// - Creates vertex P (or reuses if within tolerance)
+    /// - Replaces edge A──B with edges A──P and P──B
+    /// - Updates ALL face loops that use this edge
+    /// - Rebuilds radial chains for the two new edges
+    ///
+    /// Returns (new_vert, edge_ap, edge_pb).
+    ///
+    /// # Safety
+    /// This is the most delicate DCEL operation. Every half-edge's
+    /// next/prev/next_rad pointers and every face's loop start must
+    /// remain consistent after the split.
+    pub fn split_edge(
+        &mut self,
+        edge_id: EdgeId,
+        pos: DVec3,
+    ) -> Result<(VertId, EdgeId, EdgeId)> {
+        let edge = self.edges.get(edge_id)
+            .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", edge_id))?;
+        ensure!(edge.is_active(), "Edge {:?} is not active", edge_id);
+
+        let va = edge.v_small();
+        let vb = edge.v_large();
+
+        // ─── 1. Create midpoint vertex ──────────────────────────────
+        let vp = self.verts.insert(Vertex::new(pos, VERTEX_TOLERANCE));
+        let key = spatial_key(pos);
+        self.spatial_hash.entry(key).or_default().push(vp);
+
+        // ─── 2. Collect all half-edges on the radial chain ──────────
+        let start_he = self.edges[edge_id].any_he();
+        ensure!(!start_he.is_null(), "Edge has no half-edges");
+
+        // Gather (he_id, dst, face, prev, next, is_outer, flags) before mutation
+        struct HeInfo {
+            id: HeId,
+            dst: VertId,
+            face: FaceId,
+            prev: HeId,
+            next: HeId,
+            is_outer: bool,
+            flags: HeFlags,
+        }
+
+        let mut old_hes_info = Vec::new();
+        let mut he = start_he;
+        loop {
+            let h = &self.hes[he];
+            old_hes_info.push(HeInfo {
+                id: he,
+                dst: h.dst(),
+                face: h.face(),
+                prev: h.prev(),
+                next: h.next(),
+                is_outer: h.is_outer(),
+                flags: h.flags(),
+            });
+            he = self.hes[he].next_rad();
+            if he == start_he { break; }
+            if old_hes_info.len() > 1000 {
+                bail!("Radial chain exceeded 1000 — corrupted topology");
+            }
+        }
+
+        // ─── 3. Create two new edges (manually, not via add_edge) ───
+        let pair_ap = VertPairKey::new(va, vp);
+        let pair_pb = VertPairKey::new(vp, vb);
+
+        let e1 = self.edges.insert(Edge::new(pair_ap.v_small, pair_ap.v_large, EDGE_TOLERANCE));
+        let e2 = self.edges.insert(Edge::new(pair_pb.v_small, pair_pb.v_large, EDGE_TOLERANCE));
+
+        self.vert_to_edge.insert(pair_ap, e1);
+        self.vert_to_edge.insert(pair_pb, e2);
+
+        // ─── 4. For each old HE, create two replacement HEs ────────
+        let mut e1_hes: Vec<HeId> = Vec::new();
+        let mut e2_hes: Vec<HeId> = Vec::new();
+
+        for info in &old_hes_info {
+            if info.dst == vb {
+                // Direction: A → B  ⟹  split into A→P (on E1) then P→B (on E2)
+                let he_ap = self.hes.insert(HalfEdge::new(vp, e1));
+                let he_pb = self.hes.insert(HalfEdge::new(vb, e2));
+
+                // Wire into face loop: prev → he_ap → he_pb → next
+                self.hes[he_ap].set_next(he_pb);
+                self.hes[he_pb].set_prev(he_ap);
+                self.hes[he_ap].set_prev(info.prev);
+                self.hes[he_pb].set_next(info.next);
+                self.hes[he_ap].set_face(info.face);
+                self.hes[he_pb].set_face(info.face);
+                self.hes[he_ap].set_outer(info.is_outer);
+                self.hes[he_pb].set_outer(info.is_outer);
+                self.hes[he_ap].set_flags(info.flags);
+                self.hes[he_pb].set_flags(info.flags);
+
+                // Update neighbor pointers
+                if !info.prev.is_null() && self.hes.contains(info.prev) {
+                    self.hes[info.prev].set_next(he_ap);
+                }
+                if !info.next.is_null() && self.hes.contains(info.next) {
+                    self.hes[info.next].set_prev(he_pb);
+                }
+
+                // Update face loop start if it pointed to old HE
+                if !info.face.is_null() {
+                    if let Some(face) = self.faces.get_mut(info.face) {
+                        if face.outer().start == info.id {
+                            face.set_outer(LoopRef::new(he_ap, face.outer().is_outer));
+                        }
+                        for inner in face.inners_mut().iter_mut() {
+                            if inner.start == info.id {
+                                inner.start = he_ap;
+                            }
+                        }
+                    }
+                }
+
+                e1_hes.push(he_ap);
+                e2_hes.push(he_pb);
+
+            } else if info.dst == va {
+                // Direction: B → A  ⟹  split into B→P (on E2) then P→A (on E1)
+                let he_bp = self.hes.insert(HalfEdge::new(vp, e2));
+                let he_pa = self.hes.insert(HalfEdge::new(va, e1));
+
+                // Wire into face loop: prev → he_bp → he_pa → next
+                self.hes[he_bp].set_next(he_pa);
+                self.hes[he_pa].set_prev(he_bp);
+                self.hes[he_bp].set_prev(info.prev);
+                self.hes[he_pa].set_next(info.next);
+                self.hes[he_bp].set_face(info.face);
+                self.hes[he_pa].set_face(info.face);
+                self.hes[he_bp].set_outer(info.is_outer);
+                self.hes[he_pa].set_outer(info.is_outer);
+                self.hes[he_bp].set_flags(info.flags);
+                self.hes[he_pa].set_flags(info.flags);
+
+                if !info.prev.is_null() && self.hes.contains(info.prev) {
+                    self.hes[info.prev].set_next(he_bp);
+                }
+                if !info.next.is_null() && self.hes.contains(info.next) {
+                    self.hes[info.next].set_prev(he_pa);
+                }
+
+                if !info.face.is_null() {
+                    if let Some(face) = self.faces.get_mut(info.face) {
+                        if face.outer().start == info.id {
+                            face.set_outer(LoopRef::new(he_bp, face.outer().is_outer));
+                        }
+                        for inner in face.inners_mut().iter_mut() {
+                            if inner.start == info.id {
+                                inner.start = he_bp;
+                            }
+                        }
+                    }
+                }
+
+                e2_hes.push(he_bp);
+                e1_hes.push(he_pa);
+            } else {
+                bail!("HE {:?} dst={:?} doesn't match edge vertices A={:?} B={:?}",
+                    info.id, info.dst, va, vb);
+            }
+
+            // Deactivate old half-edge
+            self.hes[info.id].set_active(false);
+        }
+
+        // ─── 5. Build radial chains for E1 and E2 ──────────────────
+        for hes in [&e1_hes, &e2_hes] {
+            if hes.len() >= 2 {
+                for i in 0..hes.len() {
+                    let next = hes[(i + 1) % hes.len()];
+                    self.hes[hes[i]].set_next_rad(next);
+                }
+            } else if hes.len() == 1 {
+                // Single HE — point to itself (shouldn't happen for valid edge)
+                self.hes[hes[0]].set_next_rad(hes[0]);
+            }
+        }
+
+        // Set edge anchors
+        if let Some(&first) = e1_hes.first() {
+            self.edges[e1].set_any_he(first);
+        }
+        if let Some(&first) = e2_hes.first() {
+            self.edges[e2].set_any_he(first);
+        }
+
+        // ─── 6. Set vertex outgoing for new vertex P ────────────────
+        if let Some(&he) = e1_hes.first() {
+            self.verts[vp].set_outgoing(Some(he));
+        }
+
+        // Update outgoing for A and B if they pointed to deactivated HEs
+        if let Some(out) = self.verts[va].outgoing() {
+            if !self.hes[out].is_active() {
+                // Find a new active HE starting from A
+                for &he_id in &e1_hes {
+                    if let Ok(src) = self.he_src(he_id) {
+                        if src == va { self.verts[va].set_outgoing(Some(he_id)); break; }
+                    }
+                }
+            }
+        }
+        if let Some(out) = self.verts[vb].outgoing() {
+            if !self.hes[out].is_active() {
+                for &he_id in &e2_hes {
+                    if let Ok(src) = self.he_src(he_id) {
+                        if src == vb { self.verts[vb].set_outgoing(Some(he_id)); break; }
+                    }
+                }
+            }
+        }
+
+        // ─── 7. Deactivate old edge ────────────────────────────────
+        self.edges[edge_id].set_active(false);
+        self.vert_to_edge.remove(&VertPairKey::new(va, vb));
+
+        Ok((vp, e1, e2))
+    }
+
+    // ========================================================================
+    // Face splitting
+    // ========================================================================
+
+    /// Split a face by connecting two of its boundary vertices with a new edge.
+    ///
+    /// Given face F with boundary [..., v1, ..., v2, ...]:
+    /// - Creates edge v1–v2 (the split edge)
+    /// - Splits F into two faces: F_A (v1→...→v2) and F_B (v2→...→v1)
+    /// - Both new faces inherit the original face's material and normal
+    ///
+    /// Returns (face_a, face_b).
+    ///
+    /// # Preconditions
+    /// - v1 and v2 must be on the face's outer boundary
+    /// - v1 and v2 must not be adjacent (that would create a degenerate face)
+    /// - The face must not have holes that cross the split line
+    pub fn split_face(
+        &mut self,
+        face_id: FaceId,
+        v1: VertId,
+        v2: VertId,
+    ) -> Result<(FaceId, FaceId)> {
+        ensure!(self.faces.contains(face_id), "Face {:?} not found", face_id);
+        ensure!(v1 != v2, "Cannot split face with same vertex");
+
+        // Save face properties before removal
+        let material = self.faces[face_id].material();
+        let normal = self.faces[face_id].normal();
+
+        let outer_start = self.faces[face_id].outer().start;
+        let loop_verts = self.collect_loop_verts(outer_start)?;
+        let n = loop_verts.len();
+
+        // Find positions of v1 and v2 in the boundary loop
+        let idx1 = loop_verts.iter().position(|&v| v == v1)
+            .ok_or_else(|| anyhow::anyhow!("v1 {:?} not on face {:?} boundary", v1, face_id))?;
+        let idx2 = loop_verts.iter().position(|&v| v == v2)
+            .ok_or_else(|| anyhow::anyhow!("v2 {:?} not on face {:?} boundary", v2, face_id))?;
+
+        // Check v1 and v2 are not adjacent (would create degenerate face)
+        let dist_fwd = if idx2 >= idx1 { idx2 - idx1 } else { n - idx1 + idx2 };
+        let dist_bwd = n - dist_fwd;
+        ensure!(dist_fwd >= 2 && dist_bwd >= 2,
+            "v1 and v2 are adjacent or equal — split would create degenerate face");
+
+        // Build vertex lists for two new faces
+        // Face A: walk from idx1 to idx2 (forward)
+        let mut verts_a = Vec::with_capacity(dist_fwd + 1);
+        {
+            let mut i = idx1;
+            loop {
+                verts_a.push(loop_verts[i]);
+                if i == idx2 { break; }
+                i = (i + 1) % n;
+            }
+        }
+
+        // Face B: walk from idx2 to idx1 (forward)
+        let mut verts_b = Vec::with_capacity(dist_bwd + 1);
+        {
+            let mut i = idx2;
+            loop {
+                verts_b.push(loop_verts[i]);
+                if i == idx1 { break; }
+                i = (i + 1) % n;
+            }
+        }
+
+        ensure!(verts_a.len() >= 3, "Face A would be degenerate ({} verts)", verts_a.len());
+        ensure!(verts_b.len() >= 3, "Face B would be degenerate ({} verts)", verts_b.len());
+
+        // Remove original face (frees its half-edges for reuse)
+        self.remove_face(face_id)?;
+
+        // Create two new faces (add_face → make_loop → find_halfedge reuses freed HEs)
+        let face_a = self.add_face(&verts_a, material)?;
+        let face_b = self.add_face(&verts_b, material)?;
+
+        // Ensure normals match the original face
+        self.faces[face_a].set_normal(normal);
+        self.faces[face_b].set_normal(normal);
+
+        Ok((face_a, face_b))
     }
 
     // ========================================================================

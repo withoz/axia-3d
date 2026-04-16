@@ -103,6 +103,9 @@ type AxiaEngineExtended = AxiaEngine & {
   remove_material?(faceIds: Uint32Array): boolean;
   get_face_material?(faceIdRaw: number): number;
   get_all_materials?(): string;
+  // Face Split — draw line on face to subdivide
+  splitFaceByLine?(faceId: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): string;
+  pointInFace?(faceId: number, x: number, y: number, z: number): boolean;
   // Smooth Group Push-Pull
   push_pull_smooth_group_seamless?(faceIds: Uint32Array, distance: number): boolean;
   // Primitive shapes
@@ -192,6 +195,22 @@ export class WasmBridge {
     }
     // Fallback: assume xia_id == face_id (legacy behavior)
     return xiaId;
+  }
+
+  /** Split a face by drawing a line across it.
+   *  Both endpoints should be on the face's boundary.
+   *  Returns the JSON result string, or empty string on failure.
+   */
+  splitFaceByLine(faceId: number, start: [number, number, number], end: [number, number, number]): string {
+    if (!this.engine?.splitFaceByLine) return '';
+    this.markDirty();
+    return this.engine.splitFaceByLine(faceId, start[0], start[1], start[2], end[0], end[1], end[2]);
+  }
+
+  /** Test if a 3D point is inside a face's boundary (on its plane). */
+  pointInFace(faceId: number, point: [number, number, number]): boolean {
+    if (!this.engine?.pointInFace) return false;
+    return this.engine.pointInFace(faceId, point[0], point[1], point[2]);
   }
 
   /** Push/Pull: dist > 0 = extrude outward, dist < 0 = recess inward */
