@@ -652,12 +652,40 @@ export class ToolManager {
    * If cursor is on empty space → use default ground plane (Y-up).
    */
   private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
-    const DEFAULT_NORMAL = new THREE.Vector3(0, 1, 0);
-    const DEFAULT_UP = new THREE.Vector3(0, 0, 1);
-    const DEFAULT_RIGHT = new THREE.Vector3(1, 0, 0);
-    const defaultPlane: DrawPlaneInfo = {
-      normal: DEFAULT_NORMAL, up: DEFAULT_UP, right: DEFAULT_RIGHT, onFace: false,
-    };
+    // View-mode-adaptive default drawing plane
+    const vm = this.viewport.viewMode;
+    let defaultPlane: DrawPlaneInfo;
+    switch (vm) {
+      case 'front':
+      case 'back':
+        // Z=0 plane (XY wall) — normal=(0,0,1), up=(0,1,0), right=(1,0,0)
+        defaultPlane = {
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+          right: new THREE.Vector3(1, 0, 0),
+          onFace: false,
+        };
+        break;
+      case 'right':
+      case 'left':
+        // X=0 plane (YZ wall) — normal=(1,0,0), up=(0,1,0), right=(0,0,-1)
+        defaultPlane = {
+          normal: new THREE.Vector3(1, 0, 0),
+          up: new THREE.Vector3(0, 1, 0),
+          right: new THREE.Vector3(0, 0, -1),
+          onFace: false,
+        };
+        break;
+      default: // '3d', 'top', 'bottom'
+        // Y=0 plane (XZ ground) — normal=(0,1,0), up=(0,0,-1), right=(1,0,0)
+        defaultPlane = {
+          normal: new THREE.Vector3(0, 1, 0),
+          up: new THREE.Vector3(0, 0, -1),
+          right: new THREE.Vector3(1, 0, 0),
+          onFace: false,
+        };
+        break;
+    }
 
     const hit = this.viewport.pick(e.clientX, e.clientY);
     if (!hit || hit.faceIndex == null) return defaultPlane;
