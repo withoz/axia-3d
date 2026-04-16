@@ -547,7 +547,9 @@ export class Viewport {
     this._viewMode = mode;
 
     if (mode === '3d') {
-      // 3D perspective 복원
+      // 3D perspective 복원 — 그리드를 XZ 바닥면(Y=0)으로 리셋
+      this.infiniteGrid.rotation.set(0, 0, 0);
+      this.infiniteGrid.position.set(0, 0, 0);
       this.updateCameraFromSpherical();
     } else {
       // 2D 직교 뷰 설정
@@ -592,6 +594,25 @@ export class Viewport {
       }
 
       cam.lookAt(this.orbitTarget);
+
+      // 그리드를 현재 뷰의 작업 평면에 맞게 회전
+      // 기본 그리드: XZ 평면 (Y=0) — top/bottom에서 그대로 보임
+      this.infiniteGrid.rotation.set(0, 0, 0);
+      this.infiniteGrid.position.set(0, 0, 0);
+      switch (mode) {
+        case 'front':
+        case 'back':
+          // XZ → XY 평면 (Z=0): X축 기준 -90° 회전
+          this.infiniteGrid.rotation.x = -Math.PI / 2;
+          break;
+        case 'right':
+        case 'left':
+          // XZ → YZ 평면 (X=0): Z축 기준 90° 회전
+          this.infiniteGrid.rotation.z = Math.PI / 2;
+          break;
+        // top/bottom: 기본 XZ 평면 그대로
+      }
+
       this.updateOrthoCamera();
     }
 
