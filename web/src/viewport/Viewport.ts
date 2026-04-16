@@ -549,6 +549,11 @@ export class Viewport {
       const dist = 500000000;  // 500km
       const cam = this.orthoCamera;
 
+      // Match ortho zoom to 3D perspective view's visible area
+      // orthoZoom = radius * tan(FOV/2) gives equivalent screen coverage
+      const fovRad = (this.camera.fov * Math.PI) / 180;
+      this.orthoZoom = this.spherical.radius * Math.tan(fovRad / 2);
+
       switch (mode) {
         case 'top':    // Numpad 7 — 위에서 내려다봄
           cam.position.set(this.orbitTarget.x, dist, this.orbitTarget.z);
