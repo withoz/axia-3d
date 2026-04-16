@@ -21,7 +21,12 @@ export interface DimLine {
   text: string;
   /** 색상 (CSS) */
   color?: string;
+  /** If true, this label can be clicked to edit the value */
+  editable?: boolean;
 }
+
+/** Callback when a dimension value is edited */
+export type DimEditCallback = (index: number, newValue: number, dimLine: DimLine) => void;
 
 export class DimensionLabel {
   private container: HTMLElement;
@@ -29,6 +34,12 @@ export class DimensionLabel {
   private labels: HTMLElement[] = [];
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+
+  // ═══ Inline Edit State ═══
+  private editInput: HTMLInputElement | null = null;
+  private editingIndex: number = -1;
+  private _onEdit: DimEditCallback | null = null;
+  private _currentLines: DimLine[] = [];
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -63,10 +74,24 @@ export class DimensionLabel {
     ro.observe(container);
   }
 
+  /** Register callback for when a dimension value is edited */
+  set onEdit(cb: DimEditCallback | null) {
+    this._onEdit = cb;
+  }
+
+  /** Whether an inline edit is currently active */
+  get isEditing(): boolean {
+    return this.editingIndex >= 0;
+  }
+
   /**
    * 치수 라인들 업데이트 (매 프레임 호출)
    */
   update(camera: THREE.Camera, lines: DimLine[]) {
+    // Don't update layout while editing (keeps the input stable)
+    if (this.isEditing) return;
+
+    this._currentLines = lines;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
 
@@ -141,6 +166,24 @@ export class DimensionLabel {
       label.style.top = my + 'px';
       label.style.transform = `translate(-50%, -50%) rotate(${angle}rad)`;
       label.style.setProperty('--dim-color', color);
+
+      // Editable labels get pointer-events and click handler
+      if (line.editable && this._onEdit) {
+        label.style.pointerEvents = 'auto';
+        label.style.cursor = 'pointer';
+        label.title = '클릭하여 치수 편집';
+        const idx = i;
+        label.onmousedown = (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          this.startEdit(idx);
+        };
+      } else {
+        label.style.pointerEvents = 'none';
+        label.style.cursor = '';
+        label.title = '';
+        label.onmousedown = null;
+      }
     }
 
     this.ctx.restore();
@@ -217,8 +260,120 @@ export class DimensionLabel {
     this.labels[0].style.setProperty('--dim-color', color);
   }
 
+  // ═══════════════════════════════════════════════════
+  //  Inline Dimension Edit
+  // ═══════════════════════════════════════════════════
+
+  /** Start inline editing of a dimension label */
+  private startEdit(index: number): void {
+    if (index < 0 || index >= this.labels.length || index >= this._currentLines.length) return;
+    this.cancelEdit(); // Close any previous edit
+
+    this.editingIndex = index;
+    const label = this.labels[index];
+    const line = this._currentLines[index];
+
+    // Get the label's position
+    const left = parseFloat(label.style.left) || 0;
+    const top = parseFloat(label.style.top) || 0;
+
+    // Create inline input
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'dim-edit-input';
+    // Extract numeric value from formatted text (e.g. "1,234.56 mm" → "1234.56")
+    const rawLength = line.from.distanceTo(line.to);
+    input.value = rawLength.toFixed(2);
+    input.style.cssText = `
+      position: absolute;
+      left: ${left}px;
+      top: ${top}px;
+      transform: translate(-50%, -50%);
+      width: 80px;
+      padding: 2px 6px;
+      font-size: 12px;
+      font-family: 'Segoe UI', sans-serif;
+      font-weight: 600;
+      text-align: center;
+      color: #fff;
+      background: rgba(30, 30, 50, 0.95);
+      border: 2px solid ${line.color || '#4ac1ff'};
+      border-radius: 4px;
+      outline: none;
+      z-index: 210;
+      pointer-events: auto;
+    `;
+    this.overlay.appendChild(input);
+    this.editInput = input;
+
+    // Hide the label text while editing
+    label.style.display = 'none';
+
+    // Focus and select
+    input.focus();
+    input.select();
+
+    // Event handlers
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.commitEdit();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.cancelEdit();
+      }
+    });
+
+    input.addEventListener('blur', () => {
+      // Small delay to allow click-to-commit patterns
+      setTimeout(() => {
+        if (this.editInput === input) {
+          this.cancelEdit();
+        }
+      }, 150);
+    });
+  }
+
+  /** Commit the edited value */
+  private commitEdit(): void {
+    if (this.editingIndex < 0 || !this.editInput) return;
+
+    const raw = this.editInput.value.trim();
+    const newValue = parseFloat(raw);
+    if (isNaN(newValue) || newValue <= 0) {
+      this.cancelEdit();
+      return;
+    }
+
+    const idx = this.editingIndex;
+    const dimLine = this._currentLines[idx];
+    this.removeEditInput();
+    this.editingIndex = -1;
+
+    // Fire callback
+    if (this._onEdit && dimLine) {
+      this._onEdit(idx, newValue, dimLine);
+    }
+  }
+
+  /** Cancel editing without applying */
+  cancelEdit(): void {
+    this.removeEditInput();
+    this.editingIndex = -1;
+  }
+
+  private removeEditInput(): void {
+    if (this.editInput) {
+      this.editInput.remove();
+      this.editInput = null;
+    }
+  }
+
   /** 모든 치수 표시 숨기기 */
   clear() {
+    this.cancelEdit();
     for (const el of this.labels) {
       el.style.display = 'none';
     }

@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { Viewport } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
-import { DimensionLabel } from '../ui/DimensionLabel';
+import { DimensionLabel, DimLine, DimEditCallback } from '../ui/DimensionLabel';
 import { UnitSystem } from '../units/UnitSystem';
 import { SnapManager } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
@@ -53,6 +53,9 @@ export class ToolManager {
   private faceMap: Uint32Array = new Uint32Array(0);
   private edgeMap: Uint32Array | null = null;
 
+  // ═══ Selection Dimension Display (Stage 1) ═══
+  private selectionDimLines: DimLine[] = [];
+
   // ═══ 3D Axis Inference (SketchUp style) ═══
   private axisLock: 'x' | 'y' | 'z' | 'free' | null = null;
   private inferredAxis: 'x' | 'y' | 'z' | 'free' = 'free';
@@ -97,6 +100,21 @@ export class ToolManager {
 
     // Initialize pickbox
     this.pickBox = new PickBox(viewport.container);
+
+    // ═══ Selection Dimension Display: show edge dims when faces selected ═══
+    this.selection.onChange((faces: number[]) => {
+      if (this._currentTool === 'select' && faces.length > 0) {
+        this.updateSelectionDimensions(faces);
+      } else {
+        this.selectionDimLines = [];
+        this.dimLabel.clear();
+      }
+    });
+
+    // ═══ Dimension Edit: click label → edit value → resize geometry ═══
+    this.dimLabel.onEdit = (index: number, newValue: number, dimLine: DimLine) => {
+      this.handleDimensionEdit(index, newValue, dimLine);
+    };
 
     // Capture 'this' for closures
     const mgr = this;
@@ -152,6 +170,9 @@ export class ToolManager {
 
     this.setupMouseHandlers();
     this.setupKeyboardHandlers();
+
+    // Per-frame dim label update (keeps labels correct during camera orbit)
+    viewport.onFrame(() => this.renderSelectionDimensions());
   }
 
   get currentTool(): string {
@@ -174,6 +195,18 @@ export class ToolManager {
     }
 
     this._currentTool = name;
+
+    // Clear selection dimensions when switching tools
+    if (name !== 'select') {
+      this.selectionDimLines = [];
+      this.dimLabel.clear();
+    } else {
+      // Re-entering select tool: recompute dims for current selection
+      const faces = this.selection.getSelectedFaces();
+      if (faces.length > 0) {
+        this.updateSelectionDimensions(faces);
+      }
+    }
 
     // Pickbox visibility for offset tool
     const canvas = this.viewport.renderer.domElement;
@@ -741,6 +774,173 @@ export class ToolManager {
     this.inferredAxis = 'free';
   }
 
+  // ═══════════════════════════════════════════════════
+  //  Selection Dimension Display (Stage 1)
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * Compute dimension lines for selected faces' boundary edges.
+   * Called on selection change — caches the result for per-frame rendering.
+   */
+  private updateSelectionDimensions(faceIds: number[]): void {
+    this.selectionDimLines = [];
+
+    if (faceIds.length === 0) {
+      this.dimLabel.clear();
+      return;
+    }
+
+    // Color palette for alternating edge colors
+    const colors = ['#ff6b6b', '#51cf66', '#4dabf7', '#ffd43b', '#cc5de8', '#ff922b'];
+
+    // Collect boundary edges from ALL selected faces (avoid duplicates)
+    const edgeSet = new Map<string, { from: THREE.Vector3; to: THREE.Vector3 }>();
+
+    for (const faceId of faceIds) {
+      const loop = this.extractFaceBoundary(faceId);
+      if (loop.length < 2) continue;
+
+      for (let i = 0; i < loop.length; i++) {
+        const a = loop[i];
+        const b = loop[(i + 1) % loop.length];
+
+        // Canonical key (sorted) to deduplicate shared edges between adjacent selected faces
+        const ka = `${a.x.toFixed(4)},${a.y.toFixed(4)},${a.z.toFixed(4)}`;
+        const kb = `${b.x.toFixed(4)},${b.y.toFixed(4)},${b.z.toFixed(4)}`;
+        const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+
+        if (!edgeSet.has(key)) {
+          edgeSet.set(key, { from: a.clone(), to: b.clone() });
+        }
+      }
+    }
+
+    // Convert to DimLine array
+    let colorIdx = 0;
+    for (const [, edge] of edgeSet) {
+      const length = edge.from.distanceTo(edge.to);
+      if (length < 0.1) continue; // Skip degenerate edges
+
+      this.selectionDimLines.push({
+        from: edge.from,
+        to: edge.to,
+        text: this.units.format(length),
+        color: colors[colorIdx % colors.length],
+        editable: true,
+      });
+      colorIdx++;
+    }
+
+    // Immediately render
+    if (this.selectionDimLines.length > 0) {
+      this.dimLabel.update(this.viewport.activeCamera, this.selectionDimLines);
+    } else {
+      this.dimLabel.clear();
+    }
+  }
+
+  /**
+   * Re-render cached selection dimensions (called on camera/mouse updates)
+   */
+  renderSelectionDimensions(): void {
+    if (this.selectionDimLines.length > 0 && this._currentTool === 'select') {
+      this.dimLabel.update(this.viewport.activeCamera, this.selectionDimLines);
+    }
+  }
+
+  /**
+   * Handle dimension edit: user clicked a dimension label and entered a new value.
+   * Resizes the selected face(s) along the edited edge direction.
+   *
+   * Algorithm:
+   *   1. Compute edge direction and current length
+   *   2. Scale factor = newLength / oldLength along that axis
+   *   3. Find the "anchor" (midpoint of opposite edge) as scale center
+   *   4. Decompose scale into world axes via edge direction projection
+   *   5. Call bridge.scaleFaces() to apply
+   */
+  private handleDimensionEdit(index: number, newValue: number, dimLine: DimLine): void {
+    const selectedFaces = this.selection.getSelectedFaces();
+    if (selectedFaces.length === 0) return;
+
+    const oldLength = dimLine.from.distanceTo(dimLine.to);
+    if (oldLength < 0.001) return;
+
+    const scaleFactor = newValue / oldLength;
+    if (Math.abs(scaleFactor - 1.0) < 0.0001) return; // No change needed
+
+    // Edge direction (unit vector)
+    const edgeDir = new THREE.Vector3().subVectors(dimLine.to, dimLine.from).normalize();
+
+    // Scale center: We want to scale from the opposite side of the face.
+    // Find the boundary vertex farthest from the edge in the perpendicular direction.
+    // This makes the "opposite" edge stay fixed while the edited edge moves.
+    const edgeMid = new THREE.Vector3().addVectors(dimLine.from, dimLine.to).multiplyScalar(0.5);
+
+    // Collect all boundary vertices from selected faces to find the anchor point
+    const allVerts: THREE.Vector3[] = [];
+    for (const fid of selectedFaces) {
+      const loop = this.extractFaceBoundary(fid);
+      allVerts.push(...loop);
+    }
+
+    // Find vertex farthest from the edge line (perpendicular distance)
+    let maxPerpDist = 0;
+    let anchorPoint = edgeMid.clone();
+    for (const v of allVerts) {
+      // Project v onto the edge line to get perpendicular distance
+      const toV = new THREE.Vector3().subVectors(v, dimLine.from);
+      const along = toV.dot(edgeDir);
+      const proj = dimLine.from.clone().addScaledVector(edgeDir, along);
+      const perpDist = v.distanceTo(proj);
+      if (perpDist > maxPerpDist) {
+        maxPerpDist = perpDist;
+        // Anchor = the projection of the farthest vertex onto the edge direction,
+        // but at the farthest vertex's "row" — effectively the opposite edge
+        anchorPoint = v.clone();
+      }
+    }
+
+    // Compute scale center: project anchorPoint along edge direction
+    // The scale center should be at the anchorPoint for the edge direction axis
+    const scaleCenterOnAxis = anchorPoint.clone();
+
+    // Decompose the scale into world axes:
+    // We want to scale by `scaleFactor` along `edgeDir`, and 1.0 on the perpendicular axes.
+    // Scale matrix in edge-local space: S_local = scaleFactor along edgeDir
+    // In world axes: S_world = I + (scaleFactor - 1) * edgeDir ⊗ edgeDir
+    // This gives: sx_world = 1 + (scaleFactor - 1) * edgeDir.x²
+    //             sy_world = 1 + (scaleFactor - 1) * edgeDir.y²
+    //             sz_world = 1 + (scaleFactor - 1) * edgeDir.z²
+    // However, bridge.scaleFaces does axis-aligned scale only (sx, sy, sz).
+    // For axis-aligned edges this works perfectly. For diagonal edges, we approximate.
+
+    const d = scaleFactor - 1;
+    const sx = 1 + d * edgeDir.x * edgeDir.x;
+    const sy = 1 + d * edgeDir.y * edgeDir.y;
+    const sz = 1 + d * edgeDir.z * edgeDir.z;
+
+    debugLog(`[DimEdit] Edge ${index}: ${oldLength.toFixed(2)} → ${newValue.toFixed(2)}, factor=${scaleFactor.toFixed(4)}, scale=(${sx.toFixed(4)}, ${sy.toFixed(4)}, ${sz.toFixed(4)})`);
+
+    const ok = this.bridge.scaleFaces(
+      selectedFaces,
+      scaleCenterOnAxis.x, scaleCenterOnAxis.y, scaleCenterOnAxis.z,
+      sx, sy, sz,
+    );
+
+    if (ok) {
+      this.syncMesh();
+      // Refresh dimensions after geometry change
+      const newFaces = this.selection.getSelectedFaces();
+      if (newFaces.length > 0) {
+        this.updateSelectionDimensions(newFaces);
+      }
+      debugLog(`[DimEdit] Applied successfully`);
+    } else {
+      debugLog(`[DimEdit] scaleFaces failed — WASM may not support this operation`);
+    }
+  }
+
   private setupMouseHandlers(): void {
     const canvas = this.viewport.renderer.domElement;
 
@@ -839,7 +1039,12 @@ export class ToolManager {
       }
 
       if (this._currentTool === 'select') {
-        this.dimLabel.clear();
+        // Re-render selection dimensions on every mousemove (camera may have changed)
+        if (this.selectionDimLines.length > 0) {
+          this.dimLabel.update(this.viewport.activeCamera, this.selectionDimLines);
+        } else {
+          this.dimLabel.clear();
+        }
         this.snapVisual.clear();
       }
     });
@@ -868,7 +1073,10 @@ export class ToolManager {
   private setupKeyboardHandlers(): void {
     // ═══ CAPTURE PHASE: Tab/Enter선점 (기본 포커스 이동 방지) ═══
     document.addEventListener('keydown', (e) => {
-      // Tab/Enter: VCB 입력 제어 (숫자 입력 중일 때)
+      // VCB(cmd-input)에 포커스 → VCB 핸들러가 Enter/Tab 처리하도록 통과시킴
+      if (e.target instanceof HTMLInputElement) return;
+
+      // Tab/Enter: 도구 내부 제어 (숫자 입력 중일 때)
       // 이 핸들러는 가장 우선순위가 높음 (캡처 단계)
       if ((e.key === 'Tab' || e.key === 'Enter') && this.isToolBusy()) {
         // Prevent default browser behavior (focus movement for Tab, form submit for Enter)

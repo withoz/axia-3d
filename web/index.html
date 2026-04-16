@@ -469,6 +469,21 @@
       transition: opacity 0.15s ease;
     }
 
+    /* Editable dim labels — visual feedback on hover */
+    .dim-label[style*="pointer-events: auto"]:hover {
+      background: rgba(30, 30, 50, 0.85);
+      box-shadow: 0 0 8px var(--dim-color, #4ac1ff);
+      transform: translate(-50%, -50%) scale(1.05);
+    }
+
+    /* Inline edit input */
+    .dim-edit-input {
+      box-shadow: 0 0 10px rgba(74, 193, 255, 0.5);
+    }
+    .dim-edit-input:focus {
+      box-shadow: 0 0 12px rgba(74, 193, 255, 0.7);
+    }
+
     /* ═══ Tool label (current tool name, top-left) ═══ */
     #tool-label {
       position: absolute;

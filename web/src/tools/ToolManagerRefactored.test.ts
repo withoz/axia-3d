@@ -125,6 +125,7 @@ function mockViewport() {
     setViewMode: vi.fn(),
     resetCamera: vi.fn(),
     getStyleSettings: vi.fn().mockReturnValue({ gridVisible: true, axisVisible: true }),
+    onFrame: vi.fn(),
   } as any;
 }
 

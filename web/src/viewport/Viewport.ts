@@ -49,6 +49,7 @@ export class Viewport {
   private _resizeObserver: ResizeObserver | null = null;
   private _boundHandlers: { target: EventTarget; type: string; handler: EventListener }[] = [];
   private _frameId: number | null = null;
+  private _onFrameCallbacks: (() => void)[] = [];
 
   // Camera control state
   private isOrbiting = false;
@@ -1362,9 +1363,15 @@ export class Viewport {
     this.setEdgeStyle({ color: preset.edgeColor });
   }
 
+  /** Register a callback to run each frame (before render) */
+  onFrame(cb: () => void): void {
+    this._onFrameCallbacks.push(cb);
+  }
+
   start() {
     const animate = () => {
       this._frameId = requestAnimationFrame(animate);
+      for (const cb of this._onFrameCallbacks) cb();
       this.renderer.render(this.scene, this.activeCamera);
     };
     animate();
