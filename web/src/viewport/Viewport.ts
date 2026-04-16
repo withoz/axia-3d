@@ -111,7 +111,7 @@ export class Viewport {
     this.orthoCamera = new THREE.OrthographicCamera(
       -this.orthoZoom * aspect, this.orthoZoom * aspect,
       this.orthoZoom, -this.orthoZoom,
-      1, 2000000,
+      1, 1000000000,
     );
 
     // ── Lights ──
