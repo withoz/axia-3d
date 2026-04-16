@@ -60,6 +60,10 @@ export class DrawLineTool implements ITool {
   private startPoint: THREE.Vector3 | null = null;
   private previewEnd: THREE.Vector3 | null = null;
 
+  // Face Split — track which face is being drawn on
+  private startFaceId: number = -1;
+  private endFaceId: number = -1;
+
   // Chain tracking — first point of continuous drawing chain (for loop close detection)
   private chainStartPoint: THREE.Vector3 | null = null;
 
@@ -91,6 +95,25 @@ export class DrawLineTool implements ITool {
       return;
     }
     if (e.button !== 0) return;
+
+    // ─── Face detection for Face Split ───
+    // Capture which face (if any) was clicked before dispatching to state machine
+    const pickedFaceId = this.pickFaceAtMouse(e);
+
+    if (this.state === LineDrawState.Armed) {
+      // First click: remember face for potential face split
+      this.startFaceId = pickedFaceId;
+      this.endFaceId = -1;
+      if (pickedFaceId >= 0) {
+        debugLog(`[FaceSplit] 1st click on face ${pickedFaceId}`);
+      }
+    } else if (this.state === LineDrawState.Drawing) {
+      // Second+ click: remember end face
+      this.endFaceId = pickedFaceId;
+      if (pickedFaceId >= 0) {
+        debugLog(`[FaceSplit] 2nd click on face ${pickedFaceId} (start was ${this.startFaceId})`);
+      }
+    }
 
     // Check loop close first (higher priority than regular snap)
     const loopClosePoint = this.checkLoopClose(e);
@@ -240,6 +263,8 @@ export class DrawLineTool implements ITool {
         this.startPoint = null;
         this.previewEnd = null;
         this.chainStartPoint = null;
+        this.startFaceId = -1;
+        this.endFaceId = -1;
         this.removeLinePreview();
         this.removeStartDot();
         this.ctx.clearAxisGuide();
@@ -262,18 +287,20 @@ export class DrawLineTool implements ITool {
         // *** Engine call happens ONLY here ***
         const faceCreated = this.commitLine();
         if (faceCreated) {
-          // Face auto-created from closed loop → stop continuous drawing
+          // Face auto-created from closed loop or face split → stop continuous drawing
           this.removeLinePreview();
           this.removeStartDot();
           this.startPoint = null;
           this.previewEnd = null;
           this.chainStartPoint = null;
+          this.startFaceId = -1;
+          this.endFaceId = -1;
           this.ctx.clearAxisGuide();
           this.ctx.dimLabel.clear();
           this.ctx.axisLock = null;
           this.ctx.snap.setReferencePoint(null);
           this.state = LineDrawState.Armed;
-          debugLog('[Line] Loop closed → returning to Armed');
+          debugLog('[Line] Loop closed / face split → returning to Armed');
         } else {
           // Continuous drawing: end → next start → back to Drawing
           this.continuousReenter();
@@ -290,7 +317,7 @@ export class DrawLineTool implements ITool {
   /**
    * Commit the line to the WASM engine.
    * This is the ONLY place where the engine is called.
-   * Returns true if a face was auto-created (closed loop detected).
+   * Returns true if a face was auto-created (closed loop detected or face split).
    */
   private commitLine(): boolean {
     if (!this.startPoint || !this.previewEnd) return false;
@@ -298,11 +325,85 @@ export class DrawLineTool implements ITool {
     const len = this.startPoint.distanceTo(this.previewEnd);
     if (len <= 1) return false; // Too short, ignore
 
+    // ─── Face Split path ───
+    // If both start and end are on the same existing face → split that face
+    if (this.startFaceId >= 0 && this.startFaceId === this.endFaceId) {
+      return this.tryFaceSplit(this.startFaceId, this.startPoint, this.previewEnd, len);
+    }
+
+    // Log why face split was NOT triggered (for debugging)
+    if (this.startFaceId >= 0 || this.endFaceId >= 0) {
+      debugLog(`[FaceSplit] Not triggered: startFace=${this.startFaceId}, endFace=${this.endFaceId} (need same face ≥ 0)`);
+    }
+
+    // ─── Regular draw line path ───
     const facesBefore = this.ctx.bridge.faceCount();
 
     this.ctx.bridge.drawLine(
       this.startPoint.x, this.startPoint.y, this.startPoint.z,
       this.previewEnd.x, this.previewEnd.y, this.previewEnd.z,
+    );
+
+    const facesAfter = this.ctx.bridge.faceCount();
+    const faceCreated = facesAfter > facesBefore;
+
+    if (faceCreated) {
+      debugLog(`[Line] Closed loop → face created! (${len.toFixed(2)} mm)`);
+    } else {
+      debugLog(`[Line] Created: ${len.toFixed(2)} mm`);
+    }
+
+    this.ctx.syncMesh();
+    return faceCreated;
+  }
+
+  /**
+   * Attempt to split a face by drawing a line across it.
+   * Called when both start and end points are on the same face.
+   * Returns true if split succeeded (face was divided → stop continuous drawing).
+   */
+  private tryFaceSplit(faceId: number, start: THREE.Vector3, end: THREE.Vector3, len: number): boolean {
+    try {
+      debugLog(`[FaceSplit] Attempting: face=${faceId}, start=(${start.x.toFixed(2)},${start.y.toFixed(2)},${start.z.toFixed(2)}), end=(${end.x.toFixed(2)},${end.y.toFixed(2)},${end.z.toFixed(2)}), len=${len.toFixed(2)}`);
+
+      const resultJson = this.ctx.bridge.splitFaceByLine(
+        faceId,
+        [start.x, start.y, start.z],
+        [end.x, end.y, end.z],
+      );
+
+      // Empty string means WASM method not available
+      if (!resultJson) {
+        debugLog(`[FaceSplit] WASM splitFaceByLine not available — falling back to drawLine`);
+        return this.fallbackDrawLine(start, end, len);
+      }
+
+      const result = JSON.parse(resultJson);
+
+      if (result.error) {
+        debugLog(`[FaceSplit] Engine error: ${result.error} — falling back to drawLine`);
+        return this.fallbackDrawLine(start, end, len);
+      }
+
+      debugLog(`[FaceSplit] Success! face=${faceId} → [${result.faces}] (+${result.verts?.length || 0} verts, +${result.edges || 0} edges)`);
+      this.ctx.syncMesh();
+      return true; // Face was split → stop continuous and return to Armed
+
+    } catch (err) {
+      debugLog(`[FaceSplit] Exception: ${err} — falling back to drawLine`);
+      return this.fallbackDrawLine(start, end, len);
+    }
+  }
+
+  /**
+   * Fallback: regular drawLine when face split fails or is unavailable.
+   */
+  private fallbackDrawLine(start: THREE.Vector3, end: THREE.Vector3, len: number): boolean {
+    const facesBefore = this.ctx.bridge.faceCount();
+
+    this.ctx.bridge.drawLine(
+      start.x, start.y, start.z,
+      end.x, end.y, end.z,
     );
 
     const facesAfter = this.ctx.bridge.faceCount();
@@ -326,6 +427,9 @@ export class DrawLineTool implements ITool {
     if (this.previewEnd) {
       this.startPoint = this.previewEnd.clone();
       this.previewEnd = null;
+      // Carry over endFaceId as next startFaceId (continuous drawing on same face)
+      this.startFaceId = this.endFaceId;
+      this.endFaceId = -1;
       this.removeLinePreview();
       this.ctx.clearAxisGuide();
       this.ctx.dimLabel.clear();
@@ -337,6 +441,23 @@ export class DrawLineTool implements ITool {
     } else {
       this.transitionTo(LineDrawState.Idle);
     }
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  Face Detection (for Face Split)
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * Raycast to detect which face (if any) is under the mouse cursor.
+   * Returns DCEL FaceId (≥0) or -1 if no face hit.
+   */
+  private pickFaceAtMouse(e: MouseEvent): number {
+    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
+    if (hit && hit.faceIndex != null) {
+      const faceId = this.ctx.getFaceId(hit.faceIndex);
+      return faceId >= 0 ? faceId : -1;
+    }
+    return -1;
   }
 
   // ═══════════════════════════════════════════════════

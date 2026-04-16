@@ -39,29 +39,45 @@ export function loadInitialScene(deps: InitialSceneDeps): void {
       if (success) {
         updateFileStatus(fileManager.getCurrentFileName());
         debugLog('[Init] Initial scene loaded successfully');
+        // 메시 동기화 — 성공 시에만
+        toolManager.syncMesh();
       } else {
-        console.error('[Init] Failed to import snapshot');
+        console.error('[Init] Failed to import snapshot — creating fallback scene');
+        createFallbackScene(bridge, toolManager);
       }
-
-      // 메시 동기화
-      toolManager.syncMesh();
     })
     .catch(err => {
       console.error('[Init] Failed to load initial scene:', err);
-      debugLog('[Init] Creating fallback scene with default shapes...');
-
-      // Fallback: 기본 도형 생성 (파일 로드 실패 시)
-      try {
-        const cylinderId = bridge.create_cylinder?.(-12000, 3000, 0, 5000, 8000, 24);
-        const expectedFaceId = bridge.faceCount();
-        const boxId = bridge.drawRect(0, 0, 0, 0, 1, 0, 0, 0, 1, 10000, 8000);
-        if (boxId >= 0) {
-          bridge.pushPull(expectedFaceId, 10000);
-        }
-        const sphereId = bridge.create_sphere?.(12000, 3500, 0, 5000, 24, 16);
-        toolManager.syncMesh();
-      } catch (e) {
-        console.error('[Init] Fallback scene creation failed:', e);
-      }
+      createFallbackScene(bridge, toolManager);
     });
+}
+
+/** Fallback: 기본 도형 생성 (파일 로드 실패 시) */
+function createFallbackScene(bridge: WasmBridge, toolManager: ToolManager): void {
+  debugLog('[Init] Creating fallback scene with default shapes...');
+
+  // Use async IIFE to sequence WASM calls, each in its own microtask
+  // to avoid wasm-bindgen RefCell borrow conflicts
+  (async () => {
+    try {
+      bridge.create_cylinder?.(-12000, 3000, 0, 5000, 8000, 24);
+      await new Promise(r => setTimeout(r, 0));
+
+      const expectedFaceId = bridge.faceCount();
+      const boxId = bridge.drawRect(0, 0, 0, 0, 1, 0, 0, 0, 1, 10000, 8000);
+      await new Promise(r => setTimeout(r, 0));
+
+      if (boxId >= 0) {
+        bridge.pushPull(expectedFaceId, 10000);
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      bridge.create_sphere?.(12000, 3500, 0, 5000, 24, 16);
+      await new Promise(r => setTimeout(r, 0));
+    } catch (e) {
+      console.error('[Init] Fallback scene creation failed:', e);
+    }
+
+    toolManager.syncMesh();
+  })();
 }

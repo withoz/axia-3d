@@ -710,7 +710,7 @@ impl AxiaEngine {
             Err(e) => {
                 console_error!("[RUST] split_face_by_line ERROR: {}", e);
                 // No commit — transaction will be discarded
-                String::new()
+                format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "'"))
             }
         }
     }

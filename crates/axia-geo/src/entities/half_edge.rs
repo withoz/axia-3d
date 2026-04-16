@@ -18,6 +18,8 @@ bitflags! {
         const SMOOTH_NORMAL = 1 << 1;
         /// Soften coplanar edges automatically
         const SOFTEN_COPLANAR = 1 << 2;
+        /// Hard edge (always render, even between coplanar faces — e.g. face split edges)
+        const HARD = 1 << 3;
     }
 }
 

@@ -60,7 +60,8 @@ describe('InitialScene', () => {
       globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
 
       loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 10));
+      // createFallbackScene uses async + setTimeout(0) between each WASM call
+      await new Promise(r => setTimeout(r, 200));
 
       // Fallback: creates cylinder, box (drawRect + pushPull), sphere
       expect(deps.bridge.create_cylinder).toHaveBeenCalled();
@@ -76,14 +77,14 @@ describe('InitialScene', () => {
       });
 
       loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 10));
+      await new Promise(r => setTimeout(r, 200));
 
       expect(deps.bridge.drawRect).toHaveBeenCalled();
     });
   });
 
   describe('loadInitialScene - import failure', () => {
-    it('still syncs mesh when import returns false', async () => {
+    it('calls fallback when import returns false', async () => {
       const mockBuffer = new ArrayBuffer(16);
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -92,8 +93,11 @@ describe('InitialScene', () => {
       (deps.fileManager.loadFromArrayBuffer as any).mockResolvedValue(false);
 
       loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 10));
+      // Failure path now calls createFallbackScene with async setTimeout
+      await new Promise(r => setTimeout(r, 200));
 
+      // Fallback shapes should be created
+      expect(deps.bridge.create_cylinder).toHaveBeenCalled();
       expect(deps.toolManager.syncMesh).toHaveBeenCalled();
       expect(deps.updateFileStatus).not.toHaveBeenCalled();
     });

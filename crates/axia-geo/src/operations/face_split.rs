@@ -199,26 +199,63 @@ pub fn split_face_by_line(
     let mut new_verts = Vec::new();
     let mut new_edges = Vec::new();
 
-    // ─── Step 1: Determine where line endpoints touch the face boundary ─
+    // ─── Step 0: Project line endpoints onto face plane ─────────────────
+    // Three.js raycast coordinates may not be exactly on the face plane.
+    // Project them onto the face plane to ensure coplanarity.
+    let face_normal = mesh.faces[face_id].normal();
     let outer_start = mesh.faces[face_id].outer().start;
     let loop_verts = mesh.collect_loop_verts(outer_start)?;
     let loop_hes = mesh.collect_loop_hes(outer_start)?;
-    // For each endpoint, find: either an existing vertex, or a point on an edge
-    let split_v1 = find_boundary_point(mesh, face_id, line_start, &loop_verts, &loop_hes)?;
-    let split_v2 = find_boundary_point(mesh, face_id, line_end, &loop_verts, &loop_hes)?;
+
+    ensure!(!loop_verts.is_empty(), "Face has no boundary vertices");
+    let face_origin = mesh.vertex_pos(loop_verts[0])?;
+
+    // Compute face bounding box diagonal for distance thresholds
+    let face_diag = compute_face_diagonal(mesh, &loop_verts)?;
+    let max_plane_dist = face_diag.max(1.0); // Allow projection from up to face-diagonal distance
+    debug.push(format!("face_diag={:.4}, normal={:?}", face_diag, face_normal));
+
+    let proj_start = project_to_plane(line_start, face_origin, face_normal, max_plane_dist)?;
+    let proj_end = project_to_plane(line_end, face_origin, face_normal, max_plane_dist)?;
+
+    debug.push(format!("projected start: {:?} (plane_dist={:.6})", proj_start,
+        (line_start - proj_start).length()));
+    debug.push(format!("projected end: {:?} (plane_dist={:.6})", proj_end,
+        (line_end - proj_end).length()));
+
+    // ─── Step 1: Determine where line endpoints touch the face boundary ─
+    let snap_tolerance = face_diag * 0.02; // 2% of face diagonal — generous for UI precision
+    let split_v1 = find_boundary_point(mesh, face_id, proj_start, &loop_verts, &loop_hes, snap_tolerance)?;
+    let split_v2 = find_boundary_point(mesh, face_id, proj_end, &loop_verts, &loop_hes, snap_tolerance)?;
 
     debug.push(format!("split_v1: {:?}", split_v1));
     debug.push(format!("split_v2: {:?}", split_v2));
 
     // ─── Step 2: Realize the boundary points as actual vertices ─────────
     // If a point is on an edge, split that edge to create the vertex.
-    // Process in reverse order to avoid invalidating the second point
-    // when splitting an edge for the first point.
+    // IMPORTANT: If both points are on the SAME edge, we must handle carefully:
+    //   - After splitting the edge for v1, the original edge is deactivated.
+    //   - v2's edge_id would be stale. We fix this by finding which new edge v2 falls on.
 
-    // We need to handle the case where both points are on the same edge
-    let v1 = realize_boundary_point(mesh, &split_v1, &mut new_verts, &mut new_edges, &mut debug)?;
-    // After edge split, face_id may still be valid (split_edge preserves faces)
-    let v2 = realize_boundary_point(mesh, &split_v2, &mut new_verts, &mut new_edges, &mut debug)?;
+    // Check for same-edge case
+    let (split_v1_final, split_v2_final) = fix_same_edge_case(split_v1, split_v2);
+
+    let v1 = realize_boundary_point(mesh, &split_v1_final, &mut new_verts, &mut new_edges, &mut debug)?;
+
+    // After v1's edge split, v2's edge_id might be stale — re-resolve if needed
+    let split_v2_resolved = if let BoundaryPoint::OnEdge { edge_id, position, t } = &split_v2_final {
+        if !mesh.edges[*edge_id].is_active() {
+            // The edge was split by v1 — find which new edge contains this position
+            debug.push(format!("  v2's edge {} was split, re-resolving...", edge_id.raw()));
+            resolve_on_split_edge(mesh, *edge_id, *position, &new_edges, &mut debug)?
+        } else {
+            split_v2_final.clone()
+        }
+    } else {
+        split_v2_final.clone()
+    };
+
+    let v2 = realize_boundary_point(mesh, &split_v2_resolved, &mut new_verts, &mut new_edges, &mut debug)?;
 
     ensure!(v1 != v2, "Both split points resolved to the same vertex {:?}", v1);
 
@@ -242,6 +279,32 @@ pub fn split_face_by_line(
     })
 }
 
+/// Project a 3D point onto a plane defined by (origin, normal).
+/// Returns error if the point is too far from the plane.
+fn project_to_plane(
+    point: DVec3,
+    plane_origin: DVec3,
+    plane_normal: DVec3,
+    max_distance: f64,
+) -> Result<DVec3> {
+    let dist = (point - plane_origin).dot(plane_normal);
+    ensure!(dist.abs() < max_distance,
+        "Point is {:.4} from face plane (max allowed: {:.4})", dist.abs(), max_distance);
+    Ok(point - plane_normal * dist)
+}
+
+/// Compute the bounding box diagonal of a face (for relative tolerance calculation).
+fn compute_face_diagonal(mesh: &Mesh, verts: &[VertId]) -> Result<f64> {
+    let mut min = DVec3::splat(f64::MAX);
+    let mut max = DVec3::splat(f64::MIN);
+    for &vid in verts {
+        let p = mesh.vertex_pos(vid)?;
+        min = min.min(p);
+        max = max.max(p);
+    }
+    Ok((max - min).length())
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Internal helpers
 // ════════════════════════════════════════════════════════════════════════════
@@ -262,26 +325,48 @@ enum BoundaryPoint {
 
 /// Find where a point touches a face's boundary.
 ///
-/// Checks vertices first (within tolerance), then edges.
+/// Uses a relative tolerance based on face size (snap_tolerance).
+///
+/// Strategy:
+/// 1. Check if point is on an existing vertex (within tolerance)
+/// 2. Project point onto each boundary edge, find closest within tolerance
+/// 3. If inside face: extend the split line to intersect the boundary (future)
+/// 4. Snap to nearest edge as fallback (for interior points from UI clicks)
+///
+/// The snap_tolerance should be proportional to face size (e.g. face_diagonal * 0.02).
 fn find_boundary_point(
     mesh: &Mesh,
     _face_id: FaceId,
     point: DVec3,
     loop_verts: &[VertId],
     loop_hes: &[HeId],
+    snap_tolerance: f64,
 ) -> Result<BoundaryPoint> {
     let n = loop_verts.len();
+    // Vertex snap threshold: generous enough for UI precision
+    let vert_snap = snap_tolerance;
 
-    // Check if point coincides with an existing vertex
+    // ── Pass 1: Check if point coincides with an existing vertex ──
+    let mut best_vert: Option<(VertId, f64)> = None;
     for &vid in loop_verts {
         let vpos = mesh.vertex_pos(vid)?;
-        if (vpos - point).length() < VERTEX_TOLERANCE * 100.0 {
-            return Ok(BoundaryPoint::ExistingVertex(vid));
+        let dist = (vpos - point).length();
+        if dist < vert_snap {
+            if best_vert.is_none() || dist < best_vert.unwrap().1 {
+                best_vert = Some((vid, dist));
+            }
         }
     }
+    if let Some((vid, _)) = best_vert {
+        return Ok(BoundaryPoint::ExistingVertex(vid));
+    }
 
-    // Check each boundary edge for closest approach
-    let mut best_edge: Option<(EdgeId, DVec3, f64, f64)> = None; // (edge_id, pos, t, dist)
+    // ── Pass 2: Project onto each boundary edge, find best match ──
+    // Use a 2-tier approach:
+    //   - Tight: edge distance < snap_tolerance → high confidence
+    //   - Loose: always track the closest edge as fallback
+    let mut tight_best: Option<(EdgeId, DVec3, f64, f64)> = None; // (edge_id, pos, t, dist)
+    let mut loose_best: Option<(EdgeId, DVec3, f64, f64)> = None;
 
     for i in 0..n {
         let he_id = loop_hes[i];
@@ -291,72 +376,138 @@ fn find_boundary_point(
         let ea = mesh.vertex_pos(edge.v_small())?;
         let eb = mesh.vertex_pos(edge.v_large())?;
 
-        // Project point onto edge segment
         let edge_dir = eb - ea;
         let edge_len_sq = edge_dir.length_squared();
         if edge_len_sq < 1e-20 { continue; }
+        let edge_len = edge_len_sq.sqrt();
 
         let t = (point - ea).dot(edge_dir) / edge_len_sq;
         let t_clamped = t.clamp(0.0, 1.0);
         let closest = ea + edge_dir * t_clamped;
         let dist = (point - closest).length();
 
-        // Skip if too close to endpoints (will snap to vertex instead)
-        if t_clamped < 0.01 || t_clamped > 0.99 {
+        // Snap t close to endpoints to vertex instead
+        // Use relative threshold based on edge length
+        let endpoint_threshold = (vert_snap / edge_len).min(0.05);
+        if t_clamped < endpoint_threshold {
+            // Close to v_small — check if it's a loop vertex
+            let src_vid = if mesh.hes[he_id].dst() == edge.v_small() {
+                edge.v_large()
+            } else {
+                edge.v_small()
+            };
+            if dist < vert_snap * 2.0 {
+                return Ok(BoundaryPoint::ExistingVertex(src_vid));
+            }
+            continue;
+        }
+        if t_clamped > 1.0 - endpoint_threshold {
+            let dst_vid = mesh.hes[he_id].dst();
+            if dist < vert_snap * 2.0 {
+                return Ok(BoundaryPoint::ExistingVertex(dst_vid));
+            }
             continue;
         }
 
-        if dist < FACE_TOLERANCE * 100.0 {
-            if best_edge.is_none() || dist < best_edge.as_ref().unwrap().3 {
-                best_edge = Some((edge_id, closest, t_clamped, dist));
+        // Tight match (close to boundary edge)
+        if dist < snap_tolerance {
+            if tight_best.is_none() || dist < tight_best.as_ref().unwrap().3 {
+                tight_best = Some((edge_id, closest, t_clamped, dist));
             }
+        }
+
+        // Loose: always track closest (for interior point fallback)
+        if loose_best.is_none() || dist < loose_best.as_ref().unwrap().3 {
+            loose_best = Some((edge_id, closest, t_clamped, dist));
         }
     }
 
-    if let Some((edge_id, pos, t, _dist)) = best_edge {
+    // Return tight match if found
+    if let Some((edge_id, pos, t, _dist)) = tight_best {
         return Ok(BoundaryPoint::OnEdge { edge_id, position: pos, t });
     }
 
-    // Point is not on any boundary — this might be an internal point
-    // For now, find the closest edge and snap to it
-    let mut closest_edge: Option<(EdgeId, DVec3, f64, f64)> = None;
+    // ── Pass 3: Interior point — snap to closest edge ──
+    // This handles the case where the user clicks inside the face (common with Three.js raycast).
+    // The point gets projected onto the nearest boundary edge.
+    if let Some((edge_id, pos, t, dist)) = loose_best {
+        // Sanity check: don't snap unreasonably far
+        if dist < snap_tolerance * 50.0 {
+            return Ok(BoundaryPoint::OnEdge { edge_id, position: pos, t });
+        }
+    }
 
-    for i in 0..n {
-        let he_id = loop_hes[i];
-        let edge_id = mesh.hes[he_id].edge();
-        let edge = &mesh.edges[edge_id];
-        let ea = mesh.vertex_pos(edge.v_small())?;
-        let eb = mesh.vertex_pos(edge.v_large())?;
+    // ── Pass 4: Last resort — snap to nearest vertex ──
+    let mut best_vid = loop_verts[0];
+    let mut best_dist = f64::MAX;
+    for &vid in loop_verts {
+        let d = (mesh.vertex_pos(vid)? - point).length();
+        if d < best_dist {
+            best_dist = d;
+            best_vid = vid;
+        }
+    }
+    Ok(BoundaryPoint::ExistingVertex(best_vid))
+}
 
-        let edge_dir = eb - ea;
-        let edge_len_sq = edge_dir.length_squared();
-        if edge_len_sq < 1e-20 { continue; }
+/// Handle the case where both boundary points are on the same edge.
+///
+/// If both are OnEdge with the same edge_id, we ensure v1 has the smaller t
+/// so that after splitting for v1, v2's position falls on the correct new sub-edge.
+fn fix_same_edge_case(bp1: BoundaryPoint, bp2: BoundaryPoint) -> (BoundaryPoint, BoundaryPoint) {
+    if let (
+        BoundaryPoint::OnEdge { edge_id: e1, t: t1, .. },
+        BoundaryPoint::OnEdge { edge_id: e2, t: t2, .. },
+    ) = (&bp1, &bp2) {
+        if e1 == e2 {
+            // Same edge: ensure t1 < t2 for consistent ordering
+            if t1 > t2 {
+                return (bp2, bp1);
+            }
+        }
+    }
+    (bp1, bp2)
+}
 
-        let t = ((point - ea).dot(edge_dir) / edge_len_sq).clamp(0.0, 1.0);
-        let closest = ea + edge_dir * t;
-        let dist = (point - closest).length();
+/// After an edge was split, find which new sub-edge contains the given position.
+///
+/// When edge E (A→B) is split at point P creating edges E1(A→P) and E2(P→B),
+/// we need to find which of E1 or E2 contains our target position.
+fn resolve_on_split_edge(
+    mesh: &Mesh,
+    _old_edge_id: EdgeId,
+    position: DVec3,
+    new_edges: &[EdgeId],
+    debug: &mut Vec<String>,
+) -> Result<BoundaryPoint> {
+    let mut best: Option<(EdgeId, DVec3, f64, f64)> = None; // (edge_id, closest, t, dist)
 
-        if t > 0.01 && t < 0.99 {
-            if closest_edge.is_none() || dist < closest_edge.as_ref().unwrap().3 {
-                closest_edge = Some((edge_id, closest, t, dist));
+    for &eid in new_edges {
+        if !mesh.edges.contains(eid) || !mesh.edges[eid].is_active() { continue; }
+        let ea = mesh.vertex_pos(mesh.edges[eid].v_small())?;
+        let eb = mesh.vertex_pos(mesh.edges[eid].v_large())?;
+        let dir = eb - ea;
+        let len_sq = dir.length_squared();
+        if len_sq < 1e-20 { continue; }
+
+        let t = (position - ea).dot(dir) / len_sq;
+        let t_clamped = t.clamp(0.0, 1.0);
+        let closest = ea + dir * t_clamped;
+        let dist = (position - closest).length();
+
+        if t_clamped > 0.01 && t_clamped < 0.99 {
+            if best.is_none() || dist < best.as_ref().unwrap().3 {
+                best = Some((eid, closest, t_clamped, dist));
             }
         }
     }
 
-    if let Some((edge_id, pos, t, _)) = closest_edge {
+    if let Some((edge_id, pos, t, dist)) = best {
+        debug.push(format!("  re-resolved to edge {} at t={:.4} (dist={:.6})", edge_id.raw(), t, dist));
         Ok(BoundaryPoint::OnEdge { edge_id, position: pos, t })
     } else {
-        // Snap to nearest vertex as last resort
-        let mut best_vid = loop_verts[0];
-        let mut best_dist = f64::MAX;
-        for &vid in loop_verts {
-            let d = (mesh.vertex_pos(vid)? - point).length();
-            if d < best_dist {
-                best_dist = d;
-                best_vid = vid;
-            }
-        }
-        Ok(BoundaryPoint::ExistingVertex(best_vid))
+        // Fallback: snap to nearest new vertex
+        anyhow::bail!("Could not resolve position on split edge — no suitable new edge found")
     }
 }
 
@@ -535,9 +686,9 @@ mod tests {
         let (fa, fb) = m.split_face(fid, v0, v2).unwrap();
 
         assert_ne!(fa, fb);
-        // Original face should be removed
-        assert!(!m.faces.contains(fid));
-        // Two new triangles
+        // Original face is reused for one of the two sub-faces (DCEL surgery)
+        assert_eq!(fa, fid);
+        // Two faces total (original reused + one new)
         assert_eq!(m.face_count(), 2);
     }
 
@@ -589,6 +740,57 @@ mod tests {
 
         let result = m.split_face(fid, v0, v0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn split_face_preserves_adjacent_face_loops() {
+        // This is the critical test: splitting a face on a box must NOT
+        // corrupt the loops of adjacent (neighbor) faces that share edges.
+        // The old remove_face+add_face approach broke this.
+        let mut m = Mesh::new();
+        let mat = MaterialId::default();
+
+        // Create a box via push_pull (6 faces sharing edges)
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(4.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(4.0, 0.0, 4.0));
+        let v3 = m.add_vertex(DVec3::new(0.0, 0.0, 4.0));
+        let base = m.add_face(&[v0, v3, v2, v1], mat).unwrap(); // CCW for Y-up normal
+        let pp = m.push_pull(base, 3.0, mat).unwrap();
+
+        let face_count_before = m.face_count();
+        assert_eq!(face_count_before, 6, "box should have 6 faces");
+
+        // Find the top face (the one returned by push_pull)
+        let top_face = pp.top_face;
+        let top_verts = m.collect_loop_verts(m.faces[top_face].outer().start).unwrap();
+        assert_eq!(top_verts.len(), 4, "top face should be a quad");
+
+        // Split the top face diagonally
+        let (fa, fb) = m.split_face(top_face, top_verts[0], top_verts[2]).unwrap();
+
+        // Should now have 7 faces (6 - 1 original + 2 new = 7, but original reused so 6 + 1 = 7)
+        assert_eq!(m.face_count(), 7, "box + split should have 7 faces");
+
+        // Verify BOTH new faces have valid loops
+        let verts_a = m.collect_loop_verts(m.faces[fa].outer().start).unwrap();
+        let verts_b = m.collect_loop_verts(m.faces[fb].outer().start).unwrap();
+        assert_eq!(verts_a.len(), 3, "face A should be a triangle");
+        assert_eq!(verts_b.len(), 3, "face B should be a triangle");
+
+        // CRITICAL: Verify ALL remaining faces (the 5 side/bottom faces) still have valid loops
+        for (fid, face) in m.faces.iter() {
+            if !face.is_active() { continue; }
+            let loop_start = face.outer().start;
+            let verts = m.collect_loop_verts(loop_start);
+            assert!(verts.is_ok(), "Face {:?} has broken loop after split", fid);
+            let verts = verts.unwrap();
+            assert!(verts.len() >= 3, "Face {:?} has degenerate loop ({} verts)", fid, verts.len());
+        }
+
+        // Verify export_buffers works (the ultimate integration test — it triangulates all faces)
+        let bufs = m.export_buffers().unwrap();
+        assert!(bufs.0.len() > 0, "export_buffers should produce vertices");
     }
 
     // ── split_face_by_line tests ─────────────────────────────────────
@@ -732,6 +934,255 @@ mod tests {
         ).unwrap();
 
         assert!(result.is_none());
+    }
+
+    // ── Box face split tests (real 3D scenario) ──────────────────────
+
+    /// Helper: create a box by making a rect on XZ plane and push_pull upward.
+    ///
+    /// Vertex winding [v0,v3,v2,v1] → upward normal (0,1,0)
+    /// push_pull(height) goes +Y → top face at Y=height.
+    fn make_box(mesh: &mut Mesh, width: f64, depth: f64, height: f64) -> (FaceId, crate::operations::push_pull::PushPullResult) {
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(width, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(width, 0.0, depth));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, depth));
+        // CCW winding for upward normal: v0→v3→v2→v1
+        let base = mesh.add_face(&[v0, v3, v2, v1], mat).unwrap();
+        let pp = mesh.push_pull(base, height, mat).unwrap();
+        let top = pp.top_face;
+        (top, pp)
+    }
+
+    #[test]
+    fn box_face_split_top_edge_to_edge_midpoints() {
+        // Create a 4x3x4 box (width=4, depth=4, height=3)
+        // Top face at Y=3 should have verts at (0,3,0), (4,3,0), (4,3,4), (0,3,4)
+        let mut m = Mesh::new();
+        let (top_face, pp) = make_box(&mut m, 4.0, 4.0, 3.0);
+
+        println!("=== BOX FACE SPLIT: edge-to-edge midpoints ===");
+        println!("Total faces after push_pull: {}", m.face_count());
+        println!("Top face: {:?}", top_face);
+        println!("Push/Pull debug: {:?}", pp.split_debug);
+
+        // Inspect the top face
+        let outer_start = m.faces[top_face].outer().start;
+        let loop_verts = m.collect_loop_verts(outer_start).unwrap();
+        let loop_hes = m.collect_loop_hes(outer_start).unwrap();
+        println!("Top face vertex count: {}", loop_verts.len());
+        for (i, &vid) in loop_verts.iter().enumerate() {
+            let pos = m.vertex_pos(vid).unwrap();
+            let he = loop_hes[i];
+            let edge = m.hes[he].edge();
+            println!("  v{} = {:?} (vert_id={}, he={}, edge={})", i, pos, vid.raw(), he.raw(), edge.raw());
+        }
+
+        let normal = m.faces[top_face].normal();
+        println!("Top face normal: {:?}", normal);
+
+        // Attempt split: midpoint of one edge to midpoint of opposite edge
+        // For a top face at Y=3, we want to split from midpoint of edge at Z=0 to midpoint of edge at Z=4
+        // i.e., from (2, 3, 0) to (2, 3, 4)
+        let line_start = DVec3::new(2.0, 3.0, 0.0);
+        let line_end = DVec3::new(2.0, 3.0, 4.0);
+
+        println!("\nSplit line: {:?} → {:?}", line_start, line_end);
+
+        // Check plane distance first
+        let plane_dist = point_on_face_plane(&m, top_face, line_start).unwrap();
+        println!("line_start plane distance: {:.2e} (FACE_TOLERANCE = {:.2e})", plane_dist, FACE_TOLERANCE);
+
+        let plane_dist2 = point_on_face_plane(&m, top_face, line_end).unwrap();
+        println!("line_end plane distance: {:.2e}", plane_dist2);
+
+        // Check point_in_face
+        let in_face_start = point_in_face(&m, top_face, line_start).unwrap();
+        let in_face_end = point_in_face(&m, top_face, line_end).unwrap();
+        println!("line_start in face: {}", in_face_start);
+        println!("line_end in face: {}", in_face_end);
+
+        // Check boundary point detection
+        let bp1 = find_boundary_point(&m, top_face, line_start, &loop_verts, &loop_hes, 1.0);
+        let bp2 = find_boundary_point(&m, top_face, line_end, &loop_verts, &loop_hes, 1.0);
+        println!("boundary_point for line_start: {:?}", bp1);
+        println!("boundary_point for line_end: {:?}", bp2);
+
+        // Check each edge for proximity to line_start
+        println!("\n--- Edge distances from line_start (2, 3, 0) ---");
+        for i in 0..loop_verts.len() {
+            let he_id = loop_hes[i];
+            let edge_id = m.hes[he_id].edge();
+            let edge = &m.edges[edge_id];
+            let ea = m.vertex_pos(edge.v_small()).unwrap();
+            let eb = m.vertex_pos(edge.v_large()).unwrap();
+            let edge_dir = eb - ea;
+            let edge_len_sq = edge_dir.length_squared();
+            if edge_len_sq < 1e-20 { continue; }
+            let t = ((line_start - ea).dot(edge_dir) / edge_len_sq).clamp(0.0, 1.0);
+            let closest = ea + edge_dir * t;
+            let dist = (line_start - closest).length();
+            println!("  edge {} ({:?} → {:?}): t={:.4}, dist={:.2e}, FACE_TOLERANCE*100={:.2e}, pass={}",
+                edge_id.raw(), ea, eb, t, dist, FACE_TOLERANCE * 100.0, dist < FACE_TOLERANCE * 100.0);
+        }
+
+        // Now actually attempt the split
+        let result = split_face_by_line(&mut m, top_face, line_start, line_end);
+        match &result {
+            Ok(r) => {
+                println!("\nSplit SUCCEEDED!");
+                println!("  new_faces: {:?}", r.new_faces);
+                println!("  new_verts: {:?}", r.new_verts);
+                println!("  debug: {:?}", r.debug);
+                assert_eq!(r.new_faces.len(), 2, "should create 2 faces");
+            }
+            Err(e) => {
+                println!("\nSplit FAILED: {}", e);
+                panic!("Face split failed on box top face: {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn box_face_split_interior_points() {
+        // Simulate what happens when Three.js raycast gives interior points
+        // (user draws a line across the middle of the face, not snapped to edges)
+        let mut m = Mesh::new();
+        let (top_face, _) = make_box(&mut m, 4.0, 4.0, 3.0);
+
+        println!("=== BOX FACE SPLIT: interior points (raycast scenario) ===");
+
+        let outer_start = m.faces[top_face].outer().start;
+        let loop_verts = m.collect_loop_verts(outer_start).unwrap();
+        let loop_hes = m.collect_loop_hes(outer_start).unwrap();
+        println!("Top face verts:");
+        for (i, &vid) in loop_verts.iter().enumerate() {
+            println!("  {:?}", m.vertex_pos(vid).unwrap());
+        }
+
+        // Interior points: (2, 3, 0.5) to (2, 3, 3.5)
+        // These are INSIDE the face, not on any boundary edge
+        let line_start = DVec3::new(2.0, 3.0, 0.5);
+        let line_end = DVec3::new(2.0, 3.0, 3.5);
+
+        println!("\nInterior split line: {:?} → {:?}", line_start, line_end);
+
+        // Check closest edge for each point
+        for (label, pt) in [("start", line_start), ("end", line_end)] {
+            let mut closest_dist = f64::MAX;
+            let mut closest_edge_info = String::new();
+            for i in 0..loop_verts.len() {
+                let he_id = loop_hes[i];
+                let edge_id = m.hes[he_id].edge();
+                let edge = &m.edges[edge_id];
+                let ea = m.vertex_pos(edge.v_small()).unwrap();
+                let eb = m.vertex_pos(edge.v_large()).unwrap();
+                let edge_dir = eb - ea;
+                let edge_len_sq = edge_dir.length_squared();
+                if edge_len_sq < 1e-20 { continue; }
+                let t = ((pt - ea).dot(edge_dir) / edge_len_sq).clamp(0.0, 1.0);
+                let closest = ea + edge_dir * t;
+                let dist = (pt - closest).length();
+                if dist < closest_dist {
+                    closest_dist = dist;
+                    closest_edge_info = format!("edge {} ({:?}→{:?}) t={:.4} dist={:.6}", edge_id.raw(), ea, eb, t, dist);
+                }
+            }
+            println!("  {} closest: {} (FACE_TOL*100={:.2e})", label, closest_edge_info, FACE_TOLERANCE * 100.0);
+        }
+
+        // Try the split — the fallback logic should snap interior points to closest edges
+        let result = split_face_by_line(&mut m, top_face, line_start, line_end);
+        match &result {
+            Ok(r) => {
+                println!("\nInterior split SUCCEEDED!");
+                println!("  new_faces: {:?}", r.new_faces);
+                println!("  new_verts: {:?}", r.new_verts);
+                println!("  debug: {:?}", r.debug);
+                assert_eq!(r.new_faces.len(), 2);
+            }
+            Err(e) => {
+                println!("\nInterior split FAILED: {}", e);
+                panic!("Interior face split failed: {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn box_face_split_tolerance_analysis() {
+        // Analyze tolerance thresholds for boundary point detection
+        let mut m = Mesh::new();
+        let (top_face, _) = make_box(&mut m, 4.0, 4.0, 3.0);
+
+        println!("=== TOLERANCE ANALYSIS ===");
+        println!("FACE_TOLERANCE = {:.2e}", FACE_TOLERANCE);
+        println!("VERTEX_TOLERANCE = {:.2e}", VERTEX_TOLERANCE);
+        println!("FACE_TOLERANCE * 100 = {:.2e} (boundary edge match)", FACE_TOLERANCE * 100.0);
+        println!("VERTEX_TOLERANCE * 100 = {:.2e} (vertex match)", VERTEX_TOLERANCE * 100.0);
+
+        let outer_start = m.faces[top_face].outer().start;
+        let loop_verts = m.collect_loop_verts(outer_start).unwrap();
+        let loop_hes = m.collect_loop_hes(outer_start).unwrap();
+
+        // Test: exact boundary point at (2, 3, 0) — should be on edge
+        let exact_boundary = DVec3::new(2.0, 3.0, 0.0);
+        let bp = find_boundary_point(&m, top_face, exact_boundary, &loop_verts, &loop_hes, 1.0);
+        println!("\nExact boundary point (2,3,0): {:?}", bp);
+
+        // Test: point slightly off the face plane
+        let offsets = [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3];
+        println!("\n--- Plane distance tolerance test ---");
+        for off in offsets {
+            let pt = DVec3::new(2.0, 3.0 + off, 0.0);
+            let plane_dist = point_on_face_plane(&m, top_face, pt).unwrap();
+            let on_plane = plane_dist.abs() < FACE_TOLERANCE;
+            println!("  offset={:.0e}: plane_dist={:.2e}, on_plane={}", off, plane_dist.abs(), on_plane);
+        }
+
+        // Test: point near edge but at various distances
+        // Edge from (0,3,0) to (4,3,0) — point at (2, 3, dist) for various dist
+        println!("\n--- Edge proximity tolerance test (point offset from edge in Z) ---");
+        let distances = [0.0, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 0.01, 0.1, 0.5];
+        for d in distances {
+            let pt = DVec3::new(2.0, 3.0, d);
+            let bp = find_boundary_point(&m, top_face, pt, &loop_verts, &loop_hes, 1.0);
+            let bp_type = match &bp {
+                Ok(BoundaryPoint::ExistingVertex(vid)) => format!("ExistingVertex({})", vid.raw()),
+                Ok(BoundaryPoint::OnEdge { edge_id, t, .. }) => format!("OnEdge(edge={}, t={:.4})", edge_id.raw(), t),
+                Err(e) => format!("Error: {}", e),
+            };
+            println!("  dist_from_edge={:.0e}: {}", d, bp_type);
+        }
+
+        // The key question: with FACE_TOLERANCE*100 = 1e-4, a point 0.5 units from
+        // the nearest edge will NOT match any boundary edge in the first pass (dist > 1e-4).
+        // The fallback code at line 322-361 kicks in and snaps to the closest edge.
+        // But the snapped point will be at (2, 3, 0) instead of (2, 3, 0.5).
+        // This means the SPLIT LINE is changed from the user's intent!
+
+        // Verify: what does the fallback produce for an interior point?
+        let interior = DVec3::new(2.0, 3.0, 0.5);
+        let bp = find_boundary_point(&m, top_face, interior, &loop_verts, &loop_hes, 1.0).unwrap();
+        println!("\nInterior point (2,3,0.5) resolved to: {:?}", bp);
+        match &bp {
+            BoundaryPoint::OnEdge { position, .. } => {
+                println!("  Snapped position: {:?}", position);
+                println!("  Distance from original: {:.6}", (interior - *position).length());
+            }
+            BoundaryPoint::ExistingVertex(vid) => {
+                let vpos = m.vertex_pos(*vid).unwrap();
+                println!("  Snapped to vertex position: {:?}", vpos);
+                println!("  Distance from original: {:.6}", (interior - vpos).length());
+            }
+        }
+
+        // This should pass — the tolerance analysis itself is informational
+        println!("\n=== CONCLUSION ===");
+        println!("FACE_TOLERANCE*100 = {:.2e} is the threshold for 'on boundary' detection.", FACE_TOLERANCE * 100.0);
+        println!("Points more than {:.2e} from any edge are treated as interior.", FACE_TOLERANCE * 100.0);
+        println!("Interior points get SNAPPED to the nearest edge (fallback behavior).");
+        println!("This changes the split line geometry but still produces a valid split.");
     }
 
     // ── Integration: split_face + push_pull ──────────────────────────

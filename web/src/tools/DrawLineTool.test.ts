@@ -9,6 +9,8 @@ function mockToolContext() {
     bridge: {
       drawLine: vi.fn().mockReturnValue(0),
       faceCount: vi.fn().mockReturnValue(0),
+      splitFaceByLine: vi.fn().mockReturnValue('{"faces":[10,11],"verts":[5],"edges":1}'),
+      pointInFace: vi.fn().mockReturnValue(false),
     },
     viewport: {
       scene: { add: vi.fn(), remove: vi.fn() },
@@ -18,6 +20,8 @@ function mockToolContext() {
           getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
         },
       },
+      pick: vi.fn().mockReturnValue(null),
+      container: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) },
     },
     selection: { clearSelection: vi.fn() },
     syncMesh: vi.fn(),
@@ -27,14 +31,18 @@ function mockToolContext() {
       setReferencePoint: vi.fn(),
       getSnap: vi.fn().mockReturnValue(null),
     },
+    snapVisual: { update: vi.fn(), clear: vi.fn() },
     clearAxisGuide: vi.fn(),
+    updateAxisGuide: vi.fn(),
     getSelectedFaces: vi.fn().mockReturnValue([]),
+    getFaceId: vi.fn().mockReturnValue(-1),
     get3DPoint: vi.fn(),
     getGroundPoint: vi.fn(),
     getSnappedPoint: vi.fn().mockReturnValue(null),
     getAxisInferredPoint: vi.fn().mockReturnValue(null),
     axisLock: null as string | null,
     inferredAxis: 'free' as string | null,
+    faceMap: new Uint32Array([0, 1, 2]),
   } as any;
 }
 
@@ -140,6 +148,95 @@ describe('DrawLineTool', () => {
     it('does nothing when not in Drawing state', () => {
       tool.applyVCBValue(500);
       expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('face split', () => {
+    it('calls splitFaceByLine when both clicks are on the same face', () => {
+      // Setup: viewport.pick returns a face, getFaceId returns the same face ID
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 2, point: new THREE.Vector3(50, 0, 50) });
+      ctx.getFaceId.mockReturnValue(7);
+
+      tool.onActivate(); // → Armed
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
+      // Now in Drawing, startFaceId=7
+
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
+      // endFaceId=7, same as startFaceId → should call splitFaceByLine
+
+      expect(ctx.bridge.splitFaceByLine).toHaveBeenCalledWith(
+        7,
+        [10, 0, 10],
+        [90, 0, 90],
+      );
+      expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+      expect(ctx.syncMesh).toHaveBeenCalled();
+    });
+
+    it('falls back to drawLine when face split returns error', () => {
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 2 });
+      ctx.getFaceId.mockReturnValue(7);
+      ctx.bridge.splitFaceByLine.mockReturnValue('{"error":"no boundary intersection"}');
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
+
+      // splitFaceByLine was called but returned error → fallback to drawLine
+      expect(ctx.bridge.splitFaceByLine).toHaveBeenCalled();
+      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90);
+    });
+
+    it('falls back to drawLine when splitFaceByLine throws', () => {
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 2 });
+      ctx.getFaceId.mockReturnValue(7);
+      ctx.bridge.splitFaceByLine.mockImplementation(() => { throw new Error('not available'); });
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
+
+      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90);
+    });
+
+    it('uses regular drawLine when start and end are on different faces', () => {
+      let callCount = 0;
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 2 });
+      ctx.getFaceId.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? 7 : 8; // Different face IDs
+      });
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
+
+      expect(ctx.bridge.splitFaceByLine).not.toHaveBeenCalled();
+      expect(ctx.bridge.drawLine).toHaveBeenCalled();
+    });
+
+    it('uses regular drawLine when clicking on empty space (no face)', () => {
+      ctx.viewport.pick.mockReturnValue(null); // No face hit
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
+
+      expect(ctx.bridge.splitFaceByLine).not.toHaveBeenCalled();
+      expect(ctx.bridge.drawLine).toHaveBeenCalled();
+    });
+
+    it('returns to Armed after successful face split', () => {
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 2 });
+      ctx.getFaceId.mockReturnValue(7);
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
+
+      // Face split succeeded → should NOT be in Drawing (continuous) mode
+      expect(tool.isBusy()).toBe(false); // Armed, not Drawing
+      expect(tool.getStateName()).toBe('Armed');
     });
   });
 

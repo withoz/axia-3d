@@ -713,15 +713,17 @@ impl Mesh {
         ensure!(self.faces.contains(face_id), "Face {:?} not found", face_id);
         ensure!(v1 != v2, "Cannot split face with same vertex");
 
-        // Save face properties before removal
+        // Save face properties
         let material = self.faces[face_id].material();
         let normal = self.faces[face_id].normal();
 
         let outer_start = self.faces[face_id].outer().start;
+        let loop_hes = self.collect_loop_hes(outer_start)?;
         let loop_verts = self.collect_loop_verts(outer_start)?;
         let n = loop_verts.len();
 
         // Find positions of v1 and v2 in the boundary loop
+        // loop_hes[i].dst() == loop_verts[i]
         let idx1 = loop_verts.iter().position(|&v| v == v1)
             .ok_or_else(|| anyhow::anyhow!("v1 {:?} not on face {:?} boundary", v1, face_id))?;
         let idx2 = loop_verts.iter().position(|&v| v == v2)
@@ -733,44 +735,82 @@ impl Mesh {
         ensure!(dist_fwd >= 2 && dist_bwd >= 2,
             "v1 and v2 are adjacent or equal — split would create degenerate face");
 
-        // Build vertex lists for two new faces
-        // Face A: walk from idx1 to idx2 (forward)
-        let mut verts_a = Vec::with_capacity(dist_fwd + 1);
+        // ================================================================
+        // Direct DCEL surgery — NO remove_face, NO add_face
+        // ================================================================
+        //
+        // Original loop: ... → he_to_v1 → he_from_v1 → ... → he_to_v2 → he_from_v2 → ...
+        //   where he_to_v1.dst = v1, he_to_v2.dst = v2
+        //
+        // After split:
+        //   Loop A (face_id): he_to_v1 → he_v1v2 → he_from_v2 → ... → he_to_v1
+        //   Loop B (face_b):  he_to_v2 → he_v2v1 → he_from_v1 → ... → he_to_v2
+
+        // Identify the key half-edges
+        let he_to_v1 = loop_hes[idx1];     // dst = v1
+        let he_from_v1 = loop_hes[(idx1 + 1) % n]; // starts at v1
+        let he_to_v2 = loop_hes[idx2];     // dst = v2
+        let he_from_v2 = loop_hes[(idx2 + 1) % n]; // starts at v2
+
+        // Create the splitting edge v1↔v2
+        let (split_edge_id, _) = self.add_edge(v1, v2)?;
+
+        // Get free half-edges for the split edge
+        let he_v1v2 = self.find_halfedge(split_edge_id, v2)?; // v1→v2
+        let he_v2v1 = self.find_halfedge(split_edge_id, v1)?; // v2→v1
+
+        // === Splice Loop A: he_to_v1 → he_v1v2 → he_from_v2 → ... → he_to_v1 ===
+        self.hes[he_to_v1].set_next(he_v1v2);
+        self.hes[he_v1v2].set_prev(he_to_v1);
+        self.hes[he_v1v2].set_next(he_from_v2);
+        self.hes[he_from_v2].set_prev(he_v1v2);
+
+        // === Splice Loop B: he_to_v2 → he_v2v1 → he_from_v1 → ... → he_to_v2 ===
+        self.hes[he_to_v2].set_next(he_v2v1);
+        self.hes[he_v2v1].set_prev(he_to_v2);
+        self.hes[he_v2v1].set_next(he_from_v1);
+        self.hes[he_from_v1].set_prev(he_v2v1);
+
+        // === Assign face references ===
+
+        // Mark split edge HEs as HARD so they render even between coplanar faces
+        self.hes[he_v1v2].set_flags(HeFlags::HARD);
+        self.hes[he_v2v1].set_flags(HeFlags::HARD);
+
+        // Loop A keeps face_id — set face on the new split HE
+        self.hes[he_v1v2].set_face(face_id);
+        self.hes[he_v1v2].set_outer(true);
+        self.hes[he_v1v2].set_active(true);
+
+        // Update face_id's outer loop start to point into Loop A
+        self.faces[face_id].set_outer(LoopRef::new(he_v1v2, true));
+
+        // Create face_b for Loop B
+        let face_b = self.faces.insert(Face::new(
+            LoopRef::new(he_v2v1, true),
+            normal,
+            FACE_TOLERANCE,
+            material,
+        ));
+
+        // Set face on he_v2v1
+        self.hes[he_v2v1].set_face(face_b);
+        self.hes[he_v2v1].set_outer(true);
+        self.hes[he_v2v1].set_active(true);
+
+        // Walk Loop B and reassign all existing HEs from face_id → face_b
         {
-            let mut i = idx1;
-            loop {
-                verts_a.push(loop_verts[i]);
-                if i == idx2 { break; }
-                i = (i + 1) % n;
+            let mut he_id = self.hes[he_v2v1].next();
+            while he_id != he_v2v1 {
+                if he_id.is_null() {
+                    bail!("Null next pointer encountered while reassigning Loop B faces");
+                }
+                self.hes[he_id].set_face(face_b);
+                he_id = self.hes[he_id].next();
             }
         }
 
-        // Face B: walk from idx2 to idx1 (forward)
-        let mut verts_b = Vec::with_capacity(dist_bwd + 1);
-        {
-            let mut i = idx2;
-            loop {
-                verts_b.push(loop_verts[i]);
-                if i == idx1 { break; }
-                i = (i + 1) % n;
-            }
-        }
-
-        ensure!(verts_a.len() >= 3, "Face A would be degenerate ({} verts)", verts_a.len());
-        ensure!(verts_b.len() >= 3, "Face B would be degenerate ({} verts)", verts_b.len());
-
-        // Remove original face (frees its half-edges for reuse)
-        self.remove_face(face_id)?;
-
-        // Create two new faces (add_face → make_loop → find_halfedge reuses freed HEs)
-        let face_a = self.add_face(&verts_a, material)?;
-        let face_b = self.add_face(&verts_b, material)?;
-
-        // Ensure normals match the original face
-        self.faces[face_a].set_normal(normal);
-        self.faces[face_b].set_normal(normal);
-
-        Ok((face_a, face_b))
+        Ok((face_id, face_b))
     }
 
     // ========================================================================
@@ -1251,14 +1291,16 @@ impl Mesh {
                 Err(_) => continue,
             };
 
-            // Check half-edge SOFT flag
+            // Check half-edge flags (SOFT / HARD)
             let he_start = edge.any_he();
             if he_start.is_null() {
                 continue;
             }
-            if self.hes[he_start].flags().contains(HeFlags::SOFT) {
+            let he_flags = self.hes[he_start].flags();
+            if he_flags.contains(HeFlags::SOFT) {
                 continue; // soft edge — don't draw
             }
+            let force_hard = he_flags.contains(HeFlags::HARD);
 
             // Collect adjacent face normals via radial chain
             let mut face_normals: Vec<DVec3> = Vec::new();
@@ -1278,15 +1320,19 @@ impl Mesh {
             }
 
             // Decision: draw this edge?
-            let draw = match face_normals.len() {
-                0 => true,  // isolated edge (wireframe) — draw
-                1 => true,  // boundary edge — draw
-                2 => {
-                    // Two faces: check if coplanar
-                    let dot = face_normals[0].dot(face_normals[1]).abs();
-                    dot < cos_threshold // draw only if NOT coplanar
+            let draw = if force_hard {
+                true // HARD flag → always draw (face split edges, user-drawn lines)
+            } else {
+                match face_normals.len() {
+                    0 => true,  // isolated edge (wireframe) — draw
+                    1 => true,  // boundary edge — draw
+                    2 => {
+                        // Two faces: check if coplanar
+                        let dot = face_normals[0].dot(face_normals[1]).abs();
+                        dot < cos_threshold // draw only if NOT coplanar
+                    }
+                    _ => true,  // non-manifold — draw
                 }
-                _ => true,  // non-manifold — draw
             };
 
             if draw {
