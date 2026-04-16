@@ -469,7 +469,7 @@ export class Viewport {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 1.1 : 0.9;
       if (this._viewMode !== '3d') {
-        this.orthoZoom = Math.max(50, Math.min(500000000, this.orthoZoom * factor));
+        this.orthoZoom = Math.max(10, Math.min(200000, this.orthoZoom * factor));
         this.updateOrthoCamera();
       } else {
         this.spherical.radius = Math.max(100, Math.min(500000000,
@@ -547,22 +547,25 @@ export class Viewport {
     this._viewMode = mode;
 
     if (mode === '3d') {
-      // 3D perspective 복원 — 그리드를 XZ 바닥면(Y=0)으로 리셋
+      // 3D perspective 복원 — 그리드+축을 XZ 바닥면(Y=0)으로 리셋
       this.infiniteGrid.rotation.set(0, 0, 0);
       this.infiniteGrid.position.set(0, 0, 0);
+      for (const al of this.axisLines) {
+        al.rotation.set(0, 0, 0);
+        al.position.set(0, 0, 0);
+      }
       this.updateCameraFromSpherical();
     } else {
       // 2D 직교 뷰 설정
-      // 직교 카메라는 거리가 크기에 무관 — near/far 범위 안에만 배치하면 됨
-      const dist = 500;
+      // dist = 3D 카메라와 동일한 거리 → near/far도 비례 스케일
+      const dist = this.spherical.radius;
       const cam = this.orthoCamera;
 
-      // near/far를 dist 기준으로 설정: 카메라 앞뒤 충분한 범위 확보
-      cam.near = 0.1;
-      cam.far = dist * 2;
+      cam.near = Math.max(0.1, dist * 0.001);
+      cam.far = Math.max(10000, dist * 10);
 
-      // Match ortho zoom to 3D perspective view's visible area
-      // orthoZoom = radius * tan(FOV/2) gives equivalent screen coverage
+      // 3D perspective에서 보이는 화면 높이와 1:1 대응
+      // visibleHeight = 2 * tan(FOV/2) * dist → orthoZoom = visibleHeight / 2
       const fovRad = (this.camera.fov * Math.PI) / 180;
       this.orthoZoom = this.spherical.radius * Math.tan(fovRad / 2);
 
@@ -595,22 +598,28 @@ export class Viewport {
 
       cam.lookAt(this.orbitTarget);
 
-      // 그리드를 현재 뷰의 작업 평면에 맞게 회전
+      // 그리드+축 연장선을 현재 뷰의 작업 평면에 맞게 회전
       // 기본 그리드: XZ 평면 (Y=0) — top/bottom에서 그대로 보임
       this.infiniteGrid.rotation.set(0, 0, 0);
       this.infiniteGrid.position.set(0, 0, 0);
+      const axisRot = new THREE.Euler(0, 0, 0);
       switch (mode) {
         case 'front':
         case 'back':
           // XZ → XY 평면 (Z=0): X축 기준 -90° 회전
           this.infiniteGrid.rotation.x = -Math.PI / 2;
+          axisRot.x = -Math.PI / 2;
           break;
         case 'right':
         case 'left':
           // XZ → YZ 평면 (X=0): Z축 기준 90° 회전
           this.infiniteGrid.rotation.z = Math.PI / 2;
+          axisRot.z = Math.PI / 2;
           break;
         // top/bottom: 기본 XZ 평면 그대로
+      }
+      for (const al of this.axisLines) {
+        al.rotation.copy(axisRot);
       }
 
       this.updateOrthoCamera();
