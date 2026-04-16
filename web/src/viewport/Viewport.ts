@@ -111,7 +111,7 @@ export class Viewport {
     this.orthoCamera = new THREE.OrthographicCamera(
       -this.orthoZoom * aspect, this.orthoZoom * aspect,
       this.orthoZoom, -this.orthoZoom,
-      1, 1000000000,
+      1, 1000,
     );
 
     // ── Lights ──
@@ -546,7 +546,7 @@ export class Viewport {
       this.updateCameraFromSpherical();
     } else {
       // 2D 직교 뷰 설정
-      const dist = 500000000;  // 500km
+      const dist = 500;  // 직교 카메라는 거리가 크기에 무관, near/far(1~1000) 범위 안에 배치
       const cam = this.orthoCamera;
 
       // Match ortho zoom to 3D perspective view's visible area
