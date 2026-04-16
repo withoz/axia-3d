@@ -851,24 +851,13 @@ export class ToolManager {
   /**
    * Handle dimension edit: user clicked a dimension label and entered a new value.
    *
-   * Strategy: Use scaleFaces with the opposite edge midpoint as center.
-   * The scale is applied only along the perpendicular direction from the
-   * opposite edge to the edited edge, keeping the opposite edge fixed.
+   * Strategy:
+   *   1. Scale center = face centroid (symmetric, both parallel edges change equally)
+   *   2. For axis-aligned edges: direct scaleFaces (exact, 0% error)
+   *   3. For non-axis-aligned edges: rotate → scale → rotate-back (exact, 0% error)
    *
-   * For a rectangular face ABCD where we edit edge AB:
-   *   1. Opposite edge CD stays fixed (scale center on CD midpoint)
-   *   2. Scale factor = newLength / oldLength? No — we need distance-based scaling.
-   *   3. Actually, for edge length change:
-   *      - The perpendicular distance from opposite edge to edited edge = height
-   *      - We want to stretch ALONG the edge direction
-   *      - Scale along edgeDir from opposite-edge-midpoint
-   *
-   * Correct approach:
-   *   - Scale center = midpoint of the edge nearest to centroid (opposite edge)
-   *   - Scale factor along edge direction = newLen / oldLen
-   *   - Applied via scaleFaces with world-axis decomposition
-   *
-   * For axis-aligned geometry (most common: ground rect, box faces), this is exact.
+   * Result: The edited edge AND its parallel opposite edge both become newLength.
+   * The face stays rectangular (no shear/distortion).
    */
   private handleDimensionEdit(index: number, newValue: number, dimLine: DimLine): void {
     const selectedFaces = this.selection.getSelectedFaces();
@@ -880,13 +869,12 @@ export class ToolManager {
     const delta = newValue - oldLength;
     if (Math.abs(delta) < 0.01) return; // No meaningful change
 
+    const scaleFactor = newValue / oldLength;
+
     // Edge direction (unit vector along the edge)
     const edgeDir = new THREE.Vector3().subVectors(dimLine.to, dimLine.from).normalize();
 
-    // Edge midpoint
-    const edgeMid = new THREE.Vector3().addVectors(dimLine.from, dimLine.to).multiplyScalar(0.5);
-
-    // Face centroid (average of all boundary vertices)
+    // Face centroid as scale center (symmetric scaling)
     const allVerts: THREE.Vector3[] = [];
     for (const fid of selectedFaces) {
       const loop = this.extractFaceBoundary(fid);
@@ -897,84 +885,75 @@ export class ToolManager {
     const centroid = new THREE.Vector3();
     for (const v of allVerts) centroid.add(v);
     centroid.divideScalar(allVerts.length);
+    const cx = centroid.x, cy = centroid.y, cz = centroid.z;
 
-    // Direction from centroid to edge midpoint (perpendicular, outward from face center)
-    const outward = new THREE.Vector3().subVectors(edgeMid, centroid);
-    // Remove component along edge direction → pure perpendicular
-    outward.addScaledVector(edgeDir, -outward.dot(edgeDir));
-    const perpDist = outward.length();
-    if (perpDist < 0.001) {
-      debugLog(`[DimEdit] Edge passes through centroid, cannot determine direction`);
-      return;
-    }
-    outward.normalize();
+    // Check if edge is axis-aligned (fast path, exact)
+    const ax = Math.abs(edgeDir.x);
+    const ay = Math.abs(edgeDir.y);
+    const az = Math.abs(edgeDir.z);
+    const isAxisAligned = (ax > 0.999) || (ay > 0.999) || (az > 0.999);
 
-    // Find the opposite edge: the boundary edge whose midpoint is farthest
-    // in the OPPOSITE perpendicular direction from the edited edge
-    let oppositeEdgeMid = centroid.clone(); // fallback
-    let bestOppDot = Infinity;
-    for (const fid of selectedFaces) {
-      const loop = this.extractFaceBoundary(fid);
-      if (loop.length < 2) continue;
-      for (let i = 0; i < loop.length; i++) {
-        const a = loop[i];
-        const b = loop[(i + 1) % loop.length];
-        const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
-        const toMid = new THREE.Vector3().subVectors(mid, centroid);
-        const dotPerp = toMid.dot(outward);
-        if (dotPerp < bestOppDot) {
-          bestOppDot = dotPerp;
-          oppositeEdgeMid = mid;
+    let ok = false;
+
+    if (isAxisAligned) {
+      // ═══ Fast path: axis-aligned edge → direct scale (exact) ═══
+      const sx = ax > 0.999 ? scaleFactor : 1;
+      const sy = ay > 0.999 ? scaleFactor : 1;
+      const sz = az > 0.999 ? scaleFactor : 1;
+
+      debugLog(`[DimEdit] Axis-aligned: ${oldLength.toFixed(2)} → ${newValue.toFixed(2)}, scale=(${sx},${sy},${sz})`);
+      ok = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, sx, sy, sz);
+    } else {
+      // ═══ General path: rotate → scale → rotate-back (exact) ═══
+      // Rotate so edgeDir aligns with X-axis, then scale X, then rotate back.
+      //
+      // Rotation angle: angle from edgeDir to X-axis around their cross product
+      const xAxis = new THREE.Vector3(1, 0, 0);
+      const rotAxis = new THREE.Vector3().crossVectors(edgeDir, xAxis);
+      const rotAxisLen = rotAxis.length();
+
+      if (rotAxisLen < 0.0001) {
+        // edgeDir is already ±X → should have been caught by isAxisAligned
+        ok = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, scaleFactor, 1, 1);
+      } else {
+        rotAxis.divideScalar(rotAxisLen); // normalize
+        const angleDeg = Math.acos(Math.max(-1, Math.min(1, edgeDir.dot(xAxis)))) * (180 / Math.PI);
+
+        debugLog(`[DimEdit] Non-axis: rotate ${angleDeg.toFixed(2)}° around (${rotAxis.x.toFixed(3)},${rotAxis.y.toFixed(3)},${rotAxis.z.toFixed(3)}), scale X×${scaleFactor.toFixed(4)}, rotate back`);
+
+        // Step 1: Rotate to align edge with X-axis
+        const r1 = this.bridge.rotateFaces(
+          selectedFaces, cx, cy, cz,
+          rotAxis.x, rotAxis.y, rotAxis.z, angleDeg,
+        );
+        if (r1) {
+          // Step 2: Scale along X-axis (now exact)
+          const s = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, scaleFactor, 1, 1);
+          if (s) {
+            // Step 3: Rotate back
+            ok = this.bridge.rotateFaces(
+              selectedFaces, cx, cy, cz,
+              rotAxis.x, rotAxis.y, rotAxis.z, -angleDeg,
+            );
+          }
+        }
+        if (!ok) {
+          debugLog(`[DimEdit] Rotate-scale-rotate failed, attempting undo`);
+          this.bridge.undo(); // Roll back partial operations
+          this.bridge.undo();
         }
       }
     }
 
-    // Scale center = opposite edge midpoint (this edge stays fixed)
-    const cx = oppositeEdgeMid.x;
-    const cy = oppositeEdgeMid.y;
-    const cz = oppositeEdgeMid.z;
-
-    // Total perpendicular span from opposite edge to edited edge
-    const totalSpan = new THREE.Vector3().subVectors(edgeMid, oppositeEdgeMid).dot(outward);
-    if (Math.abs(totalSpan) < 0.001) {
-      debugLog(`[DimEdit] Zero span between edges`);
-      return;
-    }
-
-    // New span = totalSpan + delta (the edited edge moves outward by delta)
-    // Scale factor for perpendicular direction = newSpan / oldSpan
-    // But we need to scale along edgeDir for the LENGTH change.
-    // Two separate concerns:
-    //   a) Edge LENGTH change → scale along edgeDir
-    //   b) The perpendicular distance doesn't change
-    //
-    // For pure edge length scaling from opposite edge center:
-    const scaleFactor = newValue / oldLength;
-
-    // Decompose into world axes (tensor product approximation)
-    const d = scaleFactor - 1;
-    const sx = 1 + d * edgeDir.x * edgeDir.x;
-    const sy = 1 + d * edgeDir.y * edgeDir.y;
-    const sz = 1 + d * edgeDir.z * edgeDir.z;
-
-    debugLog(`[DimEdit] Edge ${index}: ${oldLength.toFixed(2)} → ${newValue.toFixed(2)}, delta=${delta.toFixed(2)}, factor=${scaleFactor.toFixed(4)}, center=(${cx.toFixed(1)},${cy.toFixed(1)},${cz.toFixed(1)}), scale=(${sx.toFixed(4)},${sy.toFixed(4)},${sz.toFixed(4)})`);
-
-    const ok = this.bridge.scaleFaces(
-      selectedFaces,
-      cx, cy, cz,
-      sx, sy, sz,
-    );
-
     if (ok) {
       this.syncMesh();
-      // Refresh dimensions after geometry change
       const newFaces = this.selection.getSelectedFaces();
       if (newFaces.length > 0) {
         this.updateSelectionDimensions(newFaces);
       }
-      debugLog(`[DimEdit] Applied successfully`);
+      debugLog(`[DimEdit] ✓ ${oldLength.toFixed(2)} → ${newValue.toFixed(2)} mm (exact)`);
     } else {
-      debugLog(`[DimEdit] scaleFaces failed — WASM may not support this operation`);
+      debugLog(`[DimEdit] ✗ Failed`);
     }
   }
 
