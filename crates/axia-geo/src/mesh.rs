@@ -1136,6 +1136,87 @@ impl Mesh {
     // Mesh export (for sending to Three.js)
     // ========================================================================
 
+    /// Compute a **smooth per-vertex normal** for a vertex belonging to a face.
+    ///
+    /// Given the half-edge in the face's loop whose `dst` is this vertex,
+    /// traverses around the vertex via the DCEL radial/next links and averages
+    /// the normals of all faces whose angle to `face_normal` is within
+    /// `EDGE_VISIBILITY_ANGLE_DEG`. This matches the soft-edge cull threshold,
+    /// so smooth shading and edge hiding are consistent.
+    ///
+    /// Faces across a **hard** edge (HARD flag or angle > threshold) are excluded,
+    /// preserving sharp corners (boxes, face-split seams).
+    ///
+    /// Falls back to `face_normal` on any degeneracy (isolated vertex, corrupted
+    /// topology, traversal overrun).
+    fn compute_smooth_normal_at(&self, he_into_vertex: HeId, vertex_id: VertId, face_normal: DVec3) -> DVec3 {
+        use crate::tolerances::{EDGE_VISIBILITY_ANGLE_DEG, deg_to_rad};
+        let cos_threshold = deg_to_rad(EDGE_VISIBILITY_ANGLE_DEG).cos();
+
+        // Sanity: he_into_vertex must end at vertex_id
+        let he0 = match self.hes.get(he_into_vertex) {
+            Some(h) if h.is_active() && h.dst() == vertex_id => h,
+            _ => return face_normal,
+        };
+        // Starting outgoing HE from vertex_id (in the same face as he_into_vertex).
+        // hes[he_into_vertex].next() has origin = vertex_id.
+        let start_out = he0.next();
+        if start_out.is_null() || !self.hes.contains(start_out) {
+            return face_normal;
+        }
+
+        // Collect weighted sum of neighbor face normals.
+        let mut accum = DVec3::ZERO;
+        let mut count: u32 = 0;
+        let mut he_out = start_out;
+        const MAX_ITERS: u32 = 1024; // paranoia cap for non-manifold / corruption
+        for _ in 0..MAX_ITERS {
+            let he_ref = match self.hes.get(he_out) {
+                Some(h) if h.is_active() => h,
+                _ => break,
+            };
+
+            // Record this face's normal if it passes the smooth threshold
+            let face_id = he_ref.face();
+            if !face_id.is_null() {
+                if let Some(f) = self.faces.get(face_id) {
+                    if f.is_active() && f.is_visible() {
+                        let n = f.normal();
+                        if n.length_squared() > 1e-20 {
+                            let dot = n.dot(face_normal);
+                            if dot >= cos_threshold {
+                                // smoothing pair — include
+                                accum += n;
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Advance to next outgoing HE at this vertex:
+            //   incoming = prev(he_out)     (in same face, ends at vertex)
+            //   twin    = next_rad(incoming) (crosses edge → outgoing in neighbor face)
+            let incoming = he_ref.prev();
+            if incoming.is_null() || !self.hes.contains(incoming) {
+                break;
+            }
+            let twin = self.hes[incoming].next_rad();
+            if twin.is_null() || !self.hes.contains(twin) || twin == incoming {
+                break; // boundary or non-manifold — stop
+            }
+            he_out = twin;
+            if he_out == start_out {
+                break; // closed fan — done
+            }
+        }
+
+        if count == 0 || accum.length_squared() < 1e-20 {
+            return face_normal;
+        }
+        accum.normalize()
+    }
+
     /// Export mesh as flat vertex/index buffers for GPU rendering.
     /// Returns (positions, normals, indices, face_id_per_triangle)
     /// Export mesh as flat vertex/index buffers for GPU rendering.
@@ -1161,6 +1242,9 @@ impl Mesh {
                 Ok(verts) => verts,
                 Err(_) => continue, // skip corrupted face, don't kill all rendering
             };
+            // Outer loop HEs — parallel to loop_verts (hes[i].dst() == loop_verts[i]).
+            // Used for smooth-normal computation around each vertex.
+            let loop_hes = self.collect_loop_hes(face.outer().start).unwrap_or_default();
 
             if loop_verts.len() < 3 {
                 continue;
@@ -1170,15 +1254,26 @@ impl Mesh {
             let (coord1, coord2) = Self::projection_axes(normal);
             let mut coords_2d: Vec<f64> = Vec::with_capacity(loop_verts.len() * 2);
             let mut positions_3d: Vec<DVec3> = Vec::with_capacity(loop_verts.len());
+            // Per-vertex smooth normals (aligned with positions_3d indexing)
+            let mut vert_normals: Vec<DVec3> = Vec::with_capacity(loop_verts.len());
 
             let mut skip_face = false;
-            for &vid in &loop_verts {
+            for (i, &vid) in loop_verts.iter().enumerate() {
                 match self.vertex_pos(vid) {
                     Ok(pos) => {
                         positions_3d.push(pos);
                         let arr = [pos.x, pos.y, pos.z];
                         coords_2d.push(arr[coord1]);
                         coords_2d.push(arr[coord2]);
+
+                        // Smooth normal: average adjacent face normals within threshold
+                        // (only if we have a matching HE reference)
+                        if i < loop_hes.len() {
+                            let smooth = self.compute_smooth_normal_at(loop_hes[i], vid, normal);
+                            vert_normals.push(smooth);
+                        } else {
+                            vert_normals.push(normal);
+                        }
                     }
                     Err(_) => { skip_face = true; break; }
                 }
@@ -1206,6 +1301,8 @@ impl Mesh {
                             let arr = [pos.x, pos.y, pos.z];
                             coords_2d.push(arr[coord1]);
                             coords_2d.push(arr[coord2]);
+                            // Inner-loop verts: use face normal (holes rarely need smoothing)
+                            vert_normals.push(normal);
                         }
                         Err(_) => { skip_face = true; break; }
                     }
@@ -1233,8 +1330,11 @@ impl Mesh {
                 }
             }
 
-            // Emit vertices (f32 for GPU + f64 for precision)
-            for pos in &positions_3d {
+            // Emit vertices (f32 for GPU + f64 for precision).
+            // Per-vertex smooth normals: averaged across adjacent faces that share a
+            // soft edge with this face (SketchUp-style, threshold EDGE_VISIBILITY_ANGLE_DEG).
+            // Falls back to face normal when there are no neighbors within threshold.
+            for (i, pos) in positions_3d.iter().enumerate() {
                 positions.push(pos.x as f32);
                 positions.push(pos.y as f32);
                 positions.push(pos.z as f32);
@@ -1243,9 +1343,10 @@ impl Mesh {
                 positions_f64.push(pos.y);
                 positions_f64.push(pos.z);
 
-                normals.push(normal.x as f32);
-                normals.push(normal.y as f32);
-                normals.push(normal.z as f32);
+                let n = vert_normals.get(i).copied().unwrap_or(normal);
+                normals.push(n.x as f32);
+                normals.push(n.y as f32);
+                normals.push(n.z as f32);
             }
 
             // Emit indices (offset by current vertex count)
