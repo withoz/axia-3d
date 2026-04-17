@@ -260,13 +260,14 @@ export class ToolManager {
    *   make-component — group과 동일
    */
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
-    'delete', 'flip-faces', 'redo', 'group', 'make-component',
+    'delete', 'flip-faces', 'merge-faces', 'redo', 'group', 'make-component',
   ]);
 
   /** 사용자 친화 명령어 이름 (Toast 메시지용) */
   private static readonly ACTION_DISPLAY: Record<string, string> = {
     'delete': '삭제',
     'flip-faces': '면 반전',
+    'merge-faces': '면 통합',
     'redo': '다시 실행',
     'group': '그룹 만들기',
     'make-component': '컴포넌트 변환',
@@ -337,6 +338,23 @@ export class ToolManager {
       } else {
         const err = this.bridge.lastError();
         Toast.error(err || '면 반전 실패');
+      }
+    } else if (action === 'merge-faces') {
+      // 선택된 인접 coplanar face들을 하나로 통합
+      const faces = this.selection.getSelectedFaces();
+      if (faces.length < 2) {
+        Toast.warning('통합하려면 2개 이상의 면을 선택하세요');
+        return;
+      }
+      const merged = this.bridge.tryMergeAdjacentFaces(faces);
+      if (merged > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐`, 2500);
+        debugLog('[Action] merge-faces:', merged);
+      } else {
+        const err = this.bridge.lastError();
+        Toast.warning(err || '통합할 수 있는 인접 coplanar 면이 없습니다');
       }
     } else if (action === 'select-all') {
       this.selection.selectEverything(this.faceMap, this.edgeMap);

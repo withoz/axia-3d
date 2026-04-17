@@ -106,6 +106,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'redo': toolManager.executeAction('redo'); break;
       case 'delete': toolManager.executeAction('delete'); break;
       case 'flip-faces': toolManager.executeAction('flip-faces'); break;
+      case 'merge-faces': toolManager.executeAction('merge-faces'); break;
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;

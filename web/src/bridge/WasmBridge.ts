@@ -65,6 +65,9 @@ type AxiaEngineExtended = AxiaEngine & {
   getPositionsF64?(): Float64Array;
   delete_edge?(edgeId: number): boolean;
   batch_delete?(faceIds: Uint32Array, edgeIds: Uint32Array): boolean;
+  // Face merge (coplanar face combine)
+  mergeFacesByEdge?(edgeId: number): number;
+  tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
   get_connected_faces?(seedFaceId: number): Uint32Array;
   // Snapshot / Import
   export_snapshot?(): Uint8Array;
@@ -456,6 +459,45 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] batchDelete failed:', e);
       return false;
+    }
+  }
+
+  /**
+   * Merge two coplanar faces that share the given edge into one face.
+   * Returns the merged FaceId on success (>= 0), or -1 on failure
+   * (with lastError set — e.g. "not coplanar", "shares multiple edges").
+   * Single undo step.
+   */
+  mergeFacesByEdge(edgeId: number): number {
+    if (!this.engine) return -1;
+    this.markDirty();
+    try {
+      const eng = this.engine as AxiaEngineExtended & {
+        mergeFacesByEdge?(edgeId: number): number;
+      };
+      return eng.mergeFacesByEdge?.(edgeId) ?? -1;
+    } catch (e) {
+      console.error('[WasmBridge] mergeFacesByEdge failed:', e);
+      return -1;
+    }
+  }
+
+  /**
+   * Iteratively merge adjacent coplanar faces within the selection.
+   * Returns the number of merges performed (0 if nothing merged).
+   * Single undo step.
+   */
+  tryMergeAdjacentFaces(faceIds: number[]): number {
+    if (!this.engine) return 0;
+    this.markDirty();
+    try {
+      const eng = this.engine as AxiaEngineExtended & {
+        tryMergeAdjacentFaces?(ids: Uint32Array): number;
+      };
+      return eng.tryMergeAdjacentFaces?.(new Uint32Array(faceIds)) ?? 0;
+    } catch (e) {
+      console.error('[WasmBridge] tryMergeAdjacentFaces failed:', e);
+      return 0;
     }
   }
 

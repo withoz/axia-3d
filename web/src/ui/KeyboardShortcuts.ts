@@ -158,6 +158,13 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // Ctrl+M: 면 통합 (선택된 coplanar 인접 face를 하나로)
+    if (e.ctrlKey && (e.key === 'm' || e.key === 'M')) {
+      e.preventDefault();
+      toolManager.executeAction('merge-faces');
+      return;
+    }
+
     if (e.ctrlKey && e.key === 'z') {
       e.preventDefault();
       if (e.repeat) return;

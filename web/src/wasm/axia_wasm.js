@@ -823,6 +823,21 @@ export class AxiaEngine {
         const ret = wasm.axiaengine_make_component(this.__wbg_ptr, group_id, ptr0, len0);
         return ret;
     }
+    /**
+     * Merge the two coplanar faces sharing the given edge into a single face.
+     *
+     * - Success: returns the new merged FaceId (>= 0).
+     * - Failure: returns -1 and sets lastError (e.g. "not coplanar",
+     *   "shares multiple edges", "edge not shared by exactly 2 faces").
+     *
+     * Wrapped in a single undo transaction.
+     * @param {number} edge_id_raw
+     * @returns {number}
+     */
+    mergeFacesByEdge(edge_id_raw) {
+        const ret = wasm.axiaengine_mergeFacesByEdge(this.__wbg_ptr, edge_id_raw);
+        return ret;
+    }
     constructor() {
         const ret = wasm.axiaengine_new();
         this.__wbg_ptr = ret >>> 0;
@@ -1097,6 +1112,23 @@ export class AxiaEngine {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_translate_faces(this.__wbg_ptr, ptr0, len0, dx, dy, dz);
         return ret !== 0;
+    }
+    /**
+     * Try to merge adjacent coplanar faces in the given selection.
+     *
+     * Iteratively finds pairs of faces that share exactly one edge and are
+     * coplanar, merges them, and repeats until no more pairs qualify.
+     * Returns the number of merges actually performed.
+     *
+     * All merges are wrapped in a single undo transaction.
+     * @param {Uint32Array} face_ids
+     * @returns {number}
+     */
+    tryMergeAdjacentFaces(face_ids) {
+        const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_tryMergeAdjacentFaces(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
     }
     /**
      * @returns {boolean}

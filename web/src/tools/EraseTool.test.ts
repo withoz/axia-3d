@@ -13,6 +13,7 @@ function mockToolContext() {
       deleteEdge: vi.fn().mockReturnValue(true),
       deleteEdgeCascade: vi.fn().mockReturnValue(2),
       batchDelete: vi.fn().mockReturnValue(true),
+      mergeFacesByEdge: vi.fn().mockReturnValue(-1),  // default: merge fails → cascade
       getEdgeLines: vi.fn().mockReturnValue(new Float32Array([
         0, 0, 0, 10, 0, 0,  // segment 0 → edgeMap[0]=10
         10, 0, 0, 10, 10, 0, // segment 1 → edgeMap[1]=20

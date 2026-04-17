@@ -55,6 +55,7 @@ export const axiaengine_import_snapshot: (a: number, b: number, c: number) => nu
 export const axiaengine_is_face_locked: (a: number, b: number) => number;
 export const axiaengine_lastError: (a: number, b: number) => void;
 export const axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
+export const axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
 export const axiaengine_new: () => number;
 export const axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
@@ -73,6 +74,7 @@ export const axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: nu
 export const axiaengine_toggle_group_lock: (a: number, b: number) => number;
 export const axiaengine_toggle_group_visibility: (a: number, b: number) => number;
 export const axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number) => number;
 export const axiaengine_undo: (a: number) => number;
 export const axiaengine_vert_count: (a: number) => number;
 export const axiaengine_xiaCount: (a: number) => number;

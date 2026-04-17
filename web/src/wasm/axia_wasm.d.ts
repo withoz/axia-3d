@@ -244,6 +244,16 @@ export class AxiaEngine {
      * 그룹을 컴포넌트로 변환
      */
     make_component(group_id: number, name: string): number;
+    /**
+     * Merge the two coplanar faces sharing the given edge into a single face.
+     *
+     * - Success: returns the new merged FaceId (>= 0).
+     * - Failure: returns -1 and sets lastError (e.g. "not coplanar",
+     *   "shares multiple edges", "edge not shared by exactly 2 faces").
+     *
+     * Wrapped in a single undo transaction.
+     */
+    mergeFacesByEdge(edge_id_raw: number): number;
     constructor();
     /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
@@ -344,6 +354,16 @@ export class AxiaEngine {
      * 선택된 face들의 정점을 이동
      */
     translate_faces(face_ids: Uint32Array, dx: number, dy: number, dz: number): boolean;
+    /**
+     * Try to merge adjacent coplanar faces in the given selection.
+     *
+     * Iteratively finds pairs of faces that share exactly one edge and are
+     * coplanar, merges them, and repeats until no more pairs qualify.
+     * Returns the number of merges actually performed.
+     *
+     * All merges are wrapped in a single undo transaction.
+     */
+    tryMergeAdjacentFaces(face_ids: Uint32Array): number;
     undo(): boolean;
     vert_count(): number;
     /**
@@ -450,6 +470,7 @@ export interface InitOutput {
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
     readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_new: () => number;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
@@ -468,6 +489,7 @@ export interface InitOutput {
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
     readonly axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_undo: (a: number) => number;
     readonly axiaengine_vert_count: (a: number) => number;
     readonly axiaengine_xiaCount: (a: number) => number;

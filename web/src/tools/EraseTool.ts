@@ -97,20 +97,36 @@ export class EraseTool implements ITool {
       return; // 빈 클릭 — 아무것도 할 일 없음
     }
 
-    // batch_delete 한 번의 트랜잭션으로 처리 (단일 undo로 전체 복원 가능)
-    const ok = this.ctx.bridge.batchDelete(faces, edges);
+    // SketchUp-style: edge 삭제 시 양쪽 face가 coplanar면 두 face를 합친다 (merge).
+    // 실패(비coplanar/복합 공유 등)한 edge만 cascade 삭제로 폴백.
+    const edgesToCascade: number[] = [];
+    let mergedCount = 0;
+    for (const edgeId of edges) {
+      const result = this.ctx.bridge.mergeFacesByEdge(edgeId);
+      if (result >= 0) {
+        mergedCount++;
+      } else {
+        edgesToCascade.push(edgeId);
+      }
+    }
+
+    // 남은 edge / 선택된 face는 기존 cascade/batch 삭제
+    let ok = true;
+    if (faces.length > 0 || edgesToCascade.length > 0) {
+      ok = this.ctx.bridge.batchDelete(faces, edgesToCascade);
+    }
 
     if (ok) {
       this.ctx.selection.clearSelection();
       this.ctx.syncMesh();
-      const total = faces.length + edges.length;
-      debugLog(`[Erase] batch deleted: ${faces.length} faces, ${edges.length} edges`);
-      if (total > 1) {
-        // 다중 삭제 시 안내 — 사용자가 우발적으로 많이 지웠을 때 인지
+      const total = faces.length + edgesToCascade.length + mergedCount;
+      debugLog(`[Erase] ${mergedCount} merged, ${faces.length} faces, ${edgesToCascade.length} edges deleted`);
+      if (total > 1 || mergedCount > 0) {
         const parts: string[] = [];
-        if (faces.length > 0) parts.push(`${faces.length}개 면`);
-        if (edges.length > 0) parts.push(`${edges.length}개 엣지`);
-        Toast.info(`${parts.join(', ')} 삭제됨`, 2500);
+        if (mergedCount > 0) parts.push(`${mergedCount}개 면 통합`);
+        if (faces.length > 0) parts.push(`${faces.length}개 면 삭제`);
+        if (edgesToCascade.length > 0) parts.push(`${edgesToCascade.length}개 엣지 삭제`);
+        Toast.info(parts.join(', '), 2500);
       }
     } else {
       Toast.error('삭제에 실패했습니다');

@@ -1634,6 +1634,130 @@ impl AxiaEngine {
     }
 
     // ========================================================================
+    // Face Merge
+    // ========================================================================
+
+    /// Merge the two coplanar faces sharing the given edge into a single face.
+    ///
+    /// - Success: returns the new merged FaceId (>= 0).
+    /// - Failure: returns -1 and sets lastError (e.g. "not coplanar",
+    ///   "shares multiple edges", "edge not shared by exactly 2 faces").
+    ///
+    /// Wrapped in a single undo transaction.
+    #[wasm_bindgen(js_name = "mergeFacesByEdge")]
+    pub fn merge_faces_by_edge(&mut self, edge_id_raw: u32) -> i32 {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            self.set_error(format!("Edge {} not found", edge_id_raw));
+            return -1;
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.merge_faces_by_edge(eid) {
+            Ok(new_face) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                debug_log!("[RUST] merge_faces_by_edge: ok, new face = {:?}", new_face);
+                new_face.raw() as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                let msg = e.to_string();
+                console_error!("[RUST] merge_faces_by_edge error: {}", msg);
+                self.set_error(msg);
+                -1
+            }
+        }
+    }
+
+    /// Try to merge adjacent coplanar faces in the given selection.
+    ///
+    /// Iteratively finds pairs of faces that share exactly one edge and are
+    /// coplanar, merges them, and repeats until no more pairs qualify.
+    /// Returns the number of merges actually performed.
+    ///
+    /// All merges are wrapped in a single undo transaction.
+    #[wasm_bindgen(js_name = "tryMergeAdjacentFaces")]
+    pub fn try_merge_adjacent_faces(&mut self, face_ids: Vec<u32>) -> u32 {
+        if face_ids.len() < 2 {
+            return 0;
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut current: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        let mut merges_done: u32 = 0;
+
+        loop {
+            // Build {edge -> faces sharing it (within selection)}
+            let mut edge_to_faces: std::collections::HashMap<EdgeId, Vec<FaceId>> =
+                std::collections::HashMap::new();
+
+            for &fid in &current {
+                let f = match self.scene.mesh.faces.get(fid) {
+                    Some(f) if f.is_active() => f,
+                    _ => continue,
+                };
+                let start = f.outer().start;
+                if start.is_null() { continue; }
+                if let Ok(hes) = self.scene.mesh.collect_loop_hes(start) {
+                    for he in hes {
+                        let e = self.scene.mesh.hes[he].edge();
+                        edge_to_faces.entry(e).or_default().push(fid);
+                    }
+                }
+            }
+
+            // Find a candidate edge shared by exactly two selected faces
+            let mut candidate: Option<(EdgeId, FaceId, FaceId)> = None;
+            for (e, faces) in edge_to_faces.iter() {
+                if faces.len() == 2 && faces[0] != faces[1] {
+                    candidate = Some((*e, faces[0], faces[1]));
+                    break;
+                }
+            }
+            let (edge_id, f1, f2) = match candidate {
+                Some(v) => v,
+                None => break,
+            };
+
+            // Attempt merge; silently skip non-coplanar candidates
+            match self.scene.mesh.merge_faces_by_edge(edge_id) {
+                Ok(new_face) => {
+                    merges_done += 1;
+                    // Replace f1/f2 with new_face in the working set
+                    current.retain(|&x| x != f1 && x != f2);
+                    current.push(new_face);
+                }
+                Err(_) => {
+                    // Remove this pair from consideration to make progress
+                    // (we don't modify the mesh on error since merge_faces_by_edge
+                    //  bails pre-mutation thanks to F5 hardening)
+                    // Remove one face so this pair isn't re-examined
+                    current.retain(|&x| x != f2);
+                }
+            }
+        }
+
+        if merges_done > 0 {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        } else {
+            self.scene.transactions.cancel();
+            self.set_error("No coplanar adjacent faces to merge".to_string());
+        }
+
+        merges_done
+    }
+
+    // ========================================================================
     // DXF Import
     // ========================================================================
 
