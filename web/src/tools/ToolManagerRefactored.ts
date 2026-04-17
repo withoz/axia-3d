@@ -859,48 +859,175 @@ export class ToolManager {
       return;
     }
 
-    // Color palette for alternating edge colors
-    const colors = ['#ff6b6b', '#51cf66', '#4dabf7', '#ffd43b', '#cc5de8', '#ff922b'];
+    // ═══ Phase 1: Perimeter edge 추출 (count==1인 것만) ═══
+    // 이전엔 edgeSet으로 중복만 제거했는데, 인접한 두 선택 면이
+    // 공유하는 내부 edge도 포함되어 테셀레이션된 구/원기둥이
+    // 수백 개 라벨로 덮였음. 이제는 선택 영역의 **실제 perimeter**만.
+    const vkey = (v: THREE.Vector3) =>
+      `${Math.round(v.x * 1000)},${Math.round(v.y * 1000)},${Math.round(v.z * 1000)}`;
+    const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
-    // Collect boundary edges from ALL selected faces (avoid duplicates)
-    const edgeSet = new Map<string, { from: THREE.Vector3; to: THREE.Vector3 }>();
+    type EdgeRec = { from: THREE.Vector3; to: THREE.Vector3; fromKey: string; toKey: string; count: number };
+    const edges = new Map<string, EdgeRec>();
 
     for (const faceId of faceIds) {
       const loop = this.extractFaceBoundary(faceId);
       if (loop.length < 2) continue;
-
       for (let i = 0; i < loop.length; i++) {
         const a = loop[i];
         const b = loop[(i + 1) % loop.length];
-
-        // Canonical key (sorted) to deduplicate shared edges between adjacent selected faces
-        const ka = `${a.x.toFixed(4)},${a.y.toFixed(4)},${a.z.toFixed(4)}`;
-        const kb = `${b.x.toFixed(4)},${b.y.toFixed(4)},${b.z.toFixed(4)}`;
-        const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-
-        if (!edgeSet.has(key)) {
-          edgeSet.set(key, { from: a.clone(), to: b.clone() });
+        const ka = vkey(a);
+        const kb = vkey(b);
+        const k = edgeKey(ka, kb);
+        const ex = edges.get(k);
+        if (ex) {
+          ex.count++;
+        } else {
+          edges.set(k, { from: a.clone(), to: b.clone(), fromKey: ka, toKey: kb, count: 1 });
         }
       }
     }
 
-    // Convert to DimLine array
-    let colorIdx = 0;
-    for (const [, edge] of edgeSet) {
-      const length = edge.from.distanceTo(edge.to);
-      if (length < 0.1) continue; // Skip degenerate edges
-
-      this.selectionDimLines.push({
-        from: edge.from,
-        to: edge.to,
-        text: this.units.format(length),
-        color: colors[colorIdx % colors.length],
-        editable: true,
-      });
-      colorIdx++;
+    // Perimeter = 선택 내부에서 공유되지 않는 edge들
+    const perimeter: EdgeRec[] = [];
+    for (const [, e] of edges) {
+      if (e.count === 1 && e.from.distanceTo(e.to) >= 0.1) perimeter.push(e);
     }
 
-    // Immediately render
+    if (perimeter.length === 0) {
+      this.dimLabel.clear();
+      return;
+    }
+
+    // ═══ Phase 2: Edge chain 재구성 (vertex connectivity로 연결된 체인 묶기) ═══
+    // 같은 vertex key를 공유하는 edge들을 따라가며 연속 체인 형성.
+    // smooth group의 연속된 perimeter는 하나의 "arc"로 인식됨.
+    const adj = new Map<string, EdgeRec[]>();
+    for (const e of perimeter) {
+      (adj.get(e.fromKey) ?? adj.set(e.fromKey, []).get(e.fromKey)!).push(e);
+      (adj.get(e.toKey) ?? adj.set(e.toKey, []).get(e.toKey)!).push(e);
+    }
+    const visited = new Set<EdgeRec>();
+    const chains: EdgeRec[][] = [];
+    for (const start of perimeter) {
+      if (visited.has(start)) continue;
+      const chain: EdgeRec[] = [start];
+      visited.add(start);
+      // Forward walk from start.toKey
+      let frontierKey = start.toKey;
+      while (true) {
+        const neighbors = adj.get(frontierKey) ?? [];
+        const next = neighbors.find(e => !visited.has(e));
+        if (!next) break;
+        visited.add(next);
+        chain.push(next);
+        frontierKey = next.fromKey === frontierKey ? next.toKey : next.fromKey;
+        if (frontierKey === start.fromKey) break; // closed loop
+      }
+      // Backward walk from start.fromKey (in case chain is open)
+      let backKey = start.fromKey;
+      while (true) {
+        const neighbors = adj.get(backKey) ?? [];
+        const prev = neighbors.find(e => !visited.has(e));
+        if (!prev) break;
+        visited.add(prev);
+        chain.unshift(prev);
+        backKey = prev.fromKey === backKey ? prev.toKey : prev.fromKey;
+      }
+      chains.push(chain);
+    }
+
+    // ═══ Phase 3: 각 체인을 분석하여 표시 결정 ═══
+    // - 원형 감지: 닫힌 체인의 모든 vertex가 centroid에서 등거리 → R 라벨
+    // - 기타 체인: 단일 선분이면 길이 라벨, 다중 선분이면 총 길이 (⌒)
+    const colors = ['#ff6b6b', '#51cf66', '#4dabf7', '#ffd43b', '#cc5de8', '#ff922b'];
+    let colorIdx = 0;
+    const MAX_DIM_LABELS = 20;
+
+    for (const chain of chains) {
+      if (this.selectionDimLines.length >= MAX_DIM_LABELS) break;
+      const isClosed = chain.length > 1 &&
+        (chain[0].fromKey === chain[chain.length - 1].toKey ||
+         chain[0].fromKey === chain[chain.length - 1].fromKey ||
+         chain[0].toKey === chain[chain.length - 1].toKey ||
+         chain[0].toKey === chain[chain.length - 1].fromKey);
+
+      const color = colors[colorIdx++ % colors.length];
+
+      // 단일 선분 — 개별 치수 유지
+      if (chain.length === 1) {
+        const e = chain[0];
+        const len = e.from.distanceTo(e.to);
+        this.selectionDimLines.push({
+          from: e.from, to: e.to, text: this.units.format(len), color, editable: true,
+        });
+        continue;
+      }
+
+      // 체인의 모든 vertex 수집 (중복 제거)
+      const vertMap = new Map<string, THREE.Vector3>();
+      for (const e of chain) {
+        vertMap.set(e.fromKey, e.from);
+        vertMap.set(e.toKey, e.to);
+      }
+      const verts = Array.from(vertMap.values());
+
+      // centroid
+      const centroid = new THREE.Vector3();
+      for (const v of verts) centroid.add(v);
+      centroid.divideScalar(verts.length);
+
+      // 총 길이
+      let totalLen = 0;
+      for (const e of chain) totalLen += e.from.distanceTo(e.to);
+
+      // Phase 3: 원형(닫힌 체인 + 등거리) 감지
+      let isCircular = false;
+      let radius = 0;
+      if (isClosed && verts.length >= 8) {
+        // avg radius
+        let sumR = 0;
+        for (const v of verts) sumR += v.distanceTo(centroid);
+        const avgR = sumR / verts.length;
+        // 모든 vertex가 avgR에서 ±1% 이내면 원으로 인식
+        let maxDev = 0;
+        for (const v of verts) {
+          const dev = Math.abs(v.distanceTo(centroid) - avgR);
+          if (dev > maxDev) maxDev = dev;
+        }
+        if (maxDev < avgR * 0.01) {
+          isCircular = true;
+          radius = avgR;
+        }
+      }
+
+      if (isCircular) {
+        // 중심 → 첫 vertex로 R 라벨
+        this.selectionDimLines.push({
+          from: centroid,
+          to: verts[0],
+          text: `R ${this.units.format(radius)}`,
+          color,
+          editable: true,
+        });
+      } else {
+        // 체인 중간 edge 한 개 골라서 arc 심볼 + 총 길이
+        const mid = chain[Math.floor(chain.length / 2)];
+        const arcLabel = isClosed
+          ? `⌒ ${this.units.format(totalLen)} (닫힘)`
+          : `⌒ ${this.units.format(totalLen)}`;
+        this.selectionDimLines.push({
+          from: mid.from, to: mid.to, text: arcLabel, color, editable: false,
+        });
+      }
+    }
+
+    // 초과 시 요약 덧붙이기
+    if (chains.length > MAX_DIM_LABELS) {
+      // 라벨 배열은 이미 MAX로 잘렸고, 단순 경고만 debugLog
+      debugLog(`[Selection] ${chains.length} chains, showing ${MAX_DIM_LABELS}`);
+    }
+
     if (this.selectionDimLines.length > 0) {
       this.dimLabel.update(this.viewport.activeCamera, this.selectionDimLines);
     } else {
