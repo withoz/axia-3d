@@ -290,6 +290,76 @@ describe('ToolManager', () => {
         expect(bridge.flipFaces).not.toHaveBeenCalled();
       });
     });
+
+    // ── 파괴적/구조적 명령어 busy 가드 (2026-04-17) ──
+    describe('BUSY_BLOCKED_ACTIONS', () => {
+      it('delete blocks during busy tool', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([1, 2]);
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+
+        tm.executeAction('delete');
+        expect(bridge.batchDelete).not.toHaveBeenCalled();
+      });
+
+      it('delete works when idle', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([1, 2]);
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([]);
+        vi.spyOn(tm.selection, 'clearSelection').mockImplementation(() => {});
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+
+        tm.executeAction('delete');
+        expect(bridge.batchDelete).toHaveBeenCalledWith([1, 2], []);
+      });
+
+      it('redo blocks during busy tool', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+
+        tm.executeAction('redo');
+        expect(bridge.redo).not.toHaveBeenCalled();
+      });
+
+      it('redo works when idle', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+
+        tm.executeAction('redo');
+        expect(bridge.redo).toHaveBeenCalled();
+      });
+
+      it('group blocks during busy tool', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        const spy = vi.spyOn(tm.selection, 'groupSelected').mockReturnValue(null);
+
+        tm.executeAction('group');
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('make-component blocks during busy tool', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        // make-component 내부 호출 어느 것이든 확인 — bridge.makeComponent 존재 가정
+        (bridge as any).makeComponent = vi.fn();
+
+        tm.executeAction('make-component');
+        expect((bridge as any).makeComponent).not.toHaveBeenCalled();
+      });
+
+      it('undo during busy tool cancels the tool (CAD 관례, not blocked)', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        const cancelSpy = vi.spyOn(tm, 'cancelCurrentTool').mockImplementation(() => {});
+
+        tm.executeAction('undo');
+        expect(cancelSpy).toHaveBeenCalled();
+        expect(bridge.undo).not.toHaveBeenCalled();
+      });
+
+      it('non-destructive actions (select-all, deselect, etc.) are NOT blocked by busy', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        const spy = vi.spyOn(tm.selection, 'selectEverything').mockImplementation(() => {});
+
+        tm.executeAction('select-all');
+        expect(spy).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('syncMesh', () => {

@@ -248,7 +248,41 @@ export class ToolManager {
     }
   }
 
+  /**
+   * 도구가 작업 중일 때 실행하면 안 되는 파괴적/구조적 명령어들.
+   * `undo`는 예외 — busy 시 "현재 도구 취소"로 해석 (CAD 관례).
+   *
+   * 각 명령이 차단되는 이유 (2026-04-17):
+   *   delete         — Line/Push/Pull이 참조하는 face가 사라져 state 깨짐
+   *   flip-faces     — Push/Pull ghost 프리뷰의 normal 불일치
+   *   redo           — 도구 state와 topology 불일치 유발
+   *   group          — Drawing 중 그룹 생성 → 예측 불가
+   *   make-component — group과 동일
+   */
+  private static readonly BUSY_BLOCKED_ACTIONS = new Set([
+    'delete', 'flip-faces', 'redo', 'group', 'make-component',
+  ]);
+
+  /** 사용자 친화 명령어 이름 (Toast 메시지용) */
+  private static readonly ACTION_DISPLAY: Record<string, string> = {
+    'delete': '삭제',
+    'flip-faces': '면 반전',
+    'redo': '다시 실행',
+    'group': '그룹 만들기',
+    'make-component': '컴포넌트 변환',
+  };
+
   executeAction(action: string): void {
+    // ═══ Busy 가드 (2026-04-17) ═══
+    // 파괴적/구조적 명령은 도구가 작업 중일 때 차단.
+    // undo는 별도 처리 (아래 분기) — busy 시 "cancel" 의미로 사용.
+    if (ToolManager.BUSY_BLOCKED_ACTIONS.has(action) && this.isToolBusy()) {
+      const name = ToolManager.ACTION_DISPLAY[action] ?? action;
+      Toast.warning(`'${name}'은 도구 작업 중 실행할 수 없습니다 — Esc 또는 Space로 먼저 완료하세요`);
+      debugLog(`[Action] ${action} blocked — tool is busy`);
+      return;
+    }
+
     if (action === 'undo') {
       if (this.isToolBusy()) {
         debugLog('[Action] undo blocked — tool is active, cancelling tool instead');
@@ -289,18 +323,7 @@ export class ToolManager {
       }
     } else if (action === 'flip-faces') {
       // SketchUp "Reverse Faces" — 선택된 면의 노멀/winding 반전.
-      //
-      // Busy 가드 (2026-04-17): 다른 도구가 진행 중이면 flip을 금지.
-      // 사유:
-      //   - Push/Pull ghost 프리뷰가 캡처한 normal과 실제 face normal 불일치 방지
-      //   - Draw 도중 face 인덱스 참조 안정성 보호
-      //   - Undo 체인이 도구 완료와 flip 이 얽히는 것 방지
-      // 사용자는 Escape 또는 Space로 현재 도구를 먼저 종료해야 함.
-      if (this.isToolBusy()) {
-        Toast.warning('진행 중인 도구를 완료한 후 면을 반전하세요 (Esc 또는 Space)');
-        return;
-      }
-
+      // Busy 가드는 executeAction 진입부의 BUSY_BLOCKED_ACTIONS에서 일괄 처리.
       const faces = this.selection.getSelectedFaces();
       if (faces.length === 0) {
         Toast.warning('반전할 면을 먼저 선택하세요');
