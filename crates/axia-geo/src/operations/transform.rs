@@ -2,11 +2,17 @@
 //!
 //! face 집합에 속한 정점들을 변환.
 //! 정점 단위로 변환하므로 DCEL 토폴로지는 변경되지 않음.
+//!
+//! Geometric Validity Guards (ADR-003):
+//! - translate: delta가 유한해야 함
+//! - rotate: angle이 유한, axis가 단위벡터에 근접
+//! - scale: 각 축 factor가 유한하고, 결과 extent가 EPSILON_LENGTH 이상
 
 use glam::{DVec3, DMat3};
-use anyhow::Result;
+use anyhow::{Result, ensure, bail};
 
 use crate::mesh::Mesh;
+use crate::tolerances::EPSILON_LENGTH;
 use crate::{FaceId, VertId};
 
 /// Transform 결과
@@ -25,6 +31,13 @@ impl Mesh {
         face_ids: &[FaceId],
         delta: DVec3,
     ) -> Result<TransformResult> {
+        // Geometric Validity Guard (ADR-003): 유한값 검증
+        ensure!(
+            delta.x.is_finite() && delta.y.is_finite() && delta.z.is_finite(),
+            "translate delta must be finite, got ({}, {}, {})",
+            delta.x, delta.y, delta.z
+        );
+
         let vert_ids = self.collect_face_verts(face_ids)?;
 
         for &vid in &vert_ids {
@@ -52,6 +65,21 @@ impl Mesh {
         axis: DVec3,
         angle_rad: f64,
     ) -> Result<TransformResult> {
+        // Geometric Validity Guard (ADR-003)
+        ensure!(
+            angle_rad.is_finite(),
+            "rotate angle must be finite, got {}",
+            angle_rad
+        );
+        ensure!(
+            center.x.is_finite() && center.y.is_finite() && center.z.is_finite(),
+            "rotate center must be finite"
+        );
+        ensure!(
+            axis.length_squared() > EPSILON_LENGTH * EPSILON_LENGTH,
+            "rotation axis must be a non-zero vector"
+        );
+
         let vert_ids = self.collect_face_verts(face_ids)?;
         let rot = rotation_matrix(axis.normalize(), angle_rad);
 
@@ -72,13 +100,83 @@ impl Mesh {
     }
 
     /// 지정된 face들의 모든 정점을 center 기준으로 스케일
+    ///
+    /// # Guards (ADR-003)
+    /// - `scale` 성분이 모두 유한해야 함
+    /// - 어느 축이든 `|scale| == 0.0` 거부 (즉시 degenerate)
+    /// - 결과 bbox의 어느 축이든 < EPSILON_LENGTH면 거부 (스케일 다운이 degenerate 만드는 경우)
     pub fn scale_faces(
         &mut self,
         face_ids: &[FaceId],
         center: DVec3,
         scale: DVec3,
     ) -> Result<TransformResult> {
+        // ─── Validity Guards ────────────────────────────────────────────
+        ensure!(
+            scale.x.is_finite() && scale.y.is_finite() && scale.z.is_finite(),
+            "scale factors must be finite, got ({}, {}, {})",
+            scale.x, scale.y, scale.z
+        );
+        ensure!(
+            center.x.is_finite() && center.y.is_finite() && center.z.is_finite(),
+            "scale center must be finite"
+        );
+        ensure!(
+            scale.x != 0.0 && scale.y != 0.0 && scale.z != 0.0,
+            "scale factor cannot be exactly zero (would collapse to plane/line/point)"
+        );
+
         let vert_ids = self.collect_face_verts(face_ids)?;
+
+        // 결과 bbox 사전 계산 → degenerate 여부 판정
+        if !vert_ids.is_empty() {
+            let mut min = DVec3::splat(f64::INFINITY);
+            let mut max = DVec3::splat(f64::NEG_INFINITY);
+            for &vid in &vert_ids {
+                if let Some(v) = self.verts.get(vid) {
+                    let p = v.pos() - center;
+                    let scaled = DVec3::new(p.x * scale.x, p.y * scale.y, p.z * scale.z);
+                    let new_pos = scaled + center;
+                    min = min.min(new_pos);
+                    max = max.max(new_pos);
+                }
+            }
+            let extent = max - min;
+            // Face 집합의 기존 차원 (예: 평면 face는 한 축이 0)을 고려해
+            // "기존에 extent > EPSILON 이었는데 스케일 후 < EPSILON"인 경우만 거부
+            // 현재 구현은 단순 3D bbox 체크 → 평면 face의 scale은 한 축이 원래 0이므로 무시
+            let mut collapsed_axes = 0;
+            if extent.x < EPSILON_LENGTH { collapsed_axes += 1; }
+            if extent.y < EPSILON_LENGTH { collapsed_axes += 1; }
+            if extent.z < EPSILON_LENGTH { collapsed_axes += 1; }
+
+            // 원본 extent 계산
+            let mut orig_min = DVec3::splat(f64::INFINITY);
+            let mut orig_max = DVec3::splat(f64::NEG_INFINITY);
+            for &vid in &vert_ids {
+                if let Some(v) = self.verts.get(vid) {
+                    orig_min = orig_min.min(v.pos());
+                    orig_max = orig_max.max(v.pos());
+                }
+            }
+            let orig_extent = orig_max - orig_min;
+            let mut orig_collapsed_axes = 0;
+            if orig_extent.x < EPSILON_LENGTH { orig_collapsed_axes += 1; }
+            if orig_extent.y < EPSILON_LENGTH { orig_collapsed_axes += 1; }
+            if orig_extent.z < EPSILON_LENGTH { orig_collapsed_axes += 1; }
+
+            // 스케일 후 새롭게 collapsed된 축이 있으면 거부
+            if collapsed_axes > orig_collapsed_axes {
+                bail!(
+                    "scale would collapse an axis below EPSILON_LENGTH ({}): \
+                     original extent=({:.4e},{:.4e},{:.4e}), scaled extent=({:.4e},{:.4e},{:.4e}) — \
+                     would create degenerate geometry (ADR-003)",
+                    EPSILON_LENGTH,
+                    orig_extent.x, orig_extent.y, orig_extent.z,
+                    extent.x, extent.y, extent.z
+                );
+            }
+        }
 
         for &vid in &vert_ids {
             if let Some(vert) = self.verts.get_mut(vid) {
@@ -239,5 +337,89 @@ mod tests {
         let c = mesh.faces_centroid(&faces).unwrap();
         assert!((c.x - 0.5).abs() < 0.01);
         assert!((c.z - 0.5).abs() < 0.01);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Geometric Validity Guards (ADR-003)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn translate_rejects_nan_delta() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        let r = mesh.translate_faces(&faces, DVec3::new(f64::NAN, 0.0, 0.0));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn translate_rejects_infinity() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        let r = mesh.translate_faces(&faces, DVec3::new(f64::INFINITY, 0.0, 0.0));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn scale_rejects_zero_factor() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        // 어느 축이든 정확히 0 → 거부
+        assert!(mesh.scale_faces(&faces, DVec3::ZERO, DVec3::new(0.0, 1.0, 1.0)).is_err());
+        assert!(mesh.scale_faces(&faces, DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0)).is_err());
+        assert!(mesh.scale_faces(&faces, DVec3::ZERO, DVec3::new(1.0, 1.0, 0.0)).is_err());
+    }
+
+    #[test]
+    fn scale_rejects_nan_factor() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        let r = mesh.scale_faces(&faces, DVec3::ZERO, DVec3::new(f64::NAN, 1.0, 1.0));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn scale_rejects_subepsilon_collapse() {
+        // make_test_quad는 2D face이지만 이 테스트용으로 3D box 생성
+        let mut mesh = Mesh::default();
+        let mat = crate::MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0));
+        let base = mesh.add_face(&[v0, v3, v2, v1], mat).unwrap();
+        let pp = mesh.push_pull(base, 10.0, mat).unwrap();
+
+        // 박스의 모든 face 수집 (bottom + top + sides)
+        let all_faces: Vec<_> = mesh.faces.iter().map(|(id, _)| id).collect();
+
+        // 박스 extent = 10 × 10 × 10. Y축을 1e-8배 → 1e-7 → EPSILON_LENGTH(1e-6) 미만 → 거부
+        let r = mesh.scale_faces(&all_faces, DVec3::ZERO, DVec3::new(1.0, 1e-8, 1.0));
+        assert!(r.is_err(), "scaling down below EPSILON_LENGTH must be rejected");
+        let _ = pp;
+    }
+
+    #[test]
+    fn scale_accepts_reasonable_downscale() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        // 1/2 스케일 — 정상
+        let r = mesh.scale_faces(&faces, DVec3::ZERO, DVec3::splat(0.5));
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn rotate_rejects_nan_angle() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        let r = mesh.rotate_faces(&faces, DVec3::ZERO, DVec3::Y, f64::NAN);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn rotate_rejects_zero_axis() {
+        let mut mesh = Mesh::default();
+        let faces = make_test_quad(&mut mesh);
+        let r = mesh.rotate_faces(&faces, DVec3::ZERO, DVec3::ZERO, 1.0);
+        assert!(r.is_err());
     }
 }

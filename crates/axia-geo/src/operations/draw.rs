@@ -1,22 +1,47 @@
 //! Draw operations — Line, Rectangle, Circle.
 //!
 //! These create edges and optionally auto-close faces when a loop is detected.
+//!
+//! Geometric Validity Guards (ADR-003):
+//! - line: start != end (길이 ≥ EPSILON_LENGTH)
+//! - rectangle: width, height ≥ EPSILON_LENGTH
+//! - circle: radius ≥ EPSILON_LENGTH, segments ≥ 3
 
 use glam::DVec3;
-use anyhow::Result;
+use anyhow::{Result, ensure};
 
 use crate::entities::id::*;
 use crate::mesh::Mesh;
+use crate::tolerances::EPSILON_LENGTH;
 
 impl Mesh {
     /// Draw a line segment between two 3D points.
     /// Creates vertices (with dedup) and the connecting edge.
     /// Returns (v_start, v_end, edge_id).
+    ///
+    /// # Guards (ADR-003)
+    /// - 좌표 성분이 모두 유한
+    /// - 선의 길이 ≥ EPSILON_LENGTH (0-length line 거부)
     pub fn draw_line(
         &mut self,
         start: DVec3,
         end: DVec3,
     ) -> Result<(VertId, VertId, EdgeId)> {
+        ensure!(
+            start.x.is_finite() && start.y.is_finite() && start.z.is_finite(),
+            "draw_line start must be finite"
+        );
+        ensure!(
+            end.x.is_finite() && end.y.is_finite() && end.z.is_finite(),
+            "draw_line end must be finite"
+        );
+        ensure!(
+            (end - start).length() >= EPSILON_LENGTH,
+            "draw_line length {:.2e} below EPSILON_LENGTH {:.2e} — would create degenerate edge (ADR-003)",
+            (end - start).length(),
+            EPSILON_LENGTH
+        );
+
         let v0 = self.add_vertex(start);
         let v1 = self.add_vertex(end);
         let (edge_id, _) = self.add_edge(v0, v1)?;
@@ -25,6 +50,9 @@ impl Mesh {
 
     /// Draw a rectangle on a plane defined by center, normal, and up direction.
     /// Returns the face ID and the 4 vertex IDs.
+    ///
+    /// # Guards (ADR-003)
+    /// - width, height ≥ EPSILON_LENGTH
     pub fn draw_rectangle(
         &mut self,
         center: DVec3,
@@ -34,6 +62,21 @@ impl Mesh {
         height: f64,
         material: MaterialId,
     ) -> Result<(FaceId, [VertId; 4])> {
+        ensure!(
+            width.is_finite() && width >= EPSILON_LENGTH,
+            "draw_rectangle width {} below EPSILON_LENGTH {} (ADR-003)",
+            width, EPSILON_LENGTH
+        );
+        ensure!(
+            height.is_finite() && height >= EPSILON_LENGTH,
+            "draw_rectangle height {} below EPSILON_LENGTH {} (ADR-003)",
+            height, EPSILON_LENGTH
+        );
+        ensure!(
+            normal.length_squared() > EPSILON_LENGTH * EPSILON_LENGTH,
+            "draw_rectangle normal must be non-zero"
+        );
+
         let n = normal.normalize();
         let u = up.normalize();
         let v = n.cross(u).normalize();
@@ -53,6 +96,10 @@ impl Mesh {
 
     /// Draw a regular polygon (approximation of circle) on a plane.
     /// Returns the face ID and vertex IDs.
+    ///
+    /// # Guards (ADR-003)
+    /// - radius ≥ EPSILON_LENGTH
+    /// - segments ≥ 3 (삼각형이 최소 다각형)
     pub fn draw_circle(
         &mut self,
         center: DVec3,
@@ -61,6 +108,21 @@ impl Mesh {
         segments: u32,
         material: MaterialId,
     ) -> Result<(FaceId, Vec<VertId>)> {
+        ensure!(
+            radius.is_finite() && radius >= EPSILON_LENGTH,
+            "draw_circle radius {} below EPSILON_LENGTH {} (ADR-003)",
+            radius, EPSILON_LENGTH
+        );
+        ensure!(
+            segments >= 3,
+            "draw_circle requires segments >= 3, got {}",
+            segments
+        );
+        ensure!(
+            normal.length_squared() > EPSILON_LENGTH * EPSILON_LENGTH,
+            "draw_circle normal must be non-zero"
+        );
+
         let n = normal.normalize();
 
         // Find a perpendicular basis vector
@@ -329,5 +391,80 @@ mod tests {
                 dist
             );
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Geometric Validity Guards (ADR-003)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn draw_line_rejects_zero_length() {
+        let mut m = Mesh::new();
+        let p = DVec3::new(1.0, 2.0, 3.0);
+        let r = m.draw_line(p, p);
+        assert!(r.is_err(), "zero-length line must be rejected");
+    }
+
+    #[test]
+    fn draw_line_rejects_subepsilon_length() {
+        let mut m = Mesh::new();
+        let p0 = DVec3::new(0.0, 0.0, 0.0);
+        let p1 = DVec3::new(EPSILON_LENGTH * 0.5, 0.0, 0.0);
+        let r = m.draw_line(p0, p1);
+        assert!(r.is_err(), "sub-epsilon line must be rejected");
+    }
+
+    #[test]
+    fn draw_line_rejects_nan_endpoint() {
+        let mut m = Mesh::new();
+        let r = m.draw_line(
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(f64::NAN, 0.0, 0.0),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn draw_rectangle_rejects_zero_width() {
+        let mut m = Mesh::new();
+        let r = m.draw_rectangle(
+            DVec3::ZERO, DVec3::Y, DVec3::X,
+            0.0, 1.0,
+            MaterialId::new(0),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn draw_rectangle_rejects_subepsilon() {
+        let mut m = Mesh::new();
+        let r = m.draw_rectangle(
+            DVec3::ZERO, DVec3::Y, DVec3::X,
+            EPSILON_LENGTH * 0.5, 1.0,
+            MaterialId::new(0),
+        );
+        assert!(r.is_err(), "sub-epsilon width must be rejected");
+    }
+
+    #[test]
+    fn draw_circle_rejects_zero_radius() {
+        let mut m = Mesh::new();
+        let r = m.draw_circle(
+            DVec3::ZERO, DVec3::Y,
+            0.0, 16,
+            MaterialId::new(0),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn draw_circle_rejects_too_few_segments() {
+        let mut m = Mesh::new();
+        let r = m.draw_circle(
+            DVec3::ZERO, DVec3::Y,
+            1.0, 2,  // 2 segments → 거부 (최소 3)
+            MaterialId::new(0),
+        );
+        assert!(r.is_err());
     }
 }

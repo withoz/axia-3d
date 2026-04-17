@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog, debugWarn } from '../utils/debug';
+import { Toast } from '../ui/Toast';
 
 export class PushPullTool implements ITool {
   readonly name = 'pushpull';
@@ -126,6 +127,11 @@ export class PushPullTool implements ITool {
           if (ok) {
             this.lastPPDist = dist;
             this.ctx.syncMesh();
+          } else {
+            const err = this.ctx.bridge.lastError();
+            if (err) {
+              Toast.error(`곡면 Push/Pull 실패: ${err}`, 3500);
+            }
           }
         } else {
           // 단일 면 push/pull
@@ -134,6 +140,14 @@ export class PushPullTool implements ITool {
           if (success) {
             this.lastPPDist = dist;
             this.ctx.syncMesh();
+          } else {
+            // ADR-003: degenerate 거부 등 실패 사유를 사용자에게 피드백
+            const err = this.ctx.bridge.lastError();
+            if (err) {
+              Toast.error(`Push/Pull 실패: ${err}`, 3500);
+            } else {
+              Toast.warn('Push/Pull이 실행되지 않았습니다', 2500);
+            }
           }
         }
       }

@@ -198,6 +198,11 @@ export class AxiaEngine {
      */
     is_face_locked(face_id_raw: number): boolean;
     /**
+     * 최근 실패한 연산의 에러 메시지를 반환. 실패 이력이 없으면 빈 문자열.
+     * TypeScript Bridge가 연산 반환값이 false일 때 이 값을 Toast로 표시.
+     */
+    lastError(): string;
+    /**
      * 그룹을 컴포넌트로 변환
      */
     make_component(group_id: number, name: string): number;
@@ -397,6 +402,7 @@ export interface InitOutput {
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
+    readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_new: () => number;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;

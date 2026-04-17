@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { debugLog, debugWarn } from '../utils/debug';
+import { COS_SMOOTH_GROUP, COS_EXACT_COPLANAR } from '../constants';
 
 export interface SelectionState {
   /** 현재 선택된 Rust FaceId 집합 */
@@ -873,13 +874,13 @@ export class SelectionManager {
    * 직각 모서리(90°)는 넘지 않으므로 상자의 각 면은 개별 선택됩니다.
    */
   private findSmoothGroup(seedFaceId: number): Set<number> {
-    const ANGLE_THRESHOLD = 30.1; // degrees (0.1° epsilon — 저분할 원통/원뿔 경계 안정화)
-    const cosThreshold = Math.cos(ANGLE_THRESHOLD * Math.PI / 180);
-    // Upper bound: exclude perfectly coplanar neighbors (same plane, split by a
-    // HARD edge). These are split sub-faces, NOT a curved surface.
-    // cos(0.1°) ≈ 0.9999985 — cylinders (22.5° between 16 segments → cos≈0.924)
-    // and smooth cones still merge, but coplanar split siblings do not.
-    const EXACT_COPLANAR = Math.cos(0.1 * Math.PI / 180);
+    // Lower bound: angle < SMOOTH_GROUP_ANGLE_DEG → merge into smooth group
+    // Upper bound: angle > EXACT_COPLANAR_ANGLE_DEG → must NOT be split sibling
+    // → 결합 조건: EXACT_COPLANAR < angle < SMOOTH_GROUP
+    //   즉, dot in (COS_SMOOTH_GROUP, COS_EXACT_COPLANAR)
+    // 자세한 상수 관계는 constants.ts / tolerances.rs 참조.
+    const cosThreshold = COS_SMOOTH_GROUP;
+    const EXACT_COPLANAR = COS_EXACT_COPLANAR;
 
     if (this.faceMap.length === 0 || this.positions.length === 0 || this.indices.length === 0) {
       return new Set([seedFaceId]);

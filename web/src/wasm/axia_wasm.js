@@ -711,6 +711,27 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * 최근 실패한 연산의 에러 메시지를 반환. 실패 이력이 없으면 빈 문자열.
+     * TypeScript Bridge가 연산 반환값이 false일 때 이 값을 Toast로 표시.
+     * @returns {string}
+     */
+    lastError() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_lastError(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * 그룹을 컴포넌트로 변환
      * @param {number} group_id
      * @param {string} name

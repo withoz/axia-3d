@@ -196,6 +196,15 @@ impl Mesh {
         dist: f64,
         material: MaterialId,
     ) -> Result<PushPullResult> {
+        // ─── Geometric Validity Guard (ADR-003) ─────────────────────────
+        // NaN/Inf 입력 차단 — WASM 바인딩 실수 등으로 들어올 수 있음
+        ensure!(
+            dist.is_finite(),
+            "push_pull distance must be finite, got {}",
+            dist
+        );
+
+        // dist == 0은 no-op (유효한 호출로 처리)
         if dist == 0.0 {
             return Ok(PushPullResult {
                 base_face: face_id,
@@ -207,6 +216,14 @@ impl Mesh {
                 split_debug: Vec::new(),
             });
         }
+
+        // |dist| < EPSILON_LENGTH: degenerate 기하 생성 거부
+        ensure!(
+            dist.abs() >= crate::tolerances::EPSILON_LENGTH,
+            "push_pull distance {} below EPSILON_LENGTH ({}) — would create degenerate geometry (ADR-003)",
+            dist,
+            crate::tolerances::EPSILON_LENGTH
+        );
 
         ensure!(self.faces.contains(face_id), "Face {:?} not found", face_id);
 
@@ -863,5 +880,88 @@ mod tests {
 
         let r = m.push_pull(f, 0.1, mat);
         assert!(r.is_ok(), "should handle tiny faces");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Geometric Validity Guards (ADR-003)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn pushpull_rejects_nan_distance() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(f, f64::NAN, mat);
+        assert!(r.is_err(), "NaN distance must be rejected");
+        assert!(
+            r.unwrap_err().to_string().contains("finite"),
+            "error message should mention finite"
+        );
+    }
+
+    #[test]
+    fn pushpull_rejects_infinity_distance() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        assert!(m.push_pull(f, f64::INFINITY, mat).is_err());
+        assert!(m.push_pull(f, f64::NEG_INFINITY, mat).is_err());
+    }
+
+    #[test]
+    fn pushpull_accepts_exactly_zero_as_noop() {
+        // dist == 0.0은 no-op으로 유효 처리 (거부 아님)
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let faces_before = m.face_count();
+
+        let r = m.push_pull(f, 0.0, mat);
+        assert!(r.is_ok(), "zero distance should be no-op, not error");
+        assert_eq!(m.face_count(), faces_before, "zero dist should not change mesh");
+    }
+
+    #[test]
+    fn pushpull_rejects_subepsilon_distance() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        // EPSILON_LENGTH의 절반 → degenerate, 거부되어야 함
+        let r = m.push_pull(f, EPSILON_LENGTH * 0.5, mat);
+        assert!(r.is_err(), "sub-epsilon distance must be rejected");
+        let msg = r.unwrap_err().to_string();
+        assert!(
+            msg.contains("degenerate") || msg.contains("EPSILON"),
+            "error message should mention degenerate/EPSILON, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn pushpull_rejects_negative_subepsilon() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        // 음수도 절댓값 기준 — push와 pull 모두 차단
+        let r = m.push_pull(f, -EPSILON_LENGTH * 0.5, mat);
+        assert!(r.is_err(), "sub-epsilon negative distance must be rejected");
+    }
+
+    #[test]
+    fn pushpull_accepts_exactly_epsilon() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        // EPSILON_LENGTH와 동일 → 경계값, 허용
+        let r = m.push_pull(f, EPSILON_LENGTH, mat);
+        assert!(r.is_ok(), "exactly epsilon distance should be accepted");
     }
 }

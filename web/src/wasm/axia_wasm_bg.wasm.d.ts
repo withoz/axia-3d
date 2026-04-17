@@ -49,6 +49,7 @@ export const axiaengine_group_count: (a: number) => number;
 export const axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
 export const axiaengine_is_face_locked: (a: number, b: number) => number;
+export const axiaengine_lastError: (a: number, b: number) => void;
 export const axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_new: () => number;
 export const axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;

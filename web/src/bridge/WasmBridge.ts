@@ -56,6 +56,8 @@ interface WasmDeltaBuffers {
 }
 
 type AxiaEngineExtended = AxiaEngine & {
+  // Error reporting — last failed op's message (ADR-003)
+  lastError?(): string;
   // Edge/geometry queries
   get_edge_lines?(): Float32Array;
   get_edge_map?(): Uint32Array;
@@ -218,6 +220,19 @@ export class WasmBridge {
     if (!this.engine) return false;
     this.markDirty();
     return this.engine.push_pull(faceId, dist);
+  }
+
+  /**
+   * WASM 엔진의 마지막 실패 메시지 반환. 성공 이력만 있으면 빈 문자열.
+   * 연산이 false를 반환했을 때 이 값으로 Toast/UI 피드백 표시 (ADR-003).
+   */
+  lastError(): string {
+    if (!this.engine) return '';
+    try {
+      return this.engine.lastError?.() ?? '';
+    } catch {
+      return '';
+    }
   }
 
   undo(): boolean {

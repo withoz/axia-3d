@@ -136,6 +136,11 @@ pub struct AxiaEngine {
     /// Maps face_id (raw u32) → FaceRange in the full cached buffer.
     /// Built during rebuild_cache() for fast face→buffer offset lookups.
     face_range_map: HashMap<u32, FaceRange>,
+
+    /// 가장 최근 실패한 기하 연산의 에러 메시지.
+    /// TypeScript에서 `last_error()`로 읽어서 Toast에 표시.
+    /// 성공한 연산은 이 값을 비우지 않음 (persistent until next failure).
+    last_error: String,
 }
 
 #[wasm_bindgen]
@@ -156,7 +161,25 @@ impl AxiaEngine {
             cache_version: 0,
             topology_changed: true,  // first render always needs full build
             face_range_map: HashMap::new(),
+            last_error: String::new(),
         }
+    }
+
+    /// 최근 실패한 연산의 에러 메시지를 반환. 실패 이력이 없으면 빈 문자열.
+    /// TypeScript Bridge가 연산 반환값이 false일 때 이 값을 Toast로 표시.
+    #[wasm_bindgen(js_name = "lastError")]
+    pub fn last_error(&self) -> String {
+        self.last_error.clone()
+    }
+
+    /// 에러 기록용 내부 헬퍼. 각 연산이 실패 시 호출.
+    fn set_error(&mut self, msg: impl Into<String>) {
+        self.last_error = msg.into();
+    }
+
+    /// 성공 시 에러 상태 clear (다음 실패까지 빈 문자열 유지)
+    fn clear_error(&mut self) {
+        self.last_error.clear();
     }
 
     fn rebuild_cache(&mut self) {
@@ -180,8 +203,9 @@ impl AxiaEngine {
             }
         }
         // Edge lines are computed from DCEL topology (not from triangle geometry)
-        // 30° threshold: 원통 옆면(인접 면 15°)은 soft edge, 직각(90°)은 hard edge
-        let (edge_lines, edge_map) = self.scene.export_edge_lines_with_map(30.0);
+        // EDGE_VISIBILITY_ANGLE_DEG (30°): 원통 옆면은 soft edge, 직각은 hard edge
+        let (edge_lines, edge_map) = self.scene
+            .export_edge_lines_with_map(axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG);
         self.cached_edge_lines = edge_lines;
         self.cached_edge_map = edge_map;
         self.cache_dirty = false;
@@ -236,11 +260,13 @@ impl AxiaEngine {
 
     /// Check if all faces in the group share the same normal (coplanar).
     ///
-    /// Returns true if every pair of faces has |dot(n_i, n_j)| ≥ cos(0.1°).
+    /// Returns true if every pair of faces has |dot(n_i, n_j)| ≥ cos(EXACT_COPLANAR_ANGLE_DEG).
     /// Used to detect when a "smooth group" is actually split sub-faces of
     /// a single plane, which must NOT be treated as a curved surface.
     fn all_faces_coplanar(&self, face_ids: &[FaceId]) -> bool {
-        const EXACT_COPLANAR_COS: f64 = 0.9999985;  // cos(0.1°) ≈ 0.9999985
+        let exact_coplanar_cos = axia_geo::tolerances::deg_to_cos(
+            axia_geo::tolerances::EXACT_COPLANAR_ANGLE_DEG,
+        );
         if face_ids.len() < 2 { return true; }
 
         let reference = match self.scene.mesh.faces.get(face_ids[0]) {
@@ -259,7 +285,7 @@ impl AxiaEngine {
                 let len = n.length();
                 if len < 1e-10 { return false; }
                 let n_unit = n / len;
-                if reference.dot(n_unit).abs() < EXACT_COPLANAR_COS {
+                if reference.dot(n_unit).abs() < exact_coplanar_cos {
                     return false;
                 }
             } else {
@@ -593,6 +619,7 @@ impl AxiaEngine {
             }
             axia_core::commands::CommandResult::Error(e) => {
                 console_error!("[RUST] push_pull ERROR: {}", e);
+                self.set_error(e.to_string());
                 false
             }
             _ => {
@@ -1621,6 +1648,7 @@ impl AxiaEngine {
             }
             Err(e) => {
                 console_error!("[RUST] translate ERROR: {}", e);
+                self.set_error(format!("translate: {}", e));
                 false
             }
         }
@@ -1655,6 +1683,7 @@ impl AxiaEngine {
             }
             Err(e) => {
                 console_error!("[RUST] rotate ERROR: {}", e);
+                self.set_error(format!("rotate: {}", e));
                 false
             }
         }
@@ -1687,6 +1716,7 @@ impl AxiaEngine {
             }
             Err(e) => {
                 console_error!("[RUST] scale ERROR: {}", e);
+                self.set_error(format!("scale: {}", e));
                 false
             }
         }
