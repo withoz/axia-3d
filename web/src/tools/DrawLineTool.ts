@@ -64,6 +64,8 @@ export class DrawLineTool implements ITool {
   // Face Split — track which face is being drawn on
   private startFaceId: number = -1;
   private endFaceId: number = -1;
+  /** 현재 마우스 커서가 올라간 face ID (mousemove 갱신). -1 = 허공. */
+  private hoverFaceId: number = -1;
 
   // Chain tracking — first point of continuous drawing chain (for loop close detection)
   private chainStartPoint: THREE.Vector3 | null = null;
@@ -131,6 +133,13 @@ export class DrawLineTool implements ITool {
   }
 
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+    // 면 분할 프리뷰용: 현재 hover face 추적 (drawing 중일 때만 의미 있음)
+    if (this.state === LineDrawState.Drawing) {
+      this.hoverFaceId = this.pickFaceAtMouse(e);
+    } else {
+      this.hoverFaceId = -1;
+    }
+
     // Check for loop close proximity (snap to chain start point)
     const loopClosePoint = this.checkLoopClose(e);
     if (loopClosePoint) {
@@ -266,6 +275,7 @@ export class DrawLineTool implements ITool {
         this.chainStartPoint = null;
         this.startFaceId = -1;
         this.endFaceId = -1;
+        this.hoverFaceId = -1;
         this.removeLinePreview();
         this.removeStartDot();
         this.ctx.clearAxisGuide();
@@ -296,6 +306,7 @@ export class DrawLineTool implements ITool {
           this.chainStartPoint = null;
           this.startFaceId = -1;
           this.endFaceId = -1;
+          this.hoverFaceId = -1;
           this.ctx.clearAxisGuide();
           this.ctx.dimLabel.clear();
           this.ctx.axisLock = null;
@@ -388,7 +399,11 @@ export class DrawLineTool implements ITool {
       if (result.error) {
         // ADR-003 가드, 인접 정점 거부 등 → 사용자에게 원인 전달
         debugLog(`[FaceSplit] Engine error: ${result.error} — falling back to drawLine`);
-        Toast.warn(`면 분할 실패: ${this.friendlyErrorMessage(result.error)} — 일반 선으로 그립니다`, 3000);
+        // 친절 메시지는 원인+해결책을 한 줄에 담기에 조금 더 긴 표시 시간 허용
+        Toast.warn(
+          `면 분할 실패: ${this.friendlyErrorMessage(result.error)} — 일반 선으로 그립니다`,
+          4500,
+        );
         return this.fallbackDrawLine(start, end, len);
       }
 
@@ -413,21 +428,40 @@ export class DrawLineTool implements ITool {
     }
   }
 
-  /** Rust 에러 메시지를 사용자 친화 한국어로 변환. */
+  /**
+   * Rust 에러 메시지를 사용자 친화 한국어로 변환.
+   * "원인 + 해결 방법"을 한 줄에 담아 사용자가 다음 액션을 즉시 이해하도록 함.
+   */
   private friendlyErrorMessage(err: string): string {
+    // 길이 관련
     if (err.includes('degenerate') || err.includes('EPSILON')) {
-      return '분할선이 너무 짧습니다';
+      return '분할선이 너무 짧습니다 (시작점과 끝점을 더 떨어뜨리세요)';
     }
+    // 인접 정점 — 사용자 관점에서 왜/어떻게
     if (err.includes('adjacent')) {
-      return '인접한 정점을 이을 수 없습니다';
+      return '이미 이어진 모서리 위의 두 점은 분할에 사용할 수 없습니다 — 반대쪽 모서리나 면 안쪽을 끝점으로 하세요';
     }
+    // 수치 이상
     if (err.includes('finite')) {
-      return '분할 좌표가 유효하지 않습니다';
+      return '분할 좌표가 유효하지 않습니다 (NaN/Infinity) — 스냅을 확인하세요';
     }
+    // 대상 면 사라짐
     if (err.includes('not found')) {
-      return '대상 면을 찾을 수 없습니다';
+      return '대상 면을 찾을 수 없습니다 (이미 삭제되었거나 선택 해제됨)';
     }
-    return err; // 원본 유지
+    // 같은 정점 중복
+    if (err.includes('same vertex')) {
+      return '시작점과 끝점이 같은 정점입니다';
+    }
+    // 내부 점 해석 실패
+    if (err.includes('Could not resolve')) {
+      return '분할선 위치를 경계에서 찾지 못했습니다 — 면 가장자리 근처에서 다시 시도하세요';
+    }
+    // 경계 정점 없음
+    if (err.includes('boundary')) {
+      return '면 경계 위에 분할 끝점을 놓아주세요';
+    }
+    return err; // 원본 유지 (예상 못 한 에러)
   }
 
   /**
@@ -623,8 +657,19 @@ export class DrawLineTool implements ITool {
       x: 'X축', y: 'Y축(높이)', z: 'Z축', free: '',
     };
 
+    // ──── 분할 예정 감지 ────────────────────────────────────────
+    // startFaceId가 유효하고 현재 같은 face 위라면 두 번째 클릭 시 face split 발생.
+    // 사용자에게 시각적으로 "이 선은 면을 자른다" 신호를 보라색으로 전달.
+    const willSplit =
+      this.startFaceId >= 0 && this.hoverFaceId === this.startFaceId;
+
+    const SPLIT_COLOR = 0xa855f7;     // 보라 — 분할 예정
+    const SPLIT_COLOR_STR = '#a855f7';
+    const lineColor = willSplit ? SPLIT_COLOR : axisColors[axis];
+    const lineColorStr = willSplit ? SPLIT_COLOR_STR : axisColorStr[axis];
+
     // Preview line
-    this.renderLinePreview(this.startPoint, this.previewEnd, axisColors[axis]);
+    this.renderLinePreview(this.startPoint, this.previewEnd, lineColor, willSplit);
 
     // Axis guide
     this.ctx.updateAxisGuide(this.startPoint, axis, this.previewEnd);
@@ -632,19 +677,27 @@ export class DrawLineTool implements ITool {
     // Dimension label
     const len = this.startPoint.distanceTo(this.previewEnd);
     if (len > 0.1) {
-      const label = axisNames[axis]
+      const baseLabel = axisNames[axis]
         ? `${axisNames[axis]} ${this.ctx.units.format(len)}`
         : this.ctx.units.format(len);
+      // 분할 예정이면 라벨 앞에 표시기 추가
+      const label = willSplit ? `\u2702 ${baseLabel}` : baseLabel;
       this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-        { from: this.startPoint.clone(), to: this.previewEnd.clone(), text: label, color: axisColorStr[axis] },
+        { from: this.startPoint.clone(), to: this.previewEnd.clone(), text: label, color: lineColorStr },
       ]);
     }
   }
 
   /**
    * Render the temporary line preview in 3D.
+   * When `dashed` is true, renders as a dashed line (used for "will split" preview).
    */
-  private renderLinePreview(start: THREE.Vector3, end: THREE.Vector3, color: number): void {
+  private renderLinePreview(
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    color: number,
+    dashed: boolean = false,
+  ): void {
     this.removeLinePreview();
 
     const offset = 0.5; // Y offset to prevent z-fighting with ground
@@ -653,6 +706,21 @@ export class DrawLineTool implements ITool {
       new THREE.Vector3(end.x, end.y + offset, end.z),
     ];
     const geo = new THREE.BufferGeometry().setFromPoints(points);
+    if (dashed) {
+      // 분할 예정 — 점선 + 보라색으로 "이 선은 면을 자른다" 신호
+      const mat = new THREE.LineDashedMaterial({
+        color,
+        linewidth: 1,
+        dashSize: 80,   // mm 단위 (씬 스케일에 맞춤)
+        gapSize: 40,
+        depthTest: true,
+      });
+      this.linePreview = new THREE.Line(geo, mat);
+      this.linePreview.computeLineDistances(); // LineDashedMaterial 필수
+      this.linePreview.renderOrder = 999;
+      this.ctx.viewport.scene.add(this.linePreview);
+      return;
+    }
     const mat = new THREE.LineBasicMaterial({
       color,
       linewidth: 1,

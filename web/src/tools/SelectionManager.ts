@@ -70,10 +70,14 @@ export class SelectionManager {
   private selectionChangeListeners: Array<(faces: number[]) => void> = [];
 
   // ── 하이라이트 색상 ──
-  private static readonly HOVER_COLOR = 0x4fc3f7;    // 밝은 파랑
-  private static readonly HOVER_OPACITY = 0.08;       // 매우 은은한 오버레이
-  private static readonly SELECT_COLOR = 0x2196f3;   // 파랑
+  // Face: 파랑(fill) — 기존 유지
+  // Edge: 오렌지(line) — 기본 엣지 색(#333366) 및 face 선택색과 명확히 구분 (2026-04-17)
+  // Hover: 밝은 파랑 — 엣지 hover에도 공용
+  private static readonly HOVER_COLOR = 0x4fc3f7;       // 밝은 파랑
+  private static readonly HOVER_OPACITY = 0.08;          // 매우 은은한 오버레이
+  private static readonly SELECT_COLOR = 0x2196f3;      // 파랑 — face 선택
   private static readonly SELECT_OPACITY = 0.18;
+  private static readonly EDGE_SELECT_COLOR = 0xff6f00;  // 오렌지 — edge 선택 (대비↑)
 
   constructor(scene: THREE.Scene) {
     this.highlightGroup = new THREE.Group();
@@ -1052,8 +1056,8 @@ export class SelectionManager {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     const mat = new THREE.LineBasicMaterial({
-      color: SelectionManager.SELECT_COLOR,
-      linewidth: 3,
+      color: SelectionManager.EDGE_SELECT_COLOR,  // 오렌지 — face 선택(파랑)과 구분
+      linewidth: 3,  // 대부분 브라우저가 clamp(1)하지만 지원 시 굵게
       depthTest: false,
     });
     this.edgeSelectionLine = new THREE.LineSegments(geo, mat);
