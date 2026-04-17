@@ -78,12 +78,11 @@ impl Mesh {
         ));
 
         // ── Stage 0.5: 공면 face 감지 ─────────────────
-        let (coplanar_intersections, mut intersections) =
-            self.detect_coplanar_faces(&solid_a, &solid_b);
+        let coplanar_intersections = self.detect_coplanar_faces(&solid_a, &solid_b);
+        let coplanar_count = coplanar_intersections.len();
 
         // ── Stage 1: 교차선 수집 ─────────────────────
-        let coplanar_count = coplanar_intersections.len();
-        intersections.extend(coplanar_intersections);
+        let intersections: Vec<IntersectionSegment> = coplanar_intersections;
         debug.push(format!("Intersections found: {} (including {} coplanar)",
             intersections.len(), coplanar_count));
 
@@ -487,13 +486,17 @@ impl Mesh {
     /// ── Stage 0.5: 공면 face 감지 ────────────────────
     /// A와 B의 두 solids에서 같은 평면에 있는 face 쌍을 찾아서
     /// pseudo-intersection을 생성해 face split을 유도
+    ///
+    /// G-3 fix: 반환 타입을 단순화 — 이전엔 `(coplanar_segs, regular_segs)` 튜플을
+    /// 반환했으나 `drain`으로 모두 regular에 옮긴 뒤 빈 coplanar를 반환하여
+    /// 호출자의 debug log가 항상 "0 coplanar"로 찍히는 버그가 있었음.
+    /// 이제는 공면 세그먼트만 단일 벡터로 반환.
     fn detect_coplanar_faces(
         &self,
         solid_a: &SolidData,
         solid_b: &SolidData,
-    ) -> (Vec<IntersectionSegment>, Vec<IntersectionSegment>) {
+    ) -> Vec<IntersectionSegment> {
         let mut coplanar_segs = Vec::new();
-        let mut regular_segs = Vec::new();
 
         for &fid_a in &solid_a.face_ids {
             let face_a = match self.faces.get(fid_a) {
@@ -546,12 +549,7 @@ impl Mesh {
             }
         }
 
-        // 겹치는 것 제거 후 반환
-        for seg in coplanar_segs.drain(..) {
-            regular_segs.push(seg);
-        }
-
-        (coplanar_segs, regular_segs)
+        coplanar_segs
     }
 
     /// ── Stage 6: 공면 face 병합 ───────────────────
@@ -590,8 +588,14 @@ impl Mesh {
                         if fa.is_active() && fb.is_active() {
                             let na = fa.normal();
                             let nb = fb.normal();
-                            if (na.dot(nb).abs() - 1.0).abs() < 1e-6 {
-                                // 공면이므로 공유 edge를 찾아서 merge 시도
+                            // G-2 fix: 법선 평행 체크 + 점-평면 거리 체크 (are_faces_coplanar_strict)
+                            // 이전엔 법선만 비교하여 "같은 방향, 다른 높이"인 평행 면도
+                            // 공면으로 오판 → merge_faces_by_edge가 degenerate face 생성 위험.
+                            let parallel = (na.dot(nb).abs() - 1.0).abs() < 1e-6;
+                            let coplanar = parallel
+                                && self.are_faces_coplanar_strict(fid_a, fid_b).unwrap_or(false);
+                            if coplanar {
+                                // 공유 edge를 찾아서 merge 시도
                                 if let Some(shared_edge) = self.find_shared_edge_between_faces(fid_a, fid_b) {
                                     let _ = self.merge_faces_by_edge(shared_edge);
                                 }

@@ -157,16 +157,35 @@ impl Mesh {
 
     /// Flip a face: reverse boundary winding and negate the stored normal.
     ///
-    /// Internal use only (Boolean ops). Does NOT handle inner loops or validate
-    /// degeneracy. For the public API use `flip_face_safe` / `flip_faces`.
+    /// Internal use (Boolean ops / neighbor orientation propagation).
+    /// Does NOT validate degeneracy — caller must ensure face is valid.
+    /// Reverses both the outer loop and all inner loops (holes) so that
+    /// winding remains consistent for faces with holes.
+    /// Use `flip_face_safe` for user-triggered commands (adds validation).
     pub(crate) fn flip_face(&mut self, face_id: FaceId) -> Result<()> {
         // Negate stored normal
         let normal = self.faces[face_id].normal();
         self.faces[face_id].set_normal(-normal);
 
         // Reverse the outer loop
-        let start = self.faces[face_id].outer().start;
-        self.reverse_loop(start)?;
+        let outer_start = self.faces[face_id].outer().start;
+        self.reverse_loop(outer_start)?;
+
+        // ── B-1 fix: Reverse every inner loop (holes) to keep winding consistent ──
+        // Previously only the outer loop was reversed, leaving hole windings inverted
+        // relative to the new normal. Boolean Subtract on faces with holes produced
+        // corrupt geometry.
+        let inner_starts: Vec<HeId> = self.faces[face_id]
+            .inners()
+            .iter()
+            .map(|l| l.start)
+            .collect();
+        for start in inner_starts {
+            if !start.is_null() {
+                self.reverse_loop(start)?;
+            }
+        }
+
         Ok(())
     }
 
