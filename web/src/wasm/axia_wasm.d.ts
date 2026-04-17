@@ -123,6 +123,18 @@ export class AxiaEngine {
      */
     getSnapVerticesF64(): Float64Array;
     /**
+     * 씬에 존재하는 모든 XIA ID를 반환. 디버깅/열거용.
+     */
+    getXiaIds(): Uint32Array;
+    /**
+     * 특정 XIA ID에 대한 요약 JSON.
+     * `get_xia_info`는 face ID를 받지만, 이 함수는 **XIA ID를 직접 받는다**.
+     * 내부적으로 해당 XIA의 모든 face_ids를 수집해 `get_xia_info`와 동일한 JSON을 반환.
+     *
+     * XIA가 없으면 `{"empty":true}` 반환.
+     */
+    getXiaStats(xia_id: number): string;
+    /**
      * 전체 그룹 트리 JSON 반환
      */
     get_all_groups(): string;
@@ -185,10 +197,15 @@ export class AxiaEngine {
      */
     get_xia_for_face(face_id_raw: number): number;
     /**
-     * 선택된 face ID 배열에 대해 XIA 속성을 JSON으로 반환.
-     * 반환: { isSolid, bbox{minX,minY,minZ,maxX,maxY,maxZ}, length, width, height,
-     *         surfaceArea, volume, faceCount, vertCount, edgeCount, snapPoints,
-     *         shapeType }
+     * ⚠️ **파라미터는 FACE IDs** (XIA IDs 아님). XIA Inspector가 선택된 면들의
+     * 집계 속성을 계산하기 위한 함수. 이름의 "xia"는 "XIA 관점의 속성"이라는 뜻.
+     *
+     * - 입력: 선택된 face ID 배열
+     * - 출력 JSON: { isSolid, bbox{minX..maxZ}, length, width, height,
+     *   surfaceArea, volume, faceCount, vertCount, edgeCount, snapPoints, shapeType }
+     *
+     * 특정 XIA 하나의 정보가 필요하면 먼저 `get_xia_face(xia_id)`로 대표 face를 얻은
+     * 뒤 그 XIA의 모든 face_ids를 수집해 이 함수에 전달하거나, 새 `get_xia_stats` 사용.
      */
     get_xia_info(face_ids_raw: Uint32Array): string;
     /**
@@ -319,6 +336,10 @@ export class AxiaEngine {
     translate_faces(face_ids: Uint32Array, dx: number, dy: number, dz: number): boolean;
     undo(): boolean;
     vert_count(): number;
+    /**
+     * 씬의 XIA 개수.
+     */
+    xiaCount(): number;
 }
 
 /**
@@ -392,6 +413,8 @@ export interface InitOutput {
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
+    readonly axiaengine_getXiaIds: (a: number, b: number) => void;
+    readonly axiaengine_getXiaStats: (a: number, b: number, c: number) => void;
     readonly axiaengine_get_all_groups: (a: number, b: number) => void;
     readonly axiaengine_get_all_materials: (a: number, b: number) => void;
     readonly axiaengine_get_connected_faces: (a: number, b: number, c: number) => void;
@@ -436,6 +459,7 @@ export interface InitOutput {
     readonly axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_undo: (a: number) => number;
     readonly axiaengine_vert_count: (a: number) => number;
+    readonly axiaengine_xiaCount: (a: number) => number;
     readonly deltabuffers_getCacheVersion: (a: number) => number;
     readonly deltabuffers_getFaceVertCounts: (a: number, b: number) => void;
     readonly deltabuffers_getFaceVertOffsets: (a: number, b: number) => void;

@@ -570,6 +570,34 @@ impl AxiaEngine {
         self.scene.get_xia_for_face(fid).unwrap_or(u32::MAX)
     }
 
+    /// 씬에 존재하는 모든 XIA ID를 반환. 디버깅/열거용.
+    #[wasm_bindgen(js_name = "getXiaIds")]
+    pub fn get_xia_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.scene.xias.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 씬의 XIA 개수.
+    #[wasm_bindgen(js_name = "xiaCount")]
+    pub fn xia_count(&self) -> u32 {
+        self.scene.xias.len() as u32
+    }
+
+    /// 특정 XIA ID에 대한 요약 JSON.
+    /// `get_xia_info`는 face ID를 받지만, 이 함수는 **XIA ID를 직접 받는다**.
+    /// 내부적으로 해당 XIA의 모든 face_ids를 수집해 `get_xia_info`와 동일한 JSON을 반환.
+    ///
+    /// XIA가 없으면 `{"empty":true}` 반환.
+    #[wasm_bindgen(js_name = "getXiaStats")]
+    pub fn get_xia_stats(&self, xia_id: u32) -> String {
+        let Some(xia) = self.scene.xias.get(&xia_id) else {
+            return r#"{"empty":true}"#.to_string();
+        };
+        let face_ids_raw: Vec<u32> = xia.face_ids.iter().map(|f| f.raw()).collect();
+        self.get_xia_info(&face_ids_raw)
+    }
+
     // ========================================================================
     // Push/Pull
     // ========================================================================
@@ -1342,10 +1370,15 @@ impl AxiaEngine {
     // XIA Inspector — 선택된 face들의 기하학적/물리적 속성 계산
     // ========================================================================
 
-    /// 선택된 face ID 배열에 대해 XIA 속성을 JSON으로 반환.
-    /// 반환: { isSolid, bbox{minX,minY,minZ,maxX,maxY,maxZ}, length, width, height,
-    ///         surfaceArea, volume, faceCount, vertCount, edgeCount, snapPoints,
-    ///         shapeType }
+    /// ⚠️ **파라미터는 FACE IDs** (XIA IDs 아님). XIA Inspector가 선택된 면들의
+    /// 집계 속성을 계산하기 위한 함수. 이름의 "xia"는 "XIA 관점의 속성"이라는 뜻.
+    ///
+    /// - 입력: 선택된 face ID 배열
+    /// - 출력 JSON: { isSolid, bbox{minX..maxZ}, length, width, height,
+    ///   surfaceArea, volume, faceCount, vertCount, edgeCount, snapPoints, shapeType }
+    ///
+    /// 특정 XIA 하나의 정보가 필요하면 먼저 `get_xia_face(xia_id)`로 대표 face를 얻은
+    /// 뒤 그 XIA의 모든 face_ids를 수집해 이 함수에 전달하거나, 새 `get_xia_stats` 사용.
     pub fn get_xia_info(&self, face_ids_raw: &[u32]) -> String {
         use std::collections::HashSet;
 

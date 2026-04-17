@@ -372,6 +372,48 @@ export class AxiaEngine {
         }
     }
     /**
+     * 씬에 존재하는 모든 XIA ID를 반환. 디버깅/열거용.
+     * @returns {Uint32Array}
+     */
+    getXiaIds() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getXiaIds(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * 특정 XIA ID에 대한 요약 JSON.
+     * `get_xia_info`는 face ID를 받지만, 이 함수는 **XIA ID를 직접 받는다**.
+     * 내부적으로 해당 XIA의 모든 face_ids를 수집해 `get_xia_info`와 동일한 JSON을 반환.
+     *
+     * XIA가 없으면 `{"empty":true}` 반환.
+     * @param {number} xia_id
+     * @returns {string}
+     */
+    getXiaStats(xia_id) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getXiaStats(retptr, this.__wbg_ptr, xia_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * 전체 그룹 트리 JSON 반환
      * @returns {string}
      */
@@ -649,10 +691,15 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
-     * 선택된 face ID 배열에 대해 XIA 속성을 JSON으로 반환.
-     * 반환: { isSolid, bbox{minX,minY,minZ,maxX,maxY,maxZ}, length, width, height,
-     *         surfaceArea, volume, faceCount, vertCount, edgeCount, snapPoints,
-     *         shapeType }
+     * ⚠️ **파라미터는 FACE IDs** (XIA IDs 아님). XIA Inspector가 선택된 면들의
+     * 집계 속성을 계산하기 위한 함수. 이름의 "xia"는 "XIA 관점의 속성"이라는 뜻.
+     *
+     * - 입력: 선택된 face ID 배열
+     * - 출력 JSON: { isSolid, bbox{minX..maxZ}, length, width, height,
+     *   surfaceArea, volume, faceCount, vertCount, edgeCount, snapPoints, shapeType }
+     *
+     * 특정 XIA 하나의 정보가 필요하면 먼저 `get_xia_face(xia_id)`로 대표 face를 얻은
+     * 뒤 그 XIA의 모든 face_ids를 수집해 이 함수에 전달하거나, 새 `get_xia_stats` 사용.
      * @param {Uint32Array} face_ids_raw
      * @returns {string}
      */
@@ -1046,6 +1093,14 @@ export class AxiaEngine {
      */
     vert_count() {
         const ret = wasm.axiaengine_vert_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * 씬의 XIA 개수.
+     * @returns {number}
+     */
+    xiaCount() {
+        const ret = wasm.axiaengine_xiaCount(this.__wbg_ptr);
         return ret >>> 0;
     }
 }
