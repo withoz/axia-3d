@@ -18,15 +18,16 @@ const ERASE_COLOR = 0xff4444;
 
 /**
  * Erase 도구 전용 원형 커서 (SVG 데이터 URL).
- * 순수한 빨간 원 (채움 없음, 중앙 점 없음). 기존 24×24에서 ~30% 크기로 축소.
- * 8×8 컨테이너에 r=3 outline, 핫스팟(4,4) = 중앙. 시스템 `crosshair` 폴백.
+ * Offset 도구의 PickBox와 동일한 크기·테두리 굵기(11px, stroke 1.5px)로 일관성 확보.
+ * 순수 빨간 outline — 채움 없음, 중앙 점 없음.
+ * 핫스팟(5, 5) = 중앙. 시스템 `crosshair` 폴백.
  */
 const ERASE_CURSOR_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8">' +
-  '<circle cx="4" cy="4" r="3" fill="none" stroke="#ff4444" stroke-width="1"/>' +
+  '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11">' +
+  '<circle cx="5.5" cy="5.5" r="4.5" fill="none" stroke="#ff4444" stroke-width="1.5"/>' +
   '</svg>';
 const ERASE_CURSOR =
-  `url("data:image/svg+xml;utf8,${encodeURIComponent(ERASE_CURSOR_SVG)}") 4 4, crosshair`;
+  `url("data:image/svg+xml;utf8,${encodeURIComponent(ERASE_CURSOR_SVG)}") 5 5, crosshair`;
 
 export class EraseTool implements ITool {
   readonly name = 'erase';
