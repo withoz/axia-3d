@@ -909,12 +909,7 @@ export class SelectionManager {
     if (this.positions.length === 0 || this.indices.length === 0) return null;
 
     // 에지 카운트: 선택된 face 내 삼각형들의 에지 중, 1번만 등장하는 에지 = 경계.
-    // ── Position-based dedup ──
-    // Rust export는 face마다 vertex를 별도로 복제하므로 같은 position을
-    // 가진 인접 quad의 수직 edge가 index 기준으로는 다른 edge가 된다.
-    // μm 정밀도로 position을 양자화해 공유 edge를 같은 키로 묶는다.
-    // (이전엔 index만 썼던 탓에 원기둥/구 선택 시 인접 quad 공유 수직선이
-    //  모두 "count=1"로 계산되어 48개의 가짜 수직선이 생기던 버그)
+    // Position 기반 μm 양자화 키로 dedup (index 기반은 face 복제된 vertex에서 오류 유발).
     const posKey = (i: number) => {
       const x = Math.round(this.positions[i * 3] * 1000);
       const y = Math.round(this.positions[i * 3 + 1] * 1000);
@@ -926,7 +921,8 @@ export class SelectionManager {
       return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
     };
 
-    const edgeEndpoints = new Map<string, [number, number]>(); // canonical key → one representative index pair
+    type EdgeRec = { a: number; b: number; keyA: string; keyB: string };
+    const edgeEndpoints = new Map<string, EdgeRec>();
     const edgeHits = new Map<string, number>();
 
     for (let tri = 0; tri < this.faceMap.length; tri++) {
@@ -935,23 +931,141 @@ export class SelectionManager {
       if (base + 2 >= this.indices.length) continue;
 
       const i0 = this.indices[base], i1 = this.indices[base + 1], i2 = this.indices[base + 2];
-      const edges: [number, number][] = [[i0, i1], [i1, i2], [i2, i0]];
+      const tris: [number, number][] = [[i0, i1], [i1, i2], [i2, i0]];
 
-      for (const [a, b] of edges) {
+      for (const [a, b] of tris) {
         const key = edgeKey(a, b);
-        if (!edgeEndpoints.has(key)) edgeEndpoints.set(key, [a, b]);
+        if (!edgeEndpoints.has(key)) {
+          edgeEndpoints.set(key, { a, b, keyA: posKey(a), keyB: posKey(b) });
+        }
         edgeHits.set(key, (edgeHits.get(key) || 0) + 1);
       }
     }
 
-    // 경계 에지만 수집 (1번만 등장한 에지)
+    // 경계 에지 추출 (count == 1)
+    const perimeter: EdgeRec[] = [];
+    for (const [key, rec] of edgeEndpoints) {
+      if ((edgeHits.get(key) || 0) === 1) perimeter.push(rec);
+    }
+    if (perimeter.length === 0) return null;
+
+    // ── Chain 재구성 (position adjacency로 연속 edge 묶기) ──
+    const adj = new Map<string, EdgeRec[]>();
+    for (const e of perimeter) {
+      (adj.get(e.keyA) ?? adj.set(e.keyA, []).get(e.keyA)!).push(e);
+      (adj.get(e.keyB) ?? adj.set(e.keyB, []).get(e.keyB)!).push(e);
+    }
+    const visited = new Set<EdgeRec>();
+    const chains: EdgeRec[][] = [];
+    for (const start of perimeter) {
+      if (visited.has(start)) continue;
+      const chain: EdgeRec[] = [start];
+      visited.add(start);
+      let frontier = start.keyB;
+      while (true) {
+        const neighbors = adj.get(frontier) ?? [];
+        const next = neighbors.find(e => !visited.has(e));
+        if (!next) break;
+        visited.add(next);
+        chain.push(next);
+        frontier = next.keyA === frontier ? next.keyB : next.keyA;
+        if (frontier === start.keyA) break;
+      }
+      let back = start.keyA;
+      while (true) {
+        const neighbors = adj.get(back) ?? [];
+        const prev = neighbors.find(e => !visited.has(e));
+        if (!prev) break;
+        visited.add(prev);
+        chain.unshift(prev);
+        back = prev.keyA === back ? prev.keyB : prev.keyA;
+      }
+      chains.push(chain);
+    }
+
     const lineVerts: number[] = [];
-    for (const [key, [a, b]] of edgeEndpoints) {
-      if ((edgeHits.get(key) || 0) === 1) {
-        lineVerts.push(
-          this.positions[a * 3], this.positions[a * 3 + 1], this.positions[a * 3 + 2],
-          this.positions[b * 3], this.positions[b * 3 + 1], this.positions[b * 3 + 2],
-        );
+    const AGGREGATE_MIN_EDGES = 8;
+    const SMOOTH_SEGMENTS = 96; // 원형으로 감지된 체인은 이 해상도로 부드럽게 렌더
+
+    for (const chain of chains) {
+      const isClosed = chain.length > 1 &&
+        (chain[0].keyA === chain[chain.length - 1].keyB ||
+         chain[0].keyA === chain[chain.length - 1].keyA ||
+         chain[0].keyB === chain[chain.length - 1].keyB ||
+         chain[0].keyB === chain[chain.length - 1].keyA);
+
+      // 체인의 모든 정점 수집 (position 기반, 중복 제거)
+      const vertsMap = new Map<string, THREE.Vector3>();
+      for (const e of chain) {
+        if (!vertsMap.has(e.keyA)) {
+          vertsMap.set(e.keyA, new THREE.Vector3(
+            this.positions[e.a * 3], this.positions[e.a * 3 + 1], this.positions[e.a * 3 + 2]));
+        }
+        if (!vertsMap.has(e.keyB)) {
+          vertsMap.set(e.keyB, new THREE.Vector3(
+            this.positions[e.b * 3], this.positions[e.b * 3 + 1], this.positions[e.b * 3 + 2]));
+        }
+      }
+      const verts = Array.from(vertsMap.values());
+
+      // 원형 체인 감지 (닫힘 + 등거리 + 8+ 세그먼트)
+      let isCircular = false;
+      let center = new THREE.Vector3();
+      let radius = 0;
+      let planeNormal = new THREE.Vector3(0, 1, 0);
+
+      if (isClosed && chain.length >= AGGREGATE_MIN_EDGES && verts.length >= AGGREGATE_MIN_EDGES) {
+        for (const v of verts) center.add(v);
+        center.divideScalar(verts.length);
+        let sumR = 0;
+        for (const v of verts) sumR += v.distanceTo(center);
+        const avgR = sumR / verts.length;
+        let maxDev = 0;
+        for (const v of verts) {
+          const d = Math.abs(v.distanceTo(center) - avgR);
+          if (d > maxDev) maxDev = d;
+        }
+        if (maxDev < avgR * 0.01) {
+          isCircular = true;
+          radius = avgR;
+          // 평면 법선: 두 반지름 벡터의 외적
+          const r0 = verts[0].clone().sub(center).normalize();
+          const r1 = verts[Math.floor(verts.length / 4)].clone().sub(center).normalize();
+          planeNormal = r0.clone().cross(r1);
+          if (planeNormal.lengthSq() < 1e-8) {
+            planeNormal = new THREE.Vector3(0, 1, 0);
+          } else {
+            planeNormal.normalize();
+          }
+        }
+      }
+
+      if (isCircular) {
+        // 부드러운 원 — SMOOTH_SEGMENTS 각도 분할로 LineSegments 방출
+        // (시각적으로 하나의 연속된 원 곡선)
+        const axis0 = verts[0].clone().sub(center).normalize();
+        const axis1 = planeNormal.clone().cross(axis0).normalize();
+        const pts: THREE.Vector3[] = [];
+        for (let k = 0; k < SMOOTH_SEGMENTS; k++) {
+          const t = (2 * Math.PI * k) / SMOOTH_SEGMENTS;
+          const p = center.clone()
+            .add(axis0.clone().multiplyScalar(Math.cos(t) * radius))
+            .add(axis1.clone().multiplyScalar(Math.sin(t) * radius));
+          pts.push(p);
+        }
+        for (let k = 0; k < SMOOTH_SEGMENTS; k++) {
+          const p = pts[k];
+          const q = pts[(k + 1) % SMOOTH_SEGMENTS];
+          lineVerts.push(p.x, p.y, p.z, q.x, q.y, q.z);
+        }
+      } else {
+        // 원형이 아닌 체인: 원본 chord edge 그대로
+        for (const e of chain) {
+          lineVerts.push(
+            this.positions[e.a * 3], this.positions[e.a * 3 + 1], this.positions[e.a * 3 + 2],
+            this.positions[e.b * 3], this.positions[e.b * 3 + 1], this.positions[e.b * 3 + 2],
+          );
+        }
       }
     }
 
