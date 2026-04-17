@@ -168,14 +168,6 @@ describe('SnapManager', () => {
     // Should not throw
   });
 
-  // ── setParallelRef ──
-
-  it('setParallelRef accepts Vector3 or null', () => {
-    const { Vector3 } = THREE;
-    snap.setParallelRef(new Vector3(1, 0, 0));
-    snap.setParallelRef(null);
-    // Should not throw
-  });
 
   // ── onSnapChange callback ──
 

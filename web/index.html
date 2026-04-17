@@ -2092,19 +2092,18 @@
 
         <!-- 스냅 모드 그리드 (2열, AutoCAD/ZWCAD 스타일) -->
         <div class="osnap-grid">
+          <!-- S1 fix: 미구현 모드(insertion/node/from/mid2p/tempTrack) 체크박스 제거.
+               이전에는 체크해도 findSnap에 분기가 없어 아무 동작 없음. -->
           <label class="osnap-mode"><input type="checkbox" data-mode="endpoint" checked><span class="osnap-icon">&#9632;</span><span class="osnap-name">끝점(E)</span></label>
-          <label class="osnap-mode"><input type="checkbox" data-mode="insertion"><span class="osnap-icon">&#8862;</span><span class="osnap-name">삽입점(S)</span></label>
-
           <label class="osnap-mode"><input type="checkbox" data-mode="midpoint" checked><span class="osnap-icon">&#9650;</span><span class="osnap-name">중간점(M)</span></label>
+
           <label class="osnap-mode"><input type="checkbox" data-mode="perpendicular" checked><span class="osnap-icon">&#8869;</span><span class="osnap-name">수직(U)</span></label>
-
           <label class="osnap-mode"><input type="checkbox" data-mode="center" checked><span class="osnap-icon">&#9675;</span><span class="osnap-name">중앙(C)</span></label>
+
           <label class="osnap-mode"><input type="checkbox" data-mode="tangent"><span class="osnap-icon">&#9678;</span><span class="osnap-name">접점(N)</span></label>
-
           <label class="osnap-mode"><input type="checkbox" data-mode="geometric"><span class="osnap-icon">&#9633;</span><span class="osnap-name">기하학적 중심(G)</span></label>
-          <label class="osnap-mode"><input type="checkbox" data-mode="nearest"><span class="osnap-icon">&times;</span><span class="osnap-name">근처점(R)</span></label>
 
-          <label class="osnap-mode"><input type="checkbox" data-mode="node"><span class="osnap-icon">&#9679;</span><span class="osnap-name">노드(D)</span></label>
+          <label class="osnap-mode"><input type="checkbox" data-mode="nearest"><span class="osnap-icon">&times;</span><span class="osnap-name">근처점(R)</span></label>
           <label class="osnap-mode"><input type="checkbox" data-mode="parallel" checked><span class="osnap-icon">//</span><span class="osnap-name">평행(L)</span></label>
 
           <label class="osnap-mode"><input type="checkbox" data-mode="quadrant"><span class="osnap-icon">&#9671;</span><span class="osnap-name">사분점(Q)</span></label>

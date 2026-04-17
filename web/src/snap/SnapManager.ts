@@ -123,6 +123,11 @@ interface EdgeSegment {
   b: THREE.Vector3;
 }
 
+// ═══ Performance limits (S5) ═══
+// 각 O(N)/O(N²) 스냅 모드의 최대 순회 개수. 대형 씬에서 mousemove 부담 방지.
+const MAX_EDGES_PER_MODE = 500;
+const MAX_FACES_PER_MODE = 300;
+
 // ═══ Priority (lower = higher priority) ═══
 const SNAP_PRIORITY: Record<SnapType, number> = {
   endpoint: 0,
@@ -160,9 +165,6 @@ export class SnapManager {
 
   // Extension tracking: hovered edge history
   private hoveredEdge: EdgeSegment | null = null;
-
-  // Parallel tracking: reference edge direction
-  private parallelRef: THREE.Vector3 | null = null;
 
   // Temp track points accumulated during a command
   private trackPoints: THREE.Vector3[] = [];
@@ -255,11 +257,6 @@ export class SnapManager {
     this.referencePoint = pt ? pt.clone() : null;
   }
 
-  /** Set parallel reference direction from an edge */
-  setParallelRef(dir: THREE.Vector3 | null) {
-    this.parallelRef = dir ? dir.clone().normalize() : null;
-  }
-
   /** Add a temporary tracking point */
   addTrackPoint(pt: THREE.Vector3) {
     this.trackPoints.push(pt.clone());
@@ -341,6 +338,12 @@ export class SnapManager {
     const vertSet = new Map<string, THREE.Vector3>();
 
     // ── 1) Unique vertices — prefer f64 precision for exact snap ──
+    // S2 fix: dedup 키를 μm (1e-3 mm) 정밀도로 변경.
+    // 이전 toFixed(1)은 0.1mm 반올림이라 미세 간격 정점이 병합되어
+    // 일부 정점에 스냅 안 걸리는 문제가 있었음.
+    const dedupKey = (x: number, y: number, z: number) =>
+      `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(z * 1000)}`;
+
     if (snapVerticesF64 && snapVerticesF64.length >= 3) {
       // Use f64 vertex positions from WASM (exact DCEL coordinates, no f32 loss)
       const vertCount = snapVerticesF64.length / 3;
@@ -350,7 +353,7 @@ export class SnapManager {
           snapVerticesF64[i * 3 + 1],
           snapVerticesF64[i * 3 + 2],
         );
-        const key = `${v.x.toFixed(1)},${v.y.toFixed(1)},${v.z.toFixed(1)}`;
+        const key = dedupKey(v.x, v.y, v.z);
         if (!vertSet.has(key)) vertSet.set(key, v);
       }
     } else if (positions.length > 0) {
@@ -362,7 +365,7 @@ export class SnapManager {
           positions[i * 3 + 1],
           positions[i * 3 + 2],
         );
-        const key = `${v.x.toFixed(1)},${v.y.toFixed(1)},${v.z.toFixed(1)}`;
+        const key = dedupKey(v.x, v.y, v.z);
         if (!vertSet.has(key)) vertSet.set(key, v);
       }
     }
@@ -374,8 +377,8 @@ export class SnapManager {
         const b = new THREE.Vector3(edgeLines[i + 3], edgeLines[i + 4], edgeLines[i + 5]);
         this.edges.push({ a, b });
         // Also register edge endpoints as vertices for endpoint snap
-        const keyA = `${a.x.toFixed(1)},${a.y.toFixed(1)},${a.z.toFixed(1)}`;
-        const keyB = `${b.x.toFixed(1)},${b.y.toFixed(1)},${b.z.toFixed(1)}`;
+        const keyA = dedupKey(a.x, a.y, a.z);
+        const keyB = dedupKey(b.x, b.y, b.z);
         if (!vertSet.has(keyA)) vertSet.set(keyA, a.clone());
         if (!vertSet.has(keyB)) vertSet.set(keyB, b.clone());
       }
@@ -383,8 +386,8 @@ export class SnapManager {
       // Fallback: boundary edges from triangles
       const edgeMap = new Map<string, { a: THREE.Vector3; b: THREE.Vector3; count: number }>();
       const ek = (a: THREE.Vector3, b: THREE.Vector3) => {
-        const ka = `${a.x.toFixed(1)},${a.y.toFixed(1)},${a.z.toFixed(1)}`;
-        const kb = `${b.x.toFixed(1)},${b.y.toFixed(1)},${b.z.toFixed(1)}`;
+        const ka = dedupKey(a.x, a.y, a.z);
+        const kb = dedupKey(b.x, b.y, b.z);
         return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
       };
       const triCount = indices.length / 3;
@@ -423,7 +426,7 @@ export class SnapManager {
       for (let j = 0; j < 3; j++) {
         const idx = indices[t * 3 + j];
         const v = new THREE.Vector3(positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2]);
-        const key = `${v.x.toFixed(1)},${v.y.toFixed(1)},${v.z.toFixed(1)}`;
+        const key = dedupKey(v.x, v.y, v.z);
         if (!set.has(key)) {
           set.add(key);
           list.push(v);
@@ -520,7 +523,9 @@ export class SnapManager {
 
     // ── Midpoint (중간점) ▲ ──
     if (modes.has('midpoint')) {
-      for (const edge of this.edges) {
+      const cap = Math.min(this.edges.length, MAX_EDGES_PER_MODE);
+      for (let i = 0; i < cap; i++) {
+        const edge = this.edges[i];
         const mid = edge.a.clone().add(edge.b).multiplyScalar(0.5);
         const s = toScreenPx(mid);
         if (s && mousePx.distanceTo(s) <= threshold) {
@@ -606,7 +611,9 @@ export class SnapManager {
 
     // ── Perpendicular (수직점) ⊥ ──
     if (modes.has('perpendicular') && this.referencePoint) {
-      for (const edge of this.edges) {
+      const cap = Math.min(this.edges.length, MAX_EDGES_PER_MODE);
+      for (let i = 0; i < cap; i++) {
+        const edge = this.edges[i];
         const perp = this.perpendicularPoint(this.referencePoint, edge.a, edge.b);
         if (!perp) continue;
         const s = toScreenPx(perp);
@@ -618,7 +625,9 @@ export class SnapManager {
 
     // ── Parallel (평행) // ──
     if (modes.has('parallel') && this.referencePoint && groundPoint) {
-      for (const edge of this.edges) {
+      const cap = Math.min(this.edges.length, MAX_EDGES_PER_MODE);
+      for (let i = 0; i < cap; i++) {
+        const edge = this.edges[i];
         const par = this.parallelSnap(this.referencePoint, groundPoint, edge);
         if (!par) continue;
         const s = toScreenPx(par);
@@ -631,16 +640,18 @@ export class SnapManager {
     // ── On Face (면 위 투영) — 사용자 요청: 주변 면에 맞춤 ──
     if (modes.has('onFace') && faceHitPoint) {
       const s = toScreenPx(faceHitPoint);
-      if (s) {
-        // onFace는 항상 pickup 지점이 정확하므로 threshold 내면 후보로 추가
-        // (다른 높은 우선순위 스냅이 있으면 그쪽이 이김 — priority 14)
+      // S4 fix: 다른 모드와 일관되게 threshold 체크 추가.
+      // onFace는 priority 14로 마지막이므로 다른 스냅이 있으면 그쪽이 이김.
+      if (s && mousePx.distanceTo(s) <= threshold) {
         addCandidate('onFace', faceHitPoint, s);
       }
     }
 
     // ── Tangent (접점) — reference point에서 원형 face로의 접선 ──
     if (modes.has('tangent') && this.referencePoint) {
+      let faceCount = 0;
       for (const [, data] of this.faceData) {
+        if (faceCount++ >= MAX_FACES_PER_MODE) break;
         if (data.verts.length < 8) continue; // 원형 근사 face만 (8+ vertices)
         // Average radius
         let sumR = 0;
@@ -659,7 +670,9 @@ export class SnapManager {
     // ── Nearest (근처점) ──
     if (modes.has('nearest') && groundPoint) {
       let bestNearest: { pos: THREE.Vector3; dist: number; edge: EdgeSegment } | null = null;
-      for (const edge of this.edges) {
+      const cap = Math.min(this.edges.length, MAX_EDGES_PER_MODE);
+      for (let i = 0; i < cap; i++) {
+        const edge = this.edges[i];
         const pt = this.closestPointOnSegment(groundPoint, edge.a, edge.b);
         const s = toScreenPx(pt);
         if (!s) continue;
@@ -774,7 +787,10 @@ export class SnapManager {
     const MIN_ALIGN_DIST = 1.0; // 1mm 이하 거리 제외 (자기 자신과 가까운 면)
 
     // ── Vertices (priority 0) ──
-    for (const v of this.vertices) {
+    // S5: 성능 캡 (엄청 큰 씬에서 mousemove 부담 방지)
+    const vertCap = Math.min(this.vertices.length, MAX_EDGES_PER_MODE);
+    for (let vi = 0; vi < vertCap; vi++) {
+      const v = this.vertices[vi];
       const d = alignDist(v);
       if (Math.abs(d) < MIN_ALIGN_DIST) continue;
       const s = toScreenPx(v);
@@ -785,7 +801,9 @@ export class SnapManager {
     }
 
     // ── Edges (priority 1) — closest point on segment projected to normal line ──
-    for (const edge of this.edges) {
+    const edgeCap = Math.min(this.edges.length, MAX_EDGES_PER_MODE);
+    for (let ei = 0; ei < edgeCap; ei++) {
+      const edge = this.edges[ei];
       // Find the parameter on edge that minimizes distance to the normal line at startHitPoint
       // Normal line: P(s) = startHitPoint + s * startNormal
       // Edge: E(t) = edge.a + t * (edge.b - edge.a)
@@ -812,7 +830,9 @@ export class SnapManager {
     }
 
     // ── Parallel faces (priority 2) ──
+    let faceIter = 0;
     for (const [fid, data] of this.faceData) {
+      if (faceIter++ >= MAX_FACES_PER_MODE) break;
       if (fid === startFaceId) continue; // self-reference
       const cosAng = Math.abs(data.normal.dot(startNormal));
       if (cosAng < 0.95) continue; // not parallel
