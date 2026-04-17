@@ -29,6 +29,27 @@ import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
 
 // ═══════════════════════════════════════════════════
+//  Geometry helper: 2D segment-segment intersection
+// ═══════════════════════════════════════════════════
+
+/** Returns true if open segments AB and CD properly intersect (excluding shared endpoints). */
+function segmentsIntersect2D(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number,
+): boolean {
+  const d1 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+  const d2 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+  const d3 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  const d4 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+  // Strict crossing (sign flips on both) — we skip collinear overlap cases
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true;
+  }
+  return false;
+}
+
+// ═══════════════════════════════════════════════════
 //  State & Event Definitions
 // ═══════════════════════════════════════════════════
 
@@ -69,6 +90,10 @@ export class DrawLineTool implements ITool {
 
   // Chain tracking — first point of continuous drawing chain (for loop close detection)
   private chainStartPoint: THREE.Vector3 | null = null;
+  /** All committed waypoints of the current chain (Phase 1: B1 — close to any) */
+  private chainPoints: THREE.Vector3[] = [];
+  /** Last loop-close target type (for Toast/UI differentiation) */
+  private lastCloseKind: 'chain-start' | 'chain-mid' | 'free' | null = null;
 
   // Three.js preview objects
   private linePreview: THREE.Line | null = null;
@@ -228,6 +253,7 @@ export class DrawLineTool implements ITool {
           // Track chain origin for loop close detection
           if (!this.chainStartPoint) {
             this.chainStartPoint = point.clone();
+            this.chainPoints = [point.clone()];
           }
           this.ctx.snap.setReferencePoint(point);
           this.ctx.axisLock = null;
@@ -291,6 +317,9 @@ export class DrawLineTool implements ITool {
         this.startPoint = null;
         this.previewEnd = null;
         this.chainStartPoint = null;
+        this.chainPoints = [];
+        this.lastCloseKind = null;
+        this._lastIntersectionWarn = null;
         this.startFaceId = -1;
         this.endFaceId = -1;
         this.hoverFaceId = -1;
@@ -322,6 +351,9 @@ export class DrawLineTool implements ITool {
           this.startPoint = null;
           this.previewEnd = null;
           this.chainStartPoint = null;
+          this.chainPoints = [];
+          this.lastCloseKind = null;
+          this._lastIntersectionWarn = null;
           this.startFaceId = -1;
           this.endFaceId = -1;
           this.hoverFaceId = -1;
@@ -355,13 +387,32 @@ export class DrawLineTool implements ITool {
     const len = this.startPoint.distanceTo(this.previewEnd);
     if (len <= 1) return false; // Too short, ignore
 
+    // Task 5: Split vs loop-close precedence
+    // 규칙: loop close(chainStart/waypoint/free endpoint 근접)가 가장 우선.
+    //       같은 면 위 split은 그 다음. 둘 다 조건 충족 시 loopClose 우선.
+    const isLoopClose = this.lastCloseKind !== null;
+
+    if (isLoopClose) {
+      // Task 2 / B2: 평면성 검사 — 닫힌 루프가 실제로 같은 평면인가?
+      const allPts = [...this.chainPoints, this.previewEnd];
+      const planar = this.isChainPlanar(allPts);
+      if (!planar) {
+        Toast.warning('비평면 루프 — 면이 자동 생성되지 않을 수 있습니다', 2500);
+      }
+      if (this.startFaceId >= 0 && this.startFaceId === this.endFaceId) {
+        debugLog('[Line] Both loop-close and same-face conditions met — loop-close wins');
+        Toast.info('루프 닫기 실행 (면 분할이 아닌 새 경계 생성)', 1800);
+      }
+      // Fall through to regular drawLine path — WASM's closed-loop detection
+      // will auto-create the face when applicable.
+    }
+
     // ─── Face Split path ───
-    // If both start and end are on the same existing face → split that face
-    if (this.startFaceId >= 0 && this.startFaceId === this.endFaceId) {
+    // Only when NOT closing a loop (loop close takes precedence per Task 5).
+    if (!isLoopClose && this.startFaceId >= 0 && this.startFaceId === this.endFaceId) {
       return this.tryFaceSplit(this.startFaceId, this.startPoint, this.previewEnd, len);
     }
 
-    // Log why face split was NOT triggered (for debugging)
     if (this.startFaceId >= 0 || this.endFaceId >= 0) {
       debugLog(`[FaceSplit] Not triggered: startFace=${this.startFaceId}, endFace=${this.endFaceId} (need same face ≥ 0)`);
     }
@@ -378,13 +429,46 @@ export class DrawLineTool implements ITool {
     const faceCreated = facesAfter > facesBefore;
 
     if (faceCreated) {
-      debugLog(`[Line] Closed loop → face created! (${len.toFixed(2)} mm)`);
+      debugLog(`[Line] Closed loop → face created! (${len.toFixed(2)} mm, kind=${this.lastCloseKind})`);
+      Toast.info('루프 닫힘 — 면 생성됨', 1800);
+    } else if (isLoopClose) {
+      // Loop close fired but face wasn't created (likely non-planar or self-intersect)
+      Toast.warning('루프 닫힘 — 면 생성 실패 (비평면 또는 자체교차)', 2500);
+      debugLog(`[Line] Loop close attempted but no face created (kind=${this.lastCloseKind})`);
     } else {
       debugLog(`[Line] Created: ${len.toFixed(2)} mm`);
     }
 
     this.ctx.syncMesh();
     return faceCreated;
+  }
+
+  /**
+   * Check if all chain points lie within tolerance of a common plane.
+   * Uses PCA-like best-fit: plane normal = cross product of two largest chords.
+   * Returns true if every point is within 1mm of that plane.
+   */
+  private isChainPlanar(pts: THREE.Vector3[]): boolean {
+    if (pts.length < 4) return true; // 3 or fewer pts are always coplanar
+    const origin = pts[0];
+    // Find the two longest chords emanating from origin for best basis
+    const vecs = pts.slice(1).map(p => p.clone().sub(origin));
+    vecs.sort((a, b) => b.lengthSq() - a.lengthSq());
+    const u = vecs[0].clone().normalize();
+    let v: THREE.Vector3 | null = null;
+    for (let i = 1; i < vecs.length; i++) {
+      const cand = vecs[i].clone();
+      const proj = u.clone().multiplyScalar(cand.dot(u));
+      const ortho = cand.sub(proj);
+      if (ortho.lengthSq() > 0.01) { v = ortho.normalize(); break; }
+    }
+    if (!v) return true; // colinear → planar by definition
+    const normal = u.clone().cross(v).normalize();
+    const d = normal.dot(origin);
+    for (const p of pts) {
+      if (Math.abs(normal.dot(p) - d) > 1.0) return false; // 1mm tolerance
+    }
+    return true;
   }
 
   /**
@@ -531,6 +615,8 @@ export class DrawLineTool implements ITool {
    */
   private continuousReenter(): void {
     if (this.previewEnd) {
+      // Phase 1: append committed point to chain for loop closure candidacy
+      this.chainPoints.push(this.previewEnd.clone());
       this.startPoint = this.previewEnd.clone();
       this.previewEnd = null;
       // Carry over endFaceId as next startFaceId (continuous drawing on same face)
@@ -624,49 +710,152 @@ export class DrawLineTool implements ITool {
   }
 
   /**
-   * Check if mouse is near the chain start point (loop close).
-   * Returns the exact chainStartPoint if within screen pixel threshold,
-   * and sets a loopClose snap override for visual feedback.
+   * Check if mouse is near a valid loop-close target.
+   *
+   * Phase 1 (2026-04-17) 확장:
+   * - B1: chainStartPoint뿐 아니라 **모든 committed waypoint + 외부 free endpoint** 후보
+   * - B6: 체인이 최소 2개 커밋된 segment를 가져야 (3 segment polygon 최소)
+   * - B3: 자체 교차 검사 (preview 색상으로 경고)
+   *
+   * Precedence: chain-start > chain-mid > free (external).
    */
   private checkLoopClose(e: MouseEvent): THREE.Vector3 | null {
-    if (this.state !== LineDrawState.Drawing || !this.chainStartPoint || !this.startPoint) {
-      return null;
-    }
+    this.lastCloseKind = null;
+    if (this.state !== LineDrawState.Drawing || !this.startPoint) return null;
 
-    // Need at least 2 segments to form a loop (startPoint ≠ chainStartPoint)
-    if (this.startPoint.distanceTo(this.chainStartPoint) < 1) {
-      return null; // Still on first segment — no loop possible
-    }
+    // B6: 최소 2 committed segment 필요 (chain에 2+ 점)
+    if (this.chainPoints.length < 2) return null;
 
-    // Project chainStartPoint to screen space
     const camera = this.ctx.viewport.activeCamera;
     const container = this.ctx.viewport.container;
     if (!camera || !container) return null;
-
-    const projected = this.chainStartPoint.clone().project(camera);
-    if (projected.z < -1 || projected.z > 1) return null; // Behind camera
-
     const rect = container.getBoundingClientRect();
-    const screenX = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
-    const screenY = (-projected.y * 0.5 + 0.5) * rect.height + rect.top;
 
-    // Screen distance from mouse to chain start
-    const dx = e.clientX - screenX;
-    const dy = e.clientY - screenY;
-    const screenDist = Math.sqrt(dx * dx + dy * dy);
+    const project = (p: THREE.Vector3): { sx: number; sy: number } | null => {
+      const v = p.clone().project(camera);
+      if (v.z < -1 || v.z > 1) return null;
+      return {
+        sx: (v.x * 0.5 + 0.5) * rect.width + rect.left,
+        sy: (-v.y * 0.5 + 0.5) * rect.height + rect.top,
+      };
+    };
 
-    const LOOP_CLOSE_THRESHOLD_PX = 15;
-    if (screenDist > LOOP_CLOSE_THRESHOLD_PX) return null;
+    const THRESHOLD = 15;
 
-    // Show loop close visual feedback (green filled circle)
+    type Candidate = {
+      point: THREE.Vector3;
+      sx: number;
+      sy: number;
+      dist: number;
+      kind: 'chain-start' | 'chain-mid' | 'free';
+      priority: number;
+    };
+    const candidates: Candidate[] = [];
+    const consider = (p: THREE.Vector3, kind: Candidate['kind'], priority: number) => {
+      const s = project(p);
+      if (!s) return;
+      const d = Math.sqrt((e.clientX - s.sx) ** 2 + (e.clientY - s.sy) ** 2);
+      if (d <= THRESHOLD) candidates.push({ point: p, sx: s.sx, sy: s.sy, dist: d, kind, priority });
+    };
+
+    // Chain start (highest priority)
+    if (this.chainStartPoint) consider(this.chainStartPoint, 'chain-start', 0);
+
+    // Chain mid-waypoints (for figure-8 / sub-loops) — skip first (= chainStart) and last (= startPoint)
+    for (let i = 1; i < this.chainPoints.length - 1; i++) {
+      consider(this.chainPoints[i], 'chain-mid', 1);
+    }
+
+    // External free endpoint via existing snap infra
+    const ext = this.ctx.snap.findNearestEndpoint(
+      e.clientX, e.clientY,
+      this.ctx.viewport.activeCamera,
+      this.ctx.viewport.renderer.domElement,
+      THRESHOLD,
+    );
+    if (ext?.position) {
+      // Skip if this endpoint coincides with current startPoint (would be zero-length segment)
+      if (!this.startPoint || ext.position.distanceTo(this.startPoint) > 0.1) {
+        consider(ext.position, 'free', 2);
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => a.priority !== b.priority
+      ? a.priority - b.priority
+      : a.dist - b.dist);
+    const best = candidates[0];
+    this.lastCloseKind = best.kind;
+
+    // B3: self-intersection pre-check — preview segment startPoint → best.point
+    //     against all prior chain segments (excluding immediate adjacent).
+    const wouldIntersect = this.checkChainSelfIntersection(this.startPoint, best.point);
+
+    // Visual feedback
     this.ctx.snapVisual.update({
       type: 'loopClose',
-      position: this.chainStartPoint.clone(),
-      screenPos: new THREE.Vector2(screenX, screenY),
-      distance: screenDist,
+      position: best.point.clone(),
+      screenPos: new THREE.Vector2(best.sx, best.sy),
+      distance: best.dist,
     }, this.ctx.viewport.activeCamera);
 
-    return this.chainStartPoint.clone();
+    if (wouldIntersect) {
+      // 단순 경고 toast (렌더 프레임마다 spam 방지 — 같은 상태면 재출력 안 함)
+      if (this._lastIntersectionWarn !== 'shown') {
+        Toast.warning('⚠ 닫힘 세그먼트가 기존 체인과 교차합니다', 1500);
+        this._lastIntersectionWarn = 'shown';
+      }
+    } else {
+      this._lastIntersectionWarn = null;
+    }
+
+    return best.point.clone();
+  }
+
+  private _lastIntersectionWarn: string | null = null;
+
+  /**
+   * Project closing segment + existing chain into the chain's best-fit 2D plane
+   * and run segment-segment intersection tests. True if any non-adjacent pair crosses.
+   * (Phase 1 best-effort — uses chain centroid + first chord as local basis.)
+   */
+  private checkChainSelfIntersection(from: THREE.Vector3, to: THREE.Vector3): boolean {
+    const pts = [...this.chainPoints, this.startPoint!];
+    if (pts.length < 3) return false;
+    // Build 2D basis from first chord
+    const origin = pts[0];
+    const e1 = pts[1].clone().sub(origin).normalize();
+    // Find e2 via cross with average normal of points (or first non-collinear)
+    let e2: THREE.Vector3 | null = null;
+    for (let i = 2; i < pts.length; i++) {
+      const cand = pts[i].clone().sub(origin);
+      const proj = e1.clone().multiplyScalar(cand.dot(e1));
+      const ortho = cand.sub(proj);
+      if (ortho.lengthSq() > 0.01) { e2 = ortho.normalize(); break; }
+    }
+    if (!e2) return false; // colinear chain
+    const project2D = (p: THREE.Vector3): [number, number] => {
+      const d = p.clone().sub(origin);
+      return [d.dot(e1), d.dot(e2!)];
+    };
+    // Segments: chain pts pairs (excluding last→closing is the new one under test)
+    const segs2D: [number, number, number, number][] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, ay] = project2D(pts[i]);
+      const [bx, by] = project2D(pts[i + 1]);
+      segs2D.push([ax, ay, bx, by]);
+    }
+    const [cx1, cy1] = project2D(from);
+    const [cx2, cy2] = project2D(to);
+    // Test closing seg against all non-adjacent prior segs
+    // Closing seg is from pts[last]=startPoint to to — so pts.length-2..last is adjacent
+    // Also the closing point (to) may coincide with pts[0] or some waypoint, sharing endpoint.
+    for (let i = 0; i < segs2D.length - 1; i++) {
+      const [ax, ay, bx, by] = segs2D[i];
+      if (segmentsIntersect2D(cx1, cy1, cx2, cy2, ax, ay, bx, by)) return true;
+    }
+    return false;
   }
 
   // ═══════════════════════════════════════════════════
