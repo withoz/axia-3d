@@ -22,6 +22,8 @@ export class PushPullTool implements ITool {
   /** smooth group 전체의 face별 boundary (고스트 프리뷰에서 모든 면 표시용) */
   private ppAllFaceVerts: THREE.Vector3[][] = [];
   private lastPPDist: number = 0;
+  /** align-to-geometry 발동 시 저장되는 현재 드래그 거리 (Phase 2 클릭 commit용) */
+  private currentDragDist: number = 0;
 
   /** 최소 유효 거리 (mm) — 이보다 작으면 무시 (프리뷰 확정용 threshold) */
   private static readonly MIN_COMMIT_DIST = 0.5;
@@ -124,7 +126,8 @@ export class PushPullTool implements ITool {
       }
     } else {
       // Phase 2: confirm distance (second click)
-      const dist = this.ppRayDist(e);
+      // align 스냅이 발동됐다면 currentDragDist가 그 값을 담고 있음
+      const dist = this.currentDragDist !== 0 ? this.currentDragDist : this.ppRayDist(e);
       debugLog('[PP] Phase 2: confirm dist=', dist.toFixed(2));
 
       if (Math.abs(dist) >= PushPullTool.MIN_COMMIT_DIST) {
@@ -140,14 +143,56 @@ export class PushPullTool implements ITool {
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
     if (!this.ppActive || !this.ppGhost) return;
 
-    const dist = this.ppRayDist(e);
+    let dist = this.ppRayDist(e);
+    let isAligned = false;
+    let alignedTargetType: 'vertex' | 'edge' | 'face' | null = null;
+
+    // ── Align-to-geometry (v1): 단일 면만 지원, smooth group은 비활성 ──
+    if (!this.isSmoothGroup) {
+      const aligned = this.ctx.snap.findAlignedDistance(
+        e.clientX, e.clientY,
+        this.ctx.viewport.activeCamera,
+        this.ctx.viewport.renderer.domElement,
+        this.ppFaceId,
+        this.ppHitPoint,
+        this.ppNormal,
+      );
+      if (aligned) {
+        dist = aligned.dist;
+        isAligned = true;
+        alignedTargetType = aligned.targetType;
+        // 타겟에 snap marker 표시
+        const s = aligned.target.clone().project(this.ctx.viewport.activeCamera);
+        const rect = this.ctx.viewport.renderer.domElement.getBoundingClientRect();
+        const screenPos = new THREE.Vector2(
+          (s.x * 0.5 + 0.5) * rect.width + rect.left,
+          (-s.y * 0.5 + 0.5) * rect.height + rect.top,
+        );
+        const markerType = aligned.targetType === 'vertex' ? 'endpoint'
+                         : aligned.targetType === 'edge' ? 'nearest'
+                         : 'onFace';
+        this.ctx.snapVisual.update({
+          type: markerType,
+          position: aligned.target,
+          screenPos,
+        }, this.ctx.viewport.activeCamera);
+      } else {
+        this.ctx.snapVisual.clear();
+      }
+    }
+
+    this.currentDragDist = dist;
     this.updatePPGhost(dist);
 
     // Show dimension
     if (this.ppFaceVerts.length >= 2 && Math.abs(dist) > 0.001) {
       const absDist = Math.abs(dist);
       const sign = dist >= 0 ? '' : '-';
-      const text = sign + this.ctx.units.format(absDist);
+      const alignPrefix = isAligned ? (alignedTargetType === 'face' ? '⊡ ' : alignedTargetType === 'edge' ? '／ ' : '■ ') : '';
+      const text = alignPrefix + sign + this.ctx.units.format(absDist);
+      const labelColor = isAligned ? '#66ff99' : '#ffd43b';
+      // 저장: dim label 렌더에서 사용하도록
+      const _labelColor = labelColor; void _labelColor;
       const offset = this.ppNormal.clone().multiplyScalar(dist);
 
       // Find closest vertex to mouse
@@ -175,7 +220,7 @@ export class PushPullTool implements ITool {
       const edgeTo = edgeFrom.clone().add(offset);
 
       this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-        { from: edgeFrom, to: edgeTo, text, color: '#ffd43b' },
+        { from: edgeFrom, to: edgeTo, text, color: isAligned ? '#66ff99' : '#ffd43b' },
       ]);
     } else {
       this.ctx.dimLabel.clear();
@@ -263,9 +308,11 @@ export class PushPullTool implements ITool {
     this.ppFaceId = -1;
     this.smoothGroupFaces = [];
     this.isSmoothGroup = false;
+    this.currentDragDist = 0;
     this.removePPGhost();
     this.ctx.selection.clearSelection();
     this.ctx.dimLabel.clear();
+    this.ctx.snapVisual.clear();
   }
 
   private createPPGhost(faceId: number, _hitPoint: THREE.Vector3): void {

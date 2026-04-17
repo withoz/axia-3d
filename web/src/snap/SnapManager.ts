@@ -714,6 +714,134 @@ export class SnapManager {
     return result;
   }
 
+  /**
+   * Push/Pull "alignment" distance — find signed distance along startNormal
+   * from startHitPoint to a nearby reference vertex / edge / parallel face.
+   *
+   * v1 scope:
+   *   - Parallel faces (|n·targetN| > 0.95) — plane-to-plane perpendicular distance
+   *   - Edges — closest-point-on-segment to the normal line
+   *   - Vertices — direct projection onto the normal line
+   *
+   * @param mouseX client X
+   * @param mouseY client Y
+   * @param camera active camera
+   * @param canvas renderer canvas
+   * @param startFaceId — start face (excluded from alignment, self-reference)
+   * @param startHitPoint — point on the start face (centroid or click hit)
+   * @param startNormal — the start face's normal (unit vector)
+   * @returns alignment info or null
+   */
+  findAlignedDistance(
+    mouseX: number, mouseY: number,
+    camera: THREE.Camera,
+    canvas: HTMLCanvasElement,
+    startFaceId: number,
+    startHitPoint: THREE.Vector3,
+    startNormal: THREE.Vector3,
+  ): {
+    dist: number;
+    target: THREE.Vector3;
+    targetType: 'vertex' | 'edge' | 'face';
+  } | null {
+    const rect = canvas.getBoundingClientRect();
+    const mousePx = new THREE.Vector2(mouseX, mouseY);
+    const threshold = this.config.pixelThreshold * 1.5; // 조금 너그러운 임계값
+
+    const toScreenPx = (pos: THREE.Vector3): THREE.Vector2 | null => {
+      const v = pos.clone().project(camera);
+      if (v.z < -1 || v.z > 1) return null;
+      return new THREE.Vector2(
+        (v.x * 0.5 + 0.5) * rect.width + rect.left,
+        (-v.y * 0.5 + 0.5) * rect.height + rect.top,
+      );
+    };
+
+    /** signed distance from startHitPoint to p along startNormal */
+    const alignDist = (p: THREE.Vector3): number => {
+      return p.clone().sub(startHitPoint).dot(startNormal);
+    };
+
+    type Candidate = {
+      dist: number;
+      target: THREE.Vector3;
+      targetType: 'vertex' | 'edge' | 'face';
+      screenDist: number;
+      priority: number; // lower = higher priority
+    };
+    const candidates: Candidate[] = [];
+
+    const MIN_ALIGN_DIST = 1.0; // 1mm 이하 거리 제외 (자기 자신과 가까운 면)
+
+    // ── Vertices (priority 0) ──
+    for (const v of this.vertices) {
+      const d = alignDist(v);
+      if (Math.abs(d) < MIN_ALIGN_DIST) continue;
+      const s = toScreenPx(v);
+      if (!s) continue;
+      const sd = mousePx.distanceTo(s);
+      if (sd > threshold) continue;
+      candidates.push({ dist: d, target: v.clone(), targetType: 'vertex', screenDist: sd, priority: 0 });
+    }
+
+    // ── Edges (priority 1) — closest point on segment projected to normal line ──
+    for (const edge of this.edges) {
+      // Find the parameter on edge that minimizes distance to the normal line at startHitPoint
+      // Normal line: P(s) = startHitPoint + s * startNormal
+      // Edge: E(t) = edge.a + t * (edge.b - edge.a)
+      // Minimize |E(t) - P(s)|^2 jointly.
+      const ab = edge.b.clone().sub(edge.a);
+      const ao = edge.a.clone().sub(startHitPoint);
+      const abab = ab.dot(ab);
+      const abn = ab.dot(startNormal);
+      const aon = ao.dot(startNormal);
+      const abao = ab.dot(ao);
+      const denom = abab - abn * abn;
+      if (Math.abs(denom) < 1e-8) continue; // edge parallel to normal — skip
+      const t = (-abao + abn * aon) / denom;
+      if (t < -0.01 || t > 1.01) continue; // projection outside segment
+      const tClamped = Math.max(0, Math.min(1, t));
+      const closestOnEdge = edge.a.clone().add(ab.clone().multiplyScalar(tClamped));
+      const d = alignDist(closestOnEdge);
+      if (Math.abs(d) < MIN_ALIGN_DIST) continue;
+      const s = toScreenPx(closestOnEdge);
+      if (!s) continue;
+      const sd = mousePx.distanceTo(s);
+      if (sd > threshold) continue;
+      candidates.push({ dist: d, target: closestOnEdge, targetType: 'edge', screenDist: sd, priority: 1 });
+    }
+
+    // ── Parallel faces (priority 2) ──
+    for (const [fid, data] of this.faceData) {
+      if (fid === startFaceId) continue; // self-reference
+      const cosAng = Math.abs(data.normal.dot(startNormal));
+      if (cosAng < 0.95) continue; // not parallel
+      // Distance from startHitPoint to target face plane along startNormal
+      // plane: n·x + d = 0  →  t = -(n·hit + d) / (n·normal)
+      const nDotN = data.normal.dot(startNormal);
+      if (Math.abs(nDotN) < 1e-6) continue;
+      const tParam = -(data.normal.dot(startHitPoint) + data.planeD) / nDotN;
+      if (Math.abs(tParam) < MIN_ALIGN_DIST) continue;
+      const intersectPt = startHitPoint.clone().add(startNormal.clone().multiplyScalar(tParam));
+      const s = toScreenPx(intersectPt);
+      if (!s) continue;
+      const sd = mousePx.distanceTo(s);
+      if (sd > threshold) continue;
+      candidates.push({ dist: tParam, target: intersectPt, targetType: 'face', screenDist: sd, priority: 2 });
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Sort: priority first, then screen distance
+    candidates.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return a.screenDist - b.screenDist;
+    });
+
+    const best = candidates[0];
+    return { dist: best.dist, target: best.target, targetType: best.targetType };
+  }
+
   /** Tangent points from external point P to circle (center C, radius r) on plane with normal n */
   private tangentPoints(p: THREE.Vector3, center: THREE.Vector3, r: number, normal: THREE.Vector3): THREE.Vector3[] {
     // Project P onto face plane

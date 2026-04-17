@@ -34,6 +34,13 @@ function mockToolContext() {
     },
     syncMesh: vi.fn(),
     dimLabel: { update: vi.fn(), clear: vi.fn() },
+    snap: {
+      findAlignedDistance: vi.fn().mockReturnValue(null),
+    },
+    snapVisual: {
+      update: vi.fn(),
+      clear: vi.fn(),
+    },
     units: { format: vi.fn().mockReturnValue('10.0 mm') },
     getFaceId: vi.fn().mockReturnValue(-1),
     getSelectedFaces: vi.fn().mockReturnValue([]),
