@@ -71,9 +71,13 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     return n.toFixed(decimals).replace(/\B(?=(\d{3})+\.)/g, ',');
   };
 
-  // ── 기하 상태 단계 인디케이터 업데이트 ──
-  // HTML은 `data-state="line"`을 쓰지만 GeometryState.Edge는 문자열 'edge'.
-  // 불일치 방지를 위한 매핑 + 빈 문자열("")로 전체 비활성화 허용.
+  // ── 기하 차원 인디케이터 업데이트 (Line → Face → Volume) ──
+  //
+  // Point/XIA는 의도적으로 배제 (ADR-002):
+  //   - Point는 Drawing 도구의 중간 상태일 뿐, 독립 XIA가 아님
+  //   - XIA는 차원 축이 아닌 Semantic 분류이므로 차원 바에 들어가면 범주 오류
+  // HTML `data-state="line"` ↔ `GeometryState.Edge = 'edge'` 매핑 유지.
+  // 빈 문자열("")을 넘기면 모든 단계 비활성화.
   const toStepName = (state: string): string => {
     if (state === 'edge') return 'line';
     return state;
@@ -82,9 +86,9 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     const stepsEl = document.getElementById('xi-state-steps');
     if (!stepsEl) return;
 
-    const order = ['point', 'line', 'face', 'volume', 'xia'];
+    const order = ['line', 'face', 'volume'];
     const normalized = toStepName(state);
-    const activeIdx = order.indexOf(normalized); // -1 = all off (선택 없음)
+    const activeIdx = order.indexOf(normalized); // -1 = all off (선택 없음 또는 Point)
 
     stepsEl.querySelectorAll('.xi-step').forEach(step => {
       const s = (step as HTMLElement).dataset.state || '';

@@ -82,6 +82,41 @@ Push/Pull로 Face→Volume, Face 삭제로 Volume→Face 등 **자동 승강**�
   - 현재는 허용. 사용자가 의도적으로 만들 수 있음
   - 엄격한 "닫힌 솔리드" 판정이 필요하면 `is_face_set_closed()` 별도 사용
 
+## 개념 정정 (Clarification, 2026-04-17)
+
+초기 설계에서 XIA 상태를 다음과 같이 **차원 축 하나**에 늘어놓았다:
+
+```
+Dissolved → Point → Edge → Face → Volume → "XIA"
+```
+
+이 표현은 **범주 오류(category error)** 를 포함한다:
+
+- `Point`, `Edge`, `Face`, `Volume`은 **기하의 차원** (0D/1D/2D/3D) 속성
+- `XIA`는 **Semantic 분류** (이름·재질·그룹·선택 단위를 가진 객체 여부)
+- 둘은 **직교하는 축**이지, 한 축의 선형 진행 단계가 아니다
+
+**정확한 모델**:
+
+```
+기하 차원 (Dimension): Vertex(0D) · Edge(1D) · Face(2D) · Volume(3D)
+                         ↑ 이것이 "도구가 만드는 결과"
+Semantic 정체성 (XIA): "이름 붙은 의미 단위" — 차원과 직교
+```
+
+즉:
+- **Point/Line/Face는 "그리는 도구/기하 원소"이지 XIA의 진행 단계가 아니다.**
+- XIA는 Line이든 Face든 Volume이든 **어느 차원에도 붙을 수 있는 Semantic wrapper**다.
+- `XiaState::Point`는 현재 코드에서 dead branch로 **할당된 적이 없다** (이 점은 의도적).
+
+### 이 정정이 코드에 미친 영향
+
+- `XiaState` enum 자체는 **파일 포맷 호환성**을 위해 그대로 유지 (Point variant 포함)
+- Inspector UI의 단계 바에서 `Point`/`XIA` 라벨을 제거:
+  - 남은 단계: `Line → Face → Volume` (순수 차원)
+  - XIA 승격은 별도 방식으로 표현 (이름/재질 부여 등 — 미래 UI 개선)
+- 이 ADR은 계속 유효. "XIA 상태 = face 개수"라는 판정 공식 자체는 변경 없음.
+
 ## 대안 (Alternatives)
 
 ### 대안 A: 저장 방식

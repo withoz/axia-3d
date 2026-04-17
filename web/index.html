@@ -1106,16 +1106,13 @@
     .xi-step.passed .xi-step-dot {
       transform: scale(1.2);
     }
-    .xi-step[data-state="point"] .xi-step-dot  { background: #888888; }
+    /* Point/XIA 스타일은 HTML과 함께 제거 (ADR-002) */
     .xi-step[data-state="line"] .xi-step-dot   { background: #ff9800; }
     .xi-step[data-state="face"] .xi-step-dot   { background: #2196f3; }
     .xi-step[data-state="volume"] .xi-step-dot { background: #9c27b0; }
-    .xi-step[data-state="xia"] .xi-step-dot    { background: #4caf50; }
-    .xi-step.active[data-state="point"] .xi-step-dot  { box-shadow: 0 0 8px rgba(136, 136, 136, 0.6); }
     .xi-step.active[data-state="line"] .xi-step-dot   { box-shadow: 0 0 8px rgba(255, 152, 0, 0.6); }
     .xi-step.active[data-state="face"] .xi-step-dot   { box-shadow: 0 0 8px rgba(33, 150, 243, 0.6); }
     .xi-step.active[data-state="volume"] .xi-step-dot { box-shadow: 0 0 8px rgba(156, 39, 176, 0.6); }
-    .xi-step.active[data-state="xia"] .xi-step-dot    { box-shadow: 0 0 8px rgba(76, 175, 80, 0.6); }
     .xi-step-label {
       font-size: 9px;
       font-weight: 500;
@@ -1794,18 +1791,20 @@
       <div class="xi-body">
         <!-- ═══ 속성 탭 ═══ -->
         <div class="xi-tab-content active" id="xi-tab-props">
-          <!-- 기하 상태 인디케이터 (항상 표시) -->
+          <!--
+            기하 차원 인디케이터 (항상 표시).
+            Point / XIA 슬롯은 의도적으로 제거:
+              - Point: 독립 객체로서의 점은 엔진에 존재하지 않음 (Drawing 중간 상태)
+              - XIA: XIA는 "차원 단계"가 아니라 "의미 분류" — 차원 축에 넣으면 범주 오류.
+            자세한 이유는 ADR-002 참조.
+          -->
           <div class="xi-state-row">
             <div class="xi-state-steps" id="xi-state-steps">
-              <div class="xi-step" data-state="point"><span class="xi-step-dot"></span><span class="xi-step-label">Point</span></div>
-              <div class="xi-step-line"></div>
               <div class="xi-step" data-state="line"><span class="xi-step-dot"></span><span class="xi-step-label">Line</span></div>
               <div class="xi-step-line"></div>
               <div class="xi-step" data-state="face"><span class="xi-step-dot"></span><span class="xi-step-label">Face</span></div>
               <div class="xi-step-line"></div>
               <div class="xi-step" data-state="volume"><span class="xi-step-dot"></span><span class="xi-step-label">Volume</span></div>
-              <div class="xi-step-line xi-step-line-mat"></div>
-              <div class="xi-step" data-state="xia"><span class="xi-step-dot"></span><span class="xi-step-label">XIA</span></div>
             </div>
           </div>
 
