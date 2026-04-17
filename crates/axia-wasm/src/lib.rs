@@ -1586,6 +1586,53 @@ impl AxiaEngine {
         flipped
     }
 
+    /// **User-triggered Face Reverse** (SketchUp "Reverse Faces").
+    ///
+    /// Flips orientation of the given faces. Locked (inside grouped/component)
+    /// faces are silently skipped. Wrapped in a single undo transaction so the
+    /// whole batch restores with one Ctrl+Z.
+    ///
+    /// Returns the count of faces actually flipped.
+    #[wasm_bindgen(js_name = "flipFaces")]
+    pub fn flip_faces(&mut self, face_ids: Vec<u32>) -> u32 {
+        if face_ids.is_empty() {
+            return 0;
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        // 잠긴(locked) 면 스킵 — 그룹/컴포넌트 보호
+        let fids: Vec<FaceId> = face_ids
+            .iter()
+            .map(|&id| FaceId::new(id))
+            .filter(|fid| !self.scene.is_face_locked(*fid))
+            .collect();
+
+        let skipped = face_ids.len() - fids.len();
+        let flipped = self.scene.mesh.flip_faces(&fids);
+
+        debug_log!(
+            "[RUST] flip_faces: requested={}, skipped_locked={}, flipped={}",
+            face_ids.len(), skipped, flipped
+        );
+
+        if flipped > 0 {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        } else {
+            // 아무것도 뒤집히지 않음 — 트랜잭션 취소해 undo 스택 오염 방지
+            self.scene.transactions.cancel();
+            if skipped > 0 {
+                self.set_error(format!("{}개 면이 잠겨있어 반전 불가", skipped));
+            }
+        }
+
+        flipped as u32
+    }
+
     // ========================================================================
     // DXF Import
     // ========================================================================

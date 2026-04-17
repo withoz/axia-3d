@@ -297,6 +297,23 @@ export class AxiaEngine {
         }
     }
     /**
+     * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
+     *
+     * Flips orientation of the given faces. Locked (inside grouped/component)
+     * faces are silently skipped. Wrapped in a single undo transaction so the
+     * whole batch restores with one Ctrl+Z.
+     *
+     * Returns the count of faces actually flipped.
+     * @param {Uint32Array} face_ids
+     * @returns {number}
+     */
+    flipFaces(face_ids) {
+        const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_flipFaces(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
+    }
+    /**
      * Get the current cache version (monotonic counter).
      * Used by JavaScript to validate delta buffer freshness.
      * @returns {number}

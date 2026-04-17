@@ -14,6 +14,7 @@ import { SelectionManager } from './SelectionManager';
 import { PickBox } from '../ui/PickBox';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
+import { Toast } from '../ui/Toast';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
@@ -285,6 +286,22 @@ export class ToolManager {
         this.selection.clearSelection();
         this.syncMesh();
         debugLog('[Action] delete', selectedFaces.length, 'faces,', selectedEdges.length, 'edges');
+      }
+    } else if (action === 'flip-faces') {
+      // SketchUp "Reverse Faces" — 선택된 면의 노멀/winding 반전
+      const faces = this.selection.getSelectedFaces();
+      if (faces.length === 0) {
+        Toast.warn('반전할 면을 먼저 선택하세요');
+        return;
+      }
+      const flipped = this.bridge.flipFaces(faces);
+      if (flipped > 0) {
+        this.syncMesh();
+        Toast.info(`${flipped}개 면 반전됨`, 1800);
+        debugLog('[Action] flip-faces:', flipped);
+      } else {
+        const err = this.bridge.lastError();
+        Toast.error(err || '면 반전 실패');
       }
     } else if (action === 'select-all') {
       this.selection.selectEverything(this.faceMap, this.edgeMap);

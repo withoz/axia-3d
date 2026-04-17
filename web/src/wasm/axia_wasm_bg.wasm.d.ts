@@ -23,6 +23,7 @@ export const axiaengine_draw_rect: (a: number, b: number, c: number, d: number, 
 export const axiaengine_export_snapshot: (a: number, b: number) => void;
 export const axiaengine_face_count: (a: number) => number;
 export const axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
+export const axiaengine_flipFaces: (a: number, b: number, c: number) => number;
 export const axiaengine_getCacheVersion: (a: number) => number;
 export const axiaengine_getDirtyFaceBuffers: (a: number) => number;
 export const axiaengine_getDirtyFaceCount: (a: number) => number;

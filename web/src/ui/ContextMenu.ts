@@ -72,6 +72,12 @@ export function initContextMenu(deps: ContextMenuDeps): void {
     );
     if (groupSep) groupSep.style.display = anyGroupVisible ? '' : 'none';
 
+    // ── 면 반전 항목 — 선택된 face가 있을 때만 표시 ──
+    const faceItems = ctxMenu.querySelectorAll('.ctx-face-item');
+    faceItems.forEach(item => {
+      (item as HTMLElement).style.display = hasSelection ? '' : 'none';
+    });
+
     // 화면 밖으로 나가지 않도록 위치 조정
     const menuW = 200, menuH = 400;
     const cx = Math.min(x, window.innerWidth - menuW);
@@ -99,6 +105,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'undo': toolManager.executeAction('undo'); break;
       case 'redo': toolManager.executeAction('redo'); break;
       case 'delete': toolManager.executeAction('delete'); break;
+      case 'flip-faces': toolManager.executeAction('flip-faces'); break;
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;

@@ -7,7 +7,7 @@
 //! This is equivalent to SketchUp's "Orient Faces" feature.
 
 use std::collections::{HashSet, VecDeque};
-use anyhow::Result;
+use anyhow::{Result, ensure};
 
 use crate::entities::id::*;
 use crate::mesh::Mesh;
@@ -156,18 +156,31 @@ impl Mesh {
     }
 
     /// Flip a face: reverse boundary winding and negate the stored normal.
+    ///
+    /// Internal use only (Boolean ops). Does NOT handle inner loops or validate
+    /// degeneracy. For the public API use `flip_face_safe` / `flip_faces`.
     pub(crate) fn flip_face(&mut self, face_id: FaceId) -> Result<()> {
         // Negate stored normal
         let normal = self.faces[face_id].normal();
         self.faces[face_id].set_normal(-normal);
 
-        // Reverse the half-edge loop direction
+        // Reverse the outer loop
         let start = self.faces[face_id].outer().start;
-        let hes = self.collect_loop_hes(start)?;
+        self.reverse_loop(start)?;
+        Ok(())
+    }
 
-        // Swap next/prev for each half-edge, and swap dst vertices
-        // For a loop A→B→C→D, we want D→C→B→A
-        // Each HE's next becomes its prev, and prev becomes next
+    /// Reverse a half-edge loop in place.
+    /// Swaps next/prev pointers and shifts dst vertices one slot backwards.
+    fn reverse_loop(&mut self, start: HeId) -> Result<()> {
+        let hes = self.collect_loop_hes(start)?;
+        let n = hes.len();
+        if n < 3 {
+            // Degenerate loop — nothing useful to reverse
+            return Ok(());
+        }
+
+        // Swap next/prev for each half-edge
         for &he_id in &hes {
             let old_next = self.hes[he_id].next();
             let old_prev = self.hes[he_id].prev();
@@ -175,20 +188,198 @@ impl Mesh {
             self.hes[he_id].set_prev(old_next);
         }
 
-        // Also need to update dst vertices:
-        // In original loop: he[i].dst = boundary[i+1]
-        // After reversal: he[i] should point to boundary[i-1]
-        // Collect original destinations
+        // Update dst vertices: after reversal, he[i].dst = old dst of he[i-1]
         let dsts: Vec<VertId> = hes.iter().map(|&h| self.hes[h].dst()).collect();
-        let n = hes.len();
-        // After reversing next/prev, he[i]'s prev is old he[i+1]
-        // The dst should shift: he[i].dst = old_dst of he[i-1]
         for i in 0..n {
             let prev_idx = if i == 0 { n - 1 } else { i - 1 };
             self.hes[hes[i]].set_dst(dsts[prev_idx]);
+        }
+        Ok(())
+    }
+
+    /// **Public API**: Safely flip a face's orientation.
+    ///
+    /// Differences from the internal `flip_face`:
+    ///  - Validates face existence and non-degeneracy (≥ 3 vertices)
+    ///  - Reverses **all** inner loops (holes) in addition to the outer loop
+    ///  - Suitable for user-triggered "Reverse Face" commands
+    pub fn flip_face_safe(&mut self, face_id: FaceId) -> Result<()> {
+        ensure!(self.faces.contains(face_id), "Face {:?} not found", face_id);
+
+        // Degenerate check via outer loop vertex count
+        let outer_start = self.faces[face_id].outer().start;
+        let verts = self.collect_loop_verts(outer_start)?;
+        ensure!(
+            verts.len() >= 3,
+            "Cannot flip degenerate face {:?} ({} verts)",
+            face_id,
+            verts.len()
+        );
+
+        // Negate stored normal
+        let normal = self.faces[face_id].normal();
+        self.faces[face_id].set_normal(-normal);
+
+        // Reverse outer loop
+        self.reverse_loop(outer_start)?;
+
+        // Reverse every inner loop (holes)
+        let inner_starts: Vec<HeId> = self.faces[face_id]
+            .inners()
+            .iter()
+            .map(|l| l.start)
+            .collect();
+        for start in inner_starts {
+            if !start.is_null() {
+                self.reverse_loop(start)?;
+            }
         }
 
         Ok(())
     }
 
+    /// **Public API**: Flip multiple faces in one go.
+    ///
+    /// Each face is processed independently; failures on one do not abort the
+    /// batch. Returns the count of successfully flipped faces.
+    ///
+    /// Caller is responsible for wrapping the call in a single undo
+    /// transaction if they want a unified rollback point.
+    pub fn flip_faces(&mut self, face_ids: &[FaceId]) -> usize {
+        let mut flipped = 0usize;
+        for &fid in face_ids {
+            if self.flip_face_safe(fid).is_ok() {
+                flipped += 1;
+            }
+        }
+        flipped
+    }
+}
+
+#[cfg(test)]
+mod flip_tests {
+    use super::*;
+    use crate::MaterialId;
+    use glam::DVec3;
+
+    fn make_square(mesh: &mut Mesh) -> FaceId {
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(4.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(4.0, 0.0, 4.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 4.0));
+        mesh.add_face(&[v0, v1, v2, v3], mat).unwrap()
+    }
+
+    #[test]
+    fn flip_face_safe_inverts_normal() {
+        let mut m = Mesh::new();
+        let fid = make_square(&mut m);
+        let original = m.faces[fid].normal();
+
+        m.flip_face_safe(fid).unwrap();
+        let flipped = m.faces[fid].normal();
+
+        // Stored normal should now point the opposite direction
+        assert!(flipped.dot(original) < 0.0, "normal should be reversed");
+    }
+
+    #[test]
+    fn flip_face_safe_reverses_loop_winding() {
+        let mut m = Mesh::new();
+        let fid = make_square(&mut m);
+        let original_verts = m
+            .collect_loop_verts(m.faces[fid].outer().start)
+            .unwrap();
+
+        m.flip_face_safe(fid).unwrap();
+
+        let reversed_verts = m
+            .collect_loop_verts(m.faces[fid].outer().start)
+            .unwrap();
+        // Reversed loop should contain same vertices in reverse-ish order
+        assert_eq!(original_verts.len(), reversed_verts.len());
+        // Stored normal must match the new (reversed) loop orientation
+        let computed = m.compute_normal(&reversed_verts).unwrap();
+        let stored = m.faces[fid].normal();
+        assert!(
+            computed.dot(stored) > 0.0,
+            "stored normal should match computed normal of reversed loop"
+        );
+    }
+
+    #[test]
+    fn flip_twice_restores_original() {
+        let mut m = Mesh::new();
+        let fid = make_square(&mut m);
+        let original_normal = m.faces[fid].normal();
+
+        m.flip_face_safe(fid).unwrap();
+        m.flip_face_safe(fid).unwrap();
+
+        let final_normal = m.faces[fid].normal();
+        assert!(
+            final_normal.dot(original_normal) > 0.9999,
+            "two flips should restore normal"
+        );
+    }
+
+    #[test]
+    fn flip_face_safe_rejects_nonexistent_face() {
+        let mut m = Mesh::new();
+        let r = m.flip_face_safe(FaceId::new(999));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn flip_faces_batch_counts_successes() {
+        let mut m = Mesh::new();
+        let f1 = make_square(&mut m);
+        // Second face (offset)
+        let mat = MaterialId::new(0);
+        let v0 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(14.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(14.0, 0.0, 4.0));
+        let v3 = m.add_vertex(DVec3::new(10.0, 0.0, 4.0));
+        let f2 = m.add_face(&[v0, v1, v2, v3], mat).unwrap();
+
+        // Include a bad id — should be silently skipped, others still counted
+        let flipped = m.flip_faces(&[f1, FaceId::new(9999), f2]);
+        assert_eq!(flipped, 2);
+    }
+
+    #[test]
+    fn flip_face_on_box_top_reverses_only_that_face() {
+        // 박스 생성 후 윗면만 flip → 다른 면은 영향 없어야 함
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(4.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(4.0, 0.0, 4.0));
+        let v3 = m.add_vertex(DVec3::new(0.0, 0.0, 4.0));
+        let base = m.add_face(&[v0, v3, v2, v1], mat).unwrap();
+        let pp = m.push_pull(base, 3.0, mat).unwrap();
+        let top = pp.top_face;
+
+        // 원본 노멀 저장
+        let orig_top = m.faces[top].normal();
+        let orig_others: Vec<(FaceId, glam::DVec3)> = m.faces
+            .iter()
+            .filter(|(id, f)| *id != top && f.is_active())
+            .map(|(id, f)| (id, f.normal()))
+            .collect();
+
+        m.flip_face_safe(top).unwrap();
+
+        // 윗면만 뒤집혔는지 확인
+        assert!(m.faces[top].normal().dot(orig_top) < 0.0);
+        for (id, n_orig) in orig_others {
+            let n_now = m.faces[id].normal();
+            assert!(
+                n_now.dot(n_orig) > 0.9999,
+                "face {:?} should not be affected by top flip",
+                id
+            );
+        }
+    }
 }

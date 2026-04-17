@@ -459,6 +459,26 @@ export class WasmBridge {
     }
   }
 
+  /**
+   * Flip (reverse) the orientation of the given faces.
+   * Locked faces are silently skipped by the engine.
+   * Returns the number of faces actually flipped.
+   * All changes are a single undo step.
+   */
+  flipFaces(faceIds: number[]): number {
+    if (!this.engine) return 0;
+    this.markDirty();
+    try {
+      const eng = this.engine as AxiaEngineExtended & {
+        flipFaces?(ids: Uint32Array): number;
+      };
+      return eng.flipFaces?.(new Uint32Array(faceIds)) ?? 0;
+    } catch (e) {
+      console.error('[WasmBridge] flipFaces failed:', e);
+      return 0;
+    }
+  }
+
   /** DCEL topology BFS: seedFace에서 edge를 공유하는 모든 연결된 face 반환 */
   getConnectedFaces(seedFaceId: number): number[] {
     if (!this.engine?.get_connected_faces) return [];

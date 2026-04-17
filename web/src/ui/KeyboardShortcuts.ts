@@ -71,6 +71,13 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // N: 면 반전 (SketchUp "Reverse Faces" 대응 — modifier 없을 때만)
+    if ((e.key === 'n' || e.key === 'N') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      toolManager.executeAction('flip-faces');
+      return;
+    }
+
     // F3: OSNAP 토글
     if (e.key === 'F3') {
       e.preventDefault();

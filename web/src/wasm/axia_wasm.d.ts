@@ -86,6 +86,16 @@ export class AxiaEngine {
      */
     faces_centroid(face_ids: Uint32Array): Float64Array;
     /**
+     * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
+     *
+     * Flips orientation of the given faces. Locked (inside grouped/component)
+     * faces are silently skipped. Wrapped in a single undo transaction so the
+     * whole batch restores with one Ctrl+Z.
+     *
+     * Returns the count of faces actually flipped.
+     */
+    flipFaces(face_ids: Uint32Array): number;
+    /**
      * Get the current cache version (monotonic counter).
      * Used by JavaScript to validate delta buffer freshness.
      */
@@ -408,6 +418,7 @@ export interface InitOutput {
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_getCacheVersion: (a: number) => number;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
