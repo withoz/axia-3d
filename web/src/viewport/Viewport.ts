@@ -1082,6 +1082,52 @@ export class Viewport {
     return frontHit || hits[0];
   }
 
+  /**
+   * Edge / Face 동시 raycast → 커서에 더 가까운 쪽을 선호하는 "지능형 우선순위" 픽.
+   *
+   * 규칙:
+   *  1. 엣지 hit이 커서로부터 `preferEdgeWithinPx` 픽셀 이내 → **edge 우선**
+   *  2. 그 외 face hit이 있으면 → face
+   *  3. face miss지만 edge hit → edge (빈 공간 근처 엣지)
+   *  4. 둘 다 miss → null
+   *
+   * 이 방식으로:
+   *  - 면 중앙 클릭 → 언제나 면 선택
+   *  - 엣지 5px 이내 클릭 → 엣지 선택 (얇은 엣지도 놓치지 않음)
+   *  - 작은 면도 중앙만 정확히 클릭하면 face 선택 가능
+   */
+  pickEdgeOrFace(
+    screenX: number,
+    screenY: number,
+    preferEdgeWithinPx: number = 5,
+  ):
+    | { type: 'face'; hit: THREE.Intersection }
+    | { type: 'edge'; hit: THREE.Intersection }
+    | null
+  {
+    const faceHit = this.pick(screenX, screenY);
+    const edgeHit = this.pickEdge(screenX, screenY);
+
+    if (!faceHit && !edgeHit) return null;
+    if (!edgeHit) return { type: 'face', hit: faceHit! };
+    if (!faceHit) return { type: 'edge', hit: edgeHit };
+
+    // ── 둘 다 hit: 화면 상 엣지까지 거리로 판정 ──
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const cam = this.activeCamera;
+    const edgeProj = edgeHit.point.clone().project(cam);
+    const edgeScreenX = ((edgeProj.x + 1) / 2) * rect.width + rect.left;
+    const edgeScreenY = ((1 - edgeProj.y) / 2) * rect.height + rect.top;
+    const dx = edgeScreenX - screenX;
+    const dy = edgeScreenY - screenY;
+    const edgePixelDist = Math.sqrt(dx * dx + dy * dy);
+
+    if (edgePixelDist <= preferEdgeWithinPx) {
+      return { type: 'edge', hit: edgeHit };
+    }
+    return { type: 'face', hit: faceHit };
+  }
+
   /** Perform a raycast pick on wireframe edges (LineSegments).
    *  Returns the intersection with `index` = line segment index (for edge map lookup).
    *  Threshold is automatically computed from camera distance for consistent screen-space feel. */

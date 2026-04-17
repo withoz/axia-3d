@@ -154,23 +154,23 @@ export class EraseTool implements ITool {
   // ════════════════════════════════════════════════
 
   private tryAccumulate(e: MouseEvent): void {
-    // 1) Face 우선
-    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
-    if (hit && hit.faceIndex != null && hit.faceIndex >= 0) {
-      const fid = this.ctx.getFaceId(hit.faceIndex);
-      if (fid >= 0 && !this.accumulatedFaces.has(fid)) {
-        this.accumulatedFaces.add(fid);
+    // Edge/Face 지능형 우선순위 — 커서 5px 이내 엣지는 엣지 우선, 그 외 면
+    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY);
+    if (!picked) return;
+
+    if (picked.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
+      const segIndex = Math.floor(picked.hit.index / 2);
+      const edgeId = this.ctx.edgeMap[segIndex];
+      if (edgeId != null && !this.accumulatedEdges.has(edgeId)) {
+        this.accumulatedEdges.add(edgeId);
       }
       return;
     }
 
-    // 2) Edge
-    const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-    if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-      const segIndex = Math.floor(edgeHit.index / 2);
-      const edgeId = this.ctx.edgeMap[segIndex];
-      if (edgeId != null && !this.accumulatedEdges.has(edgeId)) {
-        this.accumulatedEdges.add(edgeId);
+    if (picked.type === 'face' && picked.hit.faceIndex != null && picked.hit.faceIndex >= 0) {
+      const fid = this.ctx.getFaceId(picked.hit.faceIndex);
+      if (fid >= 0 && !this.accumulatedFaces.has(fid)) {
+        this.accumulatedFaces.add(fid);
       }
     }
   }
@@ -180,10 +180,18 @@ export class EraseTool implements ITool {
   // ════════════════════════════════════════════════
 
   private updateHoverVisuals(e: MouseEvent): void {
-    // Face hover: 빨간 반투명 overlay
-    const faceHit = this.ctx.viewport.pick(e.clientX, e.clientY);
-    if (faceHit && faceHit.faceIndex != null && faceHit.faceIndex >= 0) {
-      const fid = this.ctx.getFaceId(faceHit.faceIndex);
+    // Edge/Face 지능형 우선순위 호버 — SelectTool과 동일 규칙으로 일관성 확보
+    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY);
+
+    if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
+      const segIndex = Math.floor(picked.hit.index / 2);
+      this.showEdgeHover(segIndex);
+      this.removeFaceHover();
+      return;
+    }
+
+    if (picked?.type === 'face' && picked.hit.faceIndex != null && picked.hit.faceIndex >= 0) {
+      const fid = this.ctx.getFaceId(picked.hit.faceIndex);
       if (fid >= 0) {
         this.showFaceHover(fid);
         this.removeEdgeHover();
@@ -191,16 +199,9 @@ export class EraseTool implements ITool {
       }
     }
 
+    // 어떤 것도 hit 안 됨
     this.removeFaceHover();
-
-    // Edge hover: 빨간 선
-    const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-    if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-      const segIndex = Math.floor(edgeHit.index / 2);
-      this.showEdgeHover(segIndex);
-    } else {
-      this.removeEdgeHover();
-    }
+    this.removeEdgeHover();
   }
 
   private showEdgeHover(segIndex: number): void {
