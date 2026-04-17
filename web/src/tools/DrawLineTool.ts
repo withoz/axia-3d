@@ -94,6 +94,15 @@ export class DrawLineTool implements ITool {
   private chainPoints: THREE.Vector3[] = [];
   /** Last loop-close target type (for Toast/UI differentiation) */
   private lastCloseKind: 'chain-start' | 'chain-mid' | 'free' | null = null;
+  /**
+   * Drawing plane locked on first click.
+   * Subsequent clicks/moves project the mouse ray onto THIS plane instead of
+   * viewport's pick-then-workplane fallback, so a continuous chain stays
+   * coplanar even when the mouse passes over other faces.
+   * Snap overrides this (snap point used verbatim). Shift key lets the user
+   * temporarily bypass plane-lock for 3D paths.
+   */
+  private drawingPlane: THREE.Plane | null = null;
 
   // Three.js preview objects
   private linePreview: THREE.Line | null = null;
@@ -135,6 +144,8 @@ export class DrawLineTool implements ITool {
       if (pickedFaceId >= 0) {
         debugLog(`[FaceSplit] 1st click on face ${pickedFaceId}`);
       }
+      // Lock the drawing plane based on this click (pick hit or workplane)
+      this.establishDrawingPlane(e);
     } else if (this.state === LineDrawState.Drawing) {
       // Second+ click: remember end face
       this.endFaceId = pickedFaceId;
@@ -185,6 +196,7 @@ export class DrawLineTool implements ITool {
     if (e.key === 'Escape') {
       this.handle(LineDrawEvent.Escape);
     }
+    // Shift 여부는 각 mouse 이벤트의 e.shiftKey로 직접 읽음 (키업 훅 불필요)
   }
 
   applyVCBValue(value: number): void {
@@ -320,6 +332,7 @@ export class DrawLineTool implements ITool {
         this.chainPoints = [];
         this.lastCloseKind = null;
         this._lastIntersectionWarn = null;
+        this.drawingPlane = null;
         this.startFaceId = -1;
         this.endFaceId = -1;
         this.hoverFaceId = -1;
@@ -354,6 +367,7 @@ export class DrawLineTool implements ITool {
           this.chainPoints = [];
           this.lastCloseKind = null;
           this._lastIntersectionWarn = null;
+          this.drawingPlane = null;
           this.startFaceId = -1;
           this.endFaceId = -1;
           this.hoverFaceId = -1;
@@ -640,6 +654,70 @@ export class DrawLineTool implements ITool {
   // ═══════════════════════════════════════════════════
 
   /**
+   * Lock the drawing plane based on the first click's context.
+   *
+   *  - 클릭이 face 위에 있으면 **그 face의 plane**으로 고정
+   *  - 그렇지 않으면 현재 view mode의 **workplane** (XZ / XY / YZ)으로 고정
+   *
+   * 이후 연속 체인의 모든 점은 이 plane에 투영돼 체인이 coplanar 유지.
+   * Snap이 발동하면 snap point가 우선 (plane 무시).
+   */
+  private establishDrawingPlane(e: MouseEvent): void {
+    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
+    if (hit && hit.point && hit.face) {
+      // Use face-pick: world-space normal from the mesh's world matrix
+      const worldNormal = hit.face.normal.clone();
+      if (hit.object && hit.object.matrixWorld) {
+        // Transform local normal to world (rotation only — no translation)
+        const m = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+        worldNormal.applyMatrix3(m).normalize();
+      }
+      this.drawingPlane = new THREE.Plane()
+        .setFromNormalAndCoplanarPoint(worldNormal, hit.point.clone());
+      debugLog('[Line] Drawing plane locked from face pick, normal=',
+        worldNormal.toArray().map(v => v.toFixed(3)));
+    } else {
+      // Fall back to view-based workplane through the computed click point
+      const vm = (this.ctx.viewport as { viewMode?: string }).viewMode ?? '3d';
+      let normal: THREE.Vector3;
+      switch (vm) {
+        case 'front': case 'back':  normal = new THREE.Vector3(0, 0, 1); break;
+        case 'right': case 'left':  normal = new THREE.Vector3(1, 0, 0); break;
+        default:                    normal = new THREE.Vector3(0, 1, 0); break;
+      }
+      const pt = this.ctx.get3DPoint(e) ?? new THREE.Vector3();
+      this.drawingPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, pt);
+      debugLog('[Line] Drawing plane locked to workplane, normal=',
+        normal.toArray());
+    }
+  }
+
+  /**
+   * Cast a ray from the mouse and intersect with the locked drawing plane.
+   * Returns null if no plane is locked or ray is parallel.
+   */
+  private projectOntoDrawingPlane(e: MouseEvent): THREE.Vector3 | null {
+    if (!this.drawingPlane) return null;
+    if (!Number.isFinite(e.clientX) || !Number.isFinite(e.clientY)) return null;
+    const canvas = this.ctx.viewport.renderer.domElement;
+    const rect = canvas.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(mouse, this.ctx.viewport.activeCamera);
+    const hit = new THREE.Vector3();
+    const result = ray.ray.intersectPlane(this.drawingPlane, hit);
+    if (!result) return null;
+    // Guard against NaN in degenerate camera/plane configurations
+    if (!Number.isFinite(result.x) || !Number.isFinite(result.y) || !Number.isFinite(result.z)) {
+      return null;
+    }
+    return result;
+  }
+
+  /**
    * Raycast to detect which face (if any) is under the mouse cursor.
    * Returns DCEL FaceId (≥0) or -1 if no face hit.
    */
@@ -670,14 +748,21 @@ export class DrawLineTool implements ITool {
     }
 
     if (this.state === LineDrawState.Drawing && this.startPoint) {
-      // Second+ click: snap > axis inference > raw
+      // Second+ click: snap > axis inference > drawing-plane projection > raw
+      // Snap fires → always use it (exact coordinate match for loop close)
       const rawPt = this.ctx.get3DPoint(e);
       const snapPt = this.ctx.getSnappedPoint(e, rawPt, true);
-      // Snap fires → always use it (exact coordinate match for loop close)
       if (snapPt) return snapPt;
 
       const inferred = this.ctx.getAxisInferredPoint(e, this.startPoint);
-      return inferred ? inferred.point : (rawPt ?? fallback);
+      if (inferred) return inferred.point;
+
+      // Drawing plane projection keeps the chain coplanar with the first click
+      if (!e.shiftKey) {
+        const planePt = this.projectOntoDrawingPlane(e);
+        if (planePt) return planePt;
+      }
+      return rawPt ?? fallback;
     }
 
     return fallback;
@@ -706,6 +791,12 @@ export class DrawLineTool implements ITool {
       return inferred.point;
     }
 
+    // Drawing plane projection — keeps chain coplanar with first click's plane.
+    // Shift bypass lets the user draw 3D paths that cross planes.
+    if (!e.shiftKey) {
+      const planePt = this.projectOntoDrawingPlane(e);
+      if (planePt) return planePt;
+    }
     return rawPt ?? fallback;
   }
 
