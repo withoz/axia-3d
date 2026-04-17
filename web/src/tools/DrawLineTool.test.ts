@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import { DrawLineTool, LineDrawState } from './DrawLineTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+vi.mock('../ui/Toast', () => ({
+  Toast: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), show: vi.fn() },
+}));
 
 function mockToolContext() {
   return {
@@ -23,7 +26,10 @@ function mockToolContext() {
       pick: vi.fn().mockReturnValue(null),
       container: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) },
     },
-    selection: { clearSelection: vi.fn() },
+    selection: {
+      clearSelection: vi.fn(),
+      selectFaces: vi.fn(),
+    },
     syncMesh: vi.fn(),
     dimLabel: { update: vi.fn(), clear: vi.fn() },
     units: { format: vi.fn().mockReturnValue('100mm') },

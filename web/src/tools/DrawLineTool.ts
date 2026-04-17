@@ -26,6 +26,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
+import { Toast } from '../ui/Toast';
 
 // ═══════════════════════════════════════════════════
 //  State & Event Definitions
@@ -361,6 +362,10 @@ export class DrawLineTool implements ITool {
    * Attempt to split a face by drawing a line across it.
    * Called when both start and end points are on the same face.
    * Returns true if split succeeded (face was divided → stop continuous drawing).
+   *
+   * UX 개선 (2026-04-17):
+   * - 실패 시 Toast 알림 (이전엔 debugLog만)
+   * - 성공 시 결과 face 중 하나를 자동 선택 → 바로 Push/Pull 가능
    */
   private tryFaceSplit(faceId: number, start: THREE.Vector3, end: THREE.Vector3, len: number): boolean {
     try {
@@ -372,7 +377,7 @@ export class DrawLineTool implements ITool {
         [end.x, end.y, end.z],
       );
 
-      // Empty string means WASM method not available
+      // Empty string means WASM method not available (older WASM build)
       if (!resultJson) {
         debugLog(`[FaceSplit] WASM splitFaceByLine not available — falling back to drawLine`);
         return this.fallbackDrawLine(start, end, len);
@@ -381,18 +386,48 @@ export class DrawLineTool implements ITool {
       const result = JSON.parse(resultJson);
 
       if (result.error) {
+        // ADR-003 가드, 인접 정점 거부 등 → 사용자에게 원인 전달
         debugLog(`[FaceSplit] Engine error: ${result.error} — falling back to drawLine`);
+        Toast.warn(`면 분할 실패: ${this.friendlyErrorMessage(result.error)} — 일반 선으로 그립니다`, 3000);
         return this.fallbackDrawLine(start, end, len);
       }
 
-      debugLog(`[FaceSplit] Success! face=${faceId} → [${result.faces}] (+${result.verts?.length || 0} verts, +${result.edges || 0} edges)`);
+      const newFaces: number[] = Array.isArray(result.faces) ? result.faces : [];
+      debugLog(`[FaceSplit] Success! face=${faceId} → [${newFaces}] (+${result.verts?.length || 0} verts, +${result.edges || 0} edges)`);
+
       this.ctx.syncMesh();
+
+      // ⑫ 자동 선택: 분할된 sub-face 중 첫 번째를 선택 → 즉시 Push/Pull 가능
+      if (newFaces.length > 0) {
+        this.ctx.selection.clearSelection();
+        this.ctx.selection.selectFaces([newFaces[0]]);
+      }
+
+      Toast.info(`면이 ${newFaces.length}개로 분할됨`, 1800);
       return true; // Face was split → stop continuous and return to Armed
 
     } catch (err) {
       debugLog(`[FaceSplit] Exception: ${err} — falling back to drawLine`);
+      Toast.error(`면 분할 중 오류: ${err}`, 3000);
       return this.fallbackDrawLine(start, end, len);
     }
+  }
+
+  /** Rust 에러 메시지를 사용자 친화 한국어로 변환. */
+  private friendlyErrorMessage(err: string): string {
+    if (err.includes('degenerate') || err.includes('EPSILON')) {
+      return '분할선이 너무 짧습니다';
+    }
+    if (err.includes('adjacent')) {
+      return '인접한 정점을 이을 수 없습니다';
+    }
+    if (err.includes('finite')) {
+      return '분할 좌표가 유효하지 않습니다';
+    }
+    if (err.includes('not found')) {
+      return '대상 면을 찾을 수 없습니다';
+    }
+    return err; // 원본 유지
   }
 
   /**

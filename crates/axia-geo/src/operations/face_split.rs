@@ -193,6 +193,26 @@ pub fn split_face_by_line(
     line_start: DVec3,
     line_end: DVec3,
 ) -> Result<FaceSplitResult> {
+    // ─── Geometric Validity Guards (ADR-003) ───────────────────────────
+    ensure!(
+        line_start.x.is_finite() && line_start.y.is_finite() && line_start.z.is_finite(),
+        "split_face_by_line: line_start must be finite, got {:?}",
+        line_start
+    );
+    ensure!(
+        line_end.x.is_finite() && line_end.y.is_finite() && line_end.z.is_finite(),
+        "split_face_by_line: line_end must be finite, got {:?}",
+        line_end
+    );
+    let line_len = (line_end - line_start).length();
+    ensure!(
+        line_len >= crate::tolerances::EPSILON_LENGTH,
+        "split_face_by_line: line length {:.2e} below EPSILON_LENGTH ({:.2e}) — \
+         would create degenerate split (ADR-003)",
+        line_len,
+        crate::tolerances::EPSILON_LENGTH
+    );
+
     ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
 
     let mut debug = Vec::new();
@@ -812,6 +832,61 @@ mod tests {
 
         // Total faces should be 2 (original removed, 2 new)
         assert_eq!(m.face_count(), 2);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Geometric Validity Guards (ADR-003) for split_face_by_line
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn split_face_by_line_rejects_nan() {
+        let mut m = Mesh::new();
+        let (fid, _) = make_square(&mut m);
+        let r = split_face_by_line(
+            &mut m, fid,
+            DVec3::new(f64::NAN, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 4.0),
+        );
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("finite"));
+    }
+
+    #[test]
+    fn split_face_by_line_rejects_infinity() {
+        let mut m = Mesh::new();
+        let (fid, _) = make_square(&mut m);
+        let r = split_face_by_line(
+            &mut m, fid,
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(f64::INFINITY, 0.0, 4.0),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn split_face_by_line_rejects_zero_length() {
+        let mut m = Mesh::new();
+        let (fid, _) = make_square(&mut m);
+        let p = DVec3::new(2.0, 0.0, 2.0);
+        let r = split_face_by_line(&mut m, fid, p, p);
+        assert!(r.is_err(), "zero-length split line must be rejected");
+        let msg = r.unwrap_err().to_string();
+        assert!(
+            msg.contains("degenerate") || msg.contains("EPSILON"),
+            "error should mention degenerate/EPSILON, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn split_face_by_line_rejects_subepsilon_length() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let (fid, _) = make_square(&mut m);
+        let p0 = DVec3::new(2.0, 0.0, 2.0);
+        let p1 = DVec3::new(2.0 + EPSILON_LENGTH * 0.5, 0.0, 2.0);
+        let r = split_face_by_line(&mut m, fid, p0, p1);
+        assert!(r.is_err(), "sub-epsilon split line must be rejected");
     }
 
     #[test]

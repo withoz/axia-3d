@@ -823,7 +823,9 @@ impl AxiaEngine {
             }
             Err(e) => {
                 console_error!("[RUST] split_face_by_line ERROR: {}", e);
-                // No commit — transaction will be discarded
+                // 트랜잭션 명시적 취소 — 열린 프레임이 남으면 후속 undo 스택 오염
+                self.scene.transactions.cancel();
+                self.set_error(format!("split_face_by_line: {}", e));
                 format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "'"))
             }
         }
