@@ -908,11 +908,26 @@ export class SelectionManager {
   private buildBoundaryEdges(faceIds: Set<number>): THREE.BufferGeometry | null {
     if (this.positions.length === 0 || this.indices.length === 0) return null;
 
-    // 에지 카운트: 선택된 face 내 삼각형들의 에지 중, 1번만 등장하는 에지 = 경계
-    const edgeCount = new Map<string, [number, number]>();
-    const edgeHits = new Map<string, number>();
+    // 에지 카운트: 선택된 face 내 삼각형들의 에지 중, 1번만 등장하는 에지 = 경계.
+    // ── Position-based dedup ──
+    // Rust export는 face마다 vertex를 별도로 복제하므로 같은 position을
+    // 가진 인접 quad의 수직 edge가 index 기준으로는 다른 edge가 된다.
+    // μm 정밀도로 position을 양자화해 공유 edge를 같은 키로 묶는다.
+    // (이전엔 index만 썼던 탓에 원기둥/구 선택 시 인접 quad 공유 수직선이
+    //  모두 "count=1"로 계산되어 48개의 가짜 수직선이 생기던 버그)
+    const posKey = (i: number) => {
+      const x = Math.round(this.positions[i * 3] * 1000);
+      const y = Math.round(this.positions[i * 3 + 1] * 1000);
+      const z = Math.round(this.positions[i * 3 + 2] * 1000);
+      return `${x},${y},${z}`;
+    };
+    const edgeKey = (a: number, b: number) => {
+      const ka = posKey(a), kb = posKey(b);
+      return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+    };
 
-    const makeKey = (a: number, b: number) => a < b ? `${a}_${b}` : `${b}_${a}`;
+    const edgeEndpoints = new Map<string, [number, number]>(); // canonical key → one representative index pair
+    const edgeHits = new Map<string, number>();
 
     for (let tri = 0; tri < this.faceMap.length; tri++) {
       if (!faceIds.has(this.faceMap[tri])) continue;
@@ -923,15 +938,15 @@ export class SelectionManager {
       const edges: [number, number][] = [[i0, i1], [i1, i2], [i2, i0]];
 
       for (const [a, b] of edges) {
-        const key = makeKey(a, b);
-        edgeCount.set(key, [a, b]);
+        const key = edgeKey(a, b);
+        if (!edgeEndpoints.has(key)) edgeEndpoints.set(key, [a, b]);
         edgeHits.set(key, (edgeHits.get(key) || 0) + 1);
       }
     }
 
     // 경계 에지만 수집 (1번만 등장한 에지)
     const lineVerts: number[] = [];
-    for (const [key, [a, b]] of edgeCount) {
+    for (const [key, [a, b]] of edgeEndpoints) {
       if ((edgeHits.get(key) || 0) === 1) {
         lineVerts.push(
           this.positions[a * 3], this.positions[a * 3 + 1], this.positions[a * 3 + 2],
