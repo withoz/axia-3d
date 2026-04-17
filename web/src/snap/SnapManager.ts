@@ -50,6 +50,8 @@ export type SnapType =
   // 관계 스냅
   | 'perpendicular'   // 수직점
   | 'parallel'        // 평행
+  // 면 스냅
+  | 'onFace'          // 면 위 투영점 (cursor ray ∩ face plane)
   // 기타
   | 'node'            // 노드
   | 'insertion'       // 삽입점
@@ -64,7 +66,7 @@ export type SnapType =
 export interface SnapMarkerDef {
   shape: 'square' | 'triangle' | 'x' | 'circle' | 'diamond' | 'perpendicular'
        | 'parallel' | 'dot' | 'plus' | 'extension' | 'apparent' | 'geometric'
-       | 'filledCircle';
+       | 'filledCircle' | 'onFace';
   color: string;
   label: string;        // Korean tooltip label
   labelEn: string;      // English label
@@ -87,6 +89,7 @@ export const SNAP_MARKERS: Record<SnapType, SnapMarkerDef> = {
   tangent:       { shape: 'circle',        color: G, label: '접점',         labelEn: 'Tangent' },
   perpendicular: { shape: 'perpendicular', color: G, label: '수직점',       labelEn: 'Perpendicular' },
   parallel:      { shape: 'parallel',      color: G, label: '평행',         labelEn: 'Parallel' },
+  onFace:        { shape: 'onFace',        color: G, label: '면 위',        labelEn: 'On Face' },
   node:          { shape: 'dot',           color: G, label: '노드',         labelEn: 'Node' },
   insertion:     { shape: 'plus',          color: G, label: '삽입',         labelEn: 'Insertion' },
   nearest:       { shape: 'x',            color: Y, label: '근처점',       labelEn: 'Nearest' },
@@ -136,7 +139,8 @@ const SNAP_PRIORITY: Record<SnapType, number> = {
   node: 11,
   insertion: 12,
   nearest: 13,
-  tempTrack: 14,
+  onFace: 14,       // 면 투영은 다른 모드보다 낮은 우선순위 (edge/vertex 우선)
+  tempTrack: 15,
   from: 16,
   mid2p: 17,
   loopClose: -1,    // highest priority — loop close overrides all
@@ -149,7 +153,7 @@ export class SnapManager {
   private vertices: THREE.Vector3[] = [];
   private edges: EdgeSegment[] = [];
   private faceCenters: THREE.Vector3[] = [];
-  private faceData: Map<number, { center: THREE.Vector3; verts: THREE.Vector3[] }> = new Map();
+  private faceData: Map<number, { center: THREE.Vector3; verts: THREE.Vector3[]; normal: THREE.Vector3; planeD: number }> = new Map();
 
   // Reference point for perpendicular/tangent/parallel/extension
   private referencePoint: THREE.Vector3 | null = null;
@@ -177,9 +181,13 @@ export class SnapManager {
       enabled: true,
       modes: new Set<SnapType>([
         'endpoint',
+        'midpoint',
         'intersection',
         'center',
         'perpendicular',
+        'parallel',
+        'extension',
+        'onFace',
       ]),
       pixelThreshold: 15,
       gridSpacing: 1000,
@@ -428,7 +436,22 @@ export class SnapManager {
       for (const v of verts) center.add(v);
       center.divideScalar(verts.length);
       this.faceCenters.push(center);
-      this.faceData.set(fid, { center, verts: [...verts] });
+
+      // ── Face plane equation (onFace snap) ──
+      // Best-fit normal from first non-degenerate triangle (center, v0, v1)
+      let normal = new THREE.Vector3(0, 1, 0);
+      for (let i = 0; i < verts.length; i++) {
+        const j = (i + 1) % verts.length;
+        const e1 = verts[i].clone().sub(center);
+        const e2 = verts[j].clone().sub(center);
+        const n = e1.cross(e2);
+        if (n.lengthSq() > 1e-6) {
+          normal = n.normalize();
+          break;
+        }
+      }
+      const planeD = -normal.dot(center);
+      this.faceData.set(fid, { center, verts: [...verts], normal, planeD });
     }
   }
 
@@ -450,6 +473,7 @@ export class SnapManager {
     camera: THREE.Camera,
     canvas: HTMLCanvasElement,
     groundPoint?: THREE.Vector3 | null,
+    faceHitPoint?: THREE.Vector3 | null,
   ): SnapPoint | null {
     if (!this.config.enabled) {
       this.setResult(null);
@@ -604,6 +628,34 @@ export class SnapManager {
       }
     }
 
+    // ── On Face (면 위 투영) — 사용자 요청: 주변 면에 맞춤 ──
+    if (modes.has('onFace') && faceHitPoint) {
+      const s = toScreenPx(faceHitPoint);
+      if (s) {
+        // onFace는 항상 pickup 지점이 정확하므로 threshold 내면 후보로 추가
+        // (다른 높은 우선순위 스냅이 있으면 그쪽이 이김 — priority 14)
+        addCandidate('onFace', faceHitPoint, s);
+      }
+    }
+
+    // ── Tangent (접점) — reference point에서 원형 face로의 접선 ──
+    if (modes.has('tangent') && this.referencePoint) {
+      for (const [, data] of this.faceData) {
+        if (data.verts.length < 8) continue; // 원형 근사 face만 (8+ vertices)
+        // Average radius
+        let sumR = 0;
+        for (const v of data.verts) sumR += v.distanceTo(data.center);
+        const r = sumR / data.verts.length;
+        const tangents = this.tangentPoints(this.referencePoint, data.center, r, data.normal);
+        for (const t of tangents) {
+          const s = toScreenPx(t);
+          if (s && mousePx.distanceTo(s) <= threshold) {
+            addCandidate('tangent', t, s);
+          }
+        }
+      }
+    }
+
     // ── Nearest (근처점) ──
     if (modes.has('nearest') && groundPoint) {
       let bestNearest: { pos: THREE.Vector3; dist: number; edge: EdgeSegment } | null = null;
@@ -649,16 +701,42 @@ export class SnapManager {
     camera: THREE.Camera,
     canvas: HTMLCanvasElement,
     groundPoint?: THREE.Vector3 | null,
+    faceHitPoint?: THREE.Vector3 | null,
   ): SnapPoint | null {
     // Temporarily force snap ON and switch to override mode only
     const origEnabled = this.config.enabled;
     const origModes = new Set(this.config.modes);
     this.config.enabled = true;
     this.config.modes = new Set([type]);
-    const result = this.findSnap(mouseX, mouseY, camera, canvas, groundPoint);
+    const result = this.findSnap(mouseX, mouseY, camera, canvas, groundPoint, faceHitPoint);
     this.config.enabled = origEnabled;
     this.config.modes = origModes;
     return result;
+  }
+
+  /** Tangent points from external point P to circle (center C, radius r) on plane with normal n */
+  private tangentPoints(p: THREE.Vector3, center: THREE.Vector3, r: number, normal: THREE.Vector3): THREE.Vector3[] {
+    // Project P onto face plane
+    const toP = p.clone().sub(center);
+    const distFromPlane = toP.dot(normal);
+    const pOnPlane = p.clone().sub(normal.clone().multiplyScalar(distFromPlane));
+    const d = pOnPlane.distanceTo(center);
+    if (d <= r + 1e-4) return []; // P inside or on circle — no tangent
+    // Angle between CP and tangent line
+    const alpha = Math.acos(r / d);
+    const cpDir = pOnPlane.clone().sub(center).normalize();
+    // Rotate cpDir by ±alpha around normal to get tangent directions from center
+    const rotated = (angle: number): THREE.Vector3 => {
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      // Rodrigues' rotation around normal
+      const k = normal;
+      return cpDir.clone().multiplyScalar(cos)
+        .add(k.clone().cross(cpDir).multiplyScalar(sin))
+        .add(k.clone().multiplyScalar(k.dot(cpDir) * (1 - cos)));
+    };
+    const t1 = center.clone().add(rotated(alpha).multiplyScalar(r));
+    const t2 = center.clone().add(rotated(-alpha).multiplyScalar(r));
+    return [t1, t2];
   }
 
   // ═══ Internal helpers ═══

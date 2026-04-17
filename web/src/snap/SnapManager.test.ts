@@ -35,9 +35,16 @@ describe('SnapManager', () => {
     expect(snap.isActive('perpendicular')).toBe(true);
   });
 
-  it('default modes do NOT include midpoint or nearest', () => {
-    expect(snap.isActive('midpoint')).toBe(false);
+  it('default active modes include midpoint, parallel, extension, onFace', () => {
+    expect(snap.isActive('midpoint')).toBe(true);
+    expect(snap.isActive('parallel')).toBe(true);
+    expect(snap.isActive('extension')).toBe(true);
+    expect(snap.isActive('onFace')).toBe(true);
+  });
+
+  it('default modes do NOT include nearest or tangent', () => {
     expect(snap.isActive('nearest')).toBe(false);
+    expect(snap.isActive('tangent')).toBe(false);
   });
 
   it('setMode enables a mode', () => {

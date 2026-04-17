@@ -122,7 +122,26 @@ export class SnapVisual {
       case 'apparent':     this.drawApparent(x, y, s, color); break;
       case 'geometric':    this.drawGeometric(x, y, s, color); break;
       case 'filledCircle': this.drawFilledCircle(x, y, s, color); break;
+      case 'onFace':       this.drawOnFace(x, y, s, color); break;
     }
+  }
+
+  /** ⊡ On Face — 사각형 + 중앙 점 (face 평면 hit 표시) */
+  private drawOnFace(x: number, y: number, s: number, color: string) {
+    const ctx = this.ctx;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    // 회전 45° 사각형 (기존 square/geometric과 구분)
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.strokeRect(-s * 0.8, -s * 0.8, s * 1.6, s * 1.6);
+    ctx.restore();
+    // 중심 점
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.8, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   /** ■ Endpoint — 빈 사각형 (AutoCAD 초록 사각형) */

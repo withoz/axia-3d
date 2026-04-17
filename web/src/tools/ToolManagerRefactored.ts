@@ -445,6 +445,17 @@ export class ToolManager {
   private getSnappedPoint(e: MouseEvent, rawGroundPoint: THREE.Vector3 | null, consumeOverride = false): THREE.Vector3 | null {
     const canvas = this.viewport.renderer.domElement;
 
+    // ── onFace 스냅용: 커서 아래 face pick (있으면 전달) ──
+    let faceHitPoint: THREE.Vector3 | null = null;
+    try {
+      const hit = this.viewport.pick(e.clientX, e.clientY);
+      if (hit && hit.point) {
+        faceHitPoint = hit.point.clone();
+      }
+    } catch {
+      faceHitPoint = null;
+    }
+
     const overrideType = consumeOverride
       ? this.snap.consumeOverride()
       : this.snap.getOverride();
@@ -459,6 +470,7 @@ export class ToolManager {
         this.viewport.activeCamera,
         canvas,
         rawGroundPoint,
+        faceHitPoint,
       );
     } else {
       snapResult = this.snap.findSnap(
@@ -466,6 +478,7 @@ export class ToolManager {
         this.viewport.activeCamera,
         canvas,
         rawGroundPoint,
+        faceHitPoint,
       );
     }
 
