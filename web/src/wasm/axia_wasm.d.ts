@@ -232,17 +232,21 @@ export class AxiaEngine {
     push_pull(face_id_raw: number, dist: number): boolean;
     /**
      * Push/Pull a smooth group seamlessly (no gaps, wall faces connect adjacent surfaces)
-     * Expects a JavaScript array of face IDs converted to a Uint32Array
      *
      * # Parameters
-     * - face_ids_ptr: pointer to face ID array
-     * - face_ids_len: number of face IDs
+     * - face_ids: Uint32Array of face IDs (wasm-bindgen converts JS Uint32Array → Vec<u32>)
      * - dist: distance to offset (positive = outward)
      *
      * # Returns
      * true if successful
+     *
+     * # Behavior
+     * - NaN/0 distance → no-op, returns true.
+     * - Empty group → no-op, returns true.
+     * - All faces coplanar → falls back to per-face regular push_pull
+     *   (prevents degenerate walls when smooth group contains only split sub-faces).
      */
-    push_pull_smooth_group_seamless(face_ids_ptr: number, face_ids_len: number, dist: number): boolean;
+    push_pull_smooth_group_seamless(face_ids: Uint32Array, dist: number): boolean;
     redo(): boolean;
     /**
      * 그룹에서 face 제거

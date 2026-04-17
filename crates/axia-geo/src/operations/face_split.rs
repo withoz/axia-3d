@@ -1214,4 +1214,49 @@ mod tests {
         assert!(faces_after > faces_before, "push/pull should create new faces");
         assert!(!pp.side_faces.is_empty(), "should have side walls");
     }
+
+    #[test]
+    fn box_split_face_then_pushpull() {
+        // THE critical scenario: create a box, split its top face, then push/pull one half.
+        // This is what causes the app hang in production.
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let (top_face, _pp) = make_box(&mut m, 4.0, 4.0, 3.0);
+
+        assert_eq!(m.face_count(), 6, "box should have 6 faces");
+
+        // Split the top face from midpoint of one edge to midpoint of opposite edge
+        let line_start = DVec3::new(2.0, 3.0, 0.0);
+        let line_end = DVec3::new(2.0, 3.0, 4.0);
+
+        let split_result = split_face_by_line(&mut m, top_face, line_start, line_end).unwrap();
+        assert_eq!(split_result.new_faces.len(), 2, "should create 2 faces");
+        assert_eq!(m.face_count(), 7, "box + split = 7 faces");
+
+        // Now push/pull one of the split sub-faces
+        let face_a = split_result.new_faces[0];
+        println!("Attempting push_pull on split face {:?}", face_a);
+
+        let faces_before = m.face_count();
+        let pp = m.push_pull(face_a, 2.0, mat).unwrap();
+        let faces_after = m.face_count();
+
+        println!("push_pull result: faces {} → {}, sides={}, debug={:?}",
+            faces_before, faces_after, pp.side_faces.len(), pp.split_debug);
+
+        assert!(faces_after > faces_before, "push/pull should create new faces");
+
+        // Verify ALL faces have valid loops (no corrupted topology)
+        for (fid, face) in m.faces.iter() {
+            if !face.is_active() { continue; }
+            let verts = m.collect_loop_verts(face.outer().start);
+            assert!(verts.is_ok(), "Face {:?} has broken loop after split+pushpull", fid);
+            let verts = verts.unwrap();
+            assert!(verts.len() >= 3, "Face {:?} degenerate ({} verts)", fid, verts.len());
+        }
+
+        // Verify export_buffers works
+        let bufs = m.export_buffers();
+        assert!(bufs.is_ok(), "export_buffers failed after split+pushpull");
+    }
 }

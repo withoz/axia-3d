@@ -875,6 +875,11 @@ export class SelectionManager {
   private findSmoothGroup(seedFaceId: number): Set<number> {
     const ANGLE_THRESHOLD = 30.1; // degrees (0.1° epsilon — 저분할 원통/원뿔 경계 안정화)
     const cosThreshold = Math.cos(ANGLE_THRESHOLD * Math.PI / 180);
+    // Upper bound: exclude perfectly coplanar neighbors (same plane, split by a
+    // HARD edge). These are split sub-faces, NOT a curved surface.
+    // cos(0.1°) ≈ 0.9999985 — cylinders (22.5° between 16 segments → cos≈0.924)
+    // and smooth cones still merge, but coplanar split siblings do not.
+    const EXACT_COPLANAR = Math.cos(0.1 * Math.PI / 180);
 
     if (this.faceMap.length === 0 || this.positions.length === 0 || this.indices.length === 0) {
       return new Set([seedFaceId]);
@@ -977,8 +982,9 @@ export class SelectionManager {
         if (!neighborNormal) continue;
 
         // 인접 면과의 각도 체크 (current vs neighbor)
+        // 조건: 각도 < 30° (smooth) AND 완전 코플래너 아님 (split sibling 제외)
         const dot = currentNormal.dot(neighborNormal);
-        if (dot >= cosThreshold) {
+        if (dot >= cosThreshold && dot < EXACT_COPLANAR) {
           group.add(neighbor);
           queue.push(neighbor);
         }

@@ -234,6 +234,41 @@ impl AxiaEngine {
         self.cache_version = self.cache_version.wrapping_add(1);
     }
 
+    /// Check if all faces in the group share the same normal (coplanar).
+    ///
+    /// Returns true if every pair of faces has |dot(n_i, n_j)| ≥ cos(0.1°).
+    /// Used to detect when a "smooth group" is actually split sub-faces of
+    /// a single plane, which must NOT be treated as a curved surface.
+    fn all_faces_coplanar(&self, face_ids: &[FaceId]) -> bool {
+        const EXACT_COPLANAR_COS: f64 = 0.9999985;  // cos(0.1°) ≈ 0.9999985
+        if face_ids.len() < 2 { return true; }
+
+        let reference = match self.scene.mesh.faces.get(face_ids[0]) {
+            Some(f) => {
+                let n = f.normal();
+                let len = n.length();
+                if len < 1e-10 { return false; }
+                n / len
+            }
+            None => return false,
+        };
+
+        for &fid in &face_ids[1..] {
+            if let Some(f) = self.scene.mesh.faces.get(fid) {
+                let n = f.normal();
+                let len = n.length();
+                if len < 1e-10 { return false; }
+                let n_unit = n / len;
+                if reference.dot(n_unit).abs() < EXACT_COPLANAR_COS {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
     // ========================================================================
     // Cache Version & Delta Tracking
     // ========================================================================
@@ -577,30 +612,29 @@ impl AxiaEngine {
     }
 
     /// Push/Pull a smooth group seamlessly (no gaps, wall faces connect adjacent surfaces)
-    /// Expects a JavaScript array of face IDs converted to a Uint32Array
     ///
     /// # Parameters
-    /// - face_ids_ptr: pointer to face ID array
-    /// - face_ids_len: number of face IDs
+    /// - face_ids: Uint32Array of face IDs (wasm-bindgen converts JS Uint32Array → Vec<u32>)
     /// - dist: distance to offset (positive = outward)
     ///
     /// # Returns
     /// true if successful
+    ///
+    /// # Behavior
+    /// - NaN/0 distance → no-op, returns true.
+    /// - Empty group → no-op, returns true.
+    /// - All faces coplanar → falls back to per-face regular push_pull
+    ///   (prevents degenerate walls when smooth group contains only split sub-faces).
     #[wasm_bindgen]
     pub fn push_pull_smooth_group_seamless(
         &mut self,
-        face_ids_ptr: *const u32,
-        face_ids_len: usize,
+        face_ids: Vec<u32>,
         dist: f64,
     ) -> bool {
-        if dist == 0.0 || face_ids_len == 0 {
+        // NaN / 0 guard — JS can pass NaN if args are misaligned
+        if !dist.is_finite() || dist == 0.0 || face_ids.is_empty() {
             return true;
         }
-
-        // Convert pointer to slice
-        let face_ids = unsafe {
-            std::slice::from_raw_parts(face_ids_ptr, face_ids_len)
-        };
 
         let smooth_group: Vec<FaceId> = face_ids
             .iter()
@@ -612,6 +646,31 @@ impl AxiaEngine {
             smooth_group.len(),
             dist
         );
+
+        // ────────────────────────────────────────────────────────────────
+        // Coplanar fallback — if all faces share the same normal (within
+        // a tight tolerance), seamless-offset would create degenerate walls
+        // on shared edges. Delegate to regular per-face push_pull instead.
+        //
+        // This handles the case where findSmoothGroup returns split sub-faces
+        // (same plane, same normal) that should be treated independently.
+        // ────────────────────────────────────────────────────────────────
+        if smooth_group.len() >= 2 && self.all_faces_coplanar(&smooth_group) {
+            debug_log!(
+                "[RUST] seamless: all {} faces coplanar — falling back to per-face push_pull",
+                smooth_group.len()
+            );
+            // Only push/pull the FIRST face to avoid topology chaos from
+            // operating on multiple coplanar split siblings simultaneously.
+            // The user clicked one face; that's the one that should extrude.
+            let first = smooth_group[0];
+            let cmd = Command::PushPull { face_id: first, dist };
+            let result = self.scene.execute(cmd);
+            let ok = matches!(result, axia_core::commands::CommandResult::PushPullDone { .. });
+            if ok { self.mark_topology_changed(); }
+            self.invalidate_cache();
+            return ok;
+        }
 
         let faces_before = self.scene.mesh.face_count();
 

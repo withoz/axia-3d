@@ -815,22 +815,27 @@ export class AxiaEngine {
     }
     /**
      * Push/Pull a smooth group seamlessly (no gaps, wall faces connect adjacent surfaces)
-     * Expects a JavaScript array of face IDs converted to a Uint32Array
      *
      * # Parameters
-     * - face_ids_ptr: pointer to face ID array
-     * - face_ids_len: number of face IDs
+     * - face_ids: Uint32Array of face IDs (wasm-bindgen converts JS Uint32Array → Vec<u32>)
      * - dist: distance to offset (positive = outward)
      *
      * # Returns
      * true if successful
-     * @param {number} face_ids_ptr
-     * @param {number} face_ids_len
+     *
+     * # Behavior
+     * - NaN/0 distance → no-op, returns true.
+     * - Empty group → no-op, returns true.
+     * - All faces coplanar → falls back to per-face regular push_pull
+     *   (prevents degenerate walls when smooth group contains only split sub-faces).
+     * @param {Uint32Array} face_ids
      * @param {number} dist
      * @returns {boolean}
      */
-    push_pull_smooth_group_seamless(face_ids_ptr, face_ids_len, dist) {
-        const ret = wasm.axiaengine_push_pull_smooth_group_seamless(this.__wbg_ptr, face_ids_ptr, face_ids_len, dist);
+    push_pull_smooth_group_seamless(face_ids, dist) {
+        const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_push_pull_smooth_group_seamless(this.__wbg_ptr, ptr0, len0, dist);
         return ret !== 0;
     }
     /**
