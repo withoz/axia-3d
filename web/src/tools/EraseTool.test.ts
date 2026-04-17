@@ -3,12 +3,16 @@ import * as THREE from 'three';
 import { EraseTool } from './EraseTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+vi.mock('../ui/Toast', () => ({
+  Toast: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), show: vi.fn() },
+}));
 
 function mockToolContext() {
   return {
     bridge: {
-      deleteFace: vi.fn(),
-      deleteEdge: vi.fn(),
+      deleteFace: vi.fn().mockReturnValue(true),
+      deleteEdge: vi.fn().mockReturnValue(true),
+      deleteEdgeCascade: vi.fn().mockReturnValue(2),
       getEdgeLines: vi.fn().mockReturnValue(new Float32Array([
         0, 0, 0, 10, 0, 0,  // segment 0
         10, 0, 0, 10, 10, 0, // segment 1
@@ -80,14 +84,15 @@ describe('EraseTool', () => {
 
       tool.onMouseDown({ clientX: 100, clientY: 200 } as MouseEvent, null);
 
-      expect(ctx.bridge.deleteEdge).toHaveBeenCalledWith(20);
+      // EraseTool은 이제 deleteEdgeCascade를 호출 (cascade 카운트 반환)
+      expect(ctx.bridge.deleteEdgeCascade).toHaveBeenCalledWith(20);
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
     it('does nothing when nothing is hit', () => {
       tool.onMouseDown({ clientX: 100, clientY: 200 } as MouseEvent, null);
       expect(ctx.bridge.deleteFace).not.toHaveBeenCalled();
-      expect(ctx.bridge.deleteEdge).not.toHaveBeenCalled();
+      expect(ctx.bridge.deleteEdgeCascade).not.toHaveBeenCalled();
     });
   });
 

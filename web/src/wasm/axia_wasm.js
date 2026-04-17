@@ -157,9 +157,23 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * Delete an edge plus all faces sharing it. Returns the cascaded face count
+     * (>= 0 on success, -1 on failure). TS wraps this to inform the user how
+     * many faces were removed as a side effect.
+     * @param {number} edge_id_raw
+     * @returns {number}
+     */
+    deleteEdgeCascade(edge_id_raw) {
+        const ret = wasm.axiaengine_deleteEdgeCascade(this.__wbg_ptr, edge_id_raw);
+        return ret;
+    }
+    /**
      * Delete an edge (and its half-edges) from the mesh.
-     * Also removes any faces that reference this edge.
-     * Used by the Erase tool.
+     * Also removes any faces that reference this edge (SketchUp-style cascade).
+     *
+     * Legacy signature returning just bool — calls the cascaded_count version.
+     * New code should prefer `delete_edge_cascade` which reports how many faces
+     * were removed so the UI can show a toast.
      * @param {number} edge_id_raw
      * @returns {boolean}
      */
@@ -168,9 +182,11 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
-     * Get the stored normal for a face (from Rust engine, not Three.js).
-     * Returns [nx, ny, nz] or [0,0,0] if not found.
-     * Force-delete a face from the mesh. Called from JS after inward push/pull.
+     * Force-delete a face from the mesh.
+     *
+     * Wrapped in an undo transaction (Bug #1 fix, 2026-04-17) — previously
+     * this op mutated the mesh without recording a snapshot, causing Ctrl+Z
+     * to skip past the deletion to an earlier command.
      * @param {number} face_id_raw
      * @returns {boolean}
      */

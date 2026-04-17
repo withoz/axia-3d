@@ -47,15 +47,26 @@ export class AxiaEngine {
      */
     create_sphere(cx: number, cy: number, cz: number, radius: number, u_segments: number, v_segments: number): number;
     /**
+     * Delete an edge plus all faces sharing it. Returns the cascaded face count
+     * (>= 0 on success, -1 on failure). TS wraps this to inform the user how
+     * many faces were removed as a side effect.
+     */
+    deleteEdgeCascade(edge_id_raw: number): number;
+    /**
      * Delete an edge (and its half-edges) from the mesh.
-     * Also removes any faces that reference this edge.
-     * Used by the Erase tool.
+     * Also removes any faces that reference this edge (SketchUp-style cascade).
+     *
+     * Legacy signature returning just bool — calls the cascaded_count version.
+     * New code should prefer `delete_edge_cascade` which reports how many faces
+     * were removed so the UI can show a toast.
      */
     delete_edge(edge_id_raw: number): boolean;
     /**
-     * Get the stored normal for a face (from Rust engine, not Three.js).
-     * Returns [nx, ny, nz] or [0,0,0] if not found.
-     * Force-delete a face from the mesh. Called from JS after inward push/pull.
+     * Force-delete a face from the mesh.
+     *
+     * Wrapped in an undo transaction (Bug #1 fix, 2026-04-17) — previously
+     * this op mutated the mesh without recording a snapshot, causing Ctrl+Z
+     * to skip past the deletion to an earlier command.
      */
     delete_face(face_id_raw: number): boolean;
     /**
@@ -366,6 +377,7 @@ export interface InitOutput {
     readonly axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_create_sphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly axiaengine_deleteEdgeCascade: (a: number, b: number) => number;
     readonly axiaengine_delete_edge: (a: number, b: number) => number;
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;

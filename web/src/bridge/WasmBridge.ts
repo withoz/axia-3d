@@ -426,6 +426,25 @@ export class WasmBridge {
     }
   }
 
+  /**
+   * Edge 삭제 + 인접 face cascade 카운트 반환.
+   * 반환값 >= 0: 삭제된 face 수, -1: 실패.
+   * UI는 이 값을 "N개 면도 함께 삭제됨" 토스트에 사용.
+   */
+  deleteEdgeCascade(edgeId: number): number {
+    if (!this.engine) return -1;
+    this.markDirty();
+    try {
+      const eng = this.engine as AxiaEngineExtended & {
+        deleteEdgeCascade?(edgeId: number): number;
+      };
+      return eng.deleteEdgeCascade?.(edgeId) ?? -1;
+    } catch (e) {
+      console.error('[WasmBridge] deleteEdgeCascade failed:', e);
+      return -1;
+    }
+  }
+
   /** Batch delete faces and edges in a single undo transaction */
   batchDelete(faceIds: number[], edgeIds: number[]): boolean {
     if (!this.engine?.batch_delete) return false;

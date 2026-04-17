@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
+import { Toast } from '../ui/Toast';
 
 export class EraseTool implements ITool {
   readonly name = 'erase';
@@ -30,10 +31,14 @@ export class EraseTool implements ITool {
     if (hit && hit.faceIndex != null && hit.faceIndex >= 0) {
       const fid = this.ctx.getFaceId(hit.faceIndex);
       if (fid >= 0) {
-        this.ctx.bridge.deleteFace(fid);
+        const ok = this.ctx.bridge.deleteFace(fid);
         this.ctx.selection.clearSelection();
         this.ctx.syncMesh();
-        debugLog('[Erase] Deleted face:', fid);
+        if (ok) {
+          debugLog('[Erase] Deleted face:', fid);
+        } else {
+          Toast.error('면 삭제 실패');
+        }
         return;
       }
     }
@@ -44,9 +49,18 @@ export class EraseTool implements ITool {
       const segIndex = Math.floor(edgeHit.index / 2);
       const edgeId = this.ctx.edgeMap[segIndex];
       if (edgeId != null) {
-        this.ctx.bridge.deleteEdge(edgeId);
-        this.ctx.syncMesh();
-        debugLog('[Erase] Deleted edge:', edgeId);
+        // deleteEdgeCascade로 삭제 → 함께 없어진 face 수 반환
+        const cascaded = this.ctx.bridge.deleteEdgeCascade(edgeId);
+        if (cascaded >= 0) {
+          this.ctx.syncMesh();
+          // Bug #3: cascade 발생 시 사용자에게 알림 (SketchUp 호환 동작)
+          if (cascaded > 0) {
+            Toast.info(`엣지와 인접 면 ${cascaded}개가 함께 삭제됨`, 2500);
+          }
+          debugLog('[Erase] Deleted edge:', edgeId, 'cascaded faces:', cascaded);
+        } else {
+          Toast.error('엣지 삭제 실패');
+        }
         return;
       }
     }

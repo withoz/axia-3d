@@ -13,6 +13,7 @@ export const axiaengine_create_cone: (a: number, b: number, c: number, d: number
 export const axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_create_sphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+export const axiaengine_deleteEdgeCascade: (a: number, b: number) => number;
 export const axiaengine_delete_edge: (a: number, b: number) => number;
 export const axiaengine_delete_face: (a: number, b: number) => number;
 export const axiaengine_delete_group: (a: number, b: number) => number;

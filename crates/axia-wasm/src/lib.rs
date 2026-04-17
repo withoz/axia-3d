@@ -1078,35 +1078,57 @@ impl AxiaEngine {
     // Scene info
     // ========================================================================
 
-    /// Get the stored normal for a face (from Rust engine, not Three.js).
-    /// Returns [nx, ny, nz] or [0,0,0] if not found.
-    /// Force-delete a face from the mesh. Called from JS after inward push/pull.
+    /// Force-delete a face from the mesh.
+    ///
+    /// Wrapped in an undo transaction (Bug #1 fix, 2026-04-17) — previously
+    /// this op mutated the mesh without recording a snapshot, causing Ctrl+Z
+    /// to skip past the deletion to an earlier command.
     pub fn delete_face(&mut self, face_id_raw: u32) -> bool {
         let fid = FaceId::new(face_id_raw);
-        if self.scene.mesh.faces.contains(fid) {
-            // Clean up face_to_xia reverse index + XIA face_ids
-            self.scene.unregister_face_from_xia(fid);
-            // Try proper removal first
-            let _ = self.scene.mesh.remove_face(fid);
-            // Force-remove from storage even if remove_face had issues
-            if self.scene.mesh.faces.contains(fid) {
-                self.scene.mesh.faces.remove(fid);
-            }
-            self.mark_topology_changed();
-            self.invalidate_cache();
-            !self.scene.mesh.faces.contains(fid) // return true if actually gone
-        } else {
-            true // already gone
+        if !self.scene.mesh.faces.contains(fid) {
+            return true; // already gone — no-op, no transaction needed
         }
+
+        // Begin undo transaction
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        // Clean up face_to_xia reverse index + XIA face_ids
+        self.scene.unregister_face_from_xia(fid);
+        // Try proper removal first
+        let _ = self.scene.mesh.remove_face(fid);
+        // Force-remove from storage even if remove_face had issues
+        if self.scene.mesh.faces.contains(fid) {
+            self.scene.mesh.faces.remove(fid);
+        }
+
+        // Commit transaction so Ctrl+Z can restore this deletion
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        !self.scene.mesh.faces.contains(fid) // return true if actually gone
     }
 
     /// Delete an edge (and its half-edges) from the mesh.
-    /// Also removes any faces that reference this edge.
-    /// Used by the Erase tool.
+    /// Also removes any faces that reference this edge (SketchUp-style cascade).
+    ///
+    /// Legacy signature returning just bool — calls the cascaded_count version.
+    /// New code should prefer `delete_edge_cascade` which reports how many faces
+    /// were removed so the UI can show a toast.
     pub fn delete_edge(&mut self, edge_id_raw: u32) -> bool {
+        self.delete_edge_cascade(edge_id_raw) >= 0
+    }
+
+    /// Delete an edge plus all faces sharing it. Returns the cascaded face count
+    /// (>= 0 on success, -1 on failure). TS wraps this to inform the user how
+    /// many faces were removed as a side effect.
+    #[wasm_bindgen(js_name = "deleteEdgeCascade")]
+    pub fn delete_edge_cascade(&mut self, edge_id_raw: u32) -> i32 {
         let eid = EdgeId::new(edge_id_raw);
         if !self.scene.mesh.edges.contains(eid) {
-            return true; // already gone
+            return 0; // already gone, 0 cascaded
         }
 
         self.scene.transactions.begin();
@@ -1114,6 +1136,7 @@ impl AxiaEngine {
 
         // First, find and remove any faces sharing this edge
         let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+        let cascade_count = faces.len() as i32;
         // Clean up face_to_xia for all affected faces
         let face_ids: Vec<FaceId> = faces.iter().copied().collect();
         self.scene.unregister_faces_from_xia(&face_ids);
@@ -1139,7 +1162,11 @@ impl AxiaEngine {
         self.mark_topology_changed();
         self.invalidate_cache();
 
-        !self.scene.mesh.edges.contains(eid)
+        if self.scene.mesh.edges.contains(eid) {
+            -1 // failure
+        } else {
+            cascade_count
+        }
     }
 
     /// Batch delete faces and edges in a single undo transaction.
