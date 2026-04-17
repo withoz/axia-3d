@@ -945,6 +945,36 @@ impl Mesh {
         Ok(hes.iter().map(|&he_id| self.hes[he_id].edge()).collect())
     }
 
+    /// Mark all half-edges in a face's outer loop as SOFT on both sides (twin too).
+    ///
+    /// Used by primitive creation (cylinder/cone caps) to suppress rendering of
+    /// the tessellation chord ring so curved surfaces appear truly smooth.
+    /// The underlying topology is unchanged — only the render filter is affected.
+    pub fn mark_face_outer_soft(&mut self, face_id: FaceId) -> Result<()> {
+        let face = self.faces.get(face_id)
+            .ok_or_else(|| anyhow::anyhow!("Face {:?} not found", face_id))?;
+        let start = face.outer().start;
+        if start.is_null() { return Ok(()); }
+        let hes = self.collect_loop_hes(start)?;
+        for &he_id in &hes {
+            if let Some(h) = self.hes.get_mut(he_id) {
+                let mut f = h.flags();
+                f.insert(HeFlags::SOFT);
+                h.set_flags(f);
+            }
+            // twin on same edge (manifold: next_rad)
+            let twin = self.hes.get(he_id).map(|h| h.next_rad()).unwrap_or_default();
+            if !twin.is_null() && twin != he_id {
+                if let Some(h) = self.hes.get_mut(twin) {
+                    let mut f = h.flags();
+                    f.insert(HeFlags::SOFT);
+                    h.set_flags(f);
+                }
+            }
+        }
+        Ok(())
+    }
+
     // ========================================================================
     // Closed-loop detection (auto-face creation)
     // ========================================================================

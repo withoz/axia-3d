@@ -59,6 +59,12 @@ impl Mesh {
             faces.push(side_face);
         }
 
+        // Hide tessellation chord edges on top/bottom rings so the cylinder
+        // appears as a smooth curve rather than an n-gon. Verticals between
+        // side faces are already hidden by the angle-based soft filter (~15°).
+        self.mark_face_outer_soft(base_face)?;
+        self.mark_face_outer_soft(top_face)?;
+
         Ok(faces)
     }
 
@@ -117,6 +123,10 @@ impl Mesh {
             let side_face = self.add_face(&quad, material)?;
             faces.push(side_face);
         }
+
+        // Hide tessellation chord rings (base + top) — same as cylinder.
+        self.mark_face_outer_soft(base_face)?;
+        self.mark_face_outer_soft(top_face)?;
 
         Ok(faces)
     }
