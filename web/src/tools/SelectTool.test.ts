@@ -32,6 +32,7 @@ function mockToolContext() {
       handleEdgeClick: vi.fn(),
       selectAll: vi.fn(),
       selectAdjacentEdges: vi.fn(),
+      selectFaceWithEdges: vi.fn(),
       clearSelection: vi.fn(),
     },
     bridge: {
@@ -164,6 +165,104 @@ describe('SelectTool', () => {
 
     it('deactivate cleans up', () => {
       expect(() => tool.onDeactivate()).not.toThrow();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Bug fix regression tests (2026-04-17)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe('Bug 2: double-click routes through selectFaceWithEdges', () => {
+    it('double-click calls selectFaceWithEdges with modifiers', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
+
+      // 1st click
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+      // 2nd click (double)
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+
+      expect(ctx.selection.selectFaceWithEdges).toHaveBeenCalledWith(5, false, false);
+    });
+
+    it('shift+double-click forwards shiftKey', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      expect(ctx.selection.selectFaceWithEdges).toHaveBeenCalledWith(5, true, false);
+    });
+  });
+
+  describe('Bug 4: edge click resets multi-click state', () => {
+    it('prevents false double-click after edge interleaved', () => {
+      // 1. face click
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+
+      // 2. edge click (should reset multi-click)
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+
+      // 3. face click again — should NOT trigger double-click since edge reset the state
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+
+      // If multi-click state was correctly reset, selectFaceWithEdges (double-click path) should NOT be called
+      expect(ctx.selection.selectFaceWithEdges).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Bug 5: triple-click forwards modifiers to selectAll', () => {
+    it('shift+triple-click passes shiftKey=true', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      expect(ctx.selection.selectAll).toHaveBeenCalledWith(5, true, false);
+    });
+  });
+
+  describe('Bug 6/7: drag-select respects shift modifier', () => {
+    it('shift+empty click does NOT clear selection on mouseup', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue(null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseUp({ clientX: 100, clientY: 200 } as MouseEvent);
+      expect(ctx.selection.clearSelection).not.toHaveBeenCalled();
+    });
+
+    it('plain empty click clears selection on mouseup', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue(null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseUp({ clientX: 100, clientY: 200 } as MouseEvent);
+      expect(ctx.selection.clearSelection).toHaveBeenCalled();
+    });
+
+    it('shift+drag does NOT call clearSelection when drag starts', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue(null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseMove({ clientX: 120, clientY: 220 } as MouseEvent, null); // > 5px threshold
+      expect(ctx.selection.clearSelection).not.toHaveBeenCalled();
+    });
+
+    it('plain drag clears selection when drag starts', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue(null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseMove({ clientX: 120, clientY: 220 } as MouseEvent, null);
+      expect(ctx.selection.clearSelection).toHaveBeenCalled();
+    });
+  });
+
+  describe('Bug 8: cleanup resets multi-click state', () => {
+    it('cleanup clears click count and timer', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+
+      // cleanup (e.g., tool switch)
+      tool.cleanup();
+
+      // Next face click should be treated as fresh single click, not accumulated
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+      // single click uses handleClick, not selectFaceWithEdges
+      expect(ctx.selection.selectFaceWithEdges).not.toHaveBeenCalled();
     });
   });
 });

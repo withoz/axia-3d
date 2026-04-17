@@ -168,10 +168,10 @@ export class SelectionManager {
     const smoothGroup = this.findSmoothGroup(faceId);
 
     if (shiftKey) {
-      // Shift+클릭: 추가
+      // Shift+클릭: 추가 (기존 edge 선택도 유지)
       for (const fid of smoothGroup) this.selected.add(fid);
     } else if (ctrlKey) {
-      // Ctrl+클릭: 토글
+      // Ctrl+클릭: 토글 (edge 선택은 건드리지 않음)
       const allSelected = [...smoothGroup].every(fid => this.selected.has(fid));
       if (allSelected) {
         for (const fid of smoothGroup) this.selected.delete(fid);
@@ -179,12 +179,15 @@ export class SelectionManager {
         for (const fid of smoothGroup) this.selected.add(fid);
       }
     } else {
-      // 일반 클릭: 기존 해제 → 곡면 그룹 전체 선택
+      // 일반 클릭: 면과 엣지 **모두** 해제 후 곡면 그룹 선택 (Bug 1 fix, 2026-04-17)
+      // handleEdgeClick의 대칭성 맞춤 — 이전엔 edge만 남아있어 혼란 유발했음
       this.selected.clear();
+      this.selectedEdges.clear();
       for (const fid of smoothGroup) this.selected.add(fid);
     }
 
     this.rebuildSelectionMesh();
+    this.rebuildEdgeSelectionLine();  // edge clear 시각 반영
     this.notifyChange();
   }
 
@@ -235,18 +238,41 @@ export class SelectionManager {
     this.rebuildEdgeHoverLine();
   }
 
-  /** SketchUp 더블클릭: face + 경계 edge 모두 선택 */
-  selectFaceWithEdges(faceId: number) {
+  /**
+   * SketchUp 더블클릭: face + 경계 edge 모두 선택.
+   *
+   * Modifier 동작 (2026-04-17 추가):
+   * - plain: 기존 선택 모두 해제 → face + 경계 edges 선택
+   * - shift: 기존 선택 유지하며 face + 경계 edges **추가**
+   * - ctrl:  face가 이미 선택되어 있으면 face + 경계 edges **제거**, 아니면 추가
+   */
+  selectFaceWithEdges(faceId: number, shiftKey: boolean = false, ctrlKey: boolean = false) {
     if (faceId < 0) return;
 
     this.clearXiaDots(); // XIA 도트 모드 해제
-    this.selected.clear();
-    this.selectedEdges.clear();
-    this.selected.add(faceId);
 
-    // 해당 face의 경계 edge 찾기
-    if (this.edgeMap && this.edgeLines) {
-      this.addBorderEdgesForFaces(new Set([faceId]));
+    const faceSet = new Set<number>([faceId]);
+    const borderEdges = this.computeBorderEdges(faceSet);
+
+    if (shiftKey) {
+      // 추가 (기존 유지)
+      this.selected.add(faceId);
+      for (const eid of borderEdges) this.selectedEdges.add(eid);
+    } else if (ctrlKey) {
+      // 토글
+      if (this.selected.has(faceId)) {
+        this.selected.delete(faceId);
+        for (const eid of borderEdges) this.selectedEdges.delete(eid);
+      } else {
+        this.selected.add(faceId);
+        for (const eid of borderEdges) this.selectedEdges.add(eid);
+      }
+    } else {
+      // 교체
+      this.selected.clear();
+      this.selectedEdges.clear();
+      this.selected.add(faceId);
+      for (const eid of borderEdges) this.selectedEdges.add(eid);
     }
 
     this.rebuildSelectionMesh();
@@ -254,32 +280,86 @@ export class SelectionManager {
     this.notifyChange();
   }
 
+  /**
+   * 주어진 face 집합의 경계 edge ID들을 계산 (side-effect 없음).
+   * addBorderEdgesForFaces는 즉시 this.selectedEdges에 추가하는데,
+   * 토글/교체 로직을 구현하려면 먼저 수집이 필요해 분리함.
+   */
+  private computeBorderEdges(faceIds: Set<number>): number[] {
+    if (!this.edgeMap || !this.edgeLines) return [];
+
+    const faceVertKeys = new Set<string>();
+    for (let tri = 0; tri < this.faceMap.length; tri++) {
+      if (!faceIds.has(this.faceMap[tri])) continue;
+      const base = tri * 3;
+      if (base + 2 >= this.indices.length) continue;
+      for (let j = 0; j < 3; j++) {
+        const idx = this.indices[base + j];
+        const x = this.positions[idx * 3];
+        const y = this.positions[idx * 3 + 1];
+        const z = this.positions[idx * 3 + 2];
+        faceVertKeys.add(`${x.toFixed(1)},${y.toFixed(1)},${z.toFixed(1)}`);
+      }
+    }
+
+    const result: number[] = [];
+    for (let i = 0; i < this.edgeMap.length; i++) {
+      const base = i * 6;
+      if (base + 5 >= this.edgeLines.length) continue;
+      const keyA = `${this.edgeLines[base].toFixed(1)},${this.edgeLines[base + 1].toFixed(1)},${this.edgeLines[base + 2].toFixed(1)}`;
+      const keyB = `${this.edgeLines[base + 3].toFixed(1)},${this.edgeLines[base + 4].toFixed(1)},${this.edgeLines[base + 5].toFixed(1)}`;
+      if (faceVertKeys.has(keyA) && faceVertKeys.has(keyB)) {
+        result.push(this.edgeMap[i]);
+      }
+    }
+    return result;
+  }
+
   /** SketchUp 트리플클릭: 연결된 전체 오브젝트 (face + edge) 선택 — XIA 도트 표시
    *  그룹이 있으면 그룹 전체를, 없으면 연결된 면(XIA) 전체를 선택
    */
-  selectAll(seedFaceId: number) {
+  /**
+   * 트리플클릭: 연결된 전체 XIA(group 또는 connected faces) + 경계 edges 선택.
+   *
+   * Modifier (2026-04-17 추가):
+   * - plain: 기존 선택 해제 → XIA 전체
+   * - shift: 기존 선택에 XIA 전체 추가
+   * - ctrl:  XIA가 모두 선택되어 있으면 제거, 아니면 추가
+   */
+  selectAll(seedFaceId: number, shiftKey: boolean = false, ctrlKey: boolean = false) {
     if (seedFaceId < 0) return;
 
     // 그룹이 있으면 그룹 면을 우선 선택
     const groupFaces = this.getGroupFaces(seedFaceId);
     const targetFaces = groupFaces ?? this.findConnectedFaces(seedFaceId);
+    const targetBorderEdges = this.computeBorderEdges(targetFaces);
 
-    this.selected.clear();
-    this.selectedEdges.clear();
-
-    for (const fid of targetFaces) {
-      this.selected.add(fid);
+    if (shiftKey) {
+      // 추가
+      for (const fid of targetFaces) this.selected.add(fid);
+      for (const eid of targetBorderEdges) this.selectedEdges.add(eid);
+    } else if (ctrlKey) {
+      // 토글: 모두 선택 상태면 제거, 아니면 추가
+      const allSelected = [...targetFaces].every(f => this.selected.has(f));
+      if (allSelected) {
+        for (const fid of targetFaces) this.selected.delete(fid);
+        for (const eid of targetBorderEdges) this.selectedEdges.delete(eid);
+      } else {
+        for (const fid of targetFaces) this.selected.add(fid);
+        for (const eid of targetBorderEdges) this.selectedEdges.add(eid);
+      }
+    } else {
+      // 교체
+      this.selected.clear();
+      this.selectedEdges.clear();
+      for (const fid of targetFaces) this.selected.add(fid);
+      for (const eid of targetBorderEdges) this.selectedEdges.add(eid);
     }
 
-    // 연결된 모든 face의 경계 edge 추가
-    if (this.edgeMap && this.edgeLines) {
-      this.addBorderEdgesForFaces(targetFaces);
-    }
-
-    this.isXiaSelected = true;   // XIA 전체 선택 모드 ON
+    this.isXiaSelected = !shiftKey && !ctrlKey;  // 교체 케이스에서만 XIA 도트 모드
     this.rebuildSelectionMesh();
     this.rebuildEdgeSelectionLine();
-    this.rebuildXiaDots();       // 도트 + 점선 바운딩 박스
+    if (this.isXiaSelected) this.rebuildXiaDots();
     this.notifyChange();
   }
 

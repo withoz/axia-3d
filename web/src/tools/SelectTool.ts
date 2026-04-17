@@ -13,6 +13,8 @@ export class SelectTool implements ITool {
   private dragSelectStart: { x: number; y: number } | null = null;
   private dragSelectBox: HTMLDivElement | null = null;
   private isDragSelecting: boolean = false;
+  /** mousedown 시점의 modifier 상태 — performBoxSelect / 빈클릭 해제 로직이 사용 */
+  private dragModifiers: { shift: boolean; ctrl: boolean } = { shift: false, ctrl: false };
 
   // Multi-click detection (double/triple)
   private clickCount: number = 0;
@@ -38,6 +40,9 @@ export class SelectTool implements ITool {
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       // ── 엣지 선택 경로 ──
+      // Bug 4 fix: 엣지 클릭은 면 multi-click 시퀀스를 끊어야 함.
+      this.resetMultiClickState();
+
       const segIndex = Math.floor(picked.hit.index / 2);
       const edgeId = this.ctx.edgeMap[segIndex];
       if (edgeId != null) {
@@ -47,7 +52,7 @@ export class SelectTool implements ITool {
     }
 
     if (picked?.type === 'face' && picked.hit.faceIndex != null) {
-      // ── Face 선택 경로 (기존 multi-click 로직 유지) ──
+      // ── Face 선택 경로 ──
       const hit = picked.hit;
       const fid = this.ctx.getFaceId(hit.faceIndex);
       debugLog('[HIT] faceId=', fid, 'triIndex=', hit.faceIndex);
@@ -67,14 +72,15 @@ export class SelectTool implements ITool {
       }, this.MULTI_CLICK_DELAY);
 
       if (this.clickCount >= 3) {
+        // Bug 5 fix: modifier 전달 — shift+triple은 추가, ctrl+triple은 토글
         debugLog('[SelectTool] Triple-click → selectAll from face', fid);
-        this.ctx.selection.selectAll(fid);
+        this.ctx.selection.selectAll(fid, e.shiftKey, e.ctrlKey);
         this.clickCount = 0;
         this.lastClickFaceId = -1;
       } else if (this.clickCount === 2) {
+        // Bug 2+5 fix: selectFaceWithEdges를 한 번에 호출 (대칭적 clear + modifier 지원)
         debugLog('[SelectTool] Double-click → face + adjacent edges', fid);
-        this.ctx.selection.handleClick(fid, false, false);
-        this.ctx.selection.selectAdjacentEdges(fid);
+        this.ctx.selection.selectFaceWithEdges(fid, e.shiftKey, e.ctrlKey);
       } else {
         this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey);
       }
@@ -82,10 +88,20 @@ export class SelectTool implements ITool {
     }
 
     // ── 빈 공간 → drag-select 시작 + multi-click 리셋 ──
+    this.resetMultiClickState();
+    this.dragSelectStart = { x: e.clientX, y: e.clientY };
+    this.dragModifiers = { shift: e.shiftKey, ctrl: e.ctrlKey };
+    this.isDragSelecting = false;
+  }
+
+  /** Bug 4+8 fix: multi-click 추적 상태를 완전 초기화 */
+  private resetMultiClickState(): void {
     this.clickCount = 0;
     this.lastClickFaceId = -1;
-    this.dragSelectStart = { x: e.clientX, y: e.clientY };
-    this.isDragSelecting = false;
+    if (this.clickTimer) {
+      clearTimeout(this.clickTimer);
+      this.clickTimer = null;
+    }
   }
 
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
@@ -95,7 +111,10 @@ export class SelectTool implements ITool {
       if (!this.isDragSelecting && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
         // 5px movement threshold → start actual drag-select
         this.isDragSelecting = true;
-        this.ctx.selection.clearSelection();
+        // Bug 6 fix: shift/ctrl 드래그는 기존 선택 유지하며 누적/토글
+        if (!this.dragModifiers.shift && !this.dragModifiers.ctrl) {
+          this.ctx.selection.clearSelection();
+        }
         this.createDragSelectBox();
       }
       if (this.isDragSelecting) {
@@ -112,12 +131,16 @@ export class SelectTool implements ITool {
       if (this.isDragSelecting) {
         this.performBoxSelect(
           this.dragSelectStart.x, this.dragSelectStart.y,
-          e.clientX, e.clientY
+          e.clientX, e.clientY,
+          this.dragModifiers.shift,
+          this.dragModifiers.ctrl,
         );
         this.removeDragSelectBox();
       } else {
-        // No drag, just empty space click → deselect
-        this.ctx.selection.clearSelection();
+        // Bug 7 fix: shift/ctrl 눌린 빈 클릭은 선택 유지
+        if (!this.dragModifiers.shift && !this.dragModifiers.ctrl) {
+          this.ctx.selection.clearSelection();
+        }
       }
       this.dragSelectStart = null;
     }
@@ -135,6 +158,9 @@ export class SelectTool implements ITool {
 
   cleanup(): void {
     this.removeDragSelectBox();
+    // Bug 8 fix: multi-click 추적 상태 + 타이머 초기화 (tool 전환 시 누수 방지)
+    this.resetMultiClickState();
+    this.dragModifiers = { shift: false, ctrl: false };
   }
 
   private createDragSelectBox(): void {
@@ -187,7 +213,10 @@ export class SelectTool implements ITool {
     this.dragSelectStart = null;
   }
 
-  private performBoxSelect(startX: number, startY: number, endX: number, endY: number): void {
+  private performBoxSelect(
+    startX: number, startY: number, endX: number, endY: number,
+    shiftKey: boolean = false, ctrlKey: boolean = false,
+  ): void {
     const camera = this.ctx.viewport.activeCamera;
     const canvas = this.ctx.viewport.renderer.domElement;
     const rect = canvas.getBoundingClientRect();
@@ -276,13 +305,28 @@ export class SelectTool implements ITool {
       }
     }
 
-    // Apply selection
-    this.ctx.selection.clearSelection();
-    for (const fid of selectedFaces) {
-      this.ctx.selection.handleClick(fid, true, false);
+    // ── Apply selection (Bug 3 fix: modifier 존중) ──
+    // plain drag: 기존 선택 대체 (onMouseMove가 이미 clearSelection 호출함)
+    // shift drag: 기존 선택에 박스 내용 추가
+    // ctrl  drag: 박스 내용을 토글 (이미 선택된 건 해제, 없는 건 추가)
+    if (ctrlKey) {
+      // 토글
+      for (const fid of selectedFaces) {
+        this.ctx.selection.handleClick(fid, false, true);
+      }
+      for (const eid of selectedEdges) {
+        this.ctx.selection.handleEdgeClick(eid, false, true);
+      }
+    } else {
+      // 추가 (plain drag는 이미 clearSelection 됐으므로 빈 상태에 추가, shift drag는 기존에 추가)
+      for (const fid of selectedFaces) {
+        this.ctx.selection.handleClick(fid, true, false);
+      }
+      for (const eid of selectedEdges) {
+        this.ctx.selection.handleEdgeClick(eid, true, false);
+      }
     }
-    for (const eid of selectedEdges) {
-      this.ctx.selection.handleEdgeClick(eid, true, false);
-    }
+    // shiftKey 참조 제거 경고 방지 — 향후 확장용으로 함수 시그니처에 유지
+    void shiftKey;
   }
 }
