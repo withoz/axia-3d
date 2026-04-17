@@ -810,6 +810,35 @@ impl Mesh {
             }
         }
 
+        // ────────────────────────────────────────────────────────────────
+        // 노멀 일관성 자가 보정 (회귀 방지, ADR-003 / 2026-04-17)
+        //
+        // DCEL 수술이 올바르면 두 sub-face 모두 원본과 같은 loop 회전 방향을
+        // 유지하므로 원본 노멀이 그대로 맞다. 하지만 split_edge가 먼저 호출되어
+        // loop 포인터가 건드려진 경우 아주 드물게 loop가 뒤집힐 수 있다.
+        //
+        // 방어책: 두 sub-face의 실제 loop에서 노멀을 재계산해서
+        // stored normal과 방향이 반대면 stored를 뒤집어 맞춘다.
+        // (loop 자체를 reverse하지 않는 이유: DCEL radial chain 재봉합이 비용 큼)
+        //
+        // 이렇게 하면 triangulation/렌더링이 stored normal을 기준으로 작동하므로
+        // 시각적 "앞뒷면 뒤집힘" 현상을 원천 차단한다.
+        // ────────────────────────────────────────────────────────────────
+        for sub_face in [face_id, face_b] {
+            let loop_start = self.faces[sub_face].outer().start;
+            if let Ok(verts) = self.collect_loop_verts(loop_start) {
+                if let Ok(computed) = self.compute_normal(&verts) {
+                    if computed.length_squared() > 1e-20 {
+                        let stored = self.faces[sub_face].normal();
+                        if computed.dot(stored) < 0.0 {
+                            // loop가 뒤집혔다 — stored를 뒤집어 두-톤 렌더링 일관성 회복
+                            self.faces[sub_face].set_normal(-stored);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok((face_id, face_b))
     }
 

@@ -813,6 +813,173 @@ mod tests {
         assert!(bufs.0.len() > 0, "export_buffers should produce vertices");
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Normal consistency after split (앞뒷면 뒤집힘 회귀 방지)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// 박스 윗면을 분할했을 때 두 sub-face 모두 같은 방향 법선을 유지해야 한다.
+    /// 이 불변식이 깨지면 렌더링에서 앞/뒷면이 섞여 보인다.
+    #[test]
+    fn split_face_preserves_normal_direction() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // 박스 생성 후 윗면(=+Y 방향 법선) 분할
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(4.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(4.0, 0.0, 4.0));
+        let v3 = m.add_vertex(DVec3::new(0.0, 0.0, 4.0));
+        let base = m.add_face(&[v0, v3, v2, v1], mat).unwrap(); // +Y 노멀
+        let pp = m.push_pull(base, 3.0, mat).unwrap();
+        let top = pp.top_face;
+        let original_normal = m.faces[top].normal();
+
+        // 윗면을 중앙에서 가르기
+        let top_verts = m.collect_loop_verts(m.faces[top].outer().start).unwrap();
+        let (fa, fb) = m.split_face(top, top_verts[0], top_verts[2]).unwrap();
+
+        // 두 sub-face의 저장된 노멀이 원본과 일치하는가
+        let stored_a = m.faces[fa].normal();
+        let stored_b = m.faces[fb].normal();
+
+        assert!(
+            stored_a.dot(original_normal) > 0.0,
+            "face_a stored normal {:?} flipped from original {:?}",
+            stored_a, original_normal
+        );
+        assert!(
+            stored_b.dot(original_normal) > 0.0,
+            "face_b stored normal {:?} flipped from original {:?}",
+            stored_b, original_normal
+        );
+
+        // 저장된 노멀과 실제 loop 방향의 일치 여부 (이게 깨지면 두-톤 렌더링 뒤집힘)
+        let verts_a = m.collect_loop_verts(m.faces[fa].outer().start).unwrap();
+        let verts_b = m.collect_loop_verts(m.faces[fb].outer().start).unwrap();
+        let computed_a = m.compute_normal(&verts_a).unwrap();
+        let computed_b = m.compute_normal(&verts_b).unwrap();
+
+        assert!(
+            computed_a.dot(stored_a) > 0.0,
+            "face_a loop orientation doesn't match stored normal: \
+             computed {:?}, stored {:?}",
+            computed_a, stored_a
+        );
+        assert!(
+            computed_b.dot(stored_b) > 0.0,
+            "face_b loop orientation doesn't match stored normal: \
+             computed {:?}, stored {:?}",
+            computed_b, stored_b
+        );
+    }
+
+    /// **진단용**: split_face_by_line이 edge를 split할 때, **그 edge를 공유하는
+    /// 인접 면(박스의 벽)**의 노멀 방향이 영향받지 않는지 확인.
+    /// 사용자가 실제로 본 "앞뒷면 뒤집힘"은 이 경로에서 발생할 가능성 큼.
+    #[test]
+    fn split_face_by_line_preserves_adjacent_normals() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // 박스 생성
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(10.0, 0.0, 8.0));
+        let v3 = m.add_vertex(DVec3::new(0.0, 0.0, 8.0));
+        let base = m.add_face(&[v0, v3, v2, v1], mat).unwrap();
+        let pp = m.push_pull(base, 5.0, mat).unwrap();
+        let top = pp.top_face;
+
+        // 분할 전 모든 face의 노멀 저장
+        let before: std::collections::HashMap<_, _> = m.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, f)| (id, f.normal()))
+            .collect();
+
+        // 윗면 분할 (edge split 2회 → 인접 벽 2개의 loop 업데이트 발생)
+        split_face_by_line(
+            &mut m, top,
+            DVec3::new(5.0, 5.0, 0.0),
+            DVec3::new(5.0, 5.0, 8.0),
+        ).unwrap();
+
+        // 원래 존재하던 face들 중 여전히 존재하는 것들의 노멀 비교
+        let mut adjacent_flipped = Vec::new();
+        for (fid, orig_normal) in &before {
+            if *fid == top { continue; } // 분할 대상은 제외
+            if let Some(face) = m.faces.get(*fid) {
+                if !face.is_active() { continue; }
+                let stored = face.normal();
+                if stored.dot(*orig_normal) < 0.0 {
+                    adjacent_flipped.push((fid.raw(), *orig_normal, stored));
+                }
+
+                // loop 실제 방향도 확인
+                let verts = m.collect_loop_verts(face.outer().start).unwrap();
+                let computed = m.compute_normal(&verts).unwrap();
+                assert!(
+                    computed.dot(stored) > 0.0,
+                    "adjacent face {} stored/computed mismatch after split: \
+                     stored {:?}, computed {:?}",
+                    fid.raw(), stored, computed
+                );
+            }
+        }
+
+        assert!(
+            adjacent_flipped.is_empty(),
+            "인접 면 노멀이 뒤집힘: {:?}",
+            adjacent_flipped
+        );
+    }
+
+    /// split_face_by_line 경로 (edge split + face split 연쇄)에서도 동일 불변식
+    #[test]
+    fn split_face_by_line_preserves_normal_direction() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // 박스 생성
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(10.0, 0.0, 8.0));
+        let v3 = m.add_vertex(DVec3::new(0.0, 0.0, 8.0));
+        let base = m.add_face(&[v0, v3, v2, v1], mat).unwrap();
+        let pp = m.push_pull(base, 5.0, mat).unwrap();
+        let top = pp.top_face;
+        let original_normal = m.faces[top].normal();
+
+        // 윗면의 두 edge 중간점을 잇는 분할선 (edge split 두 번 발생)
+        let result = split_face_by_line(
+            &mut m, top,
+            DVec3::new(5.0, 5.0, 0.0),
+            DVec3::new(5.0, 5.0, 8.0),
+        ).unwrap();
+
+        assert_eq!(result.new_faces.len(), 2);
+        let fa = result.new_faces[0];
+        let fb = result.new_faces[1];
+
+        // 두 sub-face의 stored vs computed 노멀 모두 원본과 같은 방향
+        for (label, f) in [("A", fa), ("B", fb)] {
+            let stored = m.faces[f].normal();
+            let verts = m.collect_loop_verts(m.faces[f].outer().start).unwrap();
+            let computed = m.compute_normal(&verts).unwrap();
+
+            assert!(
+                stored.dot(original_normal) > 0.0,
+                "sub-face {} stored normal flipped: {:?} vs orig {:?}",
+                label, stored, original_normal
+            );
+            assert!(
+                computed.dot(stored) > 0.0,
+                "sub-face {} loop orientation doesn't match stored normal: \
+                 computed {:?}, stored {:?}",
+                label, computed, stored
+            );
+        }
+    }
+
     // ── split_face_by_line tests ─────────────────────────────────────
 
     #[test]
