@@ -165,14 +165,31 @@ export class DrawLineTool implements ITool {
   applyVCBValue(value: number): void {
     if (this.state !== LineDrawState.Drawing || !this.startPoint) return;
 
+    // ── Bug 2 fix: NaN/Infinity/0 가드 ──
+    if (!Number.isFinite(value) || value === 0) {
+      Toast.warning('유효한 길이를 입력하세요', 2000);
+      return;
+    }
+
     // Use current axis (locked or inferred) to determine direction
     const axis = this.ctx.axisLock || this.ctx.inferredAxis;
     let dir = new THREE.Vector3(1, 0, 0);
     if (axis === 'y') dir.set(0, 1, 0);
     else if (axis === 'z') dir.set(0, 0, 1);
+    else if (axis === 'free' || !axis) {
+      // ── Bug 1 fix: free 축일 때 X축 강제 대신 현재 preview 방향 사용 ──
+      // 마우스가 가리키는 방향(또는 스냅 방향)을 유지.
+      if (this.previewEnd) {
+        const delta = this.previewEnd.clone().sub(this.startPoint);
+        if (delta.lengthSq() > 1e-6) {
+          dir = delta.normalize();
+        }
+        // (delta가 ≈0이면 X축 fallback — 마우스를 움직이지 않고 VCB만 친 경우)
+      }
+    }
 
     const endPt = this.startPoint.clone().add(dir.multiplyScalar(value));
-    debugLog(`[VCB/Line] Length=${value} axis=${axis}`);
+    debugLog(`[VCB/Line] Length=${value} axis=${axis} dir=(${dir.x.toFixed(2)},${dir.y.toFixed(2)},${dir.z.toFixed(2)})`);
 
     // Commit via state machine
     this.handle(LineDrawEvent.LeftClick, endPt);
@@ -217,7 +234,8 @@ export class DrawLineTool implements ITool {
           this.ctx.inferredAxis = 'free';
           this.showStartDot(point);
           this.transitionTo(LineDrawState.Drawing);
-        } else if (event === LineDrawEvent.Escape) {
+        } else if (event === LineDrawEvent.Escape || event === LineDrawEvent.RightClick) {
+          // Bug 6 fix: Armed에서 RightClick도 Escape와 동일하게 Idle로 종료
           this.transitionTo(LineDrawState.Idle);
         }
         break;
@@ -412,10 +430,29 @@ export class DrawLineTool implements ITool {
 
       this.ctx.syncMesh();
 
-      // ⑫ 자동 선택: 분할된 sub-face 중 첫 번째를 선택 → 즉시 Push/Pull 가능
+      // ⑫ 자동 선택: end 좌표에 가장 가까운 centroid를 가진 sub-face 선택 (Bug 5 fix)
+      // 사용자가 마지막으로 가리킨 쪽 면이 선택되어 즉시 Push/Pull 가능.
       if (newFaces.length > 0) {
+        let pickedFace = newFaces[0];
+        if (newFaces.length > 1) {
+          // bridge.facesCentroid 사용 — 없으면 첫 번째 fallback
+          let bestDist = Infinity;
+          for (const fid of newFaces) {
+            try {
+              const c = this.ctx.bridge.facesCentroid([fid]);
+              if (c) {
+                const d = c.distanceToSquared(end);
+                if (d < bestDist) {
+                  bestDist = d;
+                  pickedFace = fid;
+                }
+              }
+            } catch { /* centroid 미지원 — 넘어감 */ }
+          }
+        }
         this.ctx.selection.clearSelection();
-        this.ctx.selection.selectFaces([newFaces[0]]);
+        this.ctx.selection.selectFaces([pickedFace]);
+        debugLog(`[FaceSplit] Auto-selected sub-face ${pickedFace} (closest to end)`);
       }
 
       Toast.info(`면이 ${newFaces.length}개로 분할됨`, 1800);
@@ -700,11 +737,9 @@ export class DrawLineTool implements ITool {
   ): void {
     this.removeLinePreview();
 
-    const offset = 0.5; // Y offset to prevent z-fighting with ground
-    const points = [
-      new THREE.Vector3(start.x, start.y + offset, start.z),
-      new THREE.Vector3(end.x, end.y + offset, end.z),
-    ];
+    // Bug 4 fix: Y축 고정 오프셋 제거 — 수직 벽 위 프리뷰가 벽 속에 파묻히던 문제 해결.
+    // 대신 depthTest: false + 높은 renderOrder로 항상 최상위 렌더.
+    const points = [start.clone(), end.clone()];
     const geo = new THREE.BufferGeometry().setFromPoints(points);
     if (dashed) {
       // 분할 예정 — 점선 + 보라색으로 "이 선은 면을 자른다" 신호
@@ -713,21 +748,21 @@ export class DrawLineTool implements ITool {
         linewidth: 1,
         dashSize: 80,   // mm 단위 (씬 스케일에 맞춤)
         gapSize: 40,
-        depthTest: true,
+        depthTest: false,
       });
       this.linePreview = new THREE.Line(geo, mat);
       this.linePreview.computeLineDistances(); // LineDashedMaterial 필수
-      this.linePreview.renderOrder = 999;
+      this.linePreview.renderOrder = 1001;
       this.ctx.viewport.scene.add(this.linePreview);
       return;
     }
     const mat = new THREE.LineBasicMaterial({
       color,
       linewidth: 1,
-      depthTest: true,
+      depthTest: false,
     });
     this.linePreview = new THREE.Line(geo, mat);
-    this.linePreview.renderOrder = 999;
+    this.linePreview.renderOrder = 1001;
     this.ctx.viewport.scene.add(this.linePreview);
   }
 
@@ -737,9 +772,8 @@ export class DrawLineTool implements ITool {
   private showStartDot(point: THREE.Vector3): void {
     this.removeStartDot();
 
-    const geo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(point.x, point.y + 0.5, point.z),
-    ]);
+    // Bug 4 fix: Y축 고정 오프셋 제거 (depthTest:false로 항상 보이게 함)
+    const geo = new THREE.BufferGeometry().setFromPoints([point.clone()]);
     const mat = new THREE.PointsMaterial({
       color: 0x22b8cf,
       size: 8,
