@@ -3,7 +3,7 @@ import { EraseTool } from './EraseTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
 vi.mock('../ui/Toast', () => ({
-  Toast: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), show: vi.fn() },
+  Toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn(), show: vi.fn() },
 }));
 
 function mockToolContext() {

@@ -146,7 +146,7 @@ export class PushPullTool implements ITool {
             if (err) {
               Toast.error(`Push/Pull 실패: ${err}`, 3500);
             } else {
-              Toast.warn('Push/Pull이 실행되지 않았습니다', 2500);
+              Toast.warning('Push/Pull이 실행되지 않았습니다', 2500);
             }
           }
         }

@@ -5,6 +5,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn(), debugWarn: vi.fn() }));
 
+vi.mock('../ui/Toast', () => ({
+  Toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn(), show: vi.fn() },
+}));
+
 vi.mock('../materials/MaterialLibrary', () => ({
   getMaterialLibrary: vi.fn(() => ({ syncFromRust: vi.fn() })),
 }));
@@ -255,6 +259,36 @@ describe('ToolManager', () => {
       const spy = vi.spyOn(tm.selection, 'selectEverything').mockImplementation(() => {});
       tm.executeAction('select-all');
       expect(spy).toHaveBeenCalled();
+    });
+
+    // ── flip-faces 가드 회귀 방지 (2026-04-17) ──
+    describe('flip-faces action', () => {
+      it('flips faces when tool is idle and faces are selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5, 6]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).flipFaces = vi.fn().mockReturnValue(2);
+
+        tm.executeAction('flip-faces');
+        expect(bridge.flipFaces).toHaveBeenCalledWith([5, 6]);
+      });
+
+      it('does NOTHING when tool is busy (Push/Pull ghost, Line drawing, etc.)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).flipFaces = vi.fn().mockReturnValue(1);
+
+        tm.executeAction('flip-faces');
+        expect(bridge.flipFaces).not.toHaveBeenCalled();
+      });
+
+      it('warns when no faces are selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).flipFaces = vi.fn().mockReturnValue(0);
+
+        tm.executeAction('flip-faces');
+        expect(bridge.flipFaces).not.toHaveBeenCalled();
+      });
     });
   });
 

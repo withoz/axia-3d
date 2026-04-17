@@ -400,7 +400,7 @@ export class DrawLineTool implements ITool {
         // ADR-003 가드, 인접 정점 거부 등 → 사용자에게 원인 전달
         debugLog(`[FaceSplit] Engine error: ${result.error} — falling back to drawLine`);
         // 친절 메시지는 원인+해결책을 한 줄에 담기에 조금 더 긴 표시 시간 허용
-        Toast.warn(
+        Toast.warning(
           `면 분할 실패: ${this.friendlyErrorMessage(result.error)} — 일반 선으로 그립니다`,
           4500,
         );

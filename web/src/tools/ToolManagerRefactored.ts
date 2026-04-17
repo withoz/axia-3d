@@ -288,10 +288,22 @@ export class ToolManager {
         debugLog('[Action] delete', selectedFaces.length, 'faces,', selectedEdges.length, 'edges');
       }
     } else if (action === 'flip-faces') {
-      // SketchUp "Reverse Faces" — 선택된 면의 노멀/winding 반전
+      // SketchUp "Reverse Faces" — 선택된 면의 노멀/winding 반전.
+      //
+      // Busy 가드 (2026-04-17): 다른 도구가 진행 중이면 flip을 금지.
+      // 사유:
+      //   - Push/Pull ghost 프리뷰가 캡처한 normal과 실제 face normal 불일치 방지
+      //   - Draw 도중 face 인덱스 참조 안정성 보호
+      //   - Undo 체인이 도구 완료와 flip 이 얽히는 것 방지
+      // 사용자는 Escape 또는 Space로 현재 도구를 먼저 종료해야 함.
+      if (this.isToolBusy()) {
+        Toast.warning('진행 중인 도구를 완료한 후 면을 반전하세요 (Esc 또는 Space)');
+        return;
+      }
+
       const faces = this.selection.getSelectedFaces();
       if (faces.length === 0) {
-        Toast.warn('반전할 면을 먼저 선택하세요');
+        Toast.warning('반전할 면을 먼저 선택하세요');
         return;
       }
       const flipped = this.bridge.flipFaces(faces);
