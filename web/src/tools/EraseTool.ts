@@ -16,6 +16,19 @@ import { Toast } from '../ui/Toast';
 /** 호버/삭제 예정 표시 색상 */
 const ERASE_COLOR = 0xff4444;
 
+/**
+ * Erase 도구 전용 원형 커서 (SVG 데이터 URL).
+ * 빨간 테두리 + 중앙 점. 24×24, 핫스팟(12,12) = 중앙.
+ * 시스템 `crosshair`로 폴백.
+ */
+const ERASE_CURSOR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">' +
+  '<circle cx="12" cy="12" r="9" fill="rgba(255,68,68,0.15)" stroke="#ff4444" stroke-width="2"/>' +
+  '<circle cx="12" cy="12" r="1.5" fill="#ff4444"/>' +
+  '</svg>';
+const ERASE_CURSOR =
+  `url("data:image/svg+xml;utf8,${encodeURIComponent(ERASE_CURSOR_SVG)}") 12 12, crosshair`;
+
 export class EraseTool implements ITool {
   readonly name = 'erase';
 
@@ -39,10 +52,14 @@ export class EraseTool implements ITool {
   }
 
   onActivate(): void {
+    const canvas = this.ctx.viewport.renderer.domElement;
+    canvas.style.cursor = ERASE_CURSOR;
     debugLog('[EraseTool] Activated');
   }
 
   onDeactivate(): void {
+    const canvas = this.ctx.viewport.renderer.domElement;
+    canvas.style.cursor = '';
     this.cleanup();
   }
 

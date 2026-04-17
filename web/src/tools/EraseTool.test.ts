@@ -35,6 +35,11 @@ function mockToolContext() {
         add: vi.fn(),
         remove: vi.fn(),
       },
+      renderer: {
+        domElement: {
+          style: { cursor: '' },
+        },
+      },
     },
     selection: {
       handleClick: vi.fn(),
@@ -202,9 +207,23 @@ describe('EraseTool', () => {
     });
   });
 
-  describe('onActivate', () => {
+  describe('onActivate / cursor', () => {
     it('does not throw', () => {
       expect(() => tool.onActivate()).not.toThrow();
+    });
+
+    it('sets circular erase cursor on activate', () => {
+      tool.onActivate();
+      const cursor = ctx.viewport.renderer.domElement.style.cursor;
+      expect(cursor).toContain('svg');
+      expect(cursor).toContain('crosshair'); // fallback
+    });
+
+    it('restores default cursor on deactivate', () => {
+      tool.onActivate();
+      expect(ctx.viewport.renderer.domElement.style.cursor).not.toBe('');
+      tool.onDeactivate();
+      expect(ctx.viewport.renderer.domElement.style.cursor).toBe('');
     });
   });
 });
