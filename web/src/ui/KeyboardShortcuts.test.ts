@@ -183,10 +183,38 @@ describe('KeyboardShortcuts', () => {
       expect(deps.toolManager.snap.toggle).toHaveBeenCalled();
     });
 
-    it('Spacebar cancels busy tool', () => {
+    it('Spacebar cancels busy tool and switches to select', () => {
       (deps.toolManager.isToolBusy as any).mockReturnValue(true);
+      (deps.toolManager as any)._currentTool = 'line';
+      Object.defineProperty(deps.toolManager, 'currentTool', {
+        get() { return this._currentTool; },
+        configurable: true,
+      });
       fireKey(' ');
       expect(deps.toolManager.cancelCurrentTool).toHaveBeenCalled();
+      expect(deps.toolManager.setTool).toHaveBeenCalledWith('select');
+    });
+
+    it('Spacebar switches idle tool to select (SketchUp style)', () => {
+      (deps.toolManager.isToolBusy as any).mockReturnValue(false);
+      (deps.toolManager as any)._currentTool = 'line';
+      Object.defineProperty(deps.toolManager, 'currentTool', {
+        get() { return this._currentTool; },
+        configurable: true,
+      });
+      fireKey(' ');
+      expect(deps.toolManager.setTool).toHaveBeenCalledWith('select');
+    });
+
+    it('Spacebar is a no-op when already in select tool', () => {
+      (deps.toolManager.isToolBusy as any).mockReturnValue(false);
+      (deps.toolManager as any)._currentTool = 'select';
+      Object.defineProperty(deps.toolManager, 'currentTool', {
+        get() { return this._currentTool; },
+        configurable: true,
+      });
+      fireKey(' ');
+      expect(deps.toolManager.setTool).not.toHaveBeenCalled();
     });
 
     it('H resets camera', () => {

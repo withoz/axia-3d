@@ -54,14 +54,42 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
     if (toolLabel) toolLabel.textContent = toolNames[tool] || tool;
   };
 
+  // ── Toolbar / tool-label 동기화 헬퍼 ──
+  const syncToolbarHighlight = (tool: string) => {
+    toolbar.querySelectorAll('.tool-btn').forEach(b => {
+      b.classList.toggle('active', (b as HTMLElement).dataset.tool === tool);
+    });
+  };
+
+  // ── 입력 요소 포커스 가드 (텍스트 입력 중 단축키 차단) ──
+  const isTypingInInput = (target: EventTarget | null): boolean => {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    const tag = el.tagName;
+    return (
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      (el as HTMLElement).isContentEditable === true
+    );
+  };
+
   // ── Main keyboard shortcuts (Section 5) ──
   window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement) return;
+    if (isTypingInInput(e.target)) return;
 
-    // Spacebar: 현재 도구 완료 (Line 종료 등 — CAD 스타일)
-    if (e.key === ' ' && toolManager.isToolBusy()) {
+    // Spacebar: SketchUp 스타일 — 진행 중이면 cancel, 이후 항상 Select 도구로 전환
+    // (CAD의 "cancel" 의미와 SketchUp의 "select tool" 의미를 통합)
+    if (e.key === ' ') {
       e.preventDefault();
-      toolManager.cancelCurrentTool();
+      if (toolManager.isToolBusy()) {
+        toolManager.cancelCurrentTool();
+      }
+      if (toolManager.currentTool !== 'select') {
+        toolManager.setTool('select');
+        syncToolbarHighlight('select');
+        updateToolLabel('select');
+      }
       return;
     }
 
@@ -71,8 +99,8 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
-    // N: 면 반전 (SketchUp "Reverse Faces" 대응 — modifier 없을 때만)
-    if ((e.key === 'n' || e.key === 'N') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    // Shift+N: 면 반전 (플레인 N은 Cone 도구에 예약되어 있어 충돌 방지)
+    if ((e.key === 'N' || e.key === 'n') && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       e.preventDefault();
       toolManager.executeAction('flip-faces');
       return;
@@ -159,9 +187,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         if (toolLabel) toolLabel.textContent = '3D Perspective';
       } else {
         toolManager.setTool('select');
-        toolbar.querySelectorAll('.tool-btn').forEach(b => {
-          b.classList.toggle('active', (b as HTMLElement).dataset.tool === 'select');
-        });
+        syncToolbarHighlight('select');
       }
     } else if (e.shiftKey && !e.ctrlKey && !e.altKey) {
       // Shift 조합 단축키
@@ -208,9 +234,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const tool = keyMap[e.key];
       if (tool) {
         toolManager.setTool(tool);
-        toolbar.querySelectorAll('.tool-btn').forEach(b => {
-          b.classList.toggle('active', (b as HTMLElement).dataset.tool === tool);
-        });
+        syncToolbarHighlight(tool);
         updateToolLabel(tool);
       }
     }
