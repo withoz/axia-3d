@@ -1540,7 +1540,13 @@ impl Mesh {
     }
 
     /// Check if two faces are coplanar: normals nearly parallel AND on the same plane.
-    /// This is the AixxiA `are_faces_coplanar` method ported directly.
+    ///
+    /// F8 fix (2026-04-17): tolerances are now scale-aware and mutually consistent.
+    /// - Normal parallelism: `|dot| >= cos(0.5°)` (≈ 1e-5 gap). Was `1e-3` which
+    ///   corresponded to ≈ 2.5° — too loose for CAD-grade merges.
+    /// - Plane distance: `max(1e-3, faces_bbox_diagonal × 1e-5)` — absolute floor
+    ///   (1μm) plus a relative component so large (km-scale) or small (μm-scale)
+    ///   models behave sensibly.
     pub fn are_faces_coplanar_strict(&self, f1: FaceId, f2: FaceId) -> Result<bool> {
         let verts1 = self.collect_loop_verts(self.faces[f1].outer().start)?;
         let verts2 = self.collect_loop_verts(self.faces[f2].outer().start)?;
@@ -1553,22 +1559,35 @@ impl Mesh {
         let n1_len = n1.length();
         let n2_len = n2.length();
         if n1_len < 1e-10 || n2_len < 1e-10 {
-            return Ok(true); // degenerate → treat as coplanar (AixxiA behavior)
+            return Ok(true); // degenerate → treat as coplanar
         }
         let n1u = n1 / n1_len;
         let n2u = n2 / n2_len;
 
-        // Normals parallel? (tolerance: 1e-3 like AixxiA)
+        // Normals parallel? cos(0.5°) ≈ 0.99996192
+        const COS_PARALLEL_THRESHOLD: f64 = 0.99996192;
         let dot = n1u.dot(n2u).abs();
-        if (1.0 - dot).abs() > 1e-3 {
+        if dot < COS_PARALLEL_THRESHOLD {
             return Ok(false);
         }
 
-        // Same plane? Point-to-plane distance check
+        // Scale-aware distance tolerance: use f1+f2 combined bbox diagonal.
+        let mut min_pt = glam::DVec3::splat(f64::INFINITY);
+        let mut max_pt = glam::DVec3::splat(f64::NEG_INFINITY);
+        for &vid in verts1.iter().chain(verts2.iter()) {
+            if let Ok(p) = self.vertex_pos(vid) {
+                min_pt = min_pt.min(p);
+                max_pt = max_pt.max(p);
+            }
+        }
+        let bbox_diag = (max_pt - min_pt).length().max(1.0);
+        let dist_tol = (bbox_diag * 1e-5).max(1e-3); // at least 1μm, or 1e-5 × extent
+
+        // Point-to-plane distance check against the plane defined by f1
         let p1 = self.vertex_pos(verts1[0])?;
         let p2 = self.vertex_pos(verts2[0])?;
         let distance = n1u.dot(p2 - p1).abs();
-        Ok(distance < 1e-3)
+        Ok(distance < dist_tol)
     }
 
     /// Find the half-edge belonging to a specific face on a given edge.
@@ -1613,31 +1632,85 @@ impl Mesh {
     }
 
     /// Remove an edge and all its half-edges from the mesh.
+    ///
+    /// Safe cleanup (2026-04-17 F1/F2/F7 fixes):
+    /// - F7: 10_000-iteration guard replaces arbitrary 100-cap; returns error on overrun
+    /// - F1: Vertex.outgoing() is repointed to a surviving HE so downstream traversals
+    ///       don't follow a dangling reference
+    /// - F2: next_rad radial chain is spliced out before HE removal so non-manifold
+    ///       edges' radial walks remain consistent
     pub fn remove_edge_and_halfedges(&mut self, edge_id: EdgeId) -> Result<()> {
         if !self.edges.contains(edge_id) {
             bail!("Edge {:?} not found", edge_id);
         }
 
-        // Collect all HEs in radial chain
+        let v_small = self.edges[edge_id].v_small();
+        let v_large = self.edges[edge_id].v_large();
+
+        // Collect all HEs in radial chain (F7: safer guard)
         let start_he = self.edges[edge_id].any_he();
+        let mut to_remove: Vec<HeId> = Vec::new();
         if !start_he.is_null() {
-            let mut to_remove = Vec::new();
             let mut he_id = start_he;
+            let mut guard = 0usize;
             loop {
                 to_remove.push(he_id);
                 he_id = self.hes[he_id].next_rad();
-                if he_id == start_he || to_remove.len() > 100 {
-                    break;
+                if he_id == start_he { break; }
+                guard += 1;
+                if guard > 10_000 {
+                    bail!("Radial chain overrun on edge {:?} — corrupted topology", edge_id);
                 }
-            }
-            for he in to_remove {
-                self.hes.remove(he);
             }
         }
 
+        let removed_set: rustc_hash::FxHashSet<HeId> =
+            to_remove.iter().copied().collect();
+
+        // F1: repoint each endpoint vertex's `outgoing` to a surviving HE.
+        for &v in &[v_small, v_large] {
+            let cur = self.verts[v].outgoing();
+            if let Some(out) = cur {
+                if !removed_set.contains(&out) { continue; }
+                // Find any live HE whose origin == v (i.e., prev(h).dst == v)
+                let mut replacement: Option<HeId> = None;
+                for (h_id, h) in self.hes.iter() {
+                    if removed_set.contains(&h_id) || !h.is_active() { continue; }
+                    let p = h.prev();
+                    if p.is_null() || !self.hes.contains(p) { continue; }
+                    if self.hes[p].dst() == v {
+                        replacement = Some(h_id);
+                        break;
+                    }
+                }
+                self.verts[v].set_outgoing(replacement);
+            }
+        }
+
+        // F2: splice each removed HE out of its next_rad chain so non-manifold
+        // neighbors keep their radial traversal intact.
+        for &he in &to_remove {
+            let next_of_he = self.hes[he].next_rad();
+            // Find pred: any live HE whose next_rad points to this he
+            let mut pred: Option<HeId> = None;
+            for (h_id, h) in self.hes.iter() {
+                if removed_set.contains(&h_id) { continue; }
+                if h.next_rad() == he {
+                    pred = Some(h_id);
+                    break;
+                }
+            }
+            if let Some(p) = pred {
+                self.hes[p].set_next_rad(next_of_he);
+            }
+        }
+
+        // Remove HEs
+        for he in &to_remove {
+            self.hes.remove(*he);
+        }
+
         // Remove edge from lookup
-        let v_small = self.edges[edge_id].v_small();
-        let v_large = self.edges[edge_id].v_large();
         let key = VertPairKey::new(v_small, v_large);
         self.vert_to_edge.remove(&key);
         self.edges.remove(edge_id);
@@ -1661,13 +1734,21 @@ impl Mesh {
         let f1 = faces[0];
         let f2 = faces[1];
 
+        // F4: reject when F1 and F2 share more than one edge — ambiguous merge
+        // (e.g. C-slit / bridge topology).
+        let shared = self.count_shared_edges_outer(f1, f2);
+        if shared != 1 {
+            bail!("Faces {:?} and {:?} share {} edges (exactly 1 required)", f1, f2, shared);
+        }
+
         // 2. Coplanarity check
         if !self.are_faces_coplanar_strict(f1, f2)? {
             bail!("Faces {:?} and {:?} are not coplanar", f1, f2);
         }
 
-        // 3. Save original normal for winding consistency
+        // 3. Save original normal for winding consistency + material
         let original_normal = self.faces[f1].normal();
+        let material = self.faces[f1].material();
 
         // 4. Find half-edges for each face on this edge and merge loops
         let he1 = self.find_he_for_face_and_edge(f1, edge_id)?;
@@ -1675,25 +1756,95 @@ impl Mesh {
         let mut merged_verts = self.merge_face_loops(he1, he2)?;
 
         // 5. Fix winding: merged loop might reverse the normal direction.
-        //    Compare merged normal with original face normal; reverse if mismatched.
         let merged_normal = self.compute_normal(&merged_verts)?;
         if merged_normal.dot(original_normal) < 0.0 {
             merged_verts.reverse();
         }
 
-        // 6. Get material from first face
-        let material = self.faces[f1].material();
+        // F6: Remove collinear vertices (T-junction cleanup)
+        merged_verts = self.simplify_collinear_loop(&merged_verts);
+        if merged_verts.len() < 3 {
+            bail!("Merged loop degenerate after collinear simplification");
+        }
 
-        // 7. Remove shared edge (and its half-edges)
+        // F5: Pre-validate — attempt compute_normal on the simplified loop.
+        // If this fails we bail BEFORE any destructive removal (atomicity).
+        let _ = self.compute_normal(&merged_verts)
+            .map_err(|e| anyhow::anyhow!("Merge pre-validation: {}", e))?;
+
+        // F3: Collect inner loops (holes) from BOTH faces before removal.
+        // add_face_with_holes will re-materialize them on the merged face.
+        let mut inner_loops: Vec<Vec<VertId>> = Vec::new();
+        for &fid in &[f1, f2] {
+            let inners: Vec<_> = self.faces[fid].inners().to_vec();
+            for inner_ref in inners {
+                if inner_ref.start.is_null() { continue; }
+                if let Ok(v) = self.collect_loop_verts(inner_ref.start) {
+                    if v.len() >= 3 { inner_loops.push(v); }
+                }
+            }
+        }
+
+        // 7. Destructive phase — all pre-validation done above.
         self.remove_edge_and_halfedges(edge_id)?;
-
-        // 8. Remove old faces
         self.faces.remove(f1);
         self.faces.remove(f2);
 
-        // 9. Create new merged face
-        let new_face = self.add_face(&merged_verts, material)?;
+        // 9. Create new merged face with preserved holes (F3)
+        let hole_slices: Vec<&[VertId]> = inner_loops.iter().map(|v| v.as_slice()).collect();
+        let new_face = self.add_face_with_holes(&merged_verts, &hole_slices, material)?;
         Ok(new_face)
+    }
+
+    /// Count edges shared by the outer loops of two faces (F4 helper).
+    fn count_shared_edges_outer(&self, f1: FaceId, f2: FaceId) -> usize {
+        let mut set = rustc_hash::FxHashSet::default();
+        if let Ok(hes) = self.collect_loop_hes(self.faces[f1].outer().start) {
+            for he in hes { set.insert(self.hes[he].edge()); }
+        }
+        let mut count = 0usize;
+        if let Ok(hes) = self.collect_loop_hes(self.faces[f2].outer().start) {
+            for he in hes {
+                if set.contains(&self.hes[he].edge()) { count += 1; }
+            }
+        }
+        count
+    }
+
+    /// Remove vertices that lie on the straight segment between their neighbors (F6).
+    ///
+    /// Given a cyclic loop `[v0, v1, ..., vN-1]`, if three consecutive vertices
+    /// (prev, curr, next) are collinear within tolerance, `curr` is dropped.
+    /// Used after face-merge to clean T-junction artifacts.
+    fn simplify_collinear_loop(&self, verts: &[VertId]) -> Vec<VertId> {
+        let n = verts.len();
+        if n < 3 { return verts.to_vec(); }
+        let mut out: Vec<VertId> = Vec::with_capacity(n);
+        for i in 0..n {
+            let prev = verts[(i + n - 1) % n];
+            let curr = verts[i];
+            let next = verts[(i + 1) % n];
+            let (p, c, q) = match (self.vertex_pos(prev), self.vertex_pos(curr), self.vertex_pos(next)) {
+                (Ok(a), Ok(b), Ok(cc)) => (a, b, cc),
+                _ => { out.push(curr); continue; },
+            };
+            let e1 = c - p;
+            let e2 = q - c;
+            let l1 = e1.length();
+            let l2 = e2.length();
+            if l1 < 1e-9 || l2 < 1e-9 {
+                // Near-zero segment — keep to avoid pathological loss
+                out.push(curr);
+                continue;
+            }
+            let dot = e1.dot(e2) / (l1 * l2);
+            // Collinear if dot ≈ 1 (same direction, tolerance ~0.01°)
+            if dot < 0.9999999 {
+                out.push(curr);
+            }
+            // else: drop curr (collinear with neighbors)
+        }
+        out
     }
 
     /// Remove vertices that have no edges referencing them.
