@@ -72,28 +72,40 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
   };
 
   // ── 기하 상태 단계 인디케이터 업데이트 ──
+  // HTML은 `data-state="line"`을 쓰지만 GeometryState.Edge는 문자열 'edge'.
+  // 불일치 방지를 위한 매핑 + 빈 문자열("")로 전체 비활성화 허용.
+  const toStepName = (state: string): string => {
+    if (state === 'edge') return 'line';
+    return state;
+  };
   const updateStateSteps = (state: string) => {
     const stepsEl = document.getElementById('xi-state-steps');
     if (!stepsEl) return;
 
     const order = ['point', 'line', 'face', 'volume', 'xia'];
-    const activeIdx = order.indexOf(state);
+    const normalized = toStepName(state);
+    const activeIdx = order.indexOf(normalized); // -1 = all off (선택 없음)
 
     stepsEl.querySelectorAll('.xi-step').forEach(step => {
       const s = (step as HTMLElement).dataset.state || '';
       const idx = order.indexOf(s);
       step.classList.remove('active', 'passed');
+      if (activeIdx < 0) return; // 전체 비활성
       if (idx === activeIdx) step.classList.add('active');
       else if (idx < activeIdx) step.classList.add('passed');
     });
 
     stepsEl.querySelectorAll('.xi-step-line').forEach((line, i) => {
-      line.classList.toggle('passed', i < activeIdx);
+      if (activeIdx < 0) {
+        line.classList.remove('passed');
+      } else {
+        line.classList.toggle('passed', i < activeIdx);
+      }
     });
   };
 
-  // 초기 상태: Point 활성화
-  updateStateSteps('point');
+  // 초기 상태: 아무 선택 없으니 전체 비활성화 (Point 강제 표시 제거)
+  updateStateSteps('');
 
   // ── 물리 속성 패널 업데이트 ──
   const updatePhysicalPanel = (materialId: string | null) => {
@@ -179,19 +191,100 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     updateInspector(currentFaceIds);
   });
 
+  // ── 엣지 선택용: 총 길이 계산 (edgeLines + edgeMap 조합) ──
+  const computeEdgesTotalLength = (edgeIds: number[]): number => {
+    const lines = bridge.getEdgeLines();
+    const map = bridge.getEdgeMap();
+    if (!lines || !map) return 0;
+    const targetSet = new Set(edgeIds);
+    let total = 0;
+    for (let seg = 0; seg < map.length; seg++) {
+      if (!targetSet.has(map[seg])) continue;
+      const b = seg * 6;
+      if (b + 5 >= lines.length) continue;
+      const dx = lines[b + 3] - lines[b];
+      const dy = lines[b + 4] - lines[b + 1];
+      const dz = lines[b + 5] - lines[b + 2];
+      total += Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return total;
+  };
+
   // ── Inspector 메인 업데이트 ──
   const updateInspector = (faceIds: number[]) => {
     currentFaceIds = faceIds;
+    const edgeIds = toolManager.selection.getSelectedEdges();
     const emptyEl = document.getElementById('xi-empty');
     const contentEl = document.getElementById('xi-content');
 
-    if (faceIds.length === 0) {
+    // 1) 아무것도 선택 안 됨 — 모든 상태 비활성 (Point 강제 표시 금지)
+    if (faceIds.length === 0 && edgeIds.length === 0) {
       if (emptyEl) emptyEl.style.display = '';
       if (contentEl) contentEl.style.display = 'none';
-      updateStateSteps('point');
+      updateStateSteps('');
       return;
     }
 
+    // 2) 엣지만 선택됨 → Line 상태
+    if (faceIds.length === 0 && edgeIds.length > 0) {
+      if (emptyEl) emptyEl.style.display = 'none';
+      if (contentEl) contentEl.style.display = '';
+      if (xiPanel && !xiPanel.classList.contains('open')) {
+        xiPanel.classList.add('open');
+      }
+      updateStateSteps('line');
+
+      // ID
+      const idEl = document.getElementById('xi-id');
+      if (idEl) idEl.textContent = `XIA-${String(nextXiaNum).padStart(4, '0')}`;
+
+      // 상태 라벨 (Edge)
+      const edgeState = GEOMETRY_STATES[GeometryState.Edge];
+      const dotEl = document.getElementById('xi-solid-dot');
+      const labelEl = document.getElementById('xi-solid-label');
+      const subEl = document.getElementById('xi-solid-sub');
+      const shapeEl = document.getElementById('xi-shape-type');
+      if (dotEl) dotEl.className = 'xi-solid-dot edge';
+      if (labelEl) labelEl.textContent = `${edgeState.icon} ${edgeState.labelEn}`;
+      if (subEl) subEl.textContent = `${edgeIds.length}개 선분`;
+      if (shapeEl) shapeEl.textContent = '□ 선';
+
+      // 치수: 길이만 의미 있음 (L = 총 길이, W/H = 0)
+      const totalLen = computeEdgesTotalLength(edgeIds);
+      const lengthEl = document.getElementById('xi-length');
+      const widthEl = document.getElementById('xi-width');
+      const heightEl = document.getElementById('xi-height');
+      const areaEl = document.getElementById('xi-area');
+      if (lengthEl) lengthEl.textContent = formatNum(totalLen);
+      if (widthEl) widthEl.textContent = '0';
+      if (heightEl) heightEl.textContent = '0';
+      if (areaEl) areaEl.textContent = '0';
+
+      // 부피/무게 박스 숨김
+      const volBox = document.getElementById('xi-volume')?.closest('.xi-computed-box') as HTMLElement | null;
+      const weightBox = document.getElementById('xi-weight')?.closest('.xi-computed-box') as HTMLElement | null;
+      if (volBox) volBox.style.display = 'none';
+      if (weightBox) weightBox.style.display = 'none';
+
+      // 물리 속성 섹션은 Edge에서 비활성화 (dim)
+      const physSection = document.getElementById('xi-physical-section');
+      if (physSection) {
+        physSection.style.display = '';
+        physSection.style.opacity = '0.35';
+        physSection.style.pointerEvents = 'none';
+      }
+
+      currentVolumeMM3 = 0;
+
+      // 이름: "선분 N개"처럼 자동 표시 (수동 편집 안 된 경우)
+      const nameEl = document.getElementById('xi-name') as HTMLInputElement | null;
+      if (nameEl && !nameEl.dataset.edited) {
+        nameEl.value = `${edgeState.label} ${edgeIds.length}개`;
+      }
+      return;
+    }
+
+    // 3) Face 선택됨 — 기존 로직
     if (emptyEl) emptyEl.style.display = 'none';
     if (contentEl) contentEl.style.display = '';
 
