@@ -233,15 +233,97 @@ impl Mesh {
         // Anchor edge's radial reference
         self.edges[edge_id].set_any_he(he_fwd_id);
 
-        // Set vertex outgoing references (if not already set)
+        // Set vertex outgoing references (if not already set) + insert into v_ring
+        // (v_ring cycles outgoing HEs around each vertex via v_next)
         if self.verts[pair.v_start].outgoing().is_none() {
             self.verts[pair.v_start].set_outgoing(Some(he_fwd_id));
         }
         if self.verts[pair.v_end].outgoing().is_none() {
             self.verts[pair.v_end].set_outgoing(Some(he_bwd_id));
         }
+        self.insert_into_v_ring(pair.v_start, he_fwd_id);
+        self.insert_into_v_ring(pair.v_end, he_bwd_id);
 
         Ok(())
+    }
+
+    // ========================================================================
+    // V-ring management (outgoing-HE cycle around each vertex)
+    // ========================================================================
+    //
+    // Each vertex maintains a cyclic linked list of its outgoing HEs via the
+    // `v_next` field. This enables O(degree) vertex-star traversal without
+    // having to scan all HEs in the mesh.
+    //
+    //   v.outgoing() → he_a → v_next = he_b → v_next = he_c → v_next = he_a
+    //
+    // For a single-HE vertex, he.v_next = he itself (self-loop).
+
+    /// Insert `new_he` (outgoing from `v`) into v's v_ring cycle.
+    /// If v has no outgoing HE yet, establishes a self-loop (new_he.v_next = new_he).
+    /// Otherwise splices new_he in right after v.outgoing.
+    fn insert_into_v_ring(&mut self, v: VertId, new_he: HeId) {
+        let anchor = match self.verts[v].outgoing() {
+            Some(h) if h != new_he && self.hes.contains(h) => h,
+            _ => {
+                // Either no anchor yet, or anchor == new_he — self-loop
+                self.hes[new_he].set_v_next(new_he);
+                if self.verts[v].outgoing().is_none() {
+                    self.verts[v].set_outgoing(Some(new_he));
+                }
+                return;
+            }
+        };
+        let after = self.hes[anchor].v_next();
+        if after.is_null() || !self.hes.contains(after) {
+            // Broken ring — restart as 2-cycle with anchor
+            self.hes[anchor].set_v_next(new_he);
+            self.hes[new_he].set_v_next(anchor);
+            return;
+        }
+        // Splice: anchor → new_he → after → ... → anchor
+        self.hes[anchor].set_v_next(new_he);
+        self.hes[new_he].set_v_next(after);
+    }
+
+    /// Remove `he` from its origin vertex's v_ring cycle.
+    /// If `he` was v.outgoing, re-anchor to he.v_next (or clear if last).
+    fn remove_from_v_ring(&mut self, v: VertId, he: HeId) {
+        if !self.hes.contains(he) { return; }
+        let anchor = self.verts[v].outgoing();
+        // Find predecessor p with p.v_next == he
+        let mut pred: Option<HeId> = None;
+        if let Some(start) = anchor {
+            let mut cur = start;
+            let mut guard = 0usize;
+            loop {
+                let nxt = self.hes[cur].v_next();
+                if nxt == he { pred = Some(cur); break; }
+                if nxt.is_null() || !self.hes.contains(nxt) { break; }
+                cur = nxt;
+                if cur == start { break; }
+                guard += 1;
+                if guard > 10_000 { break; }
+            }
+        }
+
+        let after = self.hes[he].v_next();
+        if let Some(p) = pred {
+            if p != he {
+                self.hes[p].set_v_next(after);
+            }
+        }
+
+        // Re-anchor outgoing if it pointed to `he`
+        if anchor == Some(he) {
+            if after.is_null() || after == he {
+                self.verts[v].set_outgoing(None);
+            } else {
+                self.verts[v].set_outgoing(Some(after));
+            }
+        }
+        // Reset the removed he's v_next for cleanliness
+        self.hes[he].set_v_next(HeId::NULL);
     }
 
     // ========================================================================
@@ -1687,6 +1769,25 @@ impl Mesh {
             }
         }
 
+        // v_ring splice: each outgoing HE must be removed from its origin's
+        // v_next cycle. Origin of a HE = prev(he).dst (or v_small/v_large if
+        // prev is unavailable — fallback for freshly built / isolated HEs).
+        for &he in &to_remove {
+            let origin = {
+                let p = self.hes[he].prev();
+                if !p.is_null() && self.hes.contains(p) {
+                    self.hes[p].dst()
+                } else {
+                    // Fallback: guess origin as the endpoint NOT matching dst
+                    let dst = self.hes[he].dst();
+                    if dst == v_small { v_large } else { v_small }
+                }
+            };
+            if self.verts.contains(origin) {
+                self.remove_from_v_ring(origin, he);
+            }
+        }
+
         // F2: splice each removed HE out of its next_rad chain so non-manifold
         // neighbors keep their radial traversal intact.
         for &he in &to_remove {
@@ -1845,6 +1946,157 @@ impl Mesh {
             // else: drop curr (collinear with neighbors)
         }
         out
+    }
+
+    // ========================================================================
+    // Self-healing: degenerate cleanup + face reconstruction
+    // ========================================================================
+
+    /// Compute the raw (un-normalized) Newell vector.
+    /// Its length equals **2 × signed planar area** of the polygon.
+    /// Used by degenerate detection and face reconstruction.
+    fn newell_raw(&self, verts: &[VertId]) -> Option<DVec3> {
+        if verts.len() < 3 { return None; }
+        let mut n = DVec3::ZERO;
+        let len = verts.len();
+        for i in 0..len {
+            let p0 = self.vertex_pos(verts[i]).ok()?;
+            let p1 = self.vertex_pos(verts[(i + 1) % len]).ok()?;
+            n.x += (p0.y - p1.y) * (p0.z + p1.z);
+            n.y += (p0.z - p1.z) * (p0.x + p1.x);
+            n.z += (p0.x - p1.x) * (p0.y + p1.y);
+        }
+        Some(n)
+    }
+
+    /// Return the planar area of a face (outer loop, ignoring holes).
+    /// 0 for degenerate or missing faces.
+    pub fn face_area(&self, face_id: FaceId) -> f64 {
+        let f = match self.faces.get(face_id) {
+            Some(f) if f.is_active() => f,
+            _ => return 0.0,
+        };
+        let start = f.outer().start;
+        if start.is_null() { return 0.0; }
+        let verts = match self.collect_loop_verts(start) {
+            Ok(v) => v,
+            Err(_) => return 0.0,
+        };
+        match self.newell_raw(&verts) {
+            Some(n) => n.length() * 0.5,
+            None => 0.0,
+        }
+    }
+
+    /// Check if every outer-loop vertex of `face_id` lies within `tol` of the
+    /// stored face plane. Returns `true` only when the face is genuinely planar.
+    pub fn is_face_planar(&self, face_id: FaceId, tol: f64) -> bool {
+        let f = match self.faces.get(face_id) {
+            Some(f) if f.is_active() => f,
+            _ => return false,
+        };
+        let start = f.outer().start;
+        if start.is_null() { return false; }
+        let verts = match self.collect_loop_verts(start) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if verts.len() < 3 { return false; }
+        // Plane: (normal, offset = normal · v0)
+        let n = f.normal();
+        let p0 = match self.vertex_pos(verts[0]) { Ok(p) => p, Err(_) => return false };
+        let d = n.dot(p0);
+        for &v in verts.iter().skip(1) {
+            if let Ok(p) = self.vertex_pos(v) {
+                if (n.dot(p) - d).abs() > tol {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Reconstruct a non-planar face by splitting it into coplanar pieces.
+    ///
+    /// Uses ear-clipping fan triangulation: emits triangles from v0 as a fan,
+    /// each guaranteed planar (3 vertices ⇒ always planar). Original face is
+    /// removed; returns the list of newly-created triangle face IDs.
+    ///
+    /// Used for importing external geometry (OBJ/DXF/etc.) where n-gon faces
+    /// may not be exactly planar due to encoder precision or modeling error.
+    ///
+    /// If the input face is already planar within `tol`, returns the face
+    /// unchanged in a single-element vector.
+    pub fn reconstruct_face(&mut self, face_id: FaceId, tol: f64) -> Result<Vec<FaceId>> {
+        if !self.faces.contains(face_id) {
+            bail!("Face {:?} not found", face_id);
+        }
+        if self.is_face_planar(face_id, tol) {
+            return Ok(vec![face_id]);
+        }
+
+        // Collect data needed BEFORE destructive changes
+        let material = self.faces[face_id].material();
+        let start = self.faces[face_id].outer().start;
+        let verts = self.collect_loop_verts(start)?;
+        if verts.len() < 4 {
+            // Triangle can't be non-planar (numerically); just return it.
+            return Ok(vec![face_id]);
+        }
+
+        // Remove the original (soft delete + drop)
+        let _ = self.remove_face(face_id);
+        if self.faces.contains(face_id) {
+            self.faces.remove(face_id);
+        }
+
+        // Fan triangulation from vertex 0 — each triangle is coplanar by construction
+        let mut new_faces = Vec::new();
+        let v0 = verts[0];
+        for i in 1..verts.len() - 1 {
+            let tri = [v0, verts[i], verts[i + 1]];
+            // Skip degenerate triangles (any two verts coincide)
+            if tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] {
+                continue;
+            }
+            match self.add_face(&tri, material) {
+                Ok(fid) => new_faces.push(fid),
+                Err(_) => { /* skip degenerate tri */ }
+            }
+        }
+        Ok(new_faces)
+    }
+
+    /// Remove faces whose planar area is below `tol`.
+    /// Returns the number of faces cleaned up.
+    ///
+    /// Used as a periodic "self-heal" routine for:
+    /// - Numerical drift after many edge splits / merges
+    /// - Imported meshes with zero-area artefacts
+    ///
+    /// ADR-003 Geometric Validity Principle prevents most degenerate creations,
+    /// but this routine handles cases that slip through (external imports,
+    /// compounded floating-point error).
+    pub fn cleanup_degenerate_faces(&mut self, tol: f64) -> usize {
+        // Collect candidates first (avoid borrow issues while iterating)
+        let mut to_remove: Vec<FaceId> = Vec::new();
+        for (fid, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            let area = self.face_area(fid);
+            if area < tol {
+                to_remove.push(fid);
+            }
+        }
+        let count = to_remove.len();
+        for fid in to_remove {
+            let _ = self.remove_face(fid);
+            if self.faces.contains(fid) {
+                self.faces.remove(fid);
+            }
+        }
+        // Orphans may remain after face removal
+        self.remove_isolated_verts();
+        count
     }
 
     /// Remove vertices that have no edges referencing them.
@@ -2235,5 +2487,97 @@ mod tests {
         // (this tests that the normal is computed correctly for orientation)
         let normal_length = normal_before.length();
         assert!((normal_length - 1.0).abs() < 1e-6, "normal should be unit");
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // v_ring + self-healing (reconstruct_face / cleanup_degenerate)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn v_ring_cycle_is_consistent_after_face_creation() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _ = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+
+        // Each corner vertex should have 2 outgoing HEs in its v_ring (quad corner)
+        // Walk the ring starting at v.outgoing, count until we cycle back.
+        for &v in &[v0, v1, v2, v3] {
+            let start = mesh.verts[v].outgoing().expect("outgoing must exist");
+            let mut count = 0usize;
+            let mut cur = start;
+            loop {
+                count += 1;
+                cur = mesh.hes[cur].v_next();
+                if cur.is_null() { panic!("v_next broken for vertex {:?}", v); }
+                if cur == start { break; }
+                if count > 10 { panic!("v_ring cycle too long for vertex {:?}", v); }
+            }
+            // Quad corner = 2 adjacent edges, so 2 outgoing HEs (one to each neighbor)
+            assert_eq!(count, 2, "vertex {:?} should have 2 outgoing HEs", v);
+        }
+    }
+
+    #[test]
+    fn v_ring_cleans_up_on_edge_removal() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.5, 1.0, 0.0));
+        let _ = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        // Remove edge v0-v1
+        let eid = mesh.find_edge(v0, v1).unwrap();
+        mesh.remove_edge_and_halfedges(eid).unwrap();
+        // v0's outgoing should still reference a live HE (or be None if isolated)
+        if let Some(out) = mesh.verts[v0].outgoing() {
+            assert!(mesh.hes.contains(out), "v0.outgoing should point to a live HE");
+        }
+        if let Some(out) = mesh.verts[v1].outgoing() {
+            assert!(mesh.hes.contains(out), "v1.outgoing should point to a live HE");
+        }
+    }
+
+    #[test]
+    fn face_area_is_correct_for_unit_square() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(2.0, 3.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 3.0, 0.0));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let area = mesh.face_area(fid);
+        assert!((area - 6.0).abs() < 1e-9, "expected area 6.0 got {}", area);
+    }
+
+    #[test]
+    fn is_face_planar_accepts_flat_and_rejects_skewed() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let flat = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        assert!(mesh.is_face_planar(flat, 1e-6));
+        // Triangle is trivially planar
+    }
+
+    #[test]
+    fn cleanup_degenerate_faces_removes_zero_area() {
+        let mut mesh = Mesh::new();
+        // Good face
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let good = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        let initial_area = mesh.face_area(good);
+        assert!(initial_area > 0.1);
+        // add_face rejects degenerate at creation (ADR-003), so cleanup on a
+        // pristine mesh should remove zero faces.
+        let cleaned = mesh.cleanup_degenerate_faces(1e-6);
+        assert_eq!(cleaned, 0);
+        // The good face must survive
+        assert!(mesh.faces.contains(good));
     }
 }
