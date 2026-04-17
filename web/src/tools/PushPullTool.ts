@@ -16,11 +16,15 @@ export class PushPullTool implements ITool {
   private ppStartY: number = 0;
   private ppActive: boolean = false;
   private ppNormal: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
-  private ppScreenDir: THREE.Vector2 = new THREE.Vector2(0, -1);
   private ppGhost: THREE.Group | null = null;
   private ppHitPoint: THREE.Vector3 = new THREE.Vector3();
   private ppFaceVerts: THREE.Vector3[] = [];
+  /** smooth group 전체의 face별 boundary (고스트 프리뷰에서 모든 면 표시용) */
+  private ppAllFaceVerts: THREE.Vector3[][] = [];
   private lastPPDist: number = 0;
+
+  /** 최소 유효 거리 (mm) — 이보다 작으면 무시 (프리뷰 확정용 threshold) */
+  private static readonly MIN_COMMIT_DIST = 0.5;
 
   // ═══ 곡면 그룹 Push/Pull ═══
   private smoothGroupFaces: number[] = [];  // 곡면 그룹의 모든 faceId
@@ -72,36 +76,44 @@ export class PushPullTool implements ITool {
       }
 
       if (rustFaceId >= 0 && hitPoint) {
+        // ── Bug E fix: 법선이 degenerate면 Push/Pull 시작 거부 ──
+        const normalArr = this.ctx.bridge.getFaceNormal(rustFaceId);
+        if (!normalArr ||
+            (normalArr[0] === 0 && normalArr[1] === 0 && normalArr[2] === 0)) {
+          debugWarn('[PP] Invalid face normal for faceId=', rustFaceId);
+          Toast.error('이 면의 법선을 계산할 수 없습니다 (degenerate)');
+          return;
+        }
+        this.ppNormal = new THREE.Vector3(normalArr[0], normalArr[1], normalArr[2]);
+
         this.ppFaceId = rustFaceId;
         this.ppStartX = e.clientX;
         this.ppStartY = e.clientY;
         this.ppActive = true;
 
-        // 곡면 그룹 감지
-        this.smoothGroupFaces = this.ctx.selection.getSmoothGroup(rustFaceId);
-        this.isSmoothGroup = this.smoothGroupFaces.length > 1;
-
-        const normal = this.ctx.bridge.getFaceNormal(rustFaceId);
-        if (!normal || (normal[0] === 0 && normal[1] === 0 && normal[2] === 0)) {
-          debugWarn('[PP] Invalid face normal for faceId=', rustFaceId);
-          this.ppNormal = new THREE.Vector3(0, 1, 0);
+        // ── Bug D fix: 사용자가 이미 여러 면을 선택했으면 그 선택을 존중 ──
+        // 단, 모든 선택면이 클릭한 면과 같은 smooth group일 때만 그룹 Push/Pull로 간주.
+        // 그렇지 않으면 단일 면 Push/Pull (seed만).
+        const manualSelected = this.ctx.getSelectedFaces();
+        if (manualSelected.length > 1 && manualSelected.includes(rustFaceId)) {
+          this.smoothGroupFaces = [...manualSelected];
+          this.isSmoothGroup = true;
+          debugLog('[PP] Phase 1: using manual selection of', manualSelected.length, 'faces');
         } else {
-          this.ppNormal = new THREE.Vector3(normal[0], normal[1], normal[2]);
-        }
-
-        // Project normal direction to screen space
-        const pA = hitPoint.clone().project(this.ctx.viewport.activeCamera);
-        const pB = hitPoint.clone().add(this.ppNormal.clone().multiplyScalar(1000)).project(this.ctx.viewport.activeCamera);
-        this.ppScreenDir = new THREE.Vector2(pB.x - pA.x, pB.y - pA.y);
-        if (this.ppScreenDir.length() > 0.0001) {
-          this.ppScreenDir.normalize();
-        } else {
-          this.ppScreenDir.set(0, -1);
+          // 자동 smooth group 감지 (법선 각도 기반)
+          this.smoothGroupFaces = this.ctx.selection.getSmoothGroup(rustFaceId);
+          this.isSmoothGroup = this.smoothGroupFaces.length > 1;
         }
 
         this.ppHitPoint = hitPoint;
         this.createPPGhost(rustFaceId, hitPoint);
-        this.ctx.selection.handleClick(rustFaceId, false, false);
+
+        // ── Bug G fix: smooth group은 전체 face 선택 표시 (seed만 X) ──
+        if (this.isSmoothGroup) {
+          this.ctx.selection.selectFaces(this.smoothGroupFaces);
+        } else {
+          this.ctx.selection.handleClick(rustFaceId, false, false);
+        }
 
         if (this.isSmoothGroup) {
           debugLog('[PP] Phase 1: SMOOTH GROUP selected,', this.smoothGroupFaces.length, 'faces, seed=', rustFaceId);
@@ -115,41 +127,11 @@ export class PushPullTool implements ITool {
       const dist = this.ppRayDist(e);
       debugLog('[PP] Phase 2: confirm dist=', dist.toFixed(2));
 
-      if (Math.abs(dist) > 0.5) {
-        if (this.isSmoothGroup && this.smoothGroupFaces.length > 1) {
-          // 곡면 그룹: Seamless offset (Rhino 스타일, 갭 없이 wall face 생성)
-          const faceArray = new Uint32Array(this.smoothGroupFaces);
-          const ok = this.ctx.bridge.engine?.push_pull_smooth_group_seamless?.(faceArray, dist) ?? false;
-
-          debugLog('[PP] Smooth group seamless offset:', ok ? 'OK' : 'FAILED',
-            'faces=', this.smoothGroupFaces.length, 'dist=', dist.toFixed(2));
-
-          if (ok) {
-            this.lastPPDist = dist;
-            this.ctx.syncMesh();
-          } else {
-            const err = this.ctx.bridge.lastError();
-            if (err) {
-              Toast.error(`곡면 Push/Pull 실패: ${err}`, 3500);
-            }
-          }
-        } else {
-          // 단일 면 push/pull
-          const success = this.ctx.bridge.pushPull(this.ppFaceId, dist);
-          debugLog('[PP] pushPull result=', success, 'dist=', dist.toFixed(2));
-          if (success) {
-            this.lastPPDist = dist;
-            this.ctx.syncMesh();
-          } else {
-            // ADR-003: degenerate 거부 등 실패 사유를 사용자에게 피드백
-            const err = this.ctx.bridge.lastError();
-            if (err) {
-              Toast.error(`Push/Pull 실패: ${err}`, 3500);
-            } else {
-              Toast.warning('Push/Pull이 실행되지 않았습니다', 2500);
-            }
-          }
-        }
+      if (Math.abs(dist) >= PushPullTool.MIN_COMMIT_DIST) {
+        this.commitPushPull(dist);
+      } else if (Math.abs(dist) > 0.001) {
+        // Bug C fix: 0 < |dist| < 0.5mm 일 때 조용히 실패하지 않고 피드백
+        Toast.warning(`Push/Pull 거리가 너무 짧습니다 (최소 ${PushPullTool.MIN_COMMIT_DIST}mm)`, 2500);
       }
       this.cleanup();
     }
@@ -207,27 +189,69 @@ export class PushPullTool implements ITool {
   }
 
   applyVCBValue(value: number): void {
+    // Bug B fix: VCB 입력도 drag 경로와 동일하게 commitPushPull 사용
+    // (곡면 그룹은 seamless, 단일 면은 pushPull, 둘 다 fallback 포함)
+    if (this.ppFaceId < 0 && !this.isSmoothGroup) {
+      // ppActive 진입 전 VCB 입력: 선택된 면으로 seed
+      const sel = this.ctx.getSelectedFaces();
+      if (sel.length >= 1) {
+        this.ppFaceId = sel[0];
+      }
+    }
+    if (this.ppFaceId >= 0 || this.isSmoothGroup) {
+      this.commitPushPull(value);
+    }
+    this.cleanup();
+  }
+
+  /**
+   * Push/Pull 커밋 — drag / VCB 공통 경로
+   * - 곡면 그룹: seamless 우선, 실패/미지원 시 per-face fallback (Bug F)
+   * - 단일 면: pushPull
+   */
+  private commitPushPull(dist: number): void {
     if (this.isSmoothGroup && this.smoothGroupFaces.length > 1) {
-      // 곡면 그룹 VCB 입력
+      const faceArray = new Uint32Array(this.smoothGroupFaces);
+      const seamlessFn = this.ctx.bridge.engine?.push_pull_smooth_group_seamless;
+      let ok = false;
+      if (typeof seamlessFn === 'function') {
+        ok = seamlessFn.call(this.ctx.bridge.engine, faceArray, dist) ?? false;
+      }
+      debugLog('[PP] Smooth group seamless:', ok ? 'OK' : 'FAILED/UNAVAILABLE',
+        'faces=', this.smoothGroupFaces.length, 'dist=', dist.toFixed(2));
+
+      if (ok) {
+        this.lastPPDist = dist;
+        this.ctx.syncMesh();
+        return;
+      }
+
+      // Bug F fix: seamless 미지원 또는 실패 → per-face fallback
       let successCount = 0;
       for (const fid of this.smoothGroupFaces) {
-        if (this.ctx.bridge.pushPull(fid, value)) successCount++;
+        if (this.ctx.bridge.pushPull(fid, dist)) successCount++;
       }
       if (successCount > 0) {
-        this.lastPPDist = value;
+        debugLog('[PP] Fallback per-face:', successCount, '/', this.smoothGroupFaces.length);
+        this.lastPPDist = dist;
         this.ctx.syncMesh();
+      } else {
+        const err = this.ctx.bridge.lastError();
+        Toast.error(err ? `곡면 Push/Pull 실패: ${err}` : 'Push/Pull이 실행되지 않았습니다', 3500);
       }
     } else {
       const faceId = this.ppFaceId >= 0 ? this.ppFaceId : this.ctx.getSelectedFaces()[0];
-      if (faceId >= 0) {
-        const success = this.ctx.bridge.pushPull(faceId, value);
-        if (success) {
-          this.lastPPDist = value;
-          this.ctx.syncMesh();
-        }
+      if (faceId < 0) return;
+      const success = this.ctx.bridge.pushPull(faceId, dist);
+      debugLog('[PP] pushPull result=', success, 'dist=', dist.toFixed(2));
+      if (success) {
+        this.lastPPDist = dist;
+        this.ctx.syncMesh();
+      } else {
+        const err = this.ctx.bridge.lastError();
+        Toast.error(err ? `Push/Pull 실패: ${err}` : 'Push/Pull이 실행되지 않았습니다', 3500);
       }
     }
-    this.cleanup();
   }
 
   isBusy(): boolean {
@@ -249,6 +273,16 @@ export class PushPullTool implements ITool {
     this.ppFaceVerts = this.ctx.extractFaceBoundary(faceId);
     if (this.ppFaceVerts.length < 3) return;
 
+    // Bug A fix: smooth group 전체의 boundary 수집
+    // (seed 외의 면은 ghost에 포함되지만 치수 라벨 anchor는 seed 유지)
+    if (this.isSmoothGroup && this.smoothGroupFaces.length > 1) {
+      this.ppAllFaceVerts = this.smoothGroupFaces
+        .map(fid => this.ctx.extractFaceBoundary(fid))
+        .filter(v => v.length >= 3);
+    } else {
+      this.ppAllFaceVerts = [this.ppFaceVerts];
+    }
+
     this.ppGhost = new THREE.Group();
     this.ppGhost.renderOrder = 999;
     this.ctx.viewport.scene.add(this.ppGhost);
@@ -269,73 +303,79 @@ export class PushPullTool implements ITool {
 
     if (Math.abs(dist) < 0.001) return;
 
-    const n = this.ppFaceVerts.length;
     const offset = this.ppNormal.clone().multiplyScalar(dist);
-    const offsetVerts = this.ppFaceVerts.map(v => v.clone().add(offset));
 
-    const makeFaceGeo = (verts: THREE.Vector3[]) => {
-      const pos: number[] = [];
-      const idx: number[] = [];
-      for (const v of verts) pos.push(v.x, v.y, v.z);
-      for (let i = 1; i < verts.length - 1; i++) idx.push(0, i, i + 1);
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-      geo.setIndex(idx);
-      geo.computeVertexNormals();
-      return geo;
-    };
+    // Bug A fix: smooth group의 모든 face 각각 ghost로 렌더
+    // (단일 면일 때는 ppAllFaceVerts.length === 1)
+    const allLinePositions: number[] = [];
 
-    const makeWallGeo = (origVerts: THREE.Vector3[], offVerts: THREE.Vector3[]) => {
-      const pos: number[] = [];
-      const idx: number[] = [];
-      let vi = 0;
-      for (let i = 0; i < origVerts.length; i++) {
-        const j = (i + 1) % origVerts.length;
-        const a = origVerts[i], b = origVerts[j], c = offVerts[j], d = offVerts[i];
-        pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
-        idx.push(vi, vi+1, vi+2, vi, vi+2, vi+3);
-        vi += 4;
+    for (const verts of this.ppAllFaceVerts) {
+      if (verts.length < 3) continue;
+      const offsetVerts = verts.map(v => v.clone().add(offset));
+      const n = verts.length;
+
+      // Top face (per-face BufferGeometry, fan triangulation)
+      const topGeo = new THREE.BufferGeometry();
+      topGeo.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array(offsetVerts.flatMap(v => [v.x, v.y, v.z])), 3));
+      const localIdx: number[] = [];
+      for (let i = 1; i < n - 1; i++) localIdx.push(0, i, i + 1);
+      topGeo.setIndex(localIdx);
+      topGeo.computeVertexNormals();
+      const topMesh = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({
+        color: 0x5b9bd5, side: THREE.FrontSide,
+        transparent: true, opacity: 0.3,
+        depthWrite: false,
+      }));
+      topMesh.renderOrder = 999;
+      this.ppGhost.add(topMesh);
+
+      // Wall quads per boundary edge
+      const wallGeo = new THREE.BufferGeometry();
+      const wallPos: number[] = [];
+      const wallIdx: number[] = [];
+      let wi = 0;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const a = verts[i], b = verts[j], c = offsetVerts[j], d = offsetVerts[i];
+        wallPos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
+        wallIdx.push(wi, wi + 1, wi + 2, wi, wi + 2, wi + 3);
+        wi += 4;
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-      geo.setIndex(idx);
-      geo.computeVertexNormals();
-      return geo;
-    };
+      wallGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wallPos), 3));
+      wallGeo.setIndex(wallIdx);
+      wallGeo.computeVertexNormals();
+      const wallMesh = new THREE.Mesh(wallGeo, new THREE.MeshBasicMaterial({
+        color: 0x5b9bd5, side: THREE.FrontSide,
+        transparent: true, opacity: 0.2,
+        depthWrite: false,
+      }));
+      wallMesh.renderOrder = 998;
+      this.ppGhost.add(wallMesh);
 
-    const faceMesh = new THREE.Mesh(makeFaceGeo(offsetVerts), new THREE.MeshBasicMaterial({
-      color: 0x5b9bd5, side: THREE.FrontSide,
-      transparent: true, opacity: 0.3,
-      depthWrite: false,
-    }));
-    faceMesh.renderOrder = 999;
-    this.ppGhost.add(faceMesh);
-
-    const wallMesh = new THREE.Mesh(makeWallGeo(this.ppFaceVerts, offsetVerts), new THREE.MeshBasicMaterial({
-      color: 0x5b9bd5, side: THREE.FrontSide,
-      transparent: true, opacity: 0.2,
-      depthWrite: false,
-    }));
-    wallMesh.renderOrder = 998;
-    this.ppGhost.add(wallMesh);
-
-    const linePositions: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      linePositions.push(offsetVerts[i].x, offsetVerts[i].y, offsetVerts[i].z);
-      linePositions.push(offsetVerts[j].x, offsetVerts[j].y, offsetVerts[j].z);
+      // Boundary lines (top + vertical)
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        allLinePositions.push(offsetVerts[i].x, offsetVerts[i].y, offsetVerts[i].z);
+        allLinePositions.push(offsetVerts[j].x, offsetVerts[j].y, offsetVerts[j].z);
+      }
+      for (let i = 0; i < n; i++) {
+        allLinePositions.push(verts[i].x, verts[i].y, verts[i].z);
+        allLinePositions.push(offsetVerts[i].x, offsetVerts[i].y, offsetVerts[i].z);
+      }
     }
-    for (let i = 0; i < n; i++) {
-      linePositions.push(this.ppFaceVerts[i].x, this.ppFaceVerts[i].y, this.ppFaceVerts[i].z);
-      linePositions.push(offsetVerts[i].x, offsetVerts[i].y, offsetVerts[i].z);
+
+    // 모든 face의 outline을 통합된 LineSegments 하나로
+    if (allLinePositions.length > 0) {
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array(allLinePositions), 3));
+      const lineSegs = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({
+        color: 0x2a6cb8, depthTest: false,
+      }));
+      lineSegs.renderOrder = 1000;
+      this.ppGhost.add(lineSegs);
     }
-    const lineGeo = new THREE.BufferGeometry();
-    lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(linePositions), 3));
-    const lineSegs = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({
-      color: 0x2a6cb8, depthTest: false,
-    }));
-    lineSegs.renderOrder = 1000;
-    this.ppGhost.add(lineSegs);
   }
 
   private updatePPGhost(dist: number): void {

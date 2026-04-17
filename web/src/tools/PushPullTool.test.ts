@@ -30,6 +30,7 @@ function mockToolContext() {
       handleClick: vi.fn(),
       clearSelection: vi.fn(),
       getSmoothGroup: vi.fn().mockReturnValue([]),
+      selectFaces: vi.fn(),
     },
     syncMesh: vi.fn(),
     dimLabel: { update: vi.fn(), clear: vi.fn() },
