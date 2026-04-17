@@ -944,6 +944,10 @@ export class ToolManager {
     let colorIdx = 0;
     const MAX_DIM_LABELS = 20;
 
+    // 집계 기준: 이 값 미만 길이의 chain은 개별 edge 라벨 유지
+    // (직사각형 4 edge, 오각형 5 edge 등은 개별로 보여야 자연스러움)
+    const AGGREGATE_MIN_EDGES = 8;
+
     for (const chain of chains) {
       if (this.selectionDimLines.length >= MAX_DIM_LABELS) break;
       const isClosed = chain.length > 1 &&
@@ -954,13 +958,16 @@ export class ToolManager {
 
       const color = colors[colorIdx++ % colors.length];
 
-      // 단일 선분 — 개별 치수 유지
-      if (chain.length === 1) {
-        const e = chain[0];
-        const len = e.from.distanceTo(e.to);
-        this.selectionDimLines.push({
-          from: e.from, to: e.to, text: this.units.format(len), color, editable: true,
-        });
+      // 짧은 chain (직사각형·다각형) — 개별 edge 라벨 유지
+      if (chain.length < AGGREGATE_MIN_EDGES) {
+        for (const e of chain) {
+          if (this.selectionDimLines.length >= MAX_DIM_LABELS) break;
+          const len = e.from.distanceTo(e.to);
+          this.selectionDimLines.push({
+            from: e.from, to: e.to, text: this.units.format(len),
+            color: colors[colorIdx++ % colors.length], editable: true,
+          });
+        }
         continue;
       }
 
