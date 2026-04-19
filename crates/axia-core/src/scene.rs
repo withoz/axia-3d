@@ -476,6 +476,61 @@ impl Scene {
         }
     }
 
+    /// vertex가 임의의 활성 face의 interior(boundary 아님 + 2D 내부)에 있는지 검사.
+    fn is_vertex_interior_to_any_face(&self, v: VertId) -> bool {
+        let p = match self.mesh.vertex_pos(v) { Ok(p) => p, Err(_) => return false };
+        for (_fid, face) in self.mesh.faces.iter() {
+            if !face.is_active() { continue; }
+            let boundary = match self.mesh.collect_loop_verts(face.outer().start) {
+                Ok(b) => b, Err(_) => continue,
+            };
+            if boundary.contains(&v) { continue; }
+            if boundary.len() < 3 { continue; }
+            // Coplanar + inside polygon test
+            let Ok(p0) = self.mesh.vertex_pos(boundary[0]) else { continue };
+            let Ok(p1) = self.mesh.vertex_pos(boundary[1]) else { continue };
+            let e1 = (p1 - p0).normalize_or_zero();
+            if e1.length_squared() < 1e-10 { continue; }
+            let mut e2 = DVec3::ZERO;
+            for &vid in &boundary[2..] {
+                if let Ok(pp) = self.mesh.vertex_pos(vid) {
+                    let vv = pp - p0;
+                    let proj = e1 * vv.dot(e1);
+                    let ortho = vv - proj;
+                    if ortho.length_squared() > 1e-6 { e2 = ortho.normalize_or_zero(); break; }
+                }
+            }
+            if e2.length_squared() < 1e-10 { continue; }
+            let n = e1.cross(e2).normalize_or_zero();
+            let max_chord_sq = boundary.iter().filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .map(|q| (q - p0).length_squared()).fold(0.0_f64, f64::max);
+            let tol = (max_chord_sq.sqrt() * 1e-4).max(1e-3);
+            let dist = (p - p0).dot(n).abs();
+            if dist > tol { continue; }
+            let project2d = |q: DVec3| -> (f64, f64) {
+                let vv = q - p0; (vv.dot(e1), vv.dot(e2))
+            };
+            let poly: Vec<(f64, f64)> = boundary.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok().map(project2d))
+                .collect();
+            let (px, py) = project2d(p);
+            let mut inside = false;
+            let nn = poly.len();
+            let mut j = nn - 1;
+            for i in 0..nn {
+                let (xi, yi) = poly[i];
+                let (xj, yj) = poly[j];
+                if ((yi > py) != (yj > py)) &&
+                   (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            if inside { return true; }
+        }
+        false
+    }
+
     /// 주어진 vertex 루프가 기존 face 중 하나 이상의 centroid를 감싸고 있는지 검사.
     /// True이면 이 루프는 "외부 unbounded boundary"로 판정 → 면 생성 스킵.
     ///
@@ -632,9 +687,11 @@ impl Scene {
             }
 
             // ── (b) Free-edge loop detection — 반복 탐색 ──
-            // 발견된 루프가 외부 boundary로 판정되면 그 루프의 엣지들을 제외하고
-            // 다시 탐색 (다른 경로로 내부 루프가 있을 수 있음 — 예: 공유 엣지를 가진
-            // 인접 삼각형에서 BFS가 "잘못된 short path"를 먼저 선택한 경우).
+            // 단, 새 엣지의 한쪽 endpoint가 기존 face의 interior에 있는 경우 loop
+            // detection을 스킵 — fan_split이 나중에 처리해서 중복 생성을 방지.
+            if self.is_vertex_interior_to_any_face(v_a) || self.is_vertex_interior_to_any_face(v_b) {
+                continue;
+            }
             let mut seen_loops: Vec<Vec<VertId>> = Vec::new();
             let mut seg_faces: usize = 0;
             let mut excluded_edges: Vec<EdgeId> = Vec::new();
@@ -689,6 +746,35 @@ impl Scene {
                         if seg_faces >= 2 { break; }
                     }
                     Err(_) => break,
+                }
+            }
+        }
+
+        // ── Step 4.5: Fan-tessellation 검출 ──
+        // 이 시점엔 새 엣지들이 모두 draw_line으로 생성된 상태. 기존 face의 interior에
+        // ≥2 boundary spoke를 가진 vertex가 있으면 그 face를 dissolve+fan split.
+        // loop detection은 Step 4(b)에서 "interior vertex" 케이스를 이미 skip했으므로
+        // 여기서 처리해도 중복 face 생성 없음.
+        {
+            let candidates: Vec<FaceId> = self.mesh.faces.iter()
+                .filter(|(_, f)| f.is_active())
+                .map(|(fid, _)| fid)
+                .collect();
+            for fid in candidates {
+                let new_faces = self.mesh.dissolve_and_fan_split(fid);
+                if !new_faces.is_empty() {
+                    if let Some(xia_id) = self.get_xia_for_face(fid) {
+                        self.unregister_face_from_xia(fid);
+                        if self.xias.get(&xia_id).is_some() {
+                            self.register_faces_to_xia(xia_id, &new_faces);
+                            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                                for &f in &new_faces { xia.face_ids.push(f); }
+                            }
+                        }
+                    }
+                    for f in new_faces {
+                        if !all_created_faces.contains(&f) { all_created_faces.push(f); }
+                    }
                 }
             }
         }

@@ -325,6 +325,163 @@ impl Mesh {
         false
     }
 
+    /// Face의 interior에 있는 vertex를 찾아 fan-tessellation으로 분할.
+    ///
+    /// 조건: vertex V가 face F의 2D 내부에 있고, V에서 F의 boundary vertex들로
+    /// 자유(face=null) 엣지가 K ≥ 2개 뻗어 있으면, F를 dissolve하고 K개의 sub-face
+    /// 생성 (V를 중심으로 한 fan).
+    ///
+    /// 반환: 분할 시 생성된 새 face ids; 분할 불필요 시 빈 Vec.
+    pub fn dissolve_and_fan_split(&mut self, face_id: FaceId) -> Vec<FaceId> {
+        if !self.faces.contains(face_id) { return Vec::new(); }
+        let face = &self.faces[face_id];
+        if !face.is_active() { return Vec::new(); }
+        let material = face.material();
+        let boundary = match self.collect_loop_verts(face.outer().start) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        if boundary.len() < 3 { return Vec::new(); }
+
+        // 2D projection plane from boundary
+        let p0 = match self.vertex_pos(boundary[0]) { Ok(p) => p, Err(_) => return Vec::new() };
+        let p1 = match self.vertex_pos(boundary[1]) { Ok(p) => p, Err(_) => return Vec::new() };
+        let e1 = (p1 - p0).normalize_or_zero();
+        if e1.length_squared() < 1e-10 { return Vec::new(); }
+        let mut e2 = DVec3::ZERO;
+        for &vid in &boundary[2..] {
+            if let Ok(p) = self.vertex_pos(vid) {
+                let v = p - p0;
+                let proj = e1 * v.dot(e1);
+                let ortho = v - proj;
+                if ortho.length_squared() > 1e-6 { e2 = ortho.normalize_or_zero(); break; }
+            }
+        }
+        if e2.length_squared() < 1e-10 { return Vec::new(); }
+        let normal = e1.cross(e2).normalize_or_zero();
+        let tol = {
+            let mut max_chord_sq = 0.0_f64;
+            for &vid in &boundary {
+                if let Ok(p) = self.vertex_pos(vid) {
+                    let d = (p - p0).length_squared();
+                    if d > max_chord_sq { max_chord_sq = d; }
+                }
+            }
+            (max_chord_sq.sqrt() * 1e-4).max(1e-3)
+        };
+        let project2d = |p: DVec3| -> (f64, f64) {
+            let v = p - p0;
+            (v.dot(e1), v.dot(e2))
+        };
+
+        let boundary_set: FxHashMap<VertId, usize> = boundary.iter().enumerate()
+            .map(|(i, &v)| (v, i)).collect();
+
+        // 2D boundary polygon
+        let poly2d: Vec<(f64, f64)> = boundary.iter()
+            .filter_map(|&v| self.vertex_pos(v).ok().map(project2d))
+            .collect();
+        let point_in_poly = |x: f64, y: f64| -> bool {
+            let mut inside = false;
+            let n = poly2d.len();
+            if n < 3 { return false; }
+            let mut j = n - 1;
+            for i in 0..n {
+                let (xi, yi) = poly2d[i];
+                let (xj, yj) = poly2d[j];
+                if ((yi > y) != (yj > y)) &&
+                   (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            inside
+        };
+
+        // Find interior vertices (in F's plane + inside polygon + NOT on boundary)
+        // with at least 2 free-edge connections to boundary.
+        struct Candidate {
+            v: VertId,
+            spokes: Vec<(VertId, usize)>, // (boundary vertex, its index in boundary)
+        }
+        let mut candidates: Vec<Candidate> = Vec::new();
+
+        for (vid, vert) in self.verts.iter() {
+            if !vert.is_active() { continue; }
+            if boundary_set.contains_key(&vid) { continue; }
+            let p = vert.pos();
+            // coplanar check
+            let dist = (p - p0).dot(normal).abs();
+            if dist > tol { continue; }
+            let (px, py) = project2d(p);
+            if !point_in_poly(px, py) { continue; }
+
+            // Collect free edges from V to boundary verts
+            let mut spokes: Vec<(VertId, usize)> = Vec::new();
+            for (&key, &edge_id) in &self.vert_to_edge {
+                if !self.edges[edge_id].is_active() { continue; }
+                if !self.edge_has_free_he(edge_id) { continue; }
+                if key.v_small != vid && key.v_large != vid { continue; }
+                let other = if key.v_small == vid { key.v_large } else { key.v_small };
+                if let Some(&idx) = boundary_set.get(&other) {
+                    spokes.push((other, idx));
+                }
+            }
+            if spokes.len() >= 2 {
+                candidates.push(Candidate { v: vid, spokes });
+            }
+        }
+
+        if candidates.is_empty() { return Vec::new(); }
+
+        // Pick the candidate with the MOST spokes (best fan coverage).
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.spokes.len()));
+        let best = &candidates[0];
+        let v_center = best.v;
+        let mut spoke_verts: Vec<(VertId, usize)> = best.spokes.clone();
+        // Sort by boundary index
+        spoke_verts.sort_by_key(|&(_, idx)| idx);
+        let k = spoke_verts.len();
+        let n_boundary = boundary.len();
+
+        // Partition boundary into K arcs (by consecutive spoke-connected verts).
+        // Sub-face i: [V, b_i, boundary[b_i+1..b_{i+1}], b_{i+1}]
+        // (spanning from spoke i's boundary vertex, walking along boundary, to spoke (i+1)'s vertex)
+        let mut sub_faces_verts: Vec<Vec<VertId>> = Vec::with_capacity(k);
+        for i in 0..k {
+            let (_, start_idx) = spoke_verts[i];
+            let (_, end_idx) = spoke_verts[(i + 1) % k];
+            let mut arc: Vec<VertId> = Vec::new();
+            arc.push(v_center);
+            let mut j = start_idx;
+            loop {
+                arc.push(boundary[j]);
+                if j == end_idx { break; }
+                j = (j + 1) % n_boundary;
+                // safety
+                if arc.len() > n_boundary + 2 { break; }
+            }
+            if arc.len() >= 3 {
+                sub_faces_verts.push(arc);
+            }
+        }
+
+        if sub_faces_verts.is_empty() { return Vec::new(); }
+
+        // Dissolve original face
+        if self.remove_face(face_id).is_err() { return Vec::new(); }
+
+        // Create sub-faces
+        let mut created: Vec<FaceId> = Vec::new();
+        for verts in &sub_faces_verts {
+            match self.add_face(verts, material) {
+                Ok(fid) => created.push(fid),
+                Err(_) => continue,
+            }
+        }
+        created
+    }
+
     /// Mark both half-edges of an edge with HARD flag.
     /// HARD edges always render (even between coplanar faces) — used for user-drawn
     /// lines and face-split edges so the user's intent stays visible.
