@@ -1232,12 +1232,24 @@ impl Mesh {
         if normal_len < 1e-10 { return false; } // degenerate
         let normal = normal / normal_len;
 
-        const COPLANAR_TOL: f64 = 1e-3; // 1mm tolerance for drawn lines
+        // Relative tolerance: 폴리곤 최장 edge 길이의 0.01%.
+        // 이유: 단위 스케일(절대 tolerance)로는 mm 프로젝트(수천~수만 단위) 에선 너무
+        // 엄격해지고, m/cm 프로젝트에선 너무 느슨해짐. 상대 tolerance는 두 경우 모두 적응.
+        // 이전 고정 1e-3은 meter 가정 — mm 단위 앱에선 1µm로 너무 엄격해 마우스 스냅
+        // 기반 4+정점 루프가 쉽게 coplanar 검사에 실패했음.
+        let mut max_chord_sq = 0.0_f64;
+        for &vid in verts.iter() {
+            let p = self.verts[vid].pos();
+            let d = (p - p0).length_squared();
+            if d > max_chord_sq { max_chord_sq = d; }
+        }
+        let scale = max_chord_sq.sqrt().max(1.0);
+        let tol = scale * 1e-4;
 
         for &vid in &verts[3..] {
             let p = self.verts[vid].pos();
             let dist = (p - p0).dot(normal).abs();
-            if dist > COPLANAR_TOL {
+            if dist > tol {
                 return false;
             }
         }
