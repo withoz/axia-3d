@@ -150,7 +150,14 @@ export class SelectTool implements ITool {
 
   onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
+      // SketchUp/AutoCAD 관습:
+      //   - 드래그 박스 진행 중이면 박스만 취소 (선택 유지)
+      //   - 그 외에는 현재 선택 전체 해제
+      const wasDragging = this.isDragSelecting || this.dragSelectStart !== null;
       this.cleanup();
+      if (!wasDragging) {
+        this.ctx.selection.clearSelection();
+      }
     }
   }
 

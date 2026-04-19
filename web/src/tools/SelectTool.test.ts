@@ -265,4 +265,24 @@ describe('SelectTool', () => {
       expect(ctx.selection.selectFaceWithEdges).not.toHaveBeenCalled();
     });
   });
+
+  describe('ESC key behavior (SketchUp convention)', () => {
+    it('ESC with no drag active → clears selection', () => {
+      tool.onKeyDown({ key: 'Escape' } as KeyboardEvent);
+      expect(ctx.selection.clearSelection).toHaveBeenCalled();
+    });
+
+    it('ESC during drag-select → cancels drag but preserves selection', () => {
+      // Start drag
+      ctx.viewport.pickEdgeOrFace.mockReturnValue(null);
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
+      tool.onMouseMove({ clientX: 120, clientY: 220 } as MouseEvent, null);
+      (ctx.selection.clearSelection as ReturnType<typeof vi.fn>).mockClear();
+
+      tool.onKeyDown({ key: 'Escape' } as KeyboardEvent);
+
+      // No additional clearSelection during mid-drag ESC
+      expect(ctx.selection.clearSelection).not.toHaveBeenCalled();
+    });
+  });
 });
