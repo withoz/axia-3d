@@ -22,4 +22,4 @@ pub use commands::{Command, CommandResult};
 pub use scene::Scene;
 pub use group::{GroupManager, GroupId, ComponentDefId, ComponentInstanceId, Transform3D};
 pub use material::{Material, MaterialLibrary, MaterialCategory, PhysicalProperties, VisualProperties, FireRating};
-pub use constraint::{Constraint, ConstraintGraph, ConstraintId, ConstraintKind, ConstraintRef};
+pub use constraint::{Constraint, ConstraintGraph, ConstraintId, ConstraintKind, ConstraintRef, SolverResult};

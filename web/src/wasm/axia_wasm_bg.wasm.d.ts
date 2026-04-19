@@ -61,6 +61,7 @@ export const axiaengine_is_face_locked: (a: number, b: number) => number;
 export const axiaengine_lastError: (a: number, b: number) => void;
 export const axiaengine_listConstraints: (a: number, b: number) => void;
 export const axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
+export const axiaengine_maxConstraintResidual: (a: number) => number;
 export const axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
 export const axiaengine_new: () => number;
 export const axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
@@ -75,6 +76,7 @@ export const axiaengine_remove_faces_from_group: (a: number, b: number, c: numbe
 export const axiaengine_remove_material: (a: number, b: number, c: number) => number;
 export const axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_resolveAllConstraints: (a: number) => number;
+export const axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

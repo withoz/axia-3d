@@ -78,6 +78,9 @@ type AxiaEngineExtended = AxiaEngine & {
   resolveAllConstraints?(): number;
   setConstraintActive?(id: number, active: boolean): boolean;
   constraintCount?(): number;
+  // Level 3 iterative solver
+  resolveConstraintsIterative?(maxIter: number, tolerance: number): string;
+  maxConstraintResidual?(): number;
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
@@ -642,6 +645,36 @@ export class WasmBridge {
   constraintCount(): number {
     if (!this.engine?.constraintCount) return 0;
     try { return this.engine.constraintCount(); }
+    catch { return 0; }
+  }
+
+  /**
+   * Level 3: iterative XPBD-style constraint solve.
+   * Returns { converged, iterations, finalResidual, initialResidual, overConstrained }.
+   * Default maxIter=50, tolerance=1e-5.
+   */
+  resolveConstraintsIterative(maxIter = 50, tolerance = 1e-5): {
+    converged: boolean;
+    iterations: number;
+    finalResidual: number;
+    initialResidual: number;
+    overConstrained: boolean;
+  } | null {
+    if (!this.engine?.resolveConstraintsIterative) return null;
+    this.markDirty();
+    try {
+      const json = this.engine.resolveConstraintsIterative(maxIter, tolerance);
+      return JSON.parse(json);
+    } catch (e) {
+      console.error('[WasmBridge] resolveConstraintsIterative failed:', e);
+      return null;
+    }
+  }
+
+  /** Level 3: max residual across active constraints (no mutation). */
+  maxConstraintResidual(): number {
+    if (!this.engine?.maxConstraintResidual) return 0;
+    try { return this.engine.maxConstraintResidual(); }
     catch { return 0; }
   }
 

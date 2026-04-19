@@ -275,3 +275,182 @@ pub fn resolve_all(mesh: &mut Mesh, graph: &ConstraintGraph) -> usize {
     }
     count
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Level 3 — Iterative solver (XPBD-style projection loop)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Outcome of an iterative solve.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct SolverResult {
+    /// Converged within tolerance before max_iter ran out.
+    pub converged: bool,
+    /// Number of outer iterations performed.
+    pub iterations: u32,
+    /// Max residual across all active constraints after the final iteration.
+    pub final_residual: f64,
+    /// Maximum residual at iteration 0 — useful for relative progress.
+    pub initial_residual: f64,
+    /// Heuristic over-constrained flag — residual plateaued without converging.
+    pub over_constrained: bool,
+}
+
+impl Default for SolverResult {
+    fn default() -> Self {
+        Self {
+            converged: true,
+            iterations: 0,
+            final_residual: 0.0,
+            initial_residual: 0.0,
+            over_constrained: false,
+        }
+    }
+}
+
+/// Compute the residual (a scalar ≥ 0) of a constraint. Zero = satisfied.
+pub fn constraint_residual(mesh: &Mesh, c: &Constraint) -> f64 {
+    if !c.active { return 0.0; }
+    if c.refs.iter().any(|r| !r.is_valid(mesh)) { return 0.0; }
+
+    match c.kind {
+        ConstraintKind::Parallel | ConstraintKind::Perpendicular | ConstraintKind::Collinear => {
+            if c.refs.len() != 2 { return 0.0; }
+            let (a_va, a_vb) = match &c.refs[0] {
+                ConstraintRef::Edge { v_a, v_b } => (*v_a, *v_b),
+                _ => return 0.0,
+            };
+            let (b_va, b_vb) = match &c.refs[1] {
+                ConstraintRef::Edge { v_a, v_b } => (*v_a, *v_b),
+                _ => return 0.0,
+            };
+            let (pa0, pa1, pb0, pb1) = match (
+                mesh.vertex_pos(a_va).ok(),
+                mesh.vertex_pos(a_vb).ok(),
+                mesh.vertex_pos(b_va).ok(),
+                mesh.vertex_pos(b_vb).ok(),
+            ) {
+                (Some(a), Some(b), Some(c_), Some(d)) => (a, b, c_, d),
+                _ => return 0.0,
+            };
+            let dir_a = (pa1 - pa0).try_normalize().unwrap_or(DVec3::X);
+            let dir_b = (pb1 - pb0).try_normalize().unwrap_or(DVec3::X);
+            let dot_abs = dir_a.dot(dir_b).abs().min(1.0);
+            match c.kind {
+                ConstraintKind::Parallel => 1.0 - dot_abs,     // 0 = parallel
+                ConstraintKind::Perpendicular => dot_abs,      // 0 = perpendicular
+                ConstraintKind::Collinear => {
+                    let para_resid = 1.0 - dot_abs;
+                    // Additional: distance from B's midpoint to A's infinite line.
+                    let mid_a = (pa0 + pa1) * 0.5;
+                    let mid_b = (pb0 + pb1) * 0.5;
+                    let delta = mid_b - mid_a;
+                    let proj = dir_a * delta.dot(dir_a);
+                    let perp = delta - proj;
+                    // Scale distance residual so parallel and distance components are
+                    // balanced-ish; use relative to edge A length.
+                    let len_a = (pa1 - pa0).length().max(1.0);
+                    para_resid + perp.length() / len_a
+                }
+                _ => 0.0,
+            }
+        }
+        ConstraintKind::Distance => {
+            if c.refs.len() != 2 { return 0.0; }
+            let (v_a, v_b) = match (&c.refs[0], &c.refs[1]) {
+                (ConstraintRef::Vertex(a), ConstraintRef::Vertex(b)) => (*a, *b),
+                _ => return 0.0,
+            };
+            let target = c.value.unwrap_or(0.0);
+            if target <= 0.0 { return 0.0; }
+            let (pa, pb) = match (mesh.vertex_pos(v_a).ok(), mesh.vertex_pos(v_b).ok()) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return 0.0,
+            };
+            let actual = (pb - pa).length();
+            // Relative residual so distance magnitude doesn't dominate other types.
+            (actual - target).abs() / target.max(1.0)
+        }
+    }
+}
+
+/// Max residual across all active constraints.
+pub fn max_residual(mesh: &Mesh, graph: &ConstraintGraph) -> f64 {
+    graph.iter()
+        .filter(|c| c.active)
+        .map(|c| constraint_residual(mesh, c))
+        .fold(0.0, f64::max)
+}
+
+/// Iterate through all constraints (XPBD-style sequential projection) until
+/// max residual drops below `tolerance` or `max_iter` is reached.
+///
+/// Over-constraint heuristic: if residual fails to decrease by >1% across 5
+/// consecutive iterations, we flag `over_constrained = true` and stop early.
+pub fn resolve_iterative(
+    mesh: &mut Mesh,
+    graph: &ConstraintGraph,
+    max_iter: u32,
+    tolerance: f64,
+) -> SolverResult {
+    let initial = max_residual(mesh, graph);
+    if initial < tolerance {
+        return SolverResult {
+            converged: true,
+            iterations: 0,
+            final_residual: initial,
+            initial_residual: initial,
+            over_constrained: false,
+        };
+    }
+
+    let mut prev_residual = initial;
+    let mut stagnation = 0u32;
+    let mut iter = 0u32;
+    let mut current = initial;
+
+    while iter < max_iter {
+        // One pass: apply each constraint's projection in order.
+        for c in graph.iter() {
+            resolve_constraint(mesh, c);
+        }
+        iter += 1;
+        current = max_residual(mesh, graph);
+        if current < tolerance {
+            return SolverResult {
+                converged: true,
+                iterations: iter,
+                final_residual: current,
+                initial_residual: initial,
+                over_constrained: false,
+            };
+        }
+
+        // Stagnation detection — residual not decreasing meaningfully
+        let improvement = if prev_residual > 1e-12 {
+            (prev_residual - current) / prev_residual
+        } else { 0.0 };
+        if improvement < 0.01 {
+            stagnation += 1;
+            if stagnation >= 5 {
+                return SolverResult {
+                    converged: false,
+                    iterations: iter,
+                    final_residual: current,
+                    initial_residual: initial,
+                    over_constrained: true,
+                };
+            }
+        } else {
+            stagnation = 0;
+        }
+        prev_residual = current;
+    }
+
+    SolverResult {
+        converged: false,
+        iterations: iter,
+        final_residual: current,
+        initial_residual: initial,
+        over_constrained: false,
+    }
+}

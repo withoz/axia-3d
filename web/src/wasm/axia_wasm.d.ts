@@ -274,6 +274,11 @@ export class AxiaEngine {
      */
     make_component(group_id: number, name: string): number;
     /**
+     * **Level 3**: max residual across all active constraints at current state.
+     * For monitoring / UI status without mutating the mesh.
+     */
+    maxConstraintResidual(): number;
+    /**
      * Merge the two coplanar faces sharing the given edge into a single face.
      *
      * - Success: returns the new merged FaceId (>= 0).
@@ -351,6 +356,12 @@ export class AxiaEngine {
      * actually moved geometry.
      */
     resolveAllConstraints(): number;
+    /**
+     * **Level 3**: iterative XPBD-style solver. Returns a JSON result
+     * `{converged, iterations, finalResidual, initialResidual, overConstrained}`.
+     * Wraps in a single undo transaction if anything moved.
+     */
+    resolveConstraintsIterative(max_iter: number, tolerance: number): string;
     /**
      * 지정 정점을 center/axis 기준으로 회전.
      */
@@ -527,6 +538,7 @@ export interface InitOutput {
     readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_listConstraints: (a: number, b: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_maxConstraintResidual: (a: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_new: () => number;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
@@ -541,6 +553,7 @@ export interface InitOutput {
     readonly axiaengine_remove_material: (a: number, b: number, c: number) => number;
     readonly axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_resolveAllConstraints: (a: number) => number;
+    readonly axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

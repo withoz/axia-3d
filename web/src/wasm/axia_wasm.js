@@ -919,6 +919,15 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * **Level 3**: max residual across all active constraints at current state.
+     * For monitoring / UI status without mutating the mesh.
+     * @returns {number}
+     */
+    maxConstraintResidual() {
+        const ret = wasm.axiaengine_maxConstraintResidual(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Merge the two coplanar faces sharing the given edge into a single face.
      *
      * - Success: returns the new merged FaceId (>= 0).
@@ -1108,6 +1117,30 @@ export class AxiaEngine {
     resolveAllConstraints() {
         const ret = wasm.axiaengine_resolveAllConstraints(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * **Level 3**: iterative XPBD-style solver. Returns a JSON result
+     * `{converged, iterations, finalResidual, initialResidual, overConstrained}`.
+     * Wraps in a single undo transaction if anything moved.
+     * @param {number} max_iter
+     * @param {number} tolerance
+     * @returns {string}
+     */
+    resolveConstraintsIterative(max_iter, tolerance) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_resolveConstraintsIterative(retptr, this.__wbg_ptr, max_iter, tolerance);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * 지정 정점을 center/axis 기준으로 회전.

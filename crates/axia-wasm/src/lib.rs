@@ -11,7 +11,7 @@ use axia_core::commands::Command;
 use axia_core::commands::CommandResult;
 use axia_geo::{FaceId, EdgeId, VertId};
 use axia_geo::operations::boolean::BoolOp;
-use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all};
+use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all, resolve_iterative, max_residual};
 
 // Console logging from Rust WASM — debug only (stripped in release builds)
 macro_rules! debug_log {
@@ -1873,7 +1873,8 @@ impl AxiaEngine {
             Ok(res) => {
                 debug_log!("[RUST] translate: moved {} verts, {} faces", res.verts_moved, res.faces_affected);
                 // Level 2 auto-resolve constraints after face transform
-                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
+                // Level 3: iterative XPBD-style solve until convergence
+                let _ = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, 50, 1e-5);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
@@ -1907,7 +1908,8 @@ impl AxiaEngine {
         match self.scene.mesh.rotate_faces(&fids, center, axis, angle_rad) {
             Ok(res) => {
                 debug_log!("[RUST] rotate: {} verts, {:.1}°", res.verts_moved, angle_deg);
-                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
+                // Level 3: iterative XPBD-style solve until convergence
+                let _ = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, 50, 1e-5);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
@@ -1972,7 +1974,8 @@ impl AxiaEngine {
         match self.scene.mesh.translate_verts(&vids, delta) {
             Ok(_) => {
                 // Level 2: auto-resolve constraints touching any moved vertex
-                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
+                // Level 3: iterative XPBD-style solve until convergence
+                let _ = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, 50, 1e-5);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
@@ -2007,7 +2010,8 @@ impl AxiaEngine {
         match self.scene.mesh.rotate_verts(&vids, center, axis, angle_rad) {
             Ok(_) => {
                 // Level 2: auto-resolve constraints
-                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
+                // Level 3: iterative XPBD-style solve until convergence
+                let _ = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, 50, 1e-5);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
@@ -2073,10 +2077,9 @@ impl AxiaEngine {
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
         let id = self.scene.constraints.add(kind, refs, None);
-        // Apply immediately so the geometry matches
-        if let Some(c) = self.scene.constraints.get(id).cloned() {
-            let _ = resolve_constraint(&mut self.scene.mesh, &c);
-        }
+        // Apply immediately — single constraint, iterative gives same result
+        // but handles newly conflicting geometry gracefully.
+        let _ = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, 50, 1e-5);
         self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
         self.scene.transactions.commit();
         self.mark_topology_changed();
@@ -2181,6 +2184,41 @@ impl AxiaEngine {
     #[wasm_bindgen(js_name = "setConstraintActive")]
     pub fn set_constraint_active(&mut self, id: u32, active: bool) -> bool {
         self.scene.constraints.set_active(id, active)
+    }
+
+    /// **Level 3**: iterative XPBD-style solver. Returns a JSON result
+    /// `{converged, iterations, finalResidual, initialResidual, overConstrained}`.
+    /// Wraps in a single undo transaction if anything moved.
+    #[wasm_bindgen(js_name = "resolveConstraintsIterative")]
+    pub fn resolve_constraints_iterative(&mut self, max_iter: u32, tolerance: f64) -> String {
+        let max_iter = if max_iter == 0 { 50 } else { max_iter.min(2000) };
+        let tolerance = if tolerance <= 0.0 { 1e-5 } else { tolerance };
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let result = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, max_iter, tolerance);
+        // Only commit a transaction if the solver actually changed something
+        // (final residual differs from initial).
+        if (result.initial_residual - result.final_residual).abs() > 1e-12 {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        } else {
+            self.scene.transactions.cancel();
+        }
+        format!(
+            r#"{{"converged":{},"iterations":{},"finalResidual":{:.9},"initialResidual":{:.9},"overConstrained":{}}}"#,
+            result.converged, result.iterations, result.final_residual,
+            result.initial_residual, result.over_constrained,
+        )
+    }
+
+    /// **Level 3**: max residual across all active constraints at current state.
+    /// For monitoring / UI status without mutating the mesh.
+    #[wasm_bindgen(js_name = "maxConstraintResidual")]
+    pub fn max_constraint_residual(&self) -> f64 {
+        max_residual(&self.scene.mesh, &self.scene.constraints)
     }
 
     /// Count of constraints (active + inactive).
