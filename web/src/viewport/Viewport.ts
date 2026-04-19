@@ -750,12 +750,18 @@ export class Viewport {
         polygonOffsetUnits: 1,
         vertexColors: useVertexColors,
       });
-      // Phase C1: build BVH on the shared geometry so intersectObjects is O(log N)
+      // Phase C1: build BVH on the shared geometry so intersectObjects is O(log N).
+      //
+      // ✱ Critical (2026-04-19): `indirect: true`를 주어야 index buffer를 permute하지
+      // 않음. 기본값(reorder)이면 geometry.index.array 순서가 뒤섞여서 faceMap(tri→faceId)
+      // 매핑이 어긋남 → 레이캐스트 hit.faceIndex가 다른 삼각형의 faceId를 반환 → 박스
+      // 클릭했는데 스피어가 선택되는 현상. indirect 모드는 별도 permutation 테이블을
+      // 유지해 원본 index 순서를 보존한다.
       const geoWithBvh = geometry as THREE.BufferGeometry & {
-        computeBoundsTree?: () => void;
+        computeBoundsTree?: (opts?: { indirect?: boolean }) => void;
       };
       if (typeof geoWithBvh.computeBoundsTree === 'function' && indices.length > 0) {
-        try { geoWithBvh.computeBoundsTree(); }
+        try { geoWithBvh.computeBoundsTree({ indirect: true }); }
         catch (e) { console.warn('[Viewport] BVH build failed:', e); }
       }
 
