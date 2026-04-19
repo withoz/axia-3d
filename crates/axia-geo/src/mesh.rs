@@ -325,6 +325,49 @@ impl Mesh {
         false
     }
 
+    /// 같은 boundary vertex 집합을 가진 중복 face들을 제거 (하나만 유지).
+    ///
+    /// 사용 시나리오: 사용자가 연속 drawLine 중 fan-split + loop-detect 경쟁으로 같은
+    /// 영역에 두 face가 생성되는 경우. 또는 split_face_by_line이 원본 face를 제대로
+    /// dissolve하지 못하고 sub-face와 함께 남는 경우.
+    ///
+    /// 알고리즘: boundary vertex 집합을 정렬된 키로 만들어 그룹핑. 그룹에 face가 2+이면
+    /// 첫 번째만 유지하고 나머지 remove.
+    /// 반환: 제거된 face_ids.
+    pub fn deduplicate_overlapping_faces(&mut self) -> Vec<FaceId> {
+        // vertex set key → 유지 face_id
+        let mut groups: FxHashMap<Vec<u32>, FaceId> = FxHashMap::default();
+        let mut to_remove: Vec<FaceId> = Vec::new();
+
+        let active_ids: Vec<FaceId> = self.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+
+        for fid in active_ids {
+            let face = match self.faces.get(fid) { Some(f) => f, None => continue };
+            if !face.is_active() { continue; }
+            let verts = match self.collect_loop_verts(face.outer().start) {
+                Ok(v) => v, Err(_) => continue,
+            };
+            if verts.len() < 3 { continue; }
+            let mut key: Vec<u32> = verts.iter().map(|v| v.raw()).collect();
+            key.sort();
+            if let Some(&existing) = groups.get(&key) {
+                if existing != fid {
+                    to_remove.push(fid);
+                }
+            } else {
+                groups.insert(key, fid);
+            }
+        }
+
+        for fid in &to_remove {
+            let _ = self.remove_face(*fid);
+        }
+        to_remove
+    }
+
     /// Face의 interior에 있는 vertex를 찾아 fan-tessellation으로 분할.
     ///
     /// 조건: vertex V가 face F의 2D 내부에 있고, V에서 F의 boundary vertex들로

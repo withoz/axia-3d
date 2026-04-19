@@ -785,6 +785,19 @@ impl Scene {
             }
         }
 
+        // ── Step 4.7: Overlapping face dedup ──
+        // fan_split + loop_detect 경쟁 또는 split_face 잔여물 등으로 같은 boundary를 가진
+        // 중복 face가 남으면 하나만 남기고 제거. 중복 제거 시 XIA 연결도 정리.
+        {
+            let removed = self.mesh.deduplicate_overlapping_faces();
+            for fid in removed {
+                // XIA face_ids 목록에서 제거
+                self.unregister_face_from_xia(fid);
+                // all_created_faces에서도 제거
+                all_created_faces.retain(|&f| f != fid);
+            }
+        }
+
         // ── Step 5: 결과 XIA 생성 ──
         if !all_created_faces.is_empty() {
             // 기존 standalone-edge XIA 정리
