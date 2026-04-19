@@ -44,6 +44,10 @@ impl Mesh {
 
         let v0 = self.add_vertex(start);
         let v1 = self.add_vertex(end);
+        // Snap/dedup 후 두 점이 동일 vertex로 귀결된 경우 self-loop 방지.
+        // draw_line은 사용자 드로잉 경로 — 자기참조 엣지는 의미 없으므로 거부.
+        // (add_edge 일반은 cone/sphere apex 등 정당한 pole 공유를 허용해야 하므로 건드리지 않음.)
+        ensure!(v0 != v1, "draw_line: start and end snap to same vertex — degenerate");
         let (edge_id, _) = self.add_edge(v0, v1)?;
         Ok((v0, v1, edge_id))
     }

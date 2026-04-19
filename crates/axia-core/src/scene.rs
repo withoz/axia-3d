@@ -653,7 +653,10 @@ impl Scene {
         let mut first_edge_id: Option<EdgeId> = None;
 
         for (seg_start, seg_end) in &segments {
-            if (*seg_end - *seg_start).length() < 1e-6 { continue; }
+            // 길이 0 세그먼트 + snap 오차로 인한 "사실상 동일" 세그먼트 거부.
+            // EPSILON_LENGTH(1e-6)보다 훨씬 큰 threshold(0.1mm)를 둬서 spatial_hash
+            // dedup과 일관되게 자기참조 엣지 생성을 원천 차단.
+            if (*seg_end - *seg_start).length() < 0.1 { continue; }
 
             // 먼저 draw_line으로 엣지 생성 (양쪽 끝에 vertex가 이미 있든 없든 add_vertex가
             // 기존 vertex를 재사용 — spatial_hash 기반 dedup).
@@ -661,6 +664,9 @@ impl Scene {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            // add_vertex dedup 이후 양 끝이 같은 vertex면 스킵 (drawLine 가드 통과했어도
+            // f64 snap이 두 점을 같은 vertex로 해석한 경우)
+            if v_a == v_b { continue; }
             if first_edge_id.is_none() { first_edge_id = Some(new_edge_id); }
             self.mesh.mark_edge_hard(new_edge_id);
 
