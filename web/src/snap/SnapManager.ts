@@ -52,6 +52,11 @@ export type SnapType =
   | 'parallel'        // 평행
   // 면 스냅
   | 'onFace'          // 면 위 투영점 (cursor ray ∩ face plane)
+  // 축 / 그리드 (SketchUp-style inference)
+  | 'axisX'           // X축 추론 (빨강)
+  | 'axisY'           // Y축 추론 (파랑)
+  | 'axisZ'           // Z축 추론 (초록)
+  | 'grid'            // 그리드 스냅
   // 기타
   | 'node'            // 노드
   | 'insertion'       // 삽입점
@@ -72,31 +77,51 @@ export interface SnapMarkerDef {
   labelEn: string;      // English label
 }
 
-// 스냅 마커 색상: 빨간색 통일
-const G = '#FF3333';   // 기본 스냅
-const Y = '#FF3333';   // 보조 스냅
-const M = '#FF3333';   // 특수 스냅
+// SketchUp-style color scheme (A2):
+//   endpoint=green, midpoint=cyan, intersection=red X, on-edge=magenta,
+//   on-face=blue, parallel/perp=pink, axis X=red Y=blue Z=green
+const C_ENDPOINT      = '#00C800';  // green
+const C_MIDPOINT      = '#00E0E0';  // cyan
+const C_INTERSECTION  = '#E02020';  // red
+const C_CENTER        = '#008000';  // darker green
+const C_PERPENDICULAR = '#E060B0';  // pink
+const C_PARALLEL      = '#E060B0';  // pink
+const C_TANGENT       = '#00B894';  // teal
+const C_QUADRANT      = '#008080';  // teal-dark
+const C_ON_EDGE       = '#D845D8';  // magenta
+const C_ON_FACE       = '#2E7BFF';  // blue
+const C_EXTENSION     = '#E060B0';  // pink dashed
+const C_AXIS_X        = '#E02020';  // red
+const C_AXIS_Y        = '#2E7BFF';  // blue
+const C_AXIS_Z        = '#00C800';  // green
+const C_GRID          = '#808080';  // grey
+const C_MISC          = '#FF8F2F';  // orange
+const C_LOOP_CLOSE    = '#00CC44';  // bright green
 
 export const SNAP_MARKERS: Record<SnapType, SnapMarkerDef> = {
-  endpoint:      { shape: 'square',        color: G, label: '끝점',         labelEn: 'Endpoint' },
-  midpoint:      { shape: 'triangle',      color: G, label: '중간점',       labelEn: 'Midpoint' },
-  intersection:  { shape: 'x',            color: G, label: '교차점',       labelEn: 'Intersection' },
-  apparent:      { shape: 'apparent',      color: G, label: '가상 교차점',   labelEn: 'Apparent Int.' },
-  extension:     { shape: 'extension',     color: G, label: '연장선',       labelEn: 'Extension' },
-  center:        { shape: 'circle',        color: G, label: '중심점',       labelEn: 'Center' },
-  geometric:     { shape: 'geometric',     color: G, label: '기하학적 중심', labelEn: 'Geo. Center' },
-  quadrant:      { shape: 'diamond',       color: G, label: '사분점',       labelEn: 'Quadrant' },
-  tangent:       { shape: 'circle',        color: G, label: '접점',         labelEn: 'Tangent' },
-  perpendicular: { shape: 'perpendicular', color: G, label: '수직점',       labelEn: 'Perpendicular' },
-  parallel:      { shape: 'parallel',      color: G, label: '평행',         labelEn: 'Parallel' },
-  onFace:        { shape: 'onFace',        color: G, label: '면 위',        labelEn: 'On Face' },
-  node:          { shape: 'dot',           color: G, label: '노드',         labelEn: 'Node' },
-  insertion:     { shape: 'plus',          color: G, label: '삽입',         labelEn: 'Insertion' },
-  nearest:       { shape: 'x',            color: Y, label: '근처점',       labelEn: 'Nearest' },
-  tempTrack:     { shape: 'plus',          color: Y, label: '임시 추적점',   labelEn: 'Temp Track' },
-  from:          { shape: 'dot',           color: M, label: '시작점',       labelEn: 'From' },
-  mid2p:         { shape: 'triangle',      color: Y, label: '2점 중간',     labelEn: 'Mid 2 Points' },
-  loopClose:     { shape: 'filledCircle',  color: '#00CC44', label: '루프 닫기', labelEn: 'Close Loop' },
+  endpoint:      { shape: 'square',        color: C_ENDPOINT,      label: '끝점',         labelEn: 'Endpoint' },
+  midpoint:      { shape: 'triangle',      color: C_MIDPOINT,      label: '중간점',       labelEn: 'Midpoint' },
+  intersection:  { shape: 'x',             color: C_INTERSECTION,  label: '교차점',       labelEn: 'Intersection' },
+  apparent:      { shape: 'apparent',      color: C_INTERSECTION,  label: '가상 교차점',   labelEn: 'Apparent Int.' },
+  extension:     { shape: 'extension',     color: C_EXTENSION,     label: '연장선',       labelEn: 'Extension' },
+  center:        { shape: 'circle',        color: C_CENTER,        label: '중심점',       labelEn: 'Center' },
+  geometric:     { shape: 'geometric',     color: C_CENTER,        label: '기하학적 중심', labelEn: 'Geo. Center' },
+  quadrant:      { shape: 'diamond',       color: C_QUADRANT,      label: '사분점',       labelEn: 'Quadrant' },
+  tangent:       { shape: 'circle',        color: C_TANGENT,       label: '접점',         labelEn: 'Tangent' },
+  perpendicular: { shape: 'perpendicular', color: C_PERPENDICULAR, label: '수직점',       labelEn: 'Perpendicular' },
+  parallel:      { shape: 'parallel',      color: C_PARALLEL,      label: '평행',         labelEn: 'Parallel' },
+  onFace:        { shape: 'onFace',        color: C_ON_FACE,       label: '면 위',        labelEn: 'On Face' },
+  axisX:         { shape: 'parallel',      color: C_AXIS_X,        label: 'X축',          labelEn: 'On Red Axis' },
+  axisY:         { shape: 'parallel',      color: C_AXIS_Y,        label: 'Y축',          labelEn: 'On Blue Axis' },
+  axisZ:         { shape: 'parallel',      color: C_AXIS_Z,        label: 'Z축',          labelEn: 'On Green Axis' },
+  grid:          { shape: 'plus',          color: C_GRID,          label: '그리드',       labelEn: 'Grid' },
+  node:          { shape: 'dot',           color: C_ON_EDGE,       label: '노드',         labelEn: 'Node' },
+  insertion:     { shape: 'plus',          color: C_MISC,          label: '삽입',         labelEn: 'Insertion' },
+  nearest:       { shape: 'x',             color: C_ON_EDGE,       label: '근처점',       labelEn: 'Nearest' },
+  tempTrack:     { shape: 'plus',          color: C_MISC,          label: '임시 추적점',   labelEn: 'Temp Track' },
+  from:          { shape: 'dot',           color: C_MISC,          label: '시작점',       labelEn: 'From' },
+  mid2p:         { shape: 'triangle',      color: C_MIDPOINT,      label: '2점 중간',     labelEn: 'Mid 2 Points' },
+  loopClose:     { shape: 'filledCircle',  color: C_LOOP_CLOSE,    label: '루프 닫기',     labelEn: 'Close Loop' },
 };
 
 export interface SnapPoint {
@@ -105,6 +130,8 @@ export interface SnapPoint {
   screenPos?: THREE.Vector2;     // screen pixel position
   distance?: number;             // screen distance from mouse (pixels)
   edgeRef?: { a: THREE.Vector3; b: THREE.Vector3 }; // edge reference for extension/parallel
+  /** A6: origin point for guide line rendering (axis/parallel/perpendicular) */
+  guideFrom?: THREE.Vector3;
 }
 
 export interface SnapConfig {
@@ -145,6 +172,10 @@ const SNAP_PRIORITY: Record<SnapType, number> = {
   insertion: 12,
   nearest: 13,
   onFace: 14,       // 면 투영은 다른 모드보다 낮은 우선순위 (edge/vertex 우선)
+  axisX: 8,         // 축 추론 — parallel과 동급 우선순위
+  axisY: 8,
+  axisZ: 8,
+  grid: 18,         // grid는 가장 낮은 우선순위 (SketchUp 관습)
   tempTrack: 15,
   from: 16,
   mid2p: 17,
@@ -174,6 +205,8 @@ export class SnapManager {
 
   // Last snap result
   private _lastSnap: SnapPoint | null = null;
+  /** performance.now() of the last snap — for A4 recency bonus */
+  private _lastSnapTime: number = 0;
 
   // Callbacks
   private _onSnapChange?: (snap: SnapPoint | null) => void;
@@ -190,6 +223,7 @@ export class SnapManager {
         'parallel',
         'extension',
         'onFace',
+        'axisX', 'axisY', 'axisZ',   // A3: 축 추론 기본 활성
       ]),
       pixelThreshold: 15,
       gridSpacing: 1000,
@@ -498,7 +532,7 @@ export class SnapManager {
       );
     };
 
-    const addCandidate = (type: SnapType, position: THREE.Vector3, screenPx: THREE.Vector2, edgeRef?: EdgeSegment) => {
+    const addCandidate = (type: SnapType, position: THREE.Vector3, screenPx: THREE.Vector2, edgeRef?: EdgeSegment, guideFrom?: THREE.Vector3) => {
       const dist = mousePx.distanceTo(screenPx);
       candidates.push({
         type,
@@ -506,6 +540,7 @@ export class SnapManager {
         screenPos: screenPx.clone(),
         distance: dist,
         edgeRef: edgeRef ? { a: edgeRef.a.clone(), b: edgeRef.b.clone() } : undefined,
+        guideFrom: guideFrom ? guideFrom.clone() : undefined,
       });
     };
 
@@ -618,7 +653,7 @@ export class SnapManager {
         if (!perp) continue;
         const s = toScreenPx(perp);
         if (s && mousePx.distanceTo(s) <= threshold) {
-          addCandidate('perpendicular', perp, s, edge);
+          addCandidate('perpendicular', perp, s, edge, this.referencePoint);
         }
       }
     }
@@ -632,7 +667,41 @@ export class SnapManager {
         if (!par) continue;
         const s = toScreenPx(par);
         if (s && mousePx.distanceTo(s) <= threshold * 1.5) {
-          addCandidate('parallel', par, s, edge);
+          addCandidate('parallel', par, s, edge, this.referencePoint);
+        }
+      }
+    }
+
+    // ── A3: Axis inference (X/Y/Z) — SketchUp style ──
+    // referencePoint가 있을 때(그리는 중) 세계 축 방향으로 스냅.
+    // 커서 방향이 축 ±axisSnapAngle 이내면 그 축에 투영.
+    if (this.referencePoint && groundPoint) {
+      const AXIS_ANGLE_DEG = 7.0;
+      const cosThresh = Math.cos(AXIS_ANGLE_DEG * Math.PI / 180);
+      const axes: Array<{ type: SnapType; dir: THREE.Vector3 }> = [
+        { type: 'axisX', dir: new THREE.Vector3(1, 0, 0) },
+        { type: 'axisY', dir: new THREE.Vector3(0, 1, 0) },
+        { type: 'axisZ', dir: new THREE.Vector3(0, 0, 1) },
+      ];
+      const delta = groundPoint.clone().sub(this.referencePoint);
+      const deltaLen = delta.length();
+      if (deltaLen > 1e-6) {
+        const dirN = delta.clone().divideScalar(deltaLen);
+        for (const ax of axes) {
+          if (!modes.has(ax.type)) continue;
+          const cosA = Math.abs(dirN.dot(ax.dir));
+          if (cosA < cosThresh) continue;
+          // Sign-aware projection onto axis
+          const sign = dirN.dot(ax.dir) >= 0 ? 1 : -1;
+          const projLen = delta.dot(ax.dir) * sign;
+          const signedDir = ax.dir.clone().multiplyScalar(sign);
+          const axisPt = this.referencePoint.clone()
+            .add(signedDir.multiplyScalar(projLen));
+          const s = toScreenPx(axisPt);
+          if (s && mousePx.distanceTo(s) <= threshold * 2) {
+            // A6: guideFrom = referencePoint → SnapVisual이 축 방향 점선 렌더
+            addCandidate(ax.type, axisPt, s, undefined, this.referencePoint);
+          }
         }
       }
     }
@@ -686,16 +755,42 @@ export class SnapManager {
       }
     }
 
+    // ── A1: Grid snap (가장 낮은 우선순위) ──
+    if (modes.has('grid') && groundPoint && this.config.gridSpacing > 0) {
+      const gs = this.config.gridSpacing;
+      const gridPt = new THREE.Vector3(
+        Math.round(groundPoint.x / gs) * gs,
+        Math.round(groundPoint.y / gs) * gs,
+        Math.round(groundPoint.z / gs) * gs,
+      );
+      const s = toScreenPx(gridPt);
+      if (s && mousePx.distanceTo(s) <= threshold * 1.5) {
+        addCandidate('grid', gridPt, s);
+      }
+    }
+
     // ── Pick best candidate ──
     if (candidates.length === 0) {
       this.setResult(null);
       return null;
     }
 
-    // Sort: priority, then screen distance
+    // A4: Recency bonus — 최근 N ms 내 같은 타입이 이겼으면 약간의 우선순위 가산.
+    // 사용자가 연속 작업 중 같은 스냅 타입을 선호하는 경향을 반영.
+    const RECENCY_MS = 400;
+    const now = performance.now();
+    const recentBonus = (t: SnapType): number => {
+      if (!this._lastSnap) return 0;
+      if (this._lastSnap.type !== t) return 0;
+      const age = now - (this._lastSnapTime || 0);
+      if (age > RECENCY_MS) return 0;
+      return -0.5; // priority 소폭 인하 = 살짝 유리하게
+    };
+
+    // Sort: (priority + recency), then screen distance
     candidates.sort((a, b) => {
-      const pa = SNAP_PRIORITY[a.type];
-      const pb = SNAP_PRIORITY[b.type];
+      const pa = SNAP_PRIORITY[a.type] + recentBonus(a.type);
+      const pb = SNAP_PRIORITY[b.type] + recentBonus(b.type);
       if (pa !== pb) return pa - pb;
       return (a.distance || 0) - (b.distance || 0);
     });
@@ -703,6 +798,7 @@ export class SnapManager {
     // Remove duplicates: if endpoint and nearest are at same position, keep endpoint
     const best = candidates[0];
     this.setResult(best);
+    this._lastSnapTime = now;
     return best;
   }
 

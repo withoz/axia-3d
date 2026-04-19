@@ -120,6 +120,35 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // A5: Snap 타입별 단축 토글 (Alt + E/M/I/C/P/L/F/G)
+    // Alt 조합으로 기존 단축키(X, Y, Z, H, V 등)와 충돌 방지
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+      const map: Record<string, string> = {
+        'e': 'endpoint', 'm': 'midpoint', 'i': 'intersection',
+        'c': 'center',   'p': 'perpendicular',
+        'l': 'parallel', 'f': 'onFace',   'g': 'grid',
+        'x': 'extension','n': 'nearest',
+      };
+      const mode = map[e.key.toLowerCase()];
+      if (mode) {
+        e.preventDefault();
+        const active = toolManager.snap.toggleMode(mode as never);
+        // Mirror change to checkbox panel
+        const cb = document.querySelector<HTMLInputElement>(
+          `input[data-mode="${mode}"]`);
+        if (cb) cb.checked = active;
+        // Briefly flash status bar
+        const statOsnap = document.getElementById('stat-osnap');
+        if (statOsnap) {
+          const txt = `${mode} ${active ? 'ON' : 'OFF'}`;
+          const prev = statOsnap.textContent;
+          statOsnap.textContent = txt;
+          setTimeout(() => { statOsnap.textContent = prev; }, 800);
+        }
+        return;
+      }
+    }
+
     // 화살표 키: 축 잠금 (SketchUp 스타일)
     if (e.key === 'ArrowRight') { e.preventDefault(); toolManager.setAxisLock('x'); return; }
     if (e.key === 'ArrowUp')    { e.preventDefault(); toolManager.setAxisLock('y'); return; }

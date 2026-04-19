@@ -75,6 +75,14 @@ export class SnapVisual {
       this.drawExtensionLine(snap, camera);
     }
 
+    // A6: Guide dashed line for relational snaps (axis / parallel / perpendicular)
+    if (camera && snap.guideFrom && (
+      snap.type === 'axisX' || snap.type === 'axisY' || snap.type === 'axisZ' ||
+      snap.type === 'parallel' || snap.type === 'perpendicular'
+    )) {
+      this.drawRelationalGuide(snap, camera);
+    }
+
     // Draw marker
     this.drawMarker(snap.type, x, y, marker.color);
 
@@ -389,6 +397,33 @@ export class SnapVisual {
     ctx.moveTo(origin.x, origin.y);
     ctx.lineTo(snapLocal.x, snapLocal.y);
     ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  /**
+   * A6: Dashed guide from `snap.guideFrom` to `snap.position` for relational
+   * snaps (axis / parallel / perpendicular). Uses the marker color.
+   */
+  private drawRelationalGuide(snap: SnapPoint, camera: THREE.Camera) {
+    if (!snap.guideFrom || !snap.screenPos) return;
+    const ctx = this.ctx;
+    const rect = this.container.getBoundingClientRect();
+    const projFrom = snap.guideFrom.clone().project(camera);
+    if (projFrom.z < -1 || projFrom.z > 1) return;
+    const fromX = (projFrom.x * 0.5 + 0.5) * rect.width;
+    const fromY = (-projFrom.y * 0.5 + 0.5) * rect.height;
+    const toX = snap.screenPos.x - rect.left;
+    const toY = snap.screenPos.y - rect.top;
+    const color = SNAP_MARKERS[snap.type]?.color ?? '#FF3333';
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(fromX, fromY);
+    ctx.lineTo(toX, toY);
+    ctx.stroke();
+    ctx.restore();
     ctx.setLineDash([]);
   }
 
