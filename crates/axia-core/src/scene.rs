@@ -785,6 +785,18 @@ impl Scene {
             }
         }
 
+        // ── Step 4.55: Nested face dissolve ──
+        // 다른 face를 감싸는 face(outer tri 안에 inner tri를 그린 경우)를 dissolve해서
+        // 경계 HE를 해방. D resolver가 이어서 wedge 영역들을 재구성.
+        {
+            let dissolved = self.mesh.dissolve_containing_faces();
+            for fid in dissolved {
+                // XIA 연결 정리
+                self.unregister_face_from_xia(fid);
+                all_created_faces.retain(|&f| f != fid);
+            }
+        }
+
         // ── Step 4.6: Planar free-face resolver (Phase D) ──
         // Leftmost-turn 기반으로 free HE 그래프의 모든 bounded region을 face로 확정.
         // 기존 face는 건드리지 않고 "빈 영역"만 채움.

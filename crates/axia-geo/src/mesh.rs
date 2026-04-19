@@ -552,6 +552,81 @@ impl Mesh {
         created
     }
 
+    /// 다른 활성 face를 **물리적으로 감싸는** face를 찾아 dissolve.
+    ///
+    /// 시나리오: 사용자가 outer triangle을 그린 뒤 그 내부에 inner triangle을
+    /// 그리고 connector 엣지까지 추가한 경우. Outer tri는 이미 face로 등록됐지만
+    /// 그 경계 HE가 inner tri + wedge 영역의 CCW 순회를 차단 → wedge 생성 실패.
+    /// Outer face를 dissolve해서 경계 HE를 해방시키면 D resolver가 inner+wedges를
+    /// 올바르게 재구성.
+    ///
+    /// 조건: face A의 centroid가 다른 face B의 2D polygon 내부 + 같은 평면.
+    /// 이때 B를 dissolve. B 자체가 다른 C를 감싸는 관계도 재귀적으로 처리 가능.
+    /// 반환: dissolve된 face_ids.
+    pub fn dissolve_containing_faces(&mut self) -> Vec<FaceId> {
+        let active: Vec<FaceId> = self.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        // 각 face의 2D polygon (y=0) + centroid 계산
+        struct FaceGeom { poly: Vec<(f64, f64)>, centroid: (f64, f64), y_avg: f64 }
+        let mut geoms: FxHashMap<FaceId, FaceGeom> = FxHashMap::default();
+        for &fid in &active {
+            let face = &self.faces[fid];
+            let boundary = match self.collect_loop_verts(face.outer().start) {
+                Ok(v) => v, Err(_) => continue,
+            };
+            if boundary.len() < 3 { continue; }
+            let pts: Vec<DVec3> = boundary.iter()
+                .filter_map(|&v| self.vertex_pos(v).ok())
+                .collect();
+            if pts.len() != boundary.len() { continue; }
+            // y=0 평면만 현재 지원
+            let y_avg: f64 = pts.iter().map(|p| p.y).sum::<f64>() / pts.len() as f64;
+            if y_avg.abs() > 0.5 { continue; }
+            let poly: Vec<(f64, f64)> = pts.iter().map(|p| (p.x, p.z)).collect();
+            let cx: f64 = pts.iter().map(|p| p.x).sum::<f64>() / pts.len() as f64;
+            let cz: f64 = pts.iter().map(|p| p.z).sum::<f64>() / pts.len() as f64;
+            geoms.insert(fid, FaceGeom { poly, centroid: (cx, cz), y_avg });
+        }
+
+        let point_in = |x: f64, y: f64, poly: &[(f64, f64)]| -> bool {
+            let mut inside = false;
+            let n = poly.len();
+            if n < 3 { return false; }
+            let mut j = n - 1;
+            for i in 0..n {
+                let (xi, yi) = poly[i];
+                let (xj, yj) = poly[j];
+                if ((yi > y) != (yj > y)) &&
+                   (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            inside
+        };
+
+        // 각 face가 다른 어떤 face를 "감싸는지" 판정 (B의 centroid가 A's polygon 내부)
+        let mut to_dissolve: FxHashSet<FaceId> = FxHashSet::default();
+        for (&outer, og) in &geoms {
+            for (&inner, ig) in &geoms {
+                if outer == inner { continue; }
+                if (og.y_avg - ig.y_avg).abs() > 0.5 { continue; }
+                if point_in(ig.centroid.0, ig.centroid.1, &og.poly) {
+                    // outer가 inner를 감쌈 → outer를 dissolve 대상에 추가
+                    to_dissolve.insert(outer);
+                }
+            }
+        }
+
+        let mut dissolved: Vec<FaceId> = Vec::new();
+        for fid in to_dissolve {
+            if self.remove_face(fid).is_ok() { dissolved.push(fid); }
+        }
+        dissolved
+    }
+
     /// 같은 boundary vertex 집합을 가진 중복 face들을 제거 (하나만 유지).
     ///
     /// 사용 시나리오: 사용자가 연속 drawLine 중 fan-split + loop-detect 경쟁으로 같은
