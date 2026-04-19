@@ -638,19 +638,27 @@ impl Mesh {
         //   4) Coplanarity 재검증
         //   5) add_face
         //
-        // 기존 face의 centroid 3D 좌표 수집 (local AABB prune에 사용)
-        let mut face_centroids: Vec<DVec3> = Vec::new();
+        // 기존 face의 centroid 3D 좌표 + 면적 수집 (local AABB prune + size check).
+        // 면적: cycle이 face를 "enclose"한다고 판단하려면 cycle이 face보다 커야 함.
+        // 작은 cycle 내부에 큰 face의 centroid가 우연히 떨어져도 실제로는 enclose 아님
+        // (예: outer rect 안에 inner rect 그릴 때 outer centroid가 inner 내부에 있음).
+        let mut face_info: Vec<(DVec3, f64)> = Vec::new();
         for (_, f) in self.faces.iter() {
             if !f.is_active() { continue; }
             let verts = match self.collect_loop_verts(f.outer().start) { Ok(v) => v, Err(_) => continue };
             if verts.is_empty() { continue; }
+            let pts: Vec<DVec3> = verts.iter().filter_map(|&v| self.vertex_pos(v).ok()).collect();
+            if pts.len() < 3 { continue; }
             let mut c = DVec3::ZERO;
-            let mut cnt = 0;
-            for &v in &verts {
-                if let Ok(p) = self.vertex_pos(v) { c += p; cnt += 1; }
+            for &p in &pts { c += p; }
+            let centroid = c / pts.len() as f64;
+            // 3D polygon area: 0.5 * |Σ (pi - p0) × (pi+1 - p0)|
+            let mut area_vec = DVec3::ZERO;
+            for i in 1..pts.len()-1 {
+                area_vec += (pts[i] - pts[0]).cross(pts[i+1] - pts[0]);
             }
-            if cnt == 0 { continue; }
-            face_centroids.push(c / cnt as f64);
+            let area = area_vec.length() * 0.5;
+            face_info.push((centroid, area));
         }
 
         let point_in_poly_2d = |px: f64, py: f64, poly: &[(f64, f64)]| -> bool {
@@ -721,9 +729,13 @@ impl Mesh {
             let dx = (max_x - min_x).max(1e-3) * 0.05;
             let dy = (max_y - min_y).max(1e-3) * 0.05;
 
-            // (B) Local-containment — AABB 내부의 face centroid만 enclose 검사
+            // (B) Local-containment — AABB 내부의 face centroid만 enclose 검사.
+            // 단, cycle이 face보다 작으면 물리적으로 enclose 불가 → skip (outer rect 안에
+            // inner rect 그리는 경우 outer centroid가 inner 내부라도 inner가 outer를
+            // 감싸는 건 아님).
             let mut encloses_existing = false;
-            for &c in &face_centroids {
+            for &(c, face_area) in &face_info {
+                if face_area >= area { continue; } // 작은 cycle은 큰 face를 enclose 못 함
                 // 평면 거리 (같은 평면의 face만 의미 있음)
                 let d = (c - p0).dot(normal).abs();
                 if d > tol * 10.0 { continue; }
@@ -838,30 +850,55 @@ impl Mesh {
             inside
         };
 
-        // 각 outer face에 대해 inner face가 "같은 평면" + "polygon 내부"인지 검사
+        // 각 outer face에 대해 inner face가 "같은 평면" + "polygon 내부" + "connector edge 존재"
+        // 인 경우에만 dissolve. connector가 없는 단순 중첩(예: 사각형 안의 사각형)은
+        // 사용자의 의도된 구조로 간주해 **보존**.
+        //
+        // connector 정의: outer boundary vertex와 inner boundary vertex를 연결하는 edge.
+        // 이것이 있으면 wedge 재구성이 필요 → dissolve. 없으면 dissolve 불필요.
         let mut to_dissolve: FxHashSet<FaceId> = FxHashSet::default();
         for (&outer, og) in &geoms {
+            // outer boundary vertex 수집
+            let outer_boundary_verts: FxHashSet<VertId> = self.collect_loop_verts(
+                self.faces[outer].outer().start
+            ).unwrap_or_default().into_iter().collect();
+
             for (&inner, ig) in &geoms {
                 if outer == inner { continue; }
-                // 같은 평면인지 (normal 평행 + centroid 평면 거리 작음)
                 let n_dot = og.normal.dot(ig.normal).abs();
-                if n_dot < 0.99 { continue; } // 평면 불일치
-                // inner centroid를 outer 평면에 투영해 polygon-in 검사
+                if n_dot < 0.99 { continue; }
                 let v = ig.centroid_3d - og.origin;
                 let dist = v.dot(og.normal).abs();
-                // Relative tolerance — outer의 최장 chord 기준
                 let mut max_chord_sq = 0.0_f64;
                 for i in 0..og.poly_2d.len() {
                     let (x, y) = og.poly_2d[i];
                     max_chord_sq = max_chord_sq.max(x*x + y*y);
                 }
-                let plane_tol = (max_chord_sq.sqrt() * 1e-4).max(1.0); // 최소 1mm
-                if dist > plane_tol { continue; } // 다른 평면
+                let plane_tol = (max_chord_sq.sqrt() * 1e-4).max(1.0);
+                if dist > plane_tol { continue; }
                 let px = v.dot(og.e1);
                 let py = v.dot(og.e2);
-                if point_in(px, py, &og.poly_2d) {
+                if !point_in(px, py, &og.poly_2d) { continue; }
+
+                // Connector 검사: outer boundary vertex ↔ inner boundary vertex 엣지
+                let inner_boundary_verts: FxHashSet<VertId> = self.collect_loop_verts(
+                    self.faces[inner].outer().start
+                ).unwrap_or_default().into_iter().collect();
+
+                let has_connector = self.vert_to_edge.iter().any(|(key, &eid)| {
+                    if !self.edges[eid].is_active() { return false; }
+                    let a_in_outer = outer_boundary_verts.contains(&key.v_small);
+                    let a_in_inner = inner_boundary_verts.contains(&key.v_small);
+                    let b_in_outer = outer_boundary_verts.contains(&key.v_large);
+                    let b_in_inner = inner_boundary_verts.contains(&key.v_large);
+                    // outer ↔ inner 연결 (한쪽 끝은 outer, 다른 끝은 inner)
+                    (a_in_outer && b_in_inner) || (a_in_inner && b_in_outer)
+                });
+
+                if has_connector {
                     to_dissolve.insert(outer);
                 }
+                // connector 없으면 중첩 유지 (사용자 의도).
             }
         }
 
