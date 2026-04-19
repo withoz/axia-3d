@@ -216,8 +216,10 @@ impl Mesh {
         let len_sq = dir.length_squared();
         if len_sq < 1e-18 { return Vec::new(); }
         let len = len_sq.sqrt();
-        let perp_tol = (len * 1e-5).max(1e-4); // 선분에서의 수직 거리 허용
-        let endpoint_tol = (len * 1e-4).max(1e-3);
+        // 선분 수직 거리 허용치: 길이의 0.001% 또는 dedup_tol 중 큰 값.
+        let perp_tol = (len * 1e-5).max(SPATIAL_HASH_CELL * 1.5);
+        // Endpoint 일치 판정: add_vertex dedup_tol과 동일.
+        let endpoint_tol = SPATIAL_HASH_CELL * 1.5;
         let dir_norm = dir / len;
 
         let mut result = Vec::new();
@@ -254,9 +256,11 @@ impl Mesh {
         let dir = end - start;
         let len = dir.length();
         if len < 1e-9 { return Vec::new(); }
-        // Relative tolerance based on line length
+        // Relative coplanarity tolerance (line scale의 0.01%).
         let coplanar_tol = (len * 1e-4).max(1e-3);
-        let endpoint_tol = (len * 1e-4).max(1e-3);
+        // Endpoint-on-vertex 판정 tolerance — add_vertex의 dedup_tol(= SPATIAL_HASH_CELL*1.5 = 1.5μm)과 일치
+        // 시켜서 vertex dedup과 crossing 판정이 서로 어긋나지 않도록 함.
+        let endpoint_tol = SPATIAL_HASH_CELL * 1.5;
 
         let mut crossings = Vec::new();
         for (edge_id, edge) in self.edges.iter() {
