@@ -579,17 +579,121 @@ impl Mesh {
             cycles.push(verts);
         }
 
-        // Step 5: Signed area로 bounded/outer 구분 (2D 투영 좌표 기반)
+        // Step 5: Filters + face 생성
+        //
+        // 필터 순서 (싼 것부터):
+        //   1) Signed area — bounded vs outer (기존)
+        //   2) (A) Strip rejection — compactness 너무 낮으면 거부 (collinear strip loop)
+        //   3) 기존 face 포함 검사 (B) — **local AABB 내부에 centroid가 있는 face만** 검사
+        //   4) Coplanarity 재검증
+        //   5) add_face
+        //
+        // 기존 face의 centroid 3D 좌표 수집 (local AABB prune에 사용)
+        let mut face_centroids: Vec<DVec3> = Vec::new();
+        for (_, f) in self.faces.iter() {
+            if !f.is_active() { continue; }
+            let verts = match self.collect_loop_verts(f.outer().start) { Ok(v) => v, Err(_) => continue };
+            if verts.is_empty() { continue; }
+            let mut c = DVec3::ZERO;
+            let mut cnt = 0;
+            for &v in &verts {
+                if let Ok(p) = self.vertex_pos(v) { c += p; cnt += 1; }
+            }
+            if cnt == 0 { continue; }
+            face_centroids.push(c / cnt as f64);
+        }
+
+        let point_in_poly_2d = |px: f64, py: f64, poly: &[(f64, f64)]| -> bool {
+            let mut inside = false;
+            let n = poly.len();
+            if n < 3 { return false; }
+            let mut j = n - 1;
+            for i in 0..n {
+                let (xi, yi) = poly[i];
+                let (xj, yj) = poly[j];
+                if ((yi > py) != (yj > py)) &&
+                   (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            inside
+        };
+
         let mut created: Vec<FaceId> = Vec::new();
         for verts in &cycles {
-            let mut area2 = 0.0;
-            for i in 0..verts.len() {
-                let p = vert_2d.get(&verts[i]).copied().unwrap_or((0.0, 0.0));
-                let q = vert_2d.get(&verts[(i + 1) % verts.len()]).copied().unwrap_or((0.0, 0.0));
-                area2 += p.0 * q.1 - q.0 * p.1;
+            // 2D 좌표 시퀀스
+            let poly_2d: Vec<(f64, f64)> = verts.iter()
+                .map(|v| vert_2d.get(v).copied().unwrap_or((0.0, 0.0)))
+                .collect();
+            if poly_2d.len() < 3 { continue; }
+
+            // 1) Signed area
+            let mut signed_area2 = 0.0;
+            for i in 0..poly_2d.len() {
+                let p = poly_2d[i];
+                let q = poly_2d[(i + 1) % poly_2d.len()];
+                signed_area2 += p.0 * q.1 - q.0 * p.1;
             }
-            if area2 <= 0.0 { continue; }
+            if signed_area2 <= 0.0 { continue; } // outer (CW) — skip
+
+            let area = signed_area2.abs() * 0.5;
+
+            // Perimeter
+            let mut perimeter = 0.0;
+            for i in 0..poly_2d.len() {
+                let p = poly_2d[i];
+                let q = poly_2d[(i + 1) % poly_2d.len()];
+                let dx = q.0 - p.0;
+                let dy = q.1 - p.1;
+                perimeter += (dx*dx + dy*dy).sqrt();
+            }
+            if perimeter < 1e-6 { continue; }
+
+            // (A) Strip rejection — normalized compactness (4π·area/perimeter²)
+            // 원=1.0, 정사각형≈0.785, 10:1 사각형≈0.025, 100:1 strip≈0.003
+            // 임계값 0.001: 극단적으로 얇은 strip만 거부.
+            let compactness = 4.0 * std::f64::consts::PI * area / (perimeter * perimeter);
+            if compactness < 0.001 { continue; }
+
+            // Cycle의 2D AABB
+            let mut min_x = f64::INFINITY;
+            let mut max_x = f64::NEG_INFINITY;
+            let mut min_y = f64::INFINITY;
+            let mut max_y = f64::NEG_INFINITY;
+            for &(x, y) in &poly_2d {
+                if x < min_x { min_x = x; }
+                if x > max_x { max_x = x; }
+                if y < min_y { min_y = y; }
+                if y > max_y { max_y = y; }
+            }
+            // 5% expansion — δ
+            let dx = (max_x - min_x).max(1e-3) * 0.05;
+            let dy = (max_y - min_y).max(1e-3) * 0.05;
+
+            // (B) Local-containment — AABB 내부의 face centroid만 enclose 검사
+            let mut encloses_existing = false;
+            for &c in &face_centroids {
+                // 평면 거리 (같은 평면의 face만 의미 있음)
+                let d = (c - p0).dot(normal).abs();
+                if d > tol * 10.0 { continue; }
+                let cx = (c - p0).dot(e1);
+                let cy = (c - p0).dot(e2);
+                // Local AABB prune
+                if cx < min_x - dx || cx > max_x + dx { continue; }
+                if cy < min_y - dy || cy > max_y + dy { continue; }
+                // 최종 point-in-polygon
+                if point_in_poly_2d(cx, cy, &poly_2d) {
+                    encloses_existing = true;
+                    break;
+                }
+            }
+            if encloses_existing { continue; }
+
+            // Coplanarity 재검증
             if !self.are_verts_coplanar(verts) { continue; }
+
+            // Face 생성
             if let Ok(fid) = self.add_face(verts, material) {
                 created.push(fid);
             }
