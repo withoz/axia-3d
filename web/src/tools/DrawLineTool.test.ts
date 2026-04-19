@@ -104,7 +104,7 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
 
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 100, 0, 0);
+      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 100, 0, 0, 0, 1, 0);
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
@@ -148,7 +148,7 @@ describe('DrawLineTool', () => {
       tool.onActivate();
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.applyVCBValue(500);
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 500, 0, 0);
+      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 500, 0, 0, 0, 1, 0);
     });
 
     it('does nothing when not in Drawing state', () => {
@@ -190,7 +190,7 @@ describe('DrawLineTool', () => {
 
       // splitFaceByLine was called but returned error → fallback to drawLine
       expect(ctx.bridge.splitFaceByLine).toHaveBeenCalled();
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90);
+      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90, 0, 1, 0);
     });
 
     it('falls back to drawLine when splitFaceByLine throws', () => {
@@ -202,7 +202,7 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
 
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90);
+      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90, 0, 1, 0);
     });
 
     it('uses regular drawLine when start and end are on different faces', () => {

@@ -434,9 +434,13 @@ export class DrawLineTool implements ITool {
     // ─── Regular draw line path ───
     const facesBefore = this.ctx.bridge.faceCount();
 
+    // 그리기 평면의 normal을 hint로 전달 — WASM이 면 생성 시 winding을
+    // 맞춰 일관된 방향으로 normal이 나오도록 함 (CW/CCW 드로잉 상관없이).
+    const n = this.drawingPlane?.normal;
     this.ctx.bridge.drawLine(
       this.startPoint.x, this.startPoint.y, this.startPoint.z,
       this.previewEnd.x, this.previewEnd.y, this.previewEnd.z,
+      n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
     );
 
     const facesAfter = this.ctx.bridge.faceCount();
@@ -605,9 +609,11 @@ export class DrawLineTool implements ITool {
   private fallbackDrawLine(start: THREE.Vector3, end: THREE.Vector3, len: number): boolean {
     const facesBefore = this.ctx.bridge.faceCount();
 
+    const n = this.drawingPlane?.normal;
     this.ctx.bridge.drawLine(
       start.x, start.y, start.z,
       end.x, end.y, end.z,
+      n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
     );
 
     const facesAfter = this.ctx.bridge.faceCount();
