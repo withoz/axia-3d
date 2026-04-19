@@ -20,41 +20,19 @@ export interface InitialSceneDeps {
 }
 
 export function loadInitialScene(deps: InitialSceneDeps): void {
-  const { bridge, fileManager, toolManager, updateFileStatus } = deps;
+  const { bridge, toolManager, updateFileStatus } = deps;
 
-  debugLog('[Init] Loading initial scene from saved project...');
-
-  fetch('/assets/AXiA_Project_2026-04-13.xia')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to load initial scene file');
-      return response.arrayBuffer();
-    })
-    .then(async (arrayBuffer) => {
-      const fileData = new Uint8Array(arrayBuffer);
-      debugLog(`[Init] Initial scene file loaded: ${fileData.length} bytes`);
-
-      // FileManager의 파싱 로직 재사용 (중복 제거)
-      const success = await fileManager.loadFromArrayBuffer(fileData);
-
-      if (success) {
-        updateFileStatus(fileManager.getCurrentFileName());
-        debugLog('[Init] Initial scene loaded successfully');
-        // 메시 동기화 — 성공 시에만
-        toolManager.syncMesh();
-      } else {
-        console.error('[Init] Failed to import snapshot — creating fallback scene');
-        createFallbackScene(bridge, toolManager);
-      }
-    })
-    .catch(err => {
-      console.error('[Init] Failed to load initial scene:', err);
-      createFallbackScene(bridge, toolManager);
-    });
+  // 2026-04-19: 저장된 .xia 파일 대신 매번 프레시한 기본 도형을 그려서 시작.
+  // (저장 파일에서 오는 잔여 상태 회피 + 최신 BVH/edge 경로 테스트)
+  debugLog('[Init] Creating initial scene with default shapes...');
+  updateFileStatus('untitled');
+  void deps.fileManager; // suppress unused (fileManager는 이후 save 경로에서 사용)
+  createInitialScene(bridge, toolManager);
 }
 
-/** Fallback: 기본 도형 생성 (파일 로드 실패 시) */
-function createFallbackScene(bridge: WasmBridge, toolManager: ToolManager): void {
-  debugLog('[Init] Creating fallback scene with default shapes...');
+/** 기본 도형 생성: cylinder + box + sphere. */
+function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void {
+  debugLog('[Init] Creating initial scene with default shapes...');
 
   // Use async IIFE to sequence WASM calls, each in its own microtask
   // to avoid wasm-bindgen RefCell borrow conflicts
