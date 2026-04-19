@@ -268,6 +268,7 @@ export class ToolManager {
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
     'delete', 'flip-faces', 'merge-faces', 'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
+    'constrain-edge-length', 'split-edge-midpoint',
   ]);
 
   /** 사용자 친화 명령어 이름 (Toast 메시지용) */
@@ -281,6 +282,8 @@ export class ToolManager {
     'constrain-parallel': '평행 정렬',
     'constrain-perpendicular': '수직 정렬',
     'constrain-collinear': '동일 선상 정렬',
+    'constrain-edge-length': '엣지 길이 고정',
+    'split-edge-midpoint': '엣지 중점 분할',
   };
 
   executeAction(action: string): void {
@@ -365,6 +368,71 @@ export class ToolManager {
       } else {
         const err = this.bridge.lastError();
         Toast.warning(err || '통합할 수 있는 인접 coplanar 면이 없습니다');
+      }
+    } else if (action === 'split-edge-midpoint') {
+      // 1개 엣지 선택 → 중점에서 split
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length !== 1) {
+        Toast.warning('1개의 엣지를 선택해야 합니다');
+        return;
+      }
+      const edgeId = edges[0];
+      const eps = this.bridge.getEdgeEndpoints(edgeId);
+      if (eps.length !== 2) { Toast.error('엣지 엔드포인트 조회 실패'); return; }
+      const p0 = this.bridge.getVertexPos(eps[0]);
+      const p1 = this.bridge.getVertexPos(eps[1]);
+      if (!p0 || !p1) { Toast.error('엣지 좌표 조회 실패'); return; }
+      const mx = (p0[0] + p1[0]) / 2;
+      const my = (p0[1] + p1[1]) / 2;
+      const mz = (p0[2] + p1[2]) / 2;
+      const newVid = this.bridge.splitEdge(edgeId, mx, my, mz);
+      if (newVid >= 0) {
+        this.selection.clearSelection();
+        this.syncMesh();
+        Toast.info(`엣지 중점 분할 → 새 vertex ${newVid}`, 1800);
+        debugLog(`[Action] split-edge-midpoint: edge=${edgeId} → vert=${newVid}`);
+      } else {
+        const err = this.bridge.lastError();
+        Toast.error(err || '엣지 분할 실패', 3000);
+      }
+    } else if (action === 'constrain-edge-length') {
+      // 선택된 1개 엣지의 길이를 고정 — 양 끝 vertex 간 Distance 제약으로 변환.
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length !== 1) {
+        Toast.warning('1개의 엣지를 선택해야 합니다');
+        return;
+      }
+      const edgeId = edges[0];
+      const eps = this.bridge.getEdgeEndpoints(edgeId);
+      if (eps.length !== 2) {
+        Toast.error('엣지 엔드포인트 조회 실패');
+        return;
+      }
+      const p0 = this.bridge.getVertexPos(eps[0]);
+      const p1 = this.bridge.getVertexPos(eps[1]);
+      if (!p0 || !p1) { Toast.error('엣지 좌표 조회 실패'); return; }
+      const current = Math.sqrt(
+        (p1[0]-p0[0])**2 + (p1[1]-p0[1])**2 + (p1[2]-p0[2])**2
+      );
+      const promptText = `엣지 길이 (현재 ${current.toFixed(2)} mm):`;
+      const input = window.prompt(promptText, current.toFixed(2));
+      if (input == null) return;
+      const target = parseFloat(input);
+      if (!(target > 0) || !Number.isFinite(target)) {
+        Toast.warning('유효한 양수 값을 입력하세요');
+        return;
+      }
+      const id = this.bridge.addDistanceConstraint(eps[0], eps[1], target);
+      if (id > 0) {
+        this.syncMesh();
+        Toast.info(`엣지 길이 제약 추가 (id=${id}, ${target.toFixed(2)} mm)`, 2200);
+        debugLog(`[Action] constrain-edge-length: edge=${edgeId}, verts=${eps[0]},${eps[1]}, length=${target}`);
+        const cp = (window as unknown as { __axia_constraintPanel?: { refresh: () => void } })
+          .__axia_constraintPanel;
+        cp?.refresh();
+      } else {
+        const err = this.bridge.lastError();
+        Toast.error(err || '엣지 길이 제약 생성 실패', 3000);
       }
     } else if (action === 'constrain-parallel' || action === 'constrain-perpendicular' || action === 'constrain-collinear') {
       // Constraint Solver Level 2 — persistent graph.

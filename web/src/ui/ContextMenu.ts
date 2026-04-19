@@ -78,11 +78,17 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = hasSelection ? '' : 'none';
     });
 
-    // ── Edge constraint 항목 — 정확히 2개 엣지 선택 시만 표시 ──
+    // ── Edge constraint (2엣지) 항목 ──
     const edgeItems = ctxMenu.querySelectorAll('.ctx-edge-item');
     const selectedEdges = toolManager.selection.getSelectedEdges().length;
     edgeItems.forEach(item => {
       (item as HTMLElement).style.display = selectedEdges === 2 ? '' : 'none';
+    });
+
+    // ── 1엣지 전용 항목 (길이/중점 분할) ──
+    const edge1Items = ctxMenu.querySelectorAll('.ctx-edge1-item');
+    edge1Items.forEach(item => {
+      (item as HTMLElement).style.display = selectedEdges === 1 ? '' : 'none';
     });
 
     // 화면 밖으로 나가지 않도록 위치 조정
@@ -117,6 +123,8 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'constrain-parallel':
       case 'constrain-perpendicular':
       case 'constrain-collinear':
+      case 'constrain-edge-length':
+      case 'split-edge-midpoint':
         toolManager.executeAction(action);
         break;
       case 'select-all': toolManager.executeAction('select-all'); break;

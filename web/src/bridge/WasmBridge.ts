@@ -70,6 +70,7 @@ type AxiaEngineExtended = AxiaEngine & {
   rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
+  splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
   // Constraint Solver Level 2 (persistent graph)
   addEdgeConstraint?(kind: string, eaVa: number, eaVb: number, ebVa: number, ebVb: number): number;
   addDistanceConstraint?(vA: number, vB: number, distance: number): number;
@@ -560,6 +561,22 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] getEdgeEndpoints failed:', e);
       return [];
+    }
+  }
+
+  /**
+   * Edge를 지정 위치에서 split — 새 vertex 생성하고 edge를 2개로 나눔.
+   * 성공 시 새 vertex id, 실패 시 -1.
+   * 단일 undo 스텝.
+   */
+  splitEdge(edgeId: number, px: number, py: number, pz: number): number {
+    if (!this.engine?.splitEdge) return -1;
+    this.markDirty();
+    try {
+      return this.engine.splitEdge(edgeId, px, py, pz);
+    } catch (e) {
+      console.error('[WasmBridge] splitEdge failed:', e);
+      return -1;
     }
   }
 

@@ -435,6 +435,39 @@ AXiA Snap 시스템은 SketchUp 수준의 계층적 추론(Inference) 엔진을 
 - **C3 Worker thread**: 씬 규모 ~수백 face에서 ROI 낮음
 - **C4 GPU picking**: BVH로 CPU pick 충분히 빠름, edge picking 시 재고
 
+## Constraint Solver (Level 1/2/3 — 2026-04-19 완성)
+
+파라메트릭 CAD 스타일 구속 시스템.
+
+### Level 1 — One-shot apply (`ConstraintCommands.ts`)
+`makeParallel/makePerpendicular/makeCollinear` — 선택된 2 엣지에 즉시 기하 조정.
+지속 관계 저장 안 함.
+
+### Level 2 — Persistent graph (`axia-core/constraint.rs` + `Scene.constraints`)
+- `ConstraintGraph`: VertId pair 기반 reference (edge split에 견고)
+- `addEdgeConstraint(kind)` / `addDistanceConstraint(vA, vB, distance)`
+- `removeConstraint` / `setConstraintActive` / `listConstraints`
+- snapshot에 포함 → undo/redo + AXIA 파일 저장 시 유지 (roundtrip 검증 완료)
+- 모든 transform 후 자동 resolve
+
+### Level 3 — Iterative XPBD solver
+- `resolveConstraintsIterative(max_iter, tolerance)` — 순차 투영 반복
+- Residual 정의: Parallel/Perpendicular/Collinear/Distance
+- Stagnation heuristic → `overConstrained` 조기 종료
+- 체인 전파 (A‖B‖C) 자동 수렴
+
+### UI — ConstraintPanel (`J` 키)
+우측 사이드바 패널:
+- 제약 목록 (id, kind icon, refs, active, 삭제)
+- 상태바: 개수 + residual + 수렴 아이콘 (✓/⚠)
+- ⟳ 모두 해결 / ✕ ALL 모두 삭제
+- 컬러: ∥ 평행, ⊥ 수직, — 동일 선상, ↔ 거리
+
+### 사용법
+**평행/수직/동일 선상**: 엣지 2개 선택 → 우클릭 → "엣지 평행/수직/동일 선상 정렬"
+**엣지 길이 고정**: 엣지 1개 선택 → 우클릭 → "엣지 길이 설정…" → 값 입력
+**엣지 중점 분할**: 엣지 1개 선택 → 우클릭 → "엣지 중점 분할"
+
 ## 향후 과제
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Constraint Solver (수직, 평행, 거리 고정 — 파라메트릭)

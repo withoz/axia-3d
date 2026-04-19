@@ -385,6 +385,13 @@ export class AxiaEngine {
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
     /**
+     * Edge를 지정 위치에서 split하여 새 vertex를 생성하고 edge를 2개로 나눈다.
+     * 반환: 성공 시 새 vertex id (>=0), 실패 시 -1.
+     * position이 엣지 선분 밖이면 가까운 쪽으로 clamp.
+     * 내부적으로 mesh.split_edge를 호출하고 단일 undo 트랜잭션으로 감쌈.
+     */
+    splitEdge(edge_id_raw: number, px: number, py: number, pz: number): number;
+    /**
      * Split a face by drawing a line segment across it.
      *
      * Both endpoints should be on the face's boundary (on an edge or at a vertex).
@@ -559,6 +566,7 @@ export interface InitOutput {
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+    readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;

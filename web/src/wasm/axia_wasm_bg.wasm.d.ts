@@ -82,6 +82,7 @@ export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: numbe
 export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+export const axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const axiaengine_toggle_group_lock: (a: number, b: number) => number;
 export const axiaengine_toggle_group_visibility: (a: number, b: number) => number;

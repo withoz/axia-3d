@@ -1218,6 +1218,21 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Edge를 지정 위치에서 split하여 새 vertex를 생성하고 edge를 2개로 나눈다.
+     * 반환: 성공 시 새 vertex id (>=0), 실패 시 -1.
+     * position이 엣지 선분 밖이면 가까운 쪽으로 clamp.
+     * 내부적으로 mesh.split_edge를 호출하고 단일 undo 트랜잭션으로 감쌈.
+     * @param {number} edge_id_raw
+     * @param {number} px
+     * @param {number} py
+     * @param {number} pz
+     * @returns {number}
+     */
+    splitEdge(edge_id_raw, px, py, pz) {
+        const ret = wasm.axiaengine_splitEdge(this.__wbg_ptr, edge_id_raw, px, py, pz);
+        return ret;
+    }
+    /**
      * Split a face by drawing a line segment across it.
      *
      * Both endpoints should be on the face's boundary (on an edge or at a vertex).

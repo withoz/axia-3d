@@ -2027,6 +2027,51 @@ impl AxiaEngine {
         }
     }
 
+    /// Edge를 지정 위치에서 split하여 새 vertex를 생성하고 edge를 2개로 나눈다.
+    /// 반환: 성공 시 새 vertex id (>=0), 실패 시 -1.
+    /// position이 엣지 선분 밖이면 가까운 쪽으로 clamp.
+    /// 내부적으로 mesh.split_edge를 호출하고 단일 undo 트랜잭션으로 감쌈.
+    #[wasm_bindgen(js_name = "splitEdge")]
+    pub fn split_edge(&mut self, edge_id_raw: u32, px: f64, py: f64, pz: f64) -> i32 {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            self.set_error(format!("Edge {} not found", edge_id_raw));
+            return -1;
+        }
+        // Clamp position onto the edge segment for safety
+        let pos = {
+            let edge = &self.scene.mesh.edges[eid];
+            let p0 = self.scene.mesh.vertex_pos(edge.v_small()).unwrap_or(DVec3::ZERO);
+            let p1 = self.scene.mesh.vertex_pos(edge.v_large()).unwrap_or(DVec3::ZERO);
+            let p  = DVec3::new(px, py, pz);
+            let d  = p1 - p0;
+            let len_sq = d.length_squared();
+            if len_sq < 1e-12 {
+                p0
+            } else {
+                let t = ((p - p0).dot(d) / len_sq).clamp(0.05, 0.95);
+                p0 + d * t
+            }
+        };
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        match self.scene.mesh.split_edge(eid, pos) {
+            Ok((vp, _e1, _e2)) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                vp.raw() as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                self.set_error(format!("split_edge: {}", e));
+                -1
+            }
+        }
+    }
+
     /// Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
     /// 실패 시 빈 벡터.
     #[wasm_bindgen(js_name = "getEdgeEndpoints")]
