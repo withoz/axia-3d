@@ -5,6 +5,17 @@ export class AxiaEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Add a distance constraint between two vertices.
+     */
+    addDistanceConstraint(v_a: number, v_b: number, distance: number): number;
+    /**
+     * Add a parallel/perpendicular/collinear constraint between two edges.
+     * `edgeA_v_a/b` and `edgeB_v_a/b` are vertex IDs.
+     * `kind`: "parallel" | "perpendicular" | "collinear"
+     * Returns the new constraint ID (>=1) on success, 0 on failure.
+     */
+    addEdgeConstraint(kind: string, edge_a_v_a: number, edge_a_v_b: number, edge_b_v_a: number, edge_b_v_b: number): number;
+    /**
      * 그룹에 face 추가
      */
     add_faces_to_group(group_id: number, face_ids: Uint32Array): boolean;
@@ -26,6 +37,10 @@ export class AxiaEngine {
     boolean_op(faces_a: Uint32Array, faces_b: Uint32Array, op: string): string;
     can_redo(): boolean;
     can_undo(): boolean;
+    /**
+     * Count of constraints (active + inactive).
+     */
+    constraintCount(): number;
     /**
      * Create a cone primitive.
      * Returns the base face ID for Push/Pull operations.
@@ -250,6 +265,11 @@ export class AxiaEngine {
      */
     lastError(): string;
     /**
+     * List all constraints as JSON.
+     * Format: [{id, kind, active, refs:[...], value}, ...]
+     */
+    listConstraints(): string;
+    /**
      * 그룹을 컴포넌트로 변환
      */
     make_component(group_id: number, name: string): number;
@@ -311,6 +331,10 @@ export class AxiaEngine {
     push_pull_smooth_group_seamless(face_ids: Uint32Array, dist: number): boolean;
     redo(): boolean;
     /**
+     * Remove a constraint by ID. Returns true on success.
+     */
+    removeConstraint(id: number): boolean;
+    /**
      * 그룹에서 face 제거
      */
     remove_faces_from_group(group_id: number, face_ids: Uint32Array): boolean;
@@ -322,6 +346,11 @@ export class AxiaEngine {
      * 그룹 이름 변경
      */
     rename_group(group_id: number, new_name: string): boolean;
+    /**
+     * Re-solve all active constraints. Returns number of constraints that
+     * actually moved geometry.
+     */
+    resolveAllConstraints(): number;
     /**
      * 지정 정점을 center/axis 기준으로 회전.
      */
@@ -336,6 +365,10 @@ export class AxiaEngine {
      * cx,cy,cz: 스케일 중심, sx,sy,sz: 축별 배율
      */
     scale_faces(face_ids: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
+    /**
+     * Toggle active flag of a constraint.
+     */
+    setConstraintActive(id: number, active: boolean): boolean;
     /**
      * 중첩 그룹 설정
      */
@@ -436,12 +469,15 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_axiaengine_free: (a: number, b: number) => void;
     readonly __wbg_deltabuffers_free: (a: number, b: number) => void;
+    readonly axiaengine_addDistanceConstraint: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
+    readonly axiaengine_constraintCount: (a: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -489,6 +525,7 @@ export interface InitOutput {
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
     readonly axiaengine_lastError: (a: number, b: number) => void;
+    readonly axiaengine_listConstraints: (a: number, b: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_new: () => number;
@@ -499,12 +536,15 @@ export interface InitOutput {
     readonly axiaengine_push_pull: (a: number, b: number, c: number) => number;
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;
+    readonly axiaengine_removeConstraint: (a: number, b: number) => number;
     readonly axiaengine_remove_faces_from_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_remove_material: (a: number, b: number, c: number) => number;
     readonly axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_resolveAllConstraints: (a: number) => number;
     readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+    readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
@@ -524,8 +564,8 @@ export interface InitOutput {
     readonly deltabuffers_isTopologyChanged: (a: number) => number;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_export2: (a: number, b: number) => number;
-    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export3: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
 }
 

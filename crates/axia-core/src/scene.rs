@@ -12,6 +12,7 @@ use crate::commands::{Command, CommandResult};
 use crate::lifecycle;
 use crate::group::{GroupId, GroupManager, Transform3D};
 use crate::material::MaterialLibrary;
+use crate::constraint::ConstraintGraph;
 
 /// Snapshot format version
 const SNAPSHOT_VERSION: u32 = 1;
@@ -37,6 +38,8 @@ pub struct Scene {
     pub default_material: MaterialId,
     /// Group / Component manager
     pub groups: GroupManager,
+    /// Constraint Solver Level 2 — persistent constraint graph
+    pub constraints: ConstraintGraph,
 }
 
 impl Scene {
@@ -50,6 +53,7 @@ impl Scene {
             material_library: MaterialLibrary::new(),
             default_material: MaterialId::new(0),
             groups: GroupManager::new(),
+            constraints: ConstraintGraph::new(),
         }
     }
 
@@ -68,11 +72,17 @@ impl Scene {
             eprintln!("[Scene] Group serialize failed: {}", e);
             Vec::new()
         });
+        // Constraint Solver Level 2 — appended at end for backward compatibility.
+        let constraints_data = bincode::serialize(&self.constraints).unwrap_or_else(|e| {
+            eprintln!("[Scene] Constraint serialize failed: {}", e);
+            Vec::new()
+        });
         let next_xia = self.next_xia_id;
 
-        // [mesh_len:u64][mesh_data][xia_len:u64][xia_data][group_len:u64][group_data][next_xia_id:u64]
+        // [mesh_len:u64][mesh_data][xia_len:u64][xia_data][group_len:u64][group_data][next_xia_id:u64][constraints_len:u64][constraints_data]
         let mut buf = Vec::with_capacity(
-            8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8,
+            8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8
+                + 8 + constraints_data.len(),
         );
         buf.extend_from_slice(&(mesh_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&mesh_data);
@@ -81,6 +91,8 @@ impl Scene {
         buf.extend_from_slice(&(group_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&group_data);
         buf.extend_from_slice(&(next_xia as u64).to_le_bytes()); // u64 for snapshot backward compat
+        buf.extend_from_slice(&(constraints_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&constraints_data);
         buf
     }
 
@@ -128,9 +140,24 @@ impl Scene {
         // 4. next_xia_id
         if offset + 8 <= data.len() {
             self.next_xia_id = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap_or([0; 8])) as u32; // u64→u32 for backward compat
+            offset += 8;
         }
 
-        // 5. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
+        // 5. Constraint graph (Level 2, backward-compat: old snapshots don't have this)
+        if offset + 8 <= data.len() {
+            let clen = read_len(data, &mut offset);
+            if clen > 0 && offset + clen <= data.len() {
+                if let Ok(restored) = bincode::deserialize::<ConstraintGraph>(&data[offset..offset + clen]) {
+                    self.constraints = restored;
+                }
+                offset += clen;
+            }
+        } else {
+            // Legacy snapshot — reset constraints
+            self.constraints = ConstraintGraph::new();
+        }
+
+        // 6. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
         self.rebuild_face_to_xia_index();
     }
 

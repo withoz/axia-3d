@@ -12,6 +12,35 @@ export class AxiaEngine {
         wasm.__wbg_axiaengine_free(ptr, 0);
     }
     /**
+     * Add a distance constraint between two vertices.
+     * @param {number} v_a
+     * @param {number} v_b
+     * @param {number} distance
+     * @returns {number}
+     */
+    addDistanceConstraint(v_a, v_b, distance) {
+        const ret = wasm.axiaengine_addDistanceConstraint(this.__wbg_ptr, v_a, v_b, distance);
+        return ret >>> 0;
+    }
+    /**
+     * Add a parallel/perpendicular/collinear constraint between two edges.
+     * `edgeA_v_a/b` and `edgeB_v_a/b` are vertex IDs.
+     * `kind`: "parallel" | "perpendicular" | "collinear"
+     * Returns the new constraint ID (>=1) on success, 0 on failure.
+     * @param {string} kind
+     * @param {number} edge_a_v_a
+     * @param {number} edge_a_v_b
+     * @param {number} edge_b_v_a
+     * @param {number} edge_b_v_b
+     * @returns {number}
+     */
+    addEdgeConstraint(kind, edge_a_v_a, edge_a_v_b, edge_b_v_a, edge_b_v_b) {
+        const ptr0 = passStringToWasm0(kind, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_addEdgeConstraint(this.__wbg_ptr, ptr0, len0, edge_a_v_a, edge_a_v_b, edge_b_v_a, edge_b_v_b);
+        return ret >>> 0;
+    }
+    /**
      * 그룹에 face 추가
      * @param {number} group_id
      * @param {Uint32Array} face_ids
@@ -95,6 +124,14 @@ export class AxiaEngine {
     can_undo() {
         const ret = wasm.axiaengine_can_undo(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Count of constraints (active + inactive).
+     * @returns {number}
+     */
+    constraintCount() {
+        const ret = wasm.axiaengine_constraintCount(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * Create a cone primitive.
@@ -849,6 +886,27 @@ export class AxiaEngine {
         }
     }
     /**
+     * List all constraints as JSON.
+     * Format: [{id, kind, active, refs:[...], value}, ...]
+     * @returns {string}
+     */
+    listConstraints() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_listConstraints(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * 그룹을 컴포넌트로 변환
      * @param {number} group_id
      * @param {string} name
@@ -999,6 +1057,15 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Remove a constraint by ID. Returns true on success.
+     * @param {number} id
+     * @returns {boolean}
+     */
+    removeConstraint(id) {
+        const ret = wasm.axiaengine_removeConstraint(this.__wbg_ptr, id);
+        return ret !== 0;
+    }
+    /**
      * 그룹에서 face 제거
      * @param {number} group_id
      * @param {Uint32Array} face_ids
@@ -1032,6 +1099,15 @@ export class AxiaEngine {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_rename_group(this.__wbg_ptr, group_id, ptr0, len0);
         return ret !== 0;
+    }
+    /**
+     * Re-solve all active constraints. Returns number of constraints that
+     * actually moved geometry.
+     * @returns {number}
+     */
+    resolveAllConstraints() {
+        const ret = wasm.axiaengine_resolveAllConstraints(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * 지정 정점을 center/axis 기준으로 회전.
@@ -1086,6 +1162,16 @@ export class AxiaEngine {
         const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_scale_faces(this.__wbg_ptr, ptr0, len0, cx, cy, cz, sx, sy, sz);
+        return ret !== 0;
+    }
+    /**
+     * Toggle active flag of a constraint.
+     * @param {number} id
+     * @param {boolean} active
+     * @returns {boolean}
+     */
+    setConstraintActive(id, active) {
+        const ret = wasm.axiaengine_setConstraintActive(this.__wbg_ptr, id, active);
         return ret !== 0;
     }
     /**

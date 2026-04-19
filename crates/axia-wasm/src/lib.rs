@@ -11,6 +11,7 @@ use axia_core::commands::Command;
 use axia_core::commands::CommandResult;
 use axia_geo::{FaceId, EdgeId, VertId};
 use axia_geo::operations::boolean::BoolOp;
+use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all};
 
 // Console logging from Rust WASM — debug only (stripped in release builds)
 macro_rules! debug_log {
@@ -1871,10 +1872,10 @@ impl AxiaEngine {
         match self.scene.mesh.translate_faces(&fids, delta) {
             Ok(res) => {
                 debug_log!("[RUST] translate: moved {} verts, {} faces", res.verts_moved, res.faces_affected);
+                // Level 2 auto-resolve constraints after face transform
+                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
-                // Use topology_changed for full rebuild: shared vertices between
-                // selected and adjacent faces make partial delta unreliable.
                 self.mark_topology_changed();
                 self.invalidate_cache();
                 true
@@ -1906,10 +1907,9 @@ impl AxiaEngine {
         match self.scene.mesh.rotate_faces(&fids, center, axis, angle_rad) {
             Ok(res) => {
                 debug_log!("[RUST] rotate: {} verts, {:.1}°", res.verts_moved, angle_deg);
+                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
-                // Use topology_changed for full rebuild: shared vertices between
-                // selected and adjacent faces make partial delta unreliable.
                 self.mark_topology_changed();
                 self.invalidate_cache();
                 true
@@ -1971,6 +1971,8 @@ impl AxiaEngine {
 
         match self.scene.mesh.translate_verts(&vids, delta) {
             Ok(_) => {
+                // Level 2: auto-resolve constraints touching any moved vertex
+                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
@@ -2004,6 +2006,8 @@ impl AxiaEngine {
 
         match self.scene.mesh.rotate_verts(&vids, center, axis, angle_rad) {
             Ok(_) => {
+                // Level 2: auto-resolve constraints
+                let _ = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
                 self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
                 self.scene.transactions.commit();
                 self.mark_topology_changed();
@@ -2039,6 +2043,150 @@ impl AxiaEngine {
             Ok(p) => vec![p.x, p.y, p.z],
             Err(_) => Vec::new(),
         }
+    }
+
+    // ========================================================================
+    // Constraint Solver Level 2 — persistent graph (Scene.constraints)
+    // ========================================================================
+
+    /// Add a parallel/perpendicular/collinear constraint between two edges.
+    /// `edgeA_v_a/b` and `edgeB_v_a/b` are vertex IDs.
+    /// `kind`: "parallel" | "perpendicular" | "collinear"
+    /// Returns the new constraint ID (>=1) on success, 0 on failure.
+    #[wasm_bindgen(js_name = "addEdgeConstraint")]
+    pub fn add_edge_constraint(
+        &mut self,
+        kind: &str,
+        edge_a_v_a: u32, edge_a_v_b: u32,
+        edge_b_v_a: u32, edge_b_v_b: u32,
+    ) -> u32 {
+        let kind = match kind {
+            "parallel"      => ConstraintKind::Parallel,
+            "perpendicular" => ConstraintKind::Perpendicular,
+            "collinear"     => ConstraintKind::Collinear,
+            other => { self.set_error(format!("unknown constraint kind: {}", other)); return 0; }
+        };
+        let refs = vec![
+            ConstraintRef::Edge { v_a: VertId::new(edge_a_v_a), v_b: VertId::new(edge_a_v_b) },
+            ConstraintRef::Edge { v_a: VertId::new(edge_b_v_a), v_b: VertId::new(edge_b_v_b) },
+        ];
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let id = self.scene.constraints.add(kind, refs, None);
+        // Apply immediately so the geometry matches
+        if let Some(c) = self.scene.constraints.get(id).cloned() {
+            let _ = resolve_constraint(&mut self.scene.mesh, &c);
+        }
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        id
+    }
+
+    /// Add a distance constraint between two vertices.
+    #[wasm_bindgen(js_name = "addDistanceConstraint")]
+    pub fn add_distance_constraint(&mut self, v_a: u32, v_b: u32, distance: f64) -> u32 {
+        if !distance.is_finite() || distance <= 0.0 {
+            self.set_error(format!("distance must be > 0, got {}", distance));
+            return 0;
+        }
+        let refs = vec![
+            ConstraintRef::Vertex(VertId::new(v_a)),
+            ConstraintRef::Vertex(VertId::new(v_b)),
+        ];
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let id = self.scene.constraints.add(ConstraintKind::Distance, refs, Some(distance));
+        if let Some(c) = self.scene.constraints.get(id).cloned() {
+            let _ = resolve_constraint(&mut self.scene.mesh, &c);
+        }
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        id
+    }
+
+    /// Remove a constraint by ID. Returns true on success.
+    #[wasm_bindgen(js_name = "removeConstraint")]
+    pub fn remove_constraint(&mut self, id: u32) -> bool {
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let removed = self.scene.constraints.remove(id);
+        if removed {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+        } else {
+            self.scene.transactions.cancel();
+        }
+        removed
+    }
+
+    /// List all constraints as JSON.
+    /// Format: [{id, kind, active, refs:[...], value}, ...]
+    #[wasm_bindgen(js_name = "listConstraints")]
+    pub fn list_constraints(&self) -> String {
+        // Lightweight manual JSON (avoid pulling in serde_json just here)
+        let mut out = String::from("[");
+        for (i, c) in self.scene.constraints.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            let kind = match c.kind {
+                ConstraintKind::Parallel      => "parallel",
+                ConstraintKind::Perpendicular => "perpendicular",
+                ConstraintKind::Collinear     => "collinear",
+                ConstraintKind::Distance      => "distance",
+            };
+            out.push_str(&format!(
+                r#"{{"id":{},"kind":"{}","active":{}"#, c.id, kind, c.active
+            ));
+            if let Some(v) = c.value {
+                out.push_str(&format!(r#","value":{}"#, v));
+            }
+            out.push_str(r#","refs":["#);
+            for (j, r) in c.refs.iter().enumerate() {
+                if j > 0 { out.push(','); }
+                match r {
+                    ConstraintRef::Edge { v_a, v_b } =>
+                        out.push_str(&format!(r#"{{"edge":[{},{}]}}"#, v_a.raw(), v_b.raw())),
+                    ConstraintRef::Vertex(v) =>
+                        out.push_str(&format!(r#"{{"vertex":{}}}"#, v.raw())),
+                }
+            }
+            out.push_str("]}");
+        }
+        out.push(']');
+        out
+    }
+
+    /// Re-solve all active constraints. Returns number of constraints that
+    /// actually moved geometry.
+    #[wasm_bindgen(js_name = "resolveAllConstraints")]
+    pub fn resolve_all_constraints(&mut self) -> u32 {
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let count = resolve_all(&mut self.scene.mesh, &self.scene.constraints);
+        if count > 0 {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        } else {
+            self.scene.transactions.cancel();
+        }
+        count as u32
+    }
+
+    /// Toggle active flag of a constraint.
+    #[wasm_bindgen(js_name = "setConstraintActive")]
+    pub fn set_constraint_active(&mut self, id: u32, active: bool) -> bool {
+        self.scene.constraints.set_active(id, active)
+    }
+
+    /// Count of constraints (active + inactive).
+    #[wasm_bindgen(js_name = "constraintCount")]
+    pub fn constraint_count(&self) -> u32 {
+        self.scene.constraints.len() as u32
     }
 
     /// Offset: face의 경계를 dist만큼 안쪽(+)/바깥쪽(-)으로 오프셋

@@ -27,11 +27,47 @@ export class ConstraintCommands {
   constructor(private bridge: WasmBridge) {}
 
   // ───────────────────────────────────────────────────────────
-  // Public API
+  // Public API (Level 2 — persistent constraint graph)
   // ───────────────────────────────────────────────────────────
 
   /**
-   * edgeB를 edgeA와 평행하게 만든다.
+   * edgeB를 edgeA와 평행하게 만들고, 제약을 Scene에 영속 저장한다.
+   * 이후 transform 연산이 일어날 때마다 Rust 엔진이 자동 재해결.
+   * @returns 제약 ID (>=1) 성공, 0 실패
+   */
+  addParallel(edgeA: number, edgeB: number): number {
+    const a = this.bridge.getEdgeEndpoints(edgeA);
+    const b = this.bridge.getEdgeEndpoints(edgeB);
+    if (a.length !== 2 || b.length !== 2) return 0;
+    return this.bridge.addEdgeConstraint('parallel', a[0], a[1], b[0], b[1]);
+  }
+
+  addPerpendicular(edgeA: number, edgeB: number): number {
+    const a = this.bridge.getEdgeEndpoints(edgeA);
+    const b = this.bridge.getEdgeEndpoints(edgeB);
+    if (a.length !== 2 || b.length !== 2) return 0;
+    return this.bridge.addEdgeConstraint('perpendicular', a[0], a[1], b[0], b[1]);
+  }
+
+  addCollinear(edgeA: number, edgeB: number): number {
+    const a = this.bridge.getEdgeEndpoints(edgeA);
+    const b = this.bridge.getEdgeEndpoints(edgeB);
+    if (a.length !== 2 || b.length !== 2) return 0;
+    return this.bridge.addEdgeConstraint('collinear', a[0], a[1], b[0], b[1]);
+  }
+
+  addDistance(vA: number, vB: number, distance: number): number {
+    if (!(distance > 0)) return 0;
+    return this.bridge.addDistanceConstraint(vA, vB, distance);
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // Legacy one-shot API (Level 1) — kept for callers who want
+  // non-persistent apply. Uses same math via client-side rotation.
+  // ───────────────────────────────────────────────────────────
+
+  /**
+   * edgeB를 edgeA와 평행하게 만든다 (일회성 적용, 제약 저장 안 함).
    * edgeB의 midpoint는 유지되고 그 주위로 회전된다.
    * @returns 성공 시 true, 실패 시 false (+ bridge.lastError 세팅)
    */

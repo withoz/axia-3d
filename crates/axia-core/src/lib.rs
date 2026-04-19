@@ -15,9 +15,11 @@ pub mod scene;
 pub mod import_dxf;
 pub mod group;
 pub mod material;
+pub mod constraint;
 
 pub use xia::{Xia, XiaState};
 pub use commands::{Command, CommandResult};
 pub use scene::Scene;
 pub use group::{GroupManager, GroupId, ComponentDefId, ComponentInstanceId, Transform3D};
 pub use material::{Material, MaterialLibrary, MaterialCategory, PhysicalProperties, VisualProperties, FireRating};
+pub use constraint::{Constraint, ConstraintGraph, ConstraintId, ConstraintKind, ConstraintRef};

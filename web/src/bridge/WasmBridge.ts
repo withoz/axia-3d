@@ -70,6 +70,14 @@ type AxiaEngineExtended = AxiaEngine & {
   rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
+  // Constraint Solver Level 2 (persistent graph)
+  addEdgeConstraint?(kind: string, eaVa: number, eaVb: number, ebVa: number, ebVb: number): number;
+  addDistanceConstraint?(vA: number, vB: number, distance: number): number;
+  removeConstraint?(id: number): boolean;
+  listConstraints?(): string;
+  resolveAllConstraints?(): number;
+  setConstraintActive?(id: number, active: boolean): boolean;
+  constraintCount?(): number;
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
@@ -563,6 +571,78 @@ export class WasmBridge {
       console.error('[WasmBridge] getVertexPos failed:', e);
       return null;
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Constraint Solver Level 2 (persistent graph)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Add edge-based constraint (parallel/perpendicular/collinear) between
+   * two edges specified by vertex pairs. Returns constraint ID (>=1) or 0 on failure.
+   * Constraint is applied immediately (first-time solve).
+   */
+  addEdgeConstraint(
+    kind: 'parallel' | 'perpendicular' | 'collinear',
+    edgeAVa: number, edgeAVb: number,
+    edgeBVa: number, edgeBVb: number,
+  ): number {
+    if (!this.engine?.addEdgeConstraint) return 0;
+    this.markDirty();
+    try {
+      return this.engine.addEdgeConstraint(kind, edgeAVa, edgeAVb, edgeBVa, edgeBVb);
+    } catch (e) {
+      console.error('[WasmBridge] addEdgeConstraint failed:', e);
+      return 0;
+    }
+  }
+
+  addDistanceConstraint(vA: number, vB: number, distance: number): number {
+    if (!this.engine?.addDistanceConstraint) return 0;
+    this.markDirty();
+    try {
+      return this.engine.addDistanceConstraint(vA, vB, distance);
+    } catch (e) {
+      console.error('[WasmBridge] addDistanceConstraint failed:', e);
+      return 0;
+    }
+  }
+
+  removeConstraint(id: number): boolean {
+    if (!this.engine?.removeConstraint) return false;
+    this.markDirty();
+    try { return this.engine.removeConstraint(id); }
+    catch (e) { console.error('[WasmBridge] removeConstraint failed:', e); return false; }
+  }
+
+  listConstraints(): Array<{ id: number; kind: string; active: boolean; value?: number; refs: unknown[] }> {
+    if (!this.engine?.listConstraints) return [];
+    try {
+      const json = this.engine.listConstraints();
+      return JSON.parse(json);
+    } catch (e) {
+      console.error('[WasmBridge] listConstraints failed:', e);
+      return [];
+    }
+  }
+
+  resolveAllConstraints(): number {
+    if (!this.engine?.resolveAllConstraints) return 0;
+    this.markDirty();
+    try { return this.engine.resolveAllConstraints(); }
+    catch (e) { console.error('[WasmBridge] resolveAllConstraints failed:', e); return 0; }
+  }
+
+  setConstraintActive(id: number, active: boolean): boolean {
+    if (!this.engine?.setConstraintActive) return false;
+    try { return this.engine.setConstraintActive(id, active); }
+    catch (e) { console.error('[WasmBridge] setConstraintActive failed:', e); return false; }
+  }
+
+  constraintCount(): number {
+    if (!this.engine?.constraintCount) return 0;
+    try { return this.engine.constraintCount(); }
+    catch { return 0; }
   }
 
   /**

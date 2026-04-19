@@ -362,8 +362,9 @@ export class ToolManager {
         Toast.warning(err || '통합할 수 있는 인접 coplanar 면이 없습니다');
       }
     } else if (action === 'constrain-parallel' || action === 'constrain-perpendicular' || action === 'constrain-collinear') {
-      // Constraint Solver Level 1 (one-shot apply).
-      // 선택된 2개 엣지: 첫번째(index 0) = 참조, 두번째 = 이동 대상
+      // Constraint Solver Level 2 — persistent graph.
+      // 2개 엣지: 첫번째 = 기준(driver), 두번째 = 이동 대상(driven).
+      // 엔진에 제약이 영속 저장되고 이후 transform 때마다 자동 재해결.
       const edges = this.selection.getSelectedEdges();
       if (edges.length !== 2) {
         Toast.warning('2개의 엣지를 선택해야 합니다 (첫 번째 = 기준, 두 번째 = 이동 대상)');
@@ -371,19 +372,19 @@ export class ToolManager {
       }
       const [edgeA, edgeB] = edges;
       const cc = new ConstraintCommands(this.bridge);
-      let ok = false;
+      let id = 0;
       let label = '';
-      if (action === 'constrain-parallel')            { ok = cc.makeParallel(edgeA, edgeB); label = '평행'; }
-      else if (action === 'constrain-perpendicular')  { ok = cc.makePerpendicular(edgeA, edgeB); label = '수직'; }
-      else                                            { ok = cc.makeCollinear(edgeA, edgeB); label = '동일 선상'; }
+      if (action === 'constrain-parallel')            { id = cc.addParallel(edgeA, edgeB); label = '평행'; }
+      else if (action === 'constrain-perpendicular')  { id = cc.addPerpendicular(edgeA, edgeB); label = '수직'; }
+      else                                            { id = cc.addCollinear(edgeA, edgeB); label = '동일 선상'; }
 
-      if (ok) {
+      if (id > 0) {
         this.syncMesh();
-        Toast.info(`엣지 정렬 완료: ${label}`, 1800);
-        debugLog(`[Action] ${action}: edges=${edgeA},${edgeB}`);
+        Toast.info(`${label} 제약 추가 (id=${id}) — 이후 이동 시 자동 유지`, 2200);
+        debugLog(`[Action] ${action}: edges=${edgeA},${edgeB}, constraintId=${id}`);
       } else {
         const err = this.bridge.lastError();
-        Toast.error(err || `${label} 정렬 실패 (엣지가 거의 평행하거나 degenerate)`, 3000);
+        Toast.error(err || `${label} 제약 생성 실패`, 3000);
       }
     } else if (action === 'select-all') {
       this.selection.selectEverything(this.faceMap, this.edgeMap);
