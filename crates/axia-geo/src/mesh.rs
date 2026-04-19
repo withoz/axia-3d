@@ -1246,13 +1246,111 @@ impl Mesh {
         v1: VertId,
         new_edge_id: EdgeId,
     ) -> Option<Vec<VertId>> {
-        // Try boundary chain walk first (CAD approach — O(L) for degree-2 loops)
-        if let Some(verts) = self.detect_loop_by_chain_walk(v0, v1, new_edge_id) {
+        self.detect_free_edge_loop_excluding(v0, v1, new_edge_id, &[])
+    }
+
+    /// detect_free_edge_loop의 확장: 추가로 제외할 엣지 집합을 받음.
+    /// 이전 iteration에서 "외부 boundary"로 걸러진 루프의 엣지들을 제외하고
+    /// 다른 경로를 탐색할 때 사용.
+    pub fn detect_free_edge_loop_excluding(
+        &self,
+        v0: VertId,
+        v1: VertId,
+        new_edge_id: EdgeId,
+        excluded: &[EdgeId],
+    ) -> Option<Vec<VertId>> {
+        if let Some(verts) = self.detect_loop_by_chain_walk_excluding(v0, v1, new_edge_id, excluded) {
             return Some(verts);
         }
+        self.detect_loop_by_bfs_excluding(v0, v1, new_edge_id, excluded)
+    }
 
-        // Fallback: BFS on free-edge adjacency graph (legacy approach)
-        self.detect_loop_by_bfs(v0, v1, new_edge_id)
+    fn detect_loop_by_chain_walk_excluding(
+        &self,
+        v0: VertId,
+        v1: VertId,
+        new_edge_id: EdgeId,
+        excluded: &[EdgeId],
+    ) -> Option<Vec<VertId>> {
+        let mut path = vec![v0, v1];
+        let mut prev_v = v0;
+        let mut curr_v = v1;
+        for _ in 0..10000 {
+            let mut neighbors = Vec::new();
+            for (&key, &edge_id) in &self.vert_to_edge {
+                if edge_id == new_edge_id { continue; }
+                if excluded.contains(&edge_id) { continue; }
+                if key.v_small != curr_v && key.v_large != curr_v { continue; }
+                if !self.edges[edge_id].is_active() { continue; }
+                if !self.edge_has_free_he(edge_id) { continue; }
+                let other = if key.v_small == curr_v { key.v_large } else { key.v_small };
+                if other != prev_v { neighbors.push(other); }
+            }
+            if neighbors.len() == 1 {
+                let next_v = neighbors[0];
+                if next_v == v0 {
+                    if path.len() >= 3 && self.are_verts_coplanar(&path) { return Some(path); }
+                    return None;
+                }
+                prev_v = curr_v;
+                curr_v = next_v;
+                path.push(curr_v);
+            } else {
+                return None;
+            }
+        }
+        None
+    }
+
+    fn detect_loop_by_bfs_excluding(
+        &self,
+        v0: VertId,
+        v1: VertId,
+        new_edge_id: EdgeId,
+        excluded: &[EdgeId],
+    ) -> Option<Vec<VertId>> {
+        use std::collections::VecDeque;
+        let mut adj: FxHashMap<VertId, Vec<VertId>> = FxHashMap::default();
+        for (edge_id, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            if edge_id == new_edge_id { continue; }
+            if excluded.contains(&edge_id) { continue; }
+            if !self.edge_has_free_he(edge_id) { continue; }
+            let va = edge.v_small();
+            let vb = edge.v_large();
+            adj.entry(va).or_default().push(vb);
+            adj.entry(vb).or_default().push(va);
+        }
+        let mut parent: FxHashMap<VertId, VertId> = FxHashMap::default();
+        parent.insert(v1, VertId::NULL);
+        let mut queue = VecDeque::new();
+        queue.push_back(v1);
+        while let Some(current) = queue.pop_front() {
+            if let Some(neighbors) = adj.get(&current) {
+                for &next in neighbors {
+                    if parent.contains_key(&next) { continue; }
+                    parent.insert(next, current);
+                    if next == v0 {
+                        let mut path = Vec::new();
+                        let mut node = v0;
+                        loop {
+                            path.push(node);
+                            let p = parent[&node];
+                            if p.is_null() { break; }
+                            node = p;
+                        }
+                        if path.len() < 3 { return None; }
+                        let mut face_verts = Vec::with_capacity(path.len());
+                        face_verts.push(path[0]);
+                        for i in (1..path.len()).rev() { face_verts.push(path[i]); }
+                        if self.are_verts_coplanar(&face_verts) { return Some(face_verts); }
+                        return None;
+                    }
+                    queue.push_back(next);
+                }
+            }
+        }
+        None
     }
 
     /// CAD boundary walk: build free-edge adjacency at each vertex on-the-fly

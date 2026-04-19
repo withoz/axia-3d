@@ -632,10 +632,16 @@ impl Scene {
             }
 
             // ── (b) Free-edge loop detection — 반복 탐색 ──
+            // 발견된 루프가 외부 boundary로 판정되면 그 루프의 엣지들을 제외하고
+            // 다시 탐색 (다른 경로로 내부 루프가 있을 수 있음 — 예: 공유 엣지를 가진
+            // 인접 삼각형에서 BFS가 "잘못된 short path"를 먼저 선택한 경우).
             let mut seen_loops: Vec<Vec<VertId>> = Vec::new();
             let mut seg_faces: usize = 0;
+            let mut excluded_edges: Vec<EdgeId> = Vec::new();
             loop {
-                let loop_verts = match self.mesh.detect_free_edge_loop(v_a, v_b, new_edge_id) {
+                let loop_verts = match self.mesh.detect_free_edge_loop_excluding(
+                    v_a, v_b, new_edge_id, &excluded_edges,
+                ) {
                     Some(v) => v,
                     None => break,
                 };
@@ -643,7 +649,21 @@ impl Scene {
                 norm.sort_by_key(|v| v.raw());
                 if seen_loops.iter().any(|s| s == &norm) { break; }
                 seen_loops.push(norm.clone());
-                if self.loop_encloses_existing_face(&loop_verts) { break; }
+                if self.loop_encloses_existing_face(&loop_verts) {
+                    // 이 루프의 엣지들을 excluded에 추가하고 재탐색
+                    for i in 0..loop_verts.len() {
+                        let va = loop_verts[i];
+                        let vb = loop_verts[(i + 1) % loop_verts.len()];
+                        if let Some(eid) = self.mesh.find_edge(va, vb) {
+                            if !excluded_edges.contains(&eid) {
+                                excluded_edges.push(eid);
+                            }
+                        }
+                    }
+                    // Safety cap
+                    if excluded_edges.len() > 20 { break; }
+                    continue;
+                }
 
                 for i in 0..loop_verts.len() {
                     let va = loop_verts[i];
