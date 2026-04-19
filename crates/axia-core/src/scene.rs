@@ -557,105 +557,153 @@ impl Scene {
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
-        match self.mesh.draw_line(start, end) {
-            Ok((v0, v1, edge_id)) => {
-                // 사용자가 직접 그린 선은 coplanar 면 사이에서도 항상 보이도록 HARD 마킹.
-                self.mesh.mark_edge_hard(edge_id);
+        // ── Step 1: 기존 엣지와의 교차점 탐지 ──
+        // 새 line이 기존 엣지와 교차하면 교차점에 자동 vertex 삽입 (split_edge).
+        // 이후 서브 세그먼트 단위로 draw_line을 호출해 각 구간별로 face 처리.
+        let crossings = self.mesh.find_line_crossings(start, end);
 
-                // ── Auto-face: 새 엣지가 하나 이상의 루프를 닫으면 각각 면 생성 ──
-                // 반복 탐색: detect_free_edge_loop은 new_edge의 한쪽에서 루프를 찾음.
-                // 첫 면 생성 후 반대쪽에도 free half-edge가 남아 있으면 또 다른 루프
-                // 가능 → Some을 반환. 이런 식으로 한 drawLine이 여러 enclosed region을
-                // 만든 경우(예: 기존 면 사이를 가로지르는 선) 모두 면으로 확정.
-                let mut created_faces: Vec<FaceId> = Vec::new();
-                let mut all_loop_edge_ids: Vec<EdgeId> = Vec::new();
-                // 이전 루프의 vertex set (정규화된 순서) — 반대 winding 중복 탐지.
-                let mut seen_loops: Vec<Vec<VertId>> = Vec::new();
+        // ── Step 2: 교차된 엣지들을 split (vertex 삽입) ──
+        // 각 split은 SplitEdge가 반환한 new_vert_id를 통해 sub-segment의 끝점 vertex를 알 수 있음.
+        // split_edge 중간에 faces의 boundary도 자동으로 갱신됨.
+        let mut split_points: Vec<(DVec3, VertId)> = Vec::new();
+        for (edge_id, pos, _t) in &crossings {
+            match self.mesh.split_edge(*edge_id, *pos) {
+                Ok((new_vid, _e1, _e2)) => split_points.push((*pos, new_vid)),
+                Err(_) => continue, // split 실패 — 해당 교차점은 스킵
+            }
+        }
 
-                loop {
-                    let loop_verts = match self.mesh.detect_free_edge_loop(v0, v1, edge_id) {
-                        Some(v) => v,
-                        None => break,
-                    };
-                    // 같은 vertex 집합을 역순으로 재발견하는 경우(= "외부" 면)는 건너뜀.
-                    let mut norm = loop_verts.clone();
-                    norm.sort_by_key(|v| v.raw());
-                    if seen_loops.iter().any(|s| s == &norm) { break; }
-                    seen_loops.push(norm.clone());
+        // ── Step 3: sub-segment 리스트 구성 ──
+        // [start] -> [split_points...] -> [end]
+        let mut segments: Vec<(DVec3, DVec3)> = Vec::new();
+        let mut prev = start;
+        for (pos, _) in &split_points {
+            segments.push((prev, *pos));
+            prev = *pos;
+        }
+        segments.push((prev, end));
 
-                    // "외부 unbounded 루프" 필터: 이 루프가 기존 면(face)을 감싸는
-                    // 경우라면 내부가 아니라 외부 boundary임 → 면 생성 스킵.
-                    // 판정: 루프의 모든 vertex의 2D 투영 bbox 내부에 있는 **기존 face의
-                    // centroid**가 있으면 skip.
-                    if self.loop_encloses_existing_face(&loop_verts) {
-                        break;
-                    }
+        // ── Step 4: 각 sub-segment를 개별 처리 ──
+        // - 양 끝점이 같은 face의 boundary에 있으면 split_face_by_line 시도 (Cross-face split)
+        // - 아니면 draw_line + detect_free_edge_loop 반복 (기존 로직)
+        let mut all_created_faces: Vec<FaceId> = Vec::new();
+        let mut all_loop_edge_ids: Vec<EdgeId> = Vec::new();
+        let mut first_edge_id: Option<EdgeId> = None;
 
-                    // Collect edges of this loop for XIA cleanup
-                    for i in 0..loop_verts.len() {
-                        let va = loop_verts[i];
-                        let vb = loop_verts[(i + 1) % loop_verts.len()];
-                        if let Some(eid) = self.mesh.find_edge(va, vb) {
-                            if !all_loop_edge_ids.contains(&eid) {
-                                all_loop_edge_ids.push(eid);
+        for (seg_start, seg_end) in &segments {
+            if (*seg_end - *seg_start).length() < 1e-6 { continue; }
+
+            // 먼저 draw_line으로 엣지 생성 (양쪽 끝에 vertex가 이미 있든 없든 add_vertex가
+            // 기존 vertex를 재사용 — spatial_hash 기반 dedup).
+            let (v_a, v_b, new_edge_id) = match self.mesh.draw_line(*seg_start, *seg_end) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if first_edge_id.is_none() { first_edge_id = Some(new_edge_id); }
+            self.mesh.mark_edge_hard(new_edge_id);
+
+            // ── (a) Cross-face split 시도: 두 vertex 모두 같은 face boundary 위인지 ──
+            if let Some(face_id) = self.mesh.find_face_containing_both_verts(v_a, v_b) {
+                match axia_geo::operations::face_split::split_face_by_line(
+                    &mut self.mesh,
+                    face_id,
+                    *seg_start,
+                    *seg_end,
+                ) {
+                    Ok(result) => {
+                        for fid in result.new_faces {
+                            if !all_created_faces.contains(&fid) {
+                                all_created_faces.push(fid);
                             }
                         }
+                        continue; // split 성공 — 다음 세그먼트로
                     }
-                    match self.mesh.add_face(&loop_verts, self.default_material) {
-                        Ok(fid) => created_faces.push(fid),
-                        Err(_) => break,
+                    Err(_) => {
+                        // split 실패 시 loop detection으로 fallback
                     }
-                    // Safety cap — one edge separates at most 2 regions.
-                    if created_faces.len() >= 2 { break; }
                 }
+            }
 
-                if !created_faces.is_empty() {
-                    // Remove standalone-edge XIAs whose edge is part of any created loop
-                    let xias_to_remove: Vec<XiaId> = self.xias.iter()
-                        .filter(|(_, x)| {
-                            if let Some(eid) = x.standalone_edge_id {
-                                all_loop_edge_ids.contains(&eid)
-                            } else {
-                                false
-                            }
-                        })
-                        .map(|(&id, _)| id)
-                        .collect();
-                    for xid in &xias_to_remove {
-                        self.xias.remove(xid);
-                    }
+            // ── (b) Free-edge loop detection — 반복 탐색 ──
+            let mut seen_loops: Vec<Vec<VertId>> = Vec::new();
+            let mut seg_faces: usize = 0;
+            loop {
+                let loop_verts = match self.mesh.detect_free_edge_loop(v_a, v_b, new_edge_id) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let mut norm = loop_verts.clone();
+                norm.sort_by_key(|v| v.raw());
+                if seen_loops.iter().any(|s| s == &norm) { break; }
+                seen_loops.push(norm.clone());
+                if self.loop_encloses_existing_face(&loop_verts) { break; }
 
-                    // Create one XIA owning all new faces (single user action = single entity)
-                    let xia_id = self.create_xia("Face".to_string());
-                    if let Some(xia) = self.xias.get_mut(&xia_id) {
-                        xia.position = start;
-                        xia.surface_normal = surface_normal;
-                        for &fid in &created_faces {
-                            xia.face_ids.push(fid);
+                for i in 0..loop_verts.len() {
+                    let va = loop_verts[i];
+                    let vb = loop_verts[(i + 1) % loop_verts.len()];
+                    if let Some(eid) = self.mesh.find_edge(va, vb) {
+                        if !all_loop_edge_ids.contains(&eid) {
+                            all_loop_edge_ids.push(eid);
                         }
                     }
-                    self.register_faces_to_xia(xia_id, &created_faces);
-
-                    self.transactions.set_after_snapshot(self.scene_snapshot());
-                    self.transactions.commit();
-                    return CommandResult::EntityCreated(xia_id);
                 }
-
-                // ── No loop detected — create edge XIA ──
-                let xia_id = self.create_xia("Line".to_string());
-                if let Some(xia) = self.xias.get_mut(&xia_id) {
-                    xia.position = start;
-                    xia.surface_normal = surface_normal;
-                    xia.standalone_edge_id = Some(edge_id);
+                match self.mesh.add_face(&loop_verts, self.default_material) {
+                    Ok(fid) => {
+                        all_created_faces.push(fid);
+                        seg_faces += 1;
+                        if seg_faces >= 2 { break; }
+                    }
+                    Err(_) => break,
                 }
-                self.transactions.set_after_snapshot(self.scene_snapshot());
-                self.transactions.commit();
-                CommandResult::EntityCreated(xia_id)
             }
-            Err(e) => {
-                self.transactions.cancel();
-                CommandResult::Error(e.to_string())
+        }
+
+        // ── Step 5: 결과 XIA 생성 ──
+        if !all_created_faces.is_empty() {
+            // 기존 standalone-edge XIA 정리
+            let xias_to_remove: Vec<XiaId> = self.xias.iter()
+                .filter(|(_, x)| {
+                    if let Some(eid) = x.standalone_edge_id {
+                        all_loop_edge_ids.contains(&eid)
+                    } else {
+                        false
+                    }
+                })
+                .map(|(&id, _)| id)
+                .collect();
+            for xid in &xias_to_remove {
+                self.xias.remove(xid);
             }
+
+            let xia_id = self.create_xia("Face".to_string());
+            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                xia.position = start;
+                xia.surface_normal = surface_normal;
+                for &fid in &all_created_faces {
+                    xia.face_ids.push(fid);
+                }
+            }
+            self.register_faces_to_xia(xia_id, &all_created_faces);
+
+            self.transactions.set_after_snapshot(self.scene_snapshot());
+            self.transactions.commit();
+            return CommandResult::EntityCreated(xia_id);
+        }
+
+        // 면 생성 안 됐지만 최소 하나의 엣지는 생성됨 → Line XIA
+        if let Some(edge_id) = first_edge_id {
+            let xia_id = self.create_xia("Line".to_string());
+            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                xia.position = start;
+                xia.surface_normal = surface_normal;
+                xia.standalone_edge_id = Some(edge_id);
+            }
+            self.transactions.set_after_snapshot(self.scene_snapshot());
+            self.transactions.commit();
+            CommandResult::EntityCreated(xia_id)
+        } else {
+            self.transactions.cancel();
+            CommandResult::Error("draw_line produced no edges".to_string())
         }
     }
 

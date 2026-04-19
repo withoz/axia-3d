@@ -184,6 +184,103 @@ impl Mesh {
         Ok((edge_id, true))
     }
 
+    /// 주어진 line segment (start→end)과 교차하는 기존 엣지들의 교차점을 찾음.
+    /// Coplanar edges만 대상 (4개 점의 tetrahedron volume으로 판정).
+    /// 반환: (edge_id, 교차점 3D 좌표, t_on_new_line) 리스트, t_param 오름차순.
+    ///
+    /// 사용: drawLine에서 기존 엣지와의 교차점을 자동 vertex로 삽입하기 위함.
+    pub fn find_line_crossings(
+        &self,
+        start: DVec3,
+        end: DVec3,
+    ) -> Vec<(EdgeId, DVec3, f64)> {
+        let dir = end - start;
+        let len = dir.length();
+        if len < 1e-9 { return Vec::new(); }
+        // Relative tolerance based on line length
+        let coplanar_tol = (len * 1e-4).max(1e-3);
+        let endpoint_tol = (len * 1e-4).max(1e-3);
+
+        let mut crossings = Vec::new();
+        for (edge_id, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let va = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
+            let vb = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
+
+            // 끝점 일치 — 공유 vertex는 교차 아님
+            if (va - start).length() < endpoint_tol || (va - end).length() < endpoint_tol ||
+               (vb - start).length() < endpoint_tol || (vb - end).length() < endpoint_tol {
+                continue;
+            }
+
+            // 두 segment의 공통 평면 확인 + 교차 parameter 계산
+            let d2 = vb - va;
+            let n = dir.cross(d2);
+            let n_sq = n.length_squared();
+            if n_sq < 1e-16 { continue; } // 평행
+            // (va - start)가 n에 수직 = coplanar
+            let w = va - start;
+            let coplan_err = w.dot(n).abs() / n.length();
+            if coplan_err > coplanar_tol { continue; }
+
+            // Solve: start + t*dir = va + s*d2
+            // t = ((va - start) × d2) · n / |n|²
+            let t = w.cross(d2).dot(n) / n_sq;
+            let s = w.cross(dir).dot(n) / n_sq;
+
+            // Both parameters strictly inside (0, 1) — 끝점 교차는 제외
+            if t > 1e-3 && t < 1.0 - 1e-3 && s > 1e-3 && s < 1.0 - 1e-3 {
+                let pos = start + dir * t;
+                crossings.push((edge_id, pos, t));
+            }
+        }
+
+        crossings.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        crossings
+    }
+
+    /// 주어진 face의 경계 루프에 특정 vertex가 포함되어 있는지 검사.
+    pub fn face_contains_vertex_on_boundary(&self, face_id: FaceId, vid: VertId) -> bool {
+        let face = match self.faces.get(face_id) { Some(f) => f, None => return false };
+        if !face.is_active() { return false; }
+        let verts = match self.collect_loop_verts(face.outer().start) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        verts.contains(&vid)
+    }
+
+    /// 두 vertex 모두가 경계 위에 있는 활성 face의 ID를 반환 (있다면).
+    /// 여러 face가 공유하는 경우 첫 번째 매치 반환.
+    pub fn find_face_containing_both_verts(&self, v1: VertId, v2: VertId) -> Option<FaceId> {
+        for (face_id, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            let verts = match self.collect_loop_verts(face.outer().start) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if verts.contains(&v1) && verts.contains(&v2) {
+                // 인접 vertex가 아닐 때만 (인접이면 그냥 기존 엣지) → face split 가능
+                if !self.are_adjacent_in_loop(&verts, v1, v2) {
+                    return Some(face_id);
+                }
+            }
+        }
+        None
+    }
+
+    fn are_adjacent_in_loop(&self, verts: &[VertId], a: VertId, b: VertId) -> bool {
+        let n = verts.len();
+        for i in 0..n {
+            let va = verts[i];
+            let vb = verts[(i + 1) % n];
+            if (va == a && vb == b) || (va == b && vb == a) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Mark both half-edges of an edge with HARD flag.
     /// HARD edges always render (even between coplanar faces) — used for user-drawn
     /// lines and face-split edges so the user's intent stays visible.
