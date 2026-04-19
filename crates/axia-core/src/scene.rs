@@ -785,6 +785,17 @@ impl Scene {
             }
         }
 
+        // ── Step 4.6: Planar free-face resolver (Phase D) ──
+        // Leftmost-turn 기반으로 free HE 그래프의 모든 bounded region을 face로 확정.
+        // 기존 face는 건드리지 않고 "빈 영역"만 채움.
+        // 현재 scope: y=0 ground plane.
+        {
+            let resolved = self.mesh.resolve_planar_free_faces(self.default_material);
+            for f in resolved {
+                if !all_created_faces.contains(&f) { all_created_faces.push(f); }
+            }
+        }
+
         // ── Step 4.7: Overlapping face dedup ──
         // fan_split + loop_detect 경쟁 또는 split_face 잔여물 등으로 같은 boundary를 가진
         // 중복 face가 남으면 하나만 남기고 제거. 중복 제거 시 XIA 연결도 정리.

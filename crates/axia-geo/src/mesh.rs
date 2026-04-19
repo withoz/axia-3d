@@ -6,7 +6,7 @@
 //! - No global state — each Mesh is self-contained
 
 use glam::DVec3;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Serialize, Deserialize};
 use anyhow::{Result, bail, ensure};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -346,6 +346,183 @@ impl Mesh {
             }
         }
         false
+    }
+
+    /// HalfEdge의 source vertex 반환 (dst의 반대쪽).
+    pub fn he_source(&self, he_id: HeId) -> VertId {
+        let he = &self.hes[he_id];
+        let edge = &self.edges[he.edge()];
+        let dst = he.dst();
+        if dst == edge.v_small() { edge.v_large() } else { edge.v_small() }
+    }
+
+    /// HalfEdge의 "twin" (같은 edge의 반대 방향 HE) 반환.
+    /// 2-manifold 메시에서 twin은 radial 체인의 다음 것.
+    /// 3+ radial의 경우(non-manifold): dst가 다른 첫 번째 HE.
+    pub fn he_twin(&self, he_id: HeId) -> HeId {
+        let start_dst = self.hes[he_id].dst();
+        let mut he = self.hes[he_id].next_rad();
+        let start = he_id;
+        let mut count = 0;
+        while he != start && count < 1000 {
+            if self.hes[he].dst() != start_dst {
+                return he;
+            }
+            he = self.hes[he].next_rad();
+            count += 1;
+        }
+        start // fallback
+    }
+
+    /// ════════════════════════════════════════════════════════════════════════
+    /// Planar Face Resolution — Leftmost-turn traversal
+    /// ════════════════════════════════════════════════════════════════════════
+    ///
+    /// Free half-edges (face=null)로 이루어진 planar 그래프에서 모든 bounded
+    /// region을 체계적으로 찾아 face로 확정. 기존 face는 건드리지 않음.
+    ///
+    /// 알고리즘 (leftmost-turn):
+    /// 1. 각 vertex의 outgoing free HE를 2D angle로 정렬.
+    /// 2. 각 free HE에서 시작해 "incoming twin에서 CW 다음 outgoing"로 walk.
+    /// 3. 이 walk는 HE 왼쪽 face의 boundary를 traverse.
+    /// 4. 모든 cycle을 수집, signed area > 0인 것만 face로 생성 (외부 unbounded 제외).
+    ///
+    /// 현재 scope: y=0 ground plane만 지원.
+    /// (다중 평면은 차후 component별 PCA로 확장.)
+    pub fn resolve_planar_free_faces(&mut self, material: MaterialId) -> Vec<FaceId> {
+        // Step 1: free HE 수집 (y=0 범주 + coplanar 체크는 cycle 확인 시)
+        let free_hes: Vec<HeId> = self.hes.iter()
+            .filter(|(_, he)| he.is_active() && he.face().is_null())
+            .map(|(id, _)| id)
+            .collect();
+        if free_hes.is_empty() { return Vec::new(); }
+
+        // Step 2: y=0 평면 필터 + vertex→outgoing HE 인덱스 구축
+        const Y_EPS: f64 = 0.5; // 0.5mm 안에 y=0
+        let mut in_plane: FxHashSet<HeId> = FxHashSet::default();
+        for &he in &free_hes {
+            let src = self.he_source(he);
+            let dst = self.hes[he].dst();
+            let ps = match self.vertex_pos(src) { Ok(p) => p, Err(_) => continue };
+            let pd = match self.vertex_pos(dst) { Ok(p) => p, Err(_) => continue };
+            if ps.y.abs() < Y_EPS && pd.y.abs() < Y_EPS {
+                in_plane.insert(he);
+            }
+        }
+
+        let mut vert_to_outs: FxHashMap<VertId, Vec<HeId>> = FxHashMap::default();
+        for &he in &in_plane {
+            let src = self.he_source(he);
+            vert_to_outs.entry(src).or_default().push(he);
+        }
+
+        // Step 3: 각 vertex의 outgoing을 XZ 평면 angle로 정렬 (y=0 가정)
+        let he_angle = |he: HeId, mesh: &Mesh| -> f64 {
+            let src = mesh.he_source(he);
+            let dst = mesh.hes[he].dst();
+            let ps = mesh.vertex_pos(src).unwrap_or(DVec3::ZERO);
+            let pd = mesh.vertex_pos(dst).unwrap_or(DVec3::ZERO);
+            (pd.z - ps.z).atan2(pd.x - ps.x)
+        };
+
+        // 정렬 — closure에서 self 빌림 회피를 위해 직접
+        for (_, hes) in vert_to_outs.iter_mut() {
+            hes.sort_by(|&a, &b| {
+                let sa = {
+                    let he = &self.hes[a];
+                    let ps = {
+                        let edge = &self.edges[he.edge()];
+                        let dst = he.dst();
+                        let src = if dst == edge.v_small() { edge.v_large() } else { edge.v_small() };
+                        self.verts.get(src).map(|v| v.pos()).unwrap_or(DVec3::ZERO)
+                    };
+                    let pd = self.verts.get(he.dst()).map(|v| v.pos()).unwrap_or(DVec3::ZERO);
+                    (pd.z - ps.z).atan2(pd.x - ps.x)
+                };
+                let sb = {
+                    let he = &self.hes[b];
+                    let ps = {
+                        let edge = &self.edges[he.edge()];
+                        let dst = he.dst();
+                        let src = if dst == edge.v_small() { edge.v_large() } else { edge.v_small() };
+                        self.verts.get(src).map(|v| v.pos()).unwrap_or(DVec3::ZERO)
+                    };
+                    let pd = self.verts.get(he.dst()).map(|v| v.pos()).unwrap_or(DVec3::ZERO);
+                    (pd.z - ps.z).atan2(pd.x - ps.x)
+                };
+                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        let _ = he_angle;
+
+        // Step 4: Leftmost-turn walk — 모든 free HE를 cycle로 그룹
+        let mut visited: FxHashSet<HeId> = FxHashSet::default();
+        let mut cycles: Vec<Vec<VertId>> = Vec::new();
+        let max_iter = in_plane.len() * 2 + 10;
+
+        for &start in &in_plane {
+            if visited.contains(&start) { continue; }
+
+            let mut cycle_hes: Vec<HeId> = Vec::new();
+            let mut current = start;
+            let mut closed = false;
+            for _ in 0..max_iter {
+                if visited.contains(&current) {
+                    // 이미 방문한 HE — 중복 탐색, 중단
+                    break;
+                }
+                cycle_hes.push(current);
+                visited.insert(current);
+
+                // 다음 HE: dst(current)에서 twin(current)를 outs에서 찾고 CW previous
+                let v = self.hes[current].dst();
+                let twin = self.he_twin(current);
+
+                let outs = match vert_to_outs.get(&v) { Some(o) => o, None => break };
+                if outs.is_empty() { break; }
+                let twin_idx = match outs.iter().position(|&h| h == twin) {
+                    Some(i) => i,
+                    None => break, // twin not in outs — degenerate
+                };
+                let next_idx = (twin_idx + outs.len() - 1) % outs.len();
+                let next_he = outs[next_idx];
+
+                if next_he == start {
+                    closed = true;
+                    break;
+                }
+                current = next_he;
+            }
+
+            if !closed || cycle_hes.len() < 3 { continue; }
+
+            // Cycle vertex 시퀀스
+            let verts: Vec<VertId> = cycle_hes.iter().map(|&h| self.he_source(h)).collect();
+            cycles.push(verts);
+        }
+
+        // Step 5: Signed area로 bounded/outer 구분 + face 생성
+        let mut created: Vec<FaceId> = Vec::new();
+        for verts in &cycles {
+            // Signed area (XZ 평면, CCW=양수)
+            let mut area2 = 0.0;
+            for i in 0..verts.len() {
+                let p = self.vertex_pos(verts[i]).unwrap_or(DVec3::ZERO);
+                let q = self.vertex_pos(verts[(i + 1) % verts.len()]).unwrap_or(DVec3::ZERO);
+                area2 += p.x * q.z - q.x * p.z;
+            }
+            // CCW from +Y (위에서 내려다보면 CCW가 양수)
+            // 음수면 outer(CW boundary) — skip.
+            if area2 <= 0.0 { continue; }
+            // Coplanarity (이미 y=0 필터했지만 안전 재검증)
+            if !self.are_verts_coplanar(verts) { continue; }
+
+            match self.add_face(verts, material) {
+                Ok(fid) => created.push(fid),
+                Err(_) => continue,
+            }
+        }
+        created
     }
 
     /// 같은 boundary vertex 집합을 가진 중복 face들을 제거 (하나만 유지).
