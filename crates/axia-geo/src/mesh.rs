@@ -389,6 +389,19 @@ impl Mesh {
     ///
     /// 다중 평면 지원: 각 component 독립적으로 평면 결정, 3D 스케치 처리 가능.
     pub fn resolve_planar_free_faces(&mut self, material: MaterialId) -> Vec<FaceId> {
+        self.resolve_planar_free_faces_scoped(material, None)
+    }
+
+    /// seed_verts: Some이면 해당 vertex를 포함하는 component만 처리.
+    /// None이면 전체 free HE graph 처리.
+    ///
+    /// 사용: drawLine에서 새 엣지의 vertex만 전달하면 **이전에 삭제된 face의 자유
+    /// 엣지를 건드리지 않아** 삭제된 면이 재생성되는 버그를 방지.
+    pub fn resolve_planar_free_faces_scoped(
+        &mut self,
+        material: MaterialId,
+        seed_verts: Option<&[VertId]>,
+    ) -> Vec<FaceId> {
         let free_hes: Vec<HeId> = self.hes.iter()
             .filter(|(_, he)| he.is_active() && he.face().is_null())
             .map(|(id, _)| id)
@@ -396,7 +409,6 @@ impl Mesh {
         if free_hes.is_empty() { return Vec::new(); }
 
         // Step 1: free HE를 connected component로 그룹 (공유 vertex 기준)
-        //   각 component의 vertex 집합도 동시 수집.
         let free_set: FxHashSet<HeId> = free_hes.iter().copied().collect();
         let mut he_to_comp: FxHashMap<HeId, usize> = FxHashMap::default();
         let mut components: Vec<Vec<HeId>> = Vec::new();
@@ -411,7 +423,6 @@ impl Mesh {
                 comp_hes.push(he);
                 let src = self.he_source(he);
                 let dst = self.hes[he].dst();
-                // source와 dst의 모든 outgoing active HE 중 free인 것을 인접으로
                 for &v in &[src, dst] {
                     for (hid, h) in self.hes.iter() {
                         if !h.is_active() { continue; }
@@ -428,8 +439,22 @@ impl Mesh {
             components.push(comp_hes);
         }
 
+        // seed_verts 필터: 해당 vertex를 포함하는 component만 선택
+        let filtered_components: Vec<&Vec<HeId>> = if let Some(seeds) = seed_verts {
+            let seed_set: FxHashSet<VertId> = seeds.iter().copied().collect();
+            components.iter().filter(|comp| {
+                comp.iter().any(|&he| {
+                    let src = self.he_source(he);
+                    let dst = self.hes[he].dst();
+                    seed_set.contains(&src) || seed_set.contains(&dst)
+                })
+            }).collect()
+        } else {
+            components.iter().collect()
+        };
+
         let mut created_all: Vec<FaceId> = Vec::new();
-        for comp in &components {
+        for comp in filtered_components {
             let faces = self.resolve_component(comp, material);
             created_all.extend(faces);
         }

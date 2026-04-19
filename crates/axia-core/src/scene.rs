@@ -651,6 +651,7 @@ impl Scene {
         let mut all_created_faces: Vec<FaceId> = Vec::new();
         let mut all_loop_edge_ids: Vec<EdgeId> = Vec::new();
         let mut first_edge_id: Option<EdgeId> = None;
+        let mut touched_verts: Vec<VertId> = Vec::new();
 
         for (seg_start, seg_end) in &segments {
             // 길이 0 세그먼트 + snap 오차로 인한 "사실상 동일" 세그먼트 거부.
@@ -669,6 +670,8 @@ impl Scene {
             if v_a == v_b { continue; }
             if first_edge_id.is_none() { first_edge_id = Some(new_edge_id); }
             self.mesh.mark_edge_hard(new_edge_id);
+            if !touched_verts.contains(&v_a) { touched_verts.push(v_a); }
+            if !touched_verts.contains(&v_b) { touched_verts.push(v_b); }
 
             // ── (a) Cross-face split 시도: 두 vertex 모두 같은 face boundary 위인지 ──
             if let Some(face_id) = self.mesh.find_face_containing_both_verts(v_a, v_b) {
@@ -797,12 +800,14 @@ impl Scene {
             }
         }
 
-        // ── Step 4.6: Planar free-face resolver (Phase D) ──
-        // Leftmost-turn 기반으로 free HE 그래프의 모든 bounded region을 face로 확정.
-        // 기존 face는 건드리지 않고 "빈 영역"만 채움.
-        // 현재 scope: y=0 ground plane.
+        // ── Step 4.6: Planar free-face resolver (Phase D) — SCOPED ──
+        // 현재 drawLine이 관여한 vertex를 포함하는 component만 처리. 이전에 삭제된
+        // face의 free 엣지(예: 지워진 원통의 top/bottom 경계)는 touched_verts에 없으므로
+        // 재생성되지 않음.
         {
-            let resolved = self.mesh.resolve_planar_free_faces(self.default_material);
+            let resolved = self.mesh.resolve_planar_free_faces_scoped(
+                self.default_material, Some(&touched_verts),
+            );
             for f in resolved {
                 if !all_created_faces.contains(&f) { all_created_faces.push(f); }
             }
