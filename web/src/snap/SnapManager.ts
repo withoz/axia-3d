@@ -196,6 +196,10 @@ export class SnapManager {
   private static readonly CELL_SIZE = 5000; // mm
   private _vertexCells: Map<string, number[]> = new Map();
 
+  // Phase C2: cache signature for dirty tracking — updateFromMesh early-outs
+  // when the incoming mesh buffers match the last build.
+  private _cacheSig: string = '';
+
   // Reference point for perpendicular/tangent/parallel/extension
   private referencePoint: THREE.Vector3 | null = null;
 
@@ -456,6 +460,25 @@ export class SnapManager {
     edgeLines?: Float32Array | null,
     snapVerticesF64?: Float64Array | null,
   ) {
+    // Phase C2: cheap signature — array lengths are usually enough to detect
+    // topology changes. Vertex positions within unchanged buffers don't change.
+    // When positions DO change (translate/rotate/scale), the bridge currently
+    // calls syncMesh which invokes this function. In delta paths the lengths
+    // stay the same → we'd skip rebuild, missing moved positions. Extend
+    // signature with a positions hash sample to catch that too.
+    let posSample = 0;
+    const step = Math.max(1, Math.floor(positions.length / 32));
+    for (let i = 0; i < positions.length; i += step) {
+      posSample = (posSample * 31 + Math.round(positions[i] * 1000)) | 0;
+    }
+    const sig = `${positions.length}:${indices.length}:${faceMap.length}:${edgeLines?.length ?? 0}:${snapVerticesF64?.length ?? 0}:${posSample}`;
+    if (sig === this._cacheSig) {
+      // No-op: cache still valid. Caller called syncMesh but nothing changed
+      // geometrically that affects snap. Saves the O(V+E+F) rebuild.
+      return;
+    }
+    this._cacheSig = sig;
+
     this.vertices = [];
     this.edges = [];
     this.faceCenters = [];

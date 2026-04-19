@@ -6,8 +6,25 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import {
+  computeBoundsTree,
+  disposeBoundsTree,
+  acceleratedRaycast,
+} from 'three-mesh-bvh';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { WasmBridge, DeltaBuffers } from '../bridge/WasmBridge';
+
+// Phase C1: Patch Three.js Mesh/BufferGeometry with BVH-accelerated raycast.
+// All raycaster.intersectObjects calls now use BVH automatically on meshes
+// whose geometry has called computeBoundsTree().
+(THREE.BufferGeometry.prototype as unknown as {
+  computeBoundsTree: typeof computeBoundsTree;
+  disposeBoundsTree: typeof disposeBoundsTree;
+}).computeBoundsTree = computeBoundsTree;
+(THREE.BufferGeometry.prototype as unknown as {
+  disposeBoundsTree: typeof disposeBoundsTree;
+}).disposeBoundsTree = disposeBoundsTree;
+(THREE.Mesh.prototype as unknown as { raycast: typeof acceleratedRaycast }).raycast = acceleratedRaycast;
 
 export type ViewMode = '3d' | 'top' | 'bottom' | 'front' | 'back' | 'right' | 'left';
 
@@ -677,6 +694,13 @@ export class Viewport {
       const child = this.meshGroup.children[0];
       this.meshGroup.remove(child);
       if (child instanceof THREE.Mesh) {
+        // Phase C1: dispose BVH before the geometry itself
+        const geo = child.geometry as THREE.BufferGeometry & {
+          disposeBoundsTree?: () => void;
+        };
+        if (typeof geo.disposeBoundsTree === 'function') {
+          try { geo.disposeBoundsTree(); } catch { /* ignore */ }
+        }
         child.geometry.dispose();
         if (child.material instanceof THREE.Material) {
           child.material.dispose();
@@ -726,6 +750,15 @@ export class Viewport {
         polygonOffsetUnits: 1,
         vertexColors: useVertexColors,
       });
+      // Phase C1: build BVH on the shared geometry so intersectObjects is O(log N)
+      const geoWithBvh = geometry as THREE.BufferGeometry & {
+        computeBoundsTree?: () => void;
+      };
+      if (typeof geoWithBvh.computeBoundsTree === 'function' && indices.length > 0) {
+        try { geoWithBvh.computeBoundsTree(); }
+        catch (e) { console.warn('[Viewport] BVH build failed:', e); }
+      }
+
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
       frontMesh.castShadow = true;
