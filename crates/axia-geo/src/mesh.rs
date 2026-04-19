@@ -389,18 +389,18 @@ impl Mesh {
     ///
     /// 다중 평면 지원: 각 component 독립적으로 평면 결정, 3D 스케치 처리 가능.
     pub fn resolve_planar_free_faces(&mut self, material: MaterialId) -> Vec<FaceId> {
-        self.resolve_planar_free_faces_scoped(material, None)
+        self.resolve_planar_free_faces_scoped(material, None, None)
     }
 
     /// seed_verts: Some이면 해당 vertex를 포함하는 component만 처리.
-    /// None이면 전체 free HE graph 처리.
-    ///
-    /// 사용: drawLine에서 새 엣지의 vertex만 전달하면 **이전에 삭제된 face의 자유
-    /// 엣지를 건드리지 않아** 삭제된 면이 재생성되는 버그를 방지.
+    /// required_edges: Some이면 cycle이 최소 하나의 해당 edge를 포함해야 face 생성.
+    ///   → 이전에 삭제된 면의 free HE cycle을 재생성하지 않도록 필수 (drawLine이
+    ///   만든 새 edge가 없으면 skip).
     pub fn resolve_planar_free_faces_scoped(
         &mut self,
         material: MaterialId,
         seed_verts: Option<&[VertId]>,
+        required_edges: Option<&[EdgeId]>,
     ) -> Vec<FaceId> {
         let free_hes: Vec<HeId> = self.hes.iter()
             .filter(|(_, he)| he.is_active() && he.face().is_null())
@@ -453,16 +453,24 @@ impl Mesh {
             components.iter().collect()
         };
 
+        let required_edge_set: Option<FxHashSet<EdgeId>> = required_edges
+            .map(|e| e.iter().copied().collect());
+
         let mut created_all: Vec<FaceId> = Vec::new();
         for comp in filtered_components {
-            let faces = self.resolve_component(comp, material);
+            let faces = self.resolve_component(comp, material, required_edge_set.as_ref());
             created_all.extend(faces);
         }
         created_all
     }
 
     /// 단일 component의 free HE들에 대해 평면 결정 + leftmost-turn + face 생성.
-    fn resolve_component(&mut self, comp_hes: &[HeId], material: MaterialId) -> Vec<FaceId> {
+    fn resolve_component(
+        &mut self,
+        comp_hes: &[HeId],
+        material: MaterialId,
+        required_edges: Option<&FxHashSet<EdgeId>>,
+    ) -> Vec<FaceId> {
         if comp_hes.is_empty() { return Vec::new(); }
 
         // Component의 모든 vertex 수집
@@ -600,6 +608,17 @@ impl Mesh {
             }
 
             if !closed || cycle_hes.len() < 3 { continue; }
+
+            // required_edges 필터: cycle이 적어도 하나의 required edge를 포함해야 함.
+            // 이 필터는 "이전에 삭제된 면의 자유 엣지 cycle"이 재생성되는 것을 차단.
+            // 새 drawLine이 만든 edge 집합을 required로 넘기면, 그것을 포함하는 cycle만 face화.
+            if let Some(req) = required_edges {
+                let uses_required = cycle_hes.iter().any(|&he| {
+                    req.contains(&self.hes[he].edge())
+                });
+                if !uses_required { continue; }
+            }
+
             let verts: Vec<VertId> = cycle_hes.iter().map(|&h| self.he_source(h)).collect();
             cycles.push(verts);
         }

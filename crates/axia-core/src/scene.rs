@@ -652,6 +652,7 @@ impl Scene {
         let mut all_loop_edge_ids: Vec<EdgeId> = Vec::new();
         let mut first_edge_id: Option<EdgeId> = None;
         let mut touched_verts: Vec<VertId> = Vec::new();
+        let mut new_edges: Vec<EdgeId> = Vec::new();
 
         for (seg_start, seg_end) in &segments {
             // 길이 0 세그먼트 + snap 오차로 인한 "사실상 동일" 세그먼트 거부.
@@ -672,6 +673,7 @@ impl Scene {
             self.mesh.mark_edge_hard(new_edge_id);
             if !touched_verts.contains(&v_a) { touched_verts.push(v_a); }
             if !touched_verts.contains(&v_b) { touched_verts.push(v_b); }
+            if !new_edges.contains(&new_edge_id) { new_edges.push(new_edge_id); }
 
             // ── (a) Cross-face split 시도: 두 vertex 모두 같은 face boundary 위인지 ──
             if let Some(face_id) = self.mesh.find_face_containing_both_verts(v_a, v_b) {
@@ -800,13 +802,17 @@ impl Scene {
             }
         }
 
-        // ── Step 4.6: Planar free-face resolver (Phase D) — SCOPED ──
-        // 현재 drawLine이 관여한 vertex를 포함하는 component만 처리. 이전에 삭제된
-        // face의 free 엣지(예: 지워진 원통의 top/bottom 경계)는 touched_verts에 없으므로
-        // 재생성되지 않음.
+        // ── Step 4.6: Planar free-face resolver (Phase D) — SCOPED + REQUIRED ──
+        // **이중 필터**:
+        //   (1) seed_verts: 현재 drawLine이 관여한 vertex의 component만 처리.
+        //   (2) required_edges: cycle이 새로 그린 edge를 최소 하나 포함해야 face 생성.
+        // 두 조건 모두 충족해야 face 생성 → 이전에 삭제된 면의 자유 엣지 cycle을
+        // "우연히 통과한" 경우도 절대 재생성되지 않음.
         {
             let resolved = self.mesh.resolve_planar_free_faces_scoped(
-                self.default_material, Some(&touched_verts),
+                self.default_material,
+                Some(&touched_verts),
+                Some(&new_edges),
             );
             for f in resolved {
                 if !all_created_faces.contains(&f) { all_created_faces.push(f); }
