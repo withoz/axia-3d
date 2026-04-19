@@ -387,6 +387,10 @@ export class ToolManager {
         this.syncMesh();
         Toast.info(`${label} 제약 추가 (id=${id}) — 이후 이동 시 자동 유지`, 2200);
         debugLog(`[Action] ${action}: edges=${edgeA},${edgeB}, constraintId=${id}`);
+        // Constraint Panel 자동 새로고침 (열려 있는 경우)
+        const cp = (window as unknown as { __axia_constraintPanel?: { refresh: () => void } })
+          .__axia_constraintPanel;
+        cp?.refresh();
       } else {
         const err = this.bridge.lastError();
         Toast.error(err || `${label} 제약 생성 실패`, 3000);

@@ -12,6 +12,7 @@ import { UnitSystem } from './units/UnitSystem';
 import { SettingsPanel } from './units/SettingsPanel';
 // FileImporter is now lazy-loaded via MenuBar (dynamic import on first use)
 import { ComponentPanel } from './ui/ComponentPanel';
+import { ConstraintPanel } from './ui/ConstraintPanel';
 import { FileManager } from './file/FileManager';
 import { MaterialLibrary } from './materials/MaterialLibrary';
 import { DraggablePanelManager } from './ui/DraggablePanelManager';
@@ -320,7 +321,29 @@ async function main() {
     });
   }
 
-  debugLog('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner');
+  // ═══ 14. Constraint Panel (파라메트릭 제약 목록) ═══
+  {
+    const constraintPanel = new ConstraintPanel(
+      viewportEl,
+      bridge,
+      {
+        syncMesh: () => toolManager.syncMesh(),
+      },
+    );
+    // 전역 노출 — ToolManager가 제약 변경 후 refresh 호출하도록 함
+    (window as unknown as { __axia_constraintPanel?: ConstraintPanel })
+      .__axia_constraintPanel = constraintPanel;
+
+    // 키보드 J → Constraint Panel 토글 ('K'는 Inference Lock에서 사용 중)
+    window.addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      if ((e.key === 'j' || e.key === 'J') && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        constraintPanel.toggle();
+      }
+    });
+  }
+
+  debugLog('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner, J=Constraints');
 }
 
 main().catch((err) => {
