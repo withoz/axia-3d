@@ -184,6 +184,44 @@ impl Mesh {
         Ok((edge_id, true))
     }
 
+    /// 새 line segment (start→end) 위에 있는 기존 vertex들을 찾음.
+    /// 반환: (VertId, 3D pos, t_on_new_line) — t 오름차순 정렬.
+    /// 이들은 edge split이 불필요 (vertex 이미 존재) — 새 line 자체가 이 vertex에서
+    /// 나눠져야 grid 교차점 같은 케이스 처리 가능.
+    pub fn find_vertices_on_line(
+        &self,
+        start: DVec3,
+        end: DVec3,
+    ) -> Vec<(VertId, DVec3, f64)> {
+        let dir = end - start;
+        let len_sq = dir.length_squared();
+        if len_sq < 1e-18 { return Vec::new(); }
+        let len = len_sq.sqrt();
+        let perp_tol = (len * 1e-5).max(1e-4); // 선분에서의 수직 거리 허용
+        let endpoint_tol = (len * 1e-4).max(1e-3);
+        let dir_norm = dir / len;
+
+        let mut result = Vec::new();
+        for (vid, vert) in self.verts.iter() {
+            if !vert.is_active() { continue; }
+            let p = vert.pos();
+            // start/end와 동일한 vertex는 제외
+            if (p - start).length() < endpoint_tol { continue; }
+            if (p - end).length() < endpoint_tol { continue; }
+            // t 파라미터
+            let w = p - start;
+            let t = w.dot(dir_norm) / len;
+            if t <= 1e-6 || t >= 1.0 - 1e-6 { continue; }
+            // 선분까지 수직 거리
+            let proj = start + dir * t;
+            let perp = (p - proj).length();
+            if perp > perp_tol { continue; }
+            result.push((vid, p, t));
+        }
+        result.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        result
+    }
+
     /// 주어진 line segment (start→end)과 교차하는 기존 엣지들의 교차점을 찾음.
     /// Coplanar edges만 대상 (4개 점의 tetrahedron volume으로 판정).
     /// 반환: (edge_id, 교차점 3D 좌표, t_on_new_line) 리스트, t_param 오름차순.
@@ -228,10 +266,16 @@ impl Mesh {
             let t = w.cross(d2).dot(n) / n_sq;
             let s = w.cross(dir).dot(n) / n_sq;
 
-            // Both parameters strictly inside (0, 1) — 끝점 교차는 제외
-            if t > 1e-3 && t < 1.0 - 1e-3 && s > 1e-3 && s < 1.0 - 1e-3 {
-                let pos = start + dir * t;
-                crossings.push((edge_id, pos, t));
+            // s(기존 엣지 parameter)는 반드시 interior — 공유 vertex는 이미 위에서
+            // 걸러졌으므로 여기 도달하면 기존 엣지 위의 진짜 교차점.
+            // t(새 line parameter)는 [0, 1] 전체 허용 — 새 line의 start/end가 기존
+            // 엣지 중간 위에 있어도 해당 엣지를 split해야 grid 같은 케이스가 동작.
+            let t_eps = 1e-6;
+            let s_eps = 1e-3;
+            if t > -t_eps && t < 1.0 + t_eps && s > s_eps && s < 1.0 - s_eps {
+                let t_clamped = t.clamp(0.0, 1.0);
+                let pos = start + dir * t_clamped;
+                crossings.push((edge_id, pos, t_clamped));
             }
         }
 
@@ -755,11 +799,18 @@ impl Mesh {
                 self.hes[he_ap].set_flags(info.flags);
                 self.hes[he_pb].set_flags(info.flags);
 
-                // Update neighbor pointers
-                if !info.prev.is_null() && self.hes.contains(info.prev) {
+                // Update neighbor pointers — 단, 현재 HE가 실제로 그들의 prev/next로
+                // 연결되어 있을 때만. 자유(face=null) HE의 prev/next는 face 생성 시
+                // 이웃의 next/prev가 재지정돼 stale 상태가 될 수 있어 덮어쓰면
+                // **인접 face의 boundary loop가 파손**됨.
+                if !info.prev.is_null() && self.hes.contains(info.prev)
+                    && self.hes[info.prev].next() == info.id
+                {
                     self.hes[info.prev].set_next(he_ap);
                 }
-                if !info.next.is_null() && self.hes.contains(info.next) {
+                if !info.next.is_null() && self.hes.contains(info.next)
+                    && self.hes[info.next].prev() == info.id
+                {
                     self.hes[info.next].set_prev(he_pb);
                 }
 
@@ -797,10 +848,14 @@ impl Mesh {
                 self.hes[he_bp].set_flags(info.flags);
                 self.hes[he_pa].set_flags(info.flags);
 
-                if !info.prev.is_null() && self.hes.contains(info.prev) {
+                if !info.prev.is_null() && self.hes.contains(info.prev)
+                    && self.hes[info.prev].next() == info.id
+                {
                     self.hes[info.prev].set_next(he_bp);
                 }
-                if !info.next.is_null() && self.hes.contains(info.next) {
+                if !info.next.is_null() && self.hes.contains(info.next)
+                    && self.hes[info.next].prev() == info.id
+                {
                     self.hes[info.next].set_prev(he_pa);
                 }
 

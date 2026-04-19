@@ -557,27 +557,34 @@ impl Scene {
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
-        // ── Step 1: 기존 엣지와의 교차점 탐지 ──
-        // 새 line이 기존 엣지와 교차하면 교차점에 자동 vertex 삽입 (split_edge).
-        // 이후 서브 세그먼트 단위로 draw_line을 호출해 각 구간별로 face 처리.
+        // ── Step 1: 기존 엣지 교차점 + 기존 vertex on-line 탐지 ──
+        // (a) 새 line이 기존 엣지 interior와 교차 → split_edge로 vertex 삽입
+        // (b) 새 line interior에 기존 vertex가 이미 놓여 있음 → split_edge 불필요,
+        //     새 line 자체를 이 vertex에서 sub-segment로 분할
         let crossings = self.mesh.find_line_crossings(start, end);
+        let verts_on_line = self.mesh.find_vertices_on_line(start, end);
 
-        // ── Step 2: 교차된 엣지들을 split (vertex 삽입) ──
-        // 각 split은 SplitEdge가 반환한 new_vert_id를 통해 sub-segment의 끝점 vertex를 알 수 있음.
-        // split_edge 중간에 faces의 boundary도 자동으로 갱신됨.
-        let mut split_points: Vec<(DVec3, VertId)> = Vec::new();
-        for (edge_id, pos, _t) in &crossings {
+        // ── Step 2: 교차된 엣지 split + 모든 break point 수집 (t 오름차순) ──
+        // BreakPoint: t on new line, 3D position.
+        let mut break_points: Vec<(f64, DVec3)> = Vec::new();
+        for (edge_id, pos, t) in &crossings {
             match self.mesh.split_edge(*edge_id, *pos) {
-                Ok((new_vid, _e1, _e2)) => split_points.push((*pos, new_vid)),
-                Err(_) => continue, // split 실패 — 해당 교차점은 스킵
+                Ok(_) => break_points.push((*t, *pos)),
+                Err(_) => continue,
             }
         }
+        for (_vid, pos, t) in &verts_on_line {
+            break_points.push((*t, *pos));
+        }
+        break_points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Dedup nearby breakpoints (same position from both lists)
+        let dedup_tol = (end - start).length() * 1e-5;
+        break_points.dedup_by(|a, b| (a.1 - b.1).length() < dedup_tol);
 
         // ── Step 3: sub-segment 리스트 구성 ──
-        // [start] -> [split_points...] -> [end]
         let mut segments: Vec<(DVec3, DVec3)> = Vec::new();
         let mut prev = start;
-        for (pos, _) in &split_points {
+        for (_t, pos) in &break_points {
             segments.push((prev, *pos));
             prev = *pos;
         }
