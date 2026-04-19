@@ -1106,13 +1106,13 @@ export class Viewport {
     // → 바닥면(노말이 위를 향함)도 아래에서 클릭 가능
     const meshes = this.meshGroup.children.filter(c => c instanceof THREE.Mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
-    // FrontSide hit 우선, 없으면 BackSide hit 사용
     if (hits.length === 0) return null;
-    const frontHit = hits.find(h => {
-      const mat = (h.object as THREE.Mesh).material as THREE.Material;
-      return mat && mat.side !== THREE.BackSide;
-    });
-    return frontHit || hits[0];
+    // ✱ Bug fix (2026-04-19): 이전 구현은 FrontSide를 선호하려고 BackSide hit을
+    // 스킵했으나, front/back 메시가 *같은 geometry를 공유*하므로 정면 hit은 frontMesh,
+    // 뒷면 hit은 backMesh로 동일 거리에 기록됨. 따라서 hits[0]이 BackSide일 때
+    // "다음 FrontSide"는 뒤쪽 **다른 오브젝트**의 정면이 되어 엉뚱한 오브젝트가
+    // 선택됨. 거리 정렬된 hits[0]을 그대로 사용한다 (front/back 무관하게 가장 가까운 면).
+    return hits[0];
   }
 
   /**
@@ -1145,9 +1145,24 @@ export class Viewport {
     if (!edgeHit) return { type: 'face', hit: faceHit! };
     if (!faceHit) return { type: 'edge', hit: edgeHit };
 
-    // ── 둘 다 hit: 화면 상 엣지까지 거리로 판정 ──
-    const rect = this.renderer.domElement.getBoundingClientRect();
+    // ── 둘 다 hit ──
+    // ✱ Bug fix (2026-04-19): pickEdge는 LineSegments에 threshold를 적용한 Line raycast라
+    // 카메라 ray에서 perpendicular 거리만 판정함. 그래서 박스 뒤에 있는 구/원의 엣지가
+    // 박스 face보다 perpendicular-거리상 가깝다는 이유로 선택돼 "박스 클릭했는데 구/원이
+    // 먼저 선택"되는 현상 발생. → face가 edge보다 "명백히 앞"(ray 거리)에 있으면 edge 무시.
+    //
+    // polygonOffset으로 edge가 face보다 아주 살짝 앞에 렌더링되므로 eps를 좀 크게 둔다.
+    // 카메라-거리에 비례한 tolerance: 0.5% (박스 5m 떨어져 있을 때 약 25mm 여유).
     const cam = this.activeCamera;
+    const camDist = (cam as THREE.PerspectiveCamera).position.length();
+    const depthEps = Math.max(camDist * 0.005, 1);
+    if (edgeHit.distance > faceHit.distance + depthEps) {
+      // edge가 face보다 뒤에 있음 (occluded). face 선택.
+      return { type: 'face', hit: faceHit };
+    }
+
+    // 화면 상 엣지까지 거리로 판정 (edge가 face와 같은 평면상이거나 앞에 있을 때만)
+    const rect = this.renderer.domElement.getBoundingClientRect();
     const edgeProj = edgeHit.point.clone().project(cam);
     const edgeScreenX = ((edgeProj.x + 1) / 2) * rect.width + rect.left;
     const edgeScreenY = ((1 - edgeProj.y) / 2) * rect.height + rect.top;
