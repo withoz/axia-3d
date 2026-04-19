@@ -16,13 +16,20 @@ use crate::storage::SlotStorage;
 use crate::tolerances::*;
 
 /// Spatial hash cell key for fast vertex coincidence queries.
-/// Each axis coordinate is quantized to VERTEX_TOLERANCE-sized cells.
+///
+/// 셀 크기: 1 μm (1e-3 mm). 마우스 기반 좌표의 f32 drift(~1e-4 mm)와
+/// snap 오차를 흡수하기에 적절한 크기. VERTEX_TOLERANCE(1e-7)은 정밀한
+/// coincidence 판정용으로 유지되지만, 공간 해시는 조금 더 관대한 셀을 사용.
 type SpatialKey = (i64, i64, i64);
+
+/// 공간 해시 셀 크기. VERTEX_TOLERANCE보다 크게 해서 근접 vertex 후보를
+/// 넉넉히 수집한다. 실제 coincidence 판정은 Vertex::coincident의 tolerance.
+const SPATIAL_HASH_CELL: f64 = 1e-3; // 1 μm
 
 /// Convert a position to a spatial hash key.
 #[inline]
 fn spatial_key(pos: DVec3) -> SpatialKey {
-    const INV_CELL: f64 = 1.0 / VERTEX_TOLERANCE;
+    const INV_CELL: f64 = 1.0 / SPATIAL_HASH_CELL;
     (
         (pos.x * INV_CELL).floor() as i64,
         (pos.y * INV_CELL).floor() as i64,
@@ -111,7 +118,12 @@ impl Mesh {
     /// Uses spatial hashing for O(1) average-case coincidence lookup.
     pub fn add_vertex(&mut self, pos: DVec3) -> VertId {
         let key = spatial_key(pos);
-        // Check the cell and its 26 neighbors (3×3×3 neighborhood)
+        // 공간 해시 3×3×3 = 최대 3 셀(=3μm) 반경 내 후보.
+        // 실제 dedup 판정은 SPATIAL_HASH_CELL × 1.5 (1.5μm) 이내로 — f32 drift(~0.1μm)와
+        // snap 오차(μm급)를 흡수. VERTEX_TOLERANCE(1e-7)는 그대로 두지만 add_vertex
+        // dedup 단계에선 실용적 기준 적용.
+        let dedup_tol = SPATIAL_HASH_CELL * 1.5;
+        let dedup_tol_sq = dedup_tol * dedup_tol;
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -119,7 +131,14 @@ impl Mesh {
                     if let Some(ids) = self.spatial_hash.get(&neighbor_key) {
                         for &vid in ids {
                             if let Some(vert) = self.verts.get(vid) {
-                                if vert.is_active() && vert.coincident(pos) {
+                                if !vert.is_active() { continue; }
+                                // precise coincident (1e-7) OR within SPATIAL_HASH_CELL
+                                // (후자는 마우스 drift 흡수용)
+                                if vert.coincident(pos) {
+                                    return vid;
+                                }
+                                let d_sq = (vert.pos() - pos).length_squared();
+                                if d_sq < dedup_tol_sq {
                                     return vid;
                                 }
                             }
