@@ -120,6 +120,35 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // B3: Tab = Tentative snap cycling (순회)
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const chosen = toolManager.snap.cycleTentative();
+      if (chosen) {
+        toolManager.snapVisual.update(chosen, toolManager.viewport.activeCamera);
+      }
+      return;
+    }
+
+    // B1: K = Inference Lock toggle (현재 스냅 고정/해제)
+    // (L은 Line tool, Shift는 다른 조합에 쓰이므로 K 단독 키로 예약)
+    if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      if (toolManager.snap.hasLockedInference()) {
+        toolManager.snap.clearLockedInference();
+      } else if (toolManager.snap.lastSnap) {
+        toolManager.snap.setLockedInference(toolManager.snap.lastSnap);
+      }
+      const statOsnap = document.getElementById('stat-osnap');
+      if (statOsnap) {
+        const locked = toolManager.snap.hasLockedInference();
+        const prev = statOsnap.textContent;
+        statOsnap.textContent = locked ? '🔒 LOCKED' : 'UNLOCK';
+        setTimeout(() => { statOsnap.textContent = prev; }, 800);
+      }
+      return;
+    }
+
     // A5: Snap 타입별 단축 토글 (Alt + E/M/I/C/P/L/F/G)
     // Alt 조합으로 기존 단축키(X, Y, Z, H, V 등)와 충돌 방지
     if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {

@@ -191,6 +191,11 @@ export class SnapManager {
   private faceCenters: THREE.Vector3[] = [];
   private faceData: Map<number, { center: THREE.Vector3; verts: THREE.Vector3[]; normal: THREE.Vector3; planeD: number }> = new Map();
 
+  // Phase B4: Spatial hash — world cells → vertex indices.
+  // Cell size should be a multiple of typical snap threshold (≈ 10-100× pixel threshold).
+  private static readonly CELL_SIZE = 5000; // mm
+  private _vertexCells: Map<string, number[]> = new Map();
+
   // Reference point for perpendicular/tangent/parallel/extension
   private referencePoint: THREE.Vector3 | null = null;
 
@@ -207,6 +212,30 @@ export class SnapManager {
   private _lastSnap: SnapPoint | null = null;
   /** performance.now() of the last snap — for A4 recency bonus */
   private _lastSnapTime: number = 0;
+
+  // ═══ Phase B1: Inference Lock ═══
+  /**
+   * When set, findSnap projects the cursor onto this snap's constraint and
+   * returns the locked snap with the projected position. Used for SketchUp-style
+   * Shift-to-lock behavior: hover a snap → hold Shift → snap is "sticky" along
+   * its axis/direction.
+   */
+  private _lockedInference: SnapPoint | null = null;
+
+  // ═══ Phase B2: Inference Chaining ═══
+  /**
+   * Queue of recently hovered edges. When the cursor passes over an edge, it's
+   * added here and its direction is used to suggest parallel/extension snaps
+   * even when the edge is not the immediate target.
+   */
+  private _recentHoveredEdges: EdgeSegment[] = [];
+  private static readonly RECENT_EDGE_CAP = 3;
+
+  // ═══ Phase B3: Tentative Snap (Tab cycling) ═══
+  /** Index into the last candidate list — cycled by Tab */
+  private _tentativeIndex: number = 0;
+  /** Last ranked candidates (updated each findSnap call). Frozen for Tab cycling. */
+  private _lastRankedCandidates: SnapPoint[] = [];
 
   // Callbacks
   private _onSnapChange?: (snap: SnapPoint | null) => void;
@@ -289,6 +318,69 @@ export class SnapManager {
   /** Set reference point (line start, etc.) for perpendicular/parallel snap */
   setReferencePoint(pt: THREE.Vector3 | null) {
     this.referencePoint = pt ? pt.clone() : null;
+  }
+
+  // ═══ Phase B1: Inference Lock API ═══
+
+  /**
+   * Lock the current snap. Subsequent findSnap calls project the cursor onto
+   * this snap's constraint (axis / plane / line) and keep returning it until
+   * `clearLockedInference()` is called.
+   */
+  setLockedInference(snap: SnapPoint | null) {
+    this._lockedInference = snap;
+  }
+  clearLockedInference() {
+    this._lockedInference = null;
+  }
+  hasLockedInference(): boolean {
+    return this._lockedInference !== null;
+  }
+  getLockedInference(): SnapPoint | null {
+    return this._lockedInference;
+  }
+
+  // ═══ Phase B2: Inference Chaining API ═══
+
+  /**
+   * Register an edge the user just hovered over. The edge's direction is
+   * used to generate parallel/extension candidates in subsequent findSnap calls.
+   * Capped at RECENT_EDGE_CAP.
+   */
+  recordHoveredEdge(a: THREE.Vector3, b: THREE.Vector3) {
+    // Dedup: skip if same edge already in queue (by both endpoints)
+    for (const e of this._recentHoveredEdges) {
+      if (e.a.distanceToSquared(a) < 1 && e.b.distanceToSquared(b) < 1) return;
+      if (e.a.distanceToSquared(b) < 1 && e.b.distanceToSquared(a) < 1) return;
+    }
+    this._recentHoveredEdges.push({ a: a.clone(), b: b.clone() });
+    while (this._recentHoveredEdges.length > SnapManager.RECENT_EDGE_CAP) {
+      this._recentHoveredEdges.shift();
+    }
+  }
+  clearRecentEdges() {
+    this._recentHoveredEdges = [];
+  }
+  getRecentEdges(): readonly EdgeSegment[] {
+    return this._recentHoveredEdges;
+  }
+
+  // ═══ Phase B3: Tentative Snap API (Tab cycling) ═══
+
+  /**
+   * Advance through the last candidate list. Returns the new best-candidate,
+   * or null if no candidates are ranked.
+   */
+  cycleTentative(): SnapPoint | null {
+    if (this._lastRankedCandidates.length === 0) return null;
+    this._tentativeIndex =
+      (this._tentativeIndex + 1) % this._lastRankedCandidates.length;
+    const chosen = this._lastRankedCandidates[this._tentativeIndex];
+    this.setResult(chosen);
+    return chosen;
+  }
+  resetTentative() {
+    this._tentativeIndex = 0;
   }
 
   /** Add a temporary tracking point */
@@ -442,6 +534,23 @@ export class SnapManager {
     // Finalize vertex list
     this.vertices = Array.from(vertSet.values());
 
+    // Phase B4: Rebuild vertex spatial hash for fast endpoint proximity queries
+    this._vertexCells.clear();
+    const cs = SnapManager.CELL_SIZE;
+    for (let i = 0; i < this.vertices.length; i++) {
+      const v = this.vertices[i];
+      const cx = Math.floor(v.x / cs);
+      const cy = Math.floor(v.y / cs);
+      const cz = Math.floor(v.z / cs);
+      const key = `${cx},${cy},${cz}`;
+      let bucket = this._vertexCells.get(key);
+      if (!bucket) {
+        bucket = [];
+        this._vertexCells.set(key, bucket);
+      }
+      bucket.push(i);
+    }
+
     // Early exit if no face data to process
     if (positions.length === 0 && this.edges.length === 0) return;
 
@@ -517,6 +626,17 @@ export class SnapManager {
       return null;
     }
 
+    // Phase B1: Inference lock short-circuit
+    // When locked, project cursor onto the lock's constraint and return it.
+    if (this._lockedInference) {
+      const projected = this.projectOntoLock(
+        this._lockedInference,
+        mouseX, mouseY, camera, canvas, groundPoint,
+      );
+      this.setResult(projected);
+      return projected;
+    }
+
     const rect = canvas.getBoundingClientRect();
     const mousePx = new THREE.Vector2(mouseX, mouseY);
     const threshold = this.config.pixelThreshold;
@@ -548,12 +668,20 @@ export class SnapManager {
 
     // ── Endpoint (끝점) ■ ──
     if (modes.has('endpoint')) {
-      for (const v of this.vertices) {
+      // Phase B4: use spatial hash if we have a groundPoint (3D location)
+      // to narrow candidates. Falls back to linear scan when no groundPoint.
+      const candIdx = groundPoint
+        ? this.queryVertexCells(groundPoint)
+        : null;
+      const iter = candIdx
+        ? (fn: (v: THREE.Vector3) => void) => { for (const i of candIdx) fn(this.vertices[i]); }
+        : (fn: (v: THREE.Vector3) => void) => { for (const v of this.vertices) fn(v); };
+      iter(v => {
         const s = toScreenPx(v);
         if (s && mousePx.distanceTo(s) <= threshold) {
           addCandidate('endpoint', v, s);
         }
-      }
+      });
     }
 
     // ── Midpoint (중간점) ▲ ──
@@ -603,6 +731,13 @@ export class SnapManager {
     if (modes.has('extension') && groundPoint) {
       for (const edge of this.edges) {
         const ext = this.extensionSnap(groundPoint, edge, threshold, toScreenPx, mousePx);
+        if (ext) {
+          addCandidate('extension', ext.position, ext.screenPx, edge);
+        }
+      }
+      // Phase B2: recently hovered edges also contribute extension candidates
+      for (const edge of this._recentHoveredEdges) {
+        const ext = this.extensionSnap(groundPoint, edge, threshold * 1.5, toScreenPx, mousePx);
         if (ext) {
           addCandidate('extension', ext.position, ext.screenPx, edge);
         }
@@ -667,6 +802,16 @@ export class SnapManager {
         if (!par) continue;
         const s = toScreenPx(par);
         if (s && mousePx.distanceTo(s) <= threshold * 1.5) {
+          addCandidate('parallel', par, s, edge, this.referencePoint);
+        }
+      }
+      // Phase B2: Inference chaining — recently hovered edges also contribute
+      // parallel/extension candidates even after user's cursor leaves them.
+      for (const edge of this._recentHoveredEdges) {
+        const par = this.parallelSnap(this.referencePoint, groundPoint, edge);
+        if (!par) continue;
+        const s = toScreenPx(par);
+        if (s && mousePx.distanceTo(s) <= threshold * 2) {
           addCandidate('parallel', par, s, edge, this.referencePoint);
         }
       }
@@ -795,11 +940,72 @@ export class SnapManager {
       return (a.distance || 0) - (b.distance || 0);
     });
 
+    // Phase B3: store ranked list for Tab cycling (Tentative snap)
+    this._lastRankedCandidates = candidates;
+    this._tentativeIndex = 0;
+
     // Remove duplicates: if endpoint and nearest are at same position, keep endpoint
     const best = candidates[0];
     this.setResult(best);
     this._lastSnapTime = now;
     return best;
+  }
+
+  /**
+   * Phase B1: Project cursor onto a locked inference's constraint.
+   * - axisX/Y/Z: project cursor ray onto the world axis line through guideFrom
+   * - parallel/perpendicular: project along the edge direction or perpendicular
+   * - endpoint/midpoint/center/etc. (point snaps): return unchanged (point lock)
+   * - grid / onFace / extension / nearest: return unchanged
+   */
+  private projectOntoLock(
+    lock: SnapPoint,
+    mouseX: number, mouseY: number,
+    camera: THREE.Camera,
+    canvas: HTMLCanvasElement,
+    groundPoint?: THREE.Vector3 | null,
+  ): SnapPoint {
+    const rect = canvas.getBoundingClientRect();
+    const toScreenPx = (p: THREE.Vector3): THREE.Vector2 => {
+      const v = p.clone().project(camera);
+      return new THREE.Vector2(
+        (v.x * 0.5 + 0.5) * rect.width + rect.left,
+        (-v.y * 0.5 + 0.5) * rect.height + rect.top,
+      );
+    };
+
+    // Axis lock: project groundPoint onto the world axis passing through guideFrom
+    if (lock.type === 'axisX' || lock.type === 'axisY' || lock.type === 'axisZ') {
+      const origin = lock.guideFrom ?? lock.position;
+      const axis = lock.type === 'axisX'
+        ? new THREE.Vector3(1, 0, 0)
+        : lock.type === 'axisY'
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1);
+      const target = groundPoint ?? lock.position;
+      const delta = target.clone().sub(origin);
+      const t = delta.dot(axis);
+      const projected = origin.clone().add(axis.clone().multiplyScalar(t));
+      const s = toScreenPx(projected);
+      const d = Math.sqrt((mouseX - s.x) ** 2 + (mouseY - s.y) ** 2);
+      return { ...lock, position: projected, screenPos: s, distance: d };
+    }
+
+    // Parallel/perpendicular lock: project along the edge direction from guideFrom
+    if ((lock.type === 'parallel' || lock.type === 'perpendicular')
+      && lock.edgeRef && lock.guideFrom) {
+      const dir = lock.edgeRef.b.clone().sub(lock.edgeRef.a).normalize();
+      const target = groundPoint ?? lock.position;
+      const delta = target.clone().sub(lock.guideFrom);
+      const t = delta.dot(dir);
+      const projected = lock.guideFrom.clone().add(dir.clone().multiplyScalar(t));
+      const s = toScreenPx(projected);
+      const d = Math.sqrt((mouseX - s.x) ** 2 + (mouseY - s.y) ** 2);
+      return { ...lock, position: projected, screenPos: s, distance: d };
+    }
+
+    // Point locks: return as-is
+    return lock;
   }
 
   /** One-shot snap override (ZWCAD 스냅 재지정) — ignores active modes & enabled state, uses only specified type */
@@ -956,6 +1162,28 @@ export class SnapManager {
 
     const best = candidates[0];
     return { dist: best.dist, target: best.target, targetType: best.targetType };
+  }
+
+  /**
+   * Phase B4: Query vertex indices in the 3×3×3 cell neighborhood of `world`.
+   * Returns `null` if the hash is empty (caller should fall back to linear).
+   */
+  private queryVertexCells(world: THREE.Vector3): number[] | null {
+    if (this._vertexCells.size === 0) return null;
+    const cs = SnapManager.CELL_SIZE;
+    const cx = Math.floor(world.x / cs);
+    const cy = Math.floor(world.y / cs);
+    const cz = Math.floor(world.z / cs);
+    const out: number[] = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const bucket = this._vertexCells.get(`${cx+dx},${cy+dy},${cz+dz}`);
+          if (bucket) out.push(...bucket);
+        }
+      }
+    }
+    return out;
   }
 
   /** Tangent points from external point P to circle (center C, radius r) on plane with normal n */

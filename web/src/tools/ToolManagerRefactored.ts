@@ -500,6 +500,13 @@ export class ToolManager {
       );
     }
 
+    // Phase B2: Inference chaining — remember recently hovered edges so that
+    // parallel / extension inferences remain available even after the cursor
+    // leaves them. Called whenever a snap fires on an edge-type candidate.
+    if (snapResult?.edgeRef) {
+      this.snap.recordHoveredEdge(snapResult.edgeRef.a, snapResult.edgeRef.b);
+    }
+
     // SketchUp-style: if normal snap didn't fire, always-on endpoint inference kicks in
     if (!snapResult) {
       snapResult = this.snap.findNearestEndpoint(
