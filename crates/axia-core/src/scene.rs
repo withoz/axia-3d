@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use glam::DVec3;
 use anyhow::Result;
 
-use axia_geo::{Mesh, MaterialId, FaceId, EdgeId};
+use axia_geo::{Mesh, MaterialId, FaceId, EdgeId, VertId};
 use axia_transaction::TransactionManager;
 
 use crate::xia::{Xia, XiaId};
@@ -476,6 +476,78 @@ impl Scene {
         }
     }
 
+    /// 주어진 vertex 루프가 기존 face 중 하나 이상의 centroid를 감싸고 있는지 검사.
+    /// True이면 이 루프는 "외부 unbounded boundary"로 판정 → 면 생성 스킵.
+    ///
+    /// 구현: 루프 3점으로 근사 평면 정의 → 평면의 두 basis로 2D 투영 →
+    /// 기존 face들의 centroid를 같은 평면에 투영 후 point-in-polygon 검사.
+    fn loop_encloses_existing_face(&self, loop_verts: &[VertId]) -> bool {
+        if loop_verts.len() < 3 { return false; }
+        // 루프 vertex의 3D 좌표 수집
+        let pts: Vec<DVec3> = loop_verts.iter()
+            .filter_map(|v| self.mesh.vertex_pos(*v).ok())
+            .collect();
+        if pts.len() < 3 { return false; }
+        // 평면 basis 구성
+        let origin = pts[0];
+        let e1 = (pts[1] - origin).normalize_or_zero();
+        if e1.length_squared() < 1e-10 { return false; }
+        let mut e2 = DVec3::ZERO;
+        for p in &pts[2..] {
+            let v = *p - origin;
+            let proj = e1 * v.dot(e1);
+            let ortho = v - proj;
+            if ortho.length_squared() > 1e-6 {
+                e2 = ortho.normalize_or_zero();
+                break;
+            }
+        }
+        if e2.length_squared() < 1e-10 { return false; }
+        let project2d = |p: DVec3| -> (f64, f64) {
+            let v = p - origin;
+            (v.dot(e1), v.dot(e2))
+        };
+        let poly: Vec<(f64, f64)> = pts.iter().map(|&p| project2d(p)).collect();
+        // point-in-polygon (ray cast)
+        let point_in = |x: f64, y: f64| -> bool {
+            let mut inside = false;
+            let n = poly.len();
+            let mut j = n - 1;
+            for i in 0..n {
+                let (xi, yi) = poly[i];
+                let (xj, yj) = poly[j];
+                if ((yi > y) != (yj > y)) &&
+                   (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            inside
+        };
+        // 기존 활성 face의 centroid 투영 후 검사
+        for (face_id, face) in self.mesh.faces.iter() {
+            if !face.is_active() { continue; }
+            // centroid 계산 (face vertices 평균)
+            let Ok(verts) = self.mesh.collect_loop_verts(face.outer().start) else { continue };
+            if verts.is_empty() { continue; }
+            let mut cx = DVec3::ZERO;
+            for &v in &verts {
+                if let Ok(p) = self.mesh.vertex_pos(v) { cx += p; }
+            }
+            cx /= verts.len() as f64;
+            // 평면 거리 검사 (루프 평면에서 너무 멀면 무관)
+            let normal = e1.cross(e2).normalize_or_zero();
+            let dist = (cx - origin).dot(normal).abs();
+            if dist > 1.0 { continue; } // 다른 평면의 face — 무시
+            let (px, py) = project2d(cx);
+            if point_in(px, py) {
+                let _ = face_id;
+                return true;
+            }
+        }
+        false
+    }
+
     fn exec_draw_line(
         &mut self,
         start: DVec3,
@@ -488,65 +560,93 @@ impl Scene {
         match self.mesh.draw_line(start, end) {
             Ok((v0, v1, edge_id)) => {
                 // 사용자가 직접 그린 선은 coplanar 면 사이에서도 항상 보이도록 HARD 마킹.
-                // (face split과 동일 규칙 — mesh.rs line ~858 참조)
                 self.mesh.mark_edge_hard(edge_id);
-                // ── Auto-face: check if this edge closes a loop ──
-                if let Some(loop_verts) = self.mesh.detect_free_edge_loop(v0, v1, edge_id) {
-                    // Collect all edges forming the loop (for XIA cleanup)
-                    let loop_edge_ids: Vec<EdgeId> = (0..loop_verts.len())
-                        .filter_map(|i| {
-                            let va = loop_verts[i];
-                            let vb = loop_verts[(i + 1) % loop_verts.len()];
-                            self.mesh.find_edge(va, vb)
-                        })
-                        .collect();
 
-                    // Create the face from the closed loop
-                    match self.mesh.add_face(&loop_verts, self.default_material) {
-                        Ok(face_id) => {
-                            // Remove all standalone-edge XIAs whose edge is part of this loop
-                            let xias_to_remove: Vec<XiaId> = self.xias.iter()
-                                .filter(|(_, x)| {
-                                    if let Some(eid) = x.standalone_edge_id {
-                                        loop_edge_ids.contains(&eid)
-                                    } else {
-                                        false
-                                    }
-                                })
-                                .map(|(&id, _)| id)
-                                .collect();
+                // ── Auto-face: 새 엣지가 하나 이상의 루프를 닫으면 각각 면 생성 ──
+                // 반복 탐색: detect_free_edge_loop은 new_edge의 한쪽에서 루프를 찾음.
+                // 첫 면 생성 후 반대쪽에도 free half-edge가 남아 있으면 또 다른 루프
+                // 가능 → Some을 반환. 이런 식으로 한 drawLine이 여러 enclosed region을
+                // 만든 경우(예: 기존 면 사이를 가로지르는 선) 모두 면으로 확정.
+                let mut created_faces: Vec<FaceId> = Vec::new();
+                let mut all_loop_edge_ids: Vec<EdgeId> = Vec::new();
+                // 이전 루프의 vertex set (정규화된 순서) — 반대 winding 중복 탐지.
+                let mut seen_loops: Vec<Vec<VertId>> = Vec::new();
 
-                            for xid in &xias_to_remove {
-                                self.xias.remove(xid);
+                loop {
+                    let loop_verts = match self.mesh.detect_free_edge_loop(v0, v1, edge_id) {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    // 같은 vertex 집합을 역순으로 재발견하는 경우(= "외부" 면)는 건너뜀.
+                    let mut norm = loop_verts.clone();
+                    norm.sort_by_key(|v| v.raw());
+                    if seen_loops.iter().any(|s| s == &norm) { break; }
+                    seen_loops.push(norm.clone());
+
+                    // "외부 unbounded 루프" 필터: 이 루프가 기존 면(face)을 감싸는
+                    // 경우라면 내부가 아니라 외부 boundary임 → 면 생성 스킵.
+                    // 판정: 루프의 모든 vertex의 2D 투영 bbox 내부에 있는 **기존 face의
+                    // centroid**가 있으면 skip.
+                    if self.loop_encloses_existing_face(&loop_verts) {
+                        break;
+                    }
+
+                    // Collect edges of this loop for XIA cleanup
+                    for i in 0..loop_verts.len() {
+                        let va = loop_verts[i];
+                        let vb = loop_verts[(i + 1) % loop_verts.len()];
+                        if let Some(eid) = self.mesh.find_edge(va, vb) {
+                            if !all_loop_edge_ids.contains(&eid) {
+                                all_loop_edge_ids.push(eid);
                             }
-
-                            // Create new XIA owning the face
-                            let xia_id = self.create_xia("Face".to_string());
-                            if let Some(xia) = self.xias.get_mut(&xia_id) {
-                                xia.position = start;
-                                xia.surface_normal = surface_normal;
-                                xia.face_ids.push(face_id);
-                                // geometry_state() = Face (1 face, no standalone edge)
-                            }
-                            self.register_faces_to_xia(xia_id, &[face_id]);
-
-                            self.transactions.set_after_snapshot(self.scene_snapshot());
-                            self.transactions.commit();
-                            return CommandResult::EntityCreated(xia_id);
-                        }
-                        Err(_) => {
-                            // Face creation failed — fall through to edge-only path
                         }
                     }
+                    match self.mesh.add_face(&loop_verts, self.default_material) {
+                        Ok(fid) => created_faces.push(fid),
+                        Err(_) => break,
+                    }
+                    // Safety cap — one edge separates at most 2 regions.
+                    if created_faces.len() >= 2 { break; }
                 }
 
-                // ── No loop detected (or face creation failed) — create edge XIA ──
+                if !created_faces.is_empty() {
+                    // Remove standalone-edge XIAs whose edge is part of any created loop
+                    let xias_to_remove: Vec<XiaId> = self.xias.iter()
+                        .filter(|(_, x)| {
+                            if let Some(eid) = x.standalone_edge_id {
+                                all_loop_edge_ids.contains(&eid)
+                            } else {
+                                false
+                            }
+                        })
+                        .map(|(&id, _)| id)
+                        .collect();
+                    for xid in &xias_to_remove {
+                        self.xias.remove(xid);
+                    }
+
+                    // Create one XIA owning all new faces (single user action = single entity)
+                    let xia_id = self.create_xia("Face".to_string());
+                    if let Some(xia) = self.xias.get_mut(&xia_id) {
+                        xia.position = start;
+                        xia.surface_normal = surface_normal;
+                        for &fid in &created_faces {
+                            xia.face_ids.push(fid);
+                        }
+                    }
+                    self.register_faces_to_xia(xia_id, &created_faces);
+
+                    self.transactions.set_after_snapshot(self.scene_snapshot());
+                    self.transactions.commit();
+                    return CommandResult::EntityCreated(xia_id);
+                }
+
+                // ── No loop detected — create edge XIA ──
                 let xia_id = self.create_xia("Line".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.position = start;
                     xia.surface_normal = surface_normal;
                     xia.standalone_edge_id = Some(edge_id);
-                    // geometry_state() = Edge (standalone edge, no faces)
                 }
                 self.transactions.set_after_snapshot(self.scene_snapshot());
                 self.transactions.commit();
