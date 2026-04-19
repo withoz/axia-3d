@@ -375,178 +375,223 @@ impl Mesh {
     }
 
     /// ════════════════════════════════════════════════════════════════════════
-    /// Planar Face Resolution — Leftmost-turn traversal
+    /// Planar Face Resolution — Leftmost-turn traversal (다중 평면 지원)
     /// ════════════════════════════════════════════════════════════════════════
     ///
     /// Free half-edges (face=null)로 이루어진 planar 그래프에서 모든 bounded
     /// region을 체계적으로 찾아 face로 확정. 기존 face는 건드리지 않음.
     ///
-    /// 알고리즘 (leftmost-turn):
-    /// 1. 각 vertex의 outgoing free HE를 2D angle로 정렬.
-    /// 2. 각 free HE에서 시작해 "incoming twin에서 CW 다음 outgoing"로 walk.
-    /// 3. 이 walk는 HE 왼쪽 face의 boundary를 traverse.
-    /// 4. 모든 cycle을 수집, signed area > 0인 것만 face로 생성 (외부 unbounded 제외).
+    /// 알고리즘:
+    /// 1. 모든 free HE를 수집, connected component로 그룹화 (공유 vertex).
+    /// 2. 각 component마다 PCA-lite 기반 평면 결정 (3점 non-collinear).
+    /// 3. Component의 평면으로 2D 투영 → leftmost-turn walk → cycle 수집.
+    /// 4. Signed area > 0인 cycle을 face로 생성.
     ///
-    /// 현재 scope: y=0 ground plane만 지원.
-    /// (다중 평면은 차후 component별 PCA로 확장.)
+    /// 다중 평면 지원: 각 component 독립적으로 평면 결정, 3D 스케치 처리 가능.
     pub fn resolve_planar_free_faces(&mut self, material: MaterialId) -> Vec<FaceId> {
-        // Step 1: free HE 수집 (y=0 범주 + coplanar 체크는 cycle 확인 시)
         let free_hes: Vec<HeId> = self.hes.iter()
             .filter(|(_, he)| he.is_active() && he.face().is_null())
             .map(|(id, _)| id)
             .collect();
         if free_hes.is_empty() { return Vec::new(); }
 
-        // Step 2: y=0 평면 필터 + vertex→outgoing HE 인덱스 구축
-        const Y_EPS: f64 = 0.5; // 0.5mm 안에 y=0
-        let mut in_plane: FxHashSet<HeId> = FxHashSet::default();
-        for &he in &free_hes {
-            let src = self.he_source(he);
-            let dst = self.hes[he].dst();
-            let ps = match self.vertex_pos(src) { Ok(p) => p, Err(_) => continue };
-            let pd = match self.vertex_pos(dst) { Ok(p) => p, Err(_) => continue };
-            if ps.y.abs() < Y_EPS && pd.y.abs() < Y_EPS {
-                in_plane.insert(he);
+        // Step 1: free HE를 connected component로 그룹 (공유 vertex 기준)
+        //   각 component의 vertex 집합도 동시 수집.
+        let free_set: FxHashSet<HeId> = free_hes.iter().copied().collect();
+        let mut he_to_comp: FxHashMap<HeId, usize> = FxHashMap::default();
+        let mut components: Vec<Vec<HeId>> = Vec::new();
+        for &start in &free_hes {
+            if he_to_comp.contains_key(&start) { continue; }
+            let comp_id = components.len();
+            let mut comp_hes: Vec<HeId> = Vec::new();
+            let mut stack: Vec<HeId> = vec![start];
+            while let Some(he) = stack.pop() {
+                if he_to_comp.contains_key(&he) { continue; }
+                he_to_comp.insert(he, comp_id);
+                comp_hes.push(he);
+                let src = self.he_source(he);
+                let dst = self.hes[he].dst();
+                // source와 dst의 모든 outgoing active HE 중 free인 것을 인접으로
+                for &v in &[src, dst] {
+                    for (hid, h) in self.hes.iter() {
+                        if !h.is_active() { continue; }
+                        if !free_set.contains(&hid) { continue; }
+                        if he_to_comp.contains_key(&hid) { continue; }
+                        let hs = self.he_source(hid);
+                        let hd = h.dst();
+                        if hs == v || hd == v {
+                            stack.push(hid);
+                        }
+                    }
+                }
+            }
+            components.push(comp_hes);
+        }
+
+        let mut created_all: Vec<FaceId> = Vec::new();
+        for comp in &components {
+            let faces = self.resolve_component(comp, material);
+            created_all.extend(faces);
+        }
+        created_all
+    }
+
+    /// 단일 component의 free HE들에 대해 평면 결정 + leftmost-turn + face 생성.
+    fn resolve_component(&mut self, comp_hes: &[HeId], material: MaterialId) -> Vec<FaceId> {
+        if comp_hes.is_empty() { return Vec::new(); }
+
+        // Component의 모든 vertex 수집
+        let mut verts_set: FxHashSet<VertId> = FxHashSet::default();
+        for &he in comp_hes {
+            verts_set.insert(self.he_source(he));
+            verts_set.insert(self.hes[he].dst());
+        }
+        let verts_vec: Vec<VertId> = verts_set.iter().copied().collect();
+        if verts_vec.len() < 3 { return Vec::new(); }
+
+        // Step 2: 평면 결정 — 3점 non-collinear
+        let p0 = match self.vertex_pos(verts_vec[0]) { Ok(p) => p, Err(_) => return Vec::new() };
+        // 가장 먼 점 찾기 (v1)
+        let mut max_d = 0.0_f64;
+        let mut v1_pos = p0;
+        for &v in verts_vec.iter().skip(1) {
+            if let Ok(p) = self.vertex_pos(v) {
+                let d = (p - p0).length_squared();
+                if d > max_d { max_d = d; v1_pos = p; }
+            }
+        }
+        if max_d < 1e-10 { return Vec::new(); }
+        let e1 = (v1_pos - p0).normalize_or_zero();
+        if e1.length_squared() < 1e-10 { return Vec::new(); }
+        // 최대 수직 거리 점 찾기 (v2)
+        let mut max_perp = 0.0_f64;
+        let mut v2_pos = p0;
+        for &v in &verts_vec {
+            if let Ok(p) = self.vertex_pos(v) {
+                let d = p - p0;
+                let proj = e1 * d.dot(e1);
+                let ortho = d - proj;
+                let len = ortho.length_squared();
+                if len > max_perp { max_perp = len; v2_pos = p; }
+            }
+        }
+        if max_perp < 1e-10 { return Vec::new(); } // collinear component
+        let e2 = {
+            let d = v2_pos - p0;
+            let proj = e1 * d.dot(e1);
+            (d - proj).normalize_or_zero()
+        };
+        let normal = e1.cross(e2).normalize_or_zero();
+        if normal.length_squared() < 1e-10 { return Vec::new(); }
+
+        // 평면 coplanarity tolerance (상대)
+        let tol = (max_d.sqrt() * 1e-4).max(1e-3);
+
+        // Component의 모든 vertex가 평면 위에 있는지 확인
+        for &v in &verts_vec {
+            if let Ok(p) = self.vertex_pos(v) {
+                let dist = (p - p0).dot(normal).abs();
+                if dist > tol { return Vec::new(); } // 비평면 component — skip
             }
         }
 
-        // vertex → ALL outgoing HE (free + 기존 face 소속 모두) — angular ordering에 필요.
-        // non-free HE는 "twin index"를 찾기 위한 reference로만 사용됨.
-        let mut vert_to_outs: FxHashMap<VertId, Vec<HeId>> = FxHashMap::default();
-        // 먼저 free HE의 src vertex set 수집
-        let mut verts_of_interest: FxHashSet<VertId> = FxHashSet::default();
-        for &he in &in_plane {
-            verts_of_interest.insert(self.he_source(he));
-            verts_of_interest.insert(self.hes[he].dst());
+        // Step 3: 2D 투영
+        let project2d = |p: DVec3| -> (f64, f64) {
+            let v = p - p0;
+            (v.dot(e1), v.dot(e2))
+        };
+
+        // vertex → 2D 좌표
+        let mut vert_2d: FxHashMap<VertId, (f64, f64)> = FxHashMap::default();
+        for &v in &verts_vec {
+            if let Ok(p) = self.vertex_pos(v) {
+                vert_2d.insert(v, project2d(p));
+            }
         }
-        // 그 vertex들의 ALL outgoing HE 수집 (v_ring 기반)
-        for &v in &verts_of_interest {
+
+        // vertex → ALL outgoing HE (free + in-face 모두, angular ordering용)
+        let mut vert_to_outs: FxHashMap<VertId, Vec<HeId>> = FxHashMap::default();
+        for &v in &verts_vec {
             let mut list = Vec::new();
-            // 모든 active HE를 훑어 source == v인 것을 수집
-            // (v_ring을 완벽히 traverse하는 대신 단순 스캔 — in_plane 크기가 작을 때만 유효)
             for (hid, he) in self.hes.iter() {
                 if !he.is_active() { continue; }
-                // y=0 평면 필터 (HE의 양 끝이 y=0)
-                let src = self.he_source(hid);
-                if src != v { continue; }
-                let dst = he.dst();
-                let ps = match self.vertex_pos(src) { Ok(p) => p, Err(_) => continue };
-                let pd = match self.vertex_pos(dst) { Ok(p) => p, Err(_) => continue };
-                if ps.y.abs() >= Y_EPS || pd.y.abs() >= Y_EPS { continue; }
+                if self.he_source(hid) != v { continue; }
+                // 2D 상 위치 정의 가능한 경우만 포함 (dst이 vert_2d에 있음)
+                if !vert_2d.contains_key(&he.dst()) { continue; }
                 list.push(hid);
             }
             vert_to_outs.insert(v, list);
         }
 
-        // Step 3: 각 vertex의 outgoing을 XZ 평면 angle로 정렬 (y=0 가정)
-        let he_angle = |he: HeId, mesh: &Mesh| -> f64 {
-            let src = mesh.he_source(he);
-            let dst = mesh.hes[he].dst();
-            let ps = mesh.vertex_pos(src).unwrap_or(DVec3::ZERO);
-            let pd = mesh.vertex_pos(dst).unwrap_or(DVec3::ZERO);
-            (pd.z - ps.z).atan2(pd.x - ps.x)
+        // HE의 2D 방향 angle
+        let he_angle_2d = |hid: HeId, self_: &Mesh| -> f64 {
+            let src = self_.he_source(hid);
+            let dst = self_.hes[hid].dst();
+            let ps = vert_2d.get(&src).copied().unwrap_or((0.0, 0.0));
+            let pd = vert_2d.get(&dst).copied().unwrap_or((0.0, 0.0));
+            (pd.1 - ps.1).atan2(pd.0 - ps.0)
         };
 
-        // 정렬 — closure에서 self 빌림 회피를 위해 직접
+        // 정렬
         for (_, hes) in vert_to_outs.iter_mut() {
             hes.sort_by(|&a, &b| {
-                let sa = {
-                    let he = &self.hes[a];
-                    let ps = {
-                        let edge = &self.edges[he.edge()];
-                        let dst = he.dst();
-                        let src = if dst == edge.v_small() { edge.v_large() } else { edge.v_small() };
-                        self.verts.get(src).map(|v| v.pos()).unwrap_or(DVec3::ZERO)
-                    };
-                    let pd = self.verts.get(he.dst()).map(|v| v.pos()).unwrap_or(DVec3::ZERO);
-                    (pd.z - ps.z).atan2(pd.x - ps.x)
-                };
-                let sb = {
-                    let he = &self.hes[b];
-                    let ps = {
-                        let edge = &self.edges[he.edge()];
-                        let dst = he.dst();
-                        let src = if dst == edge.v_small() { edge.v_large() } else { edge.v_small() };
-                        self.verts.get(src).map(|v| v.pos()).unwrap_or(DVec3::ZERO)
-                    };
-                    let pd = self.verts.get(he.dst()).map(|v| v.pos()).unwrap_or(DVec3::ZERO);
-                    (pd.z - ps.z).atan2(pd.x - ps.x)
-                };
+                let sa = he_angle_2d(a, self);
+                let sb = he_angle_2d(b, self);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
-        let _ = he_angle;
 
-        // Step 4: Leftmost-turn walk — 모든 free HE를 cycle로 그룹
+        // Step 4: Leftmost-turn walk
+        let free_set: FxHashSet<HeId> = comp_hes.iter().copied().collect();
         let mut visited: FxHashSet<HeId> = FxHashSet::default();
         let mut cycles: Vec<Vec<VertId>> = Vec::new();
-        let max_iter = in_plane.len() * 2 + 10;
+        let max_iter = comp_hes.len() * 2 + 10;
 
-        for &start in &in_plane {
+        for &start in comp_hes {
             if visited.contains(&start) { continue; }
-
             let mut cycle_hes: Vec<HeId> = Vec::new();
             let mut current = start;
             let mut closed = false;
             for _ in 0..max_iter {
-                if visited.contains(&current) {
-                    // 이미 방문한 HE — 중복 탐색, 중단
-                    break;
-                }
+                if visited.contains(&current) { break; }
                 cycle_hes.push(current);
                 visited.insert(current);
 
-                // 다음 HE: dst(current)에서 twin(current)를 outs에서 찾고 CW previous
                 let v = self.hes[current].dst();
                 let twin = self.he_twin(current);
-
                 let outs = match vert_to_outs.get(&v) { Some(o) => o, None => break };
                 if outs.is_empty() { break; }
                 let twin_idx = match outs.iter().position(|&h| h == twin) {
-                    Some(i) => i,
-                    None => break, // twin not present — 비정상 토폴로지
+                    Some(i) => i, None => break,
                 };
                 let next_idx = (twin_idx + outs.len() - 1) % outs.len();
                 let next_he = outs[next_idx];
 
-                // 다음 HE가 기존 face에 속해 있으면 free 영역 밖 — cycle 완결 불가
-                if !self.hes[next_he].face().is_null() {
-                    break;
-                }
+                if !self.hes[next_he].face().is_null() { break; }
+                if !free_set.contains(&next_he) { break; } // 다른 component의 free HE (드문 케이스)
 
-                if next_he == start {
-                    closed = true;
-                    break;
-                }
+                if next_he == start { closed = true; break; }
                 current = next_he;
             }
 
             if !closed || cycle_hes.len() < 3 { continue; }
-
-            // Cycle vertex 시퀀스
             let verts: Vec<VertId> = cycle_hes.iter().map(|&h| self.he_source(h)).collect();
             cycles.push(verts);
         }
 
-        // Step 5: Signed area로 bounded/outer 구분 + face 생성
+        // Step 5: Signed area로 bounded/outer 구분 (2D 투영 좌표 기반)
         let mut created: Vec<FaceId> = Vec::new();
         for verts in &cycles {
-            // Signed area (XZ 평면, CCW=양수)
             let mut area2 = 0.0;
             for i in 0..verts.len() {
-                let p = self.vertex_pos(verts[i]).unwrap_or(DVec3::ZERO);
-                let q = self.vertex_pos(verts[(i + 1) % verts.len()]).unwrap_or(DVec3::ZERO);
-                area2 += p.x * q.z - q.x * p.z;
+                let p = vert_2d.get(&verts[i]).copied().unwrap_or((0.0, 0.0));
+                let q = vert_2d.get(&verts[(i + 1) % verts.len()]).copied().unwrap_or((0.0, 0.0));
+                area2 += p.0 * q.1 - q.0 * p.1;
             }
-            // CCW from +Y (위에서 내려다보면 CCW가 양수)
-            // 음수면 outer(CW boundary) — skip.
             if area2 <= 0.0 { continue; }
-            // Coplanarity (이미 y=0 필터했지만 안전 재검증)
             if !self.are_verts_coplanar(verts) { continue; }
-
-            match self.add_face(verts, material) {
-                Ok(fid) => created.push(fid),
-                Err(_) => continue,
+            if let Ok(fid) = self.add_face(verts, material) {
+                created.push(fid);
             }
         }
         created
@@ -568,8 +613,15 @@ impl Mesh {
             .filter(|(_, f)| f.is_active())
             .map(|(id, _)| id)
             .collect();
-        // 각 face의 2D polygon (y=0) + centroid 계산
-        struct FaceGeom { poly: Vec<(f64, f64)>, centroid: (f64, f64), y_avg: f64 }
+        // 각 face의 자체 평면에서 2D polygon + centroid 계산
+        struct FaceGeom {
+            poly_2d: Vec<(f64, f64)>,
+            centroid_3d: DVec3,
+            origin: DVec3,
+            e1: DVec3,
+            e2: DVec3,
+            normal: DVec3,
+        }
         let mut geoms: FxHashMap<FaceId, FaceGeom> = FxHashMap::default();
         for &fid in &active {
             let face = &self.faces[fid];
@@ -581,13 +633,36 @@ impl Mesh {
                 .filter_map(|&v| self.vertex_pos(v).ok())
                 .collect();
             if pts.len() != boundary.len() { continue; }
-            // y=0 평면만 현재 지원
-            let y_avg: f64 = pts.iter().map(|p| p.y).sum::<f64>() / pts.len() as f64;
-            if y_avg.abs() > 0.5 { continue; }
-            let poly: Vec<(f64, f64)> = pts.iter().map(|p| (p.x, p.z)).collect();
+            // face의 자체 평면 (normal + origin)
+            let face_normal = face.normal();
+            if face_normal.length_squared() < 1e-10 { continue; }
+            let origin = pts[0];
+            // e1: 첫 edge 방향
+            let mut e1 = DVec3::ZERO;
+            for p in &pts[1..] {
+                let v = *p - origin;
+                if v.length_squared() > 1e-6 {
+                    e1 = v.normalize_or_zero();
+                    break;
+                }
+            }
+            if e1.length_squared() < 1e-10 { continue; }
+            // e2 = normal × e1
+            let e2 = face_normal.cross(e1).normalize_or_zero();
+            if e2.length_squared() < 1e-10 { continue; }
+            let poly_2d: Vec<(f64, f64)> = pts.iter()
+                .map(|p| {
+                    let v = *p - origin;
+                    (v.dot(e1), v.dot(e2))
+                })
+                .collect();
             let cx: f64 = pts.iter().map(|p| p.x).sum::<f64>() / pts.len() as f64;
+            let cy: f64 = pts.iter().map(|p| p.y).sum::<f64>() / pts.len() as f64;
             let cz: f64 = pts.iter().map(|p| p.z).sum::<f64>() / pts.len() as f64;
-            geoms.insert(fid, FaceGeom { poly, centroid: (cx, cz), y_avg });
+            geoms.insert(fid, FaceGeom {
+                poly_2d, centroid_3d: DVec3::new(cx, cy, cz),
+                origin, e1, e2, normal: face_normal,
+            });
         }
 
         let point_in = |x: f64, y: f64, poly: &[(f64, f64)]| -> bool {
@@ -607,14 +682,28 @@ impl Mesh {
             inside
         };
 
-        // 각 face가 다른 어떤 face를 "감싸는지" 판정 (B의 centroid가 A's polygon 내부)
+        // 각 outer face에 대해 inner face가 "같은 평면" + "polygon 내부"인지 검사
         let mut to_dissolve: FxHashSet<FaceId> = FxHashSet::default();
         for (&outer, og) in &geoms {
             for (&inner, ig) in &geoms {
                 if outer == inner { continue; }
-                if (og.y_avg - ig.y_avg).abs() > 0.5 { continue; }
-                if point_in(ig.centroid.0, ig.centroid.1, &og.poly) {
-                    // outer가 inner를 감쌈 → outer를 dissolve 대상에 추가
+                // 같은 평면인지 (normal 평행 + centroid 평면 거리 작음)
+                let n_dot = og.normal.dot(ig.normal).abs();
+                if n_dot < 0.99 { continue; } // 평면 불일치
+                // inner centroid를 outer 평면에 투영해 polygon-in 검사
+                let v = ig.centroid_3d - og.origin;
+                let dist = v.dot(og.normal).abs();
+                // Relative tolerance — outer의 최장 chord 기준
+                let mut max_chord_sq = 0.0_f64;
+                for i in 0..og.poly_2d.len() {
+                    let (x, y) = og.poly_2d[i];
+                    max_chord_sq = max_chord_sq.max(x*x + y*y);
+                }
+                let plane_tol = (max_chord_sq.sqrt() * 1e-4).max(1.0); // 최소 1mm
+                if dist > plane_tol { continue; } // 다른 평면
+                let px = v.dot(og.e1);
+                let py = v.dot(og.e2);
+                if point_in(px, py, &og.poly_2d) {
                     to_dissolve.insert(outer);
                 }
             }
