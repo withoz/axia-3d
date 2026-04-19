@@ -611,12 +611,18 @@ impl Mesh {
 
             // required_edges 필터: cycle이 적어도 하나의 required edge를 포함해야 함.
             // 이 필터는 "이전에 삭제된 면의 자유 엣지 cycle"이 재생성되는 것을 차단.
-            // 새 drawLine이 만든 edge 집합을 required로 넘기면, 그것을 포함하는 cycle만 face화.
+            //
+            // **크기 제한**: 작은 cycle(≤7 vertices)에는 필터 적용 안 함.
+            // 이유: 사용자가 새로 그리는 일반 도형(삼각/사각/오각형 등)은 vertex 수가 적음.
+            // 반면 삭제된 원형 면(예: 원통 top 24 vertices)은 큰 cycle. 필터를 큰 cycle에만
+            // 적용하면 일반 face 생성 실패 없이 큰 deleted boundary 재생성만 차단.
             if let Some(req) = required_edges {
-                let uses_required = cycle_hes.iter().any(|&he| {
-                    req.contains(&self.hes[he].edge())
-                });
-                if !uses_required { continue; }
+                if cycle_hes.len() > 7 {
+                    let uses_required = cycle_hes.iter().any(|&he| {
+                        req.contains(&self.hes[he].edge())
+                    });
+                    if !uses_required { continue; }
+                }
             }
 
             let verts: Vec<VertId> = cycle_hes.iter().map(|&h| self.he_source(h)).collect();
