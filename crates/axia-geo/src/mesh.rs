@@ -739,6 +739,8 @@ impl Mesh {
 
             // Face 생성
             if let Ok(fid) = self.add_face(verts, material) {
+                // 인접 face와 normal 일관성 검사 — 필요 시 뒤집기
+                self.align_face_with_neighbors(fid);
                 created.push(fid);
             }
         }
@@ -1062,6 +1064,62 @@ impl Mesh {
             }
         }
         created
+    }
+
+    /// Face의 normal을 인접 face의 normal과 일관되게 맞춤.
+    ///
+    /// Manifold 규칙: 닫힌 솔리드의 인접 face들은 모두 같은 쪽(outward/inward)을
+    /// 향함. 특히 인접 face들 간 normal dot > 0. 새로 생성된 face가 우연히 반대
+    /// 방향의 normal을 가지면 (예: 수직 평면에서 signed area 부호 혼동) 인접 face와
+    /// dot < 0이 됨 → 뒤집어서 수정.
+    ///
+    /// 반환: flip이 수행되었는지.
+    pub fn align_face_with_neighbors(&mut self, face_id: FaceId) -> bool {
+        let face = match self.faces.get(face_id) { Some(f) => f, None => return false };
+        if !face.is_active() { return false; }
+        let my_normal = face.normal();
+        if my_normal.length_squared() < 1e-10 { return false; }
+
+        let verts = match self.collect_loop_verts(face.outer().start) {
+            Ok(v) => v, Err(_) => return false,
+        };
+        if verts.len() < 3 { return false; }
+
+        // 각 edge에서 adjacent face 찾기 (HE twin의 face)
+        let mut total_dot = 0.0;
+        let mut neighbor_count = 0;
+        for i in 0..verts.len() {
+            let va = verts[i];
+            let vb = verts[(i + 1) % verts.len()];
+            let edge_id = match self.find_edge(va, vb) { Some(e) => e, None => continue };
+            // Radial chain에서 다른 face를 가진 HE 찾기
+            let start_he = self.edges[edge_id].any_he();
+            if start_he.is_null() { continue; }
+            let mut he = start_he;
+            loop {
+                let f = self.hes[he].face();
+                if !f.is_null() && f != face_id {
+                    if let Some(neighbor) = self.faces.get(f) {
+                        if neighbor.is_active() {
+                            let n_normal = neighbor.normal();
+                            if n_normal.length_squared() > 1e-10 {
+                                total_dot += my_normal.dot(n_normal);
+                                neighbor_count += 1;
+                            }
+                        }
+                    }
+                }
+                he = self.hes[he].next_rad();
+                if he == start_he { break; }
+            }
+        }
+
+        // 다수의 이웃이 나와 반대 방향(dot < 0)이면 flip
+        if neighbor_count > 0 && total_dot < 0.0 {
+            let _ = self.flip_face_safe(face_id);
+            return true;
+        }
+        false
     }
 
     /// Mark both half-edges of an edge with HARD flag.

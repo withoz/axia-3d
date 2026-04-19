@@ -744,13 +744,16 @@ impl Scene {
                 }
                 match self.mesh.add_face(&loop_verts, self.default_material) {
                     Ok(fid) => {
-                        // 그리는 방향(CW/CCW)에 따라 face normal이 반대로 나오는 문제 방지.
-                        // surface_normal이 주어졌으면 그것과 정렬되도록 flip.
-                        // 주어지지 않았으면 "위쪽(+Y)"을 preference로 (horizontal 기본값).
-                        let face_n = self.mesh.faces[fid].normal();
-                        let target = surface_normal.unwrap_or(DVec3::Y);
-                        if face_n.dot(target) < 0.0 {
-                            let _ = self.mesh.flip_face_safe(fid);
+                        // Normal 방향 일관성:
+                        // 1) 인접 face가 있으면 그들과 같은 방향으로 flip (solid manifold).
+                        // 2) 인접 face 없거나 inconclusive면 surface_normal 힌트 / +Y 기본값.
+                        let aligned = self.mesh.align_face_with_neighbors(fid);
+                        if !aligned {
+                            let face_n = self.mesh.faces[fid].normal();
+                            let target = surface_normal.unwrap_or(DVec3::Y);
+                            if face_n.dot(target) < 0.0 {
+                                let _ = self.mesh.flip_face_safe(fid);
+                            }
                         }
                         all_created_faces.push(fid);
                         seg_faces += 1;
