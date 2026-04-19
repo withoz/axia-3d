@@ -393,9 +393,52 @@ interface GroupInfo {
 - MaterialPropertiesPanel.ts (248줄) — 재질 속성 편집 UI 완성
 - 물리 속성 (밀도/질량/무게) 계산 + 표시 완성
 
+## SketchUp-style Inference Engine (Phase A/B/C — 2026-04-19 완성)
+
+AXiA Snap 시스템은 SketchUp 수준의 계층적 추론(Inference) 엔진을 갖춤.
+
+### 계층적 후보 생성 (SnapManager.findSnap)
+1. **점 추론**: endpoint / midpoint / intersection / apparent / center / geometric / quadrant / node
+2. **선 추론**: nearest (on edge) / onFace / perpendicular / parallel / tangent / extension
+3. **축 추론**: axisX (빨강) / axisY (파랑) / axisZ (초록) — SketchUp 컬러 규칙
+4. **파생 추론** (B2): `_recentHoveredEdges` 큐(cap 3)에 저장된 엣지 방향으로 parallel·extension
+5. **그리드 스냅**: gridSpacing 기반 격자점 (가장 낮은 우선순위)
+
+### Scoring
+- priority × 1000 - pixel distance (낮은 priority가 우선)
+- **Recency bonus (A4)**: 400ms 이내 같은 타입 재등장 시 -0.5 보정
+
+### Inference Lock (B1) — `K` 키
+- 현재 스냅을 `setLockedInference`로 잠그면 cursor가 lock constraint에 강제 투영
+- 축 lock: 세계 축에 cursor ray 투영
+- parallel/perpendicular lock: edge 방향 라인 투영
+- 점 lock: 해당 위치 고정
+
+### Tentative Snap (B3) — `Tab` 키
+- 마지막 ranked candidates 보존 → Tab으로 순환 → SnapVisual 업데이트
+- 매 mousemove 시 index 리셋 (예측 가능한 UX)
+
+### 키보드 Filter Toggle (A5) — `Alt + X`
+- `Alt+E/M/I/C/P/L/F/G/X/N` — 10개 스냅 모드 개별 on/off
+- OSNAP 패널 체크박스도 자동 동기화
+
+### 시각 피드백
+- **컬러**: SketchUp 관습 (endpoint 녹색/midpoint 청록/intersection 빨강/onFace 파랑/perp·parallel 분홍/axis X·Y·Z = 빨·파·녹)
+- **가이드 점선 (A6)**: axis/parallel/perpendicular에서 `guideFrom`→snap 점선 렌더
+
+### 성능 (Phase C)
+- **BVH picking (C1)**: three-mesh-bvh 0.9.9 monkey-patch — `raycaster.intersectObjects` 자동 O(log N)
+- **Vertex spatial hash (B4)**: CELL_SIZE=5000mm, `queryVertexCells`로 3×3×3=27셀 필터
+- **Dirty flag (C2)**: `updateFromMesh`가 시그니처 동일 시 rebuild skip
+
+### Defer 항목
+- **C3 Worker thread**: 씬 규모 ~수백 face에서 ROI 낮음
+- **C4 GPU picking**: BVH로 CPU pick 충분히 빠름, edge picking 시 재고
+
 ## 향후 과제
 - Material / Texture (텍스처 이미지 매핑 미구현)
-- Constraint Solver (수직, 평행, 거리 고정)
+- Constraint Solver (수직, 평행, 거리 고정 — 파라메트릭)
 - STEP/IGES 지원
 - Electron/Tauri 데스크톱 앱
 - Boundary Extraction (Solid → Face)
+- Worker thread / GPU picking (대형 씬 필요 시)

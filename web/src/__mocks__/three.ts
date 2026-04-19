@@ -39,6 +39,7 @@ export class Vector3 {
   length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); }
   normalize() { const l = this.length() || 1; return this.multiplyScalar(1 / l); }
   distanceTo(v: Vector3) { return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z); }
+  distanceToSquared(v: Vector3) { const dx = this.x - v.x, dy = this.y - v.y, dz = this.z - v.z; return dx*dx + dy*dy + dz*dz; }
   addScaledVector(v: Vector3, s: number) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
   setFromMatrixColumn(_matrix: any, _index: number) { return this; }
   project(_camera: any) { return this; }

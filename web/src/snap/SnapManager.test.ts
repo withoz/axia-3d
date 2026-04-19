@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { SnapManager } from './SnapManager';
+import { SnapManager, SNAP_MARKERS } from './SnapManager';
 import type { SnapType } from './SnapManager';
 
 describe('SnapManager', () => {
@@ -139,7 +139,7 @@ describe('SnapManager', () => {
 
   it('setReferencePoint accepts Vector3', () => {
     const { Vector3 } = THREE;
-    snap.setReferencePoint(new Vector3(10, 20, 30));
+    snap.setReferencePoint(new THREE.Vector3(10, 20, 30));
     // Should not throw
   });
 
@@ -152,8 +152,8 @@ describe('SnapManager', () => {
 
   it('addTrackPoint and clearTrackPoints', () => {
     const { Vector3 } = THREE;
-    snap.addTrackPoint(new Vector3(1, 0, 0));
-    snap.addTrackPoint(new Vector3(0, 1, 0));
+    snap.addTrackPoint(new THREE.Vector3(1, 0, 0));
+    snap.addTrackPoint(new THREE.Vector3(0, 1, 0));
     // Should not throw
     snap.clearTrackPoints();
     // Should not throw
@@ -163,7 +163,7 @@ describe('SnapManager', () => {
 
   it('setMid2pFirst accepts Vector3 or null', () => {
     const { Vector3 } = THREE;
-    snap.setMid2pFirst(new Vector3(5, 5, 5));
+    snap.setMid2pFirst(new THREE.Vector3(5, 5, 5));
     snap.setMid2pFirst(null);
     // Should not throw
   });
@@ -222,5 +222,120 @@ describe('SnapManager', () => {
     expect(snap.consumeOverride()).toBe('center');
     expect(snap.consumeOverride()).toBeUndefined();
     expect(snap.consumeOverride()).toBeUndefined();
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Phase A: Axis / Grid / Recency
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('Phase A — axis / grid / markers', () => {
+    it('axisX/Y/Z SnapType have marker definitions with SketchUp colors', () => {
+      expect(SNAP_MARKERS.axisX.color.toUpperCase()).toBe('#E02020');
+      expect(SNAP_MARKERS.axisY.color.toUpperCase()).toBe('#2E7BFF');
+      expect(SNAP_MARKERS.axisZ.color.toUpperCase()).toBe('#00C800');
+    });
+
+    it('grid SnapType exists with low priority', () => {
+      expect(SNAP_MARKERS.grid).toBeDefined();
+      expect(SNAP_MARKERS.grid.shape).toBe('plus');
+    });
+
+    it('default active modes include axisX/Y/Z', () => {
+      expect(snap.isActive('axisX')).toBe(true);
+      expect(snap.isActive('axisY')).toBe(true);
+      expect(snap.isActive('axisZ')).toBe(true);
+    });
+
+    it('setMode/isActive work for grid', () => {
+      expect(snap.isActive('grid')).toBe(false);
+      snap.setMode('grid', true);
+      expect(snap.isActive('grid')).toBe(true);
+      snap.setMode('grid', false);
+      expect(snap.isActive('grid')).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Phase B1: Inference Lock
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('Phase B1 — Inference Lock', () => {
+    it('starts unlocked', () => {
+      expect(snap.hasLockedInference()).toBe(false);
+      expect(snap.getLockedInference()).toBeNull();
+    });
+
+    it('setLockedInference stores snap and reports locked', () => {
+      const fakeSnap = {
+        type: 'axisX' as const,
+        position: new THREE.Vector3(10, 0, 0),
+      };
+      snap.setLockedInference(fakeSnap);
+      expect(snap.hasLockedInference()).toBe(true);
+      expect(snap.getLockedInference()).toBe(fakeSnap);
+    });
+
+    it('clearLockedInference releases', () => {
+      snap.setLockedInference({ type: 'axisY', position: new THREE.Vector3(0, 5, 0) });
+      snap.clearLockedInference();
+      expect(snap.hasLockedInference()).toBe(false);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Phase B2: Inference Chaining
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('Phase B2 — Inference Chaining', () => {
+    it('getRecentEdges starts empty', () => {
+      expect(snap.getRecentEdges().length).toBe(0);
+    });
+
+    it('recordHoveredEdge adds to queue', () => {
+      snap.recordHoveredEdge(new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0));
+      expect(snap.getRecentEdges().length).toBe(1);
+    });
+
+    it('recordHoveredEdge dedups identical edges', () => {
+      snap.recordHoveredEdge(new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0));
+      snap.recordHoveredEdge(new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0));
+      expect(snap.getRecentEdges().length).toBe(1);
+    });
+
+    it('recordHoveredEdge recognizes reversed edges as same', () => {
+      snap.recordHoveredEdge(new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0));
+      snap.recordHoveredEdge(new THREE.Vector3(10, 0, 0), new THREE.Vector3(0, 0, 0));
+      expect(snap.getRecentEdges().length).toBe(1);
+    });
+
+    it('caps at RECENT_EDGE_CAP (3)', () => {
+      snap.recordHoveredEdge(new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0));
+      snap.recordHoveredEdge(new THREE.Vector3(20, 0, 0), new THREE.Vector3(30, 0, 0));
+      snap.recordHoveredEdge(new THREE.Vector3(40, 0, 0), new THREE.Vector3(50, 0, 0));
+      snap.recordHoveredEdge(new THREE.Vector3(60, 0, 0), new THREE.Vector3(70, 0, 0));
+      expect(snap.getRecentEdges().length).toBe(3);
+      // Oldest dropped
+      expect(snap.getRecentEdges()[0].a.x).toBe(20);
+    });
+
+    it('clearRecentEdges resets', () => {
+      snap.recordHoveredEdge(new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0));
+      snap.clearRecentEdges();
+      expect(snap.getRecentEdges().length).toBe(0);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Phase B3: Tentative Snap
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('Phase B3 — Tentative Snap', () => {
+    it('cycleTentative returns null with no candidates', () => {
+      expect(snap.cycleTentative()).toBeNull();
+    });
+
+    it('resetTentative does not throw with no candidates', () => {
+      expect(() => snap.resetTentative()).not.toThrow();
+    });
   });
 });
