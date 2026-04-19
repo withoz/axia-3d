@@ -410,10 +410,32 @@ impl Mesh {
             }
         }
 
+        // vertex → ALL outgoing HE (free + 기존 face 소속 모두) — angular ordering에 필요.
+        // non-free HE는 "twin index"를 찾기 위한 reference로만 사용됨.
         let mut vert_to_outs: FxHashMap<VertId, Vec<HeId>> = FxHashMap::default();
+        // 먼저 free HE의 src vertex set 수집
+        let mut verts_of_interest: FxHashSet<VertId> = FxHashSet::default();
         for &he in &in_plane {
-            let src = self.he_source(he);
-            vert_to_outs.entry(src).or_default().push(he);
+            verts_of_interest.insert(self.he_source(he));
+            verts_of_interest.insert(self.hes[he].dst());
+        }
+        // 그 vertex들의 ALL outgoing HE 수집 (v_ring 기반)
+        for &v in &verts_of_interest {
+            let mut list = Vec::new();
+            // 모든 active HE를 훑어 source == v인 것을 수집
+            // (v_ring을 완벽히 traverse하는 대신 단순 스캔 — in_plane 크기가 작을 때만 유효)
+            for (hid, he) in self.hes.iter() {
+                if !he.is_active() { continue; }
+                // y=0 평면 필터 (HE의 양 끝이 y=0)
+                let src = self.he_source(hid);
+                if src != v { continue; }
+                let dst = he.dst();
+                let ps = match self.vertex_pos(src) { Ok(p) => p, Err(_) => continue };
+                let pd = match self.vertex_pos(dst) { Ok(p) => p, Err(_) => continue };
+                if ps.y.abs() >= Y_EPS || pd.y.abs() >= Y_EPS { continue; }
+                list.push(hid);
+            }
+            vert_to_outs.insert(v, list);
         }
 
         // Step 3: 각 vertex의 outgoing을 XZ 평면 angle로 정렬 (y=0 가정)
@@ -482,10 +504,15 @@ impl Mesh {
                 if outs.is_empty() { break; }
                 let twin_idx = match outs.iter().position(|&h| h == twin) {
                     Some(i) => i,
-                    None => break, // twin not in outs — degenerate
+                    None => break, // twin not present — 비정상 토폴로지
                 };
                 let next_idx = (twin_idx + outs.len() - 1) % outs.len();
                 let next_he = outs[next_idx];
+
+                // 다음 HE가 기존 face에 속해 있으면 free 영역 밖 — cycle 완결 불가
+                if !self.hes[next_he].face().is_null() {
+                    break;
+                }
 
                 if next_he == start {
                     closed = true;
