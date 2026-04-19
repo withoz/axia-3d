@@ -295,6 +295,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         's': 'scale', 'S': 'scale',
         'o': 'offset', 'O': 'offset',
         'e': 'erase', 'E': 'erase',
+        'x': 'split', 'X': 'split',
       };
       const tool = keyMap[e.key];
       if (tool) {

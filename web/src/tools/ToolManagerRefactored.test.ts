@@ -185,10 +185,11 @@ describe('ToolManager', () => {
       expect(tm.selection).toBeDefined();
     });
 
-    it('registers all 14 tools', () => {
+    it('registers all 15 tools', () => {
       const toolNames = [
         'select', 'line', 'rect', 'circle', 'pushpull',
         'move', 'rotate', 'scale', 'offset', 'erase',
+        'split',
         'group', 'sphere', 'cylinder', 'cone',
       ];
       for (const name of toolNames) {

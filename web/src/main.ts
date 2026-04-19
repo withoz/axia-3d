@@ -13,6 +13,7 @@ import { SettingsPanel } from './units/SettingsPanel';
 // FileImporter is now lazy-loaded via MenuBar (dynamic import on first use)
 import { ComponentPanel } from './ui/ComponentPanel';
 import { ConstraintPanel } from './ui/ConstraintPanel';
+import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
 import { MaterialLibrary } from './materials/MaterialLibrary';
 import { DraggablePanelManager } from './ui/DraggablePanelManager';
@@ -339,6 +340,28 @@ async function main() {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       if ((e.key === 'j' || e.key === 'J') && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         constraintPanel.toggle();
+      }
+    });
+  }
+
+  // ═══ 15. Constraint Visual (3D 뷰포트 제약 인디케이터) ═══
+  {
+    const constraintVisual = new ConstraintVisual(viewportEl, bridge);
+    (window as unknown as { __axia_constraintVisual?: ConstraintVisual })
+      .__axia_constraintVisual = constraintVisual;
+
+    // 매 프레임 업데이트 (카메라 이동 시 마커 위치 즉시 추적)
+    const tickCV = () => {
+      constraintVisual.update(viewport.activeCamera);
+      requestAnimationFrame(tickCV);
+    };
+    requestAnimationFrame(tickCV);
+
+    // Shift+J → 인디케이터 토글
+    window.addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      if ((e.key === 'j' || e.key === 'J') && e.shiftKey && !e.ctrlKey && !e.altKey) {
+        constraintVisual.toggle();
       }
     });
   }

@@ -31,6 +31,7 @@ import { RotateTool } from './RotateTool';
 import { ScaleTool } from './ScaleTool';
 import { OffsetTool } from './OffsetTool';
 import { EraseTool } from './EraseTool';
+import { SplitTool } from './SplitTool';
 import { GroupTool } from './GroupTool';
 import { SphereTool } from '../primitives/SphereTool';
 import { CylinderTool } from '../primitives/CylinderTool';
@@ -165,6 +166,7 @@ export class ToolManager {
     this.tools.set('scale', new ScaleTool(this.toolContext));
     this.tools.set('offset', new OffsetTool(this.toolContext));
     this.tools.set('erase', new EraseTool(this.toolContext));
+    this.tools.set('split', new SplitTool(this.toolContext));
     this.tools.set('group', new GroupTool(this.toolContext));
     this.tools.set('sphere', new SphereTool(this.toolContext));
     this.tools.set('cylinder', new CylinderTool(this.toolContext));
@@ -268,7 +270,7 @@ export class ToolManager {
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
     'delete', 'flip-faces', 'merge-faces', 'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
-    'constrain-edge-length', 'split-edge-midpoint',
+    'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
   ]);
 
   /** 사용자 친화 명령어 이름 (Toast 메시지용) */
@@ -284,6 +286,7 @@ export class ToolManager {
     'constrain-collinear': '동일 선상 정렬',
     'constrain-edge-length': '엣지 길이 고정',
     'split-edge-midpoint': '엣지 중점 분할',
+    'constrain-endpoint-distance': '끝점 거리 고정',
   };
 
   executeAction(action: string): void {
@@ -433,6 +436,72 @@ export class ToolManager {
       } else {
         const err = this.bridge.lastError();
         Toast.error(err || '엣지 길이 제약 생성 실패', 3000);
+      }
+    } else if (action === 'constrain-endpoint-distance') {
+      // 2 선택 엣지의 4개 끝점 중 가장 가까운 쌍에 Distance 제약.
+      // 공유 정점이 있으면 나머지 2개 사이 거리로 자동 해석.
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length !== 2) {
+        Toast.warning('2개의 엣지를 선택해야 합니다');
+        return;
+      }
+      const [edgeA, edgeB] = edges;
+      const epA = this.bridge.getEdgeEndpoints(edgeA);
+      const epB = this.bridge.getEdgeEndpoints(edgeB);
+      if (epA.length !== 2 || epB.length !== 2) {
+        Toast.error('엣지 엔드포인트 조회 실패'); return;
+      }
+      // 공유 정점이 있는지 확인
+      const shared = [epA[0], epA[1]].filter(v => epB.includes(v));
+      let vA: number, vB: number;
+      if (shared.length === 1) {
+        // 공유 있음 → 반대쪽 정점끼리 distance (삼각형 변 길이)
+        vA = epA.find(v => v !== shared[0])!;
+        vB = epB.find(v => v !== shared[0])!;
+      } else {
+        // 공유 없음 → 4쌍 중 최단 거리 정점 쌍
+        const positions = [
+          [epA[0], this.bridge.getVertexPos(epA[0])],
+          [epA[1], this.bridge.getVertexPos(epA[1])],
+          [epB[0], this.bridge.getVertexPos(epB[0])],
+          [epB[1], this.bridge.getVertexPos(epB[1])],
+        ];
+        if (positions.some(([, p]) => !p)) { Toast.error('정점 좌표 조회 실패'); return; }
+        let best = { vA: epA[0], vB: epB[0], dist: Infinity };
+        for (const a of [0, 1]) {
+          for (const b of [2, 3]) {
+            const [vAid, pA] = positions[a] as [number, [number, number, number]];
+            const [vBid, pB] = positions[b] as [number, [number, number, number]];
+            const d = Math.sqrt((pA[0]-pB[0])**2 + (pA[1]-pB[1])**2 + (pA[2]-pB[2])**2);
+            if (d < best.dist) best = { vA: vAid, vB: vBid, dist: d };
+          }
+        }
+        vA = best.vA; vB = best.vB;
+      }
+
+      const pA = this.bridge.getVertexPos(vA);
+      const pB = this.bridge.getVertexPos(vB);
+      if (!pA || !pB) { Toast.error('정점 좌표 조회 실패'); return; }
+      const current = Math.sqrt((pA[0]-pB[0])**2 + (pA[1]-pB[1])**2 + (pA[2]-pB[2])**2);
+
+      const input = window.prompt(
+        `정점 v${vA} ↔ v${vB} 거리 (현재 ${current.toFixed(2)} mm):`,
+        current.toFixed(2),
+      );
+      if (input == null) return;
+      const target = parseFloat(input);
+      if (!(target > 0) || !Number.isFinite(target)) {
+        Toast.warning('유효한 양수 값을 입력하세요'); return;
+      }
+      const id = this.bridge.addDistanceConstraint(vA, vB, target);
+      if (id > 0) {
+        this.syncMesh();
+        Toast.info(`끝점 거리 제약 추가 (id=${id}, v${vA}↔v${vB} = ${target.toFixed(2)})`, 2500);
+        const cp = (window as unknown as { __axia_constraintPanel?: { refresh: () => void } })
+          .__axia_constraintPanel;
+        cp?.refresh();
+      } else {
+        Toast.error(this.bridge.lastError() || '제약 생성 실패', 3000);
       }
     } else if (action === 'constrain-parallel' || action === 'constrain-perpendicular' || action === 'constrain-collinear') {
       // Constraint Solver Level 2 — persistent graph.

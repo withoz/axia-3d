@@ -125,6 +125,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'constrain-collinear':
       case 'constrain-edge-length':
       case 'split-edge-midpoint':
+      case 'constrain-endpoint-distance':
         toolManager.executeAction(action);
         break;
       case 'select-all': toolManager.executeAction('select-all'); break;
