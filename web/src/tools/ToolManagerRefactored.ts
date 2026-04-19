@@ -588,8 +588,24 @@ export class ToolManager {
           positions: delta.positions.length,
           savings: '~90% vs full buffer',
         });
-        // Note: Don't update SelectionManager/SnapManager for delta
-        // They work fine with existing buffers until a topology change
+        // ✱ Bug fix (2026-04-19): delta 경로에서도 edge lines / selection / snap을
+        // 새 위치 기반으로 갱신해야 함. 이전에는 geometry 위치만 패치하고 끝내서
+        // edge picking과 snap이 옛 위치를 참조 → 옮긴 오브젝트 대신 "뒤에 있는 것처럼
+        // 보이는 원래 위치"의 오브젝트가 선택되는 현상 발생.
+        if (edgeLines) this.viewport.updateEdgeLines(edgeLines);
+        const buffersForUpdate = this.bridge.getMeshBuffers();
+        if (buffersForUpdate) {
+          this.faceMap = buffersForUpdate.faceMap;
+          this.selection.updateBuffers(
+            buffersForUpdate.positions, buffersForUpdate.indices, buffersForUpdate.faceMap,
+          );
+          this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
+          const snapF64 = this.bridge.getSnapVerticesF64();
+          this.snap.updateFromMesh(
+            buffersForUpdate.positions, buffersForUpdate.indices, buffersForUpdate.faceMap,
+            edgeLines, snapF64,
+          );
+        }
         const stats = this.bridge.getStats();
         this.viewport.setStats(stats.verts, stats.faces);
         return;  // Success!

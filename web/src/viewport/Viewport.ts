@@ -874,9 +874,20 @@ export class Viewport {
       geometry.computeBoundingSphere();
       geometry.computeBoundingBox();
 
+      // ✱ Bug fix (2026-04-19): BVH bounds도 함께 갱신해야 함.
+      // three-mesh-bvh는 위치 변경 후 refit()으로 bounds를 업데이트. refit이 없으면
+      // raycast가 이전 위치 기반 BVH를 사용 → "옮긴 후 예전 자리에 있는 것처럼" pick됨.
+      const geoBvh = geometry as THREE.BufferGeometry & {
+        boundsTree?: { refit?: () => void };
+      };
+      if (geoBvh.boundsTree?.refit) {
+        try { geoBvh.boundsTree.refit(); }
+        catch (e) { console.warn('[Viewport] BVH refit failed, rebuilding:', e); }
+      }
+
       // Note: smoothNormals is NOT re-run here because translate/rotate/scale
       // don't change the angular relationship between adjacent faces.
-      // Edge wireframe also stays valid (topology unchanged).
+      // Edge wireframe vertex 위치는 JS에서 별도 업데이트 (ToolManager.syncMesh가 호출).
 
       return true;
     } catch (e) {
