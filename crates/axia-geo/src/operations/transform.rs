@@ -56,6 +56,146 @@ impl Mesh {
         })
     }
 
+    /// **Constraint Solver Level 1**: 지정 정점 배열을 delta만큼 직접 이동.
+    ///
+    /// translate_faces와 달리 face 기반이 아닌 vertex 기반 연산이므로
+    /// Constraint Solver(makeParallel/Perpendicular/setDistance)에서 사용.
+    /// 이동된 정점을 참조하는 face는 자동으로 normal 재계산됨.
+    pub fn translate_verts(
+        &mut self,
+        vert_ids: &[VertId],
+        delta: DVec3,
+    ) -> Result<TransformResult> {
+        ensure!(
+            delta.x.is_finite() && delta.y.is_finite() && delta.z.is_finite(),
+            "translate_verts delta must be finite, got ({}, {}, {})",
+            delta.x, delta.y, delta.z
+        );
+        if vert_ids.is_empty() {
+            return Ok(TransformResult { verts_moved: 0, faces_affected: 0 });
+        }
+
+        // Collect affected faces via radial traversal of outgoing HEs
+        let mut affected_faces: std::collections::HashSet<FaceId> =
+            std::collections::HashSet::new();
+
+        for &vid in vert_ids {
+            if let Some(vert) = self.verts.get_mut(vid) {
+                let new_pos = vert.pos() + delta;
+                vert.set_pos(new_pos);
+            }
+
+            // Walk vertex v-ring to find all faces touching this vertex
+            let start_he = match self.verts.get(vid).and_then(|v| v.outgoing()) {
+                Some(h) if !h.is_null() && self.hes.contains(h) => h,
+                _ => continue,
+            };
+            let mut cur = start_he;
+            let mut guard = 0;
+            loop {
+                let f = self.hes[cur].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    affected_faces.insert(f);
+                }
+                let nxt = self.hes[cur].v_next();
+                if nxt.is_null() || !self.hes.contains(nxt) || nxt == start_he { break; }
+                cur = nxt;
+                guard += 1;
+                if guard > 10_000 { break; }
+            }
+        }
+
+        let faces_vec: Vec<FaceId> = affected_faces.into_iter().collect();
+        if !faces_vec.is_empty() {
+            self.recompute_face_normals(&faces_vec)?;
+        }
+
+        Ok(TransformResult {
+            verts_moved: vert_ids.len(),
+            faces_affected: faces_vec.len(),
+        })
+    }
+
+    /// **Constraint Solver Level 1**: 지정 정점을 center/axis 기준으로 회전.
+    /// makeParallel/Perpendicular 에서 엣지의 두 정점을 midpoint 기준으로 회전할 때 사용.
+    pub fn rotate_verts(
+        &mut self,
+        vert_ids: &[VertId],
+        center: DVec3,
+        axis: DVec3,
+        angle_rad: f64,
+    ) -> Result<TransformResult> {
+        ensure!(angle_rad.is_finite(), "rotate_verts angle must be finite");
+        ensure!(
+            center.x.is_finite() && center.y.is_finite() && center.z.is_finite(),
+            "rotate_verts center must be finite"
+        );
+        ensure!(
+            axis.length_squared() > EPSILON_LENGTH * EPSILON_LENGTH,
+            "rotate_verts axis must be non-zero"
+        );
+        if vert_ids.is_empty() || angle_rad.abs() < 1e-12 {
+            return Ok(TransformResult { verts_moved: 0, faces_affected: 0 });
+        }
+
+        let axis_n = axis.normalize();
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+        let one_m = 1.0 - cos_a;
+
+        // Rodrigues rotation matrix
+        let (x, y, z) = (axis_n.x, axis_n.y, axis_n.z);
+        let rot = DMat3::from_cols_array(&[
+            cos_a + x * x * one_m,
+            x * y * one_m + z * sin_a,
+            x * z * one_m - y * sin_a,
+            x * y * one_m - z * sin_a,
+            cos_a + y * y * one_m,
+            y * z * one_m + x * sin_a,
+            x * z * one_m + y * sin_a,
+            y * z * one_m - x * sin_a,
+            cos_a + z * z * one_m,
+        ]);
+
+        let mut affected_faces: std::collections::HashSet<FaceId> =
+            std::collections::HashSet::new();
+
+        for &vid in vert_ids {
+            if let Some(vert) = self.verts.get_mut(vid) {
+                let rel = vert.pos() - center;
+                let rotated = rot * rel;
+                vert.set_pos(center + rotated);
+            }
+            let start_he = match self.verts.get(vid).and_then(|v| v.outgoing()) {
+                Some(h) if !h.is_null() && self.hes.contains(h) => h,
+                _ => continue,
+            };
+            let mut cur = start_he;
+            let mut guard = 0;
+            loop {
+                let f = self.hes[cur].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    affected_faces.insert(f);
+                }
+                let nxt = self.hes[cur].v_next();
+                if nxt.is_null() || !self.hes.contains(nxt) || nxt == start_he { break; }
+                cur = nxt;
+                guard += 1;
+                if guard > 10_000 { break; }
+            }
+        }
+
+        let faces_vec: Vec<FaceId> = affected_faces.into_iter().collect();
+        if !faces_vec.is_empty() {
+            self.recompute_face_normals(&faces_vec)?;
+        }
+
+        Ok(TransformResult {
+            verts_moved: vert_ids.len(),
+            faces_affected: faces_vec.len(),
+        })
+    }
+
     /// 지정된 face들의 모든 정점을 center 기준으로 회전
     /// axis: 회전축 (단위 벡터), angle_rad: 라디안 각도
     pub fn rotate_faces(

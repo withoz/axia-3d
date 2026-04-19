@@ -13,6 +13,7 @@ import { SnapVisual } from '../snap/SnapVisual';
 import { SelectionManager } from './SelectionManager';
 import { PickBox } from '../ui/PickBox';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
+import { ConstraintCommands } from './ConstraintCommands';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
@@ -261,6 +262,7 @@ export class ToolManager {
    */
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
     'delete', 'flip-faces', 'merge-faces', 'redo', 'group', 'make-component',
+    'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
   ]);
 
   /** 사용자 친화 명령어 이름 (Toast 메시지용) */
@@ -271,6 +273,9 @@ export class ToolManager {
     'redo': '다시 실행',
     'group': '그룹 만들기',
     'make-component': '컴포넌트 변환',
+    'constrain-parallel': '평행 정렬',
+    'constrain-perpendicular': '수직 정렬',
+    'constrain-collinear': '동일 선상 정렬',
   };
 
   executeAction(action: string): void {
@@ -355,6 +360,30 @@ export class ToolManager {
       } else {
         const err = this.bridge.lastError();
         Toast.warning(err || '통합할 수 있는 인접 coplanar 면이 없습니다');
+      }
+    } else if (action === 'constrain-parallel' || action === 'constrain-perpendicular' || action === 'constrain-collinear') {
+      // Constraint Solver Level 1 (one-shot apply).
+      // 선택된 2개 엣지: 첫번째(index 0) = 참조, 두번째 = 이동 대상
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length !== 2) {
+        Toast.warning('2개의 엣지를 선택해야 합니다 (첫 번째 = 기준, 두 번째 = 이동 대상)');
+        return;
+      }
+      const [edgeA, edgeB] = edges;
+      const cc = new ConstraintCommands(this.bridge);
+      let ok = false;
+      let label = '';
+      if (action === 'constrain-parallel')            { ok = cc.makeParallel(edgeA, edgeB); label = '평행'; }
+      else if (action === 'constrain-perpendicular')  { ok = cc.makePerpendicular(edgeA, edgeB); label = '수직'; }
+      else                                            { ok = cc.makeCollinear(edgeA, edgeB); label = '동일 선상'; }
+
+      if (ok) {
+        this.syncMesh();
+        Toast.info(`엣지 정렬 완료: ${label}`, 1800);
+        debugLog(`[Action] ${action}: edges=${edgeA},${edgeB}`);
+      } else {
+        const err = this.bridge.lastError();
+        Toast.error(err || `${label} 정렬 실패 (엣지가 거의 평행하거나 degenerate)`, 3000);
       }
     } else if (action === 'select-all') {
       this.selection.selectEverything(this.faceMap, this.edgeMap);

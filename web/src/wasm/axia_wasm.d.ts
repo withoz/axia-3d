@@ -121,6 +121,11 @@ export class AxiaEngine {
      */
     getDirtyFaceCount(): number;
     /**
+     * Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
+     * 실패 시 빈 벡터.
+     */
+    getEdgeEndpoints(edge_id_raw: number): Uint32Array;
+    /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
      * Use for dimension display, snap matching, and precision-sensitive operations.
@@ -132,6 +137,10 @@ export class AxiaEngine {
      * Snap system should use these instead of the f32 render buffers.
      */
     getSnapVerticesF64(): Float64Array;
+    /**
+     * Vertex 위치를 [x, y, z]로 반환. 실패 시 빈 벡터.
+     */
+    getVertexPos(vert_id_raw: number): Float64Array;
     /**
      * 씬에 존재하는 모든 XIA ID를 반환. 디버깅/열거용.
      */
@@ -314,6 +323,10 @@ export class AxiaEngine {
      */
     rename_group(group_id: number, new_name: string): boolean;
     /**
+     * 지정 정점을 center/axis 기준으로 회전.
+     */
+    rotateVerts(vert_ids: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angle_deg: number): boolean;
+    /**
      * 선택된 face들의 정점을 회전
      * cx,cy,cz: 회전 중심, ax,ay,az: 회전축, angle_deg: 각도 (도)
      */
@@ -350,6 +363,11 @@ export class AxiaEngine {
      * 그룹 가시성 토글
      */
     toggle_group_visibility(group_id: number): boolean;
+    /**
+     * 지정 정점 배열을 delta만큼 이동. Constraint Solver에서 makeParallel/
+     * Perpendicular/setDistance의 기초 연산으로 사용.
+     */
+    translateVerts(vert_ids: Uint32Array, dx: number, dy: number, dz: number): boolean;
     /**
      * 선택된 face들의 정점을 이동
      */
@@ -442,8 +460,10 @@ export interface InitOutput {
     readonly axiaengine_getCacheVersion: (a: number) => number;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
+    readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
+    readonly axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
     readonly axiaengine_getXiaIds: (a: number, b: number) => void;
     readonly axiaengine_getXiaStats: (a: number, b: number, c: number) => void;
     readonly axiaengine_get_all_groups: (a: number, b: number) => void;
@@ -482,12 +502,14 @@ export interface InitOutput {
     readonly axiaengine_remove_faces_from_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_remove_material: (a: number, b: number, c: number) => number;
     readonly axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
+    readonly axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_undo: (a: number) => number;

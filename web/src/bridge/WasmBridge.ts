@@ -65,6 +65,11 @@ type AxiaEngineExtended = AxiaEngine & {
   getPositionsF64?(): Float64Array;
   delete_edge?(edgeId: number): boolean;
   batch_delete?(faceIds: Uint32Array, edgeIds: Uint32Array): boolean;
+  // Constraint Solver Level 1 (vertex-level ops + edge/vertex queries)
+  translateVerts?(vertIds: Uint32Array, dx: number, dy: number, dz: number): boolean;
+  rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
+  getEdgeEndpoints?(edgeId: number): Uint32Array;
+  getVertexPos?(vertId: number): Float64Array;
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
@@ -498,6 +503,65 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] tryMergeAdjacentFaces failed:', e);
       return 0;
+    }
+  }
+
+  /**
+   * Constraint Solver Level 1: vertex 배열을 delta만큼 이동 (단일 undo).
+   */
+  translateVerts(vertIds: number[], dx: number, dy: number, dz: number): boolean {
+    if (!this.engine?.translateVerts) return false;
+    this.markDirty();
+    try {
+      return this.engine.translateVerts(new Uint32Array(vertIds), dx, dy, dz);
+    } catch (e) {
+      console.error('[WasmBridge] translateVerts failed:', e);
+      return false;
+    }
+  }
+
+  /** Constraint Solver Level 1: vertex 배열을 center/axis/angle로 회전 (단일 undo). */
+  rotateVerts(
+    vertIds: number[],
+    cx: number, cy: number, cz: number,
+    ax: number, ay: number, az: number,
+    angleDeg: number,
+  ): boolean {
+    if (!this.engine?.rotateVerts) return false;
+    this.markDirty();
+    try {
+      return this.engine.rotateVerts(
+        new Uint32Array(vertIds),
+        cx, cy, cz, ax, ay, az, angleDeg,
+      );
+    } catch (e) {
+      console.error('[WasmBridge] rotateVerts failed:', e);
+      return false;
+    }
+  }
+
+  /** Edge의 두 끝점 VertId 반환 ([v_small, v_large]); 실패 시 빈 배열. */
+  getEdgeEndpoints(edgeId: number): number[] {
+    if (!this.engine?.getEdgeEndpoints) return [];
+    try {
+      const arr = this.engine.getEdgeEndpoints(edgeId);
+      return arr ? Array.from(arr) : [];
+    } catch (e) {
+      console.error('[WasmBridge] getEdgeEndpoints failed:', e);
+      return [];
+    }
+  }
+
+  /** Vertex 위치 [x, y, z] 반환; 실패 시 null. */
+  getVertexPos(vertId: number): [number, number, number] | null {
+    if (!this.engine?.getVertexPos) return null;
+    try {
+      const arr = this.engine.getVertexPos(vertId);
+      if (!arr || arr.length < 3) return null;
+      return [arr[0], arr[1], arr[2]];
+    } catch (e) {
+      console.error('[WasmBridge] getVertexPos failed:', e);
+      return null;
     }
   }
 

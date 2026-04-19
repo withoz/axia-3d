@@ -78,6 +78,13 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = hasSelection ? '' : 'none';
     });
 
+    // ── Edge constraint 항목 — 정확히 2개 엣지 선택 시만 표시 ──
+    const edgeItems = ctxMenu.querySelectorAll('.ctx-edge-item');
+    const selectedEdges = toolManager.selection.getSelectedEdges().length;
+    edgeItems.forEach(item => {
+      (item as HTMLElement).style.display = selectedEdges === 2 ? '' : 'none';
+    });
+
     // 화면 밖으로 나가지 않도록 위치 조정
     const menuW = 200, menuH = 400;
     const cx = Math.min(x, window.innerWidth - menuW);
@@ -107,6 +114,11 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'delete': toolManager.executeAction('delete'); break;
       case 'flip-faces': toolManager.executeAction('flip-faces'); break;
       case 'merge-faces': toolManager.executeAction('merge-faces'); break;
+      case 'constrain-parallel':
+      case 'constrain-perpendicular':
+      case 'constrain-collinear':
+        toolManager.executeAction(action);
+        break;
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;

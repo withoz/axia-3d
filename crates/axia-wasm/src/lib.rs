@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use axia_core::scene::Scene;
 use axia_core::commands::Command;
 use axia_core::commands::CommandResult;
-use axia_geo::{FaceId, EdgeId};
+use axia_geo::{FaceId, EdgeId, VertId};
 use axia_geo::operations::boolean::BoolOp;
 
 // Console logging from Rust WASM — debug only (stripped in release builds)
@@ -1952,6 +1952,92 @@ impl AxiaEngine {
                 self.set_error(format!("scale: {}", e));
                 false
             }
+        }
+    }
+
+    // ========================================================================
+    // Constraint Solver Level 1 (vertex-level ops + edge queries)
+    // ========================================================================
+
+    /// 지정 정점 배열을 delta만큼 이동. Constraint Solver에서 makeParallel/
+    /// Perpendicular/setDistance의 기초 연산으로 사용.
+    #[wasm_bindgen(js_name = "translateVerts")]
+    pub fn translate_verts(&mut self, vert_ids: &[u32], dx: f64, dy: f64, dz: f64) -> bool {
+        let vids: Vec<VertId> = vert_ids.iter().map(|&id| VertId::new(id)).collect();
+        let delta = DVec3::new(dx, dy, dz);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.translate_verts(&vids, delta) {
+            Ok(_) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                true
+            }
+            Err(e) => {
+                console_error!("[RUST] translate_verts ERROR: {}", e);
+                self.set_error(format!("translate_verts: {}", e));
+                self.scene.transactions.cancel();
+                false
+            }
+        }
+    }
+
+    /// 지정 정점을 center/axis 기준으로 회전.
+    #[wasm_bindgen(js_name = "rotateVerts")]
+    pub fn rotate_verts(
+        &mut self, vert_ids: &[u32],
+        cx: f64, cy: f64, cz: f64,
+        ax: f64, ay: f64, az: f64,
+        angle_deg: f64,
+    ) -> bool {
+        let vids: Vec<VertId> = vert_ids.iter().map(|&id| VertId::new(id)).collect();
+        let center = DVec3::new(cx, cy, cz);
+        let axis = DVec3::new(ax, ay, az);
+        let angle_rad = angle_deg.to_radians();
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.rotate_verts(&vids, center, axis, angle_rad) {
+            Ok(_) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                true
+            }
+            Err(e) => {
+                console_error!("[RUST] rotate_verts ERROR: {}", e);
+                self.set_error(format!("rotate_verts: {}", e));
+                self.scene.transactions.cancel();
+                false
+            }
+        }
+    }
+
+    /// Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
+    /// 실패 시 빈 벡터.
+    #[wasm_bindgen(js_name = "getEdgeEndpoints")]
+    pub fn get_edge_endpoints(&self, edge_id_raw: u32) -> Vec<u32> {
+        let eid = EdgeId::new(edge_id_raw);
+        let edge = match self.scene.mesh.edges.get(eid) {
+            Some(e) if e.is_active() => e,
+            _ => return Vec::new(),
+        };
+        vec![edge.v_small().raw(), edge.v_large().raw()]
+    }
+
+    /// Vertex 위치를 [x, y, z]로 반환. 실패 시 빈 벡터.
+    #[wasm_bindgen(js_name = "getVertexPos")]
+    pub fn get_vertex_pos(&self, vert_id_raw: u32) -> Vec<f64> {
+        let vid = VertId::new(vert_id_raw);
+        match self.scene.mesh.vertex_pos(vid) {
+            Ok(p) => vec![p.x, p.y, p.z],
+            Err(_) => Vec::new(),
         }
     }
 

@@ -351,6 +351,25 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
+     * 실패 시 빈 벡터.
+     * @param {number} edge_id_raw
+     * @returns {Uint32Array}
+     */
+    getEdgeEndpoints(edge_id_raw) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getEdgeEndpoints(retptr, this.__wbg_ptr, edge_id_raw);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
      * Use for dimension display, snap matching, and precision-sensitive operations.
@@ -379,6 +398,24 @@ export class AxiaEngine {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             wasm.axiaengine_getSnapVerticesF64(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Vertex 위치를 [x, y, z]로 반환. 실패 시 빈 벡터.
+     * @param {number} vert_id_raw
+     * @returns {Float64Array}
+     */
+    getVertexPos(vert_id_raw) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getVertexPos(retptr, this.__wbg_ptr, vert_id_raw);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var v1 = getArrayF64FromWasm0(r0, r1).slice();
@@ -997,6 +1034,24 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * 지정 정점을 center/axis 기준으로 회전.
+     * @param {Uint32Array} vert_ids
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} angle_deg
+     * @returns {boolean}
+     */
+    rotateVerts(vert_ids, cx, cy, cz, ax, ay, az, angle_deg) {
+        const ptr0 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_rotateVerts(this.__wbg_ptr, ptr0, len0, cx, cy, cz, ax, ay, az, angle_deg);
+        return ret !== 0;
+    }
+    /**
      * 선택된 face들의 정점을 회전
      * cx,cy,cz: 회전 중심, ax,ay,az: 회전축, angle_deg: 각도 (도)
      * @param {Uint32Array} face_ids
@@ -1097,6 +1152,21 @@ export class AxiaEngine {
      */
     toggle_group_visibility(group_id) {
         const ret = wasm.axiaengine_toggle_group_visibility(this.__wbg_ptr, group_id);
+        return ret !== 0;
+    }
+    /**
+     * 지정 정점 배열을 delta만큼 이동. Constraint Solver에서 makeParallel/
+     * Perpendicular/setDistance의 기초 연산으로 사용.
+     * @param {Uint32Array} vert_ids
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @returns {boolean}
+     */
+    translateVerts(vert_ids, dx, dy, dz) {
+        const ptr0 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_translateVerts(this.__wbg_ptr, ptr0, len0, dx, dy, dz);
         return ret !== 0;
     }
     /**
