@@ -8,6 +8,8 @@ import { debugLog } from '../utils/debug';
 
 export class SelectTool implements ITool {
   readonly name = 'select';
+  // Select uses pickEdgeOrFace (BVH raycast); snap markers are visual noise here.
+  readonly wantsSnap = false;
 
   private ctx: ToolContext;
   private dragSelectStart: { x: number; y: number } | null = null;

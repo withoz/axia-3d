@@ -198,6 +198,12 @@ export class ToolManager {
 
     this._currentTool = name;
 
+    // If the new tool doesn't want snap, clear any lingering SnapVisual markers.
+    const newToolObj = this.tools.get(name);
+    if (newToolObj?.wantsSnap === false) {
+      this.snapVisual.clear();
+    }
+
     // Clear selection dimensions when switching tools
     if (name !== 'select') {
       this.selectionDimLines = [];
@@ -221,7 +227,6 @@ export class ToolManager {
     }
 
     // Activate new tool
-    const newToolObj = this.tools.get(name);
     if (newToolObj?.onActivate) {
       newToolObj.onActivate();
     }
@@ -1265,10 +1270,14 @@ export class ToolManager {
 
       // Get 3D point
       const rawPt = this.get3DPoint(e);
-      const point = this.getSnappedPoint(e, rawPt, true);
+
+      // Skip snap for tools that explicitly opt out (Select, Erase).
+      const tool = this.tools.get(this._currentTool);
+      const point = tool?.wantsSnap === false
+        ? rawPt
+        : this.getSnappedPoint(e, rawPt, true);
 
       // Dispatch to current tool
-      const tool = this.tools.get(this._currentTool);
       if (tool?.onMouseDown) {
         tool.onMouseDown(e, point);
       }
@@ -1277,10 +1286,14 @@ export class ToolManager {
     // ===== MOUSE MOVE =====
     canvas.addEventListener('mousemove', (e) => {
       const rawPt = this.get3DPoint(e);
-      const point = this.getSnappedPoint(e, rawPt);
 
-      // Dispatch to current tool
+      // Snap is skipped when the active tool opts out (wantsSnap=false) —
+      // eliminates visual marker noise and saves findSnap computation.
       const tool = this.tools.get(this._currentTool);
+      const point = tool?.wantsSnap === false
+        ? rawPt
+        : this.getSnappedPoint(e, rawPt);
+
       if (tool?.onMouseMove) {
         tool.onMouseMove(e, point);
       }

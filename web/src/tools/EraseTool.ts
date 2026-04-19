@@ -31,6 +31,8 @@ const ERASE_CURSOR =
 
 export class EraseTool implements ITool {
   readonly name = 'erase';
+  // Erase is a pick-to-delete flow (edge/face picks via raycast); no snap needed.
+  readonly wantsSnap = false;
 
   private ctx: ToolContext;
 

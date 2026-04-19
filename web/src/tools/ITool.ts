@@ -85,6 +85,14 @@ export interface ITool {
   /** Tool name (e.g., 'select', 'line', 'rect', 'circle', 'pushpull', 'move', 'rotate', 'scale', 'offset', 'erase') */
   readonly name: string;
 
+  /**
+   * Whether this tool wants snap computation on mousemove.
+   * Default: `true` (snap runs, point passed to onMouseMove is snap-adjusted).
+   * `false` = tool doesn't use snap (e.g. Select, Erase) — skip expensive
+   * findSnap traversal and clear SnapVisual markers for a clean UI.
+   */
+  readonly wantsSnap?: boolean;
+
   /** Called when tool becomes active (setTool was called) */
   onActivate?(): void;
 
