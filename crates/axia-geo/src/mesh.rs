@@ -184,6 +184,22 @@ impl Mesh {
         Ok((edge_id, true))
     }
 
+    /// Mark both half-edges of an edge with HARD flag.
+    /// HARD edges always render (even between coplanar faces) — used for user-drawn
+    /// lines and face-split edges so the user's intent stays visible.
+    pub fn mark_edge_hard(&mut self, edge_id: EdgeId) {
+        if !self.edges.contains(edge_id) { return; }
+        let he_start = self.edges[edge_id].any_he();
+        if he_start.is_null() { return; }
+        let mut he_id = he_start;
+        loop {
+            let new_flags = self.hes[he_id].flags() | HeFlags::HARD;
+            self.hes[he_id].set_flags(new_flags);
+            he_id = self.hes[he_id].next_rad();
+            if he_id == he_start { break; }
+        }
+    }
+
     /// Find edge between two vertices.
     pub fn find_edge(&self, a: VertId, b: VertId) -> Option<EdgeId> {
         let key = VertPairKey::new(a, b);

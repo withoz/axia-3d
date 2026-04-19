@@ -487,6 +487,9 @@ impl Scene {
 
         match self.mesh.draw_line(start, end) {
             Ok((v0, v1, edge_id)) => {
+                // 사용자가 직접 그린 선은 coplanar 면 사이에서도 항상 보이도록 HARD 마킹.
+                // (face split과 동일 규칙 — mesh.rs line ~858 참조)
+                self.mesh.mark_edge_hard(edge_id);
                 // ── Auto-face: check if this edge closes a loop ──
                 if let Some(loop_verts) = self.mesh.detect_free_edge_loop(v0, v1, edge_id) {
                     // Collect all edges forming the loop (for XIA cleanup)
