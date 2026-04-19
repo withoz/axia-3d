@@ -309,6 +309,48 @@ export class SnapManager {
     else this.config.modes.delete(mode);
   }
 
+  /**
+   * Line 도구에 최적화된 snap 프리셋 적용.
+   *
+   * 면 자동 생성(drawLine의 loop closure, face split, D resolver)에 가장 우호적인
+   * snap 모드만 활성화. 원칙:
+   *  - 기존 vertex/edge/midpoint에 정확히 붙도록 유도 → loop closure 성공률 ↑
+   *  - 기하학적 정확성 보장 (axis/parallel/perpendicular)
+   *  - "빈 공간에 떠 있는" snap(extension/apparent/grid)은 제외 → dangling vertex 방지
+   *
+   * 비활성화된 모드는 `saveSnapConfig`로 복원 가능 (Line 도구 해제 시).
+   */
+  applyFaceCreationPreset(): void {
+    this.config.modes = new Set<SnapType>([
+      // 핵심: loop closure + face split 트리거
+      'endpoint',       // 기존 vertex에 정확히 붙음 (loop 닫기의 기본)
+      'midpoint',       // 기존 edge 중점 → edge split + face 재분할
+      'intersection',   // 실제 교차 vertex — 자동 vertex 삽입 + split
+      'nearest',        // edge 위 임의 점 → endpoint-on-edge 케이스 (split 트리거)
+      'onFace',         // 면 내부 점 → face split 케이스
+      // 기하학적 정확성 (선을 정확한 방향으로 유지 → 이후 다른 선과 정확히 교차)
+      'perpendicular',
+      'parallel',
+      'axisX', 'axisY', 'axisZ',
+    ]);
+    // 의도적으로 제외: extension, apparent, grid, center, quadrant, tangent, geometric
+    // — 이들은 "빈 공간"에 snap하여 dangling vertex를 만들 가능성이 있음.
+  }
+
+  /**
+   * 현재 snap 모드 스냅샷. 도구 전환 시 원복을 위해 저장해 둘 수 있음.
+   */
+  saveSnapConfig(): Set<SnapType> {
+    return new Set(this.config.modes);
+  }
+
+  /**
+   * 저장된 snap 모드 복원.
+   */
+  restoreSnapConfig(saved: Set<SnapType>): void {
+    this.config.modes = new Set(saved);
+  }
+
   isActive(mode: SnapType): boolean {
     return this.config.modes.has(mode);
   }

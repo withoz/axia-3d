@@ -108,6 +108,9 @@ export class DrawLineTool implements ITool {
   private linePreview: THREE.Line | null = null;
   private startDot: THREE.Points | null = null;
 
+  // Snap 프리셋 교체 시 원상복구를 위한 이전 설정 저장
+  private _savedSnapModes: Set<import('../snap/SnapManager').SnapType> | null = null;
+
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
   }
@@ -117,12 +120,22 @@ export class DrawLineTool implements ITool {
   // ═══════════════════════════════════════════════════
 
   onActivate(): void {
+    // Line 도구 진입 시 face-creation 최적 snap 프리셋 적용.
+    // 기존 snap 설정은 onDeactivate에서 원복.
+    this._savedSnapModes = this.ctx.snap.saveSnapConfig();
+    this.ctx.snap.applyFaceCreationPreset();
+
     this.handle(LineDrawEvent.ToolSelected);
-    debugLog('[DrawLineTool] Activated');
+    debugLog('[DrawLineTool] Activated (face-creation snap preset applied)');
   }
 
   onDeactivate(): void {
     this.handle(LineDrawEvent.Escape);
+    // Snap 원상복구
+    if (this._savedSnapModes) {
+      this.ctx.snap.restoreSnapConfig(this._savedSnapModes);
+      this._savedSnapModes = null;
+    }
   }
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {

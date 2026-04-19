@@ -36,6 +36,9 @@ function mockToolContext() {
     snap: {
       setReferencePoint: vi.fn(),
       getSnap: vi.fn().mockReturnValue(null),
+      saveSnapConfig: vi.fn().mockReturnValue(new Set()),
+      restoreSnapConfig: vi.fn(),
+      applyFaceCreationPreset: vi.fn(),
     },
     snapVisual: { update: vi.fn(), clear: vi.fn() },
     clearAxisGuide: vi.fn(),
