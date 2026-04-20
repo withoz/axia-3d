@@ -118,6 +118,32 @@ export class AxiaEngine {
         }
     }
     /**
+     * Linear array — create `count` translated copies of the given
+     * faces, each shifted by `offset · k` for k = 1..=count. Returns
+     * the new FaceIds in copy-major, source-order.
+     * @param {Uint32Array} face_ids
+     * @param {number} count
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @returns {Uint32Array}
+     */
+    arrayLinearFaces(face_ids, count, dx, dy, dz) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_arrayLinearFaces(retptr, this.__wbg_ptr, ptr0, len0, count, dx, dy, dz);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v2 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      * @param {Uint32Array} face_ids_raw
      * @param {number} material_id_raw

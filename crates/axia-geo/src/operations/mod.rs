@@ -18,3 +18,4 @@ pub mod sweep;
 pub mod subdivide;
 pub mod fillet;
 pub mod deform;
+pub mod array_op;

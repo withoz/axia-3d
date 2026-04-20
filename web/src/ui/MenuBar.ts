@@ -249,6 +249,16 @@ export function initMenuBar(deps: MenuBarDeps): void {
         Toast.info(`축 ${next ? '표시' : '숨김'}`);
         break;
       }
+      case 'reference-image': {
+        // 참조 이미지 overlay — 사진 따라 그리기 / 비율 맞추기 용.
+        // HTML <img> overlay 방식: 3D 씬과 독립, 카메라 이동해도 고정.
+        void import('./ReferenceImage').then(({ promptAndAddReferenceImage }) => {
+          void promptAndAddReferenceImage(viewport.container).then(ref => {
+            if (ref) Toast.info('참조 이미지 불러옴 — Shift+휠로 크기, 드래그로 이동', 3500);
+          });
+        });
+        break;
+      }
 
       // ── 그리기 ──
       case 'tool-line': setActiveTool('line'); break;
@@ -275,13 +285,16 @@ export function initMenuBar(deps: MenuBarDeps): void {
       // 컨텍스트 메뉴에서 mirror-y / mirror-z 선택.
       case 'tool-mirror': toolManager.executeAction('mirror-x'); break;
       case 'subdivide': toolManager.executeAction('subdivide'); break;
-      case 'tool-array': setActiveTool('array'); break;
+      // Array — 선택된 면을 선형(linear) 배열로 복제. 개수/간격은 prompt.
+      case 'tool-array': toolManager.executeAction('array-linear'); break;
       case 'tool-trim': setActiveTool('trim'); break;
       case 'tool-extend': setActiveTool('extend'); break;
       // Fillet — 선택된 엣지 1개에 모깎기 적용. 도구가 아니라 액션이므로
       // 활성 도구 전환 없이 즉시 실행.
       case 'tool-fillet': toolManager.executeAction('fillet-edge'); break;
-      case 'tool-chamfer': setActiveTool('chamfer'); break;
+      // Chamfer — 선택된 엣지 1개에 모따기 적용. Fillet과 동일 파라미터
+      // (거리)지만 세그먼트 없이 평면 bevel.
+      case 'tool-chamfer': toolManager.executeAction('chamfer-edge'); break;
       case 'tool-explode': setActiveTool('explode'); break;
       case 'tool-group': toolManager.executeAction('group'); break;
       case 'tool-ungroup': toolManager.executeAction('ungroup'); break;

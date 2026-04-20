@@ -1303,6 +1303,39 @@ impl AxiaEngine {
         }
     }
 
+    /// Linear array — create `count` translated copies of the given
+    /// faces, each shifted by `offset · k` for k = 1..=count. Returns
+    /// the new FaceIds in copy-major, source-order.
+    #[wasm_bindgen(js_name = "arrayLinearFaces")]
+    pub fn array_linear_faces(
+        &mut self,
+        face_ids: &[u32],
+        count: u32,
+        dx: f64, dy: f64, dz: f64,
+    ) -> Vec<u32> {
+        let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        let offset = DVec3::new(dx, dy, dz);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.array_linear_faces(&fids, count, offset) {
+            Ok(new_faces) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                new_faces.iter().map(|f| f.raw()).collect()
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] array_linear_faces ERROR: {}", e);
+                self.set_error(format!("array_linear: {}", e));
+                Vec::new()
+            }
+        }
+    }
+
     /// Return the outer-loop vertex IDs of a face in walk order.
     /// Empty vec on error (face missing, degenerate, etc.).
     #[wasm_bindgen(js_name = "getFaceVertices")]

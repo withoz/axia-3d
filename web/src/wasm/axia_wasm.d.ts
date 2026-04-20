@@ -46,6 +46,12 @@ export class AxiaEngine {
      */
     analyzeMergeCandidatesTol(face_ids: Uint32Array, angle_tol_deg: number): string;
     /**
+     * Linear array — create `count` translated copies of the given
+     * faces, each shifted by `offset · k` for k = 1..=count. Returns
+     * the new FaceIds in copy-major, source-order.
+     */
+    arrayLinearFaces(face_ids: Uint32Array, count: number, dx: number, dy: number, dz: number): Uint32Array;
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
@@ -700,6 +706,7 @@ export interface InitOutput {
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;

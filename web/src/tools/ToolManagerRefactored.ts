@@ -298,6 +298,8 @@ export class ToolManager {
     'revolve-x', 'revolve-y', 'revolve-z',
     'subdivide',
     'fillet-edge',
+    'chamfer-edge',
+    'array-linear',
     'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
@@ -329,6 +331,8 @@ export class ToolManager {
     'revolve-z': '선택 엣지를 Z축으로 회전 (Revolve)',
     'subdivide': '전체 메시 Catmull-Clark 분할',
     'fillet-edge': '선택 엣지 모깎기 (Fillet)',
+    'chamfer-edge': '선택 엣지 모따기 (Chamfer)',
+    'array-linear': '선택을 선형 배열로 복제',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
     'taper-selection': '선택 테이퍼 (Taper)',
@@ -754,6 +758,73 @@ export class ToolManager {
         Toast.info(`${vertIds.length}개 정점을 ×${endScale.toFixed(2)} 테이퍼`, 2000);
       } else {
         Toast.fromBridgeError(this.bridge, 'Taper 실패');
+      }
+    } else if (action === 'array-linear') {
+      // 선택한 face들을 N개 복제, 각 복제는 offset만큼 이동된 위치에.
+      // Prompt에서 "N,dx,dy,dz" 형식으로 입력받음.
+      const sel = this.selection.getSelectedFaces();
+      if (sel.length === 0) {
+        Toast.warning('배열할 면을 먼저 선택하세요', 2500);
+        return;
+      }
+      const last = localStorage.getItem('axia:array:params') ?? '5, 2000, 0, 0';
+      const input = window.prompt(
+        '배열 파라미터 "N, dx, dy, dz" (개수, X 오프셋, Y 오프셋, Z 오프셋):',
+        last,
+      );
+      if (input == null) return;
+      const parts = input.split(/[,\s]+/).map(s => s.trim()).filter(s => s.length);
+      if (parts.length !== 4) {
+        Toast.warning('4개 값이 필요합니다: N,dx,dy,dz', 3000);
+        return;
+      }
+      const count = parseInt(parts[0], 10);
+      const dx = parseFloat(parts[1]);
+      const dy = parseFloat(parts[2]);
+      const dz = parseFloat(parts[3]);
+      if (!Number.isFinite(count) || count < 1 ||
+          ![dx, dy, dz].every(Number.isFinite)) {
+        Toast.warning('유효한 숫자 값을 입력하세요', 3000);
+        return;
+      }
+      try { localStorage.setItem('axia:array:params', input); } catch { /* ignore */ }
+      const newFaces = this.bridge.arrayLinearFaces(sel, count, [dx, dy, dz]);
+      if (newFaces.length > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`${sel.length}개 면을 ${count}회 복제 (총 ${newFaces.length}개)`, 2500);
+        debugLog(`[Action] array-linear: count=${count}, offset=(${dx},${dy},${dz})`);
+      } else {
+        Toast.fromBridgeError(this.bridge, '배열 실패');
+      }
+    } else if (action === 'chamfer-edge') {
+      // Chamfer is a degenerate Fillet with only one strip segment — so
+      // instead of an arc between the rolled-back points, a single flat
+      // quad connects them. Same DCEL surgery, same parameter, different
+      // sampling. Delegating to filletEdge(edge, distance, 1) keeps the
+      // code path unified.
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length !== 1) {
+        Toast.warning('모따기할 엣지 1개를 먼저 선택하세요', 2500);
+        return;
+      }
+      const lastDist = Number(localStorage.getItem('axia:chamfer:distance') ?? '50');
+      const input = window.prompt('모따기 거리 (mm):', String(lastDist));
+      if (input == null) return;
+      const distance = parseFloat(input);
+      if (!Number.isFinite(distance) || distance <= 0) {
+        Toast.warning('유효한 양수 거리를 입력하세요', 2500);
+        return;
+      }
+      try { localStorage.setItem('axia:chamfer:distance', String(distance)); } catch { /* ignore */ }
+      const n = this.bridge.filletEdge(edges[0], distance, 1);
+      if (n >= 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`모따기 완료 — 거리 ${distance}mm`, 2500);
+        debugLog(`[Action] chamfer-edge: distance=${distance}, n=${n}`);
+      } else {
+        Toast.fromBridgeError(this.bridge, '모따기 실패');
       }
     } else if (action === 'fillet-edge') {
       // 선택된 단일 엣지를 radius 반경으로 모깎기. 우선 `fillet:radius`

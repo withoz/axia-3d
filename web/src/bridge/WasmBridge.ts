@@ -101,6 +101,11 @@ type AxiaEngineExtended = AxiaEngine & {
   subdivideCatmullClark?(): number;
   filletEdge?(edgeId: number, radius: number, segments: number): number;
   getFaceVertices?(faceId: number): Uint32Array;
+  arrayLinearFaces?(
+    faceIds: Uint32Array,
+    count: number,
+    dx: number, dy: number, dz: number,
+  ): Uint32Array;
   bendVerts?(
     vertIds: Uint32Array,
     axX: number, axY: number, axZ: number,
@@ -951,6 +956,30 @@ export class WasmBridge {
       return out ? Array.from(out) : [];
     } catch (e) {
       this.recordBridgeError('loftSections', e);
+      return [];
+    }
+  }
+
+  /**
+   * Linear array — create `count` translated copies of the given faces.
+   * Returns the new FaceId list, empty on failure (lastError set).
+   */
+  arrayLinearFaces(
+    faceIds: number[],
+    count: number,
+    offset: [number, number, number],
+  ): number[] {
+    if (!this.engine?.arrayLinearFaces) return [];
+    this.markDirty();
+    try {
+      const out = this.engine.arrayLinearFaces(
+        new Uint32Array(faceIds),
+        count,
+        offset[0], offset[1], offset[2],
+      );
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      this.recordBridgeError('arrayLinearFaces', e);
       return [];
     }
   }

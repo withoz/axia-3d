@@ -1812,6 +1812,8 @@
           <div class="menu-sep"></div>
           <div class="menu-action" data-action="view-grid">그리드 표시/숨기기<span class="mk">`</span></div>
           <div class="menu-action" data-action="view-axis">축 표시/숨기기</div>
+          <div class="menu-sep"></div>
+          <div class="menu-action" data-action="reference-image">참조 이미지 불러오기…</div>
         </div>
       </div>
 
@@ -2124,6 +2126,16 @@
               <span class="tdi-label">엣지 모깎기 (Fillet)…</span>
               <span class="tdi-key"></span>
             </div>
+            <div class="tool-dropdown-item" data-action="chamfer-edge">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Right-angle with a flat diagonal bevel -->
+                <path d="M5 5 L5 13 L11 19 L19 19"/>
+                <path d="M5 19 L5 13" stroke-dasharray="2 2"/>
+                <path d="M11 19 L5 19" stroke-dasharray="2 2"/>
+              </svg></span>
+              <span class="tdi-label">엣지 모따기 (Chamfer)…</span>
+              <span class="tdi-key"></span>
+            </div>
             <div class="tool-dropdown-sep"></div>
             <div class="tool-dropdown-item" data-action="bend-selection">
               <span class="tdi-icon"><svg viewBox="0 0 24 24">
@@ -2222,6 +2234,8 @@
       <div class="ctx-item ctx-face-item" data-action="merge-faces">면 통합 <span class="ctx-key">Ctrl+M</span></div>
       <div class="ctx-item ctx-face-item" data-action="merge-xia-coplanar">XIA 내 Coplanar 면 일괄 통합</div>
       <div class="ctx-item ctx-face-item" data-action="merge-as-hole">내부 면을 구멍으로 합치기 (2면 선택)</div>
+      <!-- Array — 선택한 면을 선형 배열로 복제 -->
+      <div class="ctx-item ctx-face-item" data-action="array-linear">선형 배열 복제 (Array)…</div>
       <!-- Mirror — world plane 기준 미러링 -->
       <div class="ctx-item ctx-face-item" data-action="mirror-x">미러 · YZ 평면 (X 반전)</div>
       <div class="ctx-item ctx-face-item" data-action="mirror-y">미러 · XZ 평면 (Y 반전)</div>
@@ -2239,6 +2253,7 @@
       <div class="ctx-item ctx-edge1-item" data-action="constrain-edge-length">엣지 길이 설정…</div>
       <div class="ctx-item ctx-edge1-item" data-action="split-edge-midpoint">엣지 중점 분할</div>
       <div class="ctx-item ctx-edge1-item" data-action="fillet-edge">엣지 모깎기 (Fillet)…</div>
+      <div class="ctx-item ctx-edge1-item" data-action="chamfer-edge">엣지 모따기 (Chamfer)…</div>
       <div class="ctx-sep"></div>
       <!-- 그룹 / 컴포넌트 -->
       <div class="ctx-item ctx-group-item" data-action="group">그룹 만들기 <span class="ctx-key">Ctrl+G</span></div>
