@@ -1145,6 +1145,34 @@ export class AxiaEngine {
         const ret = wasm.axiaengine_mergeFacesByEdgeTol(this.__wbg_ptr, edge_id_raw, angle_tol_deg);
         return ret;
     }
+    /**
+     * Mirror the given faces across a plane. Returns the new FaceIds
+     * in the same order as the input (empty vec on failure, with
+     * `lastError()` set). Single undo transaction wraps the whole batch.
+     * @param {Uint32Array} face_ids
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @returns {Uint32Array}
+     */
+    mirrorFaces(face_ids, ox, oy, oz, nx, ny, nz) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_mirrorFaces(retptr, this.__wbg_ptr, ptr0, len0, ox, oy, oz, nx, ny, nz);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v2 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
     constructor() {
         const ret = wasm.axiaengine_new();
         this.__wbg_ptr = ret >>> 0;
@@ -1401,6 +1429,39 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
+     * axis `(origin, dir)` into a surface of revolution. Returns the new
+     * FaceIds in profile-major, ring-minor order, or an empty vec on
+     * failure (with `lastError` set).
+     *
+     * Profile vertex order matters — see `operations::revolve` docs.
+     * Single undo transaction wraps the whole spin.
+     * @param {Float64Array} profile_flat
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} segments
+     * @returns {Uint32Array}
+     */
+    revolveProfile(profile_flat, ox, oy, oz, dx, dy, dz, segments) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayF64ToWasm0(profile_flat, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_revolveProfile(retptr, this.__wbg_ptr, ptr0, len0, ox, oy, oz, dx, dy, dz, segments);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v2 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
         }
     }
     /**
@@ -2018,6 +2079,13 @@ function passArray32ToWasm0(arg, malloc) {
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayF64ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 8, 8) >>> 0;
+    getFloat64ArrayMemory0().set(arg, ptr / 8);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }

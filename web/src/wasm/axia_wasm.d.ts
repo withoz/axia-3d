@@ -371,6 +371,12 @@ export class AxiaEngine {
      * `angle_tol_deg` — 허용 각도 (°). 기본 0.5° (strict). 관대하게는 2~5°.
      */
     mergeFacesByEdgeTol(edge_id_raw: number, angle_tol_deg: number): number;
+    /**
+     * Mirror the given faces across a plane. Returns the new FaceIds
+     * in the same order as the input (empty vec on failure, with
+     * `lastError()` set). Single undo transaction wraps the whole batch.
+     */
+    mirrorFaces(face_ids: Uint32Array, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): Uint32Array;
     constructor();
     /**
      * Phase H — Import Normalizer 실행 (ADR-007 Barrier).
@@ -469,6 +475,16 @@ export class AxiaEngine {
      * Wraps in a single undo transaction if anything moved.
      */
     resolveConstraintsIterative(max_iter: number, tolerance: number): string;
+    /**
+     * Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
+     * axis `(origin, dir)` into a surface of revolution. Returns the new
+     * FaceIds in profile-major, ring-minor order, or an empty vec on
+     * failure (with `lastError` set).
+     *
+     * Profile vertex order matters — see `operations::revolve` docs.
+     * Single undo transaction wraps the whole spin.
+     */
+    revolveProfile(profile_flat: Float64Array, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, segments: number): Uint32Array;
     /**
      * 지정 정점을 center/axis 기준으로 회전.
      */
@@ -692,6 +708,7 @@ export interface InitOutput {
     readonly axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
+    readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
@@ -708,6 +725,7 @@ export interface InitOutput {
     readonly axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_resolveAllConstraints: (a: number) => number;
     readonly axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_revolveProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
