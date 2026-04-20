@@ -66,20 +66,20 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
       bridge.create_cylinder?.(legXFront, 0, +legZ, legRadius, legHeight, 12); // 앞-우
       await tick();
 
-      // ─── 몸통 (박스, x=-3000..+3000, y=2500..4500, z=-1250..+1250) ──
-      // drawRect 시그니처: (cx,cy,cz, nx,ny,nz, ux,uy,uz, width, height)
-      // 몸통 바닥면: 중심 (0, 2500, 0), 법선 +Y(위), up=+X(몸 길이 방향),
-      // width = Z 폭 2500, height = X 길이 6000.
+      // ─── 몸통 (수평 원통, x=-3000..+3000, 반지름 1100, 중심 y=3500) ─
+      // 뒤쪽 원(-X 방향 끝)에서 시작해 +X 방향으로 pushPull해 원통 생성.
+      //   drawCircle: 중심 (-3000, 3500, 0), 법선 +X, 반지름 1100
+      //   pushPull(6000) → 원이 +X로 6000만큼 이동하며 측면 생성
+      //   결과: y ∈ [2400, 4600], z ∈ [-1100, +1100], x ∈ [-3000, +3000]
       const bodyBaseFaceId = bridge.faceCount();
-      bridge.drawRect(
-        0, 2500, 0,      // center
-        0, 1, 0,         // normal (facing up)
-        1, 0, 0,         // up = +X (몸의 앞쪽)
-        2500,            // width (Z)
-        6000,            // height (X)
+      bridge.drawCircle(
+        -3000, 3500, 0,  // center (뒤쪽 끝)
+        1, 0, 0,         // normal = +X (pushPull 방향)
+        1100,            // radius
+        24,              // segments (매끄러운 원통)
       );
       await tick();
-      bridge.pushPull(bodyBaseFaceId, 2000); // 위로 2000 → 몸통 높이 y=2500..4500
+      bridge.pushPull(bodyBaseFaceId, 6000); // +X 방향 6000 → 길이 6000 몸통
       await tick();
 
       // ─── 머리 (구, 몸통 앞쪽 위) ────────────────────────────────

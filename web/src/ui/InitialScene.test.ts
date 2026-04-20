@@ -9,6 +9,7 @@ function mockDeps(): InitialSceneDeps {
       create_cylinder: vi.fn().mockReturnValue(0),
       faceCount: vi.fn().mockReturnValue(1),
       drawRect: vi.fn().mockReturnValue(0),
+      drawCircle: vi.fn().mockReturnValue(0),
       pushPull: vi.fn(),
       create_sphere: vi.fn().mockReturnValue(1),
     } as any,
@@ -31,15 +32,15 @@ describe('InitialScene', () => {
   });
 
   describe('loadInitialScene', () => {
-    it('creates puppy scene (4 legs + body box + head/ears/nose/tail) on startup', async () => {
+    it('creates puppy scene (4 legs + body cylinder + head/ears/nose/tail) on startup', async () => {
       loadInitialScene(deps);
       // async + setTimeout(0) between each WASM call
       await new Promise(r => setTimeout(r, 400));
 
       // 4 legs + 1 tail = 5 cylinder calls
       expect((deps.bridge.create_cylinder as any).mock.calls.length).toBe(5);
-      // body box via drawRect + pushPull
-      expect(deps.bridge.drawRect).toHaveBeenCalled();
+      // body is a horizontal cylinder built from drawCircle + pushPull
+      expect(deps.bridge.drawCircle).toHaveBeenCalled();
       expect(deps.bridge.pushPull).toHaveBeenCalled();
       // head + 2 ears + nose = 4 sphere calls
       expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(4);
