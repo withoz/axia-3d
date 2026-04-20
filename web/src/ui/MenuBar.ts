@@ -258,6 +258,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-circle': setActiveTool('circle'); break;
       case 'tool-arc': setActiveTool('arc'); break;
       case 'tool-freehand': setActiveTool('freehand'); break;
+      case 'tool-bezier': setActiveTool('bezier'); break;
       case 'tool-point': setActiveTool('point'); break;
       case 'tool-text3d': setActiveTool('text3d'); break;
 

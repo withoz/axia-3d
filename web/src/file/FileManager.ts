@@ -76,6 +76,19 @@ export class FileManager {
         }
       }
 
+      // Phase I4 — CurveRegistry 직렬화 (AXIA 파일 metadata에 포함)
+      try {
+        // 동적 import — FileManager는 curves 모듈에 직접 의존하지 않음
+        const { getCurveRegistry } = await import('../curves/CurveRegistry');
+        const registry = getCurveRegistry();
+        if (registry.size() > 0) {
+          metadata.curves = registry.toJSON();
+          debugLog(`[FileManager] curve ${registry.size()}개 저장됨`);
+        }
+      } catch (e) {
+        console.warn('[FileManager] curve 저장 실패:', e);
+      }
+
       // Combine metadata + snapshot into single file
       const fileData = this.createAxiaFile(metadata, snapshotData);
 
@@ -156,6 +169,17 @@ export class FileManager {
               }
             }
 
+            // Phase I4 — CurveRegistry 복원
+            if (metadata.curves) {
+              try {
+                const { getCurveRegistry } = await import('../curves/CurveRegistry');
+                getCurveRegistry().fromJSON(metadata.curves);
+                debugLog(`[FileManager] curve ${metadata.curves.curves?.length ?? 0}개 복원`);
+              } catch (e) {
+                console.warn('[FileManager] curve 복원 실패:', e);
+              }
+            }
+
             const success = this.bridge.importSnapshot(snapshot);
             if (success) {
               Toast.success(`로드 완료: ${this.currentFileName}`);
@@ -221,6 +245,17 @@ export class FileManager {
           } catch (err) {
             console.warn(`[FileManager] 재질 복원 실패: ${material.name}`, err);
           }
+        }
+      }
+
+      // Phase I4 — Curve 복원
+      if (metadata.curves) {
+        try {
+          const { getCurveRegistry } = await import('../curves/CurveRegistry');
+          getCurveRegistry().fromJSON(metadata.curves);
+          debugLog(`[FileManager] curve ${metadata.curves.curves?.length ?? 0}개 복원`);
+        } catch (e) {
+          console.warn('[FileManager] curve 복원 실패:', e);
         }
       }
 
