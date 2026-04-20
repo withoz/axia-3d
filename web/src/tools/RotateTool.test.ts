@@ -108,6 +108,71 @@ describe('RotateTool (CAD 3-click style)', () => {
     });
   });
 
+  describe('Axis switching (X/Y/Z keys)', () => {
+    it('default axis is Y', () => {
+      tool.onActivate();
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
+      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      // rotateFaces(selected, cx,cy,cz, ax,ay,az, angle)
+      // Y축: ay=1
+      expect(calls[0][5]).toBe(1); // ay
+      expect(calls[0][4]).toBe(0); // ax
+      expect(calls[0][6]).toBe(0); // az
+    });
+
+    it('X key switches to X axis', () => {
+      tool.onActivate();
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onKeyDown({ key: 'x', preventDefault: () => {} } as any);
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 10, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
+      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      expect(calls[0][4]).toBe(1); // ax
+      expect(calls[0][5]).toBe(0); // ay
+      expect(calls[0][6]).toBe(0); // az
+    });
+
+    it('Z key switches to Z axis', () => {
+      tool.onActivate();
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onKeyDown({ key: 'Z', preventDefault: () => {} } as any);
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 10, 0));
+      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      expect(calls[0][4]).toBe(0); // ax
+      expect(calls[0][5]).toBe(0); // ay
+      expect(calls[0][6]).toBe(1); // az
+    });
+
+    it('axis switch during pick-target rewinds preview', () => {
+      tool.onActivate();
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10)); // 90° Y
+      // 축 전환 → Y축 역방향 -90° 적용된 후 새 축 적용
+      tool.onKeyDown({ key: 'X', preventDefault: () => {} } as any);
+      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      // 최소 2번 호출 (preview 1 + rewind 1)
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      // rewind 호출은 이전 축(Y)에 대한 음수 각도
+      const rewind = calls[1];
+      expect(rewind[5]).toBe(1); // ay — 이전 Y축
+      expect(rewind[7]).toBeCloseTo(-90, 0); // -90°
+    });
+
+    it('Ctrl+X does not switch axis (respects modifier)', () => {
+      tool.onActivate();
+      tool.onKeyDown({ key: 'X', ctrlKey: true, preventDefault: () => {} } as any);
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
+      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      expect(calls[0][5]).toBe(1); // still Y
+    });
+  });
+
   describe('Escape', () => {
     it('cleans up from any phase', () => {
       tool.onActivate();

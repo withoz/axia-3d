@@ -28,6 +28,8 @@ export class RotateTool implements ITool {
   private basePoint: THREE.Vector3 | null = null;
   private referencePoint: THREE.Vector3 | null = null;
   private rotationAxis: { x: number; y: number; z: number } = { x: 0, y: 1, z: 0 };
+  /** 현재 회전 축 레이블 ('X' | 'Y' | 'Z') */
+  private axisLabel: 'X' | 'Y' | 'Z' = 'Y';
 
   /** 최종 적용될 누적 각도 (도) — preview 중 incremental 적용된 합계 */
   private appliedAngleDeg: number = 0;
@@ -45,8 +47,24 @@ export class RotateTool implements ITool {
       return;
     }
     this.phase = 'pick-base';
-    Toast.info('① 기준점(회전 중심)을 클릭하세요', 2500);
-    debugLog('[RotateTool] Activated — awaiting base point');
+    // 시작 시 축 기본값 해결 — axisLock 있으면 그것, 없으면 Y
+    this.applyAxisFromLabel(this.inferInitialAxis());
+    Toast.info(`① 기준점(회전 중심)을 클릭하세요 · 축: ${this.axisLabel} (X/Y/Z로 변경)`, 3500);
+    debugLog('[RotateTool] Activated — awaiting base point, axis=', this.axisLabel);
+  }
+
+  private inferInitialAxis(): 'X' | 'Y' | 'Z' {
+    const ax = this.ctx.axisLock || this.ctx.inferredAxis;
+    if (ax === 'x') return 'X';
+    if (ax === 'z') return 'Z';
+    return 'Y';
+  }
+
+  private applyAxisFromLabel(label: 'X' | 'Y' | 'Z'): void {
+    this.axisLabel = label;
+    if (label === 'X') this.rotationAxis = { x: 1, y: 0, z: 0 };
+    else if (label === 'Z') this.rotationAxis = { x: 0, y: 0, z: 1 };
+    else this.rotationAxis = { x: 0, y: 1, z: 0 };
   }
 
   onDeactivate(): void {
@@ -160,7 +178,40 @@ export class RotateTool implements ITool {
       }
       this.cleanup();
       Toast.info('회전 취소됨', 1500);
+      return;
     }
+
+    // X/Y/Z 축 전환 (대소문자 무관, 수정자 없을 때만)
+    if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && this.phase !== 'idle') {
+      const k = e.key.toUpperCase();
+      if (k === 'X' || k === 'Y' || k === 'Z') {
+        e.preventDefault();
+        this.switchAxis(k as 'X' | 'Y' | 'Z');
+      }
+    }
+  }
+
+  /** 활성 상태에서 축 변경 — pick-target이면 preview 되감고 새 축으로 재적용 */
+  private switchAxis(label: 'X' | 'Y' | 'Z'): void {
+    if (this.axisLabel === label) return;
+
+    if (this.phase === 'pick-target' && this.basePoint && Math.abs(this.appliedAngleDeg) > 0.001) {
+      // 기존 축으로 적용된 preview 회전 되감기
+      const oldAx = this.rotationAxis;
+      const selected = this.ctx.getSelectedFaces();
+      this.ctx.bridge.rotateFaces(selected,
+        this.basePoint.x, this.basePoint.y, this.basePoint.z,
+        oldAx.x, oldAx.y, oldAx.z,
+        -this.appliedAngleDeg,
+      );
+      this.appliedAngleDeg = 0;
+      this.previewAngleDeg = 0;
+      this.ctx.syncMesh();
+    }
+
+    this.applyAxisFromLabel(label);
+    Toast.info(`축 전환 → ${label}축 회전`, 1500);
+    debugLog('[Rotate] Axis switched to', label);
   }
 
   applyVCBValue(value: number): void {
