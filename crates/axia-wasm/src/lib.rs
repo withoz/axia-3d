@@ -552,6 +552,16 @@ impl AxiaEngine {
     // XIA → Face ID lookup
     // ========================================================================
 
+    /// 주어진 XIA가 소유한 모든 face ID 반환 (B3 — 그룹 병합용).
+    /// 빈 배열이면 해당 XIA가 없거나 비어 있음.
+    #[wasm_bindgen(js_name = "getXiaFaceIds")]
+    pub fn get_xia_face_ids(&self, xia_id: u32) -> Vec<u32> {
+        match self.scene.xias.get(&xia_id) {
+            Some(xia) => xia.face_ids.iter().map(|f| f.raw()).collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// Returns the first face ID owned by the given XIA ID.
     /// draw_rect/draw_circle return XIA IDs; push_pull expects face IDs.
     /// Returns u32::MAX on failure.

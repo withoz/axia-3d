@@ -528,6 +528,25 @@ export class AxiaEngine {
         }
     }
     /**
+     * 주어진 XIA가 소유한 모든 face ID 반환 (B3 — 그룹 병합용).
+     * 빈 배열이면 해당 XIA가 없거나 비어 있음.
+     * @param {number} xia_id
+     * @returns {Uint32Array}
+     */
+    getXiaFaceIds(xia_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getXiaFaceIds(retptr, this.__wbg_ptr, xia_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * 씬에 존재하는 모든 XIA ID를 반환. 디버깅/열거용.
      * @returns {Uint32Array}
      */

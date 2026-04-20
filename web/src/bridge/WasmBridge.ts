@@ -82,6 +82,9 @@ type AxiaEngineExtended = AxiaEngine & {
   // Level 3 iterative solver
   resolveConstraintsIterative?(maxIter: number, tolerance: number): string;
   maxConstraintResidual?(): number;
+  // XIA face list (B3)
+  getXiaFaceIds?(xiaId: number): Uint32Array;
+
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   mergeFacesByEdgeTol?(edgeId: number, angleTolDeg: number): number;
@@ -1067,6 +1070,20 @@ export class WasmBridge {
   }
 
   /** face가 속한 XIA ID 조회 (O(1) 역인덱스, 없으면 -1) */
+  /**
+   * XIA가 소유한 모든 face ID 반환 (B3 — 그룹 병합 지원).
+   */
+  getXiaFaceIds(xiaId: number): number[] {
+    if (!this.engine) return [];
+    try {
+      const ids = this.engine.getXiaFaceIds?.(xiaId);
+      return ids ? Array.from(ids) : [];
+    } catch (e) {
+      console.error('[WasmBridge] getXiaFaceIds failed:', e);
+      return [];
+    }
+  }
+
   getXiaForFace(faceId: number): number {
     if (!this.engine) return -1;
     try {

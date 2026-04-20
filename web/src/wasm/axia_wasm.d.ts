@@ -183,6 +183,11 @@ export class AxiaEngine {
      */
     getVertexPos(vert_id_raw: number): Float64Array;
     /**
+     * 주어진 XIA가 소유한 모든 face ID 반환 (B3 — 그룹 병합용).
+     * 빈 배열이면 해당 XIA가 없거나 비어 있음.
+     */
+    getXiaFaceIds(xia_id: number): Uint32Array;
+    /**
      * 씬에 존재하는 모든 XIA ID를 반환. 디버깅/열거용.
      */
     getXiaIds(): Uint32Array;
@@ -555,6 +560,7 @@ export interface InitOutput {
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
     readonly axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getXiaFaceIds: (a: number, b: number, c: number) => void;
     readonly axiaengine_getXiaIds: (a: number, b: number) => void;
     readonly axiaengine_getXiaStats: (a: number, b: number, c: number) => void;
     readonly axiaengine_get_all_groups: (a: number, b: number) => void;

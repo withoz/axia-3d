@@ -269,7 +269,8 @@ export class ToolManager {
    *   make-component — group과 동일
    */
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
-    'delete', 'flip-faces', 'merge-faces', 'redo', 'group', 'make-component',
+    'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar',
+    'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
   ]);
@@ -279,6 +280,7 @@ export class ToolManager {
     'delete': '삭제',
     'flip-faces': '면 반전',
     'merge-faces': '면 통합',
+    'merge-xia-coplanar': 'XIA 내 coplanar 면 일괄 통합',
     'redo': '다시 실행',
     'group': '그룹 만들기',
     'make-component': '컴포넌트 변환',
@@ -428,6 +430,50 @@ export class ToolManager {
         const hint =
           '통합할 수 있는 면이 없습니다.\n• 엣지를 공유하는 coplanar 면이 있어야 합니다\n• 두 면이 한 엣지만 공유해야 합니다 (C-slit 형태 불가)';
         Toast.warning(err || hint, 3500);
+      }
+    } else if (action === 'merge-xia-coplanar') {
+      // B3: 선택된 XIA의 모든 face 중 인접 coplanar 쌍 일괄 병합.
+      // 입력:
+      //   - 선택된 face가 있으면 그 중 하나의 XIA 기준
+      //   - 없으면 현재 활성 XIA 기준 (구현 시점엔 selected faces 우선)
+      const selectedFaces = this.selection.getSelectedFaces();
+      let xiaId = -1;
+      if (selectedFaces.length > 0) {
+        xiaId = this.bridge.getXiaForFace(selectedFaces[0]);
+      }
+      if (xiaId < 0 || xiaId === 0xffffffff) {
+        Toast.warning(
+          '선택된 면이 속한 XIA를 찾을 수 없습니다. 먼저 XIA의 면을 하나 선택하세요.',
+          3000,
+        );
+        return;
+      }
+      const xiaFaceIds = this.bridge.getXiaFaceIds(xiaId);
+      if (xiaFaceIds.length < 2) {
+        Toast.info('이 XIA에는 병합할 면이 2개 이상 없습니다', 2500);
+        return;
+      }
+      const tol = getMergeTolerance();
+      const analysis = this.bridge.analyzeMergeCandidates(xiaFaceIds, tol);
+      debugLog('[Action] merge-xia-coplanar pre-analysis:', analysis, 'xia=', xiaId, 'tol=', tol);
+      if (analysis.mergeable === 0) {
+        Toast.info(
+          `XIA ${xiaId} — 병합 가능한 인접 coplanar 면이 없습니다` +
+          (analysis.nonCoplanar > 0 ? ` (평면 불일치 ${analysis.nonCoplanar}쌍)` : ''),
+          3000,
+        );
+        return;
+      }
+      const merged = this.bridge.tryMergeAdjacentFaces(xiaFaceIds, tol);
+      if (merged > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(
+          `XIA ${xiaId} — ${merged}회 통합, ${xiaFaceIds.length}개 면 → ${xiaFaceIds.length - merged}개`,
+          3000,
+        );
+      } else {
+        Toast.warning(this.bridge.lastError() || '통합 실패', 3000);
       }
     } else if (action === 'split-edge-midpoint') {
       // 1개 엣지 선택 → 중점에서 split

@@ -36,6 +36,7 @@ export const axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => v
 export const axiaengine_getPositionsF64: (a: number, b: number) => void;
 export const axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
 export const axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
+export const axiaengine_getXiaFaceIds: (a: number, b: number, c: number) => void;
 export const axiaengine_getXiaIds: (a: number, b: number) => void;
 export const axiaengine_getXiaStats: (a: number, b: number, c: number) => void;
 export const axiaengine_get_all_groups: (a: number, b: number) => void;
