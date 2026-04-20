@@ -296,6 +296,7 @@ export class ToolManager {
     'synthesize-faces',
     'mirror-x', 'mirror-y', 'mirror-z',
     'revolve-x', 'revolve-y', 'revolve-z',
+    'subdivide',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -324,6 +325,7 @@ export class ToolManager {
     'revolve-x': '선택 엣지를 X축으로 회전 (Revolve)',
     'revolve-y': '선택 엣지를 Y축으로 회전 (Revolve)',
     'revolve-z': '선택 엣지를 Z축으로 회전 (Revolve)',
+    'subdivide': '전체 메시 Catmull-Clark 분할',
   };
 
   executeAction(action: string): void {
@@ -648,6 +650,18 @@ export class ToolManager {
         debugLog(`[Action] ${action}: ${newFaces.length} faces`);
       } else {
         Toast.error(this.bridge.lastError() || 'Revolve 실패');
+      }
+    } else if (action === 'subdivide') {
+      // 전체 메시에 Catmull-Clark subdivision 1회 적용.
+      // 면 개수 N → 각 면의 verts 수 합 (quad로 분할). 경계/hole 면은 거부.
+      const count = this.bridge.subdivideCatmullClark();
+      if (count >= 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`Catmull-Clark 분할 완료 — ${count}개 quad 생성`, 2500);
+        debugLog(`[Action] subdivide: ${count} quads`);
+      } else {
+        Toast.error(this.bridge.lastError() || 'Subdivision 실패');
       }
     } else if (action === 'synthesize-faces') {
       // Phase H5 — 자유 엣지를 감지해 face로 합성 (수동 트리거)

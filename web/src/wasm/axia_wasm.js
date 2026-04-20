@@ -1641,6 +1641,17 @@ export class AxiaEngine {
         }
     }
     /**
+     * Apply one level of Catmull-Clark subdivision to the whole mesh.
+     * Returns the count of new quads on success, or -1 on failure.
+     * Wrapped in a single undo transaction so one Ctrl+Z restores the
+     * original topology.
+     * @returns {number}
+     */
+    subdivideCatmullClark() {
+        const ret = wasm.axiaengine_subdivideCatmullClark(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Sweep a 2D profile along a 3D path, producing one ring of vertices
      * per path point and stitching them with `loft`. `profile_flat` is
      * K points (xyz triples) in a local XY plane; `path_flat` is M points

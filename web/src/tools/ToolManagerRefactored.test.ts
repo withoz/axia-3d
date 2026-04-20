@@ -395,6 +395,36 @@ describe('ToolManager', () => {
       });
     });
 
+    // ── subdivide action ─────────────────────────────────────────
+    describe('subdivide action', () => {
+      it('calls bridge.subdivideCatmullClark and syncs on success', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).subdivideCatmullClark = vi.fn().mockReturnValue(48);
+        const syncSpy = vi.spyOn(tm, 'syncMesh').mockImplementation(() => {});
+
+        tm.executeAction('subdivide');
+        expect(bridge.subdivideCatmullClark).toHaveBeenCalled();
+        expect(syncSpy).toHaveBeenCalled();
+      });
+
+      it('shows error toast when bridge returns -1', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).subdivideCatmullClark = vi.fn().mockReturnValue(-1);
+        (bridge as any).lastError = vi.fn().mockReturnValue('some err');
+
+        tm.executeAction('subdivide');
+        expect(bridge.subdivideCatmullClark).toHaveBeenCalled();
+      });
+
+      it('blocked when tool is busy', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).subdivideCatmullClark = vi.fn().mockReturnValue(48);
+
+        tm.executeAction('subdivide');
+        expect(bridge.subdivideCatmullClark).not.toHaveBeenCalled();
+      });
+    });
+
     // ── 파괴적/구조적 명령어 busy 가드 (2026-04-17) ──
     describe('BUSY_BLOCKED_ACTIONS', () => {
       it('delete blocks during busy tool', () => {

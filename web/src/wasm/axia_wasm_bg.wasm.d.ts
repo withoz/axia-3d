@@ -99,6 +99,7 @@ export const axiaengine_setConstraintActive: (a: number, b: number, c: number) =
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
 export const axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+export const axiaengine_subdivideCatmullClark: (a: number) => number;
 export const axiaengine_sweepProfileAlongPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
 export const axiaengine_toggle_group_lock: (a: number, b: number) => number;

@@ -1303,6 +1303,32 @@ impl AxiaEngine {
         }
     }
 
+    /// Apply one level of Catmull-Clark subdivision to the whole mesh.
+    /// Returns the count of new quads on success, or -1 on failure.
+    /// Wrapped in a single undo transaction so one Ctrl+Z restores the
+    /// original topology.
+    #[wasm_bindgen(js_name = "subdivideCatmullClark")]
+    pub fn subdivide_catmull_clark(&mut self) -> i32 {
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.subdivide_catmull_clark() {
+            Ok(count) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                count as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] subdivide_catmull_clark ERROR: {}", e);
+                self.set_error(format!("subdivide: {}", e));
+                -1
+            }
+        }
+    }
+
     /// Sweep a 2D profile along a 3D path, producing one ring of vertices
     /// per path point and stitching them with `loft`. `profile_flat` is
     /// K points (xyz triples) in a local XY plane; `path_flat` is M points

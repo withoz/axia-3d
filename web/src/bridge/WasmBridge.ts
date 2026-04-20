@@ -98,6 +98,7 @@ type AxiaEngineExtended = AxiaEngine & {
     pathFlat: Float64Array,
     closedProfile: boolean,
   ): Uint32Array;
+  subdivideCatmullClark?(): number;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -891,6 +892,22 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] loftSections failed:', e);
       return [];
+    }
+  }
+
+  /**
+   * Catmull-Clark 1 step smoothing — 전체 mesh에 적용.
+   * 매 호출마다 face 수가 크게 증가 (N각형 → N개 quad). 여러 번 호출하면
+   * 점점 매끄러워짐. 반환: 생성된 새 face 수, 실패 시 -1.
+   */
+  subdivideCatmullClark(): number {
+    if (!this.engine?.subdivideCatmullClark) return -1;
+    this.markDirty();
+    try {
+      return this.engine.subdivideCatmullClark();
+    } catch (e) {
+      console.error('[WasmBridge] subdivideCatmullClark failed:', e);
+      return -1;
     }
   }
 

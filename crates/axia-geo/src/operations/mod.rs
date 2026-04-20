@@ -15,3 +15,4 @@ pub mod mirror;
 pub mod revolve;
 pub mod loft;
 pub mod sweep;
+pub mod subdivide;

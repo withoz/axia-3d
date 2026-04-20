@@ -274,6 +274,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       // Mirror — 현재는 WORLD YZ 평면 기준 (x 반전) 기본값. 다른 축은 우클릭
       // 컨텍스트 메뉴에서 mirror-y / mirror-z 선택.
       case 'tool-mirror': toolManager.executeAction('mirror-x'); break;
+      case 'subdivide': toolManager.executeAction('subdivide'); break;
       case 'tool-array': setActiveTool('array'); break;
       case 'tool-trim': setActiveTool('trim'); break;
       case 'tool-extend': setActiveTool('extend'); break;

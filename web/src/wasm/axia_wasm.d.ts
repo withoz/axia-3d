@@ -547,6 +547,13 @@ export class AxiaEngine {
      */
     splitFaceByLine(face_id_raw: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): string;
     /**
+     * Apply one level of Catmull-Clark subdivision to the whole mesh.
+     * Returns the count of new quads on success, or -1 on failure.
+     * Wrapped in a single undo transaction so one Ctrl+Z restores the
+     * original topology.
+     */
+    subdivideCatmullClark(): number;
+    /**
      * Sweep a 2D profile along a 3D path, producing one ring of vertices
      * per path point and stitching them with `loft`. `profile_flat` is
      * K points (xyz triples) in a local XY plane; `path_flat` is M points
@@ -756,6 +763,7 @@ export interface InitOutput {
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly axiaengine_subdivideCatmullClark: (a: number) => number;
     readonly axiaengine_sweepProfileAlongPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
