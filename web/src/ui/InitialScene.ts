@@ -31,78 +31,90 @@ export function loadInitialScene(deps: InitialSceneDeps): void {
 }
 
 /**
- * 기본 도형 생성 — 프리미티브(박스/원기둥/구)로 조합한 간단한 "강아지" 모델.
+ * 기본 도형 생성 — 파피용(Papillon) 스타일 강아지 모델.
  *
  * 좌표계: +X = 앞, +Y = 위, +Z = 오른쪽. 바닥은 y=0.
- * 파트:
- *   - 다리 4개 (원기둥, 바닥 y=0 ~ 몸통 아래 y=2500)
- *   - 몸통 (박스, y=2500 ~ y=4500, 길이 6000 X축)
- *   - 머리 (구, 몸통 앞쪽 +X 방향)
- *   - 귀 2개 (작은 구, 머리 위)
- *   - 코 (작은 구, 머리 앞쪽 끝)
- *   - 꼬리 (원기둥, 몸통 뒤쪽 위로)
+ * 파피용 특징을 반영:
+ *   - 호리호리한 몸통 + 가느다란 다리
+ *   - 큰 뾰족 귀 (콘으로 곧게 세움)
+ *   - 뾰족한 주둥이 (머리 앞쪽으로 짧은 수평 원통)
+ *   - 높이 든 꼬리 (뒤쪽에서 위로 길게 뻗음)
  */
 function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void {
-  debugLog('[Init] Creating initial "puppy" scene...');
+  debugLog('[Init] Creating initial "Papillon puppy" scene...');
 
   // Use async IIFE to sequence WASM calls, each in its own microtask
   // to avoid wasm-bindgen RefCell borrow conflicts
   (async () => {
     const tick = () => new Promise(r => setTimeout(r, 0));
     try {
-      // ─── 다리 4개 (원기둥, 높이 2500) ─────────────────────────────
-      // 각 다리는 바닥 중심 (x, 0, z), 몸통 아래 y=2500까지 올라감
-      const legRadius = 400;
-      const legHeight = 2500;
-      const legZ = 1000;
-      const legXFront = 2000;
-      const legXBack = -2000;
-      bridge.create_cylinder?.(legXBack,  0, -legZ, legRadius, legHeight, 12); // 뒤-좌
+      // ─── 다리 4개 (가느다란 원기둥) ───────────────────────────────
+      const legRadius = 240;
+      const legHeight = 2600;
+      const legZ = 900;
+      const legXFront = 1800;
+      const legXBack = -1800;
+      bridge.create_cylinder?.(legXBack,  0, -legZ, legRadius, legHeight, 10);
       await tick();
-      bridge.create_cylinder?.(legXBack,  0, +legZ, legRadius, legHeight, 12); // 뒤-우
+      bridge.create_cylinder?.(legXBack,  0, +legZ, legRadius, legHeight, 10);
       await tick();
-      bridge.create_cylinder?.(legXFront, 0, -legZ, legRadius, legHeight, 12); // 앞-좌
+      bridge.create_cylinder?.(legXFront, 0, -legZ, legRadius, legHeight, 10);
       await tick();
-      bridge.create_cylinder?.(legXFront, 0, +legZ, legRadius, legHeight, 12); // 앞-우
+      bridge.create_cylinder?.(legXFront, 0, +legZ, legRadius, legHeight, 10);
       await tick();
 
-      // ─── 몸통 (수평 원통, x=-3000..+3000, 반지름 1100, 중심 y=3500) ─
-      // 뒤쪽 원(-X 방향 끝)에서 시작해 +X 방향으로 pushPull해 원통 생성.
-      //   drawCircle: 중심 (-3000, 3500, 0), 법선 +X, 반지름 1100
-      //   pushPull(6000) → 원이 +X로 6000만큼 이동하며 측면 생성
-      //   결과: y ∈ [2400, 4600], z ∈ [-1100, +1100], x ∈ [-3000, +3000]
+      // ─── 몸통 (호리호리한 수평 원통) ─────────────────────────────
+      //   radius 900, x∈[-2600, 2800], 중심 y=3500
       const bodyBaseFaceId = bridge.faceCount();
       bridge.drawCircle(
-        -3000, 3500, 0,  // center (뒤쪽 끝)
-        1, 0, 0,         // normal = +X (pushPull 방향)
-        1100,            // radius
-        24,              // segments (매끄러운 원통)
+        -2600, 3500, 0,  // 뒤쪽 끝
+        1, 0, 0,         // normal = +X
+        900,             // radius (파피용처럼 슬림)
+        24,
       );
       await tick();
-      bridge.pushPull(bodyBaseFaceId, 6000); // +X 방향 6000 → 길이 6000 몸통
+      bridge.pushPull(bodyBaseFaceId, 5400); // 길이 5400
       await tick();
 
-      // ─── 머리 (구, 몸통 앞쪽 위) ────────────────────────────────
-      const headX = 3800, headY = 3800, headR = 1300;
+      // ─── 머리 (구) — 몸통 앞쪽 위 ────────────────────────────────
+      const headX = 3300, headY = 3700, headR = 900;
       bridge.create_sphere?.(headX, headY, 0, headR, 20, 14);
       await tick();
 
-      // ─── 귀 2개 (구, 머리 위 좌우) ──────────────────────────────
-      bridge.create_sphere?.(headX - 200, headY + 1100, -700, 400, 12, 8);
+      // ─── 주둥이 (짧은 수평 원기둥, 머리 앞쪽으로 돌출) ───────────
+      const snoutBaseFaceId = bridge.faceCount();
+      bridge.drawCircle(
+        headX + 600, headY - 200, 0,
+        1, 0, 0,         // normal +X
+        320,             // 얇은 주둥이
+        16,
+      );
       await tick();
-      bridge.create_sphere?.(headX - 200, headY + 1100, +700, 400, 12, 8);
+      bridge.pushPull(snoutBaseFaceId, 700);
       await tick();
 
-      // ─── 코 (작은 구, 머리 앞쪽 끝) ──────────────────────────────
-      bridge.create_sphere?.(headX + 1200, headY - 200, 0, 300, 10, 8);
+      // ─── 코 (작은 구, 주둥이 끝에) ────────────────────────────────
+      bridge.create_sphere?.(headX + 1380, headY - 200, 0, 220, 10, 8);
       await tick();
 
-      // ─── 꼬리 (원기둥, 몸통 뒤쪽 위로) ─────────────────────────────
-      // 뒤쪽 상단에서 살짝 위로 올라가는 스터비 꼬리
-      bridge.create_cylinder?.(-3100, 4000, 0, 180, 1400, 8);
+      // ─── 귀 2개 (큰 뾰족 귀 — 콘, 머리 위로 곧게) ────────────────
+      // create_cone(base_x, base_y, base_z, radius, height, segments)
+      // 머리 위쪽 좌우에 베이스, 위로 뻗음.
+      const earBaseY = headY + 700;   // 머리 위 살짝 겹침
+      const earR = 450;
+      const earH = 1800;
+      bridge.create_cone?.(headX - 100, earBaseY, -600, earR, earH, 12);
+      await tick();
+      bridge.create_cone?.(headX - 100, earBaseY, +600, earR, earH, 12);
+      await tick();
+
+      // ─── 꼬리 (길고 높은 원기둥) ─────────────────────────────────
+      // 파피용 특유의 풍성하게 말린 꼬리 느낌은 프리미티브로 어려우나,
+      // 몸통 뒤 상단에서 위로 길게 뻗어 실루엣을 표현.
+      bridge.create_cylinder?.(-2700, 4100, 0, 220, 2400, 10);
       await tick();
     } catch (e) {
-      console.error('[Init] Puppy scene creation failed:', e);
+      console.error('[Init] Papillon scene creation failed:', e);
     }
 
     toolManager.syncMesh();
