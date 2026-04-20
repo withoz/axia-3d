@@ -1041,13 +1041,15 @@ impl Scene {
 
     /// Export scene state with version header
     pub fn export_versioned_snapshot(&self) -> Result<Vec<u8>> {
-        // ADR-007 — 직렬화 전 invariants 검증 (debug build)
-        #[cfg(debug_assertions)]
-        {
-            let report = self.mesh.verify_face_invariants();
-            if !report.is_valid() {
-                eprintln!("[ADR-007] Pre-export invariant violations:\n{}", report.summary());
-            }
+        // ADR-007 — 직렬화 전 invariant 검증 (non-strict: 경고만)
+        // 엄격 검증 필요 시 export_versioned_snapshot_strict() 사용.
+        let report = self.mesh.verify_face_invariants();
+        if !report.is_valid() {
+            eprintln!(
+                "[ADR-007] Export proceeding with {} invariant violation(s).\n{}",
+                report.violations.len(),
+                report.summary(),
+            );
         }
 
         let mut buf = Vec::new();
@@ -1057,6 +1059,22 @@ impl Scene {
         buf.extend_from_slice(&(mesh_data.len() as u32).to_le_bytes());
         buf.extend(mesh_data);
         Ok(buf)
+    }
+
+    /// ADR-007 Phase 5 — 엄격 export: invariant 위반 시 저장 거부.
+    ///
+    /// 사용자가 "Save as" 등 중요한 저장 지점에서 쓸 수 있는 변형.
+    /// 기본 `export_versioned_snapshot`은 경고만 출력하여 호환성 유지.
+    pub fn export_versioned_snapshot_strict(&self) -> Result<Vec<u8>> {
+        let report = self.mesh.verify_face_invariants();
+        if !report.is_valid() {
+            anyhow::bail!(
+                "Refusing strict export — {} invariant violation(s). First: {}",
+                report.violations.len(),
+                report.violations.first().cloned().unwrap_or_else(|| "(no detail)".into()),
+            );
+        }
+        self.export_versioned_snapshot()
     }
 
     /// Import scene state with version validation

@@ -1562,6 +1562,37 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
+    /// 파일 저장 대화창 등에서 데이터 무결성이 중요한 경우 사용.
+    #[wasm_bindgen(js_name = "exportSnapshotStrict")]
+    pub fn export_snapshot_strict(&mut self) -> Vec<u8> {
+        match self.scene.export_versioned_snapshot_strict() {
+            Ok(data) => data,
+            Err(e) => {
+                console_error!("[RUST] export_snapshot_strict ERROR: {}", e);
+                self.set_error(e.to_string());
+                Vec::new()
+            }
+        }
+    }
+
+    /// 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
+    /// UI에서 "정합성 검사" 버튼에 바인딩.
+    #[wasm_bindgen(js_name = "verifyInvariants")]
+    pub fn verify_invariants(&self) -> String {
+        let report = self.scene.mesh.verify_face_invariants();
+        let violations_json: Vec<String> = report.violations.iter()
+            .map(|v| format!("{:?}", v))
+            .collect();
+        format!(
+            r#"{{"checkedFaces":{},"valid":{},"violationCount":{},"violations":[{}]}}"#,
+            report.checked_faces,
+            report.is_valid(),
+            report.violations.len(),
+            violations_json.join(","),
+        )
+    }
+
     /// 바이너리 스냅샷으로부터 프로젝트 복원 (supports versioned and legacy formats)
     pub fn import_snapshot(&mut self, data: &[u8]) -> bool {
         match self.scene.import_versioned_snapshot(data) {

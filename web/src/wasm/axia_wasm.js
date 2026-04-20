@@ -355,6 +355,24 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
+     * 파일 저장 대화창 등에서 데이터 무결성이 중요한 경우 사용.
+     * @returns {Uint8Array}
+     */
+    exportSnapshotStrict() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_exportSnapshotStrict(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * 프로젝트 데이터를 바이너리 스냅샷으로 내보내기 (versioned format with magic bytes)
      * @returns {Uint8Array}
      */
@@ -1460,6 +1478,27 @@ export class AxiaEngine {
     undo() {
         const ret = wasm.axiaengine_undo(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
+     * UI에서 "정합성 검사" 버튼에 바인딩.
+     * @returns {string}
+     */
+    verifyInvariants() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_verifyInvariants(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * @returns {number}

@@ -468,6 +468,38 @@ AXiA Snap 시스템은 SketchUp 수준의 계층적 추론(Inference) 엔진을 
 **엣지 길이 고정**: 엣지 1개 선택 → 우클릭 → "엣지 길이 설정…" → 값 입력
 **엣지 중점 분할**: 엣지 1개 선택 → 우클릭 → "엣지 중점 분할"
 
+## ADR-007: Face Orientation Policy (2026-04-20 제정)
+
+**"Normal을 관리하지 말고, Winding만 지키면 모든 게 자동으로 따라온다"**
+
+### 7가지 불변식 (Invariants)
+1. **단일 진실** — 솔리드의 외부 = Front, 내부 face는 미생성
+2. **전역 Winding** — CCW = Front (전 도구/로더/프리미티브 준수)
+3. **Normal = 결과** — Topology에서 계산, 저장은 캐시일 뿐
+4. **편집 중 Invariants 불변** — 모든 연산은 유효 상태 → 유효 상태
+5. **Merge/Boolean 3단계** — 검증 → 자동 보정 → 명확한 실패 사유
+6. **Front-only 렌더** — Single-sided 기본 (CAD 모드)
+7. **Save/Load 정합성** — 직렬화 전후 invariant 검증
+
+### 구현 요소
+- `Mesh::verify_face_invariants() → InvariantReport`
+  - I1~I5 위반 감지 (null loop / normal 불일치 / inner 유효성 / HE 소속 / non-manifold)
+- `Mesh::debug_verify_invariants()` — `#[cfg(debug_assertions)]`에서 자동 실행
+- 모든 편집 연산에 가드 삽입 (draw/push-pull/transform/offset/merge/flip/boolean)
+- `Scene::export_versioned_snapshot_strict()` — 위반 시 Err 반환 (엄격 모드)
+- WASM `exportSnapshotStrict` / `verifyInvariants` 노출
+- Viewport `setSingleSidedRender(bool)` — CAD 모드 토글
+- CommandInput `cadmode` / `mergetol` / `mergemat` 커맨드
+
+### 감사 결과로 발견된 실제 버그
+- **Sphere 폴 non-manifold**: u_segments개 vertex가 spatial hash로 dedup돼 한 엣지에 N개 face 공유 → 올바른 삼각형 fan 토폴로지로 수정 (16 face 공유 → 2 face 공유)
+
+### 관련 ADR
+- ADR-003: Geometric Validity Guards (선제 조건)
+- ADR-005: Coplanar Merge는 순수 기하
+- ADR-006: Multi-loop Face (Phase F 완료 — hole 지원)
+- ADR-007: Face Orientation Policy (본 문서)
+
 ## 향후 과제
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Constraint Solver (수직, 평행, 거리 고정 — 파라메트릭)

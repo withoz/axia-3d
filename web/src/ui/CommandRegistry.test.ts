@@ -29,13 +29,14 @@ describe('CommandRegistry', () => {
   });
 
   describe('initCommandRegistry', () => {
-    it('registers line, mergetol, mergemat and help handlers', () => {
-      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(4);
+    it('registers line, mergetol, mergemat, cadmode and help handlers', () => {
+      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(5);
       const calls = (deps.commandInput.registerHandler as any).mock.calls;
       const names = calls.map((c: any) => c[0].name);
       expect(names).toContain('line');
       expect(names).toContain('mergetol');
       expect(names).toContain('mergemat');
+      expect(names).toContain('cadmode');
       expect(names).toContain('help');
     });
   });

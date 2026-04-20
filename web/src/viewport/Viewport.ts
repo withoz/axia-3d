@@ -59,6 +59,8 @@ export class Viewport {
   private _frontColor = 0xe8e8e8;
   private _backColor = 0x8899bb;
   private _edgeColor = 0x333366;
+  /** ADR-007 Phase 4 — CAD 모드: single-sided 렌더링 (BackSide mesh 생략, GPU ↑) */
+  private _singleSidedRender = false;
   private _faceOpacity = 1.0;
   private _edgeVisible = true;
   private _profileEdge = true;
@@ -800,19 +802,27 @@ export class Viewport {
       // ── Store reference for color updates ──
       this.frontMesh = frontMesh;
 
-      // BackSide도 vertex color 사용 — 재질 색상이 뒷면에도 표시되도록
-      // (바닥면 노말이 반전되지 않은 레거시 모델에서도 재질 색상 표시)
-      const backMat = new THREE.MeshBasicMaterial({
-        color: useVertexColors ? 0xb0b0c8 : 0x9898b4, // vertex color 곱셈 보정 (약간 밝게)
-        side: THREE.BackSide,
-        polygonOffset: true,
-        polygonOffsetFactor: 1,
-        polygonOffsetUnits: 1,
-        vertexColors: useVertexColors,
-      });
-      const backMesh = new THREE.Mesh(geometry, backMat);
-      backMesh.name = 'back-mesh';
-      this.meshGroup.add(backMesh);
+      // ADR-007 Phase 4 — CAD 모드 (single-sided) 활성화 시 BackSide mesh 생략
+      // 이점:
+      //   - 렌더 draw call 절반 (face 당 front + back → front only)
+      //   - GPU 픽셀 셰이딩 작업량 감소 (back-face culling 정상 동작)
+      //   - 외부=Front 불변식 가정 시 뒤쪽 면은 사용자가 볼 일 없음
+      // 단점:
+      //   - 볼륨 안에서 바라보면 면이 안 보임 (원칙상 OK — 일관된 "outer=front")
+      //   - 뒤집힌 레거시 모델은 수동 flip 필요
+      if (!this._singleSidedRender) {
+        const backMat = new THREE.MeshBasicMaterial({
+          color: useVertexColors ? 0xb0b0c8 : 0x9898b4,
+          side: THREE.BackSide,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+          vertexColors: useVertexColors,
+        });
+        const backMesh = new THREE.Mesh(geometry, backMat);
+        backMesh.name = 'back-mesh';
+        this.meshGroup.add(backMesh);
+      }
 
       // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback
       if (edgeLines && edgeLines.length > 0) {
@@ -1561,6 +1571,24 @@ export class Viewport {
     }
   }
 
+  /**
+   * ADR-007 Phase 4 — CAD 모드 (single-sided 렌더) on/off.
+   *
+   * true: BackSide mesh 생략 → GPU 작업량 절반, outer=Front 불변식 기반
+   * false: 기존 two-tone (뒷면 파란 톤)
+   *
+   * 변경은 다음 updateMesh()부터 반영됨. 즉시 효과를 보려면 호출 후
+   * bridge.syncMesh() 또는 updateMesh()를 재호출.
+   */
+  setSingleSidedRender(enabled: boolean) {
+    this._singleSidedRender = enabled;
+  }
+
+  /** 현재 single-sided 모드 여부 */
+  isSingleSidedRender(): boolean {
+    return this._singleSidedRender;
+  }
+
   /** 현재 스타일 설정값 반환 (프리셋 비교/저장용) */
   getStyleSettings() {
     return {
@@ -1576,6 +1604,7 @@ export class Viewport {
       profileEdge: this._profileEdge,
       gridVisible: this.infiniteGrid.visible,
       axisVisible: this.axisGroup ? this.axisGroup.visible : true,
+      singleSidedRender: this._singleSidedRender,
     };
   }
 

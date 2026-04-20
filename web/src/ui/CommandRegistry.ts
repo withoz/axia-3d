@@ -94,6 +94,43 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
     },
   });
 
+  // ADR-007 Phase 4 — CAD 모드 (single-sided 렌더) 토글
+  commandInput.registerHandler({
+    name: 'cadmode',
+    aliases: ['singleside'],
+    help: 'CAD 모드 토글 (single-sided 렌더, GPU 성능↑). 사용: cadmode [on|off|toggle]',
+    execute: (args: string[]) => {
+      // @ts-ignore — viewport는 DraggablePanels 모듈을 통해 간접 접근
+      const viewport = (window as any).__axiaViewport;
+      if (!viewport?.setSingleSidedRender) {
+        // 대체: toolManager 체인에서 찾기
+        const vp = (toolManager as any).viewport;
+        if (!vp?.setSingleSidedRender) {
+          commandInput.printError('viewport 접근 불가');
+          return;
+        }
+        const cur = vp.isSingleSidedRender();
+        if (args.length === 0) {
+          commandInput.printInfo(`CAD 모드: ${cur ? 'ON' : 'OFF'}`);
+          return;
+        }
+        const v = args[0].toLowerCase();
+        let next: boolean;
+        if (v === 'on' || v === 'true' || v === '1') next = true;
+        else if (v === 'off' || v === 'false' || v === '0') next = false;
+        else if (v === 'toggle' || v === 't') next = !cur;
+        else throw new Error('사용법: cadmode [on|off|toggle]');
+        vp.setSingleSidedRender(next);
+        toolManager.syncMesh(); // mesh 재생성
+        commandInput.printSuccess(
+          `CAD 모드: ${next ? 'ON — single-sided 렌더 (외부=Front)' : 'OFF — two-tone 렌더'}`
+        );
+        return;
+      }
+      // Fallback 경로 (실제로는 여기 도달 안 함)
+    },
+  });
+
   // 면 통합 재질 경계 존중 토글 (C2)
   commandInput.registerHandler({
     name: 'mergemat',

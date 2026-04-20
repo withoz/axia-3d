@@ -118,6 +118,11 @@ export class AxiaEngine {
     draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
     /**
+     * ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
+     * 파일 저장 대화창 등에서 데이터 무결성이 중요한 경우 사용.
+     */
+    exportSnapshotStrict(): Uint8Array;
+    /**
      * 프로젝트 데이터를 바이너리 스냅샷으로 내보내기 (versioned format with magic bytes)
      */
     export_snapshot(): Uint8Array;
@@ -480,6 +485,11 @@ export class AxiaEngine {
      */
     tryMergeAdjacentFacesTol(face_ids: Uint32Array, angle_tol_deg: number): number;
     undo(): boolean;
+    /**
+     * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
+     * UI에서 "정합성 검사" 버튼에 바인딩.
+     */
+    verifyInvariants(): string;
     vert_count(): number;
     /**
      * 씬의 XIA 개수.
@@ -555,6 +565,7 @@ export interface InitOutput {
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
@@ -626,6 +637,7 @@ export interface InitOutput {
     readonly axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_tryMergeAdjacentFacesTol: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_undo: (a: number) => number;
+    readonly axiaengine_verifyInvariants: (a: number, b: number) => void;
     readonly axiaengine_vert_count: (a: number) => number;
     readonly axiaengine_xiaCount: (a: number) => number;
     readonly deltabuffers_getCacheVersion: (a: number) => number;
