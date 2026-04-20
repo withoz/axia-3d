@@ -46,6 +46,39 @@ export class Vector3 {
   toArray() { return [this.x, this.y, this.z]; }
 }
 
+// Phase I — Curve 지원 (CatmullRomCurve3 최소 구현: 선형 보간 approximation)
+export class CatmullRomCurve3 {
+  points: Vector3[];
+  closed: boolean;
+  constructor(points: Vector3[] = [], closed = false, _curveType = 'centripetal', _tension = 0.5) {
+    this.points = points;
+    this.closed = closed;
+  }
+  getPoints(divisions: number): Vector3[] {
+    // Test용 최소 구현 — 실제 Catmull-Rom 보간 대신 piecewise linear
+    const n = this.points.length;
+    if (n === 0) return [];
+    if (n === 1) return [this.points[0].clone()];
+    const result: Vector3[] = [];
+    const steps = Math.max(divisions, n);
+    const lastIdx = this.closed ? n : n - 1;
+    for (let i = 0; i <= steps; i++) {
+      const u = (i / steps) * lastIdx;
+      const k = Math.min(Math.floor(u), lastIdx - 1);
+      const t = u - k;
+      const a = this.points[k];
+      const b = this.points[(k + 1) % n];
+      const p = new Vector3(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+      );
+      result.push(p);
+    }
+    return result;
+  }
+}
+
 export class Plane {
   normal = new Vector3(0, 1, 0);
   constant = 0;

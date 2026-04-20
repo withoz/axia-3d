@@ -26,6 +26,8 @@ import { SelectTool } from './SelectTool';
 import { DrawLineTool } from './DrawLineTool';
 import { DrawRectTool } from './DrawRectTool';
 import { DrawCircleTool } from './DrawCircleTool';
+import { DrawArcTool } from './DrawArcTool';
+import { DrawFreehandTool } from './DrawFreehandTool';
 import { PushPullTool } from './PushPullTool';
 import { MoveTool } from './MoveTool';
 import { RotateTool } from './RotateTool';
@@ -161,6 +163,8 @@ export class ToolManager {
     this.tools.set('line', new DrawLineTool(this.toolContext));
     this.tools.set('rect', new DrawRectTool(this.toolContext));
     this.tools.set('circle', new DrawCircleTool(this.toolContext));
+    this.tools.set('arc', new DrawArcTool(this.toolContext));
+    this.tools.set('freehand', new DrawFreehandTool(this.toolContext));
     this.tools.set('pushpull', new PushPullTool(this.toolContext));
     this.tools.set('move', new MoveTool(this.toolContext));
     this.tools.set('rotate', new RotateTool(this.toolContext));
