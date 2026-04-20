@@ -88,6 +88,8 @@ type AxiaEngineExtended = AxiaEngine & {
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   mergeFacesByEdgeTol?(edgeId: number, angleTolDeg: number): number;
+  /** Phase F — C1 비인접 포함 병합 (outer가 inner를 hole로 흡수) */
+  mergeCoplanarContaining?(outerFaceId: number, innerFaceId: number, angleTolDeg: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
   tryMergeAdjacentFacesTol?(faceIds: Uint32Array, angleTolDeg: number): number;
   /** Dry-run — returns JSON {total, mergeable, nonCoplanar, ambiguous, estMergesAfterCascade} */
@@ -493,6 +495,22 @@ export class WasmBridge {
    * (with lastError set — e.g. "not coplanar", "shares multiple edges").
    * Single undo step.
    */
+  /**
+   * Phase F — 비인접 coplanar 포함 병합 (C1).
+   * outer face 안에 완전히 들어있는 inner face를 hole로 흡수.
+   * 반환: 병합된 face ID, 실패 시 -1 (lastError 참조).
+   */
+  mergeCoplanarContaining(outerFaceId: number, innerFaceId: number, angleTolDeg = 0.5): number {
+    if (!this.engine) return -1;
+    this.markDirty();
+    try {
+      return this.engine.mergeCoplanarContaining?.(outerFaceId, innerFaceId, angleTolDeg) ?? -1;
+    } catch (e) {
+      console.error('[WasmBridge] mergeCoplanarContaining failed:', e);
+      return -1;
+    }
+  }
+
   mergeFacesByEdge(edgeId: number, angleTolDeg = 0.5): number {
     if (!this.engine) return -1;
     this.markDirty();

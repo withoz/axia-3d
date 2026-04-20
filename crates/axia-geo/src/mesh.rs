@@ -3119,6 +3119,135 @@ impl Mesh {
         Ok(new_face)
     }
 
+    /// Phase F — 비인접(non-adjacent) coplanar 병합: outer face 안에 완전히
+    /// 포함된 inner face를 hole로 합침 (ADR-006 C1 케이스).
+    ///
+    /// 조건:
+    ///   - 두 face가 coplanar (tolerance 적용)
+    ///   - inner의 모든 vertex가 outer 평면 내부에 투영됐을 때 outer 다각형 내부
+    ///   - 두 face가 엣지를 공유하지 않음 (진짜 비인접)
+    ///
+    /// 동작:
+    ///   1. outer의 기존 hole들 보존
+    ///   2. inner의 outer loop을 새 hole로 추가 (CW 방향으로 저장됨)
+    ///   3. inner face 제거 (그러나 vert/edge는 남아 hole boundary로 사용)
+    ///
+    /// 반환: 병합된 face_id (기존 outer_face 재사용)
+    pub fn merge_coplanar_containing(
+        &mut self,
+        outer_face: FaceId,
+        inner_face: FaceId,
+        angle_tol_deg: f64,
+    ) -> Result<FaceId> {
+        if outer_face == inner_face {
+            bail!("outer and inner faces are the same");
+        }
+        // 두 face 활성 확인
+        if !self.faces.get(outer_face).map(|f| f.is_active()).unwrap_or(false) {
+            bail!("outer face {:?} inactive or missing", outer_face);
+        }
+        if !self.faces.get(inner_face).map(|f| f.is_active()).unwrap_or(false) {
+            bail!("inner face {:?} inactive or missing", inner_face);
+        }
+
+        // 1. 엣지 공유 금지 (공유하면 일반 merge_faces_by_edge 사용해야 함)
+        let shared = self.count_shared_edges_outer(outer_face, inner_face);
+        if shared > 0 {
+            bail!("faces share {} edge(s) — use merge_faces_by_edge instead", shared);
+        }
+
+        // 2. Coplanarity (tolerance 허용)
+        if !self.are_faces_coplanar_with_tolerance(outer_face, inner_face, angle_tol_deg)? {
+            bail!("faces not coplanar within {:.2}°", angle_tol_deg);
+        }
+
+        // 3. 외부 경계 수집
+        let outer_verts = self.collect_loop_verts(self.faces[outer_face].outer().start)?;
+        let inner_verts = self.collect_loop_verts(self.faces[inner_face].outer().start)?;
+        if outer_verts.len() < 3 || inner_verts.len() < 3 {
+            bail!("degenerate loop");
+        }
+
+        // 4. Containment — outer의 평면에서 inner 모든 vertex가 outer polygon 내부
+        //    (2D projection + point-in-polygon)
+        let n = self.faces[outer_face].normal().normalize_or_zero();
+        if n.length_squared() < 1e-10 {
+            bail!("outer face normal degenerate");
+        }
+        let p0 = self.vertex_pos(outer_verts[0])?;
+        // 평면의 두 basis 구성
+        let mut t = DVec3::new(1.0, 0.0, 0.0);
+        if t.cross(n).length_squared() < 1e-6 { t = DVec3::new(0.0, 1.0, 0.0); }
+        let e1 = (t - n * t.dot(n)).normalize_or_zero();
+        let e2 = n.cross(e1).normalize_or_zero();
+        let project2d = |p: DVec3| -> (f64, f64) {
+            let v = p - p0;
+            (v.dot(e1), v.dot(e2))
+        };
+        let outer_2d: Vec<(f64, f64)> = outer_verts.iter()
+            .filter_map(|v| self.vertex_pos(*v).ok())
+            .map(project2d)
+            .collect();
+        if outer_2d.len() < 3 { bail!("outer 2D projection failed"); }
+
+        let point_in = |x: f64, y: f64, poly: &[(f64, f64)]| -> bool {
+            let mut inside = false;
+            let n = poly.len();
+            let mut j = n - 1;
+            for i in 0..n {
+                let (xi, yi) = poly[i];
+                let (xj, yj) = poly[j];
+                if ((yi > y) != (yj > y))
+                   && (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            inside
+        };
+
+        for &iv in &inner_verts {
+            let p = self.vertex_pos(iv)?;
+            let (x, y) = project2d(p);
+            if !point_in(x, y, &outer_2d) {
+                bail!("inner face {:?} not contained in outer {:?}", inner_face, outer_face);
+            }
+        }
+
+        // 5. outer의 기존 hole들 보존
+        let existing_inner_refs: Vec<LoopRef> = self.faces[outer_face].inners().to_vec();
+        let mut existing_holes: Vec<Vec<VertId>> = Vec::new();
+        for inner_ref in &existing_inner_refs {
+            if inner_ref.start.is_null() { continue; }
+            if let Ok(v) = self.collect_loop_verts(inner_ref.start) {
+                if v.len() >= 3 { existing_holes.push(v); }
+            }
+        }
+
+        // 6. inner의 inner loops — 이 경우 inner face도 hole을 가질 수 있지만
+        //    보통 평평한 rect/원 → 지원 안 해도 일반적이진 않음. 일단 보존.
+        let inner_face_holes: Vec<Vec<VertId>> = self.faces[inner_face].inners().iter()
+            .filter_map(|ir| self.collect_loop_verts(ir.start).ok())
+            .filter(|v| v.len() >= 3)
+            .collect();
+
+        // 7. 재료는 outer 기준
+        let material = self.faces[outer_face].material();
+
+        // 8. 두 face 제거 (엣지는 add_face_with_holes가 dedup하므로 살아남음)
+        self.faces.remove(outer_face);
+        self.faces.remove(inner_face);
+
+        // 9. 재생성 — outer_verts + [inner_verts] + 기존 holes + inner의 holes
+        let mut hole_slices: Vec<&[VertId]> = Vec::new();
+        hole_slices.push(&inner_verts);
+        for h in &existing_holes { hole_slices.push(h); }
+        for h in &inner_face_holes { hole_slices.push(h); }
+
+        let new_face = self.add_face_with_holes(&outer_verts, &hole_slices, material)?;
+        Ok(new_face)
+    }
+
     /// Count edges shared by the outer loops of two faces (F4 helper).
     fn count_shared_edges_outer(&self, f1: FaceId, f2: FaceId) -> usize {
         let mut set = rustc_hash::FxHashSet::default();
@@ -3625,6 +3754,68 @@ mod tests {
             // merge 실패해도 상태는 일관성 있어야 함
             assert!(mesh.face_count() >= 1);
         }
+    }
+
+    #[test]
+    fn test_merge_coplanar_containing_creates_hole() {
+        // Phase F — 비인접 coplanar 병합: outer 사각형 + 내부 사각형 → outer에 hole
+        let mut mesh = Mesh::new();
+        // Outer 200×200
+        let o0 = mesh.add_vertex(DVec3::new(-100.0, 0.0, -100.0));
+        let o1 = mesh.add_vertex(DVec3::new( 100.0, 0.0, -100.0));
+        let o2 = mesh.add_vertex(DVec3::new( 100.0, 0.0,  100.0));
+        let o3 = mesh.add_vertex(DVec3::new(-100.0, 0.0,  100.0));
+        // Inner 40×40 (중앙)
+        let i0 = mesh.add_vertex(DVec3::new(-20.0, 0.0, -20.0));
+        let i1 = mesh.add_vertex(DVec3::new( 20.0, 0.0, -20.0));
+        let i2 = mesh.add_vertex(DVec3::new( 20.0, 0.0,  20.0));
+        let i3 = mesh.add_vertex(DVec3::new(-20.0, 0.0,  20.0));
+
+        let outer_f = mesh.add_face(&[o0, o1, o2, o3], MaterialId::new(0)).unwrap();
+        let inner_f = mesh.add_face(&[i0, i1, i2, i3], MaterialId::new(0)).unwrap();
+        assert_eq!(mesh.face_count(), 2);
+
+        let merged = mesh.merge_coplanar_containing(outer_f, inner_f, 0.5).unwrap();
+        assert_eq!(mesh.face_count(), 1);
+        let face = &mesh.faces[merged];
+        assert_eq!(face.inners().len(), 1, "merged face should have 1 hole");
+    }
+
+    #[test]
+    fn test_merge_coplanar_containing_rejects_sharing_edge() {
+        // 두 face가 엣지를 공유하면 merge_faces_by_edge를 써야 함
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0));
+        let v4 = mesh.add_vertex(DVec3::new(20.0, 0.0, 0.0));
+        let v5 = mesh.add_vertex(DVec3::new(20.0, 0.0, 10.0));
+        let f1 = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let f2 = mesh.add_face(&[v1, v4, v5, v2], MaterialId::new(0)).unwrap();
+        let result = mesh.merge_coplanar_containing(f1, f2, 0.5);
+        assert!(result.is_err(), "sharing edge should reject");
+    }
+
+    #[test]
+    fn test_merge_coplanar_containing_rejects_non_coplanar() {
+        let mut mesh = Mesh::new();
+        // 두 면을 서로 다른 평면에 배치
+        let o = [
+            mesh.add_vertex(DVec3::new(-10.0, 0.0, -10.0)),
+            mesh.add_vertex(DVec3::new( 10.0, 0.0, -10.0)),
+            mesh.add_vertex(DVec3::new( 10.0, 0.0,  10.0)),
+            mesh.add_vertex(DVec3::new(-10.0, 0.0,  10.0)),
+        ];
+        let i = [
+            mesh.add_vertex(DVec3::new(-5.0, 5.0, -5.0)),
+            mesh.add_vertex(DVec3::new( 5.0, 5.0, -5.0)),
+            mesh.add_vertex(DVec3::new( 5.0, 5.0,  5.0)),
+            mesh.add_vertex(DVec3::new(-5.0, 5.0,  5.0)),
+        ];
+        let of = mesh.add_face(&o, MaterialId::new(0)).unwrap();
+        let inf = mesh.add_face(&i, MaterialId::new(0)).unwrap();
+        assert!(mesh.merge_coplanar_containing(of, inf, 0.5).is_err());
     }
 
     #[test]

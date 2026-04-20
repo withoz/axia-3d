@@ -65,6 +65,7 @@ export const axiaengine_lastError: (a: number, b: number) => void;
 export const axiaengine_listConstraints: (a: number, b: number) => void;
 export const axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_maxConstraintResidual: (a: number) => number;
+export const axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
 export const axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
 export const axiaengine_new: () => number;

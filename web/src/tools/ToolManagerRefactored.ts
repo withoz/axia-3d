@@ -269,7 +269,7 @@ export class ToolManager {
    *   make-component — group과 동일
    */
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
-    'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar',
+    'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar', 'merge-as-hole',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -281,6 +281,7 @@ export class ToolManager {
     'flip-faces': '면 반전',
     'merge-faces': '면 통합',
     'merge-xia-coplanar': 'XIA 내 coplanar 면 일괄 통합',
+    'merge-as-hole': '내부 면을 구멍으로 합치기',
     'redo': '다시 실행',
     'group': '그룹 만들기',
     'make-component': '컴포넌트 변환',
@@ -498,6 +499,47 @@ export class ToolManager {
         );
       } else {
         Toast.warning(this.bridge.lastError() || '통합 실패', 3000);
+      }
+    } else if (action === 'merge-as-hole') {
+      // Phase F (C1): 2개 면 선택 — 한 면이 다른 면을 포함할 때 inner를 hole로 합침
+      const sel = this.selection.getSelectedFaces();
+      if (sel.length !== 2) {
+        Toast.warning('정확히 2개의 면을 선택하세요 (바깥쪽 + 안쪽)', 3000);
+        return;
+      }
+      const tol = getMergeTolerance();
+      // 두 face의 boundary를 가져와 면적 큰 쪽을 outer로 판정
+      const v0 = this.extractFaceBoundary(sel[0]);
+      const v1 = this.extractFaceBoundary(sel[1]);
+      if (v0.length < 3 || v1.length < 3) {
+        Toast.warning('면 경계 추출 실패', 2500);
+        return;
+      }
+      // 폴리곤 면적 (3D, fan triangle)
+      const polyArea = (verts: THREE.Vector3[]): number => {
+        let area = new THREE.Vector3();
+        const p0 = verts[0];
+        for (let i = 1; i < verts.length - 1; i++) {
+          const a = new THREE.Vector3().subVectors(verts[i], p0);
+          const b = new THREE.Vector3().subVectors(verts[i + 1], p0);
+          area.add(a.cross(b));
+        }
+        return area.length() * 0.5;
+      };
+      const a0 = polyArea(v0);
+      const a1 = polyArea(v1);
+      const [outer, inner] = a0 >= a1 ? [sel[0], sel[1]] : [sel[1], sel[0]];
+      const result = this.bridge.mergeCoplanarContaining(outer, inner, tol);
+      if (result >= 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info('내부 면을 구멍으로 병합 완료', 2500);
+      } else {
+        Toast.warning(
+          this.bridge.lastError() ||
+          '병합 실패 — 두 면이 같은 평면이고 하나가 다른 하나에 완전히 포함돼야 합니다',
+          4000,
+        );
       }
     } else if (action === 'split-edge-midpoint') {
       // 1개 엣지 선택 → 중점에서 split

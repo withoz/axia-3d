@@ -1,7 +1,27 @@
 # ADR-006: Face Merge 미지원 케이스 — Multi-loop / 비인접
 
-- **Status**: Accepted (2026-04-20)
+- **Status**: **Partially resolved** (C1 구현 완료 — 2026-04-20 Phase F)
 - **Scope**: `axia-geo::mesh::merge_faces_by_edge`, face topology
+
+## 업데이트 (2026-04-20 Phase F — C1 해결)
+
+데이터 모델 재검토 결과 `Face` 구조가 이미 `inners: SmallVec<[LoopRef; 1]>`를
+포함하고 있어 multi-loop face를 지원함. `add_face_with_holes`, `merge_faces_by_edge`
+모두 inners를 정상 처리. 따라서 ADR 초안의 "DCEL 전체 리팩토링 필요" 전제는 오판이었음.
+
+**Phase F 완료분**:
+- `merge_coplanar_containing` — C1 (비인접 포함 coplanar merge) 구현
+- WASM `mergeCoplanarContaining`, TS bridge 연동
+- Action `merge-as-hole` + 컨텍스트 메뉴 "내부 면을 구멍으로 합치기"
+- Unit tests 3개 추가 (성공/edge 공유/비coplanar 거부)
+
+**Phase F 남은 작업 (B2)**:
+- C-slit 병합 (두 면이 2+ 엣지 공유하는 특수 토폴로지)
+- 실제 사용 빈도 낮음 + 구현 복잡 → 필요 시 추가 작업
+
+---
+
+## (이하 원래 ADR 초안 — 문서 보존)
 
 ## 맥락
 

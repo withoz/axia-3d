@@ -1012,6 +1012,19 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * Phase F — 비인접 coplanar 포함 병합 (ADR-006 C1).
+     * outer_face 안에 inner_face가 완전히 들어 있으면 inner를 hole로 합침.
+     * Returns new face ID, or -1 on failure (lastError set).
+     * @param {number} outer_face_raw
+     * @param {number} inner_face_raw
+     * @param {number} angle_tol_deg
+     * @returns {number}
+     */
+    mergeCoplanarContaining(outer_face_raw, inner_face_raw, angle_tol_deg) {
+        const ret = wasm.axiaengine_mergeCoplanarContaining(this.__wbg_ptr, outer_face_raw, inner_face_raw, angle_tol_deg);
+        return ret;
+    }
+    /**
      * Merge the two coplanar faces sharing the given edge into a single face.
      *
      * - Success: returns the new merged FaceId (>= 0).

@@ -310,6 +310,12 @@ export class AxiaEngine {
      */
     maxConstraintResidual(): number;
     /**
+     * Phase F — 비인접 coplanar 포함 병합 (ADR-006 C1).
+     * outer_face 안에 inner_face가 완전히 들어 있으면 inner를 hole로 합침.
+     * Returns new face ID, or -1 on failure (lastError set).
+     */
+    mergeCoplanarContaining(outer_face_raw: number, inner_face_raw: number, angle_tol_deg: number): number;
+    /**
      * Merge the two coplanar faces sharing the given edge into a single face.
      *
      * - Success: returns the new merged FaceId (>= 0).
@@ -589,6 +595,7 @@ export interface InitOutput {
     readonly axiaengine_listConstraints: (a: number, b: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_maxConstraintResidual: (a: number) => number;
+    readonly axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
     readonly axiaengine_new: () => number;

@@ -1677,6 +1677,36 @@ impl AxiaEngine {
         }
     }
 
+    /// Phase F — 비인접 coplanar 포함 병합 (ADR-006 C1).
+    /// outer_face 안에 inner_face가 완전히 들어 있으면 inner를 hole로 합침.
+    /// Returns new face ID, or -1 on failure (lastError set).
+    #[wasm_bindgen(js_name = "mergeCoplanarContaining")]
+    pub fn merge_coplanar_containing(
+        &mut self,
+        outer_face_raw: u32,
+        inner_face_raw: u32,
+        angle_tol_deg: f64,
+    ) -> i32 {
+        let o = FaceId::new(outer_face_raw);
+        let i = FaceId::new(inner_face_raw);
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        match self.scene.mesh.merge_coplanar_containing(o, i, angle_tol_deg) {
+            Ok(new_face) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                new_face.raw() as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                self.set_error(e.to_string());
+                -1
+            }
+        }
+    }
+
     /// Tolerance 지정 단일 엣지 병합 (B1).
     /// `angle_tol_deg` — 허용 각도 (°). 기본 0.5° (strict). 관대하게는 2~5°.
     #[wasm_bindgen(js_name = "mergeFacesByEdgeTol")]
