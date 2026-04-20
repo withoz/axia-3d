@@ -286,6 +286,27 @@ pub fn split_face_by_line(
     debug.push(format!("projected end: {:?} (plane_dist={:.6})", proj_end,
         (line_end - proj_end).length()));
 
+    // ─── Step 0.5: Early case (c) detection ────────────────────────────
+    // If exactly one endpoint is strictly inside exactly one hole and no
+    // holes are crossed, we take the "bridge" route — one endpoint can't
+    // be resolved via find_boundary_point on outer (it's in void), so we
+    // dispatch here before the normal outer-resolution step fails.
+    if !saved_holes.is_empty() {
+        let early_classifications = classify_holes(mesh, proj_start, proj_end, &saved_holes)?;
+        let case_c_match = detect_case_c(&early_classifications);
+        if let Some((hole_idx, which_end)) = case_c_match {
+            return split_face_case_c(
+                mesh, face_id,
+                proj_start, proj_end,
+                which_end,
+                &saved_holes, hole_idx,
+                &early_classifications,
+                &loop_verts, &loop_hes, face_diag,
+                new_verts, new_edges, debug,
+            );
+        }
+    }
+
     // ─── Step 1: Determine where line endpoints touch the face boundary ─
     let snap_tolerance = face_diag * 0.02; // 2% of face diagonal — generous for UI precision
     let split_v1 = find_boundary_point(mesh, face_id, proj_start, &loop_verts, &loop_hes, snap_tolerance)?;
@@ -347,10 +368,20 @@ pub fn split_face_by_line(
                     pts.len()
                 );
             }
-            HoleClassification::Inside => {
+            HoleClassification::InsideStart | HoleClassification::InsideEnd => {
+                // Should have been handled by Step 0.5 early dispatcher; if
+                // we got here it means the endpoint-inside condition was
+                // combined with other crossings, which we don't yet support.
                 bail!(
-                    "split_face_by_line: endpoint lies inside a hole on face {} — \
-                     bridge topology not yet supported (Phase G case c)",
+                    "split_face_by_line: endpoint inside a hole combined with \
+                     other hole crossings on face {} — mixed case c+b not supported",
+                    face_id.raw()
+                );
+            }
+            HoleClassification::InsideBoth => {
+                bail!(
+                    "split_face_by_line: both endpoints inside the same hole on \
+                     face {} — zero-length cut in void",
                     face_id.raw()
                 );
             }
@@ -423,9 +454,12 @@ enum HoleClassification {
     /// Cutting line crosses this hole's boundary. Carries (segment index,
     /// 3D intersection position) for each crossing, in hole-loop order.
     Crossed(Vec<(usize, DVec3)>),
-    /// An endpoint of the cutting line lies strictly inside the hole
-    /// (bridge topology, Phase G case c — not yet supported).
-    Inside,
+    /// proj_start lies strictly inside this hole (Phase G case c).
+    InsideStart,
+    /// proj_end lies strictly inside this hole (Phase G case c).
+    InsideEnd,
+    /// Both endpoints inside the same hole — reject (zero-length cut in void).
+    InsideBoth,
     /// Unusual geometric configuration we don't handle.
     Ambiguous(String),
 }
@@ -439,12 +473,14 @@ fn classify_holes(
     let mut out = Vec::with_capacity(saved_holes.len());
     for hole in saved_holes {
         let verts = mesh.collect_loop_verts(hole.loop_ref.start)?;
-        if point_inside_loop_3d(mesh, &verts, proj_start)?
-            || point_inside_loop_3d(mesh, &verts, proj_end)?
-        {
-            out.push(HoleClassification::Inside);
+        let s_in = point_inside_loop_3d(mesh, &verts, proj_start)?;
+        let e_in = point_inside_loop_3d(mesh, &verts, proj_end)?;
+        if s_in && e_in {
+            out.push(HoleClassification::InsideBoth);
             continue;
         }
+        if s_in { out.push(HoleClassification::InsideStart); continue; }
+        if e_in { out.push(HoleClassification::InsideEnd);   continue; }
         let crossings = find_loop_crossings_3d(mesh, &verts, proj_start, proj_end)?;
         out.push(match crossings.len() {
             0 => HoleClassification::Clear,
@@ -766,6 +802,172 @@ fn find_hole_edge_containing(
     let (eid, _, t) = best.ok_or_else(||
         anyhow::anyhow!("find_hole_edge_containing: empty hole loop"))?;
     Ok((eid, t))
+}
+
+/// Which endpoint of the cutting line was flagged inside a hole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum InsideEnd { Start, End }
+
+/// If the classifications describe exactly one hole with exactly one
+/// endpoint inside (and no crossings, no other insides, no ambiguity),
+/// return `(hole_idx, which_end)` — caller routes to `split_face_case_c`.
+fn detect_case_c(classifications: &[HoleClassification]) -> Option<(usize, InsideEnd)> {
+    let mut target: Option<(usize, InsideEnd)> = None;
+    for (i, c) in classifications.iter().enumerate() {
+        match c {
+            HoleClassification::Clear => {}
+            HoleClassification::InsideStart => {
+                if target.is_some() { return None; }
+                target = Some((i, InsideEnd::Start));
+            }
+            HoleClassification::InsideEnd => {
+                if target.is_some() { return None; }
+                target = Some((i, InsideEnd::End));
+            }
+            // Anything else (Crossed, InsideBoth, Ambiguous) → not pure case (c)
+            _ => return None,
+        }
+    }
+    target
+}
+
+/// Phase G case (c) — "bridge" topology. One cutting-line endpoint lies
+/// on outer; the other lies strictly inside a hole. We find where the
+/// line crosses that hole boundary (H) and create a zero-width bridge
+/// A↔H that fuses the hole into the outer loop.
+///
+/// Result: a single face whose outer loop traverses outer, then the
+/// former hole (in the same natural CW winding the hole had), then
+/// back — connected by the bridge edge traversed in both directions.
+/// All other holes remain as inner loops on the rebuilt face.
+fn split_face_case_c(
+    mesh: &mut Mesh,
+    face_id: FaceId,
+    proj_start: DVec3,
+    proj_end: DVec3,
+    which_end: InsideEnd,
+    saved_holes: &[SavedHole],
+    hole_idx: usize,
+    _classifications: &[HoleClassification],
+    outer_loop_verts: &[VertId],
+    outer_loop_hes: &[HeId],
+    face_diag: f64,
+    mut new_verts: Vec<VertId>,
+    mut new_edges: Vec<EdgeId>,
+    mut debug: Vec<String>,
+) -> Result<FaceSplitResult> {
+    // Normalize direction: outer_pt is the endpoint on outer, inside_pt is
+    // the endpoint inside the hole.
+    let (outer_pt, inside_pt) = match which_end {
+        InsideEnd::End   => (proj_start, proj_end),
+        InsideEnd::Start => (proj_end,   proj_start),
+    };
+    debug.push(format!(
+        "case (c): hole_idx={}, which_end={:?}, outer_pt={:?}, inside_pt={:?}",
+        hole_idx, which_end, outer_pt, inside_pt,
+    ));
+
+    // ── Resolve the outer endpoint as a real vertex on outer ───────────
+    let snap_tol = face_diag * 0.02;
+    let outer_bp = find_boundary_point(
+        mesh, face_id, outer_pt, outer_loop_verts, outer_loop_hes, snap_tol,
+    )?;
+    let outer_a = realize_boundary_point(
+        mesh, &outer_bp, &mut new_verts, &mut new_edges, &mut debug,
+    )?;
+
+    // ── Find the single hole-boundary crossing ─────────────────────────
+    // Re-read the crossed hole's current loop (realize_boundary_point on
+    // outer didn't touch inners, but be defensive).
+    let hole_start_now = mesh.faces[face_id].inners()[hole_idx].start;
+    let hole_verts_pre = mesh.collect_loop_verts(hole_start_now)?;
+    let crossings = find_loop_crossings_3d(mesh, &hole_verts_pre, outer_pt, inside_pt)?;
+    ensure!(
+        crossings.len() == 1,
+        "case (c): expected exactly 1 hole crossing, got {}",
+        crossings.len(),
+    );
+    let (seg_idx, pos) = crossings[0];
+    let (eid, _t) = find_hole_edge_containing(mesh, &hole_verts_pre, seg_idx, pos)?;
+    let (h_vert, e1, e2) = mesh.split_edge(eid, pos)?;
+    new_verts.push(h_vert);
+    new_edges.push(e1);
+    new_edges.push(e2);
+    debug.push(format!("  hole crossing at edge {} → v{}", eid.raw(), h_vert.raw()));
+
+    // ── Compose the bridged outer loop ──────────────────────────────────
+    // outer_walk (starting from outer_a, one full cycle back to outer_a
+    // exclusive) + hole_walk from H for one natural-CW cycle, then A
+    // appended once to close the bridge.
+    //
+    // The resulting list has outer_a at index 0 and one further occurrence
+    // between H's arrivals — make_loop pairs consecutive entries so A at
+    // [0] naturally closes the loop with the last vertex.
+    let outer_post = mesh.collect_loop_verts(mesh.faces[face_id].outer().start)?;
+    let hole_post  = mesh.collect_loop_verts(
+        mesh.faces[face_id].inners()[hole_idx].start,
+    )?;
+
+    // Build outer arc starting at outer_a going natural CCW for one cycle.
+    let a_pos = outer_post.iter().position(|&v| v == outer_a)
+        .ok_or_else(|| anyhow::anyhow!("case (c): outer_a lost from outer loop"))?;
+    let mut outer_seq: Vec<VertId> = Vec::with_capacity(outer_post.len());
+    for k in 0..outer_post.len() {
+        outer_seq.push(outer_post[(a_pos + k) % outer_post.len()]);
+    }
+    // outer_seq starts with outer_a and contains every outer vert once.
+
+    // Hole arc: natural CW cycle starting and ending at h_vert (exclusive
+    // of the trailing duplicate H — we add H and A explicitly in the
+    // bridge closure).
+    let h_pos = hole_post.iter().position(|&v| v == h_vert)
+        .ok_or_else(|| anyhow::anyhow!("case (c): H lost from hole loop"))?;
+    let mut hole_seq: Vec<VertId> = Vec::with_capacity(hole_post.len());
+    for k in 0..hole_post.len() {
+        hole_seq.push(hole_post[(h_pos + k) % hole_post.len()]);
+    }
+    // hole_seq starts with h_vert and contains every hole vert once.
+
+    // Final bridged loop: outer_seq + [H] + hole_seq[1..] (rest of hole
+    // after H) + [H] closes back into the bridge → make_loop walks:
+    //   outer_a → outer_seq[1] → … → outer_seq[-1] → H → hole_seq[1]
+    //     → … → hole_seq[-1] → H → outer_a (wraps)
+    // i.e. the bridge edge A↔H is used twice in opposite directions and
+    // the hole is traversed in its natural CW winding.
+    let mut bridged: Vec<VertId> = Vec::with_capacity(outer_seq.len() + hole_seq.len() + 2);
+    bridged.extend_from_slice(&outer_seq);
+    bridged.push(h_vert);
+    bridged.extend_from_slice(&hole_seq[1..]);
+    bridged.push(h_vert);
+
+    // ── Preserve other (untouched) holes as inners on the new face ─────
+    let mut other_holes: Vec<Vec<VertId>> = Vec::new();
+    for (i, hole) in saved_holes.iter().enumerate() {
+        if i == hole_idx { continue; }
+        let start = mesh.faces[face_id].inners()[i].start;
+        other_holes.push(mesh.collect_loop_verts(start)?);
+    }
+
+    // ── Remove original + rebuild single face ──────────────────────────
+    let material = mesh.faces[face_id].material();
+    mesh.remove_face(face_id)?;
+
+    let other_slices: Vec<&[VertId]> = other_holes.iter().map(|v| v.as_slice()).collect();
+    let new_face = mesh.add_face_with_holes(&bridged, &other_slices, material)?;
+
+    if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
+
+    debug.push(format!("case (c) result: face={} ({}v, {} holes)",
+        new_face.raw(), bridged.len(), other_holes.len()));
+
+    mesh.debug_verify_invariants();
+
+    Ok(FaceSplitResult {
+        new_faces: vec![new_face],
+        new_verts,
+        new_edges,
+        debug,
+    })
 }
 
 /// Axis-projected point-in-polygon (ray cast along +u). Works for polygons
@@ -2353,19 +2555,68 @@ mod tests {
     }
 
     #[test]
-    fn phase_g_rejects_endpoint_inside_hole() {
-        // Endpoint at (0, 0, 0) is inside the hole — case (c) bridge topology.
+    fn phase_g3_bridge_endpoint_inside_hole() {
+        // Endpoint at (0, 0, 0) is inside the hole — case (c) bridge
+        // topology. After the operation, the face should be single (no
+        // split) and carry no holes (the hole fused into outer).
+        let (mut mesh, f) = build_holed_face();
+        let before_faces = mesh.face_count();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 60.0),
+            DVec3::new(   0.0, 0.0,  0.0),  // inside 40×40 hole at origin
+        ).unwrap_or_else(|e| panic!("case (c) bridge failed: {}", e));
+
+        // Case (c) produces exactly one face (not two — it's a merge, not a split).
+        assert_eq!(res.new_faces.len(), 1);
+        let nf = res.new_faces[0];
+        assert!(
+            mesh.faces[nf].inners().is_empty(),
+            "bridged face should have zero inner loops, got {}",
+            mesh.faces[nf].inners().len(),
+        );
+        // Total face count stays the same (one face removed, one added).
+        assert_eq!(mesh.face_count(), before_faces);
+
+        // Outer loop now includes outer (4) + hole (4) + H twice + A
+        // unchanged once = 10 entries in the vertex list (A and H each
+        // appear twice due to the bridge).
+        let loop_verts = mesh.collect_loop_verts(mesh.faces[nf].outer().start).unwrap();
+        assert!(loop_verts.len() >= 9,
+            "bridged outer loop should be long (outer + hole + bridge), got {}", loop_verts.len());
+
+        let report = mesh.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after Phase G case (c):\n{}", report.summary());
+    }
+
+    #[test]
+    fn phase_g3_bridge_start_endpoint_inside() {
+        // Symmetric case — start inside hole, end on outer. Same topology
+        // as the above but exercises the InsideStart path.
+        let (mut mesh, f) = build_holed_face();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(   0.0, 0.0,  0.0),  // inside hole
+            DVec3::new(-100.0, 0.0, 60.0),
+        ).unwrap();
+        assert_eq!(res.new_faces.len(), 1);
+    }
+
+    #[test]
+    fn phase_g3_rejects_both_endpoints_inside_hole() {
         let (mut mesh, f) = build_holed_face();
         let err = split_face_by_line(
             &mut mesh, f,
-            DVec3::new(-100.0, 0.0, 60.0),
-            DVec3::new(   0.0, 0.0,  0.0),
+            DVec3::new(-10.0, 0.0, 0.0),  // both inside
+            DVec3::new( 10.0, 0.0, 0.0),
         );
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
         assert!(
-            msg.contains("hole") && (msg.contains("inside") || msg.contains("case c")),
-            "expected endpoint-inside-hole rejection, got: {}", msg
+            msg.contains("both endpoints") || msg.contains("InsideBoth")
+                || msg.contains("zero-length"),
+            "expected InsideBoth rejection, got: {}", msg,
         );
     }
 
