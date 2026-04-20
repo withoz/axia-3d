@@ -102,6 +102,9 @@ export class Color {
   r: number; g: number; b: number;
   constructor(c?: string | number) { this.r = 0; this.g = 0; this.b = 0; if (c) this.set(c); }
   set(_c: any) { return this; }
+  setHex(_h: number) { return this; }
+  setRGB(r: number, g: number, b: number) { this.r = r; this.g = g; this.b = b; return this; }
+  copy(c: Color) { this.r = c.r; this.g = c.g; this.b = c.b; return this; }
 }
 
 export class BufferGeometry {
@@ -112,6 +115,16 @@ export class BufferGeometry {
   dispose() {}
   computeVertexNormals() {}
   setFromPoints(_points: any[]) { return this; }
+}
+
+export class PlaneGeometry extends BufferGeometry {
+  constructor(_w?: number, _h?: number) { super(); }
+}
+
+export class Quaternion {
+  x = 0; y = 0; z = 0; w = 1;
+  setFromUnitVectors(_a: any, _b: any) { return this; }
+  copy(q: Quaternion) { this.x = q.x; this.y = q.y; this.z = q.z; this.w = q.w; return this; }
 }
 
 export class BufferAttribute {
@@ -134,6 +147,8 @@ export class Object3D {
   position = new Vector3();
   rotation = { x: 0, y: 0, z: 0 };
   scale = new Vector3(1, 1, 1);
+  quaternion = new Quaternion();
+  renderOrder = 0;
   add(child: Object3D) { this.children.push(child); child.parent = this; }
   remove(child: Object3D) {
     const i = this.children.indexOf(child);

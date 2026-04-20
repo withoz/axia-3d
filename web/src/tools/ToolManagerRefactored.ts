@@ -10,6 +10,7 @@ import { DimensionLabel, DimLine } from '../ui/DimensionLabel';
 import { UnitSystem } from '../units/UnitSystem';
 import { SnapManager } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
+import { DrawPlaneIndicator } from '../viewport/DrawPlaneIndicator';
 import { SelectionManager } from './SelectionManager';
 import { PickBox } from '../ui/PickBox';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
@@ -78,6 +79,13 @@ export class ToolManager {
   // ═══ Hover tools (static sets) ═══
   private static readonly HOVER_TOOLS = new Set(['select', 'pushpull', 'offset', 'move', 'rotate', 'scale', 'group']);
   private static readonly EDGE_HOVER_TOOLS = new Set(['offset', 'erase']);
+  /** Tools that benefit from a hover-time draw-plane preview (tiny RGB gizmo). */
+  private static readonly DRAW_PLANE_TOOLS = new Set(['line', 'rect', 'circle', 'arc', 'freehand', 'bezier']);
+
+  // ═══ Draw-plane hover indicator ═══
+  private drawPlaneIndicator: DrawPlaneIndicator | null = null;
+  private drawPlaneRafPending = false;
+  private drawPlaneLastEvent: MouseEvent | null = null;
 
   constructor(
     viewport: Viewport,
@@ -107,6 +115,9 @@ export class ToolManager {
 
     // Initialize pickbox
     this.pickBox = new PickBox(viewport.container);
+
+    // Initialize draw-plane hover indicator (shown only for drawing tools)
+    this.drawPlaneIndicator = new DrawPlaneIndicator(viewport.scene);
 
     // ═══ Selection Dimension Display: show edge dims when faces selected ═══
     this.selection.onChange((faces: number[]) => {
@@ -211,6 +222,11 @@ export class ToolManager {
     const newToolObj = this.tools.get(name);
     if (newToolObj?.wantsSnap === false) {
       this.snapVisual.clear();
+    }
+
+    // Hide draw-plane indicator if the new tool doesn't use it
+    if (!ToolManager.DRAW_PLANE_TOOLS.has(name)) {
+      this.drawPlaneIndicator?.hide();
     }
 
     // Clear selection dimensions when switching tools
@@ -1163,6 +1179,34 @@ export class ToolManager {
   }
 
   /**
+   * Update the hover-time draw-plane gizmo from the last recorded mouse
+   * event. Called at most once per animation frame (RAF throttle).
+   *
+   * Performance: one `viewport.pick()` raycast (BVH-accelerated) per frame
+   * at most, only while a drawing tool is active and the user is hovering.
+   */
+  private flushDrawPlaneIndicator(): void {
+    this.drawPlaneRafPending = false;
+    const e = this.drawPlaneLastEvent;
+    if (!e) return;
+    if (!ToolManager.DRAW_PLANE_TOOLS.has(this._currentTool)) return;
+    if (this.isToolBusy()) { this.drawPlaneIndicator?.hide(); return; }
+
+    const plane = this.getDrawPlane(e);
+    // Gizmo anchor: use the face hit point if we're on a face,
+    // else the ground raycast point. If neither exists, hide.
+    let origin: THREE.Vector3 | null = null;
+    if (plane.onFace) {
+      const hit = this.viewport.pick(e.clientX, e.clientY);
+      if (hit?.point) origin = hit.point.clone();
+    }
+    if (!origin) origin = this.get3DPoint(e);
+    if (!origin) { this.drawPlaneIndicator?.hide(); return; }
+
+    this.drawPlaneIndicator?.show(origin, plane);
+  }
+
+  /**
    * Detect drawing plane from mouse position.
    * If cursor is on an existing face → use that face's DCEL normal.
    * If cursor is on empty space → use default ground plane (Y-up).
@@ -1734,12 +1778,24 @@ export class ToolManager {
         }
         this.snapVisual.clear();
       }
+
+      // ═══ Draw-plane hover indicator (RAF-throttled) ═══
+      if (ToolManager.DRAW_PLANE_TOOLS.has(this._currentTool) && !isOperating) {
+        this.drawPlaneLastEvent = e;
+        if (!this.drawPlaneRafPending) {
+          this.drawPlaneRafPending = true;
+          requestAnimationFrame(() => this.flushDrawPlaneIndicator());
+        }
+      } else {
+        this.drawPlaneIndicator?.hide();
+      }
     });
 
     // ===== MOUSE LEAVE =====
     canvas.addEventListener('mouseleave', () => {
       this.selection.clearHover();
       this.selection.clearEdgeHover();
+      this.drawPlaneIndicator?.hide();
     });
 
     // ===== MOUSE UP =====
