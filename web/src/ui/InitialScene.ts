@@ -50,20 +50,28 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
     try {
       // ─── Legs × 4 (tapered revolve) ─────────────────────────────
       // Profile is in the XZ-constant plane containing the vertical (+Y) axis
-      // at (cx, *, cz). Points are ordered along +Y for outward normals.
+      // at (cx, *, cz). Points ordered along +Y for outward normals.
+      //
+      // Positions chosen so that each leg top (y ≈ 3000) sits inside the
+      // body revolve solid:
+      //   - body at x=±1800 has radius 700–850 around the spine at y=3500,
+      //     so the body bottom is y ≈ 2650–2800 there
+      //   - z=±550 sits inside the body's z-range at both hip and chest
+      //   - the top pole at y=3000 is WELL INSIDE body, guaranteeing a
+      //     visibly continuous leg-to-body junction
       const legPositions: Array<[number, number]> = [
-        [-1800, -900], [-1800,  900],   // back legs
-        [ 1800, -900], [ 1800,  900],   // front legs
+        [-1800, -550], [-1800,  550],   // back legs
+        [ 1800, -550], [ 1800,  550],   // front legs
       ];
       for (const [cx, cz] of legPositions) {
         const profile: number[] = [
           cx,          0, cz,    // foot pole (on axis)
           cx + 290,   60, cz,    // paw (widest near ground)
-          cx + 240,  200, cz,    // ankle
-          cx + 210,  800, cz,    // lower leg
-          cx + 260, 1600, cz,    // knee
-          cx + 300, 2200, cz,    // thigh
-          cx,       2500, cz,    // top pole (connects to body)
+          cx + 240,  220, cz,    // ankle
+          cx + 210, 1000, cz,    // lower leg
+          cx + 260, 1900, cz,    // knee
+          cx + 320, 2600, cz,    // thigh (widest up top)
+          cx,       3000, cz,    // top pole — inside body
         ];
         bridge.revolveProfile(profile, cx, 0, cz, 0, 1, 0, 12);
         await tick();
@@ -125,23 +133,28 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
       await tick();
 
       // ─── Tail (sweep along curved upward path) ─────────────────
-      // Papillon's plume tail curls up and back over the body. We sweep
-      // a small circle profile along a hand-crafted curve. The closed
-      // profile gives a tube; subdivision afterward can round it further.
-      const tailPoints = 8;
-      const tailRadius = 130;
+      // Papillon's plume tail curls up and back over the body. The path
+      // STARTS INSIDE the body rear (roughly at the top-back of the revolve
+      // solid, so the tail-body junction looks seamless) and curls up-back.
+      // Closed circle profile → solid tube; bump radius to 180 for
+      // visibility against the body silhouette.
+      const tailPoints = 10;
+      const tailRadius = 180;
       const tailProfile: number[] = [];
       for (let i = 0; i < tailPoints; i++) {
         const a = (i * Math.PI * 2) / tailPoints;
         tailProfile.push(tailRadius * Math.cos(a), tailRadius * Math.sin(a), 0);
       }
+      // Body at x=-2500 has radius ≈ 300 → y ∈ [3200, 3800] there.
+      // Starting tail at (-2500, 3700) places its first section INSIDE the
+      // body envelope near the upper-rear.
       const tailPath: number[] = [
+        -2500, 3700, 0,   // inside body, top-rear
         -2700, 4100, 0,
-        -2850, 4500, 0,
-        -3000, 5000, 0,
-        -3050, 5500, 0,
-        -2950, 6000, 0,
-        -2650, 6300, 0,
+        -2900, 4600, 0,
+        -3000, 5100, 0,
+        -2950, 5700, 0,
+        -2700, 6200, 0,
         -2300, 6400, 0,
       ];
       bridge.sweepProfileAlongPath(tailProfile, tailPath, true);
