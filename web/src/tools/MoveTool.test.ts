@@ -3,18 +3,24 @@ import * as THREE from 'three';
 import { MoveTool } from './MoveTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+vi.mock('../ui/Toast', () => ({
+  Toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn() },
+}));
 
 function mockToolContext() {
   return {
     bridge: {
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
       translateFaces: vi.fn(),
+      translateVerts: vi.fn(),
+      getEdgeEndpoints: vi.fn().mockReturnValue([] as number[]),
     },
     viewport: {
       activeCamera: new THREE.PerspectiveCamera(),
     },
     selection: {
       getSelectedFaces: vi.fn().mockReturnValue([1, 2]),
+      getSelectedEdges: vi.fn().mockReturnValue([]),
     },
     getSelectedFaces: vi.fn().mockReturnValue([1, 2]),
     syncMesh: vi.fn(),
@@ -67,8 +73,9 @@ describe('MoveTool', () => {
       expect(tool.isBusy()).toBe(true);
     });
 
-    it('does nothing when no faces selected', () => {
+    it('does nothing when nothing selected', () => {
       ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
       expect(tool.isBusy()).toBe(false);
     });
@@ -141,10 +148,53 @@ describe('MoveTool', () => {
       expect(ctx.bridge.translateFaces).toHaveBeenCalledWith([1, 2], 0, 100, 0);
     });
 
-    it('does nothing when no faces selected', () => {
+    it('does nothing when nothing selected', () => {
       ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
       tool.applyVCBValue(500);
       expect(ctx.bridge.translateFaces).not.toHaveBeenCalled();
+      expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('edge movement', () => {
+    beforeEach(() => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10, 20]);
+      // edge 10 → verts [1,2], edge 20 → verts [2,3] (shared vert 2)
+      ctx.bridge.getEdgeEndpoints.mockImplementation((eid: number) => {
+        if (eid === 10) return [1, 2];
+        if (eid === 20) return [2, 3];
+        return [];
+      });
+    });
+
+    it('drags edges by translating their vertices (deduped)', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      expect(tool.isBusy()).toBe(true);
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(100, 0, 0));
+      expect(ctx.bridge.translateVerts).toHaveBeenCalled();
+      const call = (ctx.bridge.translateVerts as any).mock.calls[0];
+      const vertIds = (call[0] as number[]).slice().sort();
+      expect(vertIds).toEqual([1, 2, 3]); // dedup
+      expect(ctx.bridge.translateFaces).not.toHaveBeenCalled();
+      expect(ctx.syncMesh).toHaveBeenCalled();
+    });
+
+    it('VCB applies to edges along axis lock', () => {
+      ctx.axisLock = 'z';
+      tool.applyVCBValue(50);
+      expect(ctx.bridge.translateVerts).toHaveBeenCalled();
+      const call = (ctx.bridge.translateVerts as any).mock.calls[0];
+      expect(call[1]).toBe(0); expect(call[2]).toBe(0); expect(call[3]).toBe(50);
+    });
+
+    it('faces take priority over edges when both selected', () => {
+      ctx.getSelectedFaces.mockReturnValue([7, 8]);
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      expect(ctx.bridge.translateFaces).toHaveBeenCalled();
+      expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
     });
   });
 

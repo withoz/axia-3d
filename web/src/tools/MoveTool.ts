@@ -7,14 +7,18 @@ import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
 
+type Target =
+  | { kind: 'faces'; ids: number[] }
+  | { kind: 'verts'; ids: number[]; edgeCount: number };
+
 export class MoveTool implements ITool {
   readonly name = 'move';
 
   private ctx: ToolContext;
   private transformActive: boolean = false;
   private transformStartPt: THREE.Vector3 | null = null;
-  private transformCentroid: THREE.Vector3 | null = null;
   private transformLastDelta: THREE.Vector3 = new THREE.Vector3();
+  private target: Target | null = null;
 
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
@@ -28,30 +32,60 @@ export class MoveTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (this.transformActive) return;
+  /**
+   * 현재 선택을 Move 대상으로 변환.
+   * 우선순위: 면 → 에지(정점으로 변환) → null.
+   */
+  private resolveTarget(): Target | null {
+    const faces = this.ctx.getSelectedFaces();
+    if (faces.length > 0) return { kind: 'faces', ids: faces };
 
-    const selected = this.ctx.getSelectedFaces();
-    if (selected.length === 0) {
-      // #13: 빈 선택 시 사용자 안내 (이전엔 침묵)
-      Toast.info('이동할 면을 먼저 선택하세요', 2000);
-      return;
+    const edges = this.ctx.selection.getSelectedEdges();
+    if (edges.length === 0) return null;
+
+    // 에지 → 정점 ID 집합 (중복 제거)
+    const vertSet = new Set<number>();
+    for (const eid of edges) {
+      const eps = this.ctx.bridge.getEdgeEndpoints(eid);
+      if (eps.length === 2) {
+        vertSet.add(eps[0]);
+        vertSet.add(eps[1]);
+      }
     }
-    const centroid = this.ctx.bridge.facesCentroid(selected);
-    if (centroid && point) {
-      this.transformCentroid = centroid;
-      this.transformStartPt = point.clone();
-      this.transformActive = true;
-      this.transformLastDelta.set(0, 0, 0);
-      debugLog(`[Move] Start drag, ${selected.length} faces, centroid=`,
-        centroid.x.toFixed(1), centroid.y.toFixed(1), centroid.z.toFixed(1));
+    if (vertSet.size === 0) return null;
+    return { kind: 'verts', ids: Array.from(vertSet), edgeCount: edges.length };
+  }
+
+  private translate(t: Target, dx: number, dy: number, dz: number): void {
+    if (t.kind === 'faces') {
+      this.ctx.bridge.translateFaces(t.ids, dx, dy, dz);
+    } else {
+      this.ctx.bridge.translateVerts(t.ids, dx, dy, dz);
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (!this.transformActive || !this.transformStartPt || !this.transformCentroid || !point) return;
+  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+    if (this.transformActive) return;
 
-    const selected = this.ctx.getSelectedFaces();
+    const t = this.resolveTarget();
+    if (!t) {
+      // #13: 빈 선택 시 사용자 안내
+      Toast.info('이동할 면 또는 에지를 먼저 선택하세요', 2000);
+      return;
+    }
+    if (!point) return;
+
+    this.target = t;
+    this.transformStartPt = point.clone();
+    this.transformActive = true;
+    this.transformLastDelta.set(0, 0, 0);
+    const label = t.kind === 'faces' ? `${t.ids.length} faces` : `${t.edgeCount} edges (${t.ids.length} verts)`;
+    debugLog(`[Move] Start drag, ${label}`);
+  }
+
+  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+    if (!this.transformActive || !this.transformStartPt || !this.target || !point) return;
+
     const totalDelta = new THREE.Vector3().subVectors(point, this.transformStartPt);
 
     // #1: Axis lock을 드래그에도 반영 (이전엔 VCB만 반영)
@@ -64,7 +98,7 @@ export class MoveTool implements ITool {
 
     // #7: 0.1mm 임계값을 0.01mm로 낮춤 (정밀 조정 반영)
     if (incDelta.lengthSq() > 1e-4) {
-      this.ctx.bridge.translateFaces(selected, incDelta.x, incDelta.y, incDelta.z);
+      this.translate(this.target, incDelta.x, incDelta.y, incDelta.z);
       this.transformLastDelta.copy(totalDelta);
       this.ctx.syncMesh();
 
@@ -82,7 +116,7 @@ export class MoveTool implements ITool {
       debugLog('[Move] End drag');
       this.transformActive = false;
       this.transformStartPt = null;
-      this.transformCentroid = null;
+      this.target = null;
       this.transformLastDelta.set(0, 0, 0);
       this.ctx.dimLabel.clear();
     }
@@ -95,9 +129,9 @@ export class MoveTool implements ITool {
   }
 
   applyVCBValue(value: number): void {
-    const selected = this.ctx.getSelectedFaces();
-    if (selected.length === 0) {
-      Toast.info('이동할 면을 먼저 선택하세요', 2000);
+    const t = this.resolveTarget();
+    if (!t) {
+      Toast.info('이동할 면 또는 에지를 먼저 선택하세요', 2000);
       return;
     }
     let dx = 0, dy = 0, dz = 0;
@@ -106,8 +140,8 @@ export class MoveTool implements ITool {
     else if (axis === 'y') dy = value;
     else if (axis === 'z') dz = value;
     else dx = value;
-    this.ctx.bridge.translateFaces(selected, dx, dy, dz);
-    debugLog(`[VCB/Move] Applied: (${dx},${dy},${dz})`);
+    this.translate(t, dx, dy, dz);
+    debugLog(`[VCB/Move] Applied: (${dx},${dy},${dz}) → ${t.kind}`);
     this.ctx.syncMesh();
   }
 
@@ -118,7 +152,7 @@ export class MoveTool implements ITool {
   cleanup(): void {
     this.transformActive = false;
     this.transformStartPt = null;
-    this.transformCentroid = null;
+    this.target = null;
     this.transformLastDelta.set(0, 0, 0);
     this.ctx.dimLabel.clear();
   }
