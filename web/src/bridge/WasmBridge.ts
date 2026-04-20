@@ -84,9 +84,12 @@ type AxiaEngineExtended = AxiaEngine & {
   maxConstraintResidual?(): number;
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
+  mergeFacesByEdgeTol?(edgeId: number, angleTolDeg: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
+  tryMergeAdjacentFacesTol?(faceIds: Uint32Array, angleTolDeg: number): number;
   /** Dry-run — returns JSON {total, mergeable, nonCoplanar, ambiguous, estMergesAfterCascade} */
   analyzeMergeCandidates?(faceIds: Uint32Array): string;
+  analyzeMergeCandidatesTol?(faceIds: Uint32Array, angleTolDeg: number): string;
   get_connected_faces?(seedFaceId: number): Uint32Array;
   // Snapshot / Import
   export_snapshot?(): Uint8Array;
@@ -487,13 +490,17 @@ export class WasmBridge {
    * (with lastError set — e.g. "not coplanar", "shares multiple edges").
    * Single undo step.
    */
-  mergeFacesByEdge(edgeId: number): number {
+  mergeFacesByEdge(edgeId: number, angleTolDeg = 0.5): number {
     if (!this.engine) return -1;
     this.markDirty();
     try {
       const eng = this.engine as AxiaEngineExtended & {
         mergeFacesByEdge?(edgeId: number): number;
+        mergeFacesByEdgeTol?(edgeId: number, tol: number): number;
       };
+      if (eng.mergeFacesByEdgeTol) {
+        return eng.mergeFacesByEdgeTol(edgeId, angleTolDeg);
+      }
       return eng.mergeFacesByEdge?.(edgeId) ?? -1;
     } catch (e) {
       console.error('[WasmBridge] mergeFacesByEdge failed:', e);
@@ -506,13 +513,21 @@ export class WasmBridge {
    * Returns the number of merges performed (0 if nothing merged).
    * Single undo step.
    */
-  tryMergeAdjacentFaces(faceIds: number[]): number {
+  tryMergeAdjacentFaces(faceIds: number[], angleTolDeg = 0.5): number {
     if (!this.engine) return 0;
     this.markDirty();
     try {
       const eng = this.engine as AxiaEngineExtended & {
         tryMergeAdjacentFaces?(ids: Uint32Array): number;
+        tryMergeAdjacentFacesTol?(ids: Uint32Array, tol: number): number;
       };
+      // Prefer tolerance-aware variant if available; fallback to strict.
+      if (eng.tryMergeAdjacentFacesTol && angleTolDeg !== 0.5) {
+        return eng.tryMergeAdjacentFacesTol(new Uint32Array(faceIds), angleTolDeg);
+      }
+      if (eng.tryMergeAdjacentFacesTol) {
+        return eng.tryMergeAdjacentFacesTol(new Uint32Array(faceIds), angleTolDeg);
+      }
       return eng.tryMergeAdjacentFaces?.(new Uint32Array(faceIds)) ?? 0;
     } catch (e) {
       console.error('[WasmBridge] tryMergeAdjacentFaces failed:', e);
@@ -529,7 +544,7 @@ export class WasmBridge {
    *   ambiguous — 2+ 엣지 공유 (C-slit 등)
    *   estMergesAfterCascade — 예상 최대 병합 횟수
    */
-  analyzeMergeCandidates(faceIds: number[]): {
+  analyzeMergeCandidates(faceIds: number[], angleTolDeg = 0.5): {
     total: number;
     mergeable: number;
     nonCoplanar: number;
@@ -541,8 +556,11 @@ export class WasmBridge {
     try {
       const eng = this.engine as AxiaEngineExtended & {
         analyzeMergeCandidates?(ids: Uint32Array): string;
+        analyzeMergeCandidatesTol?(ids: Uint32Array, tol: number): string;
       };
-      const json = eng.analyzeMergeCandidates?.(new Uint32Array(faceIds));
+      const json = eng.analyzeMergeCandidatesTol
+        ? eng.analyzeMergeCandidatesTol(new Uint32Array(faceIds), angleTolDeg)
+        : eng.analyzeMergeCandidates?.(new Uint32Array(faceIds));
       if (!json) return empty;
       return JSON.parse(json);
     } catch (e) {

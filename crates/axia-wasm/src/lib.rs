@@ -1667,6 +1667,98 @@ impl AxiaEngine {
         }
     }
 
+    /// Tolerance 지정 단일 엣지 병합 (B1).
+    /// `angle_tol_deg` — 허용 각도 (°). 기본 0.5° (strict). 관대하게는 2~5°.
+    #[wasm_bindgen(js_name = "mergeFacesByEdgeTol")]
+    pub fn merge_faces_by_edge_tol(&mut self, edge_id_raw: u32, angle_tol_deg: f64) -> i32 {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            self.set_error(format!("Edge {} not found", edge_id_raw));
+            return -1;
+        }
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        match self.scene.mesh.merge_faces_by_edge_with_tolerance(eid, angle_tol_deg) {
+            Ok(new_face) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                new_face.raw() as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                self.set_error(e.to_string());
+                -1
+            }
+        }
+    }
+
+    /// Tolerance 지정 인접 면 반복 병합 (B1).
+    #[wasm_bindgen(js_name = "tryMergeAdjacentFacesTol")]
+    pub fn try_merge_adjacent_faces_tol(&mut self, face_ids: Vec<u32>, angle_tol_deg: f64) -> u32 {
+        if face_ids.len() < 2 {
+            self.set_error("Need 2+ faces".to_string());
+            return 0;
+        }
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut current: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        let mut merges_done: u32 = 0;
+
+        loop {
+            let mut edge_to_faces: std::collections::HashMap<EdgeId, Vec<FaceId>> =
+                std::collections::HashMap::new();
+            for &fid in &current {
+                let f = match self.scene.mesh.faces.get(fid) {
+                    Some(f) if f.is_active() => f,
+                    _ => continue,
+                };
+                let start = f.outer().start;
+                if start.is_null() { continue; }
+                if let Ok(hes) = self.scene.mesh.collect_loop_hes(start) {
+                    for he in hes {
+                        let e = self.scene.mesh.hes[he].edge();
+                        edge_to_faces.entry(e).or_default().push(fid);
+                    }
+                }
+            }
+            let mut candidate: Option<(EdgeId, FaceId, FaceId)> = None;
+            for (e, faces) in edge_to_faces.iter() {
+                if faces.len() == 2 && faces[0] != faces[1] {
+                    candidate = Some((*e, faces[0], faces[1]));
+                    break;
+                }
+            }
+            let (edge_id, f1, f2) = match candidate {
+                Some(v) => v,
+                None => break,
+            };
+            match self.scene.mesh.merge_faces_by_edge_with_tolerance(edge_id, angle_tol_deg) {
+                Ok(new_face) => {
+                    merges_done += 1;
+                    current.retain(|&x| x != f1 && x != f2);
+                    current.push(new_face);
+                }
+                Err(_) => {
+                    current.retain(|&x| x != f2);
+                }
+            }
+        }
+
+        if merges_done > 0 {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        } else {
+            self.scene.transactions.cancel();
+            self.set_error("No coplanar adjacent faces to merge".to_string());
+        }
+        merges_done
+    }
+
     /// Dry-run analysis of merge candidates — does NOT mutate the mesh.
     ///
     /// For each pair of faces in the selection that shares an edge, checks:
@@ -1688,6 +1780,12 @@ impl AxiaEngine {
     /// The upper bound = min(mergeable, face_count - 1).
     #[wasm_bindgen(js_name = "analyzeMergeCandidates")]
     pub fn analyze_merge_candidates(&self, face_ids: Vec<u32>) -> String {
+        self.analyze_merge_candidates_tol(face_ids, 0.5)
+    }
+
+    /// Tolerance 지정 merge analysis (B1).
+    #[wasm_bindgen(js_name = "analyzeMergeCandidatesTol")]
+    pub fn analyze_merge_candidates_tol(&self, face_ids: Vec<u32>, angle_tol_deg: f64) -> String {
         if face_ids.len() < 2 {
             return r#"{"total":0,"mergeable":0,"nonCoplanar":0,"ambiguous":0,"estMergesAfterCascade":0}"#.to_string();
         }
@@ -1733,7 +1831,7 @@ impl AxiaEngine {
                 ambiguous += 1;
                 continue;
             }
-            match self.scene.mesh.are_faces_coplanar_strict(*f1, *f2) {
+            match self.scene.mesh.are_faces_coplanar_with_tolerance(*f1, *f2, angle_tol_deg) {
                 Ok(true) => mergeable += 1,
                 _ => non_coplanar += 1,
             }

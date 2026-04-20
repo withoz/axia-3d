@@ -16,6 +16,7 @@ import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { ConstraintCommands } from './ConstraintCommands';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
+import { getMergeTolerance } from './MergeSettings';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
@@ -356,28 +357,26 @@ export class ToolManager {
         Toast.error(err || '면 반전 실패');
       }
     } else if (action === 'merge-faces') {
-      // ═══ 면 통합 (A1 + A3 — 2026-04-20)
-      // 우선순위:
-      //   1) Edge 1개 선택 → 그 엣지 양옆 face 병합 (Ctrl+M on edge)
-      //   2) Face 2+ 선택 → 선택 집합 내 인접 coplanar 쌍 반복 병합
-      // 실패 시 구체적 사유를 Toast로 안내 (A3).
+      // ═══ 면 통합 (A1/A3/B1 — 2026-04-20)
       const edges = this.selection.getSelectedEdges();
       const faces = this.selection.getSelectedFaces();
+      const tol = getMergeTolerance();
 
       if (edges.length === 1 && faces.length === 0) {
         // Edge-selection merge
         const edgeId = edges[0];
-        const result = this.bridge.mergeFacesByEdge(edgeId);
+        const result = this.bridge.mergeFacesByEdge(edgeId, tol);
         if (result >= 0) {
           this.syncMesh();
           this.selection.clearSelection();
-          Toast.info('엣지 양옆 면 통합 완료', 2000);
-          debugLog('[Action] merge-faces (edge):', result);
+          const tolNote = tol !== 0.5 ? ` (tol ${tol}°)` : '';
+          Toast.info(`엣지 양옆 면 통합 완료${tolNote}`, 2000);
+          debugLog('[Action] merge-faces (edge):', result, 'tol=', tol);
         } else {
           const err = this.bridge.lastError();
           Toast.warning(
             err ||
-            '해당 엣지 양옆의 두 면이 같은 평면이 아니거나, 경계가 모호합니다 (coplanar + 공유 엣지 1개 필요)',
+            `해당 엣지 양옆의 두 면이 같은 평면이 아니거나 (현재 tol ${tol}°), 경계가 모호합니다 (공유 엣지 1개 필요)`,
             3500,
           );
         }
@@ -392,9 +391,9 @@ export class ToolManager {
         return;
       }
 
-      // A2: 프리뷰 분석 — 실제 변경 없이 결과 예측
-      const analysis = this.bridge.analyzeMergeCandidates(faces);
-      debugLog('[Action] merge-faces pre-analysis:', analysis);
+      // A2: 프리뷰 분석 — 실제 변경 없이 결과 예측 (B1 tolerance 적용)
+      const analysis = this.bridge.analyzeMergeCandidates(faces, tol);
+      debugLog('[Action] merge-faces pre-analysis:', analysis, 'tol=', tol);
       if (analysis.mergeable === 0) {
         // 실패 사유 구체화 (A3 확장)
         const lines: string[] = ['통합할 수 있는 면이 없습니다.'];
@@ -412,18 +411,18 @@ export class ToolManager {
         return;
       }
 
-      const merged = this.bridge.tryMergeAdjacentFaces(faces);
+      const merged = this.bridge.tryMergeAdjacentFaces(faces, tol);
       if (merged > 0) {
         this.syncMesh();
         this.selection.clearSelection();
-        // 예측값과 실제값 비교 포함
         const skipped = analysis.nonCoplanar + analysis.ambiguous;
         const skipNote = skipped > 0 ? ` (${skipped}쌍 건너뜀)` : '';
+        const tolNote = tol !== 0.5 ? ` · tol ${tol}°` : '';
         Toast.info(
-          `${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐${skipNote}`,
+          `${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐${skipNote}${tolNote}`,
           2800,
         );
-        debugLog('[Action] merge-faces (faces):', merged);
+        debugLog('[Action] merge-faces (faces):', merged, 'tol=', tol);
       } else {
         const err = this.bridge.lastError();
         const hint =

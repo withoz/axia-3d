@@ -8,6 +8,7 @@
 import { CommandInput } from './CommandInput';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
+import { getMergeTolerance, setMergeTolerance } from '../tools/MergeSettings';
 
 export interface CommandRegistryDeps {
   commandInput: CommandInput;
@@ -72,6 +73,25 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
 
       throw new Error('명령 형식이 잘못되었습니다');
     }
+  });
+
+  // 면 통합 tolerance 설정 커맨드 (B1)
+  commandInput.registerHandler({
+    name: 'mergetol',
+    aliases: ['mtol'],
+    help: '면 통합 각도 tolerance 설정 (°). 예: mergetol 2 — 2°까지 허용',
+    execute: (args: string[]) => {
+      if (args.length === 0) {
+        commandInput.printInfo(`현재 merge tolerance: ${getMergeTolerance()}°`);
+        return;
+      }
+      const v = parseFloat(args[0]);
+      if (!Number.isFinite(v) || v < 0 || v > 10) {
+        throw new Error('유효한 각도(0~10°)를 입력하세요');
+      }
+      setMergeTolerance(v);
+      commandInput.printSuccess(`면 통합 tolerance: ${v}° (0.5° = strict, 2~5° = loose)`);
+    },
   });
 
   // Register help command

@@ -94,6 +94,30 @@ export class AxiaEngine {
         }
     }
     /**
+     * Tolerance 지정 merge analysis (B1).
+     * @param {Uint32Array} face_ids
+     * @param {number} angle_tol_deg
+     * @returns {string}
+     */
+    analyzeMergeCandidatesTol(face_ids, angle_tol_deg) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_analyzeMergeCandidatesTol(retptr, this.__wbg_ptr, ptr0, len0, angle_tol_deg);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      * @param {Uint32Array} face_ids_raw
      * @param {number} material_id_raw
@@ -983,6 +1007,17 @@ export class AxiaEngine {
         const ret = wasm.axiaengine_mergeFacesByEdge(this.__wbg_ptr, edge_id_raw);
         return ret;
     }
+    /**
+     * Tolerance 지정 단일 엣지 병합 (B1).
+     * `angle_tol_deg` — 허용 각도 (°). 기본 0.5° (strict). 관대하게는 2~5°.
+     * @param {number} edge_id_raw
+     * @param {number} angle_tol_deg
+     * @returns {number}
+     */
+    mergeFacesByEdgeTol(edge_id_raw, angle_tol_deg) {
+        const ret = wasm.axiaengine_mergeFacesByEdgeTol(this.__wbg_ptr, edge_id_raw, angle_tol_deg);
+        return ret;
+    }
     constructor() {
         const ret = wasm.axiaengine_new();
         this.__wbg_ptr = ret >>> 0;
@@ -1373,6 +1408,18 @@ export class AxiaEngine {
         const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_tryMergeAdjacentFaces(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
+    }
+    /**
+     * Tolerance 지정 인접 면 반복 병합 (B1).
+     * @param {Uint32Array} face_ids
+     * @param {number} angle_tol_deg
+     * @returns {number}
+     */
+    tryMergeAdjacentFacesTol(face_ids, angle_tol_deg) {
+        const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_tryMergeAdjacentFacesTol(this.__wbg_ptr, ptr0, len0, angle_tol_deg);
         return ret >>> 0;
     }
     /**

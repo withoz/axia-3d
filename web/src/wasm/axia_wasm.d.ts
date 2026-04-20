@@ -42,6 +42,10 @@ export class AxiaEngine {
      */
     analyzeMergeCandidates(face_ids: Uint32Array): string;
     /**
+     * Tolerance 지정 merge analysis (B1).
+     */
+    analyzeMergeCandidatesTol(face_ids: Uint32Array, angle_tol_deg: number): string;
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
@@ -310,6 +314,11 @@ export class AxiaEngine {
      * Wrapped in a single undo transaction.
      */
     mergeFacesByEdge(edge_id_raw: number): number;
+    /**
+     * Tolerance 지정 단일 엣지 병합 (B1).
+     * `angle_tol_deg` — 허용 각도 (°). 기본 0.5° (strict). 관대하게는 2~5°.
+     */
+    mergeFacesByEdgeTol(edge_id_raw: number, angle_tol_deg: number): number;
     constructor();
     /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
@@ -455,6 +464,10 @@ export class AxiaEngine {
      * All merges are wrapped in a single undo transaction.
      */
     tryMergeAdjacentFaces(face_ids: Uint32Array): number;
+    /**
+     * Tolerance 지정 인접 면 반복 병합 (B1).
+     */
+    tryMergeAdjacentFacesTol(face_ids: Uint32Array, angle_tol_deg: number): number;
     undo(): boolean;
     vert_count(): number;
     /**
@@ -513,6 +526,7 @@ export interface InitOutput {
     readonly axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
@@ -570,6 +584,7 @@ export interface InitOutput {
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_maxConstraintResidual: (a: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
+    readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
     readonly axiaengine_new: () => number;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
@@ -596,6 +611,7 @@ export interface InitOutput {
     readonly axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number) => number;
+    readonly axiaengine_tryMergeAdjacentFacesTol: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_undo: (a: number) => number;
     readonly axiaengine_vert_count: (a: number) => number;
     readonly axiaengine_xiaCount: (a: number) => number;

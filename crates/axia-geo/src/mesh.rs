@@ -2813,6 +2813,21 @@ impl Mesh {
     ///   (1μm) plus a relative component so large (km-scale) or small (μm-scale)
     ///   models behave sensibly.
     pub fn are_faces_coplanar_strict(&self, f1: FaceId, f2: FaceId) -> Result<bool> {
+        // Default strict tolerance = 0.5° (기존 동작 유지)
+        self.are_faces_coplanar_with_tolerance(f1, f2, 0.5)
+    }
+
+    /// 사용자 지정 각도 tolerance로 coplanar 여부 검사 (B1).
+    ///
+    /// `angle_tol_deg` — 법선 간 허용 각도 (°). 0.5 = CAD 표준,
+    /// 2~5는 "거의 coplanar" 병합용.
+    /// 0 이하 또는 NaN이면 기본 0.5°로 보정.
+    pub fn are_faces_coplanar_with_tolerance(
+        &self,
+        f1: FaceId,
+        f2: FaceId,
+        angle_tol_deg: f64,
+    ) -> Result<bool> {
         let verts1 = self.collect_loop_verts(self.faces[f1].outer().start)?;
         let verts2 = self.collect_loop_verts(self.faces[f2].outer().start)?;
         if verts1.len() < 3 || verts2.len() < 3 {
@@ -2829,14 +2844,23 @@ impl Mesh {
         let n1u = n1 / n1_len;
         let n2u = n2 / n2_len;
 
-        // Normals parallel? cos(0.5°) ≈ 0.99996192
-        const COS_PARALLEL_THRESHOLD: f64 = 0.99996192;
+        // 동적 threshold — 사용자 tolerance 기반
+        let tol = if angle_tol_deg.is_finite() && angle_tol_deg > 0.0 {
+            angle_tol_deg.min(45.0) // 상한 45° (그 이상은 의미 없음)
+        } else {
+            0.5
+        };
+        let cos_threshold = (tol.to_radians()).cos();
         let dot = n1u.dot(n2u).abs();
-        if dot < COS_PARALLEL_THRESHOLD {
+        if dot < cos_threshold {
             return Ok(false);
         }
 
         // Scale-aware distance tolerance: use f1+f2 combined bbox diagonal.
+        // Tolerance scales with angle tolerance — a larger angle can tilt the
+        // far vertex by bbox × sin(angle), so distance tolerance must allow
+        // that much offset. Otherwise 2° angle accept + 0.002mm distance reject
+        // contradicts each other for non-tiny faces.
         let mut min_pt = glam::DVec3::splat(f64::INFINITY);
         let mut max_pt = glam::DVec3::splat(f64::NEG_INFINITY);
         for &vid in verts1.iter().chain(verts2.iter()) {
@@ -2846,7 +2870,10 @@ impl Mesh {
             }
         }
         let bbox_diag = (max_pt - min_pt).length().max(1.0);
-        let dist_tol = (bbox_diag * 1e-5).max(1e-3); // at least 1μm, or 1e-5 × extent
+        // 기본 정밀 tolerance (구 로직 유지) + 각도 기반 보정
+        let base_tol = (bbox_diag * 1e-5).max(1e-3);
+        let angle_based_tol = bbox_diag * tol.to_radians().sin() * 1.2; // 20% 여유
+        let dist_tol = base_tol.max(angle_based_tol);
 
         // Point-to-plane distance check against the plane defined by f1
         let p1 = self.vertex_pos(verts1[0])?;
@@ -3010,6 +3037,18 @@ impl Mesh {
     /// 4. Delete old faces and shared edge
     /// 5. Create new merged face
     pub fn merge_faces_by_edge(&mut self, edge_id: EdgeId) -> Result<FaceId> {
+        self.merge_faces_by_edge_with_tolerance(edge_id, 0.5)
+    }
+
+    /// 사용자 지정 각도 tolerance로 두 coplanar face 병합 (B1).
+    ///
+    /// `angle_tol_deg` — 허용 각도 (°). 0.5 = 엄격, 2~5 = 관대.
+    /// CAD-grade 품질을 위해 상한 45°로 자동 클램프.
+    pub fn merge_faces_by_edge_with_tolerance(
+        &mut self,
+        edge_id: EdgeId,
+        angle_tol_deg: f64,
+    ) -> Result<FaceId> {
         // 1. Find the two faces sharing this edge
         let (faces, _hes) = self.get_faces_sharing_edge(edge_id);
         if faces.len() != 2 {
@@ -3025,9 +3064,9 @@ impl Mesh {
             bail!("Faces {:?} and {:?} share {} edges (exactly 1 required)", f1, f2, shared);
         }
 
-        // 2. Coplanarity check
-        if !self.are_faces_coplanar_strict(f1, f2)? {
-            bail!("Faces {:?} and {:?} are not coplanar", f1, f2);
+        // 2. Coplanarity check (tolerance 기반)
+        if !self.are_faces_coplanar_with_tolerance(f1, f2, angle_tol_deg)? {
+            bail!("Faces {:?} and {:?} are not coplanar (tol={:.2}°)", f1, f2, angle_tol_deg);
         }
 
         // 3. Save original normal for winding consistency + material
@@ -3586,6 +3625,32 @@ mod tests {
             // merge 실패해도 상태는 일관성 있어야 함
             assert!(mesh.face_count() >= 1);
         }
+    }
+
+    #[test]
+    fn test_merge_tolerance_rejects_strict_but_accepts_loose() {
+        // 1° 기울어진 두 사각형: strict(0.5°)는 reject, loose(2°)는 accept
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(100.0, 100.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 100.0, 0.0));
+        // 두 번째 면: 공유 엣지 v1-v2, 반대쪽 꼭짓점을 1° 기울임
+        // tan(1°)×100 ≈ 1.745 → 정점 Z를 약 1.745만큼 올림
+        let dz = 100.0 * (1.0_f64.to_radians().tan());
+        let v4 = mesh.add_vertex(DVec3::new(200.0, 0.0, dz));
+        let v5 = mesh.add_vertex(DVec3::new(200.0, 100.0, dz));
+
+        let f1 = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let f2 = mesh.add_face(&[v1, v4, v5, v2], MaterialId::new(0)).unwrap();
+
+        // Strict (0.5°) — 거부
+        let strict = mesh.are_faces_coplanar_with_tolerance(f1, f2, 0.5).unwrap();
+        assert!(!strict, "0.5° tol should reject 1° tilt");
+
+        // Loose (2°) — 허용
+        let loose = mesh.are_faces_coplanar_with_tolerance(f1, f2, 2.0).unwrap();
+        assert!(loose, "2° tol should accept 1° tilt");
     }
 
     #[test]

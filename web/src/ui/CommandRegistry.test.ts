@@ -29,11 +29,12 @@ describe('CommandRegistry', () => {
   });
 
   describe('initCommandRegistry', () => {
-    it('registers line and help handlers', () => {
-      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(2);
+    it('registers line, mergetol and help handlers', () => {
+      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(3);
       const calls = (deps.commandInput.registerHandler as any).mock.calls;
       const names = calls.map((c: any) => c[0].name);
       expect(names).toContain('line');
+      expect(names).toContain('mergetol');
       expect(names).toContain('help');
     });
   });
