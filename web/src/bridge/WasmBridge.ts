@@ -82,6 +82,12 @@ type AxiaEngineExtended = AxiaEngine & {
     ox: number, oy: number, oz: number,
     nx: number, ny: number, nz: number,
   ): Uint32Array;
+  revolveProfile?(
+    profileFlat: Float64Array,
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    segments: number,
+  ): Uint32Array;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -848,6 +854,30 @@ export class WasmBridge {
       return out ? Array.from(out) : [];
     } catch (e) {
       console.error('[WasmBridge] mirrorFaces failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 2D 프로파일(3N 길이 flat 배열 [x,y,z, x,y,z, …])을 axis (origin, dir)
+   * 기준으로 회전시켜 surface of revolution 생성. 새 FaceId 목록 반환.
+   */
+  revolveProfile(
+    profile: number[],
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    segments: number,
+  ): number[] {
+    if (!this.engine?.revolveProfile) return [];
+    this.markDirty();
+    try {
+      const out = this.engine.revolveProfile(
+        new Float64Array(profile),
+        ox, oy, oz, dx, dy, dz, segments,
+      );
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      console.error('[WasmBridge] revolveProfile failed:', e);
       return [];
     }
   }

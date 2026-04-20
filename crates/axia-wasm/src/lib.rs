@@ -1303,6 +1303,55 @@ impl AxiaEngine {
         }
     }
 
+    /// Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
+    /// axis `(origin, dir)` into a surface of revolution. Returns the new
+    /// FaceIds in profile-major, ring-minor order, or an empty vec on
+    /// failure (with `lastError` set).
+    ///
+    /// Profile vertex order matters — see `operations::revolve` docs.
+    /// Single undo transaction wraps the whole spin.
+    #[wasm_bindgen(js_name = "revolveProfile")]
+    pub fn revolve_profile(
+        &mut self,
+        profile_flat: &[f64],
+        ox: f64, oy: f64, oz: f64,
+        dx: f64, dy: f64, dz: f64,
+        segments: u32,
+    ) -> Vec<u32> {
+        if profile_flat.len() < 6 || profile_flat.len() % 3 != 0 {
+            self.set_error(format!(
+                "revolve: profile_flat must be a non-empty multiple of 3, got {}",
+                profile_flat.len(),
+            ));
+            return Vec::new();
+        }
+        let profile: Vec<DVec3> = profile_flat.chunks_exact(3)
+            .map(|c| DVec3::new(c[0], c[1], c[2]))
+            .collect();
+        let origin = DVec3::new(ox, oy, oz);
+        let dir = DVec3::new(dx, dy, dz);
+        let material = self.scene.default_material;
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.revolve(&profile, origin, dir, segments, material) {
+            Ok(faces) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                faces.iter().map(|f| f.raw()).collect()
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] revolve ERROR: {}", e);
+                self.set_error(format!("revolve: {}", e));
+                Vec::new()
+            }
+        }
+    }
+
     /// Mirror the given faces across a plane. Returns the new FaceIds
     /// in the same order as the input (empty vec on failure, with
     /// `lastError()` set). Single undo transaction wraps the whole batch.
