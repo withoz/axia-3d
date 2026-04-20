@@ -142,6 +142,10 @@ pub struct AxiaEngine {
     /// TypeScript에서 `last_error()`로 읽어서 Toast에 표시.
     /// 성공한 연산은 이 값을 비우지 않음 (persistent until next failure).
     last_error: String,
+
+    /// 가장 최근 `batch_erase_edges_with_merge`에서 일부 edge의 merge가
+    /// 실패했을 때 첫 번째 실패 사유. 디버그 Toast 용.
+    last_merge_failure: String,
 }
 
 #[wasm_bindgen]
@@ -163,6 +167,7 @@ impl AxiaEngine {
             topology_changed: true,  // first render always needs full build
             face_range_map: HashMap::new(),
             last_error: String::new(),
+            last_merge_failure: String::new(),
         }
     }
 
@@ -1271,6 +1276,33 @@ impl AxiaEngine {
         true
     }
 
+    /// Dry-run: "if I erase this edge right now, would it merge two coplanar
+    /// faces (good outcome) or cascade-delete (destructive)?"
+    ///
+    /// Returns:
+    ///   • `[f1, f2]` — the two adjacent faces that would merge into one
+    ///   • `[]`      — merge would fail (non-coplanar, C-slit, or edge not
+    ///                 shared by exactly 2 faces); erase would cascade
+    ///
+    /// Pure inspection — no state mutation, safe to call on every mousemove.
+    #[wasm_bindgen(js_name = "previewEdgeEraseMerge")]
+    pub fn preview_edge_erase_merge(&self, edge_id_raw: u32, angle_tol_deg: f64) -> Vec<u32> {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            return vec![];
+        }
+        let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+        if faces.len() != 2 {
+            return vec![];
+        }
+        match self.scene.mesh.are_faces_coplanar_with_tolerance(
+            faces[0], faces[1], angle_tol_deg,
+        ) {
+            Ok(true) => vec![faces[0].raw(), faces[1].raw()],
+            _ => vec![],
+        }
+    }
+
     pub fn get_face_normal(&self, face_id_raw: u32) -> Vec<f64> {
         let fid = FaceId::new(face_id_raw);
         if let Some(face) = self.scene.mesh.faces.get(fid) {
@@ -1279,6 +1311,134 @@ impl AxiaEngine {
         } else {
             vec![0.0, 0.0, 0.0]
         }
+    }
+
+    /// Atomic "erase with auto-merge" — primary delete path for the Erase tool.
+    ///
+    /// For each edge in `edge_ids`:
+    ///   1. First try `merge_faces_by_edge_with_tolerance`. If it succeeds the
+    ///      edge and the two coplanar faces collapse to a single face.
+    ///   2. If merge fails (non-coplanar, C-slit, etc.) cascade-delete the
+    ///      edge plus every face touching it.
+    ///
+    /// After edge processing, any faces listed in `face_ids` that still exist
+    /// are removed outright.
+    ///
+    /// **Everything runs inside a single undo transaction** so the user
+    /// presses Ctrl+Z once to restore the original geometry, regardless of
+    /// how many edges and faces were touched.
+    ///
+    /// When `cascade_only == true`, the merge step is skipped entirely —
+    /// every edge goes straight to cascade-delete. This backs the Shift
+    /// modifier in the Erase tool.
+    ///
+    /// Returns a packed `[merged, cascaded_faces, cascaded_edges]` triple
+    /// (one i32 each) for the tool to surface in its Toast feedback. All
+    /// values are >= 0 on success.
+    #[wasm_bindgen(js_name = "batchEraseEdgesWithMerge")]
+    pub fn batch_erase_edges_with_merge(
+        &mut self,
+        face_ids: &[u32],
+        edge_ids: &[u32],
+        angle_tol_deg: f64,
+        cascade_only: bool,
+    ) -> Vec<i32> {
+        if face_ids.is_empty() && edge_ids.is_empty() {
+            return vec![0, 0, 0];
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut merged: i32 = 0;
+        let mut cascaded_faces: i32 = 0;
+        let mut cascaded_edges: i32 = 0;
+        let mut all_removed_faces: Vec<FaceId> = Vec::new();
+
+        // Capture the first merge failure for diagnostic purposes — surfaces
+        // in the Erase tool's debug log so users can tell why an edge fell
+        // through to cascade (e.g. "not coplanar (3.2° > 0.5° tolerance)").
+        let mut first_failure_reason: Option<String> = None;
+
+        // Edge pass — try merge first, cascade on failure.
+        for &eid_raw in edge_ids {
+            let eid = EdgeId::new(eid_raw);
+            if !self.scene.mesh.edges.contains(eid) {
+                // Already gone (earlier merge folded it in). Skip.
+                continue;
+            }
+
+            if !cascade_only {
+                match self.scene.mesh.merge_faces_by_edge_with_tolerance(eid, angle_tol_deg) {
+                    Ok(_new_face) => {
+                        merged += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        if first_failure_reason.is_none() {
+                            first_failure_reason = Some(format!("edge {}: {}", eid_raw, e));
+                        }
+                        /* fall through to cascade */
+                    }
+                }
+            }
+
+            // Cascade-delete: remove sharing faces + the edge itself.
+            if self.scene.mesh.edges.contains(eid) {
+                let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+                for fid in &faces { all_removed_faces.push(*fid); }
+                cascaded_faces += faces.len() as i32;
+                for fid in faces {
+                    let _ = self.scene.mesh.remove_face(fid);
+                    if self.scene.mesh.faces.contains(fid) {
+                        self.scene.mesh.faces.remove(fid);
+                    }
+                }
+                let _ = self.scene.mesh.remove_edge_and_halfedges(eid);
+                if self.scene.mesh.edges.contains(eid) {
+                    self.scene.mesh.edges.remove(eid);
+                }
+                cascaded_edges += 1;
+            }
+        }
+
+        // Face-only deletions.
+        for &fid_raw in face_ids {
+            let fid = FaceId::new(fid_raw);
+            if self.scene.mesh.faces.contains(fid) {
+                all_removed_faces.push(fid);
+                let _ = self.scene.mesh.remove_face(fid);
+                if self.scene.mesh.faces.contains(fid) {
+                    self.scene.mesh.faces.remove(fid);
+                }
+            }
+        }
+
+        self.scene.unregister_faces_from_xia(&all_removed_faces);
+        self.scene.mesh.remove_isolated_verts();
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        // Save first failure so JS can fetch it via `lastMergeFailureReason()`.
+        // (We don't overload the numeric return to keep the happy path small.)
+        if let Some(reason) = first_failure_reason {
+            self.last_merge_failure = reason;
+        } else {
+            self.last_merge_failure.clear();
+        }
+
+        vec![merged, cascaded_faces, cascaded_edges]
+    }
+
+    /// Diagnostic — first merge failure reason from the most recent
+    /// `batchEraseEdgesWithMerge` call. Empty string if no failure or no
+    /// call yet. Intended for the debug-mode Toast in the Erase tool.
+    #[wasm_bindgen(js_name = "lastMergeFailureReason")]
+    pub fn last_merge_failure_reason(&self) -> String {
+        self.last_merge_failure.clone()
     }
 
     /// DCEL 위상(topology) 기반으로 seedFace에 연결된 모든 face를 BFS 탐색.

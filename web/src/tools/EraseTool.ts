@@ -12,9 +12,12 @@ import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
+import { getMergeTolerance } from './MergeSettings';
 
-/** 호버/삭제 예정 표시 색상 */
+/** 호버/삭제 예정 표시 색상 — cascade(= face도 사라지는) 모드 */
 const ERASE_COLOR = 0xff4444;
+/** "이 엣지를 지우면 두 coplanar 면이 병합됩니다" 미리보기 색상. */
+const MERGE_PREVIEW_COLOR = 0x4dd2ff;
 
 /**
  * Erase 도구 전용 원형 커서 (SVG 데이터 URL).
@@ -40,6 +43,8 @@ export class EraseTool implements ITool {
   private dragActive = false;
   private accumulatedFaces = new Set<number>();
   private accumulatedEdges = new Set<number>();
+  /** Shift held at mousedown → skip auto-merge, go straight to cascade. */
+  private cascadeOnly = false;
 
   // Visual feedback
   private edgeHoverHighlight: THREE.Line | null = null;
@@ -67,6 +72,10 @@ export class EraseTool implements ITool {
 
   onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     this.dragActive = true;
+    // Shift at mousedown locks the gesture into cascade-only mode — useful
+    // when the user wants to keep a bounding edge visible instead of letting
+    // the two adjacent coplanar faces silently merge.
+    this.cascadeOnly = e.shiftKey === true;
     this.accumulatedFaces.clear();
     this.accumulatedEdges.clear();
     this.clearDragOverlays();
@@ -99,35 +108,61 @@ export class EraseTool implements ITool {
       return; // 빈 클릭 — 아무것도 할 일 없음
     }
 
-    // SketchUp-style: edge 삭제 시 양쪽 face가 coplanar면 두 face를 합친다 (merge).
-    // 실패(비coplanar/복합 공유 등)한 edge만 cascade 삭제로 폴백.
-    const edgesToCascade: number[] = [];
-    let mergedCount = 0;
-    for (const edgeId of edges) {
-      const result = this.ctx.bridge.mergeFacesByEdge(edgeId);
-      if (result >= 0) {
-        mergedCount++;
-      } else {
-        edgesToCascade.push(edgeId);
-      }
-    }
+    // SketchUp-style: try merge first (two coplanar faces collapse to one),
+    // fall back to cascade-delete for any edge that can't merge. Everything
+    // runs inside a single Rust undo transaction — one Ctrl+Z restores all.
+    //
+    // Shift at mousedown forces cascade-only (keep adjacent faces separate).
+    const tol = getMergeTolerance();
+    const cascadeOnly = this.cascadeOnly;
+    const res = this.ctx.bridge.batchEraseEdgesWithMerge(faces, edges, tol, cascadeOnly);
 
-    // 남은 edge / 선택된 face는 기존 cascade/batch 삭제
+    let mergedCount = 0;
+    let cascadedFaces = faces.length;
+    let cascadedEdges = edges.length;
     let ok = true;
-    if (faces.length > 0 || edgesToCascade.length > 0) {
-      ok = this.ctx.bridge.batchDelete(faces, edgesToCascade);
+
+    if (res) {
+      mergedCount = res.merged;
+      cascadedFaces = res.cascadedFaces + faces.length;  // batch API already includes face_ids
+      cascadedEdges = res.cascadedEdges;
+      // Wait — the batch WASM call also removes `faces`; don't double-count.
+      cascadedFaces = res.cascadedFaces;
+    } else {
+      // Older WASM without batchEraseEdgesWithMerge — fall back to previous logic.
+      const edgesToCascade: number[] = [];
+      for (const edgeId of edges) {
+        const result = cascadeOnly ? -1 : this.ctx.bridge.mergeFacesByEdge(edgeId, tol);
+        if (result >= 0) mergedCount++;
+        else edgesToCascade.push(edgeId);
+      }
+      if (faces.length > 0 || edgesToCascade.length > 0) {
+        ok = this.ctx.bridge.batchDelete(faces, edgesToCascade);
+      }
+      cascadedEdges = edgesToCascade.length;
+      cascadedFaces = faces.length;
     }
 
     if (ok) {
       this.ctx.selection.clearSelection();
       this.ctx.syncMesh();
-      const total = faces.length + edgesToCascade.length + mergedCount;
-      debugLog(`[Erase] ${mergedCount} merged, ${faces.length} faces, ${edgesToCascade.length} edges deleted`);
+      const total = cascadedFaces + cascadedEdges + mergedCount;
+      debugLog(`[Erase] ${mergedCount} merged, ${cascadedFaces} faces, ${cascadedEdges} edges cascaded`
+        + (cascadeOnly ? ' (shift: cascade-only)' : ''));
+
+      // Debug aid: if user asked for merge but some edges cascaded, log why.
+      if (!cascadeOnly && cascadedEdges > 0 && edges.length > 0) {
+        const reason = this.ctx.bridge.lastMergeFailureReason();
+        if (reason) {
+          debugLog(`[Erase] first merge failure: ${reason} (tol=${tol}°)`);
+        }
+      }
       if (total > 1 || mergedCount > 0) {
         const parts: string[] = [];
         if (mergedCount > 0) parts.push(`${mergedCount}개 면 통합`);
-        if (faces.length > 0) parts.push(`${faces.length}개 면 삭제`);
-        if (edgesToCascade.length > 0) parts.push(`${edgesToCascade.length}개 엣지 삭제`);
+        if (cascadedFaces > 0) parts.push(`${cascadedFaces}개 면 삭제`);
+        if (cascadedEdges > 0) parts.push(`${cascadedEdges}개 엣지 삭제`);
+        if (cascadeOnly) parts.push('(Shift: 병합 안 함)');
         Toast.info(parts.join(', '), 2500);
       }
     } else {
@@ -136,6 +171,7 @@ export class EraseTool implements ITool {
 
     this.accumulatedFaces.clear();
     this.accumulatedEdges.clear();
+    this.cascadeOnly = false;
   }
 
   onKeyDown(e: KeyboardEvent): void {
@@ -203,8 +239,18 @@ export class EraseTool implements ITool {
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       const segIndex = Math.floor(picked.hit.index / 2);
-      this.showEdgeHover(segIndex);
-      this.removeFaceHover();
+      // 이 엣지를 지우면 양옆 coplanar 면이 병합될지 미리 확인.
+      // Shift는 cascade-only 모드이므로 preview 비활성.
+      const edgeId = this.ctx.edgeMap[segIndex];
+      const mergePair = (!e.shiftKey && edgeId != null)
+        ? this.ctx.bridge.previewEdgeEraseMerge(edgeId, getMergeTolerance())
+        : null;
+      this.showEdgeHover(segIndex, mergePair != null);
+      if (mergePair) {
+        this.showMergePreviewFaces(mergePair);
+      } else {
+        this.removeFaceHover();
+      }
       return;
     }
 
@@ -222,7 +268,7 @@ export class EraseTool implements ITool {
     this.removeEdgeHover();
   }
 
-  private showEdgeHover(segIndex: number): void {
+  private showEdgeHover(segIndex: number, willMerge: boolean = false): void {
     this.removeEdgeHover();
     const edgeLines = this.ctx.bridge.getEdgeLines();
     if (!edgeLines) return;
@@ -238,11 +284,24 @@ export class EraseTool implements ITool {
       ]), 3
     ));
     const mat = new THREE.LineBasicMaterial({
-      color: ERASE_COLOR, linewidth: 2, depthTest: false,
+      color: willMerge ? MERGE_PREVIEW_COLOR : ERASE_COLOR,
+      linewidth: 2, depthTest: false,
     });
     this.edgeHoverHighlight = new THREE.Line(geo, mat);
     this.edgeHoverHighlight.renderOrder = 998;
     this.ctx.viewport.scene.add(this.edgeHoverHighlight);
+  }
+
+  /**
+   * "Will merge" 미리보기 — 두 coplanar 면을 옅은 파란색으로 tint해서
+   * 이 엣지를 지우면 둘이 하나로 합쳐진다는 사실을 사용자에게 알린다.
+   */
+  private showMergePreviewFaces(faceIds: [number, number]): void {
+    this.removeFaceHover();
+    const mesh = this.buildFacesOverlay([...faceIds], 0.28, MERGE_PREVIEW_COLOR);
+    if (!mesh) return;
+    this.faceHoverHighlight = mesh;
+    this.ctx.viewport.scene.add(mesh);
   }
 
   private removeEdgeHover(): void {
@@ -325,7 +384,7 @@ export class EraseTool implements ITool {
    * 주어진 faceIds의 삼각형들을 모아 빨간 반투명 Mesh로 반환.
    * faceMap을 역참조하여 현재 렌더 버퍼에서 해당 face의 트라이앵글만 추출.
    */
-  private buildFacesOverlay(faceIds: number[], opacity: number): THREE.Mesh | null {
+  private buildFacesOverlay(faceIds: number[], opacity: number, color: number = ERASE_COLOR): THREE.Mesh | null {
     const buffers = this.ctx.bridge.getMeshBuffers();
     if (!buffers) return null;
     const { positions, indices, faceMap } = buffers;
@@ -350,7 +409,7 @@ export class EraseTool implements ITool {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(triPositions), 3));
     const mat = new THREE.MeshBasicMaterial({
-      color: ERASE_COLOR,
+      color,
       side: THREE.DoubleSide,
       transparent: true,
       opacity,

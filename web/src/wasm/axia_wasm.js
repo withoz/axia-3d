@@ -130,6 +130,52 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Atomic "erase with auto-merge" — primary delete path for the Erase tool.
+     *
+     * For each edge in `edge_ids`:
+     *   1. First try `merge_faces_by_edge_with_tolerance`. If it succeeds the
+     *      edge and the two coplanar faces collapse to a single face.
+     *   2. If merge fails (non-coplanar, C-slit, etc.) cascade-delete the
+     *      edge plus every face touching it.
+     *
+     * After edge processing, any faces listed in `face_ids` that still exist
+     * are removed outright.
+     *
+     * **Everything runs inside a single undo transaction** so the user
+     * presses Ctrl+Z once to restore the original geometry, regardless of
+     * how many edges and faces were touched.
+     *
+     * When `cascade_only == true`, the merge step is skipped entirely —
+     * every edge goes straight to cascade-delete. This backs the Shift
+     * modifier in the Erase tool.
+     *
+     * Returns a packed `[merged, cascaded_faces, cascaded_edges]` triple
+     * (one i32 each) for the tool to surface in its Toast feedback. All
+     * values are >= 0 on success.
+     * @param {Uint32Array} face_ids
+     * @param {Uint32Array} edge_ids
+     * @param {number} angle_tol_deg
+     * @param {boolean} cascade_only
+     * @returns {Int32Array}
+     */
+    batchEraseEdgesWithMerge(face_ids, edge_ids, angle_tol_deg, cascade_only) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(edge_ids, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_batchEraseEdgesWithMerge(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, angle_tol_deg, cascade_only);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v3 = getArrayI32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v3;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Batch delete faces and edges in a single undo transaction.
      * Called from JS delete action — undo restores everything at once.
      * @param {Uint32Array} face_ids
@@ -997,6 +1043,28 @@ export class AxiaEngine {
         }
     }
     /**
+     * Diagnostic — first merge failure reason from the most recent
+     * `batchEraseEdgesWithMerge` call. Empty string if no failure or no
+     * call yet. Intended for the debug-mode Toast in the Erase tool.
+     * @returns {string}
+     */
+    lastMergeFailureReason() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_lastMergeFailureReason(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * List all constraints as JSON.
      * Format: [{id, kind, active, refs:[...], value}, ...]
      * @returns {string}
@@ -1186,6 +1254,33 @@ export class AxiaEngine {
     pointInFace(face_id_raw, x, y, z) {
         const ret = wasm.axiaengine_pointInFace(this.__wbg_ptr, face_id_raw, x, y, z);
         return ret !== 0;
+    }
+    /**
+     * Dry-run: "if I erase this edge right now, would it merge two coplanar
+     * faces (good outcome) or cascade-delete (destructive)?"
+     *
+     * Returns:
+     *   • `[f1, f2]` — the two adjacent faces that would merge into one
+     *   • `[]`      — merge would fail (non-coplanar, C-slit, or edge not
+     *                 shared by exactly 2 faces); erase would cascade
+     *
+     * Pure inspection — no state mutation, safe to call on every mousemove.
+     * @param {number} edge_id_raw
+     * @param {number} angle_tol_deg
+     * @returns {Uint32Array}
+     */
+    previewEdgeEraseMerge(edge_id_raw, angle_tol_deg) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_previewEdgeEraseMerge(retptr, this.__wbg_ptr, edge_id_raw, angle_tol_deg);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Push/Pull a face along its normal.
@@ -1830,6 +1925,11 @@ function getArrayF64FromWasm0(ptr, len) {
     return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
 }
 
+function getArrayI32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getInt32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
@@ -1862,6 +1962,14 @@ function getFloat64ArrayMemory0() {
         cachedFloat64ArrayMemory0 = new Float64Array(wasm.memory.buffer);
     }
     return cachedFloat64ArrayMemory0;
+}
+
+let cachedInt32ArrayMemory0 = null;
+function getInt32ArrayMemory0() {
+    if (cachedInt32ArrayMemory0 === null || cachedInt32ArrayMemory0.byteLength === 0) {
+        cachedInt32ArrayMemory0 = new Int32Array(wasm.memory.buffer);
+    }
+    return cachedInt32ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -1993,6 +2101,7 @@ function __wbg_finalize_init(instance, module) {
     cachedDataViewMemory0 = null;
     cachedFloat32ArrayMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
+    cachedInt32ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     return wasm;

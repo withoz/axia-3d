@@ -9,6 +9,11 @@
  */
 
 import { UnitSystem, UnitType } from './UnitSystem';
+import {
+  getMergeTolerance, setMergeTolerance,
+  getRespectMaterial, setRespectMaterial,
+  MERGE_TOL_MAX,
+} from '../tools/MergeSettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -91,6 +96,24 @@ export class SettingsPanel {
       </div>
 
       <div class="sp-divider"></div>
+
+      <div class="sp-section">
+        <label class="sp-label">면 병합 허용 각도</label>
+        <div class="sp-row">
+          <input type="range" id="sp-merge-tol" min="0" max="${MERGE_TOL_MAX}" step="0.1" />
+          <span id="sp-merge-tol-val" class="sp-value"></span>
+        </div>
+        <div class="sp-hint">작은 값(0.5°)은 CAD-grade · 큰 값은 관대한 병합</div>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-merge-respect-mat" />
+          재질 경계 존중 (다른 재질은 병합 안 함)
+        </label>
+      </div>
+
+      <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
 
@@ -129,6 +152,21 @@ export class SettingsPanel {
       }
     });
 
+    // 병합 허용 각도
+    const tolSlider = panel.querySelector('#sp-merge-tol') as HTMLInputElement;
+    const tolVal = panel.querySelector('#sp-merge-tol-val')!;
+    tolSlider.addEventListener('input', () => {
+      const v = parseFloat(tolSlider.value);
+      setMergeTolerance(v);
+      tolVal.textContent = `${v.toFixed(1)}°`;
+    });
+
+    // 재질 경계 존중
+    const matCheck = panel.querySelector('#sp-merge-respect-mat') as HTMLInputElement;
+    matCheck.addEventListener('change', () => {
+      setRespectMaterial(matCheck.checked);
+    });
+
     return panel;
   }
 
@@ -153,6 +191,17 @@ export class SettingsPanel {
     const snapUnit = this.panel.querySelector('#sp-snap-unit')!;
     snapInput.value = this.units.fromInternal(this.units.snapInterval).toFixed(this.units.precision);
     snapUnit.textContent = this.units.config.label;
+
+    // 병합 각도
+    const tolSlider = this.panel.querySelector('#sp-merge-tol') as HTMLInputElement;
+    const tolVal = this.panel.querySelector('#sp-merge-tol-val')!;
+    const tol = getMergeTolerance();
+    tolSlider.value = String(tol);
+    tolVal.textContent = `${tol.toFixed(1)}°`;
+
+    // 재질 존중
+    const matCheck = this.panel.querySelector('#sp-merge-respect-mat') as HTMLInputElement;
+    matCheck.checked = getRespectMaterial();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;

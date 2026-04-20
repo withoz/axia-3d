@@ -50,6 +50,31 @@ export class AxiaEngine {
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
     /**
+     * Atomic "erase with auto-merge" — primary delete path for the Erase tool.
+     *
+     * For each edge in `edge_ids`:
+     *   1. First try `merge_faces_by_edge_with_tolerance`. If it succeeds the
+     *      edge and the two coplanar faces collapse to a single face.
+     *   2. If merge fails (non-coplanar, C-slit, etc.) cascade-delete the
+     *      edge plus every face touching it.
+     *
+     * After edge processing, any faces listed in `face_ids` that still exist
+     * are removed outright.
+     *
+     * **Everything runs inside a single undo transaction** so the user
+     * presses Ctrl+Z once to restore the original geometry, regardless of
+     * how many edges and faces were touched.
+     *
+     * When `cascade_only == true`, the merge step is skipped entirely —
+     * every edge goes straight to cascade-delete. This backs the Shift
+     * modifier in the Erase tool.
+     *
+     * Returns a packed `[merged, cascaded_faces, cascaded_edges]` triple
+     * (one i32 each) for the tool to surface in its Toast feedback. All
+     * values are >= 0 on success.
+     */
+    batchEraseEdgesWithMerge(face_ids: Uint32Array, edge_ids: Uint32Array, angle_tol_deg: number, cascade_only: boolean): Int32Array;
+    /**
      * Batch delete faces and edges in a single undo transaction.
      * Called from JS delete action — undo restores everything at once.
      */
@@ -306,6 +331,12 @@ export class AxiaEngine {
      */
     lastError(): string;
     /**
+     * Diagnostic — first merge failure reason from the most recent
+     * `batchEraseEdgesWithMerge` call. Empty string if no failure or no
+     * call yet. Intended for the debug-mode Toast in the Erase tool.
+     */
+    lastMergeFailureReason(): string;
+    /**
      * List all constraints as JSON.
      * Format: [{id, kind, active, refs:[...], value}, ...]
      */
@@ -375,6 +406,18 @@ export class AxiaEngine {
      * Useful for determining if a draw operation should trigger face split.
      */
     pointInFace(face_id_raw: number, x: number, y: number, z: number): boolean;
+    /**
+     * Dry-run: "if I erase this edge right now, would it merge two coplanar
+     * faces (good outcome) or cascade-delete (destructive)?"
+     *
+     * Returns:
+     *   • `[f1, f2]` — the two adjacent faces that would merge into one
+     *   • `[]`      — merge would fail (non-coplanar, C-slit, or edge not
+     *                 shared by exactly 2 faces); erase would cascade
+     *
+     * Pure inspection — no state mutation, safe to call on every mousemove.
+     */
+    previewEdgeEraseMerge(edge_id_raw: number, angle_tol_deg: number): Uint32Array;
     /**
      * Push/Pull a face along its normal.
      * dist > 0 = extrude outward (face kept)
@@ -586,6 +629,7 @@ export interface InitOutput {
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;
@@ -641,6 +685,7 @@ export interface InitOutput {
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
     readonly axiaengine_lastError: (a: number, b: number) => void;
+    readonly axiaengine_lastMergeFailureReason: (a: number, b: number) => void;
     readonly axiaengine_listConstraints: (a: number, b: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_maxConstraintResidual: (a: number) => number;
@@ -653,6 +698,7 @@ export interface InitOutput {
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;
     readonly axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly axiaengine_previewEdgeEraseMerge: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_push_pull: (a: number, b: number, c: number) => number;
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;

@@ -65,6 +65,14 @@ type AxiaEngineExtended = AxiaEngine & {
   getPositionsF64?(): Float64Array;
   delete_edge?(edgeId: number): boolean;
   batch_delete?(faceIds: Uint32Array, edgeIds: Uint32Array): boolean;
+  batchEraseEdgesWithMerge?(
+    faceIds: Uint32Array,
+    edgeIds: Uint32Array,
+    angleTolDeg: number,
+    cascadeOnly: boolean,
+  ): Int32Array;
+  previewEdgeEraseMerge?(edgeId: number, angleTolDeg: number): Uint32Array;
+  lastMergeFailureReason?(): string;
   // Constraint Solver Level 1 (vertex-level ops + edge/vertex queries)
   translateVerts?(vertIds: Uint32Array, dx: number, dy: number, dz: number): boolean;
   rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
@@ -495,6 +503,71 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] batchDelete failed:', e);
       return false;
+    }
+  }
+
+  /**
+   * Diagnostic — first merge failure reason from the most recent
+   * `batchEraseEdgesWithMerge` call. Empty string if none.
+   */
+  lastMergeFailureReason(): string {
+    if (!this.engine?.lastMergeFailureReason) return '';
+    try { return this.engine.lastMergeFailureReason() ?? ''; }
+    catch { return ''; }
+  }
+
+  /**
+   * Dry-run hover helper for the Erase tool — "would erasing this edge
+   * merge two faces, or cascade-delete them?"
+   *
+   * Returns the two face IDs that would merge, or `null` if erase would
+   * cascade (non-coplanar / not shared by exactly 2 / WASM unavailable).
+   */
+  previewEdgeEraseMerge(edgeId: number, angleTolDeg = 0.5): [number, number] | null {
+    if (!this.engine?.previewEdgeEraseMerge) return null;
+    try {
+      const out = this.engine.previewEdgeEraseMerge(edgeId, angleTolDeg);
+      if (out && out.length === 2) {
+        return [out[0], out[1]];
+      }
+      return null;
+    } catch (e) {
+      console.error('[WasmBridge] previewEdgeEraseMerge failed:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Erase tool primary path — atomic merge-or-cascade for many edges + faces
+   * in a single undo transaction.
+   *
+   * Returns `[merged, cascadedFaces, cascadedEdges]`. If the WASM method
+   * is unavailable (older binding), caller should fall back to the old
+   * per-edge merge loop.
+   */
+  batchEraseEdgesWithMerge(
+    faceIds: number[],
+    edgeIds: number[],
+    angleTolDeg: number,
+    cascadeOnly: boolean,
+  ): { merged: number; cascadedFaces: number; cascadedEdges: number } | null {
+    if (!this.engine?.batchEraseEdgesWithMerge) return null;
+    this.markDirty();
+    try {
+      const out = this.engine.batchEraseEdgesWithMerge(
+        new Uint32Array(faceIds),
+        new Uint32Array(edgeIds),
+        angleTolDeg,
+        cascadeOnly,
+      );
+      return {
+        merged: out[0] ?? 0,
+        cascadedFaces: out[1] ?? 0,
+        cascadedEdges: out[2] ?? 0,
+      };
+    } catch (e) {
+      console.error('[WasmBridge] batchEraseEdgesWithMerge failed:', e);
+      return null;
     }
   }
 
