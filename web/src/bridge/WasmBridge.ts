@@ -68,6 +68,7 @@ type AxiaEngineExtended = AxiaEngine & {
   // Constraint Solver Level 1 (vertex-level ops + edge/vertex queries)
   translateVerts?(vertIds: Uint32Array, dx: number, dy: number, dz: number): boolean;
   rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
+  scaleVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -726,6 +727,25 @@ export class WasmBridge {
       );
     } catch (e) {
       console.error('[WasmBridge] rotateVerts failed:', e);
+      return false;
+    }
+  }
+
+  /** vertex 배열을 center 기준으로 (sx,sy,sz) 스케일 (단일 undo). */
+  scaleVerts(
+    vertIds: number[],
+    cx: number, cy: number, cz: number,
+    sx: number, sy: number, sz: number,
+  ): boolean {
+    if (!this.engine?.scaleVerts) return false;
+    this.markDirty();
+    try {
+      return this.engine.scaleVerts(
+        new Uint32Array(vertIds),
+        cx, cy, cz, sx, sy, sz,
+      );
+    } catch (e) {
+      console.error('[WasmBridge] scaleVerts failed:', e);
       return false;
     }
   }

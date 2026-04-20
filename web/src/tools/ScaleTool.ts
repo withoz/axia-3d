@@ -60,25 +60,15 @@ export class ScaleTool implements ITool {
   }
 
   /**
-   * 대상에 비균일 스케일 적용. Faces는 WASM scaleFaces 단일 호출.
-   * Verts는 WASM에 scaleVerts가 없으므로 per-vertex translateVerts 루프로 구현.
+   * 대상에 비균일 스케일 적용. Faces는 scaleFaces, Verts는 scaleVerts —
+   * 양쪽 모두 단일 WASM 호출 + 단일 undo 트랜잭션.
    */
   private scale(t: Target, cx: number, cy: number, cz: number,
                 sx: number, sy: number, sz: number): void {
     if (t.kind === 'faces') {
       this.ctx.bridge.scaleFaces(t.ids, cx, cy, cz, sx, sy, sz);
-      return;
-    }
-    // verts path: 각 정점을 중심 기준으로 재배치.
-    // v_new = C + (v - C) * s  →  delta = (v - C) * (s - 1)
-    for (const v of t.ids) {
-      const p = this.ctx.bridge.getVertexPos(v);
-      if (!p) continue;
-      const dx = (p[0] - cx) * (sx - 1);
-      const dy = (p[1] - cy) * (sy - 1);
-      const dz = (p[2] - cz) * (sz - 1);
-      if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9 && Math.abs(dz) < 1e-9) continue;
-      this.ctx.bridge.translateVerts([v], dx, dy, dz);
+    } else {
+      this.ctx.bridge.scaleVerts(t.ids, cx, cy, cz, sx, sy, sz);
     }
   }
 

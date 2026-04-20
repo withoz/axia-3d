@@ -199,6 +199,113 @@ impl Mesh {
         })
     }
 
+    /// 지정된 정점들을 center 기준으로 스케일. `rotate_verts` 와 동일한 패턴:
+    /// 정점만 이동시키고 인접 face들의 법선을 재계산한다. ADR-003 guard 준수.
+    pub fn scale_verts(
+        &mut self,
+        vert_ids: &[VertId],
+        center: DVec3,
+        scale: DVec3,
+    ) -> Result<TransformResult> {
+        ensure!(
+            scale.x.is_finite() && scale.y.is_finite() && scale.z.is_finite(),
+            "scale_verts factors must be finite, got ({}, {}, {})",
+            scale.x, scale.y, scale.z
+        );
+        ensure!(
+            center.x.is_finite() && center.y.is_finite() && center.z.is_finite(),
+            "scale_verts center must be finite"
+        );
+        ensure!(
+            scale.x != 0.0 && scale.y != 0.0 && scale.z != 0.0,
+            "scale_verts factor cannot be exactly zero"
+        );
+        if vert_ids.is_empty()
+            || ((scale.x - 1.0).abs() < 1e-12
+                && (scale.y - 1.0).abs() < 1e-12
+                && (scale.z - 1.0).abs() < 1e-12)
+        {
+            return Ok(TransformResult { verts_moved: 0, faces_affected: 0 });
+        }
+
+        // 1차로 새 위치 계산 → degenerate bbox 검사 (scale_faces와 동일 정책)
+        let mut orig_min = DVec3::splat(f64::INFINITY);
+        let mut orig_max = DVec3::splat(f64::NEG_INFINITY);
+        let mut new_min = DVec3::splat(f64::INFINITY);
+        let mut new_max = DVec3::splat(f64::NEG_INFINITY);
+        for &vid in vert_ids {
+            if let Some(v) = self.verts.get(vid) {
+                let p = v.pos();
+                orig_min = orig_min.min(p);
+                orig_max = orig_max.max(p);
+                let rel = p - center;
+                let scaled = DVec3::new(rel.x * scale.x, rel.y * scale.y, rel.z * scale.z);
+                let np = scaled + center;
+                new_min = new_min.min(np);
+                new_max = new_max.max(np);
+            }
+        }
+        let orig_extent = orig_max - orig_min;
+        let new_extent = new_max - new_min;
+        let count_collapsed = |e: DVec3| -> i32 {
+            let mut c = 0;
+            if e.x < EPSILON_LENGTH { c += 1; }
+            if e.y < EPSILON_LENGTH { c += 1; }
+            if e.z < EPSILON_LENGTH { c += 1; }
+            c
+        };
+        if count_collapsed(new_extent) > count_collapsed(orig_extent) {
+            bail!(
+                "scale_verts would collapse an axis below EPSILON_LENGTH: \
+                 original=({:.4e},{:.4e},{:.4e}) scaled=({:.4e},{:.4e},{:.4e}) (ADR-003)",
+                orig_extent.x, orig_extent.y, orig_extent.z,
+                new_extent.x, new_extent.y, new_extent.z
+            );
+        }
+
+        // 실제 이동 + 인접 face 수집
+        let mut affected_faces: std::collections::HashSet<FaceId> =
+            std::collections::HashSet::new();
+
+        for &vid in vert_ids {
+            if let Some(vert) = self.verts.get_mut(vid) {
+                let rel = vert.pos() - center;
+                let scaled = DVec3::new(rel.x * scale.x, rel.y * scale.y, rel.z * scale.z);
+                vert.set_pos(center + scaled);
+            }
+            let start_he = match self.verts.get(vid).and_then(|v| v.outgoing()) {
+                Some(h) if !h.is_null() && self.hes.contains(h) => h,
+                _ => continue,
+            };
+            let mut cur = start_he;
+            let mut guard = 0;
+            loop {
+                let f = self.hes[cur].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    affected_faces.insert(f);
+                }
+                let nxt = self.hes[cur].v_next();
+                if nxt.is_null() || !self.hes.contains(nxt) || nxt == start_he { break; }
+                cur = nxt;
+                guard += 1;
+                if guard > 10_000 { break; }
+            }
+        }
+
+        let faces_vec: Vec<FaceId> = affected_faces.into_iter().collect();
+        if !faces_vec.is_empty() {
+            self.recompute_face_normals(&faces_vec)?;
+        }
+
+        // ADR-007 — invariants 검증
+        self.debug_verify_invariants();
+
+        Ok(TransformResult {
+            verts_moved: vert_ids.len(),
+            faces_affected: faces_vec.len(),
+        })
+    }
+
     /// 지정된 face들의 모든 정점을 center 기준으로 회전
     /// axis: 회전축 (단위 벡터), angle_rad: 라디안 각도
     pub fn rotate_faces(

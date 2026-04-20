@@ -436,6 +436,10 @@ export class AxiaEngine {
      */
     rotate_faces(face_ids: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angle_deg: number): boolean;
     /**
+     * 지정 정점을 center 기준으로 스케일. (sx,sy,sz)로 비균일 지원.
+     */
+    scaleVerts(vert_ids: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
+    /**
      * 선택된 face들의 정점을 스케일
      * cx,cy,cz: 스케일 중심, sx,sy,sz: 축별 배율
      */
@@ -660,6 +664,7 @@ export interface InitOutput {
     readonly axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+    readonly axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;

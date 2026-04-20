@@ -2375,6 +2375,38 @@ impl AxiaEngine {
         }
     }
 
+    /// 지정 정점을 center 기준으로 스케일. (sx,sy,sz)로 비균일 지원.
+    #[wasm_bindgen(js_name = "scaleVerts")]
+    pub fn scale_verts(
+        &mut self, vert_ids: &[u32],
+        cx: f64, cy: f64, cz: f64,
+        sx: f64, sy: f64, sz: f64,
+    ) -> bool {
+        let vids: Vec<VertId> = vert_ids.iter().map(|&id| VertId::new(id)).collect();
+        let center = DVec3::new(cx, cy, cz);
+        let scale = DVec3::new(sx, sy, sz);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.scale_verts(&vids, center, scale) {
+            Ok(_) => {
+                let _ = resolve_iterative(&mut self.scene.mesh, &self.scene.constraints, 50, 1e-5);
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                true
+            }
+            Err(e) => {
+                console_error!("[RUST] scale_verts ERROR: {}", e);
+                self.set_error(format!("scale_verts: {}", e));
+                self.scene.transactions.cancel();
+                false
+            }
+        }
+    }
+
     /// Edge를 지정 위치에서 split하여 새 vertex를 생성하고 edge를 2개로 나눈다.
     /// 반환: 성공 시 새 vertex id (>=0), 실패 시 -1.
     /// position이 엣지 선분 밖이면 가까운 쪽으로 clamp.

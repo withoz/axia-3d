@@ -1346,6 +1346,23 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * 지정 정점을 center 기준으로 스케일. (sx,sy,sz)로 비균일 지원.
+     * @param {Uint32Array} vert_ids
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} sx
+     * @param {number} sy
+     * @param {number} sz
+     * @returns {boolean}
+     */
+    scaleVerts(vert_ids, cx, cy, cz, sx, sy, sz) {
+        const ptr0 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_scaleVerts(this.__wbg_ptr, ptr0, len0, cx, cy, cz, sx, sy, sz);
+        return ret !== 0;
+    }
+    /**
      * 선택된 face들의 정점을 스케일
      * cx,cy,cz: 스케일 중심, sx,sy,sz: 축별 배율
      * @param {Uint32Array} face_ids

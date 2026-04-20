@@ -12,7 +12,7 @@ function mockToolContext() {
     bridge: {
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
       scaleFaces: vi.fn(),
-      translateVerts: vi.fn(),
+      scaleVerts: vi.fn(),
       getEdgeEndpoints: vi.fn().mockReturnValue([] as number[]),
       getVertexPos: vi.fn().mockReturnValue([0, 0, 0] as [number, number, number]),
     },
@@ -119,7 +119,7 @@ describe('ScaleTool', () => {
       ctx.selection.getSelectedEdges.mockReturnValue([]);
       tool.applyVCBValue(2);
       expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
-      expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
+      expect(ctx.bridge.scaleVerts).not.toHaveBeenCalled();
     });
 
     it('does nothing when centroid is null', () => {
@@ -146,21 +146,22 @@ describe('ScaleTool', () => {
       });
     });
 
-    it('VCB ×2 from centroid moves each vert via translateVerts', () => {
+    it('VCB ×2 calls scaleVerts once with deduped vert ids and centroid', () => {
       // centroid ≈ (10/3, 0, 10/3)
       tool.applyVCBValue(2);
       expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
-      // Each vert gets its own translateVerts call
-      const calls = (ctx.bridge.translateVerts as any).mock.calls;
-      expect(calls.length).toBe(3);
-      // For vert 1 at (0,0,0), delta = (0-10/3)*(2-1) = -10/3
-      const call1 = calls.find((c: any[]) => c[0][0] === 1)!;
-      expect(call1[1]).toBeCloseTo(-10 / 3, 2);
+      expect(ctx.bridge.scaleVerts).toHaveBeenCalledTimes(1);
+      const call = (ctx.bridge.scaleVerts as any).mock.calls[0];
+      expect(call[0].slice().sort()).toEqual([1, 2, 3]); // dedup
+      expect(call[1]).toBeCloseTo(10 / 3, 2); // cx
+      expect(call[3]).toBeCloseTo(10 / 3, 2); // cz
+      expect(call[4]).toBe(2); expect(call[5]).toBe(2); expect(call[6]).toBe(2);
     });
 
-    it('scale 1.0 skips zero-delta calls', () => {
-      tool.applyVCBValue(1);
-      expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
+    it('non-uniform VCB preserves per-axis factors', () => {
+      tool.applyVCBValue(2, 0.5, 3);
+      const call = (ctx.bridge.scaleVerts as any).mock.calls[0];
+      expect(call[4]).toBe(2); expect(call[5]).toBe(0.5); expect(call[6]).toBe(3);
     });
   });
 

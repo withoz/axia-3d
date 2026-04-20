@@ -87,6 +87,7 @@ export const axiaengine_resolveAllConstraints: (a: number) => number;
 export const axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+export const axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
