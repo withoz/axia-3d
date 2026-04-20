@@ -13,6 +13,7 @@ function mockDeps(): InitialSceneDeps {
       pushPull: vi.fn(),
       create_sphere: vi.fn().mockReturnValue(1),
       create_cone: vi.fn().mockReturnValue(2),
+      revolveProfile: vi.fn().mockReturnValue([3, 4, 5]),
     } as any,
     fileManager: {
       loadFromArrayBuffer: vi.fn().mockResolvedValue(true),
@@ -33,16 +34,14 @@ describe('InitialScene', () => {
   });
 
   describe('loadInitialScene', () => {
-    it('creates Papillon scene (legs, body, head, snout, ears, nose, tail) on startup', async () => {
+    it('creates Papillon scene (legs, revolve body+snout, head, ears, nose, tail) on startup', async () => {
       loadInitialScene(deps);
-      // async + setTimeout(0) between each WASM call
       await new Promise(r => setTimeout(r, 500));
 
       // 4 legs + 1 tail = 5 cylinders
       expect((deps.bridge.create_cylinder as any).mock.calls.length).toBe(5);
-      // body + snout = 2 drawCircle+pushPull pairs
-      expect((deps.bridge.drawCircle as any).mock.calls.length).toBe(2);
-      expect((deps.bridge.pushPull as any).mock.calls.length).toBe(2);
+      // body + snout = 2 revolves (replaces the old drawCircle+pushPull pairs)
+      expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(2);
       // head + nose = 2 spheres
       expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(2);
       // 2 ears as cones
