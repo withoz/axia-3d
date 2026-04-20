@@ -85,6 +85,11 @@ type AxiaEngineExtended = AxiaEngine & {
   // XIA face list (B3)
   getXiaFaceIds?(xiaId: number): Uint32Array;
 
+  // Phase H — Import Normalizer (ADR-007 Barrier)
+  normalizeForImport?(optionsJson: string): string;
+  verifyInvariants?(): string;
+  exportSnapshotStrict?(): Uint8Array;
+
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   mergeFacesByEdgeTol?(edgeId: number, angleTolDeg: number): number;
@@ -508,6 +513,57 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] mergeCoplanarContaining failed:', e);
       return -1;
+    }
+  }
+
+  /**
+   * Phase H — Import Normalizer (ADR-007 Barrier).
+   * 외부 import된 mesh 데이터를 AXiA 네이티브 규칙에 맞춰 정리.
+   * 반환: {degenerateRemoved, windingFlipped, normalsRecomputed,
+   *         isolatedVertsRemoved, remainingViolations}
+   */
+  normalizeForImport(opts?: {
+    remove_degenerate?: boolean;
+    normalize_winding?: boolean;
+    recompute_normals?: boolean;
+    remove_isolated_verts?: boolean;
+  }): {
+    degenerateRemoved: number;
+    windingFlipped: number;
+    normalsRecomputed: number;
+    isolatedVertsRemoved: number;
+    remainingViolations: number;
+  } {
+    const empty = {
+      degenerateRemoved: 0, windingFlipped: 0, normalsRecomputed: 0,
+      isolatedVertsRemoved: 0, remainingViolations: 0,
+    };
+    if (!this.engine?.normalizeForImport) return empty;
+    this.markDirty();
+    try {
+      const json = opts ? JSON.stringify(opts) : '';
+      const result = this.engine.normalizeForImport(json);
+      return JSON.parse(result);
+    } catch (e) {
+      console.error('[WasmBridge] normalizeForImport failed:', e);
+      return empty;
+    }
+  }
+
+  /** ADR-007 invariant 검증 — 현재 mesh 상태 리포트. */
+  verifyInvariants(): {
+    checkedFaces: number;
+    valid: boolean;
+    violationCount: number;
+    violations: string[];
+  } {
+    const empty = { checkedFaces: 0, valid: true, violationCount: 0, violations: [] };
+    if (!this.engine?.verifyInvariants) return empty;
+    try {
+      return JSON.parse(this.engine.verifyInvariants());
+    } catch (e) {
+      console.error('[WasmBridge] verifyInvariants failed:', e);
+      return empty;
     }
   }
 

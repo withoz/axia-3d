@@ -337,6 +337,18 @@ export class AxiaEngine {
     mergeFacesByEdgeTol(edge_id_raw: number, angle_tol_deg: number): number;
     constructor();
     /**
+     * Phase H — Import Normalizer 실행 (ADR-007 Barrier).
+     *
+     * 외부 파일에서 들어온 mesh 데이터를 AXiA 네이티브 규칙에 맞춰 정리.
+     * 반환: JSON 리포트 {degenerateRemoved, windingFlipped, normalsRecomputed,
+     *                    isolatedVertsRemoved, remainingViolations}
+     *
+     * `options_json`: {remove_degenerate, normalize_winding, recompute_normals,
+     *                  remove_isolated_verts, degenerate_tolerance}
+     *                 — 생략/빈문자면 기본값 사용.
+     */
+    normalizeForImport(options_json: string): string;
+    /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
      * plane_normal: 참조 평면 법선 (Y-up = 0,1,0)
      */
@@ -610,6 +622,7 @@ export interface InitOutput {
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
     readonly axiaengine_new: () => number;
+    readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;

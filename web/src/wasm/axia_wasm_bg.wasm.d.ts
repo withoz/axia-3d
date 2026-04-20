@@ -70,6 +70,7 @@ export const axiaengine_mergeCoplanarContaining: (a: number, b: number, c: numbe
 export const axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
 export const axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
 export const axiaengine_new: () => number;
+export const axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_orient_faces: (a: number) => number;

@@ -17,7 +17,7 @@ pub mod operations;
 pub mod tolerances;
 
 // Re-export main types
-pub use mesh::Mesh;
+pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, InvariantReport, ManifoldInfo};
 pub use entities::id::*;
 pub use entities::{Vertex, Edge, HalfEdge, Face, LoopRef};
 pub use tolerances::*;

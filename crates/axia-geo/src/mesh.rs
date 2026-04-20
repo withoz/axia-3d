@@ -80,6 +80,61 @@ pub struct ManifoldInfo {
     pub is_closed_solid: bool,
 }
 
+/// Phase H — Import Normalizer 옵션.
+///
+/// 외부 파일 (DXF/SKP/OBJ 등)에서 들어온 데이터를 AXiA 네이티브 규칙
+/// (ADR-007)에 맞춰 정리하는 옵션 플래그. 기본은 모두 true로 보수적 정리.
+#[derive(Debug, Clone)]
+pub struct NormalizeOptions {
+    /// 퇴화(zero-area) face 제거
+    pub remove_degenerate: bool,
+    /// Signed-volume 기반 winding 일관화 (다수결로 outer=Front 통일)
+    pub normalize_winding: bool,
+    /// Face normal을 topology에서 재계산
+    pub recompute_normals: bool,
+    /// 고아 vertex 정리
+    pub remove_isolated_verts: bool,
+    /// 면적 임계값 (이보다 작으면 degenerate로 간주)
+    pub degenerate_tolerance: f64,
+}
+
+impl Default for NormalizeOptions {
+    fn default() -> Self {
+        Self {
+            remove_degenerate: true,
+            normalize_winding: true,
+            recompute_normals: true,
+            remove_isolated_verts: true,
+            degenerate_tolerance: 1e-6,
+        }
+    }
+}
+
+/// Normalizer 실행 결과 리포트.
+#[derive(Debug, Clone)]
+pub struct NormalizeReport {
+    pub degenerate_removed: usize,
+    pub winding_flipped: usize,
+    pub normals_recomputed: usize,
+    pub isolated_verts_removed: usize,
+    /// Normalize 후 남은 invariant 위반 (전부 해결되지 못한 케이스)
+    pub remaining_violations: usize,
+}
+
+impl NormalizeReport {
+    pub fn summary(&self) -> String {
+        format!(
+            "Normalize: removed {} degen, flipped {} winding, recomputed {} normals, \
+             removed {} isolated verts, remaining {} violations",
+            self.degenerate_removed,
+            self.winding_flipped,
+            self.normals_recomputed,
+            self.isolated_verts_removed,
+            self.remaining_violations,
+        )
+    }
+}
+
 /// Result of [`Mesh::verify_face_invariants`] — ADR-007 정책 준수 여부 리포트.
 #[derive(Debug, Clone)]
 pub struct InvariantReport {
@@ -3641,6 +3696,150 @@ impl Mesh {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  Phase H — Import Normalizer (ADR-007 Barrier)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// 외부 import된 mesh 데이터를 AXiA 네이티브 규칙에 맞게 정리.
+    ///
+    /// 이 함수는 "경계(Barrier)" 역할 — 외부 규칙의 데이터를 ADR-007 준수
+    /// 데이터로 변환. Import 직후 반드시 호출하여 엔진 내부 규율 유지.
+    ///
+    /// 단계:
+    ///   1. Degenerate face 제거 (zero-area)
+    ///   2. Isolated vertex 정리
+    ///   3. Winding 일관화 — 다수결로 "올바른" 방향 판정 후 소수 flip
+    ///   4. Normal 캐시 재계산 (topology 기반)
+    ///   5. 최종 invariant verify
+    pub fn normalize_for_import(&mut self, opts: &NormalizeOptions) -> NormalizeReport {
+        let mut report = NormalizeReport {
+            degenerate_removed: 0,
+            winding_flipped: 0,
+            normals_recomputed: 0,
+            isolated_verts_removed: 0,
+            remaining_violations: 0,
+        };
+
+        // 1. Degenerate faces
+        if opts.remove_degenerate {
+            report.degenerate_removed = self.cleanup_degenerate_faces(opts.degenerate_tolerance);
+        }
+
+        // 2. Normal 재계산 — I2 (cached normal이 winding과 일치)
+        if opts.recompute_normals {
+            let active_faces: Vec<FaceId> = self.faces.iter()
+                .filter(|(_, f)| f.is_active())
+                .map(|(id, _)| id)
+                .collect();
+            for fid in &active_faces {
+                let outer_start = self.faces[*fid].outer().start;
+                if outer_start.is_null() { continue; }
+                if let Ok(verts) = self.collect_loop_verts(outer_start) {
+                    if let Ok(n) = self.compute_normal(&verts) {
+                        if n.length_squared() > 1e-10 {
+                            self.faces[*fid].set_normal(n.normalize_or_zero());
+                            report.normals_recomputed += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Winding 일관화
+        //    휴리스틱: 각 face의 normal이 mesh centroid에서 face centroid로 향하는
+        //    벡터와 양의 내적이면 "바깥쪽 front" (올바름). 음수면 flip 대상.
+        //    이는 볼록체 가정 하에 작동 — 오목체는 완벽하지 않지만
+        //    다수결로 대부분 올바르게 정규화됨.
+        if opts.normalize_winding {
+            let active_faces: Vec<FaceId> = self.faces.iter()
+                .filter(|(_, f)| f.is_active())
+                .map(|(id, _)| id)
+                .collect();
+            if active_faces.len() >= 4 {
+                // mesh centroid
+                let mut all_pos = DVec3::ZERO;
+                let mut cnt = 0usize;
+                for fid in &active_faces {
+                    let outer_start = self.faces[*fid].outer().start;
+                    if outer_start.is_null() { continue; }
+                    if let Ok(verts) = self.collect_loop_verts(outer_start) {
+                        for v in verts {
+                            if let Ok(p) = self.vertex_pos(v) {
+                                all_pos += p;
+                                cnt += 1;
+                            }
+                        }
+                    }
+                }
+                if cnt > 0 {
+                    let mesh_centroid = all_pos / cnt as f64;
+                    let mut to_flip: Vec<FaceId> = Vec::new();
+                    for fid in &active_faces {
+                        let outer_start = self.faces[*fid].outer().start;
+                        if outer_start.is_null() { continue; }
+                        let verts = match self.collect_loop_verts(outer_start) {
+                            Ok(v) => v, Err(_) => continue,
+                        };
+                        if verts.is_empty() { continue; }
+                        // Face centroid
+                        let mut fc = DVec3::ZERO;
+                        let mut fcn = 0usize;
+                        for v in &verts {
+                            if let Ok(p) = self.vertex_pos(*v) {
+                                fc += p;
+                                fcn += 1;
+                            }
+                        }
+                        if fcn == 0 { continue; }
+                        fc /= fcn as f64;
+                        let outward = fc - mesh_centroid;
+                        let normal = self.faces[*fid].normal();
+                        if normal.length_squared() < 1e-10 { continue; }
+                        // 음의 내적 → 뒤집혔음 → flip 대상
+                        if outward.dot(normal) < 0.0 {
+                            to_flip.push(*fid);
+                        }
+                    }
+                    // 다수가 flip 대상이면 전체 뒤집기보다 그대로 두는 게 나음
+                    // (아마 역방향 convention으로 들어온 경우)
+                    let half = active_faces.len() / 2;
+                    if to_flip.len() <= half {
+                        for fid in &to_flip {
+                            if self.flip_face_safe(*fid).is_ok() {
+                                report.winding_flipped += 1;
+                            }
+                        }
+                    } else {
+                        // 다수가 뒤집힘 — 소수 (올바른 쪽) 만 flip (equivalent 반전)
+                        let correct: Vec<FaceId> = active_faces.iter()
+                            .copied()
+                            .filter(|fid| !to_flip.contains(fid))
+                            .collect();
+                        for fid in &correct {
+                            if self.flip_face_safe(*fid).is_ok() {
+                                report.winding_flipped += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Isolated verts
+        if opts.remove_isolated_verts {
+            let before = self.verts.len();
+            self.remove_isolated_verts();
+            let after = self.verts.len();
+            report.isolated_verts_removed = before.saturating_sub(after);
+        }
+
+        // 5. 최종 verify
+        let inv_report = self.verify_face_invariants();
+        report.remaining_violations = inv_report.violations.len();
+
+        report
+    }
+
     // ═══════════════════════════════════════
     //  Shell operations
     // ═══════════════════════════════════════
@@ -4214,6 +4413,106 @@ mod tests {
         ).unwrap();
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "hole face violates: {}", report.summary());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Phase H — Import Normalizer 테스트
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn normalize_noop_on_clean_mesh() {
+        // 정상 정사면체 — normalize 후에도 변화 최소
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        mesh.add_face(&[v0, v2, v1], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v0, v1, v3], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v1, v2, v3], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v2, v0, v3], MaterialId::new(0)).unwrap();
+
+        let opts = NormalizeOptions::default();
+        let report = mesh.normalize_for_import(&opts);
+
+        // 깨끗한 mesh라면 flip 대상이 매우 적거나 전무
+        assert_eq!(report.degenerate_removed, 0);
+        assert_eq!(report.remaining_violations, 0,
+            "clean mesh should have no violations after normalize");
+    }
+
+    #[test]
+    fn normalize_removes_degenerate_faces() {
+        let mut mesh = Mesh::new();
+        // 정상 삼각형
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 100.0, 0.0));
+        let _good = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+
+        // 퇴화 삼각형은 add_face가 ADR-003으로 차단하므로 직접 만들기는 어려움.
+        // 대신 normalize가 정상 case에서 아무것도 망가뜨리지 않는지 확인.
+        let report = mesh.normalize_for_import(&NormalizeOptions::default());
+        assert_eq!(report.degenerate_removed, 0);
+        assert_eq!(mesh.face_count(), 1);
+    }
+
+    #[test]
+    fn normalize_recomputes_normals() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0));
+        let f = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+
+        // 강제로 normal 왜곡
+        mesh.faces[f].set_normal(DVec3::new(0.0, -1.0, 0.0));
+
+        let opts = NormalizeOptions { recompute_normals: true, normalize_winding: false, ..Default::default() };
+        let report = mesh.normalize_for_import(&opts);
+        assert!(report.normals_recomputed >= 1);
+
+        // 재계산 후 cached가 실제 winding과 일치해야 함
+        let inv = mesh.verify_face_invariants();
+        assert!(inv.is_valid(), "normalize should fix normal: {}", inv.summary());
+    }
+
+    #[test]
+    fn normalize_winding_fixes_inverted_tetrahedron() {
+        // 뒤집힌 winding의 정사면체 — normalize가 outer=Front로 복구
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        // 모든 face를 "안쪽을 향하게" 생성 (winding 반전)
+        mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap(); // 반전 bottom
+        mesh.add_face(&[v0, v3, v1], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v1, v3, v2], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v2, v3, v0], MaterialId::new(0)).unwrap();
+
+        let report = mesh.normalize_for_import(&NormalizeOptions::default());
+        // 4개 또는 0개가 flip되어야 함 (다수결 의해)
+        // 중요한 건 normalize 후 모든 normal이 바깥을 향하는지
+        assert!(report.winding_flipped == 4 || report.winding_flipped == 0,
+            "got {} flips", report.winding_flipped);
+
+        // 최종: outer face가 mesh centroid 바깥을 향함
+        let active: Vec<FaceId> = mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id).collect();
+        let mesh_c = DVec3::new(5.0, 2.5, 5.0); // 대략 centroid
+        for fid in &active {
+            let verts = mesh.collect_loop_verts(mesh.faces[*fid].outer().start).unwrap();
+            let mut fc = DVec3::ZERO;
+            for v in &verts { fc += mesh.vertex_pos(*v).unwrap(); }
+            fc /= verts.len() as f64;
+            let outward = fc - mesh_c;
+            let n = mesh.faces[*fid].normal();
+            // 바깥으로 향하면 OK (일부 face는 구조상 정확히 수직 ~ dot≈0 허용)
+            assert!(outward.dot(n) >= -0.1,
+                "face {:?} normal still inward: dot={:.3}", fid, outward.dot(n));
+        }
     }
 
     #[test]

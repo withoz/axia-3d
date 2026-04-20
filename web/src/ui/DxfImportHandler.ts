@@ -45,6 +45,17 @@ export function importDxfFile(deps: DxfImportDeps): void {
         return;
       }
 
+      // Phase H (ADR-007 Barrier) — import 직후 자동 정규화
+      // 외부 DXF 데이터를 AXiA 네이티브 규칙에 맞춰 정리.
+      const normReport = bridge.normalizeForImport();
+      if (normReport.remainingViolations > 0) {
+        console.warn(
+          `[DXF Import] Normalize 후에도 ${normReport.remainingViolations}개 위반 남음`,
+          normReport
+        );
+      }
+      debugLog('[DXF Import] Normalize 결과:', normReport);
+
       // Sync mesh (WASM → Three.js)
       toolManager.syncMesh();
 

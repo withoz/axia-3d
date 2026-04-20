@@ -23,6 +23,13 @@ function mockDeps(): DxfImportDeps {
         splines: 0,
         skipped: 1,
       }),
+      normalizeForImport: vi.fn().mockReturnValue({
+        degenerateRemoved: 0,
+        windingFlipped: 0,
+        normalsRecomputed: 0,
+        isolatedVertsRemoved: 0,
+        remainingViolations: 0,
+      }),
     } as any,
     toolManager: {
       syncMesh: vi.fn(),

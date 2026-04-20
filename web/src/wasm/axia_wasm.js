@@ -1075,6 +1075,37 @@ export class AxiaEngine {
         return this;
     }
     /**
+     * Phase H — Import Normalizer 실행 (ADR-007 Barrier).
+     *
+     * 외부 파일에서 들어온 mesh 데이터를 AXiA 네이티브 규칙에 맞춰 정리.
+     * 반환: JSON 리포트 {degenerateRemoved, windingFlipped, normalsRecomputed,
+     *                    isolatedVertsRemoved, remainingViolations}
+     *
+     * `options_json`: {remove_degenerate, normalize_winding, recompute_normals,
+     *                  remove_isolated_verts, degenerate_tolerance}
+     *                 — 생략/빈문자면 기본값 사용.
+     * @param {string} options_json
+     * @returns {string}
+     */
+    normalizeForImport(options_json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(options_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_normalizeForImport(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
      * plane_normal: 참조 평면 법선 (Y-up = 0,1,0)
      * @param {number} edge_id_raw

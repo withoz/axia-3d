@@ -1576,6 +1576,50 @@ impl AxiaEngine {
         }
     }
 
+    /// Phase H — Import Normalizer 실행 (ADR-007 Barrier).
+    ///
+    /// 외부 파일에서 들어온 mesh 데이터를 AXiA 네이티브 규칙에 맞춰 정리.
+    /// 반환: JSON 리포트 {degenerateRemoved, windingFlipped, normalsRecomputed,
+    ///                    isolatedVertsRemoved, remainingViolations}
+    ///
+    /// `options_json`: {remove_degenerate, normalize_winding, recompute_normals,
+    ///                  remove_isolated_verts, degenerate_tolerance}
+    ///                 — 생략/빈문자면 기본값 사용.
+    #[wasm_bindgen(js_name = "normalizeForImport")]
+    pub fn normalize_for_import(&mut self, options_json: String) -> String {
+        use axia_geo::NormalizeOptions;
+        let opts: NormalizeOptions = if options_json.is_empty() || options_json == "{}" {
+            NormalizeOptions::default()
+        } else {
+            // 간단 파싱 — 필요한 필드만 추출
+            let mut o = NormalizeOptions::default();
+            if options_json.contains("\"remove_degenerate\":false") { o.remove_degenerate = false; }
+            if options_json.contains("\"normalize_winding\":false") { o.normalize_winding = false; }
+            if options_json.contains("\"recompute_normals\":false") { o.recompute_normals = false; }
+            if options_json.contains("\"remove_isolated_verts\":false") { o.remove_isolated_verts = false; }
+            o
+        };
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let report = self.scene.mesh.normalize_for_import(&opts);
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        debug_log!("[RUST] normalizeForImport: {}", report.summary());
+
+        format!(
+            r#"{{"degenerateRemoved":{},"windingFlipped":{},"normalsRecomputed":{},"isolatedVertsRemoved":{},"remainingViolations":{}}}"#,
+            report.degenerate_removed,
+            report.winding_flipped,
+            report.normals_recomputed,
+            report.isolated_verts_removed,
+            report.remaining_violations,
+        )
+    }
+
     /// 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
     /// UI에서 "정합성 검사" 버튼에 바인딩.
     #[wasm_bindgen(js_name = "verifyInvariants")]
