@@ -24,7 +24,8 @@
       z-index: 9500;
       display: flex;
       align-items: center;
-      background: rgba(30, 30, 38, 0.95);
+      /* 기존 rgba(30,30,38,0.95)에서 RGB 10% 어둡게 (×0.9) */
+      background: rgba(27, 27, 34, 0.95);
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       padding: 0 4px;
       user-select: none;
@@ -53,14 +54,14 @@
       color: #fff;
     }
 
-    /* 드롭다운 메뉴 */
+    /* 드롭다운 메뉴 — menubar와 동일 비율로 10% 어둡게 */
     .menu-dropdown {
       display: none;
       position: absolute;
       top: 100%;
       left: 0;
       min-width: 220px;
-      background: rgba(40, 40, 48, 0.98);
+      background: rgba(36, 36, 43, 0.98);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 4px;
       padding: 4px 0;

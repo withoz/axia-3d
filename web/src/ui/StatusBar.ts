@@ -52,6 +52,8 @@ export class StatusBar {
     this.setupFkeyButtons();
     this.setupCbTools();
     this.updateMeta();
+    // UnitSystem 변경 구독 — 단위/정밀도 변경 시 자동 반영
+    this.deps.units.onChange?.(() => this.updateMeta());
   }
 
   // ═══════════════════════════════════════════════════
