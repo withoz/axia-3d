@@ -8,7 +8,7 @@
 import { CommandInput } from './CommandInput';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
-import { getMergeTolerance, setMergeTolerance } from '../tools/MergeSettings';
+import { getMergeTolerance, setMergeTolerance, getRespectMaterial, setRespectMaterial } from '../tools/MergeSettings';
 
 export interface CommandRegistryDeps {
   commandInput: CommandInput;
@@ -91,6 +91,28 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
       }
       setMergeTolerance(v);
       commandInput.printSuccess(`면 통합 tolerance: ${v}° (0.5° = strict, 2~5° = loose)`);
+    },
+  });
+
+  // 면 통합 재질 경계 존중 토글 (C2)
+  commandInput.registerHandler({
+    name: 'mergemat',
+    aliases: ['mmat'],
+    help: '면 통합 시 재질 경계 존중 토글 (on/off/toggle). 현재값 출력: 인수 없음',
+    execute: (args: string[]) => {
+      const cur = getRespectMaterial();
+      if (args.length === 0) {
+        commandInput.printInfo(`재질 경계 존중: ${cur ? 'ON' : 'OFF'}`);
+        return;
+      }
+      const v = args[0].toLowerCase();
+      let next: boolean;
+      if (v === 'on' || v === 'true' || v === '1') next = true;
+      else if (v === 'off' || v === 'false' || v === '0') next = false;
+      else if (v === 'toggle' || v === 't') next = !cur;
+      else throw new Error('사용법: mergemat [on|off|toggle]');
+      setRespectMaterial(next);
+      commandInput.printSuccess(`재질 경계 존중: ${next ? 'ON — 같은 재질끼리만 병합' : 'OFF — 재질 무시'}`);
     },
   });
 

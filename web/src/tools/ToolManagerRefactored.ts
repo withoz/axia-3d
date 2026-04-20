@@ -16,7 +16,7 @@ import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { ConstraintCommands } from './ConstraintCommands';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
-import { getMergeTolerance } from './MergeSettings';
+import { getMergeTolerance, getRespectMaterial, groupFacesByMaterial } from './MergeSettings';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
@@ -393,35 +393,59 @@ export class ToolManager {
         return;
       }
 
+      // C2: 재질 경계 존중 옵션 — 같은 material끼리만 병합
+      let workingFaces = faces;
+      if (getRespectMaterial()) {
+        const lib = getMaterialLibrary();
+        const groups = groupFacesByMaterial(faces, (id) => lib.getMaterialForFace(id)?.id);
+        // 가장 큰 그룹만 처리 (한 번의 Ctrl+M에 한 material만)
+        let bestMat = '';
+        let bestSize = 0;
+        for (const [mat, ids] of groups) {
+          if (ids.length > bestSize) { bestMat = mat; bestSize = ids.length; }
+        }
+        if (bestSize < 2) {
+          Toast.warning('재질 경계 존중 모드: 같은 재질 면이 2개 이상 필요합니다', 3000);
+          return;
+        }
+        workingFaces = groups.get(bestMat)!;
+        if (groups.size > 1) {
+          debugLog('[Action] merge-faces: respect-material filtered', faces.length, '→', workingFaces.length, 'mat=', bestMat);
+        }
+      }
+
       // A2: 프리뷰 분석 — 실제 변경 없이 결과 예측 (B1 tolerance 적용)
-      const analysis = this.bridge.analyzeMergeCandidates(faces, tol);
-      debugLog('[Action] merge-faces pre-analysis:', analysis, 'tol=', tol);
+      const analysis = this.bridge.analyzeMergeCandidates(workingFaces, tol);
+      debugLog('[Action] merge-faces pre-analysis:', analysis, 'tol=', tol, 'faces=', workingFaces.length);
       if (analysis.mergeable === 0) {
-        // 실패 사유 구체화 (A3 확장)
+        // 실패 사유 구체화 (A3 확장, B2/C1 ADR-006 안내)
         const lines: string[] = ['통합할 수 있는 면이 없습니다.'];
         if (analysis.total === 0) {
           lines.push('• 선택한 면들이 엣지를 공유하지 않습니다');
+          lines.push('  (비인접 coplanar 병합은 미지원 — ADR-006 참조)');
         }
         if (analysis.nonCoplanar > 0) {
-          lines.push(`• ${analysis.nonCoplanar}쌍이 평면 불일치 (coplanar 아님)`);
+          const tolHint = tol === 0.5 ? ' (mergetol 2 명령으로 허용치 확장 가능)' : '';
+          lines.push(`• ${analysis.nonCoplanar}쌍이 평면 불일치${tolHint}`);
         }
         if (analysis.ambiguous > 0) {
-          lines.push(`• ${analysis.ambiguous}쌍이 C-slit 형태 (2개 이상 엣지 공유)`);
+          lines.push(`• ${analysis.ambiguous}쌍이 C-slit 형태 (hole 필요 — 미지원)`);
         }
         const err = this.bridge.lastError();
-        Toast.warning(err || lines.join('\n'), 4000);
+        Toast.warning(err || lines.join('\n'), 4500);
         return;
       }
 
-      const merged = this.bridge.tryMergeAdjacentFaces(faces, tol);
+      const merged = this.bridge.tryMergeAdjacentFaces(workingFaces, tol);
       if (merged > 0) {
         this.syncMesh();
         this.selection.clearSelection();
         const skipped = analysis.nonCoplanar + analysis.ambiguous;
         const skipNote = skipped > 0 ? ` (${skipped}쌍 건너뜀)` : '';
         const tolNote = tol !== 0.5 ? ` · tol ${tol}°` : '';
+        const matNote = getRespectMaterial() ? ' · 재질별' : '';
         Toast.info(
-          `${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐${skipNote}${tolNote}`,
+          `${merged}회 통합 — ${workingFaces.length}개 면이 ${workingFaces.length - merged}개로 합쳐짐${skipNote}${tolNote}${matNote}`,
           2800,
         );
         debugLog('[Action] merge-faces (faces):', merged, 'tol=', tol);
