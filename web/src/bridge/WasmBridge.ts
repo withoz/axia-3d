@@ -88,6 +88,16 @@ type AxiaEngineExtended = AxiaEngine & {
     dx: number, dy: number, dz: number,
     segments: number,
   ): Uint32Array;
+  loftSections?(
+    sectionsFlat: Float64Array,
+    sectionSize: number,
+    closedSections: boolean,
+  ): Uint32Array;
+  sweepProfileAlongPath?(
+    profileFlat: Float64Array,
+    pathFlat: Float64Array,
+    closedProfile: boolean,
+  ): Uint32Array;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -854,6 +864,56 @@ export class WasmBridge {
       return out ? Array.from(out) : [];
     } catch (e) {
       console.error('[WasmBridge] mirrorFaces failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * N개의 cross-section을 이어붙여 loft 표면 생성.
+   * `sections` — 모든 section의 point를 연결한 flat 배열 (각 point=3 float).
+   * `sectionSize` — section당 point 개수 (모든 section 동일해야 함).
+   * `closedSections` — section이 닫힌 ring인지 (true면 마지막↔첫 point 연결).
+   */
+  loftSections(
+    sections: number[],
+    sectionSize: number,
+    closedSections: boolean,
+  ): number[] {
+    if (!this.engine?.loftSections) return [];
+    this.markDirty();
+    try {
+      const out = this.engine.loftSections(
+        new Float64Array(sections),
+        sectionSize,
+        closedSections,
+      );
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      console.error('[WasmBridge] loftSections failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * 2D profile을 3D path 따라 sweep. profile은 local XY 평면 (z=0).
+   * path는 world 공간 폴리라인. closed_profile=true면 tube, false면 strip.
+   */
+  sweepProfileAlongPath(
+    profile: number[],
+    path: number[],
+    closedProfile: boolean,
+  ): number[] {
+    if (!this.engine?.sweepProfileAlongPath) return [];
+    this.markDirty();
+    try {
+      const out = this.engine.sweepProfileAlongPath(
+        new Float64Array(profile),
+        new Float64Array(path),
+        closedProfile,
+      );
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      console.error('[WasmBridge] sweepProfileAlongPath failed:', e);
       return [];
     }
   }

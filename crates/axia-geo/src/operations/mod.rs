@@ -13,3 +13,5 @@ pub mod primitives;
 pub mod face_split;
 pub mod mirror;
 pub mod revolve;
+pub mod loft;
+pub mod sweep;

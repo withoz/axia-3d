@@ -1303,6 +1303,119 @@ impl AxiaEngine {
         }
     }
 
+    /// Sweep a 2D profile along a 3D path, producing one ring of vertices
+    /// per path point and stitching them with `loft`. `profile_flat` is
+    /// K points (xyz triples) in a local XY plane; `path_flat` is M points
+    /// (xyz triples) in world space. `closed_profile` treats the profile
+    /// as a closed ring. Returns new FaceIds; empty on failure.
+    #[wasm_bindgen(js_name = "sweepProfileAlongPath")]
+    pub fn sweep_profile_along_path(
+        &mut self,
+        profile_flat: &[f64],
+        path_flat: &[f64],
+        closed_profile: bool,
+    ) -> Vec<u32> {
+        if profile_flat.len() < 9 || profile_flat.len() % 3 != 0
+            || path_flat.len() < 6 || path_flat.len() % 3 != 0
+        {
+            self.set_error(format!(
+                "sweep: bad input — profile_flat.len()={}, path_flat.len()={}",
+                profile_flat.len(), path_flat.len(),
+            ));
+            return Vec::new();
+        }
+        let profile: Vec<DVec3> = profile_flat.chunks_exact(3)
+            .map(|c| DVec3::new(c[0], c[1], c[2])).collect();
+        let path: Vec<DVec3> = path_flat.chunks_exact(3)
+            .map(|c| DVec3::new(c[0], c[1], c[2])).collect();
+        let material = self.scene.default_material;
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.sweep(&profile, &path, closed_profile, material) {
+            Ok(faces) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                faces.iter().map(|f| f.raw()).collect()
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] sweep ERROR: {}", e);
+                self.set_error(format!("sweep: {}", e));
+                Vec::new()
+            }
+        }
+    }
+
+    /// Loft N cross-sections into a continuous surface. `sections_flat` is
+    /// a flat f64 array containing every point of every section as xyz
+    /// triples; `section_size` says how many POINTS (not floats) are in
+    /// each section. All sections must be the same size.
+    ///
+    /// `closed_sections` treats each section as a closed ring (the last
+    /// point wraps to the first).
+    ///
+    /// Returns the new FaceIds in section-major, point-minor order.
+    /// Single undo transaction.
+    #[wasm_bindgen(js_name = "loftSections")]
+    pub fn loft_sections(
+        &mut self,
+        sections_flat: &[f64],
+        section_size: u32,
+        closed_sections: bool,
+    ) -> Vec<u32> {
+        let ps = section_size as usize;
+        if ps < 3 || sections_flat.len() % (3 * ps) != 0 || sections_flat.is_empty() {
+            self.set_error(format!(
+                "loft: bad input — sections_flat.len()={}, section_size={}",
+                sections_flat.len(), section_size,
+            ));
+            return Vec::new();
+        }
+        let n_sections = sections_flat.len() / (3 * ps);
+        if n_sections < 2 {
+            self.set_error(format!("loft: need ≥ 2 sections, got {}", n_sections));
+            return Vec::new();
+        }
+        let mut sections: Vec<Vec<DVec3>> = Vec::with_capacity(n_sections);
+        for s in 0..n_sections {
+            let base = s * ps * 3;
+            let mut sec = Vec::with_capacity(ps);
+            for j in 0..ps {
+                let idx = base + j * 3;
+                sec.push(DVec3::new(
+                    sections_flat[idx],
+                    sections_flat[idx + 1],
+                    sections_flat[idx + 2],
+                ));
+            }
+            sections.push(sec);
+        }
+        let material = self.scene.default_material;
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.loft(&sections, closed_sections, material) {
+            Ok(faces) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                faces.iter().map(|f| f.raw()).collect()
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] loft ERROR: {}", e);
+                self.set_error(format!("loft: {}", e));
+                Vec::new()
+            }
+        }
+    }
+
     /// Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
     /// axis `(origin, dir)` into a surface of revolution. Returns the new
     /// FaceIds in profile-major, ring-minor order, or an empty vec on

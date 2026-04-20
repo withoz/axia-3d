@@ -342,6 +342,19 @@ export class AxiaEngine {
      */
     listConstraints(): string;
     /**
+     * Loft N cross-sections into a continuous surface. `sections_flat` is
+     * a flat f64 array containing every point of every section as xyz
+     * triples; `section_size` says how many POINTS (not floats) are in
+     * each section. All sections must be the same size.
+     *
+     * `closed_sections` treats each section as a closed ring (the last
+     * point wraps to the first).
+     *
+     * Returns the new FaceIds in section-major, point-minor order.
+     * Single undo transaction.
+     */
+    loftSections(sections_flat: Float64Array, section_size: number, closed_sections: boolean): Uint32Array;
+    /**
      * 그룹을 컴포넌트로 변환
      */
     make_component(group_id: number, name: string): number;
@@ -534,6 +547,14 @@ export class AxiaEngine {
      */
     splitFaceByLine(face_id_raw: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): string;
     /**
+     * Sweep a 2D profile along a 3D path, producing one ring of vertices
+     * per path point and stitching them with `loft`. `profile_flat` is
+     * K points (xyz triples) in a local XY plane; `path_flat` is M points
+     * (xyz triples) in world space. `closed_profile` treats the profile
+     * as a closed ring. Returns new FaceIds; empty on failure.
+     */
+    sweepProfileAlongPath(profile_flat: Float64Array, path_flat: Float64Array, closed_profile: boolean): Uint32Array;
+    /**
      * Phase H5 — 자유 엣지 → Face Synthesis (사용자 수동 트리거).
      *
      * 닫힌 polygon을 이루는 free edges를 감지해 face로 전환.
@@ -703,6 +724,7 @@ export interface InitOutput {
     readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_lastMergeFailureReason: (a: number, b: number) => void;
     readonly axiaengine_listConstraints: (a: number, b: number) => void;
+    readonly axiaengine_loftSections: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_maxConstraintResidual: (a: number) => number;
     readonly axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
@@ -734,6 +756,7 @@ export interface InitOutput {
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly axiaengine_sweepProfileAlongPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;

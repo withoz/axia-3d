@@ -1086,6 +1086,37 @@ export class AxiaEngine {
         }
     }
     /**
+     * Loft N cross-sections into a continuous surface. `sections_flat` is
+     * a flat f64 array containing every point of every section as xyz
+     * triples; `section_size` says how many POINTS (not floats) are in
+     * each section. All sections must be the same size.
+     *
+     * `closed_sections` treats each section as a closed ring (the last
+     * point wraps to the first).
+     *
+     * Returns the new FaceIds in section-major, point-minor order.
+     * Single undo transaction.
+     * @param {Float64Array} sections_flat
+     * @param {number} section_size
+     * @param {boolean} closed_sections
+     * @returns {Uint32Array}
+     */
+    loftSections(sections_flat, section_size, closed_sections) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayF64ToWasm0(sections_flat, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_loftSections(retptr, this.__wbg_ptr, ptr0, len0, section_size, closed_sections);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v2 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * 그룹을 컴포넌트로 변환
      * @param {number} group_id
      * @param {string} name
@@ -1607,6 +1638,34 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Sweep a 2D profile along a 3D path, producing one ring of vertices
+     * per path point and stitching them with `loft`. `profile_flat` is
+     * K points (xyz triples) in a local XY plane; `path_flat` is M points
+     * (xyz triples) in world space. `closed_profile` treats the profile
+     * as a closed ring. Returns new FaceIds; empty on failure.
+     * @param {Float64Array} profile_flat
+     * @param {Float64Array} path_flat
+     * @param {boolean} closed_profile
+     * @returns {Uint32Array}
+     */
+    sweepProfileAlongPath(profile_flat, path_flat, closed_profile) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayF64ToWasm0(profile_flat, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArrayF64ToWasm0(path_flat, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_sweepProfileAlongPath(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, closed_profile);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v3 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v3;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
         }
     }
     /**
