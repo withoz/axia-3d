@@ -144,17 +144,11 @@ async function main() {
   loadInitialScene({ bridge, fileManager, toolManager, updateFileStatus });
 
   // ═══ Selection status bar update ═══
-  toolManager.selection.onChange((faces) => {
-    const wrap = document.getElementById('stat-sel-wrap');
-    const el = document.getElementById('stat-selected');
-    if (wrap && el) {
-      if (faces.length > 0) {
-        wrap.style.display = '';
-        el.textContent = String(faces.length);
-      } else {
-        wrap.style.display = 'none';
-      }
-    }
+  // Phase H 이후 status bar는 coords + F-keys에 집중.
+  // "Selected: N" 정보는 XIA Inspector에서 이미 확인 가능하므로 status bar에
+  // 반영하지 않음 (이전 코드는 overflow 유발).
+  toolManager.selection.onChange((_faces) => {
+    // 기존 stat-sel-wrap은 숨김 유지 (legacy 호환 목적으로 DOM은 유지)
   });
 
   // 5a. OSNAP toggle — 레거시(stat-osnap) 유지 + 새 StatusBar 연동

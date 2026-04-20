@@ -138,6 +138,10 @@
       z-index: 5000;
       display: flex;
       align-items: center;
+      /* 좁은 화면 / 패널 열림 시 자동 줄바꿈 */
+      flex-wrap: wrap;
+      /* 패널이 열려도 반드시 여유 확보 (최대 95%) */
+      max-width: calc(100vw - 24px);
       background: rgba(0, 0, 0, 0.40);
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
@@ -146,6 +150,8 @@
       padding: 4px 5px;
       gap: 0;
       user-select: none;
+      justify-content: center;
+      row-gap: 4px;
     }
 
     .tool-btn {
@@ -284,7 +290,8 @@
     #statusbar {
       position: static;
       flex: 0 0 auto;
-      max-width: 60%;
+      /* 70% 까지 허용 — coords + F-keys 수용 */
+      max-width: 70%;
       height: 30px;
       display: inline-flex;
       align-items: center;
@@ -330,8 +337,8 @@
       white-space: nowrap;
       /* 모든 숫자가 동일 너비 ('tabular nums') — 1234.5 vs 999.9 layout 동일 */
       font-variant-numeric: tabular-nums;
-      /* 최대 좌표를 수용하는 고정 너비 — statusbar 움직이지 않음 */
-      min-width: 240px;
+      /* 일반 좌표 수용 너비 (±99999.9999 × 3) */
+      min-width: 220px;
       display: inline-block;
       text-align: left;
     }
@@ -1789,6 +1796,15 @@
         </button>
         <button class="tool-btn" data-tool="circle" title="Circle (C)">
           <svg viewBox="0 0 512 512"><path d="M464 256A208 208 0 1 0 48 256a208 208 0 1 0 416 0zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="arc" title="Arc (A) — 3-point">
+          <svg viewBox="0 0 512 512"><path d="M64 448 A 256 256 0 0 1 448 448" stroke="currentColor" stroke-width="36" fill="none" stroke-linecap="round"/><circle cx="64" cy="448" r="24"/><circle cx="448" cy="448" r="24"/><circle cx="256" cy="192" r="24"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="freehand" title="Freehand (Shift+F)">
+          <svg viewBox="0 0 512 512"><path d="M32 384 Q 96 192 192 256 T 352 192 Q 416 128 480 256" stroke="currentColor" stroke-width="36" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="bezier" title="Cubic Bezier (4 control points)">
+          <svg viewBox="0 0 512 512"><path d="M32 416 C 96 96, 416 96, 480 416" stroke="currentColor" stroke-width="28" fill="none" stroke-linecap="round"/><circle cx="32" cy="416" r="20" fill="currentColor"/><circle cx="480" cy="416" r="20" fill="currentColor"/><circle cx="96" cy="96" r="16" fill="none" stroke="currentColor" stroke-width="12"/><circle cx="416" cy="96" r="16" fill="none" stroke="currentColor" stroke-width="12"/><line x1="32" y1="416" x2="96" y2="96" stroke="currentColor" stroke-width="8" stroke-dasharray="12 8" opacity="0.5"/><line x1="480" y1="416" x2="416" y2="96" stroke="currentColor" stroke-width="8" stroke-dasharray="12 8" opacity="0.5"/></svg>
         </button>
       </div>
 
