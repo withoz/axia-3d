@@ -6,7 +6,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn(), debugWarn: vi.fn() }));
 
 vi.mock('../ui/Toast', () => ({
-  Toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn(), show: vi.fn() },
+  Toast: {
+    info: vi.fn(), warning: vi.fn(), error: vi.fn(), show: vi.fn(),
+    fromBridgeError: vi.fn(),
+  },
 }));
 
 vi.mock('../materials/MaterialLibrary', () => ({

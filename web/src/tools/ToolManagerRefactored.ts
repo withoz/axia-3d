@@ -598,8 +598,7 @@ export class ToolManager {
         Toast.info(`${sel.length}개 면을 ${label} 평면 기준 미러링 (${newFaces.length}개 생성)`, 2500);
         debugLog(`[Action] ${action}: ${newFaces.length} mirrored faces`);
       } else {
-        const err = this.bridge.lastError();
-        Toast.error(err || '미러링 실패');
+        Toast.fromBridgeError(this.bridge, '미러링 실패');
       }
     } else if (action === 'revolve-x' || action === 'revolve-y' || action === 'revolve-z') {
       // Revolve Tool — 선택된 엣지 체인을 프로파일로, world X/Y/Z 축을
@@ -649,7 +648,7 @@ export class ToolManager {
         Toast.info(`${chain.positions.length} point profile → ${axisLabel} 축 revolve (${newFaces.length} faces)`, 2500);
         debugLog(`[Action] ${action}: ${newFaces.length} faces`);
       } else {
-        Toast.error(this.bridge.lastError() || 'Revolve 실패');
+        Toast.fromBridgeError(this.bridge, 'Revolve 실패');
       }
     } else if (action === 'subdivide') {
       // 전체 메시에 Catmull-Clark subdivision 1회 적용.
@@ -661,7 +660,7 @@ export class ToolManager {
         Toast.info(`Catmull-Clark 분할 완료 — ${count}개 quad 생성`, 2500);
         debugLog(`[Action] subdivide: ${count} quads`);
       } else {
-        Toast.error(this.bridge.lastError() || 'Subdivision 실패');
+        Toast.fromBridgeError(this.bridge, 'Subdivision 실패');
       }
     } else if (action === 'synthesize-faces') {
       // Phase H5 — 자유 엣지를 감지해 face로 합성 (수동 트리거)

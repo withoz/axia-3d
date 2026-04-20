@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import * as THREE from 'three';
 import { RotateTool } from './RotateTool';
 
@@ -87,7 +87,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
       expect(ctx.bridge.rotateVerts).toHaveBeenCalled();
       expect(ctx.bridge.rotateFaces).not.toHaveBeenCalled();
-      const vertIds = (ctx.bridge.rotateVerts as any).mock.calls[0][0].slice().sort();
+      const vertIds = (ctx.bridge.rotateVerts as Mock).mock.calls[0][0].slice().sort();
       expect(vertIds).toEqual([1, 2, 3]); // dedup
     });
 
@@ -100,7 +100,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       });
       tool.applyVCBValue(45);
       expect(ctx.bridge.rotateVerts).toHaveBeenCalled();
-      const call = (ctx.bridge.rotateVerts as any).mock.calls[0];
+      const call = (ctx.bridge.rotateVerts as Mock).mock.calls[0];
       // centroid ≈ (2, 0, 2)
       expect(call[1]).toBeCloseTo(2, 1);
       expect(call[3]).toBeCloseTo(2, 1);
@@ -165,7 +165,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
-      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      const calls = (ctx.bridge.rotateFaces as Mock).mock.calls;
       // rotateFaces(selected, cx,cy,cz, ax,ay,az, angle)
       // Y축: ay=1
       expect(calls[0][5]).toBe(1); // ay
@@ -179,7 +179,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       tool.onKeyDown({ key: 'x', preventDefault: () => {} } as any);
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 10, 0));
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
-      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      const calls = (ctx.bridge.rotateFaces as Mock).mock.calls;
       expect(calls[0][4]).toBe(1); // ax
       expect(calls[0][5]).toBe(0); // ay
       expect(calls[0][6]).toBe(0); // az
@@ -191,7 +191,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       tool.onKeyDown({ key: 'Z', preventDefault: () => {} } as any);
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 10, 0));
-      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      const calls = (ctx.bridge.rotateFaces as Mock).mock.calls;
       expect(calls[0][4]).toBe(0); // ax
       expect(calls[0][5]).toBe(0); // ay
       expect(calls[0][6]).toBe(1); // az
@@ -204,7 +204,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10)); // 90° Y
       // 축 전환 → Y축 역방향 -90° 적용된 후 새 축 적용
       tool.onKeyDown({ key: 'X', preventDefault: () => {} } as any);
-      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      const calls = (ctx.bridge.rotateFaces as Mock).mock.calls;
       // 최소 2번 호출 (preview 1 + rewind 1)
       expect(calls.length).toBeGreaterThanOrEqual(2);
       // rewind 호출은 이전 축(Y)에 대한 음수 각도
@@ -219,7 +219,7 @@ describe('RotateTool (CAD 3-click style)', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
-      const calls = (ctx.bridge.rotateFaces as any).mock.calls;
+      const calls = (ctx.bridge.rotateFaces as Mock).mock.calls;
       expect(calls[0][5]).toBe(1); // still Y
     });
   });

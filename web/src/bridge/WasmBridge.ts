@@ -192,6 +192,15 @@ type AxiaEngineExtended = AxiaEngine & {
 export class WasmBridge {
   public engine: AxiaEngineExtended | null = null;
 
+  /**
+   * Sticky error from a thrown JS-side exception inside a bridge wrapper.
+   * `engine.lastError()` only tracks Rust-side failures; thrown exceptions
+   * (panic, type errors, binding mismatches) used to be swallowed by the
+   * `try { ... } catch { console.error(...) }` blocks with the user seeing
+   * nothing. We stash the message here so `lastError()` can report it too.
+   */
+  private _bridgeSideError: string = '';
+
   /** Cached mesh buffer management to avoid redundant WASM→JS copies */
   private bufferCache: {
     positions: Float32Array | null;
@@ -296,12 +305,39 @@ export class WasmBridge {
    * 연산이 false를 반환했을 때 이 값으로 Toast/UI 피드백 표시 (ADR-003).
    */
   lastError(): string {
-    if (!this.engine) return '';
-    try {
-      return this.engine.lastError?.() ?? '';
-    } catch {
-      return '';
+    // Engine-side error (Rust bail → console_error → set_error) takes
+    // precedence; bridge-side sticky message only surfaces when the
+    // engine has nothing to say (e.g. the engine never got called
+    // because the JS wrapper threw first).
+    if (this.engine) {
+      try {
+        const msg = this.engine.lastError?.() ?? '';
+        if (msg && msg.trim().length > 0) return msg;
+      } catch {
+        /* fall through to bridge-side */
+      }
     }
+    return this._bridgeSideError;
+  }
+
+  /**
+   * Record a JS-side exception inside a bridge wrapper. Called from the
+   * `catch (e) { … }` blocks in the individual WASM-call wrappers so that
+   * the next `lastError()` / `Toast.fromBridgeError()` can surface it.
+   */
+  private recordBridgeError(op: string, e: unknown): void {
+    const msg = e instanceof Error ? e.message : String(e);
+    this._bridgeSideError = `${op}: ${msg}`;
+    console.error(`[WasmBridge] ${op} failed:`, e);
+  }
+
+  /**
+   * Clear any sticky bridge-side error. Call at the start of a wrapper
+   * that's about to make a fresh engine call so the error only reflects
+   * the MOST RECENT operation.
+   */
+  private clearBridgeError(): void {
+    this._bridgeSideError = '';
   }
 
   undo(): boolean {
@@ -588,7 +624,7 @@ export class WasmBridge {
         cascadedEdges: out[2] ?? 0,
       };
     } catch (e) {
-      console.error('[WasmBridge] batchEraseEdgesWithMerge failed:', e);
+      this.recordBridgeError('batchEraseEdgesWithMerge', e);
       return null;
     }
   }
@@ -864,7 +900,7 @@ export class WasmBridge {
       );
       return out ? Array.from(out) : [];
     } catch (e) {
-      console.error('[WasmBridge] mirrorFaces failed:', e);
+      this.recordBridgeError('mirrorFaces', e);
       return [];
     }
   }
@@ -890,7 +926,7 @@ export class WasmBridge {
       );
       return out ? Array.from(out) : [];
     } catch (e) {
-      console.error('[WasmBridge] loftSections failed:', e);
+      this.recordBridgeError('loftSections', e);
       return [];
     }
   }
@@ -906,7 +942,7 @@ export class WasmBridge {
     try {
       return this.engine.subdivideCatmullClark();
     } catch (e) {
-      console.error('[WasmBridge] subdivideCatmullClark failed:', e);
+      this.recordBridgeError('subdivideCatmullClark', e);
       return -1;
     }
   }
@@ -930,7 +966,7 @@ export class WasmBridge {
       );
       return out ? Array.from(out) : [];
     } catch (e) {
-      console.error('[WasmBridge] sweepProfileAlongPath failed:', e);
+      this.recordBridgeError('sweepProfileAlongPath', e);
       return [];
     }
   }
@@ -954,7 +990,7 @@ export class WasmBridge {
       );
       return out ? Array.from(out) : [];
     } catch (e) {
-      console.error('[WasmBridge] revolveProfile failed:', e);
+      this.recordBridgeError('revolveProfile', e);
       return [];
     }
   }

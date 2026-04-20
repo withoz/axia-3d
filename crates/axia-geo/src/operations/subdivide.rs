@@ -170,23 +170,29 @@ impl Mesh {
             }
         }
 
+        // ─── Pass 6.5: build vert-pair → EdgeId index ──────────────
+        // Pass 7 needs to look up "the edge between two specific vertices"
+        // N times per face. A linear scan through edge_data was O(E) per
+        // lookup → O(F·E) overall, which becomes O(F²) on typical manifold
+        // meshes and dominates the whole subdivision pass. Keying on an
+        // ORDER-INDEPENDENT pair (min, max) gives O(1) lookups.
+        let mut edge_by_pair: HashMap<(VertId, VertId), EdgeId> =
+            HashMap::with_capacity(edge_data.len());
+        for (&eid, (v0, v1, _)) in &edge_data {
+            let key = if v0.raw() <= v1.raw() { (*v0, *v1) } else { (*v1, *v0) };
+            edge_by_pair.insert(key, eid);
+        }
+        let edge_between = |a: VertId, b: VertId| -> Option<EdgeId> {
+            let key = if a.raw() <= b.raw() { (a, b) } else { (b, a) };
+            edge_by_pair.get(&key).copied()
+        };
+
         // ─── Pass 7: build new quads ─────────────────────────────
         // For each original face F with verts [v_0, v_1, ..., v_{N-1}]:
         //   For i in 0..N create a quad [v_i, ep(e_i), fp, ep(e_{i-1})]
         //   where e_i is the edge between v_i and v_{i+1},
         //         e_{i-1} is the edge between v_{i-1} and v_i.
         let mut new_face_count = 0usize;
-        let find_edge_between = |a: VertId, b: VertId,
-                                 all_edges: &HashMap<EdgeId, (VertId, VertId, Vec<FaceId>)>|
-         -> Option<EdgeId> {
-            for (&eid, (v0, v1, _)) in all_edges {
-                if (*v0 == a && *v1 == b) || (*v0 == b && *v1 == a) {
-                    return Some(eid);
-                }
-            }
-            None
-        };
-
         for &fid in &active_faces {
             let verts = &face_verts[&fid];
             let material = face_material[&fid];
@@ -196,9 +202,9 @@ impl Mesh {
                 let v_curr = verts[i];
                 let v_prev = verts[(i + n - 1) % n];
                 let v_next = verts[(i + 1) % n];
-                let e_curr = find_edge_between(v_curr, v_next, &edge_data)
+                let e_curr = edge_between(v_curr, v_next)
                     .ok_or_else(|| anyhow::anyhow!("subdivide: missing edge in face"))?;
-                let e_prev = find_edge_between(v_prev, v_curr, &edge_data)
+                let e_prev = edge_between(v_prev, v_curr)
                     .ok_or_else(|| anyhow::anyhow!("subdivide: missing edge in face"))?;
                 let ep_curr = edge_point_vid[&e_curr];
                 let ep_prev = edge_point_vid[&e_prev];
@@ -304,5 +310,37 @@ mod tests {
     fn subdivide_rejects_empty_mesh() {
         let mut m = Mesh::new();
         assert!(m.subdivide_catmull_clark().is_err());
+    }
+
+    /// Two consecutive subdivision passes on a cube: 6 → 24 → 96 quads.
+    /// Exercises the lookup index under a larger face/edge set and
+    /// guards the O(F) edge-lookup path against regressions (the old
+    /// linear scan made a 96-quad pass noticeably slow even in tests).
+    #[test]
+    fn subdivide_cube_twice_scales() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v000 = m.add_vertex(DVec3::new( 0.0, 0.0, 0.0));
+        let v100 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v110 = m.add_vertex(DVec3::new(10.0,10.0, 0.0));
+        let v010 = m.add_vertex(DVec3::new( 0.0,10.0, 0.0));
+        let v001 = m.add_vertex(DVec3::new( 0.0, 0.0,10.0));
+        let v101 = m.add_vertex(DVec3::new(10.0, 0.0,10.0));
+        let v111 = m.add_vertex(DVec3::new(10.0,10.0,10.0));
+        let v011 = m.add_vertex(DVec3::new( 0.0,10.0,10.0));
+        m.add_face_with_holes(&[v000, v010, v110, v100], &[], mat).unwrap();
+        m.add_face_with_holes(&[v001, v101, v111, v011], &[], mat).unwrap();
+        m.add_face_with_holes(&[v000, v100, v101, v001], &[], mat).unwrap();
+        m.add_face_with_holes(&[v010, v011, v111, v110], &[], mat).unwrap();
+        m.add_face_with_holes(&[v000, v001, v011, v010], &[], mat).unwrap();
+        m.add_face_with_holes(&[v100, v110, v111, v101], &[], mat).unwrap();
+
+        let c1 = m.subdivide_catmull_clark().unwrap();
+        assert_eq!(c1, 24);
+        let c2 = m.subdivide_catmull_clark().unwrap();
+        assert_eq!(c2, 96, "second pass on 24-quad mesh should produce 24×4 = 96 quads");
+        let report = m.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after 2× subdiv:\n{}", report.summary());
     }
 }

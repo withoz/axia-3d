@@ -11,7 +11,7 @@
 //! explicit vertex welding once we add one. This keeps the operation
 //! composable and side-effect-free on the source geometry.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Result, bail, ensure};
 use glam::DVec3;
@@ -56,30 +56,35 @@ impl Mesh {
             p - 2.0 * (p - plane_origin).dot(n) * n
         };
 
-        // ─── Collect all source vertices used by the input faces ──
-        // Multiple faces share vertices along common edges; we want to
-        // produce exactly one mirrored vertex per source vertex so
-        // shared edges stay shared in the mirrored copy.
-        let mut source_verts: HashSet<VertId> = HashSet::new();
+        // ─── Collect source vertices and allocate mirrored copies ──
+        // Previously this was two passes (HashSet for dedup, then a
+        // separate HashMap build). Merging them avoids a full extra
+        // iteration over every source vertex and an intermediate
+        // HashSet allocation.
+        //
+        // Multiple faces share vertices along common edges; we want
+        // exactly one mirrored vertex per source vertex so shared
+        // edges stay shared in the mirrored copy — hence the
+        // `or_insert_with` on `vert_map` acts as both the
+        // deduplication and the allocation step in one pass.
+        let mut vert_map: HashMap<VertId, VertId> = HashMap::new();
+        let mut scratch_loops: Vec<Vec<VertId>> = Vec::new();
         for &fid in face_ids {
             let outer = self.faces[fid].outer().start;
-            for v in self.collect_loop_verts(outer)? {
-                source_verts.insert(v);
-            }
+            scratch_loops.push(self.collect_loop_verts(outer)?);
             let inners: Vec<_> = self.faces[fid].inners().to_vec();
             for inner in inners {
-                for v in self.collect_loop_verts(inner.start)? {
-                    source_verts.insert(v);
-                }
+                scratch_loops.push(self.collect_loop_verts(inner.start)?);
             }
         }
-
-        // ─── Allocate mirrored vertices ────────────────────────────
-        let mut vert_map: HashMap<VertId, VertId> = HashMap::with_capacity(source_verts.len());
-        for &src in &source_verts {
-            let p = self.vertex_pos(src)?;
-            let new_v = self.add_vertex(reflect(p));
-            vert_map.insert(src, new_v);
+        for loop_verts in &scratch_loops {
+            for &src in loop_verts {
+                if !vert_map.contains_key(&src) {
+                    let p = self.vertex_pos(src)?;
+                    let new_v = self.add_vertex(reflect(p));
+                    vert_map.insert(src, new_v);
+                }
+            }
         }
 
         // ─── Rebuild each face in the mirrored space ──────────────
@@ -127,6 +132,7 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     /// Single triangle mirrored across YZ plane (x = 0).
     #[test]

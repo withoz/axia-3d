@@ -196,6 +196,27 @@ export class Toast {
   static info(message: string, duration?: number): void {
     Toast.getInstance()?.show(message, 'info', duration);
   }
+
+  /**
+   * Show a failure toast that prefers the engine's last error message,
+   * falling back to `fallback` when the engine didn't populate one.
+   * Standardizes the `Toast.error(bridge.lastError() || 'X 실패')` idiom
+   * used across action handlers.
+   */
+  static fromBridgeError(
+    bridge: { lastError(): string },
+    fallback: string,
+    severity: 'error' | 'warning' = 'error',
+    duration?: number,
+  ): void {
+    const err = bridge.lastError();
+    const msg = err && err.trim().length > 0 ? err : fallback;
+    if (severity === 'warning') {
+      Toast.warning(msg, duration);
+    } else {
+      Toast.error(msg, duration);
+    }
+  }
 }
 
 // Inject CSS animations into document head (run once on first import)

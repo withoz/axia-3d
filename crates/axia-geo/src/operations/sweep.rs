@@ -121,6 +121,44 @@ mod tests {
         assert_eq!(report.violations.len(), 0, "invariants:\n{}", report.summary());
     }
 
+    /// Sweep over a multi-segment path should leave every generated face
+    /// in a valid ADR-007 state (winding + manifoldness + normal match).
+    /// Regression guard against silent loft invariant drift when sweep
+    /// is the caller.
+    #[test]
+    fn sweep_bent_and_vertical_paths_preserve_invariants() {
+        let hex: Vec<DVec3> = (0..6).map(|i| {
+            let a = (i as f64) * std::f64::consts::TAU / 6.0;
+            DVec3::new(a.cos(), a.sin(), 0.0)
+        }).collect();
+
+        // Bent path (horizontal → vertical 90° turn)
+        let mut m1 = Mesh::new();
+        let path_bent = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(4.0, 4.0, 0.0),
+            DVec3::new(4.0, 4.0, 4.0),
+        ];
+        m1.sweep(&hex, &path_bent, true, MaterialId::new(0)).unwrap();
+        let r1 = m1.verify_face_invariants();
+        assert_eq!(r1.violations.len(), 0,
+            "bent-path sweep invariants:\n{}", r1.summary());
+
+        // Vertical path — exercises the `|T · Y| > 0.95` up-reference
+        // fallback branch in sweep's frame computation.
+        let mut m2 = Mesh::new();
+        let path_vert = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(0.0, 3.0, 0.0),
+            DVec3::new(0.0, 6.0, 0.0),
+        ];
+        m2.sweep(&hex, &path_vert, true, MaterialId::new(0)).unwrap();
+        let r2 = m2.verify_face_invariants();
+        assert_eq!(r2.violations.len(), 0,
+            "vertical-path sweep invariants:\n{}", r2.summary());
+    }
+
     /// Sweep along a right-angle path — bend in the middle.
     #[test]
     fn sweep_along_bent_path_produces_bent_surface() {

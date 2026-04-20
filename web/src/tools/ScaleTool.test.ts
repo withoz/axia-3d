@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import * as THREE from 'three';
 import { ScaleTool } from './ScaleTool';
 
@@ -84,7 +84,7 @@ describe('ScaleTool', () => {
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(20, 0, 0)); // ×2
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(30, 0, 0)); // target ×3 (×2 이미 적용됨)
       // 2번째 호출은 incremental ×1.5
-      const calls = (ctx.bridge.scaleFaces as any).mock.calls;
+      const calls = (ctx.bridge.scaleFaces as Mock).mock.calls;
       expect(calls.length).toBe(2);
       expect(calls[1][4]).toBeCloseTo(1.5, 2);
     });
@@ -151,7 +151,7 @@ describe('ScaleTool', () => {
       tool.applyVCBValue(2);
       expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
       expect(ctx.bridge.scaleVerts).toHaveBeenCalledTimes(1);
-      const call = (ctx.bridge.scaleVerts as any).mock.calls[0];
+      const call = (ctx.bridge.scaleVerts as Mock).mock.calls[0];
       expect(call[0].slice().sort()).toEqual([1, 2, 3]); // dedup
       expect(call[1]).toBeCloseTo(10 / 3, 2); // cx
       expect(call[3]).toBeCloseTo(10 / 3, 2); // cz
@@ -160,7 +160,7 @@ describe('ScaleTool', () => {
 
     it('non-uniform VCB preserves per-axis factors', () => {
       tool.applyVCBValue(2, 0.5, 3);
-      const call = (ctx.bridge.scaleVerts as any).mock.calls[0];
+      const call = (ctx.bridge.scaleVerts as Mock).mock.calls[0];
       expect(call[4]).toBe(2); expect(call[5]).toBe(0.5); expect(call[6]).toBe(3);
     });
   });

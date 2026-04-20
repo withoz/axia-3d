@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import * as THREE from 'three';
 import { MoveTool } from './MoveTool';
 
@@ -174,7 +174,7 @@ describe('MoveTool', () => {
       expect(tool.isBusy()).toBe(true);
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(100, 0, 0));
       expect(ctx.bridge.translateVerts).toHaveBeenCalled();
-      const call = (ctx.bridge.translateVerts as any).mock.calls[0];
+      const call = (ctx.bridge.translateVerts as Mock).mock.calls[0];
       const vertIds = (call[0] as number[]).slice().sort();
       expect(vertIds).toEqual([1, 2, 3]); // dedup
       expect(ctx.bridge.translateFaces).not.toHaveBeenCalled();
@@ -185,7 +185,7 @@ describe('MoveTool', () => {
       ctx.axisLock = 'z';
       tool.applyVCBValue(50);
       expect(ctx.bridge.translateVerts).toHaveBeenCalled();
-      const call = (ctx.bridge.translateVerts as any).mock.calls[0];
+      const call = (ctx.bridge.translateVerts as Mock).mock.calls[0];
       expect(call[1]).toBe(0); expect(call[2]).toBe(0); expect(call[3]).toBe(50);
     });
 

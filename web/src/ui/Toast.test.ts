@@ -110,4 +110,38 @@ describe('Toast', () => {
       expect(() => Toast.success('No init')).not.toThrow();
     });
   });
+
+  describe('fromBridgeError()', () => {
+    beforeEach(() => { Toast.init(container); });
+
+    it('surfaces the bridge lastError when present', () => {
+      const bridge = { lastError: () => 'face 5 not coplanar (tol 0.5°)' };
+      Toast.fromBridgeError(bridge, '병합 실패');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('face 5 not coplanar');
+      // Fallback should NOT appear when engine populated an error.
+      expect(cont.textContent).not.toContain('병합 실패');
+    });
+
+    it('falls back to the provided message when lastError is empty', () => {
+      const bridge = { lastError: () => '' };
+      Toast.fromBridgeError(bridge, '폴백 메시지');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('폴백 메시지');
+    });
+
+    it('treats whitespace-only lastError as empty', () => {
+      const bridge = { lastError: () => '   \t\n  ' };
+      Toast.fromBridgeError(bridge, '폴백');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('폴백');
+    });
+
+    it('uses warning severity when requested', () => {
+      const bridge = { lastError: () => 'minor issue' };
+      Toast.fromBridgeError(bridge, 'ignored', 'warning');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('minor issue');
+    });
+  });
 });
