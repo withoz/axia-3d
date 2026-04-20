@@ -9,6 +9,7 @@ import { Viewport, ViewMode } from '../viewport/Viewport';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { vcbTools } from './VCB';
 import { Toast } from './Toast';
+import { toggleShortcutHelp, closeShortcutHelpIfOpen } from './ShortcutHelpModal';
 
 export interface KeyboardShortcutsDeps {
   toolManager: ToolManager;
@@ -104,6 +105,64 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
     if ((e.key === 'N' || e.key === 'n') && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       e.preventDefault();
       toolManager.executeAction('flip-faces');
+      return;
+    }
+
+    // ── F1: 단축키 도움말 모달 토글 ──
+    if (e.key === 'F1') {
+      e.preventDefault();
+      toggleShortcutHelp();
+      return;
+    }
+
+    // ── F2: 선택된 XIA 이름 입력 필드로 포커스 ──
+    if (e.key === 'F2') {
+      e.preventDefault();
+      const nameInput = document.getElementById('xi-name') as HTMLInputElement | null;
+      if (nameInput && nameInput.offsetParent !== null) {
+        nameInput.focus();
+        nameInput.select();
+      } else {
+        Toast.info('XIA가 선택되지 않았습니다');
+      }
+      return;
+    }
+
+    // ── F4: 그리드 표시/숨김 ──
+    if (e.key === 'F4') {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.gridVisible;
+      viewport.setGridVisible(next);
+      Toast.info(`그리드 ${next ? '표시' : '숨김'}`);
+      return;
+    }
+
+    // ── F5: 카메라 원점 복귀 (View Home) ──
+    if (e.key === 'F5') {
+      e.preventDefault();
+      viewport.resetCamera();
+      Toast.info('뷰 원점 복귀');
+      return;
+    }
+
+    // ── F6: 엣지 표시/숨김 ──
+    if (e.key === 'F6') {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.edgeVisible;
+      viewport.setEdgeStyle({ visible: next });
+      Toast.info(`엣지 ${next ? '표시' : '숨김'}`);
+      return;
+    }
+
+    // ── F7: 축 표시/숨김 ──
+    if (e.key === 'F7') {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.axisVisible;
+      viewport.setAxisVisible(next);
+      Toast.info(`축 ${next ? '표시' : '숨김'}`);
       return;
     }
 
@@ -249,6 +308,8 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const redoBtn = toolbar.querySelector('[data-tool="redo"]');
       if (redoBtn) { redoBtn.classList.add('flash'); redoBtn.addEventListener('animationend', () => redoBtn.classList.remove('flash'), { once: true }); }
     } else if (e.key === 'Escape') {
+      // Escape: 도움말 모달 우선 닫기
+      if (closeShortcutHelpIfOpen()) return;
       // Escape: 그룹 편집 모드 종료 → 3D 뷰 복귀 → Select 도구
       if (toolManager.selection.isInGroupEditMode()) {
         toolManager.selection.exitGroupEdit();
