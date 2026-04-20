@@ -247,6 +247,9 @@ impl Mesh {
             PushPullMode::CreateFace => self.push_pull_create_face(face_id, dist, material)?,
         };
 
+        // ADR-007 — 연산 후 invariants 재확인 (debug build only)
+        self.debug_verify_invariants();
+
         // 디버그 정보는 최소한만 기록
         let mut debug = Vec::with_capacity(1 + result.split_debug.len());
         debug.push(format!("MODE={:?}", mode));
@@ -1041,6 +1044,36 @@ mod tests {
     }
 
     // ─── Phase F: Push/Pull with holes ─────────────────────
+    // ADR-007: Invariants 유지 검증 (Phase G)
+    #[test]
+    fn pushpull_invariants_after_push() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let _ = m.push_pull(f, 50.0, mat).unwrap();
+        let report = m.verify_face_invariants();
+        assert!(report.is_valid(),
+            "push_pull broke invariants:\n{}", report.summary());
+    }
+
+    #[test]
+    fn pushpull_invariants_after_negative_push() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let _ = m.push_pull(f, 50.0, mat).unwrap();
+        // box의 top을 찾아 negative push (MoveOnly 경로)
+        let faces: Vec<_> = m.faces.iter()
+            .filter(|(_, face)| face.is_active() && face.normal().y > 0.9)
+            .map(|(id, _)| id).collect();
+        if let Some(&top) = faces.first() {
+            let _ = m.push_pull(top, -20.0, mat);
+        }
+        let report = m.verify_face_invariants();
+        assert!(report.is_valid(),
+            "negative push broke invariants:\n{}", report.summary());
+    }
+
     #[test]
     fn pushpull_face_with_hole_create_inner_walls() {
         // 바닥 사각형에 구멍 뚫고 push → 창문 달린 벽

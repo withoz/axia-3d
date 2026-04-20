@@ -80,6 +80,41 @@ pub struct ManifoldInfo {
     pub is_closed_solid: bool,
 }
 
+/// Result of [`Mesh::verify_face_invariants`] — ADR-007 정책 준수 여부 리포트.
+#[derive(Debug, Clone)]
+pub struct InvariantReport {
+    /// 검사된 활성 face 수
+    pub checked_faces: usize,
+    /// 발견된 위반 사항 목록 (비어 있으면 전부 통과)
+    pub violations: Vec<String>,
+}
+
+impl InvariantReport {
+    /// 모든 invariant 통과 여부
+    pub fn is_valid(&self) -> bool {
+        self.violations.is_empty()
+    }
+
+    /// Human-readable 요약
+    pub fn summary(&self) -> String {
+        if self.violations.is_empty() {
+            format!("✓ All {} faces satisfy invariants", self.checked_faces)
+        } else {
+            let mut s = format!(
+                "✗ {} violations in {} faces:\n",
+                self.violations.len(),
+                self.checked_faces,
+            );
+            for v in &self.violations {
+                s.push_str("  - ");
+                s.push_str(v);
+                s.push('\n');
+            }
+            s
+        }
+    }
+}
+
 impl Mesh {
     /// Create a new empty mesh.
     pub fn new() -> Self {
@@ -3116,6 +3151,8 @@ impl Mesh {
         // 9. Create new merged face with preserved holes (F3)
         let hole_slices: Vec<&[VertId]> = inner_loops.iter().map(|v| v.as_slice()).collect();
         let new_face = self.add_face_with_holes(&merged_verts, &hole_slices, material)?;
+        // ADR-007 — merge 후 invariants 검증 (debug only)
+        self.debug_verify_invariants();
         Ok(new_face)
     }
 
@@ -3245,6 +3282,8 @@ impl Mesh {
         for h in &inner_face_holes { hole_slices.push(h); }
 
         let new_face = self.add_face_with_holes(&outer_verts, &hole_slices, material)?;
+        // ADR-007 — 연산 후 invariants 검증
+        self.debug_verify_invariants();
         Ok(new_face)
     }
 
@@ -3484,6 +3523,122 @@ impl Mesh {
 
     pub fn he_count(&self) -> usize {
         self.hes.len()
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Face Orientation Invariants (ADR-007)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// 전체 mesh의 face orientation invariants 검증 결과.
+    ///
+    /// 위반 사항이 있으면 `violations`에 Human-readable 메시지 열거.
+    /// `is_valid == true` 이면 모든 invariant 통과.
+    pub fn verify_face_invariants(&self) -> InvariantReport {
+        let mut violations: Vec<String> = Vec::new();
+        let mut checked_faces = 0usize;
+
+        for (fid, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            checked_faces += 1;
+
+            // I1: outer loop 존재 + 최소 3 verts
+            let outer_start = face.outer().start;
+            if outer_start.is_null() {
+                violations.push(format!("face {:?}: null outer start", fid));
+                continue;
+            }
+            let outer_verts = match self.collect_loop_verts(outer_start) {
+                Ok(v) => v,
+                Err(e) => {
+                    violations.push(format!("face {:?}: cannot collect outer loop: {}", fid, e));
+                    continue;
+                }
+            };
+            if outer_verts.len() < 3 {
+                violations.push(format!("face {:?}: outer loop has {} verts (< 3)",
+                    fid, outer_verts.len()));
+                continue;
+            }
+
+            // I2: cached normal이 실제 winding과 일치 (반대 방향이면 위반)
+            let cached = face.normal();
+            if cached.length_squared() > 1e-10 {
+                if let Ok(computed) = self.compute_normal(&outer_verts) {
+                    let cn = cached.normalize_or_zero();
+                    let gn = computed.normalize_or_zero();
+                    if cn.length_squared() > 1e-10 && gn.length_squared() > 1e-10 {
+                        let dot = cn.dot(gn);
+                        if dot < 0.9 {
+                            violations.push(format!(
+                                "face {:?}: cached normal opposite to winding (dot={:.3})",
+                                fid, dot,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // I3: inner loops도 collect 가능해야 함 + 각각 ≥ 3 verts
+            for (ii, inner) in face.inners().iter().enumerate() {
+                if inner.start.is_null() {
+                    violations.push(format!("face {:?}: inner[{}] null start", fid, ii));
+                    continue;
+                }
+                match self.collect_loop_verts(inner.start) {
+                    Ok(iv) if iv.len() >= 3 => {}
+                    Ok(iv) => violations.push(format!(
+                        "face {:?}: inner[{}] has {} verts (< 3)", fid, ii, iv.len())),
+                    Err(e) => violations.push(format!(
+                        "face {:?}: inner[{}] cannot collect: {}", fid, ii, e)),
+                }
+            }
+
+            // I4: outer loop의 모든 half-edge가 이 face에 속해야 함
+            if let Ok(outer_hes) = self.collect_loop_hes(outer_start) {
+                for he in outer_hes {
+                    let he_face = self.hes[he].face();
+                    if he_face != fid {
+                        violations.push(format!(
+                            "face {:?}: outer HE {:?} points to wrong face {:?}",
+                            fid, he, he_face,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // I5: 각 edge는 최대 2개 active face와 공유
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let (faces, _) = self.get_faces_sharing_edge(eid);
+            let active_faces: Vec<_> = faces.iter()
+                .filter(|&&f| self.faces.get(f).map(|face| face.is_active()).unwrap_or(false))
+                .collect();
+            if active_faces.len() > 2 {
+                violations.push(format!(
+                    "edge {:?}: shared by {} active faces (non-manifold)",
+                    eid, active_faces.len(),
+                ));
+            }
+        }
+
+        InvariantReport {
+            checked_faces,
+            violations,
+        }
+    }
+
+    /// 디버그 빌드에서만 invariants 검증. Release에서는 no-op.
+    /// 편집 연산 끝에 삽입해 조기 버그 감지용.
+    #[inline]
+    pub fn debug_verify_invariants(&self) {
+        #[cfg(debug_assertions)]
+        {
+            let report = self.verify_face_invariants();
+            if !report.is_valid() {
+                eprintln!("[ADR-007] Invariant violations:\n{}", report.summary());
+            }
+        }
     }
 
     // ═══════════════════════════════════════
@@ -4000,6 +4155,80 @@ mod tests {
         let flat = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
         assert!(mesh.is_face_planar(flat, 1e-6));
         // Triangle is trivially planar
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  ADR-007: Face Orientation Invariant Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn invariants_empty_mesh_passes() {
+        let mesh = Mesh::new();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "empty mesh must pass: {}", report.summary());
+    }
+
+    #[test]
+    fn invariants_single_triangle_passes() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0));
+        mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "single triangle violates: {}", report.summary());
+    }
+
+    #[test]
+    fn invariants_tetrahedron_passes() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        mesh.add_face(&[v0, v2, v1], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v0, v1, v3], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v1, v2, v3], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v2, v0, v3], MaterialId::new(0)).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "tet violates: {}", report.summary());
+        assert_eq!(report.checked_faces, 4);
+    }
+
+    #[test]
+    fn invariants_face_with_hole_passes() {
+        // Phase F — 구멍 있는 face도 invariant 통과
+        let mut mesh = Mesh::new();
+        let o0 = mesh.add_vertex(DVec3::new(-10.0, 0.0, -10.0));
+        let o1 = mesh.add_vertex(DVec3::new( 10.0, 0.0, -10.0));
+        let o2 = mesh.add_vertex(DVec3::new( 10.0, 0.0,  10.0));
+        let o3 = mesh.add_vertex(DVec3::new(-10.0, 0.0,  10.0));
+        let h0 = mesh.add_vertex(DVec3::new(-2.0, 0.0, -2.0));
+        let h1 = mesh.add_vertex(DVec3::new(-2.0, 0.0,  2.0));
+        let h2 = mesh.add_vertex(DVec3::new( 2.0, 0.0,  2.0));
+        let h3 = mesh.add_vertex(DVec3::new( 2.0, 0.0, -2.0));
+        mesh.add_face_with_holes(
+            &[o0, o1, o2, o3],
+            &[&[h0, h1, h2, h3]],
+            MaterialId::new(0),
+        ).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "hole face violates: {}", report.summary());
+    }
+
+    #[test]
+    fn invariants_detect_flipped_normal() {
+        // 강제로 face의 캐시 normal을 반대로 만들어 invariant가 감지하는지
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0));
+        let f = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        let n = mesh.faces[f].normal();
+        mesh.faces[f].set_normal(-n); // 강제 반전
+        let report = mesh.verify_face_invariants();
+        assert!(!report.is_valid(), "flipped cached normal must be detected");
+        assert!(report.violations.iter().any(|v| v.contains("cached normal")));
     }
 
     #[test]

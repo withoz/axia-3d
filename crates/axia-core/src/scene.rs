@@ -1041,6 +1041,15 @@ impl Scene {
 
     /// Export scene state with version header
     pub fn export_versioned_snapshot(&self) -> Result<Vec<u8>> {
+        // ADR-007 — 직렬화 전 invariants 검증 (debug build)
+        #[cfg(debug_assertions)]
+        {
+            let report = self.mesh.verify_face_invariants();
+            if !report.is_valid() {
+                eprintln!("[ADR-007] Pre-export invariant violations:\n{}", report.summary());
+            }
+        }
+
         let mut buf = Vec::new();
         buf.extend_from_slice(&AXIA_MAGIC);
         buf.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
@@ -1069,6 +1078,15 @@ impl Scene {
                 }
                 let mesh_data = &data[12..12+mesh_len];
                 self.mesh = bincode::deserialize(mesh_data)?;
+                // ADR-007 — import 후 invariants 검증 (debug 경고, release는 무시)
+                #[cfg(debug_assertions)]
+                {
+                    let report = self.mesh.verify_face_invariants();
+                    if !report.is_valid() {
+                        eprintln!("[ADR-007] Post-import invariant violations:\n{}",
+                            report.summary());
+                    }
+                }
                 Ok(())
             }
             _ => anyhow::bail!("Unsupported snapshot version: {}", version),
@@ -1078,6 +1096,14 @@ impl Scene {
     /// Import legacy snapshot format (no version header, direct bincode)
     fn import_legacy_snapshot(&mut self, data: &[u8]) -> Result<()> {
         self.mesh = bincode::deserialize(data)?;
+        #[cfg(debug_assertions)]
+        {
+            let report = self.mesh.verify_face_invariants();
+            if !report.is_valid() {
+                eprintln!("[ADR-007] Legacy-import invariant violations:\n{}",
+                    report.summary());
+            }
+        }
         Ok(())
     }
 }
