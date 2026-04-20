@@ -356,21 +356,57 @@ export class ToolManager {
         Toast.error(err || '면 반전 실패');
       }
     } else if (action === 'merge-faces') {
-      // 선택된 인접 coplanar face들을 하나로 통합
+      // ═══ 면 통합 (A1 + A3 — 2026-04-20)
+      // 우선순위:
+      //   1) Edge 1개 선택 → 그 엣지 양옆 face 병합 (Ctrl+M on edge)
+      //   2) Face 2+ 선택 → 선택 집합 내 인접 coplanar 쌍 반복 병합
+      // 실패 시 구체적 사유를 Toast로 안내 (A3).
+      const edges = this.selection.getSelectedEdges();
       const faces = this.selection.getSelectedFaces();
-      if (faces.length < 2) {
-        Toast.warning('통합하려면 2개 이상의 면을 선택하세요');
+
+      if (edges.length === 1 && faces.length === 0) {
+        // Edge-selection merge
+        const edgeId = edges[0];
+        const result = this.bridge.mergeFacesByEdge(edgeId);
+        if (result >= 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          Toast.info('엣지 양옆 면 통합 완료', 2000);
+          debugLog('[Action] merge-faces (edge):', result);
+        } else {
+          const err = this.bridge.lastError();
+          Toast.warning(
+            err ||
+            '해당 엣지 양옆의 두 면이 같은 평면이 아니거나, 경계가 모호합니다 (coplanar + 공유 엣지 1개 필요)',
+            3500,
+          );
+        }
         return;
       }
+
+      if (faces.length < 2) {
+        Toast.warning(
+          '통합하려면 2개 이상의 면 또는 1개의 엣지를 선택하세요',
+          3000,
+        );
+        return;
+      }
+
       const merged = this.bridge.tryMergeAdjacentFaces(faces);
       if (merged > 0) {
         this.syncMesh();
         this.selection.clearSelection();
-        Toast.info(`${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐`, 2500);
-        debugLog('[Action] merge-faces:', merged);
+        Toast.info(
+          `${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐`,
+          2500,
+        );
+        debugLog('[Action] merge-faces (faces):', merged);
       } else {
         const err = this.bridge.lastError();
-        Toast.warning(err || '통합할 수 있는 인접 coplanar 면이 없습니다');
+        // A3: 기본 메시지를 더 구체화 — 사용자가 원인 파악 가능하도록
+        const hint =
+          '통합할 수 있는 면이 없습니다.\n• 엣지를 공유하는 coplanar 면이 있어야 합니다\n• 두 면이 한 엣지만 공유해야 합니다 (C-slit 형태 불가)';
+        Toast.warning(err || hint, 3500);
       }
     } else if (action === 'split-edge-midpoint') {
       // 1개 엣지 선택 → 중점에서 split
