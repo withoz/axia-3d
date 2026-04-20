@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
   computeBoundsTree,
   disposeBoundsTree,
@@ -111,8 +112,12 @@ export class Viewport {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.NoToneMapping;
+    // ACESFilmic gives PBR materials a natural photographic look under IBL;
+    // the previous NoToneMapping clipped highlights whenever roughness was
+    // low. Exposure 1.0 is the neutral baseline.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
     // ── Scene ──
@@ -137,19 +142,85 @@ export class Viewport {
     );
 
     // ── Lights ──
-    const ambient = new THREE.AmbientLight(0x404040, 2);
+    // IBL now does the heavy lifting for ambient-ish fill, so the direct
+    // lights can be dialed down and shaped more like studio key/back
+    // lights rather than a "flood everything" rig.
+    const ambient = new THREE.AmbientLight(0x303030, 0.6);
     this.scene.add(ambient);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    dirLight.position.set(5000, 10000, 7000);
+    // Key light — casts the main shadow. Bounds are generous (±20k mm)
+    // so the typical scale of user scenes (m-to-tens-of-meters) fits
+    // without clipping. 2048² shadow map balances quality vs VRAM.
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
+    dirLight.position.set(8000, 15000, 10000);
+    dirLight.castShadow = true;
+    const shadow = dirLight.shadow;
+    shadow.mapSize.set(2048, 2048);
+    shadow.camera.left   = -20000;
+    shadow.camera.right  =  20000;
+    shadow.camera.top    =  20000;
+    shadow.camera.bottom = -20000;
+    shadow.camera.near   = 100;
+    shadow.camera.far    = 60000;
+    // Bias defaults produce acne on near-axis faces; small negative bias
+    // + slight normalBias tunes the trade-off between acne and peter-
+    // panning for our scene scale.
+    shadow.bias        = -0.0005;
+    shadow.normalBias  = 1.5;
+    shadow.radius      = 4; // softness of PCFSoft filter
     this.scene.add(dirLight);
 
-    const backLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    backLight.position.set(-5000, 5000, -7000);
+    // Back/fill light — no shadow (performance; two shadow-casting lights
+    // doubles depth-pass cost without much visual gain).
+    const backLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    backLight.position.set(-6000, 4000, -8000);
     this.scene.add(backLight);
 
-    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x362d59, 0.6);
+    // Subtle sky/ground tint on top of IBL — keeps the under-belly of
+    // upside-facing surfaces from going fully dark when IBL contribution
+    // is low (edge-on to the env map).
+    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x362d59, 0.35);
     this.scene.add(hemiLight);
+
+    // ── Image-Based Lighting (IBL) ─────────────────────────────────
+    // RoomEnvironment is a procedural "studio photo booth" env generated
+    // entirely in GPU at runtime, so no HDR asset download is required.
+    // PMREMGenerator pre-filters it into a cube mipmap chain tuned for
+    // each roughness level of MeshStandardMaterial — without this step
+    // the material would only use the direct lights above and reflections
+    // would look flat.
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      pmrem.compileEquirectangularShader();
+      const envScene = new RoomEnvironment();
+      const envTex = pmrem.fromScene(envScene, 0.04).texture;
+      this.scene.environment = envTex;
+      // Keep scene.background on the flat color (updateBackground above)
+      // so the photo-booth room doesn't appear behind the model — users
+      // still want a clean CAD backdrop, just PBR-lit geometry.
+      pmrem.dispose();
+    } catch (e) {
+      console.warn('[Viewport] IBL init failed; falling back to direct lights only:', e);
+    }
+
+    // ── Shadow catcher ─────────────────────────────────────────────
+    // Large invisible horizontal plane at y=0 that ONLY receives the
+    // directional light's shadow. Without this, shadows cast by geometry
+    // have nothing to fall on (the infinite grid is a shader-drawn
+    // overlay, not a receiver). `ShadowMaterial` renders only the
+    // shadow contribution (alpha), so the plane itself stays transparent
+    // and doesn't clash with the flat CAD background.
+    const shadowCatcher = new THREE.Mesh(
+      new THREE.PlaneGeometry(200000, 200000),
+      new THREE.ShadowMaterial({ opacity: 0.28 }),
+    );
+    shadowCatcher.rotation.x = -Math.PI / 2; // XZ plane, facing +Y
+    shadowCatcher.position.y = 0;
+    shadowCatcher.receiveShadow = true;
+    shadowCatcher.name = 'shadow-catcher';
+    // Never contribute to picking / selection / snapping.
+    shadowCatcher.userData.nonInteractive = true;
+    this.scene.add(shadowCatcher);
 
     // ── Infinite Grid (AixxiA shader-based) ──
     this.infiniteGrid = this.createInfiniteGrid();
@@ -769,8 +840,12 @@ export class Viewport {
         // vertexColors가 활성이면 white(곱셈 중립) 사용 → vertex color가 그대로 표시됨
         color: useVertexColors ? 0xffffff : 0xe8e8e8,
         side: THREE.FrontSide,
-        roughness: 0.6,
-        metalness: 0.1,
+        // Balanced PBR defaults for a CAD preview: roughness 0.5 gives
+        // a soft sheen under IBL without looking plasticky; metalness 0
+        // keeps non-metallic surface assumption (users can override per
+        // material via the material UI later).
+        roughness: 0.5,
+        metalness: 0.0,
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
