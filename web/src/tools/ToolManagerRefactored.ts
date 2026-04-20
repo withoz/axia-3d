@@ -256,10 +256,10 @@ export class ToolManager {
     debugLog('[AxisLock]', axis ? `${axis.toUpperCase()}축 잠금` : '해제');
   }
 
-  applyVCBValue(value: number, value2?: number): void {
+  applyVCBValue(value: number, value2?: number, value3?: number): void {
     const tool = this.tools.get(this._currentTool);
     if (tool?.applyVCBValue) {
-      tool.applyVCBValue(value, value2);
+      tool.applyVCBValue(value, value2, value3);
     }
   }
 

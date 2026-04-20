@@ -86,6 +86,21 @@ export function initVCB(deps: VCBDeps): void {
           }
         }
 
+        // Phase 3 #5: scale 비균일 — "sx,sy,sz" 또는 "sx sy sz" 파싱
+        // units.parseInput 대신 parseFloat — scale은 ratio (단위 없음)
+        if (tool === 'scale' && (raw.includes(',') || raw.includes(' '))) {
+          const parts = raw.split(/[,\s]+/).map(s => parseFloat(s.trim()));
+          if (parts.length >= 2 && parts.every(v => Number.isFinite(v))) {
+            const sx = parts[0]!;
+            const sy = parts[1]!;
+            const sz = parts[2] !== undefined ? parts[2]! : sy;
+            debugLog(`[VCB] scale: ${sx}, ${sy}, ${sz}`);
+            toolManager.applyVCBValue(sx, sy, sz);
+            deactivateVCB();
+            return;
+          }
+        }
+
         const mm = units.parseInput(raw);
         if (mm !== null) {
           debugLog(`[VCB] ${tool}: "${raw}" → ${mm.toFixed(2)} mm`);

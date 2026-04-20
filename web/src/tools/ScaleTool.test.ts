@@ -58,49 +58,40 @@ describe('ScaleTool', () => {
   });
 
   describe('onMouseMove', () => {
-    it('updates dimension label during drag', () => {
+    it('applies real-time scale and updates dim label during drag (Phase 1 #4)', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(20, 0, 0));
+      // 실시간 프리뷰: scaleFaces 즉시 호출
+      expect(ctx.bridge.scaleFaces).toHaveBeenCalledWith(
+        [1, 2], 0, 0, 0, 2, 2, 2
+      );
       expect(ctx.dimLabel.update).toHaveBeenCalled();
+      expect(ctx.syncMesh).toHaveBeenCalled();
+    });
+
+    it('applies incremental scale on subsequent moves', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(20, 0, 0)); // ×2
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(30, 0, 0)); // target ×3 (×2 이미 적용됨)
+      // 2번째 호출은 incremental ×1.5
+      const calls = (ctx.bridge.scaleFaces as any).mock.calls;
+      expect(calls.length).toBe(2);
+      expect(calls[1][4]).toBeCloseTo(1.5, 2);
     });
 
     it('does nothing when not active', () => {
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(20, 0, 0));
-      expect(ctx.dimLabel.update).not.toHaveBeenCalled();
+      expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
     });
   });
 
   describe('onMouseUp', () => {
-    it('applies scale on mouse up', () => {
-      // Start at distance 10 from centroid
+    it('ends drag and clears state', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
-
-      // End at distance 20 from centroid (scale 2x)
-      ctx.get3DPoint.mockReturnValue(new THREE.Vector3(20, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(20, 0, 0));
       tool.onMouseUp({} as MouseEvent);
-
-      expect(ctx.bridge.scaleFaces).toHaveBeenCalledWith(
-        [1, 2], 0, 0, 0, 2, 2, 2
-      );
-      expect(ctx.syncMesh).toHaveBeenCalled();
       expect(tool.isBusy()).toBe(false);
-    });
-
-    it('skips scale if ratio near 1.0', () => {
-      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
-      ctx.get3DPoint.mockReturnValue(new THREE.Vector3(10.005, 0, 0));
-      tool.onMouseUp({} as MouseEvent);
-
-      expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
-    });
-
-    it('does nothing if get3DPoint returns null', () => {
-      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
-      ctx.get3DPoint.mockReturnValue(null);
-      tool.onMouseUp({} as MouseEvent);
-
-      expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
-      expect(tool.isBusy()).toBe(false);
+      expect(ctx.dimLabel.clear).toHaveBeenCalled();
     });
   });
 

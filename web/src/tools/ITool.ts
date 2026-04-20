@@ -111,8 +111,8 @@ export interface ITool {
   /** Called on keyboard key down (for axis lock, esc to cancel, etc.) */
   onKeyDown?(e: KeyboardEvent): void;
 
-  /** Apply VCB (Value Control Box) input — exact number from user or second dimension */
-  applyVCBValue?(value: number, value2?: number): void;
+  /** Apply VCB input. Optional 2~3 values (rect width/height, scale x/y/z, etc.) */
+  applyVCBValue?(value: number, value2?: number, value3?: number): void;
 
   /** Check if tool is in the middle of an operation (drawing, dragging, etc.) */
   isBusy(): boolean;
