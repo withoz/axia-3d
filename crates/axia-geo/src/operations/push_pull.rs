@@ -709,12 +709,21 @@ impl Mesh {
             }
         }
 
-        // ─── 6. 솔리드 방식: 원본 face 유지 (바닥면 닫힘) ──
-        //   스케치업 방식은 원본 삭제했지만, 솔리드 방식은 유지하여
-        //   닫힌 형태의 매스(closed solid)를 만든다.
-        //   원본 face는 바닥면으로 남아있음.
-        //   노말은 원래 방향 유지 (push/pull 방향 계산에 사용되므로 반전 금지)
-        //   → BackSide 렌더링에 vertexColors 적용으로 아래에서도 재질 색상 표시
+        // ─── 6. 솔리드 방식: 원본 face 유지 + ADR-007 outward 정렬 ──
+        //   원본 face는 바닥면으로 남아 closed solid 완성.
+        //   (이전 주석: "노말은 원래 방향 유지" — push/pull 방향 계산은 이미
+        //    사용됐으므로 더 이상 유지 필요 없음.)
+        //   ADR-007 원칙 1: 외부=Front — push/pull 방향의 반대가 base의 outward.
+        //   따라서 base face를 flip해 normal이 -offset 방향을 향하게.
+        if self.faces.contains(face_id) {
+            let base_n = self.faces[face_id].normal();
+            let offset_n = offset.normalize_or_zero();
+            // 원본 face의 normal이 push 방향과 같다면 (내부 향함) flip
+            // push 방향의 반대가 바닥에서 본 outward
+            if base_n.dot(offset_n) > 0.0 {
+                let _ = self.flip_face_safe(face_id);
+            }
+        }
 
         // top_face가 merge로 인해 사라졌을 수 있으므로 최종 face에서 찾기
         let actual_top = if self.faces.contains(top_face) {
@@ -1044,6 +1053,33 @@ mod tests {
     }
 
     // ─── Phase F: Push/Pull with holes ─────────────────────
+    #[test]
+    fn pushpull_base_and_top_face_outward() {
+        // ADR-007 원칙 1: 외부=Front. Push/Pull 후 base와 top face 모두
+        // solid 바깥쪽으로 normal이 향해야 함.
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let initial_normal = m.faces[f].normal();
+        // push_pull은 face normal 방향으로 dist 만큼 extrude
+        // 결과: top face는 initial_normal 방향, base는 반대 방향이 outward
+        let result = m.push_pull(f, 10.0, mat).unwrap();
+
+        let base_normal = m.faces[result.base_face].normal();
+        let top_normal = m.faces[result.top_face].normal();
+
+        // base의 outward = push 방향의 반대
+        let base_outward_expected = -initial_normal;
+        assert!(base_normal.dot(base_outward_expected) > 0.9,
+            "base face normal {:?} should be outward (expected ~{:?})",
+            base_normal, base_outward_expected);
+
+        // top의 outward = push 방향
+        assert!(top_normal.dot(initial_normal) > 0.9,
+            "top face normal {:?} should be outward (expected ~{:?})",
+            top_normal, initial_normal);
+    }
+
     // ADR-007: Invariants 유지 검증 (Phase G)
     #[test]
     fn pushpull_invariants_after_push() {
