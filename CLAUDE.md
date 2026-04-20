@@ -500,9 +500,95 @@ AXiA Snap 시스템은 SketchUp 수준의 계층적 추론(Inference) 엔진을 
 - ADR-006: Multi-loop Face (Phase F 완료 — hole 지원)
 - ADR-007: Face Orientation Policy (본 문서)
 
+## Session 2026-04-20~21 완료 내역 (9 commits on claude/zealous-boyd)
+
+이 세션에서 transform 도구 에지 지원·드로잉 평면 호버·면 병합 UX·면 분할 hole
+지원이 쌓였다. 요약:
+
+### Transform 도구 에지 지원
+- **Rotate X/Y/Z 축 키** (`RotateTool.ts`) — CAD 3-click phase 어느 시점이든
+  X/Y/Z를 눌러 축 전환. pick-target 중 전환 시 이전 축의 preview를 역방향으로
+  되감고 새 축으로 재적용. modifier 키(Ctrl/Alt/Shift/Meta) 있으면 무시.
+- **에지 이동/회전/스케일** (`MoveTool`/`RotateTool`/`ScaleTool`) — 면이 없고
+  에지만 선택된 경우 각 에지 엔드포인트를 정점 집합으로 모아서 (중복 제거)
+  `translateVerts` / `rotateVerts` / `scaleVerts`로 위임. 면과 에지가 같이
+  선택되면 면이 우선.
+- **Rust `scale_verts`** (`axia-geo/operations/transform.rs`) — 기존
+  `rotate_verts`와 동일 패턴: 정점 이동 → 인접 면 법선 재계산 → ADR-003
+  degenerate 체크 → ADR-007 invariant 검증. WASM `scaleVerts` 바인딩 + 단일
+  undo transaction + iterative constraint resolve. ScaleTool의 per-vertex
+  `translateVerts` 루프가 단일 `scaleVerts` 호출로 단순화됨.
+
+### 드로잉 평면 호버 인디케이터
+- **`DrawPlaneIndicator.ts`** (viewport 전용) — Line/Rect/Circle/Arc/Freehand/
+  Bezier 도구가 활성화되고 드로잉 중이 아닐 때, 커서 위치에 RGB 축 gizmo +
+  반투명 평면 패치를 표시. 면 위 = 파랑, 지면/기본 = 회색.
+- **ToolManager 통합** — mousemove에서 RAF-throttle (프레임당 1회 `viewport.pick`
+  + `getDrawPlane`). 도구 전환·mouseleave·드로잉 시작 시 자동 숨김.
+- three.js mock에 `PlaneGeometry`, `Quaternion`, `Color.setHex`, `Object3D
+  .quaternion/renderOrder` 추가해 헤드리스 테스트 지원.
+
+### Face auto-merge 대규모 개선 (Erase tool)
+이전엔 여러 엣지 드래그 삭제 시 엣지마다 개별 `mergeFacesByEdge` 호출 →
+undo가 엣지 수만큼 필요. 현재:
+- **`batch_erase_edges_with_merge(faces, edges, tol, cascadeOnly)`** (Rust WASM)
+  — 단일 트랜잭션으로 edge별 merge-or-cascade 처리. `[merged, cascadedFaces,
+  cascadedEdges]` 반환. Ctrl+Z 한 번에 전체 원복. 첫 merge 실패 사유는
+  `lastMergeFailureReason`로 조회 가능 (debug용).
+- **Shift modifier** — Shift를 누르고 삭제하면 `cascadeOnly=true` 전달,
+  coplanar 면 병합 없이 cascade-delete.
+- **Tolerance UI slider** (`SettingsPanel.ts`) — 0~10° 각도 허용치 + 재질
+  경계 존중 체크박스. `MergeSettings.ts`의 `setMergeTolerance`/`setRespect
+  Material`과 localStorage 연동.
+- **Hover 병합 미리보기** — `previewEdgeEraseMerge(edgeId, tol)` WASM dry-run
+  → 병합될 엣지는 청록색(`MERGE_PREVIEW_COLOR`) + 두 면 청록 tint;
+  cascade-delete될 엣지는 빨간색 유지. Shift hover는 cascade 예보.
+
+### Phase G — split_face_by_line hole 지원
+Phase F는 hole이 있는 면의 line split을 명시적으로 거부했다. Phase G로 대부분의
+실용 케이스 해결:
+
+- **Case (a)**: 절단선이 outer 내부에 있고 어떤 hole도 건드리지 않음 — 가장
+  흔한 경우. hole들은 기하학적 포함 관계로 두 결과 면에 자동 재분배.
+  `point_in_face`로 분류 → face_b로 이동하는 hole은 HE의 face 포인터까지 재할당.
+- **Case (b)**: 절단선이 hole 경계를 관통 — hole이 "먹힘". Phase G2로 일반화:
+  - N개 hole 동시 관통 지원
+  - 각 hole의 2 교차점을 `split_edge`로 실현
+  - cut 방향으로 (h_a, h_b) 쌍 정렬 및 hole들 간 정렬
+  - `arc_natural` 순회로 face_1/face_2 정점 리스트 구성
+    (natural CW hole + natural CCW outer 조합이 CCW winding 보장)
+  - `remove_face` + `add_face_with_holes` 2회 → 새 cut 엣지 자동 생성
+  - 미접촉 hole은 2D point-in-polygon으로 재배치
+- **Case (c) endpoint-inside-hole**: 여전히 거부 (bridge topology 미구현)
+
+구현 파일: `axia-geo/operations/face_split.rs`. 새 헬퍼:
+`classify_holes`, `find_loop_crossings_3d`, `split_face_case_b`, `arc_natural`,
+`loop_basis`, `project_to_basis`, `segments_cross_2d`, `point_in_polygon_axis_2d`,
+`reassign_loop_face`, `find_hole_edge_containing`.
+
+테스트 8개 신규: `phase_g_split_above/below_hole`, `phase_g_preserves_hole_
+vertex_count`, `phase_g_rejects_endpoint_inside_hole`, `phase_g2_hole_split_
+consumes_hole`, `phase_g2_hole_split_both_pieces_closed`, `phase_g2_cut_one_
+hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
+
+### 발견된 버그 / 고친 것
+- `split_edge`가 loop의 start HE를 회전시킬 때 저장해둔 `loop_ref.start`가
+  stale이 됨 → 각 split 사이에 `mesh.faces[face_id].inners()[i].start`로
+  재조회.
+- ScaleTool 에지 경로가 초기엔 per-vertex `translateVerts` 루프였으나 Rust
+  `scale_verts` 추가 후 단일 호출로 교체 → undo 엔트리 수가 정점 수에서 1로.
+- EraseTool 테스트 mock에서 `e.shiftKey === undefined` 이슈 → `=== true` 비교로
+  boolean 강제.
+
+### 통계
+- Rust 테스트: 186 → 194 (hole-aware split 8개 추가)
+- TypeScript 테스트: 945 → 950 (Erase Shift/hover-preview 등 +5)
+- 전체 Vite build 정상
+- 원격 백업: `origin/claude/zealous-boyd` ← `240c5e5`까지 푸시 완료
+
 ## 향후 과제
+- Phase G case (c): endpoint-on-hole-boundary "bridge" topology
 - Material / Texture (텍스처 이미지 매핑 미구현)
-- Constraint Solver (수직, 평행, 거리 고정 — 파라메트릭)
 - STEP/IGES 지원
 - Electron/Tauri 데스크톱 앱
 - Boundary Extraction (Solid → Face)
