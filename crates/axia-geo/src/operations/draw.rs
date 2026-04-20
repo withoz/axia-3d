@@ -95,6 +95,8 @@ impl Mesh {
 
         // CCW winding when viewed from normal direction → normal points outward
         let face_id = self.add_face(&[v0, v3, v2, v1], material)?;
+        // ADR-007 — draw 후 invariants 검증
+        self.debug_verify_invariants();
         Ok((face_id, [v0, v3, v2, v1]))
     }
 
@@ -148,6 +150,8 @@ impl Mesh {
         }
 
         let face_id = self.add_face(&verts, material)?;
+        // ADR-007 — draw 후 invariants 검증
+        self.debug_verify_invariants();
         Ok((face_id, verts))
     }
 }

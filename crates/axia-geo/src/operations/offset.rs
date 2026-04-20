@@ -172,6 +172,9 @@ impl Mesh {
             strip_faces.push(strip_fid);
         }
 
+        // ADR-007 — offset 후 invariants 검증
+        self.debug_verify_invariants();
+
         Ok(OffsetResult {
             inner_face,
             strip_faces,

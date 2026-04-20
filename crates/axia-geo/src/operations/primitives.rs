@@ -140,38 +140,138 @@ impl Mesh {
         v_segments: u32,
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
-        let mut faces = Vec::new();
-        let mut rings: Vec<Vec<VertId>> = Vec::new();
+        // ADR-007 — polar singularity 문제 해결:
+        // 기존 코드는 북/남극에서 u_segments개의 정점을 생성했으나 spatial hash
+        // dedup으로 전부 단일 vertex로 병합 → quad가 퇴화되고 한 엣지가 N개
+        // face에 공유돼 non-manifold 위반.
+        //
+        // 올바른 토폴로지:
+        //   - 북극: 단일 vertex (pole_n)
+        //   - 남극: 단일 vertex (pole_s)
+        //   - 사이에 (v_segments - 1)개의 intermediate ring
+        //   - 북극 cap: 삼각형 fan (pole_n, ring[0][u], ring[0][next_u])
+        //   - 중간: quad strip
+        //   - 남극 cap: 삼각형 fan (ring[last][next_u], ring[last][u], pole_s)
 
-        for v in 0..=v_segments {
+        if v_segments < 2 || u_segments < 3 {
+            anyhow::bail!(
+                "create_sphere: need u_segments>=3, v_segments>=2 (got {}, {})",
+                u_segments, v_segments
+            );
+        }
+
+        let mut faces = Vec::new();
+
+        // 극점 단일 정점
+        let pole_n = self.add_vertex(center + DVec3::new(0.0, radius, 0.0));
+        let pole_s = self.add_vertex(center + DVec3::new(0.0, -radius, 0.0));
+
+        // 중간 링: v = 1..v_segments-1 (남북극 제외)
+        let mut rings: Vec<Vec<VertId>> = Vec::with_capacity((v_segments - 1) as usize);
+        for v in 1..v_segments {
             let theta = std::f64::consts::PI * (v as f64) / (v_segments as f64);
             let y = radius * theta.cos();
             let r = radius * theta.sin();
-            let mut ring = Vec::new();
+            let mut ring = Vec::with_capacity(u_segments as usize);
             for u in 0..u_segments {
                 let phi = 2.0 * std::f64::consts::PI * (u as f64) / (u_segments as f64);
                 let x = r * phi.cos();
                 let z = r * phi.sin();
-                let pos = center + DVec3::new(x, y, z);
-                ring.push(self.add_vertex(pos));
+                ring.push(self.add_vertex(center + DVec3::new(x, y, z)));
             }
             rings.push(ring);
         }
 
-        for v in 0..(rings.len() as u32 - 1) {
+        // 북극 cap — 삼각형 fan
+        if let Some(first_ring) = rings.first() {
+            for u in 0..u_segments {
+                let next_u = (u + 1) % u_segments;
+                let tri = vec![
+                    pole_n,
+                    first_ring[u as usize],
+                    first_ring[next_u as usize],
+                ];
+                let f = self.add_face(&tri, material)?;
+                faces.push(f);
+            }
+        }
+
+        // 중간 quad strips — 인접 ring 사이
+        for v in 0..(rings.len().saturating_sub(1)) {
             for u in 0..u_segments {
                 let next_u = (u + 1) % u_segments;
                 let quad = vec![
-                    rings[v as usize][u as usize],
-                    rings[v as usize][next_u as usize],
-                    rings[(v + 1) as usize][next_u as usize],
-                    rings[(v + 1) as usize][u as usize],
+                    rings[v][u as usize],
+                    rings[v][next_u as usize],
+                    rings[v + 1][next_u as usize],
+                    rings[v + 1][u as usize],
                 ];
-                let face = self.add_face(&quad, material)?;
-                faces.push(face);
+                let f = self.add_face(&quad, material)?;
+                faces.push(f);
+            }
+        }
+
+        // 남극 cap — 삼각형 fan (winding 반전: pole이 마지막에 오도록)
+        if let Some(last_ring) = rings.last() {
+            for u in 0..u_segments {
+                let next_u = (u + 1) % u_segments;
+                let tri = vec![
+                    last_ring[next_u as usize],
+                    last_ring[u as usize],
+                    pole_s,
+                ];
+                let f = self.add_face(&tri, material)?;
+                faces.push(f);
             }
         }
 
         Ok(faces)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entities::id::MaterialId;
+
+    // ADR-007 Phase 2 — 프리미티브가 invariants를 준수하는지 전수 감사
+
+    #[test]
+    fn cylinder_invariants_pass() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_cylinder(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "cylinder: {}", report.summary());
+    }
+
+    #[test]
+    fn cone_invariants_pass() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "cone: {}", report.summary());
+    }
+
+    #[test]
+    fn sphere_invariants_pass() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_sphere(DVec3::ZERO, 50.0, 16, 12, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "sphere: {}", report.summary());
+    }
+
+    #[test]
+    fn multiple_primitives_invariants_pass() {
+        // 여러 프리미티브 동시 생성 후에도 invariants 유지
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_cylinder(DVec3::new(-200.0, 0.0, 0.0), 30.0, 80.0, 12, mat).unwrap();
+        mesh.create_cone(DVec3::new(0.0, 0.0, 0.0), 40.0, 90.0, 16, mat).unwrap();
+        mesh.create_sphere(DVec3::new(200.0, 0.0, 0.0), 50.0, 20, 14, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "combined: {}", report.summary());
     }
 }

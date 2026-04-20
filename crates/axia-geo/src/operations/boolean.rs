@@ -187,6 +187,9 @@ impl Mesh {
             new_vert_count,
         ));
 
+        // ADR-007 — boolean 후 invariants 검증
+        self.debug_verify_invariants();
+
         Ok(BooleanResult {
             faces: merged_faces,
             new_verts: new_vert_count,

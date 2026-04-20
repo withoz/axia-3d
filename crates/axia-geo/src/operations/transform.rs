@@ -50,6 +50,9 @@ impl Mesh {
         // normal 재계산
         self.recompute_face_normals(face_ids)?;
 
+        // ADR-007 — 연산 후 invariants 검증
+        self.debug_verify_invariants();
+
         Ok(TransformResult {
             verts_moved: vert_ids.len(),
             faces_affected: face_ids.len(),
@@ -233,6 +236,9 @@ impl Mesh {
 
         self.recompute_face_normals(face_ids)?;
 
+        // ADR-007 — 변환 후 invariants 검증
+        self.debug_verify_invariants();
+
         Ok(TransformResult {
             verts_moved: vert_ids.len(),
             faces_affected: face_ids.len(),
@@ -327,6 +333,9 @@ impl Mesh {
         }
 
         self.recompute_face_normals(face_ids)?;
+
+        // ADR-007 — 변환 후 invariants 검증
+        self.debug_verify_invariants();
 
         Ok(TransformResult {
             verts_moved: vert_ids.len(),

@@ -254,6 +254,9 @@ impl Mesh {
             }
         }
 
+        // ADR-007 — flip 후 invariants 검증
+        self.debug_verify_invariants();
+
         Ok(())
     }
 
