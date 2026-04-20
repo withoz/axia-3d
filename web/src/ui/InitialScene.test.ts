@@ -31,15 +31,18 @@ describe('InitialScene', () => {
   });
 
   describe('loadInitialScene', () => {
-    it('creates default shapes (cylinder + box + sphere) on startup', async () => {
+    it('creates puppy scene (4 legs + body box + head/ears/nose/tail) on startup', async () => {
       loadInitialScene(deps);
       // async + setTimeout(0) between each WASM call
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 400));
 
-      expect(deps.bridge.create_cylinder).toHaveBeenCalled();
+      // 4 legs + 1 tail = 5 cylinder calls
+      expect((deps.bridge.create_cylinder as any).mock.calls.length).toBe(5);
+      // body box via drawRect + pushPull
       expect(deps.bridge.drawRect).toHaveBeenCalled();
       expect(deps.bridge.pushPull).toHaveBeenCalled();
-      expect(deps.bridge.create_sphere).toHaveBeenCalled();
+      // head + 2 ears + nose = 4 sphere calls
+      expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(4);
       expect(deps.toolManager.syncMesh).toHaveBeenCalled();
     });
 
