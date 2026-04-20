@@ -271,12 +271,12 @@
       position: absolute;
       bottom: 1px;
       left: 8px;
-      width: calc(50% - 16px);
+      width: calc(60% - 16px);
       height: 30px;
       display: flex;
       align-items: center;
       padding: 0 12px;
-      gap: 16px;
+      gap: 8px;
       background: rgba(0, 0, 0, 0.40);
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
@@ -289,22 +289,87 @@
     }
     #statusbar .stat { color: rgba(255, 255, 255, 0.5); }
     #statusbar .stat b { color: rgba(66, 133, 244, 0.9); font-weight: 600; }
-    #statusbar .osnap-toggle {
-      cursor: pointer;
-      padding: 1px 6px;
-      border-radius: 3px;
-      transition: background 0.15s;
+
+    /* 좌표 (AutoCAD 스타일) */
+    #statusbar .sb-coords {
+      font-family: 'Consolas', 'SF Mono', 'Menlo', monospace;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.85);
+      white-space: nowrap;
+      min-width: 200px;
     }
-    #statusbar .osnap-toggle:hover {
-      background: rgba(255, 255, 255, 0.1);
+    #statusbar .sb-coords.snapped {
+      color: #44ff88;
+    }
+    #statusbar .sb-meta {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      white-space: nowrap;
+    }
+
+    /* F-키 바 (우측 정렬) */
+    #statusbar .sb-fkeys {
+      margin-left: auto;
+      display: flex;
+      gap: 2px;
+      align-items: center;
+    }
+    #statusbar .sb-fkey {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 26px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: rgba(255,255,255,0.6);
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      font-family: inherit;
+      line-height: 1;
+    }
+    #statusbar .sb-fkey:hover {
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+    }
+    #statusbar .sb-fkey .sb-ico {
+      font-size: 13px;
+      line-height: 1;
+    }
+    #statusbar .sb-fkey .sb-lbl {
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      opacity: 0.75;
+      margin-top: 1px;
+    }
+    /* 토글 ON 상태 — 파란 강조 */
+    #statusbar .sb-fkey.sb-toggle.on {
+      background: rgba(58, 151, 255, 0.25);
+      border-color: rgba(58, 151, 255, 0.5);
+      color: #9ac8ff;
+    }
+    #statusbar .sb-fkey.sb-toggle.on:hover {
+      background: rgba(58, 151, 255, 0.4);
+    }
+    /* 토글 OFF 상태 */
+    #statusbar .sb-fkey.sb-toggle:not(.on) {
+      color: rgba(255,255,255,0.35);
+    }
+    /* F2 비활성화 상태 (XIA 미선택) */
+    #statusbar .sb-fkey[data-action="rename"]:not(.enabled) {
+      opacity: 0.35;
     }
 
     /* ═══ KAYAC-style Bottom Command Bar (right half) ═══ */
     #commandbar {
       position: absolute;
       bottom: 1px;
-      left: calc(50% + 8px);
-      width: calc(50% - 16px);
+      left: calc(60% + 8px);
+      width: calc(40% - 16px);
       height: 30px;
       display: flex;
       align-items: center;
@@ -1763,14 +1828,36 @@
 
     <!-- KAYAC-style bottom status bar (left half) -->
     <div id="statusbar">
-      <span class="stat">Verts: <b id="stat-verts">0</b></span>
-      <span class="stat">Faces: <b id="stat-faces">0</b></span>
+      <!-- 좌표 (AutoCAD 스타일) -->
+      <span class="sb-coords" id="sb-coords">—, —, —</span>
+      <span class="sb-meta" id="sb-meta">· mm · 4</span>
+
+      <!-- 숨겨진 레거시 표시 (XIA Inspector / toolbar가 대신 표시) -->
       <span class="stat" id="stat-sel-wrap" style="display:none">Selected: <b id="stat-selected" style="color:#2196f3">0</b></span>
-      <span class="stat">Tool: <b id="stat-tool">Select</b></span>
-      <span class="stat">Unit: <b id="stat-unit">mm</b></span>
-      <span class="stat">Prec: <b id="stat-prec">4</b></span>
-      <span class="stat osnap-toggle" id="osnap-toggle" title="Object Snap (F3)">
-        OSNAP: <b id="stat-osnap" style="color:#44ff88;">ON</b>
+
+      <!-- F-키 토글·액션 바 (우측 정렬) -->
+      <div class="sb-fkeys">
+        <button class="sb-fkey" data-fkey="F1" data-action="help"
+                title="도움말 (F1)"><span class="sb-ico">?</span><span class="sb-lbl">F1</span></button>
+        <button class="sb-fkey" data-fkey="F2" data-action="rename"
+                title="XIA 이름 변경 (F2)"><span class="sb-ico">✎</span><span class="sb-lbl">F2</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F3" data-action="osnap" id="sb-fkey-osnap"
+                title="Object Snap (F3)"><span class="sb-ico">⎕</span><span class="sb-lbl">F3</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F4" data-action="grid" id="sb-fkey-grid"
+                title="그리드 (F4)"><span class="sb-ico">⊞</span><span class="sb-lbl">F4</span></button>
+        <button class="sb-fkey" data-fkey="F5" data-action="home"
+                title="뷰 원점 복귀 (F5)"><span class="sb-ico">⌂</span><span class="sb-lbl">F5</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F6" data-action="edge" id="sb-fkey-edge"
+                title="엣지 (F6)"><span class="sb-ico">▦</span><span class="sb-lbl">F6</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F7" data-action="axis" id="sb-fkey-axis"
+                title="축 (F7)"><span class="sb-ico">✛</span><span class="sb-lbl">F7</span></button>
+      </div>
+
+      <!-- 백워드 호환용 숨김 요소들 -->
+      <span style="display:none">
+        <b id="stat-verts">0</b><b id="stat-faces">0</b>
+        <b id="stat-tool">Select</b><b id="stat-unit">mm</b><b id="stat-prec">4</b>
+        <b id="stat-osnap">ON</b>
       </span>
     </div>
 

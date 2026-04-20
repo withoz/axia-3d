@@ -134,6 +134,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const s = viewport.getStyleSettings();
       const next = !s.gridVisible;
       viewport.setGridVisible(next);
+      document.getElementById('sb-fkey-grid')?.classList.toggle('on', next);
       Toast.info(`그리드 ${next ? '표시' : '숨김'}`);
       return;
     }
@@ -152,6 +153,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const s = viewport.getStyleSettings();
       const next = !s.edgeVisible;
       viewport.setEdgeStyle({ visible: next });
+      document.getElementById('sb-fkey-edge')?.classList.toggle('on', next);
       Toast.info(`엣지 ${next ? '표시' : '숨김'}`);
       return;
     }
@@ -162,6 +164,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const s = viewport.getStyleSettings();
       const next = !s.axisVisible;
       viewport.setAxisVisible(next);
+      document.getElementById('sb-fkey-axis')?.classList.toggle('on', next);
       Toast.info(`축 ${next ? '표시' : '숨김'}`);
       return;
     }

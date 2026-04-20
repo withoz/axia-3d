@@ -26,6 +26,7 @@ import { initProjectSerializer } from './ui/ProjectSerializer';
 import { initMenuBar } from './ui/MenuBar';
 import { initVCB } from './ui/VCB';
 import { initKeyboardShortcuts } from './ui/KeyboardShortcuts';
+import { StatusBar } from './ui/StatusBar';
 import { initContextMenu } from './ui/ContextMenu';
 import { loadInitialScene } from './ui/InitialScene';
 import { initXiaInspector } from './ui/XiaInspector';
@@ -156,7 +157,7 @@ async function main() {
     }
   });
 
-  // 5a. OSNAP toggle (F3) and status bar click
+  // 5a. OSNAP toggle — 레거시(stat-osnap) 유지 + 새 StatusBar 연동
   const osnapToggle = document.getElementById('osnap-toggle');
   const statOsnap = document.getElementById('stat-osnap');
 
@@ -166,6 +167,8 @@ async function main() {
       statOsnap.textContent = on ? 'ON' : 'OFF';
       statOsnap.style.color = on ? '#44ff88' : '#ff4444';
     }
+    // 새 상태바 F3 버튼도 동기화
+    statusBar.setToggle('sb-fkey-osnap', on);
   };
 
   if (osnapToggle) {
@@ -174,6 +177,14 @@ async function main() {
       updateOsnapUI();
     });
   }
+
+  // ═══ 새 상태바: 좌표 추적 + F1~F7 아이콘 바 ═══
+  const statusBar = new StatusBar({
+    viewport,
+    units,
+    snap: toolManager.snap,
+  });
+  statusBar.syncFromViewport();
 
   // ═══ OSNAP 설정 패널 (제도 설정값) — MenuBar/ContextMenu보다 먼저 초기화 ═══
   const osnapAPI = initOsnapPanel({
