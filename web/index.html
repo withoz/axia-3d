@@ -266,13 +266,24 @@
       flex-shrink: 0;
     }
 
-    /* ═══ KAYAC-style Bottom Status Bar (left half) ═══ */
-    #statusbar {
+    /* ═══ 하단 바 컨테이너 — 상태바 + 커맨드바를 한 줄로 붙여서 배치 ═══ */
+    #bottombar {
       position: absolute;
       bottom: 1px;
       left: 8px;
-      width: auto;
-      max-width: calc(60% - 16px);
+      right: 8px;
+      height: 30px;
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      z-index: 100;
+    }
+
+    /* ═══ KAYAC-style Bottom Status Bar ═══ */
+    #statusbar {
+      position: static;
+      flex: 0 0 auto;
+      max-width: 60%;
       height: 30px;
       display: inline-flex;
       align-items: center;
@@ -366,12 +377,11 @@
       opacity: 0.35;
     }
 
-    /* ═══ KAYAC-style Bottom Command Bar (right half) ═══ */
+    /* ═══ KAYAC-style Bottom Command Bar (statusbar 바로 오른쪽에 붙음) ═══ */
     #commandbar {
-      position: absolute;
-      bottom: 1px;
-      left: calc(60% + 8px);
-      width: calc(40% - 16px);
+      position: static;
+      flex: 1 1 auto;
+      min-width: 0;
       height: 30px;
       display: flex;
       align-items: center;
@@ -383,8 +393,18 @@
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-      z-index: 100;
       font-size: 12px;
+    }
+    /* 붙어 있는 경우: statusbar와 commandbar 사이 라운딩/경계 조정 */
+    #bottombar #statusbar {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: none;
+      margin-right: -1px; /* 1px 테두리 중복 제거 */
+    }
+    #bottombar #commandbar.attached {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
     }
     #commandbar .cmd-label {
       color: rgba(255, 255, 255, 0.4);
@@ -1829,6 +1849,7 @@
     </div>
 
     <!-- KAYAC-style bottom status bar (left half) -->
+    <div id="bottombar">
     <div id="statusbar">
       <!-- 좌표 (AutoCAD 스타일) -->
       <span class="sb-coords" id="sb-coords">—, —, —</span>
@@ -1863,11 +1884,12 @@
       </span>
     </div>
 
-    <!-- KAYAC-style bottom command bar (right half) -->
-    <div id="commandbar">
+    <!-- KAYAC-style bottom command bar (statusbar 바로 옆에 붙음) -->
+    <div id="commandbar" class="attached">
       <span class="cmd-label" id="cmd-label">치수:</span>
       <input type="text" id="cmd-input" placeholder="숫자 입력 후 Enter..." />
     </div>
+    </div><!-- /#bottombar -->
 
     <!-- ═══ XIA Inspector Panel (left side) ═══ -->
     <div id="xia-inspector">
