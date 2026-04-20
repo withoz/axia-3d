@@ -9,7 +9,7 @@
 //! - `split_face_by_line()` — split a face with a line segment (main entry point)
 
 use glam::DVec3;
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 
 use crate::entities::*;
 use crate::mesh::Mesh;
@@ -246,13 +246,17 @@ pub fn split_face_by_line(
 
     ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
 
-    // Phase F — 구멍 있는 face의 line split은 복잡 (hole 경계 교차, inner loop 분할 등)
-    // 현재는 단순 가드: holes 있으면 명확한 에러로 거부. 미래 작업(F 연장)에서 구현.
-    ensure!(
-        mesh.faces[face_id].inners().is_empty(),
-        "split_face_by_line: face has {} hole(s) — multi-loop split not yet supported",
-        mesh.faces[face_id].inners().len(),
-    );
+    // Phase G — multi-loop split support.
+    //
+    // Case (a) supported here: the cutting line lies entirely inside the
+    // outer boundary and does not intersect any hole. Each hole is
+    // redistributed to whichever of the two resulting faces geometrically
+    // contains it (point-in-face test on a hole sample vertex).
+    //
+    // Not yet handled (rejected with explicit error): the line crossing a
+    // hole boundary, or an endpoint landing strictly inside a hole — those
+    // require splitting the hole loop itself or bridging hole↔outer.
+    let saved_holes = save_hole_loops(mesh, face_id)?;
 
     let mut debug = Vec::new();
     let mut new_verts = Vec::new();
@@ -320,6 +324,20 @@ pub fn split_face_by_line(
 
     debug.push(format!("splitting face {:?} between v{} and v{}", face_id.raw(), v1.raw(), v2.raw()));
 
+    // ─── Step 2.5: Validate line vs. saved holes (Phase G case restriction) ─
+    // For now only case (a) — line inside outer, not crossing any hole.
+    if !saved_holes.is_empty() {
+        validate_line_avoids_holes(mesh, face_id, proj_start, proj_end, &saved_holes)?;
+        debug.push(format!("{} hole(s) saved; line clear of all", saved_holes.len()));
+    }
+
+    // Temporarily detach saved hole refs from the face so mesh.split_face
+    // operates on a clean outer-only topology. The hole half-edges remain
+    // in the mesh — we re-attach after the split below.
+    if !saved_holes.is_empty() {
+        mesh.faces[face_id].inners_mut().clear();
+    }
+
     // ─── Step 3: Split the face ─────────────────────────────────────────
     let (face_a, face_b) = mesh.split_face(face_id, v1, v2)?;
 
@@ -330,12 +348,194 @@ pub fn split_face_by_line(
 
     debug.push(format!("result: face_a={}, face_b={}", face_a.raw(), face_b.raw()));
 
+    // ─── Step 4: Redistribute holes between the two resulting faces ─────
+    // Each saved hole belongs to whichever piece geometrically contains it.
+    // HEs of the hole loop also need their face pointer updated whenever
+    // the hole moves to face_b (for face_a the pointer is already valid
+    // since face_a keeps the original face_id).
+    if !saved_holes.is_empty() {
+        for hole in &saved_holes {
+            let sample = mesh.vertex_pos(hole.sample_vert)?;
+            let in_a = point_in_face(mesh, face_a, sample).unwrap_or(false);
+            let target = if in_a { face_a } else { face_b };
+            debug.push(format!(
+                "hole start={} → face {} (in_a={})",
+                hole.loop_ref.start.raw(),
+                target.raw(),
+                in_a,
+            ));
+            if target != face_id {
+                // Hole moved to face_b: update every HE.face() along the loop.
+                reassign_loop_face(mesh, hole.loop_ref.start, target)?;
+            }
+            mesh.faces[target].add_inner(hole.loop_ref);
+        }
+    }
+
     Ok(FaceSplitResult {
         new_faces: vec![face_a, face_b],
         new_verts,
         new_edges,
         debug,
     })
+}
+
+/// Snapshot of one hole loop on the face being split — saves the LoopRef
+/// plus a sample vertex on the loop so we can classify containment after
+/// the outer split completes.
+struct SavedHole {
+    loop_ref: LoopRef,
+    sample_vert: VertId,
+}
+
+/// Collect every hole loop on `face_id` with a representative vertex per
+/// loop. Does not mutate the mesh.
+fn save_hole_loops(mesh: &Mesh, face_id: FaceId) -> Result<Vec<SavedHole>> {
+    let inner_refs: Vec<_> = mesh.faces[face_id].inners().to_vec();
+    let mut out = Vec::with_capacity(inner_refs.len());
+    for lref in inner_refs {
+        let verts = mesh.collect_loop_verts(lref.start)?;
+        ensure!(
+            !verts.is_empty(),
+            "split_face_by_line: hole loop {} is empty",
+            lref.start.raw(),
+        );
+        out.push(SavedHole { loop_ref: lref, sample_vert: verts[0] });
+    }
+    Ok(out)
+}
+
+/// Reject line-vs-hole intersections and endpoints inside holes —
+/// those belong to cases (b)/(c) which Phase G does not yet implement.
+fn validate_line_avoids_holes(
+    mesh: &Mesh,
+    face_id: FaceId,
+    proj_start: DVec3,
+    proj_end: DVec3,
+    saved: &[SavedHole],
+) -> Result<()> {
+    // Endpoint-inside-hole check: a hole excludes interior, so point_in_face
+    // returns false if the point is strictly inside a hole. We detect the
+    // intent by checking each hole's polygon directly instead.
+    for hole in saved {
+        let verts = mesh.collect_loop_verts(hole.loop_ref.start)?;
+        if point_inside_loop_3d(mesh, &verts, proj_start)?
+            || point_inside_loop_3d(mesh, &verts, proj_end)?
+        {
+            bail!(
+                "split_face_by_line: endpoint lies inside a hole on face {} — \
+                 bridge topology not yet supported (Phase G case c)",
+                face_id.raw(),
+            );
+        }
+        if segment_crosses_loop_3d(mesh, &verts, proj_start, proj_end)? {
+            bail!(
+                "split_face_by_line: line crosses hole boundary on face {} — \
+                 hole-split not yet supported (Phase G case b)",
+                face_id.raw(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Project `loop_verts` and `point` onto the face plane (using the loop's
+/// own plane) and run 2D point-in-polygon ray casting.
+fn point_inside_loop_3d(mesh: &Mesh, loop_verts: &[VertId], point: DVec3) -> Result<bool> {
+    use crate::operations::boolean_geo::point_in_polygon_2d;
+    if loop_verts.len() < 3 { return Ok(false); }
+    let (origin, basis_u, basis_v) = loop_basis(mesh, loop_verts)?;
+    let poly: Vec<_> = loop_verts.iter()
+        .map(|&v| project_to_basis(mesh.vertex_pos(v).unwrap_or(origin), origin, basis_u, basis_v))
+        .collect();
+    let p2 = project_to_basis(point, origin, basis_u, basis_v);
+    Ok(point_in_polygon_2d(&p2, &poly))
+}
+
+/// True if segment (a,b) crosses any edge of the loop when projected to 2D.
+/// Coincident endpoints (segment ends on a loop vertex) do not count.
+fn segment_crosses_loop_3d(
+    mesh: &Mesh,
+    loop_verts: &[VertId],
+    a: DVec3,
+    b: DVec3,
+) -> Result<bool> {
+    if loop_verts.len() < 3 { return Ok(false); }
+    let (origin, basis_u, basis_v) = loop_basis(mesh, loop_verts)?;
+    let a2 = project_to_basis(a, origin, basis_u, basis_v);
+    let b2 = project_to_basis(b, origin, basis_u, basis_v);
+    let poly: Vec<_> = loop_verts.iter()
+        .map(|&v| project_to_basis(mesh.vertex_pos(v).unwrap_or(origin), origin, basis_u, basis_v))
+        .collect();
+    for i in 0..poly.len() {
+        let p = poly[i];
+        let q = poly[(i + 1) % poly.len()];
+        if segments_cross_2d(a2, b2, p, q) { return Ok(true); }
+    }
+    Ok(false)
+}
+
+/// Build an orthonormal 2D basis from the first three non-collinear
+/// vertices of a loop. Used for per-loop projection so we don't depend
+/// on a face-wide normal (holes and outer share it in practice).
+fn loop_basis(mesh: &Mesh, loop_verts: &[VertId]) -> Result<(DVec3, DVec3, DVec3)> {
+    let p0 = mesh.vertex_pos(loop_verts[0])?;
+    let mut u = DVec3::ZERO;
+    let mut n = DVec3::ZERO;
+    for i in 1..loop_verts.len() {
+        let cand = mesh.vertex_pos(loop_verts[i])? - p0;
+        if cand.length() > 1e-9 { u = cand.normalize(); break; }
+    }
+    for i in 2..loop_verts.len() {
+        let c = mesh.vertex_pos(loop_verts[i])? - p0;
+        let cross = u.cross(c);
+        if cross.length() > 1e-9 { n = cross.normalize(); break; }
+    }
+    ensure!(
+        u.length_squared() > 0.0 && n.length_squared() > 0.0,
+        "loop_basis: loop is degenerate",
+    );
+    let v = n.cross(u).normalize();
+    Ok((p0, u, v))
+}
+
+fn project_to_basis(p: DVec3, origin: DVec3, u: DVec3, v: DVec3) -> crate::operations::boolean_geo::Pt2 {
+    let d = p - origin;
+    crate::operations::boolean_geo::Pt2 { x: d.dot(u), y: d.dot(v) }
+}
+
+/// Standard 2D segment intersection (proper crossing, endpoints exclusive
+/// to avoid false positives when the line touches a loop vertex).
+fn segments_cross_2d(
+    a: crate::operations::boolean_geo::Pt2,
+    b: crate::operations::boolean_geo::Pt2,
+    c: crate::operations::boolean_geo::Pt2,
+    d: crate::operations::boolean_geo::Pt2,
+) -> bool {
+    fn cross(o: crate::operations::boolean_geo::Pt2,
+             a: crate::operations::boolean_geo::Pt2,
+             b: crate::operations::boolean_geo::Pt2) -> f64 {
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+    }
+    let d1 = cross(c, d, a);
+    let d2 = cross(c, d, b);
+    let d3 = cross(a, b, c);
+    let d4 = cross(a, b, d);
+    (d1 * d2 < 0.0) && (d3 * d4 < 0.0)
+}
+
+/// Walk every half-edge of the loop starting at `start` and set its
+/// face pointer to `target`. Used after the outer split when a hole
+/// moves from face_a (== original face_id) to face_b.
+fn reassign_loop_face(mesh: &mut Mesh, start: HeId, target: FaceId) -> Result<()> {
+    let mut cur = start;
+    for _ in 0..10_000 {
+        mesh.hes[cur].set_face(target);
+        let nxt = mesh.hes[cur].next();
+        if nxt == start || nxt.is_null() { return Ok(()); }
+        cur = nxt;
+    }
+    bail!("reassign_loop_face: loop did not close within 10000 steps (possible corruption)");
 }
 
 /// Project a 3D point onto a plane defined by (origin, normal).
@@ -1539,5 +1739,123 @@ mod tests {
         // Verify export_buffers works
         let bufs = m.export_buffers();
         assert!(bufs.is_ok(), "export_buffers failed after split+pushpull");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Phase G — split_face_by_line on faces with holes
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// Helper: a 200×200 face on y=0 with a 40×40 hole at the center.
+    fn build_holed_face() -> (Mesh, FaceId) {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let o0 = m.add_vertex(DVec3::new(-100.0, 0.0, -100.0));
+        let o1 = m.add_vertex(DVec3::new( 100.0, 0.0, -100.0));
+        let o2 = m.add_vertex(DVec3::new( 100.0, 0.0,  100.0));
+        let o3 = m.add_vertex(DVec3::new(-100.0, 0.0,  100.0));
+        // Hole (CW relative to outer CCW — standard convention)
+        let h0 = m.add_vertex(DVec3::new(-20.0, 0.0, -20.0));
+        let h1 = m.add_vertex(DVec3::new(-20.0, 0.0,  20.0));
+        let h2 = m.add_vertex(DVec3::new( 20.0, 0.0,  20.0));
+        let h3 = m.add_vertex(DVec3::new( 20.0, 0.0, -20.0));
+        let f = m.add_face_with_holes(
+            &[o0, o1, o2, o3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+        (m, f)
+    }
+
+    #[test]
+    fn phase_g_split_above_hole_keeps_hole_below() {
+        // Cut horizontally well above the hole (z = 60). The hole center
+        // (0, 0, 0) must end up on the lower piece.
+        let (mut mesh, f) = build_holed_face();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 60.0),
+            DVec3::new( 100.0, 0.0, 60.0),
+        ).unwrap_or_else(|e| panic!("split failed: {}\ndebug: built a holed 200x200 face", e));
+        assert_eq!(res.new_faces.len(), 2);
+        let holed: Vec<_> = res.new_faces.iter()
+            .filter(|&&fid| !mesh.faces[fid].inners().is_empty())
+            .collect();
+        assert_eq!(holed.len(), 1, "exactly one output face should carry the hole");
+        // Verify the other output face has no inner loops
+        let empty_count = res.new_faces.iter()
+            .filter(|&&fid| mesh.faces[fid].inners().is_empty())
+            .count();
+        assert_eq!(empty_count, 1);
+        // Invariants hold across the whole mesh
+        let report = mesh.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants broken after hole-aware split:\n{}", report.summary());
+    }
+
+    #[test]
+    fn phase_g_split_below_hole_keeps_hole_above() {
+        // Mirror of the above — cut at z=-60, hole should land in upper piece.
+        let (mut mesh, f) = build_holed_face();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, -60.0),
+            DVec3::new( 100.0, 0.0, -60.0),
+        ).unwrap();
+        let with_hole: Vec<_> = res.new_faces.iter()
+            .filter(|&&fid| !mesh.faces[fid].inners().is_empty())
+            .collect();
+        assert_eq!(with_hole.len(), 1);
+    }
+
+    #[test]
+    fn phase_g_rejects_line_crossing_hole() {
+        // Cut horizontally THROUGH the hole (z=0) — case (b), not yet handled.
+        let (mut mesh, f) = build_holed_face();
+        let err = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 0.0),
+            DVec3::new( 100.0, 0.0, 0.0),
+        );
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("hole") && (msg.contains("cross") || msg.contains("case b")),
+            "expected hole-crossing rejection, got: {}", msg
+        );
+    }
+
+    #[test]
+    fn phase_g_rejects_endpoint_inside_hole() {
+        // Endpoint at (0, 0, 0) is inside the hole — case (c) bridge topology.
+        let (mut mesh, f) = build_holed_face();
+        let err = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 60.0),
+            DVec3::new(   0.0, 0.0,  0.0),
+        );
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("hole") && (msg.contains("inside") || msg.contains("case c")),
+            "expected endpoint-inside-hole rejection, got: {}", msg
+        );
+    }
+
+    #[test]
+    fn phase_g_preserves_hole_vertex_count() {
+        // After splitting above the hole, the hole's 4 vertices must still
+        // form a complete 4-edge loop attached to exactly one face.
+        let (mut mesh, f) = build_holed_face();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 60.0),
+            DVec3::new( 100.0, 0.0, 60.0),
+        ).unwrap();
+        for &fid in &res.new_faces {
+            for inner in mesh.faces[fid].inners().to_vec() {
+                let verts = mesh.collect_loop_verts(inner.start).unwrap();
+                assert_eq!(verts.len(), 4, "hole should still have 4 verts");
+            }
+        }
     }
 }
