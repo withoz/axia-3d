@@ -80,6 +80,12 @@ export class AxiaEngine {
      */
     batch_delete(face_ids: Uint32Array, edge_ids: Uint32Array): boolean;
     /**
+     * Bend a vertex set around `bend_axis` with angle ramping from 0
+     * (at `t=0` along `bend_dir`) to `angle_deg` (at `t=length_limit`).
+     * Verts with negative `t` (behind `origin`) are left untouched.
+     */
+    bendVerts(vert_ids: Uint32Array, ax_x: number, ax_y: number, ax_z: number, dir_x: number, dir_y: number, dir_z: number, ox: number, oy: number, oz: number, angle_deg: number, length_limit: number): boolean;
+    /**
      * Boolean 연산 수행
      * faces_a, faces_b: face ID 배열 (u32)
      * op: "union" | "subtract" | "intersect"
@@ -208,6 +214,11 @@ export class AxiaEngine {
      * 실패 시 빈 벡터.
      */
     getEdgeEndpoints(edge_id_raw: number): Uint32Array;
+    /**
+     * Return the outer-loop vertex IDs of a face in walk order.
+     * Empty vec on error (face missing, degenerate, etc.).
+     */
+    getFaceVertices(face_id_raw: number): Uint32Array;
     /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
@@ -580,6 +591,11 @@ export class AxiaEngine {
      */
     synthesizeFacesFromFreeEdges(): number;
     /**
+     * Taper a vertex set along `(axis_origin, axis_dir)` from
+     * `start_scale` at t=0 to `end_scale` at t=length.
+     */
+    taperVerts(vert_ids: Uint32Array, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, start_scale: number, end_scale: number, length: number): boolean;
+    /**
      * 그룹 잠금 토글
      */
     toggle_group_lock(group_id: number): boolean;
@@ -610,6 +626,11 @@ export class AxiaEngine {
      * Tolerance 지정 인접 면 반복 병합 (B1).
      */
     tryMergeAdjacentFacesTol(face_ids: Uint32Array, angle_tol_deg: number): number;
+    /**
+     * Twist a vertex set around `(axis_origin, axis_dir)` with
+     * `degrees_per_unit` degrees of rotation per unit of axial distance.
+     */
+    twistVerts(vert_ids: Uint32Array, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, degrees_per_unit: number): boolean;
     undo(): boolean;
     /**
      * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
@@ -682,6 +703,7 @@ export interface InitOutput {
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
@@ -708,6 +730,7 @@ export interface InitOutput {
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
     readonly axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
@@ -774,12 +797,14 @@ export interface InitOutput {
     readonly axiaengine_subdivideCatmullClark: (a: number) => number;
     readonly axiaengine_sweepProfileAlongPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
+    readonly axiaengine_taperVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
     readonly axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_translate_faces: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_tryMergeAdjacentFacesTol: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_twistVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_undo: (a: number) => number;
     readonly axiaengine_verifyInvariants: (a: number, b: number) => void;
     readonly axiaengine_verifyOutwardNormals: (a: number, b: number) => void;

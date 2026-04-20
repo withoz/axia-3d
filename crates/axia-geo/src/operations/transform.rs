@@ -478,7 +478,7 @@ impl Mesh {
     }
 
     /// face들의 법선 벡터 재계산
-    fn recompute_face_normals(&mut self, face_ids: &[FaceId]) -> Result<()> {
+    pub(crate) fn recompute_face_normals(&mut self, face_ids: &[FaceId]) -> Result<()> {
         for &fid in face_ids {
             let face = match self.faces.get(fid) {
                 Some(f) if f.is_active() => f,

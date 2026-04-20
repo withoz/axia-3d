@@ -1303,6 +1303,126 @@ impl AxiaEngine {
         }
     }
 
+    /// Return the outer-loop vertex IDs of a face in walk order.
+    /// Empty vec on error (face missing, degenerate, etc.).
+    #[wasm_bindgen(js_name = "getFaceVertices")]
+    pub fn get_face_vertices(&self, face_id_raw: u32) -> Vec<u32> {
+        let fid = FaceId::new(face_id_raw);
+        if !self.scene.mesh.faces.contains(fid) { return vec![]; }
+        let start = self.scene.mesh.faces[fid].outer().start;
+        match self.scene.mesh.collect_loop_verts(start) {
+            Ok(verts) => verts.into_iter().map(|v| v.raw()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// Bend a vertex set around `bend_axis` with angle ramping from 0
+    /// (at `t=0` along `bend_dir`) to `angle_deg` (at `t=length_limit`).
+    /// Verts with negative `t` (behind `origin`) are left untouched.
+    #[wasm_bindgen(js_name = "bendVerts")]
+    pub fn bend_verts(
+        &mut self,
+        vert_ids: &[u32],
+        ax_x: f64, ax_y: f64, ax_z: f64,          // bend axis
+        dir_x: f64, dir_y: f64, dir_z: f64,       // bend direction
+        ox: f64, oy: f64, oz: f64,                // origin
+        angle_deg: f64,
+        length_limit: f64,
+    ) -> bool {
+        let vids: Vec<VertId> = vert_ids.iter().map(|&id| VertId::new(id)).collect();
+        let bend_axis = DVec3::new(ax_x, ax_y, ax_z);
+        let bend_dir = DVec3::new(dir_x, dir_y, dir_z);
+        let origin = DVec3::new(ox, oy, oz);
+        let angle_rad = angle_deg.to_radians();
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.bend_verts(&vids, bend_axis, bend_dir, origin, angle_rad, length_limit) {
+            Ok(_) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                true
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                self.set_error(format!("bend: {}", e));
+                false
+            }
+        }
+    }
+
+    /// Twist a vertex set around `(axis_origin, axis_dir)` with
+    /// `degrees_per_unit` degrees of rotation per unit of axial distance.
+    #[wasm_bindgen(js_name = "twistVerts")]
+    pub fn twist_verts_deform(
+        &mut self,
+        vert_ids: &[u32],
+        ox: f64, oy: f64, oz: f64,
+        ax: f64, ay: f64, az: f64,
+        degrees_per_unit: f64,
+    ) -> bool {
+        let vids: Vec<VertId> = vert_ids.iter().map(|&id| VertId::new(id)).collect();
+        let axis_origin = DVec3::new(ox, oy, oz);
+        let axis_dir = DVec3::new(ax, ay, az);
+        let angle_per_unit = degrees_per_unit.to_radians();
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.twist_verts(&vids, axis_origin, axis_dir, angle_per_unit) {
+            Ok(_) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                true
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                self.set_error(format!("twist: {}", e));
+                false
+            }
+        }
+    }
+
+    /// Taper a vertex set along `(axis_origin, axis_dir)` from
+    /// `start_scale` at t=0 to `end_scale` at t=length.
+    #[wasm_bindgen(js_name = "taperVerts")]
+    pub fn taper_verts(
+        &mut self,
+        vert_ids: &[u32],
+        ox: f64, oy: f64, oz: f64,
+        ax: f64, ay: f64, az: f64,
+        start_scale: f64,
+        end_scale: f64,
+        length: f64,
+    ) -> bool {
+        let vids: Vec<VertId> = vert_ids.iter().map(|&id| VertId::new(id)).collect();
+        let axis_origin = DVec3::new(ox, oy, oz);
+        let axis_dir = DVec3::new(ax, ay, az);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.taper_verts(&vids, axis_origin, axis_dir, start_scale, end_scale, length) {
+            Ok(_) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                true
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                self.set_error(format!("taper: {}", e));
+                false
+            }
+        }
+    }
+
     /// Round off a single edge into a cylindrical arc of the given
     /// radius, sampled with `segments` quads. Returns the count of new
     /// fillet strip quads on success (>= 2), or -1 on failure with

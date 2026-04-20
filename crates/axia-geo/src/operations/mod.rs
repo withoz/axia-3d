@@ -17,3 +17,4 @@ pub mod loft;
 pub mod sweep;
 pub mod subdivide;
 pub mod fillet;
+pub mod deform;

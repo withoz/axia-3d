@@ -298,6 +298,7 @@ export class ToolManager {
     'revolve-x', 'revolve-y', 'revolve-z',
     'subdivide',
     'fillet-edge',
+    'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -328,6 +329,9 @@ export class ToolManager {
     'revolve-z': '선택 엣지를 Z축으로 회전 (Revolve)',
     'subdivide': '전체 메시 Catmull-Clark 분할',
     'fillet-edge': '선택 엣지 모깎기 (Fillet)',
+    'bend-selection': '선택 구부리기 (Bend)',
+    'twist-selection': '선택 비틀기 (Twist)',
+    'taper-selection': '선택 테이퍼 (Taper)',
   };
 
   executeAction(action: string): void {
@@ -651,6 +655,105 @@ export class ToolManager {
         debugLog(`[Action] ${action}: ${newFaces.length} faces`);
       } else {
         Toast.fromBridgeError(this.bridge, 'Revolve 실패');
+      }
+    } else if (action === 'bend-selection' || action === 'twist-selection' || action === 'taper-selection') {
+      // Deformers operate on the vertex set of the selected faces (or
+      // edges' endpoints). We derive a natural axis from the selection's
+      // bounding-box longest dimension — the "length direction" of the
+      // shape — then prompt for the single scalar parameter. Users who
+      // need custom axis can pre-rotate the model.
+      const faces = this.selection.getSelectedFaces();
+      const edges = this.selection.getSelectedEdges();
+      if (faces.length === 0 && edges.length === 0) {
+        Toast.warning('변형할 면 또는 에지를 먼저 선택하세요', 2500);
+        return;
+      }
+      // Collect unique vertex IDs from selected faces + edges.
+      const vertSet = new Set<number>();
+      for (const fid of faces) {
+        for (const v of this.bridge.getFaceVertices(fid)) vertSet.add(v);
+      }
+      for (const eid of edges) {
+        const eps = this.bridge.getEdgeEndpoints(eid);
+        if (eps.length === 2) { vertSet.add(eps[0]); vertSet.add(eps[1]); }
+      }
+      if (vertSet.size === 0) {
+        Toast.warning('선택에서 정점을 추출할 수 없습니다', 2500);
+        return;
+      }
+      const vertIds = Array.from(vertSet);
+      // Compute bbox + longest-dimension axis.
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const v of vertIds) {
+        const p = this.bridge.getVertexPos(v);
+        if (!p) continue;
+        if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+        if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+        if (p[2] < minZ) minZ = p[2]; if (p[2] > maxZ) maxZ = p[2];
+      }
+      const dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
+      const origin: [number, number, number] = [minX, minY, minZ];
+      // Pick longest axis as the deformer axis.
+      let axisDir: [number, number, number], axisLen: number;
+      if (dx >= dy && dx >= dz) { axisDir = [1, 0, 0]; axisLen = dx; }
+      else if (dy >= dz)        { axisDir = [0, 1, 0]; axisLen = dy; }
+      else                      { axisDir = [0, 0, 1]; axisLen = dz; }
+      if (axisLen < 1e-3) {
+        Toast.warning('선택 범위가 너무 작습니다', 2500);
+        return;
+      }
+
+      if (action === 'bend-selection') {
+        const input = window.prompt('구부리기 각도 (도, +/-):', '30');
+        if (input == null) return;
+        const deg = parseFloat(input);
+        if (!Number.isFinite(deg)) { Toast.warning('유효한 숫자를 입력하세요'); return; }
+        // Bend axis is perpendicular to the longest direction AND to world
+        // up (Y) by default. This matches the natural "bend this rod" feel.
+        const upish: [number, number, number] = axisDir[1] !== 0 ? [0, 0, 1] : [0, 1, 0];
+        const bendAxis: [number, number, number] = [
+          axisDir[1] * upish[2] - axisDir[2] * upish[1],
+          axisDir[2] * upish[0] - axisDir[0] * upish[2],
+          axisDir[0] * upish[1] - axisDir[1] * upish[0],
+        ];
+        const ok = this.bridge.bendVerts(vertIds, bendAxis, axisDir, origin, deg, axisLen);
+        if (ok) {
+          this.syncMesh();
+          Toast.info(`${vertIds.length}개 정점을 ${deg.toFixed(1)}° 구부림`, 2000);
+        } else {
+          Toast.fromBridgeError(this.bridge, 'Bend 실패');
+        }
+        return;
+      }
+      if (action === 'twist-selection') {
+        const input = window.prompt('비틀기 각도 (축 전체에 대해 총 도수):', '45');
+        if (input == null) return;
+        const totalDeg = parseFloat(input);
+        if (!Number.isFinite(totalDeg)) { Toast.warning('유효한 숫자를 입력하세요'); return; }
+        const degPerUnit = totalDeg / axisLen;
+        const ok = this.bridge.twistVertsDeform(vertIds, origin, axisDir, degPerUnit);
+        if (ok) {
+          this.syncMesh();
+          Toast.info(`${vertIds.length}개 정점을 총 ${totalDeg.toFixed(1)}° 비틈`, 2000);
+        } else {
+          Toast.fromBridgeError(this.bridge, 'Twist 실패');
+        }
+        return;
+      }
+      // taper-selection
+      const input = window.prompt('끝 스케일 (0보다 큰 실수, 1.0 = 원래 크기):', '0.5');
+      if (input == null) return;
+      const endScale = parseFloat(input);
+      if (!Number.isFinite(endScale) || endScale <= 0) {
+        Toast.warning('유효한 양수 스케일을 입력하세요'); return;
+      }
+      const ok = this.bridge.taperVerts(vertIds, origin, axisDir, 1.0, endScale, axisLen);
+      if (ok) {
+        this.syncMesh();
+        Toast.info(`${vertIds.length}개 정점을 ×${endScale.toFixed(2)} 테이퍼`, 2000);
+      } else {
+        Toast.fromBridgeError(this.bridge, 'Taper 실패');
       }
     } else if (action === 'fillet-edge') {
       // 선택된 단일 엣지를 radius 반경으로 모깎기. 우선 `fillet:radius`

@@ -135,6 +135,9 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'revolve-y': toolManager.executeAction('revolve-y'); break;
       case 'revolve-z': toolManager.executeAction('revolve-z'); break;
       case 'fillet-edge': toolManager.executeAction('fillet-edge'); break;
+      case 'bend-selection':  toolManager.executeAction('bend-selection'); break;
+      case 'twist-selection': toolManager.executeAction('twist-selection'); break;
+      case 'taper-selection': toolManager.executeAction('taper-selection'); break;
       case 'constrain-parallel':
       case 'constrain-perpendicular':
       case 'constrain-collinear':

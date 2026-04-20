@@ -191,6 +191,30 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Bend a vertex set around `bend_axis` with angle ramping from 0
+     * (at `t=0` along `bend_dir`) to `angle_deg` (at `t=length_limit`).
+     * Verts with negative `t` (behind `origin`) are left untouched.
+     * @param {Uint32Array} vert_ids
+     * @param {number} ax_x
+     * @param {number} ax_y
+     * @param {number} ax_z
+     * @param {number} dir_x
+     * @param {number} dir_y
+     * @param {number} dir_z
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} angle_deg
+     * @param {number} length_limit
+     * @returns {boolean}
+     */
+    bendVerts(vert_ids, ax_x, ax_y, ax_z, dir_x, dir_y, dir_z, ox, oy, oz, angle_deg, length_limit) {
+        const ptr0 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_bendVerts(this.__wbg_ptr, ptr0, len0, ax_x, ax_y, ax_z, dir_x, dir_y, dir_z, ox, oy, oz, angle_deg, length_limit);
+        return ret !== 0;
+    }
+    /**
      * Boolean 연산 수행
      * faces_a, faces_b: face ID 배열 (u32)
      * op: "union" | "subtract" | "intersect"
@@ -549,6 +573,25 @@ export class AxiaEngine {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             wasm.axiaengine_getEdgeEndpoints(retptr, this.__wbg_ptr, edge_id_raw);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Return the outer-loop vertex IDs of a face in walk order.
+     * Empty vec on error (face missing, degenerate, etc.).
+     * @param {number} face_id_raw
+     * @returns {Uint32Array}
+     */
+    getFaceVertices(face_id_raw) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getFaceVertices(retptr, this.__wbg_ptr, face_id_raw);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var v1 = getArrayU32FromWasm0(r0, r1).slice();
@@ -1709,6 +1752,27 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * Taper a vertex set along `(axis_origin, axis_dir)` from
+     * `start_scale` at t=0 to `end_scale` at t=length.
+     * @param {Uint32Array} vert_ids
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} start_scale
+     * @param {number} end_scale
+     * @param {number} length
+     * @returns {boolean}
+     */
+    taperVerts(vert_ids, ox, oy, oz, ax, ay, az, start_scale, end_scale, length) {
+        const ptr0 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_taperVerts(this.__wbg_ptr, ptr0, len0, ox, oy, oz, ax, ay, az, start_scale, end_scale, length);
+        return ret !== 0;
+    }
+    /**
      * 그룹 잠금 토글
      * @param {number} group_id
      * @returns {boolean}
@@ -1783,6 +1847,25 @@ export class AxiaEngine {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_tryMergeAdjacentFacesTol(this.__wbg_ptr, ptr0, len0, angle_tol_deg);
         return ret >>> 0;
+    }
+    /**
+     * Twist a vertex set around `(axis_origin, axis_dir)` with
+     * `degrees_per_unit` degrees of rotation per unit of axial distance.
+     * @param {Uint32Array} vert_ids
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} degrees_per_unit
+     * @returns {boolean}
+     */
+    twistVerts(vert_ids, ox, oy, oz, ax, ay, az, degrees_per_unit) {
+        const ptr0 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_twistVerts(this.__wbg_ptr, ptr0, len0, ox, oy, oz, ax, ay, az, degrees_per_unit);
+        return ret !== 0;
     }
     /**
      * @returns {boolean}

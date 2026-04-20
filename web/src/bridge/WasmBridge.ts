@@ -100,6 +100,29 @@ type AxiaEngineExtended = AxiaEngine & {
   ): Uint32Array;
   subdivideCatmullClark?(): number;
   filletEdge?(edgeId: number, radius: number, segments: number): number;
+  getFaceVertices?(faceId: number): Uint32Array;
+  bendVerts?(
+    vertIds: Uint32Array,
+    axX: number, axY: number, axZ: number,
+    dirX: number, dirY: number, dirZ: number,
+    ox: number, oy: number, oz: number,
+    angleDeg: number,
+    lengthLimit: number,
+  ): boolean;
+  twistVerts?(
+    vertIds: Uint32Array,
+    ox: number, oy: number, oz: number,
+    ax: number, ay: number, az: number,
+    degreesPerUnit: number,
+  ): boolean;
+  taperVerts?(
+    vertIds: Uint32Array,
+    ox: number, oy: number, oz: number,
+    ax: number, ay: number, az: number,
+    startScale: number,
+    endScale: number,
+    length: number,
+  ): boolean;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -929,6 +952,103 @@ export class WasmBridge {
     } catch (e) {
       this.recordBridgeError('loftSections', e);
       return [];
+    }
+  }
+
+  /**
+   * Get outer-loop vertex IDs of a face in walk order. Empty array on
+   * error / missing face. Used by deformers to gather the vertex set
+   * from a face selection.
+   */
+  getFaceVertices(faceId: number): number[] {
+    if (!this.engine?.getFaceVertices) return [];
+    try {
+      const out = this.engine.getFaceVertices(faceId);
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      this.recordBridgeError('getFaceVertices', e);
+      return [];
+    }
+  }
+
+  /**
+   * Bend vertices around `bendAxis` through `origin`. Rotation angle
+   * ramps 0 → angleDeg as t (projected distance along bendDir) goes
+   * from 0 to lengthLimit. Returns false on failure (lastError set).
+   */
+  bendVerts(
+    vertIds: number[],
+    bendAxis: [number, number, number],
+    bendDir: [number, number, number],
+    origin: [number, number, number],
+    angleDeg: number,
+    lengthLimit: number,
+  ): boolean {
+    if (!this.engine?.bendVerts) return false;
+    this.markDirty();
+    try {
+      return this.engine.bendVerts(
+        new Uint32Array(vertIds),
+        bendAxis[0], bendAxis[1], bendAxis[2],
+        bendDir[0], bendDir[1], bendDir[2],
+        origin[0], origin[1], origin[2],
+        angleDeg, lengthLimit,
+      );
+    } catch (e) {
+      this.recordBridgeError('bendVerts', e);
+      return false;
+    }
+  }
+
+  /**
+   * Twist vertices around `(axisOrigin, axisDir)`. `degreesPerUnit` is
+   * the twist rate per mm along the axis.
+   */
+  twistVertsDeform(
+    vertIds: number[],
+    axisOrigin: [number, number, number],
+    axisDir: [number, number, number],
+    degreesPerUnit: number,
+  ): boolean {
+    if (!this.engine?.twistVerts) return false;
+    this.markDirty();
+    try {
+      return this.engine.twistVerts(
+        new Uint32Array(vertIds),
+        axisOrigin[0], axisOrigin[1], axisOrigin[2],
+        axisDir[0], axisDir[1], axisDir[2],
+        degreesPerUnit,
+      );
+    } catch (e) {
+      this.recordBridgeError('twistVerts', e);
+      return false;
+    }
+  }
+
+  /**
+   * Taper vertices along `(axisOrigin, axisDir)` from startScale at t=0
+   * to endScale at t=length.
+   */
+  taperVerts(
+    vertIds: number[],
+    axisOrigin: [number, number, number],
+    axisDir: [number, number, number],
+    startScale: number,
+    endScale: number,
+    length: number,
+  ): boolean {
+    if (!this.engine?.taperVerts) return false;
+    this.markDirty();
+    try {
+      return this.engine.taperVerts(
+        new Uint32Array(vertIds),
+        axisOrigin[0], axisOrigin[1], axisOrigin[2],
+        axisDir[0], axisDir[1], axisDir[2],
+        startScale, endScale, length,
+      );
+    } catch (e) {
+      this.recordBridgeError('taperVerts', e);
+      return false;
     }
   }
 
