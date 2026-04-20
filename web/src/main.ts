@@ -198,8 +198,66 @@ async function main() {
   // 4b. Wire toolbar buttons
   const toolbar = document.getElementById('toolbar');
   if (!toolbar) throw new Error('Missing #toolbar element');
+
+  // 툴바 밖 클릭 시 열린 dropdown 모두 닫기
+  document.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('.tool-dropdown')) {
+      toolbar.querySelectorAll('.tool-dropdown.open').forEach(d => d.classList.remove('open'));
+    }
+  });
+
+  // ═══ Dropdown 트리거 + 선택 핸들러 ═══
   toolbar.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest('.tool-btn') as HTMLElement;
+    const target = e.target as HTMLElement;
+
+    // 드롭다운 trigger (▼ 버튼)
+    const trigger = target.closest('.tool-dropdown-trigger') as HTMLElement;
+    if (trigger) {
+      e.stopPropagation();
+      const dropdown = trigger.closest('.tool-dropdown') as HTMLElement;
+      if (dropdown) {
+        // 다른 열린 드롭다운 닫기
+        toolbar.querySelectorAll('.tool-dropdown.open').forEach(d => {
+          if (d !== dropdown) d.classList.remove('open');
+        });
+        dropdown.classList.toggle('open');
+      }
+      return;
+    }
+
+    // 드롭다운 패널 안의 항목 선택
+    const item = target.closest('.tool-dropdown-item') as HTMLElement;
+    if (item) {
+      const dropdown = item.closest('.tool-dropdown') as HTMLElement;
+      const tool = item.dataset.tool;
+      if (tool && dropdown) {
+        // 그룹 내 active 갱신
+        dropdown.querySelectorAll('.tool-dropdown-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        // 대표 버튼의 data-tool 갱신 (다음 클릭이 이 도구를 선택하도록)
+        const mainBtn = dropdown.querySelector('.tool-btn') as HTMLElement | null;
+        if (mainBtn) {
+          mainBtn.dataset.tool = tool;
+          // 아이콘 교체 — 항목의 아이콘 SVG 복제
+          const srcIcon = item.querySelector('.tdi-icon svg');
+          if (srcIcon && mainBtn) {
+            mainBtn.innerHTML = srcIcon.outerHTML;
+          }
+          mainBtn.title = (item.querySelector('.tdi-label')?.textContent ?? '') +
+            ((item.querySelector('.tdi-key')?.textContent ?? '').length > 0
+              ? ' (' + item.querySelector('.tdi-key')?.textContent + ')'
+              : '');
+        }
+        dropdown.classList.remove('open');
+        // 도구 활성화
+        toolbar.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+        if (mainBtn) mainBtn.classList.add('active');
+        toolManager.setTool(tool);
+        return;
+      }
+    }
+
+    const btn = target.closest('.tool-btn') as HTMLElement;
     if (!btn) return;
 
     const tool = btn.dataset.tool;

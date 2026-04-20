@@ -189,9 +189,19 @@
       100% { background: transparent; }
     }
     .tool-btn svg {
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    /* 일부 아이콘은 fill 필요 (점 표시 등) — explicit 오버라이드 */
+    .tool-btn svg [data-fill="true"],
+    .tool-btn svg .filled {
       fill: currentColor;
+      stroke: none;
     }
     .tool-btn[title]:hover::after {
       content: attr(title);
@@ -215,6 +225,95 @@
       background: rgba(255, 255, 255, 0.15);
       margin: 0 4px;
       flex-shrink: 0;
+    }
+
+    /* ═══ Dropdown 도구 그룹 (메뉴 형식으로 변형 선택) ═══ */
+    .tool-dropdown {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .tool-dropdown-trigger {
+      width: 18px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.5);
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      border-radius: 4px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tool-dropdown-trigger:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+    .tool-dropdown-trigger svg {
+      width: 10px;
+      height: 10px;
+      fill: currentColor;
+    }
+    /* 드롭다운 패널 */
+    .tool-dropdown-panel {
+      display: none;
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      min-width: 180px;
+      background: rgba(40, 40, 48, 0.98);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 4px 0;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      z-index: 9999;
+    }
+    .tool-dropdown.open .tool-dropdown-panel {
+      display: block;
+    }
+    .tool-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px;
+      color: rgba(255, 255, 255, 0.85);
+      cursor: pointer;
+      font-size: 12px;
+      user-select: none;
+      transition: background 0.1s;
+    }
+    .tool-dropdown-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+    }
+    .tool-dropdown-item.active {
+      background: rgba(58, 151, 255, 0.25);
+      color: #fff;
+    }
+    .tool-dropdown-item .tdi-icon {
+      width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.75);
+    }
+    .tool-dropdown-item .tdi-icon svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+    .tool-dropdown-item .tdi-label { flex: 1; }
+    .tool-dropdown-item .tdi-key {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.35);
+      font-family: 'Consolas', monospace;
+      padding: 1px 5px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
     }
 
     .tool-group {
@@ -1780,64 +1879,136 @@
       <!-- Select/Transform group -->
       <div class="tool-group">
         <button class="tool-btn active" data-tool="select" title="Select (V)">
-          <svg viewBox="0 0 320 512"><path d="M0 55.2V426c0 12.2 9.9 22 22 22c6.3 0 12.4-2.7 16.6-7.5L121.2 346l58.1 116.3c7.9 15.8 27.1 22.2 42.9 14.3s22.2-27.1 14.3-42.9L178.3 316.2l85.7-1.5c12.2 0 22-9.9 22-22c0-6.3-2.7-12.4-7.5-16.6L38.6 7.5C34.4 2.7 28.3 0 22 0C9.9 0 0 9.9 0 55.2z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M5 3 L5 19 L9 15 L12 21 L14 20 L11 14 L16 14 Z"/></svg>
         </button>
       </div>
 
       <div class="tool-sep"></div>
 
-      <!-- Drawing group -->
+      <!-- Drawing group — 드롭다운 통합 -->
       <div class="tool-group">
-        <button class="tool-btn" data-tool="line" title="Line (L)">
-          <svg viewBox="0 0 512 512"><path d="M464 256A208 208 0 1 0 48 256a208 208 0 1 0 416 0zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z" fill="none" stroke="currentColor" stroke-width="40"/><line x1="120" y1="392" x2="392" y2="120" stroke="currentColor" stroke-width="32" stroke-linecap="round"/></svg>
-        </button>
+        <!-- 선 (Line 계열: Line / Freehand / Bezier) -->
+        <div class="tool-dropdown" data-group="line-family">
+          <button class="tool-btn" data-tool="line" title="Line (L)">
+            <svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5"/><circle cx="5" cy="19" r="1.4" class="filled"/><circle cx="19" cy="5" r="1.4" class="filled"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="line-family" title="선 종류 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="line">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5"/><circle cx="5" cy="19" r="1.4" class="filled"/><circle cx="19" cy="5" r="1.4" class="filled"/></svg></span>
+              <span class="tdi-label">선 (Line)</span>
+              <span class="tdi-key">L</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="freehand">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 17 Q 7 8 11 12 T 17 9 Q 20 5 22 13"/></svg></span>
+              <span class="tdi-label">자유선 (Freehand)</span>
+              <span class="tdi-key">⇧F</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="bezier">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 19 C 7 4, 17 4, 21 19"/><circle cx="3" cy="19" r="1.4" class="filled"/><circle cx="21" cy="19" r="1.4" class="filled"/></svg></span>
+              <span class="tdi-label">Bezier 곡선</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 사각형 (Rectangle) -->
         <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
-          <svg viewBox="0 0 448 512"><path d="M384 80c8.8 0 16 7.2 16 16V416c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V96c0-8.8 7.2-16 16-16H384zM64 32C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V96c0-35.3-28.7-64-64-64H64z"/></svg>
+          <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/></svg>
         </button>
-        <button class="tool-btn" data-tool="circle" title="Circle (C)">
-          <svg viewBox="0 0 512 512"><path d="M464 256A208 208 0 1 0 48 256a208 208 0 1 0 416 0zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="arc" title="Arc (A) — 3-point">
-          <svg viewBox="0 0 512 512"><path d="M64 448 A 256 256 0 0 1 448 448" stroke="currentColor" stroke-width="36" fill="none" stroke-linecap="round"/><circle cx="64" cy="448" r="24"/><circle cx="448" cy="448" r="24"/><circle cx="256" cy="192" r="24"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="freehand" title="Freehand (Shift+F)">
-          <svg viewBox="0 0 512 512"><path d="M32 384 Q 96 192 192 256 T 352 192 Q 416 128 480 256" stroke="currentColor" stroke-width="36" fill="none" stroke-linecap="round"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="bezier" title="Cubic Bezier (4 control points)">
-          <svg viewBox="0 0 512 512"><path d="M32 416 C 96 96, 416 96, 480 416" stroke="currentColor" stroke-width="28" fill="none" stroke-linecap="round"/><circle cx="32" cy="416" r="20" fill="currentColor"/><circle cx="480" cy="416" r="20" fill="currentColor"/><circle cx="96" cy="96" r="16" fill="none" stroke="currentColor" stroke-width="12"/><circle cx="416" cy="96" r="16" fill="none" stroke="currentColor" stroke-width="12"/><line x1="32" y1="416" x2="96" y2="96" stroke="currentColor" stroke-width="8" stroke-dasharray="12 8" opacity="0.5"/><line x1="480" y1="416" x2="416" y2="96" stroke="currentColor" stroke-width="8" stroke-dasharray="12 8" opacity="0.5"/></svg>
-        </button>
+
+        <!-- 원 / 호 (Circle family) -->
+        <div class="tool-dropdown" data-group="circle-family">
+          <button class="tool-btn" data-tool="circle" title="Circle (C)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="circle-family" title="원/호 종류 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="circle">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/></svg></span>
+              <span class="tdi-label">원 (Circle)</span>
+              <span class="tdi-key">C</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="arc">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 19 A 10 10 0 0 1 20 19"/></svg></span>
+              <span class="tdi-label">호 (3-point Arc)</span>
+              <span class="tdi-key">A</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="tool-sep"></div>
 
-      <!-- Modeling group -->
+      <!-- Modeling group — 프리미티브 + 편집 (드롭다운 통합) -->
       <div class="tool-group">
         <button class="tool-btn" data-tool="pushpull" title="Push/Pull (P)">
-          <svg viewBox="0 0 384 512"><path d="M214.6 41.4c-12.5-12.5-32.8-12.5-45.3 0l-160 160c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L160 141.2V448c0 17.7 14.3 32 32 32s32-14.3 32-32V141.2l105.4 105.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-160-160z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M6 21 L18 21 M12 17 L12 4 M8 8 L12 4 L16 8"/></svg>
         </button>
-        <button class="tool-btn" data-tool="sphere" title="Sphere (H)">
-          <svg viewBox="0 0 512 512"><circle cx="256" cy="256" r="200" fill="currentColor" opacity="0.6"/><circle cx="256" cy="256" r="200" fill="none" stroke="currentColor" stroke-width="20"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="cylinder" title="Cylinder (Y)">
-          <svg viewBox="0 0 512 512"><rect x="96" y="64" width="320" height="280" fill="none" stroke="currentColor" stroke-width="20"/><ellipse cx="256" cy="64" rx="160" ry="60" fill="none" stroke="currentColor" stroke-width="20"/><ellipse cx="256" cy="344" rx="160" ry="60" fill="none" stroke="currentColor" stroke-width="20" opacity="0.6"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="cone" title="Cone (N)">
-          <svg viewBox="0 0 512 512"><polygon points="256,64 96,344 416,344" fill="none" stroke="currentColor" stroke-width="20"/><line x1="96" y1="344" x2="416" y2="344" stroke="currentColor" stroke-width="20"/><ellipse cx="256" cy="344" rx="160" ry="60" fill="none" stroke="currentColor" stroke-width="20" opacity="0.6"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="move" title="Move (M)">
-          <svg viewBox="0 0 512 512"><path d="M278.6 9.4c-12.5-12.5-32.8-12.5-45.3 0l-64 64c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l9.4-9.4V224H109.3l9.4-9.4c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-64 64c-12.5 12.5-12.5 32.8 0 45.3l64 64c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-9.4-9.4H224v124.7l-9.4-9.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l64 64c12.5 12.5 32.8 12.5 45.3 0l64-64c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-9.4 9.4V288h124.7l-9.4 9.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l64-64c12.5-12.5 12.5-32.8 0-45.3l-64-64c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l9.4 9.4H288V109.3l9.4 9.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-64-64z"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="rotate" title="Rotate (Q)">
-          <svg viewBox="0 0 512 512"><path d="M142.9 142.9c62.2-62.2 162.7-62.2 224.9 0L320 192h128V64l-51.2 51.2c-81.2-81.2-212.9-81.2-294.2 0c-81.2 81.2-81.2 212.9 0 294.2c81.2 81.2 212.9 81.2 294.2 0c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0c-56.2 56.2-147.4 56.2-203.6 0s-56.2-147.4 0-203.6z"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="scale" title="Scale (S)">
-          <svg viewBox="0 0 512 512"><path d="M344 0H488c13.3 0 24 10.7 24 24V168c0 9.7-5.8 18.5-14.8 22.2s-19.3 1.7-26.2-5.2l-39-39-87 87c-9.4 9.4-24.6 9.4-33.9 0l-24-24c-9.4-9.4-9.4-24.6 0-33.9l87-87L335 49c-6.9-6.9-8.9-17.2-5.2-26.2S334.3 0 344 0zM168 512H24c-13.3 0-24-10.7-24-24V344c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2l39 39 87-87c9.4-9.4 24.6-9.4 33.9 0l24 24c9.4 9.4 9.4 24.6 0 33.9l-87 87 39 39c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8z"/></svg>
-        </button>
+
+        <!-- 프리미티브 (Sphere / Cylinder / Cone) -->
+        <div class="tool-dropdown" data-group="primitive-family">
+          <button class="tool-btn" data-tool="sphere" title="Sphere (H)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="primitive-family" title="프리미티브 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="sphere">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/></svg></span>
+              <span class="tdi-label">구 (Sphere)</span>
+              <span class="tdi-key">H</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="cylinder">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="6" ry="2"/><path d="M6 5 L6 19 M18 5 L18 19"/><path d="M6 19 A 6 2 0 0 0 18 19"/></svg></span>
+              <span class="tdi-label">원통 (Cylinder)</span>
+              <span class="tdi-key">Y</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="cone">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L5 19 M12 3 L19 19"/><ellipse cx="12" cy="19" rx="7" ry="2"/></svg></span>
+              <span class="tdi-label">원뿔 (Cone)</span>
+              <span class="tdi-key">N</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 변형 (Move / Rotate / Scale) -->
+        <div class="tool-dropdown" data-group="transform-family">
+          <button class="tool-btn" data-tool="move" title="Move (M)">
+            <svg viewBox="0 0 24 24"><path d="M12 3 L12 21 M3 12 L21 12 M8 7 L12 3 L16 7 M8 17 L12 21 L16 17 M7 8 L3 12 L7 16 M17 8 L21 12 L17 16"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="transform-family" title="변형 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="move">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L12 21 M3 12 L21 12 M8 7 L12 3 L16 7 M8 17 L12 21 L16 17 M7 8 L3 12 L7 16 M17 8 L21 12 L17 16"/></svg></span>
+              <span class="tdi-label">이동 (Move)</span>
+              <span class="tdi-key">M</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="rotate">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M21 12 A 9 9 0 1 1 12 3 L16 3 M16 3 L16 7"/></svg></span>
+              <span class="tdi-label">회전 (Rotate)</span>
+              <span class="tdi-key">Q</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="scale">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 20 L12 12 M4 20 L9 20 M4 20 L4 15 M20 4 L12 12 M20 4 L15 4 M20 4 L20 9"/></svg></span>
+              <span class="tdi-label">크기 (Scale)</span>
+              <span class="tdi-key">S</span>
+            </div>
+          </div>
+        </div>
+
         <button class="tool-btn" data-tool="offset" title="Offset (O)">
-          <svg viewBox="0 0 448 512"><path d="M64 32C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V96c0-35.3-28.7-64-64-64H64zm48 96h224c17.7 0 32 14.3 32 32V352c0 17.7-14.3 32-32 32H112c-17.7 0-32-14.3-32-32V160c0-17.7 14.3-32 32-32zm16 48V336H320V176H128z"/></svg>
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><rect x="8" y="8" width="8" height="8" rx="0.5"/></svg>
         </button>
         <button class="tool-btn" data-tool="erase" title="Erase (E)">
-          <svg viewBox="0 0 576 512"><path d="M290.7 57.4L57.4 290.7c-25 25-25 65.5 0 90.5l80 80c12 12 28.3 18.7 45.3 18.7H288h9.4H512c17.7 0 32-14.3 32-32s-14.3-32-32-32H387.9L518.6 284.7c25-25 25-65.5 0-90.5L381.3 57.4c-25-25-65.5-25-90.5 0zM297.4 182.6l-144 144c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l144-144c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M16 4 L20 8 L10 18 L6 18 L4 16 Z M10 18 L14 14 M6 18 L20 18"/></svg>
         </button>
       </div>
 
@@ -1846,10 +2017,10 @@
       <!-- Undo/Redo group -->
       <div class="tool-group">
         <button class="tool-btn" data-tool="undo" title="Undo (Ctrl+Z)">
-          <svg viewBox="0 0 512 512"><path d="M125.7 160H176c17.7 0 32 14.3 32 32s-14.3 32-32 32H48c-17.7 0-32-14.3-32-32V64c0-17.7 14.3-32 32-32s32 14.3 32 32v51.2L97.6 97.6c87.5-87.5 229.3-87.5 316.8 0s87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3s-163.8-62.5-226.3 0L125.7 160z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M4 10 L9 10 A 6 6 0 0 1 21 10 L21 14 M4 10 L8 6 M4 10 L8 14"/></svg>
         </button>
         <button class="tool-btn" data-tool="redo" title="Redo (Ctrl+Y)">
-          <svg viewBox="0 0 512 512"><path d="M386.3 160H336c-17.7 0-32 14.3-32 32s14.3 32 32 32H464c17.7 0 32-14.3 32-32V64c0-17.7-14.3-32-32-32s-32 14.3-32 32v51.2l-17.6-17.6c-87.5-87.5-229.3-87.5-316.8 0s-87.5 229.3 0 316.8s229.3 87.5 316.8 0c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0c-62.5 62.5-163.8 62.5-226.3 0s-62.5-163.8 0-226.3s163.8-62.5 226.3 0L386.3 160z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M20 10 L15 10 A 6 6 0 0 0 3 10 L3 14 M20 10 L16 6 M20 10 L16 14"/></svg>
         </button>
       </div>
 
