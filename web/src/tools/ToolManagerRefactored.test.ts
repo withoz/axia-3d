@@ -342,6 +342,59 @@ describe('ToolManager', () => {
       });
     });
 
+    // ── revolve-x/y/z action ──────────────────────────────────────
+    describe('revolve action', () => {
+      it('extracts chain from selected edges and calls revolveProfile', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10, 11]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).getEdgeEndpoints = vi.fn((eid: number) =>
+          eid === 10 ? [1, 2] : [2, 3]);
+        (bridge as any).getVertexPos = vi.fn((vid: number) =>
+          [[0, 0, 0], [1, 0, 0], [2, 0, 0]][vid - 1]);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([500, 501]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).toHaveBeenCalled();
+        const args = (bridge.revolveProfile as any).mock.calls[0];
+        // 3 points × 3 coords = 9 values
+        expect(args[0].length).toBe(9);
+        // Axis direction = +Y
+        expect(args[4]).toBe(0); expect(args[5]).toBe(1); expect(args[6]).toBe(0);
+        // Segments = 24 default
+        expect(args[7]).toBe(24);
+      });
+
+      it('warns when no edges selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).not.toHaveBeenCalled();
+      });
+
+      it('warns when edge selection is not a simple chain', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10, 11, 12]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        // Y-branch: vertex 2 has degree 3
+        (bridge as any).getEdgeEndpoints = vi.fn((eid: number) =>
+          eid === 10 ? [1, 2] : eid === 11 ? [2, 3] : [2, 4]);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).not.toHaveBeenCalled();
+      });
+
+      it('blocked when tool is busy', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).not.toHaveBeenCalled();
+      });
+    });
+
     // ── 파괴적/구조적 명령어 busy 가드 (2026-04-17) ──
     describe('BUSY_BLOCKED_ACTIONS', () => {
       it('delete blocks during busy tool', () => {

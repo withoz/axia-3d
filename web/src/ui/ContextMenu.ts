@@ -91,6 +91,12 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = selectedEdges === 1 ? '' : 'none';
     });
 
+    // ── 엣지 체인 전용 항목 (Revolve, 1개 이상) ──
+    const chainItems = ctxMenu.querySelectorAll('.ctx-edge-chain-item');
+    chainItems.forEach(item => {
+      (item as HTMLElement).style.display = selectedEdges >= 1 ? '' : 'none';
+    });
+
     // 화면 밖으로 나가지 않도록 위치 조정
     const menuW = 200, menuH = 400;
     const cx = Math.min(x, window.innerWidth - menuW);
@@ -125,6 +131,9 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'mirror-x': toolManager.executeAction('mirror-x'); break;
       case 'mirror-y': toolManager.executeAction('mirror-y'); break;
       case 'mirror-z': toolManager.executeAction('mirror-z'); break;
+      case 'revolve-x': toolManager.executeAction('revolve-x'); break;
+      case 'revolve-y': toolManager.executeAction('revolve-y'); break;
+      case 'revolve-z': toolManager.executeAction('revolve-z'); break;
       case 'constrain-parallel':
       case 'constrain-perpendicular':
       case 'constrain-collinear':

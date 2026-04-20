@@ -18,6 +18,7 @@ import { ConstraintCommands } from './ConstraintCommands';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
 import { getMergeTolerance, getRespectMaterial, groupFacesByMaterial } from './MergeSettings';
+import { extractEdgeChain } from './EdgeChain';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
@@ -294,6 +295,7 @@ export class ToolManager {
     'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar', 'merge-as-hole',
     'synthesize-faces',
     'mirror-x', 'mirror-y', 'mirror-z',
+    'revolve-x', 'revolve-y', 'revolve-z',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -319,6 +321,9 @@ export class ToolManager {
     'mirror-x': 'X축 기준 미러 (YZ 평면)',
     'mirror-y': 'Y축 기준 미러 (XZ 평면)',
     'mirror-z': 'Z축 기준 미러 (XY 평면)',
+    'revolve-x': '선택 엣지를 X축으로 회전 (Revolve)',
+    'revolve-y': '선택 엣지를 Y축으로 회전 (Revolve)',
+    'revolve-z': '선택 엣지를 Z축으로 회전 (Revolve)',
   };
 
   executeAction(action: string): void {
@@ -593,6 +598,56 @@ export class ToolManager {
       } else {
         const err = this.bridge.lastError();
         Toast.error(err || '미러링 실패');
+      }
+    } else if (action === 'revolve-x' || action === 'revolve-y' || action === 'revolve-z') {
+      // Revolve Tool — 선택된 엣지 체인을 프로파일로, world X/Y/Z 축을
+      // 회전 축으로 삼아 surface of revolution 생성.
+      // 축 origin은 프로파일 bbox의 해당 축 위 점 (bbox 중심을 축에 투영).
+      const sel = this.selection.getSelectedEdges();
+      if (sel.length < 1) {
+        Toast.warning('회전시킬 엣지 체인을 먼저 선택하세요', 2500);
+        return;
+      }
+      const chain = extractEdgeChain(sel, this.bridge);
+      if (!chain) {
+        Toast.warning(
+          '선택된 엣지가 단순 체인이 아닙니다 (분기/단절). ' +
+          '연결된 폴리라인만 revolve 가능합니다.',
+          3500,
+        );
+        return;
+      }
+      const [ax, ay, az] =
+        action === 'revolve-x' ? [1, 0, 0] :
+        action === 'revolve-y' ? [0, 1, 0] : [0, 0, 1];
+      // Axis origin = 프로파일 bbox 중심을 축에 투영한 점.
+      // (Three.js Box3 대신 직접 계산 — 테스트 mock 호환성)
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const p of chain.positions) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+        if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+      }
+      const center = {
+        x: (minX + maxX) * 0.5,
+        y: (minY + maxY) * 0.5,
+        z: (minZ + maxZ) * 0.5,
+      };
+      const origin: [number, number, number] =
+        action === 'revolve-x' ? [0, center.y, center.z] :
+        action === 'revolve-y' ? [center.x, 0, center.z] : [center.x, center.y, 0];
+      const flat: number[] = [];
+      for (const p of chain.positions) { flat.push(p.x, p.y, p.z); }
+      const newFaces = this.bridge.revolveProfile(flat, origin[0], origin[1], origin[2], ax, ay, az, 24);
+      if (newFaces.length > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        const axisLabel = action === 'revolve-x' ? 'X' : action === 'revolve-y' ? 'Y' : 'Z';
+        Toast.info(`${chain.positions.length} point profile → ${axisLabel} 축 revolve (${newFaces.length} faces)`, 2500);
+        debugLog(`[Action] ${action}: ${newFaces.length} faces`);
+      } else {
+        Toast.error(this.bridge.lastError() || 'Revolve 실패');
       }
     } else if (action === 'synthesize-faces') {
       // Phase H5 — 자유 엣지를 감지해 face로 합성 (수동 트리거)
