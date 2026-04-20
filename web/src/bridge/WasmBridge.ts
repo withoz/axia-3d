@@ -106,6 +106,13 @@ type AxiaEngineExtended = AxiaEngine & {
     count: number,
     dx: number, dy: number, dz: number,
   ): Uint32Array;
+  arrayRadialFaces?(
+    faceIds: Uint32Array,
+    count: number,
+    ox: number, oy: number, oz: number,
+    ax: number, ay: number, az: number,
+    totalAngleRad: number,
+  ): Uint32Array;
   faceArea?(faceId: number): number;
   edgeLength?(edgeId: number): number;
   meshVolume?(): number;
@@ -996,6 +1003,34 @@ export class WasmBridge {
       return out ? Array.from(out) : [];
     } catch (e) {
       this.recordBridgeError('arrayLinearFaces', e);
+      return [];
+    }
+  }
+
+  /**
+   * Radial array — rotate `count` copies of the given faces around an axis.
+   * Returns the new FaceId list, empty on failure (lastError set).
+   */
+  arrayRadialFaces(
+    faceIds: number[],
+    count: number,
+    origin: [number, number, number],
+    axis: [number, number, number],
+    totalAngleRad: number,
+  ): number[] {
+    if (!this.engine?.arrayRadialFaces) return [];
+    this.markDirty();
+    try {
+      const out = this.engine.arrayRadialFaces(
+        new Uint32Array(faceIds),
+        count,
+        origin[0], origin[1], origin[2],
+        axis[0], axis[1], axis[2],
+        totalAngleRad,
+      );
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      this.recordBridgeError('arrayRadialFaces', e);
       return [];
     }
   }

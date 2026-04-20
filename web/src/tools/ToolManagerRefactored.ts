@@ -39,6 +39,7 @@ import { OffsetTool } from './OffsetTool';
 import { EraseTool } from './EraseTool';
 import { SplitTool } from './SplitTool';
 import { GroupTool } from './GroupTool';
+import { MeasureTool } from './MeasureTool';
 import { SphereTool } from '../primitives/SphereTool';
 import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
@@ -187,6 +188,7 @@ export class ToolManager {
     this.tools.set('erase', new EraseTool(this.toolContext));
     this.tools.set('split', new SplitTool(this.toolContext));
     this.tools.set('group', new GroupTool(this.toolContext));
+    this.tools.set('measure', new MeasureTool(this.toolContext));
     this.tools.set('sphere', new SphereTool(this.toolContext));
     this.tools.set('cylinder', new CylinderTool(this.toolContext));
     this.tools.set('cone', new ConeTool(this.toolContext));
@@ -299,7 +301,7 @@ export class ToolManager {
     'subdivide',
     'fillet-edge',
     'chamfer-edge',
-    'array-linear',
+    'array-linear', 'array-radial',
     'measure-selection',
     'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
@@ -334,10 +336,12 @@ export class ToolManager {
     'fillet-edge': '선택 엣지 모깎기 (Fillet)',
     'chamfer-edge': '선택 엣지 모따기 (Chamfer)',
     'array-linear': '선택을 선형 배열로 복제',
+    'array-radial': '선택을 원형 배열로 복제',
     'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
     'taper-selection': '선택 테이퍼 (Taper)',
+    'assign-quick-color': '선택 면에 색상 지정',
   };
 
   executeAction(action: string): void {
@@ -851,6 +855,106 @@ export class ToolManager {
       } else {
         Toast.fromBridgeError(this.bridge, '배열 실패');
       }
+    } else if (action === 'array-radial') {
+      // 선택한 면을 축 중심으로 원형 배열. Prompt: "N, axis(x|y|z), totalDeg"
+      // 축 원점은 선택 면의 bounding box center(X축은 YZ-평면, 등)에서 유추.
+      const sel = this.selection.getSelectedFaces();
+      if (sel.length === 0) {
+        Toast.warning('배열할 면을 먼저 선택하세요', 2500);
+        return;
+      }
+      const last = localStorage.getItem('axia:array-radial:params') ?? '6, y, 360';
+      const input = window.prompt(
+        '원형 배열 파라미터 "N, axis(x|y|z), 총각도°" (예: 6, y, 360):',
+        last,
+      );
+      if (input == null) return;
+      const parts = input.split(/[,\s]+/).map(s => s.trim()).filter(s => s.length);
+      if (parts.length !== 3) {
+        Toast.warning('3개 값이 필요합니다: N, axis, 총각도°', 3000);
+        return;
+      }
+      const count = parseInt(parts[0], 10);
+      const axisChar = parts[1].toLowerCase();
+      const totalDeg = parseFloat(parts[2]);
+      if (!Number.isFinite(count) || count < 1 || !Number.isFinite(totalDeg)) {
+        Toast.warning('유효한 숫자 값을 입력하세요', 3000);
+        return;
+      }
+      let axis: [number, number, number];
+      if (axisChar === 'x') axis = [1, 0, 0];
+      else if (axisChar === 'y') axis = [0, 1, 0];
+      else if (axisChar === 'z') axis = [0, 0, 1];
+      else { Toast.warning('축은 x / y / z 중 하나여야 합니다', 3000); return; }
+      // axis_origin = 월드 원점. (선택 중심을 축 원점으로 하면 원형 배열이
+      // 제자리에서 시작 — 대부분의 사용자가 원하는 "원점 중심 원형 배열"과 달라짐)
+      const origin: [number, number, number] = [0, 0, 0];
+      try { localStorage.setItem('axia:array-radial:params', input); } catch { /* ignore */ }
+      const totalRad = (totalDeg * Math.PI) / 180;
+      const newFaces = this.bridge.arrayRadialFaces(sel, count, origin, axis, totalRad);
+      if (newFaces.length > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`${sel.length}개 면을 ${count}회 원형 복제 (${axisChar}축, ${totalDeg}°)`, 2500);
+        debugLog(`[Action] array-radial: count=${count}, axis=${axisChar}, deg=${totalDeg}`);
+      } else {
+        Toast.fromBridgeError(this.bridge, '원형 배열 실패');
+      }
+    } else if (action === 'assign-quick-color') {
+      // 선택된 face들에 즉석 색상을 부여. HTML color picker → MaterialLibrary에
+      // 일회용 custom material 등록 → assignToFaces. Rust 엔진은 rustId를
+      // opaque u32로 저장하므로 10000+ 범위는 안전하게 사용 가능 (BUILTIN 12개와 충돌 없음).
+      // Viewport의 vertex color 파이프라인은 TS-side getMaterialForFace만 참조하므로
+      // 즉시 색이 반영됨.
+      const selFaces = this.selection.getSelectedFaces();
+      if (selFaces.length === 0) {
+        Toast.warning('색상을 지정할 면을 먼저 선택하세요', 2500);
+        return;
+      }
+      const lastColor = localStorage.getItem('axia:quickcolor:last') ?? '#3b82f6';
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.value = lastColor;
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      document.body.appendChild(input);
+      const cleanup = () => { try { input.remove(); } catch { /* ignore */ } };
+      input.addEventListener('change', () => {
+        const hex = input.value; // '#rrggbb'
+        try { localStorage.setItem('axia:quickcolor:last', hex); } catch { /* ignore */ }
+        const colorInt = parseInt(hex.slice(1), 16);
+        const lib = getMaterialLibrary();
+        // 10000+ 범위에서 고유 rustId 할당 (현재 최대값 + 1)
+        let maxRustId = 12;
+        for (const m of lib.getAll()) {
+          if (m.rustId > maxRustId) maxRustId = m.rustId;
+        }
+        const rustId = Math.max(maxRustId + 1, 10001);
+        const id = `quick-${Date.now()}-${rustId}`;
+        lib.addCustom({
+          id,
+          rustId,
+          name: `색상 ${hex}`,
+          nameEn: `Color ${hex}`,
+          category: 'custom',
+          physical: {
+            density: 1000, friction: 0.5, restitution: 0.2, specificGravity: 1.0,
+            thermalConductivity: 0.5, fireRating: 'incombustible',
+          },
+          visual: { color: colorInt, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+        });
+        const ok = lib.assignToFaces(selFaces, id);
+        if (ok) {
+          this.syncMesh();
+          Toast.info(`${selFaces.length}개 면에 ${hex} 색상 적용`, 2000);
+          debugLog(`[Action] assign-quick-color: ${selFaces.length} faces, color=${hex}`);
+        } else {
+          Toast.error('색상 적용 실패', 2500);
+        }
+        cleanup();
+      });
+      input.addEventListener('cancel', cleanup);
+      input.click();
     } else if (action === 'chamfer-edge') {
       // Chamfer is a degenerate Fillet with only one strip segment — so
       // instead of an arc between the rolled-back points, a single flat

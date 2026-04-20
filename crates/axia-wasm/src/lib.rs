@@ -1365,6 +1365,42 @@ impl AxiaEngine {
         }
     }
 
+    /// Radial array — rotate `count` copies of the given faces around
+    /// an axis. Copy `k` is rotated by `total_angle_rad · k / count`
+    /// about (axis_origin, axis_dir). Returns new FaceIds copy-major.
+    #[wasm_bindgen(js_name = "arrayRadialFaces")]
+    pub fn array_radial_faces(
+        &mut self,
+        face_ids: &[u32],
+        count: u32,
+        ox: f64, oy: f64, oz: f64,
+        ax: f64, ay: f64, az: f64,
+        total_angle_rad: f64,
+    ) -> Vec<u32> {
+        let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        let origin = DVec3::new(ox, oy, oz);
+        let axis = DVec3::new(ax, ay, az);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.array_radial_faces(&fids, count, origin, axis, total_angle_rad) {
+            Ok(new_faces) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                new_faces.iter().map(|f| f.raw()).collect()
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] array_radial_faces ERROR: {}", e);
+                self.set_error(format!("array_radial: {}", e));
+                Vec::new()
+            }
+        }
+    }
+
     /// Return the outer-loop vertex IDs of a face in walk order.
     /// Empty vec on error (face missing, degenerate, etc.).
     #[wasm_bindgen(js_name = "getFaceVertices")]

@@ -371,6 +371,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         'o': 'offset', 'O': 'offset',
         'e': 'erase', 'E': 'erase',
         'x': 'split', 'X': 'split',
+        'u': 'measure', 'U': 'measure',
       };
       const tool = keyMap[e.key];
       if (tool) {

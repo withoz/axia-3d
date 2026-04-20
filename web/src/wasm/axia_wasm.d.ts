@@ -52,6 +52,12 @@ export class AxiaEngine {
      */
     arrayLinearFaces(face_ids: Uint32Array, count: number, dx: number, dy: number, dz: number): Uint32Array;
     /**
+     * Radial array — rotate `count` copies of the given faces around
+     * an axis. Copy `k` is rotated by `total_angle_rad · k / count`
+     * about (axis_origin, axis_dir). Returns new FaceIds copy-major.
+     */
+    arrayRadialFaces(face_ids: Uint32Array, count: number, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, total_angle_rad: number): Uint32Array;
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
@@ -724,6 +730,7 @@ export interface InitOutput {
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly axiaengine_arrayRadialFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
