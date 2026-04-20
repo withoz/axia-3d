@@ -333,20 +333,12 @@ pub fn split_face_by_line(
     let classifications = classify_holes(mesh, proj_start, proj_end, &saved_holes)?;
 
     // Decision tree: which Phase G branch?
-    let mut crossed_idx: Option<usize> = None;
+    let mut crossed_indices: Vec<usize> = Vec::new();
     for (i, c) in classifications.iter().enumerate() {
         match c {
             HoleClassification::Clear => {}
             HoleClassification::Crossed(pts) if pts.len() == 2 => {
-                ensure!(
-                    crossed_idx.is_none(),
-                    "split_face_by_line: cutting line crosses {} holes — \
-                     multi-hole crossing not yet supported",
-                    classifications.iter()
-                        .filter(|c| matches!(c, HoleClassification::Crossed(pts) if pts.len() == 2))
-                        .count(),
-                );
-                crossed_idx = Some(i);
+                crossed_indices.push(i);
             }
             HoleClassification::Crossed(pts) => {
                 bail!(
@@ -368,12 +360,12 @@ pub fn split_face_by_line(
         }
     }
 
-    // ─── Case (b): one hole is crossed — "hole-eaten" reconstruction ────
-    if let Some(crossed_i) = crossed_idx {
+    // ─── Case (b): one or more holes are crossed — "hole-eaten" reconstruction ──
+    if !crossed_indices.is_empty() {
         return split_face_case_b(
             mesh, face_id,
             v1, v2,
-            &saved_holes, crossed_i, &classifications,
+            &saved_holes, &crossed_indices, &classifications,
             proj_start, proj_end,
             new_verts, new_edges, debug,
         );
@@ -518,16 +510,20 @@ fn segment_cross_t(
     (num / denom).clamp(0.0, 1.0)
 }
 
-/// Phase G case (b) — cutting line crosses outer twice and exactly one
-/// hole twice. The crossed hole is consumed; each output face gets one
-/// arc of the former hole woven into its outer boundary.
+/// Phase G case (b), multi-hole generalization — cutting line crosses
+/// outer twice and N ≥ 1 holes twice each. Every crossed hole is
+/// consumed; each output face gets one arc of each crossed hole woven
+/// into its outer boundary in the order the cut encounters them.
+///
+/// Non-crossed ("clear") holes are redistributed between the two
+/// output faces by geometric containment.
 fn split_face_case_b(
     mesh: &mut Mesh,
     face_id: FaceId,
     outer_a: VertId,
     outer_b: VertId,
     saved_holes: &[SavedHole],
-    crossed_i: usize,
+    crossed_indices: &[usize],
     classifications: &[HoleClassification],
     proj_start: DVec3,
     _proj_end: DVec3,
@@ -535,97 +531,131 @@ fn split_face_case_b(
     mut new_edges: Vec<EdgeId>,
     mut debug: Vec<String>,
 ) -> Result<FaceSplitResult> {
-    let crossed_hole = &saved_holes[crossed_i];
-    let crossings = match &classifications[crossed_i] {
-        HoleClassification::Crossed(c) => c.clone(),
-        _ => unreachable!("split_face_case_b invariant: crossed hole mis-classified"),
-    };
     debug.push(format!(
-        "case (b): crossing hole start={} at {} points",
-        crossed_hole.loop_ref.start.raw(),
-        crossings.len(),
+        "case (b): {} hole(s) crossed",
+        crossed_indices.len(),
     ));
 
-    // ── Realize the two hole-boundary crossings as real vertices ───────
-    // `crossings` is in hole-segment order; realize each by splitting its
-    // hole edge. After split_edge, subsequent crossing indices may shift
-    // so re-resolve from the (now larger) hole loop via face.inners().
-    let mut realized_hole_verts = [VertId::NULL; 2];
-    for (k, (seg_idx, pos)) in crossings.iter().enumerate() {
-        // Re-fetch the hole's current start each iteration — split_edge may
-        // have rotated it if it coincided with the previous split.
-        let hole_start_now = mesh.faces[face_id].inners()[crossed_i].start;
-        let loop_verts = mesh.collect_loop_verts(hole_start_now)?;
-        let (eid, _t) = find_hole_edge_containing(mesh, &loop_verts, *seg_idx, *pos)?;
-        let (new_v, e1, e2) = mesh.split_edge(eid, *pos)?;
-        new_verts.push(new_v);
-        new_edges.push(e1);
-        new_edges.push(e2);
-        realized_hole_verts[k] = new_v;
-        debug.push(format!(
-            "  realized hole crossing {} at edge {} → v{}",
-            seg_idx, eid.raw(), new_v.raw(),
-        ));
+    // ── Realize all hole-boundary crossings as real vertices ───────────
+    // One entry per crossed hole. Each holds (hole_index_in_saved_holes,
+    // realized V closer to A, realized V closer to B).
+    struct CrossedHole {
+        saved_idx: usize,
+        h_a: VertId, // closer to outer_a along cut
+        h_b: VertId, // closer to outer_b along cut
     }
-
-    // ── Order H1/H2 by distance along the cutting line from outer_a ────
     let a_pos = mesh.vertex_pos(outer_a)?;
     let b_pos = mesh.vertex_pos(outer_b)?;
     let cut_dir = b_pos - a_pos;
-    let t_for = |v: VertId| -> f64 {
-        let p = mesh.vertex_pos(v).unwrap_or(a_pos) - a_pos;
-        p.dot(cut_dir) / cut_dir.length_squared().max(1e-12)
-    };
-    let t0 = t_for(realized_hole_verts[0]);
-    let t1 = t_for(realized_hole_verts[1]);
-    let (h1, h2) = if t0 <= t1 {
-        (realized_hole_verts[0], realized_hole_verts[1])
-    } else {
-        (realized_hole_verts[1], realized_hole_verts[0])
-    };
+    let cut_len_sq = cut_dir.length_squared().max(1e-12);
+    let t_for_pos = |p: DVec3| ((p - a_pos).dot(cut_dir) / cut_len_sq);
 
-    // ── Collect updated outer + crossed-hole vertex loops ──────────────
-    let outer_start_now = mesh.faces[face_id].outer().start;
-    let hole_start_now  = mesh.faces[face_id].inners()[crossed_i].start;
-    let updated_outer = mesh.collect_loop_verts(outer_start_now)?;
-    let updated_hole  = mesh.collect_loop_verts(hole_start_now)?;
+    let mut crossed: Vec<CrossedHole> = Vec::with_capacity(crossed_indices.len());
+    for &saved_idx in crossed_indices {
+        let crossings = match &classifications[saved_idx] {
+            HoleClassification::Crossed(c) => c.clone(),
+            _ => unreachable!(),
+        };
+        debug_assert_eq!(crossings.len(), 2);
+        let mut realized = [VertId::NULL; 2];
+        for (k, (seg_idx, pos)) in crossings.iter().enumerate() {
+            let hole_start_now = mesh.faces[face_id].inners()[saved_idx].start;
+            let loop_verts = mesh.collect_loop_verts(hole_start_now)?;
+            let (eid, _t) = find_hole_edge_containing(mesh, &loop_verts, *seg_idx, *pos)?;
+            let (new_v, e1, e2) = mesh.split_edge(eid, *pos)?;
+            new_verts.push(new_v);
+            new_edges.push(e1);
+            new_edges.push(e2);
+            realized[k] = new_v;
+            debug.push(format!(
+                "  hole[{}] crossing {} at edge {} → v{}",
+                saved_idx, seg_idx, eid.raw(), new_v.raw(),
+            ));
+        }
+        let p0 = mesh.vertex_pos(realized[0])?;
+        let p1 = mesh.vertex_pos(realized[1])?;
+        let (h_a, h_b) = if t_for_pos(p0) <= t_for_pos(p1) {
+            (realized[0], realized[1])
+        } else {
+            (realized[1], realized[0])
+        };
+        crossed.push(CrossedHole { saved_idx, h_a, h_b });
+    }
+
+    // Sort crossed holes along the cut direction by h_a's parameter.
+    // This gives us the order in which the line enters each hole.
+    crossed.sort_by(|x, y| {
+        let tx = t_for_pos(mesh.vertex_pos(x.h_a).unwrap_or(a_pos));
+        let ty = t_for_pos(mesh.vertex_pos(y.h_a).unwrap_or(a_pos));
+        tx.partial_cmp(&ty).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // ── Collect updated outer + each crossed-hole loop ─────────────────
+    let updated_outer = mesh.collect_loop_verts(mesh.faces[face_id].outer().start)?;
     ensure!(
         updated_outer.contains(&outer_a) && updated_outer.contains(&outer_b),
         "case (b): outer loop lost A/B after edge split",
     );
-    ensure!(
-        updated_hole.contains(&h1) && updated_hole.contains(&h2),
-        "case (b): hole loop lost H1/H2 after edge split",
-    );
+    let mut updated_holes: Vec<Vec<VertId>> = Vec::with_capacity(crossed.len());
+    for ch in &crossed {
+        let start = mesh.faces[face_id].inners()[ch.saved_idx].start;
+        let verts = mesh.collect_loop_verts(start)?;
+        ensure!(
+            verts.contains(&ch.h_a) && verts.contains(&ch.h_b),
+            "case (b): hole[{}] lost crossing verts after split",
+            ch.saved_idx,
+        );
+        updated_holes.push(verts);
+    }
 
-    // ── Build the two output-face vertex loops ─────────────────────────
+    // ── Build face_1 and face_2 vertex lists ───────────────────────────
     //
-    //   face_1 loop: A → (hole natural from H1 to H2) → (outer natural from B to A)
-    //   face_2 loop: (outer natural from A to B) → (hole natural from H2 to H1)
+    //   face_1 (one side of cut, walked CCW):
+    //     A → for each crossed hole in cut order:
+    //           [hole_natural(h_a → h_b)] →
+    //        B → outer_natural(B → A)[:-1]   (skip duplicate A)
     //
-    // Walking hole in "natural" order (CW from face normal) and outer in
-    // "natural" order (CCW) combined with the above sequence yields CCW
-    // winding on both output faces for any convex-ish crossing — verified
-    // on test geometry in phase_g2_hole_split_above_normal.
-    let hole_arc_1 = arc_natural(&updated_hole, h1, h2);         // [H1, ..., H2]
+    //   face_2 (other side, walked CCW):
+    //     outer_natural(A → B) →
+    //     for each crossed hole in REVERSE cut order:
+    //           [hole_natural(h_b → h_a)]
+    //
+    // Single-hole reduction:
+    //   face_1 = [A, hole(h_a→h_b), B, outer(B→A)[:-1]]
+    //   face_2 = [outer(A→B), hole(h_b→h_a)]
+    //
+    // Which matches Phase G2 single-hole exactly; verified by shoelace
+    // on the 200×200-with-40×40-hole test geometry.
     let outer_arc_1 = arc_natural(&updated_outer, outer_b, outer_a); // [B, ..., A]
     let outer_arc_2 = arc_natural(&updated_outer, outer_a, outer_b); // [A, ..., B]
-    let hole_arc_2 = arc_natural(&updated_hole, h2, h1);         // [H2, ..., H1]
 
-    // face_1: A + hole_arc_1 + outer_arc_1 (skip trailing A duplicate)
-    let mut face_1_verts: Vec<VertId> = Vec::with_capacity(hole_arc_1.len() + outer_arc_1.len());
+    let mut face_1_verts: Vec<VertId> = Vec::new();
     face_1_verts.push(outer_a);
-    face_1_verts.extend_from_slice(&hole_arc_1);
-    face_1_verts.extend_from_slice(&outer_arc_1[..outer_arc_1.len().saturating_sub(1)]);
+    for (k, ch) in crossed.iter().enumerate() {
+        let arc = arc_natural(&updated_holes[k], ch.h_a, ch.h_b);
+        face_1_verts.extend_from_slice(&arc);
+    }
+    // After all crossed holes, fall through to outer's B-to-A arc.
+    // The next vertex after the last h_b must be B — we append outer_arc_1
+    // without repeating B: the outer_arc_1 starts at B, so we skip its
+    // first entry and extend the rest, but we also skip the trailing A.
+    if !outer_arc_1.is_empty() {
+        // Push B explicitly (first elem of outer_arc_1), then the rest
+        // excluding trailing A.
+        face_1_verts.push(outer_arc_1[0]);
+        face_1_verts.extend_from_slice(&outer_arc_1[1..outer_arc_1.len().saturating_sub(1)]);
+    }
 
-    // face_2: outer_arc_2 + hole_arc_2 (start already has A; end at H1)
-    let mut face_2_verts: Vec<VertId> = Vec::with_capacity(outer_arc_2.len() + hole_arc_2.len());
-    face_2_verts.extend_from_slice(&outer_arc_2);
-    face_2_verts.extend_from_slice(&hole_arc_2);
+    let mut face_2_verts: Vec<VertId> = Vec::new();
+    face_2_verts.extend_from_slice(&outer_arc_2); // [A, ..., B]
+    // Reverse cut order for face_2 — it walks back from B to A through
+    // each hole's "other" arc (h_b → h_a).
+    for (k, ch) in crossed.iter().enumerate().rev() {
+        let arc = arc_natural(&updated_holes[k], ch.h_b, ch.h_a);
+        face_2_verts.extend_from_slice(&arc);
+    }
 
-    // ── Figure out which clear holes go to which new face ──────────────
-    // We base containment on 2D (face plane) point-in-polygon of the
-    // candidate outer loops since the face hasn't been materialized yet.
+    // ── Redistribute clear (untouched) holes by containment ────────────
     let normal = mesh.faces[face_id].normal();
     let face_origin = mesh.vertex_pos(updated_outer[0])?;
     let (u_axis, v_axis) = projection_axes(normal);
@@ -636,10 +666,13 @@ fn split_face_case_b(
         .map(|&vid| project_2d(mesh.vertex_pos(vid).unwrap_or(face_origin)))
         .collect();
 
+    let crossed_set: std::collections::HashSet<usize> =
+        crossed_indices.iter().copied().collect();
+
     let mut holes_for_1: Vec<Vec<VertId>> = Vec::new();
     let mut holes_for_2: Vec<Vec<VertId>> = Vec::new();
     for (i, hole) in saved_holes.iter().enumerate() {
-        if i == crossed_i { continue; }          // crossed hole is consumed
+        if crossed_set.contains(&i) { continue; }  // consumed hole
         if !matches!(classifications[i], HoleClassification::Clear) { continue; }
         let sample3 = mesh.vertex_pos(hole.sample_vert)?;
         let s2 = project_2d(sample3);
@@ -659,16 +692,21 @@ fn split_face_case_b(
     let face_1 = mesh.add_face_with_holes(&face_1_verts, &holes_for_1_slices, material)?;
     let face_2 = mesh.add_face_with_holes(&face_2_verts, &holes_for_2_slices, material)?;
 
-    // Track the new cut edges (A↔H1 and H2↔B)
-    if let Some(e) = mesh.find_edge(outer_a, h1) { new_edges.push(e); }
-    if let Some(e) = mesh.find_edge(h2, outer_b) { new_edges.push(e); }
+    // Track the new cut edges (A↔first h_a, each h_b↔next h_a, last h_b↔B)
+    if let Some(first) = crossed.first() {
+        if let Some(e) = mesh.find_edge(outer_a, first.h_a) { new_edges.push(e); }
+    }
+    for pair in crossed.windows(2) {
+        if let Some(e) = mesh.find_edge(pair[0].h_b, pair[1].h_a) { new_edges.push(e); }
+    }
+    if let Some(last) = crossed.last() {
+        if let Some(e) = mesh.find_edge(last.h_b, outer_b) { new_edges.push(e); }
+    }
 
     debug.push(format!("case (b) result: face_1={} ({}v), face_2={} ({}v)",
         face_1.raw(), face_1_verts.len(), face_2.raw(), face_2_verts.len()));
-    // Use proj_start for diagnostic if needed
     debug.push(format!("  proj_start={:?}", proj_start));
 
-    // ADR-007 — verify the rebuild didn't break invariants
     mesh.debug_verify_invariants();
 
     Ok(FaceSplitResult {
@@ -2200,20 +2238,22 @@ mod tests {
     }
 
     #[test]
-    fn phase_g2_rejects_multi_hole_crossings() {
-        // Two holes side by side — cut through both → rejected.
+    fn phase_g2_cuts_through_two_holes() {
+        // Two holes side by side — cut through both. Phase G2 multi-hole.
+        // Both holes eaten; two output faces, each with a long outer loop
+        // including two concave notches (one per hole).
         let mut m = Mesh::new();
         let mat = MaterialId::new(0);
         let o0 = m.add_vertex(DVec3::new(-200.0, 0.0, -100.0));
         let o1 = m.add_vertex(DVec3::new( 200.0, 0.0, -100.0));
         let o2 = m.add_vertex(DVec3::new( 200.0, 0.0,  100.0));
         let o3 = m.add_vertex(DVec3::new(-200.0, 0.0,  100.0));
-        // Hole A at x=-80
+        // Hole A at x≈-80
         let a0 = m.add_vertex(DVec3::new(-100.0, 0.0, -20.0));
         let a1 = m.add_vertex(DVec3::new(-100.0, 0.0,  20.0));
         let a2 = m.add_vertex(DVec3::new( -60.0, 0.0,  20.0));
         let a3 = m.add_vertex(DVec3::new( -60.0, 0.0, -20.0));
-        // Hole B at x=+80
+        // Hole B at x≈+80
         let b0 = m.add_vertex(DVec3::new(  60.0, 0.0, -20.0));
         let b1 = m.add_vertex(DVec3::new(  60.0, 0.0,  20.0));
         let b2 = m.add_vertex(DVec3::new( 100.0, 0.0,  20.0));
@@ -2223,15 +2263,20 @@ mod tests {
             &[&[a0, a1, a2, a3], &[b0, b1, b2, b3]],
             mat,
         ).unwrap();
-        let err = split_face_by_line(
+        let res = split_face_by_line(
             &mut m, f,
             DVec3::new(-200.0, 0.0, 0.0),
             DVec3::new( 200.0, 0.0, 0.0),
-        );
-        assert!(err.is_err());
-        let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("multi-hole"),
-            "expected multi-hole rejection, got: {}", msg);
+        ).unwrap_or_else(|e| panic!("multi-hole split failed: {}", e));
+        assert_eq!(res.new_faces.len(), 2);
+        // Neither output face keeps a hole (both were consumed).
+        for &fid in &res.new_faces {
+            assert!(m.faces[fid].inners().is_empty(),
+                "expected 0 holes, got {}", m.faces[fid].inners().len());
+        }
+        let report = m.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after multi-hole Phase G2 split:\n{}", report.summary());
     }
 
     #[test]
