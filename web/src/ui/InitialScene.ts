@@ -125,11 +125,44 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
       bridge.create_sphere?.(snoutAxisX + 950, snoutY, 0, 180, 10, 8);
       await tick();
 
-      // ─── Ears × 2 (cones, vertical) ────────────────────────────
-      const earBaseY = headY + 700, earR = 450, earH = 1800;
-      bridge.create_cone?.(headX - 100, earBaseY, -600, earR, earH, 12);
+      // ─── Ears × 2 (tilted revolve — Papillon "butterfly" V-shape) ─
+      // Real Papillon ears angle ~20° outward from vertical, and their
+      // height is comparable to the head radius (not 2× like before).
+      // Cone primitives are axis-locked to +Y, so we use Revolve with a
+      // tilted axis instead: mostly +Y, plus ±Z for the outward lean.
+      const buildEar = (zSign: -1 | 1) => {
+        // Base center: slightly inside the top of the head so the ear's
+        // bottom visibly emerges from the head surface.
+        const baseX = headX - 120;
+        const baseY = headY + 550;
+        const baseZ = zSign * 420;
+        // Axis direction tilted ~20° outward in YZ plane.
+        const tiltZ = zSign * 0.34;           // sin(20°) ≈ 0.34
+        const axisY = 0.94;                   // cos(20°) ≈ 0.94
+        // Profile lies in the plane containing the axis AND the world +X
+        // direction (which is perpendicular to the YZ-tilt axis).
+        // Length along axis = 1250 — comparable to head r=900.
+        const L = 1250;
+        const addPt = (t: number, r: number): [number, number, number] => [
+          baseX + r,                 // +X is our perpendicular-in-plane axis
+          baseY + t * axisY,
+          baseZ + t * tiltZ,
+        ];
+        const pts = [
+          addPt(0,        0),        // base pole
+          addPt(0,      600),        // base rim (wide)
+          addPt(L*0.30, 540),        // lower ear
+          addPt(L*0.65, 320),        // upper half, tapering
+          addPt(L*0.90, 140),        // near tip
+          addPt(L,        0),        // tip pole (pointed)
+        ];
+        const profile: number[] = [];
+        for (const p of pts) profile.push(...p);
+        bridge.revolveProfile(profile, baseX, baseY, baseZ, 0, axisY, tiltZ, 14);
+      };
+      buildEar(-1);
       await tick();
-      bridge.create_cone?.(headX - 100, earBaseY, +600, earR, earH, 12);
+      buildEar(+1);
       await tick();
 
       // ─── Tail (sweep along curved upward path) ─────────────────

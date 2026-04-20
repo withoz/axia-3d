@@ -35,18 +35,17 @@ describe('InitialScene', () => {
   });
 
   describe('loadInitialScene', () => {
-    it('creates Papillon scene (revolve legs+body+snout, sphere head+nose, cone ears, sweep tail)', async () => {
+    it('creates Papillon scene (revolve for legs+body+snout+ears, sphere head+nose, sweep tail)', async () => {
       loadInitialScene(deps);
       await new Promise(r => setTimeout(r, 500));
 
-      // No more plain cylinders — legs and tail use revolve / sweep
+      // No plain cylinders, no cones — everything is revolve/sweep/sphere now
       expect((deps.bridge.create_cylinder as any).mock.calls.length).toBe(0);
-      // 4 legs + body + snout = 6 revolves
-      expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(6);
+      expect((deps.bridge.create_cone as any).mock.calls.length).toBe(0);
+      // 4 legs + body + snout + 2 ears = 8 revolves
+      expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(8);
       // head + nose = 2 spheres
       expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(2);
-      // 2 ears as cones
-      expect((deps.bridge.create_cone as any).mock.calls.length).toBe(2);
       // 1 tail as sweep
       expect((deps.bridge.sweepProfileAlongPath as any).mock.calls.length).toBe(1);
       expect(deps.toolManager.syncMesh).toHaveBeenCalled();
