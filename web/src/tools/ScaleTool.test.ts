@@ -3,15 +3,24 @@ import * as THREE from 'three';
 import { ScaleTool } from './ScaleTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+vi.mock('../ui/Toast', () => ({
+  Toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn() },
+}));
 
 function mockToolContext() {
   return {
     bridge: {
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
       scaleFaces: vi.fn(),
+      translateVerts: vi.fn(),
+      getEdgeEndpoints: vi.fn().mockReturnValue([] as number[]),
+      getVertexPos: vi.fn().mockReturnValue([0, 0, 0] as [number, number, number]),
     },
     viewport: {
       activeCamera: new THREE.PerspectiveCamera(),
+    },
+    selection: {
+      getSelectedEdges: vi.fn().mockReturnValue([]),
     },
     getSelectedFaces: vi.fn().mockReturnValue([1, 2]),
     get3DPoint: vi.fn(),
@@ -50,8 +59,9 @@ describe('ScaleTool', () => {
       expect(tool.isBusy()).toBe(true);
     });
 
-    it('does nothing when no faces selected', () => {
+    it('does nothing when nothing selected', () => {
       ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
       expect(tool.isBusy()).toBe(false);
     });
@@ -104,16 +114,53 @@ describe('ScaleTool', () => {
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
-    it('does nothing when no faces selected', () => {
+    it('does nothing when nothing selected', () => {
       ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
       tool.applyVCBValue(2);
       expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
+      expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
     });
 
     it('does nothing when centroid is null', () => {
       ctx.bridge.facesCentroid.mockReturnValue(null);
       tool.applyVCBValue(2);
       expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('edge scaling', () => {
+    beforeEach(() => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10, 20]);
+      ctx.bridge.getEdgeEndpoints.mockImplementation((eid: number) => {
+        if (eid === 10) return [1, 2];
+        if (eid === 20) return [2, 3];
+        return [];
+      });
+      ctx.bridge.getVertexPos.mockImplementation((v: number) => {
+        if (v === 1) return [0, 0, 0];
+        if (v === 2) return [10, 0, 0];
+        if (v === 3) return [0, 0, 10];
+        return null;
+      });
+    });
+
+    it('VCB ×2 from centroid moves each vert via translateVerts', () => {
+      // centroid ≈ (10/3, 0, 10/3)
+      tool.applyVCBValue(2);
+      expect(ctx.bridge.scaleFaces).not.toHaveBeenCalled();
+      // Each vert gets its own translateVerts call
+      const calls = (ctx.bridge.translateVerts as any).mock.calls;
+      expect(calls.length).toBe(3);
+      // For vert 1 at (0,0,0), delta = (0-10/3)*(2-1) = -10/3
+      const call1 = calls.find((c: any[]) => c[0][0] === 1)!;
+      expect(call1[1]).toBeCloseTo(-10 / 3, 2);
+    });
+
+    it('scale 1.0 skips zero-delta calls', () => {
+      tool.applyVCBValue(1);
+      expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
     });
   });
 

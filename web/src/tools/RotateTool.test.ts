@@ -12,9 +12,15 @@ function mockToolContext() {
     bridge: {
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
       rotateFaces: vi.fn(),
+      rotateVerts: vi.fn(),
+      getEdgeEndpoints: vi.fn().mockReturnValue([] as number[]),
+      getVertexPos: vi.fn().mockReturnValue([0, 0, 0] as [number, number, number]),
     },
     viewport: {
       activeCamera: new THREE.PerspectiveCamera(),
+    },
+    selection: {
+      getSelectedEdges: vi.fn().mockReturnValue([]),
     },
     getSelectedFaces: vi.fn().mockReturnValue([1, 2, 3]),
     syncMesh: vi.fn(),
@@ -52,8 +58,53 @@ describe('RotateTool (CAD 3-click style)', () => {
 
     it('stays false when activating without selection', () => {
       ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
       tool.onActivate();
       expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  describe('edge rotation', () => {
+    beforeEach(() => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10, 20]);
+      ctx.bridge.getEdgeEndpoints.mockImplementation((eid: number) => {
+        if (eid === 10) return [1, 2];
+        if (eid === 20) return [2, 3];
+        return [];
+      });
+    });
+
+    it('activates with edge-only selection', () => {
+      tool.onActivate();
+      expect(tool.isBusy()).toBe(true);
+    });
+
+    it('drag rotates verts (not faces)', () => {
+      tool.onActivate();
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(10, 0, 0));
+      tool.onMouseMove({} as MouseEvent, new THREE.Vector3(0, 0, 10));
+      expect(ctx.bridge.rotateVerts).toHaveBeenCalled();
+      expect(ctx.bridge.rotateFaces).not.toHaveBeenCalled();
+      const vertIds = (ctx.bridge.rotateVerts as any).mock.calls[0][0].slice().sort();
+      expect(vertIds).toEqual([1, 2, 3]); // dedup
+    });
+
+    it('legacy VCB rotates verts around their centroid', () => {
+      ctx.bridge.getVertexPos.mockImplementation((v: number) => {
+        if (v === 1) return [0, 0, 0];
+        if (v === 2) return [6, 0, 0];
+        if (v === 3) return [0, 0, 6];
+        return null;
+      });
+      tool.applyVCBValue(45);
+      expect(ctx.bridge.rotateVerts).toHaveBeenCalled();
+      const call = (ctx.bridge.rotateVerts as any).mock.calls[0];
+      // centroid ≈ (2, 0, 2)
+      expect(call[1]).toBeCloseTo(2, 1);
+      expect(call[3]).toBeCloseTo(2, 1);
+      expect(call[7]).toBe(45); // angle
     });
   });
 

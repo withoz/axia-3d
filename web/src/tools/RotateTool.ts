@@ -19,11 +19,16 @@ import { Toast } from '../ui/Toast';
 
 type Phase = 'idle' | 'pick-base' | 'pick-reference' | 'pick-target';
 
+type Target =
+  | { kind: 'faces'; ids: number[] }
+  | { kind: 'verts'; ids: number[]; edgeCount: number };
+
 export class RotateTool implements ITool {
   readonly name = 'rotate';
 
   private ctx: ToolContext;
   private phase: Phase = 'idle';
+  private target: Target | null = null;
 
   private basePoint: THREE.Vector3 | null = null;
   private referencePoint: THREE.Vector3 | null = null;
@@ -40,12 +45,52 @@ export class RotateTool implements ITool {
     this.ctx = ctx;
   }
 
+  /** 선택을 회전 대상으로 변환. 면 우선, 없으면 에지→정점. */
+  private resolveTarget(): Target | null {
+    const faces = this.ctx.getSelectedFaces();
+    if (faces.length > 0) return { kind: 'faces', ids: faces };
+    const edges = this.ctx.selection.getSelectedEdges();
+    if (edges.length === 0) return null;
+    const vertSet = new Set<number>();
+    for (const eid of edges) {
+      const eps = this.ctx.bridge.getEdgeEndpoints(eid);
+      if (eps.length === 2) { vertSet.add(eps[0]); vertSet.add(eps[1]); }
+    }
+    if (vertSet.size === 0) return null;
+    return { kind: 'verts', ids: Array.from(vertSet), edgeCount: edges.length };
+  }
+
+  private rotate(t: Target, cx: number, cy: number, cz: number,
+                 ax: number, ay: number, az: number, deg: number): void {
+    if (t.kind === 'faces') {
+      this.ctx.bridge.rotateFaces(t.ids, cx, cy, cz, ax, ay, az, deg);
+    } else {
+      this.ctx.bridge.rotateVerts(t.ids, cx, cy, cz, ax, ay, az, deg);
+    }
+  }
+
+  /** 대상의 중심점 (legacy VCB용). */
+  private targetCentroid(t: Target): THREE.Vector3 | null {
+    if (t.kind === 'faces') {
+      return this.ctx.bridge.facesCentroid(t.ids);
+    }
+    const sum = new THREE.Vector3();
+    let n = 0;
+    for (const v of t.ids) {
+      const p = this.ctx.bridge.getVertexPos(v);
+      if (p) { sum.x += p[0]; sum.y += p[1]; sum.z += p[2]; n++; }
+    }
+    if (n === 0) return null;
+    return sum.multiplyScalar(1 / n);
+  }
+
   onActivate(): void {
-    const selected = this.ctx.getSelectedFaces();
-    if (selected.length === 0) {
-      Toast.info('회전할 면을 먼저 선택하세요', 2500);
+    const t = this.resolveTarget();
+    if (!t) {
+      Toast.info('회전할 면 또는 에지를 먼저 선택하세요', 2500);
       return;
     }
+    this.target = t;
     this.phase = 'pick-base';
     // 시작 시 축 기본값 해결 — axisLock 있으면 그것, 없으면 Y
     this.applyAxisFromLabel(this.inferInitialAxis());
@@ -140,10 +185,9 @@ export class RotateTool implements ITool {
 
     // Incremental 적용 — 이전 preview와 차이만 회전
     const incDeg = targetDeg - this.appliedAngleDeg;
-    if (Math.abs(incDeg) > 0.1) {
+    if (Math.abs(incDeg) > 0.1 && this.target) {
       const ax = this.rotationAxis;
-      const selected = this.ctx.getSelectedFaces();
-      this.ctx.bridge.rotateFaces(selected,
+      this.rotate(this.target,
         this.basePoint.x, this.basePoint.y, this.basePoint.z,
         ax.x, ax.y, ax.z,
         incDeg,
@@ -165,11 +209,10 @@ export class RotateTool implements ITool {
   onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       // pick-target 단계에서 Esc — preview 회전을 역방향으로 되돌림
-      if (this.phase === 'pick-target' && this.basePoint
+      if (this.phase === 'pick-target' && this.basePoint && this.target
           && Math.abs(this.appliedAngleDeg) > 0.001) {
         const ax = this.rotationAxis;
-        const selected = this.ctx.getSelectedFaces();
-        this.ctx.bridge.rotateFaces(selected,
+        this.rotate(this.target,
           this.basePoint.x, this.basePoint.y, this.basePoint.z,
           ax.x, ax.y, ax.z,
           -this.appliedAngleDeg,
@@ -195,11 +238,11 @@ export class RotateTool implements ITool {
   private switchAxis(label: 'X' | 'Y' | 'Z'): void {
     if (this.axisLabel === label) return;
 
-    if (this.phase === 'pick-target' && this.basePoint && Math.abs(this.appliedAngleDeg) > 0.001) {
+    if (this.phase === 'pick-target' && this.basePoint && this.target
+        && Math.abs(this.appliedAngleDeg) > 0.001) {
       // 기존 축으로 적용된 preview 회전 되감기
       const oldAx = this.rotationAxis;
-      const selected = this.ctx.getSelectedFaces();
-      this.ctx.bridge.rotateFaces(selected,
+      this.rotate(this.target,
         this.basePoint.x, this.basePoint.y, this.basePoint.z,
         oldAx.x, oldAx.y, oldAx.z,
         -this.appliedAngleDeg,
@@ -218,29 +261,28 @@ export class RotateTool implements ITool {
     // VCB는 각도 값 직접 입력 — 어느 phase든 base 확정 후면 작동.
     if (this.phase === 'idle') {
       // 선택 없이 VCB만 호출 — 기본 centroid 사용 (레거시 호환)
-      const selected = this.ctx.getSelectedFaces();
-      if (selected.length === 0) {
-        Toast.info('회전할 면을 먼저 선택하세요', 2000);
+      const t = this.resolveTarget();
+      if (!t) {
+        Toast.info('회전할 면 또는 에지를 먼저 선택하세요', 2000);
         return;
       }
-      const centroid = this.ctx.bridge.facesCentroid(selected);
+      const centroid = this.targetCentroid(t);
       if (!centroid) return;
       const ax = this.resolveRotationAxis();
-      this.ctx.bridge.rotateFaces(selected,
+      this.rotate(t,
         centroid.x, centroid.y, centroid.z,
         ax.x, ax.y, ax.z, value);
       this.ctx.syncMesh();
-      debugLog(`[VCB/Rotate] legacy centroid ${value}°`);
+      debugLog(`[VCB/Rotate] legacy centroid ${value}° → ${t.kind}`);
       return;
     }
 
-    if (this.phase === 'pick-target' && this.basePoint) {
+    if (this.phase === 'pick-target' && this.basePoint && this.target) {
       // CAD 방식 — preview 상태에서 VCB로 정확한 각도 지정
       const incDeg = value - this.appliedAngleDeg;
       if (Math.abs(incDeg) > 0.001) {
         const ax = this.rotationAxis;
-        const selected = this.ctx.getSelectedFaces();
-        this.ctx.bridge.rotateFaces(selected,
+        this.rotate(this.target,
           this.basePoint.x, this.basePoint.y, this.basePoint.z,
           ax.x, ax.y, ax.z, incDeg);
         this.appliedAngleDeg = value;
@@ -268,6 +310,7 @@ export class RotateTool implements ITool {
     this.phase = 'idle';
     this.basePoint = null;
     this.referencePoint = null;
+    this.target = null;
     this.appliedAngleDeg = 0;
     this.previewAngleDeg = 0;
     this.ctx.dimLabel.clear();
