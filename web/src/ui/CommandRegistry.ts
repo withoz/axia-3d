@@ -182,24 +182,43 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
     },
   });
 
-  // Phase H — 현재 mesh invariant 검증
+  // Phase H — 현재 mesh invariant 검증 (topology + outward)
   commandInput.registerHandler({
     name: 'verify',
     aliases: ['check'],
-    help: 'ADR-007 invariant 검증 — 현재 mesh 위반 리포트',
+    help: 'ADR-007 invariant 검증 — topology + outward normal 리포트',
     execute: () => {
-      const report = bridge.verifyInvariants();
-      if (report.valid) {
-        commandInput.printSuccess(
-          `✓ ${report.checkedFaces}개 face invariants 전부 통과`
-        );
+      const topo = bridge.verifyInvariants();
+      const outward = bridge.verifyOutwardNormals();
+
+      const lines: string[] = [];
+      // Topology part
+      if (topo.valid) {
+        lines.push(`✓ Topology: ${topo.checkedFaces}개 face invariants 통과`);
       } else {
-        commandInput.printError(
-          `✗ ${report.violationCount}개 위반 (${report.checkedFaces}개 face 검사):\n` +
-          report.violations.slice(0, 3).map(v => '  - ' + v).join('\n') +
-          (report.violations.length > 3 ? `\n  ... (+${report.violations.length - 3} more)` : '')
-        );
+        lines.push(`✗ Topology: ${topo.violationCount}개 위반 (${topo.checkedFaces}개 검사)`);
+        topo.violations.slice(0, 3).forEach(v => lines.push('  - ' + v));
+        if (topo.violations.length > 3) lines.push(`  ... (+${topo.violations.length - 3} more)`);
       }
+      // Outward part
+      if (!outward.isClosedSolid) {
+        lines.push(`· Outward: open surface — 검증 스킵 (OK)`);
+      } else if (outward.inwardCount === 0) {
+        lines.push(`✓ Outward: ${outward.checkedFaces}개 face 모두 바깥 향함`);
+      } else {
+        lines.push(
+          `✗ Outward: ${outward.inwardCount}/${outward.checkedFaces}개 face 내부 향함`
+        );
+        if (outward.inwardFaces.length > 0) {
+          const ids = outward.inwardFaces.slice(0, 5).join(', ');
+          const more = outward.inwardFaces.length > 5 ? ` +${outward.inwardFaces.length - 5}` : '';
+          lines.push(`  face IDs: ${ids}${more}`);
+        }
+      }
+
+      const allOk = topo.valid && (!outward.isClosedSolid || outward.inwardCount === 0);
+      if (allOk) commandInput.printSuccess(lines.join('\n'));
+      else commandInput.printError(lines.join('\n'));
     },
   });
 

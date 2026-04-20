@@ -1556,6 +1556,27 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-007 원칙 1 확장 — 닫힌 solid의 outward normal 검증.
+     * 반환 JSON: {isClosedSolid, checkedFaces, inwardCount, inwardFaces[]}
+     * @returns {string}
+     */
+    verifyOutwardNormals() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_verifyOutwardNormals(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @returns {number}
      */
     vert_count() {

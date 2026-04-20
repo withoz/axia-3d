@@ -88,6 +88,7 @@ type AxiaEngineExtended = AxiaEngine & {
   // Phase H — Import Normalizer (ADR-007 Barrier)
   normalizeForImport?(optionsJson: string): string;
   verifyInvariants?(): string;
+  verifyOutwardNormals?(): string;
   exportSnapshotStrict?(): Uint8Array;
   synthesizeFacesFromFreeEdges?(): number;
   countFreeEdges?(): number;
@@ -592,6 +593,26 @@ export class WasmBridge {
       return JSON.parse(this.engine.verifyInvariants());
     } catch (e) {
       console.error('[WasmBridge] verifyInvariants failed:', e);
+      return empty;
+    }
+  }
+
+  /**
+   * ADR-007 원칙 1 확장 — 닫힌 solid에서 face normal이 outward 향하는지.
+   * 열린 surface면 isClosedSolid=false (건강한 상태 OK).
+   */
+  verifyOutwardNormals(): {
+    isClosedSolid: boolean;
+    checkedFaces: number;
+    inwardCount: number;
+    inwardFaces: number[];
+  } {
+    const empty = { isClosedSolid: false, checkedFaces: 0, inwardCount: 0, inwardFaces: [] };
+    if (!this.engine?.verifyOutwardNormals) return empty;
+    try {
+      return JSON.parse(this.engine.verifyOutwardNormals());
+    } catch (e) {
+      console.error('[WasmBridge] verifyOutwardNormals failed:', e);
       return empty;
     }
   }

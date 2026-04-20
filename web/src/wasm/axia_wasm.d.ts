@@ -518,6 +518,11 @@ export class AxiaEngine {
      * UI에서 "정합성 검사" 버튼에 바인딩.
      */
     verifyInvariants(): string;
+    /**
+     * ADR-007 원칙 1 확장 — 닫힌 solid의 outward normal 검증.
+     * 반환 JSON: {isClosedSolid, checkedFaces, inwardCount, inwardFaces[]}
+     */
+    verifyOutwardNormals(): string;
     vert_count(): number;
     /**
      * 씬의 XIA 개수.
@@ -669,6 +674,7 @@ export interface InitOutput {
     readonly axiaengine_tryMergeAdjacentFacesTol: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_undo: (a: number) => number;
     readonly axiaengine_verifyInvariants: (a: number, b: number) => void;
+    readonly axiaengine_verifyOutwardNormals: (a: number, b: number) => void;
     readonly axiaengine_vert_count: (a: number) => number;
     readonly axiaengine_xiaCount: (a: number) => number;
     readonly deltabuffers_getCacheVersion: (a: number) => number;

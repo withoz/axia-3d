@@ -135,6 +135,41 @@ impl NormalizeReport {
     }
 }
 
+/// Result of [`Mesh::verify_outward_normals`] — ADR-007 원칙 1 확장 리포트.
+///
+/// 닫힌 solid의 모든 face normal이 outward(바깥) 향하는지 검증.
+/// 열린 surface나 non-manifold mesh는 is_closed_solid=false로 스킵.
+#[derive(Debug, Clone)]
+pub struct OutwardReport {
+    /// 닫힌 2-manifold solid 여부 (false면 검증 스킵됨)
+    pub is_closed_solid: bool,
+    /// 검사된 face 수
+    pub checked_faces: usize,
+    /// 내부 향함(inward) 감지된 face 수
+    pub inward_count: usize,
+    /// Inward face ID 목록 (최대 detail 용)
+    pub inward_faces: Vec<FaceId>,
+}
+
+impl OutwardReport {
+    pub fn is_valid(&self) -> bool {
+        !self.is_closed_solid || self.inward_count == 0
+    }
+    pub fn summary(&self) -> String {
+        if !self.is_closed_solid {
+            return "Open surface (outward check skipped)".to_string();
+        }
+        if self.inward_count == 0 {
+            format!("✓ {} faces all outward", self.checked_faces)
+        } else {
+            format!(
+                "✗ {}/{} faces inward-facing",
+                self.inward_count, self.checked_faces
+            )
+        }
+    }
+}
+
 /// Result of [`Mesh::verify_face_invariants`] — ADR-007 정책 준수 여부 리포트.
 #[derive(Debug, Clone)]
 pub struct InvariantReport {
@@ -3683,6 +3718,95 @@ impl Mesh {
         }
     }
 
+    /// ADR-007 원칙 1 확장 — 닫힌 solid에서 각 face normal이 outward 향하는지 검증.
+    ///
+    /// 닫힌 2-manifold solid가 아니면 (open surface 등) 빈 리포트 반환.
+    /// 휴리스틱: mesh centroid → face centroid 방향과 face normal이 양의 내적이면
+    /// outward. 볼록체에서 완벽, 심한 오목체에선 제한적.
+    ///
+    /// 사용 예: Phase G/H 이후 closed solid 생성 확인, box/sphere 등 프리미티브
+    /// sanity check, push/pull 결과 검증 등.
+    pub fn verify_outward_normals(&self) -> OutwardReport {
+        let active_faces: Vec<FaceId> = self.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+
+        // 닫힌 solid 여부 확인 — open surface는 outward 정의 불가
+        let manifold = self.face_set_manifold_info(&active_faces);
+        if !manifold.is_closed_solid {
+            return OutwardReport {
+                is_closed_solid: false,
+                checked_faces: 0,
+                inward_count: 0,
+                inward_faces: Vec::new(),
+            };
+        }
+
+        // Mesh centroid — 모든 active vertex 평균
+        let mut sum = DVec3::ZERO;
+        let mut cnt = 0usize;
+        for (_, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            if let Ok(verts) = self.collect_loop_verts(face.outer().start) {
+                for v in verts {
+                    if let Ok(p) = self.vertex_pos(v) {
+                        sum += p;
+                        cnt += 1;
+                    }
+                }
+            }
+        }
+        if cnt == 0 {
+            return OutwardReport {
+                is_closed_solid: true,
+                checked_faces: 0,
+                inward_count: 0,
+                inward_faces: Vec::new(),
+            };
+        }
+        let mesh_centroid = sum / cnt as f64;
+
+        let mut inward_faces = Vec::new();
+        for fid in &active_faces {
+            let face = &self.faces[*fid];
+            let normal = face.normal();
+            if normal.length_squared() < 1e-10 { continue; }
+
+            // Face centroid
+            let verts = match self.collect_loop_verts(face.outer().start) {
+                Ok(v) => v, Err(_) => continue,
+            };
+            if verts.is_empty() { continue; }
+            let mut fc = DVec3::ZERO;
+            let mut fcn = 0usize;
+            for v in &verts {
+                if let Ok(p) = self.vertex_pos(*v) {
+                    fc += p;
+                    fcn += 1;
+                }
+            }
+            if fcn == 0 { continue; }
+            fc /= fcn as f64;
+
+            let outward = fc - mesh_centroid;
+            if outward.length_squared() < 1e-10 { continue; }
+
+            let dot = normal.dot(outward);
+            if dot < 0.0 {
+                // 내부 향함 감지
+                inward_faces.push(*fid);
+            }
+        }
+
+        OutwardReport {
+            is_closed_solid: true,
+            checked_faces: active_faces.len(),
+            inward_count: inward_faces.len(),
+            inward_faces,
+        }
+    }
+
     /// 디버그 빌드에서만 invariants 검증. Release에서는 no-op.
     /// 편집 연산 끝에 삽입해 조기 버그 감지용.
     #[inline]
@@ -4513,6 +4637,82 @@ mod tests {
             assert!(outward.dot(n) >= -0.1,
                 "face {:?} normal still inward: dot={:.3}", fid, outward.dot(n));
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Outward Normal Invariant Tests (ADR-007 원칙 1 확장)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn outward_open_surface_skips() {
+        // 삼각형 하나 — 열린 surface이므로 검증 스킵
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0));
+        mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+
+        let report = mesh.verify_outward_normals();
+        assert!(!report.is_closed_solid, "single face is open, not solid");
+        assert!(report.is_valid(), "open surface should pass (skip)");
+    }
+
+    #[test]
+    fn outward_tetrahedron_all_outward() {
+        // 정사면체 — 모든 face가 outward 향하도록 winding
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        // Bottom: [v0, v1, v2] → normal -Y (아래쪽 바깥)
+        mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        // Sides: v3을 "꼭대기"로 감아 side normal이 바깥 향하게
+        mesh.add_face(&[v0, v3, v1], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v1, v3, v2], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v2, v3, v0], MaterialId::new(0)).unwrap();
+
+        let report = mesh.verify_outward_normals();
+        assert!(report.is_closed_solid, "tet is closed");
+        assert_eq!(report.inward_count, 0, "all faces outward: {}", report.summary());
+        assert_eq!(report.checked_faces, 4);
+    }
+
+    #[test]
+    fn outward_sphere_all_outward() {
+        // 프리미티브 sphere — Phase 2 수정 후 모든 face outward
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_sphere(DVec3::ZERO, 100.0, 20, 12, mat).unwrap();
+
+        let report = mesh.verify_outward_normals();
+        assert!(report.is_closed_solid);
+        assert_eq!(report.inward_count, 0,
+            "sphere should have all outward normals: {}", report.summary());
+    }
+
+    #[test]
+    fn outward_detect_flipped_face() {
+        // 올바른 tetrahedron winding — 한 face를 flip → inward 감지
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        let f0 = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v0, v3, v1], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v1, v3, v2], MaterialId::new(0)).unwrap();
+        mesh.add_face(&[v2, v3, v0], MaterialId::new(0)).unwrap();
+
+        // f0 의 normal을 강제로 뒤집기 (cached만)
+        let n = mesh.faces[f0].normal();
+        mesh.faces[f0].set_normal(-n);
+
+        let report = mesh.verify_outward_normals();
+        assert!(report.is_closed_solid);
+        assert!(report.inward_count >= 1,
+            "flipped face should be detected: {}", report.summary());
+        assert!(report.inward_faces.contains(&f0));
     }
 
     #[test]

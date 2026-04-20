@@ -101,6 +101,7 @@ export const axiaengine_tryMergeAdjacentFaces: (a: number, b: number, c: number)
 export const axiaengine_tryMergeAdjacentFacesTol: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_undo: (a: number) => number;
 export const axiaengine_verifyInvariants: (a: number, b: number) => void;
+export const axiaengine_verifyOutwardNormals: (a: number, b: number) => void;
 export const axiaengine_vert_count: (a: number) => number;
 export const axiaengine_xiaCount: (a: number) => number;
 export const deltabuffers_getCacheVersion: (a: number) => number;

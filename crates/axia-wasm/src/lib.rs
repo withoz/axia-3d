@@ -1663,6 +1663,23 @@ impl AxiaEngine {
         )
     }
 
+    /// ADR-007 원칙 1 확장 — 닫힌 solid의 outward normal 검증.
+    /// 반환 JSON: {isClosedSolid, checkedFaces, inwardCount, inwardFaces[]}
+    #[wasm_bindgen(js_name = "verifyOutwardNormals")]
+    pub fn verify_outward_normals(&self) -> String {
+        let report = self.scene.mesh.verify_outward_normals();
+        let ids_json: Vec<String> = report.inward_faces.iter()
+            .map(|f| f.raw().to_string())
+            .collect();
+        format!(
+            r#"{{"isClosedSolid":{},"checkedFaces":{},"inwardCount":{},"inwardFaces":[{}]}}"#,
+            report.is_closed_solid,
+            report.checked_faces,
+            report.inward_count,
+            ids_json.join(","),
+        )
+    }
+
     /// 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
     /// UI에서 "정합성 검사" 버튼에 바인딩.
     #[wasm_bindgen(js_name = "verifyInvariants")]
