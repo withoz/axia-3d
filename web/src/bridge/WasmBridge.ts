@@ -85,6 +85,8 @@ type AxiaEngineExtended = AxiaEngine & {
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
+  /** Dry-run — returns JSON {total, mergeable, nonCoplanar, ambiguous, estMergesAfterCascade} */
+  analyzeMergeCandidates?(faceIds: Uint32Array): string;
   get_connected_faces?(seedFaceId: number): Uint32Array;
   // Snapshot / Import
   export_snapshot?(): Uint8Array;
@@ -515,6 +517,37 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] tryMergeAdjacentFaces failed:', e);
       return 0;
+    }
+  }
+
+  /**
+   * Dry-run merge analysis (mesh 불변).
+   * 반환 객체:
+   *   total     — 엣지를 공유하는 면 쌍 총 개수
+   *   mergeable — coplanar + 공유 엣지 1개인 쌍 (실제 병합 가능)
+   *   nonCoplanar — 엣지 공유하나 평면 불일치
+   *   ambiguous — 2+ 엣지 공유 (C-slit 등)
+   *   estMergesAfterCascade — 예상 최대 병합 횟수
+   */
+  analyzeMergeCandidates(faceIds: number[]): {
+    total: number;
+    mergeable: number;
+    nonCoplanar: number;
+    ambiguous: number;
+    estMergesAfterCascade: number;
+  } {
+    const empty = { total: 0, mergeable: 0, nonCoplanar: 0, ambiguous: 0, estMergesAfterCascade: 0 };
+    if (!this.engine) return empty;
+    try {
+      const eng = this.engine as AxiaEngineExtended & {
+        analyzeMergeCandidates?(ids: Uint32Array): string;
+      };
+      const json = eng.analyzeMergeCandidates?.(new Uint32Array(faceIds));
+      if (!json) return empty;
+      return JSON.parse(json);
+    } catch (e) {
+      console.error('[WasmBridge] analyzeMergeCandidates failed:', e);
+      return empty;
     }
   }
 

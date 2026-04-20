@@ -392,18 +392,40 @@ export class ToolManager {
         return;
       }
 
+      // A2: 프리뷰 분석 — 실제 변경 없이 결과 예측
+      const analysis = this.bridge.analyzeMergeCandidates(faces);
+      debugLog('[Action] merge-faces pre-analysis:', analysis);
+      if (analysis.mergeable === 0) {
+        // 실패 사유 구체화 (A3 확장)
+        const lines: string[] = ['통합할 수 있는 면이 없습니다.'];
+        if (analysis.total === 0) {
+          lines.push('• 선택한 면들이 엣지를 공유하지 않습니다');
+        }
+        if (analysis.nonCoplanar > 0) {
+          lines.push(`• ${analysis.nonCoplanar}쌍이 평면 불일치 (coplanar 아님)`);
+        }
+        if (analysis.ambiguous > 0) {
+          lines.push(`• ${analysis.ambiguous}쌍이 C-slit 형태 (2개 이상 엣지 공유)`);
+        }
+        const err = this.bridge.lastError();
+        Toast.warning(err || lines.join('\n'), 4000);
+        return;
+      }
+
       const merged = this.bridge.tryMergeAdjacentFaces(faces);
       if (merged > 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        // 예측값과 실제값 비교 포함
+        const skipped = analysis.nonCoplanar + analysis.ambiguous;
+        const skipNote = skipped > 0 ? ` (${skipped}쌍 건너뜀)` : '';
         Toast.info(
-          `${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐`,
-          2500,
+          `${merged}회 통합 — ${faces.length}개 면이 ${faces.length - merged}개로 합쳐짐${skipNote}`,
+          2800,
         );
         debugLog('[Action] merge-faces (faces):', merged);
       } else {
         const err = this.bridge.lastError();
-        // A3: 기본 메시지를 더 구체화 — 사용자가 원인 파악 가능하도록
         const hint =
           '통합할 수 있는 면이 없습니다.\n• 엣지를 공유하는 coplanar 면이 있어야 합니다\n• 두 면이 한 엣지만 공유해야 합니다 (C-slit 형태 불가)';
         Toast.warning(err || hint, 3500);

@@ -6,6 +6,7 @@ export const __wbg_deltabuffers_free: (a: number, b: number) => void;
 export const axiaengine_addDistanceConstraint: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
+export const axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;

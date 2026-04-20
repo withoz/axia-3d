@@ -20,6 +20,28 @@ export class AxiaEngine {
      */
     add_faces_to_group(group_id: number, face_ids: Uint32Array): boolean;
     /**
+     * Dry-run analysis of merge candidates — does NOT mutate the mesh.
+     *
+     * For each pair of faces in the selection that shares an edge, checks:
+     *   - shared edge count (must be 1)
+     *   - coplanarity (strict tolerance)
+     *
+     * Returns JSON:
+     *   {
+     *     "total": N,                 // pairs sharing any edge
+     *     "mergeable": M,             // pairs passing both checks
+     *     "nonCoplanar": K,           // pairs sharing 1 edge but not coplanar
+     *     "ambiguous": L,             // pairs sharing >1 edge
+     *     "estMergesAfterCascade": E  // upper bound of final merge count
+     *   }
+     *
+     * `estMergesAfterCascade` approximates how many merges would happen if
+     * the user proceeded with `tryMergeAdjacentFaces` — each merge can enable
+     * new adjacencies so the exact count is not known without running it.
+     * The upper bound = min(mergeable, face_count - 1).
+     */
+    analyzeMergeCandidates(face_ids: Uint32Array): string;
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
@@ -490,6 +512,7 @@ export interface InitOutput {
     readonly axiaengine_addDistanceConstraint: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;

@@ -1667,6 +1667,89 @@ impl AxiaEngine {
         }
     }
 
+    /// Dry-run analysis of merge candidates — does NOT mutate the mesh.
+    ///
+    /// For each pair of faces in the selection that shares an edge, checks:
+    ///   - shared edge count (must be 1)
+    ///   - coplanarity (strict tolerance)
+    ///
+    /// Returns JSON:
+    ///   {
+    ///     "total": N,                 // pairs sharing any edge
+    ///     "mergeable": M,             // pairs passing both checks
+    ///     "nonCoplanar": K,           // pairs sharing 1 edge but not coplanar
+    ///     "ambiguous": L,             // pairs sharing >1 edge
+    ///     "estMergesAfterCascade": E  // upper bound of final merge count
+    ///   }
+    ///
+    /// `estMergesAfterCascade` approximates how many merges would happen if
+    /// the user proceeded with `tryMergeAdjacentFaces` — each merge can enable
+    /// new adjacencies so the exact count is not known without running it.
+    /// The upper bound = min(mergeable, face_count - 1).
+    #[wasm_bindgen(js_name = "analyzeMergeCandidates")]
+    pub fn analyze_merge_candidates(&self, face_ids: Vec<u32>) -> String {
+        if face_ids.len() < 2 {
+            return r#"{"total":0,"mergeable":0,"nonCoplanar":0,"ambiguous":0,"estMergesAfterCascade":0}"#.to_string();
+        }
+
+        use std::collections::HashMap;
+        let face_set: std::collections::HashSet<FaceId> =
+            face_ids.iter().map(|&id| FaceId::new(id)).collect();
+
+        // Map: edge → list of selected faces using it
+        let mut edge_to_faces: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+        for &fid in &face_set {
+            let f = match self.scene.mesh.faces.get(fid) {
+                Some(f) if f.is_active() => f,
+                _ => continue,
+            };
+            let start = f.outer().start;
+            if start.is_null() { continue; }
+            if let Ok(hes) = self.scene.mesh.collect_loop_hes(start) {
+                for he in hes {
+                    let e = self.scene.mesh.hes[he].edge();
+                    edge_to_faces.entry(e).or_default().push(fid);
+                }
+            }
+        }
+
+        // Collect unique face pairs + edges they share
+        let mut pair_edges: HashMap<(FaceId, FaceId), u32> = HashMap::new();
+        for (_, faces) in edge_to_faces.iter() {
+            if faces.len() == 2 && faces[0] != faces[1] {
+                let mut a = faces[0];
+                let mut b = faces[1];
+                if b.raw() < a.raw() { std::mem::swap(&mut a, &mut b); }
+                *pair_edges.entry((a, b)).or_insert(0) += 1;
+            }
+        }
+
+        let mut mergeable: u32 = 0;
+        let mut non_coplanar: u32 = 0;
+        let mut ambiguous: u32 = 0;
+
+        for ((f1, f2), shared_count) in pair_edges.iter() {
+            if *shared_count > 1 {
+                ambiguous += 1;
+                continue;
+            }
+            match self.scene.mesh.are_faces_coplanar_strict(*f1, *f2) {
+                Ok(true) => mergeable += 1,
+                _ => non_coplanar += 1,
+            }
+        }
+
+        let total = pair_edges.len() as u32;
+        let face_count = face_ids.len() as u32;
+        let est_max = if face_count > 0 { face_count - 1 } else { 0 };
+        let est_merges = mergeable.min(est_max);
+
+        format!(
+            r#"{{"total":{},"mergeable":{},"nonCoplanar":{},"ambiguous":{},"estMergesAfterCascade":{}}}"#,
+            total, mergeable, non_coplanar, ambiguous, est_merges,
+        )
+    }
+
     /// Try to merge adjacent coplanar faces in the given selection.
     ///
     /// Iteratively finds pairs of faces that share exactly one edge and are

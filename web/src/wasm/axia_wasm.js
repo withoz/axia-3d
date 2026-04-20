@@ -53,6 +53,47 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Dry-run analysis of merge candidates — does NOT mutate the mesh.
+     *
+     * For each pair of faces in the selection that shares an edge, checks:
+     *   - shared edge count (must be 1)
+     *   - coplanarity (strict tolerance)
+     *
+     * Returns JSON:
+     *   {
+     *     "total": N,                 // pairs sharing any edge
+     *     "mergeable": M,             // pairs passing both checks
+     *     "nonCoplanar": K,           // pairs sharing 1 edge but not coplanar
+     *     "ambiguous": L,             // pairs sharing >1 edge
+     *     "estMergesAfterCascade": E  // upper bound of final merge count
+     *   }
+     *
+     * `estMergesAfterCascade` approximates how many merges would happen if
+     * the user proceeded with `tryMergeAdjacentFaces` — each merge can enable
+     * new adjacencies so the exact count is not known without running it.
+     * The upper bound = min(mergeable, face_count - 1).
+     * @param {Uint32Array} face_ids
+     * @returns {string}
+     */
+    analyzeMergeCandidates(face_ids) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_analyzeMergeCandidates(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      * @param {Uint32Array} face_ids_raw
      * @param {number} material_id_raw
