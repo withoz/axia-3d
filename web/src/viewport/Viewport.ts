@@ -11,7 +11,9 @@ import {
   disposeBoundsTree,
   acceleratedRaycast,
 } from 'three-mesh-bvh';
-import { getMaterialLibrary } from '../materials/MaterialLibrary';
+import { getMaterialLibrary, TextureInfo } from '../materials/MaterialLibrary';
+import { getTextureCache } from '../materials/TextureCache';
+import { computeUVsFromBuffers, UVProjectionParams } from '../materials/UVProjection';
 import { WasmBridge, DeltaBuffers } from '../bridge/WasmBridge';
 
 // Phase C1: Patch Three.js Mesh/BufferGeometry with BVH-accelerated raycast.
@@ -739,6 +741,28 @@ export class Viewport {
 
       // ── 3) Two-tone rendering (SketchUp style) ──
       const useVertexColors = this.colorAttribute !== null;
+
+      // ── 3a) Texture lookup — Phase E v1: single-texture per mesh ──
+      // Scan assigned materials for the first textured one; apply its texture
+      // + UV projection to the whole front mesh. Faces without texture still
+      // render via vertex color (white * texture ≈ texture on default color).
+      // Multi-texture via geometry groups is future work (v2).
+      const firstTex = this.findFirstTexturedMaterial(faceMap);
+      if (firstTex) {
+        const uvs = computeUVsFromBuffers(
+          geometry.getAttribute('position').array as Float32Array,
+          geometry.getAttribute('normal').array as Float32Array,
+          {
+            mode: firstTex.projection,
+            scale: firstTex.scale,
+            rotation: firstTex.rotation ?? 0,
+          } as UVProjectionParams,
+        );
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        // Kick off async texture load; refresh material when ready.
+        this.applyTextureAsync(firstTex);
+      }
+
       const frontMat = new THREE.MeshStandardMaterial({
         // vertexColors가 활성이면 white(곱셈 중립) 사용 → vertex color가 그대로 표시됨
         color: useVertexColors ? 0xffffff : 0xe8e8e8,
@@ -749,6 +773,8 @@ export class Viewport {
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
         vertexColors: useVertexColors,
+        // 텍스처가 이미 캐시돼 있으면 즉시 적용, 아니면 applyTextureAsync가 나중에 세팅
+        map: firstTex ? getTextureCache().get(firstTex.dataUrl) : null,
       });
       // Phase C1: build BVH on the shared geometry so intersectObjects is O(log N).
       //
@@ -1068,6 +1094,47 @@ export class Viewport {
   }
 
   /**
+   * Find the first textured material among the face set's assignments.
+   * Phase E v1: single-texture-per-mesh. Multi-texture via geometry groups
+   * is planned for v2.
+   */
+  private findFirstTexturedMaterial(faceMap?: Uint32Array): TextureInfo | null {
+    if (!faceMap || faceMap.length === 0) return null;
+    const matLib = getMaterialLibrary();
+    const seen = new Set<number>();
+    for (let i = 0; i < faceMap.length; i++) {
+      const fid = faceMap[i];
+      if (seen.has(fid)) continue;
+      seen.add(fid);
+      const mat = matLib.getMaterialForFace(fid);
+      if (mat?.visual.texture) return mat.visual.texture;
+    }
+    return null;
+  }
+
+  /**
+   * Load the texture from cache (or fetch asynchronously) and apply it to the
+   * current frontMesh's material. Called after geometry build when a textured
+   * material is detected.
+   */
+  private applyTextureAsync(tex: TextureInfo): void {
+    const cache = getTextureCache();
+    const cached = cache.get(tex.dataUrl);
+    if (cached) {
+      // Already loaded — nothing to do; frontMat.map was set at build time.
+      return;
+    }
+    cache.load(tex.dataUrl)
+      .then((three_tex) => {
+        if (!this.frontMesh) return;
+        const mat = this.frontMesh.material as THREE.MeshStandardMaterial;
+        mat.map = three_tex;
+        mat.needsUpdate = true;
+      })
+      .catch((err) => console.warn('[Viewport] texture load failed:', err));
+  }
+
+  /**
    * Refresh per-face material colors. Call this when material assignments change.
    */
   refreshMaterialColors(): void {
@@ -1108,6 +1175,59 @@ export class Viewport {
 
     if (hasChanges) {
       this.colorAttribute.needsUpdate = true;
+    }
+
+    // ── Texture sync ──
+    // Material 재할당으로 텍스처 상태가 바뀌었으면 UV + map 갱신.
+    this.refreshMeshTexture();
+  }
+
+  /**
+   * Re-scan assigned materials for a textured material and sync the frontMesh's
+   * map + UV attribute. Called from refreshMaterialColors to handle cases where
+   * texture was assigned/removed AFTER initial mesh build.
+   */
+  private refreshMeshTexture(): void {
+    if (!this.frontMesh) return;
+    const geometry = this.frontMesh.geometry;
+    const mat = this.frontMesh.material as THREE.MeshStandardMaterial;
+    const tex = this.findFirstTexturedMaterial(this.faceMap);
+
+    if (!tex) {
+      // 텍스처가 모두 제거됨 — map 해제
+      if (mat.map) {
+        mat.map = null;
+        mat.needsUpdate = true;
+      }
+      return;
+    }
+
+    // UV attribute 갱신 (현재 projection 기준)
+    const posAttr = geometry.getAttribute('position');
+    const normAttr = geometry.getAttribute('normal');
+    if (!posAttr || !normAttr) return;
+    const uvs = computeUVsFromBuffers(
+      posAttr.array as Float32Array,
+      normAttr.array as Float32Array,
+      { mode: tex.projection, scale: tex.scale, rotation: tex.rotation ?? 0 },
+    );
+    const existingUv = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined;
+    if (existingUv && existingUv.array.length === uvs.length) {
+      (existingUv.array as Float32Array).set(uvs);
+      existingUv.needsUpdate = true;
+    } else {
+      geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    }
+
+    // 텍스처 로드/적용
+    const cached = getTextureCache().get(tex.dataUrl);
+    if (cached) {
+      if (mat.map !== cached) {
+        mat.map = cached;
+        mat.needsUpdate = true;
+      }
+    } else {
+      this.applyTextureAsync(tex);
     }
   }
 
