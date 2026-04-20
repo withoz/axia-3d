@@ -1277,6 +1277,12 @@ export interface BooleanResult {
 export interface XiaInfo {
   empty: boolean;
   isSolid?: boolean;
+  /** Edges with only 1 incident face — open boundary holes */
+  boundaryEdges?: number;
+  /** Edges with 3+ incident faces — T-junction / self-intersection defects */
+  nonManifoldEdges?: number;
+  /** Edges with exactly 2 incident faces — manifold interior edges */
+  interiorEdges?: number;
   shapeType?: string;
   faceCount?: number;
   vertCount?: number;

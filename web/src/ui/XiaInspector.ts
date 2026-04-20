@@ -322,7 +322,20 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
 
       if (dotEl) dotEl.className = 'xi-solid-dot ' + geoState;
       if (labelEl) labelEl.textContent = `${stateInfo.icon} ${stateInfo.labelEn}`;
-      if (subEl) subEl.textContent = stateInfo.description;
+
+      // Boundary extraction 결과 상세 표시
+      // - Closed solid: "L×W×H (3D solid)"
+      // - Has boundary: "Open: N boundary edges"
+      // - Non-manifold: "Defect: N non-manifold edges"
+      let subText = stateInfo.description;
+      if (info.isSolid) {
+        subText = `✓ Closed solid (${info.interiorEdges ?? 0} manifold edges)`;
+      } else if ((info.boundaryEdges ?? 0) > 0) {
+        subText = `⚠ Open — ${info.boundaryEdges} boundary edges`;
+      } else if ((info.nonManifoldEdges ?? 0) > 0) {
+        subText = `✗ Non-manifold — ${info.nonManifoldEdges} defect edges`;
+      }
+      if (subEl) subEl.textContent = subText;
       if (shapeEl) shapeEl.textContent = `\u25a1 ${info.shapeType || ''}`;
 
       // 기하학적 속성 — mm 단위

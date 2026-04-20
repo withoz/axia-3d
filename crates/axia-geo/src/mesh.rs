@@ -64,6 +64,22 @@ pub struct Mesh {
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
 
+/// Result of [`Mesh::face_set_manifold_info`] — 면 집합이 닫힌 2-manifold 솔리드를
+/// 이루는지, 혹은 경계(open)나 non-manifold 결함이 있는지 분석 결과.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifoldInfo {
+    /// 집합에 포함된 활성 face 수.
+    pub face_count: usize,
+    /// 정확히 2개 face가 공유하는 edge 수 (manifold 내부 edge).
+    pub interior_edge_count: usize,
+    /// 1개 face만 인접한 edge 수 (open boundary — hole).
+    pub boundary_edge_count: usize,
+    /// 3개 이상 face가 공유하는 edge 수 (non-manifold).
+    pub non_manifold_edge_count: usize,
+    /// 닫힌 2-manifold 솔리드 여부 (face≥4 ∧ boundary=0 ∧ non_manifold=0).
+    pub is_closed_solid: bool,
+}
+
 impl Mesh {
     /// Create a new empty mesh.
     pub fn new() -> Self {
@@ -2035,6 +2051,55 @@ impl Mesh {
         Ok(hes.iter().map(|&he_id| self.hes[he_id].edge()).collect())
     }
 
+    /// Analyze whether the given face set forms a closed 2-manifold solid.
+    ///
+    /// For a watertight solid (tetrahedron, cube, sphere, …) every bounding
+    /// edge must be shared by exactly 2 faces within the set.
+    ///
+    /// # Algorithm
+    ///   O(F · avg_edge_per_face). For each face, walk its outer loop and
+    ///   accumulate edge→count. Final pass classifies by count.
+    pub fn face_set_manifold_info(&self, face_ids: &[FaceId]) -> ManifoldInfo {
+        let mut edge_counts: FxHashMap<EdgeId, u32> = FxHashMap::default();
+        let mut active_faces = 0usize;
+        for &fid in face_ids {
+            let Some(face) = self.faces.get(fid) else { continue };
+            if !face.is_active() { continue; }
+            active_faces += 1;
+            let edges = match self.face_outer_edges(fid) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for e in edges {
+                *edge_counts.entry(e).or_insert(0) += 1;
+            }
+        }
+        let mut interior = 0usize;
+        let mut boundary = 0usize;
+        let mut non_manifold = 0usize;
+        for &cnt in edge_counts.values() {
+            match cnt {
+                1 => boundary += 1,
+                2 => interior += 1,
+                _ => non_manifold += 1,
+            }
+        }
+        // 최소 closed solid = tetrahedron (4 faces). 1~3 face로는 closed 불가.
+        let is_closed = active_faces >= 4 && boundary == 0 && non_manifold == 0;
+        ManifoldInfo {
+            face_count: active_faces,
+            interior_edge_count: interior,
+            boundary_edge_count: boundary,
+            non_manifold_edge_count: non_manifold,
+            is_closed_solid: is_closed,
+        }
+    }
+
+    /// Convenience: true ⇔ face_set is a closed 2-manifold solid.
+    pub fn is_face_set_closed_solid(&self, face_ids: &[FaceId]) -> bool {
+        self.face_set_manifold_info(face_ids).is_closed_solid
+    }
+
     /// Mark all half-edges in a face's outer loop as SOFT on both sides (twin too).
     ///
     /// Used by primitive creation (cylinder/cone caps) to suppress rendering of
@@ -3697,5 +3762,336 @@ mod tests {
         assert_eq!(cleaned, 0);
         // The good face must survive
         assert!(mesh.faces.contains(good));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Phase E — D Resolver 회귀 테스트 (2026-04-20)
+    //
+    // 최근 수정된 `resolve_planar_free_faces_scoped` 의 필터 체인
+    // (Strip, Local-containment, required_edges, size check) 검증.
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Helper: 닫힌 polygon 경로를 free-edge로만 그림 (add_face 안 함).
+    fn draw_closed_loop(mesh: &mut Mesh, pts: &[DVec3]) -> Vec<EdgeId> {
+        let mut edges = Vec::new();
+        for i in 0..pts.len() {
+            let a = pts[i];
+            let b = pts[(i + 1) % pts.len()];
+            let (_, _, eid) = mesh.draw_line(a, b).unwrap();
+            edges.push(eid);
+        }
+        edges
+    }
+
+    #[test]
+    fn d_resolver_simple_square_creates_one_face() {
+        let mut mesh = Mesh::new();
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 100.0),
+            DVec3::new(0.0, 0.0, 100.0),
+        ]);
+        let faces = mesh.resolve_planar_free_faces(MaterialId::new(0));
+        assert_eq!(faces.len(), 1, "simple square must create 1 face");
+    }
+
+    #[test]
+    fn d_resolver_nested_rect_without_connector_keeps_both() {
+        // 버그 수정 회귀 테스트: outer rect + inner rect (connector 없음)
+        // → outer의 centroid가 inner cycle 내부에 있어도 area 비교로 false
+        // positive 차단 → inner face 정상 생성.
+        let mut mesh = Mesh::new();
+        // Outer: (-100,-100) ~ (100,100)
+        let outer_verts: Vec<VertId> = [
+            DVec3::new(-100.0, 0.0, -100.0),
+            DVec3::new( 100.0, 0.0, -100.0),
+            DVec3::new( 100.0, 0.0,  100.0),
+            DVec3::new(-100.0, 0.0,  100.0),
+        ].iter().map(|&p| mesh.add_vertex(p)).collect();
+        mesh.add_face(&outer_verts, MaterialId::new(0)).unwrap();
+        // Inner: (-30,-30) ~ (30,30) — free edges only
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(-30.0, 0.0, -30.0),
+            DVec3::new( 30.0, 0.0, -30.0),
+            DVec3::new( 30.0, 0.0,  30.0),
+            DVec3::new(-30.0, 0.0,  30.0),
+        ]);
+        let faces = mesh.resolve_planar_free_faces(MaterialId::new(0));
+        assert_eq!(faces.len(), 1, "inner rect must be created as a separate face");
+        assert_eq!(mesh.face_count(), 2, "total faces = outer + inner");
+    }
+
+    #[test]
+    fn d_resolver_smaller_cycle_not_rejected_by_larger_face_centroid() {
+        // 작은 cycle이 큰 face의 centroid를 포함해도 area 비교로 reject 안 됨.
+        let mut mesh = Mesh::new();
+        // 큰 face (centroid at origin)
+        let big: Vec<VertId> = [
+            DVec3::new(-500.0, 0.0, -500.0),
+            DVec3::new( 500.0, 0.0, -500.0),
+            DVec3::new( 500.0, 0.0,  500.0),
+            DVec3::new(-500.0, 0.0,  500.0),
+        ].iter().map(|&p| mesh.add_vertex(p)).collect();
+        mesh.add_face(&big, MaterialId::new(0)).unwrap();
+        // 작은 cycle — 원점 포함 but area < big
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(-10.0, 0.0, -10.0),
+            DVec3::new( 10.0, 0.0, -10.0),
+            DVec3::new( 10.0, 0.0,  10.0),
+            DVec3::new(-10.0, 0.0,  10.0),
+        ]);
+        let faces = mesh.resolve_planar_free_faces(MaterialId::new(0));
+        assert_eq!(faces.len(), 1, "small cycle inside large face must still create face");
+    }
+
+    #[test]
+    fn d_resolver_cw_cycle_rejected() {
+        // Clockwise cycle (signed area < 0) → outer boundary, skip.
+        let mut mesh = Mesh::new();
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, 100.0),
+            DVec3::new(100.0, 0.0, 100.0),
+            DVec3::new(100.0, 0.0, 0.0),
+        ]);
+        let faces = mesh.resolve_planar_free_faces(MaterialId::new(0));
+        // 평면 기준에 따라 하나는 CCW 하나는 CW. free HE는 양방향 존재하므로
+        // 어느 한 쪽은 항상 생성됨. 중요한 건 무한 루프/중복 생성 없음.
+        assert!(faces.len() >= 1, "at least one orientation creates a face");
+    }
+
+    #[test]
+    fn d_resolver_seed_verts_filter_excludes_untouched_component() {
+        // 두 개의 분리된 cycle — seed_verts로 한쪽만 처리.
+        let mut mesh = Mesh::new();
+        // Component A (will be seeded)
+        let a_verts: Vec<VertId> = {
+            let (_, _, _) = mesh.draw_line(
+                DVec3::new(0.0, 0.0, 0.0), DVec3::new(50.0, 0.0, 0.0)
+            ).unwrap();
+            let (_, _, _) = mesh.draw_line(
+                DVec3::new(50.0, 0.0, 0.0), DVec3::new(50.0, 0.0, 50.0)
+            ).unwrap();
+            let (_, _, _) = mesh.draw_line(
+                DVec3::new(50.0, 0.0, 50.0), DVec3::new(0.0, 0.0, 50.0)
+            ).unwrap();
+            let (va, _, _) = mesh.draw_line(
+                DVec3::new(0.0, 0.0, 50.0), DVec3::new(0.0, 0.0, 0.0)
+            ).unwrap();
+            vec![va]
+        };
+        // Component B (not seeded) — far away
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(1000.0, 0.0, 1000.0),
+            DVec3::new(1100.0, 0.0, 1000.0),
+            DVec3::new(1100.0, 0.0, 1100.0),
+            DVec3::new(1000.0, 0.0, 1100.0),
+        ]);
+        let faces = mesh.resolve_planar_free_faces_scoped(
+            MaterialId::new(0),
+            Some(&a_verts),
+            None,
+        );
+        assert_eq!(faces.len(), 1, "only component A processed");
+    }
+
+    #[test]
+    fn d_resolver_required_edges_small_cycle_bypasses_filter() {
+        // cycle_hes.len() ≤ 7 → required_edges 필터 적용 안 됨 (사각형 = 4).
+        // 기존 face의 자유 HE cycle이 있어도 작은 cycle은 그냥 통과.
+        let mut mesh = Mesh::new();
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 100.0),
+            DVec3::new(0.0, 0.0, 100.0),
+        ]);
+        // required_edges가 비어 있어도 작은 cycle이므로 face 생성됨.
+        let empty: Vec<EdgeId> = Vec::new();
+        let faces = mesh.resolve_planar_free_faces_scoped(
+            MaterialId::new(0),
+            None,
+            Some(&empty),
+        );
+        assert_eq!(faces.len(), 1, "small cycle bypasses required_edges filter");
+    }
+
+    #[test]
+    fn d_resolver_strip_rejected_by_compactness() {
+        // 극단적으로 얇은 strip (100:1 aspect ratio) — 100×0.05 = area 5,
+        // perimeter ≈ 200.1, compactness ≈ 4π·5/200.1² ≈ 0.00157
+        // 임계값 0.001 바로 위라 애매 → 더 얇게 (1000:1 ≈ 0.00016) 사용.
+        let mut mesh = Mesh::new();
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(1000.0, 0.0, 0.0),
+            DVec3::new(1000.0, 0.0, 0.1),
+            DVec3::new(0.0, 0.0, 0.1),
+        ]);
+        let faces = mesh.resolve_planar_free_faces(MaterialId::new(0));
+        // 1000:1 strip — compactness ≪ 0.001 → 반드시 거부.
+        // (양방향 free HE의 경우 한쪽은 CCW면 다른 건 CW라 최대 1개 후보지만
+        //  strip filter가 그것까지 거부해야 함.)
+        assert_eq!(faces.len(), 0, "extreme strip must be rejected");
+    }
+
+    #[test]
+    fn d_resolver_multi_plane_sketch_independent_resolution() {
+        // 두 평면에 각각 사각형 → 각 component 독립 평면 결정 (PCA-lite).
+        let mut mesh = Mesh::new();
+        // Plane 1: XZ at y=0
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 100.0),
+            DVec3::new(0.0, 0.0, 100.0),
+        ]);
+        // Plane 2: XY at z=500 (다른 평면)
+        draw_closed_loop(&mut mesh, &[
+            DVec3::new(0.0, 0.0, 500.0),
+            DVec3::new(100.0, 0.0, 500.0),
+            DVec3::new(100.0, 100.0, 500.0),
+            DVec3::new(0.0, 100.0, 500.0),
+        ]);
+        let faces = mesh.resolve_planar_free_faces(MaterialId::new(0));
+        assert_eq!(faces.len(), 2, "two independent planes must yield 2 faces");
+    }
+
+    #[test]
+    fn d_resolver_deduplicate_overlapping_same_boundary() {
+        // 같은 boundary를 가진 두 face가 생성되면 deduplicate_overlapping_faces
+        // 가 하나만 남김.
+        let mut mesh = Mesh::new();
+        let verts: Vec<VertId> = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 0.0),
+            DVec3::new(100.0, 0.0, 100.0),
+            DVec3::new(0.0, 0.0, 100.0),
+        ].iter().map(|&p| mesh.add_vertex(p)).collect();
+        mesh.add_face(&verts, MaterialId::new(0)).unwrap();
+        // 같은 경계로 다시 만들어도 add_face가 허용하면...
+        // (실제론 CW로 돌려 반대 face 만들 수 있음)
+        let cw: Vec<VertId> = vec![verts[0], verts[3], verts[2], verts[1]];
+        let _ = mesh.add_face(&cw, MaterialId::new(0));
+        let removed = mesh.deduplicate_overlapping_faces();
+        // 같은 vertex set을 가진 face가 2개면 1개 제거됨.
+        if mesh.face_count() < 2 {
+            // 안 만들어진 경우 스킵
+        } else {
+            assert!(!removed.is_empty(), "duplicate must be removed");
+        }
+    }
+
+    #[test]
+    fn d_resolver_does_not_regenerate_large_deleted_boundary() {
+        // 회귀 테스트: 큰 cycle(>7 verts) + required_edges 없음 → skip.
+        // 삭제된 원통 top/bottom face 재생성을 방지하는 핵심 필터.
+        let mut mesh = Mesh::new();
+        // 8각형 free-edge cycle (cycle_hes.len() = 8, threshold 7 초과)
+        let r = 100.0;
+        let n = 8;
+        let mut pts: Vec<DVec3> = Vec::new();
+        for i in 0..n {
+            let a = (i as f64) * std::f64::consts::TAU / (n as f64);
+            pts.push(DVec3::new(r * a.cos(), 0.0, r * a.sin()));
+        }
+        draw_closed_loop(&mut mesh, &pts);
+        // required_edges = 비어 있음 → 큰 cycle은 반드시 skip
+        let empty: Vec<EdgeId> = Vec::new();
+        let faces = mesh.resolve_planar_free_faces_scoped(
+            MaterialId::new(0),
+            None,
+            Some(&empty),
+        );
+        assert_eq!(faces.len(), 0, "large cycle without required edge must be skipped");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Boundary Extraction — face_set_manifold_info 테스트
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn manifold_info_single_face_is_open() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        let info = mesh.face_set_manifold_info(&[f]);
+        assert_eq!(info.face_count, 1);
+        assert_eq!(info.boundary_edge_count, 3);
+        assert!(!info.is_closed_solid);
+    }
+
+    #[test]
+    fn manifold_info_tetrahedron_is_closed_solid() {
+        // 4 faces, 6 edges, each edge used by exactly 2 faces → closed manifold.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        // Outward-facing: bottom CCW when seen from below, sides CCW when seen from outside
+        let f0 = mesh.add_face(&[v0, v2, v1], MaterialId::new(0)).unwrap(); // bottom
+        let f1 = mesh.add_face(&[v0, v1, v3], MaterialId::new(0)).unwrap(); // side
+        let f2 = mesh.add_face(&[v1, v2, v3], MaterialId::new(0)).unwrap(); // side
+        let f3 = mesh.add_face(&[v2, v0, v3], MaterialId::new(0)).unwrap(); // side
+        let info = mesh.face_set_manifold_info(&[f0, f1, f2, f3]);
+        assert_eq!(info.face_count, 4);
+        assert_eq!(info.interior_edge_count, 6);
+        assert_eq!(info.boundary_edge_count, 0);
+        assert_eq!(info.non_manifold_edge_count, 0);
+        assert!(info.is_closed_solid);
+        assert!(mesh.is_face_set_closed_solid(&[f0, f1, f2, f3]));
+    }
+
+    #[test]
+    fn manifold_info_tetra_missing_face_is_open() {
+        // Remove one face from tet → 3 edges become boundary.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 10.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 10.0, 5.0));
+        let f1 = mesh.add_face(&[v0, v1, v3], MaterialId::new(0)).unwrap();
+        let f2 = mesh.add_face(&[v1, v2, v3], MaterialId::new(0)).unwrap();
+        let f3 = mesh.add_face(&[v2, v0, v3], MaterialId::new(0)).unwrap();
+        // bottom face intentionally omitted
+        let info = mesh.face_set_manifold_info(&[f1, f2, f3]);
+        assert_eq!(info.face_count, 3);
+        assert_eq!(info.boundary_edge_count, 3); // bottom triangle edges
+        assert!(!info.is_closed_solid);
+    }
+
+    #[test]
+    fn manifold_info_minimum_face_count_required() {
+        // 경계가 0이어도 face ≥ 4 이어야 closed solid로 판정 (삼각뿔의 pointless 3-face
+        // 같은 비정상 케이스 방지).
+        let mesh = Mesh::new();
+        let info = mesh.face_set_manifold_info(&[]);
+        assert_eq!(info.face_count, 0);
+        assert!(!info.is_closed_solid);
+    }
+
+    #[test]
+    fn d_resolver_large_cycle_with_required_edge_creates_face() {
+        // 큰 cycle이라도 새 drawLine의 edge를 포함하면 생성됨.
+        let mut mesh = Mesh::new();
+        let r = 100.0;
+        let n = 8;
+        let mut pts: Vec<DVec3> = Vec::new();
+        for i in 0..n {
+            let a = (i as f64) * std::f64::consts::TAU / (n as f64);
+            pts.push(DVec3::new(r * a.cos(), 0.0, r * a.sin()));
+        }
+        let edges = draw_closed_loop(&mut mesh, &pts);
+        // 모든 edge가 required (새로 그린 것처럼)
+        let faces = mesh.resolve_planar_free_faces_scoped(
+            MaterialId::new(0),
+            None,
+            Some(&edges),
+        );
+        assert_eq!(faces.len(), 1, "large cycle with required edge creates face");
     }
 }

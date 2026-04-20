@@ -1476,22 +1476,11 @@ impl AxiaEngine {
         }
         volume = (volume / 6.0).abs();
 
-        // ── 4. Watertight (Solid) 체크 ──
-        // 모든 edge가 정확히 2개의 선택된 face를 공유하면 닫힌 solid
-        let face_set: HashSet<axia_geo::FaceId> = face_ids.iter().copied().collect();
-        let mut is_solid = face_ids.len() >= 4; // 최소 4면 필요
-        if is_solid {
-            for &eid in &all_edges {
-                let (neighbor_faces, _) = mesh.get_faces_sharing_edge(eid);
-                let shared_count = neighbor_faces.iter()
-                    .filter(|f| face_set.contains(f))
-                    .count();
-                if shared_count != 2 {
-                    is_solid = false;
-                    break;
-                }
-            }
-        }
+        // ── 4. Boundary Extraction — manifold 분석 (axia-geo 공통 유틸) ──
+        // 모든 edge가 정확히 2개의 선택된 face를 공유하면 닫힌 2-manifold 솔리드.
+        // boundary_edges > 0: open (hole), non_manifold > 0: T-junction 등 결함.
+        let manifold = mesh.face_set_manifold_info(&face_ids);
+        let is_solid = manifold.is_closed_solid;
 
         // ── 5. 형상 유형 판별 ──
         let shape_type = if !is_solid {
@@ -1525,8 +1514,11 @@ impl AxiaEngine {
 
         // mm 단위 기준
         format!(
-            r#"{{"empty":false,"isSolid":{},"shapeType":"{}","faceCount":{},"vertCount":{},"edgeCount":{},"snapPoints":{},"minX":{:.4},"minY":{:.4},"minZ":{:.4},"maxX":{:.4},"maxY":{:.4},"maxZ":{:.4},"length":{:.4},"width":{:.4},"height":{:.4},"surfaceArea":{:.6},"volume":{:.6},"materialId":{},"hasMaterial":{}}}"#,
+            r#"{{"empty":false,"isSolid":{},"boundaryEdges":{},"nonManifoldEdges":{},"interiorEdges":{},"shapeType":"{}","faceCount":{},"vertCount":{},"edgeCount":{},"snapPoints":{},"minX":{:.4},"minY":{:.4},"minZ":{:.4},"maxX":{:.4},"maxY":{:.4},"maxZ":{:.4},"length":{:.4},"width":{:.4},"height":{:.4},"surfaceArea":{:.6},"volume":{:.6},"materialId":{},"hasMaterial":{}}}"#,
             is_solid,
+            manifold.boundary_edge_count,
+            manifold.non_manifold_edge_count,
+            manifold.interior_edge_count,
             shape_type,
             face_ids.len(),
             all_verts.len(),

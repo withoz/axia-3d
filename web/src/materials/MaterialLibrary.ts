@@ -92,12 +92,27 @@ export interface PhysicalProperties {
   compressiveStrength?: number; // MPa — 압축강도 (향후 확장)
 }
 
+/** 텍스처 정보 (옵션) */
+export interface TextureInfo {
+  /** 이미지 데이터 URL (base64 PNG/JPEG) — 저장/로드 시 AXIA 파일에 포함 */
+  dataUrl: string;
+  /** UV projection 모드 */
+  projection: 'planar' | 'box' | 'cylindrical';
+  /** 월드 단위 당 반복 횟수 (예: 0.001 = 1000mm당 1타일) */
+  scale: number;
+  /** 투영 축 회전 (라디안, planar/box 전용) */
+  rotation?: number;
+  /** 사용자 표시명 (파일명 등) */
+  label?: string;
+}
+
 /** 시각적 속성 */
 export interface VisualProperties {
   color: number;              // hex color (0xRRGGBB)
   roughness: number;          // 0.0 ~ 1.0
   metalness: number;          // 0.0 ~ 1.0
   opacity: number;            // 0.0 ~ 1.0
+  texture?: TextureInfo;      // 옵션: 텍스처 매핑
 }
 
 /** Material 전체 정의 */

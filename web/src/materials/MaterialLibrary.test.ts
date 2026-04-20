@@ -332,5 +332,31 @@ describe('MaterialLibrary', () => {
       expect(lib2.getMaterialForFace(10)?.name).toBe('콘크리트');
       expect(lib2.getMaterialForFace(11)?.name).toBe('목재');
     });
+
+    it('custom material with texture survives JSON roundtrip', () => {
+      // Data URL for 1×1 transparent PNG (well-formed, tiny)
+      const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      lib.addCustom({
+        id: 'custom-tex-1', rustId: 9001,
+        name: '텍스처재질', nameEn: 'Textured',
+        category: 'custom',
+        physical: { density: 1000, friction: 0.5, restitution: 0.2, specificGravity: 1.0, thermalConductivity: 0.5, fireRating: 'incombustible' },
+        visual: {
+          color: 0xffffff, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+          texture: { dataUrl: tinyPng, projection: 'box', scale: 0.002, rotation: Math.PI / 4, label: 'test.png' },
+        },
+      });
+      const json = JSON.parse(JSON.stringify(lib.toJSON())); // full JSON roundtrip
+      const lib2 = new MaterialLibrary();
+      lib2.fromJSON(json);
+      const restored = lib2.get('custom-tex-1');
+      expect(restored).toBeDefined();
+      expect(restored!.visual.texture).toBeDefined();
+      expect(restored!.visual.texture!.dataUrl).toBe(tinyPng);
+      expect(restored!.visual.texture!.projection).toBe('box');
+      expect(restored!.visual.texture!.scale).toBeCloseTo(0.002, 6);
+      expect(restored!.visual.texture!.rotation).toBeCloseTo(Math.PI / 4, 4);
+      expect(restored!.visual.texture!.label).toBe('test.png');
+    });
   });
 });
