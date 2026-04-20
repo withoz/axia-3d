@@ -122,6 +122,9 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'merge-faces': toolManager.executeAction('merge-faces'); break;
       case 'merge-xia-coplanar': toolManager.executeAction('merge-xia-coplanar'); break;
       case 'merge-as-hole': toolManager.executeAction('merge-as-hole'); break;
+      case 'mirror-x': toolManager.executeAction('mirror-x'); break;
+      case 'mirror-y': toolManager.executeAction('mirror-y'); break;
+      case 'mirror-z': toolManager.executeAction('mirror-z'); break;
       case 'constrain-parallel':
       case 'constrain-perpendicular':
       case 'constrain-collinear':

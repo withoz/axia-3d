@@ -77,6 +77,11 @@ type AxiaEngineExtended = AxiaEngine & {
   translateVerts?(vertIds: Uint32Array, dx: number, dy: number, dz: number): boolean;
   rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
   scaleVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
+  mirrorFaces?(
+    faceIds: Uint32Array,
+    ox: number, oy: number, oz: number,
+    nx: number, ny: number, nz: number,
+  ): Uint32Array;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -820,6 +825,30 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] scaleVerts failed:', e);
       return false;
+    }
+  }
+
+  /**
+   * 지정 face들을 plane (origin, normal)에 대해 미러링하여 새 face 생성.
+   * 원본은 유지되고 mirrored copy가 별도 geometry로 추가됨. 새 face ID 목록
+   * 반환 (빈 배열 = 실패, lastError 조회).
+   */
+  mirrorFaces(
+    faceIds: number[],
+    ox: number, oy: number, oz: number,
+    nx: number, ny: number, nz: number,
+  ): number[] {
+    if (!this.engine?.mirrorFaces) return [];
+    this.markDirty();
+    try {
+      const out = this.engine.mirrorFaces(
+        new Uint32Array(faceIds),
+        ox, oy, oz, nx, ny, nz,
+      );
+      return out ? Array.from(out) : [];
+    } catch (e) {
+      console.error('[WasmBridge] mirrorFaces failed:', e);
+      return [];
     }
   }
 

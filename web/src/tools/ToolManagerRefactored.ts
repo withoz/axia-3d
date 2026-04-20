@@ -293,6 +293,7 @@ export class ToolManager {
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
     'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar', 'merge-as-hole',
     'synthesize-faces',
+    'mirror-x', 'mirror-y', 'mirror-z',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -315,6 +316,9 @@ export class ToolManager {
     'constrain-edge-length': '엣지 길이 고정',
     'split-edge-midpoint': '엣지 중점 분할',
     'constrain-endpoint-distance': '끝점 거리 고정',
+    'mirror-x': 'X축 기준 미러 (YZ 평면)',
+    'mirror-y': 'Y축 기준 미러 (XZ 평면)',
+    'mirror-z': 'Z축 기준 미러 (XY 평면)',
   };
 
   executeAction(action: string): void {
@@ -564,6 +568,31 @@ export class ToolManager {
           '병합 실패 — 두 면이 같은 평면이고 하나가 다른 하나에 완전히 포함돼야 합니다',
           4000,
         );
+      }
+    } else if (action === 'mirror-x' || action === 'mirror-y' || action === 'mirror-z') {
+      // Phase "Mirror" — 선택 면을 world plane (YZ / XZ / XY) 기준으로 미러링.
+      // 원본은 유지되고 mirrored copy가 별도 geometry로 추가됨. 캐릭터 모델링
+      // 대칭 워크플로우 (반만 모델링 후 반대쪽 복제)에 유용.
+      const sel = this.selection.getSelectedFaces();
+      if (sel.length === 0) {
+        Toast.warning('미러링할 면을 먼저 선택하세요', 2500);
+        return;
+      }
+      // Plane origin = world 원점, normal = 해당 축
+      const [nx, ny, nz] =
+        action === 'mirror-x' ? [1, 0, 0] :
+        action === 'mirror-y' ? [0, 1, 0] : [0, 0, 1];
+      const newFaces = this.bridge.mirrorFaces(sel, 0, 0, 0, nx, ny, nz);
+      if (newFaces.length > 0) {
+        this.syncMesh();
+        // 새로 생성된 면을 선택 상태로 전환 — 사용자가 바로 이어서 편집 가능
+        this.selection.clearSelection();
+        const label = action === 'mirror-x' ? 'YZ' : action === 'mirror-y' ? 'XZ' : 'XY';
+        Toast.info(`${sel.length}개 면을 ${label} 평면 기준 미러링 (${newFaces.length}개 생성)`, 2500);
+        debugLog(`[Action] ${action}: ${newFaces.length} mirrored faces`);
+      } else {
+        const err = this.bridge.lastError();
+        Toast.error(err || '미러링 실패');
       }
     } else if (action === 'synthesize-faces') {
       // Phase H5 — 자유 엣지를 감지해 face로 합성 (수동 트리거)

@@ -292,6 +292,56 @@ describe('ToolManager', () => {
       });
     });
 
+    // ── mirror-x/y/z action ──────────────────────────────────────
+    describe('mirror action', () => {
+      it('mirror-x calls mirrorFaces with YZ plane normal (1,0,0)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([7, 8]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([100, 101]);
+
+        tm.executeAction('mirror-x');
+        expect(bridge.mirrorFaces).toHaveBeenCalledWith([7, 8], 0, 0, 0, 1, 0, 0);
+      });
+
+      it('mirror-y uses XZ plane normal (0,1,0)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([200]);
+
+        tm.executeAction('mirror-y');
+        const args = (bridge.mirrorFaces as any).mock.calls[0];
+        expect(args[4]).toBe(0); expect(args[5]).toBe(1); expect(args[6]).toBe(0);
+      });
+
+      it('mirror-z uses XY plane normal (0,0,1)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([200]);
+
+        tm.executeAction('mirror-z');
+        const args = (bridge.mirrorFaces as any).mock.calls[0];
+        expect(args[4]).toBe(0); expect(args[5]).toBe(0); expect(args[6]).toBe(1);
+      });
+
+      it('does nothing when no faces selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([]);
+
+        tm.executeAction('mirror-x');
+        expect(bridge.mirrorFaces).not.toHaveBeenCalled();
+      });
+
+      it('blocked when tool is busy', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('mirror-x');
+        expect(bridge.mirrorFaces).not.toHaveBeenCalled();
+      });
+    });
+
     // ── 파괴적/구조적 명령어 busy 가드 (2026-04-17) ──
     describe('BUSY_BLOCKED_ACTIONS', () => {
       it('delete blocks during busy tool', () => {

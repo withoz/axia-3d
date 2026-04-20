@@ -1303,6 +1303,40 @@ impl AxiaEngine {
         }
     }
 
+    /// Mirror the given faces across a plane. Returns the new FaceIds
+    /// in the same order as the input (empty vec on failure, with
+    /// `lastError()` set). Single undo transaction wraps the whole batch.
+    #[wasm_bindgen(js_name = "mirrorFaces")]
+    pub fn mirror_faces(
+        &mut self,
+        face_ids: &[u32],
+        ox: f64, oy: f64, oz: f64,
+        nx: f64, ny: f64, nz: f64,
+    ) -> Vec<u32> {
+        let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        let origin = DVec3::new(ox, oy, oz);
+        let normal = DVec3::new(nx, ny, nz);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.mirror_faces(&fids, origin, normal) {
+            Ok(new_faces) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                new_faces.iter().map(|f| f.raw()).collect()
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] mirror_faces ERROR: {}", e);
+                self.set_error(format!("mirror_faces: {}", e));
+                Vec::new()
+            }
+        }
+    }
+
     pub fn get_face_normal(&self, face_id_raw: u32) -> Vec<f64> {
         let fid = FaceId::new(face_id_raw);
         if let Some(face) = self.scene.mesh.faces.get(fid) {

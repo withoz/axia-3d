@@ -271,7 +271,9 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-rotate': setActiveTool('rotate'); break;
       case 'tool-scale': setActiveTool('scale'); break;
       case 'tool-offset': setActiveTool('offset'); break;
-      case 'tool-mirror': setActiveTool('mirror'); break;
+      // Mirror — 현재는 WORLD YZ 평면 기준 (x 반전) 기본값. 다른 축은 우클릭
+      // 컨텍스트 메뉴에서 mirror-y / mirror-z 선택.
+      case 'tool-mirror': toolManager.executeAction('mirror-x'); break;
       case 'tool-array': setActiveTool('array'); break;
       case 'tool-trim': setActiveTool('trim'); break;
       case 'tool-extend': setActiveTool('extend'); break;
