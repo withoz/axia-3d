@@ -271,12 +271,13 @@
       position: absolute;
       bottom: 1px;
       left: 8px;
-      width: calc(60% - 16px);
+      width: auto;
+      max-width: calc(60% - 16px);
       height: 30px;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       padding: 0 12px;
-      gap: 8px;
+      gap: 6px;
       background: rgba(0, 0, 0, 0.40);
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
@@ -296,7 +297,6 @@
       font-size: 12px;
       color: rgba(255, 255, 255, 0.85);
       white-space: nowrap;
-      min-width: 200px;
     }
     #statusbar .sb-coords.snapped {
       color: #44ff88;
@@ -307,12 +307,14 @@
       white-space: nowrap;
     }
 
-    /* F-키 바 (우측 정렬) */
+    /* F-키 바 — 좌표 바로 옆에 붙여서 배치 */
     #statusbar .sb-fkeys {
-      margin-left: auto;
       display: flex;
       gap: 2px;
       align-items: center;
+      margin-left: 8px;
+      padding-left: 10px;
+      border-left: 1px solid rgba(255, 255, 255, 0.15);
     }
     #statusbar .sb-fkey {
       display: flex;
