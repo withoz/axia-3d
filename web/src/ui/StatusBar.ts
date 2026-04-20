@@ -26,6 +26,8 @@ export interface StatusBarDeps {
     toggle(): boolean;
     readonly lastSnap: { type: string; position: THREE.Vector3 } | null;
   };
+  /** Open the settings panel (단위/정밀도 포함) */
+  openSettings?: () => void;
 }
 
 export class StatusBar {
@@ -46,6 +48,7 @@ export class StatusBar {
     this.metaEl = document.getElementById('sb-meta');
     this.setupCoordsTracking();
     this.setupFkeyButtons();
+    this.setupCbTools();
     this.updateMeta();
   }
 
@@ -214,6 +217,56 @@ export class StatusBar {
     const unit = anyUnits.config?.label ?? 'mm';
     const prec = anyUnits.precision ?? 4;
     this.metaEl.textContent = `· ${unit} · ${prec}`;
+    this.updateUnitButton();
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  Commandbar right-side tools (AutoCAD 스타일 유틸 아이콘)
+  // ═══════════════════════════════════════════════════
+
+  private setupCbTools(): void {
+    // 단위/정밀도 버튼 → Settings 패널
+    const unitBtn = document.getElementById('cb-unit-btn');
+    unitBtn?.addEventListener('click', () => {
+      if (this.deps.openSettings) this.deps.openSettings();
+      else Toast.info('설정 패널을 열 수 없습니다');
+    });
+
+    // 설정
+    const settingsBtn = document.getElementById('cb-settings');
+    settingsBtn?.addEventListener('click', () => {
+      if (this.deps.openSettings) this.deps.openSettings();
+    });
+
+    // 전체 화면
+    const fsBtn = document.getElementById('cb-fullscreen');
+    fsBtn?.addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {
+          Toast.warning('전체화면을 지원하지 않습니다');
+        });
+      } else {
+        document.exitFullscreen?.();
+      }
+    });
+
+    // 메뉴 — 햄버거: 상단 메뉴바 첫 항목 포커스 (File 드롭다운 열기)
+    const menuBtn = document.getElementById('cb-menu');
+    menuBtn?.addEventListener('click', () => {
+      const firstMenu = document.querySelector<HTMLElement>('.menu-item[data-menu="file"]');
+      if (firstMenu) firstMenu.click();
+    });
+  }
+
+  /** 단위/정밀도 변경 시 호출 — 우측 유틸 버튼의 라벨 갱신 */
+  updateUnitButton(): void {
+    const anyUnits = this.deps.units as { config?: { label: string }; precision?: number };
+    const unit = anyUnits.config?.label ?? 'mm';
+    const prec = anyUnits.precision ?? 4;
+    const valEl = document.getElementById('cb-unit-val');
+    const lblEl = document.getElementById('cb-unit-lbl');
+    if (valEl) valEl.textContent = (0).toFixed(prec);
+    if (lblEl) lblEl.textContent = unit;
   }
 
   /** 초기 상태를 viewport로부터 읽어와 토글 버튼에 반영 */

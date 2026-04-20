@@ -411,6 +411,70 @@
       font-size: 11px;
       white-space: nowrap;
     }
+
+    /* 우측 유틸 바 (AutoCAD 스타일) */
+    #commandbar .cb-tools {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+      margin-left: auto;
+      padding-left: 8px;
+      border-left: 1px solid rgba(255,255,255,0.12);
+      flex: 0 0 auto;
+    }
+    /* 단위+정밀도 드롭다운 버튼 */
+    #commandbar .cb-unit {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      height: 24px;
+      padding: 0 8px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 4px;
+      color: rgba(255,255,255,0.85);
+      font-family: 'Consolas', 'SF Mono', monospace;
+      font-size: 11px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    #commandbar .cb-unit:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.25);
+    }
+    #commandbar .cb-unit #cb-unit-val {
+      color: #9ac8ff;
+      font-weight: 600;
+    }
+    #commandbar .cb-unit #cb-unit-lbl {
+      color: rgba(255,255,255,0.7);
+      font-size: 10px;
+    }
+    #commandbar .cb-unit .cb-chev {
+      font-size: 9px;
+      color: rgba(255,255,255,0.5);
+      margin-left: 2px;
+    }
+    /* 유틸 아이콘 버튼 */
+    #commandbar .cb-icon {
+      width: 26px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: rgba(255,255,255,0.65);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    #commandbar .cb-icon:hover {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+    }
     #commandbar input {
       flex: 1;
       background: transparent;
@@ -1888,6 +1952,18 @@
     <div id="commandbar" class="attached">
       <span class="cmd-label" id="cmd-label">치수:</span>
       <input type="text" id="cmd-input" placeholder="숫자 입력 후 Enter..." />
+
+      <!-- 우측 유틸 아이콘 바 (AutoCAD 스타일) -->
+      <div class="cb-tools">
+        <button class="cb-unit" id="cb-unit-btn" title="단위 / 정밀도">
+          <span id="cb-unit-val">0.0000</span>
+          <span id="cb-unit-lbl">mm</span>
+          <span class="cb-chev">▾</span>
+        </button>
+        <button class="cb-icon" id="cb-settings" title="설정 (Settings)">⚙</button>
+        <button class="cb-icon" id="cb-fullscreen" title="전체 화면 (Fullscreen)">⤢</button>
+        <button class="cb-icon" id="cb-menu" title="메뉴">≡</button>
+      </div>
     </div>
     </div><!-- /#bottombar -->
 

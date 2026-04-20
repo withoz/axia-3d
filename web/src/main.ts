@@ -178,11 +178,12 @@ async function main() {
     });
   }
 
-  // ═══ 새 상태바: 좌표 추적 + F1~F7 아이콘 바 ═══
+  // ═══ 새 상태바: 좌표 추적 + F1~F7 아이콘 바 + 커맨드바 우측 유틸 ═══
   const statusBar = new StatusBar({
     viewport,
     units,
     snap: toolManager.snap,
+    openSettings: () => settingsPanel.toggle(),
   });
   statusBar.syncFromViewport();
 
