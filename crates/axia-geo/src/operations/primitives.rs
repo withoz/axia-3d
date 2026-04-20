@@ -182,14 +182,16 @@ impl Mesh {
             rings.push(ring);
         }
 
-        // 북극 cap — 삼각형 fan
+        // 북극 cap — 삼각형 fan (winding: pole, next, u → outward +Y)
+        // u→next가 구의 측면에서 CCW이지만, pole 중심의 fan에서는 반대로
+        // 돌려야 normal이 +Y (바깥쪽)로 향함.
         if let Some(first_ring) = rings.first() {
             for u in 0..u_segments {
                 let next_u = (u + 1) % u_segments;
                 let tri = vec![
                     pole_n,
-                    first_ring[u as usize],
                     first_ring[next_u as usize],
+                    first_ring[u as usize],
                 ];
                 let f = self.add_face(&tri, material)?;
                 faces.push(f);
@@ -211,13 +213,14 @@ impl Mesh {
             }
         }
 
-        // 남극 cap — 삼각형 fan (winding 반전: pole이 마지막에 오도록)
+        // 남극 cap — 삼각형 fan (winding: u, next, pole → outward -Y)
+        // 북극과 대칭: 바깥쪽 normal이 -Y 향하도록 순서 설정.
         if let Some(last_ring) = rings.last() {
             for u in 0..u_segments {
                 let next_u = (u + 1) % u_segments;
                 let tri = vec![
-                    last_ring[next_u as usize],
                     last_ring[u as usize],
+                    last_ring[next_u as usize],
                     pole_s,
                 ];
                 let f = self.add_face(&tri, material)?;
@@ -261,6 +264,41 @@ mod tests {
         mesh.create_sphere(DVec3::ZERO, 50.0, 16, 12, mat).unwrap();
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "sphere: {}", report.summary());
+    }
+
+    #[test]
+    fn sphere_poles_face_outward() {
+        // 북극 cap은 +Y, 남극 cap은 -Y 방향 normal 향해야 함
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_sphere(DVec3::ZERO, 100.0, 16, 8, mat).unwrap();
+
+        // 극점 인근 face 판단: face의 평균 y가 매우 높거나 매우 낮은 것들
+        let mut pole_n_count = 0;
+        let mut pole_s_count = 0;
+        for fid in &faces {
+            let start = mesh.faces[*fid].outer().start;
+            let verts = mesh.collect_loop_verts(start).unwrap();
+            let mut avg_y = 0.0;
+            for v in &verts {
+                avg_y += mesh.vertex_pos(*v).unwrap().y;
+            }
+            avg_y /= verts.len() as f64;
+            let normal = mesh.faces[*fid].normal();
+            if avg_y > 80.0 {
+                // 북극 근처 — normal.y > 0 이어야 outward
+                assert!(normal.y > 0.0,
+                    "north cap face {:?} normal.y={} (expect >0)", fid, normal.y);
+                pole_n_count += 1;
+            } else if avg_y < -80.0 {
+                // 남극 근처 — normal.y < 0 이어야 outward
+                assert!(normal.y < 0.0,
+                    "south cap face {:?} normal.y={} (expect <0)", fid, normal.y);
+                pole_s_count += 1;
+            }
+        }
+        assert!(pole_n_count >= 3, "expected ≥3 north cap faces, got {}", pole_n_count);
+        assert!(pole_s_count >= 3, "expected ≥3 south cap faces, got {}", pole_s_count);
     }
 
     #[test]
