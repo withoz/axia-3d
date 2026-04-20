@@ -78,7 +78,7 @@ pub fn point_in_face(mesh: &Mesh, face_id: FaceId, point: DVec3) -> Result<bool>
     let px = component(point, ax1);
     let py = component(point, ax2);
 
-    // Ray casting algorithm (point-in-polygon)
+    // Ray casting algorithm (point-in-polygon) — outer loop
     let mut inside = false;
     let n = loop_verts.len();
     let mut j = n - 1;
@@ -98,6 +98,37 @@ pub fn point_in_face(mesh: &Mesh, face_id: FaceId, point: DVec3) -> Result<bool>
             inside = !inside;
         }
         j = i;
+    }
+
+    // Phase F — 구멍 안에 있으면 면 '내부'가 아님
+    if inside {
+        for inner in face.inners() {
+            if inner.start.is_null() { continue; }
+            let hole_verts = match mesh.collect_loop_verts(inner.start) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let mut in_hole = false;
+            let h = hole_verts.len();
+            if h < 3 { continue; }
+            let mut j = h - 1;
+            for i in 0..h {
+                let pi = mesh.vertex_pos(hole_verts[i])?;
+                let pj = mesh.vertex_pos(hole_verts[j])?;
+                let yi = component(pi, ax2);
+                let yj = component(pj, ax2);
+                let xi = component(pi, ax1);
+                let xj = component(pj, ax1);
+                if ((yi > py) != (yj > py)) &&
+                   (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+                    in_hole = !in_hole;
+                }
+                j = i;
+            }
+            if in_hole {
+                return Ok(false); // hole 내부 → face 외부로 판정
+            }
+        }
     }
 
     Ok(inside)
@@ -214,6 +245,14 @@ pub fn split_face_by_line(
     );
 
     ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
+
+    // Phase F — 구멍 있는 face의 line split은 복잡 (hole 경계 교차, inner loop 분할 등)
+    // 현재는 단순 가드: holes 있으면 명확한 에러로 거부. 미래 작업(F 연장)에서 구현.
+    ensure!(
+        mesh.faces[face_id].inners().is_empty(),
+        "split_face_by_line: face has {} hole(s) — multi-loop split not yet supported",
+        mesh.faces[face_id].inners().len(),
+    );
 
     let mut debug = Vec::new();
     let mut new_verts = Vec::new();

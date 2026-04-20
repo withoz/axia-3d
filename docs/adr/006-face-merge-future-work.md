@@ -15,9 +15,29 @@
 - Action `merge-as-hole` + 컨텍스트 메뉴 "내부 면을 구멍으로 합치기"
 - Unit tests 3개 추가 (성공/edge 공유/비coplanar 거부)
 
+**Phase F 확장 (2026-04-20 — Push/Pull + Split + Boolean)**:
+- Push/Pull MoveOnly: inner loop 정점도 함께 offset
+- Push/Pull CreateFace: 구멍 있으면 top은 `add_face_with_holes`,
+  내벽(hole wall)도 생성 → 창문·문구 있는 벽 지원
+- is_move_only: inner loop edges/verts도 face boundary로 포함
+- Split point_in_face: 구멍 내부 점은 face 외부로 판정 (subtraction)
+- Split split_face_by_line: hole 있는 face는 명확한 에러 (미지원 명시)
+- Boolean: hole 있는 면은 명확한 에러 (fan triangulation 부정확)
+- 새 단위 테스트:
+  - pushpull_face_with_hole_create_inner_walls
+  - pushpull_move_only_preserves_hole
+  - test_merge_coplanar_containing_creates_hole
+  - test_merge_coplanar_containing_rejects_sharing_edge
+  - test_merge_coplanar_containing_rejects_non_coplanar
+
 **Phase F 남은 작업 (B2)**:
 - C-slit 병합 (두 면이 2+ 엣지 공유하는 특수 토폴로지)
 - 실제 사용 빈도 낮음 + 구현 복잡 → 필요 시 추가 작업
+
+**미래 작업 (Phase G 예상)**:
+- Split: multi-loop face 분할 (hole 경계 교차, inner loop 분할)
+- Boolean: constrained Delaunay로 hole-aware triangulation
+- 이 두 항목이 완성되면 CAD-grade multi-loop 지원 완결
 
 ---
 

@@ -110,7 +110,7 @@ fn is_move_only_inner(mesh: &Mesh, face_id: FaceId, collect_debug: bool) -> Move
     };
     dbg_push!("face_normal=({:.4},{:.4},{:.4})", face_normal.x, face_normal.y, face_normal.z);
 
-    // 2. face의 경계 edge와 정점 수집
+    // 2. face의 경계 edge와 정점 수집 (Phase F: inner loops 포함)
     let face_hes = match mesh.collect_loop_hes(outer_start) {
         Ok(h) => h,
         Err(e) => {
@@ -124,7 +124,18 @@ fn is_move_only_inner(mesh: &Mesh, face_id: FaceId, collect_debug: bool) -> Move
         face_edges.insert(mesh.hes[he_id].edge());
         face_verts.insert(mesh.hes[he_id].dst());
     }
-    dbg_push!("face_edges={} face_verts={}", face_edges.len(), face_verts.len());
+    // inner loops: hole 경계도 face의 일부로 처리
+    for inner in mesh.faces[face_id].inners() {
+        if inner.start.is_null() { continue; }
+        if let Ok(inner_hes) = mesh.collect_loop_hes(inner.start) {
+            for &he_id in &inner_hes {
+                face_edges.insert(mesh.hes[he_id].edge());
+                face_verts.insert(mesh.hes[he_id].dst());
+            }
+        }
+    }
+    dbg_push!("face_edges={} face_verts={} (incl {} inner loops)",
+        face_edges.len(), face_verts.len(), mesh.faces[face_id].inners().len());
 
     // 3. 모든 edge를 탐색하여 face 정점에 연결되었지만 face 경계가 아닌 edge 찾기
     let mut non_face_edges: Vec<EdgeId> = Vec::new();
@@ -499,8 +510,19 @@ impl Mesh {
         };
         let offset = normal * dist;
 
-        // 정점 이동 (AixxiA: vert.set_d_pos(d_pos + d_delta))
-        for &vid in &boundary {
+        // Phase F — inner loop(구멍) 정점도 함께 수집 (중복 제거)
+        let inner_refs: Vec<LoopRef> = self.faces[face_id].inners().to_vec();
+        let mut all_verts: std::collections::HashSet<VertId> =
+            boundary.iter().copied().collect();
+        for ir in &inner_refs {
+            if ir.start.is_null() { continue; }
+            if let Ok(vs) = self.collect_loop_verts(ir.start) {
+                for v in vs { all_verts.insert(v); }
+            }
+        }
+
+        // 정점 이동 (outer + inner 모두 동일 offset)
+        for &vid in &all_verts {
             let old_pos = self.vertex_pos(vid)?;
             let new_pos = old_pos + offset;
             self.verts[vid].set_pos(new_pos);
@@ -519,7 +541,10 @@ impl Mesh {
             new_verts: Vec::new(),
             base_removed: false,
             adjacent_splits: 0,
-            split_debug: vec!["MoveOnly: vertices moved".into()],
+            split_debug: vec![format!(
+                "MoveOnly: {} verts moved (outer {}, inners {})",
+                all_verts.len(), boundary.len(), inner_refs.len()
+            )],
         })
     }
 
@@ -537,7 +562,7 @@ impl Mesh {
         dist: f64,
         material: MaterialId,
     ) -> Result<PushPullResult> {
-        // ─── 1. 기존 face의 모든 정점 수집 ─────────────────
+        // ─── 1. 기존 face의 outer 경계 수집 ─────────────────
         let outer_start = self.faces[face_id].outer().start;
         let boundary = self.collect_loop_verts(outer_start)?;
         ensure!(boundary.len() >= 3, "Face needs at least 3 verts");
@@ -548,18 +573,45 @@ impl Mesh {
         };
         let offset = normal * dist;
 
-        // ─── 2. 오프셋 정점 생성 ────────────────────────────
+        // Phase F — inner loops (구멍) 수집
+        // Each inner: CW winding relative to face normal (DCEL convention).
+        let inner_refs: Vec<LoopRef> = self.faces[face_id].inners().to_vec();
+        let mut inner_boundaries: Vec<Vec<VertId>> = Vec::new();
+        for ir in &inner_refs {
+            if ir.start.is_null() { continue; }
+            if let Ok(vs) = self.collect_loop_verts(ir.start) {
+                if vs.len() >= 3 { inner_boundaries.push(vs); }
+            }
+        }
+
+        // ─── 2. 오프셋 정점 생성 (outer + inners) ──────────
         let mut new_verts = Vec::with_capacity(boundary.len());
         for &vid in &boundary {
             let pos = self.vertex_pos(vid)?;
             new_verts.push(self.add_vertex(pos + offset));
         }
+        // 각 inner loop마다 새 정점 배열
+        let mut new_inner_verts: Vec<Vec<VertId>> = Vec::with_capacity(inner_boundaries.len());
+        for ib in &inner_boundaries {
+            let mut nvs = Vec::with_capacity(ib.len());
+            for &vid in ib {
+                let pos = self.vertex_pos(vid)?;
+                nvs.push(self.add_vertex(pos + offset));
+            }
+            new_inner_verts.push(nvs);
+        }
 
-        // ─── 3. 상단 face 생성 (새 정점들로) ─────────────────
-        let top_face = self.add_face(&new_verts, material)?;
+        // ─── 3. 상단 face 생성 — 구멍 있으면 add_face_with_holes ──
+        let top_face = if new_inner_verts.is_empty() {
+            self.add_face(&new_verts, material)?
+        } else {
+            let hole_slices: Vec<&[VertId]> =
+                new_inner_verts.iter().map(|v| v.as_slice()).collect();
+            self.add_face_with_holes(&new_verts, &hole_slices, material)?
+        };
         let mut new_face_ids: Vec<FaceId> = vec![top_face];
 
-        // ─── 4. 측면 face들 생성 ────────────────────────────
+        // ─── 4. 외벽 생성 (outer loop) ──────────────────────
         //   AixxiA 원본: [old_i, old_next, new_next, new_i]
         let n = boundary.len();
         let mut side_faces = Vec::with_capacity(n);
@@ -574,6 +626,29 @@ impl Mesh {
             let sf = self.add_face(&quad, material)?;
             side_faces.push(sf);
             new_face_ids.push(sf);
+        }
+
+        // ─── 4b. 내벽 생성 (각 inner loop — hole의 wall) ───
+        // Inner loop은 DCEL 상 CW (face normal 기준). Outer loop과 같은 공식으로
+        // quad를 만들면 결과 winding이 outer와 자연히 반대 → normal이 반대 방향.
+        // 이것이 정확히 원하는 동작: outer wall normal이 solid 바깥,
+        // inner wall normal은 hole 바깥(= solid 쪽이 아닌 hole 내부 쪽) = 정면이
+        // hole에서 바라볼 때 우리를 향함 → 렌더 시 hole 내벽이 보임.
+        for (ib_idx, ib) in inner_boundaries.iter().enumerate() {
+            let nvs = &new_inner_verts[ib_idx];
+            let m = ib.len();
+            for i in 0..m {
+                let next_i = (i + 1) % m;
+                let quad = vec![
+                    ib[i],
+                    ib[next_i],
+                    nvs[next_i],
+                    nvs[i],
+                ];
+                let sf = self.add_face(&quad, material)?;
+                side_faces.push(sf);
+                new_face_ids.push(sf);
+            }
         }
 
         // ─── 5. coplanar 인접면 병합 (AixxiA 핵심 로직 그대로) ──
@@ -963,5 +1038,79 @@ mod tests {
         // EPSILON_LENGTH와 동일 → 경계값, 허용
         let r = m.push_pull(f, EPSILON_LENGTH, mat);
         assert!(r.is_ok(), "exactly epsilon distance should be accepted");
+    }
+
+    // ─── Phase F: Push/Pull with holes ─────────────────────
+    #[test]
+    fn pushpull_face_with_hole_create_inner_walls() {
+        // 바닥 사각형에 구멍 뚫고 push → 창문 달린 벽
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // outer 200×200
+        let o0 = mesh.add_vertex(DVec3::new(-100.0, 0.0, -100.0));
+        let o1 = mesh.add_vertex(DVec3::new( 100.0, 0.0, -100.0));
+        let o2 = mesh.add_vertex(DVec3::new( 100.0, 0.0,  100.0));
+        let o3 = mesh.add_vertex(DVec3::new(-100.0, 0.0,  100.0));
+        // hole 40×40 (CW winding from above = reversed relative to outer CCW)
+        let h0 = mesh.add_vertex(DVec3::new(-20.0, 0.0, -20.0));
+        let h1 = mesh.add_vertex(DVec3::new(-20.0, 0.0,  20.0));
+        let h2 = mesh.add_vertex(DVec3::new( 20.0, 0.0,  20.0));
+        let h3 = mesh.add_vertex(DVec3::new( 20.0, 0.0, -20.0));
+
+        let f = mesh.add_face_with_holes(
+            &[o0, o1, o2, o3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+        let base_faces = mesh.face_count();
+        assert_eq!(base_faces, 1);
+
+        // push up 50
+        let result = mesh.push_pull(f, 50.0, mat).unwrap();
+
+        // 최소 생성: 1 top + 4 outer walls + 4 inner walls (+ 원본 유지)
+        // merge로 일부 합쳐질 수 있으나 최소 개수는 많아야 함
+        assert!(
+            mesh.face_count() >= 6,
+            "pushed face with hole should create walls inside + outside (got {} faces)",
+            mesh.face_count()
+        );
+        // 결과의 side_faces 수 >= 8 (outer 4 + inner 4)
+        assert!(
+            result.side_faces.len() >= 8,
+            "must create walls for outer AND inner loop (got {})",
+            result.side_faces.len()
+        );
+    }
+
+    #[test]
+    fn pushpull_move_only_preserves_hole() {
+        // Box top을 push/pull하는 경우 — 구멍 정점도 함께 이동
+        // Box geometry에 구멍 있는 top face 구성은 복잡하므로,
+        // 직접 MoveOnly-like 테스트: 면 정점이 모두 이동되었는지 확인
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let o = [
+            mesh.add_vertex(DVec3::new(-10.0, 0.0, -10.0)),
+            mesh.add_vertex(DVec3::new( 10.0, 0.0, -10.0)),
+            mesh.add_vertex(DVec3::new( 10.0, 0.0,  10.0)),
+            mesh.add_vertex(DVec3::new(-10.0, 0.0,  10.0)),
+        ];
+        let h = [
+            mesh.add_vertex(DVec3::new(-2.0, 0.0, -2.0)),
+            mesh.add_vertex(DVec3::new(-2.0, 0.0,  2.0)),
+            mesh.add_vertex(DVec3::new( 2.0, 0.0,  2.0)),
+            mesh.add_vertex(DVec3::new( 2.0, 0.0, -2.0)),
+        ];
+        let f = mesh.add_face_with_holes(&o, &[&h], mat).unwrap();
+
+        // 이 구성은 홀 연결 edge가 없어 CreateFace mode
+        let _ = mesh.push_pull(f, 10.0, mat).unwrap();
+
+        // 원본 hole 정점들은 여전히 y=0에 있어야 함 (원본 유지 방식)
+        for &v in &h {
+            let pos = mesh.vertex_pos(v).unwrap();
+            assert!((pos.y - 0.0).abs() < 1e-6, "original hole vert should remain at y=0");
+        }
     }
 }

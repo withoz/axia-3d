@@ -68,6 +68,20 @@ impl Mesh {
     ) -> Result<BooleanResult> {
         let mut debug = Vec::new();
 
+        // Phase F — Boolean 연산은 fan triangulation 사용 (convex face 가정).
+        // 구멍(inner loops) 있는 face는 잘못된 결과 생성 → 명확히 거부.
+        // 미래 작업: constrained Delaunay로 hole-aware triangulation.
+        for &fid in faces_a.iter().chain(faces_b.iter()) {
+            if let Some(face) = self.faces.get(fid) {
+                if !face.inners().is_empty() {
+                    anyhow::bail!(
+                        "boolean: face {:?} has {} hole(s) — multi-loop boolean not yet supported",
+                        fid, face.inners().len()
+                    );
+                }
+            }
+        }
+
         // ── Stage 0: 솔리드 데이터 준비 ──────────────
         let solid_a = self.prepare_solid(faces_a)?;
         let solid_b = self.prepare_solid(faces_b)?;
