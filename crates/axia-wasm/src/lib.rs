@@ -1303,6 +1303,35 @@ impl AxiaEngine {
         }
     }
 
+    /// Measure helpers — pure queries, no state mutation.
+    ///
+    /// faceArea returns the planar area of a single face (fan-triangulated
+    /// cross-product magnitude / 2). Returns 0 on error / missing face.
+    #[wasm_bindgen(js_name = "faceArea")]
+    pub fn face_area(&self, face_id_raw: u32) -> f64 {
+        self.scene.mesh.face_area(FaceId::new(face_id_raw))
+    }
+
+    /// edgeLength returns the straight-line distance between an edge's
+    /// two endpoints. Zero on missing / degenerate edge.
+    #[wasm_bindgen(js_name = "edgeLength")]
+    pub fn edge_length(&self, edge_id_raw: u32) -> f64 {
+        let eid = EdgeId::new(edge_id_raw);
+        let edge = match self.scene.mesh.edges.get(eid) { Some(e) => e, None => return 0.0 };
+        let va = edge.v_small();
+        let vb = edge.v_large();
+        let pa = match self.scene.mesh.vertex_pos(va) { Ok(p) => p, Err(_) => return 0.0 };
+        let pb = match self.scene.mesh.vertex_pos(vb) { Ok(p) => p, Err(_) => return 0.0 };
+        (pb - pa).length()
+    }
+
+    /// meshVolume returns the signed enclosed volume of the whole mesh.
+    /// Exact for closed solids; indicative only for open shells.
+    #[wasm_bindgen(js_name = "meshVolume")]
+    pub fn mesh_volume(&self) -> f64 {
+        self.scene.mesh.mesh_volume()
+    }
+
     /// Linear array — create `count` translated copies of the given
     /// faces, each shifted by `offset · k` for k = 1..=count. Returns
     /// the new FaceIds in copy-major, source-order.

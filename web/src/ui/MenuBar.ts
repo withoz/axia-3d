@@ -249,6 +249,22 @@ export function initMenuBar(deps: MenuBarDeps): void {
         Toast.info(`축 ${next ? '표시' : '숨김'}`);
         break;
       }
+      case 'measure-selection':
+        // 선택 상태에 따라 길이/면적/부피 Toast 출력.
+        toolManager.executeAction('measure-selection');
+        break;
+      case 'view-ssao': {
+        const next = !viewport.isSsaoEnabled();
+        viewport.setSsaoEnabled(next);
+        Toast.info(`주변광 차폐 ${next ? '켜짐' : '꺼짐'}`);
+        break;
+      }
+      case 'view-fur': {
+        const next = !viewport.isFurEnabled();
+        viewport.setFurEnabled(next);
+        Toast.info(`털 쉐이더 ${next ? '켜짐 (24 shell, 드로우콜 증가 주의)' : '꺼짐'}`);
+        break;
+      }
       case 'reference-image': {
         // 참조 이미지 overlay — 사진 따라 그리기 / 비율 맞추기 용.
         // HTML <img> overlay 방식: 3D 씬과 독립, 카메라 이동해도 고정.

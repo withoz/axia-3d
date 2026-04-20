@@ -106,6 +106,9 @@ type AxiaEngineExtended = AxiaEngine & {
     count: number,
     dx: number, dy: number, dz: number,
   ): Uint32Array;
+  faceArea?(faceId: number): number;
+  edgeLength?(edgeId: number): number;
+  meshVolume?(): number;
   bendVerts?(
     vertIds: Uint32Array,
     axX: number, axY: number, axZ: number,
@@ -958,6 +961,19 @@ export class WasmBridge {
       this.recordBridgeError('loftSections', e);
       return [];
     }
+  }
+
+  /**
+   * Query helpers for the Measure tool — pure read, no mutation.
+   */
+  faceArea(faceId: number): number {
+    return this.engine?.faceArea?.(faceId) ?? 0;
+  }
+  edgeLength(edgeId: number): number {
+    return this.engine?.edgeLength?.(edgeId) ?? 0;
+  }
+  meshVolume(): number {
+    return this.engine?.meshVolume?.() ?? 0;
   }
 
   /**

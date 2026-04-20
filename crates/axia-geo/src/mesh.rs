@@ -3451,6 +3451,38 @@ impl Mesh {
 
     /// Return the planar area of a face (outer loop, ignoring holes).
     /// 0 for degenerate or missing faces.
+    /// Signed volume of the mesh (sum of signed tetrahedra built from the
+    /// origin and each triangle of every active face, fan-triangulated).
+    /// Exact for closed manifold solids; for open shells the result is
+    /// the rough "enclosed" volume relative to the origin — useful as
+    /// an estimate but not authoritative. Units: length³.
+    pub fn mesh_volume(&self) -> f64 {
+        let mut total = 0.0;
+        for (fid, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            let start = face.outer().start;
+            if start.is_null() { continue; }
+            let verts = match self.collect_loop_verts(start) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if verts.len() < 3 { continue; }
+            // Fan-triangulate around verts[0]. For each triangle
+            // (v0, vi, vi+1) add the signed tetrahedron volume
+            // (v0 · (vi × vi+1)) / 6. Summed across all faces of a
+            // closed solid this gives the enclosed volume with sign
+            // determined by the outward winding (ADR-007 CCW → positive).
+            let p0 = match self.vertex_pos(verts[0]) { Ok(p) => p, Err(_) => continue };
+            for i in 1..verts.len() - 1 {
+                let pa = match self.vertex_pos(verts[i]) { Ok(p) => p, Err(_) => continue };
+                let pb = match self.vertex_pos(verts[i + 1]) { Ok(p) => p, Err(_) => continue };
+                total += p0.dot(pa.cross(pb));
+            }
+            let _ = fid;
+        }
+        total / 6.0
+    }
+
     pub fn face_area(&self, face_id: FaceId) -> f64 {
         let f = match self.faces.get(face_id) {
             Some(f) if f.is_active() => f,

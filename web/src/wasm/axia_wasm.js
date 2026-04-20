@@ -460,6 +460,16 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * edgeLength returns the straight-line distance between an edge's
+     * two endpoints. Zero on missing / degenerate edge.
+     * @param {number} edge_id_raw
+     * @returns {number}
+     */
+    edgeLength(edge_id_raw) {
+        const ret = wasm.axiaengine_edgeLength(this.__wbg_ptr, edge_id_raw);
+        return ret;
+    }
+    /**
      * ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
      * 파일 저장 대화창 등에서 데이터 무결성이 중요한 경우 사용.
      * @returns {Uint8Array}
@@ -493,6 +503,18 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
+    }
+    /**
+     * Measure helpers — pure queries, no state mutation.
+     *
+     * faceArea returns the planar area of a single face (fan-triangulated
+     * cross-product magnitude / 2). Returns 0 on error / missing face.
+     * @param {number} face_id_raw
+     * @returns {number}
+     */
+    faceArea(face_id_raw) {
+        const ret = wasm.axiaengine_faceArea(this.__wbg_ptr, face_id_raw);
+        return ret;
     }
     /**
      * @returns {number}
@@ -1257,6 +1279,15 @@ export class AxiaEngine {
      */
     mergeFacesByEdgeTol(edge_id_raw, angle_tol_deg) {
         const ret = wasm.axiaengine_mergeFacesByEdgeTol(this.__wbg_ptr, edge_id_raw, angle_tol_deg);
+        return ret;
+    }
+    /**
+     * meshVolume returns the signed enclosed volume of the whole mesh.
+     * Exact for closed solids; indicative only for open shells.
+     * @returns {number}
+     */
+    meshVolume() {
+        const ret = wasm.axiaengine_meshVolume(this.__wbg_ptr);
         return ret;
     }
     /**

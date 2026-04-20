@@ -160,6 +160,11 @@ export class AxiaEngine {
     draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
     /**
+     * edgeLength returns the straight-line distance between an edge's
+     * two endpoints. Zero on missing / degenerate edge.
+     */
+    edgeLength(edge_id_raw: number): number;
+    /**
      * ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
      * 파일 저장 대화창 등에서 데이터 무결성이 중요한 경우 사용.
      */
@@ -168,6 +173,13 @@ export class AxiaEngine {
      * 프로젝트 데이터를 바이너리 스냅샷으로 내보내기 (versioned format with magic bytes)
      */
     export_snapshot(): Uint8Array;
+    /**
+     * Measure helpers — pure queries, no state mutation.
+     *
+     * faceArea returns the planar area of a single face (fan-triangulated
+     * cross-product magnitude / 2). Returns 0 on error / missing face.
+     */
+    faceArea(face_id_raw: number): number;
     face_count(): number;
     /**
      * face 집합의 중심점 반환 [x, y, z]
@@ -408,6 +420,11 @@ export class AxiaEngine {
      * `angle_tol_deg` — 허용 각도 (°). 기본 0.5° (strict). 관대하게는 2~5°.
      */
     mergeFacesByEdgeTol(edge_id_raw: number, angle_tol_deg: number): number;
+    /**
+     * meshVolume returns the signed enclosed volume of the whole mesh.
+     * Exact for closed solids; indicative only for open shells.
+     */
+    meshVolume(): number;
     /**
      * Mirror the given faces across a plane. Returns the new FaceIds
      * in the same order as the input (empty vec on failure, with
@@ -727,8 +744,10 @@ export interface InitOutput {
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly axiaengine_edgeLength: (a: number, b: number) => number;
     readonly axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
+    readonly axiaengine_faceArea: (a: number, b: number) => number;
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
@@ -775,6 +794,7 @@ export interface InitOutput {
     readonly axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
+    readonly axiaengine_meshVolume: (a: number) => number;
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;

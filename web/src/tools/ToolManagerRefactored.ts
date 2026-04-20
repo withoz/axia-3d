@@ -300,6 +300,7 @@ export class ToolManager {
     'fillet-edge',
     'chamfer-edge',
     'array-linear',
+    'measure-selection',
     'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
@@ -333,6 +334,7 @@ export class ToolManager {
     'fillet-edge': '선택 엣지 모깎기 (Fillet)',
     'chamfer-edge': '선택 엣지 모따기 (Chamfer)',
     'array-linear': '선택을 선형 배열로 복제',
+    'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
     'taper-selection': '선택 테이퍼 (Taper)',
@@ -758,6 +760,58 @@ export class ToolManager {
         Toast.info(`${vertIds.length}개 정점을 ×${endScale.toFixed(2)} 테이퍼`, 2000);
       } else {
         Toast.fromBridgeError(this.bridge, 'Taper 실패');
+      }
+    } else if (action === 'measure-selection') {
+      // 현재 선택을 검사해 적절한 측정 결과 출력.
+      //   - 엣지만 선택 → 각 엣지 길이 합계 + 최장/최단
+      //   - 면만 선택      → 각 면적 합계 + 최장 변(reference)
+      //   - 아무것도 없음  → 전체 메시 부피 + XIA 개수
+      const edges = this.selection.getSelectedEdges();
+      const faces = this.selection.getSelectedFaces();
+      const fmt = (v: number) => this.units.format(v);
+      if (edges.length > 0 && faces.length === 0) {
+        let total = 0, min = Infinity, max = -Infinity;
+        for (const eid of edges) {
+          const L = this.bridge.edgeLength(eid);
+          total += L;
+          if (L < min) min = L;
+          if (L > max) max = L;
+        }
+        const lines = [
+          `📏 엣지 ${edges.length}개`,
+          `합계: ${fmt(total)}`,
+          edges.length > 1 ? `최단 ${fmt(min)} · 최장 ${fmt(max)}` : '',
+        ].filter(Boolean);
+        Toast.info(lines.join('\n'), 5000);
+        debugLog(`[Measure] edges: total=${total}, min=${min}, max=${max}`);
+      } else if (faces.length > 0) {
+        let total = 0, maxA = -Infinity;
+        for (const fid of faces) {
+          const A = this.bridge.faceArea(fid);
+          total += A;
+          if (A > maxA) maxA = A;
+        }
+        // Units are length, so area = length². We format with the base
+        // unit label appended with '²' — users can parse that intuitively.
+        const unitLbl = this.units.config.label;
+        Toast.info(
+          `📐 면 ${faces.length}개\n` +
+          `면적 합: ${total.toFixed(2)} ${unitLbl}²` +
+          (faces.length > 1 ? `\n최대 면: ${maxA.toFixed(2)} ${unitLbl}²` : ''),
+          5000,
+        );
+        debugLog(`[Measure] faces: total=${total}, max=${maxA}`);
+      } else {
+        // 전체 메시 부피
+        const vol = this.bridge.meshVolume();
+        const unitLbl = this.units.config.label;
+        Toast.info(
+          `🧊 전체 메시 부피\n` +
+          `${vol.toFixed(2)} ${unitLbl}³\n` +
+          `(닫힌 솔리드 기준, 열린 쉘은 근사치)`,
+          5000,
+        );
+        debugLog(`[Measure] mesh volume: ${vol}`);
       }
     } else if (action === 'array-linear') {
       // 선택한 face들을 N개 복제, 각 복제는 offset만큼 이동된 위치에.

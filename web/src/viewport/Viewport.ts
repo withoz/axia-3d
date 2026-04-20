@@ -7,6 +7,11 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { FurShell } from './FurShell.js';
 import {
   computeBoundsTree,
   disposeBoundsTree,
@@ -72,6 +77,19 @@ export class Viewport {
   private _boundHandlers: { target: EventTarget; type: string; handler: EventListener }[] = [];
   private _frameId: number | null = null;
   private _onFrameCallbacks: (() => void)[] = [];
+
+  // ═══ Post-processing (SSAO) ═══
+  // Built lazily on first enable so the WebGL context and scene are
+  // fully wired up. `_ssaoEnabled` is the single source of truth read
+  // by the animate loop to choose composer.render() vs renderer.render().
+  private _composer: EffectComposer | null = null;
+  private _ssaoPass: SSAOPass | null = null;
+  private _renderPass: RenderPass | null = null;
+  private _ssaoEnabled: boolean = true;
+
+  // ═══ Fur shell overlay (toggle-able; off by default) ═══
+  private _fur: FurShell | null = null;
+  private _furEnabled: boolean = false;
 
   // Camera control state
   private isOrbiting = false;
@@ -464,6 +482,9 @@ export class Viewport {
       this.orthoCamera.bottom = -this.orthoZoom;
       this.orthoCamera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
+      // Post-processing composer needs matching size.
+      if (this._composer) this._composer.setSize(w, h);
+      if (this._ssaoPass) this._ssaoPass.setSize(w, h);
       // Update LineMaterial resolution for thick axes (cached, no traverse)
       for (const mat of lineMaterials) {
         mat.resolution.set(w, h);
@@ -876,6 +897,10 @@ export class Viewport {
 
       // ── Store reference for color updates ──
       this.frontMesh = frontMesh;
+
+      // If fur was enabled before this mesh rebuild, re-attach so the
+      // shell overlay tracks the new geometry automatically.
+      this._refreshFur();
 
       // ADR-007 Phase 4 — CAD 모드 (single-sided) 활성화 시 BackSide mesh 생략
       // 이점:
@@ -1704,12 +1729,100 @@ export class Viewport {
   }
 
   start() {
+    // Build the post-processing composer on first start if SSAO is on
+    // and we haven't built it yet. Lazy so any headless test that
+    // instantiates Viewport without calling start() skips WebGL work.
+    if (this._ssaoEnabled && !this._composer) {
+      this._buildSsaoComposer();
+    }
     const animate = () => {
       this._frameId = requestAnimationFrame(animate);
       for (const cb of this._onFrameCallbacks) cb();
-      this.renderer.render(this.scene, this.activeCamera);
+      if (this._ssaoEnabled && this._composer) {
+        // Keep the SSAO pass's camera in sync with the active camera —
+        // we switch between perspective and orthographic on view-mode
+        // changes, and SSAO's depth reconstruction is camera-specific.
+        if (this._renderPass) this._renderPass.camera = this.activeCamera;
+        if (this._ssaoPass)   this._ssaoPass.camera = this.activeCamera;
+        this._composer.render();
+      } else {
+        this.renderer.render(this.scene, this.activeCamera);
+      }
     };
     animate();
+  }
+
+  /**
+   * Toggle Screen-Space Ambient Occlusion. Off by default can be
+   * preferred for low-end GPUs; we default ON since the puppy scene
+   * benefits strongly and the perf cost is manageable.
+   */
+  setSsaoEnabled(enabled: boolean): void {
+    this._ssaoEnabled = enabled;
+    if (enabled && !this._composer) {
+      this._buildSsaoComposer();
+    }
+  }
+
+  isSsaoEnabled(): boolean {
+    return this._ssaoEnabled;
+  }
+
+  /**
+   * Toggle the shell-technique fur overlay on the main mesh. Off by
+   * default because it costs N extra draw calls (N = layers). When
+   * enabled we attach to the currently-rendered `frontMesh`; if the
+   * mesh is rebuilt (syncMesh) the fur gets re-attached automatically.
+   */
+  setFurEnabled(enabled: boolean): void {
+    this._furEnabled = enabled;
+    if (enabled) {
+      if (!this._fur) this._fur = new FurShell();
+      if (this.frontMesh) {
+        this._fur.attach(this.frontMesh);
+      }
+    } else if (this._fur) {
+      this._fur.dispose();
+    }
+  }
+
+  isFurEnabled(): boolean {
+    return this._furEnabled;
+  }
+
+  /**
+   * Re-attach fur to the current main mesh. Called by `syncMesh` after
+   * mesh rebuilds so the shell overlay keeps tracking the puppy.
+   */
+  private _refreshFur(): void {
+    if (this._furEnabled && this._fur && this.frontMesh) {
+      this._fur.attach(this.frontMesh);
+    }
+  }
+
+  private _buildSsaoComposer(): void {
+    const w = this.renderer.domElement.clientWidth  || 1;
+    const h = this.renderer.domElement.clientHeight || 1;
+    try {
+      const composer = new EffectComposer(this.renderer);
+      const renderPass = new RenderPass(this.scene, this.activeCamera);
+      composer.addPass(renderPass);
+      const ssao = new SSAOPass(this.scene, this.activeCamera, w, h);
+      // Tuned for CAD-ish scene scale (scenes run 1–10k mm). Radius in
+      // world units — a large AO sphere keeps the effect visible when
+      // the model is zoomed out.
+      ssao.kernelRadius = 200;
+      ssao.minDistance = 0.001;
+      ssao.maxDistance = 0.1;
+      composer.addPass(ssao);
+      composer.addPass(new OutputPass());
+      this._composer = composer;
+      this._renderPass = renderPass;
+      this._ssaoPass = ssao;
+    } catch (e) {
+      console.warn('[Viewport] SSAO init failed, reverting to plain render:', e);
+      this._ssaoEnabled = false;
+    }
   }
 
   /** Stop the render loop */
