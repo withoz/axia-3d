@@ -315,6 +315,11 @@
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 3px;
     }
+    .tool-dropdown-sep {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      margin: 4px 6px;
+    }
 
     .tool-group {
       display: flex;
@@ -2016,6 +2021,60 @@
         <button class="tool-btn" data-tool="erase" title="Erase (E)">
           <svg viewBox="0 0 24 24"><path d="M16 4 L20 8 L10 18 L6 18 L4 16 Z M10 18 L14 14 M6 18 L20 18"/></svg>
         </button>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Organic modeling group — Mirror / Revolve / Subdivide (actions) -->
+      <div class="tool-group">
+        <!-- 대표 버튼: Subdivide (단일 클릭으로 매끄럽게 분할) -->
+        <div class="tool-dropdown" data-group="organic-family">
+          <button class="tool-btn" data-action="subdivide" title="매끄럽게 분할 (Catmull-Clark)">
+            <svg viewBox="0 0 24 24"><path d="M3 8 Q 7.5 2, 12 8 T 21 8"/><path d="M3 16 Q 7.5 10, 12 16 T 21 16"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="organic-family" title="유기 모델링 작업">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="subdivide">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 8 Q 7.5 2, 12 8 T 21 8"/><path d="M3 16 Q 7.5 10, 12 16 T 21 16"/></svg></span>
+              <span class="tdi-label">매끄럽게 분할 (Subdivide)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="mirror-x">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L12 21" stroke-dasharray="2 2"/><path d="M4 18 L4 6 L10 12 Z"/><path d="M20 18 L20 6 L14 12 Z" fill="none"/></svg></span>
+              <span class="tdi-label">Mirror · YZ 평면 (X 반전)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="mirror-y">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 12 L21 12" stroke-dasharray="2 2"/><path d="M6 4 L18 4 L12 10 Z"/><path d="M6 20 L18 20 L12 14 Z" fill="none"/></svg></span>
+              <span class="tdi-label">Mirror · XZ 평면 (Y 반전)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="mirror-z">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 3 L21 21" stroke-dasharray="2 2"/><path d="M6 15 L15 6 L15 15 Z"/><path d="M18 9 L9 18 L9 9 Z" fill="none"/></svg></span>
+              <span class="tdi-label">Mirror · XY 평면 (Z 반전)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="revolve-x">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 12 L21 12" stroke-dasharray="2 2"/><path d="M7 8 A 5 4 0 1 0 17 8"/><path d="M5 7 L7 8 L5 10"/></svg></span>
+              <span class="tdi-label">Revolve · X축 회전</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="revolve-y">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L12 21" stroke-dasharray="2 2"/><path d="M8 7 A 4 5 0 1 0 8 17"/><path d="M7 5 L8 7 L10 5"/></svg></span>
+              <span class="tdi-label">Revolve · Y축 회전</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="revolve-z">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 21 L21 3" stroke-dasharray="2 2"/><path d="M8 8 A 5 5 0 1 0 16 16"/><path d="M6 10 L8 8 L10 10"/></svg></span>
+              <span class="tdi-label">Revolve · Z축 회전</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="tool-sep"></div>

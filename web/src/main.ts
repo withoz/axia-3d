@@ -229,6 +229,18 @@ async function main() {
     const item = target.closest('.tool-dropdown-item') as HTMLElement;
     if (item) {
       const dropdown = item.closest('.tool-dropdown') as HTMLElement;
+
+      // Action dropdown item (data-action) — dispatch action + close panel,
+      // do NOT change active tool or swap the main button's icon.
+      const itemAction = item.dataset.action;
+      if (itemAction) {
+        dropdown?.classList.remove('open');
+        toolManager.executeAction(itemAction);
+        item.classList.add('flash');
+        item.addEventListener('animationend', () => item.classList.remove('flash'), { once: true });
+        return;
+      }
+
       const tool = item.dataset.tool;
       if (tool && dropdown) {
         // 그룹 내 active 갱신
@@ -259,6 +271,16 @@ async function main() {
 
     const btn = target.closest('.tool-btn') as HTMLElement;
     if (!btn) return;
+
+    // Action button (data-action on the main tool-btn) — execute without
+    // altering tool selection state. Used by Mirror / Revolve / Subdivide.
+    const btnAction = btn.dataset.action;
+    if (btnAction) {
+      toolManager.executeAction(btnAction);
+      btn.classList.add('flash');
+      btn.addEventListener('animationend', () => btn.classList.remove('flash'), { once: true });
+      return;
+    }
 
     const tool = btn.dataset.tool;
     if (!tool) return;
