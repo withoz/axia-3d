@@ -1303,6 +1303,43 @@ impl AxiaEngine {
         }
     }
 
+    /// Round off a single edge into a cylindrical arc of the given
+    /// radius, sampled with `segments` quads. Returns the count of new
+    /// fillet strip quads on success (>= 2), or -1 on failure with
+    /// `lastError()` populated.
+    #[wasm_bindgen(js_name = "filletEdge")]
+    pub fn fillet_edge(
+        &mut self,
+        edge_id_raw: u32,
+        radius: f64,
+        segments: u32,
+    ) -> i32 {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            self.set_error(format!("fillet: edge {} not found", edge_id_raw));
+            return -1;
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.fillet_edge(eid, radius, segments) {
+            Ok(res) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                res.fillet_faces.len() as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] fillet_edge ERROR: {}", e);
+                self.set_error(format!("fillet: {}", e));
+                -1
+            }
+        }
+    }
+
     /// Apply one level of Catmull-Clark subdivision to the whole mesh.
     /// Returns the count of new quads on success, or -1 on failure.
     /// Wrapped in a single undo transaction so one Ctrl+Z restores the

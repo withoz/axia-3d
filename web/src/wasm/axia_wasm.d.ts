@@ -162,6 +162,13 @@ export class AxiaEngine {
      */
     faces_centroid(face_ids: Uint32Array): Float64Array;
     /**
+     * Round off a single edge into a cylindrical arc of the given
+     * radius, sampled with `segments` quads. Returns the count of new
+     * fillet strip quads on success (>= 2), or -1 on failure with
+     * `lastError()` populated.
+     */
+    filletEdge(edge_id_raw: number, radius: number, segments: number): number;
+    /**
      * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
      *
      * Flips orientation of the given faces. Locked (inside grouped/component)
@@ -695,6 +702,7 @@ export interface InitOutput {
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_getCacheVersion: (a: number) => number;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;

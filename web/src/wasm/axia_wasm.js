@@ -472,6 +472,20 @@ export class AxiaEngine {
         }
     }
     /**
+     * Round off a single edge into a cylindrical arc of the given
+     * radius, sampled with `segments` quads. Returns the count of new
+     * fillet strip quads on success (>= 2), or -1 on failure with
+     * `lastError()` populated.
+     * @param {number} edge_id_raw
+     * @param {number} radius
+     * @param {number} segments
+     * @returns {number}
+     */
+    filletEdge(edge_id_raw, radius, segments) {
+        const ret = wasm.axiaengine_filletEdge(this.__wbg_ptr, edge_id_raw, radius, segments);
+        return ret;
+    }
+    /**
      * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
      *
      * Flips orientation of the given faces. Locked (inside grouped/component)

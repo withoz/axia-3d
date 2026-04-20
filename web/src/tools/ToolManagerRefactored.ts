@@ -297,6 +297,7 @@ export class ToolManager {
     'mirror-x', 'mirror-y', 'mirror-z',
     'revolve-x', 'revolve-y', 'revolve-z',
     'subdivide',
+    'fillet-edge',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -326,6 +327,7 @@ export class ToolManager {
     'revolve-y': '선택 엣지를 Y축으로 회전 (Revolve)',
     'revolve-z': '선택 엣지를 Z축으로 회전 (Revolve)',
     'subdivide': '전체 메시 Catmull-Clark 분할',
+    'fillet-edge': '선택 엣지 모깎기 (Fillet)',
   };
 
   executeAction(action: string): void {
@@ -649,6 +651,33 @@ export class ToolManager {
         debugLog(`[Action] ${action}: ${newFaces.length} faces`);
       } else {
         Toast.fromBridgeError(this.bridge, 'Revolve 실패');
+      }
+    } else if (action === 'fillet-edge') {
+      // 선택된 단일 엣지를 radius 반경으로 모깎기. 우선 `fillet:radius`
+      // localStorage 에 마지막 값이 있으면 기본값, 아니면 50mm.
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length !== 1) {
+        Toast.warning('모깎기할 엣지 1개를 먼저 선택하세요', 2500);
+        return;
+      }
+      const lastRadius = Number(localStorage.getItem('axia:fillet:radius') ?? '50');
+      const input = window.prompt('모깎기 반경 (mm):', String(lastRadius));
+      if (input == null) return; // cancelled
+      const radius = parseFloat(input);
+      if (!Number.isFinite(radius) || radius <= 0) {
+        Toast.warning('유효한 양수 반경을 입력하세요', 2500);
+        return;
+      }
+      try { localStorage.setItem('axia:fillet:radius', String(radius)); } catch { /* ignore */ }
+      const segments = 8;
+      const n = this.bridge.filletEdge(edges[0], radius, segments);
+      if (n >= 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`모깎기 완료 — 반경 ${radius}mm, ${n}개 fillet face 생성`, 2500);
+        debugLog(`[Action] fillet-edge: ${n} faces`);
+      } else {
+        Toast.fromBridgeError(this.bridge, '모깎기 실패');
       }
     } else if (action === 'subdivide') {
       // 전체 메시에 Catmull-Clark subdivision 1회 적용.

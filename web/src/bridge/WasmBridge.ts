@@ -99,6 +99,7 @@ type AxiaEngineExtended = AxiaEngine & {
     closedProfile: boolean,
   ): Uint32Array;
   subdivideCatmullClark?(): number;
+  filletEdge?(edgeId: number, radius: number, segments: number): number;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
@@ -928,6 +929,22 @@ export class WasmBridge {
     } catch (e) {
       this.recordBridgeError('loftSections', e);
       return [];
+    }
+  }
+
+  /**
+   * 엣지를 지정 radius의 원호 표면으로 둥글게 블렌드 (Fillet).
+   * segments만큼의 quad로 fillet strip 생성. 반환: 새 fillet face 수,
+   * 실패 시 -1 (lastError() 참조).
+   */
+  filletEdge(edgeId: number, radius: number, segments = 8): number {
+    if (!this.engine?.filletEdge) return -1;
+    this.markDirty();
+    try {
+      return this.engine.filletEdge(edgeId, radius, segments);
+    } catch (e) {
+      this.recordBridgeError('filletEdge', e);
+      return -1;
     }
   }
 

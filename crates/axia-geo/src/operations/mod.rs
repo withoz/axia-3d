@@ -16,3 +16,4 @@ pub mod revolve;
 pub mod loft;
 pub mod sweep;
 pub mod subdivide;
+pub mod fillet;

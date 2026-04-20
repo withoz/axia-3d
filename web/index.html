@@ -2113,6 +2113,17 @@
               <span class="tdi-label">Revolve · Z축 회전</span>
               <span class="tdi-key"></span>
             </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="fillet-edge">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Right-angle corner with the inside filleted off -->
+                <path d="M5 5 L5 13 A 6 6 0 0 0 11 19 L19 19"/>
+                <path d="M5 19 L5 13" stroke-dasharray="2 2"/>
+                <path d="M11 19 L5 19" stroke-dasharray="2 2"/>
+              </svg></span>
+              <span class="tdi-label">엣지 모깎기 (Fillet)…</span>
+              <span class="tdi-key"></span>
+            </div>
           </div>
         </div>
       </div>
@@ -2199,6 +2210,7 @@
       <!-- 1개 엣지 선택 시 -->
       <div class="ctx-item ctx-edge1-item" data-action="constrain-edge-length">엣지 길이 설정…</div>
       <div class="ctx-item ctx-edge1-item" data-action="split-edge-midpoint">엣지 중점 분할</div>
+      <div class="ctx-item ctx-edge1-item" data-action="fillet-edge">엣지 모깎기 (Fillet)…</div>
       <div class="ctx-sep"></div>
       <!-- 그룹 / 컴포넌트 -->
       <div class="ctx-item ctx-group-item" data-action="group">그룹 만들기 <span class="ctx-key">Ctrl+G</span></div>
