@@ -34,6 +34,7 @@ export class StatusBar {
   private deps: StatusBarDeps;
   private coordsEl: HTMLElement | null;
   private metaEl: HTMLElement | null;
+  private snapEl: HTMLElement | null;
 
   private lastWorldPos: THREE.Vector3 | null = null;
   private rafPending = false;
@@ -46,6 +47,7 @@ export class StatusBar {
     this.deps = deps;
     this.coordsEl = document.getElementById('sb-coords');
     this.metaEl = document.getElementById('sb-meta');
+    this.snapEl = document.getElementById('sb-snap');
     this.setupCoordsTracking();
     this.setupFkeyButtons();
     this.setupCbTools();
@@ -113,10 +115,14 @@ export class StatusBar {
     };
     const snap = this.deps.snap.lastSnap ?? null;
     this.coordsEl.style.opacity = '1';
+    // 스냅 prefix는 별도 span (고정폭 공간이 있어 coords 위치 불변)
+    if (this.snapEl) {
+      this.snapEl.textContent = snap ? `●${snap.type}` : '';
+    }
     if (snap) {
       const sp = snap.position;
       this.coordsEl.classList.add('snapped');
-      this.coordsEl.textContent = `[●${snap.type}] ${fmt(sp.x)}, ${fmt(sp.y)}, ${fmt(sp.z)}`;
+      this.coordsEl.textContent = `${fmt(sp.x)}, ${fmt(sp.y)}, ${fmt(sp.z)}`;
     } else {
       this.coordsEl.classList.remove('snapped');
       this.coordsEl.textContent = `${fmt(p.x)}, ${fmt(p.y)}, ${fmt(p.z)}`;
