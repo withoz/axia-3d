@@ -38,11 +38,13 @@ describe('CommandRegistry', () => {
   });
 
   describe('initCommandRegistry', () => {
-    it('registers all Phase H + prior handlers', () => {
-      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(8);
+    it('registers all Phase H+I + prior handlers', () => {
+      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(10);
       const calls = (deps.commandInput.registerHandler as any).mock.calls;
       const names = calls.map((c: any) => c[0].name);
       expect(names).toContain('line');
+      expect(names).toContain('curves');
+      expect(names).toContain('clearcurves');
       expect(names).toContain('mergetol');
       expect(names).toContain('mergemat');
       expect(names).toContain('cadmode');

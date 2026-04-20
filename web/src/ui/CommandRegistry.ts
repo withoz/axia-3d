@@ -9,6 +9,7 @@ import { CommandInput } from './CommandInput';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { getMergeTolerance, setMergeTolerance, getRespectMaterial, setRespectMaterial } from '../tools/MergeSettings';
+import { getCurveRegistry } from '../curves/CurveRegistry';
 
 export interface CommandRegistryDeps {
   commandInput: CommandInput;
@@ -91,6 +92,49 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
       }
       setMergeTolerance(v);
       commandInput.printSuccess(`면 통합 tolerance: ${v}° (0.5° = strict, 2~5° = loose)`);
+    },
+  });
+
+  // Phase I6 — 곡선 레이어 관리 커맨드
+  commandInput.registerHandler({
+    name: 'curves',
+    aliases: ['listcurves'],
+    help: '등록된 Curve 목록 표시 (CurveRegistry)',
+    execute: () => {
+      const registry = getCurveRegistry();
+      const all = registry.getAll();
+      if (all.length === 0) {
+        commandInput.printInfo('등록된 곡선 없음');
+        return;
+      }
+      const lines = all.map(c => {
+        switch (c.kind) {
+          case 'arc':
+            return `#${c.id} Arc: R=${(c as any).radius?.toFixed(1)} seg=${c.segments}`;
+          case 'bezier':
+            return `#${c.id} Bezier (4 ctrl pts) seg=${c.segments}`;
+          case 'catmull-rom':
+            return `#${c.id} Catmull-Rom (${(c as any).points?.length ?? 0} pts)`;
+          case 'freehand':
+            return `#${c.id} Freehand (${(c as any).rawPoints?.length ?? 0} raw pts)`;
+          case 'ellipse':
+            return `#${c.id} Ellipse Rx=${(c as any).xRadius?.toFixed(1)} Ry=${(c as any).yRadius?.toFixed(1)}`;
+        }
+      });
+      commandInput.printInfo(
+        `곡선 ${all.length}개:\n` + lines.join('\n')
+      );
+    },
+  });
+
+  commandInput.registerHandler({
+    name: 'clearcurves',
+    help: 'CurveRegistry 전체 초기화 (DCEL 영향 없음)',
+    execute: () => {
+      const registry = getCurveRegistry();
+      const n = registry.size();
+      registry.clear();
+      commandInput.printSuccess(`${n}개 curve 메타데이터 제거 (DCEL edges는 보존)`);
     },
   });
 
