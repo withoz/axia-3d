@@ -8,6 +8,7 @@
 import { Viewport, ViewMode } from '../viewport/Viewport';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { vcbTools } from './VCB';
+import { Toast } from './Toast';
 
 export interface KeyboardShortcutsDeps {
   toolManager: ToolManager;
@@ -117,6 +118,16 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         statOsnap.textContent = on ? 'ON' : 'OFF';
         statOsnap.style.color = on ? '#44ff88' : '#ff4444';
       }
+      return;
+    }
+
+    // Backtick (`) = 그리드 표시/숨김 토글
+    if (e.key === '`' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.gridVisible;
+      viewport.setGridVisible(next);
+      Toast.info(`그리드 ${next ? '표시' : '숨김'}`);
       return;
     }
 

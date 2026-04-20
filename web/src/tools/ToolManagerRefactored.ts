@@ -1165,6 +1165,9 @@ export class ToolManager {
     // (직사각형 4 edge, 오각형 5 edge 등은 개별로 보여야 자연스러움)
     const AGGREGATE_MIN_EDGES = 8;
 
+    // 원통 높이 감지용: 감지된 원형 체인의 centroid + radius 수집
+    const detectedCircles: Array<{ centroid: THREE.Vector3; radius: number }> = [];
+
     for (const chain of chains) {
       if (this.selectionDimLines.length >= MAX_DIM_LABELS) break;
       const isClosed = chain.length > 1 &&
@@ -1234,6 +1237,8 @@ export class ToolManager {
           color,
           editable: true,
         });
+        // 원통 높이 감지를 위해 centroid + radius 기록
+        detectedCircles.push({ centroid: centroid.clone(), radius });
       } else {
         // 체인 중간 edge 한 개 골라서 arc 심볼 + 총 길이
         const mid = chain[Math.floor(chain.length / 2)];
@@ -1243,6 +1248,44 @@ export class ToolManager {
         this.selectionDimLines.push({
           from: mid.from, to: mid.to, text: arcLabel, color, editable: false,
         });
+      }
+    }
+
+    // ═══ 원통 높이 감지 ═══
+    // 동일 반지름(±2%)의 원형 체인이 2개 이상이면 → 원통으로 간주하고
+    // 각 쌍의 centroid 거리를 "H" 라벨로 추가.
+    // (3개 이상인 경우: 가장 먼 두 원만 표시 — 전체 높이)
+    if (detectedCircles.length >= 2 && this.selectionDimLines.length < MAX_DIM_LABELS) {
+      // 같은 반지름으로 그룹핑 (±2%)
+      const groups: Array<{ radius: number; circles: typeof detectedCircles }> = [];
+      for (const c of detectedCircles) {
+        const g = groups.find(gr => Math.abs(gr.radius - c.radius) <= c.radius * 0.02);
+        if (g) g.circles.push(c); else groups.push({ radius: c.radius, circles: [c] });
+      }
+      for (const group of groups) {
+        if (group.circles.length < 2) continue;
+        // 가장 먼 두 centroid를 선택 → 원통 전체 높이
+        let maxDist = 0;
+        let best: [THREE.Vector3, THREE.Vector3] | null = null;
+        for (let i = 0; i < group.circles.length; i++) {
+          for (let j = i + 1; j < group.circles.length; j++) {
+            const d = group.circles[i].centroid.distanceTo(group.circles[j].centroid);
+            if (d > maxDist) {
+              maxDist = d;
+              best = [group.circles[i].centroid, group.circles[j].centroid];
+            }
+          }
+        }
+        if (best && maxDist > 1) {
+          if (this.selectionDimLines.length >= MAX_DIM_LABELS) break;
+          this.selectionDimLines.push({
+            from: best[0],
+            to: best[1],
+            text: `H ${this.units.format(maxDist)}`,
+            color: '#ffa94d', // 원통 높이 — 오렌지 계열로 radius(R)와 구분
+            editable: true,
+          });
+        }
       }
     }
 

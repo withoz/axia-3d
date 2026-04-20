@@ -13,6 +13,7 @@ import { ToolManager } from '../tools/ToolManagerRefactored';
 import { FileManager } from '../file/FileManager';
 import { startBooleanOp } from './BooleanHandler';
 import { debugLog } from '../utils/debug';
+import { Toast } from './Toast';
 import type { ImportFormat } from '../import/FileImporter';
 import { timestampedName } from '../export/ExportUtils';
 
@@ -236,12 +237,16 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'view-home': viewport.resetCamera(); break;
       case 'view-grid': {
         const s = viewport.getStyleSettings();
-        viewport.setGridVisible(!s.gridVisible);
+        const next = !s.gridVisible;
+        viewport.setGridVisible(next);
+        Toast.info(`그리드 ${next ? '표시' : '숨김'}`);
         break;
       }
       case 'view-axis': {
         const s = viewport.getStyleSettings();
-        viewport.setAxisVisible(!s.axisVisible);
+        const next = !s.axisVisible;
+        viewport.setAxisVisible(next);
+        Toast.info(`축 ${next ? '표시' : '숨김'}`);
         break;
       }
 
