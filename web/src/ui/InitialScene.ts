@@ -64,16 +64,23 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
         [ 1800, -550], [ 1800,  550],   // front legs
       ];
       for (const [cx, cz] of legPositions) {
+        // More intermediate profile samples → smoother silhouette along
+        // the leg (paw bulge, ankle narrow, knee curve, thigh swell).
         const profile: number[] = [
-          cx,          0, cz,    // foot pole (on axis)
-          cx + 290,   60, cz,    // paw (widest near ground)
-          cx + 240,  220, cz,    // ankle
-          cx + 210, 1000, cz,    // lower leg
-          cx + 260, 1900, cz,    // knee
-          cx + 320, 2600, cz,    // thigh (widest up top)
+          cx,          0, cz,    // foot pole
+          cx + 260,   40, cz,
+          cx + 300,  110, cz,    // paw widest
+          cx + 260,  220, cz,    // ankle
+          cx + 220,  600, cz,    // lower calf
+          cx + 220, 1100, cz,
+          cx + 245, 1700, cz,    // knee
+          cx + 290, 2200, cz,
+          cx + 325, 2600, cz,    // thigh
+          cx + 280, 2850, cz,
           cx,       3000, cz,    // top pole — inside body
         ];
-        bridge.revolveProfile(profile, cx, 0, cz, 0, 1, 0, 12);
+        // 20 rotational segments (up from 12) for a clearly round leg.
+        bridge.revolveProfile(profile, cx, 0, cz, 0, 1, 0, 20);
         await tick();
       }
 
@@ -83,24 +90,32 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
       // neck → front-pole.
       bridge.revolveProfile(
         [
+          // Denser rear taper — rear pole area was previously sharp
           -2800, 3500, 0,   // rear pole
+          -2700, 3640, 0,
           -2500, 3800, 0,
+          -2100, 4100, 0,
           -1800, 4350, 0,   // hip (r=850)
+          -1100, 4470, 0,
            -500, 4500, 0,   // mid (r=1000, thickest)
+            400, 4480, 0,
             800, 4450, 0,
+           1300, 4330, 0,
            1800, 4200, 0,   // chest (r=700)
+           2200, 4010, 0,
            2500, 3800, 0,   // neck (r=300)
+           2700, 3640, 0,
            2800, 3500, 0,   // front pole
         ],
         0, 3500, 0,   // axis origin on spine
         1, 0, 0,       // axis dir = +X
-        20,            // segments
+        28,            // segments 20 → 28 for smoother circumference
       );
       await tick();
 
-      // ─── Head (sphere) ─────────────────────────────────────────
+      // ─── Head (sphere, denser tessellation) ────────────────────
       const headX = 3300, headY = 3700, headR = 900;
-      bridge.create_sphere?.(headX, headY, 0, headR, 20, 14);
+      bridge.create_sphere?.(headX, headY, 0, headR, 32, 20);
       await tick();
 
       // ─── Snout (revolve, tapered cone from head forward) ───────
@@ -110,19 +125,23 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
         [
           snoutAxisX,        snoutY,       0,   // base pole inside head
           snoutAxisX + 100,  snoutY + 340, 0,
+          snoutAxisX + 250,  snoutY + 335, 0,
           snoutAxisX + 400,  snoutY + 320, 0,
+          snoutAxisX + 550,  snoutY + 300, 0,
           snoutAxisX + 700,  snoutY + 270, 0,
+          snoutAxisX + 800,  snoutY + 240, 0,
           snoutAxisX + 850,  snoutY + 190, 0,
+          snoutAxisX + 900,  snoutY + 120, 0,
           snoutAxisX + 950,  snoutY,       0,   // tip pole at nose position
         ],
         snoutAxisX, snoutY, 0,
         1, 0, 0,
-        16,
+        24,   // 16 → 24
       );
       await tick();
 
       // ─── Nose (sphere at snout tip) ────────────────────────────
-      bridge.create_sphere?.(snoutAxisX + 950, snoutY, 0, 180, 10, 8);
+      bridge.create_sphere?.(snoutAxisX + 950, snoutY, 0, 180, 16, 12);
       await tick();
 
       // ─── Ears × 2 (tilted revolve — Papillon "butterfly" V-shape) ─
@@ -148,17 +167,24 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
           baseY + t * axisY,
           baseZ + t * tiltZ,
         ];
+        // Denser control points → smoother transition from wide base
+        // to sharp tip.
         const pts = [
           addPt(0,        0),        // base pole
           addPt(0,      600),        // base rim (wide)
+          addPt(L*0.15, 590),
           addPt(L*0.30, 540),        // lower ear
+          addPt(L*0.50, 440),
           addPt(L*0.65, 320),        // upper half, tapering
+          addPt(L*0.80, 220),
           addPt(L*0.90, 140),        // near tip
+          addPt(L*0.97,  60),
           addPt(L,        0),        // tip pole (pointed)
         ];
         const profile: number[] = [];
         for (const p of pts) profile.push(...p);
-        bridge.revolveProfile(profile, baseX, baseY, baseZ, 0, axisY, tiltZ, 14);
+        // 14 → 20 rotational segments for a visibly round ear rim.
+        bridge.revolveProfile(profile, baseX, baseY, baseZ, 0, axisY, tiltZ, 20);
       };
       buildEar(-1);
       await tick();
@@ -171,24 +197,30 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
       // solid, so the tail-body junction looks seamless) and curls up-back.
       // Closed circle profile → solid tube; bump radius to 180 for
       // visibility against the body silhouette.
-      const tailPoints = 10;
+      const tailPoints = 16;                // 10 → 16 for rounder cross-section
       const tailRadius = 180;
       const tailProfile: number[] = [];
       for (let i = 0; i < tailPoints; i++) {
         const a = (i * Math.PI * 2) / tailPoints;
         tailProfile.push(tailRadius * Math.cos(a), tailRadius * Math.sin(a), 0);
       }
-      // Body at x=-2500 has radius ≈ 300 → y ∈ [3200, 3800] there.
-      // Starting tail at (-2500, 3700) places its first section INSIDE the
-      // body envelope near the upper-rear.
+      // Denser path → smoother curl. Inserted midpoints between the
+      // original 7 key positions so the sweep-frame transport doesn't
+      // produce visible kinks at the sharper bends.
       const tailPath: number[] = [
         -2500, 3700, 0,   // inside body, top-rear
-        -2700, 4100, 0,
-        -2900, 4600, 0,
-        -3000, 5100, 0,
-        -2950, 5700, 0,
+        -2600, 3900, 0,
+        -2720, 4100, 0,
+        -2830, 4350, 0,
+        -2915, 4620, 0,
+        -2970, 4900, 0,
+        -3005, 5180, 0,
+        -3005, 5470, 0,
+        -2970, 5730, 0,
+        -2870, 5980, 0,
         -2700, 6200, 0,
-        -2300, 6400, 0,
+        -2500, 6340, 0,
+        -2300, 6410, 0,
       ];
       bridge.sweepProfileAlongPath(tailProfile, tailPath, true);
       await tick();
