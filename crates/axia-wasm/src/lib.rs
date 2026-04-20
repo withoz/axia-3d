@@ -1576,6 +1576,49 @@ impl AxiaEngine {
         }
     }
 
+    /// Phase H5 — 자유 엣지 → Face Synthesis (사용자 수동 트리거).
+    ///
+    /// 닫힌 polygon을 이루는 free edges를 감지해 face로 전환.
+    /// 2D DXF 도면 import 후 "평면도 → 면 생성"에 유용.
+    ///
+    /// **사용자 명시 호출만** — import 직후 자동 실행 안 함 (의도 왜곡 방지).
+    ///
+    /// 반환: 생성된 face 개수 (감지 실패 / 이미 face로 처리됨 시 0)
+    #[wasm_bindgen(js_name = "synthesizeFacesFromFreeEdges")]
+    pub fn synthesize_faces_from_free_edges(&mut self) -> u32 {
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let material = self.scene.default_material;
+        let created = self.scene.mesh.resolve_planar_free_faces(material);
+
+        if !created.is_empty() {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        } else {
+            self.scene.transactions.cancel();
+        }
+
+        debug_log!("[RUST] synthesizeFacesFromFreeEdges: {} faces", created.len());
+        created.len() as u32
+    }
+
+    /// Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
+    /// UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
+    #[wasm_bindgen(js_name = "countFreeEdges")]
+    pub fn count_free_edges(&self) -> u32 {
+        let mut count = 0u32;
+        for (_, he) in self.scene.mesh.hes.iter() {
+            if he.is_active() && he.face().is_null() {
+                count += 1;
+            }
+        }
+        // HE 한 쌍 (twin)이 모두 face null이면 엣지 2번 카운트됨 → 반으로
+        count / 2
+    }
+
     /// Phase H — Import Normalizer 실행 (ADR-007 Barrier).
     ///
     /// 외부 파일에서 들어온 mesh 데이터를 AXiA 네이티브 규칙에 맞춰 정리.

@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { importDxfFile, DxfImportDeps } from './DxfImportHandler';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+vi.mock('./Toast', () => ({ Toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 
 const alertMock = vi.fn();
 globalThis.alert = alertMock;
+// Phase H4 — unit prompt mock: 기본 "mm" 반환 (Cancel 안 함)
+globalThis.prompt = vi.fn().mockReturnValue('mm');
 
 function mockDeps(): DxfImportDeps {
   return {
@@ -30,6 +33,7 @@ function mockDeps(): DxfImportDeps {
         isolatedVertsRemoved: 0,
         remainingViolations: 0,
       }),
+      countFreeEdges: vi.fn().mockReturnValue(0),
     } as any,
     toolManager: {
       syncMesh: vi.fn(),

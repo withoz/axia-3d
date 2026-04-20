@@ -270,6 +270,7 @@ export class ToolManager {
    */
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
     'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar', 'merge-as-hole',
+    'synthesize-faces',
     'redo', 'group', 'make-component',
     'constrain-parallel', 'constrain-perpendicular', 'constrain-collinear',
     'constrain-edge-length', 'split-edge-midpoint', 'constrain-endpoint-distance',
@@ -282,6 +283,7 @@ export class ToolManager {
     'merge-faces': '면 통합',
     'merge-xia-coplanar': 'XIA 내 coplanar 면 일괄 통합',
     'merge-as-hole': '내부 면을 구멍으로 합치기',
+    'synthesize-faces': '자유 엣지 → 면 합성',
     'redo': '다시 실행',
     'group': '그룹 만들기',
     'make-component': '컴포넌트 변환',
@@ -539,6 +541,26 @@ export class ToolManager {
           this.bridge.lastError() ||
           '병합 실패 — 두 면이 같은 평면이고 하나가 다른 하나에 완전히 포함돼야 합니다',
           4000,
+        );
+      }
+    } else if (action === 'synthesize-faces') {
+      // Phase H5 — 자유 엣지를 감지해 face로 합성 (수동 트리거)
+      // 주로 2D DXF import 후 "평면도에서 면 만들기" 용도.
+      // 자동이 아니라 사용자가 명시적으로 호출 → 의도 왜곡 방지.
+      const freeEdgeCount = this.bridge.countFreeEdges();
+      if (freeEdgeCount === 0) {
+        Toast.info('자유 엣지가 없습니다 (모든 엣지가 이미 면에 속함)', 2500);
+        return;
+      }
+      const created = this.bridge.synthesizeFacesFromFreeEdges();
+      if (created > 0) {
+        this.syncMesh();
+        Toast.info(`${created}개 면 합성 완료 (자유 엣지 ${freeEdgeCount}개 중)`, 3000);
+      } else {
+        Toast.warning(
+          `자유 엣지 ${freeEdgeCount}개 발견했으나 닫힌 polygon 미감지.\n` +
+          '엣지가 실제로 닫혀 있는지 확인해 주세요.',
+          3500,
         );
       }
     } else if (action === 'split-edge-midpoint') {

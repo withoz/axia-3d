@@ -89,6 +89,8 @@ type AxiaEngineExtended = AxiaEngine & {
   normalizeForImport?(optionsJson: string): string;
   verifyInvariants?(): string;
   exportSnapshotStrict?(): Uint8Array;
+  synthesizeFacesFromFreeEdges?(): number;
+  countFreeEdges?(): number;
 
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
@@ -547,6 +549,33 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] normalizeForImport failed:', e);
       return empty;
+    }
+  }
+
+  /**
+   * Phase H5 — 자유 엣지를 감지해 face로 전환 (사용자 수동 호출).
+   * 2D DXF 도면 import 후 평면도 → 면 생성에 사용.
+   * 반환: 생성된 face 수.
+   */
+  synthesizeFacesFromFreeEdges(): number {
+    if (!this.engine?.synthesizeFacesFromFreeEdges) return 0;
+    this.markDirty();
+    try {
+      return this.engine.synthesizeFacesFromFreeEdges();
+    } catch (e) {
+      console.error('[WasmBridge] synthesizeFacesFromFreeEdges failed:', e);
+      return 0;
+    }
+  }
+
+  /** Phase H5 — 자유 엣지 개수만 카운트 (mesh 불변). UI 프리뷰용. */
+  countFreeEdges(): number {
+    if (!this.engine?.countFreeEdges) return 0;
+    try {
+      return this.engine.countFreeEdges();
+    } catch (e) {
+      console.error('[WasmBridge] countFreeEdges failed:', e);
+      return 0;
     }
   }
 

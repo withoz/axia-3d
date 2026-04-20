@@ -279,6 +279,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-explode': setActiveTool('explode'); break;
       case 'tool-group': toolManager.executeAction('group'); break;
       case 'tool-ungroup': toolManager.executeAction('ungroup'); break;
+      case 'synthesize-faces': toolManager.executeAction('synthesize-faces'); break;
       case 'tool-make-component': toolManager.executeAction('make-component'); break;
 
       // ── Boolean ──

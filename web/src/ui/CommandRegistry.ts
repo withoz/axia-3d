@@ -94,6 +94,71 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
     },
   });
 
+  // Phase H — Import Normalizer 수동 실행
+  commandInput.registerHandler({
+    name: 'normalize',
+    aliases: ['renormalize'],
+    help: '현재 mesh에 Import Normalizer 재실행 (ADR-007 Barrier)',
+    execute: () => {
+      const report = bridge.normalizeForImport();
+      const parts = [
+        report.degenerateRemoved > 0 && `퇴화 ${report.degenerateRemoved}개 제거`,
+        report.windingFlipped > 0 && `winding ${report.windingFlipped}개 flip`,
+        report.normalsRecomputed > 0 && `normal ${report.normalsRecomputed}개 재계산`,
+        report.isolatedVertsRemoved > 0 && `고아 vertex ${report.isolatedVertsRemoved}개 제거`,
+      ].filter(Boolean).join(', ');
+      toolManager.syncMesh();
+      commandInput.printSuccess(
+        `Normalize 완료${parts ? ': ' + parts : ' (변경 없음)'} / ` +
+        `${report.remainingViolations > 0
+          ? '남은 위반 ' + report.remainingViolations + '건'
+          : 'invariants 통과'}`
+      );
+    },
+  });
+
+  // Phase H5 — Face Synthesis (자유 엣지 → 면)
+  commandInput.registerHandler({
+    name: 'synthfaces',
+    aliases: ['synthface', 'makefaces'],
+    help: '자유 엣지로 이뤄진 닫힌 polygon을 face로 합성 (수동 트리거)',
+    execute: () => {
+      const free = bridge.countFreeEdges();
+      if (free === 0) {
+        commandInput.printInfo('자유 엣지가 없습니다');
+        return;
+      }
+      const created = bridge.synthesizeFacesFromFreeEdges();
+      toolManager.syncMesh();
+      commandInput.printSuccess(
+        created > 0
+          ? `${created}개 면 합성 완료 (자유 엣지 ${free}개 중)`
+          : `${free}개 자유 엣지 발견하나 닫힌 polygon 미감지`
+      );
+    },
+  });
+
+  // Phase H — 현재 mesh invariant 검증
+  commandInput.registerHandler({
+    name: 'verify',
+    aliases: ['check'],
+    help: 'ADR-007 invariant 검증 — 현재 mesh 위반 리포트',
+    execute: () => {
+      const report = bridge.verifyInvariants();
+      if (report.valid) {
+        commandInput.printSuccess(
+          `✓ ${report.checkedFaces}개 face invariants 전부 통과`
+        );
+      } else {
+        commandInput.printError(
+          `✗ ${report.violationCount}개 위반 (${report.checkedFaces}개 face 검사):\n` +
+          report.violations.slice(0, 3).map(v => '  - ' + v).join('\n') +
+          (report.violations.length > 3 ? `\n  ... (+${report.violations.length - 3} more)` : '')
+        );
+      }
+    },
+  });
+
   // ADR-007 Phase 4 — CAD 모드 (single-sided 렌더) 토글
   commandInput.registerHandler({
     name: 'cadmode',

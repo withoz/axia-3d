@@ -68,6 +68,11 @@ export class AxiaEngine {
      */
     constraintCount(): number;
     /**
+     * Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
+     * UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
+     */
+    countFreeEdges(): number;
+    /**
      * Create a cone primitive.
      * Returns the base face ID for Push/Pull operations.
      */
@@ -466,6 +471,17 @@ export class AxiaEngine {
      */
     splitFaceByLine(face_id_raw: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): string;
     /**
+     * Phase H5 — 자유 엣지 → Face Synthesis (사용자 수동 트리거).
+     *
+     * 닫힌 polygon을 이루는 free edges를 감지해 face로 전환.
+     * 2D DXF 도면 import 후 "평면도 → 면 생성"에 유용.
+     *
+     * **사용자 명시 호출만** — import 직후 자동 실행 안 함 (의도 왜곡 방지).
+     *
+     * 반환: 생성된 face 개수 (감지 실패 / 이미 face로 처리됨 시 0)
+     */
+    synthesizeFacesFromFreeEdges(): number;
+    /**
      * 그룹 잠금 토글
      */
     toggle_group_lock(group_id: number): boolean;
@@ -566,6 +582,7 @@ export interface InitOutput {
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
     readonly axiaengine_constraintCount: (a: number) => number;
+    readonly axiaengine_countFreeEdges: (a: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -643,6 +660,7 @@ export interface InitOutput {
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
     readonly axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;

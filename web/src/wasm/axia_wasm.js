@@ -199,6 +199,15 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
+     * UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
+     * @returns {number}
+     */
+    countFreeEdges() {
+        const ret = wasm.axiaengine_countFreeEdges(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * Create a cone primitive.
      * Returns the base face ID for Push/Pull operations.
      * @param {number} cx
@@ -1426,6 +1435,21 @@ export class AxiaEngine {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
         }
+    }
+    /**
+     * Phase H5 — 자유 엣지 → Face Synthesis (사용자 수동 트리거).
+     *
+     * 닫힌 polygon을 이루는 free edges를 감지해 face로 전환.
+     * 2D DXF 도면 import 후 "평면도 → 면 생성"에 유용.
+     *
+     * **사용자 명시 호출만** — import 직후 자동 실행 안 함 (의도 왜곡 방지).
+     *
+     * 반환: 생성된 face 개수 (감지 실패 / 이미 face로 처리됨 시 0)
+     * @returns {number}
+     */
+    synthesizeFacesFromFreeEdges() {
+        const ret = wasm.axiaengine_synthesizeFacesFromFreeEdges(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * 그룹 잠금 토글

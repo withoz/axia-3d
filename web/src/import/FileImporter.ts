@@ -211,6 +211,13 @@ export class FileImporter {
       }
     });
 
+    // Phase H3 (ADR-007 Barrier) — Three.js 측 경량 normalize
+    // DCEL로 변환하지 않는 import 파일 (OBJ/STL/GLTF/DAE/PLY/3DS/3DM)에
+    // 대해 Three.js 레벨에서 가장 기본적인 normalize만 수행.
+    // 완전한 DCEL-level normalize가 필요하면 추후 AXIA 네이티브로 변환
+    // 단계를 거쳐야 함 (향후 과제).
+    await this.normalizeThreeGroup(group);
+
     // 스타일 적용 (SketchUp 스타일 two-tone)
     this.applyDefaultStyle(group);
 
@@ -561,91 +568,26 @@ export class FileImporter {
   }
 
   // ─── SKP (SketchUp) ──────────────────────────────────────
-  private async loadSKP(buffer: ArrayBuffer, name: string): Promise<THREE.Group> {
-    try {
-      debugLog(`[FileImporter] SKP 파일 처리 중: ${name}`);
-
-      const group = new THREE.Group();
-      group.name = `import-skp-${name}`;
-
-      // SKP 파일을 ZIP으로 파싱
-      const zip = new JSZip();
-      const skpZip = await zip.loadAsync(buffer);
-
-      // SKP 파일 정보 추출
-      const metadata: any = {
-        title: name,
-        version: 'Unknown',
-        entityCount: 0,
-      };
-
-      // SKP 내부 파일 목록 확인
-      const files = Object.keys(skpZip.files);
-      debugLog(`[FileImporter] SKP 파일 목록: ${files.length}개 항목`);
-
-      // 메타데이터 파일 찾기
-      let metadataContent: string | null = null;
-      if (skpZip.files['SketchUp.metadata']) {
-        try {
-          metadataContent = await skpZip.files['SketchUp.metadata'].async('string');
-        } catch (e) {
-          // 메타데이터 읽기 실패는 무시
-        }
-      }
-
-      // document.xml 또는 다른 형상 데이터 찾기
-      let foundGeometry = false;
-      for (const fileName of files) {
-        if (fileName.includes('document') || fileName.includes('model')) {
-          try {
-            const content = await skpZip.files[fileName].async('string');
-            if (content.length > 0) {
-              foundGeometry = true;
-              debugLog(`[FileImporter] 형상 데이터 찾음: ${fileName}`);
-            }
-          } catch (e) {
-            // 파일 읽기 실패
-          }
-        }
-      }
-
-      // SKP 파일 기본 정보로 메시 생성
-      // SKP는 복잡한 형식이므로 기본적인 큐브로 시각화
-      const geometry = new THREE.BoxGeometry(1000, 1000, 1000);
-      const material = new THREE.MeshStandardMaterial({
-        color: 0xcccccc,
-        side: THREE.FrontSide,
-        roughness: 0.6,
-        metalness: 0.1,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = `skp-default-${name}`;
-      group.add(mesh);
-
-      // 뒷면 메시 추가
-      const backMat = new THREE.MeshStandardMaterial({
-        color: 0x8899bb,
-        side: THREE.BackSide,
-        roughness: 0.7,
-        metalness: 0.05,
-      });
-      const backMesh = new THREE.Mesh(geometry, backMat);
-      backMesh.name = `skp-back-${name}`;
-      group.add(backMesh);
-
-      debugLog(
-        `[FileImporter] SKP 완료: ${name} — 메타데이터 추출됨` +
-        (foundGeometry ? ' (형상 데이터 감지)' : ' (기본 형상 표시)')
-      );
-
-      // 메타데이터 저장
-      group.userData.metadata = metadata;
-
-      return group;
-    } catch (err) {
-      console.error('[FileImporter] SKP 파일 처리 실패:', err);
-      throw new Error(`SKP 파일 처리 실패: ${(err as Error).message}`);
-    }
+  //
+  // Phase H2 (2026-04-20) — 명확한 "미지원" 에러로 교체.
+  //
+  // 이전 버전은 ZIP 헤더만 확인 후 1m 큐브를 기본 형상으로 넣어 사용자에게
+  // "import 된 것처럼" 착각 유발. 실제 .skp 바이너리 포맷은 SketchUp 독점
+  // 이며 공개 TypeScript/JS 파서가 없어 geometry 추출 불가.
+  //
+  // 권장 대체 워크플로우:
+  //   1. SketchUp에서 File → Export → 3D Model → COLLADA(.dae) 또는 OBJ
+  //   2. AXiA에서 해당 파일 import (완전 지원)
+  //
+  // 이 방식이 AXiA 네이티브 규칙에 맞는 geometry · material · hierarchy
+  // 를 보존하므로 사용자 경험도 우수.
+  private async loadSKP(_buffer: ArrayBuffer, name: string): Promise<THREE.Group> {
+    debugLog(`[FileImporter] SKP 직접 import 차단: ${name}`);
+    throw new Error(
+      `.skp 직접 import는 지원하지 않습니다.\n\n` +
+      `SketchUp에서 File → Export → 3D Model → COLLADA(.dae) 또는 OBJ로\n` +
+      `내보낸 뒤 해당 파일을 import해 주세요. (geometry · material · hierarchy 보존)`
+    );
   }
 
   // ─── DWG (dwgdxf 변환 → DXF 파싱 + libredwg 메타데이터) ──
@@ -834,6 +776,88 @@ export class FileImporter {
   }
 
   // ─── 스타일 적용 ──────────────────────────────────────
+  /**
+   * Phase H3 (ADR-007 Barrier) — Three.js group 경량 normalize.
+   *
+   * DCEL로 변환되지 않는 imported Three.js mesh에 대해 기본 정리:
+   *   1. 중복 정점 병합 (mergeVertices) — STL 'triangle soup' 해결
+   *   2. Vertex normal 재계산 — 기존 normal 불일치 해소
+   *   3. (선택) winding 감지 + flip — 전체 signed volume 기반
+   *
+   * Note: DCEL 규칙(ADR-007)은 WASM engine에서만 강제. 여기선 시각적
+   * 일관성만 담보.
+   */
+  private async normalizeThreeGroup(group: THREE.Group): Promise<void> {
+    const { mergeVertices } = await import('three/examples/jsm/utils/BufferGeometryUtils.js');
+    let meshesProcessed = 0;
+    let flipped = 0;
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const geo = child.geometry as THREE.BufferGeometry;
+      if (!geo.attributes.position) return;
+
+      try {
+        // 1. 중복 정점 병합 (1μm tolerance)
+        //    STL triangle soup, OBJ unshared verts 등 해결
+        const before = geo.attributes.position.count;
+        const merged = mergeVertices(geo, 1e-3);
+        if (merged && merged.attributes.position.count < before) {
+          child.geometry = merged;
+        }
+
+        // 2. Vertex normal 재계산 — topology 기반으로 일관화
+        (child.geometry as THREE.BufferGeometry).computeVertexNormals();
+
+        // 3. Winding sanity — signed volume 기반 전체 뒤집힘 감지
+        //    (mesh centroid 대비 face centroid 방향과 normal 양/음수 카운트)
+        const flip = this.detectInvertedWinding(child.geometry as THREE.BufferGeometry);
+        if (flip) {
+          // index 배열 역순 — tri 단위로 두 vertex 순서 교환
+          const idx = (child.geometry as THREE.BufferGeometry).index;
+          if (idx) {
+            const arr = idx.array as Uint32Array | Uint16Array;
+            for (let i = 0; i < arr.length; i += 3) {
+              const tmp = arr[i + 1]; arr[i + 1] = arr[i + 2]; arr[i + 2] = tmp;
+            }
+            idx.needsUpdate = true;
+            (child.geometry as THREE.BufferGeometry).computeVertexNormals();
+            flipped++;
+          }
+        }
+        meshesProcessed++;
+      } catch (e) {
+        console.warn('[FileImporter] normalizeThreeGroup mesh fail:', e);
+      }
+    });
+    debugLog(`[FileImporter] normalize: ${meshesProcessed} meshes, ${flipped} flipped`);
+  }
+
+  /**
+   * 전체 메시의 winding이 뒤집혀 있는지 감지 (signed volume 기반).
+   * 닫힌 mesh에서 signed volume이 음수면 normal이 전부 안쪽 향함 = 뒤집힘.
+   * 열린 surface에서는 결과 신뢰성 낮아 false 반환.
+   */
+  private detectInvertedWinding(geo: THREE.BufferGeometry): boolean {
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const idx = geo.index;
+    if (!idx || pos.count < 4) return false; // 너무 작은 mesh는 판정 불가
+
+    let signedVolume = 0;
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const idxArr = idx.array;
+    for (let i = 0; i < idxArr.length; i += 3) {
+      a.fromBufferAttribute(pos, idxArr[i] as number);
+      b.fromBufferAttribute(pos, idxArr[i + 1] as number);
+      c.fromBufferAttribute(pos, idxArr[i + 2] as number);
+      signedVolume += a.dot(b.clone().cross(c));
+    }
+    signedVolume /= 6;
+    // 유의미한 음수 부피 → 뒤집힘
+    return signedVolume < -1e-3;
+  }
+
   private applyDefaultStyle(group: THREE.Group) {
     group.traverse((child) => {
       if (child instanceof THREE.Mesh) {
