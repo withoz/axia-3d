@@ -133,6 +133,7 @@ function mockViewport() {
     resetCamera: vi.fn(),
     getStyleSettings: vi.fn().mockReturnValue({ gridVisible: true, axisVisible: true }),
     onFrame: vi.fn(),
+    setSketchPlaneVisual: vi.fn(),
   } as any;
 }
 
@@ -231,6 +232,45 @@ describe('ToolManager', () => {
   describe('isToolBusy', () => {
     it('returns false when tool is not busy', () => {
       expect(tm.isToolBusy()).toBe(false);
+    });
+  });
+
+  describe('sketch mode', () => {
+    it('enters/exits XZ sketch and flips isSketching flag', () => {
+      expect(tm.isSketching()).toBe(false);
+      tm.executeAction('sketch-start-xz');
+      expect(tm.isSketching()).toBe(true);
+      const info = tm.getSketchInfo();
+      expect(info?.label).toContain('XZ');
+      // XZ bottom plane: normal = +Y
+      expect(info?.normal.y).toBeCloseTo(1);
+      tm.executeAction('sketch-exit');
+      expect(tm.isSketching()).toBe(false);
+    });
+
+    it('sketch-start-xy uses +Z normal', () => {
+      tm.executeAction('sketch-start-xy');
+      expect(tm.getSketchInfo()?.normal.z).toBeCloseTo(1);
+    });
+
+    it('sketch-start-yz uses +X normal', () => {
+      tm.executeAction('sketch-start-yz');
+      expect(tm.getSketchInfo()?.normal.x).toBeCloseTo(1);
+    });
+
+    it('notifies viewport to show/hide plane visual', () => {
+      tm.executeAction('sketch-start-xz');
+      expect(viewport.setSketchPlaneVisual).toHaveBeenCalledWith(expect.objectContaining({
+        label: expect.stringContaining('XZ'),
+      }));
+      (viewport.setSketchPlaneVisual as any).mockClear();
+      tm.executeAction('sketch-exit');
+      expect(viewport.setSketchPlaneVisual).toHaveBeenCalledWith(null);
+    });
+
+    it('sketch-exit on inactive session is a no-op (no crash)', () => {
+      tm.executeAction('sketch-exit');
+      expect(tm.isSketching()).toBe(false);
     });
   });
 

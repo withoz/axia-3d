@@ -89,6 +89,19 @@ export class ToolManager {
   private drawPlaneRafPending = false;
   private drawPlaneLastEvent: MouseEvent | null = null;
 
+  // ═══ Sketch Mode (Tier 3A) ═══
+  // When active, all drawing commits to this fixed plane regardless of
+  // cursor pick or view mode. Edges/faces created during a session are
+  // logically "the sketch" — on exit we leave them in place (user can
+  // Push/Pull them into 3D). MVP: no explicit edge-tagging (could add
+  // later for better "sketch deletion on exit").
+  private _sketch: {
+    label: string;             // "XY 바닥" | "XZ 정면벽" | "YZ 측면벽" | "선택 면"
+    origin: THREE.Vector3;     // any point on the plane
+    normal: THREE.Vector3;     // unit
+    up: THREE.Vector3;         // unit, perpendicular to normal
+  } | null = null;
+
   constructor(
     viewport: Viewport,
     bridge: WasmBridge,
@@ -343,6 +356,11 @@ export class ToolManager {
     'thicken-faces': '선택 면에 두께 부여 (Shell/Thicken)',
     'solidify': '열린 쉘을 닫힌 솔리드로 변환 (Solidify)',
     'mesh-repair': '메시 정리 (퇴화면/와인딩/고립 정점)',
+    'sketch-start-xz': '스케치 시작 — XZ 바닥 평면',
+    'sketch-start-xy': '스케치 시작 — XY 정면 평면',
+    'sketch-start-yz': '스케치 시작 — YZ 측면 평면',
+    'sketch-start-face': '스케치 시작 — 선택 면',
+    'sketch-exit': '스케치 종료',
     'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
@@ -914,6 +932,76 @@ export class ToolManager {
       } else {
         Toast.error(`두께 부여 실패: ${firstFailure || '모든 면에서 push_pull 실패'}`, 4000);
       }
+    } else if (action === 'sketch-start-xz') {
+      // XZ 바닥 — Y=0, 평면도 기본. up = -Z so "북쪽"이 위.
+      this.enterSketch({
+        label: 'XZ 바닥',
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(0, 0, -1),
+      });
+      Toast.info(`✏️ 스케치 시작 — XZ 바닥 (Y=0). 모든 드로잉이 이 평면에 고정됩니다.`, 4000);
+    } else if (action === 'sketch-start-xy') {
+      // XY 정면 — Z=0, 입면도.
+      this.enterSketch({
+        label: 'XY 정면',
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      Toast.info(`✏️ 스케치 시작 — XY 정면 (Z=0). 모든 드로잉이 이 평면에 고정됩니다.`, 4000);
+    } else if (action === 'sketch-start-yz') {
+      // YZ 측면 — X=0.
+      this.enterSketch({
+        label: 'YZ 측면',
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(1, 0, 0),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      Toast.info(`✏️ 스케치 시작 — YZ 측면 (X=0). 모든 드로잉이 이 평면에 고정됩니다.`, 4000);
+    } else if (action === 'sketch-start-face') {
+      // 선택된 단일 면의 평면에서 스케치 시작.
+      const faces = this.selection.getSelectedFaces();
+      if (faces.length !== 1) {
+        Toast.warning('스케치 기준 면 1개를 선택하세요', 2500);
+        return;
+      }
+      const boundary = this.toolContext.extractFaceBoundary(faces[0]);
+      if (boundary.length < 3) {
+        Toast.error('선택 면의 경계를 읽을 수 없습니다', 3000);
+        return;
+      }
+      // Compute plane from 3 non-colinear boundary points
+      const p0 = boundary[0];
+      const p1 = boundary[1];
+      const p2 = boundary[2];
+      const edgeA = new THREE.Vector3().subVectors(p1, p0);
+      const edgeB = new THREE.Vector3().subVectors(p2, p0);
+      const normal = new THREE.Vector3().crossVectors(edgeA, edgeB).normalize();
+      if (normal.lengthSq() < 1e-8) {
+        Toast.error('선택 면이 퇴화되어 스케치 평면을 계산할 수 없습니다', 3000);
+        return;
+      }
+      // Up: prefer world Y projection onto plane; fall back to edgeA
+      const worldY = new THREE.Vector3(0, 1, 0);
+      let up = worldY.clone().sub(normal.clone().multiplyScalar(worldY.dot(normal)));
+      if (up.lengthSq() < 1e-6) up = edgeA.normalize();
+      else up.normalize();
+      this.enterSketch({
+        label: `면 #${faces[0]}`,
+        origin: p0.clone(),
+        normal,
+        up,
+      });
+      Toast.info(`✏️ 스케치 시작 — 면 #${faces[0]}. 모든 드로잉이 이 평면에 고정됩니다.`, 4000);
+    } else if (action === 'sketch-exit') {
+      if (!this.isSketching()) {
+        Toast.info('활성 스케치 세션이 없습니다', 2000);
+        return;
+      }
+      const info = this.getSketchInfo();
+      this.exitSketch();
+      Toast.info(`스케치 종료 (${info?.label ?? ''}) — 이제 Push/Pull로 3D 변환 가능`, 3500);
     } else if (action === 'mesh-repair') {
       // Mesh Repair — ADR-007 Phase H의 normalize_for_import를 사용자 명시 호출로 노출.
       // 네 가지 정리 단계: degenerate 면 제거 / winding 일관화 / normal 재계산 /
@@ -1577,12 +1665,58 @@ export class ToolManager {
     return rawGroundPoint;
   }
 
+  // ═══ Sketch Mode API ═══
+
+  /** Enter sketch mode. All subsequent drawing locks to this plane. */
+  enterSketch(opts: {
+    label: string;
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+  }): void {
+    this._sketch = {
+      label: opts.label,
+      origin: opts.origin.clone(),
+      normal: opts.normal.clone().normalize(),
+      up: opts.up.clone().normalize(),
+    };
+    this.viewport.setSketchPlaneVisual(this._sketch);
+    debugLog(`[Sketch] enter: ${opts.label}`);
+  }
+
+  /** Exit sketch mode. Geometry created during the session stays in the
+   *  scene — users typically follow up with push_pull to extrude. */
+  exitSketch(): void {
+    if (!this._sketch) return;
+    debugLog(`[Sketch] exit: ${this._sketch.label}`);
+    this._sketch = null;
+    this.viewport.setSketchPlaneVisual(null);
+  }
+
+  isSketching(): boolean { return this._sketch !== null; }
+
+  getSketchInfo(): { label: string; origin: THREE.Vector3; normal: THREE.Vector3; up: THREE.Vector3 } | null {
+    if (!this._sketch) return null;
+    return {
+      label: this._sketch.label,
+      origin: this._sketch.origin.clone(),
+      normal: this._sketch.normal.clone(),
+      up: this._sketch.up.clone(),
+    };
+  }
+
   /** Get the drawing plane normal based on current view mode.
+   *  - Sketch mode ACTIVE → the sketch plane (overrides view mode)
    *  - 3d / top / bottom → Y=0 plane (XZ ground)
    *  - front / back → Z=0 plane (XY wall)
    *  - right / left → X=0 plane (YZ wall)
    */
   private getWorkPlane(): THREE.Plane {
+    if (this._sketch) {
+      // THREE.Plane(normal, constant) where constant = -normal·origin
+      const c = -this._sketch.normal.dot(this._sketch.origin);
+      return new THREE.Plane(this._sketch.normal.clone(), c);
+    }
     const vm = this.viewport.viewMode;
     switch (vm) {
       case 'front':
@@ -1604,6 +1738,13 @@ export class ToolManager {
   }
 
   private get3DPoint(e: MouseEvent): THREE.Vector3 | null {
+    // Sketch mode: bypass object pick — all clicks project to the sketch
+    // plane (user explicitly chose the plane when entering sketch).
+    if (this._sketch) {
+      const ray = this.getRay(e);
+      const target = new THREE.Vector3();
+      return ray.ray.intersectPlane(this.getWorkPlane(), target);
+    }
     // 1st: try hitting an object face (exact surface point)
     const hit = this.viewport.pick(e.clientX, e.clientY);
     if (hit && hit.point) {
@@ -1860,6 +2001,13 @@ export class ToolManager {
    * If cursor is on empty space → use default ground plane (Y-up).
    */
   private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
+    // Sketch mode: lock to the sketch plane irrespective of cursor face hit.
+    if (this._sketch) {
+      const normal = this._sketch.normal.clone();
+      const up = this._sketch.up.clone();
+      const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+      return { normal, up, right, onFace: false };
+    }
     // View-mode-adaptive default drawing plane
     const vm = this.viewport.viewMode;
     let defaultPlane: DrawPlaneInfo;

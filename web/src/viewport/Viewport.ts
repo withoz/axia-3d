@@ -91,6 +91,11 @@ export class Viewport {
   private _fur: FurShell | null = null;
   private _furEnabled: boolean = false;
 
+  // ═══ Sketch plane visual (Tier 3A) ═══
+  // Tinted translucent plane + border to show which plane sketching locks to.
+  private _sketchPlaneMesh: THREE.Mesh | null = null;
+  private _sketchPlaneBorder: THREE.LineSegments | null = null;
+
   // Camera control state
   private isOrbiting = false;
   private isPanning = false;
@@ -1788,6 +1793,81 @@ export class Viewport {
 
   isFurEnabled(): boolean {
     return this._furEnabled;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Sketch plane visual (Tier 3A)
+  // ═══════════════════════════════════════════════════════
+  /** Show/hide the sketch plane indicator. Pass null to remove.
+   *  Renders a 10m × 10m translucent amber patch + dashed border centered
+   *  at the plane origin. Visible across the scene (not depth-tested for
+   *  border) so users always know where "up" on the sketch plane is.
+   */
+  setSketchPlaneVisual(
+    plane: { origin: THREE.Vector3; normal: THREE.Vector3; up: THREE.Vector3 } | null,
+  ): void {
+    // Remove existing
+    if (this._sketchPlaneMesh) {
+      this.scene.remove(this._sketchPlaneMesh);
+      this._sketchPlaneMesh.geometry.dispose();
+      (this._sketchPlaneMesh.material as THREE.Material).dispose();
+      this._sketchPlaneMesh = null;
+    }
+    if (this._sketchPlaneBorder) {
+      this.scene.remove(this._sketchPlaneBorder);
+      this._sketchPlaneBorder.geometry.dispose();
+      (this._sketchPlaneBorder.material as THREE.Material).dispose();
+      this._sketchPlaneBorder = null;
+    }
+    if (!plane) return;
+
+    const size = 10000; // 10m square — architectural scale
+    const geo = new THREE.PlaneGeometry(size, size);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffa500,         // amber — distinct from UI highlights (blue/green)
+      transparent: true,
+      opacity: 0.08,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    // Orient PlaneGeometry (initial normal = +Z) to match sketch plane normal.
+    const initialNormal = new THREE.Vector3(0, 0, 1);
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      initialNormal,
+      plane.normal.clone().normalize(),
+    );
+    mesh.quaternion.copy(q);
+    mesh.position.copy(plane.origin);
+    mesh.renderOrder = -1;     // behind other geometry
+    this.scene.add(mesh);
+    this._sketchPlaneMesh = mesh;
+
+    // Dashed border for extra legibility (always drawn on top)
+    const half = size / 2;
+    // In plane-local coords (before quaternion rotation): ±half on X/Y, z=0
+    const corners = [
+      new THREE.Vector3(-half, -half, 0),
+      new THREE.Vector3( half, -half, 0),
+      new THREE.Vector3( half,  half, 0),
+      new THREE.Vector3(-half,  half, 0),
+    ].map(v => v.applyQuaternion(q).add(plane.origin));
+    const borderGeo = new THREE.BufferGeometry().setFromPoints([
+      corners[0], corners[1],
+      corners[1], corners[2],
+      corners[2], corners[3],
+      corners[3], corners[0],
+    ]);
+    const borderMat = new THREE.LineBasicMaterial({
+      color: 0xff8800,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.8,
+    });
+    const border = new THREE.LineSegments(borderGeo, borderMat);
+    border.renderOrder = 1002;
+    this.scene.add(border);
+    this._sketchPlaneBorder = border;
   }
 
   /**
