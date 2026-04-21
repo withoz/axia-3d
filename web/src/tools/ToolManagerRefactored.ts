@@ -21,6 +21,7 @@ import { getMergeTolerance, getRespectMaterial, groupFacesByMaterial } from './M
 import { extractEdgeChain } from './EdgeChain';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
 import { getOperationLog } from '../core/OperationLog';
+import { getClipboard } from '../core/Clipboard';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
 
@@ -366,6 +367,10 @@ export class ToolManager {
     'sketch-exit': '스케치 종료',
     'convert-to-centerline': '선택 엣지 → 중심선 변환',
     'convert-to-geometry': '선택 엣지 → 일반선 변환',
+    'clipboard-copy': '복사 (Ctrl+C)',
+    'clipboard-cut': '잘라내기 (Ctrl+X)',
+    'clipboard-paste': '붙여넣기 (Ctrl+V)',
+    'duplicate': '복제 (Ctrl+D)',
     'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
@@ -403,6 +408,71 @@ export class ToolManager {
         this.syncMesh();
         getMaterialLibrary().syncFromRust();
       }
+    } else if (action === 'clipboard-copy' || action === 'clipboard-cut') {
+      // Ctrl+C / Ctrl+X — 현재 선택된 face를 클립보드에 저장.
+      // MVP: face만 지원. Edge-only 선택은 별도 안내.
+      const faces = this.selection.getSelectedFaces();
+      const edges = this.selection.getSelectedEdges();
+      if (faces.length === 0) {
+        if (edges.length > 0) {
+          Toast.warning('엣지 복사는 아직 미지원 — 면을 선택하세요', 3000);
+        } else {
+          Toast.info('복사할 항목이 선택되지 않음', 2000);
+        }
+        return;
+      }
+      getClipboard().copy('faces', faces);
+      const verb = action === 'clipboard-cut' ? '잘라내기' : '복사';
+      Toast.info(`${faces.length}개 면 ${verb} — Ctrl+V로 붙여넣기`, 2500);
+      debugLog(`[Action] ${action}: ${faces.length} faces`);
+      if (action === 'clipboard-cut') {
+        // cut = copy + delete. delete는 이미 batchDelete 경로가 있으므로 재사용.
+        const ok = this.bridge.batchDelete(faces, []);
+        if (ok) {
+          this.selection.clearSelection();
+          this.syncMesh();
+        }
+      }
+    } else if (action === 'clipboard-paste' || action === 'duplicate') {
+      // Ctrl+V / Ctrl+D — 클립보드 (또는 현재 선택)의 face를 offset만큼 복제.
+      // duplicate는 "copy+paste 즉시" 단축 경로: 현재 선택을 clipboard에 넣지
+      // 않고 바로 복제 실행 → 원래 선택 교체 없음.
+      const last = localStorage.getItem('axia:clipboard:offset') ?? '500, 0, 500';
+      let sourceFaces: number[];
+      if (action === 'duplicate') {
+        sourceFaces = this.selection.getSelectedFaces();
+        if (sourceFaces.length === 0) {
+          Toast.warning('복제할 면을 먼저 선택하세요', 2500);
+          return;
+        }
+      } else {
+        const clip = getClipboard().get();
+        if (!clip || clip.ids.length === 0) {
+          Toast.info('붙여넣을 내용이 없습니다 — 먼저 Ctrl+C로 복사하세요', 2500);
+          return;
+        }
+        sourceFaces = clip.ids;
+      }
+      // 기본 offset은 (500, 0, 500) — X+Z 대각선으로 살짝 이동해 원본 시인성 유지.
+      // 필요 시 사용자가 prompt로 변경 가능하지만 MVP는 기본값 사용.
+      const parts = last.split(/[,\s]+/).map(s => parseFloat(s.trim())).filter(Number.isFinite);
+      const [dx, dy, dz] = parts.length === 3 ? parts as [number, number, number] : [500, 0, 500];
+      const newFaces = this.bridge.arrayLinearFaces(sourceFaces, 1, [dx, dy, dz]);
+      if (newFaces.length === 0) {
+        Toast.error(
+          `${action === 'duplicate' ? '복제' : '붙여넣기'} 실패 — ` +
+          `원본 면이 삭제되었거나 유효하지 않음`,
+          4000,
+        );
+        return;
+      }
+      this.syncMesh();
+      // 새로 생긴 면들을 선택 → 바로 추가 조작 가능 (Blender 관행)
+      this.selection.clearSelection();
+      this.selection.selectFaces(newFaces);
+      const verb = action === 'duplicate' ? '복제' : '붙여넣기';
+      Toast.info(`${verb} 완료 — ${newFaces.length}개 면 (offset ${dx},${dy},${dz}mm)`, 2500);
+      debugLog(`[Action] ${action}: ${newFaces.length} faces`);
     } else if (action === 'delete') {
       const selectedFaces = this.selection.getSelectedFaces();
       const selectedEdges = this.selection.getSelectedEdges();

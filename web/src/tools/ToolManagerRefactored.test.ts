@@ -107,6 +107,7 @@ vi.mock('../primitives/ConeTool', () => ({ ConeTool: vi.fn().mockImplementation(
 })) }));
 
 import { ToolManager } from './ToolManagerRefactored';
+import { getClipboard } from '../core/Clipboard';
 
 // ── Mock factories ──
 
@@ -168,6 +169,8 @@ function mockBridge() {
     drawCenterline: vi.fn().mockReturnValue(0),
     edgeClass: vi.fn().mockReturnValue(0),
     setEdgeClass: vi.fn().mockReturnValue(true),
+    arrayLinearFaces: vi.fn().mockReturnValue([]),
+    getPositionsF64: vi.fn().mockReturnValue(null),
   } as any;
 }
 
@@ -303,6 +306,65 @@ describe('ToolManager', () => {
       (bridge.setEdgeClass as any) = vi.fn();
       tm.executeAction('convert-to-centerline');
       expect(bridge.setEdgeClass).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('clipboard (Ctrl+C/X/V/D)', () => {
+    beforeEach(() => {
+      // Reset clipboard singleton between tests
+      // imported at top;
+      getClipboard().clear();
+    });
+
+    it('copy captures selected faces into clipboard', () => {
+      (tm.selection as any).getSelectedFaces = () => [10, 20];
+      (tm.selection as any).getSelectedEdges = () => [];
+      tm.executeAction('clipboard-copy');
+      // imported at top;
+      expect(getClipboard().get()?.ids).toEqual([10, 20]);
+    });
+
+    it('cut copies then calls batchDelete', () => {
+      (tm.selection as any).getSelectedFaces = () => [5];
+      (tm.selection as any).getSelectedEdges = () => [];
+      (bridge.batchDelete as any) = vi.fn().mockReturnValue(true);
+      tm.executeAction('clipboard-cut');
+      // imported at top;
+      expect(getClipboard().get()?.ids).toEqual([5]);
+      expect(bridge.batchDelete).toHaveBeenCalledWith([5], []);
+    });
+
+    it('paste without clipboard contents is a no-op', () => {
+      // imported at top;
+      getClipboard().clear();
+      (bridge.arrayLinearFaces as any) = vi.fn();
+      tm.executeAction('clipboard-paste');
+      expect(bridge.arrayLinearFaces).not.toHaveBeenCalled();
+    });
+
+    it('paste calls arrayLinearFaces with count=1 and default offset', () => {
+      // imported at top;
+      getClipboard().copy('faces', [7, 8]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([100, 101]);
+      tm.executeAction('clipboard-paste');
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([7, 8], 1, expect.any(Array));
+    });
+
+    it('duplicate uses current selection (not clipboard)', () => {
+      (tm.selection as any).getSelectedFaces = () => [42];
+      (tm.selection as any).selectFaces = vi.fn();
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([200]);
+      tm.executeAction('duplicate');
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([42], 1, expect.any(Array));
+    });
+
+    it('copy with edge-only selection warns and does nothing', () => {
+      (tm.selection as any).getSelectedFaces = () => [];
+      (tm.selection as any).getSelectedEdges = () => [99];
+      // imported at top;
+      getClipboard().clear();
+      tm.executeAction('clipboard-copy');
+      expect(getClipboard().hasContents()).toBe(false);
     });
 
     it('sketch-exit without free edges skips synthesize and extrude', () => {

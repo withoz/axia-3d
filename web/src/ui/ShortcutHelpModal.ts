@@ -46,6 +46,10 @@ const SECTIONS: ShortcutSection[] = [
     rows: [
       { key: 'Ctrl+Z', description: 'Undo (되돌리기)' },
       { key: 'Ctrl+Y', description: 'Redo (다시 실행)' },
+      { key: 'Ctrl+C', description: '복사 (선택된 면)' },
+      { key: 'Ctrl+X', description: '잘라내기 (복사 + 삭제)' },
+      { key: 'Ctrl+V', description: '붙여넣기 (offset 500,0,500mm)' },
+      { key: 'Ctrl+D', description: '복제 (즉시 duplicate)' },
       { key: 'Ctrl+A', description: 'Select All (전체 선택)' },
       { key: 'Ctrl+S', description: '프로젝트 저장' },
       { key: 'Ctrl+O', description: '프로젝트 열기' },

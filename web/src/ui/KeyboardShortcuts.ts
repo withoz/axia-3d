@@ -296,6 +296,28 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // ── Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D — Windows 표준 클립보드 ──
+    // 입력 필드가 아닌 뷰포트 포커스에서만 동작 (isTypingInInput 가드 상단).
+    // 도구 작업 중(isBusy)이면 클립보드 조작도 차단 — 그리기 중 Ctrl+V가
+    // 예기치 않은 paste를 유발하는 것보다 명확한 "먼저 Esc"가 안전.
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
+        (e.key === 'c' || e.key === 'C' ||
+         e.key === 'x' || e.key === 'X' ||
+         e.key === 'v' || e.key === 'V' ||
+         e.key === 'd' || e.key === 'D')) {
+      e.preventDefault();
+      if (e.repeat) return;
+      if (toolManager.isToolBusy()) { return; }
+      const action = ({
+        c: 'clipboard-copy', C: 'clipboard-copy',
+        x: 'clipboard-cut',  X: 'clipboard-cut',
+        v: 'clipboard-paste', V: 'clipboard-paste',
+        d: 'duplicate',       D: 'duplicate',
+      } as Record<string, string>)[e.key];
+      if (action) toolManager.executeAction(action);
+      return;
+    }
+
     if (e.ctrlKey && e.key === 'z') {
       e.preventDefault();
       if (e.repeat) return;

@@ -222,6 +222,12 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'undo': toolManager.executeAction('undo'); break;
       case 'redo': toolManager.executeAction('redo'); break;
       case 'delete': toolManager.executeAction('delete'); break;
+      case 'clipboard-copy':
+      case 'clipboard-cut':
+      case 'clipboard-paste':
+      case 'duplicate':
+        toolManager.executeAction(action);
+        break;
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;
