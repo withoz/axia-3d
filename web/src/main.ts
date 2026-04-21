@@ -13,6 +13,7 @@ import { SettingsPanel } from './units/SettingsPanel';
 // FileImporter is now lazy-loaded via MenuBar (dynamic import on first use)
 import { ComponentPanel } from './ui/ComponentPanel';
 import { ConstraintPanel } from './ui/ConstraintPanel';
+import { HistoryPanel } from './ui/HistoryPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
 import { MaterialLibrary } from './materials/MaterialLibrary';
@@ -426,6 +427,23 @@ async function main() {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       if ((e.key === 'j' || e.key === 'J') && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         constraintPanel.toggle();
+      }
+    });
+  }
+
+  // ═══ 15. History Panel (Tier 3B — Parametric History MVP) ═══
+  {
+    const historyPanel = new HistoryPanel(viewportEl, {
+      rerun: (kind, params) => toolManager.rerunLoggedOperation(kind, params),
+    });
+    (window as unknown as { __axia_historyPanel?: HistoryPanel })
+      .__axia_historyPanel = historyPanel;
+
+    // 키보드 Shift+H → History Panel 토글
+    window.addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      if ((e.key === 'h' || e.key === 'H') && e.shiftKey && !e.ctrlKey && !e.altKey) {
+        historyPanel.toggle();
       }
     });
   }

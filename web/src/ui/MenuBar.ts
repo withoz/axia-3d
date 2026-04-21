@@ -323,6 +323,11 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-group': toolManager.executeAction('group'); break;
       case 'tool-ungroup': toolManager.executeAction('ungroup'); break;
       case 'synthesize-faces': toolManager.executeAction('synthesize-faces'); break;
+      case 'view-history': {
+        const hp = (window as unknown as { __axia_historyPanel?: { toggle(): void } }).__axia_historyPanel;
+        hp?.toggle();
+        break;
+      }
       case 'solidify': toolManager.executeAction('solidify'); break;
       case 'mesh-repair': toolManager.executeAction('mesh-repair'); break;
       // Sketch Mode — 드로잉을 고정 평면에 잠금. Push/Pull로 3D 변환 前 작업.

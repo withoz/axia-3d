@@ -20,6 +20,7 @@ import { Toast } from '../ui/Toast';
 import { getMergeTolerance, getRespectMaterial, groupFacesByMaterial } from './MergeSettings';
 import { extractEdgeChain } from './EdgeChain';
 import { getMaterialLibrary } from '../materials/MaterialLibrary';
+import { getOperationLog } from '../core/OperationLog';
 import { ServiceContainer } from '../core/ServiceContainer';
 import '../utils/debug'; // Window interface augmentation
 
@@ -874,6 +875,11 @@ export class ToolManager {
       if (newFaces.length > 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        getOperationLog().record(
+          'array-linear',
+          `선형 배열 ${count}회, (${dx},${dy},${dz})`,
+          input,
+        );
         Toast.info(`${sel.length}개 면을 ${count}회 복제 (총 ${newFaces.length}개)`, 2500);
         debugLog(`[Action] array-linear: count=${count}, offset=(${dx},${dy},${dz})`);
       } else {
@@ -920,6 +926,11 @@ export class ToolManager {
       if (success > 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        getOperationLog().record(
+          'thicken-faces',
+          `두께 ${distance}mm × ${success}개 면`,
+          String(distance),
+        );
         if (success === selFaces.length) {
           Toast.info(`${success}개 면에 두께 ${distance}mm 부여`, 2500);
         } else {
@@ -1140,6 +1151,11 @@ export class ToolManager {
       if (newFaces.length > 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        getOperationLog().record(
+          'array-radial',
+          `원형 배열 ${count}회 · ${axisChar}축 · ${totalDeg}°`,
+          input,
+        );
         Toast.info(`${sel.length}개 면을 ${count}회 원형 복제 (${axisChar}축, ${totalDeg}°)`, 2500);
         debugLog(`[Action] array-radial: count=${count}, axis=${axisChar}, deg=${totalDeg}`);
       } else {
@@ -1224,6 +1240,7 @@ export class ToolManager {
       if (n >= 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        getOperationLog().record('chamfer-edge', `모따기 ${distance}mm`, String(distance));
         Toast.info(`모따기 완료 — 거리 ${distance}mm`, 2500);
         debugLog(`[Action] chamfer-edge: distance=${distance}, n=${n}`);
       } else {
@@ -1272,6 +1289,11 @@ export class ToolManager {
       if (successEdges > 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        getOperationLog().record(
+          'fillet-edge',
+          `모깎기 ${radius}mm × ${successEdges}개 엣지`,
+          String(radius),
+        );
         if (successEdges === edges.length) {
           Toast.info(
             `모깎기 완료 — ${successEdges}개 엣지, ${totalFaces}개 fillet face 생성`,
@@ -1296,6 +1318,7 @@ export class ToolManager {
       if (count >= 0) {
         this.syncMesh();
         this.selection.clearSelection();
+        getOperationLog().record('subdivide', `Catmull-Clark 분할 (${count}개 quad)`, '');
         Toast.info(`Catmull-Clark 분할 완료 — ${count}개 quad 생성`, 2500);
         debugLog(`[Action] subdivide: ${count} quads`);
       } else {
@@ -1663,6 +1686,137 @@ export class ToolManager {
       return snapResult.position.clone();
     }
     return rawGroundPoint;
+  }
+
+  // ═══ Parametric History re-run (Tier 3B) ═══
+
+  /**
+   * Re-run a previously logged operation with new parameter values (no
+   * prompt — params come from HistoryPanel input). Returns true on success.
+   *
+   * This is NOT a full parametric feature tree — it doesn't track downstream
+   * geometry dependencies. It simply reuses the last parameter template for
+   * a one-shot rerun on the *current selection* (not the original target).
+   * Users should re-select geometry before hitting "재실행…".
+   */
+  rerunLoggedOperation(kind: string, params: string): boolean {
+    switch (kind) {
+      case 'fillet-edge': {
+        const r = parseFloat(params);
+        if (!Number.isFinite(r) || r <= 0) { Toast.warning('유효한 반경 필요', 2500); return false; }
+        const edges = this.selection.getSelectedEdges();
+        if (edges.length === 0) { Toast.warning('재실행할 엣지를 선택하세요', 2500); return false; }
+        try { localStorage.setItem('axia:fillet:radius', String(r)); } catch { /* ignore */ }
+        let ok = 0, faces = 0;
+        for (const eid of edges) {
+          const n = this.bridge.filletEdge(eid, r, 8);
+          if (n >= 0) { ok++; faces += n; }
+        }
+        if (ok > 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          getOperationLog().record('fillet-edge', `모깎기 ${r}mm × ${ok}개 엣지 (재실행)`, String(r));
+          return true;
+        }
+        Toast.fromBridgeError(this.bridge, '재실행 실패');
+        return false;
+      }
+      case 'chamfer-edge': {
+        const d = parseFloat(params);
+        if (!Number.isFinite(d) || d <= 0) { Toast.warning('유효한 거리 필요', 2500); return false; }
+        const edges = this.selection.getSelectedEdges();
+        if (edges.length !== 1) { Toast.warning('1개 엣지 선택 필요', 2500); return false; }
+        try { localStorage.setItem('axia:chamfer:distance', String(d)); } catch { /* ignore */ }
+        const n = this.bridge.filletEdge(edges[0], d, 1);
+        if (n >= 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          getOperationLog().record('chamfer-edge', `모따기 ${d}mm (재실행)`, String(d));
+          return true;
+        }
+        Toast.fromBridgeError(this.bridge, '재실행 실패');
+        return false;
+      }
+      case 'thicken-faces': {
+        const t = parseFloat(params);
+        if (!Number.isFinite(t) || t === 0) { Toast.warning('0이 아닌 두께 필요', 2500); return false; }
+        const sel = this.selection.getSelectedFaces();
+        if (sel.length === 0) { Toast.warning('재실행할 면을 선택하세요', 2500); return false; }
+        try { localStorage.setItem('axia:thicken:distance', String(t)); } catch { /* ignore */ }
+        let ok = 0;
+        for (const fid of sel) { if (this.bridge.pushPull(fid, t)) ok++; }
+        if (ok > 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          getOperationLog().record('thicken-faces', `두께 ${t}mm × ${ok}개 면 (재실행)`, String(t));
+          return true;
+        }
+        Toast.error('재실행 실패', 3000);
+        return false;
+      }
+      case 'array-linear': {
+        const sel = this.selection.getSelectedFaces();
+        if (sel.length === 0) { Toast.warning('재실행할 면을 선택하세요', 2500); return false; }
+        const parts = params.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+        if (parts.length !== 4) { Toast.warning('"N, dx, dy, dz" 4개 값 필요', 2500); return false; }
+        const count = parseInt(parts[0], 10);
+        const [dx, dy, dz] = [parts[1], parts[2], parts[3]].map(parseFloat);
+        if (!Number.isFinite(count) || count < 1 || ![dx, dy, dz].every(Number.isFinite)) {
+          Toast.warning('유효한 숫자 필요', 2500); return false;
+        }
+        try { localStorage.setItem('axia:array:params', params); } catch { /* ignore */ }
+        const newFaces = this.bridge.arrayLinearFaces(sel, count, [dx, dy, dz]);
+        if (newFaces.length > 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          getOperationLog().record('array-linear', `선형 배열 ${count}회 (재실행)`, params);
+          return true;
+        }
+        Toast.fromBridgeError(this.bridge, '재실행 실패');
+        return false;
+      }
+      case 'array-radial': {
+        const sel = this.selection.getSelectedFaces();
+        if (sel.length === 0) { Toast.warning('재실행할 면을 선택하세요', 2500); return false; }
+        const parts = params.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+        if (parts.length !== 3) { Toast.warning('"N, axis, deg" 3개 값 필요', 2500); return false; }
+        const count = parseInt(parts[0], 10);
+        const axisChar = parts[1].toLowerCase();
+        const totalDeg = parseFloat(parts[2]);
+        if (!Number.isFinite(count) || count < 1 || !Number.isFinite(totalDeg)) {
+          Toast.warning('유효한 숫자 필요', 2500); return false;
+        }
+        let axis: [number, number, number];
+        if (axisChar === 'x') axis = [1, 0, 0];
+        else if (axisChar === 'y') axis = [0, 1, 0];
+        else if (axisChar === 'z') axis = [0, 0, 1];
+        else { Toast.warning('축은 x/y/z 중 하나', 2500); return false; }
+        try { localStorage.setItem('axia:array-radial:params', params); } catch { /* ignore */ }
+        const newFaces = this.bridge.arrayRadialFaces(sel, count, [0, 0, 0], axis, totalDeg * Math.PI / 180);
+        if (newFaces.length > 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          getOperationLog().record('array-radial', `원형 배열 ${count}회 · ${axisChar}축 · ${totalDeg}° (재실행)`, params);
+          return true;
+        }
+        Toast.fromBridgeError(this.bridge, '재실행 실패');
+        return false;
+      }
+      case 'subdivide': {
+        const n = this.bridge.subdivideCatmullClark();
+        if (n >= 0) {
+          this.syncMesh();
+          this.selection.clearSelection();
+          getOperationLog().record('subdivide', `Catmull-Clark 분할 (재실행, ${n}개 quad)`, '');
+          return true;
+        }
+        Toast.fromBridgeError(this.bridge, '재실행 실패');
+        return false;
+      }
+      default:
+        Toast.warning(`재실행 지원 안 함: ${kind}`, 2500);
+        return false;
+    }
   }
 
   // ═══ Sketch Mode API ═══
