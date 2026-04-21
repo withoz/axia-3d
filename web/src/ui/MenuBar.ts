@@ -303,6 +303,14 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'subdivide': toolManager.executeAction('subdivide'); break;
       // Array — 선택된 면을 선형(linear) 배열로 복제. 개수/간격은 prompt.
       case 'tool-array': toolManager.executeAction('array-linear'); break;
+      // Array Radial — 축 중심 원형 복제. N·축·총각도 prompt.
+      case 'array-radial': toolManager.executeAction('array-radial'); break;
+      // Thicken — 선택 면에 두께를 부여 (push_pull 기반 slab).
+      case 'thicken-faces': toolManager.executeAction('thicken-faces'); break;
+      // Quick Color — 선택 면에 즉석 custom material 할당.
+      case 'assign-quick-color': toolManager.executeAction('assign-quick-color'); break;
+      // Measure Tool — 인터랙티브 2점 거리 / 3점 각도 (SelectTool 계열).
+      case 'tool-measure': setActiveTool('measure'); break;
       case 'tool-trim': setActiveTool('trim'); break;
       case 'tool-extend': setActiveTool('extend'); break;
       // Fillet — 선택된 엣지 1개에 모깎기 적용. 도구가 아니라 액션이므로
