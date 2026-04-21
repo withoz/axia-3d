@@ -71,8 +71,12 @@ const FORMAT_LABEL: Record<ImportFormat, string> = {
   '3dm':  'Rhino 3DM',
 };
 
-/** 모든 지원 확장자 */
-const ALL_ACCEPT = Object.values(FORMAT_ACCEPT).join(',');
+/** 모든 지원 확장자. STEP/IGES도 picker에 노출하되 importFile에서 명시 안내 메시지로
+ *  거부 (조용히 실패하는 것보다 사용자에게 대안을 알려주는 게 나음). */
+const ALL_ACCEPT = [
+  ...Object.values(FORMAT_ACCEPT),
+  '.step', '.stp', '.iges', '.igs',
+].join(',');
 
 export class FileImporter {
   private scene: THREE.Scene;
@@ -173,6 +177,21 @@ export class FileImporter {
   /** 파일 객체로 직접 가져오기 */
   async importFile(file: File, formatHint?: ImportFormat): Promise<ImportResult> {
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
+
+    // STEP/IGES는 의도적으로 "지원 예정" 명시 — 조용한 실패보다 대안 안내가
+    // UX적으로 낫다. 구현 로드맵은 OCCT.js 통합 (10MB+ WASM 번들 필요),
+    // BRep→Half-Edge DCEL 변환 레이어, LGPL 라이선스 검토 후 진행 예정.
+    if (ext === 'step' || ext === 'stp' || ext === 'iges' || ext === 'igs') {
+      throw new Error(
+        `.${ext} (STEP/IGES)는 아직 지원하지 않습니다 — 2026년 하반기 예정.\n\n` +
+        `지금 사용 가능한 우회법:\n` +
+        `• FreeCAD (무료): 파일 → Export → STL 또는 DXF\n` +
+        `• Fusion 360: 내보내기 → STEP 변환 가능한 포맷\n` +
+        `• Rhino / SolidWorks: Save As → OBJ / 3DM\n\n` +
+        `변환 후 AXiA는 .obj, .stl, .dxf, .3dm을 직접 읽습니다.`
+      );
+    }
+
     const format = formatHint || this.detectFormat(ext);
 
     if (!format) {

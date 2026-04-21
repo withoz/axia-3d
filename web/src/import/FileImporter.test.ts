@@ -74,6 +74,33 @@ describe('FileImporter', () => {
     });
   });
 
+  // --- STEP/IGES rejection (Tier 3C) ---
+
+  describe('STEP/IGES 미지원 안내', () => {
+    async function tryImport(name: string) {
+      const f = new File([''], name, { type: 'application/octet-stream' });
+      await importer.importFile(f);
+    }
+    it('rejects .step with guidance message', async () => {
+      await expect(tryImport('model.step')).rejects.toThrow(/STEP\/IGES.*아직 지원/);
+    });
+    it('rejects .stp', async () => {
+      await expect(tryImport('part.stp')).rejects.toThrow(/STEP\/IGES/);
+    });
+    it('rejects .iges', async () => {
+      await expect(tryImport('drawing.iges')).rejects.toThrow(/STEP\/IGES/);
+    });
+    it('rejects .igs', async () => {
+      await expect(tryImport('legacy.igs')).rejects.toThrow(/STEP\/IGES/);
+    });
+    it('error includes alternatives (FreeCAD / Fusion)', async () => {
+      try { await tryImport('foo.step'); } catch (e) {
+        expect((e as Error).message).toContain('FreeCAD');
+        expect((e as Error).message).toContain('Fusion');
+      }
+    });
+  });
+
   // --- Constructor ---
 
   describe('constructor', () => {
