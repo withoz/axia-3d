@@ -20,6 +20,13 @@ export class MoveTool implements ITool {
   private transformLastDelta: THREE.Vector3 = new THREE.Vector3();
   private target: Target | null = null;
 
+  /** Click-to-place mode — entered via startPlacement() (clipboard paste/
+   *  duplicate). First mousemove captures anchor, subsequent mousemoves
+   *  translate target, first click commits, Esc cancels (via undo).
+   *  Distinguishes from normal drag flow which needs explicit mousedown to
+   *  begin dragging. */
+  private placementMode: boolean = false;
+
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
   }
@@ -64,7 +71,43 @@ export class MoveTool implements ITool {
     }
   }
 
+  /**
+   * Enter click-to-place mode after clipboard paste/duplicate.
+   * The given faces are treated as "floating" — cursor movement translates
+   * them, first click commits, Esc cancels (via engine undo).
+   *
+   * UX contract (SketchUp/AutoCAD paste style):
+   *   T+0  paste creates copies at zero offset (overlapping source)
+   *   T+1  startPlacement(faceIds) → 즉시 커서 tracking 시작
+   *   T+2  사용자가 마우스 이동 → 첫 이동의 좌표가 anchor가 되고 이후 이동은
+   *        delta로 translate
+   *   T+3  클릭 → placement 종료, 객체가 그 위치에 확정
+   *   Esc  engine.undo → 복사본 삭제
+   */
+  startPlacement(faceIds: number[]): void {
+    if (faceIds.length === 0) return;
+    this.placementMode = true;
+    this.target = { kind: 'faces', ids: faceIds.slice() };
+    this.transformActive = true;
+    this.transformStartPt = null;  // set on first mousemove
+    this.transformLastDelta.set(0, 0, 0);
+    Toast.info('마우스로 위치 조정 → 클릭해 고정, Esc 취소', 3500);
+    debugLog(`[Move] startPlacement: ${faceIds.length} faces`);
+  }
+
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+    // Placement mode commit: first click finalizes position.
+    if (this.placementMode) {
+      debugLog('[Move] Placement committed');
+      this.placementMode = false;
+      this.transformActive = false;
+      this.transformStartPt = null;
+      this.target = null;
+      this.transformLastDelta.set(0, 0, 0);
+      this.ctx.dimLabel.clear();
+      return;
+    }
+
     if (this.transformActive) return;
 
     const t = this.resolveTarget();
@@ -84,6 +127,11 @@ export class MoveTool implements ITool {
   }
 
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+    // Placement mode: first mousemove captures the anchor (no mousedown needed).
+    if (this.placementMode && point && !this.transformStartPt) {
+      this.transformStartPt = point.clone();
+      return;
+    }
     if (!this.transformActive || !this.transformStartPt || !this.target || !point) return;
 
     const totalDelta = new THREE.Vector3().subVectors(point, this.transformStartPt);
@@ -112,6 +160,8 @@ export class MoveTool implements ITool {
   }
 
   onMouseUp(e: MouseEvent): void {
+    // Placement mode doesn't react to mouseup — commit happens on mousedown.
+    if (this.placementMode) return;
     if (this.transformActive) {
       debugLog('[Move] End drag');
       this.transformActive = false;
@@ -124,6 +174,13 @@ export class MoveTool implements ITool {
 
   onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
+      // Placement mode cancel: undo the paste via engine, then exit mode.
+      if (this.placementMode) {
+        this.ctx.bridge.undo();
+        this.ctx.syncMesh();
+        Toast.info('복제/붙여넣기 취소', 2000);
+        debugLog('[Move] Placement cancelled via Esc');
+      }
       this.cleanup();
     }
   }
@@ -146,11 +203,12 @@ export class MoveTool implements ITool {
   }
 
   isBusy(): boolean {
-    return this.transformActive;
+    return this.transformActive || this.placementMode;
   }
 
   cleanup(): void {
     this.transformActive = false;
+    this.placementMode = false;
     this.transformStartPt = null;
     this.target = null;
     this.transformLastDelta.set(0, 0, 0);

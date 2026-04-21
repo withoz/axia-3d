@@ -434,10 +434,16 @@ export class ToolManager {
         }
       }
     } else if (action === 'clipboard-paste' || action === 'duplicate') {
-      // Ctrl+V / Ctrl+D — 클립보드 (또는 현재 선택)의 face를 offset만큼 복제.
-      // duplicate는 "copy+paste 즉시" 단축 경로: 현재 선택을 clipboard에 넣지
-      // 않고 바로 복제 실행 → 원래 선택 교체 없음.
-      const last = localStorage.getItem('axia:clipboard:offset') ?? '500, 0, 500';
+      // Ctrl+V / Ctrl+D — 복사된 face를 즉시 복제 후 커서에 부착해 배치 대기.
+      //
+      // UX (SketchUp/AutoCAD 스타일):
+      //   1) 복제본을 원본 위치에 생성 (zero offset → 시각적으로 겹침)
+      //   2) MoveTool을 "placement" 모드로 즉시 활성화
+      //   3) 사용자가 마우스 이동 → 복제본이 따라옴
+      //   4) 클릭 → 그 위치에 고정
+      //   5) Esc → undo로 복제본 삭제 (paste 취소)
+      //
+      // duplicate는 현재 선택에서, paste는 클립보드에서 원본을 가져옴.
       let sourceFaces: number[];
       if (action === 'duplicate') {
         sourceFaces = this.selection.getSelectedFaces();
@@ -453,11 +459,9 @@ export class ToolManager {
         }
         sourceFaces = clip.ids;
       }
-      // 기본 offset은 (500, 0, 500) — X+Z 대각선으로 살짝 이동해 원본 시인성 유지.
-      // 필요 시 사용자가 prompt로 변경 가능하지만 MVP는 기본값 사용.
-      const parts = last.split(/[,\s]+/).map(s => parseFloat(s.trim())).filter(Number.isFinite);
-      const [dx, dy, dz] = parts.length === 3 ? parts as [number, number, number] : [500, 0, 500];
-      const newFaces = this.bridge.arrayLinearFaces(sourceFaces, 1, [dx, dy, dz]);
+      // Zero offset으로 복제 — 원본과 겹친 상태로 시작해 MoveTool이 커서에
+      // 맞춰 이동시킴. 이전 구현(고정 offset)보다 훨씬 자연스러운 UX.
+      const newFaces = this.bridge.arrayLinearFaces(sourceFaces, 1, [0, 0, 0]);
       if (newFaces.length === 0) {
         Toast.error(
           `${action === 'duplicate' ? '복제' : '붙여넣기'} 실패 — ` +
@@ -466,18 +470,22 @@ export class ToolManager {
         );
         return;
       }
-      // Defensive: 복사된 새 face는 topology-changed 경로로 SnapManager
-      // signature가 반드시 달라지므로 rebuild가 와야 하지만, 어떤 엣지
-      // 케이스에서도 스냅 포인트가 누락되지 않도록 명시적으로 cache 무효화.
-      // (사용자 보고: 복사된 객체에 스냅이 안 들어가는 증상 예방적 수정)
       this.snap.invalidateCache();
       this.syncMesh();
-      // 새로 생긴 면들을 선택 → 바로 추가 조작 가능 (Blender 관행)
+      // 새로 생긴 면들을 선택 → MoveTool이 이 선택을 move 대상으로 사용
       this.selection.clearSelection();
       this.selection.selectFaces(newFaces);
+
+      // MoveTool로 전환 후 즉시 placement 모드 진입 — 첫 mousemove가 anchor,
+      // 첫 click이 commit, Esc는 undo.
+      this.setTool('move');
+      const moveTool = this.tools.get('move') as unknown as {
+        startPlacement?: (faceIds: number[]) => void;
+      };
+      moveTool?.startPlacement?.(newFaces);
       const verb = action === 'duplicate' ? '복제' : '붙여넣기';
-      Toast.info(`${verb} 완료 — ${newFaces.length}개 면 (offset ${dx},${dy},${dz}mm)`, 2500);
-      debugLog(`[Action] ${action}: ${newFaces.length} faces`);
+      debugLog(`[Action] ${action}: ${newFaces.length} faces → placement mode`);
+      void verb; // Toast는 startPlacement 내부에서 안내 — 중복 방지
     } else if (action === 'delete') {
       const selectedFaces = this.selection.getSelectedFaces();
       const selectedEdges = this.selection.getSelectedEdges();

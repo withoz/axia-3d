@@ -358,6 +358,23 @@ describe('ToolManager', () => {
       expect(invalidateSpy).toHaveBeenCalled();
     });
 
+    it('paste uses ZERO offset (copies overlap source) for click-to-place UX', () => {
+      getClipboard().copy('faces', [1, 2]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([100, 101]);
+      tm.executeAction('clipboard-paste');
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([1, 2], 1, [0, 0, 0]);
+    });
+
+    it('paste enters move tool placement mode', () => {
+      getClipboard().copy('faces', [3]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([200]);
+      const moveTool = (tm as any).tools.get('move');
+      moveTool.startPlacement = vi.fn();
+      tm.executeAction('clipboard-paste');
+      expect(moveTool.startPlacement).toHaveBeenCalledWith([200]);
+      expect(tm.currentTool).toBe('move');
+    });
+
     it('duplicate uses current selection (not clipboard)', () => {
       (tm.selection as any).getSelectedFaces = () => [42];
       (tm.selection as any).selectFaces = vi.fn();
