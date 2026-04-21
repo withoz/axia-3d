@@ -459,9 +459,16 @@ export class ToolManager {
         }
         sourceFaces = clip.ids;
       }
-      // Zero offset으로 복제 — 원본과 겹친 상태로 시작해 MoveTool이 커서에
-      // 맞춰 이동시킴. 이전 구현(고정 offset)보다 훨씬 자연스러운 UX.
-      const newFaces = this.bridge.arrayLinearFaces(sourceFaces, 1, [0, 0, 0]);
+      // 최소 offset (0.1mm = 100μm)으로 복제 — 이유:
+      //   Rust의 add_vertex는 SPATIAL_HASH_CELL × 1.5 = 1.5μm 이내 vertex를
+      //   dedup(재사용). offset=0이면 복제본 vertex가 원본과 같은 VertId가 되어
+      //   topology가 깨짐 (한 vertex를 두 face가 "독립적으로" 경계로 사용 불가).
+      //   또 array_linear_faces에 `ensure!(offset > EPSILON)` 가드가 있어 아예
+      //   거부됨. 0.1mm 는 dedup 임계값보다 66배 커서 새 vertex 보장 + 화면
+      //   확대에서도 거의 감지 불가 + 이어지는 MoveTool placement가 즉시
+      //   재배치하므로 사용자에겐 무영향.
+      const TINY = 0.1;
+      const newFaces = this.bridge.arrayLinearFaces(sourceFaces, 1, [TINY, 0, TINY]);
       if (newFaces.length === 0) {
         Toast.error(
           `${action === 'duplicate' ? '복제' : '붙여넣기'} 실패 — ` +

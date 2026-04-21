@@ -358,11 +358,26 @@ describe('ToolManager', () => {
       expect(invalidateSpy).toHaveBeenCalled();
     });
 
-    it('paste uses ZERO offset (copies overlap source) for click-to-place UX', () => {
+    it('paste uses TINY offset (just above dedup threshold) so copies get distinct verts', () => {
+      // Zero offset would trigger Rust add_vertex dedup (1.5μm) → shared verts
+      // → DCEL topology break → original face can be replaced by invalid copy.
+      // Regression guard: make sure offset is > 0 and small enough to be invisible.
       getClipboard().copy('faces', [1, 2]);
       (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([100, 101]);
       tm.executeAction('clipboard-paste');
-      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([1, 2], 1, [0, 0, 0]);
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith(
+        [1, 2], 1,
+        expect.arrayContaining([0.1, 0, 0.1]),
+      );
+      const callArgs = (bridge.arrayLinearFaces as any).mock.calls[0];
+      const offset = callArgs[2];
+      // offset must be non-zero to pass Rust ensure!
+      const mag = Math.hypot(offset[0], offset[1], offset[2]);
+      expect(mag).toBeGreaterThan(0);
+      // offset must be >> 1.5μm (SPATIAL_HASH_CELL * 1.5) to skip dedup
+      expect(mag).toBeGreaterThan(0.002);  // 2μm floor
+      // offset must be <= 1mm to be visually imperceptible
+      expect(mag).toBeLessThan(1);
     });
 
     it('paste enters move tool placement mode', () => {
