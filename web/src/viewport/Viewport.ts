@@ -1804,7 +1804,18 @@ export class Viewport {
     const w = this.renderer.domElement.clientWidth  || 1;
     const h = this.renderer.domElement.clientHeight || 1;
     try {
-      const composer = new EffectComposer(this.renderer);
+      // ━━━ MSAA render target ━━━
+      // EffectComposer의 기본 WebGLRenderTarget은 samples=0(AA 꺼짐) —
+      // renderer.antialias:true가 무시되어 post-process 경로에서 엣지가
+      // 계단 현상으로 흐릿하게 보이는 원인. WebGL2에서 지원되는 MSAA 4x
+      // rendertarget을 명시적으로 전달해 LineSegments/mesh 공통 선명도 복원.
+      const pr = this.renderer.getPixelRatio();
+      const rt = new THREE.WebGLRenderTarget(w * pr, h * pr, {
+        type: THREE.HalfFloatType,   // HDR 톤매핑 정확도 유지
+        samples: 4,                   // 4x MSAA — 엣지 aliasing 제거
+      });
+      const composer = new EffectComposer(this.renderer, rt);
+      composer.setPixelRatio(pr);
       const renderPass = new RenderPass(this.scene, this.activeCamera);
       composer.addPass(renderPass);
       const ssao = new SSAOPass(this.scene, this.activeCamera, w, h);
