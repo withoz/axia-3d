@@ -171,6 +171,8 @@ function mockBridge() {
     setEdgeClass: vi.fn().mockReturnValue(true),
     arrayLinearFaces: vi.fn().mockReturnValue([]),
     getPositionsF64: vi.fn().mockReturnValue(null),
+    getFaceVertices: vi.fn().mockReturnValue([]),
+    getVertexPos: vi.fn().mockReturnValue(null),
   } as any;
 }
 
@@ -386,8 +388,35 @@ describe('ToolManager', () => {
       const moveTool = (tm as any).tools.get('move');
       moveTool.startPlacement = vi.fn();
       tm.executeAction('clipboard-paste');
-      expect(moveTool.startPlacement).toHaveBeenCalledWith([200]);
+      // expects at least [faceIds] — refPoint may be undefined if no vertex data
+      expect(moveTool.startPlacement).toHaveBeenCalled();
+      const callArgs = (moveTool.startPlacement as any).mock.calls[0];
+      expect(callArgs[0]).toEqual([200]);
       expect(tm.currentTool).toBe('move');
+    });
+
+    it('paste computes bbox min corner from face vertices and passes as refPoint', () => {
+      getClipboard().copy('faces', [3]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([200]);
+      // Mock face → vert → pos: one face with 4 verts forming a rectangle.
+      (bridge.getFaceVertices as any) = vi.fn().mockReturnValue([10, 11, 12, 13]);
+      const positions: Record<number, [number, number, number]> = {
+        10: [100, 0, 200],
+        11: [500, 0, 200],
+        12: [500, 0, 600],
+        13: [100, 0, 600],
+      };
+      (bridge.getVertexPos as any) = vi.fn((vid: number) => positions[vid] ?? null);
+      const moveTool = (tm as any).tools.get('move');
+      moveTool.startPlacement = vi.fn();
+      tm.executeAction('clipboard-paste');
+      const callArgs = (moveTool.startPlacement as any).mock.calls[0];
+      const refPoint = callArgs[1];
+      // bbox min corner from 4 verts = (100, 0, 200)
+      expect(refPoint).toBeDefined();
+      expect(refPoint.x).toBeCloseTo(100);
+      expect(refPoint.y).toBeCloseTo(0);
+      expect(refPoint.z).toBeCloseTo(200);
     });
 
     it('duplicate uses current selection (not clipboard)', () => {

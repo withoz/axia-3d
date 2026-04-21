@@ -27,6 +27,13 @@ export class MoveTool implements ITool {
    *  begin dragging. */
   private placementMode: boolean = false;
 
+  /** Optional reference point on the placed geometry (e.g. bbox min corner)
+   *  — on the first mousemove this point is translated to sit exactly at
+   *  the cursor, so subsequent motion keeps this corner glued to the
+   *  pointer. Without refPoint, first mousemove just captures the anchor
+   *  and the object moves relatively (legacy behavior). */
+  private placementRefPoint: THREE.Vector3 | null = null;
+
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
   }
@@ -77,22 +84,30 @@ export class MoveTool implements ITool {
    * them, first click commits, Esc cancels (via engine undo).
    *
    * UX contract (SketchUp/AutoCAD paste style):
-   *   T+0  paste creates copies at zero offset (overlapping source)
-   *   T+1  startPlacement(faceIds) → 즉시 커서 tracking 시작
-   *   T+2  사용자가 마우스 이동 → 첫 이동의 좌표가 anchor가 되고 이후 이동은
-   *        delta로 translate
+   *   T+0  paste creates copies at tiny offset (0.1mm, topology safe)
+   *   T+1  startPlacement(faceIds, refPoint) → 즉시 커서 tracking 시작
+   *   T+2  사용자가 마우스 이동 →
+   *          - refPoint 있음: 복제본의 해당 corner가 커서에 "붙어" 이동
+   *            (첫 move에서 refPoint→cursor로 snap, 이후 커서 따라다님)
+   *          - refPoint 없음: 첫 이동의 좌표가 anchor, 이후 delta translate
    *   T+3  클릭 → placement 종료, 객체가 그 위치에 확정
    *   Esc  engine.undo → 복사본 삭제
    */
-  startPlacement(faceIds: number[]): void {
+  startPlacement(faceIds: number[], refPoint?: THREE.Vector3): void {
     if (faceIds.length === 0) return;
     this.placementMode = true;
     this.target = { kind: 'faces', ids: faceIds.slice() };
     this.transformActive = true;
     this.transformStartPt = null;  // set on first mousemove
     this.transformLastDelta.set(0, 0, 0);
-    Toast.info('마우스로 위치 조정 → 클릭해 고정, Esc 취소', 3500);
-    debugLog(`[Move] startPlacement: ${faceIds.length} faces`);
+    this.placementRefPoint = refPoint ? refPoint.clone() : null;
+    Toast.info(
+      refPoint
+        ? '📐 복제본의 corner가 커서에 붙어 이동 → 클릭해 고정, Esc 취소'
+        : '마우스로 위치 조정 → 클릭해 고정, Esc 취소',
+      3500,
+    );
+    debugLog(`[Move] startPlacement: ${faceIds.length} faces, refPt=${refPoint?.toArray()}`);
   }
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
@@ -100,6 +115,7 @@ export class MoveTool implements ITool {
     if (this.placementMode) {
       debugLog('[Move] Placement committed');
       this.placementMode = false;
+      this.placementRefPoint = null;
       this.transformActive = false;
       this.transformStartPt = null;
       this.target = null;
@@ -129,6 +145,15 @@ export class MoveTool implements ITool {
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
     // Placement mode: first mousemove captures the anchor (no mousedown needed).
     if (this.placementMode && point && !this.transformStartPt) {
+      if (this.placementRefPoint && this.target) {
+        // refPoint가 주어진 경우: 해당 corner를 cursor로 snap.
+        // target을 (cursor - refPoint)만큼 translate해서 refPoint가 cursor에 있게 만듦.
+        const initialOffset = point.clone().sub(this.placementRefPoint);
+        this.translate(this.target, initialOffset.x, initialOffset.y, initialOffset.z);
+        this.ctx.syncMesh();
+        // refPoint를 현재 cursor 위치로 갱신 (다음 move 델타 계산용).
+        this.placementRefPoint = point.clone();
+      }
       this.transformStartPt = point.clone();
       return;
     }
@@ -209,6 +234,7 @@ export class MoveTool implements ITool {
   cleanup(): void {
     this.transformActive = false;
     this.placementMode = false;
+    this.placementRefPoint = null;
     this.transformStartPt = null;
     this.target = null;
     this.transformLastDelta.set(0, 0, 0);

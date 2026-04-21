@@ -483,15 +483,24 @@ export class ToolManager {
       this.selection.clearSelection();
       this.selection.selectFaces(newFaces);
 
+      // 복제본의 "기준점(grab point)"을 계산 — bbox의 min corner.
+      // 이 점이 커서에 붙은 상태로 이동하게 되어 사용자는 corner snap을
+      // 적극 활용할 수 있음 (예: 다른 박스의 vertex에 정확히 착지).
+      //
+      // 대안: bbox center를 쓰면 "객체 중심을 커서에 맞춤"이라 매스 배치에는
+      // 편하지만 건축 배치(벽 corner를 grid 교차점에 snap)는 min corner가 훨씬
+      // 직관적. SketchUp도 원본의 "지정된 base point" 또는 bbox corner를 사용.
+      const refPoint = this.computeBBoxMin(newFaces);
+
       // MoveTool로 전환 후 즉시 placement 모드 진입 — 첫 mousemove가 anchor,
       // 첫 click이 commit, Esc는 undo.
       this.setTool('move');
       const moveTool = this.tools.get('move') as unknown as {
-        startPlacement?: (faceIds: number[]) => void;
+        startPlacement?: (faceIds: number[], refPoint?: THREE.Vector3) => void;
       };
-      moveTool?.startPlacement?.(newFaces);
+      moveTool?.startPlacement?.(newFaces, refPoint ?? undefined);
       const verb = action === 'duplicate' ? '복제' : '붙여넣기';
-      debugLog(`[Action] ${action}: ${newFaces.length} faces → placement mode`);
+      debugLog(`[Action] ${action}: ${newFaces.length} faces → placement mode (refPt=${refPoint?.toArray()})`);
       void verb; // Toast는 startPlacement 내부에서 안내 — 중복 방지
     } else if (action === 'delete') {
       const selectedFaces = this.selection.getSelectedFaces();
@@ -1903,6 +1912,31 @@ export class ToolManager {
       return snapResult.position.clone();
     }
     return rawGroundPoint;
+  }
+
+  /**
+   * 여러 face의 모든 vertex를 스캔해 axis-aligned bounding box의 최소 corner를
+   * 반환. Paste/Duplicate의 placement "grab point"로 사용.
+   *
+   * 반환 null: face가 없거나 vertex 조회 실패한 경우. 호출자는 안전하게
+   * undefined 처리 (placement는 기존 "첫 mousemove = anchor" 동작으로 fallback).
+   */
+  private computeBBoxMin(faceIds: number[]): THREE.Vector3 | null {
+    if (faceIds.length === 0) return null;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let found = false;
+    for (const fid of faceIds) {
+      const verts = this.bridge.getFaceVertices(fid);
+      for (const vid of verts) {
+        const p = this.bridge.getVertexPos(vid);
+        if (!p) continue;
+        if (p[0] < minX) minX = p[0];
+        if (p[1] < minY) minY = p[1];
+        if (p[2] < minZ) minZ = p[2];
+        found = true;
+      }
+    }
+    return found ? new THREE.Vector3(minX, minY, minZ) : null;
   }
 
   // ═══ Parametric History re-run (Tier 3B) ═══
