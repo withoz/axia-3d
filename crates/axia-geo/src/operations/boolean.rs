@@ -1250,6 +1250,69 @@ mod tests {
     }
 
     #[test]
+    fn boolean_rejects_face_with_hole() {
+        // Phase G가 hole-aware split_face_by_line을 추가한 뒤에도, Boolean은
+        // constrained Delaunay triangulation을 갖지 않는 한 hole 있는 face를
+        // 안전하게 다룰 수 없다. 명시적 거부 + 유용한 에러 메시지를 유지하는
+        // regression test.
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+
+        // Solid A: 6개 face의 cube
+        let a = make_box(&mut mesh, DVec3::ZERO, DVec3::splat(4.0), mat);
+
+        // Solid B: hole 있는 단일 face (quad + 중앙 사각형 hole)
+        let v0 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(14.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(14.0, 4.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(10.0, 4.0, 0.0));
+        // Hole은 CW (outer와 반대 winding)
+        let h0 = mesh.add_vertex(DVec3::new(11.0, 1.0, 0.0));
+        let h1 = mesh.add_vertex(DVec3::new(11.0, 3.0, 0.0));
+        let h2 = mesh.add_vertex(DVec3::new(13.0, 3.0, 0.0));
+        let h3 = mesh.add_vertex(DVec3::new(13.0, 1.0, 0.0));
+        let b_face = mesh.add_face_with_holes(
+            &[v0, v1, v2, v3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+
+        let result = mesh.boolean(&a, &[b_face], BoolOp::Union, mat);
+        assert!(result.is_err(), "boolean must reject hole-containing face");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("hole"),
+            "error message should mention 'hole': got {}", err_msg);
+    }
+
+    #[test]
+    fn boolean_rejects_hole_in_either_operand() {
+        // Symmetric: hole이 A, B 어느 쪽에 있어도 거부되어야 함.
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+
+        // Solid B: 정상 cube
+        let b = make_box(&mut mesh, DVec3::new(10.0, 0.0, 0.0), DVec3::new(14.0, 4.0, 4.0), mat);
+
+        // A: hole face
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(4.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(4.0, 4.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 4.0, 0.0));
+        let h0 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let h1 = mesh.add_vertex(DVec3::new(1.0, 3.0, 0.0));
+        let h2 = mesh.add_vertex(DVec3::new(3.0, 3.0, 0.0));
+        let h3 = mesh.add_vertex(DVec3::new(3.0, 1.0, 0.0));
+        let a_face = mesh.add_face_with_holes(
+            &[v0, v1, v2, v3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+
+        let result = mesh.boolean(&[a_face], &b, BoolOp::Subtract, mat);
+        assert!(result.is_err(), "hole in A must also be rejected");
+    }
+
+    #[test]
     fn boolean_debug_info_present() {
         // Debug 정보가 제대로 기록되는지 확인
         let mut mesh = Mesh::default();
