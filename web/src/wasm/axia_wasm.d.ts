@@ -107,6 +107,12 @@ export class AxiaEngine {
     can_redo(): boolean;
     can_undo(): boolean;
     /**
+     * Collect all edges in the polyline chain containing `edge_id`.
+     * Walks through degree-2 vertices and stops at junctions/dead-ends.
+     * Empty Vec on invalid / inactive edge.
+     */
+    collectEdgeChain(edge_id_raw: number): Uint32Array;
+    /**
      * Count of constraints (active + inactive).
      */
     constraintCount(): number;
@@ -738,6 +744,7 @@ export interface InitOutput {
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
+    readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
     readonly axiaengine_countFreeEdges: (a: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;

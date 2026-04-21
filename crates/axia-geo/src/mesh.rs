@@ -2169,6 +2169,102 @@ impl Mesh {
         Ok(result)
     }
 
+    /// Count distinct active edges incident to a vertex.
+    /// Walks the radial v_next chain from the vertex's outgoing half-edge.
+    fn count_incident_edges(&self, vid: VertId) -> usize {
+        let v = match self.verts.get(vid) {
+            Some(v) if v.is_active() => v,
+            _ => return 0,
+        };
+        let start = match v.outgoing() {
+            Some(he) if !he.is_null() => he,
+            _ => return 0,
+        };
+        let mut seen: std::collections::HashSet<EdgeId> = std::collections::HashSet::new();
+        let mut he_id = start;
+        for _ in 0..256 {
+            // guard
+            let he = match self.hes.get(he_id) {
+                Some(h) if h.is_active() => h,
+                _ => break,
+            };
+            if self.edges.get(he.edge()).map(|e| e.is_active()).unwrap_or(false) {
+                seen.insert(he.edge());
+            }
+            let next = he.v_next();
+            if next == start || next.is_null() { break; }
+            he_id = next;
+        }
+        seen.len()
+    }
+
+    /// Given an edge and one endpoint, return the "other" incident edge at
+    /// that endpoint — but ONLY when exactly 2 edges meet there (valence 2).
+    /// Returns None for junctions (valence ≥ 3), dead ends, or invalid input.
+    /// Used by `collect_edge_chain` to walk polyline chains through regular
+    /// chain vertices.
+    fn other_edge_at_valence2(&self, edge_id: EdgeId, at_vert: VertId) -> Option<EdgeId> {
+        if self.count_incident_edges(at_vert) != 2 { return None; }
+        let v = self.verts.get(at_vert)?;
+        let start = v.outgoing()?;
+        if start.is_null() { return None; }
+        let mut he_id = start;
+        for _ in 0..256 {
+            let he = self.hes.get(he_id)?;
+            if !he.is_active() { break; }
+            let eid = he.edge();
+            if eid != edge_id
+                && self.edges.get(eid).map(|e| e.is_active()).unwrap_or(false)
+            {
+                return Some(eid);
+            }
+            let next = he.v_next();
+            if next == start || next.is_null() { break; }
+            he_id = next;
+        }
+        None
+    }
+
+    /// Collect all edges in the **polyline chain** containing `edge_id`.
+    /// The chain walks through degree-2 vertices (exactly 2 incident edges)
+    /// from both endpoints of the seed edge and stops at junctions (≥3) or
+    /// dead ends (1). Returned edges include the seed itself and are in
+    /// discovery order (not guaranteed topologically ordered).
+    ///
+    /// Use cases:
+    ///   - SketchUp / Blender "Select → Chain" one-click selection
+    ///   - "Select all connected edges in this polyline" for DXF polyline
+    ///     import cleanup
+    ///
+    /// Complexity: O(chain_length) — each edge visited once.
+    pub fn collect_edge_chain(&self, edge_id: EdgeId) -> Vec<EdgeId> {
+        if !self.edges.get(edge_id).map(|e| e.is_active()).unwrap_or(false) {
+            return Vec::new();
+        }
+        let mut visited: std::collections::HashSet<EdgeId> = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        let mut queue: Vec<EdgeId> = vec![edge_id];
+        while let Some(eid) = queue.pop() {
+            if !visited.insert(eid) { continue; }
+            result.push(eid);
+            if let Some(e) = self.edges.get(eid) {
+                for endpoint in [e.v_small(), e.v_large()] {
+                    if let Some(other) = self.other_edge_at_valence2(eid, endpoint) {
+                        if !visited.contains(&other) {
+                            queue.push(other);
+                        }
+                    }
+                }
+            }
+            if result.len() > 100_000 {
+                // Runaway guard — a chain should never be this long in
+                // practice; stop to protect the caller.
+                break;
+            }
+        }
+        result
+    }
+
     /// Get all edge IDs bounding a face's outer loop.
     pub fn face_outer_edges(&self, face_id: FaceId) -> Result<Vec<EdgeId>> {
         let start = self.faces[face_id].outer().start;
@@ -4078,6 +4174,67 @@ impl Default for Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_chain_selects_polyline_through_degree2_verts() {
+        // Open polyline: v0 — v1 — v2 — v3 (3 edges, 2 interior valence-2 verts)
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(3.0, 0.0, 0.0));
+        let (e01, _) = mesh.add_edge(v0, v1).unwrap();
+        let (e12, _) = mesh.add_edge(v1, v2).unwrap();
+        let (e23, _) = mesh.add_edge(v2, v3).unwrap();
+
+        let chain = mesh.collect_edge_chain(e12);
+        let set: std::collections::HashSet<EdgeId> = chain.iter().copied().collect();
+        assert!(set.contains(&e01));
+        assert!(set.contains(&e12));
+        assert!(set.contains(&e23));
+        assert_eq!(set.len(), 3, "full chain of 3 edges expected");
+    }
+
+    #[test]
+    fn edge_chain_stops_at_junction() {
+        // Y-shape: v0—v1—v2  and  v1—v3 (v1 is junction, valence=3)
+        //
+        //          v2
+        //           \
+        //    v0 ── v1 ── v3
+        //
+        // seed from e01 → should collect only e01 (stops at v1, and v0 is dead-end)
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let (e01, _) = mesh.add_edge(v0, v1).unwrap();
+        let _ = mesh.add_edge(v1, v2).unwrap();
+        let _ = mesh.add_edge(v1, v3).unwrap();
+
+        let chain = mesh.collect_edge_chain(e01);
+        assert_eq!(chain.len(), 1, "junction at v1 halts the chain — only seed returned");
+        assert_eq!(chain[0], e01);
+    }
+
+    #[test]
+    fn edge_chain_closed_loop() {
+        // Closed quadrilateral boundary: 4 edges, each vertex valence=2.
+        // Chain from any edge should return all 4.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let (e01, _) = mesh.add_edge(v0, v1).unwrap();
+        let _ = mesh.add_edge(v1, v2).unwrap();
+        let _ = mesh.add_edge(v2, v3).unwrap();
+        let _ = mesh.add_edge(v3, v0).unwrap();
+
+        let chain = mesh.collect_edge_chain(e01);
+        assert_eq!(chain.len(), 4, "closed 4-edge loop should return all 4");
+    }
 
     #[test]
     fn test_create_triangle() {

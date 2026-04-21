@@ -192,6 +192,33 @@ describe('SelectTool', () => {
     });
   });
 
+  describe('Alt+edge click selects chain', () => {
+    it('expands single edge click into polyline chain via bridge.collectEdgeChain', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.collectEdgeChain = vi.fn().mockReturnValue([10, 20, 30, 40]);
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: true } as MouseEvent,
+        null,
+      );
+      expect(ctx.bridge.collectEdgeChain).toHaveBeenCalledWith(10);
+      // 4 edges → 4 handleEdgeClick calls (first respects modifiers, rest shift=true)
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledTimes(4);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenNthCalledWith(1, 10, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenNthCalledWith(2, 20, true, false);
+    });
+
+    it('plain edge click (no Alt) does NOT call collectEdgeChain', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.collectEdgeChain = vi.fn();
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+      expect(ctx.bridge.collectEdgeChain).not.toHaveBeenCalled();
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false);
+    });
+  });
+
   describe('Bug 4: edge click resets multi-click state', () => {
     it('prevents false double-click after edge interleaved', () => {
       // 1. face click

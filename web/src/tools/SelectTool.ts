@@ -48,7 +48,23 @@ export class SelectTool implements ITool {
       const segIndex = Math.floor(picked.hit.index / 2);
       const edgeId = this.ctx.edgeMap[segIndex];
       if (edgeId != null) {
-        this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey);
+        // Alt+클릭: 엣지 체인(폴리라인) 자동 확장 선택
+        // — 양 끝점에서 valence-2 vertex를 따라 퍼짐, 교차점에서 정지.
+        // Shift 조합: 기존 선택에 체인 추가 / 단독: 체인으로 대체.
+        if (e.altKey) {
+          const chain = this.ctx.bridge.collectEdgeChain(edgeId);
+          if (chain.length === 0) return;
+          // Alt 없는 클릭처럼 기존 선택 대체(단독 Alt) 또는 추가(Alt+Shift).
+          // 첫 엣지는 기존 SelectionManager 규칙(shift/ctrl) 그대로 처리해
+          // 일반 클릭 UX와 일관성을 유지하고, 이후는 shift=true로 누적.
+          this.ctx.selection.handleEdgeClick(chain[0], e.shiftKey, e.ctrlKey);
+          for (let i = 1; i < chain.length; i++) {
+            this.ctx.selection.handleEdgeClick(chain[i], /*shift*/ true, /*ctrl*/ false);
+          }
+          debugLog(`[SelectTool] Alt+edge chain → ${chain.length} edges`);
+        } else {
+          this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey);
+        }
       }
       return;
     }

@@ -138,6 +138,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'chamfer-edge': toolManager.executeAction('chamfer-edge'); break;
       case 'array-linear': toolManager.executeAction('array-linear'); break;
       case 'array-radial': toolManager.executeAction('array-radial'); break;
+      case 'thicken-faces': toolManager.executeAction('thicken-faces'); break;
       case 'assign-quick-color': toolManager.executeAction('assign-quick-color'); break;
       case 'bend-selection':  toolManager.executeAction('bend-selection'); break;
       case 'twist-selection': toolManager.executeAction('twist-selection'); break;

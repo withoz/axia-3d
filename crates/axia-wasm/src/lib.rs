@@ -3089,6 +3089,15 @@ impl AxiaEngine {
         }
     }
 
+    /// Collect all edges in the polyline chain containing `edge_id`.
+    /// Walks through degree-2 vertices and stops at junctions/dead-ends.
+    /// Empty Vec on invalid / inactive edge.
+    #[wasm_bindgen(js_name = "collectEdgeChain")]
+    pub fn collect_edge_chain(&self, edge_id_raw: u32) -> Vec<u32> {
+        let eid = EdgeId::new(edge_id_raw);
+        self.scene.mesh.collect_edge_chain(eid).iter().map(|e| e.raw()).collect()
+    }
+
     /// Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
     /// 실패 시 빈 벡터.
     #[wasm_bindgen(js_name = "getEdgeEndpoints")]

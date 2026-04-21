@@ -139,6 +139,7 @@ type AxiaEngineExtended = AxiaEngine & {
     length: number,
   ): boolean;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
+  collectEdgeChain?(edgeId: number): Uint32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
   // Constraint Solver Level 2 (persistent graph)
@@ -1221,6 +1222,23 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] getEdgeEndpoints failed:', e);
       return [];
+    }
+  }
+
+  /**
+   * Polyline chain containing the given edge — edges reachable by walking
+   * through degree-2 vertices. Stops at junctions (≥3 incident edges) or
+   * dead ends (1 incident edge). Always includes the seed edge.
+   * Empty array if edge missing/inactive.
+   */
+  collectEdgeChain(edgeId: number): number[] {
+    if (!this.engine?.collectEdgeChain) return [edgeId];
+    try {
+      const arr = this.engine.collectEdgeChain(edgeId);
+      return arr ? Array.from(arr) : [edgeId];
+    } catch (e) {
+      this.recordBridgeError('collectEdgeChain', e);
+      return [edgeId];
     }
   }
 

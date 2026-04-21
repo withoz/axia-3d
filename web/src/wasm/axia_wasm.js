@@ -317,6 +317,26 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Collect all edges in the polyline chain containing `edge_id`.
+     * Walks through degree-2 vertices and stops at junctions/dead-ends.
+     * Empty Vec on invalid / inactive edge.
+     * @param {number} edge_id_raw
+     * @returns {Uint32Array}
+     */
+    collectEdgeChain(edge_id_raw) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_collectEdgeChain(retptr, this.__wbg_ptr, edge_id_raw);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Count of constraints (active + inactive).
      * @returns {number}
      */

@@ -302,6 +302,7 @@ export class ToolManager {
     'fillet-edge',
     'chamfer-edge',
     'array-linear', 'array-radial',
+    'thicken-faces',
     'measure-selection',
     'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
@@ -337,6 +338,7 @@ export class ToolManager {
     'chamfer-edge': '선택 엣지 모따기 (Chamfer)',
     'array-linear': '선택을 선형 배열로 복제',
     'array-radial': '선택을 원형 배열로 복제',
+    'thicken-faces': '선택 면에 두께 부여 (Shell/Thicken)',
     'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
@@ -854,6 +856,59 @@ export class ToolManager {
         debugLog(`[Action] array-linear: count=${count}, offset=(${dx},${dy},${dz})`);
       } else {
         Toast.fromBridgeError(this.bridge, '배열 실패');
+      }
+    } else if (action === 'thicken-faces') {
+      // Shell/Thicken — 선택 면에 두께를 부여해 얇은 슬랩 생성.
+      // push_pull의 CreateFace 모드는 이미 base face 유지 ("솔리드 방식: 바닥면
+      // 유지" — push_pull.rs 주석). 따라서 각 선택 면에 pushPull(d)를 호출하면
+      // 자동으로 [base + top + 측벽]로 구성된 닫힌 슬랩이 만들어짐.
+      //
+      // 여러 면을 동시에 선택한 경우 면별로 독립 슬랩 생성 — 인접 면은 각자
+      // 측벽을 가지므로 경계에서 겹침이 발생할 수 있음. (추후 "공유 엣지 통합
+      // shell" 모드 고려 대상)
+      const selFaces = this.selection.getSelectedFaces();
+      if (selFaces.length === 0) {
+        Toast.warning('두께를 부여할 면을 먼저 선택하세요', 2500);
+        return;
+      }
+      const last = localStorage.getItem('axia:thicken:distance') ?? '200';
+      const input = window.prompt(
+        `두께 (mm, 양수=노멀 방향 / 음수=반대 방향) — 선택 ${selFaces.length}개 면:`,
+        last,
+      );
+      if (input == null) return;
+      const distance = parseFloat(input);
+      if (!Number.isFinite(distance) || distance === 0) {
+        Toast.warning('0이 아닌 유효한 숫자를 입력하세요', 2500);
+        return;
+      }
+      try { localStorage.setItem('axia:thicken:distance', String(distance)); } catch { /* ignore */ }
+
+      // 각 면에 순차 push_pull. 실패 면이 있어도 나머지는 계속 진행.
+      let success = 0;
+      let firstFailure = '';
+      for (const fid of selFaces) {
+        const ok = this.bridge.pushPull(fid, distance);
+        if (ok) {
+          success++;
+        } else if (!firstFailure) {
+          firstFailure = this.bridge.lastError();
+        }
+      }
+      if (success > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        if (success === selFaces.length) {
+          Toast.info(`${success}개 면에 두께 ${distance}mm 부여`, 2500);
+        } else {
+          Toast.warning(
+            `${success}/${selFaces.length}개 면 성공 — 실패: ${firstFailure || '알 수 없는 오류'}`,
+            4000,
+          );
+        }
+        debugLog(`[Action] thicken-faces: ${success}/${selFaces.length}, d=${distance}mm`);
+      } else {
+        Toast.error(`두께 부여 실패: ${firstFailure || '모든 면에서 push_pull 실패'}`, 4000);
       }
     } else if (action === 'array-radial') {
       // 선택한 면을 축 중심으로 원형 배열. Prompt: "N, axis(x|y|z), totalDeg"
