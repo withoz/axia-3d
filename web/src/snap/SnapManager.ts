@@ -491,6 +491,14 @@ export class SnapManager {
 
   // ═══ Geometry Update ═══
 
+  /** Force the next `updateFromMesh` to rebuild even if signature matches.
+   *  Called by operations that add NEW faces but where we want to be
+   *  defensive about the sig check missing a change (e.g. clipboard paste,
+   *  array, boolean — all topology-changing ops). */
+  invalidateCache(): void {
+    this._cacheSig = '';
+  }
+
   /**
    * Update cached geometry from mesh buffers.
    * Call after syncMesh().

@@ -350,6 +350,14 @@ describe('ToolManager', () => {
       expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([7, 8], 1, expect.any(Array));
     });
 
+    it('paste invalidates snap cache (defensive — pasted faces must be snappable)', () => {
+      getClipboard().copy('faces', [1, 2]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([50, 51]);
+      const invalidateSpy = vi.spyOn(tm.snap, 'invalidateCache');
+      tm.executeAction('clipboard-paste');
+      expect(invalidateSpy).toHaveBeenCalled();
+    });
+
     it('duplicate uses current selection (not clipboard)', () => {
       (tm.selection as any).getSelectedFaces = () => [42];
       (tm.selection as any).selectFaces = vi.fn();

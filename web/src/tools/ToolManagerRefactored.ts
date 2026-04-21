@@ -466,6 +466,11 @@ export class ToolManager {
         );
         return;
       }
+      // Defensive: 복사된 새 face는 topology-changed 경로로 SnapManager
+      // signature가 반드시 달라지므로 rebuild가 와야 하지만, 어떤 엣지
+      // 케이스에서도 스냅 포인트가 누락되지 않도록 명시적으로 cache 무효화.
+      // (사용자 보고: 복사된 객체에 스냅이 안 들어가는 증상 예방적 수정)
+      this.snap.invalidateCache();
       this.syncMesh();
       // 새로 생긴 면들을 선택 → 바로 추가 조작 가능 (Blender 관행)
       this.selection.clearSelection();
