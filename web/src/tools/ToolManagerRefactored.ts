@@ -303,6 +303,8 @@ export class ToolManager {
     'chamfer-edge',
     'array-linear', 'array-radial',
     'thicken-faces',
+    'solidify',
+    'mesh-repair',
     'measure-selection',
     'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
@@ -339,6 +341,8 @@ export class ToolManager {
     'array-linear': '선택을 선형 배열로 복제',
     'array-radial': '선택을 원형 배열로 복제',
     'thicken-faces': '선택 면에 두께 부여 (Shell/Thicken)',
+    'solidify': '열린 쉘을 닫힌 솔리드로 변환 (Solidify)',
+    'mesh-repair': '메시 정리 (퇴화면/와인딩/고립 정점)',
     'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
@@ -910,6 +914,104 @@ export class ToolManager {
       } else {
         Toast.error(`두께 부여 실패: ${firstFailure || '모든 면에서 push_pull 실패'}`, 4000);
       }
+    } else if (action === 'mesh-repair') {
+      // Mesh Repair — ADR-007 Phase H의 normalize_for_import를 사용자 명시 호출로 노출.
+      // 네 가지 정리 단계: degenerate 면 제거 / winding 일관화 / normal 재계산 /
+      // 고립 vertex 제거. Import 직후뿐 아니라 사용 중 메시가 오염된 경우에도
+      // 재실행 가능.
+      //
+      // Before/After manifold 리포트 + invariant 위반 수를 Toast로 안내.
+      const before = this.bridge.meshManifoldInfo();
+      const report = this.bridge.normalizeForImport();
+      this.syncMesh();
+      const after = this.bridge.meshManifoldInfo();
+      debugLog(`[MeshRepair] ${JSON.stringify(report)} | before→after: ${JSON.stringify(before)} → ${JSON.stringify(after)}`);
+      const total = report.degenerateRemoved + report.windingFlipped +
+                    report.normalsRecomputed + report.isolatedVertsRemoved;
+      if (total === 0 && report.remainingViolations === 0) {
+        Toast.info(
+          `✅ 메시 상태 양호 — 정리할 항목 없음 (면 ${after.faceCount}개)`,
+          3500,
+        );
+      } else {
+        const parts: string[] = [];
+        if (report.degenerateRemoved > 0) parts.push(`퇴화면 ${report.degenerateRemoved}개 제거`);
+        if (report.windingFlipped > 0) parts.push(`winding ${report.windingFlipped}개 뒤집음`);
+        if (report.normalsRecomputed > 0) parts.push(`normal ${report.normalsRecomputed}개 재계산`);
+        if (report.isolatedVertsRemoved > 0) parts.push(`고립 vertex ${report.isolatedVertsRemoved}개 제거`);
+        const summary = parts.length > 0 ? parts.join(', ') : '변경 없음';
+        const remain = report.remainingViolations > 0
+          ? `\n⚠️ 잔여 invariant 위반 ${report.remainingViolations}개 — 수동 점검 필요`
+          : '';
+        Toast.info(`🩹 Mesh Repair — ${summary}${remain}`, 6000);
+      }
+    } else if (action === 'solidify') {
+      // Solidify — 열린 쉘의 boundary edge 루프를 자동 cap. 전형 사용 시나리오:
+      //   DXF/SKP import 후 "이게 닫힌 솔리드인가?" 확인 + 보정 버튼.
+      //
+      // 3단계:
+      //   1. 현재 manifold 상태 리포트 (face/boundary/non-manifold edge 수)
+      //   2. 닫힘 판정:
+      //        - 이미 닫힘 → info Toast + 종료
+      //        - non-manifold 있음 → warning Toast (Solidify만으로는 못 고침)
+      //        - boundary > 0 → synthesize 실행
+      //   3. 실행 후 재검사 → 결과 리포트
+      const before = this.bridge.meshManifoldInfo();
+      debugLog(`[Solidify] before: ${JSON.stringify(before)}`);
+      if (before.isClosedSolid) {
+        Toast.info(
+          `이미 닫힌 솔리드입니다 (면 ${before.faceCount}개, 내부 엣지 ${before.interiorEdgeCount}개)`,
+          3500,
+        );
+        return;
+      }
+      if (before.nonManifoldEdgeCount > 0) {
+        Toast.warning(
+          `Non-manifold 엣지 ${before.nonManifoldEdgeCount}개 발견 — ` +
+          `3개 이상 면이 공유하는 엣지는 Solidify가 자동 수정할 수 없습니다.\n` +
+          `먼저 Mesh Repair로 non-manifold를 해결한 뒤 다시 시도하세요.`,
+          6000,
+        );
+        return;
+      }
+      if (before.boundaryEdgeCount === 0 && before.faceCount === 0) {
+        Toast.warning('솔리드화할 메시가 없습니다 (활성 face 0개)', 3000);
+        return;
+      }
+      if (before.boundaryEdgeCount === 0) {
+        // 면은 있는데 boundary는 0이고 is_closed_solid도 아님 → face 수가 4 미만
+        Toast.info(
+          `경계 엣지가 없지만 닫힌 솔리드 판정 미충족(면 ${before.faceCount}개 — ` +
+          `최소 4면 필요)`,
+          4000,
+        );
+        return;
+      }
+      // boundary > 0 → synthesize 시도
+      const created = this.bridge.synthesizeFacesFromFreeEdges();
+      this.syncMesh();
+      const after = this.bridge.meshManifoldInfo();
+      debugLog(`[Solidify] after: created=${created}, ${JSON.stringify(after)}`);
+      if (after.isClosedSolid) {
+        Toast.info(
+          `✅ Solidify 성공 — ${created}개 면 cap 생성, ` +
+          `총 ${after.faceCount}면 닫힌 솔리드`,
+          4000,
+        );
+      } else if (created > 0) {
+        Toast.warning(
+          `일부 cap 생성(${created}개) but 아직 열린 상태: ` +
+          `boundary ${after.boundaryEdgeCount}개, non-manifold ${after.nonManifoldEdgeCount}개 남음.\n` +
+          `복잡한 비평면 boundary는 수동 보정이 필요할 수 있음.`,
+          6000,
+        );
+      } else {
+        Toast.error(
+          `Solidify 실패 — boundary ${before.boundaryEdgeCount}개가 닫힌 polygon을 ` +
+          `이루지 않거나 비평면 루프일 수 있습니다.`,
+          5000,
+        );
+      }
     } else if (action === 'array-radial') {
       // 선택한 면을 축 중심으로 원형 배열. Prompt: "N, axis(x|y|z), totalDeg"
       // 축 원점은 선택 면의 bounding box center(X축은 YZ-평면, 등)에서 유추.
@@ -1040,16 +1142,26 @@ export class ToolManager {
         Toast.fromBridgeError(this.bridge, '모따기 실패');
       }
     } else if (action === 'fillet-edge') {
-      // 선택된 단일 엣지를 radius 반경으로 모깎기. 우선 `fillet:radius`
-      // localStorage 에 마지막 값이 있으면 기본값, 아니면 50mm.
+      // 선택된 엣지들을 radius 반경으로 모깎기.
+      //
+      // 다중 엣지(Edge Bevel) 지원:
+      //   - 1개: 단일 fillet_edge 호출, 기존 동작과 동일
+      //   - N개: 순차 적용 — 각 edge가 아직 활성인지 확인 후 fillet 시도.
+      //     같은 vertex를 공유하는 3-way corner는 첫 fillet이 두 번째 edge의
+      //     endpoint를 교체할 수 있어 실패 가능 → 실패 edge 수를 집계해 안내.
+      //
+      // localStorage `axia:fillet:radius`로 마지막 반경 기본값, 없으면 50mm.
       const edges = this.selection.getSelectedEdges();
-      if (edges.length !== 1) {
-        Toast.warning('모깎기할 엣지 1개를 먼저 선택하세요', 2500);
+      if (edges.length === 0) {
+        Toast.warning('모깎기할 엣지를 1개 이상 선택하세요', 2500);
         return;
       }
       const lastRadius = Number(localStorage.getItem('axia:fillet:radius') ?? '50');
-      const input = window.prompt('모깎기 반경 (mm):', String(lastRadius));
-      if (input == null) return; // cancelled
+      const input = window.prompt(
+        `모깎기 반경 (mm) — 선택 ${edges.length}개 엣지:`,
+        String(lastRadius),
+      );
+      if (input == null) return;
       const radius = parseFloat(input);
       if (!Number.isFinite(radius) || radius <= 0) {
         Toast.warning('유효한 양수 반경을 입력하세요', 2500);
@@ -1057,14 +1169,37 @@ export class ToolManager {
       }
       try { localStorage.setItem('axia:fillet:radius', String(radius)); } catch { /* ignore */ }
       const segments = 8;
-      const n = this.bridge.filletEdge(edges[0], radius, segments);
-      if (n >= 0) {
+      let totalFaces = 0;
+      let successEdges = 0;
+      let firstError = '';
+      for (const eid of edges) {
+        const n = this.bridge.filletEdge(eid, radius, segments);
+        if (n >= 0) {
+          successEdges++;
+          totalFaces += n;
+        } else if (!firstError) {
+          firstError = this.bridge.lastError();
+        }
+      }
+      if (successEdges > 0) {
         this.syncMesh();
         this.selection.clearSelection();
-        Toast.info(`모깎기 완료 — 반경 ${radius}mm, ${n}개 fillet face 생성`, 2500);
-        debugLog(`[Action] fillet-edge: ${n} faces`);
+        if (successEdges === edges.length) {
+          Toast.info(
+            `모깎기 완료 — ${successEdges}개 엣지, ${totalFaces}개 fillet face 생성`,
+            2500,
+          );
+        } else {
+          const failed = edges.length - successEdges;
+          Toast.warning(
+            `${successEdges}/${edges.length}개 성공 — ${failed}개 실패 ` +
+            `(공유 vertex 충돌 가능성: 첫 실패 "${firstError || '원인 불명'}")`,
+            5000,
+          );
+        }
+        debugLog(`[Action] fillet-edge: ${successEdges}/${edges.length} edges, ${totalFaces} faces`);
       } else {
-        Toast.fromBridgeError(this.bridge, '모깎기 실패');
+        Toast.fromBridgeError(this.bridge, `${edges.length}개 엣지 모두 모깎기 실패`);
       }
     } else if (action === 'subdivide') {
       // 전체 메시에 Catmull-Clark subdivision 1회 적용.

@@ -2242,6 +2242,27 @@ impl AxiaEngine {
         created.len() as u32
     }
 
+    /// Analyse the whole active mesh for solid-closure status.
+    /// Returns JSON: {face_count, interior_edge_count, boundary_edge_count,
+    ///                non_manifold_edge_count, is_closed_solid}.
+    /// Used by the Solidify action to report before/after state to the user.
+    #[wasm_bindgen(js_name = "meshManifoldInfo")]
+    pub fn mesh_manifold_info(&self) -> String {
+        let all_faces: Vec<FaceId> = self.scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        let info = self.scene.mesh.face_set_manifold_info(&all_faces);
+        format!(
+            "{{\"face_count\":{},\"interior_edge_count\":{},\"boundary_edge_count\":{},\"non_manifold_edge_count\":{},\"is_closed_solid\":{}}}",
+            info.face_count,
+            info.interior_edge_count,
+            info.boundary_edge_count,
+            info.non_manifold_edge_count,
+            info.is_closed_solid,
+        )
+    }
+
     /// Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
     /// UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
     #[wasm_bindgen(js_name = "countFreeEdges")]

@@ -433,6 +433,13 @@ export class AxiaEngine {
      */
     mergeFacesByEdgeTol(edge_id_raw: number, angle_tol_deg: number): number;
     /**
+     * Analyse the whole active mesh for solid-closure status.
+     * Returns JSON: {face_count, interior_edge_count, boundary_edge_count,
+     *                non_manifold_edge_count, is_closed_solid}.
+     * Used by the Solidify action to report before/after state to the user.
+     */
+    meshManifoldInfo(): string;
+    /**
      * meshVolume returns the signed enclosed volume of the whole mesh.
      * Exact for closed solids; indicative only for open shells.
      */
@@ -808,6 +815,7 @@ export interface InitOutput {
     readonly axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
+    readonly axiaengine_meshManifoldInfo: (a: number, b: number) => void;
     readonly axiaengine_meshVolume: (a: number) => number;
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;

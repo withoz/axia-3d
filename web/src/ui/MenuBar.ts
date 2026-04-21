@@ -315,6 +315,8 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-group': toolManager.executeAction('group'); break;
       case 'tool-ungroup': toolManager.executeAction('ungroup'); break;
       case 'synthesize-faces': toolManager.executeAction('synthesize-faces'); break;
+      case 'solidify': toolManager.executeAction('solidify'); break;
+      case 'mesh-repair': toolManager.executeAction('mesh-repair'); break;
       case 'tool-make-component': toolManager.executeAction('make-component'); break;
 
       // ── Boolean ──

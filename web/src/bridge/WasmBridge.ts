@@ -163,6 +163,7 @@ type AxiaEngineExtended = AxiaEngine & {
   exportSnapshotStrict?(): Uint8Array;
   synthesizeFacesFromFreeEdges?(): number;
   countFreeEdges?(): number;
+  meshManifoldInfo?(): string;
 
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
@@ -749,6 +750,38 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] countFreeEdges failed:', e);
       return 0;
+    }
+  }
+
+  /** 전역 mesh manifold 분석 — 닫힌 솔리드 여부와 boundary/non-manifold edge 수.
+   *  Solidify 액션이 before/after 리포트에 사용.
+   */
+  meshManifoldInfo(): {
+    faceCount: number;
+    interiorEdgeCount: number;
+    boundaryEdgeCount: number;
+    nonManifoldEdgeCount: number;
+    isClosedSolid: boolean;
+  } {
+    const empty = {
+      faceCount: 0, interiorEdgeCount: 0, boundaryEdgeCount: 0,
+      nonManifoldEdgeCount: 0, isClosedSolid: false,
+    };
+    if (!this.engine?.meshManifoldInfo) return empty;
+    try {
+      const json = this.engine.meshManifoldInfo();
+      if (!json) return empty;
+      const raw = JSON.parse(json);
+      return {
+        faceCount: raw.face_count ?? 0,
+        interiorEdgeCount: raw.interior_edge_count ?? 0,
+        boundaryEdgeCount: raw.boundary_edge_count ?? 0,
+        nonManifoldEdgeCount: raw.non_manifold_edge_count ?? 0,
+        isClosedSolid: raw.is_closed_solid ?? false,
+      };
+    } catch (e) {
+      this.recordBridgeError('meshManifoldInfo', e);
+      return empty;
     }
   }
 

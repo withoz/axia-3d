@@ -1332,6 +1332,29 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * Analyse the whole active mesh for solid-closure status.
+     * Returns JSON: {face_count, interior_edge_count, boundary_edge_count,
+     *                non_manifold_edge_count, is_closed_solid}.
+     * Used by the Solidify action to report before/after state to the user.
+     * @returns {string}
+     */
+    meshManifoldInfo() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_meshManifoldInfo(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * meshVolume returns the signed enclosed volume of the whole mesh.
      * Exact for closed solids; indicative only for open shells.
      * @returns {number}
