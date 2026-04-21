@@ -586,6 +586,103 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - 전체 Vite build 정상
 - 원격 백업: `origin/claude/zealous-boyd` ← `240c5e5`까지 푸시 완료
 
+## Session 2026-04-21 완료 내역 (12 commits, Tier 1~3 순차 진행)
+
+이 세션은 "선/면/볼륨 파이프라인 강화 + UX 도약"이 테마. Ontology v1.2
+문서를 기준으로, XIA 승급은 미루고 Geometry Layer 성숙도에 집중.
+
+### Tier 1 (즉시 임팩트)
+- **1A Boolean 재검증** — Phase G hole-aware split 이후 Boolean의 명시적
+  hole 거부가 회귀 없이 작동함을 증명하는 regression test 2개 추가
+  (`boolean_rejects_face_with_hole`, `..._either_operand`).
+  TS BooleanHandler의 `alert()` → Toast 전환, 한국어 우회 안내
+  ("구멍 없는 면 선택", "구멍 합치기 역해제").
+- **1B Shell/Thicken** — push_pull CreateFace 모드 재활용, `thicken-faces`
+  액션 신설 (다중 면 순차). 우클릭/메뉴 항목.
+- **1C Loop Select** — Rust `Mesh::collect_edge_chain` (valence-2 vertex
+  따라 폴리라인 BFS, 교차점/dead-end에서 정지). 보조 메서드
+  `count_incident_edges`, `other_edge_at_valence2` (v_next 방사형 순회).
+  WASM `collectEdgeChain` + `SelectTool` Alt+edge 클릭 → 자동 체인 선택.
+
+### Tier 2 (파이프라인 성숙)
+- **2D Solidify 🧩** — Rust `meshManifoldInfo()` WASM 바인딩 (전역 활성
+  면 manifold 분석 JSON). `solidify` 액션: 이미 닫힘 / non-manifold /
+  boundary>0 3단계 자동 판정 + synthesize 실행 후 재검사.
+- **2E Edge Bevel** — `fillet-edge`가 선택된 모든 엣지에 순차 적용.
+  3-way corner는 구조적 한계 → 실패 수 집계 + 첫 에러 메시지.
+- **2F Mesh Repair 🩹** — ADR-007 Phase H `normalize_for_import`을 사용자
+  액션으로 노출. Before/After manifold 비교 + 4항목 한국어 요약.
+
+### SSAO MSAA 엣지 선명도 복원 (긴급 수정)
+- **증상**: 강아지/고양이 씬 그리고 나서 엣지가 흐릿.
+- **원인**: `EffectComposer`의 기본 `WebGLRenderTarget`이 `samples=0`이라
+  renderer.antialias:true가 무시됨. SSAO 기본 ON이라 모든 씬이
+  composer 경로 통과 → 복잡한 씬일수록 aliasing 드러남.
+- **수정**: `new EffectComposer(renderer, rt)` + `WebGLRenderTarget`
+  `{ type: HalfFloatType, samples: 4 }`. HDR 톤매핑 정확도 유지.
+
+### Tier 3 (장기 효용 MVP)
+- **3A Sketch Mode ✏️** — 건축 평면도 → Push/Pull 워크플로우:
+  - `ToolManager._sketch`: { label, origin, normal, up } 세션 상태
+  - `enterSketch` / `exitSketch` / `isSketching` / `getSketchInfo` API
+  - `getWorkPlane` / `get3DPoint` / `getDrawPlane` 오버라이드 → 활성
+    시 모든 드로잉이 고정 평면에 투영
+  - `Viewport.setSketchPlaneVisual`: 10m × 10m 반투명 amber 패치 +
+    대시 경계선 (renderOrder 1002, depthTest:false)
+  - 액션: `sketch-start-xz/xy/yz/face`, `sketch-exit`
+  - **자동 Finish → Synthesize → Extrude**: `sketch-exit` 시 free edge
+    감지 → 닫힌 프로필 자동 면화 → 높이 prompt → 즉시 pushPull
+  - **Constraint Panel 자동 열기**: enterSketch에서 J 패널 show()
+  - **상태바 배지 #sb-sketch-badge**: 오렌지→초록 색상으로 free edge
+    카운트 표시 ("✏️ XZ 바닥 · 4 free" → "✏️ XZ 바닥 · ready")
+- **3B Parametric History 🕒 (Phase 1 MVP)**:
+  - `web/src/core/OperationLog.ts` — ring buffer (cap 50), singleton.
+  - 기록 대상: fillet / chamfer / thicken / array-linear / array-radial /
+    subdivide. 리스너 기반 UI 갱신.
+  - `web/src/ui/HistoryPanel.ts` — Shift+H 단축키. "재실행…" 버튼이
+    마지막 값으로 prompt pre-fill → 현재 선택에 적용.
+  - `ToolManager.rerunLoggedOperation(kind, params)` — switch-per-kind
+    직접 실행 (full feature tree는 Phase 2).
+- **3C STEP/IGES Phase B**: 명시적 "지원 예정" 안내 + FreeCAD/Fusion/
+  Rhino 변환 대안 메시지 (OCCT.js 통합은 별도 Phase A 세션).
+
+### 도구 메뉴 확장
+- 수정 메뉴: Thicken / Array Radial / Quick Color
+- 뷰 메뉴: Measure Tool (U) / 작업 기록 패널 (Shift+H)
+- Sketch submenu (XZ/XY/YZ/선택 면/종료)
+
+### Line2 기반 엣지 선명도 개선
+- Mesh edge 렌더링을 `LineBasicMaterial + LineSegments`에서
+  `LineMaterial + LineSegments2`로 교체. Line2의 linewidth는 WebGL
+  1px 한계 없이 실제 CSS pixel 굵기 지원, DPR 무관 일관된 선명도.
+- `_meshEdgeMaterials: LineMaterial[]` 캐시로 resize + 굵기 변경 O(N) 빠른 업데이트.
+- StylePanel의 기존 "edge width" 슬라이더를 `viewport.setEdgeStyle({ width })`
+  와 연결 (이전엔 label 텍스트만 갱신).
+
+### 통계
+- Rust 테스트: 194 → 243 (+49)
+  - Boolean hole-rejection 2개
+  - Array Radial 2개
+  - Edge chain 3개 (polyline / junction-stops / closed-loop)
+  - 기타 fillet/deform 회귀 일체 유지
+- TS 테스트: 950 → 993 (+43)
+  - BooleanHandler Toast 재작성 (11개)
+  - SelectTool Alt+edge 체인 2개
+  - MeasureTool / thicken / array-radial / solidify 간접 커버
+  - OperationLog 5개
+  - Sketch Mode state machine 7개 (entry/exit, XY/XZ/YZ normal, visual,
+    finish→extrude 분기)
+  - FileImporter STEP/IGES 5개
+- Production build 정상 (252KB 초기 번들 유지)
+- 원격 백업: `origin/claude/zealous-boyd` ← `d5686f7` 이상까지 푸시 완료
+
+### Known limitations (이 세션에서 의도적으로 남긴 것)
+- Parametric History는 downstream 자동 재계산 없음 — Phase 2 CommandGraph에서
+- Sketch Mode의 edge tagging은 전역 free-edge 기반 (스케치 세션별 태깅은
+  Rust SketchSession 필요)
+- Fillet 3-way corner (같은 vertex 공유 다중 엣지) 미해결 — 별도 작업
+- STEP/IGES OCCT.js 통합 미구현 — 10MB+ 번들 검토 필요
+
 ## 향후 과제
 - Phase G case (c): endpoint-on-hole-boundary "bridge" topology
 - Material / Texture (텍스처 이미지 매핑 미구현)

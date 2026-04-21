@@ -33,6 +33,10 @@ const SECTIONS: ShortcutSection[] = [
       { key: 'N', description: 'Cone (원뿔)' },
       { key: 'M', description: 'Move (이동)' },
       { key: 'Q', description: 'Rotate (회전)' },
+      { key: 'O', description: 'Offset' },
+      { key: 'E', description: 'Erase (지우기)' },
+      { key: 'X', description: 'Split' },
+      { key: 'U', description: 'Measure Tool (2점 거리 / 3점 각도)' },
       { key: 'Space', description: 'Select 도구로 복귀' },
     ],
   },
@@ -94,6 +98,16 @@ const SECTIONS: ShortcutSection[] = [
       { key: 'I', description: 'XIA Inspector' },
       { key: 'O', description: 'Outliner (컴포넌트 패널)' },
       { key: 'J', description: 'Constraint 패널' },
+      { key: 'Shift+H', description: '작업 기록 패널 (Parametric History)' },
+    ],
+  },
+  {
+    title: '스케치 / 선택',
+    rows: [
+      { key: 'Alt+엣지 클릭', description: '폴리라인 체인 자동 선택 (Loop Select)' },
+      { key: '메뉴 → ✏️', description: 'Sketch 모드 시작 (XZ 바닥 / XY 정면 / YZ 측면 / 선택 면)' },
+      { key: '메뉴 → 스케치 종료', description: '닫힌 프로필 자동 감지 → 높이 prompt → Push/Pull' },
+      { key: '🎨 Quick Color', description: '우클릭 → 색상 지정 (선택 면에 즉석 커스텀 material)' },
     ],
   },
 ];

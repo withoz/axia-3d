@@ -1636,6 +1636,9 @@ export class ToolManager {
   syncMesh(): void {
     const edgeLines = this.bridge.getEdgeLines();
     this.edgeMap = this.bridge.getEdgeMap();
+    // 스케치 모드가 활성화된 경우 매 mesh 변경마다 free-edge 수를 상태바
+    // 배지에 반영해 사용자에게 "얼마나 닫혔는지" 실시간 피드백.
+    if (this._sketch) this.updateSketchStatusBadge();
 
     // ════ Phase 1 Optimization: Try delta first (fast path) ════
     const delta = this.bridge.getDeltaBuffers();
@@ -1944,13 +1947,23 @@ export class ToolManager {
   }
 
   /** Update the status-bar badge to reflect sketch state.
-   *  Uses #sb-sketch-badge element (added to status bar in index.html). */
+   *  Uses #sb-sketch-badge element (added to status bar in index.html).
+   *  Also shows the live free-edge count so the user knows when a closed
+   *  profile is likely ready (count drops as edges connect into loops). */
   private updateSketchStatusBadge(): void {
     const el = document.getElementById('sb-sketch-badge');
     if (!el) return;
     if (this._sketch) {
-      el.textContent = `✏️ ${this._sketch.label}`;
+      let freeCount = 0;
+      try { freeCount = this.bridge.countFreeEdges(); } catch { /* bridge may not be ready */ }
+      // "N free" shows dangling polyline endpoints. When all lines connect
+      // into closed loops, free edges drop to 0 within each loop (each HE
+      // paired) → user knows "ready to finish".
+      const suffix = freeCount > 0 ? ` · ${freeCount} free` : ' · ready';
+      el.textContent = `✏️ ${this._sketch.label}${suffix}`;
       el.style.display = 'inline-block';
+      // Color-code: orange (still drawing) → green (ready to finish)
+      el.style.background = freeCount > 0 ? '#ffa500' : '#4caf50';
     } else {
       el.style.display = 'none';
     }

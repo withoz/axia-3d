@@ -4,6 +4,8 @@
 
 import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -70,6 +72,13 @@ export class Viewport {
   private _faceOpacity = 1.0;
   private _edgeVisible = true;
   private _profileEdge = true;
+  /** Edge line width in CSS pixels (world-space, respects DPR). Controls the
+   *  `LineMaterial.linewidth` used by LineSegments2 — unlike LineBasicMaterial,
+   *  this actually takes effect on all platforms. Range: 1 ~ 5 from StylePanel. */
+  private _edgeWidth = 1.5;
+  /** Cache of Mesh-edge LineMaterials so resize + width changes are fast.
+   *  Separate from the axis LineMaterials (lineMaterials arr in constructor). */
+  private _meshEdgeMaterials: LineMaterial[] = [];
   private bgCanvas: HTMLCanvasElement | null = null;
 
   // Cleanup references
@@ -494,6 +503,11 @@ export class Viewport {
       for (const mat of lineMaterials) {
         mat.resolution.set(w, h);
       }
+      // Mesh-edge LineMaterials도 resolution 업데이트 — 굵기가 픽셀 기준
+      // 정확히 유지되려면 DPR 반영 resolution이 필수.
+      for (const mat of this._meshEdgeMaterials) {
+        mat.resolution.set(w, h);
+      }
     });
     this._resizeObserver.observe(this.container);
 
@@ -806,13 +820,15 @@ export class Viewport {
         if (child.material instanceof THREE.Material) {
           child.material.dispose();
         }
-      } else if (child instanceof THREE.LineSegments) {
+      } else if (child instanceof THREE.LineSegments || child instanceof LineSegments2) {
         child.geometry.dispose();
         if (child.material instanceof THREE.Material) {
           child.material.dispose();
         }
       }
     }
+    // 이전 frame의 mesh-edge LineMaterial 캐시 리셋 (dispose는 위에서 이미 함)
+    this._meshEdgeMaterials.length = 0;
 
     // ── 2) Face geometry (면이 있을 때만) ──
     if (positions.length > 0) {
@@ -929,39 +945,61 @@ export class Viewport {
         this.meshGroup.add(backMesh);
       }
 
-      // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback
+      // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback.
+      // Line2 기반 (LineSegments2 + LineMaterial) — LineBasicMaterial의 1px
+      // 한계 없이 실제 세계 단위 굵기 지원, DPR 무관 일관된 선명도.
       if (edgeLines && edgeLines.length > 0) {
-        // DCEL 기반 edge lines (coplanar edge 자동 숨김, Line 도구 선 포함)
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
-        const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
-        const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
-        lineSegs.name = 'dcel-edges';
-        lineSegs.visible = this._edgeVisible;
-        this.meshGroup.add(lineSegs);
+        const segGeo = new LineSegmentsGeometry();
+        segGeo.setPositions(new Float32Array(edgeLines));
+        const segMat = this._makeEdgeLineMaterial();
+        const segObj = new LineSegments2(segGeo, segMat);
+        segObj.name = 'dcel-edges';
+        segObj.visible = this._edgeVisible;
+        segObj.computeLineDistances();
+        this.meshGroup.add(segObj);
       } else {
-        // Fallback: EdgesGeometry (30° threshold)
-        const edgesMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
         const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
-        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-        edges.visible = this._edgeVisible;
-        this.meshGroup.add(edges);
+        const posAttr = edgesGeo.getAttribute('position') as THREE.BufferAttribute;
+        const segGeo = new LineSegmentsGeometry();
+        segGeo.setPositions(posAttr.array as Float32Array);
+        const segMat = this._makeEdgeLineMaterial();
+        const segObj = new LineSegments2(segGeo, segMat);
+        segObj.visible = this._edgeVisible;
+        segObj.computeLineDistances();
+        this.meshGroup.add(segObj);
+        edgesGeo.dispose();
       }
     }
 
     // ── 4) Standalone edge lines (면 없이 Line 도구로 그린 선) ──
     if (positions.length === 0 && edgeLines && edgeLines.length > 0) {
-      const lineGeo = new THREE.BufferGeometry();
-      lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
-      const lineMat = new THREE.LineBasicMaterial({
-        color: this._edgeColor,
-        linewidth: 1,
-      });
-      const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
-      lineSegs.name = 'standalone-edges';
-      lineSegs.visible = this._edgeVisible;
-      this.meshGroup.add(lineSegs);
+      const segGeo = new LineSegmentsGeometry();
+      segGeo.setPositions(new Float32Array(edgeLines));
+      const segMat = this._makeEdgeLineMaterial();
+      const segObj = new LineSegments2(segGeo, segMat);
+      segObj.name = 'standalone-edges';
+      segObj.visible = this._edgeVisible;
+      segObj.computeLineDistances();
+      this.meshGroup.add(segObj);
     }
+  }
+
+  /** Build a LineMaterial for mesh edge lines with current color + width.
+   *  Cached in _meshEdgeMaterials so setEdgeStyle / resize can update all at once. */
+  private _makeEdgeLineMaterial(): LineMaterial {
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const mat = new LineMaterial({
+      color: this._edgeColor,
+      linewidth: this._edgeWidth,
+      resolution: new THREE.Vector2(w, h),
+      worldUnits: false,  // pixel-space width
+      alphaToCoverage: false,
+      depthTest: true,
+      transparent: false,
+    });
+    this._meshEdgeMaterials.push(mat);
+    return mat;
   }
 
   /**
@@ -972,28 +1010,29 @@ export class Viewport {
   updateEdgeLines(edgeLines: Float32Array | null): void {
     if (!this.frontMesh || !edgeLines || edgeLines.length === 0) return;
 
-    // Remove existing edge wireframe from meshGroup
+    // Remove existing edge wireframe from meshGroup (both legacy + Line2)
     const toRemove: THREE.Object3D[] = [];
     for (const child of this.meshGroup.children) {
-      if (child instanceof THREE.LineSegments) {
+      if (child instanceof THREE.LineSegments || child instanceof LineSegments2) {
         toRemove.push(child);
       }
     }
     for (const obj of toRemove) {
       this.meshGroup.remove(obj);
-      (obj as THREE.LineSegments).geometry.dispose();
-      if ((obj as THREE.LineSegments).material instanceof THREE.Material) {
-        ((obj as THREE.LineSegments).material as THREE.Material).dispose();
-      }
+      (obj as unknown as { geometry: { dispose: () => void } }).geometry.dispose();
+      const mat = (obj as unknown as { material: THREE.Material }).material;
+      if (mat instanceof THREE.Material) mat.dispose();
     }
+    this._meshEdgeMaterials.length = 0;
 
-    // Recreate EdgesGeometry from current front mesh geometry
-    const geometry = this.frontMesh.geometry;
-    const edgesMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
-    const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
-    const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-    edges.visible = this._edgeVisible;
-    this.meshGroup.add(edges);
+    // Rebuild via Line2 (respects _edgeWidth)
+    const segGeo = new LineSegmentsGeometry();
+    segGeo.setPositions(edgeLines);
+    const segMat = this._makeEdgeLineMaterial();
+    const segObj = new LineSegments2(segGeo, segMat);
+    segObj.visible = this._edgeVisible;
+    segObj.computeLineDistances();
+    this.meshGroup.add(segObj);
   }
 
   /**
@@ -1639,19 +1678,33 @@ export class Viewport {
     }
   }
 
-  /** 엣지 색상/두께/표시 변경 */
-  setEdgeStyle(opts: { color?: number; visible?: boolean; profileEdge?: boolean }) {
+  /** 엣지 색상/굵기/표시 변경. width는 1~5 CSS px 범위 권장. */
+  setEdgeStyle(opts: { color?: number; visible?: boolean; profileEdge?: boolean; width?: number }) {
     if (opts.color !== undefined) this._edgeColor = opts.color;
     if (opts.visible !== undefined) this._edgeVisible = opts.visible;
     if (opts.profileEdge !== undefined) this._profileEdge = opts.profileEdge;
+    if (opts.width !== undefined) this._edgeWidth = Math.max(0.5, Math.min(10, opts.width));
 
+    // Legacy LineSegments (그리드 등 일부 잔존 가능)와 Line2 기반 mesh edges
+    // 모두 업데이트. Line2의 굵기는 LineMaterial.linewidth 속성.
     for (const child of this.meshGroup.children) {
       if (child instanceof THREE.LineSegments) {
         child.visible = this._edgeVisible;
         (child.material as THREE.LineBasicMaterial).color.setHex(this._edgeColor);
+      } else if (child instanceof LineSegments2) {
+        child.visible = this._edgeVisible;
       }
     }
+    // Line2 material은 _meshEdgeMaterials에 모아둔 참조로 일괄 갱신 (O(N) 쉬움)
+    for (const mat of this._meshEdgeMaterials) {
+      mat.color.setHex(this._edgeColor);
+      mat.linewidth = this._edgeWidth;
+      mat.needsUpdate = true;
+    }
   }
+
+  /** 현재 엣지 굵기 (StylePanel 초기값용). */
+  getEdgeWidth(): number { return this._edgeWidth; }
 
   /** 그리드 표시 on/off */
   setGridVisible(visible: boolean) {

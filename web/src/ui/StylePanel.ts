@@ -241,11 +241,13 @@ export function initStylePanel(deps: StylePanelDeps): void {
     viewport.setEdgeStyle({ color: hex });
   });
 
-  // Edge width
+  // Edge width — Line2 linewidth (CSS px)
   document.getElementById('sty-edge-width')?.addEventListener('input', (e) => {
     const val = (e.target as HTMLInputElement).value;
     const label = document.getElementById('sty-edge-width-val');
     if (label) label.textContent = val;
+    const w = parseFloat(val);
+    if (Number.isFinite(w)) viewport.setEdgeStyle({ width: w });
   });
 
   // Edge visibility
