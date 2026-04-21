@@ -161,6 +161,9 @@ function mockBridge() {
     getGroupFaces: vi.fn().mockReturnValue(null),
     createGroup: vi.fn(),
     deleteGroup: vi.fn(),
+    countFreeEdges: vi.fn().mockReturnValue(0),
+    synthesizeFacesFromFreeEdges: vi.fn().mockReturnValue(0),
+    pushPull: vi.fn().mockReturnValue(true),
   } as any;
 }
 
@@ -271,6 +274,27 @@ describe('ToolManager', () => {
     it('sketch-exit on inactive session is a no-op (no crash)', () => {
       tm.executeAction('sketch-exit');
       expect(tm.isSketching()).toBe(false);
+    });
+
+    it('sketch-exit without free edges skips synthesize and extrude', () => {
+      (bridge.countFreeEdges as any).mockReturnValue(0);
+      tm.executeAction('sketch-start-xz');
+      tm.executeAction('sketch-exit');
+      expect(bridge.synthesizeFacesFromFreeEdges).not.toHaveBeenCalled();
+      expect(bridge.pushPull).not.toHaveBeenCalled();
+    });
+
+    it('sketch-exit with free edges calls synthesize; pushPull only if user enters height', () => {
+      (bridge.countFreeEdges as any).mockReturnValue(4);
+      (bridge.synthesizeFacesFromFreeEdges as any).mockReturnValue(1);
+      // prompt: cancel → no pushPull
+      const origPrompt = global.window?.prompt;
+      if (global.window) global.window.prompt = vi.fn().mockReturnValue(null);
+      tm.executeAction('sketch-start-xz');
+      tm.executeAction('sketch-exit');
+      expect(bridge.synthesizeFacesFromFreeEdges).toHaveBeenCalled();
+      expect(bridge.pushPull).not.toHaveBeenCalled();
+      if (global.window && origPrompt) global.window.prompt = origPrompt;
     });
   });
 

@@ -1012,7 +1012,95 @@ export class ToolManager {
       }
       const info = this.getSketchInfo();
       this.exitSketch();
-      Toast.info(`스케치 종료 (${info?.label ?? ''}) — 이제 Push/Pull로 3D 변환 가능`, 3500);
+
+      // ── Auto Finish → Synthesize → optional Extrude ──
+      // 건축 핵심 워크플로우: 평면도 그리기 → 스케치 종료 → 닫힌 프로필
+      // 자동 감지 → 즉시 벽체 높이 입력 → 3D 매스 완성.
+      //
+      // synthesizeFacesFromFreeEdges는 전역으로 free HE를 대상으로 하므로
+      // 스케치 평면의 프로필만 정확히 타겟하지는 않지만, 일반적으로
+      // 스케치 세션의 "갓 그린 선"이 주 대상. 기존 free edge가 있어도
+      // 같은 평면에서 닫힌 loop만 face가 됨 → 오작동 가능성 낮음.
+      const freeBefore = this.bridge.countFreeEdges();
+      if (freeBefore === 0) {
+        Toast.info(
+          `스케치 종료 (${info?.label ?? ''}) — 자유 엣지 없음 (닫힌 프로필 미작성)`,
+          3500,
+        );
+        return;
+      }
+      const created = this.bridge.synthesizeFacesFromFreeEdges();
+      if (created === 0) {
+        this.syncMesh();
+        Toast.info(
+          `스케치 종료 (${info?.label ?? ''}) — 자유 엣지 ${freeBefore}개 있으나 ` +
+          `닫힌 polygon 미감지. 선이 끝점에서 정확히 만났는지 확인하세요.`,
+          4500,
+        );
+        return;
+      }
+      this.syncMesh();
+
+      // 높이 입력 prompt — 취소 시 면만 남기고 종료.
+      const lastH = localStorage.getItem('axia:sketch:extrude:height') ?? '2400';
+      const heightInput = window.prompt(
+        `✅ 스케치에서 ${created}개 닫힌 프로필을 감지했습니다.\n` +
+        `높이(mm)를 입력하면 즉시 Push/Pull로 3D 변환합니다.\n` +
+        `(취소 = 면만 남기고 종료)`,
+        lastH,
+      );
+      if (heightInput == null) {
+        Toast.info(
+          `스케치 종료 (${info?.label ?? ''}) — ${created}개 면 생성, 3D 변환 건너뜀`,
+          3500,
+        );
+        return;
+      }
+      const height = parseFloat(heightInput);
+      if (!Number.isFinite(height) || height === 0) {
+        Toast.warning('유효한 양/음수 높이를 입력하세요 — 면은 이미 생성됨', 3500);
+        return;
+      }
+      try { localStorage.setItem('axia:sketch:extrude:height', String(height)); } catch { /* ignore */ }
+
+      // 가장 최근 생성된 N개 face를 추출 (synthesize의 반환값이 개수만이므로
+      // countFaces() 기반 추정은 불안정 — 대신 전역 면 중 활성인 것 중 가장
+      // 최근 rustId N개를 가정). 간단한 MVP 접근: 현재 선택 + synthesize 후
+      // 선택 변화를 보고 대상 고르는 건 복잡하므로 직관적으로 "selected가
+      // 비어 있으면 추출 실패" 방지용 — 대신 bridge에 "recently created
+      // faces" API가 필요. 지금은 synthesize가 반환한 개수만 사용하고,
+      // getMeshBuffers()의 faceMap에서 뒤쪽 N개 FaceId를 타깃으로 잡음.
+      const buffers = this.bridge.getMeshBuffers();
+      if (!buffers || !buffers.faceMap) {
+        Toast.warning('면 ID 조회 실패 — 수동으로 Push/Pull하세요', 3500);
+        return;
+      }
+      // 중복 제거: faceMap은 per-triangle face id 배열이므로 unique Set
+      const uniqueFaces = Array.from(new Set(Array.from(buffers.faceMap)));
+      // 최신 N개 (큰 ID부터)
+      uniqueFaces.sort((a, b) => b - a);
+      const targets = uniqueFaces.slice(0, created);
+      let ok = 0;
+      for (const fid of targets) {
+        if (this.bridge.pushPull(fid, height)) ok++;
+      }
+      if (ok > 0) {
+        this.syncMesh();
+        getOperationLog().record(
+          'thicken-faces',
+          `스케치 Extrude ${height}mm × ${ok}개 프로필`,
+          String(height),
+        );
+        Toast.info(
+          `✅ 스케치 완료 — ${created}개 프로필 → ${ok}개 3D 매스 (높이 ${height}mm)`,
+          4000,
+        );
+      } else {
+        Toast.warning(
+          `${created}개 면은 생성되었으나 Push/Pull 실패. 수동으로 면 선택 후 P 키로 시도.`,
+          4500,
+        );
+      }
     } else if (action === 'mesh-repair') {
       // Mesh Repair — ADR-007 Phase H의 normalize_for_import를 사용자 명시 호출로 노출.
       // 네 가지 정리 단계: degenerate 면 제거 / winding 일관화 / normal 재계산 /
@@ -1835,6 +1923,13 @@ export class ToolManager {
       up: opts.up.clone().normalize(),
     };
     this.viewport.setSketchPlaneVisual(this._sketch);
+    // 툴바 배지 (DOM status bar 내부 요소) 갱신.
+    this.updateSketchStatusBadge();
+    // Constraint Panel 자동 열기 — 스케치 중에는 제약 사용이 권장되므로
+    // 사용자가 J 키를 누르지 않아도 즉시 보이게.
+    const panel = (window as unknown as { __axia_constraintPanel?: { show(): void } })
+      .__axia_constraintPanel;
+    panel?.show();
     debugLog(`[Sketch] enter: ${opts.label}`);
   }
 
@@ -1845,6 +1940,20 @@ export class ToolManager {
     debugLog(`[Sketch] exit: ${this._sketch.label}`);
     this._sketch = null;
     this.viewport.setSketchPlaneVisual(null);
+    this.updateSketchStatusBadge();
+  }
+
+  /** Update the status-bar badge to reflect sketch state.
+   *  Uses #sb-sketch-badge element (added to status bar in index.html). */
+  private updateSketchStatusBadge(): void {
+    const el = document.getElementById('sb-sketch-badge');
+    if (!el) return;
+    if (this._sketch) {
+      el.textContent = `✏️ ${this._sketch.label}`;
+      el.style.display = 'inline-block';
+    } else {
+      el.style.display = 'none';
+    }
   }
 
   isSketching(): boolean { return this._sketch !== null; }
