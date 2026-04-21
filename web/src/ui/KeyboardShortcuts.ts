@@ -334,6 +334,7 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const shiftMap: Record<string, string> = {
         'L': 'polyline',
         'F': 'freehand',
+        'C': 'centerline',
       };
       const shiftTool = shiftMap[e.key];
       if (shiftTool) {

@@ -928,9 +928,19 @@ impl AxiaEngine {
     /// Get hard edge line segments for wireframe rendering.
     /// Returns flat [x0,y0,z0, x1,y1,z1, ...] — use with THREE.LineSegments.
     /// Coplanar edges (angle ≤ 15°) are automatically hidden.
+    /// Centerline edges are excluded — call getCenterlineLines() separately.
     pub fn get_edge_lines(&mut self) -> Vec<f32> {
         self.rebuild_cache();
         self.cached_edge_lines.clone()
+    }
+
+    /// Get centerline edge segments for separate rendering (dashed/thin/dimmer).
+    /// Flat [x0,y0,z0, x1,y1,z1, ...] — pair per segment.
+    /// Not cached — centerlines are typically fewer and changes infrequently,
+    /// but if perf becomes an issue we can cache like getEdgeLines.
+    #[wasm_bindgen(js_name = "getCenterlineLines")]
+    pub fn get_centerline_lines(&self) -> Vec<f32> {
+        self.scene.mesh.export_centerline_lines()
     }
 
     /// Edge line segment index → EdgeId raw value mapping.
@@ -2242,6 +2252,66 @@ impl AxiaEngine {
         created.len() as u32
     }
 
+    /// Draw a centerline (reference axis). Unlike drawLine, bypasses
+    /// intersection-split / face synthesis / loop detection. Creates one
+    /// edge tagged Centerline; crossing other edges does not split them.
+    /// Returns the new edge raw id, or -1 on failure.
+    #[wasm_bindgen(js_name = "drawCenterline")]
+    pub fn draw_centerline(
+        &mut self,
+        x0: f64, y0: f64, z0: f64,
+        x1: f64, y1: f64, z1: f64,
+    ) -> i32 {
+        let cmd = axia_core::commands::Command::DrawCenterline {
+            start: DVec3::new(x0, y0, z0),
+            end:   DVec3::new(x1, y1, z1),
+        };
+        match self.scene.execute(cmd) {
+            axia_core::commands::CommandResult::EntityCreated(eid) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                eid as i32
+            }
+            axia_core::commands::CommandResult::Error(msg) => {
+                self.set_error(format!("draw_centerline: {}", msg));
+                -1
+            }
+            _ => -1,
+        }
+    }
+
+    /// Get an edge's semantic class as u32 (0=Geometry, 1=Centerline).
+    /// Returns 0 for missing/inactive edges (safe default).
+    #[wasm_bindgen(js_name = "edgeClass")]
+    pub fn edge_class(&self, edge_id_raw: u32) -> u32 {
+        let eid = axia_geo::EdgeId::new(edge_id_raw);
+        self.scene.mesh.edges.get(eid)
+            .map(|e| e.class().to_raw())
+            .unwrap_or(0)
+    }
+
+    /// Change an edge's semantic class. Rejects Geometry→Centerline if the
+    /// edge bounds an active face (would orphan the face).
+    /// Returns true on success.
+    #[wasm_bindgen(js_name = "setEdgeClass")]
+    pub fn set_edge_class(&mut self, edge_id_raw: u32, class_raw: u32) -> bool {
+        let cmd = axia_core::commands::Command::SetEdgeClass {
+            edge_id: axia_geo::EdgeId::new(edge_id_raw),
+            class_raw,
+        };
+        match self.scene.execute(cmd) {
+            axia_core::commands::CommandResult::MeshUpdated => {
+                self.invalidate_cache();
+                true
+            }
+            axia_core::commands::CommandResult::Error(msg) => {
+                self.set_error(format!("set_edge_class: {}", msg));
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Analyse the whole active mesh for solid-closure status.
     /// Returns JSON: {face_count, interior_edge_count, boundary_edge_count,
     ///                non_manifold_edge_count, is_closed_solid}.
@@ -2265,13 +2335,18 @@ impl AxiaEngine {
 
     /// Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
     /// UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
+    ///
+    /// Centerline 엣지는 제외 — 얘네는 "free" 상태로 있는 게 정상이므로
+    /// Finish→Extrude 트리거에 영향 주지 않아야 함.
     #[wasm_bindgen(js_name = "countFreeEdges")]
     pub fn count_free_edges(&self) -> u32 {
         let mut count = 0u32;
         for (_, he) in self.scene.mesh.hes.iter() {
-            if he.is_active() && he.face().is_null() {
-                count += 1;
-            }
+            if !he.is_active() || !he.face().is_null() { continue; }
+            let is_topo = self.scene.mesh.edges.get(he.edge())
+                .map(|e| e.class().is_topological())
+                .unwrap_or(false);
+            if is_topo { count += 1; }
         }
         // HE 한 쌍 (twin)이 모두 face null이면 엣지 2번 카운트됨 → 반으로
         count / 2

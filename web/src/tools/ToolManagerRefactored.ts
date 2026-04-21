@@ -41,6 +41,7 @@ import { EraseTool } from './EraseTool';
 import { SplitTool } from './SplitTool';
 import { GroupTool } from './GroupTool';
 import { MeasureTool } from './MeasureTool';
+import { DrawCenterlineTool } from './DrawCenterlineTool';
 import { SphereTool } from '../primitives/SphereTool';
 import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
@@ -203,6 +204,7 @@ export class ToolManager {
     this.tools.set('split', new SplitTool(this.toolContext));
     this.tools.set('group', new GroupTool(this.toolContext));
     this.tools.set('measure', new MeasureTool(this.toolContext));
+    this.tools.set('centerline', new DrawCenterlineTool(this.toolContext));
     this.tools.set('sphere', new SphereTool(this.toolContext));
     this.tools.set('cylinder', new CylinderTool(this.toolContext));
     this.tools.set('cone', new ConeTool(this.toolContext));
@@ -362,6 +364,8 @@ export class ToolManager {
     'sketch-start-yz': '스케치 시작 — YZ 측면 평면',
     'sketch-start-face': '스케치 시작 — 선택 면',
     'sketch-exit': '스케치 종료',
+    'convert-to-centerline': '선택 엣지 → 중심선 변환',
+    'convert-to-geometry': '선택 엣지 → 일반선 변환',
     'measure-selection': '선택 측정 (길이/면적/부피)',
     'bend-selection': '선택 구부리기 (Bend)',
     'twist-selection': '선택 비틀기 (Twist)',
@@ -1005,6 +1009,35 @@ export class ToolManager {
         up,
       });
       Toast.info(`✏️ 스케치 시작 — 면 #${faces[0]}. 모든 드로잉이 이 평면에 고정됩니다.`, 4000);
+    } else if (action === 'convert-to-centerline' || action === 'convert-to-geometry') {
+      // 선택된 엣지들의 class를 일괄 flip. Geometry → Centerline은 face를
+      // 감싸는 엣지는 Rust에서 거부됨 (dangling face 방지).
+      const edges = this.selection.getSelectedEdges();
+      if (edges.length === 0) {
+        Toast.warning('변환할 엣지를 먼저 선택하세요', 2500);
+        return;
+      }
+      const targetClass = action === 'convert-to-centerline' ? 1 : 0;
+      const label = action === 'convert-to-centerline' ? '중심선' : '일반선';
+      let ok = 0;
+      let firstErr = '';
+      for (const eid of edges) {
+        if (this.bridge.setEdgeClass(eid, targetClass as 0 | 1)) ok++;
+        else if (!firstErr) firstErr = this.bridge.lastError();
+      }
+      if (ok > 0) {
+        this.syncMesh();
+        if (ok === edges.length) {
+          Toast.info(`${ok}개 엣지 → ${label} 변환 완료`, 2500);
+        } else {
+          Toast.warning(
+            `${ok}/${edges.length}개 변환 — 나머지 거부: ${firstErr || '원인 불명'}`,
+            4500,
+          );
+        }
+      } else {
+        Toast.error(`변환 실패: ${firstErr || '알 수 없는 오류'}`, 3500);
+      }
     } else if (action === 'sketch-exit') {
       if (!this.isSketching()) {
         Toast.info('활성 스케치 세션이 없습니다', 2000);
@@ -1679,11 +1712,13 @@ export class ToolManager {
     debugLog('[ToolManager] Using full buffer update (delta unavailable or failed)');
     const buffers = this.bridge.getMeshBuffers();
 
+    const centerLines = this.bridge.getCenterlineLines();
     if (buffers) {
       this.viewport.updateMesh(
         buffers.positions, buffers.normals, buffers.indices,
         edgeLines ?? undefined,
         buffers.faceMap,
+        centerLines,
       );
       this.faceMap = buffers.faceMap;
 
@@ -1701,6 +1736,7 @@ export class ToolManager {
         new Float32Array(0), new Float32Array(0), new Uint32Array(0),
         edgeLines ?? undefined,
         new Uint32Array(0),
+        centerLines,
       );
       this.faceMap = new Uint32Array(0);
       this.selection.updateBuffers(new Float32Array(0), new Uint32Array(0), new Uint32Array(0));

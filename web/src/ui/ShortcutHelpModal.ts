@@ -25,6 +25,7 @@ const SECTIONS: ShortcutSection[] = [
       { key: 'L', description: 'Line (선)' },
       { key: 'R', description: 'Rect (사각형)' },
       { key: 'C', description: 'Circle (원)' },
+      { key: 'Shift+C', description: '📐 Centerline (중심선)' },
       { key: 'A', description: 'Arc (호)' },
       { key: 'G', description: 'Polygon (다각형)' },
       { key: 'P', description: 'Push/Pull' },

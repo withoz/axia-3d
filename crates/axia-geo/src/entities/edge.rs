@@ -4,6 +4,49 @@ use serde::{Deserialize, Serialize};
 use super::id::*;
 use super::flags::SharedFlags;
 
+/// Edge semantic class — distinguishes real geometry (participates in face
+/// synthesis, intersection-splitting, boolean) from reference lines that
+/// exist for layout/construction only.
+///
+/// MVP: Geometry + Centerline. Construction can be added later for
+/// scaffolding lines that get auto-cleaned on save.
+///
+/// Serialization note: `#[serde(default)]` on Edge.class ensures old AXIA
+/// files (no class field) load as Geometry — full backward compatibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeClass {
+    /// 일반 기하 선 — split on intersection, 닫힌 loop 감지 시 face 후보,
+    /// boolean 참여. 기존 엔진 동작 그대로 (이 enum의 default).
+    #[default]
+    Geometry,
+    /// 중심선/참조 축 — 교차해도 미분절, face 후보 아님, boolean 미참여.
+    /// 평면 배치에서 "벽의 중심" 같은 가상 기준선.
+    Centerline,
+}
+
+impl EdgeClass {
+    /// Raw u32 for WASM boundary. 0 = Geometry, 1 = Centerline.
+    pub fn to_raw(self) -> u32 {
+        match self {
+            EdgeClass::Geometry => 0,
+            EdgeClass::Centerline => 1,
+        }
+    }
+    pub fn from_raw(raw: u32) -> Self {
+        match raw {
+            1 => EdgeClass::Centerline,
+            _ => EdgeClass::Geometry,
+        }
+    }
+    /// Whether this class participates in intersection-splitting and face synthesis.
+    /// Currently == Geometry, but kept as a predicate in case future classes
+    /// (e.g. Construction) also need split behavior.
+    pub fn is_topological(self) -> bool {
+        matches!(self, EdgeClass::Geometry)
+    }
+}
+
 /// An edge in the Half-Edge mesh.
 ///
 /// Stores its two endpoint vertices in canonical order (v_small < v_large)
@@ -22,6 +65,11 @@ pub struct Edge {
     active: bool,
     /// Shared flags (selection, visibility, etc.)
     flags: SharedFlags,
+    /// Semantic class (Geometry default; Centerline etc.). Controls whether
+    /// intersection-split / face synthesis / boolean apply to this edge.
+    /// `#[serde(default)]` allows old AXIA files (no field) to deserialize.
+    #[serde(default)]
+    class: EdgeClass,
 }
 
 impl Edge {
@@ -33,8 +81,15 @@ impl Edge {
             any_he: HeId::NULL,
             active: true,
             flags: SharedFlags::empty(),
+            class: EdgeClass::default(),
         }
     }
+
+    #[inline]
+    pub fn class(&self) -> EdgeClass { self.class }
+
+    #[inline]
+    pub fn set_class(&mut self, class: EdgeClass) { self.class = class; }
 
     #[inline]
     pub fn v_small(&self) -> VertId {

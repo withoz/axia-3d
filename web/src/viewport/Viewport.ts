@@ -803,6 +803,7 @@ export class Viewport {
     indices: Uint32Array,
     edgeLines?: Float32Array,
     faceMap?: Uint32Array,
+    centerLines?: Float32Array | null,
   ) {
     // ── 1) 기존 geometry + material 완전 제거 ──
     while (this.meshGroup.children.length > 0) {
@@ -982,6 +983,40 @@ export class Viewport {
       segObj.computeLineDistances();
       this.meshGroup.add(segObj);
     }
+
+    // ── 5) Centerlines (중심선/참조 축) — 점선 + 옅은 색 + 얇게 ──
+    if (centerLines && centerLines.length > 0) {
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(centerLines);
+      const mat = this._makeCenterlineMaterial();
+      const obj = new LineSegments2(geo, mat);
+      obj.name = 'centerlines';
+      obj.visible = this._edgeVisible;
+      obj.computeLineDistances();  // essential for dashed rendering
+      this.meshGroup.add(obj);
+    }
+  }
+
+  /** LineMaterial tuned for centerlines: dashed, dimmer color, thinner.
+   *  Same resize pool as mesh edges so DPR/resize updates together. */
+  private _makeCenterlineMaterial(): LineMaterial {
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const mat = new LineMaterial({
+      color: 0x808090,                  // neutral grey-blue, dimmer than main edges
+      linewidth: Math.max(1, this._edgeWidth * 0.7),  // thinner than geometry edges
+      dashed: true,
+      dashSize: 120,                    // world units (mm) — visible at architectural scale
+      gapSize: 60,
+      dashScale: 1,
+      resolution: new THREE.Vector2(w, h),
+      worldUnits: false,                // pixel-space width; dash sizes still world
+      depthTest: true,
+      transparent: true,
+      opacity: 0.75,
+    });
+    this._meshEdgeMaterials.push(mat);  // reuse resize pool
+    return mat;
   }
 
   /** Build a LineMaterial for mesh edge lines with current color + width.

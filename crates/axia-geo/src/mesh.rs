@@ -406,6 +406,10 @@ impl Mesh {
         let mut crossings = Vec::new();
         for (edge_id, edge) in self.edges.iter() {
             if !edge.is_active() { continue; }
+            // Skip non-topological edges (Centerline) — by contract they don't
+            // split other lines and aren't split by them. Regular drawLine must
+            // cross freely through a centerline without either side breaking.
+            if !edge.class().is_topological() { continue; }
             let va = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
             let vb = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
 
@@ -543,8 +547,16 @@ impl Mesh {
         seed_verts: Option<&[VertId]>,
         required_edges: Option<&[EdgeId]>,
     ) -> Vec<FaceId> {
+        // Skip HEs belonging to non-topological edges (Centerline etc.) —
+        // they shouldn't contribute to face synthesis (by contract).
         let free_hes: Vec<HeId> = self.hes.iter()
-            .filter(|(_, he)| he.is_active() && he.face().is_null())
+            .filter(|(_, he)| {
+                if !he.is_active() || !he.face().is_null() { return false; }
+                match self.edges.get(he.edge()) {
+                    Some(e) => e.is_active() && e.class().is_topological(),
+                    None => false,
+                }
+            })
             .map(|(id, _)| id)
             .collect();
         if free_hes.is_empty() { return Vec::new(); }
@@ -2916,7 +2928,29 @@ impl Mesh {
         lines
     }
 
-    /// export_edge_lines + edge ID map (segment index → EdgeId raw)
+    /// Export just the centerline edge segments (flat `[x,y,z, ...]` pairs)
+    /// for separate rendering (dashed, thin, dimmer color). No edge map
+    /// returned — centerlines are not pickable as distinct entities via the
+    /// main edge-line hit path yet (they stay snap targets via vertex/midpoint
+    /// but not as mid-edge nearest hits in rendering layer).
+    pub fn export_centerline_lines(&self) -> Vec<f32> {
+        let mut lines: Vec<f32> = Vec::new();
+        for (_, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            if edge.class() != EdgeClass::Centerline { continue; }
+            let p0 = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
+            let p1 = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
+            lines.extend_from_slice(&[
+                p0.x as f32, p0.y as f32, p0.z as f32,
+                p1.x as f32, p1.y as f32, p1.z as f32,
+            ]);
+        }
+        lines
+    }
+
+    /// export_edge_lines + edge ID map (segment index → EdgeId raw).
+    /// Centerline edges are excluded — render them separately via
+    /// `export_centerline_lines` to apply dashed / dimmer styling.
     pub fn export_edge_lines_with_map(&self, angle_threshold_deg: f64) -> (Vec<f32>, Vec<u32>) {
         let cos_threshold = angle_threshold_deg.to_radians().cos();
         let mut lines: Vec<f32> = Vec::new();
@@ -2924,6 +2958,11 @@ impl Mesh {
 
         for (_edge_id, edge) in self.edges.iter() {
             if !edge.is_active() {
+                continue;
+            }
+            // Centerline edges go through a separate rendering path
+            // (export_centerline_lines) so skip them here.
+            if edge.class() == EdgeClass::Centerline {
                 continue;
             }
 

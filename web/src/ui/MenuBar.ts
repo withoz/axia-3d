@@ -311,6 +311,11 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'assign-quick-color': toolManager.executeAction('assign-quick-color'); break;
       // Measure Tool — 인터랙티브 2점 거리 / 3점 각도 (SelectTool 계열).
       case 'tool-measure': setActiveTool('measure'); break;
+      case 'tool-centerline': setActiveTool('centerline'); break;
+      case 'convert-to-centerline':
+      case 'convert-to-geometry':
+        toolManager.executeAction(action);
+        break;
       case 'tool-trim': setActiveTool('trim'); break;
       case 'tool-extend': setActiveTool('extend'); break;
       // Fillet — 선택된 엣지 1개에 모깎기 적용. 도구가 아니라 액션이므로

@@ -347,6 +347,9 @@ export class AxiaEngine {
     /**
      * Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
      * UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
+     *
+     * Centerline 엣지는 제외 — 얘네는 "free" 상태로 있는 게 정상이므로
+     * Finish→Extrude 트리거에 영향 주지 않아야 함.
      * @returns {number}
      */
     countFreeEdges() {
@@ -461,6 +464,23 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Draw a centerline (reference axis). Unlike drawLine, bypasses
+     * intersection-split / face synthesis / loop detection. Creates one
+     * edge tagged Centerline; crossing other edges does not split them.
+     * Returns the new edge raw id, or -1 on failure.
+     * @param {number} x0
+     * @param {number} y0
+     * @param {number} z0
+     * @param {number} x1
+     * @param {number} y1
+     * @param {number} z1
+     * @returns {number}
+     */
+    drawCenterline(x0, y0, z0, x1, y1, z1) {
+        const ret = wasm.axiaengine_drawCenterline(this.__wbg_ptr, x0, y0, z0, x1, y1, z1);
+        return ret;
+    }
+    /**
      * @param {number} cx
      * @param {number} cy
      * @param {number} cz
@@ -508,6 +528,16 @@ export class AxiaEngine {
     draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height) {
         const ret = wasm.axiaengine_draw_rect(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
         return ret;
+    }
+    /**
+     * Get an edge's semantic class as u32 (0=Geometry, 1=Centerline).
+     * Returns 0 for missing/inactive edges (safe default).
+     * @param {number} edge_id_raw
+     * @returns {number}
+     */
+    edgeClass(edge_id_raw) {
+        const ret = wasm.axiaengine_edgeClass(this.__wbg_ptr, edge_id_raw);
+        return ret >>> 0;
     }
     /**
      * edgeLength returns the straight-line distance between an edge's
@@ -632,6 +662,26 @@ export class AxiaEngine {
     getCacheVersion() {
         const ret = wasm.axiaengine_getCacheVersion(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Get centerline edge segments for separate rendering (dashed/thin/dimmer).
+     * Flat [x0,y0,z0, x1,y1,z1, ...] — pair per segment.
+     * Not cached — centerlines are typically fewer and changes infrequently,
+     * but if perf becomes an issue we can cache like getEdgeLines.
+     * @returns {Float32Array}
+     */
+    getCenterlineLines() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getCenterlineLines(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Export incremental geometry updates for dirty faces.
@@ -880,6 +930,7 @@ export class AxiaEngine {
      * Get hard edge line segments for wireframe rendering.
      * Returns flat [x0,y0,z0, x1,y1,z1, ...] — use with THREE.LineSegments.
      * Coplanar edges (angle ≤ 15°) are automatically hidden.
+     * Centerline edges are excluded — call getCenterlineLines() separately.
      * @returns {Float32Array}
      */
     get_edge_lines() {
@@ -1762,6 +1813,18 @@ export class AxiaEngine {
      */
     setConstraintActive(id, active) {
         const ret = wasm.axiaengine_setConstraintActive(this.__wbg_ptr, id, active);
+        return ret !== 0;
+    }
+    /**
+     * Change an edge's semantic class. Rejects Geometry→Centerline if the
+     * edge bounds an active face (would orphan the face).
+     * Returns true on success.
+     * @param {number} edge_id_raw
+     * @param {number} class_raw
+     * @returns {boolean}
+     */
+    setEdgeClass(edge_id_raw, class_raw) {
+        const ret = wasm.axiaengine_setEdgeClass(this.__wbg_ptr, edge_id_raw, class_raw);
         return ret !== 0;
     }
     /**

@@ -1829,6 +1829,7 @@
       <div class="menu-item" data-menu="draw">그리기
         <div class="menu-dropdown">
           <div class="menu-action" data-action="tool-line">선 (Line)<span class="mk">L</span></div>
+          <div class="menu-action" data-action="tool-centerline">📐 중심선 (Centerline)<span class="mk">Shift+C</span></div>
           <div class="menu-action" data-action="tool-polyline">폴리선 (Polyline)<span class="mk">Shift+L</span></div>
           <div class="menu-action" data-action="tool-rect">사각형 (Rectangle)<span class="mk">R</span></div>
           <div class="menu-action" data-action="tool-polygon">다각형 (Polygon)<span class="mk">G</span></div>
@@ -2267,6 +2268,9 @@
       <div class="ctx-item ctx-edge-chain-item" data-action="revolve-x">Revolve · X축</div>
       <div class="ctx-item ctx-edge-chain-item" data-action="revolve-y">Revolve · Y축</div>
       <div class="ctx-item ctx-edge-chain-item" data-action="revolve-z">Revolve · Z축</div>
+      <!-- EdgeClass 전환 (선택된 엣지가 하나 이상일 때 표시 가능) -->
+      <div class="ctx-item ctx-edge-chain-item" data-action="convert-to-centerline">📐 중심선으로 변환</div>
+      <div class="ctx-item ctx-edge-chain-item" data-action="convert-to-geometry">🔹 일반선으로 변환</div>
       <!-- Constraint Solver Level 1 (2개 엣지 선택 시) -->
       <div class="ctx-item ctx-edge-item" data-action="constrain-parallel">엣지 평행 정렬</div>
       <div class="ctx-item ctx-edge-item" data-action="constrain-perpendicular">엣지 수직 정렬</div>

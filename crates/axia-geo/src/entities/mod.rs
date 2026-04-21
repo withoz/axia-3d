@@ -14,7 +14,7 @@ pub mod id;
 mod flags;
 
 pub use vertex::Vertex;
-pub use edge::Edge;
+pub use edge::{Edge, EdgeClass};
 pub use half_edge::{HalfEdge, HeFlags};
 pub use face::{Face, LoopRef};
 pub use shell::Shell;

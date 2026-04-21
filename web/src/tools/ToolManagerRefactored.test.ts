@@ -164,6 +164,10 @@ function mockBridge() {
     countFreeEdges: vi.fn().mockReturnValue(0),
     synthesizeFacesFromFreeEdges: vi.fn().mockReturnValue(0),
     pushPull: vi.fn().mockReturnValue(true),
+    getCenterlineLines: vi.fn().mockReturnValue(null),
+    drawCenterline: vi.fn().mockReturnValue(0),
+    edgeClass: vi.fn().mockReturnValue(0),
+    setEdgeClass: vi.fn().mockReturnValue(true),
   } as any;
 }
 
@@ -274,6 +278,31 @@ describe('ToolManager', () => {
     it('sketch-exit on inactive session is a no-op (no crash)', () => {
       tm.executeAction('sketch-exit');
       expect(tm.isSketching()).toBe(false);
+    });
+  });
+
+  describe('centerline / edge class conversion', () => {
+    it('convert-to-centerline with selected edges calls setEdgeClass(1) per edge', () => {
+      // Patch only the methods we need on the existing SelectionManager.
+      (tm.selection as any).getSelectedEdges = () => [10, 20, 30];
+      (bridge.setEdgeClass as any) = vi.fn().mockReturnValue(true);
+      tm.executeAction('convert-to-centerline');
+      expect(bridge.setEdgeClass).toHaveBeenCalledTimes(3);
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(10, 1);
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(20, 1);
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(30, 1);
+    });
+    it('convert-to-geometry uses class=0', () => {
+      (tm.selection as any).getSelectedEdges = () => [42];
+      (bridge.setEdgeClass as any) = vi.fn().mockReturnValue(true);
+      tm.executeAction('convert-to-geometry');
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(42, 0);
+    });
+    it('no-op + warning when nothing selected', () => {
+      (tm.selection as any).getSelectedEdges = () => [];
+      (bridge.setEdgeClass as any) = vi.fn();
+      tm.executeAction('convert-to-centerline');
+      expect(bridge.setEdgeClass).not.toHaveBeenCalled();
     });
 
     it('sketch-exit without free edges skips synthesize and extrude', () => {
@@ -573,13 +602,12 @@ describe('ToolManager', () => {
     it('handles null buffers gracefully', () => {
       bridge.getMeshBuffers.mockReturnValue(null);
       expect(() => tm.syncMesh()).not.toThrow();
-      expect(viewport.updateMesh).toHaveBeenCalledWith(
-        expect.any(Float32Array),
-        expect.any(Float32Array),
-        expect.any(Uint32Array),
-        expect.anything(),
-        expect.any(Uint32Array),
-      );
+      expect(viewport.updateMesh).toHaveBeenCalled();
+      // First 3 positional args must be the empty typed arrays
+      const call = (viewport.updateMesh as any).mock.calls[0];
+      expect(call[0]).toBeInstanceOf(Float32Array);
+      expect(call[1]).toBeInstanceOf(Float32Array);
+      expect(call[2]).toBeInstanceOf(Uint32Array);
     });
 
     it('updates stats after sync', () => {

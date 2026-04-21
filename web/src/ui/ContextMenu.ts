@@ -140,6 +140,8 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'array-radial': toolManager.executeAction('array-radial'); break;
       case 'thicken-faces': toolManager.executeAction('thicken-faces'); break;
       case 'assign-quick-color': toolManager.executeAction('assign-quick-color'); break;
+      case 'convert-to-centerline': toolManager.executeAction('convert-to-centerline'); break;
+      case 'convert-to-geometry': toolManager.executeAction('convert-to-geometry'); break;
       case 'bend-selection':  toolManager.executeAction('bend-selection'); break;
       case 'twist-selection': toolManager.executeAction('twist-selection'); break;
       case 'taper-selection': toolManager.executeAction('taper-selection'); break;

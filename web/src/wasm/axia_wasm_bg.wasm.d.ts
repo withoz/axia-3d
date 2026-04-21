@@ -28,9 +28,11 @@ export const axiaengine_deleteEdgeCascade: (a: number, b: number) => number;
 export const axiaengine_delete_edge: (a: number, b: number) => number;
 export const axiaengine_delete_face: (a: number, b: number) => number;
 export const axiaengine_delete_group: (a: number, b: number) => number;
+export const axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+export const axiaengine_edgeClass: (a: number, b: number) => number;
 export const axiaengine_edgeLength: (a: number, b: number) => number;
 export const axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
 export const axiaengine_export_snapshot: (a: number, b: number) => void;
@@ -40,6 +42,7 @@ export const axiaengine_faces_centroid: (a: number, b: number, c: number, d: num
 export const axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_flipFaces: (a: number, b: number, c: number) => number;
 export const axiaengine_getCacheVersion: (a: number) => number;
+export const axiaengine_getCenterlineLines: (a: number, b: number) => void;
 export const axiaengine_getDirtyFaceBuffers: (a: number) => number;
 export const axiaengine_getDirtyFaceCount: (a: number) => number;
 export const axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
@@ -106,6 +109,7 @@ export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: numbe
 export const axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
+export const axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
 export const axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

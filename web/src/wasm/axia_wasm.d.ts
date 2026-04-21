@@ -119,6 +119,9 @@ export class AxiaEngine {
     /**
      * Phase H5 — 자유 엣지 개수만 카운트 (dry-run, mesh 불변).
      * UI에서 "N개 자유 엣지 발견 — Face Synthesis 실행?" 안내에 사용.
+     *
+     * Centerline 엣지는 제외 — 얘네는 "free" 상태로 있는 게 정상이므로
+     * Finish→Extrude 트리거에 영향 주지 않아야 함.
      */
     countFreeEdges(): number;
     /**
@@ -168,9 +171,21 @@ export class AxiaEngine {
      * 그룹 해제
      */
     delete_group(group_id: number): boolean;
+    /**
+     * Draw a centerline (reference axis). Unlike drawLine, bypasses
+     * intersection-split / face synthesis / loop detection. Creates one
+     * edge tagged Centerline; crossing other edges does not split them.
+     * Returns the new edge raw id, or -1 on failure.
+     */
+    drawCenterline(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number;
     draw_circle(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
     draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
+    /**
+     * Get an edge's semantic class as u32 (0=Geometry, 1=Centerline).
+     * Returns 0 for missing/inactive edges (safe default).
+     */
+    edgeClass(edge_id_raw: number): number;
     /**
      * edgeLength returns the straight-line distance between an edge's
      * two endpoints. Zero on missing / degenerate edge.
@@ -219,6 +234,13 @@ export class AxiaEngine {
      * Used by JavaScript to validate delta buffer freshness.
      */
     getCacheVersion(): number;
+    /**
+     * Get centerline edge segments for separate rendering (dashed/thin/dimmer).
+     * Flat [x0,y0,z0, x1,y1,z1, ...] — pair per segment.
+     * Not cached — centerlines are typically fewer and changes infrequently,
+     * but if perf becomes an issue we can cache like getEdgeLines.
+     */
+    getCenterlineLines(): Float32Array;
     /**
      * Export incremental geometry updates for dirty faces.
      *
@@ -300,6 +322,7 @@ export class AxiaEngine {
      * Get hard edge line segments for wireframe rendering.
      * Returns flat [x0,y0,z0, x1,y1,z1, ...] — use with THREE.LineSegments.
      * Coplanar edges (angle ≤ 15°) are automatically hidden.
+     * Centerline edges are excluded — call getCenterlineLines() separately.
      */
     get_edge_lines(): Float32Array;
     /**
@@ -581,6 +604,12 @@ export class AxiaEngine {
      */
     setConstraintActive(id: number, active: boolean): boolean;
     /**
+     * Change an edge's semantic class. Rejects Geometry→Centerline if the
+     * edge bounds an active face (would orphan the face).
+     * Returns true on success.
+     */
+    setEdgeClass(edge_id_raw: number, class_raw: number): boolean;
+    /**
      * 중첩 그룹 설정
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
@@ -762,9 +791,11 @@ export interface InitOutput {
     readonly axiaengine_delete_edge: (a: number, b: number) => number;
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
+    readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly axiaengine_edgeClass: (a: number, b: number) => number;
     readonly axiaengine_edgeLength: (a: number, b: number) => number;
     readonly axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
@@ -774,6 +805,7 @@ export interface InitOutput {
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_getCacheVersion: (a: number) => number;
+    readonly axiaengine_getCenterlineLines: (a: number, b: number) => void;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
@@ -840,6 +872,7 @@ export interface InitOutput {
     readonly axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
+    readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

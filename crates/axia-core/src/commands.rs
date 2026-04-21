@@ -50,6 +50,23 @@ pub enum Command {
         surface_normal: Option<DVec3>,
     },
 
+    /// Draw a centerline (reference axis). Unlike DrawLine, this skips
+    /// intersection-splitting, face synthesis, and free-edge loop detection —
+    /// creates a standalone edge tagged with `EdgeClass::Centerline`.
+    /// Used for floor-plan axes, column grids, wall centers.
+    DrawCenterline {
+        start: DVec3,
+        end: DVec3,
+    },
+
+    /// Change the semantic class of an existing edge (e.g., convert a
+    /// Geometry line into a Centerline or vice versa). Pure attribute flip,
+    /// does not modify topology.
+    SetEdgeClass {
+        edge_id: axia_geo::EdgeId,
+        class_raw: u32,  // 0 = Geometry, 1 = Centerline
+    },
+
     /// Draw a rectangle
     DrawRect {
         center: DVec3,

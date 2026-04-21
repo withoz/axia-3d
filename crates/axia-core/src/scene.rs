@@ -304,6 +304,12 @@ impl Scene {
             Command::DrawLine { start, end, surface_normal } => {
                 self.exec_draw_line(start, end, surface_normal)
             }
+            Command::DrawCenterline { start, end } => {
+                self.exec_draw_centerline(start, end)
+            }
+            Command::SetEdgeClass { edge_id, class_raw } => {
+                self.exec_set_edge_class(edge_id, class_raw)
+            }
             Command::DrawRect { center, normal, up, width, height } => {
                 self.exec_draw_rect(center, normal, up, width, height)
             }
@@ -884,6 +890,69 @@ impl Scene {
         }
     }
 
+    /// Centerline draw — deliberately skips the intersection/split/synthesize
+    /// pipeline. Creates exactly one edge tagged as Centerline; crossing other
+    /// edges does not split them. This is the key behavioral contract users
+    /// rely on for axis/grid drawing.
+    fn exec_draw_centerline(&mut self, start: DVec3, end: DVec3) -> CommandResult {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        let (_, _, edge_id) = match self.mesh.draw_line(start, end) {
+            Ok(r) => r,
+            Err(e) => {
+                self.transactions.cancel();
+                return CommandResult::Error(format!("draw_centerline: {}", e));
+            }
+        };
+        // Tag the new edge as Centerline — bypasses all downstream topology
+        // handlers (face synthesis filter, boolean skip, etc.)
+        if let Some(edge) = self.mesh.edges.get_mut(edge_id) {
+            edge.set_class(axia_geo::EdgeClass::Centerline);
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+        CommandResult::EntityCreated(edge_id.raw() as u32)
+    }
+
+    /// Flip an edge's semantic class. Only updates the attribute; does NOT
+    /// retroactively merge or split. Callers warning: changing a Geometry
+    /// edge that is already part of a face to Centerline may leave dangling
+    /// face references — current guard rejects the change in that case.
+    fn exec_set_edge_class(&mut self, edge_id: axia_geo::EdgeId, class_raw: u32) -> CommandResult {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        let class = axia_geo::EdgeClass::from_raw(class_raw);
+        // Reject demoting a Geometry edge that bounds an active face —
+        // centerlines must not participate in face topology, so demotion
+        // would orphan the face. User should delete/reshape first.
+        if class == axia_geo::EdgeClass::Centerline {
+            let bounds_face = self.mesh.get_faces_sharing_edge(edge_id).0.iter().any(
+                |&fid| self.mesh.faces.get(fid).is_some_and(|f| f.is_active())
+            );
+            if bounds_face {
+                self.transactions.cancel();
+                return CommandResult::Error(
+                    "set_edge_class: edge bounds an active face — delete the face first to convert to Centerline".to_string()
+                );
+            }
+        }
+        match self.mesh.edges.get_mut(edge_id) {
+            Some(edge) => {
+                edge.set_class(class);
+                self.transactions.set_after_snapshot(self.scene_snapshot());
+                self.transactions.commit();
+                CommandResult::MeshUpdated
+            }
+            None => {
+                self.transactions.cancel();
+                CommandResult::Error(format!("set_edge_class: edge {:?} not found", edge_id))
+            }
+        }
+    }
+
     fn exec_draw_rect(
         &mut self,
         center: DVec3,
@@ -1147,6 +1216,159 @@ pub struct SceneStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ══════════════════════════════════════════════════════════════
+    //   Centerline (EdgeClass) tests — Phase A contract verification
+    // ══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn centerline_draw_creates_edge_tagged_centerline() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCenterline {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end:   DVec3::new(100.0, 0.0, 0.0),
+        });
+        let edge_id = match result {
+            CommandResult::EntityCreated(id) => axia_geo::EdgeId::new(id),
+            other => panic!("expected EntityCreated, got {:?}", other),
+        };
+        let edge = scene.mesh.edges.get(edge_id).expect("edge exists");
+        assert_eq!(edge.class(), axia_geo::EdgeClass::Centerline);
+    }
+
+    #[test]
+    fn centerline_does_not_split_crossing_geometry_line() {
+        // Draw geometry line A-B. Then draw centerline crossing it.
+        // Geometry line must remain one edge (not split at the crossing).
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-100.0, 0.0, 0.0),
+            end:   DVec3::new( 100.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        let edges_before_cl = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+
+        // Centerline crosses the geometry line at origin
+        scene.execute(Command::DrawCenterline {
+            start: DVec3::new(0.0, 0.0, -100.0),
+            end:   DVec3::new(0.0, 0.0,  100.0),
+        });
+
+        let edges_after = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        // Exactly +1 active edge (the centerline). The geometry line is
+        // untouched — no split at the crossing.
+        assert_eq!(edges_after, edges_before_cl + 1,
+            "centerline must not split existing geometry edges");
+    }
+
+    #[test]
+    fn geometry_line_does_not_split_at_crossing_centerline() {
+        // Symmetric: draw centerline first, then geometry line crossing it.
+        // Neither should be split.
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCenterline {
+            start: DVec3::new(-100.0, 0.0, 0.0),
+            end:   DVec3::new( 100.0, 0.0, 0.0),
+        });
+        let edges_before = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        assert_eq!(edges_before, 1);
+
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(0.0, 0.0, -100.0),
+            end:   DVec3::new(0.0, 0.0,  100.0),
+            surface_normal: None,
+        });
+
+        let centerlines: Vec<_> = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.class() == axia_geo::EdgeClass::Centerline)
+            .collect();
+        assert_eq!(centerlines.len(), 1,
+            "centerline must not be split by a geometry line crossing it");
+    }
+
+    #[test]
+    fn centerline_excluded_from_face_synthesis() {
+        // Draw 3 centerlines forming a closed triangle.
+        // synthesize_faces_from_free_edges (resolve_planar_free_faces) must
+        // NOT create a face from pure-centerline loops.
+        let mut scene = Scene::new();
+        let a = DVec3::new(0.0, 0.0, 0.0);
+        let b = DVec3::new(100.0, 0.0, 0.0);
+        let c = DVec3::new(50.0, 0.0, 100.0);
+        scene.execute(Command::DrawCenterline { start: a, end: b });
+        scene.execute(Command::DrawCenterline { start: b, end: c });
+        scene.execute(Command::DrawCenterline { start: c, end: a });
+        let created = scene.mesh.resolve_planar_free_faces(
+            axia_geo::MaterialId::new(0),
+        );
+        assert_eq!(created.len(), 0,
+            "pure-centerline closed loop must not spawn a face");
+        assert_eq!(scene.mesh.face_count(), 0);
+    }
+
+    #[test]
+    fn set_edge_class_flip_works_for_free_edge() {
+        // Geometry free-edge → Centerline should succeed (no face bound).
+        let mut scene = Scene::new();
+        let r = scene.execute(Command::DrawLine {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end:   DVec3::new(100.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        // Find the edge (DrawLine doesn't return edge id; take first active)
+        let eid = scene.mesh.edges.iter()
+            .find(|(_, e)| e.is_active())
+            .map(|(id, _)| id)
+            .expect("active edge exists");
+        let _ = r;
+        let flip = scene.execute(Command::SetEdgeClass {
+            edge_id: eid,
+            class_raw: 1,  // Centerline
+        });
+        match flip {
+            CommandResult::MeshUpdated => {}
+            other => panic!("expected MeshUpdated, got {:?}", other),
+        }
+        assert_eq!(scene.mesh.edges[eid].class(), axia_geo::EdgeClass::Centerline);
+    }
+
+    #[test]
+    fn set_edge_class_rejects_demoting_face_bounding_edge() {
+        // Create a triangle face via DrawLine (closes a loop → face).
+        // Edges of that face cannot be converted to Centerline.
+        let mut scene = Scene::new();
+        let a = DVec3::new(0.0, 0.0, 0.0);
+        let b = DVec3::new(100.0, 0.0, 0.0);
+        let c = DVec3::new(50.0, 0.0, 100.0);
+        scene.execute(Command::DrawLine { start: a, end: b, surface_normal: None });
+        scene.execute(Command::DrawLine { start: b, end: c, surface_normal: None });
+        scene.execute(Command::DrawLine { start: c, end: a, surface_normal: None });
+        assert!(scene.mesh.face_count() >= 1, "triangle face should have been synthesized");
+
+        // Pick an edge that bounds a face.
+        let face_edge_id = scene.mesh.edges.iter()
+            .find(|(id, e)| {
+                e.is_active() && scene.mesh.get_faces_sharing_edge(*id).0.iter()
+                    .any(|&fid| scene.mesh.faces.get(fid).is_some_and(|f| f.is_active()))
+            })
+            .map(|(id, _)| id)
+            .expect("face-bounding edge");
+
+        let r = scene.execute(Command::SetEdgeClass {
+            edge_id: face_edge_id,
+            class_raw: 1,  // Centerline
+        });
+        match r {
+            CommandResult::Error(_) => {}
+            other => panic!("expected Error rejection, got {:?}", other),
+        }
+        // Class unchanged
+        assert_eq!(scene.mesh.edges[face_edge_id].class(),
+            axia_geo::EdgeClass::Geometry);
+    }
 
     #[test]
     fn test_scene_creation() {

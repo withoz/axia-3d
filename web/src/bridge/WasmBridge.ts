@@ -140,6 +140,13 @@ type AxiaEngineExtended = AxiaEngine & {
   ): boolean;
   getEdgeEndpoints?(edgeId: number): Uint32Array;
   collectEdgeChain?(edgeId: number): Uint32Array;
+  drawCenterline?(
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+  ): number;
+  edgeClass?(edgeId: number): number;
+  setEdgeClass?(edgeId: number, classRaw: number): boolean;
+  getCenterlineLines?(): Float32Array;
   getVertexPos?(vertId: number): Float64Array;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
   // Constraint Solver Level 2 (persistent graph)
@@ -1272,6 +1279,53 @@ export class WasmBridge {
     } catch (e) {
       this.recordBridgeError('collectEdgeChain', e);
       return [edgeId];
+    }
+  }
+
+  /**
+   * 중심선 그리기 — 기존 엣지와 교차해도 어느 쪽도 분절 안 되며,
+   * face synthesis에도 참여하지 않음. 평면도/축 그리기 용.
+   * 성공 시 새 edge id, 실패 시 -1.
+   */
+  drawCenterline(start: [number, number, number], end: [number, number, number]): number {
+    if (!this.engine?.drawCenterline) return -1;
+    this.markDirty();
+    try {
+      return this.engine.drawCenterline(
+        start[0], start[1], start[2],
+        end[0], end[1], end[2],
+      );
+    } catch (e) {
+      this.recordBridgeError('drawCenterline', e);
+      return -1;
+    }
+  }
+
+  /** Edge semantic class: 0 = Geometry, 1 = Centerline. Missing/inactive → 0. */
+  edgeClass(edgeId: number): number {
+    if (!this.engine?.edgeClass) return 0;
+    try { return this.engine.edgeClass(edgeId); }
+    catch { return 0; }
+  }
+
+  /** 기존 엣지의 class를 변경. Geometry→Centerline 시 face를 감싸는 엣지는 거부. */
+  setEdgeClass(edgeId: number, classRaw: 0 | 1): boolean {
+    if (!this.engine?.setEdgeClass) return false;
+    this.markDirty();
+    try { return this.engine.setEdgeClass(edgeId, classRaw); }
+    catch (e) { this.recordBridgeError('setEdgeClass', e); return false; }
+  }
+
+  /** Centerline 전용 edge line segments (flat [x,y,z, x,y,z, ...] pair 단위).
+   *  Viewport가 dashed LineMaterial로 별도 렌더. 비어있으면 빈 배열. */
+  getCenterlineLines(): Float32Array | null {
+    if (!this.engine?.getCenterlineLines) return null;
+    try {
+      const arr = this.engine.getCenterlineLines();
+      return arr && arr.length > 0 ? arr : null;
+    } catch (e) {
+      this.recordBridgeError('getCenterlineLines', e);
+      return null;
     }
   }
 
