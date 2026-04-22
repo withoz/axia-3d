@@ -268,7 +268,7 @@ export function initStylePanel(deps: StylePanelDeps): void {
   //   건축: 10° (벽/바닥 panel 경계 또렷)
   //   기계: 20° (원통 대칭 부드럽게 유지하되 조립 경계 보임)
   //   캐릭터: 30° (곡면 smooth)
-  const initAngle = bridge?.edgeAngleThreshold() ?? 15;
+  const initAngle = bridge?.edgeAngleThreshold() ?? 20;
   const angleSlider = document.getElementById('sty-edge-angle') as HTMLInputElement | null;
   const angleLabel = document.getElementById('sty-edge-angle-val');
   if (angleSlider) angleSlider.value = String(initAngle);
