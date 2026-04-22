@@ -41,3 +41,26 @@ backups/
 node_modules/
 dist/
 
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+target/
+
+# Rust
+Cargo.lock
+**/*.rs.bk
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Claude 
+.claudeignore
