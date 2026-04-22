@@ -271,15 +271,6 @@ export function initMenuBar(deps: MenuBarDeps): void {
         Toast.info(`털 쉐이더 ${next ? '켜짐 (24 shell, 드로우콜 증가 주의)' : '꺼짐'}`);
         break;
       }
-      case 'view-shadow': {
-        const next = !viewport.isShadowEnabled();
-        viewport.setShadowEnabled(next);
-        Toast.info(
-          `Blob 그림자 ${next ? '켜짐' : '꺼짐'}`,
-          2500,
-        );
-        break;
-      }
       case 'view-shadow-pro': {
         const next = !viewport.isProjectedShadowEnabled();
         viewport.setProjectedShadowEnabled(next);

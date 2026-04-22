@@ -110,10 +110,6 @@ export class Viewport {
   private _fur: FurShell | null = null;
   private _furEnabled: boolean = false;
 
-  // ═══ Blob shadow (light-weight ground shadow) ═══
-  private _blobShadow: THREE.Mesh | null = null;
-  private _blobShadowEnabled: boolean = true;  // 기본 on — 깔끔+가벼움
-
   // ═══ Projected shadow (SketchUp-style matrix projection) ═══
   private _projectedShadow: THREE.Mesh | null = null;
   // 2026-04-23: 기본 ON — "건축 그림자"(Projected Planar + MinEquation 균일
@@ -279,12 +275,6 @@ export class Viewport {
     } catch (e) {
       console.warn('[Viewport] IBL init failed; falling back to direct lights only:', e);
     }
-
-    // ── Blob shadow (실제 shadow map 대체) ───────────────────────────
-    // 단일 PlaneGeometry + radial gradient shader. syncMesh 시 bbox에 맞춰
-    // 위치/크기 갱신. shadow map rendering 없이 "객체 아래 soft grounding"
-    // 효과만 내어 CAD preview에 가장 부담 없이 공간감 제공.
-    this._createBlobShadow();
 
     // ── Infinite Grid (AixxiA shader-based) ──
     this.infiniteGrid = this.createInfiniteGrid();
@@ -968,9 +958,6 @@ export class Viewport {
       // If fur was enabled before this mesh rebuild, re-attach so the
       // shell overlay tracks the new geometry automatically.
       this._refreshFur();
-
-      // Blob shadow (light-weight ground shadow) 위치·크기 갱신.
-      this._updateBlobShadow();
 
       // ADR-007 Phase 4 — CAD 모드 (single-sided) 활성화 시 BackSide mesh 생략
       // 이점:
@@ -1902,77 +1889,6 @@ export class Viewport {
     return this._ssaoEnabled;
   }
 
-  /** 그림자 on/off 토글 (blob shadow 방식).
-   *  Real shadow map 사용 안 함 — 객체 아래 soft radial gradient plane만
-   *  표시/숨김. 항상 가볍고 scanline artifact 없음. */
-  setShadowEnabled(enabled: boolean): void {
-    this._blobShadowEnabled = enabled;
-    if (this._blobShadow) this._blobShadow.visible = enabled;
-  }
-
-  isShadowEnabled(): boolean {
-    return this._blobShadowEnabled;
-  }
-
-  /** Blob shadow plane 생성 (한 번만). 이후 _updateBlobShadow()로 위치·크기 갱신. */
-  private _createBlobShadow(): void {
-    const geo = new THREE.PlaneGeometry(1, 1);
-    const mat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      depthTest: true,
-      uniforms: {
-        uOpacity: { value: 0.35 },
-      },
-      vertexShader: /* glsl */`
-        varying vec2 vUv;
-        void main() {
-          vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */`
-        precision highp float;
-        varying vec2 vUv;
-        uniform float uOpacity;
-        void main() {
-          // 중심 (0.5, 0.5)에서 가장자리(1.0)로 갈수록 alpha 0.
-          // smoothstep으로 부드러운 경계. 타원형 fade.
-          vec2 c = vUv - 0.5;
-          float d = length(c) * 2.0;  // [0, 1] in circle
-          float alpha = (1.0 - smoothstep(0.3, 1.0, d)) * uOpacity;
-          if (alpha < 0.005) discard;
-          gl_FragColor = vec4(0.0, 0.0, 0.0, alpha);
-        }
-      `,
-    });
-    this._blobShadow = new THREE.Mesh(geo, mat);
-    this._blobShadow.rotation.x = -Math.PI / 2;  // XZ plane
-    this._blobShadow.position.y = 0.5;            // 약간 띄워 z-fighting 회피
-    this._blobShadow.renderOrder = -5;            // mesh 보다 먼저
-    this._blobShadow.visible = this._blobShadowEnabled;
-    this._blobShadow.userData.noPick = true;
-    this.scene.add(this._blobShadow);
-  }
-
-  /** frontMesh bbox XZ에 맞춰 blob shadow 위치·크기 갱신.
-   *  syncMesh (updateMesh)에서 매번 호출. */
-  private _updateBlobShadow(): void {
-    if (!this._blobShadow || !this.frontMesh) return;
-    const geo = this.frontMesh.geometry;
-    geo.computeBoundingBox();
-    const bb = geo.boundingBox;
-    if (!bb) { this._blobShadow.visible = false; return; }
-    const width = Math.max(100, bb.max.x - bb.min.x);
-    const depth = Math.max(100, bb.max.z - bb.min.z);
-    const cx = (bb.max.x + bb.min.x) / 2;
-    const cz = (bb.max.z + bb.min.z) / 2;
-    // Scale: bbox보다 살짝 여유롭게 — 가장자리 fade가 자연스럽게
-    this._blobShadow.scale.set(width * 1.6, depth * 1.6, 1);
-    this._blobShadow.position.set(cx, 0.5, cz);
-    this._blobShadow.visible = this._blobShadowEnabled;
-  }
-
   // ═══════════════════════════════════════════════════════
   //  Projected shadow (SketchUp-style)
   // ═══════════════════════════════════════════════════════
@@ -2043,7 +1959,7 @@ export class Viewport {
       });
       this._projectedShadow = new THREE.Mesh(geo, mat);
       this._projectedShadow.name = 'projected-shadow';
-      this._projectedShadow.renderOrder = -4;  // blob shadow(-5)보다 위, mesh 아래
+      this._projectedShadow.renderOrder = -4;  // mesh 아래에서 먼저 그려짐
       this._projectedShadow.userData.noPick = true;
       this.scene.add(this._projectedShadow);
     } else {
