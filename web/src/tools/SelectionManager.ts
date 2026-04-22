@@ -797,19 +797,23 @@ export class SelectionManager {
     const geo = this.buildFaceGeometry(this.selected);
     if (!geo) return;
 
-    // 반투명 오버레이
+    // 반투명 오버레이.
+    // 2026-04-22: depthTest:true + polygonOffsetFactor:-1 조합은
+    // logarithmicDepthBuffer와 상성이 나빠 main mesh와 z-fighting →
+    // 사용자 보고대로 face에 수평 stripe 발생.
+    // SketchUp/Rhino 표준처럼 depthTest:false + renderOrder:1 로
+    // "항상 main mesh 위에" 그려 안정적인 solid overlay 보장.
     const mat = new THREE.MeshBasicMaterial({
       color: SelectionManager.SELECT_COLOR,
       opacity: SelectionManager.SELECT_OPACITY,
       transparent: true,
       side: THREE.DoubleSide,
-      depthTest: true,
+      depthTest: false,
       depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
     });
     this.selectionMesh = new THREE.Mesh(geo, mat);
     this.selectionMesh.name = 'selection-overlay';
+    this.selectionMesh.renderOrder = 2;
     this.highlightGroup.add(this.selectionMesh);
 
     // 윤곽선 (선택된 face의 경계 에지)
@@ -849,19 +853,19 @@ export class SelectionManager {
     const geo = this.buildFaceGeometry(faceSet);
     if (!geo) return;
 
-    // 반투명 오버레이
+    // 반투명 오버레이 — selection과 동일하게 depthTest:false로 안정화
+    // (z-fighting으로 인한 stripe 방지).
     const mat = new THREE.MeshBasicMaterial({
       color: SelectionManager.HOVER_COLOR,
       opacity: SelectionManager.HOVER_OPACITY,
       transparent: true,
       side: THREE.DoubleSide,
-      depthTest: true,
+      depthTest: false,
       depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
     });
     this.hoverMesh = new THREE.Mesh(geo, mat);
     this.hoverMesh.name = 'hover-overlay';
+    this.hoverMesh.renderOrder = 1;  // selection(2)보다 아래
     this.highlightGroup.add(this.hoverMesh);
 
     // 호버 윤곽선
