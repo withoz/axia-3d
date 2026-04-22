@@ -909,8 +909,12 @@ export class Viewport {
         roughness: 0.65,
         metalness: 0.0,
         polygonOffset: true,
-        polygonOffsetFactor: 1,
-        polygonOffsetUnits: 1,
+        // 2026-04-22: 1 → 4. logarithmicDepthBuffer와 MSAA 조합에서
+        // factor 1이 부족해 엣지가 면과 z-fighting → 점선 artifact 발생.
+        // 4는 가까운 거리에서도 안전 마진, 매우 먼 거리에서는 log depth의
+        // 비선형성이 여전히 보호함.
+        polygonOffsetFactor: 4,
+        polygonOffsetUnits: 4,
         vertexColors: useVertexColors,
         // 텍스처가 이미 캐시돼 있으면 즉시 적용, 아니면 applyTextureAsync가 나중에 세팅
         map: firstTex ? getTextureCache().get(firstTex.dataUrl) : null,
@@ -975,7 +979,10 @@ export class Viewport {
         const segObj = new LineSegments2(segGeo, segMat);
         segObj.name = 'dcel-edges';
         segObj.visible = this._edgeVisible;
-        segObj.computeLineDistances();
+        // 2026-04-22: renderOrder 상향으로 mesh face 이후에 그려 z-fighting 회피.
+        // polygonOffset(factor 4) + renderOrder 1 조합으로 엣지가 항상
+        // 면 앞에 렌더되어 점선 artifact 완전 제거.
+        segObj.renderOrder = 1;
         this.meshGroup.add(segObj);
       } else {
         const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
@@ -985,7 +992,7 @@ export class Viewport {
         const segMat = this._makeEdgeLineMaterial();
         const segObj = new LineSegments2(segGeo, segMat);
         segObj.visible = this._edgeVisible;
-        segObj.computeLineDistances();
+        segObj.renderOrder = 1;
         this.meshGroup.add(segObj);
         edgesGeo.dispose();
       }
@@ -999,7 +1006,7 @@ export class Viewport {
       const segObj = new LineSegments2(segGeo, segMat);
       segObj.name = 'standalone-edges';
       segObj.visible = this._edgeVisible;
-      segObj.computeLineDistances();
+      segObj.renderOrder = 1;
       this.meshGroup.add(segObj);
     }
 
@@ -1041,12 +1048,14 @@ export class Viewport {
   /** Build a LineMaterial for mesh edge lines with current color + width.
    *  Cached in _meshEdgeMaterials so setEdgeStyle / resize can update all at once.
    *
-   *  2026-04-22: alphaToCoverage:true로 전환. Line2의 내부 fragment shader는
-   *  line quad의 중심부 거리 함수로 "선 내부만 그리고 바깥은 discard" 하는데,
-   *  MSAA rendertarget에서 alphaToCoverage가 꺼져있으면 discard 경계가
-   *  hard-clip되어 카메라 각도나 선 방향에 따라 stripe/점선 artifact 발생
-   *  (사용자 보고 "선들이 점선처럼 보임"의 근본 원인).
-   *  alphaToCoverage:true → MSAA 샘플로 soft clip → 모든 각도에서 매끈한 solid. */
+   *  2026-04-22 (두 번째 수정): 엣지 점선 artifact 근본 해결.
+   *  원인 재분석 후 수정 방향 전환:
+   *    - polygonOffset 1 → 4로 상향 (MeshStandardMaterial 측) → face가 edge
+   *      뒤로 확실히 밀림. logarithmicDepthBuffer와 조합된 z-fighting 해소.
+   *    - depthWrite: false, renderOrder: +1로 edge를 mesh 이후에 그려
+   *      "항상 mesh 위" 보장 (depthTest는 유지해 뒷면 엣지는 숨김).
+   *    - alphaToCoverage: false로 되돌림 — MSAA 4x + polygonOffset 조합이면
+   *      충분, alphaToCoverage는 오히려 checkerboard dithering 유발 가능. */
   private _makeEdgeLineMaterial(): LineMaterial {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
@@ -1054,11 +1063,12 @@ export class Viewport {
       color: this._edgeColor,
       linewidth: this._edgeWidth,
       resolution: new THREE.Vector2(w, h),
-      worldUnits: false,  // pixel-space width
-      alphaToCoverage: true,  // MSAA 샘플 기반 edge AA
+      worldUnits: false,
+      alphaToCoverage: false,
       depthTest: true,
+      depthWrite: false,  // edge끼리는 서로 depth 방해 안 함
       transparent: false,
-      dashed: false,  // solid only — computeLineDistances 호출 무의미 처리
+      dashed: false,
     });
     this._meshEdgeMaterials.push(mat);
     return mat;
@@ -1093,7 +1103,7 @@ export class Viewport {
     const segMat = this._makeEdgeLineMaterial();
     const segObj = new LineSegments2(segGeo, segMat);
     segObj.visible = this._edgeVisible;
-    segObj.computeLineDistances();
+    segObj.renderOrder = 1;  // 면 이후에 그려 z-fighting 회피
     this.meshGroup.add(segObj);
   }
 
