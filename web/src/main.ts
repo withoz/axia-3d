@@ -362,7 +362,11 @@ async function main() {
   initKeyboardShortcuts({ toolManager, viewport, toolbar, viewModeBar, saveProject, openProject });
 
   // ═══ 11. Style Side Panel — see ui/StylePanel.ts ═══
-  initStylePanel({ viewport });
+  initStylePanel({
+    viewport,
+    bridge,
+    syncMesh: () => toolManager.syncMesh(),
+  });
 
   // ═══ 12. XIA Inspector Panel — see ui/XiaInspector.ts ═══
   await initXiaInspector({ bridge, viewport, toolManager });

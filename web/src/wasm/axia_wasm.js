@@ -530,6 +530,14 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * 엣지 가시성 임계 각도(도) 조회. StylePanel 슬라이더 초기화에 사용.
+     * @returns {number}
+     */
+    edgeAngleThreshold() {
+        const ret = wasm.axiaengine_edgeAngleThreshold(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Get an edge's semantic class as u32 (0=Geometry, 1=Centerline).
      * Returns 0 for missing/inactive edges (safe default).
      * @param {number} edge_id_raw
@@ -1814,6 +1822,16 @@ export class AxiaEngine {
     setConstraintActive(id, active) {
         const ret = wasm.axiaengine_setConstraintActive(this.__wbg_ptr, id, active);
         return ret !== 0;
+    }
+    /**
+     * 엣지 가시성 임계 각도(도) 설정. 범위 [1.0, 89.0]로 clamp.
+     * 변경 시 edge cache 무효화 → 다음 getEdgeLines 호출에 반영.
+     * 작은 값: 모든 panel 경계가 보임 (건축/기계 CAD 선호).
+     * 큰 값: 부드러운 곡면 유지 (캐릭터 모델 선호).
+     * @param {number} deg
+     */
+    setEdgeAngleThreshold(deg) {
+        wasm.axiaengine_setEdgeAngleThreshold(this.__wbg_ptr, deg);
     }
     /**
      * Change an edge's semantic class. Rejects Geometry→Centerline if the

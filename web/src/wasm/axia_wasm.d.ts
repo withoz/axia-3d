@@ -182,6 +182,10 @@ export class AxiaEngine {
     draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
     /**
+     * 엣지 가시성 임계 각도(도) 조회. StylePanel 슬라이더 초기화에 사용.
+     */
+    edgeAngleThreshold(): number;
+    /**
      * Get an edge's semantic class as u32 (0=Geometry, 1=Centerline).
      * Returns 0 for missing/inactive edges (safe default).
      */
@@ -604,6 +608,13 @@ export class AxiaEngine {
      */
     setConstraintActive(id: number, active: boolean): boolean;
     /**
+     * 엣지 가시성 임계 각도(도) 설정. 범위 [1.0, 89.0]로 clamp.
+     * 변경 시 edge cache 무효화 → 다음 getEdgeLines 호출에 반영.
+     * 작은 값: 모든 panel 경계가 보임 (건축/기계 CAD 선호).
+     * 큰 값: 부드러운 곡면 유지 (캐릭터 모델 선호).
+     */
+    setEdgeAngleThreshold(deg: number): void;
+    /**
      * Change an edge's semantic class. Rejects Geometry→Centerline if the
      * edge bounds an active face (would orphan the face).
      * Returns true on success.
@@ -795,6 +806,7 @@ export interface InitOutput {
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly axiaengine_edgeAngleThreshold: (a: number) => number;
     readonly axiaengine_edgeClass: (a: number, b: number) => number;
     readonly axiaengine_edgeLength: (a: number, b: number) => number;
     readonly axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
@@ -872,6 +884,7 @@ export interface InitOutput {
     readonly axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
+    readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;

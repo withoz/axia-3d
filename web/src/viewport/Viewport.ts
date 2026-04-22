@@ -400,7 +400,10 @@ export class Viewport {
       this.container.clientHeight,
     );
 
-    // 소그리드 라인 (1m 간격, 얇고 연함)
+    // 소그리드 라인 (1m 간격). 2026-04-22 건축 가시성 향상:
+    //   color  0xaaaaaa → 0x888888 (더 진한 grey)
+    //   opacity 0.3 → 0.45
+    //   linewidth 0.5 → 0.8
     for (let i = -COUNT_SMALL; i <= COUNT_SMALL; i++) {
       const pos = i * SMALL;
       // 대그리드 위치는 건너뜀 (대그리드가 덮어씀)
@@ -410,10 +413,10 @@ export class Viewport {
       const geoX = new LineGeometry();
       geoX.setPositions([-EXTENT, 0, pos, EXTENT, 0, pos]);
       const matX = new LineMaterial({
-        color: 0xaaaaaa,
-        linewidth: 0.5,
+        color: 0x888888,
+        linewidth: 0.8,
         transparent: true,
-        opacity: 0.3,
+        opacity: 0.45,
         resolution,
       });
       const lineX = new Line2(geoX, matX);
@@ -426,10 +429,10 @@ export class Viewport {
       const geoZ = new LineGeometry();
       geoZ.setPositions([pos, 0, -EXTENT, pos, 0, EXTENT]);
       const matZ = new LineMaterial({
-        color: 0xaaaaaa,
-        linewidth: 0.5,
+        color: 0x888888,
+        linewidth: 0.8,
         transparent: true,
-        opacity: 0.3,
+        opacity: 0.45,
         resolution,
       });
       const lineZ = new Line2(geoZ, matZ);
@@ -439,7 +442,10 @@ export class Viewport {
       gridGroup.add(lineZ);
     }
 
-    // 대그리드 라인 (5m 간격, 두껍고 진함)
+    // 대그리드 라인 (5m 간격). 2026-04-22 건축 reference 강화:
+    //   color  0x999999 → 0x555555 (훨씬 진한 grey)
+    //   opacity 0.5 → 0.75
+    //   linewidth 1 → 1.5
     for (let i = -COUNT_BIG; i <= COUNT_BIG; i++) {
       const pos = i * BIG;
       // 원점(0)은 축 연장선이 이미 있으므로 건너뜀
@@ -448,10 +454,10 @@ export class Viewport {
       const geoX = new LineGeometry();
       geoX.setPositions([-EXTENT, 0, pos, EXTENT, 0, pos]);
       const matX = new LineMaterial({
-        color: 0x999999,
-        linewidth: 1,
+        color: 0x555555,
+        linewidth: 1.5,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.75,
         resolution,
       });
       const lineX = new Line2(geoX, matX);
@@ -463,10 +469,10 @@ export class Viewport {
       const geoZ = new LineGeometry();
       geoZ.setPositions([pos, 0, -EXTENT, pos, 0, EXTENT]);
       const matZ = new LineMaterial({
-        color: 0x999999,
-        linewidth: 1,
+        color: 0x555555,
+        linewidth: 1.5,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.75,
         resolution,
       });
       const lineZ = new Line2(geoZ, matZ);

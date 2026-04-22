@@ -171,6 +171,8 @@ type AxiaEngineExtended = AxiaEngine & {
   synthesizeFacesFromFreeEdges?(): number;
   countFreeEdges?(): number;
   meshManifoldInfo?(): string;
+  edgeAngleThreshold?(): number;
+  setEdgeAngleThreshold?(deg: number): void;
 
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
@@ -758,6 +760,22 @@ export class WasmBridge {
       console.error('[WasmBridge] countFreeEdges failed:', e);
       return 0;
     }
+  }
+
+  /** 엣지 가시성 임계 각도(도) 조회. */
+  edgeAngleThreshold(): number {
+    if (!this.engine?.edgeAngleThreshold) return 15;
+    try { return this.engine.edgeAngleThreshold(); }
+    catch { return 15; }
+  }
+
+  /** 엣지 가시성 임계 각도(도) 설정. 작을수록 더 많은 엣지 표시.
+   *  호출 후 caller는 syncMesh를 트리거해 화면 갱신해야 함.
+   *  Range: [1.0, 89.0] (WASM 측에서 clamp). */
+  setEdgeAngleThreshold(deg: number): void {
+    if (!this.engine?.setEdgeAngleThreshold) return;
+    try { this.engine.setEdgeAngleThreshold(deg); this.markDirty(); }
+    catch (e) { this.recordBridgeError('setEdgeAngleThreshold', e); }
   }
 
   /** 전역 mesh manifold 분석 — 닫힌 솔리드 여부와 boundary/non-manifold edge 수.

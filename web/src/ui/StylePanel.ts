@@ -6,6 +6,7 @@
  */
 
 import { Viewport } from '../viewport/Viewport';
+import type { WasmBridge } from '../bridge/WasmBridge';
 
 export interface StylePreset {
   name: string;
@@ -20,6 +21,13 @@ export interface StylePreset {
 
 export const STYLE_PRESETS: StylePreset[] = [
   { name: '건축 설계', bgMode: 'gradient2', bgSkyColor: '#8eaac4', bgGroundColor: '#d8dce2', frontColor: 0xc8ccd0, backColor: 0x8899bb, edgeColor: 0x1a1a2e },
+  // 건축 분위기 프리셋 — 야외 평면 / 입면 매스 검토에 최적화.
+  //   · Sky: 맑은 오후 하늘, Ground: 따뜻한 아스팔트 톤.
+  //   · Front: pure white (매스 볼륨을 그림자로 읽기).
+  //   · Edge: 순흑 (평면도-스타일 선명함).
+  { name: '건축 분위기', bgMode: 'gradient2', bgSkyColor: '#a4c4e4', bgGroundColor: '#c8bfae', frontColor: 0xf0f0f0, backColor: 0xb8a898, edgeColor: 0x000000 },
+  // 야외 매스 프리셋 — 해질녘 하늘로 매스 볼륨 강조 + 그림자 deep.
+  { name: '야외 매스', bgMode: 'gradient3', bgSkyColor: '#5f86b0', bgMidColor: '#d8a878', bgGroundColor: '#3a2a1a', frontColor: 0xd8cdb8, backColor: 0x8a6848, edgeColor: 0x15080a },
   { name: '밝은 하늘', bgMode: 'gradient2', bgSkyColor: '#87ceeb', bgGroundColor: '#d4e6c3', frontColor: 0xf5f5f5, backColor: 0xaabbcc, edgeColor: 0x444466 },
   { name: '클래식 흰색', bgMode: 'solid', bgSkyColor: '#ffffff', bgGroundColor: '#ffffff', frontColor: 0xf0f0f0, backColor: 0xc0c8d8, edgeColor: 0x333333 },
   { name: '다크 모드', bgMode: 'gradient2', bgSkyColor: '#0d0d1a', bgGroundColor: '#000000', frontColor: 0xcccccc, backColor: 0x667788, edgeColor: 0x222244 },
@@ -32,10 +40,16 @@ export const STYLE_PRESETS: StylePreset[] = [
 
 export interface StylePanelDeps {
   viewport: Viewport;
+  /** Optional — 엣지 각도 임계 슬라이더용. 없으면 슬라이더는 여전히 표시되나
+   *  WASM에 설정 반영 안 됨 (legacy 호환). */
+  bridge?: WasmBridge;
+  /** Optional — 엣지 각도 변경 후 mesh 재동기화. 없으면 사용자가 다음
+   *  액션에서 자연스럽게 갱신됨. */
+  syncMesh?: () => void;
 }
 
 export function initStylePanel(deps: StylePanelDeps): void {
-  const { viewport } = deps;
+  const { viewport, bridge, syncMesh } = deps;
 
   const stylePanel = document.getElementById('style-panel');
   const styleBtn = document.getElementById('style-btn');
@@ -248,6 +262,25 @@ export function initStylePanel(deps: StylePanelDeps): void {
     if (label) label.textContent = val;
     const w = parseFloat(val);
     if (Number.isFinite(w)) viewport.setEdgeStyle({ width: w });
+  });
+
+  // Edge angle threshold — WASM 측 coplanar 엣지 숨김 각도. 작을수록 엣지↑.
+  //   건축: 10° (벽/바닥 panel 경계 또렷)
+  //   기계: 20° (원통 대칭 부드럽게 유지하되 조립 경계 보임)
+  //   캐릭터: 30° (곡면 smooth)
+  const initAngle = bridge?.edgeAngleThreshold() ?? 15;
+  const angleSlider = document.getElementById('sty-edge-angle') as HTMLInputElement | null;
+  const angleLabel = document.getElementById('sty-edge-angle-val');
+  if (angleSlider) angleSlider.value = String(initAngle);
+  if (angleLabel) angleLabel.textContent = `${initAngle.toFixed(0)}°`;
+  angleSlider?.addEventListener('input', (e) => {
+    const deg = parseFloat((e.target as HTMLInputElement).value);
+    if (angleLabel) angleLabel.textContent = `${deg.toFixed(0)}°`;
+    if (!Number.isFinite(deg) || !bridge) return;
+    bridge.setEdgeAngleThreshold(deg);
+    // Debounce 없이 매 input마다 syncMesh 호출 — 슬라이더 드래그 중 즉각 피드백.
+    // 대용량 메시면 "change" 이벤트(release 시)로 바꿀 수 있음.
+    syncMesh?.();
   });
 
   // Edge visibility

@@ -143,6 +143,12 @@ pub struct AxiaEngine {
     /// 성공한 연산은 이 값을 비우지 않음 (persistent until next failure).
     last_error: String,
 
+    /// 엣지 가시성 임계 각도 (도). 인접 면 사이 법선 각도가 이보다 작으면
+    /// coplanar로 판정되어 엣지 숨김. 기본 `EDGE_VISIBILITY_ANGLE_DEG` (15°).
+    /// StylePanel의 슬라이더로 런타임 변경 → 다음 syncMesh에서 반영.
+    /// 작을수록 엣지가 많이 보임 (부드러운 곡면도 faceted), 클수록 매끈.
+    edge_angle_threshold_deg: f64,
+
     /// 가장 최근 `batch_erase_edges_with_merge`에서 일부 edge의 merge가
     /// 실패했을 때 첫 번째 실패 사유. 디버그 Toast 용.
     last_merge_failure: String,
@@ -167,6 +173,7 @@ impl AxiaEngine {
             topology_changed: true,  // first render always needs full build
             face_range_map: HashMap::new(),
             last_error: String::new(),
+            edge_angle_threshold_deg: axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG,
             last_merge_failure: String::new(),
         }
     }
@@ -208,10 +215,11 @@ impl AxiaEngine {
                 self.cached_face_map.clear();
             }
         }
-        // Edge lines are computed from DCEL topology (not from triangle geometry)
-        // EDGE_VISIBILITY_ANGLE_DEG (30°): 원통 옆면은 soft edge, 직각은 hard edge
+        // Edge lines are computed from DCEL topology (not from triangle geometry).
+        // 임계 각도는 런타임 조절 가능 (StylePanel 슬라이더). 기본은 tolerances.rs의
+        // EDGE_VISIBILITY_ANGLE_DEG (15°).
         let (edge_lines, edge_map) = self.scene
-            .export_edge_lines_with_map(axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG);
+            .export_edge_lines_with_map(self.edge_angle_threshold_deg);
         self.cached_edge_lines = edge_lines;
         self.cached_edge_map = edge_map;
         self.cache_dirty = false;
@@ -2309,6 +2317,25 @@ impl AxiaEngine {
                 false
             }
             _ => false,
+        }
+    }
+
+    /// 엣지 가시성 임계 각도(도) 조회. StylePanel 슬라이더 초기화에 사용.
+    #[wasm_bindgen(js_name = "edgeAngleThreshold")]
+    pub fn edge_angle_threshold(&self) -> f64 {
+        self.edge_angle_threshold_deg
+    }
+
+    /// 엣지 가시성 임계 각도(도) 설정. 범위 [1.0, 89.0]로 clamp.
+    /// 변경 시 edge cache 무효화 → 다음 getEdgeLines 호출에 반영.
+    /// 작은 값: 모든 panel 경계가 보임 (건축/기계 CAD 선호).
+    /// 큰 값: 부드러운 곡면 유지 (캐릭터 모델 선호).
+    #[wasm_bindgen(js_name = "setEdgeAngleThreshold")]
+    pub fn set_edge_angle_threshold(&mut self, deg: f64) {
+        let clamped = deg.max(1.0).min(89.0);
+        if (clamped - self.edge_angle_threshold_deg).abs() > 1e-6 {
+            self.edge_angle_threshold_deg = clamped;
+            self.cache_dirty = true;
         }
     }
 
