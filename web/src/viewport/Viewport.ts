@@ -1882,6 +1882,28 @@ export class Viewport {
     return this._ssaoEnabled;
   }
 
+  /** 그림자 렌더링 on/off 토글. 기본 off (CAD 작업에는 방해 가능한
+   *  shadow acne 등의 artifact가 발생). 켜면 DirectionalLight가 그림자를
+   *  생성하고 ShadowMaterial catcher plane이 받아 보여줌.
+   *  shadowMap.needsUpdate = true 로 강제 재빌드해 toggle 즉시 반영. */
+  setShadowEnabled(enabled: boolean): void {
+    this.renderer.shadowMap.enabled = enabled;
+    // 재렌더 트리거 — Three.js는 toggle 시 shadow pass 재구성 필요.
+    this.renderer.shadowMap.needsUpdate = true;
+    // 모든 material에 needsUpdate 전파 (shadow uniform 재컴파일).
+    this.scene.traverse((obj) => {
+      if ((obj as THREE.Mesh).material) {
+        const mat = (obj as THREE.Mesh).material;
+        if (Array.isArray(mat)) mat.forEach(m => { m.needsUpdate = true; });
+        else mat.needsUpdate = true;
+      }
+    });
+  }
+
+  isShadowEnabled(): boolean {
+    return this.renderer.shadowMap.enabled;
+  }
+
   /**
    * Toggle the shell-technique fur overlay on the main mesh. Off by
    * default because it costs N extra draw calls (N = layers). When

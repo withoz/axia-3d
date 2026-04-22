@@ -271,6 +271,15 @@ export function initMenuBar(deps: MenuBarDeps): void {
         Toast.info(`털 쉐이더 ${next ? '켜짐 (24 shell, 드로우콜 증가 주의)' : '꺼짐'}`);
         break;
       }
+      case 'view-shadow': {
+        const next = !viewport.isShadowEnabled();
+        viewport.setShadowEnabled(next);
+        Toast.info(
+          `그림자 ${next ? '켜짐 (shadow map 2048²)' : '꺼짐 — 깔끔한 CAD 모드'}`,
+          2500,
+        );
+        break;
+      }
       case 'reference-image': {
         // 참조 이미지 overlay — 사진 따라 그리기 / 비율 맞추기 용.
         // HTML <img> overlay 방식: 3D 씬과 독립, 카메라 이동해도 고정.
