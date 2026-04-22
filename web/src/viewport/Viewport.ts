@@ -152,7 +152,12 @@ export class Viewport {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    this.renderer.shadowMap.enabled = true;
+    // 2026-04-22: shadow 기본 off.
+    // 2048×2048 shadow map 위 ±20000mm 영역 → texel 19.5mm.
+    // 이 해상도가 ground에 떨어지면 shadow acne (수평 scanline) 발생.
+    // CAD 작업에서는 그림자 자체가 불필요한 사실감이며 artifact 원인이므로
+    // 기본 비활성. 설정 내부 구성은 유지되어 필요 시 enabled=true로 즉시 복구.
+    this.renderer.shadowMap.enabled = false;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // ACESFilmic gives PBR materials a natural photographic look under IBL;
     // the previous NoToneMapping clipped highlights whenever roughness was
