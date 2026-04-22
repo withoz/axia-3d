@@ -64,9 +64,13 @@ export class Viewport {
   private _bgSkyColor = '#8eaac4';
   private _bgMidColor = '#b0c4d8';
   private _bgGroundColor = '#d8dce2';
-  private _frontColor = 0xe8e8e8;
+  // 2026-04-22: 선명도 개선 번들 A+B 적용.
+  //   frontColor: 0xe8e8e8 → 0xc8ccd0 — IBL + ACES 조합에서 near-white
+  //                                     포화 방지, 면 contrast 확보.
+  //   edgeColor : 0x333366 → 0x1a1a2e — 밝은 면과 대비를 강화.
+  private _frontColor = 0xc8ccd0;
   private _backColor = 0x8899bb;
-  private _edgeColor = 0x333366;
+  private _edgeColor = 0x1a1a2e;
   /** ADR-007 Phase 4 — CAD 모드: single-sided 렌더링 (BackSide mesh 생략, GPU ↑) */
   private _singleSidedRender = false;
   private _faceOpacity = 1.0;
@@ -74,8 +78,10 @@ export class Viewport {
   private _profileEdge = true;
   /** Edge line width in CSS pixels (world-space, respects DPR). Controls the
    *  `LineMaterial.linewidth` used by LineSegments2 — unlike LineBasicMaterial,
-   *  this actually takes effect on all platforms. Range: 1 ~ 5 from StylePanel. */
-  private _edgeWidth = 1.5;
+   *  this actually takes effect on all platforms. Range: 1 ~ 5 from StylePanel.
+   *  2026-04-22: 1.5 → 2.0 기본값 상향. 고양이/강아지처럼 곡면 많은 모델에서
+   *  형태감 식별력 향상. */
+  private _edgeWidth = 2.0;
   /** Cache of Mesh-edge LineMaterials so resize + width changes are fast.
    *  Separate from the axis LineMaterials (lineMaterials arr in constructor). */
   private _meshEdgeMaterials: LineMaterial[] = [];
@@ -148,7 +154,9 @@ export class Viewport {
     // the previous NoToneMapping clipped highlights whenever roughness was
     // low. Exposure 1.0 is the neutral baseline.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    // 2026-04-22: exposure 1.0 → 0.9. IBL + roughness 0.65 조합에서 하이라이트가
+    // 과하게 밝아지는 현상을 차분히 내림. 면-면 경계선 가시화를 돕는다.
+    this.renderer.toneMappingExposure = 0.9;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
@@ -881,13 +889,13 @@ export class Viewport {
 
       const frontMat = new THREE.MeshStandardMaterial({
         // vertexColors가 활성이면 white(곱셈 중립) 사용 → vertex color가 그대로 표시됨
-        color: useVertexColors ? 0xffffff : 0xe8e8e8,
+        color: useVertexColors ? 0xffffff : this._frontColor,
         side: THREE.FrontSide,
-        // Balanced PBR defaults for a CAD preview: roughness 0.5 gives
-        // a soft sheen under IBL without looking plasticky; metalness 0
-        // keeps non-metallic surface assumption (users can override per
-        // material via the material UI later).
-        roughness: 0.5,
+        // Balanced PBR defaults for a CAD preview.
+        // 2026-04-22: roughness 0.5 → 0.65. 0.5는 IBL 반사가 강해 매끈한
+        // 면이 하얗게 포화. 0.65는 확산 우세로 색 보존 + 경계 대비 확보.
+        // metalness 0은 비금속 surface 가정 유지.
+        roughness: 0.65,
         metalness: 0.0,
         polygonOffset: true,
         polygonOffsetFactor: 1,

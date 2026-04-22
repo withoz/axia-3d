@@ -95,8 +95,11 @@ pub const EPSILON_ANGLE_DEG: f64 = 0.01;
 /// 엣지 가시성 임계 각도 (도). 인접 면 사이의 법선 각도가 이보다 작으면
 /// 엣지를 숨긴다(soft edge / coplanar 취급).
 ///
-/// SketchUp 기본값 30°와 동일.
-pub const EDGE_VISIBILITY_ANGLE_DEG: f64 = 30.0;
+/// 2026-04-22: SketchUp 기본 30° → 15°. 고양이/강아지처럼 revolve로 만든
+/// 곡면은 인접 face 각도가 대부분 10~25°라 30° 임계에선 거의 모든 엣지가
+/// 숨겨져 형태감이 사라진다. 15°는 "부드러운 곡면은 여전히 매끈하되
+/// 주요 silhouette / 면-면 경계는 드러나는" 균형점.
+pub const EDGE_VISIBILITY_ANGLE_DEG: f64 = 15.0;
 
 /// Smooth group 그룹핑 임계 각도 (도). BFS로 인접 면을 묶을 때 이보다
 /// 작은 각도 차이를 가진 면들을 하나의 곡면 그룹으로 취급.

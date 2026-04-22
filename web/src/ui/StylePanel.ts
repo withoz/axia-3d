@@ -19,7 +19,7 @@ export interface StylePreset {
 }
 
 export const STYLE_PRESETS: StylePreset[] = [
-  { name: '건축 설계', bgMode: 'gradient2', bgSkyColor: '#8eaac4', bgGroundColor: '#d8dce2', frontColor: 0xe8e8e8, backColor: 0x8899bb, edgeColor: 0x333366 },
+  { name: '건축 설계', bgMode: 'gradient2', bgSkyColor: '#8eaac4', bgGroundColor: '#d8dce2', frontColor: 0xc8ccd0, backColor: 0x8899bb, edgeColor: 0x1a1a2e },
   { name: '밝은 하늘', bgMode: 'gradient2', bgSkyColor: '#87ceeb', bgGroundColor: '#d4e6c3', frontColor: 0xf5f5f5, backColor: 0xaabbcc, edgeColor: 0x444466 },
   { name: '클래식 흰색', bgMode: 'solid', bgSkyColor: '#ffffff', bgGroundColor: '#ffffff', frontColor: 0xf0f0f0, backColor: 0xc0c8d8, edgeColor: 0x333333 },
   { name: '다크 모드', bgMode: 'gradient2', bgSkyColor: '#0d0d1a', bgGroundColor: '#000000', frontColor: 0xcccccc, backColor: 0x667788, edgeColor: 0x222244 },
