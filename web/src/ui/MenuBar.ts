@@ -275,7 +275,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
         const next = !viewport.isShadowEnabled();
         viewport.setShadowEnabled(next);
         Toast.info(
-          `그림자 ${next ? '켜짐 (shadow map 2048²)' : '꺼짐 — 깔끔한 CAD 모드'}`,
+          `그림자 ${next ? '켜짐 (blob shadow — 가벼운 grounding)' : '꺼짐'}`,
           2500,
         );
         break;

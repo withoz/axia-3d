@@ -110,6 +110,15 @@ export class Viewport {
   private _fur: FurShell | null = null;
   private _furEnabled: boolean = false;
 
+  // ═══ Blob shadow (light-weight ground shadow) ═══
+  // Shader-based radial gradient plane — no shadow map rendering.
+  // Placed at y=0 under scene bbox, follows it on syncMesh.
+  // 시각적으로 "매스 아래 부드러운 grounding" 정도의 힌트만 제공.
+  // 기존 shadow map 방식(VSM/PCF)은 근거리 CAD 스케일에서 texel scanline
+  // 아티팩트 피할 수 없어, 사용자 요청에 따라 가벼운 blob 방식으로 교체.
+  private _blobShadow: THREE.Mesh | null = null;
+  private _blobShadowEnabled: boolean = true;  // 기본 on — 깔끔+가벼움
+
   // ═══ Sketch plane visual (Tier 3A) ═══
   // Tinted translucent plane + border to show which plane sketching locks to.
   private _sketchPlaneMesh: THREE.Mesh | null = null;
@@ -157,13 +166,11 @@ export class Viewport {
     // 이 해상도가 ground에 떨어지면 shadow acne (수평 scanline) 발생.
     // CAD 작업에서는 그림자 자체가 불필요한 사실감이며 artifact 원인이므로
     // 기본 비활성. 설정 내부 구성은 유지되어 필요 시 enabled=true로 즉시 복구.
+    // 2026-04-22: shadowMap 완전 off. 사용자 요청대로 real-time shadow map
+    // (PCF/VSM 모두)은 scanline artifact로 CAD에 부적합 판정.
+    // 대신 blob shadow (shader 기반 소프트 그라디언트 plane)를 사용해
+    // "매스가 땅에 있다"는 grounding 힌트만 가볍게 제공.
     this.renderer.shadowMap.enabled = false;
-    // 2026-04-22: PCFSoftShadowMap → VSMShadowMap.
-    // PCF는 shadow map texel 경계를 N-tap 샘플링 블러로 숨기지만 CAD 스케일
-    // 에서 texel step이 커서 radius를 아무리 올려도 scanline artifact 남음.
-    // VSM(Variance Shadow Map)은 per-pixel variance 기반으로 실제 blur를
-    // 수행 → texel 경계 자동 smooth. 건축 preview shadow에 적합.
-    this.renderer.shadowMap.type = THREE.VSMShadowMap;
     // ACESFilmic gives PBR materials a natural photographic look under IBL;
     // the previous NoToneMapping clipped highlights whenever roughness was
     // low. Exposure 1.0 is the neutral baseline.
@@ -203,30 +210,10 @@ export class Viewport {
     this.scene.add(ambient);
 
     // Key light — casts the main shadow.
-    // VSMShadowMap 튜닝 (PCF와 bias 의미 다름):
-    //   VSM은 shadow를 depth moment로 저장하고 per-pixel Chebyshev
-    //   부등식으로 visibility 확률 계산 → 자연스러운 blur. PCF처럼
-    //   sample-count로 blur하지 않음.
-    //   mapSize    2048 (VSM은 smaller map도 smooth함)
-    //   bounds     ±10000 (건축 scene 규모)
-    //   bias       0.0 (VSM은 PCF 스타일 bias 불필요 — light bleeding 완화)
-    //   blurSamples + radius 조합이 VSM의 blur 결정.
-    //   blurSamples 25, radius 8 → 매끈하고 artifact 없는 soft shadow.
+    // DirectionalLight — 순수 조명만 기여 (shadow 생성 안 함).
+    // Shadow는 blob shadow (아래 _createBlobShadow)에서 별도 처리.
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
     dirLight.position.set(8000, 15000, 10000);
-    dirLight.castShadow = true;
-    const shadow = dirLight.shadow;
-    shadow.mapSize.set(2048, 2048);
-    shadow.camera.left   = -10000;
-    shadow.camera.right  =  10000;
-    shadow.camera.top    =  10000;
-    shadow.camera.bottom = -10000;
-    shadow.camera.near   = 100;
-    shadow.camera.far    = 60000;
-    shadow.bias        = 0.0;
-    shadow.normalBias  = 0.0;
-    shadow.radius      = 8;
-    shadow.blurSamples = 25;  // VSM 전용: moment texture 블러 샘플 수
     this.scene.add(dirLight);
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
@@ -262,25 +249,11 @@ export class Viewport {
       console.warn('[Viewport] IBL init failed; falling back to direct lights only:', e);
     }
 
-    // ── Shadow catcher ─────────────────────────────────────────────
-    // Large invisible horizontal plane at y=0 that ONLY receives the
-    // directional light's shadow. Without this, shadows cast by geometry
-    // have nothing to fall on (the infinite grid is a shader-drawn
-    // overlay, not a receiver). `ShadowMaterial` renders only the
-    // shadow contribution (alpha), so the plane itself stays transparent
-    // and doesn't clash with the flat CAD background.
-    const shadowCatcher = new THREE.Mesh(
-      new THREE.PlaneGeometry(200000, 200000),
-      // 0.28 → 0.2: 그림자 전체 강도 낮춰 잔여 shadow map artifact 체감 ↓
-      new THREE.ShadowMaterial({ opacity: 0.2 }),
-    );
-    shadowCatcher.rotation.x = -Math.PI / 2; // XZ plane, facing +Y
-    shadowCatcher.position.y = 0;
-    shadowCatcher.receiveShadow = true;
-    shadowCatcher.name = 'shadow-catcher';
-    // Never contribute to picking / selection / snapping.
-    shadowCatcher.userData.nonInteractive = true;
-    this.scene.add(shadowCatcher);
+    // ── Blob shadow (실제 shadow map 대체) ───────────────────────────
+    // 단일 PlaneGeometry + radial gradient shader. syncMesh 시 bbox에 맞춰
+    // 위치/크기 갱신. shadow map rendering 없이 "객체 아래 soft grounding"
+    // 효과만 내어 CAD preview에 가장 부담 없이 공간감 제공.
+    this._createBlobShadow();
 
     // ── Infinite Grid (AixxiA shader-based) ──
     this.infiniteGrid = this.createInfiniteGrid();
@@ -952,10 +925,7 @@ export class Viewport {
 
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
-      frontMesh.castShadow = true;
-      // VSMShadowMap으로 변경된 이후 user geometry가 shadow 받아도
-      // scanline acne 발생하지 않음 (variance filter가 자연스럽게 soft).
-      frontMesh.receiveShadow = true;
+      // Real shadow map 미사용 — blob shadow로 대체. castShadow/receiveShadow 불필요.
       this.meshGroup.add(frontMesh);
 
       // ── Store reference for color updates ──
@@ -964,6 +934,9 @@ export class Viewport {
       // If fur was enabled before this mesh rebuild, re-attach so the
       // shell overlay tracks the new geometry automatically.
       this._refreshFur();
+
+      // Blob shadow (light-weight ground shadow) 위치·크기 갱신.
+      this._updateBlobShadow();
 
       // ADR-007 Phase 4 — CAD 모드 (single-sided) 활성화 시 BackSide mesh 생략
       // 이점:
@@ -1895,26 +1868,75 @@ export class Viewport {
     return this._ssaoEnabled;
   }
 
-  /** 그림자 렌더링 on/off 토글. 기본 off (CAD 작업에는 방해 가능한
-   *  shadow acne 등의 artifact가 발생). 켜면 DirectionalLight가 그림자를
-   *  생성하고 ShadowMaterial catcher plane이 받아 보여줌.
-   *  shadowMap.needsUpdate = true 로 강제 재빌드해 toggle 즉시 반영. */
+  /** 그림자 on/off 토글 (blob shadow 방식).
+   *  Real shadow map 사용 안 함 — 객체 아래 soft radial gradient plane만
+   *  표시/숨김. 항상 가볍고 scanline artifact 없음. */
   setShadowEnabled(enabled: boolean): void {
-    this.renderer.shadowMap.enabled = enabled;
-    // 재렌더 트리거 — Three.js는 toggle 시 shadow pass 재구성 필요.
-    this.renderer.shadowMap.needsUpdate = true;
-    // 모든 material에 needsUpdate 전파 (shadow uniform 재컴파일).
-    this.scene.traverse((obj) => {
-      if ((obj as THREE.Mesh).material) {
-        const mat = (obj as THREE.Mesh).material;
-        if (Array.isArray(mat)) mat.forEach(m => { m.needsUpdate = true; });
-        else mat.needsUpdate = true;
-      }
-    });
+    this._blobShadowEnabled = enabled;
+    if (this._blobShadow) this._blobShadow.visible = enabled;
   }
 
   isShadowEnabled(): boolean {
-    return this.renderer.shadowMap.enabled;
+    return this._blobShadowEnabled;
+  }
+
+  /** Blob shadow plane 생성 (한 번만). 이후 _updateBlobShadow()로 위치·크기 갱신. */
+  private _createBlobShadow(): void {
+    const geo = new THREE.PlaneGeometry(1, 1);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      uniforms: {
+        uOpacity: { value: 0.35 },
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        precision highp float;
+        varying vec2 vUv;
+        uniform float uOpacity;
+        void main() {
+          // 중심 (0.5, 0.5)에서 가장자리(1.0)로 갈수록 alpha 0.
+          // smoothstep으로 부드러운 경계. 타원형 fade.
+          vec2 c = vUv - 0.5;
+          float d = length(c) * 2.0;  // [0, 1] in circle
+          float alpha = (1.0 - smoothstep(0.3, 1.0, d)) * uOpacity;
+          if (alpha < 0.005) discard;
+          gl_FragColor = vec4(0.0, 0.0, 0.0, alpha);
+        }
+      `,
+    });
+    this._blobShadow = new THREE.Mesh(geo, mat);
+    this._blobShadow.rotation.x = -Math.PI / 2;  // XZ plane
+    this._blobShadow.position.y = 0.5;            // 약간 띄워 z-fighting 회피
+    this._blobShadow.renderOrder = -5;            // mesh 보다 먼저
+    this._blobShadow.visible = this._blobShadowEnabled;
+    this._blobShadow.userData.noPick = true;
+    this.scene.add(this._blobShadow);
+  }
+
+  /** frontMesh bbox XZ에 맞춰 blob shadow 위치·크기 갱신.
+   *  syncMesh (updateMesh)에서 매번 호출. */
+  private _updateBlobShadow(): void {
+    if (!this._blobShadow || !this.frontMesh) return;
+    const geo = this.frontMesh.geometry;
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) { this._blobShadow.visible = false; return; }
+    const width = Math.max(100, bb.max.x - bb.min.x);
+    const depth = Math.max(100, bb.max.z - bb.min.z);
+    const cx = (bb.max.x + bb.min.x) / 2;
+    const cz = (bb.max.z + bb.min.z) / 2;
+    // Scale: bbox보다 살짝 여유롭게 — 가장자리 fade가 자연스럽게
+    this._blobShadow.scale.set(width * 1.6, depth * 1.6, 1);
+    this._blobShadow.position.set(cx, 0.5, cz);
+    this._blobShadow.visible = this._blobShadowEnabled;
   }
 
   /**
