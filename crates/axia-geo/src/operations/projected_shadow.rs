@@ -1,34 +1,50 @@
-//! Per-face Projected Shadow — SketchUp-style matrix projection onto ground plane.
+//! Silhouette Projected Shadow — Sun-facing silhouette edges의 ground 투영.
 //!
-//! 각 active face 중 "위를 향하는" 면(normal.y > threshold)을 sun direction을
-//! 따라 ground plane (y=0)으로 투영한 2D polygon을 반환한다. Shadow map을
-//! 전혀 사용하지 않아 scanline / texel acne 등의 artifact 불가능.
+//! ## Phase 2.2 업그레이드 (2026-04-23)
 //!
-//! ## 왜 위를 향하는 면만 projection?
+//! 이전 알고리즘 (Phase 1~2.1): "모든 sun-facing face를 각자 projection".
+//! 문제:
+//!   - Face마다 독립 polygon → 수많은 overlapping triangles
+//!   - Overlap 누적 darkening → 그림자 내부가 불균일하게 더 어두움
+//!   - Tube 같은 sweep 객체에서 face 사이 간격으로 "segment 끊어짐"
 //!
-//! 태양이 위에서 비출 때, 빛을 차단하는 "occluder silhouette"의 top 경계를
-//! 형성하는 것은 위쪽 normal을 가진 face들이다. 예:
-//!   - Cube 상단 face (normal +Y) → ground에 사각형 그림자
-//!   - Wall 상단의 얇은 strip → ground에 wall 실루엣
-//!   - Sphere 상반구 face들 → ground에 반구 그림자 approximation
+//! 신 알고리즘: silhouette 원칙.
 //!
-//! 옆·아래 face를 추가하면 shadow가 중첩되어 "shadow volume 전체가 ground에
-//! 떨어진" 듯한 오표시 발생. Top-only 규칙이 architectural silhouette에 딱.
+//! ### 1단계: Face 분류
+//! 각 active face의 normal · (-sun_dir) 을 계산:
+//!   > 0  → sun-facing (빛을 향함)
+//!   < 0  → sun-averted (뒷면)
 //!
-//! ## 현재 제약 (MVP)
+//! ### 2단계: Silhouette edge 추출
+//! Edge는 인접 두 face의 sun-facing 상태가 다를 때 silhouette:
+//!   - Manifold interior edge: 두 face의 분류가 다르면 silhouette
+//!   - Boundary edge (face 1개): 그 face가 sun-facing이면 silhouette
 //!
-//! - Ground (y=0)에만 투영. 벽/slab 위 receiver는 Phase 2 작업.
-//! - Fan triangulation 사용 → convex face(box top)만 정확. Concave/hole은
-//!   earcut 필요 (Phase 2).
-//! - Ground-level face (all verts y ≤ eps) 는 skip — 자기 자신에 투영 방지.
+//! 이 edge들이 바로 object의 "실루엣 윤곽"을 이룬다.
 //!
-//! ## 출력 포맷
+//! ### 3단계: Loop grouping
+//! Silhouette edge들을 연결된 loop들로 그룹핑. 각 loop는 한 object (또는
+//! 한 object의 한 silhouette region)의 외곽 경계.
 //!
-//! `Vec<f32>`, 각 9 float = 1 triangle (3 vertex × {x, y, z}). y는 항상 0.
-//! TS는 이 buffer를 `BufferGeometry`에 직접 세팅해 dark translucent mesh로 렌더.
+//! ### 4단계: Ground 투영 + triangulation
+//! Loop vertex들을 sun direction으로 y=0 평면에 matrix projection. fan
+//! triangulation으로 버퍼 생성.
+//!
+//! ## 장점
+//! - Overlap 제거 → 그림자 내부 균일한 darkness
+//! - Tube/sweep: silhouette 따라 연속된 외곽 → segment 끊어짐 없음
+//! - Shadow polygon 수 대폭 감소 → GPU 부담 ↓
+//!
+//! ## 제약 (MVP)
+//! - Ground (y=0) 만 receiver (Phase 2.3에서 multi-plane 확장)
+//! - Fan tri 사용 → convex silhouette 가정 (concave shape은 slight artifact)
+//! - Non-manifold edge (>2 face) 은 안전하게 skip
+//! - Multiple disjoint objects의 silhouette은 각자 독립 loop로 처리 ✓
 
+use std::collections::{HashMap, HashSet};
 use glam::DVec3;
 
+use crate::entities::*;
 use crate::mesh::Mesh;
 
 impl Mesh {
@@ -46,80 +62,152 @@ impl Mesh {
             return out;
         }
 
-        // Silhouette 기반 caster 판정.
-        // face가 sun을 "향하는" 경우(=sun 반대 방향 normal) 빛을 블록 →
-        // 그 뒷면 영역에 그림자를 만든다. 이 조건은:
-        //   face.normal · (-sun_dir) > 0    (sun 반대 방향과 양의 내적)
-        //   ⇔ face.normal · sun_dir < 0      (sun 진행 방향과 음의 내적)
-        //
-        // 2026-04-23 update (사용자 보고 — 꼬리 segment 끊어져 보임):
-        //   이전 `normal.y > 0.3` 필터는 "위 향하는 top face"만 포함해
-        //   tube(꼬리)나 기울어진 면을 놓침. silhouette 원칙으로 교체하면
-        //   sun을 향하는 모든 face가 cast → 겹쳐서 solid 실루엣 채움.
-        //
-        // threshold 0.1 (slightly positive)로 grazing edge case 안정화.
-        const SUN_FACING_THRESHOLD: f64 = 0.1;
-        // Min face height above ground to cast. User가 그린 ground-level rect
-        // 는 자기 자신에 투영하지 않도록 필터.
+        // Sun-facing threshold — 0 이면 정확 silhouette이지만 grazing edge
+        // 안정성을 위해 epsilon. Polygon normal 정확도(deg_to_rad의 floating
+        // error)와 ADR-007 recompute 후 정밀도 여유분을 고려해 ±0.001.
+        const SF_EPS: f64 = 0.001;
         const MIN_HEIGHT: f64 = 1.0;
 
-        for (_fid, face) in self.faces.iter() {
+        // ─── 1) Face sun-facing classification ───
+        let mut sun_facing: HashMap<FaceId, bool> = HashMap::new();
+        for (fid, face) in self.faces.iter() {
             if !face.is_active() { continue; }
-            let normal = face.normal();
-            // Sun-facing test: normal · (-sun) > threshold
-            let sun_facing = normal.dot(-sun_dir);
-            if sun_facing < SUN_FACING_THRESHOLD { continue; }
+            let dot = face.normal().dot(-sun_dir);
+            sun_facing.insert(fid, dot > SF_EPS);
+        }
 
-            // Collect face outer loop vertices (skip holes for MVP — holes in
-            // shadow polygon would need earcut with holes).
-            let outer_start = face.outer().start;
-            if outer_start.is_null() { continue; }
-            let loop_verts = match self.collect_loop_verts(outer_start) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if loop_verts.len() < 3 { continue; }
-
-            // World positions.
-            let positions: Vec<DVec3> = loop_verts.iter()
-                .filter_map(|&vid| self.vertex_pos(vid).ok())
+        // ─── 2) Silhouette edge 추출 ───
+        // Adjacent faces의 sun-facing 상태가 다르면 silhouette.
+        let mut silhouette_edges: Vec<EdgeId> = Vec::new();
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let (faces, _) = self.get_faces_sharing_edge(eid);
+            let active: Vec<FaceId> = faces.into_iter()
+                .filter(|f| sun_facing.contains_key(f))
                 .collect();
-            if positions.len() != loop_verts.len() { continue; }
 
-            // Skip ground-level faces.
-            let max_y = positions.iter()
-                .map(|p| p.y)
-                .fold(f64::NEG_INFINITY, f64::max);
-            if max_y <= MIN_HEIGHT { continue; }
+            let is_silhouette = match active.len() {
+                0 => false,           // no adjacent active face
+                1 => sun_facing[&active[0]],  // boundary edge: silhouette if lit
+                _ => {
+                    // Interior: 두 face 중 sun-facing 상태가 다른 경우
+                    let first = sun_facing[&active[0]];
+                    active.iter().any(|f| sun_facing[f] != first)
+                }
+            };
+            if !is_silhouette { continue; }
 
-            // Project each vertex onto y=0 along sun_dir.
-            // Ray: p(t) = v + sun_dir * t
-            // Solve p.y = 0:  v.y + sun_dir.y * t = 0  →  t = -v.y / sun_dir.y
-            let projected: Vec<(f64, f64)> = positions.iter().map(|v| {
-                let t = -v.y / sun_dir.y;
-                let px = v.x + sun_dir.x * t;
-                let pz = v.z + sun_dir.z * t;
-                (px, pz)
-            }).collect();
+            // Edge height filter — 두 endpoint 중 하나라도 ground 위면 포함.
+            let a_y = self.vertex_pos(edge.v_small()).map(|p| p.y).unwrap_or(0.0);
+            let b_y = self.vertex_pos(edge.v_large()).map(|p| p.y).unwrap_or(0.0);
+            if a_y.max(b_y) <= MIN_HEIGHT { continue; }
 
-            // Fan-triangulate the projected polygon from vertex 0.
-            // Works for convex faces (box tops, rect primitives). Concave
-            // faces (L-shape slabs) will produce overlap/gaps — acceptable
-            // artifact for MVP.
+            silhouette_edges.push(eid);
+        }
+
+        if silhouette_edges.is_empty() { return out; }
+
+        // ─── 3) Loop grouping ───
+        let loops = self.group_silhouette_loops(&silhouette_edges);
+
+        // ─── 4) Project + triangulate each loop ───
+        for loop_verts in loops {
+            if loop_verts.len() < 3 { continue; }
+            let projected: Vec<(f64, f64)> = loop_verts.iter()
+                .filter_map(|&vid| self.vertex_pos(vid).ok())
+                .map(|v| {
+                    let t = -v.y / sun_dir.y;
+                    (v.x + sun_dir.x * t, v.z + sun_dir.z * t)
+                })
+                .collect();
+
+            if projected.len() < 3 { continue; }
+
+            // Fan triangulation from vertex 0.
             let (x0, z0) = projected[0];
             for i in 1..projected.len() - 1 {
                 let (x1, z1) = projected[i];
                 let (x2, z2) = projected[i + 1];
-                // Vertex 0 (x0, 0, z0)
                 out.push(x0 as f32); out.push(0.0); out.push(z0 as f32);
-                // Vertex 1 (x1, 0, z1)
                 out.push(x1 as f32); out.push(0.0); out.push(z1 as f32);
-                // Vertex 2 (x2, 0, z2)
                 out.push(x2 as f32); out.push(0.0); out.push(z2 as f32);
             }
         }
 
         out
+    }
+
+    /// Silhouette edge들을 연결된 loop로 그룹화.
+    /// 각 vertex의 neighbor를 graph로 보고, 방문하지 않은 edge부터 walk해
+    /// 닫힌 loop 또는 open chain을 추출. Loop 1개당 vertex sequence 반환.
+    ///
+    /// Non-manifold 정점(silhouette 그래프에서 degree ≥ 3)은 첫 발견된
+    /// unvisited edge를 따라감 — greedy heuristic이지만 대부분의 건축
+    /// 실루엣에 충분.
+    fn group_silhouette_loops(&self, edges: &[EdgeId]) -> Vec<Vec<VertId>> {
+        // Adjacency: VertId → Vec<(other_vert, edge_id)>
+        let mut adj: HashMap<VertId, Vec<(VertId, EdgeId)>> = HashMap::new();
+        for &eid in edges {
+            if let Some(edge) = self.edges.get(eid) {
+                let a = edge.v_small();
+                let b = edge.v_large();
+                adj.entry(a).or_default().push((b, eid));
+                adj.entry(b).or_default().push((a, eid));
+            }
+        }
+
+        let mut visited: HashSet<EdgeId> = HashSet::new();
+        let mut loops: Vec<Vec<VertId>> = Vec::new();
+
+        for &seed_edge in edges {
+            if visited.contains(&seed_edge) { continue; }
+            let seed = match self.edges.get(seed_edge) { Some(e) => e, None => continue };
+            let start_vert = seed.v_small();
+
+            let mut loop_verts: Vec<VertId> = Vec::new();
+            let mut cur_vert = start_vert;
+            let mut cur_edge = seed_edge;
+
+            // Safety guard — 무한루프 방지
+            for _ in 0..100_000 {
+                visited.insert(cur_edge);
+                loop_verts.push(cur_vert);
+
+                // cur_edge의 반대 endpoint 로 이동
+                let edge = match self.edges.get(cur_edge) { Some(e) => e, None => break };
+                let next_vert = if cur_vert == edge.v_small() { edge.v_large() } else { edge.v_small() };
+
+                if next_vert == start_vert && loop_verts.len() >= 3 {
+                    break;  // closed loop
+                }
+
+                // next_vert에서 unvisited edge 선택
+                let neighbors = match adj.get(&next_vert) {
+                    Some(ns) => ns.clone(),
+                    None => { loop_verts.push(next_vert); break; }
+                };
+                let next = neighbors.into_iter()
+                    .find(|(_, eid)| !visited.contains(eid));
+
+                match next {
+                    Some((_, eid)) => {
+                        cur_vert = next_vert;
+                        cur_edge = eid;
+                    }
+                    None => {
+                        // dead end — open chain
+                        loop_verts.push(next_vert);
+                        break;
+                    }
+                }
+            }
+
+            if loop_verts.len() >= 3 {
+                loops.push(loop_verts);
+            }
+        }
+
+        loops
     }
 }
 
