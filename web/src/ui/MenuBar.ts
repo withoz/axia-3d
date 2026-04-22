@@ -275,8 +275,21 @@ export function initMenuBar(deps: MenuBarDeps): void {
         const next = !viewport.isShadowEnabled();
         viewport.setShadowEnabled(next);
         Toast.info(
-          `그림자 ${next ? '켜짐 (blob shadow — 가벼운 grounding)' : '꺼짐'}`,
+          `Blob 그림자 ${next ? '켜짐' : '꺼짐'}`,
           2500,
+        );
+        break;
+      }
+      case 'view-shadow-pro': {
+        const next = !viewport.isProjectedShadowEnabled();
+        viewport.setProjectedShadowEnabled(next);
+        if (next) {
+          // 즉시 projected shadow 계산을 위해 syncMesh 트리거
+          toolManager.syncMesh();
+        }
+        Toast.info(
+          `건축 그림자 (Projected) ${next ? '켜짐 — 매스 silhouette이 ground에 투영' : '꺼짐'}`,
+          3000,
         );
         break;
       }

@@ -113,6 +113,18 @@ export class AxiaEngine {
      */
     collectEdgeChain(edge_id_raw: number): Uint32Array;
     /**
+     * 태양 방향으로 ground(y=0)에 투영된 shadow polygon triangle buffer 반환.
+     * TS Viewport는 이 buffer를 BufferGeometry에 직접 세팅해 dark translucent
+     * mesh로 렌더. 매 syncMesh마다 재계산 (mesh 변경 시 shadow도 즉시 반영).
+     *
+     * sun_dir 컴포넌트: x, y, z. 라이트 진행 방향이며 y는 음수여야 함
+     * (태양이 아래로 비춤). 정규화는 caller가 미리 해도 Rust가 해도 OK —
+     * 내부에서 사용 전 normalize 호출.
+     *
+     * 9 f32 = 1 triangle, 각 vertex는 (x, 0, z).
+     */
+    computeGroundProjectedShadows(sun_x: number, sun_y: number, sun_z: number): Float32Array;
+    /**
      * Count of constraints (active + inactive).
      */
     constraintCount(): number;
@@ -792,6 +804,7 @@ export interface InitOutput {
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
+    readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
     readonly axiaengine_countFreeEdges: (a: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;

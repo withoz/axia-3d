@@ -111,13 +111,19 @@ export class Viewport {
   private _furEnabled: boolean = false;
 
   // ═══ Blob shadow (light-weight ground shadow) ═══
-  // Shader-based radial gradient plane — no shadow map rendering.
-  // Placed at y=0 under scene bbox, follows it on syncMesh.
-  // 시각적으로 "매스 아래 부드러운 grounding" 정도의 힌트만 제공.
-  // 기존 shadow map 방식(VSM/PCF)은 근거리 CAD 스케일에서 texel scanline
-  // 아티팩트 피할 수 없어, 사용자 요청에 따라 가벼운 blob 방식으로 교체.
   private _blobShadow: THREE.Mesh | null = null;
   private _blobShadowEnabled: boolean = true;  // 기본 on — 깔끔+가벼움
+
+  // ═══ Projected shadow (SketchUp-style matrix projection) ═══
+  // Rust compute_ground_projected_shadows → 각 active top-face을 sun 방향
+  // 으로 ground에 투영한 triangle buffer. Shadow map 전혀 사용 안 함 →
+  // scanline 구조적 불가능. CAD "건축 그림자" 모드에서 활성.
+  private _projectedShadow: THREE.Mesh | null = null;
+  private _projectedShadowEnabled: boolean = false;  // 기본 off, 사용자 선택
+  // Sun direction — 광원 DirectionalLight position으로부터 계산.
+  //   dirLight.position = (8000, 15000, 10000) → 태양이 이 방향에서 원점으로 비춤
+  //   sun_travel = -normalize(8000, 15000, 10000) ≈ (-0.408, -0.816, -0.408)
+  private _sunTravel = new THREE.Vector3(-0.408, -0.816, -0.408);
 
   // ═══ Sketch plane visual (Tier 3A) ═══
   // Tinted translucent plane + border to show which plane sketching locks to.
@@ -1937,6 +1943,70 @@ export class Viewport {
     this._blobShadow.scale.set(width * 1.6, depth * 1.6, 1);
     this._blobShadow.position.set(cx, 0.5, cz);
     this._blobShadow.visible = this._blobShadowEnabled;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Projected shadow (SketchUp-style)
+  // ═══════════════════════════════════════════════════════
+
+  /** Projected shadow on/off 토글.
+   *  Rust-side projection이 필요하므로 활성화 시 caller가 syncMesh로
+   *  trigger해 updateProjectedShadow()가 호출되도록 해야 함 (ToolManager에서
+   *  이미 보장). */
+  setProjectedShadowEnabled(enabled: boolean): void {
+    this._projectedShadowEnabled = enabled;
+    if (this._projectedShadow) this._projectedShadow.visible = enabled;
+  }
+
+  isProjectedShadowEnabled(): boolean {
+    return this._projectedShadowEnabled;
+  }
+
+  /** ToolManager.syncMesh에서 projected shadow geometry 재계산 시 호출.
+   *  Rust WASM에서 triangle buffer 받아 BufferGeometry로 렌더.
+   *  enabled=false면 기존 mesh 숨기기만 하고 작업 skip (성능). */
+  updateProjectedShadow(triangleBuffer: Float32Array | null): void {
+    if (!this._projectedShadowEnabled) {
+      if (this._projectedShadow) this._projectedShadow.visible = false;
+      return;
+    }
+    // Dispose existing geometry (매 update마다 새로 빌드)
+    if (this._projectedShadow) {
+      this._projectedShadow.geometry.dispose();
+    }
+    if (!triangleBuffer || triangleBuffer.length === 0) {
+      // Nothing to project (empty scene or sun direction invalid)
+      if (this._projectedShadow) this._projectedShadow.visible = false;
+      return;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(triangleBuffer, 3));
+    geo.computeBoundingSphere();
+    if (!this._projectedShadow) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,  // 살짝 앞쪽 — ground plane 위에 확실히
+      });
+      this._projectedShadow = new THREE.Mesh(geo, mat);
+      this._projectedShadow.name = 'projected-shadow';
+      this._projectedShadow.renderOrder = -4;  // blob shadow(-5)보다 위, mesh 아래
+      this._projectedShadow.userData.noPick = true;
+      this.scene.add(this._projectedShadow);
+    } else {
+      this._projectedShadow.geometry = geo;
+    }
+    this._projectedShadow.position.y = 0.8;  // z-fighting 회피
+    this._projectedShadow.visible = true;
+  }
+
+  /** 현재 sun travel 방향 조회 (projected shadow compute에 전달). */
+  getSunTravelDirection(): THREE.Vector3 {
+    return this._sunTravel.clone();
   }
 
   /**

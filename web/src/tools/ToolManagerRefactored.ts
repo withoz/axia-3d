@@ -1848,6 +1848,17 @@ export class ToolManager {
 
     const stats = this.bridge.getStats();
     this.viewport.setStats(stats.verts, stats.faces);
+
+    // ━━━ Projected shadow update (enabled 시만) ━━━
+    // Sun 방향은 viewport에서 얻어 Rust compute → triangle buffer → viewport 렌더.
+    // Disabled 상태에도 호출은 가볍게 early-return하므로 매 sync마다 호출.
+    if (this.viewport.isProjectedShadowEnabled()) {
+      const sun = this.viewport.getSunTravelDirection();
+      const tris = this.bridge.computeGroundProjectedShadows(sun.x, sun.y, sun.z);
+      this.viewport.updateProjectedShadow(tris);
+    } else {
+      this.viewport.updateProjectedShadow(null);
+    }
   }
 
   private getSnappedPoint(e: MouseEvent, rawGroundPoint: THREE.Vector3 | null, consumeOverride = false): THREE.Vector3 | null {

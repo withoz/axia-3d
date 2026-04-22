@@ -337,6 +337,34 @@ export class AxiaEngine {
         }
     }
     /**
+     * 태양 방향으로 ground(y=0)에 투영된 shadow polygon triangle buffer 반환.
+     * TS Viewport는 이 buffer를 BufferGeometry에 직접 세팅해 dark translucent
+     * mesh로 렌더. 매 syncMesh마다 재계산 (mesh 변경 시 shadow도 즉시 반영).
+     *
+     * sun_dir 컴포넌트: x, y, z. 라이트 진행 방향이며 y는 음수여야 함
+     * (태양이 아래로 비춤). 정규화는 caller가 미리 해도 Rust가 해도 OK —
+     * 내부에서 사용 전 normalize 호출.
+     *
+     * 9 f32 = 1 triangle, 각 vertex는 (x, 0, z).
+     * @param {number} sun_x
+     * @param {number} sun_y
+     * @param {number} sun_z
+     * @returns {Float32Array}
+     */
+    computeGroundProjectedShadows(sun_x, sun_y, sun_z) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_computeGroundProjectedShadows(retptr, this.__wbg_ptr, sun_x, sun_y, sun_z);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Count of constraints (active + inactive).
      * @returns {number}
      */

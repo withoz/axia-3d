@@ -171,6 +171,7 @@ type AxiaEngineExtended = AxiaEngine & {
   synthesizeFacesFromFreeEdges?(): number;
   countFreeEdges?(): number;
   meshManifoldInfo?(): string;
+  computeGroundProjectedShadows?(sx: number, sy: number, sz: number): Float32Array;
   edgeAngleThreshold?(): number;
   setEdgeAngleThreshold?(deg: number): void;
 
@@ -776,6 +777,21 @@ export class WasmBridge {
     if (!this.engine?.setEdgeAngleThreshold) return;
     try { this.engine.setEdgeAngleThreshold(deg); this.markDirty(); }
     catch (e) { this.recordBridgeError('setEdgeAngleThreshold', e); }
+  }
+
+  /** 태양 방향으로 ground(y=0)에 투영된 shadow triangles (flat buffer).
+   *  각 9 float = 1 triangle (3 vertex × {x, y=0, z}).
+   *  빈 mesh 또는 sun_dir 유효하지 않으면 empty.
+   *  Viewport의 projected shadow layer에서 BufferGeometry로 직접 렌더. */
+  computeGroundProjectedShadows(sunX: number, sunY: number, sunZ: number): Float32Array | null {
+    if (!this.engine?.computeGroundProjectedShadows) return null;
+    try {
+      const out = this.engine.computeGroundProjectedShadows(sunX, sunY, sunZ);
+      return out && out.length > 0 ? out : null;
+    } catch (e) {
+      this.recordBridgeError('computeGroundProjectedShadows', e);
+      return null;
+    }
   }
 
   /** 전역 mesh manifold 분석 — 닫힌 솔리드 여부와 boundary/non-manifold edge 수.
