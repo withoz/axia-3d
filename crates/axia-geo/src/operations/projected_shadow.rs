@@ -46,9 +46,19 @@ impl Mesh {
             return out;
         }
 
-        // Top-face threshold: normal.y > 0.3 → face is "tilted up enough" to
-        // cast a meaningful top silhouette. Walls (normal.y ≈ 0) skipped.
-        const NORMAL_Y_THRESHOLD: f64 = 0.3;
+        // Silhouette 기반 caster 판정.
+        // face가 sun을 "향하는" 경우(=sun 반대 방향 normal) 빛을 블록 →
+        // 그 뒷면 영역에 그림자를 만든다. 이 조건은:
+        //   face.normal · (-sun_dir) > 0    (sun 반대 방향과 양의 내적)
+        //   ⇔ face.normal · sun_dir < 0      (sun 진행 방향과 음의 내적)
+        //
+        // 2026-04-23 update (사용자 보고 — 꼬리 segment 끊어져 보임):
+        //   이전 `normal.y > 0.3` 필터는 "위 향하는 top face"만 포함해
+        //   tube(꼬리)나 기울어진 면을 놓침. silhouette 원칙으로 교체하면
+        //   sun을 향하는 모든 face가 cast → 겹쳐서 solid 실루엣 채움.
+        //
+        // threshold 0.1 (slightly positive)로 grazing edge case 안정화.
+        const SUN_FACING_THRESHOLD: f64 = 0.1;
         // Min face height above ground to cast. User가 그린 ground-level rect
         // 는 자기 자신에 투영하지 않도록 필터.
         const MIN_HEIGHT: f64 = 1.0;
@@ -56,7 +66,9 @@ impl Mesh {
         for (_fid, face) in self.faces.iter() {
             if !face.is_active() { continue; }
             let normal = face.normal();
-            if normal.y < NORMAL_Y_THRESHOLD { continue; }
+            // Sun-facing test: normal · (-sun) > threshold
+            let sun_facing = normal.dot(-sun_dir);
+            if sun_facing < SUN_FACING_THRESHOLD { continue; }
 
             // Collect face outer loop vertices (skip holes for MVP — holes in
             // shadow polygon would need earcut with holes).

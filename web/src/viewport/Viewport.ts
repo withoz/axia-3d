@@ -2023,7 +2023,10 @@ export class Viewport {
       const mat = new THREE.MeshBasicMaterial({
         color: 0x000000,
         transparent: true,
-        opacity: 0.35,
+        // 2026-04-23: 0.35 → 0.15. silhouette filter로 바뀐 뒤엔 태양을
+        // 향하는 모든 face가 project되어 overlap 누적 darkening 발생.
+        // 0.15로 낮춰 3-4 겹 overlap에서도 자연스러운 어두움 유지.
+        opacity: 0.15,
         depthWrite: false,
         side: THREE.DoubleSide,
         polygonOffset: true,
