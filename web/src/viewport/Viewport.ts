@@ -947,7 +947,14 @@ export class Viewport {
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
       frontMesh.castShadow = true;
-      frontMesh.receiveShadow = true;
+      // 2026-04-22: receiveShadow: true → false.
+      // User geometry가 shadow를 받으면 shadow map texel 경계가 그 면 위에
+      // scanline artifact로 가시. 특히 근거리 ground-level slab에서 심함.
+      // 해결: user mesh는 shadow 만 CAST하고 RECEIVE는 ShadowMaterial 기반
+      // catcher plane(y=0 ground)만 담당. Catcher는 투명 ShadowMaterial이라
+      // scanline이 있어도 상대적으로 덜 거슬림 + CAD preview에서 "ground에
+      // 그림자 비침"이 자연스러운 feedback.
+      frontMesh.receiveShadow = false;
       this.meshGroup.add(frontMesh);
 
       // ── Store reference for color updates ──
