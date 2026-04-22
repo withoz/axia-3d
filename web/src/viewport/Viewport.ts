@@ -158,7 +158,12 @@ export class Viewport {
     // CAD 작업에서는 그림자 자체가 불필요한 사실감이며 artifact 원인이므로
     // 기본 비활성. 설정 내부 구성은 유지되어 필요 시 enabled=true로 즉시 복구.
     this.renderer.shadowMap.enabled = false;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // 2026-04-22: PCFSoftShadowMap → VSMShadowMap.
+    // PCF는 shadow map texel 경계를 N-tap 샘플링 블러로 숨기지만 CAD 스케일
+    // 에서 texel step이 커서 radius를 아무리 올려도 scanline artifact 남음.
+    // VSM(Variance Shadow Map)은 per-pixel variance 기반으로 실제 blur를
+    // 수행 → texel 경계 자동 smooth. 건축 preview shadow에 적합.
+    this.renderer.shadowMap.type = THREE.VSMShadowMap;
     // ACESFilmic gives PBR materials a natural photographic look under IBL;
     // the previous NoToneMapping clipped highlights whenever roughness was
     // low. Exposure 1.0 is the neutral baseline.
@@ -198,29 +203,30 @@ export class Viewport {
     this.scene.add(ambient);
 
     // Key light — casts the main shadow.
-    // 2026-04-22 최종 튜닝: shadow map scanline scanline scanline을 완전 가리려면
-    // PCF radius를 매우 크게 가져가 soft blur로 texel 경계 흐리는 것이 최선.
-    //   mapSize    2048 → 4096 (texel 정밀도 2배)
-    //   bounds     ±10000 (더 tighter → texel 5mm 수준)
-    //   bias       -0.001 (적절한 self-shadow 억제, peter-pan 거의 없음)
-    //   normalBias 2.0 (과하지 않게)
-    //   radius     25 (매우 강한 PCFSoft 블러 → 개별 texel 경계 완전 블렌드)
-    //   opacity    0.28 → 0.2 (ShadowMaterial, 잔여 artifact visibility ↓)
-    // 기본 shadow off라 VRAM 부담 없음. 켤 때만 비용 발생 (64MB).
+    // VSMShadowMap 튜닝 (PCF와 bias 의미 다름):
+    //   VSM은 shadow를 depth moment로 저장하고 per-pixel Chebyshev
+    //   부등식으로 visibility 확률 계산 → 자연스러운 blur. PCF처럼
+    //   sample-count로 blur하지 않음.
+    //   mapSize    2048 (VSM은 smaller map도 smooth함)
+    //   bounds     ±10000 (건축 scene 규모)
+    //   bias       0.0 (VSM은 PCF 스타일 bias 불필요 — light bleeding 완화)
+    //   blurSamples + radius 조합이 VSM의 blur 결정.
+    //   blurSamples 25, radius 8 → 매끈하고 artifact 없는 soft shadow.
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
     dirLight.position.set(8000, 15000, 10000);
     dirLight.castShadow = true;
     const shadow = dirLight.shadow;
-    shadow.mapSize.set(4096, 4096);
+    shadow.mapSize.set(2048, 2048);
     shadow.camera.left   = -10000;
     shadow.camera.right  =  10000;
     shadow.camera.top    =  10000;
     shadow.camera.bottom = -10000;
     shadow.camera.near   = 100;
     shadow.camera.far    = 60000;
-    shadow.bias        = -0.001;
-    shadow.normalBias  = 2.0;
-    shadow.radius      = 25;  // 매우 soft blur — CAD 스케일 scanline 완전 숨김
+    shadow.bias        = 0.0;
+    shadow.normalBias  = 0.0;
+    shadow.radius      = 8;
+    shadow.blurSamples = 25;  // VSM 전용: moment texture 블러 샘플 수
     this.scene.add(dirLight);
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
@@ -947,14 +953,9 @@ export class Viewport {
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
       frontMesh.castShadow = true;
-      // 2026-04-22: receiveShadow: true → false.
-      // User geometry가 shadow를 받으면 shadow map texel 경계가 그 면 위에
-      // scanline artifact로 가시. 특히 근거리 ground-level slab에서 심함.
-      // 해결: user mesh는 shadow 만 CAST하고 RECEIVE는 ShadowMaterial 기반
-      // catcher plane(y=0 ground)만 담당. Catcher는 투명 ShadowMaterial이라
-      // scanline이 있어도 상대적으로 덜 거슬림 + CAD preview에서 "ground에
-      // 그림자 비침"이 자연스러운 feedback.
-      frontMesh.receiveShadow = false;
+      // VSMShadowMap으로 변경된 이후 user geometry가 shadow 받아도
+      // scanline acne 발생하지 않음 (variance filter가 자연스럽게 soft).
+      frontMesh.receiveShadow = true;
       this.meshGroup.add(frontMesh);
 
       // ── Store reference for color updates ──
