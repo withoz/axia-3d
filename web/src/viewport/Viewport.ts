@@ -2028,7 +2028,7 @@ export class Viewport {
       // 중첩 모두 자동 해결. opacity 파라미터는 MinEquation에서 의미 없음 —
       // 어둠의 정도는 color 값(0.72)으로 직접 제어.
       const mat = new THREE.MeshBasicMaterial({
-        color: 0xb8b8b8,  // 밝은 회색 — min 연산에서 배경(흰/연회색) 대비 어두워짐
+        color: 0x909090,  // 중간 회색 — min 연산에서 배경(0xe0 회색) 대비 약 44% 어두움
         transparent: true,
         depthWrite: false,
         side: THREE.DoubleSide,
