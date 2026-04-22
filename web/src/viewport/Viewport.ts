@@ -116,7 +116,9 @@ export class Viewport {
 
   // ═══ Projected shadow (SketchUp-style matrix projection) ═══
   private _projectedShadow: THREE.Mesh | null = null;
-  private _projectedShadowEnabled: boolean = false;
+  // 2026-04-23: 기본 ON — "건축 그림자"(Projected Planar + MinEquation 균일
+  // blending)를 default로 채택. 사용자는 메뉴 "보기 → 건축 그림자"로 토글.
+  private _projectedShadowEnabled: boolean = true;
   private _sunTravel = new THREE.Vector3(-0.408, -0.816, -0.408);
 
   // ═══ Directional light (Phase 2 VSM) ═══
@@ -177,8 +179,8 @@ export class Viewport {
     //   · scanline artifact가 나와도 subtle하므로 체감 안 됨
     //   · Projected의 sharp silhouette이 primary visual 담당
     //   · VSM은 곡면 위 공간감만 추가
-    // 기본 off — 사용자가 "건축 그림자 (Projected)" 켤 때 자동 같이 켜짐.
-    this.renderer.shadowMap.enabled = false;
+    // 2026-04-23: 기본 ON — 건축 그림자가 default. _projectedShadowEnabled와 동기화.
+    this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.VSMShadowMap;
     // ACESFilmic gives PBR materials a natural photographic look under IBL;
     // the previous NoToneMapping clipped highlights whenever roughness was
