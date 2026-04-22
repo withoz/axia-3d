@@ -198,27 +198,29 @@ export class Viewport {
     this.scene.add(ambient);
 
     // Key light — casts the main shadow.
-    // 2026-04-22 품질 개선 (사용자 보고 shadow acne scanline):
-    //   mapSize    2048 → 4096 (texel 19.5mm → 9.75mm, VRAM 16MB → 64MB)
-    //   bounds     ±20000 → ±15000 (tighter frustum → effective texel ↓)
-    //   bias       -0.0005 → -0.002 (더 강한 acne 억제)
-    //   normalBias 1.5 → 3.0 (surface normal 방향 오프셋 강화)
-    //   radius     4 → 8 (PCFSoft 블러 강화로 남은 계단 소프트닝)
-    // 기본 shadow off라 VRAM 부담 없음. 사용자가 켤 때만 비용 발생.
+    // 2026-04-22 최종 튜닝: shadow map scanline scanline scanline을 완전 가리려면
+    // PCF radius를 매우 크게 가져가 soft blur로 texel 경계 흐리는 것이 최선.
+    //   mapSize    2048 → 4096 (texel 정밀도 2배)
+    //   bounds     ±10000 (더 tighter → texel 5mm 수준)
+    //   bias       -0.001 (적절한 self-shadow 억제, peter-pan 거의 없음)
+    //   normalBias 2.0 (과하지 않게)
+    //   radius     25 (매우 강한 PCFSoft 블러 → 개별 texel 경계 완전 블렌드)
+    //   opacity    0.28 → 0.2 (ShadowMaterial, 잔여 artifact visibility ↓)
+    // 기본 shadow off라 VRAM 부담 없음. 켤 때만 비용 발생 (64MB).
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
     dirLight.position.set(8000, 15000, 10000);
     dirLight.castShadow = true;
     const shadow = dirLight.shadow;
     shadow.mapSize.set(4096, 4096);
-    shadow.camera.left   = -15000;
-    shadow.camera.right  =  15000;
-    shadow.camera.top    =  15000;
-    shadow.camera.bottom = -15000;
+    shadow.camera.left   = -10000;
+    shadow.camera.right  =  10000;
+    shadow.camera.top    =  10000;
+    shadow.camera.bottom = -10000;
     shadow.camera.near   = 100;
     shadow.camera.far    = 60000;
-    shadow.bias        = -0.002;
-    shadow.normalBias  = 3.0;
-    shadow.radius      = 8;
+    shadow.bias        = -0.001;
+    shadow.normalBias  = 2.0;
+    shadow.radius      = 25;  // 매우 soft blur — CAD 스케일 scanline 완전 숨김
     this.scene.add(dirLight);
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
@@ -263,7 +265,8 @@ export class Viewport {
     // and doesn't clash with the flat CAD background.
     const shadowCatcher = new THREE.Mesh(
       new THREE.PlaneGeometry(200000, 200000),
-      new THREE.ShadowMaterial({ opacity: 0.28 }),
+      // 0.28 → 0.2: 그림자 전체 강도 낮춰 잔여 shadow map artifact 체감 ↓
+      new THREE.ShadowMaterial({ opacity: 0.2 }),
     );
     shadowCatcher.rotation.x = -Math.PI / 2; // XZ plane, facing +Y
     shadowCatcher.position.y = 0;
