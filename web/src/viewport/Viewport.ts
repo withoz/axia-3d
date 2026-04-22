@@ -298,9 +298,9 @@ export class Viewport {
           this.container.clientWidth,
           this.container.clientHeight,
         ),
+        alphaToCoverage: true,  // MSAA 기반 smooth edge (점선 artifact 방지)
       });
       const line = new Line2(geo, mat);
-      line.computeLineDistances();
       line.frustumCulled = false;
       this.scene.add(line);
       this.axisLines.push(line);
@@ -1039,7 +1039,14 @@ export class Viewport {
   }
 
   /** Build a LineMaterial for mesh edge lines with current color + width.
-   *  Cached in _meshEdgeMaterials so setEdgeStyle / resize can update all at once. */
+   *  Cached in _meshEdgeMaterials so setEdgeStyle / resize can update all at once.
+   *
+   *  2026-04-22: alphaToCoverage:true로 전환. Line2의 내부 fragment shader는
+   *  line quad의 중심부 거리 함수로 "선 내부만 그리고 바깥은 discard" 하는데,
+   *  MSAA rendertarget에서 alphaToCoverage가 꺼져있으면 discard 경계가
+   *  hard-clip되어 카메라 각도나 선 방향에 따라 stripe/점선 artifact 발생
+   *  (사용자 보고 "선들이 점선처럼 보임"의 근본 원인).
+   *  alphaToCoverage:true → MSAA 샘플로 soft clip → 모든 각도에서 매끈한 solid. */
   private _makeEdgeLineMaterial(): LineMaterial {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
@@ -1048,9 +1055,10 @@ export class Viewport {
       linewidth: this._edgeWidth,
       resolution: new THREE.Vector2(w, h),
       worldUnits: false,  // pixel-space width
-      alphaToCoverage: false,
+      alphaToCoverage: true,  // MSAA 샘플 기반 edge AA
       depthTest: true,
       transparent: false,
+      dashed: false,  // solid only — computeLineDistances 호출 무의미 처리
     });
     this._meshEdgeMaterials.push(mat);
     return mat;
