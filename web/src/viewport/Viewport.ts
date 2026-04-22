@@ -197,26 +197,28 @@ export class Viewport {
     const ambient = new THREE.AmbientLight(0x303030, 0.6);
     this.scene.add(ambient);
 
-    // Key light — casts the main shadow. Bounds are generous (±20k mm)
-    // so the typical scale of user scenes (m-to-tens-of-meters) fits
-    // without clipping. 2048² shadow map balances quality vs VRAM.
+    // Key light — casts the main shadow.
+    // 2026-04-22 품질 개선 (사용자 보고 shadow acne scanline):
+    //   mapSize    2048 → 4096 (texel 19.5mm → 9.75mm, VRAM 16MB → 64MB)
+    //   bounds     ±20000 → ±15000 (tighter frustum → effective texel ↓)
+    //   bias       -0.0005 → -0.002 (더 강한 acne 억제)
+    //   normalBias 1.5 → 3.0 (surface normal 방향 오프셋 강화)
+    //   radius     4 → 8 (PCFSoft 블러 강화로 남은 계단 소프트닝)
+    // 기본 shadow off라 VRAM 부담 없음. 사용자가 켤 때만 비용 발생.
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
     dirLight.position.set(8000, 15000, 10000);
     dirLight.castShadow = true;
     const shadow = dirLight.shadow;
-    shadow.mapSize.set(2048, 2048);
-    shadow.camera.left   = -20000;
-    shadow.camera.right  =  20000;
-    shadow.camera.top    =  20000;
-    shadow.camera.bottom = -20000;
+    shadow.mapSize.set(4096, 4096);
+    shadow.camera.left   = -15000;
+    shadow.camera.right  =  15000;
+    shadow.camera.top    =  15000;
+    shadow.camera.bottom = -15000;
     shadow.camera.near   = 100;
     shadow.camera.far    = 60000;
-    // Bias defaults produce acne on near-axis faces; small negative bias
-    // + slight normalBias tunes the trade-off between acne and peter-
-    // panning for our scene scale.
-    shadow.bias        = -0.0005;
-    shadow.normalBias  = 1.5;
-    shadow.radius      = 4; // softness of PCFSoft filter
+    shadow.bias        = -0.002;
+    shadow.normalBias  = 3.0;
+    shadow.radius      = 8;
     this.scene.add(dirLight);
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
