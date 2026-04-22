@@ -174,7 +174,10 @@ function createInitialScene(bridge: WasmBridge, toolManager: ToolManager): void 
       // Starts from body rear-top, arcs up, curves back, and drops
       // a little toward the tip to give a gentle S. Radius 100 for
       // a slender cat tail.
-      const tailPoints = 14;
+      // 14 → 20 포인트. 각 단면 segment 간 각도 360/14 = 25.7° → 360/20 = 18°.
+      // 기본 엣지 임계 20.1°보다 작아 꼬리가 매끈하게 렌더됨 (이전엔 세로줄
+      // 노출). 건축 엣지에는 영향 없음 (건축은 보통 ≥30° 모서리).
+      const tailPoints = 20;
       const tailRadius = 100;
       const tailProfile: number[] = [];
       for (let i = 0; i < tailPoints; i++) {
