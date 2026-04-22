@@ -384,103 +384,108 @@ export class Viewport {
   }
 
   /** 라인 기반 무한 그리드 — 축 연장선과 동일 방식 (Y=0 완벽 고정) */
+  /**
+   * Shader-based infinite grid (2026-04-22 교체).
+   *
+   * 이전 구현은 ±100m 범위의 Line2 quad를 242×2 = 484개 생성했으나:
+   *   - 기울어진 원근뷰에서 alpha blending 간섭 → 점선/얼룩 패턴
+   *   - 먼 거리 line이 극단적 skew로 렌더 artifact
+   *   - Line2 × 수백 개 유지비
+   *
+   * 신구현: 단일 PlaneGeometry + Fragment shader가 world 좌표로부터 그리드를
+   * analytic 하게 계산 (표준 Blender/Godot/Unity 방식). derivative 기반
+   * anti-aliasing으로 모든 거리·각도에서 완벽히 선명. 카메라 거리에 따라
+   * 자연스러운 fade. GPU 1회 draw call.
+   */
   private createInfiniteGrid(): THREE.Group {
     const gridGroup = new THREE.Group();
     gridGroup.userData.isGround = true;
     gridGroup.userData.noPick = true;
 
-    const SMALL = 1000;   // 1m 소그리드
-    const BIG = 5000;     // 5m 대그리드
-    const EXTENT = 100000; // ±100m 범위 (각 방향)
-    const COUNT_SMALL = Math.floor(EXTENT / SMALL); // 소그리드 개수
-    const COUNT_BIG = Math.floor(EXTENT / BIG);     // 대그리드 개수
+    // 매우 큰 plane — 카메라가 어디에 있든 화면에 꽉 차도록. z=0 기준
+    // (xz plane). plane은 xy 면이라 rotation으로 눕힘.
+    const size = 500000; // 500m × 500m
+    const geo = new THREE.PlaneGeometry(size, size, 1, 1);
 
-    const resolution = new THREE.Vector2(
-      this.container.clientWidth,
-      this.container.clientHeight,
-    );
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uSmallSpacing: { value: 1000.0 },   // 1m
+        uBigSpacing:   { value: 5000.0 },   // 5m
+        uSmallColor:   { value: new THREE.Color(0x888888) },
+        uBigColor:     { value: new THREE.Color(0x555555) },
+        uSmallAlpha:   { value: 0.45 },
+        uBigAlpha:     { value: 0.75 },
+        uFadeNear:     { value: 20000.0 },  // 20m부터 fade 시작
+        uFadeFar:      { value: 80000.0 },  // 80m에서 완전 사라짐
+      },
+      vertexShader: /* glsl */`
+        // Plane-local xy 를 그대로 넘겨 shader에서 grid를 생성.
+        // 이렇게 하면 plane group이 view-mode에 따라 어떻게 회전되든
+        // 그리드 패턴은 항상 plane면 안에서 계산되므로 왜곡 없음.
+        varying vec2 vPlanarPos;
+        void main() {
+          vPlanarPos = position.xy;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        precision highp float;
+        varying vec2 vPlanarPos;
+        uniform float uSmallSpacing;
+        uniform float uBigSpacing;
+        uniform vec3  uSmallColor;
+        uniform vec3  uBigColor;
+        uniform float uSmallAlpha;
+        uniform float uBigAlpha;
+        uniform float uFadeNear;
+        uniform float uFadeFar;
 
-    // 소그리드 라인 (1m 간격). 2026-04-22 건축 가시성 향상:
-    //   color  0xaaaaaa → 0x888888 (더 진한 grey)
-    //   opacity 0.3 → 0.45
-    //   linewidth 0.5 → 0.8
-    for (let i = -COUNT_SMALL; i <= COUNT_SMALL; i++) {
-      const pos = i * SMALL;
-      // 대그리드 위치는 건너뜀 (대그리드가 덮어씀)
-      if (pos % BIG === 0) continue;
+        // screen-space analytic grid line — returns alpha [0, 1].
+        // fwidth로 픽셀 단위 line 두께를 normalize해 원거리/근거리 모두
+        // 일정 폭으로 보이게 함 (anti-aliased).
+        float gridAlpha(vec2 p, float spacing) {
+          vec2 coord = p / spacing;
+          vec2 dcoord = fwidth(coord);
+          vec2 lines = abs(fract(coord - 0.5) - 0.5) / dcoord;
+          float line = min(lines.x, lines.y);
+          return 1.0 - min(line, 1.0);
+        }
 
-      // X 방향 라인 (Z축을 따라)
-      const geoX = new LineGeometry();
-      geoX.setPositions([-EXTENT, 0, pos, EXTENT, 0, pos]);
-      const matX = new LineMaterial({
-        color: 0x888888,
-        linewidth: 0.8,
-        transparent: true,
-        opacity: 0.45,
-        resolution,
-      });
-      const lineX = new Line2(geoX, matX);
-      lineX.computeLineDistances();
-      lineX.frustumCulled = false;
-      lineX.userData.noPick = true;
-      gridGroup.add(lineX);
+        void main() {
+          vec2 p = vPlanarPos;
 
-      // Z 방향 라인 (X축을 따라)
-      const geoZ = new LineGeometry();
-      geoZ.setPositions([pos, 0, -EXTENT, pos, 0, EXTENT]);
-      const matZ = new LineMaterial({
-        color: 0x888888,
-        linewidth: 0.8,
-        transparent: true,
-        opacity: 0.45,
-        resolution,
-      });
-      const lineZ = new Line2(geoZ, matZ);
-      lineZ.computeLineDistances();
-      lineZ.frustumCulled = false;
-      lineZ.userData.noPick = true;
-      gridGroup.add(lineZ);
-    }
+          // Big grid on top of small — 대그리드 위치에서는 small contribution을
+          // 억제해서 double-darken을 방지.
+          float big = gridAlpha(p, uBigSpacing);
+          float small = gridAlpha(p, uSmallSpacing) * (1.0 - big);
 
-    // 대그리드 라인 (5m 간격). 2026-04-22 건축 reference 강화:
-    //   color  0x999999 → 0x555555 (훨씬 진한 grey)
-    //   opacity 0.5 → 0.75
-    //   linewidth 1 → 1.5
-    for (let i = -COUNT_BIG; i <= COUNT_BIG; i++) {
-      const pos = i * BIG;
-      // 원점(0)은 축 연장선이 이미 있으므로 건너뜀
-      if (pos === 0) continue;
+          // 거리 fade — 원거리 aliasing 억제.
+          float dist = length(p);
+          float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, dist);
 
-      const geoX = new LineGeometry();
-      geoX.setPositions([-EXTENT, 0, pos, EXTENT, 0, pos]);
-      const matX = new LineMaterial({
-        color: 0x555555,
-        linewidth: 1.5,
-        transparent: true,
-        opacity: 0.75,
-        resolution,
-      });
-      const lineX = new Line2(geoX, matX);
-      lineX.computeLineDistances();
-      lineX.frustumCulled = false;
-      lineX.userData.noPick = true;
-      gridGroup.add(lineX);
+          float smallA = small * uSmallAlpha * fade;
+          float bigA   = big   * uBigAlpha   * fade;
 
-      const geoZ = new LineGeometry();
-      geoZ.setPositions([pos, 0, -EXTENT, pos, 0, EXTENT]);
-      const matZ = new LineMaterial({
-        color: 0x555555,
-        linewidth: 1.5,
-        transparent: true,
-        opacity: 0.75,
-        resolution,
-      });
-      const lineZ = new Line2(geoZ, matZ);
-      lineZ.computeLineDistances();
-      lineZ.frustumCulled = false;
-      lineZ.userData.noPick = true;
-      gridGroup.add(lineZ);
-    }
+          // Over-compositing big over small (big이 우세)
+          vec3 col = mix(uSmallColor, uBigColor, bigA / max(bigA + smallA, 1e-4));
+          float alpha = bigA + smallA * (1.0 - bigA);
+
+          if (alpha < 0.005) discard;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+    });
+
+    const plane = new THREE.Mesh(geo, mat);
+    plane.rotation.x = -Math.PI / 2;  // XZ plane (y=0)
+    plane.position.y = 0;
+    plane.renderOrder = -10;            // mesh 뒤에
+    plane.frustumCulled = false;        // 항상 그리기
+    plane.userData.noPick = true;
+    gridGroup.add(plane);
 
     return gridGroup;
   }
@@ -1760,12 +1765,19 @@ export class Viewport {
     this.infiniteGrid.visible = visible;
   }
 
-  /** 그리드 색상 변경 */
+  /** 그리드 색상 변경. Shader-grid는 big/small 2-tier 구조이지만 단일
+   *  색상 API가 필요한 경우 small은 hex 기준, big은 조금 더 짙게 세팅. */
   setGridColor(hex: number) {
     const color = new THREE.Color(hex);
     this.infiniteGrid.traverse((child) => {
-      if (child instanceof Line2) {
-        (child.material as LineMaterial).color = color;
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+        const u = child.material.uniforms;
+        if (u.uSmallColor) (u.uSmallColor.value as THREE.Color).copy(color);
+        if (u.uBigColor) {
+          // Big grid는 small보다 어둡게 — luminance 65%로 스케일
+          const big = color.clone().multiplyScalar(0.65);
+          (u.uBigColor.value as THREE.Color).copy(big);
+        }
       }
     });
   }
