@@ -14,6 +14,7 @@ import { SettingsPanel } from './units/SettingsPanel';
 import { ComponentPanel } from './ui/ComponentPanel';
 import { ConstraintPanel } from './ui/ConstraintPanel';
 import { HistoryPanel } from './ui/HistoryPanel';
+import { SunPanel } from './ui/SunPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
 import { MaterialLibrary } from './materials/MaterialLibrary';
@@ -448,6 +449,25 @@ async function main() {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       if ((e.key === 'h' || e.key === 'H') && e.shiftKey && !e.ctrlKey && !e.altKey) {
         historyPanel.toggle();
+      }
+    });
+  }
+
+  // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══
+  {
+    const sunPanel = new SunPanel(viewportEl, {
+      viewport,
+      onSunChange: () => toolManager.syncMesh(),
+    });
+    (window as unknown as { __axia_sunPanel?: SunPanel })
+      .__axia_sunPanel = sunPanel;
+
+    // 키보드 Shift+U → Sun Panel 토글 (U alone은 Measure Tool)
+    window.addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      if ((e.key === 'u' || e.key === 'U') && e.shiftKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        sunPanel.toggle();
       }
     });
   }

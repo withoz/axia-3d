@@ -115,15 +115,14 @@ export class Viewport {
   private _blobShadowEnabled: boolean = true;  // 기본 on — 깔끔+가벼움
 
   // ═══ Projected shadow (SketchUp-style matrix projection) ═══
-  // Rust compute_ground_projected_shadows → 각 active top-face을 sun 방향
-  // 으로 ground에 투영한 triangle buffer. Shadow map 전혀 사용 안 함 →
-  // scanline 구조적 불가능. CAD "건축 그림자" 모드에서 활성.
   private _projectedShadow: THREE.Mesh | null = null;
-  private _projectedShadowEnabled: boolean = false;  // 기본 off, 사용자 선택
-  // Sun direction — 광원 DirectionalLight position으로부터 계산.
-  //   dirLight.position = (8000, 15000, 10000) → 태양이 이 방향에서 원점으로 비춤
-  //   sun_travel = -normalize(8000, 15000, 10000) ≈ (-0.408, -0.816, -0.408)
+  private _projectedShadowEnabled: boolean = false;
   private _sunTravel = new THREE.Vector3(-0.408, -0.816, -0.408);
+
+  // ═══ Directional light (Phase 2 VSM) ═══
+  // castShadow은 기본 false, setProjectedShadowEnabled(true) 시 켜짐.
+  // VSM shadow는 Projected와 함께 "건축 모드" 일괄 관리.
+  private _dirLight: THREE.DirectionalLight | null = null;
 
   // ═══ Sketch plane visual (Tier 3A) ═══
   // Tinted translucent plane + border to show which plane sketching locks to.
@@ -172,11 +171,15 @@ export class Viewport {
     // 이 해상도가 ground에 떨어지면 shadow acne (수평 scanline) 발생.
     // CAD 작업에서는 그림자 자체가 불필요한 사실감이며 artifact 원인이므로
     // 기본 비활성. 설정 내부 구성은 유지되어 필요 시 enabled=true로 즉시 복구.
-    // 2026-04-22: shadowMap 완전 off. 사용자 요청대로 real-time shadow map
-    // (PCF/VSM 모두)은 scanline artifact로 CAD에 부적합 판정.
-    // 대신 blob shadow (shader 기반 소프트 그라디언트 plane)를 사용해
-    // "매스가 땅에 있다"는 grounding 힌트만 가볍게 제공.
+    // 2026-04-23 Phase 2: VSM 보조 레이어 재도입.
+    // Projected Shadow가 flat receiver만 처리 → 곡면(cat body 등)은 공백.
+    // VSM은 low-res + low-opacity로만 설정해 "은은한 환경 음영" 역할:
+    //   · scanline artifact가 나와도 subtle하므로 체감 안 됨
+    //   · Projected의 sharp silhouette이 primary visual 담당
+    //   · VSM은 곡면 위 공간감만 추가
+    // 기본 off — 사용자가 "건축 그림자 (Projected)" 켤 때 자동 같이 켜짐.
     this.renderer.shadowMap.enabled = false;
+    this.renderer.shadowMap.type = THREE.VSMShadowMap;
     // ACESFilmic gives PBR materials a natural photographic look under IBL;
     // the previous NoToneMapping clipped highlights whenever roughness was
     // low. Exposure 1.0 is the neutral baseline.
@@ -216,10 +219,30 @@ export class Viewport {
     this.scene.add(ambient);
 
     // Key light — casts the main shadow.
-    // DirectionalLight — 순수 조명만 기여 (shadow 생성 안 함).
-    // Shadow는 blob shadow (아래 _createBlobShadow)에서 별도 처리.
+    // DirectionalLight — 조명 + VSM shadow source (Phase 2).
+    // VSM 설정은 "subtle 보조"용이므로 파라미터 보수적:
+    //   mapSize 1024      — 낮은 해상도로도 VSM은 smooth
+    //   frustum ±15000    — 건축 scene 규모
+    //   radius 12         — 자연스러운 blur
+    //   blurSamples 17    — moment blur 샘플
+    //   bias 0            — VSM에 불필요
+    // shadowMap.enabled 토글은 setProjectedShadowEnabled에 연동.
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
     dirLight.position.set(8000, 15000, 10000);
+    dirLight.castShadow = true;
+    const shadow = dirLight.shadow;
+    shadow.mapSize.set(1024, 1024);
+    shadow.camera.left   = -15000;
+    shadow.camera.right  =  15000;
+    shadow.camera.top    =  15000;
+    shadow.camera.bottom = -15000;
+    shadow.camera.near   = 100;
+    shadow.camera.far    = 60000;
+    shadow.bias          = 0.0;
+    shadow.normalBias    = 0.0;
+    shadow.radius        = 12;
+    shadow.blurSamples   = 17;
+    this._dirLight = dirLight;
     this.scene.add(dirLight);
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
@@ -931,7 +954,10 @@ export class Viewport {
 
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
-      // Real shadow map 미사용 — blob shadow로 대체. castShadow/receiveShadow 불필요.
+      // VSM 보조 layer를 위해 shadow 기능 활성. renderer.shadowMap.enabled가
+      // false면 GPU 측에서 shadow pass 생략하므로 기본 상태에서 비용 없음.
+      frontMesh.castShadow = true;
+      frontMesh.receiveShadow = true;
       this.meshGroup.add(frontMesh);
 
       // ── Store reference for color updates ──
@@ -1949,13 +1975,24 @@ export class Viewport {
   //  Projected shadow (SketchUp-style)
   // ═══════════════════════════════════════════════════════
 
-  /** Projected shadow on/off 토글.
+  /** Projected shadow on/off 토글 (+ VSM 보조 레이어 연동).
    *  Rust-side projection이 필요하므로 활성화 시 caller가 syncMesh로
    *  trigger해 updateProjectedShadow()가 호출되도록 해야 함 (ToolManager에서
-   *  이미 보장). */
+   *  이미 보장). Phase 2: VSM shadow map도 같이 on/off해 곡면 subtle 음영 추가. */
   setProjectedShadowEnabled(enabled: boolean): void {
     this._projectedShadowEnabled = enabled;
     if (this._projectedShadow) this._projectedShadow.visible = enabled;
+    // VSM 보조 layer 연동 — renderer 레벨에서 shadow pass 토글.
+    this.renderer.shadowMap.enabled = enabled;
+    this.renderer.shadowMap.needsUpdate = true;
+    // Material 재컴파일 (shadow uniform 반영)
+    this.scene.traverse((obj) => {
+      if ((obj as THREE.Mesh).material) {
+        const m = (obj as THREE.Mesh).material;
+        if (Array.isArray(m)) m.forEach(mm => { mm.needsUpdate = true; });
+        else m.needsUpdate = true;
+      }
+    });
   }
 
   isProjectedShadowEnabled(): boolean {
@@ -2007,6 +2044,62 @@ export class Viewport {
   /** 현재 sun travel 방향 조회 (projected shadow compute에 전달). */
   getSunTravelDirection(): THREE.Vector3 {
     return this._sunTravel.clone();
+  }
+
+  /**
+   * Sun 방향 설정 — azimuth/elevation 각도(도) 기준.
+   *
+   *   azimuth   — 북(0°)에서 시계방향. 동=90°, 남=180°, 서=270°.
+   *               Three.js 좌표: +Z가 "앞", +X가 오른쪽. 통상 건축에선
+   *               북=−Z 라고 가정. 본 함수도 그 규약 따름.
+   *   elevation — 수평선(0°)에서 천정(90°)으로.
+   *
+   * 내부 처리:
+   *   · sun position (DirectionalLight) 위치 = 천구상 방향의 scaled 점
+   *   · sun travel direction = -light direction (빛이 가는 방향)
+   *   · 두 값 모두 업데이트 + renderer shadow camera refresh
+   *
+   * 호출 후 caller는 syncMesh()를 트리거해 projected shadow 재계산해야 함
+   * (SunPanel 등 UI가 담당).
+   */
+  setSunDirection(azimuthDeg: number, elevationDeg: number): void {
+    // clamp
+    const az = azimuthDeg;
+    const el = Math.max(1, Math.min(89, elevationDeg));  // 지평선 아래/천정 정방향 금지
+    const azRad = (az * Math.PI) / 180;
+    const elRad = (el * Math.PI) / 180;
+    // 천구상 sun 위치 (단위벡터) → 거리 20000mm로 scale.
+    //   x = sin(az) * cos(el)  (동서)
+    //   y = sin(el)            (상승각)
+    //   z = -cos(az) * cos(el) (-Z = 북)
+    const dist = 20000;
+    const sx = Math.sin(azRad) * Math.cos(elRad) * dist;
+    const sy = Math.sin(elRad) * dist;
+    const sz = -Math.cos(azRad) * Math.cos(elRad) * dist;
+    if (this._dirLight) {
+      this._dirLight.position.set(sx, sy, sz);
+      this._dirLight.target.position.set(0, 0, 0);
+      // Shadow camera frustum은 world-origin 중심 고정 — 태양 방향만 바뀜.
+    }
+    // Sun travel direction (빛이 scene으로 가는 방향) = -normalize(light position)
+    const mag = Math.sqrt(sx * sx + sy * sy + sz * sz);
+    if (mag > 1e-6) {
+      this._sunTravel.set(-sx / mag, -sy / mag, -sz / mag);
+    }
+  }
+
+  /** 현재 sun azimuth/elevation 조회 (SunPanel 초기값 복원용). */
+  getSunAzimuthElevation(): { azimuth: number; elevation: number } {
+    // sun travel에서 역산. travel = -sun_pos_unit.
+    const t = this._sunTravel;
+    // sun position unit vector = (-t.x, -t.y, -t.z)
+    const sx = -t.x, sy = -t.y, sz = -t.z;
+    const el = Math.asin(Math.max(-1, Math.min(1, sy))) * 180 / Math.PI;
+    const az = Math.atan2(sx, -sz) * 180 / Math.PI;
+    return {
+      azimuth: (az + 360) % 360,
+      elevation: el,
+    };
   }
 
   /**

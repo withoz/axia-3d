@@ -288,9 +288,14 @@ export function initMenuBar(deps: MenuBarDeps): void {
           toolManager.syncMesh();
         }
         Toast.info(
-          `건축 그림자 (Projected) ${next ? '켜짐 — 매스 silhouette이 ground에 투영' : '꺼짐'}`,
+          `건축 그림자 (Projected + VSM) ${next ? '켜짐 — 매스 silhouette + 곡면 subtle 음영' : '꺼짐'}`,
           3000,
         );
+        break;
+      }
+      case 'view-sun-panel': {
+        const sp = (window as unknown as { __axia_sunPanel?: { toggle(): void } }).__axia_sunPanel;
+        sp?.toggle();
         break;
       }
       case 'reference-image': {
