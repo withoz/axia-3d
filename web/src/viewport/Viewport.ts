@@ -909,12 +909,8 @@ export class Viewport {
         roughness: 0.65,
         metalness: 0.0,
         polygonOffset: true,
-        // 2026-04-22: 1 → 4. logarithmicDepthBuffer와 MSAA 조합에서
-        // factor 1이 부족해 엣지가 면과 z-fighting → 점선 artifact 발생.
-        // 4는 가까운 거리에서도 안전 마진, 매우 먼 거리에서는 log depth의
-        // 비선형성이 여전히 보호함.
-        polygonOffsetFactor: 4,
-        polygonOffsetUnits: 4,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
         vertexColors: useVertexColors,
         // 텍스처가 이미 캐시돼 있으면 즉시 적용, 아니면 applyTextureAsync가 나중에 세팅
         map: firstTex ? getTextureCache().get(firstTex.dataUrl) : null,
@@ -970,44 +966,37 @@ export class Viewport {
       }
 
       // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback.
-      // Line2 기반 (LineSegments2 + LineMaterial) — LineBasicMaterial의 1px
-      // 한계 없이 실제 세계 단위 굵기 지원, DPR 무관 일관된 선명도.
+      //
+      // 2026-04-22 (단순화): Line2 + LineMaterial 조합은 두꺼운 선을 지원하지만
+      // 여러 artifact(z-fighting, 두 줄 보임, dithering)를 유발해 원래의 단순한
+      // LineBasicMaterial로 되돌림. WebGL은 linewidth가 1px로 고정되지만 그게
+      // 오히려 CAD 와이어프레임에 이상적인 깔끔함.
       if (edgeLines && edgeLines.length > 0) {
-        const segGeo = new LineSegmentsGeometry();
-        segGeo.setPositions(new Float32Array(edgeLines));
-        const segMat = this._makeEdgeLineMaterial();
-        const segObj = new LineSegments2(segGeo, segMat);
-        segObj.name = 'dcel-edges';
-        segObj.visible = this._edgeVisible;
-        // 2026-04-22: renderOrder 상향으로 mesh face 이후에 그려 z-fighting 회피.
-        // polygonOffset(factor 4) + renderOrder 1 조합으로 엣지가 항상
-        // 면 앞에 렌더되어 점선 artifact 완전 제거.
-        segObj.renderOrder = 1;
-        this.meshGroup.add(segObj);
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
+        const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
+        const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
+        lineSegs.name = 'dcel-edges';
+        lineSegs.visible = this._edgeVisible;
+        this.meshGroup.add(lineSegs);
       } else {
+        const edgesMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
         const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
-        const posAttr = edgesGeo.getAttribute('position') as THREE.BufferAttribute;
-        const segGeo = new LineSegmentsGeometry();
-        segGeo.setPositions(posAttr.array as Float32Array);
-        const segMat = this._makeEdgeLineMaterial();
-        const segObj = new LineSegments2(segGeo, segMat);
-        segObj.visible = this._edgeVisible;
-        segObj.renderOrder = 1;
-        this.meshGroup.add(segObj);
-        edgesGeo.dispose();
+        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+        edges.visible = this._edgeVisible;
+        this.meshGroup.add(edges);
       }
     }
 
     // ── 4) Standalone edge lines (면 없이 Line 도구로 그린 선) ──
     if (positions.length === 0 && edgeLines && edgeLines.length > 0) {
-      const segGeo = new LineSegmentsGeometry();
-      segGeo.setPositions(new Float32Array(edgeLines));
-      const segMat = this._makeEdgeLineMaterial();
-      const segObj = new LineSegments2(segGeo, segMat);
-      segObj.name = 'standalone-edges';
-      segObj.visible = this._edgeVisible;
-      segObj.renderOrder = 1;
-      this.meshGroup.add(segObj);
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
+      const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
+      const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
+      lineSegs.name = 'standalone-edges';
+      lineSegs.visible = this._edgeVisible;
+      this.meshGroup.add(lineSegs);
     }
 
     // ── 5) Centerlines (중심선/참조 축) — 점선 + 옅은 색 + 얇게 ──
@@ -1045,34 +1034,11 @@ export class Viewport {
     return mat;
   }
 
-  /** Build a LineMaterial for mesh edge lines with current color + width.
-   *  Cached in _meshEdgeMaterials so setEdgeStyle / resize can update all at once.
-   *
-   *  2026-04-22 (두 번째 수정): 엣지 점선 artifact 근본 해결.
-   *  원인 재분석 후 수정 방향 전환:
-   *    - polygonOffset 1 → 4로 상향 (MeshStandardMaterial 측) → face가 edge
-   *      뒤로 확실히 밀림. logarithmicDepthBuffer와 조합된 z-fighting 해소.
-   *    - depthWrite: false, renderOrder: +1로 edge를 mesh 이후에 그려
-   *      "항상 mesh 위" 보장 (depthTest는 유지해 뒷면 엣지는 숨김).
-   *    - alphaToCoverage: false로 되돌림 — MSAA 4x + polygonOffset 조합이면
-   *      충분, alphaToCoverage는 오히려 checkerboard dithering 유발 가능. */
-  private _makeEdgeLineMaterial(): LineMaterial {
-    const w = this.container.clientWidth || 1;
-    const h = this.container.clientHeight || 1;
-    const mat = new LineMaterial({
-      color: this._edgeColor,
-      linewidth: this._edgeWidth,
-      resolution: new THREE.Vector2(w, h),
-      worldUnits: false,
-      alphaToCoverage: false,
-      depthTest: true,
-      depthWrite: false,  // edge끼리는 서로 depth 방해 안 함
-      transparent: false,
-      dashed: false,
-    });
-    this._meshEdgeMaterials.push(mat);
-    return mat;
-  }
+  /** @deprecated mesh edges는 단순한 LineBasicMaterial로 되돌림 (2026-04-22).
+   *  Line2 + LineMaterial 조합은 굵기 조절 가능하지만 MSAA/z-fighting/dithering
+   *  artifact가 쌓여 "두 줄처럼 보이는" 현상을 유발. 1px LineBasicMaterial이
+   *  CAD에서 훨씬 깔끔. 이 함수는 centerline(dashed)만 여전히 필요하면 유지. */
+  // private _makeEdgeLineMaterial 제거됨 — LineBasicMaterial을 인라인 사용.
 
   /**
    * Update edge wireframe without full mesh rebuild.
@@ -1097,14 +1063,13 @@ export class Viewport {
     }
     this._meshEdgeMaterials.length = 0;
 
-    // Rebuild via Line2 (respects _edgeWidth)
-    const segGeo = new LineSegmentsGeometry();
-    segGeo.setPositions(edgeLines);
-    const segMat = this._makeEdgeLineMaterial();
-    const segObj = new LineSegments2(segGeo, segMat);
-    segObj.visible = this._edgeVisible;
-    segObj.renderOrder = 1;  // 면 이후에 그려 z-fighting 회피
-    this.meshGroup.add(segObj);
+    // Rebuild via LineBasicMaterial (단순, 안정)
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(edgeLines, 3));
+    const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
+    const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
+    lineSegs.visible = this._edgeVisible;
+    this.meshGroup.add(lineSegs);
   }
 
   /**
@@ -1755,23 +1720,26 @@ export class Viewport {
     if (opts.color !== undefined) this._edgeColor = opts.color;
     if (opts.visible !== undefined) this._edgeVisible = opts.visible;
     if (opts.profileEdge !== undefined) this._profileEdge = opts.profileEdge;
+    // width: WebGL LineBasicMaterial은 1px 고정이라 내부 상태만 저장 (미래
+    // 대비). 실제 적용하려면 Line2 기반으로 교체 필요 — 지금은 의도적으로
+    // 단순화해 1px solid 채택.
     if (opts.width !== undefined) this._edgeWidth = Math.max(0.5, Math.min(10, opts.width));
 
-    // Legacy LineSegments (그리드 등 일부 잔존 가능)와 Line2 기반 mesh edges
-    // 모두 업데이트. Line2의 굵기는 LineMaterial.linewidth 속성.
     for (const child of this.meshGroup.children) {
       if (child instanceof THREE.LineSegments) {
         child.visible = this._edgeVisible;
         (child.material as THREE.LineBasicMaterial).color.setHex(this._edgeColor);
       } else if (child instanceof LineSegments2) {
+        // Centerline은 여전히 Line2 기반 (dashed 필요).
         child.visible = this._edgeVisible;
       }
     }
-    // Line2 material은 _meshEdgeMaterials에 모아둔 참조로 일괄 갱신 (O(N) 쉬움)
+    // Centerline material 색상 동기화 (필요 시 개별 API로 분리 가능).
     for (const mat of this._meshEdgeMaterials) {
-      mat.color.setHex(this._edgeColor);
-      mat.linewidth = this._edgeWidth;
-      mat.needsUpdate = true;
+      if (mat.dashed) {
+        // 중심선은 기본 grey-blue 유지 — edge color 따라가지 않음.
+        continue;
+      }
     }
   }
 
