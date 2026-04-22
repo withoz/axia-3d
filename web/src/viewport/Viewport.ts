@@ -2020,15 +2020,22 @@ export class Viewport {
     geo.setAttribute('position', new THREE.BufferAttribute(triangleBuffer, 3));
     geo.computeBoundingSphere();
     if (!this._projectedShadow) {
+      // 2026-04-23 Phase 2.3: MinEquation 블렌딩으로 중첩 균일화.
+      // 표준 alpha blending은 1-(1-α)^N으로 겹칠수록 어두워져서 띠 그라데이션 발생.
+      // MinEquation: result = min(src*srcF, dst*dstF). srcF=One, dstF=One이면
+      // 픽셀별로 min(shadowColor, bgColor). 처음 그림자 0.72, 같은 자리에 또 그려도
+      // min(0.72, 0.72) = 0.72로 균일 유지. fan triangulation 자기중첩/인접 건물
+      // 중첩 모두 자동 해결. opacity 파라미터는 MinEquation에서 의미 없음 —
+      // 어둠의 정도는 color 값(0.72)으로 직접 제어.
       const mat = new THREE.MeshBasicMaterial({
-        color: 0x000000,
+        color: 0xb8b8b8,  // 밝은 회색 — min 연산에서 배경(흰/연회색) 대비 어두워짐
         transparent: true,
-        // 2026-04-23: 0.35 → 0.15. silhouette filter로 바뀐 뒤엔 태양을
-        // 향하는 모든 face가 project되어 overlap 누적 darkening 발생.
-        // 0.15로 낮춰 3-4 겹 overlap에서도 자연스러운 어두움 유지.
-        opacity: 0.15,
         depthWrite: false,
         side: THREE.DoubleSide,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.MinEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneFactor,
         polygonOffset: true,
         polygonOffsetFactor: -2,  // 살짝 앞쪽 — ground plane 위에 확실히
       });
