@@ -966,6 +966,15 @@ impl Scene {
 
         match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
             Ok((face_id, _verts)) => {
+                // 사용자가 명시적으로 그린 경계는 "hard edge" 로 표시해야
+                // 인접 coplanar 면에 붙어도 엣지가 자동 숨겨지지 않음.
+                // (draw_line 경로는 이미 mark_edge_hard 호출. rect도 동일
+                // 의미론 — 건축 평면 배치에서 두 방의 경계가 사라지면 안 됨.)
+                if let Ok(edges) = self.mesh.face_outer_edges(face_id) {
+                    for eid in edges {
+                        self.mesh.mark_edge_hard(eid);
+                    }
+                }
                 let xia_id = self.create_xia("Rectangle".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.position = center;
@@ -997,6 +1006,13 @@ impl Scene {
 
         match self.mesh.draw_circle(center, normal, radius, segments, self.default_material) {
             Ok((face_id, _verts)) => {
+                // draw_rect와 동일: 명시적으로 그린 원의 경계는 hard 처리.
+                // Coplanar 인접 면 옆에 있어도 경계 유지.
+                if let Ok(edges) = self.mesh.face_outer_edges(face_id) {
+                    for eid in edges {
+                        self.mesh.mark_edge_hard(eid);
+                    }
+                }
                 let xia_id = self.create_xia("Circle".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.position = center;
