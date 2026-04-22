@@ -100,7 +100,11 @@ export class Viewport {
   private _composer: EffectComposer | null = null;
   private _ssaoPass: SSAOPass | null = null;
   private _renderPass: RenderPass | null = null;
-  private _ssaoEnabled: boolean = true;
+  // 2026-04-22: 기본값 true → false. SSAO는 screen-space sampling으로
+  // flat surface에 noise pattern(깃털·해치 모양)을 만드는 고유 artifact를
+  // 가짐. CAD 작업에서는 깔끔한 solid face가 더 가치 있으므로 기본 off.
+  // View 메뉴 → "AO (주변광 차폐) 토글" 로 필요 시 활성화 가능.
+  private _ssaoEnabled: boolean = false;
 
   // ═══ Fur shell overlay (toggle-able; off by default) ═══
   private _fur: FurShell | null = null;
