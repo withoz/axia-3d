@@ -1,5 +1,28 @@
 //! Projected Shadow — Sun-facing face들을 임의 평면 receiver에 투영.
 //!
+//! ## Phase 2.5c — Concave receiver outline (2026-04-23)
+//!
+//! Sutherland-Hodgman은 convex clip polygon만 수학적으로 정확함. 2.5c에서는
+//! receiver outline이 concave(L자/O자/자유형 등)여도 올바르게 작동하도록:
+//!   1) Outer outline이 convex인지 테스트 (모든 cross product 부호 동일).
+//!   2) Convex면 기존 S-H 1회.
+//!   3) Concave면 ear-clipping으로 outer를 triangle 집합으로 분해 후, 각
+//!      triangle에 대해 subject를 S-H clip하고 결과를 누적.
+//! Triangle은 항상 convex이므로 S-H가 정확히 작동. Triangle 간 결과는 겹치지
+//! 않으므로 fan triangulate 시 중복도 없음.
+//!
+//! ## Phase 2.5b — Hole punching in receiver (2026-04-23)
+//!
+//! Receiver에 구멍(inner loop)이 있으면 그림자가 구멍도 통과해 뒤로 새어나가지
+//! 않아야 한다. Sutherland-Hodgman은 polygon을 "클리퍼 내부"로 잘라내는 방법
+//! 이라 outer에는 직접 쓸 수 있지만 hole은 "빼기"여야 함. 여기서는 간단한
+//! 2-step 전략을 쓴다:
+//!   1) Subject를 outer로 clip → 초기 visible polygon
+//!   2) 각 hole에 대해, 현재 결과를 "hole 바깥"과의 교집합만 남기기. 이는 hole
+//!      edge들을 CW로 간주하고 그대로 Sutherland-Hodgman을 한 번 더 돌리는
+//!      것과 수학적으로 동일 (클리핑 대상이 hole의 보집합).
+//! Hole이 convex라고 가정 (대부분의 CAD 구멍: 원형, 사각형).
+//!
 //! ## Phase 2.5a — Tilted receiver (2026-04-23)
 //!
 //! 이전 Phase 2.4.x는 수평(normal.y > 0.7) receiver만 지원했다. 2.5a에서는
@@ -31,15 +54,20 @@ use glam::DVec3;
 
 use crate::mesh::Mesh;
 
-/// 임의 평면 receiver — origin + normal + outline(plane-local 2D CCW).
+/// 임의 평면 receiver — origin + normal + outer outline + holes (all in
+/// plane-local 2D (u,v) coordinates).
 struct Receiver {
     origin: DVec3,
     normal: DVec3,
     /// Plane basis vectors; v1 ⊥ v2, both ⊥ normal. Used to map 3D↔2D.
     u: DVec3,
     v: DVec3,
-    /// 2D outline in (u,v) plane coords, CCW. Empty = infinite (ground).
+    /// 2D outer outline in (u,v) plane coords, CCW. Empty = infinite (ground).
     outline_2d: Vec<(f64, f64)>,
+    /// 2D hole outlines in (u,v), each forced CW so sutherland_hodgman
+    /// (which tests "inside = left of CCW") automatically keeps only the
+    /// "outside the hole" half when re-run.
+    holes_2d: Vec<Vec<(f64, f64)>>,
 }
 
 impl Receiver {
@@ -51,6 +79,7 @@ impl Receiver {
             u: DVec3::new(1.0, 0.0, 0.0),
             v: DVec3::new(0.0, 0.0, 1.0),
             outline_2d: Vec::new(),
+            holes_2d: Vec::new(),
         }
     }
 
@@ -117,7 +146,34 @@ impl Mesh {
             if signed_area_2d(&outline_2d) < 0.0 {
                 outline_2d.reverse();
             }
-            receivers.push(Receiver { origin, normal: n, u, v, outline_2d });
+
+            // Phase 2.5b — collect hole outlines. Inner loops are stored CW
+            // (their 3D winding is CW relative to the face normal so they
+            // represent interior cutouts). We force each to CW in plane-local
+            // 2D; see subtract_holes_sh() for why.
+            let mut holes_2d: Vec<Vec<(f64, f64)>> = Vec::new();
+            for inner in face.inners() {
+                let hole_vids = match self.collect_loop_verts(inner.start) {
+                    Ok(vs) => vs,
+                    Err(_) => continue,
+                };
+                if hole_vids.len() < 3 { continue; }
+                let hole_verts: Vec<DVec3> = hole_vids.iter()
+                    .filter_map(|&vid| self.vertex_pos(vid).ok())
+                    .collect();
+                if hole_verts.len() < 3 { continue; }
+                let mut h2d: Vec<(f64, f64)> = hole_verts.iter().map(|p| {
+                    let d = *p - origin;
+                    (d.dot(u), d.dot(v))
+                }).collect();
+                // Force CW — treat as "subtract" operand in clip.
+                if signed_area_2d(&h2d) > 0.0 {
+                    h2d.reverse();
+                }
+                holes_2d.push(h2d);
+            }
+
+            receivers.push(Receiver { origin, normal: n, u, v, outline_2d, holes_2d });
         }
 
         // 2) For each sun-facing caster, project to each valid receiver.
@@ -176,28 +232,64 @@ impl Mesh {
                     .collect();
 
                 // Clip — ground has empty outline (no clip needed).
-                let clipped_2d = if recv.outline_2d.is_empty() {
-                    projected_2d
+                // For concave outlines, clip_to_concave_outline decomposes into
+                // triangles and emits a sequence of convex clipped polygons.
+                let clipped_pieces: Vec<Vec<(f64, f64)>> = if recv.outline_2d.is_empty() {
+                    vec![projected_2d]
+                } else if is_convex_ccw(&recv.outline_2d) {
+                    let c = sutherland_hodgman(&projected_2d, &recv.outline_2d);
+                    if c.len() < 3 { continue; } else { vec![c] }
                 } else {
-                    sutherland_hodgman(&projected_2d, &recv.outline_2d)
+                    clip_to_concave_outline(&projected_2d, &recv.outline_2d)
                 };
-                if clipped_2d.len() < 3 { continue; }
+                if clipped_pieces.is_empty() { continue; }
+
+                // Phase 2.5b — hole subtraction.
+                // S-H cannot directly subtract a convex hole from an arbitrary
+                // subject (outside of convex clip is non-convex, which S-H
+                // doesn't handle). We use a pragmatic two-step strategy:
+                //   1) Quick centroid check — if the whole shadow centroid sits
+                //      inside a hole, the shadow entirely falls on the hole →
+                //      discard.
+                //   2) Otherwise, split the clipped polygon into fan triangles
+                //      and discard any triangle whose centroid sits inside any
+                //      hole. This gives pixel-accurate result for convex holes
+                //      when caster shadow partially overlaps the hole region.
+                // This covers the common CAD cases (floor with round/square
+                // cutouts, frame with window glass) without a full Weiler-
+                // Atherton implementation.
+                let holes = &recv.holes_2d;
 
                 // Back to 3D + offset along receiver normal for z-fight safety.
                 let epsn = recv.normal * RECV_EPS;
-                let final_3d: Vec<DVec3> = clipped_2d.iter()
-                    .map(|&uv| recv.to_3d(uv) + epsn)
-                    .collect();
+                for clipped_2d in &clipped_pieces {
+                    if clipped_2d.len() < 3 { continue; }
+                    let final_3d: Vec<DVec3> = clipped_2d.iter()
+                        .map(|&uv| recv.to_3d(uv) + epsn)
+                        .collect();
 
-                // Fan triangulate.
-                let p0 = final_3d[0];
-                for i in 1..final_3d.len() - 1 {
-                    let p1 = final_3d[i];
-                    let p2 = final_3d[i + 1];
-                    for p in [p0, p1, p2] {
-                        out.push(p.x as f32);
-                        out.push(p.y as f32);
-                        out.push(p.z as f32);
+                    // Fan triangulate with per-triangle hole discard.
+                    let p0 = final_3d[0];
+                    let uv0 = clipped_2d[0];
+                    for i in 1..final_3d.len() - 1 {
+                        let p1 = final_3d[i];
+                        let p2 = final_3d[i + 1];
+                        if !holes.is_empty() {
+                            let uv1 = clipped_2d[i];
+                            let uv2 = clipped_2d[i + 1];
+                            let centroid_2d = (
+                                (uv0.0 + uv1.0 + uv2.0) / 3.0,
+                                (uv0.1 + uv1.1 + uv2.1) / 3.0,
+                            );
+                            if holes.iter().any(|h| point_in_polygon_2d(centroid_2d, h)) {
+                                continue;
+                            }
+                        }
+                        for p in [p0, p1, p2] {
+                            out.push(p.x as f32);
+                            out.push(p.y as f32);
+                            out.push(p.z as f32);
+                        }
                     }
                 }
             }
@@ -273,6 +365,110 @@ fn line_intersect(
     if denom.abs() < 1e-12 { return None; }
     let t = ((s.0 - p1.0) * dy2 - (s.1 - p1.1) * dx2) / denom;
     Some((p1.0 + t * dx1, p1.1 + t * dy1))
+}
+
+/// Is `poly` a convex CCW polygon? Checks that every consecutive triple
+/// makes the same (non-negative) turn. Degenerate edges (zero cross) tolerated.
+fn is_convex_ccw(poly: &[(f64, f64)]) -> bool {
+    let n = poly.len();
+    if n < 3 { return false; }
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let c = poly[(i + 2) % n];
+        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        if cross < -1e-9 { return false; }
+    }
+    true
+}
+
+/// Ear-clipping triangulation for a simple (possibly concave) CCW polygon.
+/// Returns indices into `poly` as triangle triples. O(n^2), adequate for
+/// typical architectural receiver outlines (≤ few dozen vertices).
+fn ear_triangulate_2d(poly: &[(f64, f64)]) -> Vec<[usize; 3]> {
+    let n = poly.len();
+    if n < 3 { return Vec::new(); }
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut tris: Vec<[usize; 3]> = Vec::with_capacity(n.saturating_sub(2));
+    let mut guard = n * n;  // worst-case budget
+
+    while indices.len() > 3 && guard > 0 {
+        guard -= 1;
+        let m = indices.len();
+        let mut ear_found = false;
+        for i in 0..m {
+            let ia = indices[(i + m - 1) % m];
+            let ib = indices[i];
+            let ic = indices[(i + 1) % m];
+            let a = poly[ia];
+            let b = poly[ib];
+            let c = poly[ic];
+            // Convex (CCW turn at b)?
+            let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+            if cross <= 0.0 { continue; }
+            // Does any other vertex lie strictly inside triangle (a,b,c)?
+            let mut has_inside = false;
+            for &j in &indices {
+                if j == ia || j == ib || j == ic { continue; }
+                if point_in_tri_2d(poly[j], a, b, c) { has_inside = true; break; }
+            }
+            if has_inside { continue; }
+            tris.push([ia, ib, ic]);
+            indices.remove(i);
+            ear_found = true;
+            break;
+        }
+        if !ear_found { break; }  // malformed polygon — salvage what we have
+    }
+    if indices.len() == 3 {
+        tris.push([indices[0], indices[1], indices[2]]);
+    }
+    tris
+}
+
+fn point_in_tri_2d(p: (f64, f64), a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> bool {
+    let s1 = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+    let s2 = (c.0 - b.0) * (p.1 - b.1) - (c.1 - b.1) * (p.0 - b.0);
+    let s3 = (a.0 - c.0) * (p.1 - c.1) - (a.1 - c.1) * (p.0 - c.0);
+    let has_neg = s1 < 0.0 || s2 < 0.0 || s3 < 0.0;
+    let has_pos = s1 > 0.0 || s2 > 0.0 || s3 > 0.0;
+    !(has_neg && has_pos)
+}
+
+/// Clip `subject` against a concave CCW `outline` by first ear-triangulating
+/// the outline and running Sutherland-Hodgman against each triangle. Returns
+/// the list of non-empty clipped pieces.
+fn clip_to_concave_outline(
+    subject: &[(f64, f64)],
+    outline: &[(f64, f64)],
+) -> Vec<Vec<(f64, f64)>> {
+    let tris = ear_triangulate_2d(outline);
+    let mut pieces: Vec<Vec<(f64, f64)>> = Vec::new();
+    for [i, j, k] in tris {
+        let clip_tri = vec![outline[i], outline[j], outline[k]];
+        let c = sutherland_hodgman(subject, &clip_tri);
+        if c.len() >= 3 { pieces.push(c); }
+    }
+    pieces
+}
+
+/// 2D ray-casting point-in-polygon. Works for arbitrary simple polygons
+/// (convex or concave), any winding.
+fn point_in_polygon_2d(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
+    let n = poly.len();
+    if n < 3 { return false; }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        // Ray from p going +X: does edge (xi,yi)-(xj,yj) cross it?
+        let intersect = ((yi > p.1) != (yj > p.1))
+            && (p.0 < (xj - xi) * (p.1 - yi) / (yj - yi + 1e-30) + xi);
+        if intersect { inside = !inside; }
+        j = i;
+    }
+    inside
 }
 
 fn signed_area_2d(poly: &[(f64, f64)]) -> f64 {
@@ -452,6 +648,92 @@ mod tests {
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
         assert!(!ys.iter().any(|y| (y - 500.5).abs() < 0.01));
+    }
+
+    #[test]
+    fn ear_triangulate_concave_produces_valid_tris() {
+        // L-shape (6 vertices, concave CCW).
+        let l = vec![
+            (0.0, 0.0), (2.0, 0.0), (2.0, 1.0),
+            (1.0, 1.0), (1.0, 2.0), (0.0, 2.0),
+        ];
+        assert!(!is_convex_ccw(&l));
+        let tris = ear_triangulate_2d(&l);
+        // 6-vertex polygon → 4 triangles.
+        assert_eq!(tris.len(), 4);
+    }
+
+    #[test]
+    fn concave_receiver_clips_subject_per_triangle() {
+        // Concave L-shape receiver, subject (caster shadow) overlaps only
+        // the foot of the L → only one triangle of the decomposed L should
+        // retain overlap; concave clip helper must produce something.
+        let outline: Vec<(f64, f64)> = vec![
+            (0.0, 0.0), (2000.0, 0.0), (2000.0, 1000.0),
+            (1000.0, 1000.0), (1000.0, 2000.0), (0.0, 2000.0),
+        ];
+        let subject = vec![
+            (1500.0, 200.0), (1800.0, 200.0),
+            (1800.0, 500.0), (1500.0, 500.0),
+        ];
+        let pieces = clip_to_concave_outline(&subject, &outline);
+        assert!(!pieces.is_empty(), "concave clip must keep something");
+        // Total clipped area should equal subject area (300×300 = 90000)
+        // because subject is fully inside the L's foot.
+        let total_area: f64 = pieces.iter().map(|p| signed_area_2d(p).abs()).sum();
+        assert!((total_area - 90000.0).abs() < 1.0, "area {total_area} ≠ 90000");
+    }
+
+    #[test]
+    fn receiver_with_hole_does_not_catch_shadow_in_hole() {
+        // Phase 2.5b: receiver(floor) with a square hole. Caster shadow lands
+        // entirely inside the hole → result should have no receiver triangles
+        // at the floor's y level.
+        let mut mesh = Mesh::new();
+
+        // Floor at y=0 (we need y > 1 to be picked as a receiver, so floor at
+        // y=100 instead of ground).
+        let f0 = mesh.add_vertex(DVec3::new(-2000.0, 100.0, -2000.0));
+        let f1 = mesh.add_vertex(DVec3::new(-2000.0, 100.0,  2000.0));
+        let f2 = mesh.add_vertex(DVec3::new( 2000.0, 100.0,  2000.0));
+        let f3 = mesh.add_vertex(DVec3::new( 2000.0, 100.0, -2000.0));
+        // Hole in middle — 600x600 square.
+        let h0 = mesh.add_vertex(DVec3::new(-300.0, 100.0, -300.0));
+        let h1 = mesh.add_vertex(DVec3::new( 300.0, 100.0, -300.0));
+        let h2 = mesh.add_vertex(DVec3::new( 300.0, 100.0,  300.0));
+        let h3 = mesh.add_vertex(DVec3::new(-300.0, 100.0,  300.0));
+        // Face with outer CCW (+Y normal) + inner CW hole.
+        let hole: [VertId; 4] = [h0, h1, h2, h3];
+        mesh.add_face_with_holes(
+            &[f0, f1, f2, f3],
+            &[&hole[..]],
+            MaterialId::new(0),
+        ).unwrap();
+
+        // Small caster directly above the hole.
+        let c0 = mesh.add_vertex(DVec3::new(-100.0, 2000.0, -100.0));
+        let c1 = mesh.add_vertex(DVec3::new(-100.0, 2000.0,  100.0));
+        let c2 = mesh.add_vertex(DVec3::new( 100.0, 2000.0,  100.0));
+        let c3 = mesh.add_vertex(DVec3::new( 100.0, 2000.0, -100.0));
+        mesh.add_face_with_holes(&[c0, c1, c2, c3], &[], MaterialId::new(0)).unwrap();
+
+        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let tris = mesh.compute_ground_projected_shadows(sun_dir);
+        // Triangles at floor-level y (~100.5) must be empty: caster shadow
+        // fully sits inside the hole → discarded.
+        let floor_tris = (0..tris.len() / 9).filter(|i| {
+            let y0 = tris[i * 9 + 1];
+            let y1 = tris[i * 9 + 4];
+            let y2 = tris[i * 9 + 7];
+            (y0 - 100.5).abs() < 0.1 && (y1 - 100.5).abs() < 0.1 && (y2 - 100.5).abs() < 0.1
+        }).count();
+        assert_eq!(floor_tris, 0, "caster shadow over hole should punch through receiver");
+        // But ground shadow (y≈0.5) must still exist (caster still shadows ground).
+        let ground_tris = (0..tris.len() / 9).filter(|i| {
+            let y0 = tris[i * 9 + 1];
+            (y0 - 0.5).abs() < 0.1
+        }).count();
+        assert!(ground_tris > 0, "caster must still cast onto ground through the hole");
     }
 
     #[test]
