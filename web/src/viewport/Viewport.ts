@@ -1981,7 +1981,10 @@ export class Viewport {
     } else {
       this._projectedShadow.geometry = geo;
     }
-    this._projectedShadow.position.y = 0.8;  // z-fighting 회피
+    // 2026-04-23 Phase 2.4 — Rust가 이미 각 receiver 평면 + RECV_EPS(0.5mm) 로
+    //   벡터 buffer에 y값을 기록. 여기서 추가 position.y 오프셋은 불필요하며
+    //   오히려 per-receiver 위치를 망가뜨림 (ground=0.5, box top=500.5 그대로 유지해야 함).
+    this._projectedShadow.position.y = 0;
     this._projectedShadow.visible = true;
   }
 
