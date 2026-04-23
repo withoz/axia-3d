@@ -1962,7 +1962,12 @@ export class Viewport {
       // 중첩 모두 자동 해결. opacity 파라미터는 MinEquation에서 의미 없음 —
       // 어둠의 정도는 color 값(0.72)으로 직접 제어.
       const mat = new THREE.MeshBasicMaterial({
-        color: 0x909090,  // 중간 회색 — min 연산에서 배경(0xe0 회색) 대비 약 44% 어두움
+        // 2026-04-23 Phase 2.4.2 — 0x909090 → 0x707070. MinEquation은
+        //   min(shadow, bg)이므로 대비는 "배경색 - shadow색"으로 결정됨.
+        //   박스 top(PBR로 밝게 렌더, ≈200)에서 shadow 144는 차이 56으로 옅고,
+        //   지면(≈224)에서 차이 80으로 강하게 드러나 불균일. 112로 낮추면
+        //   박스 top에서 88, 지면에서 112 → 양쪽 다 뚜렷.
+        color: 0x707070,
         transparent: true,
         depthWrite: false,
         side: THREE.DoubleSide,
