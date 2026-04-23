@@ -1,50 +1,75 @@
-//! Projected Shadow — Sun-facing face들을 multi-plane receiver에 투영.
+//! Projected Shadow — Sun-facing face들을 임의 평면 receiver에 투영.
 //!
-//! ## Phase 2.4 — Multi-receiver + Sutherland-Hodgman clipping (2026-04-23)
+//! ## Phase 2.5a — Tilted receiver (2026-04-23)
 //!
-//! 이전 Phase 2.3까지는 ground(y=0) 단일 receiver만 처리해서 박스 위에 올려놓은
-//! 객체의 그림자가 박스 윗면에 떨어지지 않고 박스를 통과해 지면에 생성됐다.
-//! Phase 2.4에서:
+//! 이전 Phase 2.4.x는 수평(normal.y > 0.7) receiver만 지원했다. 2.5a에서는
+//! receiver plane을 임의의 (point, normal) 평면으로 일반화하고, 기울어진
+//! 지붕·계단·램프에도 그림자가 떨어지게 한다.
 //!
-//! 1) `collect_top_receivers()` — `normal.y > 0.7`인 모든 active face를 수평
-//!    receiver로 수집 (ground y=0은 항상 포함, 무한 범위로 표시).
-//! 2) 각 sun-facing caster face를 각 receiver 평면에 투영 후 receiver
-//!    outline(2D XZ)에 Sutherland-Hodgman 클리핑.
-//! 3) 결과 polygon을 fan triangulate해 receiver y + 0.5mm 높이로 emit.
+//! ### 알고리즘
+//! 1. collect_receivers: sun을 등지지 않은 모든 active face를 receiver 후보로
+//!    수집 (normal.dot(-sun_dir) < -eps 또는 유사 방향 face는 caster 전용).
+//!    실용상: 사람이 "바닥/벽/지붕"으로 쓸 법한 면 = not downward-pointing
+//!    (n.y > -0.1) 하면서 sun-ray가 평면을 향해 들어오는 면.
+//! 2. 각 caster vertex를 ray-plane 교차로 receiver 평면에 투영.
+//!    t = dot(recv_origin - caster_vertex, recv_normal) / dot(sun_dir, recv_normal)
+//!    projected = caster_vertex + sun_dir * t
+//! 3. Plane-local 2D basis (u, v)로 projected 점과 receiver outline을 변환.
+//! 4. Sutherland-Hodgman 2D clip.
+//! 5. Clipped 점들을 다시 3D로 복원하고 triangulate.
 //!
-//! ### Clipping 라이선스
-//! Sutherland-Hodgman은 1974년 Sutherland & Hodgman 공개 알고리즘으로 특허
-//! 없음. 본 구현은 교과서 pseudo-code 기반의 clean-room 작성. 외부 라이브러리
-//! 의존 없음.
+//! ### 라이선스
+//! Sutherland-Hodgman은 1974년 공개 알고리즘, 특허 없음. 본 구현은 교과서
+//! pseudo-code 기반 clean-room 작성.
 //!
-//! ### 제약 (현재)
-//! - Receiver outline은 convex로 가정 (대부분의 top face: 박스 top, 테이블,
-//!   바닥 슬래브가 convex라 실용적으로 충분). concave receiver는 나중에
-//!   triangulation 후 각 triangle에 대해 clip하도록 확장.
-//! - Caster는 receiver "위"에 있을 때만 투영 (min_y > receiver_y + eps).
-//!   Caster가 receiver 평면을 관통할 경우 skip — 일반적 씬에서 드문 경우.
-//! - 각 caster는 가능한 모든 receiver에 중첩 투영됨. MinEquation blending이
-//!   per-pixel min으로 균일 darkness 유지. 박스 top 뒤에 가려진 ground 그림자는
-//!   보이지 않으므로 overdraw는 시각적으로 무해.
+//! ### 제약 (Phase 2.5a 현재)
+//! - Receiver outline은 convex 가정 (concave는 Phase 2.5c에서 triangulate 후
+//!   per-triangle clip으로 확장).
+//! - Hole은 무시 (Phase 2.5b에서 추가).
 
 use glam::DVec3;
 
 use crate::mesh::Mesh;
 
-/// 수평 receiver 평면 정보.
-/// `outline`: 비어있으면 무한 범위 (ground), 아니면 2D XZ outline (CCW from above).
+/// 임의 평면 receiver — origin + normal + outline(plane-local 2D CCW).
 struct Receiver {
-    y: f64,
-    outline: Vec<(f64, f64)>,  // empty = infinite ground
+    origin: DVec3,
+    normal: DVec3,
+    /// Plane basis vectors; v1 ⊥ v2, both ⊥ normal. Used to map 3D↔2D.
+    u: DVec3,
+    v: DVec3,
+    /// 2D outline in (u,v) plane coords, CCW. Empty = infinite (ground).
+    outline_2d: Vec<(f64, f64)>,
+}
+
+impl Receiver {
+    /// Ground (y=0) infinite receiver.
+    fn ground() -> Self {
+        Self {
+            origin: DVec3::ZERO,
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            u: DVec3::new(1.0, 0.0, 0.0),
+            v: DVec3::new(0.0, 0.0, 1.0),
+            outline_2d: Vec::new(),
+        }
+    }
+
+    /// Project a 3D point into plane-local (u,v) coords assuming p lies on plane.
+    fn to_2d(&self, p: DVec3) -> (f64, f64) {
+        let d = p - self.origin;
+        (d.dot(self.u), d.dot(self.v))
+    }
+
+    /// Convert plane-local (u,v) back to 3D point on plane.
+    fn to_3d(&self, uv: (f64, f64)) -> DVec3 {
+        self.origin + self.u * uv.0 + self.v * uv.1
+    }
 }
 
 impl Mesh {
-    /// Compute projected shadow triangles on all top-facing receivers.
-    /// Returns flat buffer of triangle vertices (9 f32 per tri). Each triangle's
-    /// y coordinate is set to the receiver plane + small epsilon (0.5mm) to
-    /// avoid z-fight with the receiver surface.
-    ///
-    /// Backwards-compatible name retained; algorithm now multi-receiver.
+    /// Compute projected shadow triangles on all valid receivers.
+    /// Flat buffer, 9 f32 per triangle. Each triangle slightly offset from
+    /// its receiver plane along normal by RECV_EPS (0.5mm) for z-fight.
     pub fn compute_ground_projected_shadows(&self, sun_dir: DVec3) -> Vec<f32> {
         let mut out = Vec::new();
         if sun_dir.y > -1e-4 {
@@ -52,17 +77,18 @@ impl Mesh {
         }
 
         const SF_EPS: f64 = 0.001;
-        const MIN_HEIGHT: f64 = 1.0;   // caster가 이보다 낮으면 무시
-        const RECV_EPS: f64 = 0.5;     // receiver 위 몇 mm 띄워 z-fight 회피
-        const UP_THRESHOLD: f64 = 0.7; // top-face 판정 (normal.y > this)
+        const RECV_EPS: f64 = 0.5;
+        // receiver 수집 기준: normal · (+Y) > this  →  horizontal or tilted-up
+        // face만 receiver로 간주 (지붕, 바닥, 계단 포함).
+        const RECV_UP_MIN: f64 = 0.1;
 
-        // 1) Collect receivers — always include ground (infinite outline=[]).
-        let mut receivers: Vec<Receiver> = vec![Receiver { y: 0.0, outline: vec![] }];
+        // 1) Collect receivers. Always include infinite ground.
+        let mut receivers: Vec<Receiver> = vec![Receiver::ground()];
 
         for (_fid, face) in self.faces.iter() {
             if !face.is_active() { continue; }
             let n = face.normal();
-            if n.y < UP_THRESHOLD { continue; }
+            if n.y < RECV_UP_MIN { continue; }
 
             let outer_start = face.outer().start;
             let vert_ids = match self.collect_loop_verts(outer_start) {
@@ -75,19 +101,26 @@ impl Mesh {
                 .collect();
             if verts_3d.len() < 3 { continue; }
 
-            // 평균 y를 receiver plane으로 사용 (top face는 대체로 coplanar)
-            let avg_y: f64 = verts_3d.iter().map(|v| v.y).sum::<f64>() / verts_3d.len() as f64;
-            if avg_y < MIN_HEIGHT { continue; }  // ground 근처는 ground receiver가 담당
+            // Reject near-ground faces — ground receiver already handles them.
+            let max_y = verts_3d.iter().map(|v| v.y).fold(f64::NEG_INFINITY, f64::max);
+            if max_y < 1.0 { continue; }
 
-            let mut outline: Vec<(f64, f64)> = verts_3d.iter().map(|v| (v.x, v.z)).collect();
-            // 2D clip 알고리즘은 CCW 가정. 필요 시 뒤집음.
-            if signed_area_2d(&outline) < 0.0 {
-                outline.reverse();
+            // Plane origin = centroid; normal = face.normal().
+            let origin = verts_3d.iter().copied().sum::<DVec3>() / (verts_3d.len() as f64);
+            let (u, v) = build_plane_basis(n);
+            let mut outline_2d: Vec<(f64, f64)> = verts_3d.iter().map(|p| {
+                let d = *p - origin;
+                (d.dot(u), d.dot(v))
+            }).collect();
+
+            // Enforce CCW for Sutherland-Hodgman.
+            if signed_area_2d(&outline_2d) < 0.0 {
+                outline_2d.reverse();
             }
-            receivers.push(Receiver { y: avg_y, outline });
+            receivers.push(Receiver { origin, normal: n, u, v, outline_2d });
         }
 
-        // 2) For each sun-facing caster, project to each receiver strictly below.
+        // 2) For each sun-facing caster, project to each valid receiver.
         for (_fid, face) in self.faces.iter() {
             if !face.is_active() { continue; }
             let dot = face.normal().dot(-sun_dir);
@@ -104,40 +137,68 @@ impl Mesh {
                 .collect();
             if caster_3d.len() < 3 { continue; }
 
-            let caster_min_y = caster_3d.iter().map(|v| v.y).fold(f64::INFINITY, f64::min);
-            let caster_max_y = caster_3d.iter().map(|v| v.y).fold(f64::NEG_INFINITY, f64::max);
-
             for recv in &receivers {
-                // 2026-04-23 Phase 2.4.1 — 수직 sun-facing face(박스 앞면 등)를
-                //   허용해야 박스 base와 ground shadow가 이어짐.
-                //   max_y > recv.y + eps: 뭔가 위에 있어야 그림자가 생김.
-                //   min_y >= recv.y - eps: receiver 아래로 뚫고 내려가지 않아야
-                //     projection이 뒤로(태양 쪽) 가는 버그 방지.
-                if caster_max_y <= recv.y + 0.1 { continue; }
-                if caster_min_y < recv.y - 0.1 { continue; }
+                // Sun must hit the receiver plane from the lit side.
+                let denom = sun_dir.dot(recv.normal);
+                if denom.abs() < 1e-6 { continue; }  // sun parallel to plane
+                if denom > 0.0 { continue; }         // sun from behind the plane
 
-                // Project caster vertices onto plane y = recv.y
-                let projected: Vec<(f64, f64)> = caster_3d.iter().map(|v| {
-                    let t = (recv.y - v.y) / sun_dir.y;
-                    (v.x + sun_dir.x * t, v.z + sun_dir.z * t)
-                }).collect();
+                // Project each caster vertex to the receiver plane.
+                // t = dot(origin - v, normal) / dot(sun_dir, normal)
+                let mut projected_3d: Vec<DVec3> = Vec::with_capacity(caster_3d.len());
+                let mut all_above = true;
+                for cv in &caster_3d {
+                    // Distance of caster vertex above plane (signed).
+                    let signed = (*cv - recv.origin).dot(recv.normal);
+                    if signed < -0.1 {
+                        // Caster dips below this receiver plane — skip whole
+                        // projection to avoid backward-facing solution.
+                        all_above = false;
+                        break;
+                    }
+                    // Only projects forward if cv is above and sun goes downward
+                    // through plane. Otherwise skip.
+                    let t = (recv.origin - *cv).dot(recv.normal) / denom;
+                    if !t.is_finite() { all_above = false; break; }
+                    projected_3d.push(*cv + sun_dir * t);
+                }
+                if !all_above { continue; }
+                // Skip if the caster is entirely on (or fractionally above) the
+                // receiver plane — nothing to cast.
+                let max_signed = caster_3d.iter()
+                    .map(|cv| (*cv - recv.origin).dot(recv.normal))
+                    .fold(f64::NEG_INFINITY, f64::max);
+                if max_signed < 0.5 { continue; }
 
-                // Clip against receiver outline (empty outline = ground, no clip).
-                let clipped = if recv.outline.is_empty() {
-                    projected
+                // Map to plane-local 2D.
+                let projected_2d: Vec<(f64, f64)> = projected_3d.iter()
+                    .map(|p| recv.to_2d(*p))
+                    .collect();
+
+                // Clip — ground has empty outline (no clip needed).
+                let clipped_2d = if recv.outline_2d.is_empty() {
+                    projected_2d
                 } else {
-                    sutherland_hodgman(&projected, &recv.outline)
+                    sutherland_hodgman(&projected_2d, &recv.outline_2d)
                 };
-                if clipped.len() < 3 { continue; }
+                if clipped_2d.len() < 3 { continue; }
 
-                let y_out = (recv.y + RECV_EPS) as f32;
-                let (x0, z0) = clipped[0];
-                for i in 1..clipped.len() - 1 {
-                    let (x1, z1) = clipped[i];
-                    let (x2, z2) = clipped[i + 1];
-                    out.push(x0 as f32); out.push(y_out); out.push(z0 as f32);
-                    out.push(x1 as f32); out.push(y_out); out.push(z1 as f32);
-                    out.push(x2 as f32); out.push(y_out); out.push(z2 as f32);
+                // Back to 3D + offset along receiver normal for z-fight safety.
+                let epsn = recv.normal * RECV_EPS;
+                let final_3d: Vec<DVec3> = clipped_2d.iter()
+                    .map(|&uv| recv.to_3d(uv) + epsn)
+                    .collect();
+
+                // Fan triangulate.
+                let p0 = final_3d[0];
+                for i in 1..final_3d.len() - 1 {
+                    let p1 = final_3d[i];
+                    let p2 = final_3d[i + 1];
+                    for p in [p0, p1, p2] {
+                        out.push(p.x as f32);
+                        out.push(p.y as f32);
+                        out.push(p.z as f32);
+                    }
                 }
             }
         }
@@ -146,14 +207,21 @@ impl Mesh {
     }
 }
 
+/// Build an orthonormal (u, v) basis for a plane with the given normal.
+fn build_plane_basis(n: DVec3) -> (DVec3, DVec3) {
+    let nn = n.normalize_or_zero();
+    // Pick a world axis not parallel to nn.
+    let seed = if nn.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+    let u = seed.cross(nn).normalize_or_zero();
+    let v = nn.cross(u).normalize_or_zero();
+    (u, v)
+}
+
 // ═══════════════════════════════════════════════════════════════════
-// Sutherland-Hodgman 2D polygon clipping (public-domain algorithm).
-// Sutherland, I.E. & Hodgman, G.W. (1974). "Reentrant Polygon Clipping".
-// Communications of the ACM. No patents; clean-room Rust implementation.
+// Sutherland-Hodgman 2D polygon clipping (clean-room, no external deps).
 // ═══════════════════════════════════════════════════════════════════
 
-/// Clip `subject` polygon against `clip` polygon (assumed CCW, convex).
-/// Returns the clipped polygon (possibly empty if fully outside).
+/// Clip `subject` polygon against convex CCW `clip` polygon.
 fn sutherland_hodgman(subject: &[(f64, f64)], clip: &[(f64, f64)]) -> Vec<(f64, f64)> {
     if clip.len() < 3 || subject.len() < 3 { return Vec::new(); }
 
@@ -188,13 +256,11 @@ fn sutherland_hodgman(subject: &[(f64, f64)], clip: &[(f64, f64)]) -> Vec<(f64, 
     output
 }
 
-/// 2D: point P on the left (inside) of directed edge S→E for a CCW polygon.
 fn is_inside_ccw(p: (f64, f64), s: (f64, f64), e: (f64, f64)) -> bool {
     let cross = (e.0 - s.0) * (p.1 - s.1) - (e.1 - s.1) * (p.0 - s.0);
     cross >= 0.0
 }
 
-/// 2D line segment intersection. None if parallel within tolerance.
 fn line_intersect(
     p1: (f64, f64), p2: (f64, f64),
     s: (f64, f64),  e: (f64, f64),
@@ -204,14 +270,11 @@ fn line_intersect(
     let dx2 = e.0 - s.0;
     let dy2 = e.1 - s.1;
     let denom = dx1 * dy2 - dy1 * dx2;
-    if denom.abs() < 1e-12 {
-        return None;
-    }
+    if denom.abs() < 1e-12 { return None; }
     let t = ((s.0 - p1.0) * dy2 - (s.1 - p1.1) * dx2) / denom;
     Some((p1.0 + t * dx1, p1.1 + t * dy1))
 }
 
-/// Shoelace signed area. Positive = CCW in a standard right-handed 2D frame.
 fn signed_area_2d(poly: &[(f64, f64)]) -> f64 {
     let n = poly.len();
     if n < 3 { return 0.0; }
@@ -244,15 +307,15 @@ mod tests {
         let v2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 1000.0));
         let v3 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-
         let sun_dir = DVec3::new(0.0, -1.0, 0.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        // 4-vertex polygon → fan tri (2 triangles) → 2 * 9 = 18 floats
+        // Phase 2.5a: caster also gets projected to its OWN face's plane
+        // filtered out (max_signed<0.5), so only ground receives.
+        // 4-vertex polygon → 2 triangles → 18 floats.
         assert_eq!(tris.len(), 18);
-        // All projected y should be ~0.5 (RECV_EPS)
         for i in 0..6 {
             let y = tris[i * 3 + 1];
-            assert!(y > 0.0 && y < 1.0, "y should be small positive (RECV_EPS=0.5), got {y}");
+            assert!(y > 0.0 && y < 1.0, "y near 0.5 (ground+RECV_EPS), got {y}");
         }
     }
 
@@ -271,21 +334,21 @@ mod tests {
         let sum_x: f32 = (0..(tris.len() / 9))
             .flat_map(|i| [tris[i * 9 + 0], tris[i * 9 + 3], tris[i * 9 + 6]])
             .sum();
-        assert!(sum_x < -1000.0, "shadow must be shifted toward -X, got sum_x={sum_x}");
+        assert!(sum_x < -1000.0, "shadow must be shifted toward -X, got {sum_x}");
     }
 
     #[test]
     fn vertical_face_not_projected() {
+        // Normal on +X, not sun-facing under sun=(0,-1,0).
         let mut mesh = Mesh::new();
         let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
         let v1 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
         let v2 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
         let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-
         let sun_dir = DVec3::new(0.0, -1.0, 0.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        assert!(tris.is_empty(), "vertical face (normal.y≈0) should not cast");
+        assert!(tris.is_empty());
     }
 
     #[test]
@@ -296,18 +359,14 @@ mod tests {
         let v2 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
         let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-
         let sun_dir = DVec3::new(0.0, -1.0, 0.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        assert!(tris.is_empty(), "ground-level face should not cast on itself");
+        assert!(tris.is_empty());
     }
-
-    // ─── Sutherland-Hodgman unit tests ────────────────────────────────
 
     #[test]
     fn sh_unit_square_clip_fully_contained() {
-        // Subject square inside larger clip square → subject returned.
-        let clip = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];  // CCW
+        let clip = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         let subject = vec![(2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0)];
         let out = sutherland_hodgman(&subject, &clip);
         assert_eq!(out.len(), 4);
@@ -324,31 +383,21 @@ mod tests {
     #[test]
     fn sh_partial_overlap_produces_rectangle() {
         let clip = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
-        // Subject shifted so half is outside +X side.
         let subject = vec![(5.0, 2.0), (15.0, 2.0), (15.0, 8.0), (5.0, 8.0)];
         let out = sutherland_hodgman(&subject, &clip);
-        // Should be clipped to (5,2)-(10,2)-(10,8)-(5,8)
-        assert!(out.len() >= 4, "expected 4+ vertices, got {}", out.len());
-        assert!(out.iter().any(|p| (p.0 - 10.0).abs() < 1e-6), "must contain x=10 clip edge");
+        assert!(out.len() >= 4);
+        assert!(out.iter().any(|p| (p.0 - 10.0).abs() < 1e-6));
     }
-
-    // ─── Multi-receiver integration ───────────────────────────────────
 
     #[test]
     fn shadow_on_top_of_box_clips_correctly() {
-        // Box top at y=500 (1000x1000 square), cat-like face at y=1500 above it.
         let mut mesh = Mesh::new();
-
-        // Box TOP face: CCW from above.
-        // Box TOP face — CCW from above = +Y normal (z increases first, then x).
         let t0 = mesh.add_vertex(DVec3::new(0.0,    500.0, 0.0));
         let t1 = mesh.add_vertex(DVec3::new(0.0,    500.0, 1000.0));
         let t2 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 1000.0));
         let t3 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 0.0));
         mesh.add_face_with_holes(&[t0, t1, t2, t3], &[], MaterialId::new(0)).unwrap();
 
-        // Small square CASTER floating at y=1500, above box center.
-        // CCW from above = +Y normal = (z increases first, then x).
         let c0 = mesh.add_vertex(DVec3::new(400.0, 1500.0, 400.0));
         let c1 = mesh.add_vertex(DVec3::new(400.0, 1500.0, 600.0));
         let c2 = mesh.add_vertex(DVec3::new(600.0, 1500.0, 600.0));
@@ -357,58 +406,42 @@ mod tests {
 
         let sun_dir = DVec3::new(0.0, -1.0, 0.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        assert!(!tris.is_empty(), "must produce shadow triangles");
-
-        // Expect triangles at y≈0.5 (ground receiver) AND y≈500.5 (box top).
+        assert!(!tris.is_empty());
         let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
         let has_ground = ys.iter().any(|y| (y - 0.5).abs() < 0.01);
         let has_box_top = ys.iter().any(|y| (y - 500.5).abs() < 0.01);
-        assert!(has_ground, "ground receiver must get some shadow (box top also casts onto ground)");
-        assert!(has_box_top, "box top must be a receiver for the caster above it");
+        assert!(has_ground);
+        assert!(has_box_top);
     }
 
     #[test]
     fn vertical_sunfacing_wall_connects_base_to_shadow() {
-        // Phase 2.4.1 — 박스 앞면(수직, min_y=0, max_y=H) 이 sun-facing이면
-        // 하단 vertex는 자기자리(base)에 유지, 상단 vertex는 그림자 방향으로
-        // offset되어 박스 바닥과 그림자를 이어주는 quad가 생성돼야 함.
         let mut mesh = Mesh::new();
-        // Vertical wall at z=0, facing -Z (normal = -Z means sun coming from
-        // -Z hits it). CCW viewed from -Z: up-then-right.
         let v0 = mesh.add_vertex(DVec3::new(0.0,     0.0,   0.0));
         let v1 = mesh.add_vertex(DVec3::new(0.0,     500.0, 0.0));
         let v2 = mesh.add_vertex(DVec3::new(1000.0,  500.0, 0.0));
         let v3 = mesh.add_vertex(DVec3::new(1000.0,  0.0,   0.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
 
-        // Sun comes from -Z (so wall with -Z normal is sun-facing) tilted downward.
         let sun_dir = DVec3::new(0.0, -1.0, 1.0).normalize();
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        assert!(!tris.is_empty(), "vertical sun-facing wall must project to ground");
-
-        // The shadow quad's near edge (bottom of wall) should have z ≈ 0
-        // (stays at base). Far edge (top projected) should have z > 0.
+        assert!(!tris.is_empty());
         let zs: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 2]).collect();
         let has_near_base = zs.iter().any(|&z| z.abs() < 10.0);
         let has_far_offset = zs.iter().any(|&z| z > 100.0);
-        assert!(has_near_base, "bottom of wall must project onto its own base");
-        assert!(has_far_offset, "top of wall must project away from base");
+        assert!(has_near_base);
+        assert!(has_far_offset);
     }
 
     #[test]
     fn caster_below_box_top_does_not_project_onto_box_top() {
-        // Caster at y=200 (below box top at y=500). Should only go to ground,
-        // not to box top.
         let mut mesh = Mesh::new();
-
-        // Box TOP face — CCW from above = +Y normal (z increases first, then x).
         let t0 = mesh.add_vertex(DVec3::new(0.0,    500.0, 0.0));
         let t1 = mesh.add_vertex(DVec3::new(0.0,    500.0, 1000.0));
         let t2 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 1000.0));
         let t3 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 0.0));
         mesh.add_face_with_holes(&[t0, t1, t2, t3], &[], MaterialId::new(0)).unwrap();
 
-        // Low caster outside box (CCW from above = +Y normal).
         let c0 = mesh.add_vertex(DVec3::new(2000.0, 200.0, 2000.0));
         let c1 = mesh.add_vertex(DVec3::new(2000.0, 200.0, 2200.0));
         let c2 = mesh.add_vertex(DVec3::new(2200.0, 200.0, 2200.0));
@@ -418,7 +451,36 @@ mod tests {
         let sun_dir = DVec3::new(0.0, -1.0, 0.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
-        let has_box_top = ys.iter().any(|y| (y - 500.5).abs() < 0.01);
-        assert!(!has_box_top, "caster below box must not project onto box top");
+        assert!(!ys.iter().any(|y| (y - 500.5).abs() < 0.01));
+    }
+
+    #[test]
+    fn tilted_ramp_receives_shadow() {
+        // Phase 2.5a: 45° 기울어진 램프가 receiver로 작동해야 함.
+        // 램프: 한쪽 끝 y=0, 반대쪽 끝 y=1000. 작은 caster를 램프 위로 띄움.
+        let mut mesh = Mesh::new();
+        // Ramp corners (view from above, ramp rises +X direction).
+        // CCW from above for +Y upward-tilted plane:
+        let r0 = mesh.add_vertex(DVec3::new(0.0,    0.0,    0.0));
+        let r1 = mesh.add_vertex(DVec3::new(0.0,    0.0,    2000.0));
+        let r2 = mesh.add_vertex(DVec3::new(2000.0, 1000.0, 2000.0));
+        let r3 = mesh.add_vertex(DVec3::new(2000.0, 1000.0, 0.0));
+        mesh.add_face_with_holes(&[r0, r1, r2, r3], &[], MaterialId::new(0)).unwrap();
+
+        // Caster above ramp center, small square.
+        let c0 = mesh.add_vertex(DVec3::new(800.0,  2000.0, 800.0));
+        let c1 = mesh.add_vertex(DVec3::new(800.0,  2000.0, 1200.0));
+        let c2 = mesh.add_vertex(DVec3::new(1200.0, 2000.0, 1200.0));
+        let c3 = mesh.add_vertex(DVec3::new(1200.0, 2000.0, 800.0));
+        mesh.add_face_with_holes(&[c0, c1, c2, c3], &[], MaterialId::new(0)).unwrap();
+
+        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let tris = mesh.compute_ground_projected_shadows(sun_dir);
+        assert!(!tris.is_empty());
+        // Some triangles should land on the ramp (y between 0.5 and 1000.5),
+        // not only on the ground (y ≈ 0.5).
+        let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
+        let has_ramp = ys.iter().any(|&y| y > 10.0);
+        assert!(has_ramp, "tilted ramp must catch some shadow (expected y > 10), got ys={ys:?}");
     }
 }
