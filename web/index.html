@@ -74,12 +74,13 @@
     .menu-action {
       display: flex;
       align-items: center;
-      padding: 5px 14px;
+      padding: 5px 14px 5px 28px;  /* 2026-04-23: left 패딩 확보 → 토글 체크 자리 */
       font-size: 11px;
       color: rgba(255, 255, 255, 0.85);
       cursor: pointer;
       gap: 8px;
       transition: background 0.08s;
+      position: relative;
     }
     .menu-action:hover {
       background: rgba(58, 151, 255, 0.35);
@@ -87,6 +88,22 @@
     .menu-action.disabled {
       opacity: 0.35;
       pointer-events: none;
+    }
+    /* 토글 메뉴 항목의 ON 상태 — MenuBar.ts가 .toggle-on을 토글한다 */
+    .menu-action.toggle-on::before {
+      content: '✓';
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #7cb8ff;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .menu-action.toggle-on {
+      background: rgba(124, 184, 255, 0.08);
+      color: #fff;
     }
     .menu-action .mk {
       margin-left: auto;

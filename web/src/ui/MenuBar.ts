@@ -92,6 +92,36 @@ export function initMenuBar(deps: MenuBarDeps): void {
     openMenu = null;
   };
 
+  // 패널이 현재 열려있는지 — window의 전역 참조에서 isVisible() 우선,
+  // 없으면 .visible 필드, 둘 다 없으면 false 반환.
+  const isPanelOpen = (globalKey: string): boolean => {
+    const panel = (window as unknown as Record<string, unknown>)[globalKey];
+    if (!panel || typeof panel !== 'object') return false;
+    const p = panel as { isVisible?: () => boolean; visible?: boolean };
+    if (typeof p.isVisible === 'function') return !!p.isVisible();
+    return !!p.visible;
+  };
+
+  // 토글 메뉴 항목의 상태 동기화 — 메뉴 열릴 때마다 현재 viewport/panel
+  // 상태를 읽어 .toggle-on 클래스를 부여/제거. CSS에서 ✓ 표시를 처리한다.
+  const syncToggleStates = () => {
+    // 각 getter는 optional chaining으로 보호 — 테스트 mock은 일부 메서드만
+    // 제공하므로 없을 경우 false로 fallback.
+    const state: Record<string, boolean> = {
+      'view-grid': viewport.infiniteGrid?.visible ?? true,
+      'view-axis': viewport.axisGroup?.visible ?? true,
+      'view-ssao': viewport.isSsaoEnabled?.() ?? false,
+      'view-shadow-pro': viewport.isProjectedShadowEnabled?.() ?? false,
+      'view-fur': viewport.isFurEnabled?.() ?? false,
+      'view-sun-panel': isPanelOpen('__axia_sunPanel'),
+      'view-history': isPanelOpen('__axia_historyPanel'),
+    };
+    for (const [action, on] of Object.entries(state)) {
+      const el = menubar.querySelector(`.menu-action[data-action="${action}"]`);
+      if (el) el.classList.toggle('toggle-on', on);
+    }
+  };
+
   // 메뉴 항목 클릭 → 토글
   menubar.querySelectorAll(':scope > .menu-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -103,6 +133,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
         closeAllMenus();
       } else {
         closeAllMenus();
+        syncToggleStates();
         el.classList.add('open');
         openMenu = el;
       }
@@ -111,6 +142,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
     item.addEventListener('mouseenter', () => {
       if (openMenu && openMenu !== item) {
         closeAllMenus();
+        syncToggleStates();
         (item as HTMLElement).classList.add('open');
         openMenu = item as HTMLElement;
       }
