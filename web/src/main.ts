@@ -6,6 +6,8 @@
  */
 
 import { Viewport } from './viewport/Viewport';
+import { SectionPlane } from './viewport/SectionPlane';
+import { ScenesManager } from './ui/ScenesManager';
 import { ToolManager } from './tools/ToolManagerRefactored';
 import { WasmBridge } from './bridge/WasmBridge';
 import { UnitSystem } from './units/UnitSystem';
@@ -514,6 +516,19 @@ async function main() {
   // Phase 2: 새 display 토글 버튼(grid/AO/shadow) 클릭 → 대응 setter 호출 +
   //   상태를 .active 클래스로 반영.
   wireToolbarToggleState(viewport, toolManager);
+
+  // Section plane — 단축키 F2로 간단 prompt 기반 토글.
+  const sectionPlane = new SectionPlane(viewport);
+  (window as unknown as { __axia_section?: SectionPlane }).__axia_section = sectionPlane;
+
+  // Scenes (saved views) — 토글식 floating panel.
+  const scenesManager = new ScenesManager(viewportEl, viewport, sectionPlane);
+  (window as unknown as { __axia_scenes?: ScenesManager }).__axia_scenes = scenesManager;
+
+  // Solar heatmap — lazy init on first menu use.
+  (window as unknown as { __axia_solarHeatmap?: {
+    viewport: typeof viewport; bridge: typeof bridge;
+  } }).__axia_solarHeatmap = { viewport, bridge };
 
   debugLog('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner, J=Constraints');
 }

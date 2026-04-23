@@ -30,6 +30,7 @@ import { SelectTool } from './SelectTool';
 import { DrawLineTool } from './DrawLineTool';
 import { DrawRectTool } from './DrawRectTool';
 import { DrawCircleTool } from './DrawCircleTool';
+import { DrawPolygonTool } from './DrawPolygonTool';
 import { DrawArcTool } from './DrawArcTool';
 import { DrawFreehandTool } from './DrawFreehandTool';
 import { DrawBezierTool } from './DrawBezierTool';
@@ -194,8 +195,14 @@ export class ToolManager {
     // Register all tools
     this.tools.set('select', new SelectTool(this.toolContext));
     this.tools.set('line', new DrawLineTool(this.toolContext));
+    // Polyline == Line with continuous mode (already the default behaviour —
+    //   end of one segment = start of the next, Esc/RightClick to finish).
+    //   Registered as an alias so "폴리선" menu item / Shift+L shortcut both
+    //   resolve to a real tool.
+    this.tools.set('polyline', new DrawLineTool(this.toolContext));
     this.tools.set('rect', new DrawRectTool(this.toolContext));
     this.tools.set('circle', new DrawCircleTool(this.toolContext));
+    this.tools.set('polygon', new DrawPolygonTool(this.toolContext));
     this.tools.set('arc', new DrawArcTool(this.toolContext));
     this.tools.set('freehand', new DrawFreehandTool(this.toolContext));
     this.tools.set('bezier', new DrawBezierTool(this.toolContext));

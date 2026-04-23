@@ -57,7 +57,7 @@ export class Viewport {
   //   상태 동기화에서 .visible 읽기 필요. 쓰기는 여전히 setGridVisible 등
   //   전용 메서드 경유.)
   public infiniteGrid: THREE.Group;
-  private meshGroup: THREE.Group;
+  public meshGroup: THREE.Group;  // 2026-04-23: SectionPlane 접근용 public
   public axisGroup!: THREE.Group;  // 축 화살표+라벨 그룹 (줌 비례 스케일)
   private axisLines: THREE.Object3D[] = []; // X,Y 축 연장선
 

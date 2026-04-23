@@ -118,7 +118,11 @@
       "Bash(cmd.exe //c \"E:\\\\AXiA 3D\\\\.claude\\\\worktrees\\\\zealous-boyd\\\\_backup_v21.cmd\")",
       "Bash(cargo clean *)",
       "Bash(find . -name \"*.rs\" -type f -exec grep -l \"split_face_by_line\\\\|test.*split\" {} \\\\;)",
-      "Bash(awk -F: '{sum+=$2} END {print \"total:\", sum}')"
+      "Bash(awk -F: '{sum+=$2} END {print \"total:\", sum}')",
+      "Bash(grep -o \"uSmallAlpha[^,}]\\\\{1,20\\\\}\" assets/index-B2iyMt66.js)",
+      "Bash(grep -o \"uBigAlpha[^,}]\\\\{1,20\\\\}\" assets/index-B2iyMt66.js)",
+      "Bash(grep -o \"uFadeFar[^,}]\\\\{1,30\\\\}\" assets/index-B2iyMt66.js)",
+      "Bash(cargo bench *)"
     ]
   }
 }

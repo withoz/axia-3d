@@ -414,6 +414,108 @@ export function initMenuBar(deps: MenuBarDeps): void {
         hp?.toggle();
         break;
       }
+      case 'view-scenes': {
+        const sm = (window as unknown as { __axia_scenes?: { toggle(): void } }).__axia_scenes;
+        sm?.toggle();
+        break;
+      }
+      case 'clash-detect': {
+        (async () => {
+          const { ClashDetection } = await import('../tools/ClashDetection');
+          const cd = new ClashDetection(viewport);
+          const results = cd.detect();
+          (window as unknown as { __axia_clash?: typeof cd }).__axia_clash = cd;
+          if (results.length === 0) {
+            Toast.info('간섭 없음 ✓', 2500);
+          } else {
+            const totalVol = results.reduce((s, r) => s + r.volume_mm3, 0);
+            Toast.info(
+              `⚠️ ${results.length}개 간섭 발견 (총 ${(totalVol / 1e9).toFixed(2)}m³). 빨간 박스 확인.`,
+              5000,
+            );
+          }
+        })();
+        break;
+      }
+      case 'clash-clear': {
+        const cd = (window as unknown as { __axia_clash?: { clear(): void } }).__axia_clash;
+        cd?.clear();
+        Toast.info('간섭 표시 해제');
+        break;
+      }
+      case 'solar-heatmap': {
+        // 1회성 lazy init + generate.
+        const dateStr = prompt('기준 날짜 (YYYY-MM-DD)', new Date().toISOString().slice(0, 10));
+        if (!dateStr) break;
+        const latStr = prompt('위도 (도)', '37.5665');
+        if (!latStr) break;
+        const lonStr = prompt('경도 (도)', '126.978');
+        if (!lonStr) break;
+        Toast.info('Solar heatmap 계산 중… (12 시간대 샘플)', 3000);
+        (async () => {
+          const { SolarHeatmap } = await import('../viewport/SolarHeatmap');
+          const hm = new SolarHeatmap(viewport, bridge);
+          await hm.generate({
+            resolution: 60,
+            sizeMM: 30000,
+            timeSamples: 12,
+            lat: parseFloat(latStr),
+            lon: parseFloat(lonStr),
+            dateISO: dateStr,
+          });
+          // 전역 참조 — 재사용 / 숨김
+          (window as unknown as { __axia_heatmap?: typeof hm }).__axia_heatmap = hm;
+          Toast.info('Solar heatmap 생성 완료', 2500);
+        })().catch((err) => {
+          console.error('[Heatmap] error:', err);
+          alert('Heatmap 생성 실패: ' + err);
+        });
+        break;
+      }
+      case 'solar-heatmap-off': {
+        const hm = (window as unknown as { __axia_heatmap?: { remove(): void } }).__axia_heatmap;
+        hm?.remove();
+        Toast.info('Solar heatmap 숨김');
+        break;
+      }
+      case 'upload-texture': {
+        const selected = toolManager.selection.getSelectedFaces();
+        import('./TextureUploadDialog').then(({ openTextureUploadDialog }) => {
+          openTextureUploadDialog(selected).then((result) => {
+            if (result) toolManager.syncMesh();
+          }).catch((err) => {
+            console.error('[Texture] upload failed:', err);
+            alert('텍스처 업로드 실패: ' + err);
+          });
+        });
+        break;
+      }
+      case 'section-x':
+      case 'section-y':
+      case 'section-z':
+      case 'section-off': {
+        const sp = (window as unknown as {
+          __axia_section?: { setAxis(a: 'x'|'y'|'z'|'off'): void; setPosition(p: number): void }
+        }).__axia_section;
+        if (!sp) break;
+        const axis = act.replace('section-', '') as 'x'|'y'|'z'|'off';
+        if (axis === 'off') {
+          sp.setAxis('off');
+          Toast.info('섹션 평면 해제됨', 2000);
+          break;
+        }
+        const posStr = prompt(
+          `섹션 ${axis.toUpperCase()}축 위치 (mm, 기본 0)`,
+          '0',
+        );
+        if (posStr === null) break;
+        const pos = parseFloat(posStr);
+        if (!Number.isFinite(pos)) { alert('유효한 숫자를 입력해주세요.'); break; }
+        sp.setAxis(axis);
+        sp.setPosition(pos);
+        Toast.info(`섹션 ${axis.toUpperCase()}축 @ ${pos}mm 활성`, 2500);
+        break;
+      }
       case 'solidify': toolManager.executeAction('solidify'); break;
       case 'mesh-repair': toolManager.executeAction('mesh-repair'); break;
       // Sketch Mode — 드로잉을 고정 평면에 잠금. Push/Pull로 3D 변환 前 작업.
