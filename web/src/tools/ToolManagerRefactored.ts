@@ -48,7 +48,10 @@ import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
 
 export class ToolManager {
-  private viewport: Viewport;
+  // 2026-04-23: private→public. KeyboardShortcuts/SnapVisual 등 외부 소비자가
+  //   activeCamera/scene/renderer를 읽기 위함. 쓰기용 encapsulation은
+  //   Viewport 내부 메서드(setStats 등)가 담당.
+  public viewport: Viewport;
   private bridge: WasmBridge;
   private container?: ServiceContainer;  // Phase 1: Dependency injection container
   private _currentTool: string = 'select';

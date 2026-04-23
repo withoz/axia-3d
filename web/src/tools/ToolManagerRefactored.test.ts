@@ -451,13 +451,13 @@ describe('ToolManager', () => {
       (bridge.countFreeEdges as any).mockReturnValue(4);
       (bridge.synthesizeFacesFromFreeEdges as any).mockReturnValue(1);
       // prompt: cancel → no pushPull
-      const origPrompt = global.window?.prompt;
-      if (global.window) global.window.prompt = vi.fn().mockReturnValue(null);
+      const origPrompt = globalThis.window?.prompt;
+      if (globalThis.window) globalThis.window.prompt = vi.fn().mockReturnValue(null);
       tm.executeAction('sketch-start-xz');
       tm.executeAction('sketch-exit');
       expect(bridge.synthesizeFacesFromFreeEdges).toHaveBeenCalled();
       expect(bridge.pushPull).not.toHaveBeenCalled();
-      if (global.window && origPrompt) global.window.prompt = origPrompt;
+      if (globalThis.window && origPrompt) globalThis.window.prompt = origPrompt;
     });
   });
 

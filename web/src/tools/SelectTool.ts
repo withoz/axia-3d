@@ -72,7 +72,8 @@ export class SelectTool implements ITool {
     if (picked?.type === 'face' && picked.hit.faceIndex != null) {
       // ── Face 선택 경로 ──
       const hit = picked.hit;
-      const fid = this.ctx.getFaceId(hit.faceIndex);
+      // faceIndex null/undefined는 위 조건에서 이미 배제됨 — non-null assertion.
+      const fid = this.ctx.getFaceId(hit.faceIndex!);
       debugLog('[HIT] faceId=', fid, 'triIndex=', hit.faceIndex);
 
       // Multi-click detection

@@ -226,7 +226,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'clipboard-cut':
       case 'clipboard-paste':
       case 'duplicate':
-        toolManager.executeAction(action);
+        toolManager.executeAction(act);
         break;
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
@@ -338,7 +338,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-centerline': setActiveTool('centerline'); break;
       case 'convert-to-centerline':
       case 'convert-to-geometry':
-        toolManager.executeAction(action);
+        toolManager.executeAction(act);
         break;
       case 'tool-trim': setActiveTool('trim'); break;
       case 'tool-extend': setActiveTool('extend'); break;
@@ -365,7 +365,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'sketch-start-yz':
       case 'sketch-start-face':
       case 'sketch-exit':
-        toolManager.executeAction(action);
+        toolManager.executeAction(act);
         break;
       case 'tool-make-component': toolManager.executeAction('make-component'); break;
 

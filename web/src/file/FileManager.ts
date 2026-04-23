@@ -18,6 +18,10 @@ export interface AxiaFileMetadata {
   timestamp: string;
   name: string;
   materials?: Material[];  // Serialized materials (v2+)
+  /** Phase I4 — CurveRegistry JSON (shape unknown to FileManager, module-
+   *  internal). Populated by dynamic import of CurveRegistry in save path
+   *  and consumed symmetrically on load. */
+  curves?: unknown;
 }
 
 export class FileManager {
@@ -174,7 +178,8 @@ export class FileManager {
               try {
                 const { getCurveRegistry } = await import('../curves/CurveRegistry');
                 getCurveRegistry().fromJSON(metadata.curves);
-                debugLog(`[FileManager] curve ${metadata.curves.curves?.length ?? 0}개 복원`);
+                const curvesJson = metadata.curves as { curves?: unknown[] };
+                debugLog(`[FileManager] curve ${curvesJson.curves?.length ?? 0}개 복원`);
               } catch (e) {
                 console.warn('[FileManager] curve 복원 실패:', e);
               }
@@ -253,7 +258,8 @@ export class FileManager {
         try {
           const { getCurveRegistry } = await import('../curves/CurveRegistry');
           getCurveRegistry().fromJSON(metadata.curves);
-          debugLog(`[FileManager] curve ${metadata.curves.curves?.length ?? 0}개 복원`);
+          const curvesJson = metadata.curves as { curves?: unknown[] };
+          debugLog(`[FileManager] curve ${curvesJson.curves?.length ?? 0}개 복원`);
         } catch (e) {
           console.warn('[FileManager] curve 복원 실패:', e);
         }
