@@ -105,11 +105,16 @@ impl Mesh {
             if caster_3d.len() < 3 { continue; }
 
             let caster_min_y = caster_3d.iter().map(|v| v.y).fold(f64::INFINITY, f64::min);
-            if caster_min_y <= MIN_HEIGHT && receivers.len() == 1 { continue; }
+            let caster_max_y = caster_3d.iter().map(|v| v.y).fold(f64::NEG_INFINITY, f64::max);
 
             for recv in &receivers {
-                // Caster must be strictly above receiver to cast onto it.
-                if caster_min_y <= recv.y + 0.1 { continue; }
+                // 2026-04-23 Phase 2.4.1 — 수직 sun-facing face(박스 앞면 등)를
+                //   허용해야 박스 base와 ground shadow가 이어짐.
+                //   max_y > recv.y + eps: 뭔가 위에 있어야 그림자가 생김.
+                //   min_y >= recv.y - eps: receiver 아래로 뚫고 내려가지 않아야
+                //     projection이 뒤로(태양 쪽) 가는 버그 방지.
+                if caster_max_y <= recv.y + 0.1 { continue; }
+                if caster_min_y < recv.y - 0.1 { continue; }
 
                 // Project caster vertices onto plane y = recv.y
                 let projected: Vec<(f64, f64)> = caster_3d.iter().map(|v| {
@@ -360,6 +365,34 @@ mod tests {
         let has_box_top = ys.iter().any(|y| (y - 500.5).abs() < 0.01);
         assert!(has_ground, "ground receiver must get some shadow (box top also casts onto ground)");
         assert!(has_box_top, "box top must be a receiver for the caster above it");
+    }
+
+    #[test]
+    fn vertical_sunfacing_wall_connects_base_to_shadow() {
+        // Phase 2.4.1 — 박스 앞면(수직, min_y=0, max_y=H) 이 sun-facing이면
+        // 하단 vertex는 자기자리(base)에 유지, 상단 vertex는 그림자 방향으로
+        // offset되어 박스 바닥과 그림자를 이어주는 quad가 생성돼야 함.
+        let mut mesh = Mesh::new();
+        // Vertical wall at z=0, facing -Z (normal = -Z means sun coming from
+        // -Z hits it). CCW viewed from -Z: up-then-right.
+        let v0 = mesh.add_vertex(DVec3::new(0.0,     0.0,   0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0,     500.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1000.0,  500.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(1000.0,  0.0,   0.0));
+        mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
+
+        // Sun comes from -Z (so wall with -Z normal is sun-facing) tilted downward.
+        let sun_dir = DVec3::new(0.0, -1.0, 1.0).normalize();
+        let tris = mesh.compute_ground_projected_shadows(sun_dir);
+        assert!(!tris.is_empty(), "vertical sun-facing wall must project to ground");
+
+        // The shadow quad's near edge (bottom of wall) should have z ≈ 0
+        // (stays at base). Far edge (top projected) should have z > 0.
+        let zs: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 2]).collect();
+        let has_near_base = zs.iter().any(|&z| z.abs() < 10.0);
+        let has_far_offset = zs.iter().any(|&z| z > 100.0);
+        assert!(has_near_base, "bottom of wall must project onto its own base");
+        assert!(has_far_offset, "top of wall must project away from base");
     }
 
     #[test]
