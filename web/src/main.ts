@@ -508,7 +508,78 @@ async function main() {
     });
   }
 
+  // ═══ 15. Toolbar toggle-state sync ═══
+  // Phase 1: Inspector/Style/Settings 버튼의 .active 클래스를 실제 패널 상태에
+  //   바인딩. MutationObserver로 패널 DOM 변화(class/style)를 감시 → 버튼 갱신.
+  // Phase 2: 새 display 토글 버튼(grid/AO/shadow) 클릭 → 대응 setter 호출 +
+  //   상태를 .active 클래스로 반영.
+  wireToolbarToggleState(viewport, toolManager);
+
   debugLog('AXiA 3D ready. OSNAP: F3=Toggle, R=Rect, P=Push/Pull, I=Inspector, O=Outliner, J=Constraints');
+}
+
+/** Phase 1 + Phase 2 — 툴바 버튼이 실제 상태(켜짐/꺼짐)를 시각적으로 반영하게
+ *  묶어주는 배선. 패널 세 개는 MutationObserver, display 토글 세 개는 클릭
+ *  리스너 + 초기 동기화로 처리. */
+function wireToolbarToggleState(viewport: Viewport, toolManager: ToolManager): void {
+  // ── Phase 1: 패널 버튼 3개 ──
+  const panelBindings: Array<{ btnId: string; panelId: string; isOpen: (p: HTMLElement) => boolean }> = [
+    { btnId: 'inspector-btn', panelId: 'xia-inspector', isOpen: (p) => p.classList.contains('open') },
+    { btnId: 'style-btn',     panelId: 'style-panel',   isOpen: (p) => p.classList.contains('open') },
+    { btnId: 'settings-btn',  panelId: 'settings-panel', isOpen: (p) => p.style.display !== 'none' && p.style.display !== '' },
+  ];
+  for (const { btnId, panelId, isOpen } of panelBindings) {
+    const btn = document.getElementById(btnId);
+    if (!btn) continue;
+    const syncFromPanel = () => {
+      const panel = document.getElementById(panelId);
+      // settings-panel은 클릭 시 lazily 생성되므로 초기엔 없을 수 있음.
+      btn.classList.toggle('active', !!panel && isOpen(panel));
+    };
+    // 패널 존재 여부와 상관없이 document.body 전체를 관찰하면 동적 생성도 캐치.
+    const observer = new MutationObserver(syncFromPanel);
+    observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style'],
+      childList: true,
+    });
+    syncFromPanel();
+  }
+
+  // ── Phase 2: display 토글 버튼 3개 ──
+  const displayToggles: Array<{ key: string; get: () => boolean; set: (v: boolean) => void }> = [
+    {
+      key: 'grid',
+      get: () => viewport.infiniteGrid.visible,
+      set: (v) => viewport.setGridVisible(v),
+    },
+    {
+      key: 'ssao',
+      get: () => viewport.isSsaoEnabled(),
+      set: (v) => viewport.setSsaoEnabled(v),
+    },
+    {
+      key: 'shadow',
+      get: () => viewport.isProjectedShadowEnabled(),
+      set: (v) => {
+        viewport.setProjectedShadowEnabled(v);
+        // 그림자 켤 때 즉시 geometry 계산 필요 (MenuBar와 동일한 흐름).
+        if (v) toolManager.syncMesh();
+      },
+    },
+  ];
+  for (const { key, get, set } of displayToggles) {
+    const btn = document.querySelector(`.toggle-btn[data-toggle="${key}"]`) as HTMLElement | null;
+    if (!btn) continue;
+    const sync = () => btn.classList.toggle('active', get());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      set(!get());
+      sync();
+    });
+    sync();
+  }
 }
 
 main().catch((err) => {

@@ -2458,6 +2458,32 @@
 
       <div class="tool-sep"></div>
 
+      <!-- Display toggles — 그리드 / AO / 건축 그림자 (메뉴와 동일 상태 공유) -->
+      <div class="tool-group">
+        <button class="tool-btn toggle-btn" data-toggle="grid" title="그리드 표시/숨기기 (`)">
+          <!-- Hash grid icon -->
+          <svg viewBox="0 0 24 24">
+            <path d="M3 9 L21 9 M3 15 L21 15 M9 3 L9 21 M15 3 L15 21"/>
+          </svg>
+        </button>
+        <button class="tool-btn toggle-btn" data-toggle="ssao" title="AO (주변광 차폐) 토글">
+          <!-- Sphere with soft shadow underside -->
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="11" r="7"/>
+            <path d="M6 17 Q 12 20 18 17" stroke-dasharray="2 2"/>
+          </svg>
+        </button>
+        <button class="tool-btn toggle-btn" data-toggle="shadow" title="건축 그림자 토글">
+          <!-- Box + cast shadow -->
+          <svg viewBox="0 0 24 24">
+            <rect x="5" y="5" width="10" height="10"/>
+            <path d="M11 15 L19 19 L19 21 L11 17 Z" class="filled"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="tool-sep"></div>
+
       <!-- Undo/Redo group -->
       <div class="tool-group">
         <button class="tool-btn" data-tool="undo" title="Undo (Ctrl+Z)">
