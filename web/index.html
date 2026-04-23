@@ -1802,9 +1802,10 @@
         </div>
       </div>
 
-      <!-- 보기 -->
+      <!-- 보기 — 카메라 / 디스플레이 / 패널 (측정은 모델링 메뉴로 이동) -->
       <div class="menu-item" data-menu="view">보기
         <div class="menu-dropdown">
+          <!-- ── 카메라 뷰 ── -->
           <div class="menu-action" data-action="view-3d">3D 투시<span class="mk">Num 0</span></div>
           <div class="menu-action" data-action="view-top">위 (Top)<span class="mk">T</span></div>
           <div class="menu-action" data-action="view-front">앞 (Front)<span class="mk">F</span></div>
@@ -1815,19 +1816,18 @@
           <div class="menu-sep"></div>
           <div class="menu-action" data-action="view-home">원점 복귀<span class="mk">H</span></div>
           <div class="menu-sep"></div>
+          <!-- ── 표시 요소 ── -->
           <div class="menu-action" data-action="view-grid">그리드 표시/숨기기<span class="mk">`</span></div>
           <div class="menu-action" data-action="view-axis">축 표시/숨기기</div>
-          <div class="menu-sep"></div>
           <div class="menu-action" data-action="reference-image">참조 이미지 불러오기…</div>
           <div class="menu-sep"></div>
+          <!-- ── 디스플레이 효과 ── -->
           <div class="menu-action" data-action="view-ssao">AO (주변광 차폐) 토글</div>
           <div class="menu-action" data-action="view-shadow-pro">🏛️ 건축 그림자 토글</div>
           <div class="menu-action" data-action="view-sun-panel">☀️ 태양 방향 패널<span class="mk">Shift+U</span></div>
           <div class="menu-action" data-action="view-fur">털 쉐이더 토글 (Fur shell)</div>
           <div class="menu-sep"></div>
-          <div class="menu-action" data-action="measure-selection">선택 측정 (길이/면적/부피)</div>
-          <div class="menu-action" data-action="tool-measure">📏 측정 도구 (2점 거리 / 3점 각도)<span class="mk">U</span></div>
-          <div class="menu-sep"></div>
+          <!-- ── 패널 ── -->
           <div class="menu-action" data-action="view-history">🕒 작업 기록 패널 (Parametric)<span class="mk">Shift+H</span></div>
         </div>
       </div>
@@ -1850,41 +1850,81 @@
         </div>
       </div>
 
-      <!-- 수정 -->
-      <div class="menu-item" data-menu="modify">수정
+      <!-- 프리미티브 — 툴바 Primitive 그룹과 일치 -->
+      <div class="menu-item" data-menu="primitive">프리미티브
         <div class="menu-dropdown">
+          <div class="menu-action" data-action="tool-sphere">구 (Sphere)<span class="mk">H</span></div>
+          <div class="menu-action" data-action="tool-cylinder">원통 (Cylinder)<span class="mk">Y</span></div>
+          <div class="menu-action" data-action="tool-cone">원뿔 (Cone)<span class="mk">N</span></div>
+        </div>
+      </div>
+
+      <!-- 모델링 — 툴바 Modeling+Organic+Utility 그룹과 일치. 섹션별 구분. -->
+      <div class="menu-item" data-menu="modeling">모델링
+        <div class="menu-dropdown">
+          <!-- ── 변형 (툴바 Modeling 그룹) ── -->
           <div class="menu-action" data-action="tool-pushpull">밀기/당기기 (Push/Pull)<span class="mk">P</span></div>
           <div class="menu-action" data-action="tool-move">이동 (Move)<span class="mk">M</span></div>
           <div class="menu-action" data-action="tool-rotate">회전 (Rotate)<span class="mk">Q</span></div>
           <div class="menu-action" data-action="tool-scale">크기 조정 (Scale)<span class="mk">S</span></div>
-          <div class="menu-sep"></div>
           <div class="menu-action" data-action="tool-offset">오프셋 (Offset)<span class="mk">O</span></div>
-          <div class="menu-action" data-action="thicken-faces">🧱 두께 부여 (Thicken/Shell)…</div>
-          <div class="menu-action" data-action="convert-to-centerline">📐 선택 엣지 → 중심선 변환</div>
-          <div class="menu-action" data-action="convert-to-geometry">🔹 선택 엣지 → 일반선 변환</div>
-          <div class="menu-action" data-action="tool-mirror">대칭 (Mirror)</div>
-          <div class="menu-action" data-action="subdivide">매끄럽게 분할 (Catmull-Clark)</div>
-          <div class="menu-action" data-action="tool-array">배열 · 선형 (Linear Array)…</div>
-          <div class="menu-action" data-action="array-radial">배열 · 원형 (Radial Array)…</div>
-          <div class="menu-action" data-action="assign-quick-color">🎨 빠른 색상 지정 (Quick Color)…</div>
+          <div class="menu-action" data-action="tool-erase">삭제 (Erase)<span class="mk">E</span></div>
           <div class="menu-sep"></div>
+
+          <!-- ── 복제·대칭·배열 (툴바 Organic 그룹 일부) ── -->
+          <div class="menu-action" data-action="mirror-x">대칭 · YZ 평면 (X 반전)</div>
+          <div class="menu-action" data-action="mirror-y">대칭 · XZ 평면 (Y 반전)</div>
+          <div class="menu-action" data-action="mirror-z">대칭 · XY 평면 (Z 반전)</div>
+          <div class="menu-action" data-action="array-linear">선형 배열 (Array Linear)…</div>
+          <div class="menu-action" data-action="array-radial">원형 배열 (Array Radial)…</div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 유기 변형 (툴바 Organic 그룹 일부) ── -->
+          <div class="menu-action" data-action="revolve-x">회전체 Revolve · X축</div>
+          <div class="menu-action" data-action="revolve-y">회전체 Revolve · Y축</div>
+          <div class="menu-action" data-action="revolve-z">회전체 Revolve · Z축</div>
+          <div class="menu-action" data-action="subdivide">매끄럽게 분할 (Subdivide)</div>
+          <div class="menu-action" data-action="thicken-faces">🧱 두께 부여 (Thicken/Shell)…</div>
+          <div class="menu-action" data-action="bend-selection">선택 구부리기 (Bend)…</div>
+          <div class="menu-action" data-action="twist-selection">선택 비틀기 (Twist)…</div>
+          <div class="menu-action" data-action="taper-selection">선택 테이퍼 (Taper)…</div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 엣지 편집 ── -->
           <div class="menu-action" data-action="tool-trim">자르기 (Trim)</div>
           <div class="menu-action" data-action="tool-extend">연장 (Extend)</div>
-          <div class="menu-action" data-action="tool-fillet">모깎기 (Fillet)</div>
-          <div class="menu-action" data-action="tool-chamfer">모따기 (Chamfer)</div>
+          <div class="menu-action" data-action="fillet-edge">엣지 모깎기 (Fillet)…</div>
+          <div class="menu-action" data-action="chamfer-edge">엣지 모따기 (Chamfer)…</div>
+          <div class="menu-action" data-action="convert-to-centerline">📐 선택 엣지 → 중심선 변환</div>
+          <div class="menu-action" data-action="convert-to-geometry">🔹 선택 엣지 → 일반선 변환</div>
+          <div class="menu-action" data-action="assign-quick-color">🎨 빠른 색상 지정 (Quick Color)…</div>
           <div class="menu-sep"></div>
+
+          <!-- ── Boolean ── -->
           <div class="menu-action" data-action="bool-union">합집합 (Union)</div>
           <div class="menu-action" data-action="bool-subtract">차집합 (Subtract)</div>
           <div class="menu-action" data-action="bool-intersect">교집합 (Intersect)</div>
           <div class="menu-sep"></div>
-          <div class="menu-action" data-action="tool-explode">분해 (Explode)</div>
+
+          <!-- ── 그룹 / 컴포넌트 ── -->
           <div class="menu-action" data-action="tool-group">그룹 (Group)<span class="mk">Ctrl+G</span></div>
           <div class="menu-action" data-action="tool-ungroup">그룹 해제 (Ungroup)<span class="mk">Ctrl+Shift+G</span></div>
+          <div class="menu-action" data-action="tool-make-component">컴포넌트로 변환</div>
+          <div class="menu-action" data-action="tool-explode">분해 (Explode)</div>
           <div class="menu-sep"></div>
+
+          <!-- ── 메시 도구 (툴바 Utility 그룹) ── -->
           <div class="menu-action" data-action="synthesize-faces">자유 엣지 → 면 합성</div>
           <div class="menu-action" data-action="solidify">🧩 Solidify (열린 쉘 → 닫힌 솔리드)</div>
           <div class="menu-action" data-action="mesh-repair">🩹 Mesh Repair (퇴화/와인딩/고립 정리)</div>
           <div class="menu-sep"></div>
+
+          <!-- ── 측정 ── -->
+          <div class="menu-action" data-action="measure-selection">선택 측정 (길이/면적/부피)</div>
+          <div class="menu-action" data-action="tool-measure">📏 측정 도구 (2점 거리 / 3점 각도)<span class="mk">U</span></div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 스케치 모드 ── -->
           <div class="menu-action" data-action="sketch-start-xz">✏️ 스케치 시작 · XZ 바닥 (평면도)</div>
           <div class="menu-action" data-action="sketch-start-xy">✏️ 스케치 시작 · XY 정면 (입면도)</div>
           <div class="menu-action" data-action="sketch-start-yz">✏️ 스케치 시작 · YZ 측면</div>
@@ -2318,6 +2358,81 @@
             <div class="tool-dropdown-item" data-action="synthesize-faces">
               <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 4 L20 4 L20 20 L4 20 Z"/><circle cx="4" cy="4" r="1.3" class="filled"/><circle cx="20" cy="4" r="1.3" class="filled"/><circle cx="20" cy="20" r="1.3" class="filled"/><circle cx="4" cy="20" r="1.3" class="filled"/></svg></span>
               <span class="tdi-label">자유 엣지 → 면 합성</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Boolean group — Union / Subtract / Intersect (메뉴 모델링 > Boolean과 일치) -->
+      <div class="tool-group">
+        <div class="tool-dropdown" data-group="boolean-family">
+          <button class="tool-btn" data-action="bool-union" title="합집합 (Union)">
+            <svg viewBox="0 0 24 24">
+              <!-- Two overlapping circles filled as union -->
+              <path d="M9 7 A 6 6 0 1 0 9 17 A 6 6 0 0 0 15 17 A 6 6 0 1 0 15 7 A 6 6 0 0 0 9 7 Z"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="boolean-family" title="Boolean 연산">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="bool-union">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M9 7 A 6 6 0 1 0 9 17 A 6 6 0 0 0 15 17 A 6 6 0 1 0 15 7 A 6 6 0 0 0 9 7 Z"/></svg></span>
+              <span class="tdi-label">합집합 (Union)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="bool-subtract">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6" stroke-dasharray="2 2"/></svg></span>
+              <span class="tdi-label">차집합 (Subtract)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="bool-intersect">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/><path d="M12 7 A 6 6 0 0 1 12 17 A 6 6 0 0 1 12 7 Z" class="filled"/></svg></span>
+              <span class="tdi-label">교집합 (Intersect)</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Group / Component — Ctrl+G / Ctrl+Shift+G (메뉴 모델링 > 그룹과 일치) -->
+      <div class="tool-group">
+        <div class="tool-dropdown" data-group="group-family">
+          <button class="tool-btn" data-action="group" title="그룹 만들기 (Ctrl+G)">
+            <svg viewBox="0 0 24 24">
+              <!-- Bracket-enclosed stack -->
+              <path d="M5 5 L3 5 L3 19 L5 19 M19 5 L21 5 L21 19 L19 19"/>
+              <rect x="7" y="8" width="10" height="8" rx="0.5"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="group-family" title="그룹 / 컴포넌트">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="group">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M5 5 L3 5 L3 19 L5 19 M19 5 L21 5 L21 19 L19 19"/><rect x="7" y="8" width="10" height="8" rx="0.5"/></svg></span>
+              <span class="tdi-label">그룹 (Group)</span>
+              <span class="tdi-key">Ctrl+G</span>
+            </div>
+            <div class="tool-dropdown-item" data-action="ungroup">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M5 5 L3 5 L3 19 L5 19 M19 5 L21 5 L21 19 L19 19" stroke-dasharray="2 2"/><rect x="7" y="8" width="10" height="8" rx="0.5"/></svg></span>
+              <span class="tdi-label">그룹 해제 (Ungroup)</span>
+              <span class="tdi-key">⇧Ctrl+G</span>
+            </div>
+            <div class="tool-dropdown-item" data-action="make-component">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/><circle cx="5" cy="5" r="1.5" class="filled"/><circle cx="19" cy="5" r="1.5" class="filled"/><circle cx="5" cy="19" r="1.5" class="filled"/><circle cx="19" cy="19" r="1.5" class="filled"/></svg></span>
+              <span class="tdi-label">컴포넌트로 변환</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="tool-explode">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 12 L4 4 M12 12 L20 4 M12 12 L20 20 M12 12 L4 20"/><rect x="10" y="10" width="4" height="4"/></svg></span>
+              <span class="tdi-label">분해 (Explode)</span>
               <span class="tdi-key"></span>
             </div>
           </div>

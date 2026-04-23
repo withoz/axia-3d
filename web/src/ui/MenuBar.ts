@@ -321,14 +321,39 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-rotate': setActiveTool('rotate'); break;
       case 'tool-scale': setActiveTool('scale'); break;
       case 'tool-offset': setActiveTool('offset'); break;
-      // Mirror — 현재는 WORLD YZ 평면 기준 (x 반전) 기본값. 다른 축은 우클릭
-      // 컨텍스트 메뉴에서 mirror-y / mirror-z 선택.
+      case 'tool-erase': setActiveTool('erase'); break;
+      // Mirror (world-axis) — 메뉴에서 직접 X/Y/Z 반전 선택. tool-mirror alias는
+      // 레거시 진입점 (x축 기본값).
       case 'tool-mirror': toolManager.executeAction('mirror-x'); break;
+      case 'mirror-x':
+      case 'mirror-y':
+      case 'mirror-z':
+        toolManager.executeAction(act);
+        break;
       case 'subdivide': toolManager.executeAction('subdivide'); break;
-      // Array — 선택된 면을 선형(linear) 배열로 복제. 개수/간격은 prompt.
+      // Array — 선형/원형 직접 진입. tool-array는 레거시 linear alias.
       case 'tool-array': toolManager.executeAction('array-linear'); break;
-      // Array Radial — 축 중심 원형 복제. N·축·총각도 prompt.
-      case 'array-radial': toolManager.executeAction('array-radial'); break;
+      case 'array-linear':
+      case 'array-radial':
+        toolManager.executeAction(act);
+        break;
+      // Revolve — 선택 엣지 체인을 축(X/Y/Z) 중심으로 회전체 생성.
+      case 'revolve-x':
+      case 'revolve-y':
+      case 'revolve-z':
+        toolManager.executeAction(act);
+        break;
+      // Deformation — 축 기반 Bend/Twist/Taper (비선형 정점 변형).
+      case 'bend-selection':
+      case 'twist-selection':
+      case 'taper-selection':
+        toolManager.executeAction(act);
+        break;
+      // Fillet/Chamfer — 엣지 직접 진입 액션 (tool-fillet/tool-chamfer와 동일).
+      case 'fillet-edge':
+      case 'chamfer-edge':
+        toolManager.executeAction(act);
+        break;
       // Thicken — 선택 면에 두께를 부여 (push_pull 기반 slab).
       case 'thicken-faces': toolManager.executeAction('thicken-faces'); break;
       // Quick Color — 선택 면에 즉석 custom material 할당.

@@ -201,6 +201,20 @@ async function main() {
   const toolbar = document.getElementById('toolbar');
   if (!toolbar) throw new Error('Missing #toolbar element');
 
+  // 툴바 data-action 디스패치 헬퍼 — 대부분 executeAction 으로 가지만
+  // bool-union/subtract/intersect는 BooleanHandler로 라우팅 필요 (메뉴와 동일).
+  // 이 분기를 한 곳에 모아 버튼/드롭다운 양쪽에서 공통 사용.
+  const dispatchToolbarAction = (action: string) => {
+    if (action === 'bool-union' || action === 'bool-subtract' || action === 'bool-intersect') {
+      const op = action.replace('bool-', '') as 'union' | 'subtract' | 'intersect';
+      void import('./ui/BooleanHandler').then(({ startBooleanOp }) => {
+        startBooleanOp({ bridge, toolManager }, op);
+      });
+      return;
+    }
+    toolManager.executeAction(action);
+  };
+
   // 툴바 밖 클릭 시 열린 dropdown 모두 닫기
   document.addEventListener('click', (e) => {
     if (!(e.target as HTMLElement).closest('.tool-dropdown')) {
@@ -237,7 +251,7 @@ async function main() {
       const itemAction = item.dataset.action;
       if (itemAction) {
         dropdown?.classList.remove('open');
-        toolManager.executeAction(itemAction);
+        dispatchToolbarAction(itemAction);
         item.classList.add('flash');
         item.addEventListener('animationend', () => item.classList.remove('flash'), { once: true });
         return;
@@ -278,7 +292,7 @@ async function main() {
     // altering tool selection state. Used by Mirror / Revolve / Subdivide.
     const btnAction = btn.dataset.action;
     if (btnAction) {
-      toolManager.executeAction(btnAction);
+      dispatchToolbarAction(btnAction);
       btn.classList.add('flash');
       btn.addEventListener('animationend', () => btn.classList.remove('flash'), { once: true });
       return;
