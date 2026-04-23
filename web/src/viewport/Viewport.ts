@@ -164,11 +164,12 @@ export class Viewport {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: false,
-      // 2026-04-23: logarithmicDepthBuffer true → false. 로그 z 버퍼는 1km+ 대형
-      // 씬에 유용하지만 일반 작업(수십 m 이내)에서는 z 정밀도가 오히려 fragment
-      // 단위로 분산돼 polygonOffset 기반 엣지가 살짝 어둡게 블러된다. 건축
-      // 모델링 범위에서는 선형 z 버퍼가 엣지 픽셀을 더 또렷이 고정.
-      logarithmicDepthBuffer: false,
+      // 2026-04-23: 선형 z로 바꿨더니 박스 하단 경계(y=0 근처)에서 면/엣지/
+      //   그림자/그리드가 z-fight → 톱니 계단 artifact 및 작은 블롭 발생.
+      //   로그 z 버퍼는 camera 근처에 정밀도를 집중해 mm 단위 y=0 분리를
+      //   깔끔하게 처리. CAD 와이어프레임 선명도 10% 개선보다 z-fight 제거가
+      //   훨씬 중요하므로 true 유지.
+      logarithmicDepthBuffer: true,
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
@@ -934,10 +935,9 @@ export class Viewport {
         roughness: 0.65,
         metalness: 0.0,
         polygonOffset: true,
-        // 2026-04-23: 1 → 0.5. logBuffer off(선형 z)로 정밀도가 올라 작은
-        //   offset으로도 엣지/면 분리 충분. 값을 낮추면 엣지가 면에 더
-        //   밀착해 1px이 흐릿하게 번지지 않음.
-        polygonOffsetFactor: 0.5,
+        // 2026-04-23: logBuffer on 복원 → factor 0.5도 원복(1). logBuffer의 비
+        //   선형 z에서 0.5는 너무 작아 일부 각도에서 엣지가 면에 먹힐 수 있음.
+        polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
         vertexColors: useVertexColors,
         // 텍스처가 이미 캐시돼 있으면 즉시 적용, 아니면 applyTextureAsync가 나중에 세팅
@@ -986,7 +986,7 @@ export class Viewport {
           color: useVertexColors ? 0xb0b0c8 : 0x9898b4,
           side: THREE.BackSide,
           polygonOffset: true,
-          polygonOffsetFactor: 0.5,  // 2026-04-23: 1 → 0.5 (front과 일치)
+          polygonOffsetFactor: 1,
           polygonOffsetUnits: 1,
           vertexColors: useVertexColors,
         });
