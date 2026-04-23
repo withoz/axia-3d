@@ -226,7 +226,10 @@ export class Viewport {
     // IBL now does the heavy lifting for ambient-ish fill, so the direct
     // lights can be dialed down and shaped more like studio key/back
     // lights rather than a "flood everything" rig.
-    const ambient = new THREE.AmbientLight(0x303030, 0.6);
+    // 2026-04-23 Phase 2.4.2 — 0.6 → 0.3. 기존 값은 anti-sun 면까지 고르게
+    //   밝혀서 태양 방향 shading이 약했다. 절반으로 내려 key light 대비
+    //   ratio를 키우고 self-shading(form 정의) 체감 향상.
+    const ambient = new THREE.AmbientLight(0x303030, 0.3);
     this.scene.add(ambient);
 
     // Key light — casts the main shadow.
@@ -258,14 +261,17 @@ export class Viewport {
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
     // doubles depth-pass cost without much visual gain).
-    const backLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    // 2026-04-23 Phase 2.4.2 — 0.4 → 0.1. anti-sun 면을 너무 밝혀서 form
+    //   shading을 흐릿하게 만들던 주범. 0.1로 내려 윤곽만 살짝 구분.
+    const backLight = new THREE.DirectionalLight(0xffffff, 0.1);
     backLight.position.set(-6000, 4000, -8000);
     this.scene.add(backLight);
 
     // Subtle sky/ground tint on top of IBL — keeps the under-belly of
     // upside-facing surfaces from going fully dark when IBL contribution
     // is low (edge-on to the env map).
-    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x362d59, 0.35);
+    // 2026-04-23 Phase 2.4.2 — 0.35 → 0.2. 전반적 fill 감소 동조.
+    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x362d59, 0.2);
     this.scene.add(hemiLight);
 
     // ── Image-Based Lighting (IBL) ─────────────────────────────────
