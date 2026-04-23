@@ -70,7 +70,11 @@ export class Viewport {
   //   edgeColor : 0x333366 → 0x1a1a2e — 밝은 면과 대비를 강화.
   private _frontColor = 0xc8ccd0;
   private _backColor = 0x8899bb;
-  private _edgeColor = 0x1a1a2e;
+  // 2026-04-23: 0x1a1a2e → 0x0a0a14. 1px 엣지 선명도 최대화를 위해 RGB를
+  //   (26,26,46) → (10,10,20)으로 낮춰 순검정에 근접. 밝은 면(#c8ccd0) 대비
+  //   15:1 → 23:1로 상승, WCAG AAA 대비도 초과. 여전히 완전 0x000000은 피해
+  //   ACES 톤매핑 후에도 딥네이비의 미묘한 질감 유지.
+  private _edgeColor = 0x0a0a14;
   /** ADR-007 Phase 4 — CAD 모드: single-sided 렌더링 (BackSide mesh 생략, GPU ↑) */
   private _singleSidedRender = false;
   private _faceOpacity = 1.0;
@@ -160,7 +164,11 @@ export class Viewport {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: false,
-      logarithmicDepthBuffer: true,
+      // 2026-04-23: logarithmicDepthBuffer true → false. 로그 z 버퍼는 1km+ 대형
+      // 씬에 유용하지만 일반 작업(수십 m 이내)에서는 z 정밀도가 오히려 fragment
+      // 단위로 분산돼 polygonOffset 기반 엣지가 살짝 어둡게 블러된다. 건축
+      // 모델링 범위에서는 선형 z 버퍼가 엣지 픽셀을 더 또렷이 고정.
+      logarithmicDepthBuffer: false,
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
@@ -182,9 +190,11 @@ export class Viewport {
     // the previous NoToneMapping clipped highlights whenever roughness was
     // low. Exposure 1.0 is the neutral baseline.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    // 2026-04-22: exposure 1.0 → 0.9. IBL + roughness 0.65 조합에서 하이라이트가
-    // 과하게 밝아지는 현상을 차분히 내림. 면-면 경계선 가시화를 돕는다.
-    this.renderer.toneMappingExposure = 0.9;
+    // 2026-04-22: exposure 1.0 → 0.9. 하이라이트 차분히 내림.
+    // 2026-04-23: 0.9 → 1.0 복구. 전체가 10% 어두워지는 부작용 → 검은 엣지
+    // (0x0a0a14)가 ACES 톤매핑 후 짙은 남색으로 소프트 처리되면서 1px 선의
+    // 체감 선명도 저하. 중성 1.0 기준으로 되돌려 엣지가 원래 의도한 순도로 렌더.
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
@@ -924,7 +934,10 @@ export class Viewport {
         roughness: 0.65,
         metalness: 0.0,
         polygonOffset: true,
-        polygonOffsetFactor: 1,
+        // 2026-04-23: 1 → 0.5. logBuffer off(선형 z)로 정밀도가 올라 작은
+        //   offset으로도 엣지/면 분리 충분. 값을 낮추면 엣지가 면에 더
+        //   밀착해 1px이 흐릿하게 번지지 않음.
+        polygonOffsetFactor: 0.5,
         polygonOffsetUnits: 1,
         vertexColors: useVertexColors,
         // 텍스처가 이미 캐시돼 있으면 즉시 적용, 아니면 applyTextureAsync가 나중에 세팅
@@ -973,7 +986,7 @@ export class Viewport {
           color: useVertexColors ? 0xb0b0c8 : 0x9898b4,
           side: THREE.BackSide,
           polygonOffset: true,
-          polygonOffsetFactor: 1,
+          polygonOffsetFactor: 0.5,  // 2026-04-23: 1 → 0.5 (front과 일치)
           polygonOffsetUnits: 1,
           vertexColors: useVertexColors,
         });
