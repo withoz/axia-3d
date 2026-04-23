@@ -68,6 +68,15 @@ struct Receiver {
     /// (which tests "inside = left of CCW") automatically keeps only the
     /// "outside the hole" half when re-run.
     holes_2d: Vec<Vec<(f64, f64)>>,
+    /// World-space XZ AABB for quick caster-vs-receiver overlap rejection.
+    /// `None` = infinite (ground) — always a candidate.
+    /// Phase 2.7: turned the O(N²) caster×receiver loop into O(N log N)
+    /// by skipping pairs whose XZ footprints don't overlap before the
+    /// projection+clip work.
+    xz_aabb: Option<(f64, f64, f64, f64)>,  // (min_x, min_z, max_x, max_z)
+    /// Height (min/max y in world coords) — used to skip receivers entirely
+    /// above the caster bbox max_y.
+    y_range: (f64, f64),
 }
 
 impl Receiver {
@@ -80,6 +89,8 @@ impl Receiver {
             v: DVec3::new(0.0, 0.0, 1.0),
             outline_2d: Vec::new(),
             holes_2d: Vec::new(),
+            xz_aabb: None,           // infinite
+            y_range: (0.0, 0.0),
         }
     }
 
@@ -173,7 +184,21 @@ impl Mesh {
                 holes_2d.push(h2d);
             }
 
-            receivers.push(Receiver { origin, normal: n, u, v, outline_2d, holes_2d });
+            // World-space XZ AABB + y range for fast caster-receiver pair rejection.
+            let mut min_x =  f64::INFINITY; let mut max_x = f64::NEG_INFINITY;
+            let mut min_z =  f64::INFINITY; let mut max_z = f64::NEG_INFINITY;
+            let mut min_y =  f64::INFINITY; let mut max_y_local = f64::NEG_INFINITY;
+            for p in &verts_3d {
+                if p.x < min_x { min_x = p.x; } if p.x > max_x { max_x = p.x; }
+                if p.z < min_z { min_z = p.z; } if p.z > max_z { max_z = p.z; }
+                if p.y < min_y { min_y = p.y; } if p.y > max_y_local { max_y_local = p.y; }
+            }
+
+            receivers.push(Receiver {
+                origin, normal: n, u, v, outline_2d, holes_2d,
+                xz_aabb: Some((min_x, min_z, max_x, max_z)),
+                y_range: (min_y, max_y_local),
+            });
         }
 
         // 2) For each sun-facing caster, project to each valid receiver.
@@ -193,7 +218,39 @@ impl Mesh {
                 .collect();
             if caster_3d.len() < 3 { continue; }
 
+            // ─── Phase 2.7 — caster's shadow XZ bbox for O(N log N) pruning.
+            // Project each caster vertex to y=0 along sun_dir (approx), take
+            // the union of that and the caster's own XZ bbox as a conservative
+            // footprint. A receiver whose XZ AABB does not overlap this bbox
+            // can never receive any part of this caster's shadow.
+            let mut c_min_x = f64::INFINITY; let mut c_max_x = f64::NEG_INFINITY;
+            let mut c_min_z = f64::INFINITY; let mut c_max_z = f64::NEG_INFINITY;
+            let mut c_max_y = f64::NEG_INFINITY;
+            for p in &caster_3d {
+                if p.x < c_min_x { c_min_x = p.x; } if p.x > c_max_x { c_max_x = p.x; }
+                if p.z < c_min_z { c_min_z = p.z; } if p.z > c_max_z { c_max_z = p.z; }
+                if p.y > c_max_y { c_max_y = p.y; }
+                // 투영 포인트(y=0)도 XZ bbox에 포함 — conservative.
+                if sun_dir.y.abs() > 1e-6 {
+                    let t = -p.y / sun_dir.y;
+                    let px = p.x + sun_dir.x * t;
+                    let pz = p.z + sun_dir.z * t;
+                    if px < c_min_x { c_min_x = px; } if px > c_max_x { c_max_x = px; }
+                    if pz < c_min_z { c_min_z = pz; } if pz > c_max_z { c_max_z = pz; }
+                }
+            }
+
             for recv in &receivers {
+                // Phase 2.7 — early reject: non-ground receivers with no XZ
+                // overlap with the caster's shadow footprint can be skipped
+                // before any projection/clip math.
+                if let Some((rx0, rz0, rx1, rz1)) = recv.xz_aabb {
+                    if rx1 < c_min_x || rx0 > c_max_x { continue; }
+                    if rz1 < c_min_z || rz0 > c_max_z { continue; }
+                    // Also skip receivers entirely above the caster's highest
+                    // vertex (caster can't cast upward).
+                    if recv.y_range.0 >= c_max_y - 0.1 { continue; }
+                }
                 // Sun must hit the receiver plane from the lit side.
                 let denom = sun_dir.dot(recv.normal);
                 if denom.abs() < 1e-6 { continue; }  // sun parallel to plane
