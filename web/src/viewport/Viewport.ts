@@ -428,12 +428,13 @@ export class Viewport {
       uniforms: {
         uSmallSpacing: { value: 1000.0 },   // 1m
         uBigSpacing:   { value: 5000.0 },   // 5m
-        uSmallColor:   { value: new THREE.Color(0x888888) },
-        uBigColor:     { value: new THREE.Color(0x555555) },
-        uSmallAlpha:   { value: 0.45 },
-        uBigAlpha:     { value: 0.75 },
-        uFadeNear:     { value: 20000.0 },  // 20m부터 fade 시작
-        uFadeFar:      { value: 80000.0 },  // 80m에서 완전 사라짐
+        uSmallColor:   { value: new THREE.Color(0xa8a8a8) },  // 2026-04-23: 0x88 → 0xa8 가늘게(밝게)
+        uBigColor:     { value: new THREE.Color(0x808080) },  // 2026-04-23: 0x55 → 0x80 가늘게
+        uSmallAlpha:   { value: 0.22 },  // 2026-04-23: 0.45 → 0.22 가늘게
+        uBigAlpha:     { value: 0.42 },  // 2026-04-23: 0.75 → 0.42 가늘게
+        // 2026-04-23: 작업공간 2배 확장 — 사용자 요청.
+        uFadeNear:     { value: 40000.0 },  // 20m → 40m 부터 fade 시작
+        uFadeFar:      { value: 160000.0 }, // 80m → 160m 에서 완전 사라짐
       },
       vertexShader: /* glsl */`
         // Plane-local xy 를 그대로 넘겨 shader에서 grid를 생성.
