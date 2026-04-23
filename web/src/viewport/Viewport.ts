@@ -431,7 +431,7 @@ export class Viewport {
         uSmallColor:   { value: new THREE.Color(0xa8a8a8) },  // 2026-04-23: 0x88 → 0xa8 가늘게(밝게)
         uBigColor:     { value: new THREE.Color(0x808080) },  // 2026-04-23: 0x55 → 0x80 가늘게
         uSmallAlpha:   { value: 0.18 },  // 2026-04-23: 0.45 → 0.22 → 0.18 더 가늘게
-        uBigAlpha:     { value: 0.30 },  // 2026-04-23: 0.75 → 0.42 → 0.30 더 가늘게
+        uBigAlpha:     { value: 0.25 },  // 2026-04-23: 0.75 → 0.42 → 0.30 → 0.25 더 가늘게
         // 2026-04-23: 작업공간 2배 확장 — 사용자 요청.
         uFadeNear:     { value: 40000.0 },  // 20m → 40m 부터 fade 시작
         uFadeFar:      { value: 160000.0 }, // 80m → 160m 에서 완전 사라짐
