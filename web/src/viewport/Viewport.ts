@@ -1031,36 +1031,55 @@ export class Viewport {
 
       // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback.
       //
-      // 2026-04-22 (단순화): Line2 + LineMaterial 조합은 두꺼운 선을 지원하지만
-      // 여러 artifact(z-fighting, 두 줄 보임, dithering)를 유발해 원래의 단순한
-      // LineBasicMaterial로 되돌림. WebGL은 linewidth가 1px로 고정되지만 그게
-      // 오히려 CAD 와이어프레임에 이상적인 깔끔함.
+      // 2026-04-24 — Line2 + LineMaterial 복귀. WebGL LineBasicMaterial 은
+      //   linewidth 가 1px 로 고정되어 oblique view 에서 aliasing 으로
+      //   점선처럼 보이는 사용자 보고 (user.png). Line2 는 실제 quad 를
+      //   그리므로 모든 각도에서 연속된 선으로 렌더. 과거 artifact 재발
+      //   방지: polygonOffset 로 face 보다 약간 앞으로, depthWrite 유지,
+      //   transparent:false, worldUnits:false (픽셀 굵기 고정).
       if (edgeLines && edgeLines.length > 0) {
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
-        const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
-        const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
-        lineSegs.name = 'dcel-edges';
-        lineSegs.visible = this._edgeVisible;
-        this.meshGroup.add(lineSegs);
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions(edgeLines);
+        const mat = this._makeMeshEdgeMaterial();
+        const obj = new LineSegments2(geo, mat);
+        obj.name = 'dcel-edges';
+        obj.visible = this._edgeVisible;
+        obj.renderOrder = 1;
+        this._meshEdgeMaterials.push(mat);
+        this.meshGroup.add(obj);
       } else {
-        const edgesMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
         const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
-        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-        edges.visible = this._edgeVisible;
-        this.meshGroup.add(edges);
+        const positions = edgesGeo.getAttribute('position');
+        const arr = new Float32Array(positions.count * 3);
+        for (let i = 0; i < positions.count; i++) {
+          arr[i*3] = positions.getX(i);
+          arr[i*3+1] = positions.getY(i);
+          arr[i*3+2] = positions.getZ(i);
+        }
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions(arr);
+        const mat = this._makeMeshEdgeMaterial();
+        const obj = new LineSegments2(geo, mat);
+        obj.name = 'dcel-edges-fallback';
+        obj.visible = this._edgeVisible;
+        obj.renderOrder = 1;
+        this._meshEdgeMaterials.push(mat);
+        this.meshGroup.add(obj);
+        edgesGeo.dispose();
       }
     }
 
     // ── 4) Standalone edge lines (면 없이 Line 도구로 그린 선) ──
     if (positions.length === 0 && edgeLines && edgeLines.length > 0) {
-      const lineGeo = new THREE.BufferGeometry();
-      lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgeLines), 3));
-      const lineMat = new THREE.LineBasicMaterial({ color: this._edgeColor });
-      const lineSegs = new THREE.LineSegments(lineGeo, lineMat);
-      lineSegs.name = 'standalone-edges';
-      lineSegs.visible = this._edgeVisible;
-      this.meshGroup.add(lineSegs);
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(edgeLines);
+      const mat = this._makeMeshEdgeMaterial();
+      const obj = new LineSegments2(geo, mat);
+      obj.name = 'standalone-edges';
+      obj.visible = this._edgeVisible;
+      obj.renderOrder = 1;
+      this._meshEdgeMaterials.push(mat);
+      this.meshGroup.add(obj);
     }
 
     // ── 5) Centerlines (중심선/참조 축) — 점선 + 옅은 색 + 얇게 ──
@@ -1074,6 +1093,31 @@ export class Viewport {
       obj.computeLineDistances();  // essential for dashed rendering
       this.meshGroup.add(obj);
     }
+  }
+
+  /** LineMaterial for DCEL mesh edges. Solid, polygon-offset'd so it
+   *  renders slightly in front of the shaded faces to avoid z-fight
+   *  while still occluding correctly behind the geometry. */
+  private _makeMeshEdgeMaterial(): LineMaterial {
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const mat = new LineMaterial({
+      color: this._edgeColor,
+      linewidth: Math.max(1, this._edgeWidth),
+      resolution: new THREE.Vector2(w, h),
+      worldUnits: false,
+      dashed: false,
+      transparent: false,
+      depthTest: true,
+      depthWrite: true,
+      // polygonOffset negative values push the primitive toward the camera
+      //   in depth-buffer units — keeps edges on top of the coincident face
+      //   without ghost-edge artifacts on the opposite side.
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    return mat;
   }
 
   /** LineMaterial tuned for centerlines: dashed, dimmer color, thinner.
