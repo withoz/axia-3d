@@ -14,6 +14,7 @@ import {
   getRespectMaterial, setRespectMaterial,
   MERGE_TOL_MAX,
 } from '../tools/MergeSettings';
+import { getAutoIntersect, setAutoIntersect } from '../tools/AutoIntersectSettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -113,6 +114,14 @@ export class SettingsPanel {
         </label>
       </div>
 
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-auto-intersect" />
+          그릴 때 자동 교차 (Auto-intersect on draw)
+        </label>
+        <div class="sp-hint">새 면이 기존 면과 3D 교차하면 edge 로 자동 분할 (SketchUp 스타일)</div>
+      </div>
+
       <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
@@ -167,6 +176,12 @@ export class SettingsPanel {
       setRespectMaterial(matCheck.checked);
     });
 
+    // Auto-intersect on draw
+    const autoIntCheck = panel.querySelector('#sp-auto-intersect') as HTMLInputElement;
+    autoIntCheck.addEventListener('change', () => {
+      setAutoIntersect(autoIntCheck.checked);
+    });
+
     return panel;
   }
 
@@ -202,6 +217,10 @@ export class SettingsPanel {
     // 재질 존중
     const matCheck = this.panel.querySelector('#sp-merge-respect-mat') as HTMLInputElement;
     matCheck.checked = getRespectMaterial();
+
+    // 자동 교차
+    const autoIntCheck = this.panel.querySelector('#sp-auto-intersect') as HTMLInputElement;
+    autoIntCheck.checked = getAutoIntersect();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;

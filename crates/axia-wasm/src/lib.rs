@@ -3424,6 +3424,17 @@ impl AxiaEngine {
         }
     }
 
+    /// Phase 2 — auto_intersect_on_draw 토글. 기본 true.
+    #[wasm_bindgen(js_name = "setAutoIntersectOnDraw")]
+    pub fn set_auto_intersect_on_draw(&mut self, enabled: bool) {
+        self.scene.auto_intersect_on_draw = enabled;
+    }
+
+    #[wasm_bindgen(js_name = "getAutoIntersectOnDraw")]
+    pub fn get_auto_intersect_on_draw(&self) -> bool {
+        self.scene.auto_intersect_on_draw
+    }
+
     /// "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
     /// 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
     /// inside/outside 판정 없이 모든 sub-face 유지.

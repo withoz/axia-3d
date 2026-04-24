@@ -280,6 +280,7 @@ export class AxiaEngine {
      * Returns the count of faces actually flipped.
      */
     flipFaces(face_ids: Uint32Array): number;
+    getAutoIntersectOnDraw(): boolean;
     /**
      * Get the current cache version (monotonic counter).
      * Used by JavaScript to validate delta buffer freshness.
@@ -666,6 +667,10 @@ export class AxiaEngine {
      */
     scale_faces(face_ids: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
     /**
+     * Phase 2 — auto_intersect_on_draw 토글. 기본 true.
+     */
+    setAutoIntersectOnDraw(enabled: boolean): void;
+    /**
      * Toggle active flag of a constraint.
      */
     setConstraintActive(id: number, active: boolean): boolean;
@@ -899,6 +904,7 @@ export interface InitOutput {
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
+    readonly axiaengine_getAutoIntersectOnDraw: (a: number) => number;
     readonly axiaengine_getCacheVersion: (a: number) => number;
     readonly axiaengine_getCenterlineLines: (a: number, b: number) => void;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
@@ -968,6 +974,7 @@ export interface InitOutput {
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+    readonly axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;

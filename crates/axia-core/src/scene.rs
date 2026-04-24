@@ -67,6 +67,12 @@ pub struct Scene {
     /// cleared in the epoch finalizer. When `Some`, inner exec_draw_line
     /// calls contribute to this buffer and skip their per-line post-process.
     epoch: Option<EpochContext>,
+    /// Phase 2 — SketchUp-style "auto intersect on draw". When true, every
+    /// draw_rect / draw_circle command automatically runs
+    /// intersect_faces_inner on the newly-created faces against the rest of
+    /// the scene (still inside the outer transaction, so Ctrl+Z undoes both
+    /// the draw and the intersect in one step). User-toggleable.
+    pub auto_intersect_on_draw: bool,
 }
 
 impl Scene {
@@ -82,6 +88,7 @@ impl Scene {
             groups: GroupManager::new(),
             constraints: ConstraintGraph::new(),
             epoch: None,
+            auto_intersect_on_draw: true,
         }
     }
 
@@ -285,6 +292,28 @@ impl Scene {
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
+        let result = self.intersect_faces_inner(face_ids);
+
+        match result {
+            Ok(n) => {
+                self.transactions.set_after_snapshot(self.scene_snapshot());
+                self.transactions.commit();
+                Ok(n)
+            }
+            Err(e) => {
+                self.transactions.cancel();
+                Err(e)
+            }
+        }
+    }
+
+    /// `intersect_faces_with_scene` 의 내부 구현 — 트랜잭션 관리를 하지 않는다.
+    /// 호출자가 외부 트랜잭션 안에서 호출할 때 사용 (Phase 2 draw-time auto-
+    /// intersect 에서 draw 의 기존 transaction 안에 병합). 사용자는 일반적
+    /// 으로 `intersect_faces_with_scene` 를 쓰면 된다.
+    pub fn intersect_faces_inner(&mut self, face_ids: &[FaceId]) -> anyhow::Result<usize> {
+        if face_ids.is_empty() { return Ok(0); }
+
         // 원본 face 의 XIA 매핑 보존 (분할 후 승계용)
         use std::collections::HashMap;
         let mut xia_backup: HashMap<axia_geo::FaceId, crate::xia::XiaId> = HashMap::new();
@@ -305,13 +334,7 @@ impl Scene {
             }
         }
 
-        let result_faces = match self.mesh.intersect_faces_with_model(face_ids, self.default_material) {
-            Ok(v) => v,
-            Err(e) => {
-                self.transactions.cancel();
-                return Err(e);
-            }
-        };
+        let result_faces = self.mesh.intersect_faces_with_model(face_ids, self.default_material)?;
 
         // XIA 승계: split_faces_by_intersections 는 원본 face 를 제거하고
         // 새 face 를 만든다. 원본 face id 가 여전히 active 면 그대로 두고,
@@ -359,9 +382,6 @@ impl Scene {
                 }
             }
         }
-
-        self.transactions.set_after_snapshot(self.scene_snapshot());
-        self.transactions.commit();
 
         // 모든 활성 face 수 반환 (호출자 디버그용)
         Ok(result_faces.len())
@@ -1799,6 +1819,11 @@ impl Scene {
                         xia.face_ids.push(face_id);
                     }
                     self.register_faces_to_xia(xia_id, &[face_id]);
+                    // Phase 2: auto-intersect with rest of scene (still inside
+                    //   this transaction so Ctrl+Z undoes both at once).
+                    if self.auto_intersect_on_draw {
+                        let _ = self.intersect_faces_inner(&[face_id]);
+                    }
                     self.transactions.set_after_snapshot(self.scene_snapshot());
                     self.transactions.commit();
                     return CommandResult::EntityCreated(xia_id);
@@ -1848,6 +1873,9 @@ impl Scene {
                             xia.face_ids.push(inner_fid);
                         }
                         self.register_faces_to_xia(xia_id, &[inner_fid]);
+                        if self.auto_intersect_on_draw {
+                            let _ = self.intersect_faces_inner(&[inner_fid]);
+                        }
                         self.transactions.set_after_snapshot(self.scene_snapshot());
                         self.transactions.commit();
                         return CommandResult::EntityCreated(xia_id);
@@ -1933,6 +1961,10 @@ impl Scene {
             }
         }
         self.register_faces_to_xia(xia_id, &epoch.created_faces);
+        if self.auto_intersect_on_draw {
+            let faces = epoch.created_faces.clone();
+            let _ = self.intersect_faces_inner(&faces);
+        }
         self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();
         CommandResult::EntityCreated(xia_id)
@@ -2031,6 +2063,9 @@ impl Scene {
             xia.face_ids.push(face_id);
         }
         self.register_faces_to_xia(xia_id, &[face_id]);
+        if self.auto_intersect_on_draw {
+            let _ = self.intersect_faces_inner(&[face_id]);
+        }
 
         self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();

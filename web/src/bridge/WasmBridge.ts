@@ -267,6 +267,8 @@ type AxiaEngineExtended = AxiaEngine & {
   // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
   intersectWithModel?(faceIds: Uint32Array): string;
+  setAutoIntersectOnDraw?(enabled: boolean): void;
+  getAutoIntersectOnDraw?(): boolean;
   // Group / Component
   create_group?(name: string, faceIds: Uint32Array): number;
   delete_group?(groupId: number): boolean;
@@ -2173,6 +2175,15 @@ export class WasmBridge {
       Toast.error(`Boolean 연산 실패: ${String(e)}`);
       return null;
     }
+  }
+
+  /** Phase 2 — auto-intersect on draw 토글 (기본 true). */
+  setAutoIntersectOnDraw(enabled: boolean): void {
+    this.engine?.setAutoIntersectOnDraw?.(enabled);
+  }
+
+  getAutoIntersectOnDraw(): boolean {
+    return this.engine?.getAutoIntersectOnDraw?.() ?? true;
   }
 
   /**

@@ -783,6 +783,13 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * @returns {boolean}
+     */
+    getAutoIntersectOnDraw() {
+        const ret = wasm.axiaengine_getAutoIntersectOnDraw(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * Get the current cache version (monotonic counter).
      * Used by JavaScript to validate delta buffer freshness.
      * @returns {number}
@@ -1973,6 +1980,13 @@ export class AxiaEngine {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_scale_faces(this.__wbg_ptr, ptr0, len0, cx, cy, cz, sx, sy, sz);
         return ret !== 0;
+    }
+    /**
+     * Phase 2 — auto_intersect_on_draw 토글. 기본 true.
+     * @param {boolean} enabled
+     */
+    setAutoIntersectOnDraw(enabled) {
+        wasm.axiaengine_setAutoIntersectOnDraw(this.__wbg_ptr, enabled);
     }
     /**
      * Toggle active flag of a constraint.

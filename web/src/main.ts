@@ -80,6 +80,13 @@ async function main() {
   const bridge = new WasmBridge();
   await bridge.init();
 
+  // Phase 2 — auto-intersect-on-draw 설정 WASM 에 반영 (초기 + 변경 시)
+  const { getAutoIntersect, onAutoIntersectChange } = await import('./tools/AutoIntersectSettings');
+  if (bridge.isReady()) bridge.setAutoIntersectOnDraw(getAutoIntersect());
+  onAutoIntersectChange((v) => {
+    if (bridge.isReady()) bridge.setAutoIntersectOnDraw(v);
+  });
+
   // Note: WASM is optional for basic Three.js rendering (e.g., Sphere tool)
   // Continue even if WASM fails to initialize
   if (!bridge.isReady()) {

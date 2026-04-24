@@ -46,6 +46,7 @@ export const axiaengine_face_count: (a: number) => number;
 export const axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_flipFaces: (a: number, b: number, c: number) => number;
+export const axiaengine_getAutoIntersectOnDraw: (a: number) => number;
 export const axiaengine_getCacheVersion: (a: number) => number;
 export const axiaengine_getCenterlineLines: (a: number, b: number) => void;
 export const axiaengine_getDirtyFaceBuffers: (a: number) => number;
@@ -115,6 +116,7 @@ export const axiaengine_rotateVerts: (a: number, b: number, c: number, d: number
 export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+export const axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
 export const axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
 export const axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
 export const axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
