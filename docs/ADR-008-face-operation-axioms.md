@@ -120,6 +120,13 @@ rescan on affected vertices; any new closed loop spawns a face.
 | B-2 | ✅ Done | Erase re-synthesis (Axiom 6) — newly-freed edges scope | 3266553 |
 | C | ✅ Done | De-solidify detection + Toast on solid→surface downgrade | b41bb57 |
 | D | ✅ Done | Non-coplanar forced merge via soft-edge region (preserves ADR-007) | 5638c00 |
+| E (B1) | ✅ Done | Inner RECT → sub-face + outer hole promotion | d71df4d |
+| SU-P1 | ✅ Done | Offset tool UI: face-only (edge-offset UI 제거) | 3bbb741 |
+| SU-P3 | ✅ Done | Face Operation Epoch — RECT의 4× post-process를 1×로 | 3bbb741 |
+| SU-P5 | ✅ Done | Offset preview mesh-invariant (이미 충족 — Ghost만 변경) | n/a |
+| SU-P6 | ✅ Done | Interior-RECT atomic classifier — B1 케이스 fast-path | c0812ea |
+| SU-P2 | 🔴 Defer | Bounded offset — 인접 face에서 자동 중단 (SketchUp 동작) | — |
+| SU-P4 | 🔴 Defer | Face AABB BVH 인덱스 — O(F) scan을 O(log F)로 | — |
 
 ---
 
