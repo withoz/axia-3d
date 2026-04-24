@@ -369,6 +369,51 @@ fn partial_overlap_rect_splits_big_face() {
         "total face area should be 1,020,000 (1M big + 20K outside); got {:.1}", total_area);
 }
 
+/// ADR-008 Axiom 7 / M1 — 1-corner-in partial overlap (regression for
+/// 2026-04-24 bug where overlap quad was dissolved by 4.55 because the
+/// centroid-only containment check misclassified the L-shape wrap).
+///
+/// Two 2000×1000 rectangles on the XY plane, B shifted by (400,300).
+/// Only ONE corner of B lies inside A. Expected: 3 active faces.
+#[test]
+fn m1_one_corner_in_xy_plane_three_faces() {
+    let mut scene = Scene::default();
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 0.0, 1.0),
+        up: DVec3::new(1.0, 0.0, 0.0),
+        width: 2000.0, height: 1000.0,
+    });
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(400.0, 300.0, 0.0),
+        normal: DVec3::new(0.0, 0.0, 1.0),
+        up: DVec3::new(1.0, 0.0, 0.0),
+        width: 2000.0, height: 1000.0,
+    });
+    let active = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+    assert_eq!(active, 3, "1-corner-in XY must produce 3 faces (A-L + overlap + B-wrap); got {}", active);
+}
+
+/// Same as above on XZ plane (normal Y, up Z) — orientation-independence.
+#[test]
+fn m1_one_corner_in_xz_plane_three_faces() {
+    let mut scene = Scene::default();
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 2000.0, height: 1000.0,
+    });
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(400.0, 0.0, 300.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 2000.0, height: 1000.0,
+    });
+    let active = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+    assert_eq!(active, 3, "1-corner-in XZ must produce 3 faces; got {}", active);
+}
+
 /// ADR-008 Axiom 7 / M1 — RECT that crosses a face boundary TWICE and
 /// extends through the face's interior. A long skinny RECT drawn across
 /// big rect, entering and exiting both at the left and right edges.
