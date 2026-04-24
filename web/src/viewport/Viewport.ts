@@ -1112,10 +1112,12 @@ export class Viewport {
       depthWrite: true,
       // polygonOffset negative values push the primitive toward the camera
       //   in depth-buffer units — keeps edges on top of the coincident face
-      //   without ghost-edge artifacts on the opposite side.
+      //   without ghost-edge artifacts on the opposite side. Values below
+      //   are ramped up from -1 so coincident faces never eat into the
+      //   edge line at shallow viewing angles (CAD top/side views).
       polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
     });
     return mat;
   }
