@@ -363,10 +363,30 @@ impl Mesh {
         let endpoint_tol = SPATIAL_HASH_CELL * 1.5;
         let dir_norm = dir / len;
 
+        // AABB early-reject — a vertex on the line must fall inside the
+        // line's bounding box padded by perp_tol. Rejecting by AABB
+        // avoids the expensive dot/length computation for most vertices
+        // in a large scene.
+        let tol = perp_tol.max(endpoint_tol);
+        let (lmin_x, lmax_x) = if start.x < end.x { (start.x - tol, end.x + tol) }
+                               else              { (end.x - tol, start.x + tol) };
+        let (lmin_y, lmax_y) = if start.y < end.y { (start.y - tol, end.y + tol) }
+                               else              { (end.y - tol, start.y + tol) };
+        let (lmin_z, lmax_z) = if start.z < end.z { (start.z - tol, end.z + tol) }
+                               else              { (end.z - tol, start.z + tol) };
+
         let mut result = Vec::new();
         for (vid, vert) in self.verts.iter() {
             if !vert.is_active() { continue; }
             let p = vert.pos();
+
+            if p.x < lmin_x || p.x > lmax_x
+                || p.y < lmin_y || p.y > lmax_y
+                || p.z < lmin_z || p.z > lmax_z
+            {
+                continue;
+            }
+
             // start/end와 동일한 vertex는 제외
             if (p - start).length() < endpoint_tol { continue; }
             if (p - end).length() < endpoint_tol { continue; }
@@ -403,6 +423,18 @@ impl Mesh {
         // 시켜서 vertex dedup과 crossing 판정이 서로 어긋나지 않도록 함.
         let endpoint_tol = SPATIAL_HASH_CELL * 1.5;
 
+        // AABB of the new line (expanded by coplanar tol) — a transverse
+        // crossing can only happen between edges whose bounding boxes
+        // overlap the new line's. Separating-axis test filters out most
+        // edges without touching their vertex data.
+        let aabb_tol = coplanar_tol.max(endpoint_tol);
+        let (lmin_x, lmax_x) = if start.x < end.x { (start.x - aabb_tol, end.x + aabb_tol) }
+                               else              { (end.x - aabb_tol, start.x + aabb_tol) };
+        let (lmin_y, lmax_y) = if start.y < end.y { (start.y - aabb_tol, end.y + aabb_tol) }
+                               else              { (end.y - aabb_tol, start.y + aabb_tol) };
+        let (lmin_z, lmax_z) = if start.z < end.z { (start.z - aabb_tol, end.z + aabb_tol) }
+                               else              { (end.z - aabb_tol, start.z + aabb_tol) };
+
         let mut crossings = Vec::new();
         for (edge_id, edge) in self.edges.iter() {
             if !edge.is_active() { continue; }
@@ -412,6 +444,17 @@ impl Mesh {
             if !edge.class().is_topological() { continue; }
             let va = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
             let vb = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
+
+            // AABB separating-axis early-reject.
+            let (ex_min_x, ex_max_x) = if va.x < vb.x { (va.x, vb.x) } else { (vb.x, va.x) };
+            let (ex_min_y, ex_max_y) = if va.y < vb.y { (va.y, vb.y) } else { (vb.y, va.y) };
+            let (ex_min_z, ex_max_z) = if va.z < vb.z { (va.z, vb.z) } else { (vb.z, va.z) };
+            if ex_max_x < lmin_x || ex_min_x > lmax_x
+                || ex_max_y < lmin_y || ex_min_y > lmax_y
+                || ex_max_z < lmin_z || ex_min_z > lmax_z
+            {
+                continue;
+            }
 
             // 끝점 일치 — 공유 vertex는 교차 아님
             if (va - start).length() < endpoint_tol || (va - end).length() < endpoint_tol ||
@@ -1039,6 +1082,9 @@ impl Mesh {
             .filter(|(_, f)| f.is_active())
             .map(|(id, _)| id)
             .collect();
+        // Containment requires ≥2 faces; single-face scene has nothing to
+        // do and the O(F²) geom build below is wasted work.
+        if active.len() < 2 { return Vec::new(); }
         // 각 face의 자체 평면에서 2D polygon + centroid 계산
         struct FaceGeom {
             poly_2d: Vec<(f64, f64)>,
@@ -1185,6 +1231,8 @@ impl Mesh {
             .filter(|(_, f)| f.is_active())
             .map(|(id, _)| id)
             .collect();
+        // Duplicates require ≥2 faces.
+        if active_ids.len() < 2 { return Vec::new(); }
 
         for fid in active_ids {
             let face = match self.faces.get(fid) { Some(f) => f, None => continue };

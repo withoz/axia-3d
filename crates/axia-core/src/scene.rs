@@ -819,10 +819,41 @@ impl Scene {
         // ≥2 boundary spoke를 가진 vertex가 있으면 그 face를 dissolve+fan split.
         // loop detection은 Step 4(b)에서 "interior vertex" 케이스를 이미 skip했으므로
         // 여기서 처리해도 중복 face 생성 없음.
+        //
+        // Perf (2026-04-24): 기존엔 모든 활성 face를 후보로 삼았다. 그러나
+        // fan-split은 touched_verts(이번 drawLine이 건드린 vertex) 중 하나가
+        // face interior에 있을 때만 의미가 있다. face의 3D AABB 안에 touched
+        // vertex가 없으면 즉시 스킵 → 대형 씬에서 O(F × V)를 O(k) 수준으로
+        // 절감.
         {
+            // touched_verts의 3D 좌표 수집 (1회)
+            let touched_pts: Vec<DVec3> = touched_verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
                 .filter(|(_, f)| f.is_active())
-                .map(|(fid, _)| fid)
+                .filter_map(|(fid, f)| {
+                    // face AABB 계산 — outer loop verts만
+                    let verts = self.mesh.collect_loop_verts(f.outer().start).ok()?;
+                    let mut mn = DVec3::splat(f64::INFINITY);
+                    let mut mx = DVec3::splat(f64::NEG_INFINITY);
+                    for &v in &verts {
+                        let p = self.mesh.vertex_pos(v).ok()?;
+                        mn = mn.min(p);
+                        mx = mx.max(p);
+                    }
+                    // padding — touched_verts가 face boundary에 정확히 있을
+                    // 수 있으므로 살짝 확장
+                    let pad = DVec3::splat(1e-3);
+                    mn -= pad;
+                    mx += pad;
+                    let has_inside = touched_pts.iter().any(|p| {
+                        p.x >= mn.x && p.x <= mx.x
+                            && p.y >= mn.y && p.y <= mx.y
+                            && p.z >= mn.z && p.z <= mx.z
+                    });
+                    if has_inside { Some(fid) } else { None }
+                })
                 .collect();
             for fid in candidates {
                 let new_faces = self.mesh.dissolve_and_fan_split(fid);
