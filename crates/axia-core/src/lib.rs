@@ -16,6 +16,7 @@ pub mod import_dxf;
 pub mod group;
 pub mod material;
 pub mod constraint;
+pub mod orphan_recovery;
 
 pub use xia::{Xia, XiaState};
 pub use commands::{Command, CommandResult};

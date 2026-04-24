@@ -118,6 +118,36 @@ export class AxiaEngine {
         }
     }
     /**
+     * Apply or preview an orphan-recovery plan. Wrapped in a single undo
+     * frame on apply; preview rolls back to the exact prior snapshot.
+     *
+     * `plan_json` — `RecoveryPlan` serialised as JSON.
+     * `dry_run`   — true = preview (always rolls back); false = apply.
+     *
+     * Returns `RecoveryResult` serialised as JSON.
+     * @param {string} plan_json
+     * @param {boolean} dry_run
+     * @returns {string}
+     */
+    applyOrphanRecovery(plan_json, dry_run) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(plan_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_applyOrphanRecovery(retptr, this.__wbg_ptr, ptr0, len0, dry_run);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Linear array — create `count` translated copies of the given
      * faces, each shifted by `offset · k` for k = 1..=count. Returns
      * the new FaceIds in copy-major, source-order.
@@ -356,6 +386,27 @@ export class AxiaEngine {
     can_undo() {
         const ret = wasm.axiaengine_can_undo(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Read-only classifier. Returns JSON-serialised `OrphanReport`.
+     * See ADR-009 for category definitions (C1 / C2 / C3).
+     * @returns {string}
+     */
+    classifyOrphans() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_classifyOrphans(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Collect all edges in the polyline chain containing `edge_id`.

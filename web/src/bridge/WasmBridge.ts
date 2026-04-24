@@ -8,6 +8,50 @@ import init, { AxiaEngine } from '../wasm/axia_wasm';
 import { Toast } from '../ui/Toast';
 import { debugLog } from '../utils/debug';
 
+// ═══ ADR-009 Orphan Recovery types ════════════════════════════════════
+export type OrphanCategory =
+  | { kind: 'C1Pure' }
+  | { kind: 'C2Neighbor'; xias: number }
+  | { kind: 'C3Bridge'; xias: number[] };
+
+export interface OrphanComponent {
+  id: number;
+  faces: number[];
+  face_count: number;
+  aabb_min: [number, number, number];
+  aabb_max: [number, number, number];
+  centroid: [number, number, number];
+  area_sum: number;
+  category: OrphanCategory;
+  suggested_name: string;
+}
+
+export interface OrphanReport {
+  components: OrphanComponent[];
+  total_orphans: number;
+  c1_count: number;
+  c2_count: number;
+  c3_count: number;
+  face_count_snapshot: number;
+}
+
+export interface OrphanRecoveryPlan {
+  apply_c1: boolean;
+  apply_c2: boolean;
+  /** Per-component C3 choices: [component_id, target_xia_or_null] */
+  c3_decisions: Array<[number, number | null]>;
+}
+
+export interface OrphanRecoveryResult {
+  xias_created: number[];
+  faces_absorbed: number;
+  faces_in_new_xias: number;
+  face_count_before: number;
+  face_count_after: number;
+  all_faces_owned: boolean;
+  error: string | null;
+}
+
 export interface MeshBuffers {
   positions: Float32Array;
   positionsF64?: Float64Array;  // CAD-grade f64 positions (same layout as positions)
@@ -80,6 +124,9 @@ type AxiaEngineExtended = AxiaEngine & {
   ): Int32Array;
   previewEdgeEraseMerge?(edgeId: number, angleTolDeg: number): Uint32Array;
   lastMergeFailureReason?(): string;
+  /** ADR-009 Orphan recovery */
+  classifyOrphans?(): string;
+  applyOrphanRecovery?(planJson: string, dryRun: boolean): string;
   /** Phase D (ADR-008 Axiom 9 row 3): non-coplanar forced merge via SOFT
    *  edges. Hides interior edges between the selected faces so the group
    *  reads as one continuous surface; topology is preserved. Returns the
@@ -637,6 +684,37 @@ export class WasmBridge {
     if (!this.engine?.lastMergeFailureReason) return '';
     try { return this.engine.lastMergeFailureReason() ?? ''; }
     catch { return ''; }
+  }
+
+  // ═══ ADR-009 Orphan Recovery ═══════════════════════════════════════
+  /** Read-only classifier. Returns null if the WASM build doesn't expose it. */
+  classifyOrphans(): OrphanReport | null {
+    if (!this.engine?.classifyOrphans) return null;
+    try {
+      const json = this.engine.classifyOrphans();
+      if (!json) return null;
+      return JSON.parse(json) as OrphanReport;
+    } catch (e) {
+      this.recordBridgeError('classifyOrphans', e);
+      return null;
+    }
+  }
+
+  /** Apply or preview the recovery plan. `dryRun=true` rolls back. */
+  applyOrphanRecovery(
+    plan: OrphanRecoveryPlan,
+    dryRun: boolean,
+  ): OrphanRecoveryResult | null {
+    if (!this.engine?.applyOrphanRecovery) return null;
+    if (!dryRun) this.markDirty();
+    try {
+      const json = this.engine.applyOrphanRecovery(JSON.stringify(plan), dryRun);
+      if (!json) return null;
+      return JSON.parse(json) as OrphanRecoveryResult;
+    } catch (e) {
+      this.recordBridgeError('applyOrphanRecovery', e);
+      return null;
+    }
   }
 
   /**

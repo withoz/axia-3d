@@ -50,7 +50,7 @@ pub struct Scene {
     /// All XIA entities in the scene
     pub xias: HashMap<XiaId, Xia>,
     /// Reverse index: FaceId → XiaId (O(1) lookup)
-    face_to_xia: HashMap<FaceId, XiaId>,
+    pub(crate) face_to_xia: HashMap<FaceId, XiaId>,
     /// Next XIA ID counter
     next_xia_id: u32,
     /// Transaction manager for undo/redo

@@ -43,6 +43,60 @@ export class FileManager {
     this._onFileChangeCallbacks.forEach(cb => cb());
   }
 
+  /**
+   * ADR-009 Smart Auto — after loading a file, classify any orphan faces
+   * and automatically apply C1/C2 recovery. C3 cases surface a manual-
+   * menu hint. User can opt out via `localStorage.axia:autorecover-orphans`.
+   */
+  private autoRecoverOrphansIfAny(): void {
+    try {
+      const pref = localStorage.getItem('axia:autorecover-orphans');
+      if (pref === 'off') return;
+    } catch { /* no localStorage in test env */ }
+
+    if (!this.bridge.classifyOrphans) return;
+    const report = this.bridge.classifyOrphans();
+    if (!report) return;
+    if (report.total_orphans === 0) return;
+
+    const c1 = report.c1_count;
+    const c2 = report.c2_count;
+    const c3 = report.c3_count;
+
+    // Nothing automatable.
+    if (c1 === 0 && c2 === 0) {
+      if (c3 > 0) {
+        Toast.warning(
+          `모호한 Orphan ${c3}건 발견. '정리 → Orphan 수동 복구' 메뉴 참고`,
+          4000,
+        );
+      }
+      return;
+    }
+
+    // Apply C1 + C2 automatically.
+    const result = this.bridge.applyOrphanRecovery(
+      { apply_c1: true, apply_c2: true, c3_decisions: [] },
+      /*dryRun*/ false,
+    );
+    if (!result || result.error) {
+      Toast.warning(
+        `Orphan 자동 복구 실패: ${result?.error ?? '알 수 없음'} (원본 유지)`,
+        4000,
+      );
+      return;
+    }
+
+    const autoFaces = result.faces_absorbed + result.faces_in_new_xias;
+    const newXias = result.xias_created.length;
+    let msg = `레거시 파일: ${autoFaces}개 face를 ${newXias}개 XIA로 자동 복구됨 · Ctrl+Z로 취소`;
+    if (c3 > 0) {
+      msg += `\n(모호한 Orphan ${c3}건은 '정리 → Orphan 수동 복구' 메뉴로 처리)`;
+    }
+    Toast.info(msg, 5000);
+    debugLog('[FileManager] auto-recovered orphans:', result);
+  }
+
   /** Set material library reference for serialization */
   setMaterialLibrary(lib: any): void {
     this.materialLibrary = lib;
@@ -188,6 +242,7 @@ export class FileManager {
             const success = this.bridge.importSnapshot(snapshot);
             if (success) {
               Toast.success(`로드 완료: ${this.currentFileName}`);
+              this.autoRecoverOrphansIfAny();
               this.notifyFileChange();
               resolve(true);
             } else {
@@ -269,6 +324,7 @@ export class FileManager {
       const success = this.bridge.importSnapshot(snapshot);
       if (success) {
         debugLog(`[FileManager] 로드 완료: ${this.currentFileName}`);
+        this.autoRecoverOrphansIfAny();
         this.notifyFileChange();
         return true;
       }

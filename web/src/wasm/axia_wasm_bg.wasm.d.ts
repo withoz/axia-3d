@@ -8,6 +8,7 @@ export const axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: 
 export const axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
+export const axiaengine_applyOrphanRecovery: (a: number, b: number, c: number, d: number, e: number) => void;
 export const axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_arrayRadialFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
 export const axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
@@ -18,6 +19,7 @@ export const axiaengine_bendVerts: (a: number, b: number, c: number, d: number, 
 export const axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_can_redo: (a: number) => number;
 export const axiaengine_can_undo: (a: number) => number;
+export const axiaengine_classifyOrphans: (a: number, b: number) => void;
 export const axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
 export const axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
 export const axiaengine_constraintCount: (a: number) => number;

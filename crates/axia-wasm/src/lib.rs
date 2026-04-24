@@ -12,6 +12,7 @@ use axia_core::commands::CommandResult;
 use axia_geo::{FaceId, EdgeId, VertId};
 use axia_geo::operations::boolean::BoolOp;
 use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all, resolve_iterative, max_residual};
+use axia_core::orphan_recovery::RecoveryPlan;
 
 // Console logging from Rust WASM — debug only (stripped in release builds)
 macro_rules! debug_log {
@@ -2217,6 +2218,56 @@ impl AxiaEngine {
     #[wasm_bindgen(js_name = "lastMergeFailureReason")]
     pub fn last_merge_failure_reason(&self) -> String {
         self.last_merge_failure.clone()
+    }
+
+    // ========================================================================
+    // ADR-009 — Orphan Face Recovery
+    // ========================================================================
+
+    /// Read-only classifier. Returns JSON-serialised `OrphanReport`.
+    /// See ADR-009 for category definitions (C1 / C2 / C3).
+    #[wasm_bindgen(js_name = "classifyOrphans")]
+    pub fn classify_orphans(&self) -> String {
+        let report = self.scene.classify_orphans();
+        serde_json::to_string(&report).unwrap_or_else(|e| {
+            format!("{{\"error\":\"{}\"}}", e)
+        })
+    }
+
+    /// Apply or preview an orphan-recovery plan. Wrapped in a single undo
+    /// frame on apply; preview rolls back to the exact prior snapshot.
+    ///
+    /// `plan_json` — `RecoveryPlan` serialised as JSON.
+    /// `dry_run`   — true = preview (always rolls back); false = apply.
+    ///
+    /// Returns `RecoveryResult` serialised as JSON.
+    #[wasm_bindgen(js_name = "applyOrphanRecovery")]
+    pub fn apply_orphan_recovery(&mut self, plan_json: &str, dry_run: bool) -> String {
+        let plan: RecoveryPlan = match serde_json::from_str(plan_json) {
+            Ok(p) => p,
+            Err(e) => return format!("{{\"error\":\"invalid plan JSON: {}\"}}", e),
+        };
+
+        if dry_run {
+            let result = self.scene.preview_orphan_recovery(&plan);
+            self.mark_topology_changed();
+            self.invalidate_cache();
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+
+        // Apply — single undo frame.
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let result = self.scene.apply_orphan_recovery(&plan);
+        if result.error.is_some() {
+            self.scene.transactions.cancel();
+        } else {
+            self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+            self.scene.transactions.commit();
+        }
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        serde_json::to_string(&result).unwrap_or_default()
     }
 
     /// Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.

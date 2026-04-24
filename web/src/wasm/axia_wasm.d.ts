@@ -46,6 +46,16 @@ export class AxiaEngine {
      */
     analyzeMergeCandidatesTol(face_ids: Uint32Array, angle_tol_deg: number): string;
     /**
+     * Apply or preview an orphan-recovery plan. Wrapped in a single undo
+     * frame on apply; preview rolls back to the exact prior snapshot.
+     *
+     * `plan_json` — `RecoveryPlan` serialised as JSON.
+     * `dry_run`   — true = preview (always rolls back); false = apply.
+     *
+     * Returns `RecoveryResult` serialised as JSON.
+     */
+    applyOrphanRecovery(plan_json: string, dry_run: boolean): string;
+    /**
      * Linear array — create `count` translated copies of the given
      * faces, each shifted by `offset · k` for k = 1..=count. Returns
      * the new FaceIds in copy-major, source-order.
@@ -126,6 +136,11 @@ export class AxiaEngine {
     boolean_op(faces_a: Uint32Array, faces_b: Uint32Array, op: string): string;
     can_redo(): boolean;
     can_undo(): boolean;
+    /**
+     * Read-only classifier. Returns JSON-serialised `OrphanReport`.
+     * See ADR-009 for category definitions (C1 / C2 / C3).
+     */
+    classifyOrphans(): string;
     /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
@@ -837,6 +852,7 @@ export interface InitOutput {
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly axiaengine_applyOrphanRecovery: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_arrayRadialFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
@@ -847,6 +863,7 @@ export interface InitOutput {
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
+    readonly axiaengine_classifyOrphans: (a: number, b: number) => void;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
