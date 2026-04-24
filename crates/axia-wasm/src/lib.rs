@@ -1902,7 +1902,7 @@ impl AxiaEngine {
         soft_on_fail: bool,
     ) -> Vec<i32> {
         if face_ids.is_empty() && edge_ids.is_empty() {
-            return vec![0, 0, 0, 0, 0];
+            return vec![0, 0, 0, 0, 0, 0];
         }
 
         self.scene.transactions.begin();
@@ -1913,7 +1913,50 @@ impl AxiaEngine {
         let mut cascaded_edges: i32 = 0;
         let mut softened: i32 = 0;
         let mut synthesized: i32 = 0;
+        let mut desolidified: i32 = 0;
         let mut all_removed_faces: Vec<FaceId> = Vec::new();
+
+        // ── Phase C (ADR-008 Axiom 5 — Surface↔Solid merge): snapshot which
+        // connected face-components are currently closed 2-manifold solids.
+        // After the erase pass we re-evaluate the same face sets and count
+        // those that went from solid → open, so the JS layer can show a
+        // "solid → surface" Toast.
+        //
+        // We snapshot by representative seed face + full component face list
+        // (so after faces get removed/merged, we can rebuild the post list
+        // by dropping gone faces and adding any merged survivors).
+        let mut pre_solid_components: Vec<(FaceId, Vec<FaceId>)> = Vec::new();
+        {
+            use std::collections::HashSet as StdHashSet;
+            let mut seen_seed: StdHashSet<FaceId> = StdHashSet::new();
+
+            // Every face adjacent to any erase-target edge or direct face id.
+            let mut candidate_seeds: Vec<FaceId> = Vec::new();
+            for &eid_raw in edge_ids {
+                let eid = EdgeId::new(eid_raw);
+                if self.scene.mesh.edges.contains(eid) {
+                    let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+                    candidate_seeds.extend(faces);
+                }
+            }
+            for &fid_raw in face_ids {
+                candidate_seeds.push(FaceId::new(fid_raw));
+            }
+
+            for seed in candidate_seeds {
+                if !self.scene.mesh.faces.contains(seed) { continue; }
+                if seen_seed.contains(&seed) { continue; }
+                // BFS the connected component — use raw id path via helper.
+                let component_raw = self.get_connected_faces(seed.raw());
+                let component: Vec<FaceId> = component_raw.iter()
+                    .map(|&r| FaceId::new(r)).collect();
+                for f in &component { seen_seed.insert(*f); }
+                let info = self.scene.mesh.face_set_manifold_info(&component);
+                if info.is_closed_solid {
+                    pre_solid_components.push((seed, component));
+                }
+            }
+        }
 
         // Phase B step 2 (ADR-008 Axiom 6): pre-snapshot which edges, in the
         // neighbourhood of this erase, currently have a face on at least one
@@ -2094,6 +2137,33 @@ impl AxiaEngine {
             }
         }
 
+        // ── Phase C (ADR-008 Axiom 5): count de-solidified components ──
+        // For each previously-solid component, rebuild its surviving face
+        // list (exclude any face removed during this pass) and re-check. If
+        // the surviving set is no longer a closed 2-manifold, that component
+        // was de-solidified. The JS layer uses this count to emit a Toast
+        // per ADR-008: "solid가 붕괴(de-solidify)되어 surface로 남음".
+        {
+            use std::collections::HashSet as StdHashSet;
+            let removed_set: StdHashSet<FaceId> = all_removed_faces.iter().copied().collect();
+            for (_seed, pre_faces) in &pre_solid_components {
+                let survivors: Vec<FaceId> = pre_faces.iter()
+                    .filter(|f| !removed_set.contains(f))
+                    .filter(|f| self.scene.mesh.faces.contains(**f))
+                    .copied()
+                    .collect();
+                if survivors.len() < 4 {
+                    // Can't form a closed solid below tetrahedron.
+                    desolidified += 1;
+                    continue;
+                }
+                let info = self.scene.mesh.face_set_manifold_info(&survivors);
+                if !info.is_closed_solid {
+                    desolidified += 1;
+                }
+            }
+        }
+
         self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
         self.scene.transactions.commit();
         self.mark_topology_changed();
@@ -2107,7 +2177,7 @@ impl AxiaEngine {
             self.last_merge_failure.clear();
         }
 
-        vec![merged, cascaded_faces, cascaded_edges, softened, synthesized]
+        vec![merged, cascaded_faces, cascaded_edges, softened, synthesized, desolidified]
     }
 
     /// Diagnostic — first merge failure reason from the most recent

@@ -668,7 +668,7 @@ export class WasmBridge {
     edgeIds: number[],
     angleTolDeg: number,
     cascadeOnly: boolean,
-  ): { merged: number; cascadedFaces: number; cascadedEdges: number; softened: number; synthesized: number } | null {
+  ): { merged: number; cascadedFaces: number; cascadedEdges: number; softened: number; synthesized: number; desolidified: number } | null {
     if (!this.engine?.batchEraseEdgesWithMerge) return null;
     this.markDirty();
     try {
@@ -684,6 +684,7 @@ export class WasmBridge {
         cascadedEdges: out[2] ?? 0,
         softened: out[3] ?? 0,
         synthesized: out[4] ?? 0,
+        desolidified: out[5] ?? 0,
       };
     } catch (e) {
       this.recordBridgeError('batchEraseEdgesWithMerge', e);
@@ -697,7 +698,7 @@ export class WasmBridge {
     edgeIds: number[],
     angleTolDeg: number,
     cascadeOnly: boolean,
-  ): { merged: number; cascadedFaces: number; cascadedEdges: number; softened: number; synthesized: number } | null {
+  ): { merged: number; cascadedFaces: number; cascadedEdges: number; softened: number; synthesized: number; desolidified: number } | null {
     if (!this.engine?.batchEraseEdgesSoftFallback) {
       // Fallback to the legacy destructive path if new API not available.
       return this.batchEraseEdgesWithMerge(faceIds, edgeIds, angleTolDeg, cascadeOnly);
@@ -716,6 +717,7 @@ export class WasmBridge {
         cascadedEdges: out[2] ?? 0,
         softened: out[3] ?? 0,
         synthesized: out[4] ?? 0,
+        desolidified: out[5] ?? 0,
       };
     } catch (e) {
       this.recordBridgeError('batchEraseEdgesSoftFallback', e);

@@ -122,6 +122,8 @@ export class EraseTool implements ITool {
     let cascadedFaces = faces.length;
     let cascadedEdges = edges.length;
     let softenedCount = 0;
+    let synthesizedCount = 0;
+    let desolidifiedCount = 0;
     let ok = true;
 
     if (res) {
@@ -129,6 +131,8 @@ export class EraseTool implements ITool {
       cascadedEdges = res.cascadedEdges;
       cascadedFaces = res.cascadedFaces;
       softenedCount = res.softened;
+      synthesizedCount = res.synthesized;
+      desolidifiedCount = res.desolidified;
     } else {
       // Older WASM without batchEraseEdgesWithMerge — fall back to previous logic.
       const edgesToCascade: number[] = [];
@@ -158,14 +162,26 @@ export class EraseTool implements ITool {
           debugLog(`[Erase] first merge failure: ${reason} (tol=${tol}°)`);
         }
       }
-      if (total > 1 || mergedCount > 0 || softenedCount > 0) {
+      if (total > 1 || mergedCount > 0 || softenedCount > 0 || synthesizedCount > 0) {
         const parts: string[] = [];
         if (mergedCount > 0) parts.push(`${mergedCount}개 면 통합`);
+        if (synthesizedCount > 0) parts.push(`${synthesizedCount}개 면 자동 생성`);
         if (softenedCount > 0) parts.push(`${softenedCount}개 엣지 숨김 (면 유지)`);
         if (cascadedFaces > 0) parts.push(`${cascadedFaces}개 면 삭제`);
         if (cascadedEdges > 0) parts.push(`${cascadedEdges}개 엣지 삭제`);
         if (cascadeOnly) parts.push('(Shift: 강제 삭제)');
         Toast.info(parts.join(', '), 2500);
+      }
+
+      // Phase C (ADR-008 Axiom 5): dedicated notice when a solid volume
+      // lost its closed-ness as a result of this erase. Separate toast so
+      // the user sees the semantic shift (solid → surface) independently
+      // from the numeric per-entity summary above.
+      if (desolidifiedCount > 0) {
+        const label = desolidifiedCount === 1
+          ? '솔리드 1개가 서피스로 전환됨 (닫힌 볼륨 해체)'
+          : `솔리드 ${desolidifiedCount}개가 서피스로 전환됨 (닫힌 볼륨 해체)`;
+        Toast.warning(label, 3500);
       }
     } else {
       Toast.error('삭제에 실패했습니다');
