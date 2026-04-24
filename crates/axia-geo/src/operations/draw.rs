@@ -95,6 +95,19 @@ impl Mesh {
 
         // CCW winding when viewed from normal direction → normal points outward
         let face_id = self.add_face(&[v0, v3, v2, v1], material)?;
+
+        // 2026-04-24 (ADR-008 Axiom 2): user-drawn RECT edges are HARD so
+        // they render between coplanar faces (e.g. after B1 hole-promote
+        // puts the rect next to an outer ring on the same plane). Mirrors
+        // the mark_edge_hard call exec_draw_line makes per LINE — keeps
+        // LINE↔RECT edge parity regardless of which code path produced
+        // the rect.
+        if let Ok(edges) = self.face_outer_edges(face_id) {
+            for eid in edges {
+                self.mark_edge_hard(eid);
+            }
+        }
+
         // ADR-007 — draw 후 invariants 검증
         self.debug_verify_invariants();
         Ok((face_id, [v0, v3, v2, v1]))
@@ -150,6 +163,14 @@ impl Mesh {
         }
 
         let face_id = self.add_face(&verts, material)?;
+
+        // 2026-04-24 (ADR-008 Axiom 2): same HARD-edge policy as draw_rectangle.
+        if let Ok(edges) = self.face_outer_edges(face_id) {
+            for eid in edges {
+                self.mark_edge_hard(eid);
+            }
+        }
+
         // ADR-007 — draw 후 invariants 검증
         self.debug_verify_invariants();
         Ok((face_id, verts))
