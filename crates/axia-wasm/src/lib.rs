@@ -2188,6 +2188,78 @@ impl AxiaEngine {
         self.last_merge_failure.clone()
     }
 
+    /// Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.
+    ///
+    /// For 2+ faces the user selected and explicitly asked to "merge" even
+    /// though they are not coplanar, we don't actually fuse them into a
+    /// single polygon (that would require non-planar face regions, which
+    /// violates ADR-007's Invariant 3). Instead we identify every edge
+    /// interior to the selection — edges whose radial loop contains two or
+    /// more of the selected faces — and mark those edges SOFT. The faces
+    /// stay distinct topologically, but the renderer hides the internal
+    /// seams so the selection reads as one continuous smooth surface.
+    ///
+    /// Returns the number of edges softened. Wrapped in a single undo
+    /// transaction. If fewer than two selected faces share any edge, the
+    /// return value is 0 (caller can surface a Toast).
+    #[wasm_bindgen(js_name = "softenInternalEdges")]
+    pub fn soften_internal_edges(&mut self, face_ids: &[u32]) -> i32 {
+        use std::collections::HashSet as StdHashSet;
+        if face_ids.len() < 2 { return 0; }
+        let selected: StdHashSet<FaceId> = face_ids.iter()
+            .map(|&r| FaceId::new(r))
+            .filter(|f| self.scene.mesh.faces.contains(*f))
+            .collect();
+        if selected.len() < 2 { return 0; }
+
+        // Find every edge where ≥2 of the selected faces meet. Walk the
+        // radial loop for every active topological edge once.
+        let candidate_edges: Vec<EdgeId> = self.scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.class().is_topological())
+            .map(|(id, _)| id)
+            .collect();
+
+        let mut to_soften: Vec<EdgeId> = Vec::new();
+        for eid in candidate_edges {
+            let Some(edge) = self.scene.mesh.edges.get(eid) else { continue; };
+            let start = edge.any_he();
+            if start.is_null() { continue; }
+            let mut count = 0usize;
+            let mut he = start;
+            loop {
+                match self.scene.mesh.hes.get(he) {
+                    Some(h) => {
+                        let f = h.face();
+                        if !f.is_null() && selected.contains(&f) {
+                            count += 1;
+                            if count >= 2 { break; }
+                        }
+                        let next = h.next_rad();
+                        if next.is_null() || next == start { break; }
+                        he = next;
+                    }
+                    None => break,
+                }
+            }
+            if count >= 2 {
+                to_soften.push(eid);
+            }
+        }
+
+        if to_soften.is_empty() { return 0; }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        for eid in &to_soften {
+            self.scene.mesh.mark_edge_soft(*eid);
+        }
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        to_soften.len() as i32
+    }
+
     /// DCEL 위상(topology) 기반으로 seedFace에 연결된 모든 face를 BFS 탐색.
     /// half-edge의 radial partner(next_rad)를 통해 edge를 공유하는 인접 face를 찾습니다.
     /// 좌표 비교 없이 순수 위상 구조만 사용 → 다른 Volume의 face가 섞이지 않음.

@@ -80,6 +80,11 @@ type AxiaEngineExtended = AxiaEngine & {
   ): Int32Array;
   previewEdgeEraseMerge?(edgeId: number, angleTolDeg: number): Uint32Array;
   lastMergeFailureReason?(): string;
+  /** Phase D (ADR-008 Axiom 9 row 3): non-coplanar forced merge via SOFT
+   *  edges. Hides interior edges between the selected faces so the group
+   *  reads as one continuous surface; topology is preserved. Returns the
+   *  count of edges softened. */
+  softenInternalEdges?(faceIds: Uint32Array): number;
   // Constraint Solver Level 1 (vertex-level ops + edge/vertex queries)
   translateVerts?(vertIds: Uint32Array, dx: number, dy: number, dz: number): boolean;
   rotateVerts?(vertIds: Uint32Array, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, angleDeg: number): boolean;
@@ -689,6 +694,21 @@ export class WasmBridge {
     } catch (e) {
       this.recordBridgeError('batchEraseEdgesWithMerge', e);
       return null;
+    }
+  }
+
+  /** Phase D (ADR-008 Axiom 9 row 3): non-coplanar forced merge.
+   *  Marks edges interior to `faceIds` as SOFT (hidden in render, topology
+   *  intact). Returns the number of edges softened, or 0 if the selected
+   *  faces share no interior edge (caller should Toast). */
+  softenInternalEdges(faceIds: number[]): number {
+    if (!this.engine?.softenInternalEdges) return 0;
+    this.markDirty();
+    try {
+      return this.engine.softenInternalEdges(new Uint32Array(faceIds));
+    } catch (e) {
+      this.recordBridgeError('softenInternalEdges', e);
+      return 0;
     }
   }
 

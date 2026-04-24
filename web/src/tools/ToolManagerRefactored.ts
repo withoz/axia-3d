@@ -322,7 +322,7 @@ export class ToolManager {
    */
   private static readonly BUSY_BLOCKED_ACTIONS = new Set([
     'delete', 'flip-faces', 'merge-faces', 'merge-xia-coplanar', 'merge-as-hole',
-    'merge-faces-geometric',
+    'merge-faces-geometric', 'merge-faces-force',
     'synthesize-faces',
     'mirror-x', 'mirror-y', 'mirror-z',
     'revolve-x', 'revolve-y', 'revolve-z',
@@ -346,6 +346,7 @@ export class ToolManager {
     'flip-faces': '면 반전',
     'merge-faces': '면 통합',
     'merge-xia-coplanar': 'XIA 내 coplanar 면 일괄 통합',
+    'merge-faces-force': '비평면 강제 통합 (내부 엣지 숨김)',
     'merge-as-hole': '내부 면을 구멍으로 합치기',
     'synthesize-faces': '자유 엣지 → 면 합성',
     'redo': '다시 실행',
@@ -643,6 +644,7 @@ export class ToolManager {
         if (analysis.nonCoplanar > 0) {
           const tolHint = tol === 0.5 ? ' (mergetol 2 명령으로 허용치 확장 가능)' : '';
           lines.push(`• ${analysis.nonCoplanar}쌍이 평면 불일치${tolHint}`);
+          lines.push('  → "강제 통합"(ADR-008 Axiom 9) 컨텍스트 메뉴로 내부 엣지만 숨기고 비평면 상태로 결합 가능');
         }
         if (analysis.ambiguous > 0) {
           lines.push(`• ${analysis.ambiguous}쌍이 C-slit 형태 (hole 필요 — 미지원)`);
@@ -726,6 +728,32 @@ export class ToolManager {
           4000,
         );
         debugLog('[Action] merge-faces-geometric: all attempts failed', lastError);
+      }
+    } else if (action === 'merge-faces-force') {
+      // Phase D (ADR-008 Axiom 9 row 3): non-coplanar forced merge.
+      //   Fuses a selection of non-coplanar faces into a single visual
+      //   surface by hiding (softening) every edge interior to the
+      //   selection. Topology is preserved — ADR-007's planarity
+      //   invariant stays intact because we never construct a non-planar
+      //   face. The result is a "polygon-mesh region" per ADR-008.
+      const faces = this.selection.getSelectedFaces();
+      if (faces.length < 2) {
+        Toast.warning('강제 통합은 2개 이상의 면을 선택해야 합니다', 3000);
+        return;
+      }
+      const softened = this.bridge.softenInternalEdges(faces);
+      if (softened > 0) {
+        this.syncMesh();
+        Toast.info(
+          `${faces.length}개 면을 하나의 폴리곤 서피스로 결합 (${softened}개 내부 엣지 숨김)`,
+          3000,
+        );
+        debugLog('[Action] merge-faces-force:', softened);
+      } else {
+        Toast.warning(
+          '강제 통합 실패 — 선택된 면들이 엣지를 공유하지 않습니다. 인접한 면을 함께 선택해주세요.',
+          3500,
+        );
       }
     } else if (action === 'merge-xia-coplanar') {
       // B3: 선택된 XIA의 모든 face 중 인접 coplanar 쌍 일괄 병합.
