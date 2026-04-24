@@ -1157,6 +1157,7 @@ impl Mesh {
                 if outer == inner { continue; }
                 let n_dot = og.normal.dot(ig.normal).abs();
                 if n_dot < 0.99 { continue; }
+                // 평면 거리 (coplanar 체크)
                 let v = ig.centroid_3d - og.origin;
                 let dist = v.dot(og.normal).abs();
                 let mut max_chord_sq = 0.0_f64;
@@ -1166,42 +1167,25 @@ impl Mesh {
                 }
                 let plane_tol = (max_chord_sq.sqrt() * 1e-4).max(1.0);
                 if dist > plane_tol { continue; }
-                let px = v.dot(og.e1);
-                let py = v.dot(og.e2);
-                if !point_in(px, py, &og.poly_2d) { continue; }
 
-                // 2026-04-24 bug fix (M1 partial-overlap):
-                //   centroid-in-poly 만 보면 outer가 L자 형태로 inner를 "감싸는"
-                //   경우 — L자의 centroid가 inner 사각형 내부로 떨어져 inner
-                //   쪽이 outer로 오판되고 dissolve 된다. 추가 검증: inner의
-                //   모든 boundary vertex가 outer polygon 내부(또는 거의 경계
-                //   위)여야 한다.
-                let mut all_inner_in_outer = true;
-                let inner_boundary_verts_vec: Vec<VertId> = self.collect_loop_verts(
-                    self.faces[inner].outer().start
-                ).unwrap_or_default();
-                for &iv in &inner_boundary_verts_vec {
-                    let Ok(ip) = self.vertex_pos(iv) else { all_inner_in_outer = false; break; };
-                    let iv_vec = ip - og.origin;
-                    let ix = iv_vec.dot(og.e1);
-                    let iy = iv_vec.dot(og.e2);
-                    if !point_in(ix, iy, &og.poly_2d) {
-                        // boundary 위(공유 vertex) 도 허용: outer poly 의
-                        // 어떤 vertex 와 거의 같으면 inside 간주
-                        let mut on_edge = false;
-                        for &(x, y) in &og.poly_2d {
-                            if (x - ix).abs() < 1e-3 && (y - iy).abs() < 1e-3 {
-                                on_edge = true;
-                                break;
-                            }
-                        }
-                        if !on_edge {
-                            all_inner_in_outer = false;
-                            break;
-                        }
-                    }
+                // 2026-04-24 Phase 3c (FreeDesignX 포팅):
+                //   기존 centroid-only / 2D projection 기반 containment 체크를
+                //   `polygon_geom::polygon_contains_polygon` 로 교체. 엄밀
+                //   내부점(ear-clipping) + 모든 vertex 포함 + winding 각합으로
+                //   L-shape wrap 오판을 제거.
+                let outer_pts: Vec<DVec3> = self.collect_loop_verts(self.faces[outer].outer().start)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|&v| self.verts.get(v).map(|vx| vx.pos()))
+                    .collect();
+                let inner_pts: Vec<DVec3> = self.collect_loop_verts(self.faces[inner].outer().start)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|&v| self.verts.get(v).map(|vx| vx.pos()))
+                    .collect();
+                if !crate::operations::polygon_geom::polygon_contains_polygon(&outer_pts, &inner_pts) {
+                    continue;
                 }
-                if !all_inner_in_outer { continue; }
 
                 // Connector 검사: outer boundary vertex ↔ inner boundary vertex 엣지
                 let inner_boundary_verts: FxHashSet<VertId> = self.collect_loop_verts(
