@@ -577,6 +577,32 @@ pub fn split_face_by_chain(
     ensure!(face_a_verts.len() >= 3, "face A has <3 verts — degenerate split");
     ensure!(face_b_verts.len() >= 3, "face B has <3 verts — degenerate split");
 
+    // Fix 3 (2026-04-24) — pre-flight validity guard.
+    //
+    // If either sub-face's vertex sequence has duplicates, the resulting
+    // outer boundary would be self-intersecting (figure-8 topology).
+    // That happens when the original face has a hole loop that shares
+    // a valence≥3 vertex with the chain — the boundary walk picks up
+    // hole HEs through the shared vertex. Rather than build an invalid
+    // polygon, refuse the split and leave the original face intact.
+    // Caller (Step 4.9 M1) treats Err as "no split, move on".
+    let has_dup_a = {
+        let mut seen = std::collections::HashSet::new();
+        face_a_verts.iter().any(|v| !seen.insert(*v))
+    };
+    let has_dup_b = {
+        let mut seen = std::collections::HashSet::new();
+        face_b_verts.iter().any(|v| !seen.insert(*v))
+    };
+    if has_dup_a || has_dup_b {
+        bail!(
+            "split_face_by_chain: sub-face boundary has duplicate vertex — \
+             chain interacts with a hole loop; aborting to avoid self-intersection \
+             (face_a_dup={} face_b_dup={})",
+            has_dup_a, has_dup_b,
+        );
+    }
+
     // Soft-remove the old face. Preserves HE next/prev so add_face_with_holes
     //   can rediscover the free HEs. Temporarily clears inners so the
     //   soft_remove doesn't touch hole HEs (we'll reattach to whichever

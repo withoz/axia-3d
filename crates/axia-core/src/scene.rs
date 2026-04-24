@@ -932,8 +932,23 @@ impl Scene {
             for inner_fid in candidates {
                 if !self.mesh.faces.contains(inner_fid) { continue; }
                 if let Some(outer_fid) = self.find_enclosing_face(inner_fid) {
-                    if self.promote_face_to_hole(outer_fid, inner_fid).is_ok() {
-                        self.unregister_face_from_xia(outer_fid);
+                    if let Ok(new_outer) = self.promote_face_to_hole(outer_fid, inner_fid) {
+                        // Fix 1 (2026-04-24): transfer old face's XIA
+                        //   membership to the new ring face so the container
+                        //   XIA stays connected to its geometry. Previously
+                        //   unregister_face_from_xia dropped the old face
+                        //   and left the new ring as an orphan → selection /
+                        //   push-pull on the container returned empty.
+                        if let Some(old_xia) = self.face_to_xia.remove(&outer_fid) {
+                            if let Some(xia) = self.xias.get_mut(&old_xia) {
+                                xia.face_ids.retain(|&f| f != outer_fid);
+                                xia.face_ids.push(new_outer);
+                            }
+                            self.face_to_xia.insert(new_outer, old_xia);
+                        } else {
+                            // No XIA owned the old face — just forget it.
+                            self.unregister_face_from_xia(outer_fid);
+                        }
                     }
                 }
             }
@@ -1708,8 +1723,24 @@ impl Scene {
                 match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
                     Ok((inner_fid, _verts)) => {
                         // Run B1 promotion directly against the known container.
-                        let _ = self.promote_face_to_hole(container_fid, inner_fid);
-                        self.unregister_face_from_xia(container_fid);
+                        // Fix 1 (2026-04-24): hand the container XIA over to
+                        //   the ring that promote_face_to_hole built, same
+                        //   as the Step 4.8 branch above. Keeps the
+                        //   container face pickable / editable after the
+                        //   interior RECT lands on top of it.
+                        if let Ok(new_outer) = self.promote_face_to_hole(container_fid, inner_fid) {
+                            if let Some(old_xia) = self.face_to_xia.remove(&container_fid) {
+                                if let Some(xia) = self.xias.get_mut(&old_xia) {
+                                    xia.face_ids.retain(|&f| f != container_fid);
+                                    xia.face_ids.push(new_outer);
+                                }
+                                self.face_to_xia.insert(new_outer, old_xia);
+                            } else {
+                                self.unregister_face_from_xia(container_fid);
+                            }
+                        } else {
+                            self.unregister_face_from_xia(container_fid);
+                        }
                         let xia_id = self.create_xia("Rectangle".to_string());
                         if let Some(xia) = self.xias.get_mut(&xia_id) {
                             xia.position = center;
