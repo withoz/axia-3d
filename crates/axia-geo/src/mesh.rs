@@ -475,12 +475,41 @@ impl Mesh {
         let coplanar_tol = (len * 1e-4).max(1e-3);
         let endpoint_tol = SPATIAL_HASH_CELL * 1.5;
 
+        // AABB of the new line, expanded by tolerance — any existing edge
+        // whose own AABB misses this one entirely cannot be collinear with
+        // it. This early-rejects the common case (most edges in the scene
+        // nowhere near the line being drawn), keeping this per-drawLine
+        // pass near-constant on average instead of O(E) strict.
+        let aabb_tol = coplanar_tol.max(endpoint_tol);
+        let (min_x, max_x) = if start.x < end.x { (start.x - aabb_tol, end.x + aabb_tol) }
+                             else              { (end.x - aabb_tol, start.x + aabb_tol) };
+        let (min_y, max_y) = if start.y < end.y { (start.y - aabb_tol, end.y + aabb_tol) }
+                             else              { (end.y - aabb_tol, start.y + aabb_tol) };
+        let (min_z, max_z) = if start.z < end.z { (start.z - aabb_tol, end.z + aabb_tol) }
+                             else              { (end.z - aabb_tol, start.z + aabb_tol) };
+
         let mut splits: Vec<(EdgeId, DVec3)> = Vec::new();
         for (edge_id, edge) in self.edges.iter() {
             if !edge.is_active() { continue; }
             if !edge.class().is_topological() { continue; }
             let va = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
             let vb = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
+
+            // AABB early-reject — separating-axis test between the two
+            //   edges' AABBs. Two AABBs are disjoint iff one is strictly
+            //   to the left/right / below/above / front/back of the other
+            //   on at least one axis. Any disjoint pair cannot be
+            //   collinear, so we can skip them cheaply.
+            let (ex_min_x, ex_max_x) = if va.x < vb.x { (va.x, vb.x) } else { (vb.x, va.x) };
+            let (ex_min_y, ex_max_y) = if va.y < vb.y { (va.y, vb.y) } else { (vb.y, va.y) };
+            let (ex_min_z, ex_max_z) = if va.z < vb.z { (va.z, vb.z) } else { (vb.z, va.z) };
+            if ex_max_x < min_x || ex_min_x > max_x
+                || ex_max_y < min_y || ex_min_y > max_y
+                || ex_max_z < min_z || ex_min_z > max_z
+            {
+                continue;
+            }
+
             let ab = vb - va;
             let ab_len = ab.length();
             if ab_len < 1e-9 { continue; }
@@ -948,27 +977,38 @@ impl Mesh {
             let dy = (max_y - min_y).max(1e-3) * 0.05;
 
             // (B) Local-containment — AABB 내부의 face centroid만 enclose 검사.
-            // 단, cycle이 face보다 작으면 물리적으로 enclose 불가 → skip (outer rect 안에
-            // inner rect 그리는 경우 outer centroid가 inner 내부라도 inner가 outer를
-            // 감싸는 건 아님).
-            let mut encloses_existing = false;
-            for &(c, face_area) in &face_info {
-                if face_area >= area { continue; } // 작은 cycle은 큰 face를 enclose 못 함
-                // 평면 거리 (같은 평면의 face만 의미 있음)
-                let d = (c - p0).dot(normal).abs();
-                if d > tol * 10.0 { continue; }
-                let cx = (c - p0).dot(e1);
-                let cy = (c - p0).dot(e2);
-                // Local AABB prune
-                if cx < min_x - dx || cx > max_x + dx { continue; }
-                if cy < min_y - dy || cy > max_y + dy { continue; }
-                // 최종 point-in-polygon
-                if point_in_poly_2d(cx, cy, &poly_2d) {
-                    encloses_existing = true;
-                    break;
+            //
+            // 2026-04-24 (ADR-008 Axiom 7 확장): cycle의 엣지 중 하나라도
+            // "완전 free"(어떤 face에도 속하지 않음)이면 사용자가 방금 그린
+            // outer 엣지로 판단 → 기존 inner face를 감싸도 허용.
+            // 반대로 모든 엣지가 이미 한쪽이라도 face를 가진 상태라면
+            // 기존 outer 재생성 의심 → reject.
+            let has_free_edge = verts.iter().enumerate().any(|(i, _)| {
+                let va = verts[i];
+                let vb = verts[(i + 1) % verts.len()];
+                match self.find_edge(va, vb) {
+                    Some(eid) => self.is_edge_completely_free(eid),
+                    None => false,
                 }
+            });
+
+            if !has_free_edge {
+                let mut encloses_existing = false;
+                for &(c, face_area) in &face_info {
+                    if face_area >= area { continue; }
+                    let d = (c - p0).dot(normal).abs();
+                    if d > tol * 10.0 { continue; }
+                    let cx = (c - p0).dot(e1);
+                    let cy = (c - p0).dot(e2);
+                    if cx < min_x - dx || cx > max_x + dx { continue; }
+                    if cy < min_y - dy || cy > max_y + dy { continue; }
+                    if point_in_poly_2d(cx, cy, &poly_2d) {
+                        encloses_existing = true;
+                        break;
+                    }
+                }
+                if encloses_existing { continue; }
             }
-            if encloses_existing { continue; }
 
             // Coplanarity 재검증
             if !self.are_verts_coplanar(verts) { continue; }
@@ -1392,6 +1432,30 @@ impl Mesh {
     /// face merges cannot be topologically flattened (a DCEL face must be
     /// planar), but the user's intent "make this edge disappear" is honoured
     /// by hiding it. Two faces remain but read as one surface.
+    /// Returns true iff every half-edge in the edge's radial loop has a
+    /// null face — i.e. the edge is on no face at all. Used by Phase E
+    /// synthesis to tell apart "freshly drawn" edges (completely free)
+    /// from edges that bound an existing face and would, if part of a
+    /// larger cycle, indicate recreation of a previously-resolved outer.
+    pub fn is_edge_completely_free(&self, edge_id: EdgeId) -> bool {
+        let Some(edge) = self.edges.get(edge_id) else { return false; };
+        if !edge.is_active() { return false; }
+        let start = edge.any_he();
+        if start.is_null() { return false; }
+        let mut he = start;
+        loop {
+            match self.hes.get(he) {
+                Some(h) => {
+                    if !h.face().is_null() { return false; }
+                    let next = h.next_rad();
+                    if next.is_null() || next == start { return true; }
+                    he = next;
+                }
+                None => return false,
+            }
+        }
+    }
+
     pub fn mark_edge_soft(&mut self, edge_id: EdgeId) {
         if !self.edges.contains(edge_id) { return; }
         let he_start = self.edges[edge_id].any_he();

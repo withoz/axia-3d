@@ -663,6 +663,23 @@ export class AxiaEngine {
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
     /**
+     * Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.
+     *
+     * For 2+ faces the user selected and explicitly asked to "merge" even
+     * though they are not coplanar, we don't actually fuse them into a
+     * single polygon (that would require non-planar face regions, which
+     * violates ADR-007's Invariant 3). Instead we identify every edge
+     * interior to the selection — edges whose radial loop contains two or
+     * more of the selected faces — and mark those edges SOFT. The faces
+     * stay distinct topologically, but the renderer hides the internal
+     * seams so the selection reads as one continuous smooth surface.
+     *
+     * Returns the number of edges softened. Wrapped in a single undo
+     * transaction. If fewer than two selected faces share any edge, the
+     * return value is 0 (caller can surface a Toast).
+     */
+    softenInternalEdges(face_ids: Uint32Array): number;
+    /**
      * Edge를 지정 위치에서 split하여 새 vertex를 생성하고 edge를 2개로 나눈다.
      * 반환: 성공 시 새 vertex id (>=0), 실패 시 -1.
      * position이 엣지 선분 밖이면 가까운 쪽으로 clamp.
@@ -928,6 +945,7 @@ export interface InitOutput {
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+    readonly axiaengine_softenInternalEdges: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_subdivideCatmullClark: (a: number) => number;

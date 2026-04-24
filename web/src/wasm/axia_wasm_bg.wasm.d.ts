@@ -116,6 +116,7 @@ export const axiaengine_setConstraintActive: (a: number, b: number, c: number) =
 export const axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
 export const axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+export const axiaengine_softenInternalEdges: (a: number, b: number, c: number) => number;
 export const axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const axiaengine_subdivideCatmullClark: (a: number) => number;

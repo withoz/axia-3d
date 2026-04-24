@@ -208,6 +208,50 @@ fn overlapping_rect_splits_into_subfaces() {
         "Overlapping rects should split (Axiom 7)");
 }
 
+/// Phase E (ADR-008 Axiom 7 확장) — outer rect drawn AFTER inner rect(s).
+/// The outer rect completely encloses the inner(s) with NO shared edges.
+/// Expected: outer face IS created (overlapping with inner faces), and all
+/// inner faces remain intact. Previously this was rejected by the D
+/// resolver's "encloses existing face" filter; now allowed when all cycle
+/// edges are newly drawn.
+#[test]
+fn outer_rect_enclosing_inner_rects_creates_overlapping_faces() {
+    let mut scene = Scene::default();
+
+    // Two inner rects, non-overlapping, far from each other.
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(-300.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 200.0,
+        height: 200.0,
+    });
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(300.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 200.0,
+        height: 200.0,
+    });
+    let inner_faces = scene.mesh.face_count();
+    assert_eq!(inner_faces, 2, "two inner rects → 2 faces");
+
+    // Outer rect enclosing both with no shared edges.
+    let outer = scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 2000.0,
+        height: 1000.0,
+    });
+    assert!(matches!(outer, CommandResult::EntityCreated(_)),
+        "outer rect command must succeed");
+
+    // 3 faces total: 2 inner + 1 outer.
+    assert_eq!(scene.mesh.face_count(), 3,
+        "outer face must synthesize alongside inner (ADR-008 Axiom 7)");
+}
+
 /// Axiom 4 (Q4): 독립 RECT 그리기 → 1 face + 4 edges.
 #[test]
 fn single_rect_produces_one_face() {

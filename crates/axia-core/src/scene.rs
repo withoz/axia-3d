@@ -747,19 +747,40 @@ impl Scene {
                 if seen_loops.iter().any(|s| s == &norm) { break; }
                 seen_loops.push(norm.clone());
                 if self.loop_encloses_existing_face(&loop_verts) {
-                    // 이 루프의 엣지들을 excluded에 추가하고 재탐색
+                    // 2026-04-24 (ADR-008 Axiom 7 확장): 루프의 엣지 중
+                    // 하나라도 현재 HE 중 "radial loop 모든 HE가 face_id
+                    // null"인 상태(완전 free edge)이면 이는 ADR-008 Axiom 7
+                    // 의 outer-encloses-inner 의도 → 생성 허용. 완전 free가
+                    // 아닌 엣지(이미 face를 한쪽이라도 가지고 있는 엣지)만
+                    // 포함된 cycle은 기존 outer 재생성 의심 → 계속 reject.
+                    let mut has_completely_free_edge = false;
                     for i in 0..loop_verts.len() {
                         let va = loop_verts[i];
                         let vb = loop_verts[(i + 1) % loop_verts.len()];
                         if let Some(eid) = self.mesh.find_edge(va, vb) {
-                            if !excluded_edges.contains(&eid) {
-                                excluded_edges.push(eid);
+                            if self.mesh.is_edge_completely_free(eid) {
+                                has_completely_free_edge = true;
+                                break;
                             }
                         }
                     }
-                    // Safety cap
-                    if excluded_edges.len() > 20 { break; }
-                    continue;
+
+                    if !has_completely_free_edge {
+                        // 모든 엣지가 이미 face를 갖고 있음 — 기존 outer 재생성
+                        // 의심 → reject and retry.
+                        for i in 0..loop_verts.len() {
+                            let va = loop_verts[i];
+                            let vb = loop_verts[(i + 1) % loop_verts.len()];
+                            if let Some(eid) = self.mesh.find_edge(va, vb) {
+                                if !excluded_edges.contains(&eid) {
+                                    excluded_edges.push(eid);
+                                }
+                            }
+                        }
+                        if excluded_edges.len() > 20 { break; }
+                        continue;
+                    }
+                    // has completely-free edge — fall through to face creation
                 }
 
                 for i in 0..loop_verts.len() {
