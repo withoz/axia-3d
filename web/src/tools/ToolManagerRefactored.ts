@@ -647,27 +647,60 @@ export class ToolManager {
         Toast.warning(err || hint, 3500);
       }
     } else if (action === 'merge-faces-geometric') {
-      // 2026-04-24 — 크기 다른 coplanar 면 2개를 기하학적으로 병합.
+      // 2026-04-24 — 크기 다른 coplanar 면들을 기하학적으로 병합.
+      //   N개 선택 시 가능한 모든 쌍을 순차 시도해 하나씩 묶어나감.
       //   두 면이 공통 DCEL edge 를 갖지 않더라도 collinear 경계가 겹치면
-      //   polygon-level 으로 병합. 사용자가 "이형 면 merge" 요구한 케이스.
+      //   polygon-level 으로 병합.
       const faces = this.selection.getSelectedFaces();
-      if (faces.length !== 2) {
-        Toast.warning('기하 병합은 정확히 2개의 면을 선택해야 합니다', 3000);
-        return;
-      }
-      const tol = Math.max(getMergeTolerance(), 1.0);  // geometric은 더 관대
-      const result = this.bridge.mergeCoplanarFacesGeometric(faces[0], faces[1], tol);
-      if (result >= 0) {
-        this.syncMesh();
-        this.selection.clearSelection();
-        Toast.info('기하 병합 완료 (크기가 달라도 coplanar면 가능)', 2500);
-        debugLog('[Action] merge-faces-geometric:', result);
-      } else {
-        const err = this.bridge.lastError();
+      debugLog('[merge-faces-geometric] selected faces:', faces);
+      if (faces.length < 2) {
         Toast.warning(
-          err || '기하 병합 실패 — 두 면이 coplanar & 경계가 겹치는지 확인',
+          '기하 병합은 2개 이상의 면을 선택해야 합니다. 현재: ' + faces.length + '개',
           3500,
         );
+        return;
+      }
+      const tol = Math.max(getMergeTolerance(), 2.0);  // geometric은 더 관대
+      let remaining = [...faces];
+      let mergedCount = 0;
+      let lastError = '';
+
+      // Greedy pairwise merge — pop 하나를 seed로, 나머지와 합병 가능 여부 순회.
+      // 성공 → 결과 face가 새로운 seed. 한 바퀴 실패 → 포기.
+      let iterations = 0;
+      while (remaining.length >= 2 && iterations < 50) {
+        iterations++;
+        const seed = remaining[0];
+        let merged = false;
+        for (let i = 1; i < remaining.length; i++) {
+          const other = remaining[i];
+          debugLog(`[merge-faces-geometric] try ${seed} + ${other} tol=${tol}`);
+          const result = this.bridge.mergeCoplanarFacesGeometric(seed, other, tol);
+          if (result >= 0) {
+            mergedCount++;
+            remaining.splice(i, 1);
+            remaining[0] = result;  // new seed
+            merged = true;
+            break;
+          } else {
+            lastError = this.bridge.lastError() || lastError;
+          }
+        }
+        if (!merged) break;
+      }
+
+      if (mergedCount > 0) {
+        this.syncMesh();
+        this.selection.clearSelection();
+        Toast.info(`기하 병합 ${mergedCount}회 완료`, 2500);
+        debugLog('[Action] merge-faces-geometric: success', mergedCount);
+      } else {
+        Toast.warning(
+          lastError ||
+          '기하 병합 실패 — 두 면이 같은 평면 & 경계가 겹치는지 확인 (tol ' + tol + '°/mm)',
+          4000,
+        );
+        debugLog('[Action] merge-faces-geometric: all attempts failed', lastError);
       }
     } else if (action === 'merge-xia-coplanar') {
       // B3: 선택된 XIA의 모든 face 중 인접 coplanar 쌍 일괄 병합.

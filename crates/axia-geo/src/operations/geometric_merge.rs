@@ -54,6 +54,18 @@ impl Mesh {
     ) -> Result<FaceId> {
         if f1 == f2 { bail!("cannot merge a face with itself"); }
 
+        // Fast path — if the two faces already share a DCEL edge, defer to
+        // the existing coplanar-merge pipeline. This handles the "same-size
+        // adjacent rects drawn on top of each other with add_vertex dedup"
+        // case where a true shared edge exists.
+        if let Some(shared_eid) = self.find_shared_edge_between_faces(f1, f2) {
+            if let Ok(new_face) = self.merge_faces_by_edge_with_tolerance(shared_eid, tol_deg) {
+                return Ok(new_face);
+            }
+            // If direct merge fails (e.g., multi-loop issue), fall through to
+            // geometric rebuild which re-derives the polygon.
+        }
+
         let face1 = self.faces.get(f1)
             .ok_or_else(|| anyhow::anyhow!("face {:?} not found", f1))?;
         let face2 = self.faces.get(f2)
@@ -100,22 +112,28 @@ impl Mesh {
         }
 
         // Plane-distance check: every vertex of f2 must lie on f1's plane.
+        // 2026-04-24: 1mm → 5mm tolerance. Float drift from snap/rotation
+        //   easily pushes nominally-coplanar faces to ~mm-scale discrepancy;
+        //   5mm is still sub-user-perceptible at architectural scale.
         let plane_pt = v1_pos[0];
         let plane_d_max = v2_pos.iter()
             .map(|p| (*p - plane_pt).dot(n1).abs())
             .fold(0.0_f64, f64::max);
-        if plane_d_max > 1.0 {  // 1mm tolerance
+        if plane_d_max > 5.0 {
             bail!(
-                "faces not coplanar (plane distance {:.3}mm > 1mm)",
+                "faces not coplanar (plane distance {:.3}mm > 5mm)",
                 plane_d_max,
             );
         }
 
         // Seg collinearity + overlap tolerance (mm).
-        const SEG_TOL: f64 = 0.5;
+        // 2026-04-24: 0.5 → 5.0mm — same rationale as plane_d_max, covers
+        //   drawing snap drift. Architectural-scale face sizes (100+ mm
+        //   typical) still produce clear overlap signal.
+        const SEG_TOL: f64 = 5.0;
         let overlap = find_overlap(&v1_pos, &v2_pos, SEG_TOL)
             .ok_or_else(|| anyhow::anyhow!(
-                "no collinear edge with geometric overlap between f1 and f2"
+                "no collinear edge with geometric overlap between f1 and f2 (tol 5mm)"
             ))?;
 
         // Build merged boundary.
@@ -421,6 +439,152 @@ mod tests {
 
         let result = mesh.merge_coplanar_faces_geometric(f1, f2, 5.0);
         assert!(result.is_err(), "non-coplanar merge must be rejected");
+    }
+
+    #[test]
+    fn debug_draw_rectangle_output() {
+        // IMPORTANT — draw_rectangle's param convention:
+        //   width  → v = n.cross(up) direction
+        //   height → u = up direction
+        // With up=(1,0,0), v=(0,0,-1). So "height" controls x-range,
+        //   "width" controls z-range. Counter-intuitive but this is what
+        //   the Rect tool call site generates. Users can draw same shape
+        //   by swapping the perpendicular axes.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Rect A: x=[0,1000], z=[0,1000].
+        let (f1, _) = mesh.draw_rectangle(
+            DVec3::new(500.0, 0.0, 500.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            1000.0, 1000.0, mat,
+        ).unwrap();
+        // Rect B: x=[1000, 2000] (height=1000), z=[200, 800] (width=600).
+        let (f2, _) = mesh.draw_rectangle(
+            DVec3::new(1500.0, 0.0, 500.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            600.0, 1000.0, mat,    // width=600 (z), height=1000 (x)
+        ).unwrap();
+
+        let face1 = mesh.faces.get(f1).unwrap();
+        let face2 = mesh.faces.get(f2).unwrap();
+        let n1 = face1.normal().normalize_or_zero();
+        let n2 = face2.normal().normalize_or_zero();
+        eprintln!("n1={:?} n2={:?} nd={}", n1, n2, n1.dot(n2));
+
+        let v1_ids = mesh.collect_loop_verts(face1.outer().start).unwrap();
+        let v2_ids = mesh.collect_loop_verts(face2.outer().start).unwrap();
+        let v1_pos: Vec<DVec3> = v1_ids.iter().map(|&v| mesh.vertex_pos(v).unwrap()).collect();
+        let v2_pos: Vec<DVec3> = v2_ids.iter().map(|&v| mesh.vertex_pos(v).unwrap()).collect();
+        eprintln!("v1_pos={:#?}", v1_pos);
+        eprintln!("v2_pos={:#?}", v2_pos);
+
+        let overlap = find_overlap(&v1_pos, &v2_pos, 5.0);
+        eprintln!("overlap found: {}", overlap.is_some());
+        assert!(overlap.is_some(), "overlap should be found with correct vertex lists");
+    }
+
+    #[test]
+    fn debug_find_overlap_direct() {
+        // Minimal repro — two vertex lists that should overlap at x=1000.
+        let v1 = vec![
+            DVec3::new(0.0, 0.0, 1000.0),
+            DVec3::new(1000.0, 0.0, 1000.0),
+            DVec3::new(1000.0, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, 0.0),
+        ];
+        let v2 = vec![
+            DVec3::new(1000.0, 0.0, 800.0),
+            DVec3::new(2000.0, 0.0, 800.0),
+            DVec3::new(2000.0, 0.0, 200.0),
+            DVec3::new(1000.0, 0.0, 200.0),
+        ];
+        let overlap = find_overlap(&v1, &v2, 5.0);
+        assert!(overlap.is_some(), "should find overlap between v1 edge 1 and v2 edge 3");
+    }
+
+    #[test]
+    fn two_rects_via_draw_rectangle_merge() {
+        // End-to-end — simulates the actual user flow: draw_rectangle twice
+        // at adjacent positions, expect geometric_merge to succeed.
+        // This mirrors what the Rect tool + spatial-hash vertex dedup should
+        // produce. If this test passes but the UI still fails, the bug is in
+        // the TS path (toast/render), not the Rust algorithm.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // draw_rectangle param convention: width → v(perp), height → u(up)
+        // Rect A: x=[0,1000] (height=1000), z=[0,1000] (width=1000).
+        let (f1, _) = mesh.draw_rectangle(
+            glam::DVec3::new(500.0, 0.0, 500.0),
+            glam::DVec3::new(0.0, 1.0, 0.0),
+            glam::DVec3::new(1.0, 0.0, 0.0),
+            1000.0, 1000.0, mat,
+        ).unwrap();
+
+        // Rect B: x=[1000, 2000] (height=1000), z=[200, 800] (width=600).
+        //   Shares x=1000 line with A for z ∈ [200, 800] (partial overlap).
+        let (f2, _) = mesh.draw_rectangle(
+            glam::DVec3::new(1500.0, 0.0, 500.0),
+            glam::DVec3::new(0.0, 1.0, 0.0),
+            glam::DVec3::new(1.0, 0.0, 0.0),
+            600.0, 1000.0, mat,    // width=600 (z span), height=1000 (x span)
+        ).unwrap();
+
+        assert!(mesh.faces.get(f1).is_some(), "f1 should exist");
+        assert!(mesh.faces.get(f2).is_some(), "f2 should exist");
+
+        let result = mesh.merge_coplanar_faces_geometric(f1, f2, 2.0);
+        assert!(
+            result.is_ok(),
+            "merge should succeed — realistic Rect-tool draw, got error: {:?}",
+            result.err(),
+        );
+        let merged = result.unwrap();
+        let outer = mesh.collect_loop_verts(
+            mesh.faces.get(merged).unwrap().outer().start,
+        ).unwrap();
+        // Merged L-polygon has 6-8 vertices depending on collinear cleanup.
+        assert!(outer.len() >= 6 && outer.len() <= 8,
+                "merged outer loop should have 6-8 vertices, got {}", outer.len());
+
+        // Verify the original 2 faces no longer exist.
+        assert!(!mesh.faces.contains(f1) || !mesh.faces[f1].is_active(),
+                "f1 should be removed/inactive");
+        assert!(!mesh.faces.contains(f2) || !mesh.faces[f2].is_active(),
+                "f2 should be removed/inactive");
+    }
+
+    #[test]
+    fn two_coplanar_rects_full_shared_edge_uses_fast_path() {
+        // When two rects share a COMPLETE edge (same size, fully aligned),
+        // the fast path (find_shared_edge_between_faces + merge_faces_by_edge)
+        // should kick in. This is the traditional merge path.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let (f1, _) = mesh.draw_rectangle(
+            glam::DVec3::new(500.0, 0.0, 500.0),
+            glam::DVec3::new(0.0, 1.0, 0.0),
+            glam::DVec3::new(1.0, 0.0, 0.0),
+            1000.0, 1000.0, mat,
+        ).unwrap();
+        let (f2, _) = mesh.draw_rectangle(
+            glam::DVec3::new(1500.0, 0.0, 500.0),
+            glam::DVec3::new(0.0, 1.0, 0.0),
+            glam::DVec3::new(1.0, 0.0, 0.0),
+            1000.0, 1000.0, mat,    // same size → shares FULL edge
+        ).unwrap();
+
+        // Both rects same size at x=[0..1000] and x=[1000..2000] with
+        // z=[0..1000]. Shared edge is the full edge at x=1000, z=[0..1000].
+        let result = mesh.merge_coplanar_faces_geometric(f1, f2, 2.0);
+        assert!(result.is_ok(), "same-size shared-edge merge must succeed");
+        let merged = result.unwrap();
+        let outer = mesh.collect_loop_verts(
+            mesh.faces.get(merged).unwrap().outer().start,
+        ).unwrap();
+        assert_eq!(outer.len(), 4, "merged should be a 4-vertex (2000×1000) rect");
     }
 
     #[test]
