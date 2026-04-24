@@ -609,11 +609,36 @@ export class ToolManager {
       const analysis = this.bridge.analyzeMergeCandidates(workingFaces, tol);
       debugLog('[Action] merge-faces pre-analysis:', analysis, 'tol=', tol, 'faces=', workingFaces.length);
       if (analysis.mergeable === 0) {
+        // 2026-04-24 — Auto-fallback to geometric merge when the standard
+        //   shared-edge path finds no candidates. Users reported that two
+        //   adjacent RECTs often fail because snap drift leaves vertices
+        //   not exactly deduped, so DCEL edges end up distinct even though
+        //   geometric boundaries coincide. Geometric merge handles this.
+        if (analysis.total === 0 && workingFaces.length === 2) {
+          debugLog('[Action] merge-faces: no shared DCEL edge → trying geometric merge');
+          const geoTol = Math.max(tol, 2.0);
+          const result = this.bridge.mergeCoplanarFacesGeometric(
+            workingFaces[0], workingFaces[1], geoTol,
+          );
+          if (result >= 0) {
+            this.syncMesh();
+            this.selection.clearSelection();
+            Toast.info(
+              `기하 병합으로 통합 완료 (snap 드리프트 보정 · tol ${geoTol}°/mm)`,
+              2800,
+            );
+            debugLog('[Action] merge-faces → geometric fallback: success', result);
+            return;
+          }
+          debugLog('[Action] geometric fallback also failed:', this.bridge.lastError());
+        }
+
         // 실패 사유 구체화 (A3 확장, B2/C1 ADR-006 안내)
         const lines: string[] = ['통합할 수 있는 면이 없습니다.'];
         if (analysis.total === 0) {
           lines.push('• 선택한 면들이 엣지를 공유하지 않습니다');
-          lines.push('  (비인접 coplanar 병합은 미지원 — ADR-006 참조)');
+          lines.push('  (엣지가 공유되려면 snap으로 정확히 정점 매칭 필요)');
+          lines.push('  → "🧲 기하 병합" 컨텍스트 메뉴로 폴리곤 재구성 시도 가능');
         }
         if (analysis.nonCoplanar > 0) {
           const tolHint = tol === 0.5 ? ' (mergetol 2 명령으로 허용치 확장 가능)' : '';
