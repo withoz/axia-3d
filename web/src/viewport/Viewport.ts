@@ -90,7 +90,7 @@ export class Viewport {
    *  this actually takes effect on all platforms. Range: 1 ~ 5 from StylePanel.
    *  2026-04-22: 1.5 → 2.0 기본값 상향. 고양이/강아지처럼 곡면 많은 모델에서
    *  형태감 식별력 향상. */
-  private _edgeWidth = 2.0;
+  private _edgeWidth = 1.0;
   /** Cache of Mesh-edge LineMaterials so resize + width changes are fast.
    *  Separate from the axis LineMaterials (lineMaterials arr in constructor). */
   private _meshEdgeMaterials: LineMaterial[] = [];
