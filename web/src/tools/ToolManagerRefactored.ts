@@ -800,10 +800,18 @@ export class ToolManager {
         Toast.warning(this.bridge.lastError() || '통합 실패', 3000);
       }
     } else if (action === 'merge-as-hole') {
-      // Phase F (C1): 2개 면 선택 — 한 면이 다른 면을 포함할 때 inner를 hole로 합침
+      // Phase F (C1) → now mostly redundant with ADR-008 B1 auto-promotion.
+      //   Drawing an inner RECT/Circle inside an existing face today calls
+      //   Scene::promote_face_to_hole automatically in Step 4.8. This action
+      //   is kept as an escape hatch for legacy geometry (e.g. imports, or
+      //   faces that existed before B1 landed) where the pair was never
+      //   auto-promoted.
       const sel = this.selection.getSelectedFaces();
       if (sel.length !== 2) {
-        Toast.warning('정확히 2개의 면을 선택하세요 (바깥쪽 + 안쪽)', 3000);
+        Toast.warning(
+          '정확히 2개의 면을 선택하세요 (바깥쪽 + 안쪽) · 참고: 새로 그린 내부 RECT는 자동으로 구멍이 됩니다',
+          3500,
+        );
         return;
       }
       const tol = getMergeTolerance();

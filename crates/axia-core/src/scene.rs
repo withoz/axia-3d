@@ -702,6 +702,94 @@ impl Scene {
         Ok(new_outer)
     }
 
+    /// Principle 6 classifier — if every one of `corners` lies strictly
+    /// inside one and the same coplanar (normal within 1°) active face's
+    /// polygon interior, return that face id. Otherwise None.
+    ///
+    /// "Strictly inside" means the corner is NOT on the face's boundary
+    /// (or within endpoint tolerance of a boundary vertex) — that would
+    /// require the unified pipeline's split_face_by_line path instead.
+    fn single_face_containing_corners(
+        &self,
+        corners: &[DVec3],
+        target_normal: DVec3,
+    ) -> Option<FaceId> {
+        if corners.is_empty() { return None; }
+        let mut candidate: Option<FaceId> = None;
+        for (fid, face) in self.mesh.faces.iter() {
+            if !face.is_active() { continue; }
+            // Coplanar with the rect's normal?
+            let n = face.normal();
+            if n.length_squared() < 1e-10 { continue; }
+            if n.dot(target_normal).abs() < 0.9998 { continue; }
+
+            let verts = match self.mesh.collect_loop_verts(face.outer().start) {
+                Ok(v) => v, Err(_) => continue,
+            };
+            if verts.len() < 3 { continue; }
+            let pts: Vec<DVec3> = verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
+            if pts.len() < 3 { continue; }
+
+            // 2D basis from first edge of face.
+            let p0 = pts[0];
+            let e1 = (pts[1] - p0).normalize_or_zero();
+            if e1.length_squared() < 1e-10 { continue; }
+            let mut e2 = DVec3::ZERO;
+            for p in &pts[2..] {
+                let v = *p - p0;
+                let proj = e1 * v.dot(e1);
+                let ortho = v - proj;
+                if ortho.length_squared() > 1e-6 {
+                    e2 = ortho.normalize_or_zero();
+                    break;
+                }
+            }
+            if e2.length_squared() < 1e-10 { continue; }
+            let face_n = e1.cross(e2).normalize_or_zero();
+            let poly: Vec<(f64, f64)> = pts.iter()
+                .map(|p| ((*p - p0).dot(e1), (*p - p0).dot(e2)))
+                .collect();
+            let boundary_verts: Vec<DVec3> = pts.clone();
+
+            // Each corner must be coplanar + inside + not on boundary.
+            let mut all_inside = true;
+            for c in corners {
+                // Plane distance.
+                let dist = (*c - p0).dot(face_n).abs();
+                if dist > 1e-2 { all_inside = false; break; }
+                // Boundary-vertex coincidence guard.
+                let on_boundary_vertex = boundary_verts.iter().any(|bp| (c - bp).length() < 1e-3);
+                if on_boundary_vertex { all_inside = false; break; }
+                let cx = (*c - p0).dot(e1);
+                let cy = (*c - p0).dot(e2);
+                // Point-in-polygon (ray cast).
+                let mut inside = false;
+                let nv = poly.len();
+                let mut j = nv - 1;
+                for i in 0..nv {
+                    let (xi, yi) = poly[i];
+                    let (xj, yj) = poly[j];
+                    if ((yi > cy) != (yj > cy)) &&
+                       (cx < (xj - xi) * (cy - yi) / (yj - yi + 1e-12) + xi) {
+                        inside = !inside;
+                    }
+                    j = i;
+                }
+                if !inside { all_inside = false; break; }
+            }
+            if all_inside {
+                if candidate.is_some() {
+                    // More than one candidate — ambiguous; defer to pipeline.
+                    return None;
+                }
+                candidate = Some(fid);
+            }
+        }
+        candidate
+    }
+
     /// Principle 3 (Face Operation Epoch) — consolidate the post-line
     /// synthesis steps into one reusable routine. Called by exec_draw_line
     /// when no epoch is active (single-line command) AND by the epoch
@@ -1364,6 +1452,42 @@ impl Scene {
                     return CommandResult::Error(format!("draw_rect atomic: {}", e));
                 }
             }
+        }
+
+        // ═══ Fast-path: RECT interior to a single face (B1 scenario) ═════
+        //
+        // Principle 6 classification: when the rect touches no active edge
+        // and its four corners all lie strictly inside ONE existing face's
+        // polygon (same plane, inside point-in-polygon test), the unified
+        // pipeline would run 4× drawLine → same outcome as atomic add_face
+        // + B1 hole-promote. Skip straight to the atomic branch.
+        if !edge_interaction && face_interaction {
+            if let Some(container_fid) = self.single_face_containing_corners(&corners, n_norm) {
+                // Atomic: add 4 vertices, add_face, then B1 promote.
+                match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
+                    Ok((inner_fid, _verts)) => {
+                        // Run B1 promotion directly against the known container.
+                        let _ = self.promote_face_to_hole(container_fid, inner_fid);
+                        self.unregister_face_from_xia(container_fid);
+                        let xia_id = self.create_xia("Rectangle".to_string());
+                        if let Some(xia) = self.xias.get_mut(&xia_id) {
+                            xia.position = center;
+                            xia.surface_normal = Some(n_norm);
+                            xia.face_ids.push(inner_fid);
+                        }
+                        self.register_faces_to_xia(xia_id, &[inner_fid]);
+                        self.transactions.set_after_snapshot(self.scene_snapshot());
+                        self.transactions.commit();
+                        return CommandResult::EntityCreated(xia_id);
+                    }
+                    Err(e) => {
+                        self.transactions.cancel();
+                        return CommandResult::Error(format!("draw_rect interior: {}", e));
+                    }
+                }
+            }
+            // Corners not strictly inside a single face — fall through to
+            //   the unified pipeline (handles mixed / boundary cases).
         }
         // ═══════════════════════════════════════════════════════════════
 
