@@ -116,9 +116,10 @@ rescan on affected vertices; any new closed loop spawns a face.
 | Phase | Status | What | Commit |
 |-------|--------|------|--------|
 | A | ✅ Done | RECT/CIRCLE → 4× LINE, re-entrant transactions | c08954f |
-| B | 🟡 Next | Endpoint-on-edge split + erase re-synthesis | — |
-| C | 🔵 Optional | De-solidify toast on solid→surface downgrade | — |
-| D | 🔴 Planned | Non-coplanar forced merge (requires ADR-007 carve-out or polygon mesh regions) | — |
+| B-1 | ✅ Done | Endpoint-on-edge (collinear) split for RECT overlap | de093b7 |
+| B-2 | ✅ Done | Erase re-synthesis (Axiom 6) — newly-freed edges scope | 3266553 |
+| C | ✅ Done | De-solidify detection + Toast on solid→surface downgrade | b41bb57 |
+| D | ✅ Done | Non-coplanar forced merge via soft-edge region (preserves ADR-007) | 5638c00 |
 
 ---
 
@@ -153,8 +154,11 @@ rescan on affected vertices; any new closed loop spawns a face.
   Explicit Shift+N flip is the only orientation-change mechanism.
 
 ### Future open questions
-- Non-coplanar merge (Axiom 9 last row) needs ADR-007 accommodation for
-  non-planar face regions. Defer to Phase D design.
+- ~~Non-coplanar merge (Axiom 9 last row)~~ — resolved in Phase D via
+  soft-edge region: internal edges are hidden (HeFlags::SOFT) but each
+  face stays planar. True non-planar face regions remain rejected by
+  ADR-007. A future Phase E could add a dedicated "polygon mesh region"
+  XIA type for when users want a single logical face over curved terrain.
 - Surface face re-classification after Push/Pull: when push/pull creates
   a volume from a surface face, the new boundary faces become "solid".
   Currently inferred from topology; may benefit from explicit cache.
