@@ -1434,6 +1434,19 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * 2026-04-24 — Geometric merge of two coplanar adjacent faces even when
+     * they don't share an exact DCEL edge (different-sized boundaries).
+     * Used by the "두 면 기하 병합" menu action when user selects 2 faces.
+     * @param {number} f1_raw
+     * @param {number} f2_raw
+     * @param {number} angle_tol_deg
+     * @returns {number}
+     */
+    mergeCoplanarFacesGeometric(f1_raw, f2_raw, angle_tol_deg) {
+        const ret = wasm.axiaengine_mergeCoplanarFacesGeometric(this.__wbg_ptr, f1_raw, f2_raw, angle_tol_deg);
+        return ret;
+    }
+    /**
      * Merge the two coplanar faces sharing the given edge into a single face.
      *
      * - Success: returns the new merged FaceId (>= 0).

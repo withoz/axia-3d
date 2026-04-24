@@ -2648,6 +2648,37 @@ impl AxiaEngine {
         }
     }
 
+    /// 2026-04-24 — Geometric merge of two coplanar adjacent faces even when
+    /// they don't share an exact DCEL edge (different-sized boundaries).
+    /// Used by the "두 면 기하 병합" menu action when user selects 2 faces.
+    #[wasm_bindgen(js_name = "mergeCoplanarFacesGeometric")]
+    pub fn merge_coplanar_faces_geometric(
+        &mut self,
+        f1_raw: u32,
+        f2_raw: u32,
+        angle_tol_deg: f64,
+    ) -> i32 {
+        let f1 = FaceId::new(f1_raw);
+        let f2 = FaceId::new(f2_raw);
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        match self.scene.mesh.merge_coplanar_faces_geometric(f1, f2, angle_tol_deg) {
+            Ok(new_face) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                new_face.raw() as i32
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                let msg = e.to_string();
+                self.set_error(msg);
+                -1
+            }
+        }
+    }
+
     /// Phase F — 비인접 coplanar 포함 병합 (ADR-006 C1).
     /// outer_face 안에 inner_face가 완전히 들어 있으면 inner를 hole로 합침.
     /// Returns new face ID, or -1 on failure (lastError set).

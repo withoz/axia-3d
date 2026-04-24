@@ -3555,7 +3555,7 @@ impl Mesh {
     /// Given a cyclic loop `[v0, v1, ..., vN-1]`, if three consecutive vertices
     /// (prev, curr, next) are collinear within tolerance, `curr` is dropped.
     /// Used after face-merge to clean T-junction artifacts.
-    fn simplify_collinear_loop(&self, verts: &[VertId]) -> Vec<VertId> {
+    pub(crate) fn simplify_collinear_loop(&self, verts: &[VertId]) -> Vec<VertId> {
         let n = verts.len();
         if n < 3 { return verts.to_vec(); }
         let mut out: Vec<VertId> = Vec::with_capacity(n);

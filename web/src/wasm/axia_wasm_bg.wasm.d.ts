@@ -85,6 +85,7 @@ export const axiaengine_loftSections: (a: number, b: number, c: number, d: numbe
 export const axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_maxConstraintResidual: (a: number) => number;
 export const axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
+export const axiaengine_mergeCoplanarFacesGeometric: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
 export const axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
 export const axiaengine_meshManifoldInfo: (a: number, b: number) => void;

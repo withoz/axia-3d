@@ -477,6 +477,12 @@ export class AxiaEngine {
      */
     mergeCoplanarContaining(outer_face_raw: number, inner_face_raw: number, angle_tol_deg: number): number;
     /**
+     * 2026-04-24 — Geometric merge of two coplanar adjacent faces even when
+     * they don't share an exact DCEL edge (different-sized boundaries).
+     * Used by the "두 면 기하 병합" menu action when user selects 2 faces.
+     */
+    mergeCoplanarFacesGeometric(f1_raw: number, f2_raw: number, angle_tol_deg: number): number;
+    /**
      * Merge the two coplanar faces sharing the given edge into a single face.
      *
      * - Success: returns the new merged FaceId (>= 0).
@@ -891,6 +897,7 @@ export interface InitOutput {
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_maxConstraintResidual: (a: number) => number;
     readonly axiaengine_mergeCoplanarContaining: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_mergeCoplanarFacesGeometric: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_mergeFacesByEdge: (a: number, b: number) => number;
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
     readonly axiaengine_meshManifoldInfo: (a: number, b: number) => void;

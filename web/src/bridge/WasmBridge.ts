@@ -187,6 +187,8 @@ type AxiaEngineExtended = AxiaEngine & {
   mergeFacesByEdgeTol?(edgeId: number, angleTolDeg: number): number;
   /** Phase F — C1 비인접 포함 병합 (outer가 inner를 hole로 흡수) */
   mergeCoplanarContaining?(outerFaceId: number, innerFaceId: number, angleTolDeg: number): number;
+  /** 2026-04-24 — 크기 다른 coplanar 면들의 geometric merge */
+  mergeCoplanarFacesGeometric?(f1: number, f2: number, angleTolDeg: number): number;
   tryMergeAdjacentFaces?(faceIds: Uint32Array): number;
   tryMergeAdjacentFacesTol?(faceIds: Uint32Array, angleTolDeg: number): number;
   /** Dry-run — returns JSON {total, mergeable, nonCoplanar, ambiguous, estMergesAfterCascade} */
@@ -737,6 +739,18 @@ export class WasmBridge {
       return this.engine.mergeCoplanarContaining?.(outerFaceId, innerFaceId, angleTolDeg) ?? -1;
     } catch (e) {
       console.error('[WasmBridge] mergeCoplanarContaining failed:', e);
+      return -1;
+    }
+  }
+
+  /** 2026-04-24 — geometric merge for two coplanar faces (different sizes OK). */
+  mergeCoplanarFacesGeometric(f1: number, f2: number, angleTolDeg = 1.0): number {
+    if (!this.engine) return -1;
+    this.markDirty();
+    try {
+      return this.engine.mergeCoplanarFacesGeometric?.(f1, f2, angleTolDeg) ?? -1;
+    } catch (e) {
+      console.error('[WasmBridge] mergeCoplanarFacesGeometric failed:', e);
       return -1;
     }
   }
