@@ -1170,6 +1170,39 @@ impl Mesh {
                 let py = v.dot(og.e2);
                 if !point_in(px, py, &og.poly_2d) { continue; }
 
+                // 2026-04-24 bug fix (M1 partial-overlap):
+                //   centroid-in-poly 만 보면 outer가 L자 형태로 inner를 "감싸는"
+                //   경우 — L자의 centroid가 inner 사각형 내부로 떨어져 inner
+                //   쪽이 outer로 오판되고 dissolve 된다. 추가 검증: inner의
+                //   모든 boundary vertex가 outer polygon 내부(또는 거의 경계
+                //   위)여야 한다.
+                let mut all_inner_in_outer = true;
+                let inner_boundary_verts_vec: Vec<VertId> = self.collect_loop_verts(
+                    self.faces[inner].outer().start
+                ).unwrap_or_default();
+                for &iv in &inner_boundary_verts_vec {
+                    let Ok(ip) = self.vertex_pos(iv) else { all_inner_in_outer = false; break; };
+                    let iv_vec = ip - og.origin;
+                    let ix = iv_vec.dot(og.e1);
+                    let iy = iv_vec.dot(og.e2);
+                    if !point_in(ix, iy, &og.poly_2d) {
+                        // boundary 위(공유 vertex) 도 허용: outer poly 의
+                        // 어떤 vertex 와 거의 같으면 inside 간주
+                        let mut on_edge = false;
+                        for &(x, y) in &og.poly_2d {
+                            if (x - ix).abs() < 1e-3 && (y - iy).abs() < 1e-3 {
+                                on_edge = true;
+                                break;
+                            }
+                        }
+                        if !on_edge {
+                            all_inner_in_outer = false;
+                            break;
+                        }
+                    }
+                }
+                if !all_inner_in_outer { continue; }
+
                 // Connector 검사: outer boundary vertex ↔ inner boundary vertex 엣지
                 let inner_boundary_verts: FxHashSet<VertId> = self.collect_loop_verts(
                     self.faces[inner].outer().start
