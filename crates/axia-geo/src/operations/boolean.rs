@@ -49,7 +49,6 @@ struct SolidData {
 
 struct FaceTriangles {
     face_id: FaceId,
-    #[allow(dead_code)] // find_intersections에서 사용 (현재 비활성 경로)
     tris: Vec<(DVec3, DVec3, DVec3)>,
 }
 
@@ -197,6 +196,74 @@ impl Mesh {
         })
     }
 
+    /// "Intersect with Model" — 선택된 face들과 나머지 active face 사이의
+    /// 교차선을 edge로 구성 (Boolean solid 판정 없이 순수 topology split).
+    ///
+    /// SketchUp 의 "Intersect Faces with Model" 에 해당. 선택한 face 가
+    /// 다른 face 와 3D 상에서 교차하면, 양쪽 면을 교차선 기준으로 분할해
+    /// 새 edge 를 생성한다. inside/outside 분류는 수행하지 않는다 — 모든
+    /// sub-face 를 유지.
+    ///
+    /// 인자:
+    ///   `selected`: 교차 검사 대상 face 집합
+    ///   `material`: 새 sub-face 에 할당할 material
+    ///
+    /// 반환: 분할 후 전체 sub-face 집합 (selected + rest of scene)
+    pub fn intersect_faces_with_model(
+        &mut self,
+        selected: &[FaceId],
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build "other" face set = all active faces not in selected.
+        use std::collections::HashSet;
+        let selected_set: HashSet<FaceId> = selected.iter().copied().collect();
+        let others: Vec<FaceId> = self.faces.iter()
+            .filter(|(fid, f)| f.is_active() && !selected_set.contains(fid))
+            .map(|(fid, _)| fid)
+            .collect();
+
+        if others.is_empty() {
+            return Ok(selected.to_vec());
+        }
+
+        // Active-only check: reject faces with holes (same as Boolean).
+        for &fid in selected.iter().chain(others.iter()) {
+            if let Some(face) = self.faces.get(fid) {
+                if !face.inners().is_empty() {
+                    anyhow::bail!(
+                        "intersect_faces_with_model: face {:?} has {} hole(s) — not yet supported",
+                        fid, face.inners().len()
+                    );
+                }
+            }
+        }
+
+        let solid_sel = self.prepare_solid(selected)?;
+        let solid_oth = self.prepare_solid(&others)?;
+
+        let intersections = self.find_intersections(&solid_sel, &solid_oth);
+        if intersections.is_empty() {
+            // 교차 없음 — scene 변화 없음
+            return Ok(selected.to_vec());
+        }
+
+        let split_sel = self.split_faces_by_intersections(&solid_sel, &intersections, material);
+        let split_oth = self.split_faces_by_intersections(&solid_oth, &intersections, material);
+
+        let mut result: Vec<FaceId> = Vec::new();
+        for v in split_sel.values() { result.extend(v.iter().copied()); }
+        for v in split_oth.values() { result.extend(v.iter().copied()); }
+
+        // ADR-007 — invariants 검증 (debug mode)
+        self.debug_verify_invariants();
+
+        Ok(result)
+    }
+
     /// 솔리드 데이터 준비: face → 삼각형 변환
     fn prepare_solid(&self, face_ids: &[FaceId]) -> Result<SolidData> {
         let mut triangles = Vec::new();
@@ -241,7 +308,6 @@ impl Mesh {
     }
 
     /// Stage 1: 두 솔리드 간 교차선 수집
-    #[allow(dead_code)] // 향후 Boolean 교차선 기반 분할 시 사용 예정
     fn find_intersections(
         &self,
         solid_a: &SolidData,

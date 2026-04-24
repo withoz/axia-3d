@@ -1347,6 +1347,34 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
+     * 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
+     * inside/outside 판정 없이 모든 sub-face 유지.
+     *
+     * 반환: 성공 시 {"ok":true,"faceCount":N,"totalFaces":M}
+     *       실패 시 {"ok":false,"error":"..."}
+     * @param {Uint32Array} face_ids
+     * @returns {string}
+     */
+    intersectWithModel(face_ids) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_intersectWithModel(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * face가 잠긴 그룹에 속하는지 확인
      * @param {number} face_id_raw
      * @returns {boolean}

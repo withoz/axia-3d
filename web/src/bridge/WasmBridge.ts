@@ -266,6 +266,7 @@ type AxiaEngineExtended = AxiaEngine & {
   is_face_locked?(face_id_raw: number): boolean;
   // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
+  intersectWithModel?(faceIds: Uint32Array): string;
   // Group / Component
   create_group?(name: string, faceIds: Uint32Array): number;
   delete_group?(groupId: number): boolean;
@@ -2171,6 +2172,29 @@ export class WasmBridge {
       console.error('[WasmBridge] booleanOp failed:', e);
       Toast.error(`Boolean 연산 실패: ${String(e)}`);
       return null;
+    }
+  }
+
+  /**
+   * "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
+   * 선택한 face 와 나머지 active face 사이의 3D 교차선을 edge 로 변환.
+   * inside/outside 분류 없이 모든 sub-face 를 유지.
+   *
+   * @param faceIds 교차 검사할 face ID 배열
+   * @returns 성공 시 {ok:true, resultFaces:N, totalFaces:M}
+   */
+  intersectWithModel(faceIds: number[]): { ok: boolean; resultFaces?: number; totalFaces?: number; error?: string } | null {
+    if (!this.engine) return null;
+    if (faceIds.length === 0) return { ok: false, error: 'no faces selected' };
+    this.markDirty();
+    try {
+      const arr = new Uint32Array(faceIds);
+      const json = this.engine.intersectWithModel?.(arr);
+      if (!json) return { ok: false, error: 'WASM method unavailable' };
+      return JSON.parse(json);
+    } catch (e) {
+      console.error('[WasmBridge] intersectWithModel failed:', e);
+      return { ok: false, error: String(e) };
     }
   }
 

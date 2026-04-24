@@ -272,6 +272,101 @@ impl Scene {
         }
     }
 
+    /// "Intersect with Model" (Phase 1, ADR-008 Axiom 7 extension).
+    ///
+    /// 선택된 face 집합과 나머지 씬 face 사이의 3D 교차선을 edge 로 생성.
+    /// 분할된 sub-face 의 XIA 소유권은 원본 face 의 XIA 를 승계한다.
+    /// 단일 undo transaction 으로 묶인다.
+    ///
+    /// 반환: 분할 결과로 존재하게 된 face 의 수 (디버그용).
+    pub fn intersect_faces_with_scene(&mut self, face_ids: &[FaceId]) -> anyhow::Result<usize> {
+        if face_ids.is_empty() { return Ok(0); }
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        // 원본 face 의 XIA 매핑 보존 (분할 후 승계용)
+        use std::collections::HashMap;
+        let mut xia_backup: HashMap<axia_geo::FaceId, crate::xia::XiaId> = HashMap::new();
+        for &fid in face_ids {
+            if let Some(xid) = self.face_to_xia.get(&fid).copied() {
+                xia_backup.insert(fid, xid);
+            }
+        }
+        // "others" 쪽도 XIA 승계를 위해 현재 매핑 스냅샷 (split 에서 없어질
+        // 수 있으므로)
+        let others: Vec<axia_geo::FaceId> = self.mesh.faces.iter()
+            .filter(|(f, face)| face.is_active() && !face_ids.contains(f))
+            .map(|(f, _)| f)
+            .collect();
+        for &fid in &others {
+            if let Some(xid) = self.face_to_xia.get(&fid).copied() {
+                xia_backup.insert(fid, xid);
+            }
+        }
+
+        let result_faces = match self.mesh.intersect_faces_with_model(face_ids, self.default_material) {
+            Ok(v) => v,
+            Err(e) => {
+                self.transactions.cancel();
+                return Err(e);
+            }
+        };
+
+        // XIA 승계: split_faces_by_intersections 는 원본 face 를 제거하고
+        // 새 face 를 만든다. 원본 face id 가 여전히 active 면 그대로 두고,
+        // 사라졌으면 XIA 에서 제거. 새로 생긴 face 는 아직 어떤 XIA 에도
+        // 속하지 않은 상태 — 같은 선택 그룹에 속했던 원본의 XIA 로 연결.
+        //
+        // Heuristic: result_faces 중 기존 face_to_xia 에 없는 것은 "splits
+        // of some old face". old face → new face 매핑은 face_centroid 비교
+        // 로는 정확하지 않으므로, 단순히 "원본 face 의 XIA 가 한 개로 일관
+        // 되면 그 XIA 에 모두 붙인다" 방식. (일반적으로 한 번의 intersect
+        // 호출에서 하나의 선택 그룹은 동일 XIA 를 공유.)
+        let mut selected_xia: Option<crate::xia::XiaId> = None;
+        for &fid in face_ids {
+            if let Some(xid) = xia_backup.get(&fid) {
+                match selected_xia {
+                    None => selected_xia = Some(*xid),
+                    Some(existing) if existing == *xid => {}
+                    Some(_) => { selected_xia = None; break; }
+                }
+            }
+        }
+
+        // 1. 없어진 원본 face 의 XIA 링크 제거
+        for &fid in face_ids.iter().chain(others.iter()) {
+            if !self.mesh.faces.contains(fid) || !self.mesh.faces[fid].is_active() {
+                self.unregister_face_from_xia(fid);
+            }
+        }
+
+        // 2. 새 face 를 해당 XIA 에 등록
+        //    - selected 계열의 새 face → selected_xia (결정된 경우)
+        //    - others 계열의 새 face → 원본 other face 의 XIA 는 현재 구현
+        //      으로 정확히 매핑하기 어렵다. 일단 등록하지 않고 "face-only"
+        //      상태로 두어 사용자가 재선택 시 재할당 하도록. 향후 per-face
+        //      mapping 지원 시 개선.
+        if let Some(xid) = selected_xia {
+            let new_sel: Vec<axia_geo::FaceId> = result_faces.iter()
+                .filter(|&&f| !xia_backup.contains_key(&f) && self.mesh.faces.contains(f) && self.mesh.faces[f].is_active())
+                .copied()
+                .collect();
+            self.register_faces_to_xia(xid, &new_sel);
+            if let Some(xia) = self.xias.get_mut(&xid) {
+                for &f in &new_sel {
+                    if !xia.face_ids.contains(&f) { xia.face_ids.push(f); }
+                }
+            }
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        // 모든 활성 face 수 반환 (호출자 디버그용)
+        Ok(result_faces.len())
+    }
+
     /// Compute the set of boundary edges for a XIA (from its face_ids).
     /// Does NOT include standalone_edge_id — that's tracked separately.
     /// Returns empty set if faces have no valid edges.

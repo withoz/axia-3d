@@ -532,6 +532,21 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'bool-union': startBooleanOp({ bridge, toolManager }, 'union'); break;
       case 'bool-subtract': startBooleanOp({ bridge, toolManager }, 'subtract'); break;
       case 'bool-intersect': startBooleanOp({ bridge, toolManager }, 'intersect'); break;
+      case 'intersect-with-model': {
+        const faceIds = toolManager.selection.getSelectedFaces();
+        if (!faceIds.length) {
+          Toast.info('모델과 교차: 먼저 면을 선택하세요');
+          break;
+        }
+        const result = bridge.intersectWithModel(faceIds);
+        if (!result || !result.ok) {
+          Toast.error(`모델과 교차 실패: ${result?.error ?? '알 수 없는 오류'}`);
+        } else {
+          Toast.success(`모델과 교차 완료 (총 ${result.totalFaces} 면)`);
+          toolManager.syncMesh();
+        }
+        break;
+      }
 
       // ── 형식 ──
       case 'format-units':

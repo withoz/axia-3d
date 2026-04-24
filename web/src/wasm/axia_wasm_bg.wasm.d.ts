@@ -79,6 +79,7 @@ export const axiaengine_get_xia_info: (a: number, b: number, c: number, d: numbe
 export const axiaengine_group_count: (a: number) => number;
 export const axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
+export const axiaengine_intersectWithModel: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_is_face_locked: (a: number, b: number) => number;
 export const axiaengine_lastError: (a: number, b: number) => void;
 export const axiaengine_lastMergeFailureReason: (a: number, b: number) => void;

@@ -444,6 +444,15 @@ export class AxiaEngine {
      */
     import_snapshot(data: Uint8Array): boolean;
     /**
+     * "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
+     * 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
+     * inside/outside 판정 없이 모든 sub-face 유지.
+     *
+     * 반환: 성공 시 {"ok":true,"faceCount":N,"totalFaces":M}
+     *       실패 시 {"ok":false,"error":"..."}
+     */
+    intersectWithModel(face_ids: Uint32Array): string;
+    /**
      * face가 잠긴 그룹에 속하는지 확인
      */
     is_face_locked(face_id_raw: number): boolean;
@@ -923,6 +932,7 @@ export interface InitOutput {
     readonly axiaengine_group_count: (a: number) => number;
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
+    readonly axiaengine_intersectWithModel: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
     readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_lastMergeFailureReason: (a: number, b: number) => void;

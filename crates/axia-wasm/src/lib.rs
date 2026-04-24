@@ -3424,6 +3424,36 @@ impl AxiaEngine {
         }
     }
 
+    /// "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
+    /// 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
+    /// inside/outside 판정 없이 모든 sub-face 유지.
+    ///
+    /// 반환: 성공 시 {"ok":true,"faceCount":N,"totalFaces":M}
+    ///       실패 시 {"ok":false,"error":"..."}
+    #[wasm_bindgen(js_name = "intersectWithModel")]
+    pub fn intersect_with_model(&mut self, face_ids: &[u32]) -> String {
+        if face_ids.is_empty() {
+            return r#"{"ok":false,"error":"no faces selected"}"#.to_string();
+        }
+        let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        debug_log!("[RUST] intersect_with_model: {} faces selected", fids.len());
+
+        match self.scene.intersect_faces_with_scene(&fids) {
+            Ok(n) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                format!(
+                    r#"{{"ok":true,"resultFaces":{},"totalFaces":{}}}"#,
+                    n, self.scene.mesh.face_count()
+                )
+            }
+            Err(e) => {
+                console_error!("[RUST] intersect_with_model ERROR: {}", e);
+                format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
+            }
+        }
+    }
+
     // ========================================================================
     // Transform Operations (Move / Rotate / Scale)
     // ========================================================================
