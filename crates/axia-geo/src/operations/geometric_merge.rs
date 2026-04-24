@@ -65,11 +65,15 @@ impl Mesh {
         let n1 = face1.normal().normalize_or_zero();
         let n2 = face2.normal().normalize_or_zero();
 
-        // Coplanarity — same direction within tolerance.
+        // Coplanarity — accept SAME OR OPPOSITE direction.
+        //   opposite normals just mean the two faces were wound differently
+        //   (one CCW-from-above, one CCW-from-below). Same plane, still
+        //   mergeable — we'll flip f2's loop before merging if needed.
         let tol_rad = tol_deg.to_radians();
         let cos_tol = tol_rad.cos();
         let nd = n1.dot(n2);
-        if nd < cos_tol {
+        let opposite_normal = nd < 0.0;
+        if nd.abs() < cos_tol {
             bail!(
                 "faces not coplanar ({:.2}° between normals, tol {:.2}°)",
                 n1.angle_between(n2).to_degrees(), tol_deg,
@@ -85,9 +89,15 @@ impl Mesh {
         let v1_pos: Vec<DVec3> = v1_ids.iter()
             .map(|&v| self.vertex_pos(v).unwrap_or(DVec3::ZERO))
             .collect();
-        let v2_pos: Vec<DVec3> = v2_ids.iter()
+        let mut v2_pos: Vec<DVec3> = v2_ids.iter()
             .map(|&v| self.vertex_pos(v).unwrap_or(DVec3::ZERO))
             .collect();
+        // If f2 is wound opposite to f1, reverse its loop so both are
+        // effectively CCW from the same viewpoint. This makes the bridge
+        // walk in build_merged_boundary produce a consistent CCW outline.
+        if opposite_normal {
+            v2_pos.reverse();
+        }
 
         // Plane-distance check: every vertex of f2 must lie on f1's plane.
         let plane_pt = v1_pos[0];
