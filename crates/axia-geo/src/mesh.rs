@@ -1333,7 +1333,14 @@ impl Mesh {
         if he_start.is_null() { return; }
         let mut he_id = he_start;
         loop {
-            let mut new_flags = self.hes[he_id].flags() | HeFlags::SOFTEN_COPLANAR;
+            // Set BOTH SOFT (render-hide) and SOFTEN_COPLANAR (semantic tag).
+            // The renderer checks SOFT to skip drawing — that's the actual
+            // visibility switch. SOFTEN_COPLANAR is a broader "treat as soft
+            // when faces are coplanar" hint but is NOT what the render path
+            // tests, so forgetting SOFT would keep the edge drawn.
+            let mut new_flags = self.hes[he_id].flags()
+                | HeFlags::SOFT
+                | HeFlags::SOFTEN_COPLANAR;
             new_flags.remove(HeFlags::HARD);
             self.hes[he_id].set_flags(new_flags);
             he_id = self.hes[he_id].next_rad();
