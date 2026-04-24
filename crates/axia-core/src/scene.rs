@@ -626,6 +626,21 @@ impl Scene {
             self.transactions.set_before_snapshot(self.scene_snapshot());
         }
 
+        // ── Step 0: Phase B — Collinear endpoint split ──
+        //   If the new line's START or END point lies inside the interior of
+        //   an existing COLLINEAR edge (same direction, overlapping
+        //   parametric range), split that existing edge at the endpoint
+        //   position BEFORE crossing detection. This is what enables two
+        //   overlapping RECTs to share DCEL edges properly: rect B's bottom
+        //   edge splits rect A's bottom at x=500 (or wherever the overlap
+        //   starts), creating a shared vertex rather than two parallel edges.
+        let collinear_splits = self.mesh.find_collinear_endpoint_splits(start, end);
+        for (edge_id, pos) in &collinear_splits {
+            // split_edge may fail if the edge got dissolved by an earlier
+            //   split (same pos in same line) — ignore and continue.
+            let _ = self.mesh.split_edge(*edge_id, *pos);
+        }
+
         // ── Step 1: 기존 엣지 교차점 + 기존 vertex on-line 탐지 ──
         // (a) 새 line이 기존 엣지 interior와 교차 → split_edge로 vertex 삽입
         // (b) 새 line interior에 기존 vertex가 이미 놓여 있음 → split_edge 불필요,

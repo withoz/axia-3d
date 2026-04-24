@@ -188,7 +188,6 @@ fn rect_equivalent_to_4_lines() {
 /// endpoint-on-edge cases need an additional split_edge pass that is not yet
 /// wired. Marked #[ignore] until Phase B enables it.
 #[test]
-#[ignore = "Phase B — requires endpoint-on-edge split, not yet implemented"]
 fn overlapping_rect_splits_into_subfaces() {
     let mut scene = Scene::default();
     scene.execute(Command::DrawRect {

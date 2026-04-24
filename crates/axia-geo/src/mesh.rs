@@ -451,6 +451,71 @@ impl Mesh {
         crossings
     }
 
+    /// Phase B (2026-04-24) — collinear (parallel + overlapping) edge detection.
+    ///
+    /// `find_line_crossings` handles transverse crossings but skips parallel
+    /// cases (n_sq < 1e-16). For correct RECT-overlap-RECT behaviour we need
+    /// to detect when the new line's ENDPOINTS fall into the interior of an
+    /// existing collinear edge so we can split that edge at the endpoint
+    /// position. Without this split, two overlapping collinear edges end
+    /// up as separate topology and downstream face synthesis / merge fail.
+    ///
+    /// Returns: list of `(edge_id, split_position)` where existing `edge_id`
+    /// must be split at `split_position` (which lies strictly inside the
+    /// existing edge, at either the new line's start or end point).
+    pub fn find_collinear_endpoint_splits(
+        &self,
+        start: DVec3,
+        end: DVec3,
+    ) -> Vec<(EdgeId, DVec3)> {
+        let dir = end - start;
+        let len = dir.length();
+        if len < 1e-9 { return Vec::new(); }
+        let dir_unit = dir / len;
+        let coplanar_tol = (len * 1e-4).max(1e-3);
+        let endpoint_tol = SPATIAL_HASH_CELL * 1.5;
+
+        let mut splits: Vec<(EdgeId, DVec3)> = Vec::new();
+        for (edge_id, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            if !edge.class().is_topological() { continue; }
+            let va = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
+            let vb = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
+            let ab = vb - va;
+            let ab_len = ab.length();
+            if ab_len < 1e-9 { continue; }
+            let ab_unit = ab / ab_len;
+
+            // Parallel check: cross product near zero.
+            let cross = dir_unit.cross(ab_unit);
+            if cross.length_squared() > 1e-6 { continue; }  // not parallel
+
+            // Collinear check: start must lie on the line through va.
+            //   perp distance of (start - va) from ab direction.
+            let w = start - va;
+            let perp = w - ab_unit * w.dot(ab_unit);
+            if perp.length() > coplanar_tol { continue; }
+
+            // Both endpoints of the new line collinear. Now check if either
+            //   lies strictly inside the existing edge's parameter range
+            //   (and is NOT coincident with va/vb, which would already be
+            //   handled by spatial-hash vertex dedup).
+            for &candidate in &[start, end] {
+                // Skip if candidate coincides with existing edge endpoints
+                //   (add_vertex will dedup naturally).
+                if (candidate - va).length() < endpoint_tol { continue; }
+                if (candidate - vb).length() < endpoint_tol { continue; }
+
+                let s = (candidate - va).dot(ab_unit) / ab_len;
+                let s_eps = 1e-3;
+                if s > s_eps && s < 1.0 - s_eps {
+                    splits.push((edge_id, candidate));
+                }
+            }
+        }
+        splits
+    }
+
     /// 주어진 face의 경계 루프에 특정 vertex가 포함되어 있는지 검사.
     pub fn face_contains_vertex_on_boundary(&self, face_id: FaceId, vid: VertId) -> bool {
         let face = match self.faces.get(face_id) { Some(f) => f, None => return false };
