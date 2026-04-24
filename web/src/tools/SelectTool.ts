@@ -36,7 +36,7 @@ export class SelectTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     // Edge/Face 지능형 우선순위 픽 (커서에서 5px 이내 엣지 → edge 우선, 그 외 → face)
     const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY);
 
@@ -123,7 +123,7 @@ export class SelectTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     if (this.dragSelectStart) {
       const dx = e.clientX - this.dragSelectStart.x;
       const dy = e.clientY - this.dragSelectStart.y;

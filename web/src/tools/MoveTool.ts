@@ -110,7 +110,7 @@ export class MoveTool implements ITool {
     debugLog(`[Move] startPlacement: ${faceIds.length} faces, refPt=${refPoint?.toArray()}`);
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(_e: MouseEvent, point: THREE.Vector3 | null): void {
     // Placement mode commit: first click finalizes position.
     if (this.placementMode) {
       debugLog('[Move] Placement committed');
@@ -142,7 +142,7 @@ export class MoveTool implements ITool {
     debugLog(`[Move] Start drag, ${label}`);
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(_e: MouseEvent, point: THREE.Vector3 | null): void {
     // Placement mode: first mousemove captures the anchor (no mousedown needed).
     if (this.placementMode && point && !this.transformStartPt) {
       if (this.placementRefPoint && this.target) {
@@ -184,7 +184,7 @@ export class MoveTool implements ITool {
     }
   }
 
-  onMouseUp(e: MouseEvent): void {
+  onMouseUp(_e: MouseEvent): void {
     // Placement mode doesn't react to mouseup — commit happens on mousedown.
     if (this.placementMode) return;
     if (this.transformActive) {

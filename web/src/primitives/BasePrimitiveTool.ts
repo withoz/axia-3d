@@ -6,7 +6,7 @@
 
 import * as THREE from 'three';
 import { ITool, ToolContext } from '../tools/ITool';
-import { PrimitiveSession, PrimitiveType, PrimitiveParams } from './PrimitiveSession';
+import { PrimitiveSession, PrimitiveType } from './PrimitiveSession';
 import { PrimitivePreviewManager } from './PrimitivePreviewManager';
 import { debugLog } from '../utils/debug';
 

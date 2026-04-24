@@ -58,7 +58,7 @@ export class SnapVisual {
 
   /** Update the visual display for a snap point.
    *  Call every frame or on mousemove. */
-  update(snap: SnapPoint | null, camera?: THREE.Camera, extensionEdge?: { a: THREE.Vector3; b: THREE.Vector3 }) {
+  update(snap: SnapPoint | null, camera?: THREE.Camera, _extensionEdge?: { a: THREE.Vector3; b: THREE.Vector3 }) {
     this.clear();
     if (!snap || !snap.screenPos) return;
 

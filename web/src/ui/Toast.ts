@@ -25,13 +25,6 @@ export class Toast {
     info: '#2e75b6',
   };
 
-  private static readonly LABELS = {
-    success: 'Success',
-    error: 'Error',
-    warning: 'Warning',
-    info: 'Info',
-  };
-
   private constructor(parent: HTMLElement) {
     this.container = document.createElement('div');
     this.container.id = 'axia-toast-container';
@@ -76,7 +69,6 @@ export class Toast {
   show(message: string, type: ToastType = 'info', duration: number = 3000): void {
     const toastEl = document.createElement('div');
     const bgColor = Toast.COLORS[type];
-    const label = Toast.LABELS[type];
 
     toastEl.style.cssText = `
       display: flex;

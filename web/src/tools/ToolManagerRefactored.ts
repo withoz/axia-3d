@@ -2989,7 +2989,7 @@ export class ToolManager {
    * Result: The edited edge AND its parallel opposite edge both become newLength.
    * The face stays rectangular (no shear/distortion).
    */
-  private handleDimensionEdit(index: number, newValue: number, dimLine: DimLine): void {
+  private handleDimensionEdit(_index: number, newValue: number, dimLine: DimLine): void {
     const selectedFaces = this.selection.getSelectedFaces();
     if (selectedFaces.length === 0) return;
 

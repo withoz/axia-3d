@@ -37,7 +37,7 @@ const mockCtx = {
 HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(mockCtx) as any;
 
 // Mock ResizeObserver
-globalThis.ResizeObserver = vi.fn().mockImplementation((cb: any) => ({
+globalThis.ResizeObserver = vi.fn().mockImplementation((_cb: any) => ({
   observe: vi.fn(),
   unobserve: vi.fn(),
   disconnect: vi.fn(),

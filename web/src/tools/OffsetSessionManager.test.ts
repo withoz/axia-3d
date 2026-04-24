@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import * as THREE from 'three';
 import { OffsetSessionManager } from './OffsetSessionManager';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn(), debugWarn: vi.fn() }));

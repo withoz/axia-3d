@@ -3,7 +3,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { UnitSystem } from './UnitSystem';
-import type { UnitType } from './UnitSystem';
 
 // Mock localStorage (jsdom provides it, but ensure clean state)
 beforeEach(() => {

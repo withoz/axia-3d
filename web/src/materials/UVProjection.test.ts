@@ -116,7 +116,7 @@ describe('computeUV dispatcher', () => {
   });
 
   it('routes box mode', () => {
-    const [u, v] = computeUV(
+    const [u] = computeUV(
       new THREE.Vector3(5, 0, 0),
       new THREE.Vector3(0, 1, 0),
       { mode: 'box', scale: 1.0 },

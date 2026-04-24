@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { DrawLineTool, LineDrawState } from './DrawLineTool';
+import { DrawLineTool } from './DrawLineTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
 vi.mock('../ui/Toast', () => ({

@@ -135,7 +135,7 @@ describe('ProjectSerializer', () => {
     it('fallback includes buffers as arrays', () => {
       (deps.bridge.exportSnapshot as any).mockReturnValue(null);
 
-      const BlobSpy = vi.fn().mockImplementation(function(this: any, parts: any[], opts: any) {
+      const BlobSpy = vi.fn().mockImplementation(function(this: any, parts: any[], _opts: any) {
         this._parts = parts;
       });
       globalThis.Blob = BlobSpy as any;

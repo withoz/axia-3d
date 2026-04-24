@@ -55,7 +55,7 @@ export class PushPullTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     if (!this.ppActive) {
       // Phase 1: select face (first click)
       const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
@@ -140,7 +140,7 @@ export class PushPullTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     if (!this.ppActive || !this.ppGhost) return;
 
     let dist = this.ppRayDist(e);

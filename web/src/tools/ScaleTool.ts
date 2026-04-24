@@ -72,7 +72,7 @@ export class ScaleTool implements ITool {
     }
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(_e: MouseEvent, point: THREE.Vector3 | null): void {
     if (this.transformActive) return;
 
     const t = this.resolveTarget();
@@ -93,7 +93,7 @@ export class ScaleTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(_e: MouseEvent, point: THREE.Vector3 | null): void {
     if (!this.transformActive || !this.transformStartPt || !this.transformCentroid
         || !this.target || !point) return;
 
@@ -121,7 +121,7 @@ export class ScaleTool implements ITool {
     }
   }
 
-  onMouseUp(e: MouseEvent): void {
+  onMouseUp(_e: MouseEvent): void {
     if (this.transformActive) {
       debugLog('[Scale] End drag, final ratio=', this.lastAppliedRatio.toFixed(3));
       this.transformActive = false;

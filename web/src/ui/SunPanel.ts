@@ -152,7 +152,7 @@ export class SunPanel {
   // equation-of-time correction; local time treated as mean solar time.
 
   private computeSunAzEl(
-    lat_deg: number, lon_deg: number,
+    lat_deg: number, _lon_deg: number,
     year: number, month: number, day: number,
     hour_local: number,
   ): { azimuth: number; elevation: number } {

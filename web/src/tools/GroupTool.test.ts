@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import * as THREE from 'three';
 import { GroupTool } from './GroupTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));

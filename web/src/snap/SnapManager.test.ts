@@ -138,7 +138,6 @@ describe('SnapManager', () => {
   // ── setReferencePoint ──
 
   it('setReferencePoint accepts Vector3', () => {
-    const { Vector3 } = THREE;
     snap.setReferencePoint(new THREE.Vector3(10, 20, 30));
     // Should not throw
   });
@@ -151,7 +150,6 @@ describe('SnapManager', () => {
   // ── addTrackPoint / clearTrackPoints ──
 
   it('addTrackPoint and clearTrackPoints', () => {
-    const { Vector3 } = THREE;
     snap.addTrackPoint(new THREE.Vector3(1, 0, 0));
     snap.addTrackPoint(new THREE.Vector3(0, 1, 0));
     // Should not throw
@@ -162,7 +160,6 @@ describe('SnapManager', () => {
   // ── setMid2pFirst ──
 
   it('setMid2pFirst accepts Vector3 or null', () => {
-    const { Vector3 } = THREE;
     snap.setMid2pFirst(new THREE.Vector3(5, 5, 5));
     snap.setMid2pFirst(null);
     // Should not throw

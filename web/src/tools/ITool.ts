@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { Viewport } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
-import { SnapManager, SnapPoint } from '../snap/SnapManager';
+import { SnapManager } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
 import { SelectionManager } from './SelectionManager';
 import { DimensionLabel } from '../ui/DimensionLabel';

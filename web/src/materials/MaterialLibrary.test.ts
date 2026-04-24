@@ -4,7 +4,6 @@ import {
   getMaterialLibrary,
   GeometryState,
   Material,
-  MaterialCategory,
 } from './MaterialLibrary';
 
 describe('MaterialLibrary', () => {

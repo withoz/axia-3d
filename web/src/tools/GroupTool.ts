@@ -36,7 +36,7 @@ export class GroupTool implements ITool {
     this.busy = false;
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     // 그룹 편집 모드에서의 클릭 처리
     if (this.ctx.selection.isInGroupEditMode()) {
       const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
@@ -73,7 +73,7 @@ export class GroupTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     // hover highlight
     const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
     if (hit && hit.faceIndex != null) {

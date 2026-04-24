@@ -19,7 +19,6 @@ import { TDSLoader } from 'three/examples/jsm/loaders/TDSLoader.js';
 // @ts-ignore - dxf는 parseString 함수를 export함
 import { parseString as parseDxf } from 'dxf';
 import { convertDwgToDxf, init as initDwgDxf } from 'dwgdxf';
-import JSZip from 'jszip';
 import { debugLog } from '../utils/debug';
 
 export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp' | '3dm';

@@ -4,7 +4,7 @@
  * 스크린샷 형식: 일반/물리/시각 속성 섹션별 표시
  */
 
-import { Material, PhysicalProperties, VisualProperties, MaterialCategory, FireRating, TextureInfo } from '../materials/MaterialLibrary';
+import { Material, MaterialCategory, FireRating, TextureInfo } from '../materials/MaterialLibrary';
 import { Toast } from './Toast';
 
 /** 최대 텍스처 파일 크기 (base64 인코딩 후 AXIA 파일 크기 고려) */
