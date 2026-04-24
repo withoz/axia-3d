@@ -15,7 +15,12 @@ use crate::material::MaterialLibrary;
 use crate::constraint::ConstraintGraph;
 
 /// Snapshot format version
-const SNAPSHOT_VERSION: u32 = 1;
+// File snapshot version.
+//   1 = mesh only (legacy — XIAs/Groups/Constraints lost on round-trip)
+//   2 = full scene_snapshot (mesh + xias + groups + next_xia_id + constraints)
+//       Added 2026-04-24 to stop XIAs from vanishing on save/load and leaving
+//       every face an orphan after reload.
+const SNAPSHOT_VERSION: u32 = 2;
 
 /// Magic bytes for .axia file identification
 const AXIA_MAGIC: [u8; 4] = [b'A', b'X', b'I', b'A'];
@@ -2045,9 +2050,12 @@ impl Scene {
         let mut buf = Vec::new();
         buf.extend_from_slice(&AXIA_MAGIC);
         buf.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
-        let mesh_data = bincode::serialize(&self.mesh)?;
-        buf.extend_from_slice(&(mesh_data.len() as u32).to_le_bytes());
-        buf.extend(mesh_data);
+        // V2 payload = scene_snapshot() — mesh + xias + groups + next_xia_id
+        // + constraints. Length prefix is u64 (snapshot can easily exceed 4 GB
+        // on a complex project even though current scenes are far smaller).
+        let payload = self.scene_snapshot();
+        buf.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        buf.extend(payload);
         Ok(buf)
     }
 
@@ -2069,7 +2077,7 @@ impl Scene {
 
     /// Import scene state with version validation
     pub fn import_versioned_snapshot(&mut self, data: &[u8]) -> Result<()> {
-        if data.len() < 12 {
+        if data.len() < 8 {
             // Try legacy format (no header)
             return self.import_legacy_snapshot(data);
         }
@@ -2080,13 +2088,29 @@ impl Scene {
         let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         match version {
             1 => {
+                // V1 — mesh only, XIAs/Groups/Constraints not present.
+                // Kept for backward-compat with files saved before 2026-04-24.
+                if data.len() < 12 {
+                    anyhow::bail!("V1 snapshot truncated (missing length prefix)");
+                }
                 let mesh_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
                 if data.len() < 12 + mesh_len {
-                    anyhow::bail!("Snapshot data is truncated");
+                    anyhow::bail!("V1 snapshot data is truncated");
                 }
                 let mesh_data = &data[12..12+mesh_len];
                 self.mesh = bincode::deserialize(mesh_data)?;
-                // ADR-007 — import 후 invariants 검증 (debug 경고, release는 무시)
+                // Reset semantic layer — a V1 file has no XIAs; keep the
+                //   mesh but make the empty state explicit so callers can
+                //   detect and offer "reconstruct XIAs from components".
+                self.xias.clear();
+                self.groups = GroupManager::new();
+                self.constraints = ConstraintGraph::new();
+                self.face_to_xia.clear();
+                eprintln!(
+                    "[Loader] V1 snapshot loaded: {} faces restored without XIAs. \
+                     Orphan recovery recommended.",
+                    self.mesh.face_count(),
+                );
                 #[cfg(debug_assertions)]
                 {
                     let report = self.mesh.verify_face_invariants();
@@ -2097,7 +2121,34 @@ impl Scene {
                 }
                 Ok(())
             }
-            _ => anyhow::bail!("Unsupported snapshot version: {}", version),
+            2 => {
+                // V2 — full scene snapshot (mesh + xias + groups + next_xia_id
+                // + constraints). `restore_scene_snapshot` rebuilds the
+                // face_to_xia reverse index on its own.
+                if data.len() < 16 {
+                    anyhow::bail!("V2 snapshot truncated (missing length prefix)");
+                }
+                let payload_len = u64::from_le_bytes(
+                    data[8..16].try_into().map_err(|_| anyhow::anyhow!("length parse"))?
+                ) as usize;
+                if data.len() < 16 + payload_len {
+                    anyhow::bail!("V2 snapshot data is truncated");
+                }
+                let payload = &data[16..16+payload_len];
+                self.restore_scene_snapshot(payload);
+                #[cfg(debug_assertions)]
+                {
+                    let report = self.mesh.verify_face_invariants();
+                    if !report.is_valid() {
+                        eprintln!("[ADR-007] Post-import invariant violations:\n{}",
+                            report.summary());
+                    }
+                }
+                Ok(())
+            }
+            v => anyhow::bail!(
+                "Unsupported snapshot version: {} (this build supports 1, 2)", v,
+            ),
         }
     }
 
@@ -2137,6 +2188,95 @@ pub struct SceneStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ══════════════════════════════════════════════════════════════
+    //   File save/load version tests (v1/v2 round-trip)
+    // ══════════════════════════════════════════════════════════════
+
+    /// V2 save → load round-trip preserves XIAs and face ownership.
+    /// This is the regression guard for the "all faces orphaned after
+    /// reload" issue traced to v1 format writing mesh-only.
+    #[test]
+    fn v2_roundtrip_preserves_xias_and_face_ownership() {
+        let mut scene_a = Scene::default();
+
+        // Draw a few RECTs to populate XIAs.
+        for (i, cx) in [-500.0_f64, 500.0, 0.0].iter().enumerate() {
+            let r = scene_a.execute(Command::DrawRect {
+                center: DVec3::new(*cx, 0.0, 0.0),
+                normal: DVec3::new(0.0, 1.0, 0.0),
+                up:     DVec3::new(0.0, 0.0, 1.0),
+                width: 400.0,
+                height: 400.0,
+            });
+            assert!(matches!(r, CommandResult::EntityCreated(_)),
+                "rect #{} should create an XIA", i);
+        }
+
+        let orig_face_count = scene_a.mesh.face_count();
+        let orig_xia_count = scene_a.xias.len();
+        let orig_orphans = orig_face_count - scene_a.face_to_xia.len();
+        assert!(orig_xia_count >= 3, "expected ≥3 XIAs, got {}", orig_xia_count);
+
+        // Round-trip.
+        let bytes = scene_a.export_versioned_snapshot().expect("export v2");
+        assert_eq!(&bytes[0..4], &AXIA_MAGIC, "magic header");
+        assert_eq!(
+            u32::from_le_bytes([bytes[4],bytes[5],bytes[6],bytes[7]]),
+            2, "written version must be 2",
+        );
+
+        let mut scene_b = Scene::default();
+        scene_b.import_versioned_snapshot(&bytes).expect("import v2");
+
+        // Topology preserved.
+        assert_eq!(scene_b.mesh.face_count(), orig_face_count,
+            "face count should match after v2 round-trip");
+        // XIAs preserved.
+        assert_eq!(scene_b.xias.len(), orig_xia_count,
+            "XIA count should match after v2 round-trip");
+        // Reverse index rebuilt — no new orphans.
+        let new_orphans = scene_b.mesh.face_count() - scene_b.face_to_xia.len();
+        assert_eq!(new_orphans, orig_orphans,
+            "orphan count should not grow across v2 round-trip");
+    }
+
+    /// V1 load still works (backward compatibility) but surfaces orphans
+    /// so the caller/UI can offer recovery.
+    #[test]
+    fn v1_load_drops_xias_but_preserves_mesh() {
+        // Hand-craft a v1 payload: AXIA magic + version 1 + mesh-only.
+        let mut scene_a = Scene::default();
+        scene_a.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            up: DVec3::new(0.0, 0.0, 1.0),
+            width: 200.0, height: 200.0,
+        });
+        let face_count = scene_a.mesh.face_count();
+        assert!(face_count >= 1);
+
+        // Build a v1 byte buffer manually.
+        let mesh_bytes = bincode::serialize(&scene_a.mesh).expect("serialize mesh");
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(&AXIA_MAGIC);
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.extend_from_slice(&(mesh_bytes.len() as u32).to_le_bytes());
+        v1.extend_from_slice(&mesh_bytes);
+
+        // Load into fresh scene.
+        let mut scene_b = Scene::default();
+        scene_b.import_versioned_snapshot(&v1).expect("v1 load");
+
+        // Mesh restored.
+        assert_eq!(scene_b.mesh.face_count(), face_count);
+        // XIAs deliberately cleared (legacy file has none).
+        assert_eq!(scene_b.xias.len(), 0,
+            "v1 load must reset the XIA map (flag for recovery)");
+        // All faces are orphans in the reverse index.
+        assert_eq!(scene_b.face_to_xia.len(), 0,
+            "v1 load must reset the reverse index");
+    }
 
     // ══════════════════════════════════════════════════════════════
     //   Centerline (EdgeClass) tests — Phase A contract verification

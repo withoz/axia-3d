@@ -123,7 +123,8 @@
       "Bash(grep -o \"uBigAlpha[^,}]\\\\{1,20\\\\}\" assets/index-B2iyMt66.js)",
       "Bash(grep -o \"uFadeFar[^,}]\\\\{1,30\\\\}\" assets/index-B2iyMt66.js)",
       "Bash(cargo bench *)",
-      "Bash(gh pr *)"
+      "Bash(gh pr *)",
+      "Bash(grep -c '\\\\*/$' web/src/wasm/axia_wasm.d.ts)"
     ]
   }
 }
