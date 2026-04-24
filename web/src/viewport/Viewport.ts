@@ -41,6 +41,9 @@ export type ViewMode = '3d' | 'top' | 'bottom' | 'front' | 'back' | 'right' | 'l
 // Reusable vectors for pan operations (avoid allocation in mousemove handler)
 const _panRight = new THREE.Vector3();
 const _panUp = new THREE.Vector3();
+const _zoomTmp = new THREE.Vector3();
+const _zoomMouse = new THREE.Vector2();
+const _zoomRaycaster = new THREE.Raycaster();
 
 export class Viewport {
   readonly container: HTMLElement;
@@ -656,18 +659,35 @@ export class Viewport {
       this.isPanning = false;
     }) as EventListener);
 
-    // ── Wheel: 줌 ──
+    // ── Wheel: 줌 (SketchUp 스타일 zoom-to-cursor) ──
     track(canvas, 'wheel', ((e: WheelEvent) => {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 1.1 : 0.9;
+
       if (this._viewMode !== '3d') {
+        // 2D ortho: 기존 동작 유지 (단일 zoom factor)
         this.orthoZoom = Math.max(10, Math.min(200000, this.orthoZoom * factor));
         this.updateOrthoCamera();
-      } else {
-        this.spherical.radius = Math.max(100, Math.min(500000000,
-          this.spherical.radius * factor));
-        this.updateCameraFromSpherical();
+        return;
       }
+
+      // 3D: 커서 아래 3D 점을 찾아 그쪽으로 zoom. 없으면 기본 orbit 중심 zoom.
+      const pivot = this._cursorWorldPoint(e.clientX, e.clientY);
+      const newRadius = Math.max(100, Math.min(500000000,
+        this.spherical.radius * factor));
+
+      if (pivot) {
+        // orbit target 을 pivot 쪽으로 (1 - factor) 만큼 이동.
+        //   zoom in (factor<1): target 이 pivot 에 가까워짐
+        //   zoom out (factor>1): target 이 pivot 에서 멀어짐 (cursor 기준 반대편 확대)
+        const t = 1 - factor;
+        this.orbitTarget.addScaledVector(
+          _zoomTmp.subVectors(pivot, this.orbitTarget),
+          t,
+        );
+      }
+      this.spherical.radius = newRadius;
+      this.updateCameraFromSpherical();
     }) as EventListener, { passive: false });
 
     // 오른쪽 클릭 기본 메뉴 차단 (document 전체)
@@ -1669,6 +1689,36 @@ export class Viewport {
   }
 
   /** 카메라를 원점으로 복귀 (초기 상태) */
+  /**
+   * Screen cursor → world 3D point for zoom pivot.
+   * Priority: ① scene geometry hit  ② orbit-target view-plane projection.
+   *
+   * The view-plane fallback keeps the zoom pivot at the "same depth" as
+   * the current orbit target when nothing is under the cursor — this is
+   * what users expect from SketchUp/Blender-style zoom.
+   */
+  private _cursorWorldPoint(screenX: number, screenY: number): THREE.Vector3 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    _zoomMouse.set(
+      ((screenX - rect.left) / rect.width) * 2 - 1,
+      -((screenY - rect.top) / rect.height) * 2 + 1,
+    );
+    _zoomRaycaster.setFromCamera(_zoomMouse, this.activeCamera as THREE.PerspectiveCamera);
+    // ① 실제 메시 hit
+    const meshes = this.meshGroup.children.filter(c => c instanceof THREE.Mesh);
+    const hits = _zoomRaycaster.intersectObjects(meshes, false);
+    if (hits.length > 0) return hits[0].point.clone();
+    // ② orbit-target 을 지나는 view-plane 으로 projection
+    const ray = _zoomRaycaster.ray;
+    const camDir = _zoomTmp.set(0, 0, 0);
+    this.activeCamera.getWorldDirection(camDir);
+    const denom = ray.direction.dot(camDir);
+    if (Math.abs(denom) < 1e-6) return null;
+    const t = (this.orbitTarget.clone().sub(ray.origin).dot(camDir)) / denom;
+    if (!Number.isFinite(t) || t <= 0) return null;
+    return ray.origin.clone().addScaledVector(ray.direction, t);
+  }
+
   resetCamera() {
     this.orbitTarget.set(0, 0, 0);
     this.spherical.set(60000, Math.PI / 4, Math.PI / 4);
