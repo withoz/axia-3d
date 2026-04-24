@@ -183,6 +183,29 @@ export class EraseTool implements ITool {
           : `솔리드 ${desolidifiedCount}개가 서피스로 전환됨 (닫힌 볼륨 해체)`;
         Toast.warning(label, 3500);
       }
+
+      // Option X2 (2026-04-24) — diagnostic when auto-merge didn't happen.
+      //
+      // If the user erased an edge and the topology ended up as SOFT-only
+      // (edge hidden but faces still split), they likely expected a merge
+      // and got a non-merge. Surface the first failure reason so they can
+      // react (adjust tolerance, use geometric merge, etc).
+      //
+      // Suppressed when:
+      //   • Shift held (cascadeOnly — user chose destructive)
+      //   • Actual merge succeeded (mergedCount > 0)
+      //   • Nothing softened (result was clean cascade/synth)
+      if (!cascadeOnly && mergedCount === 0 && softenedCount > 0) {
+        const reason = this.ctx.bridge.lastMergeFailureReason();
+        const base = `${softenedCount}개 엣지는 숨겨졌지만 면은 통합되지 않음.`;
+        const hint = reason
+          ? `원인: ${reason}.\n`
+            + `• 허용치 완화 → 커맨드 "mergetol 5"\n`
+            + `• 폴리곤 병합 → 두 면 선택 후 "🧲 기하 병합" 컨텍스트 메뉴`
+          : `• 허용치 완화: "mergetol 5"\n`
+            + `• 수동 병합: 두 면 선택 + Ctrl+M`;
+        Toast.warning(`${base}\n${hint}`, 5000);
+      }
     } else {
       Toast.error('삭제에 실패했습니다');
     }

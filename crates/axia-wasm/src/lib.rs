@@ -2029,7 +2029,38 @@ impl AxiaEngine {
                         if first_failure_reason.is_none() {
                             first_failure_reason = Some(format!("edge {}: {}", eid_raw, e));
                         }
-                        /* fall through to cascade */
+                        /* fall through to geometric fallback */
+                    }
+                }
+
+                // Option X1 (2026-04-24) — geometric merge fallback.
+                //
+                // Standard merge_faces_by_edge rejects on:
+                //   • ≠2 faces sharing the edge (snap-drift "parallel" edges)
+                //   • multi-edge sharing (C-slit)
+                //   • coplanarity tol miss (0.5° strict)
+                // For most user-facing "두 RECT 붙여놓고 공유 엣지 삭제" cases
+                // this is a false negative. Try the polygon-level merge with
+                // a loosened tolerance before falling through to SOFT. If it
+                // succeeds we treat the operation as merged.
+                if self.scene.mesh.edges.contains(eid) {
+                    let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+                    if faces.len() == 2 && faces[0] != faces[1] {
+                        let geo_tol = (angle_tol_deg * 4.0).max(2.0);
+                        if let Ok(_) = self.scene.mesh.merge_coplanar_faces_geometric(
+                            faces[0], faces[1], geo_tol,
+                        ) {
+                            merged += 1;
+                            // Clear the diagnostic — a successful geometric
+                            //   merge is not a "failure" from the user's POV.
+                            if first_failure_reason.as_ref()
+                                .map(|s| s.starts_with(&format!("edge {}:", eid_raw)))
+                                .unwrap_or(false)
+                            {
+                                first_failure_reason = None;
+                            }
+                            continue;
+                        }
                     }
                 }
             }
