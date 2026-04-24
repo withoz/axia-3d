@@ -688,20 +688,18 @@ impl Scene {
         if !inner_face.is_active() { return None; }
         let inner_verts = self.mesh.collect_loop_verts(inner_face.outer().start).ok()?;
         if inner_verts.len() < 3 { return None; }
-        // Sample any inner vertex (use first); all should be inside the
-        //   enclosing face since inner is a contiguous polygon inside it.
-        let inner_pos = self.mesh.vertex_pos(inner_verts[0]).ok()?;
+        let inner_pts: Vec<DVec3> = inner_verts.iter()
+            .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+            .collect();
+        if inner_pts.len() < 3 { return None; }
         let inner_normal = inner_face.normal();
         if inner_normal.length_squared() < 1e-10 { return None; }
 
-        // Compute inner area (rough, 3D) for "strictly smaller" comparison.
+        // inner area (3D)
         let inner_area = {
-            let pts: Vec<DVec3> = inner_verts.iter()
-                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
-                .collect();
             let mut a_vec = DVec3::ZERO;
-            for i in 1..pts.len().saturating_sub(1) {
-                a_vec += (pts[i] - pts[0]).cross(pts[i + 1] - pts[0]);
+            for i in 1..inner_pts.len().saturating_sub(1) {
+                a_vec += (inner_pts[i] - inner_pts[0]).cross(inner_pts[i + 1] - inner_pts[0]);
             }
             a_vec.length() * 0.5
         };
@@ -711,16 +709,13 @@ impl Scene {
         for (outer_fid, outer_face) in self.mesh.faces.iter() {
             if outer_fid == inner_fid { continue; }
             if !outer_face.is_active() { continue; }
-
-            // Coplanar check
             let outer_normal = outer_face.normal();
             if outer_normal.length_squared() < 1e-10 { continue; }
             let n_dot = outer_normal.dot(inner_normal).abs();
             if n_dot < 0.999 { continue; }
 
             let outer_verts = match self.mesh.collect_loop_verts(outer_face.outer().start) {
-                Ok(v) => v,
-                Err(_) => continue,
+                Ok(v) => v, Err(_) => continue,
             };
             if outer_verts.len() < 3 { continue; }
             let outer_pts: Vec<DVec3> = outer_verts.iter()
@@ -728,7 +723,6 @@ impl Scene {
                 .collect();
             if outer_pts.len() < 3 { continue; }
 
-            // Outer area
             let outer_area = {
                 let mut a_vec = DVec3::ZERO;
                 for i in 1..outer_pts.len() - 1 {
@@ -736,49 +730,17 @@ impl Scene {
                 }
                 a_vec.length() * 0.5
             };
-            if outer_area <= inner_area { continue; } // outer must be larger
+            if outer_area <= inner_area { continue; }
 
-            // Project inner_pos onto outer's plane basis, test point-in-polygon.
-            let p0 = outer_pts[0];
-            let e1 = (outer_pts[1] - p0).normalize_or_zero();
-            if e1.length_squared() < 1e-10 { continue; }
-            let mut e2 = DVec3::ZERO;
-            for p in &outer_pts[2..] {
-                let v = *p - p0;
-                let proj = e1 * v.dot(e1);
-                let ortho = v - proj;
-                if ortho.length_squared() > 1e-6 {
-                    e2 = ortho.normalize_or_zero();
-                    break;
-                }
+            // Phase 3c'' — containment 판정을 polygon_contains_polygon 으로
+            //   교체. 이전 구현은 inner 의 "첫 정점" ray-cast 만 검사해 해당
+            //   정점이 outer 경계 위일 때 flaky 하게 false 가 나와 B1 promote
+            //   를 놓치는 케이스가 있었음. 이제 모든 inner vertex + strict
+            //   interior 점까지 검사하는 rigorous 방식.
+            if !axia_geo::operations::polygon_geom::polygon_contains_polygon(&outer_pts, &inner_pts) {
+                continue;
             }
-            if e2.length_squared() < 1e-10 { continue; }
-            // Plane distance sanity
-            let pn = e1.cross(e2).normalize_or_zero();
-            let d = (inner_pos - p0).dot(pn).abs();
-            let tol = (outer_area.sqrt() * 1e-4).max(1e-3);
-            if d > tol { continue; }
 
-            let poly_2d: Vec<(f64, f64)> = outer_pts.iter()
-                .map(|p| ((*p - p0).dot(e1), (*p - p0).dot(e2)))
-                .collect();
-            let px = (inner_pos - p0).dot(e1);
-            let py = (inner_pos - p0).dot(e2);
-            let mut inside = false;
-            let nv = poly_2d.len();
-            let mut j = nv - 1;
-            for i in 0..nv {
-                let (xi, yi) = poly_2d[i];
-                let (xj, yj) = poly_2d[j];
-                if ((yi > py) != (yj > py)) &&
-                   (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi) {
-                    inside = !inside;
-                }
-                j = i;
-            }
-            if !inside { continue; }
-
-            // Keep the smallest valid outer (closest container).
             match best {
                 None => best = Some((outer_fid, outer_area)),
                 Some((_, a)) if outer_area < a => best = Some((outer_fid, outer_area)),

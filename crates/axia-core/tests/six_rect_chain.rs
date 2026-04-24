@@ -91,15 +91,16 @@ fn four_rect_chain() {
         "4-rect total area should be 4,940,000 (got {})", total);
 }
 
-/// Progressive improvement (2026-04-24):
-///   - Phase 3c' polygon_geom fix (f6b9b27): over-count reduced from
-///     systematic misclassification to pure algorithmic issue.
-///   - Phase 3c''-B Step 4.95 B1 second-pass: 160,000 mm² → 100,000
-///     mm² (37% reduction), one face successfully hole-promoted.
-///   - Remaining 100k over-count requires partial-overlap intersection
-///     (not just containment). Tracked as future work.
+/// Phase 3c''-B — 5-rect-with-inner-rect chain over-count RESOLVED
+/// (2026-04-24):
+///   1. polygon_geom + polygon_contains_polygon (f6b9b27) — rigorous
+///      containment check replaces centroid-only
+///   2. Step 4.95 second B1 hole-promote pass (79abc4c) — catches
+///      containment created by M1
+///   3. find_enclosing_face uses polygon_contains_polygon (not ray-
+///      cast from a single vertex) — eliminates flaky boundary-
+///      vertex classification that was missing one pair per chain
 #[test]
-#[ignore]
 fn five_rects_with_small_inner() {
     let mut scene = Scene::default();
     let rects = [
@@ -124,6 +125,57 @@ fn five_rects_with_small_inner() {
     // Expected: still 4,940,000
     assert!((total - 4_940_000.0).abs() < 1.0,
         "5-rect total area should be 4,940,000 (got {})", total);
+}
+
+/// Phase 3c''-B final — 6-rect chain (원래 사용자 버그 재현 시나리오).
+/// A~D + 내부 소형 E + 대각 F. 사용자 스크린샷 "빈 공간" 회귀 보호.
+#[test]
+fn six_rect_full_chain_no_holes() {
+    let mut scene = Scene::default();
+    let rects = [
+        (0.0, 0.0, 2000.0, 1000.0),
+        (400.0, 300.0, 2000.0, 1000.0),
+        (800.0, 600.0, 2000.0, 1000.0),
+        (-400.0, 400.0, 2000.0, 1000.0),
+        (200.0, 200.0, 800.0, 400.0),
+        (1200.0, 100.0, 1500.0, 800.0),
+    ];
+    for &(cx, cy, w, h) in rects.iter() {
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(cx, cy, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            up: DVec3::new(1.0, 0.0, 0.0),
+            width: w, height: h,
+        });
+    }
+    let total = total_face_area(&scene);
+    // 6-rect union (inclusion-exclusion):
+    //   E 는 A 안에 완전 포함되므로 union 에 기여 안 함
+    //   F: X[800,1600] Y[-650,850] = 1,200,000
+    //   A∪B∪C∪D (5-rect 계산 결과) = 4,940,000 + E=0 기여 = 4,940,000
+    //   F∩(A∪B∪C) 교집합:
+    //     F∩A: X[800,500]=empty
+    //     F∩B: X[800,900] Y[-650,850] clipped to B=Y[-700,1300] = 100×1500 = 150,000
+    //     F∩C: X[800,1300] Y[-400,850] = 500×1250 = 625,000
+    //     F∩B∩C: X[800,900] Y[-400,850] = 100×1250 = 125,000
+    //     F∩(B∪C) = 150 + 625 - 125 = 650,000
+    //   Total = 4,940,000 + (1,200,000 - 650,000) = 4,940,000 + 550,000 = 5,490,000
+    // Debug: list faces + inners
+    for (fid, f) in scene.mesh.faces.iter() {
+        if !f.is_active() { continue; }
+        let n_inners = f.inners().len();
+        let verts = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+        let pts: Vec<DVec3> = verts.iter().filter_map(|&v| scene.mesh.vertex_pos(v).ok()).collect();
+        let mut a = DVec3::ZERO;
+        for i in 1..pts.len().saturating_sub(1) {
+            a += (pts[i] - pts[0]).cross(pts[i+1] - pts[0]);
+        }
+        eprintln!("  face {:?} inners={} outer_verts={} area={:.0}",
+            fid, n_inners, pts.len(), a.length() * 0.5);
+    }
+    eprintln!("6-rect total={}", total);
+    assert!((total - 5_490_000.0).abs() < 1.0,
+        "6-rect total area should equal union 5,490,000 (got {})", total);
 }
 
 

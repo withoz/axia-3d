@@ -163,6 +163,135 @@ pub fn point_in_polygon_winding(
     (sum.abs() - std::f64::consts::TAU).abs() <= angle_tol
 }
 
+/// 공면 polygon 용 2D projection 기저.
+/// poly 의 첫 edge 방향을 e1, normal × e1 을 e2 로 설정.
+/// `project`(p) 로 2D 좌표, `lift`(x,y) 로 3D 복원.
+pub struct PlaneBasis {
+    pub origin: DVec3,
+    pub e1: DVec3,
+    pub e2: DVec3,
+    pub normal: DVec3,
+}
+
+impl PlaneBasis {
+    pub fn from_polygon(poly: &[DVec3]) -> Option<Self> {
+        if poly.len() < 3 { return None; }
+        let normal = face_unit_normal(poly)?;
+        let origin = poly[0];
+        // 첫 non-degenerate edge
+        let mut e1 = DVec3::ZERO;
+        for i in 1..poly.len() {
+            let v = poly[i] - origin;
+            if v.length_squared() > 1e-12 {
+                e1 = v.normalize();
+                break;
+            }
+        }
+        if e1.length_squared() < 0.5 { return None; }
+        let e2 = normal.cross(e1).normalize_or_zero();
+        if e2.length_squared() < 0.5 { return None; }
+        Some(Self { origin, e1, e2, normal })
+    }
+
+    pub fn project(&self, p: DVec3) -> (f64, f64) {
+        let v = p - self.origin;
+        (v.dot(self.e1), v.dot(self.e2))
+    }
+
+    pub fn lift(&self, x: f64, y: f64) -> DVec3 {
+        self.origin + self.e1 * x + self.e2 * y
+    }
+}
+
+/// 두 볼록 공면 polygon 의 intersection polygon 반환 (Sutherland-Hodgman).
+///
+/// 전제:
+///   - 두 polygon 이 거의 같은 평면
+///   - `subject` 는 볼록, `clip` 은 볼록 (S-H 가정)
+///
+/// 반환:
+///   - `None` — 완전 비교차 (intersection 비어있음)
+///   - `Some(verts)` — 교차 polygon 의 2D 꼭짓점 (CCW, basis 2D 좌표)
+///
+/// L-shape 등 비볼록 입력에선 결과가 부정확할 수 있음 (→ Weiler-Atherton
+/// 필요 신호). 현재 5-rect chain 오류는 모두 rect × rect 볼록 케이스.
+pub fn sutherland_hodgman(subject_2d: &[(f64, f64)], clip_2d: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
+    if subject_2d.len() < 3 || clip_2d.len() < 3 { return None; }
+
+    // clip polygon 의 에지 기준으로 half-plane clip 반복
+    let mut output = subject_2d.to_vec();
+
+    for i in 0..clip_2d.len() {
+        if output.is_empty() { return None; }
+        let input = std::mem::take(&mut output);
+
+        let a = clip_2d[i];
+        let b = clip_2d[(i + 1) % clip_2d.len()];
+        let edge = (b.0 - a.0, b.1 - a.1);
+        // CCW clip polygon: interior is to the LEFT of edge a→b.
+        // 2D left test: cross(b-a, p-a) > 0.
+        let is_inside = |p: (f64, f64)| -> f64 {
+            edge.0 * (p.1 - a.1) - edge.1 * (p.0 - a.0)
+        };
+        // intersection of segment (s,e) with line a-b
+        let line_intersect = |s: (f64, f64), e: (f64, f64)| -> Option<(f64, f64)> {
+            let d1 = (e.0 - s.0, e.1 - s.1);
+            let denom = d1.0 * edge.1 - d1.1 * edge.0;
+            if denom.abs() < 1e-14 { return None; }
+            let t = ((a.0 - s.0) * edge.1 - (a.1 - s.1) * edge.0) / denom;
+            Some((s.0 + d1.0 * t, s.1 + d1.1 * t))
+        };
+
+        for j in 0..input.len() {
+            let current = input[j];
+            let prev = input[(j + input.len() - 1) % input.len()];
+            let cur_in = is_inside(current);
+            let prev_in = is_inside(prev);
+            // CCW clip: inside → cross >= 0. Use > -eps for numerical robustness.
+            const EPS: f64 = -1e-9;
+            if cur_in >= EPS {
+                if prev_in < EPS {
+                    if let Some(p) = line_intersect(prev, current) { output.push(p); }
+                }
+                output.push(current);
+            } else if prev_in >= EPS {
+                if let Some(p) = line_intersect(prev, current) { output.push(p); }
+            }
+        }
+    }
+
+    // 동일 점 dedup
+    if output.len() < 3 { return None; }
+    let mut dedup = Vec::with_capacity(output.len());
+    for p in &output {
+        if let Some(last) = dedup.last() {
+            let d: (f64, f64) = (p.0 - (last as &(f64,f64)).0, p.1 - (last as &(f64,f64)).1);
+            if d.0.abs() < 1e-6 && d.1.abs() < 1e-6 { continue; }
+        }
+        dedup.push(*p);
+    }
+    // 마지막-첫 동일성
+    if dedup.len() >= 2 {
+        let first = dedup[0];
+        let last = *dedup.last().unwrap();
+        if (first.0 - last.0).abs() < 1e-6 && (first.1 - last.1).abs() < 1e-6 {
+            dedup.pop();
+        }
+    }
+    if dedup.len() < 3 { return None; }
+
+    // 면적이 거의 0 이면 degenerate intersection 으로 간주
+    let mut area2 = 0.0;
+    for i in 0..dedup.len() {
+        let (x1, y1) = dedup[i];
+        let (x2, y2) = dedup[(i + 1) % dedup.len()];
+        area2 += x1 * y2 - x2 * y1;
+    }
+    if area2.abs() < 1e-3 { return None; }
+
+    Some(dedup)
+}
+
 /// outer 폴리곤이 inner 폴리곤을 완전 포함하는가?
 ///
 /// 조건:
@@ -268,6 +397,63 @@ mod tests {
         // L-shape 은 overlap 을 포함하지 않는다 (공유 정점 2 개로 붙어있을 뿐)
         assert!(!polygon_contains_polygon(&l_shape, &overlap),
             "L-shape wrap must NOT be classified as containing the overlap quad");
+    }
+
+    #[test]
+    fn sutherland_hodgman_simple_overlap() {
+        // subject (0..4)×(0..4) , clip (2..6)×(2..6) → intersection (2..4)×(2..4)
+        let subject = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)];
+        let clip = vec![(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)];
+        let out = sutherland_hodgman(&subject, &clip).expect("overlap exists");
+        assert_eq!(out.len(), 4, "intersection should be a quad");
+        // area = 2 × 2 = 4
+        let mut area2 = 0.0;
+        for i in 0..out.len() {
+            let (x1, y1) = out[i];
+            let (x2, y2) = out[(i + 1) % out.len()];
+            area2 += x1 * y2 - x2 * y1;
+        }
+        assert!((area2.abs() * 0.5 - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sutherland_hodgman_disjoint() {
+        let subject = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let clip = vec![(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 3.0)];
+        assert!(sutherland_hodgman(&subject, &clip).is_none());
+    }
+
+    #[test]
+    fn sutherland_hodgman_full_contains() {
+        // subject (0..10)×(0..10), clip (2..4)×(2..4) — clip fully inside subject
+        // intersection = clip itself
+        let subject = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let clip = vec![(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)];
+        let out = sutherland_hodgman(&subject, &clip).expect("overlap");
+        // area == 4
+        let mut area2 = 0.0;
+        for i in 0..out.len() {
+            let (x1, y1) = out[i];
+            let (x2, y2) = out[(i + 1) % out.len()];
+            area2 += x1 * y2 - x2 * y1;
+        }
+        assert!((area2.abs() * 0.5 - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn plane_basis_roundtrip() {
+        let poly = vec![
+            DVec3::new(1.0, 2.0, 3.0),
+            DVec3::new(5.0, 2.0, 3.0),
+            DVec3::new(5.0, 6.0, 3.0),
+            DVec3::new(1.0, 6.0, 3.0),
+        ];
+        let basis = PlaneBasis::from_polygon(&poly).unwrap();
+        for &p in &poly {
+            let (x, y) = basis.project(p);
+            let back = basis.lift(x, y);
+            assert!((p - back).length() < 1e-9, "roundtrip mismatch {:?} vs {:?}", p, back);
+        }
     }
 
     #[test]
