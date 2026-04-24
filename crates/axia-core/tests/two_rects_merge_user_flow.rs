@@ -307,6 +307,126 @@ fn inner_rect_inside_bigger_face_creates_subface_with_hole() {
     assert!(has_inner, "inner sub-face must exist on its own");
 }
 
+/// ADR-008 Axiom 7 / M1 Mixed-Cycle Split — partial-overlap case.
+///
+/// Big 1000×1000 RECT at origin. Small 400×200 RECT centered at (400,0,0)
+/// spans x∈[200,600], z∈[-100,100] — half inside big, half outside.
+///
+/// Expected after Step 4.9:
+///   • Big gets split by the chain of free edges that crosses it
+///     (overlap area 60,000).
+///   • Outside portion of small (20,000) is a separate face.
+///   • Material of the overlap portion = small RECT's material
+///     (new-rect-wins decision).
+#[test]
+fn partial_overlap_rect_splits_big_face() {
+    let mut scene = Scene::default();
+
+    // Big rect
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 1000.0,
+    });
+    assert_eq!(scene.mesh.face_count(), 1, "big rect creates 1 face");
+
+    // Small rect, centered off-axis so only half overlaps
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(400.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 400.0,
+        height: 200.0,
+    });
+
+    // Expected: big is subdivided into 2 pieces (L-shape outer + 200×300
+    //   overlap inner), plus the 100×200 outside portion of small. Total 3
+    //   active faces. (mesh.face_count() may include stale slots — count
+    //   actives directly.)
+    let active = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+    assert_eq!(active, 3,
+        "partial overlap must split big into 2 + outside portion of small; got {} active faces", active);
+
+    // Verify total area: big (1,000,000) + outside portion (20,000) = 1,020,000
+    let mut total_area = 0.0;
+    for (_, f) in scene.mesh.faces.iter() {
+        if !f.is_active() { continue; }
+        let verts = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+        if verts.len() < 3 { continue; }
+        let pts: Vec<DVec3> = verts.iter()
+            .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+            .collect();
+        let mut a = DVec3::ZERO;
+        for i in 1..pts.len()-1 {
+            a += (pts[i] - pts[0]).cross(pts[i+1] - pts[0]);
+        }
+        total_area += a.length() * 0.5;
+    }
+    // Allow rounding tolerance: 1,020,000 ± 1.0
+    assert!((total_area - 1_020_000.0).abs() < 1.0,
+        "total face area should be 1,020,000 (1M big + 20K outside); got {:.1}", total_area);
+}
+
+/// ADR-008 Axiom 7 / M1 — RECT that crosses a face boundary TWICE and
+/// extends through the face's interior. A long skinny RECT drawn across
+/// big rect, entering and exiting both at the left and right edges.
+#[test]
+fn rect_edges_cross_face_boundary_twice() {
+    let mut scene = Scene::default();
+
+    // Big 1000×1000 at origin
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 1000.0,
+    });
+
+    // Very wide skinny RECT: 2000 wide × 200 tall, centered at origin.
+    // Left edge at x=-1000, right edge at x=+1000 — BOTH outside big
+    // (which is at x=±500). So the big's left and right boundaries get
+    // crossed TWICE by the skinny's horizontal edges at z=±100.
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 2000.0,
+        height: 200.0,
+    });
+
+    // Expected pieces (all on the same plane):
+    //   • Big's area above z=100 (1,000 × 400 = 400,000)
+    //   • Big's area below z=-100 (400,000)
+    //   • Overlap strip inside big at z∈[-100,100] (1,000 × 200 = 200,000)
+    //   • Left wing of skinny outside big (500 × 200 = 100,000)
+    //   • Right wing of skinny outside big (500 × 200 = 100,000)
+    // Total area = 400,000 + 400,000 + 200,000 + 100,000 + 100,000 = 1,200,000
+    // (big's 1,000,000 + skinny's 2,000×200 = 400,000 − overlap 200,000 = 1,200,000)
+    let active = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+    assert!(active >= 3,
+        "crossing-twice layout must produce ≥3 active faces; got {}", active);
+
+    let mut total_area = 0.0;
+    for (_, f) in scene.mesh.faces.iter() {
+        if !f.is_active() { continue; }
+        let verts = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+        if verts.len() < 3 { continue; }
+        let pts: Vec<DVec3> = verts.iter()
+            .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+            .collect();
+        let mut a = DVec3::ZERO;
+        for i in 1..pts.len()-1 {
+            a += (pts[i] - pts[0]).cross(pts[i+1] - pts[0]);
+        }
+        total_area += a.length() * 0.5;
+    }
+    assert!((total_area - 1_200_000.0).abs() < 10.0,
+        "expected 1,200,000 (big 1M + skinny 400K − overlap 200K); got {:.1}", total_area);
+}
+
 /// Axiom 4 (Q4): 독립 RECT 그리기 → 1 face + 4 edges.
 #[test]
 fn single_rect_produces_one_face() {

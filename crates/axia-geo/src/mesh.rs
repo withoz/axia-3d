@@ -1021,12 +1021,15 @@ impl Mesh {
 
             // (B) Local-containment — AABB 내부의 face centroid만 enclose 검사.
             //
-            // 2026-04-24 (ADR-008 Axiom 7 확장): cycle의 엣지 중 하나라도
-            // "완전 free"(어떤 face에도 속하지 않음)이면 사용자가 방금 그린
-            // outer 엣지로 판단 → 기존 inner face를 감싸도 허용.
-            // 반대로 모든 엣지가 이미 한쪽이라도 face를 가진 상태라면
-            // 기존 outer 재생성 의심 → reject.
-            let has_free_edge = verts.iter().enumerate().any(|(i, _)| {
+            // 2026-04-24 (ADR-008 Axiom 7): the cycle must be entirely on
+            // completely-free edges. Mixed cycles (some edges already
+            // bounding a face) are rejected here and are handled by the
+            // scene's Step 4.9 M1 `split_face_by_chain`.
+            //
+            // Adjacent-RECT case (B shares one edge with A) is unaffected:
+            // that face is created by exec_draw_line's Step 4(b) via
+            // `detect_free_edge_loop` before this resolver runs.
+            let all_edges_free = verts.iter().enumerate().all(|(i, _)| {
                 let va = verts[i];
                 let vb = verts[(i + 1) % verts.len()];
                 match self.find_edge(va, vb) {
@@ -1034,24 +1037,7 @@ impl Mesh {
                     None => false,
                 }
             });
-
-            if !has_free_edge {
-                let mut encloses_existing = false;
-                for &(c, face_area) in &face_info {
-                    if face_area >= area { continue; }
-                    let d = (c - p0).dot(normal).abs();
-                    if d > tol * 10.0 { continue; }
-                    let cx = (c - p0).dot(e1);
-                    let cy = (c - p0).dot(e2);
-                    if cx < min_x - dx || cx > max_x + dx { continue; }
-                    if cy < min_y - dy || cy > max_y + dy { continue; }
-                    if point_in_poly_2d(cx, cy, &poly_2d) {
-                        encloses_existing = true;
-                        break;
-                    }
-                }
-                if encloses_existing { continue; }
-            }
+            if !all_edges_free { continue; }
 
             // Coplanarity 재검증
             if !self.are_verts_coplanar(verts) { continue; }
@@ -1485,6 +1471,39 @@ impl Mesh {
     /// synthesis to tell apart "freshly drawn" edges (completely free)
     /// from edges that bound an existing face and would, if part of a
     /// larger cycle, indicate recreation of a previously-resolved outer.
+    /// Does `edge_id` have a free half-edge pointing from `src` to `dst`?
+    /// Needed by the manifold-safety gates in D resolver and Step 4(b):
+    /// before claiming a cycle edge, callers verify a suitable free HE
+    /// already exists in the radial ring, avoiding a 4-way ring that
+    /// would make the twin pair self-referencing.
+    pub fn has_free_he_from_to(&self, edge_id: EdgeId, src: VertId, dst: VertId) -> bool {
+        let Some(edge) = self.edges.get(edge_id) else { return false; };
+        if !edge.is_active() { return false; }
+        let start = edge.any_he();
+        if start.is_null() { return false; }
+        let mut he = start;
+        loop {
+            match self.hes.get(he) {
+                Some(h) => {
+                    if h.dst() == dst && h.face().is_null() {
+                        // Verify src too — walk to prev via loop (expensive
+                        //   in general but the edge's HEs all connect the
+                        //   same two verts, so any HE with dst=dst has
+                        //   src=other endpoint of this edge).
+                        let v_small = edge.v_small();
+                        let v_large = edge.v_large();
+                        let he_src = if dst == v_small { v_large } else { v_small };
+                        if he_src == src { return true; }
+                    }
+                    let next = h.next_rad();
+                    if next.is_null() || next == start { return false; }
+                    he = next;
+                }
+                None => return false,
+            }
+        }
+    }
+
     pub fn is_edge_completely_free(&self, edge_id: EdgeId) -> bool {
         let Some(edge) = self.edges.get(edge_id) else { return false; };
         if !edge.is_active() { return false; }

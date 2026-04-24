@@ -447,6 +447,177 @@ pub fn split_face_by_line(
     })
 }
 
+/// ADR-008 Axiom 7 (B2 Mixed-Cycle Split) — split a face along a chain of
+/// existing free edges whose endpoints lie on the face's boundary.
+///
+/// The caller draws a polyline that enters the face at one boundary vertex,
+/// traverses the interior via ≥1 intermediate vertices, and exits at a
+/// second boundary vertex. Those edges were just added as free edges by the
+/// drawLine pipeline; this function consumes them and produces two new
+/// sub-faces that share the chain as their common seam.
+///
+/// # Arguments
+/// * `face_id`          — the face being split. Will be dissolved.
+/// * `chain_verts`      — ordered vertex IDs of the cutting polyline.
+///                        `chain[0]` and `chain[last]` must be on the
+///                        `face_id` outer boundary; intermediate verts
+///                        must NOT be on the boundary (strict interior).
+///                        The edges between consecutive chain verts must
+///                        already exist in the mesh.
+/// * `inherit_material` — the material to stamp onto *both* resulting
+///                        sub-faces. B1 decision chose "new RECT's material
+///                        wins"; the caller passes the draw operation's
+///                        current material.
+///
+/// # Algorithm
+/// 1. Walk the face's outer loop to find the two positions where chain
+///    endpoints attach. Assert both are boundary vertices (not interior).
+/// 2. Build sub-face A's vertex sequence:
+///       chain[0], chain[1], …, chain[last],
+///       boundary from chain[last] walking forward → chain[0]
+/// 3. Build sub-face B's vertex sequence:
+///       chain[last], chain[last-1], …, chain[0],
+///       boundary from chain[0] walking forward → chain[last]
+/// 4. Soft-remove `face_id` so the existing HEs (both outer + chain) are
+///    detached from the old face but stay wired for `make_loop` to reuse.
+/// 5. Create two new faces via `add_face_with_holes` — existing holes on
+///    `face_id` (if any) are redistributed by containment, exactly like
+///    Phase G case (a) but using the chain instead of a straight line.
+///
+/// # Failure modes
+/// * Chain endpoints not both on boundary → `Err`
+/// * Intermediate chain vertex on boundary → `Err` (would require
+///   multi-seam split, not handled).
+/// * Edges between consecutive chain verts missing → `Err`.
+pub fn split_face_by_chain(
+    mesh: &mut Mesh,
+    face_id: FaceId,
+    chain_verts: &[VertId],
+    inherit_material: MaterialId,
+) -> Result<FaceSplitResult> {
+    ensure!(
+        chain_verts.len() >= 2,
+        "split_face_by_chain: chain needs ≥2 vertices, got {}",
+        chain_verts.len()
+    );
+    ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
+
+    let outer_start = mesh.faces[face_id].outer().start;
+    let boundary = mesh.collect_loop_verts(outer_start)?;
+    let n_b = boundary.len();
+    ensure!(n_b >= 3, "face boundary has <3 verts");
+
+    // Locate chain[0] and chain[last] positions on boundary.
+    let start = chain_verts[0];
+    let end = *chain_verts.last().unwrap();
+    let i_start = boundary.iter().position(|v| *v == start).ok_or_else(|| {
+        anyhow::anyhow!(
+            "split_face_by_chain: chain start vert {} not on face {} boundary",
+            start.raw(),
+            face_id.raw(),
+        )
+    })?;
+    let i_end = boundary.iter().position(|v| *v == end).ok_or_else(|| {
+        anyhow::anyhow!(
+            "split_face_by_chain: chain end vert {} not on face {} boundary",
+            end.raw(),
+            face_id.raw(),
+        )
+    })?;
+    ensure!(i_start != i_end, "chain endpoints collapsed to same boundary vert");
+
+    // Intermediate chain verts must NOT be on boundary.
+    for (i, &v) in chain_verts.iter().enumerate().take(chain_verts.len() - 1).skip(1) {
+        if boundary.contains(&v) {
+            bail!(
+                "split_face_by_chain: intermediate chain vert {} at index {} is on face boundary — \
+                 would require multi-seam split (not supported)",
+                v.raw(), i,
+            );
+        }
+    }
+
+    // Chain edges must exist.
+    for w in chain_verts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if mesh.find_edge(a, b).is_none() {
+            bail!(
+                "split_face_by_chain: edge between verts {} and {} missing — caller must draw it first",
+                a.raw(), b.raw(),
+            );
+        }
+    }
+
+    // Preserve and detach existing hole loops (same as split_face_by_line
+    //   case (a) — they get redistributed after the split).
+    let saved_holes = save_hole_loops(mesh, face_id)?;
+
+    // Build the two sub-face vertex sequences.
+    //   A: chain[0..=last] + boundary walked from i_end → i_start (skipping
+    //      end & start, which are already in the chain).
+    //   B: chain reversed + boundary walked from i_start → i_end.
+    let mut face_a_verts: Vec<VertId> = chain_verts.to_vec();
+    {
+        let mut i = (i_end + 1) % n_b;
+        while i != i_start {
+            face_a_verts.push(boundary[i]);
+            i = (i + 1) % n_b;
+        }
+    }
+
+    let mut face_b_verts: Vec<VertId> = chain_verts.iter().rev().copied().collect();
+    {
+        let mut i = (i_start + 1) % n_b;
+        while i != i_end {
+            face_b_verts.push(boundary[i]);
+            i = (i + 1) % n_b;
+        }
+    }
+
+    ensure!(face_a_verts.len() >= 3, "face A has <3 verts — degenerate split");
+    ensure!(face_b_verts.len() >= 3, "face B has <3 verts — degenerate split");
+
+    // Soft-remove the old face. Preserves HE next/prev so add_face_with_holes
+    //   can rediscover the free HEs. Temporarily clears inners so the
+    //   soft_remove doesn't touch hole HEs (we'll reattach to whichever
+    //   sub-face contains each hole afterwards).
+    mesh.faces[face_id].inners_mut().clear();
+    mesh.soft_remove_face(face_id)?;
+
+    // Rebuild two sub-faces with the requested material (Axiom 7 — new RECT
+    //   wins over container's original material).
+    let fa = mesh.add_face_with_holes(&face_a_verts, &[], inherit_material)?;
+    let fb = mesh.add_face_with_holes(&face_b_verts, &[], inherit_material)?;
+
+    // Redistribute any holes by containment, mirroring split_face_by_line.
+    for hole in &saved_holes {
+        let sample = mesh.vertex_pos(hole.sample_vert)?;
+        let in_a = point_in_face(mesh, fa, sample).unwrap_or(false);
+        let target = if in_a { fa } else { fb };
+        if !hole.loop_ref.start.is_null() {
+            reassign_loop_face(mesh, hole.loop_ref.start, target)?;
+        }
+        mesh.faces[target].add_inner(hole.loop_ref);
+    }
+
+    let mut new_edges: Vec<EdgeId> = Vec::with_capacity(chain_verts.len() - 1);
+    for w in chain_verts.windows(2) {
+        if let Some(eid) = mesh.find_edge(w[0], w[1]) {
+            new_edges.push(eid);
+        }
+    }
+
+    Ok(FaceSplitResult {
+        new_faces: vec![fa, fb],
+        new_verts: Vec::new(),
+        new_edges,
+        debug: vec![format!(
+            "split_face_by_chain: face {} → {} + {} (chain len {})",
+            face_id.raw(), fa.raw(), fb.raw(), chain_verts.len(),
+        )],
+    })
+}
+
 /// Classification outcome for one hole vs. the cutting line.
 enum HoleClassification {
     /// No interaction; hole gets redistributed by containment.

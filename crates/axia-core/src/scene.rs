@@ -801,6 +801,7 @@ impl Scene {
         new_edges: &[EdgeId],
         all_created_faces: &mut Vec<FaceId>,
     ) {
+        use std::collections::HashSet;
         // Step 4.5 — fan-tessellation, scoped to faces whose AABB contains
         //   at least one touched vertex (Perf cut from earlier session).
         {
@@ -869,6 +870,53 @@ impl Scene {
             }
         }
 
+        // Step 4.65 — Dissolve faces fully surrounded by newly-created ones.
+        //
+        // When D resolver builds a cycle that traces through an existing
+        // face's boundary edges (e.g. partial-overlap RECT: a chain of
+        // new interior edges + a segment of big's boundary forms the
+        // overlap sub-face), the ORIGINAL face's loop stays intact but
+        // every one of its boundary half-edges now has a radial partner
+        // claimed by a newly-created face. In that state the original
+        // face is geometrically redundant — it overlaps the new ones.
+        //
+        // Criterion: a face is "fully surrounded" iff every HE in its
+        // outer loop has a non-null `face()` on its radial partner AND
+        // that partner belongs to a face created in this operation.
+        {
+            let created_set: HashSet<FaceId> = all_created_faces.iter().copied().collect();
+            let candidates: Vec<FaceId> = self.mesh.faces.iter()
+                .filter(|(fid, f)| f.is_active() && !created_set.contains(fid))
+                .map(|(fid, _)| fid)
+                .collect();
+            for fid in candidates {
+                if !self.mesh.faces.contains(fid) { continue; }
+                let outer_start = self.mesh.faces[fid].outer().start;
+                if outer_start.is_null() { continue; }
+                let hes = match self.mesh.collect_loop_hes(outer_start) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if hes.is_empty() { continue; }
+                let mut all_surrounded = true;
+                for he_id in hes {
+                    let twin = self.mesh.he_twin(he_id);
+                    let twin_face = self.mesh.hes.get(twin).map(|h| h.face()).unwrap_or(axia_geo::FaceId::NULL);
+                    if twin_face.is_null() || twin_face == fid || !created_set.contains(&twin_face) {
+                        all_surrounded = false;
+                        break;
+                    }
+                }
+                if all_surrounded {
+                    self.unregister_face_from_xia(fid);
+                    let _ = self.mesh.remove_face(fid);
+                    if self.mesh.faces.contains(fid) {
+                        self.mesh.faces.remove(fid);
+                    }
+                }
+            }
+        }
+
         // Step 4.7 — dedup
         {
             let removed = self.mesh.deduplicate_overlapping_faces();
@@ -890,6 +938,194 @@ impl Scene {
                 }
             }
         }
+
+        // Step 4.9 — M1 Mixed-Cycle Split (ADR-008 Axiom 7 partial-overlap).
+        //
+        // Detect chains of free edges whose two endpoints lie on the same
+        // existing face's boundary. Such a chain indicates the user drew a
+        // polyline into a face — the enclosed region should become a
+        // sub-face with the NEW drawing's material (user decision).
+        //
+        // Scope: only faces that have at least one of `touched_verts` on
+        // their boundary are candidates — an untouched face in another
+        // corner of the scene can't have been partitioned by this op.
+        {
+            self.run_mixed_cycle_splits(touched_verts, new_edges, all_created_faces);
+        }
+    }
+
+    /// Step 4.9 worker — find and execute all mixed-cycle splits in the
+    /// scope of this epoch's touched vertices. Extracted for clarity.
+    fn run_mixed_cycle_splits(
+        &mut self,
+        touched_verts: &[VertId],
+        new_edges: &[EdgeId],
+        all_created_faces: &mut Vec<FaceId>,
+    ) {
+        use std::collections::HashSet;
+        let touched_set: HashSet<VertId> = touched_verts.iter().copied().collect();
+        if touched_set.is_empty() { return; }
+
+        // Iterate until no more splits are possible (a single draw op can
+        //   cause multiple independent splits on the same face if the user
+        //   drew a shape that touches boundary at multiple non-adjacent
+        //   points).
+        let max_rounds = 8;
+        for _round in 0..max_rounds {
+            let candidate_faces: Vec<FaceId> = self.mesh.faces.iter()
+                .filter(|(_, f)| f.is_active())
+                .filter_map(|(fid, f)| {
+                    let verts = self.mesh.collect_loop_verts(f.outer().start).ok()?;
+                    if verts.iter().any(|v| touched_set.contains(v)) {
+                        Some(fid)
+                    } else { None }
+                })
+                .collect();
+            let mut any_split = false;
+            for face_id in candidate_faces {
+                if !self.mesh.faces.contains(face_id) { continue; }
+                let Some(chain) = self.find_mixed_cycle_chain(face_id, new_edges) else { continue };
+                let split_res = axia_geo::operations::face_split::split_face_by_chain(
+                    &mut self.mesh,
+                    face_id,
+                    &chain,
+                    self.default_material,
+                );
+                match split_res {
+                    Ok(res) => {
+                        // Old face is gone; remove from all_created_faces
+                        //   (in case it was just created by this op) and from
+                        //   its XIA.
+                        all_created_faces.retain(|&f| f != face_id);
+                        self.unregister_face_from_xia(face_id);
+                        for &f in &res.new_faces {
+                            if !all_created_faces.contains(&f) {
+                                all_created_faces.push(f);
+                            }
+                        }
+                        any_split = true;
+                    }
+                    Err(_e) => {
+                        // Failure is not fatal — leave face as-is; the
+                        //   free edges inside remain (user can manually
+                        //   resolve). No Toast here — the inner user-facing
+                        //   resolve_planar step already announced face
+                        //   creation results.
+                    }
+                }
+            }
+            if !any_split { break; }
+        }
+    }
+
+    /// Try to find a free-edge chain that enters `face_id`'s boundary at
+    /// one vertex, traverses interior (free-edge) vertices, and exits at
+    /// another boundary vertex. Returns the chain vertex list if found.
+    ///
+    /// Strategy:
+    ///   1. Enumerate boundary verts that have ≥1 free-edge spoke heading
+    ///      to a NON-boundary vertex. Those are candidate entry points.
+    ///   2. BFS along free edges starting from each entry, avoiding the
+    ///      boundary itself, until we hit another boundary vert — that's
+    ///      the exit.
+    ///   3. Reject "chain" if the BFS fails or loops through only boundary
+    ///      (would be a redundant cut).
+    fn find_mixed_cycle_chain(
+        &self,
+        face_id: FaceId,
+        _new_edges: &[EdgeId],
+    ) -> Option<Vec<VertId>> {
+        use std::collections::{HashMap, HashSet};
+        let face = self.mesh.faces.get(face_id)?;
+        let boundary = self.mesh.collect_loop_verts(face.outer().start).ok()?;
+        if boundary.len() < 3 { return None; }
+        let boundary_set: HashSet<VertId> = boundary.iter().copied().collect();
+
+        // Only strictly-free edges qualify as chain edges. An edge that
+        // already bounds any face (even on one side) is part of the
+        // surrounding topology — including the adjacency seam between two
+        // freshly drawn RECTs. Counting those as "free spokes" would make
+        // Step 4.9 try to cut along an existing boundary and destroy the
+        // neighbour face's ownership.
+        let free_neighbours = |v: VertId| -> Vec<VertId> {
+            let mut out = Vec::new();
+            for (eid, edge) in self.mesh.edges.iter() {
+                if !edge.is_active() { continue; }
+                if !edge.class().is_topological() { continue; }
+                if edge.v_small() != v && edge.v_large() != v { continue; }
+                if !self.mesh.is_edge_completely_free(eid) { continue; }
+                let other = if edge.v_small() == v { edge.v_large() } else { edge.v_small() };
+                out.push(other);
+            }
+            out
+        };
+
+        // BFS from each boundary vert that has a free spoke going interior.
+        for &entry in &boundary {
+            let spokes = free_neighbours(entry);
+            for nb in spokes {
+                // Short chain case — other end is already on boundary.
+                if boundary_set.contains(&nb) && nb != entry {
+                    // Trivial chain of length 2. Only valid if the two boundary
+                    //   verts are NOT adjacent on the boundary (would be
+                    //   redundant) — a 2-vert chain on adjacent boundary would
+                    //   mean the "free edge" parallels an existing face edge.
+                    let i_a = boundary.iter().position(|v| *v == entry).unwrap();
+                    let i_b = boundary.iter().position(|v| *v == nb).unwrap();
+                    let diff = if i_a < i_b { i_b - i_a } else { i_a - i_b };
+                    let wrap = boundary.len() - diff;
+                    let adjacent = diff == 1 || wrap == 1;
+                    if !adjacent {
+                        return Some(vec![entry, nb]);
+                    }
+                    continue;
+                }
+                // Non-boundary neighbour — BFS further.
+                let mut prev: HashMap<VertId, VertId> = HashMap::new();
+                prev.insert(nb, entry);
+                let mut stack: Vec<VertId> = vec![nb];
+                let mut found_exit: Option<VertId> = None;
+                while let Some(cur) = stack.pop() {
+                    if boundary_set.contains(&cur) && cur != entry {
+                        found_exit = Some(cur);
+                        break;
+                    }
+                    for next in free_neighbours(cur) {
+                        if next == entry { continue; }
+                        if prev.contains_key(&next) { continue; }
+                        prev.insert(next, cur);
+                        stack.push(next);
+                        if boundary_set.contains(&next) {
+                            found_exit = Some(next);
+                            break;
+                        }
+                    }
+                    if found_exit.is_some() { break; }
+                }
+                if let Some(exit) = found_exit {
+                    // Reconstruct chain path entry → exit
+                    let mut chain = vec![exit];
+                    let mut cur = exit;
+                    while cur != entry {
+                        match prev.get(&cur) {
+                            Some(&p) => { chain.push(p); cur = p; }
+                            None => return None,
+                        }
+                    }
+                    chain.reverse();
+                    // Sanity: chain has entry and exit on boundary, interior
+                    //   verts not on boundary, and edges exist. Validate.
+                    if chain.len() < 2 { continue; }
+                    let mut ok = true;
+                    for i in 1..chain.len()-1 {
+                        if boundary_set.contains(&chain[i]) { ok = false; break; }
+                    }
+                    if !ok { continue; }
+                    return Some(chain);
+                }
+            }
+        }
+        None
     }
 
     /// 주어진 vertex 루프가 기존 face 중 하나 이상의 centroid를 감싸고 있는지 검사.
@@ -1102,12 +1338,11 @@ impl Scene {
                 if seen_loops.iter().any(|s| s == &norm) { break; }
                 seen_loops.push(norm.clone());
                 if self.loop_encloses_existing_face(&loop_verts) {
-                    // 2026-04-24 (ADR-008 Axiom 7 확장): 루프의 엣지 중
-                    // 하나라도 현재 HE 중 "radial loop 모든 HE가 face_id
-                    // null"인 상태(완전 free edge)이면 이는 ADR-008 Axiom 7
-                    // 의 outer-encloses-inner 의도 → 생성 허용. 완전 free가
-                    // 아닌 엣지(이미 face를 한쪽이라도 가지고 있는 엣지)만
-                    // 포함된 cycle은 기존 outer 재생성 의심 → 계속 reject.
+                    // 2026-04-24 (ADR-008 Axiom 7): 루프의 엣지 중 하나라도
+                    // 완전 free(어떤 face에도 속하지 않음)이면 outer-
+                    // encloses-inner 정당 의도로 허용 (Phase E). 모든 엣지
+                    // 가 이미 face를 갖고 있으면 기존 outer 재생성 의심 →
+                    // reject.
                     let mut has_completely_free_edge = false;
                     for i in 0..loop_verts.len() {
                         let va = loop_verts[i];
@@ -1137,6 +1372,12 @@ impl Scene {
                     }
                     // has completely-free edge — fall through to face creation
                 }
+
+                // Step 4(b) permissive: `detect_free_edge_loop_excluding` is
+                //   responsible for returning only topologically valid cycles
+                //   (it walks real free HEs). Adjacent-RECT face creation
+                //   depends on this path. Mixed-cycle safety gates live in
+                //   the D resolver (Step 4.6) and in Step 4.9 M1 only.
 
                 for i in 0..loop_verts.len() {
                     let va = loop_verts[i];
