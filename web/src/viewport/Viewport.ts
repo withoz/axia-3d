@@ -252,17 +252,22 @@ export class Viewport {
     dirLight.position.set(8000, 15000, 10000);
     dirLight.castShadow = true;
     const shadow = dirLight.shadow;
-    shadow.mapSize.set(1024, 1024);
+    // Phase 1 tune (2026-04-25):
+    //   mapSize 1024→2048 : texel 29mm → 14.6mm (50% ↓). +12MB 메모리,
+    //     shadow pass 4×. 건축 스케일에서 계단 artifact 대폭 감소.
+    //   bias/normalBias   : acne 제거 (박스 측면 얇은 줄무늬).
+    //   radius/blur 완화  : VSM band 완화 대신 slight crisper edge.
+    shadow.mapSize.set(2048, 2048);
     shadow.camera.left   = -15000;
     shadow.camera.right  =  15000;
     shadow.camera.top    =  15000;
     shadow.camera.bottom = -15000;
     shadow.camera.near   = 100;
     shadow.camera.far    = 60000;
-    shadow.bias          = 0.0;
-    shadow.normalBias    = 0.0;
-    shadow.radius        = 12;
-    shadow.blurSamples   = 17;
+    shadow.bias          = -0.0002;
+    shadow.normalBias    = 1.5;
+    shadow.radius        = 8;
+    shadow.blurSamples   = 12;
     this._dirLight = dirLight;
     this.scene.add(dirLight);
 
@@ -1612,9 +1617,15 @@ export class Viewport {
     return { type: 'face', hit: faceHit };
   }
 
-  /** Perform a raycast pick on wireframe edges (LineSegments).
-   *  Returns the intersection with `index` = line segment index (for edge map lookup).
-   *  Threshold is automatically computed from camera distance for consistent screen-space feel. */
+  /** Perform a raycast pick on wireframe edges.
+   *
+   *  Supports both LineSegments (legacy) and LineSegments2 (Line2 path,
+   *  2026-04-24 edge rendering). LineSegments2 inherits from Mesh so it
+   *  needs to be explicitly included — a plain `instanceof LineSegments`
+   *  filter skipped it, and edge selection + erase silently broke.
+   *
+   *  Threshold auto-scales from camera distance for consistent
+   *  screen-space feel. */
   pickEdge(screenX: number, screenY: number): THREE.Intersection | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(
@@ -1623,20 +1634,36 @@ export class Viewport {
     );
     this.raycaster.setFromCamera(mouse, this.activeCamera as THREE.PerspectiveCamera);
 
-    // 카메라 거리에 비례한 threshold (약 화면의 1% 정도)
     const cam = this.activeCamera as THREE.PerspectiveCamera;
     const camDist = cam.position.length();
     const dynamicThreshold = Math.max(camDist * 0.005, 10);
 
-    const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
+    // Legacy LineSegments threshold (raycaster.params.Line.threshold, world units)
+    const prevLine = this.raycaster.params.Line?.threshold ?? 1;
     if (!this.raycaster.params.Line) this.raycaster.params.Line = { threshold: 1 };
     this.raycaster.params.Line.threshold = dynamicThreshold;
 
-    const lineSegments = this.meshGroup.children.filter(c => c instanceof THREE.LineSegments);
+    // Line2 threshold (raycaster.params.Line2.threshold). LineSegments2
+    //   raycast uses world units like the legacy Line variant, so reuse
+    //   the same camera-distance-scaled value for consistent feel
+    //   whether edges render with LineBasicMaterial or LineMaterial.
+    const raycasterParams = this.raycaster.params as unknown as { Line2?: { threshold: number } };
+    const prevLine2 = raycasterParams.Line2?.threshold ?? 1;
+    if (!raycasterParams.Line2) raycasterParams.Line2 = { threshold: dynamicThreshold };
+    else raycasterParams.Line2.threshold = dynamicThreshold;
+
+    // Pick any edge-ish child: both LineSegments and LineSegments2.
+    const isEdgeChild = (c: THREE.Object3D): boolean => {
+      if (c instanceof THREE.LineSegments) return true;
+      // LineSegments2 extends Mesh but has a distinct type string.
+      return (c as THREE.Object3D & { isLineSegments2?: boolean }).isLineSegments2 === true
+        || c.type === 'LineSegments2';
+    };
+    const lineSegments = this.meshGroup.children.filter(isEdgeChild);
     const hits = this.raycaster.intersectObjects(lineSegments, false);
 
-    // threshold 복원
-    this.raycaster.params.Line.threshold = prevThreshold;
+    this.raycaster.params.Line.threshold = prevLine;
+    if (raycasterParams.Line2) raycasterParams.Line2.threshold = prevLine2;
 
     return hits.length > 0 ? hits[0] : null;
   }
