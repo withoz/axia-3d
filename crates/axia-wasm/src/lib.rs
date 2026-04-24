@@ -265,6 +265,27 @@ impl AxiaEngine {
         self.cache_version = self.cache_version.wrapping_add(1);
     }
 
+    /// Walk the radial loop of `eid` and return true if any HE has a face
+    /// pointer. Used by Phase B step 2 (erase re-synthesis) to snapshot
+    /// which edges were face-bearing before the erase pass.
+    fn edge_has_any_face(&self, eid: EdgeId) -> bool {
+        let Some(edge) = self.scene.mesh.edges.get(eid) else { return false; };
+        let start = edge.any_he();
+        if start.is_null() { return false; }
+        let mut he = start;
+        loop {
+            match self.scene.mesh.hes.get(he) {
+                Some(h) => {
+                    if !h.face().is_null() { return true; }
+                    let next = h.next_rad();
+                    if next.is_null() || next == start { return false; }
+                    he = next;
+                }
+                None => return false,
+            }
+        }
+    }
+
     /// Mark that topology changed (faces added/removed/split).
     /// Delta updates are not possible — JS must do a full rebuild.
     fn mark_topology_changed(&mut self) {
@@ -1881,7 +1902,7 @@ impl AxiaEngine {
         soft_on_fail: bool,
     ) -> Vec<i32> {
         if face_ids.is_empty() && edge_ids.is_empty() {
-            return vec![0, 0, 0];
+            return vec![0, 0, 0, 0, 0];
         }
 
         self.scene.transactions.begin();
@@ -1891,7 +1912,56 @@ impl AxiaEngine {
         let mut cascaded_faces: i32 = 0;
         let mut cascaded_edges: i32 = 0;
         let mut softened: i32 = 0;
+        let mut synthesized: i32 = 0;
         let mut all_removed_faces: Vec<FaceId> = Vec::new();
+
+        // Phase B step 2 (ADR-008 Axiom 6): pre-snapshot which edges, in the
+        // neighbourhood of this erase, currently have a face on at least one
+        // side. After the erase pass we will see which of those edges went
+        // "face → free" (newly-freed) — those are the only edges a re-synth
+        // cycle must include, which keeps the re-synthesis strictly scoped
+        // to loops the erase actually opened.
+        //
+        // Neighbourhood = edges whose endpoint is an endpoint of any erase-
+        // target edge OR an endpoint on any face-only target's boundary.
+        let mut seed_verts: Vec<VertId> = Vec::new();
+        for &eid_raw in edge_ids {
+            let eid = EdgeId::new(eid_raw);
+            if let Some(edge) = self.scene.mesh.edges.get(eid) {
+                seed_verts.push(edge.v_small());
+                seed_verts.push(edge.v_large());
+            }
+        }
+        for &fid_raw in face_ids {
+            let fid = FaceId::new(fid_raw);
+            if let Some(face) = self.scene.mesh.faces.get(fid) {
+                if let Ok(verts) = self.scene.mesh.collect_loop_verts(face.outer().start) {
+                    seed_verts.extend(verts);
+                }
+            }
+        }
+        seed_verts.sort_by_key(|v| v.raw());
+        seed_verts.dedup();
+
+        // Collect neighbourhood edges (edges touching any seed vertex) that
+        // are currently face-bearing. "face-bearing" = at least one of its
+        // half-edges has a non-null face. These are the watch-list — later
+        // we'll check which of them survive but no longer have ANY face-side.
+        let mut watched_edges: Vec<EdgeId> = Vec::new();
+        {
+            let seed_set: HashSet<VertId> = seed_verts.iter().copied().collect();
+            for (eid, edge) in self.scene.mesh.edges.iter() {
+                if !edge.is_active() { continue; }
+                if !edge.class().is_topological() { continue; }
+                if !(seed_set.contains(&edge.v_small()) || seed_set.contains(&edge.v_large())) {
+                    continue;
+                }
+                // At least one HE in the radial loop has a face?
+                if self.edge_has_any_face(eid) {
+                    watched_edges.push(eid);
+                }
+            }
+        }
 
         // Capture the first merge failure for diagnostic purposes — surfaces
         // in the Erase tool's debug log so users can tell why an edge fell
@@ -1966,6 +2036,64 @@ impl AxiaEngine {
         //   + isolated vertices. Prevents "선의 잔재" 보고된 문제.
         let _ = self.scene.mesh.cleanup_dangling();
 
+        // ── Phase B step 2 (ADR-008 Axiom 6): erase re-synthesis ──
+        // Among the watched edges, find those that SURVIVED the erase but
+        // are no longer face-bearing (they lost every face pointer). Those
+        // are the "newly-freed" edges a re-synth cycle must pass through.
+        // This scoping prevents:
+        //   • recreating a face whose boundary edges we deliberately deleted
+        //     (cascade of face+edges removes the edges entirely → not in
+        //     newly_freed list)
+        //   • recreating a face the user deliberately face-only-deleted
+        //     (those edges are still face-bearing on the neighbour's side
+        //     OR were never in the watched list if the face was isolated)
+        let newly_freed: Vec<EdgeId> = watched_edges.iter()
+            .copied()
+            .filter(|&eid| self.scene.mesh.edges.contains(eid))
+            .filter(|&eid| !self.edge_has_any_face(eid))
+            .collect();
+        let live_seeds: Vec<VertId> = seed_verts.iter()
+            .filter(|&&v| self.scene.mesh.verts.contains(v))
+            .copied()
+            .collect();
+        if !live_seeds.is_empty() && !newly_freed.is_empty() {
+            let material = self.scene.default_material;
+            let new_faces = self.scene.mesh.resolve_planar_free_faces_scoped(
+                material,
+                Some(&live_seeds),
+                Some(&newly_freed),
+            );
+            if !new_faces.is_empty() {
+                synthesized = new_faces.len() as i32;
+                // Wrap new faces in a "Face" XIA (same pattern as
+                // exec_draw_line's Step 5). Use the first face's centroid as
+                // the XIA position so picking/outliner behave naturally.
+                // Inline centroid of the first new face (use face start HE).
+                let pos = {
+                    let f0 = new_faces[0];
+                    let face = self.scene.mesh.faces.get(f0);
+                    let mut c = DVec3::ZERO;
+                    let mut n = 0;
+                    if let Some(face) = face {
+                        if let Ok(verts) = self.scene.mesh.collect_loop_verts(face.outer().start) {
+                            for v in &verts {
+                                if let Ok(p) = self.scene.mesh.vertex_pos(*v) {
+                                    c += p;
+                                    n += 1;
+                                }
+                            }
+                        }
+                    }
+                    if n > 0 { c / n as f64 } else { DVec3::ZERO }
+                };
+                self.scene.create_xia_with_faces(
+                    "Face".to_string(),
+                    pos,
+                    new_faces,
+                );
+            }
+        }
+
         self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
         self.scene.transactions.commit();
         self.mark_topology_changed();
@@ -1979,7 +2107,7 @@ impl AxiaEngine {
             self.last_merge_failure.clear();
         }
 
-        vec![merged, cascaded_faces, cascaded_edges, softened]
+        vec![merged, cascaded_faces, cascaded_edges, softened, synthesized]
     }
 
     /// Diagnostic — first merge failure reason from the most recent
