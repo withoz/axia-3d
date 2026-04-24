@@ -961,37 +961,110 @@ impl Scene {
         width: f64,
         height: f64,
     ) -> CommandResult {
+        // 2026-04-24 — Principle 1 compliance: RECT is drawn as 4 LINE segments.
+        //   Face is auto-synthesized when the 4th line closes the loop,
+        //   identical to the LINE tool's face-synthesis path. This unifies
+        //   vertex dedup + edge sharing behaviour so two adjacent RECTs
+        //   share DCEL edges (same as two adjacent triangles from LINE).
+        //
+        //   Previously exec_draw_rect called mesh.draw_rectangle directly,
+        //   which was an independent atomic path — two adjacent rects could
+        //   end up with duplicated vertices if snap drift exceeded the 1.5μm
+        //   spatial-hash dedup, and merge would fail. Now both rects go
+        //   through draw_line → synthesize, so their shared corners are
+        //   guaranteed to dedup through the same code path as LINE.
+
+        use anyhow::Result;
+
+        // Compute 4 corners. Mirrors the coordinate system used by the
+        //   original draw_rectangle: u = up.normalize(), v = n × u.
+        let n_norm = if normal.length_squared() > 1e-12 {
+            normal.normalize()
+        } else {
+            return CommandResult::Error("normal must be non-zero".to_string());
+        };
+        let u = if up.length_squared() > 1e-12 {
+            up.normalize()
+        } else {
+            return CommandResult::Error("up must be non-zero".to_string());
+        };
+        let v = n_norm.cross(u).normalize_or_zero();
+        if v.length_squared() < 1e-12 {
+            return CommandResult::Error("normal and up are parallel".to_string());
+        }
+        let hw = width / 2.0;
+        let hh = height / 2.0;
+        let corners = [
+            center - u * hh - v * hw,
+            center - u * hh + v * hw,
+            center + u * hh + v * hw,
+            center + u * hh - v * hw,
+        ];
+
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
-        match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
-            Ok((face_id, _verts)) => {
-                // 사용자가 명시적으로 그린 경계는 "hard edge" 로 표시해야
-                // 인접 coplanar 면에 붙어도 엣지가 자동 숨겨지지 않음.
-                // (draw_line 경로는 이미 mark_edge_hard 호출. rect도 동일
-                // 의미론 — 건축 평면 배치에서 두 방의 경계가 사라지면 안 됨.)
-                if let Ok(edges) = self.mesh.face_outer_edges(face_id) {
-                    for eid in edges {
-                        self.mesh.mark_edge_hard(eid);
-                    }
-                }
-                let xia_id = self.create_xia("Rectangle".to_string());
-                if let Some(xia) = self.xias.get_mut(&xia_id) {
-                    xia.position = center;
-                    xia.surface_normal = Some(normal);
-                    xia.face_ids.push(face_id);
-                    // geometry_state() = Face (1 face)
-                }
-                self.register_faces_to_xia(xia_id, &[face_id]);
-                self.transactions.set_after_snapshot(self.scene_snapshot());
-                self.transactions.commit();
-                CommandResult::EntityCreated(xia_id)
+        // Draw 4 line segments with dedup via add_vertex's spatial hash.
+        //   If any of the corners coincide with existing vertices in the
+        //   mesh (either from the previous RECT, a LINE, or anything else),
+        //   they'll be reused through the standard LINE path.
+        let draw_4_lines = |s: &mut Self| -> Result<([VertId; 4], [EdgeId; 4])> {
+            let mut vs: [VertId; 4] = [VertId::NULL; 4];
+            let mut es: [EdgeId; 4] = [EdgeId::NULL; 4];
+            for i in 0..4 {
+                let (v_a, v_b, eid) = s.mesh.draw_line(corners[i], corners[(i + 1) % 4])?;
+                anyhow::ensure!(v_a != v_b,
+                    "draw_rect side {} collapsed to a single vertex (degenerate)", i);
+                vs[i] = v_a;
+                if i == 3 { let _ = v_b; }  // last v_b should equal vs[0] (loop close)
+                es[i] = eid;
+                s.mesh.mark_edge_hard(eid);
             }
+            Ok((vs, es))
+        };
+
+        let (corner_vids, _edge_ids) = match draw_4_lines(self) {
+            Ok(r) => r,
             Err(e) => {
                 self.transactions.cancel();
-                CommandResult::Error(e.to_string())
+                return CommandResult::Error(e.to_string());
             }
+        };
+
+        // Create face from the known corner vertices.
+        //   We know the 4 corners explicitly (just drew them in order), so
+        //   there's no need to call detect_free_edge_loop — which would
+        //   ambiguously pick EITHER side of a shared edge (e.g., with a
+        //   neighbour rect, it could trace back through the neighbour's
+        //   boundary instead of the newly-drawn rect). add_face on the
+        //   explicit vertex list guarantees the correct loop.
+        //
+        //   add_face handles edge dedup (existing edges reused via vert_to_edge
+        //   lookup) and half-edge face assignment (the FREE HE on the
+        //   shared edge gets this face's id, while the existing face's HE
+        //   is untouched). This is the exact shared-edge scenario that
+        //   lets merge_faces_by_edge find both faces.
+        let face_id = match self.mesh.add_face(&corner_vids, self.default_material) {
+            Ok(fid) => fid,
+            Err(e) => {
+                self.transactions.cancel();
+                return CommandResult::Error(
+                    format!("draw_rect face synthesis failed: {}", e),
+                );
+            }
+        };
+
+        let xia_id = self.create_xia("Rectangle".to_string());
+        if let Some(xia) = self.xias.get_mut(&xia_id) {
+            xia.position = center;
+            xia.surface_normal = Some(normal);
+            xia.face_ids.push(face_id);
         }
+        self.register_faces_to_xia(xia_id, &[face_id]);
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+        CommandResult::EntityCreated(xia_id)
     }
 
     fn exec_draw_circle(
@@ -1001,35 +1074,96 @@ impl Scene {
         radius: f64,
         segments: u32,
     ) -> CommandResult {
+        // 2026-04-24 — Principle 1 compliance: CIRCLE is drawn as N LINE
+        //   segments. Same rationale as exec_draw_rect — unifies vertex
+        //   dedup / edge sharing behaviour with the LINE tool so adjacent
+        //   CIRCLEs and N-gons fuse topologically when their corners align.
+
+        if segments < 3 {
+            return CommandResult::Error(
+                format!("circle segments {} < 3 — degenerate", segments)
+            );
+        }
+        if radius <= 1e-6 {
+            return CommandResult::Error(
+                format!("circle radius {:.2e} below epsilon", radius)
+            );
+        }
+        let n_norm = if normal.length_squared() > 1e-12 {
+            normal.normalize()
+        } else {
+            return CommandResult::Error("normal must be non-zero".to_string());
+        };
+        // Build plane basis (u, v) from normal.
+        let seed = if n_norm.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+        let u = seed.cross(n_norm).normalize_or_zero();
+        let v = n_norm.cross(u).normalize_or_zero();
+        if u.length_squared() < 1e-12 || v.length_squared() < 1e-12 {
+            return CommandResult::Error("could not build plane basis".to_string());
+        }
+
+        // Compute N points on the circle.
+        let n = segments as usize;
+        let mut corners: Vec<DVec3> = Vec::with_capacity(n);
+        for i in 0..n {
+            let theta = (i as f64) * std::f64::consts::TAU / (n as f64);
+            corners.push(center + u * (radius * theta.cos()) + v * (radius * theta.sin()));
+        }
+
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
-        match self.mesh.draw_circle(center, normal, radius, segments, self.default_material) {
-            Ok((face_id, _verts)) => {
-                // draw_rect와 동일: 명시적으로 그린 원의 경계는 hard 처리.
-                // Coplanar 인접 면 옆에 있어도 경계 유지.
-                if let Ok(edges) = self.mesh.face_outer_edges(face_id) {
-                    for eid in edges {
-                        self.mesh.mark_edge_hard(eid);
+        // Draw N line segments via draw_line → add_vertex dedup for any
+        //   corners that coincide with existing vertices (e.g., a touching
+        //   circle at the same sampling positions).
+        let mut corner_vids: Vec<VertId> = Vec::with_capacity(n);
+        let mut edge_ids: Vec<EdgeId> = Vec::with_capacity(n);
+        for i in 0..n {
+            let (v_a, v_b, eid) =
+                match self.mesh.draw_line(corners[i], corners[(i + 1) % n]) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.transactions.cancel();
+                        return CommandResult::Error(
+                            format!("draw_circle segment {}: {}", i, e)
+                        );
                     }
-                }
-                let xia_id = self.create_xia("Circle".to_string());
-                if let Some(xia) = self.xias.get_mut(&xia_id) {
-                    xia.position = center;
-                    xia.surface_normal = Some(normal);
-                    xia.face_ids.push(face_id);
-                    // geometry_state() = Face (1 face)
-                }
-                self.register_faces_to_xia(xia_id, &[face_id]);
-                self.transactions.set_after_snapshot(self.scene_snapshot());
-                self.transactions.commit();
-                CommandResult::EntityCreated(xia_id)
+                };
+            if v_a == v_b {
+                self.transactions.cancel();
+                return CommandResult::Error(
+                    format!("draw_circle segment {} collapsed (degenerate)", i)
+                );
             }
+            corner_vids.push(v_a);
+            edge_ids.push(eid);
+            self.mesh.mark_edge_hard(eid);
+        }
+
+        // Create face from explicit vertex list (avoids loop-detection
+        //   ambiguity at shared boundaries).
+        let face_id = match self.mesh.add_face(&corner_vids, self.default_material) {
+            Ok(fid) => fid,
             Err(e) => {
                 self.transactions.cancel();
-                CommandResult::Error(e.to_string())
+                return CommandResult::Error(
+                    format!("draw_circle face synthesis failed: {}", e),
+                );
             }
+        };
+        let _ = edge_ids;
+
+        let xia_id = self.create_xia("Circle".to_string());
+        if let Some(xia) = self.xias.get_mut(&xia_id) {
+            xia.position = center;
+            xia.surface_normal = Some(normal);
+            xia.face_ids.push(face_id);
         }
+        self.register_faces_to_xia(xia_id, &[face_id]);
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+        CommandResult::EntityCreated(xia_id)
     }
 
     fn exec_push_pull(
