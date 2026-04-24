@@ -1116,8 +1116,8 @@ export class Viewport {
       //   are ramped up from -1 so coincident faces never eat into the
       //   edge line at shallow viewing angles (CAD top/side views).
       polygonOffset: true,
-      polygonOffsetFactor: -4,
-      polygonOffsetUnits: -4,
+      polygonOffsetFactor: -8,
+      polygonOffsetUnits: -8,
     });
     return mat;
   }
