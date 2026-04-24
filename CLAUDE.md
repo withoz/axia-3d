@@ -36,6 +36,16 @@ Semantic Layer (의미):       Object(=XIA), Material, Group
 - edges_for_xia(): face_ids → face_outer_edges() 계산 (저장 안 함, B안)
 
 ## 빌드 방법
+
+### 원-스텝 (권장, 2026-04-24~)
+```bash
+cd web
+npm run build        # WASM build + verify + vite build
+npm run build:wasm   # WASM만 (verify 포함)
+npm run verify:wasm  # 산출물 무결성 검사만
+```
+
+### 수동 (디버깅 / CI 분리 시)
 ```bash
 # WASM 빌드 (Rust 툴체인 필요)
 cd crates/axia-wasm
@@ -76,7 +86,7 @@ web/src/
   bridge/WasmBridge.ts                  — WASM 통신 브리지 (타입 안전, 버퍼 캐싱, Group/Component)
   ui/Toast.ts                           — Toast 알림 시스템 (사용자 피드백)
   ui/ComponentPanel.ts                  — 그룹/컴포넌트 트리 패널 (Outliner)
-  wasm/axia_wasm.js                     — WASM 바인딩 JS (수동 수정된 부분 있음)
+  wasm/axia_wasm.js                     — WASM 바인딩 JS (wasm-pack 자동 생성)
 ```
 
 ## Push/Pull 구현 현황 (2026-04-09 확정)
@@ -181,10 +191,10 @@ interface GroupInfo {
 5. **MeshBasicMaterial + FrontSide + 투명** → 매끈하고 깨끗 → 최종 채택
 
 ## 주의사항
-- `axia_wasm.js`는 wasm-pack 생성 후 수동 수정됨 (initSync, __wbg_init 재구성)
-- `axia_wasm.d.ts`에 JSDoc 닫기(`*/`) 수동 추가
-- 빌드 시 `--emptyOutDir false` 필수 (권한 오류 방지)
-- Rust 툴체인이 없는 환경에서는 WASM 재빌드 불가 → JS/TS만 수정 가능
+- **2026-04-24 업데이트**: 이전 경고 ("axia_wasm.js 수동 수정", "JSDoc `*/` 수동 추가") 는 현재 wasm-pack 0.14+ 기준 **더 이상 필요 없음**. `npm run build:wasm`이 자동 처리.
+- `npm run build` 를 쓰면 WASM 빌드 + verify + vite build가 한 번에 됨. 중간에 실패하면 `npm run verify:wasm`으로 산출물 검사.
+- 빌드 시 `--emptyOutDir false` 필수 (권한 오류 방지) — npm script가 자동 적용.
+- Rust 툴체인이 없는 환경에서는 WASM 재빌드 불가 → JS/TS만 수정 가능.
 
 ## 완료된 기능
 - Draw 도구 (Line, Rect, Circle)

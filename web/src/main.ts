@@ -35,10 +35,46 @@ import { initContextMenu } from './ui/ContextMenu';
 import { loadInitialScene } from './ui/InitialScene';
 import { initXiaInspector } from './ui/XiaInspector';
 import { debugLog } from './utils/debug';
+import { Toast } from './ui/Toast';
 import './ui/DraggablePanels.css';
+
+/**
+ * Detect whether the WASM binary on the server is newer than the one the
+ * previous page load cached. If so, show a non-intrusive Toast so the
+ * developer (or the user after a deploy) knows a hard refresh will pull
+ * in the latest engine. Implementation uses a HEAD request so we don't
+ * download the full binary just to check its Last-Modified.
+ */
+async function checkWasmFreshness(): Promise<void> {
+  try {
+    const res = await fetch('/src/wasm/axia_wasm_bg.wasm', {
+      method: 'HEAD',
+      cache: 'no-store',
+    });
+    if (!res.ok) return;
+    const lastMod = res.headers.get('last-modified');
+    if (!lastMod) return;
+    const storageKey = 'axia:wasm-mtime';
+    const stored = localStorage.getItem(storageKey);
+    if (stored && stored !== lastMod) {
+      debugLog(`[WASM] Binary updated: ${stored} → ${lastMod}`);
+      Toast.info(
+        'AXiA 엔진이 업데이트됐습니다. 최신 기능이 적용됩니다.',
+        4000,
+      );
+    }
+    localStorage.setItem(storageKey, lastMod);
+  } catch (e) {
+    debugLog('[WASM] freshness check skipped:', e);
+  }
+}
 
 async function main() {
   debugLog('AXiA 3D starting...');
+
+  // 0. WASM freshness check (non-blocking, just logs + Toast if newer).
+  //    Runs alongside engine init so no wall-clock impact.
+  checkWasmFreshness();
 
   // 1. Initialize WASM engine
   const bridge = new WasmBridge();
