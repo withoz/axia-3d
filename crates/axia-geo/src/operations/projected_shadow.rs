@@ -118,9 +118,21 @@ impl Mesh {
 
         const SF_EPS: f64 = 0.001;
         const RECV_EPS: f64 = 0.5;
-        // receiver 수집 기준: normal · (+Y) > this  →  horizontal or tilted-up
-        // face만 receiver로 간주 (지붕, 바닥, 계단 포함).
-        const RECV_UP_MIN: f64 = 0.1;
+        // 2026-04-24 Phase 2.8 (Option A) — cavity shadow support.
+        //
+        // Previous rule: receiver if normal.y > 0.1 (horizontal or tilted-up).
+        // That excluded cavity walls / ceilings / any downward-facing
+        // surface, so shadows never reached interiors of holes.
+        //
+        // New rule: receiver if the SUN hits the face, i.e. the face normal
+        // opposes the sun direction (sun_dir · n < 0). This includes:
+        //   • ground (+Y, sun comes from above)            — sun_dir·n < 0 ✓
+        //   • tilted roofs / ramps, sun-facing             ✓
+        //   • vertical walls with sun azimuth toward them   ✓
+        //   • cavity interior walls/floors that the sun reaches ✓
+        // Faces facing AWAY from the sun (back-lit) are still rejected —
+        // they're self-shaded and can't catch a cast shadow anyway.
+        const SUN_HIT_MIN: f64 = 0.02;
 
         // 1) Collect receivers. Always include infinite ground.
         let mut receivers: Vec<Receiver> = vec![Receiver::ground()];
@@ -128,7 +140,9 @@ impl Mesh {
         for (_fid, face) in self.faces.iter() {
             if !face.is_active() { continue; }
             let n = face.normal();
-            if n.y < RECV_UP_MIN { continue; }
+            // Receiver if sun hits this face. (-sun_dir) · n  >  SUN_HIT_MIN.
+            let sun_hit = (-sun_dir).dot(n);
+            if sun_hit < SUN_HIT_MIN { continue; }
 
             let outer_start = face.outer().start;
             let vert_ids = match self.collect_loop_verts(outer_start) {
