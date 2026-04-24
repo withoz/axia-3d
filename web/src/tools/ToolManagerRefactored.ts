@@ -96,6 +96,14 @@ export class ToolManager {
   private drawPlaneRafPending = false;
   private drawPlaneLastEvent: MouseEvent | null = null;
 
+  // Session 4 — lazy snap refresh. syncMesh used to rebuild the snap
+  //   spatial hash inline (~30 ms on a mid-sized scene). That blocks the
+  //   frame right after every draw. We defer it to the next idle slot
+  //   instead; if another syncMesh lands first we cancel and reschedule
+  //   so snap always catches up to the latest buffers, just not on the
+  //   critical path.
+  private _snapIdleHandle: number | null = null;
+
   // ═══ Sketch Mode (Tier 3A) ═══
   // When active, all drawing commits to this fixed plane regardless of
   // cursor pick or view mode. Edges/faces created during a session are
@@ -1893,6 +1901,53 @@ export class ToolManager {
     }
   }
 
+  /**
+   * Session 4 — defer snap spatial-hash rebuild to the next idle slot.
+   * Called from syncMesh in place of the old inline `snap.updateFromMesh`.
+   * If the browser does not implement `requestIdleCallback` (Safari) we
+   * fall back to a zero-delay `setTimeout` which at least gets us off the
+   * current frame.
+   */
+  private scheduleSnapRefresh(
+    positions: Float32Array,
+    indices: Uint32Array,
+    faceMap: Uint32Array,
+    edgeLines: Float32Array | null,
+    snapF64: Float64Array | null,
+  ): void {
+    // Cancel a pending refresh — the buffers we just received are newer.
+    if (this._snapIdleHandle !== null) {
+      const w = window as unknown as {
+        cancelIdleCallback?: (h: number) => void;
+      };
+      if (typeof w.cancelIdleCallback === 'function') {
+        w.cancelIdleCallback(this._snapIdleHandle);
+      } else {
+        clearTimeout(this._snapIdleHandle);
+      }
+      this._snapIdleHandle = null;
+    }
+
+    const run = () => {
+      this._snapIdleHandle = null;
+      try {
+        this.snap.updateFromMesh(positions, indices, faceMap, edgeLines, snapF64);
+      } catch (e) {
+        console.warn('[ToolManager] scheduled snap refresh failed:', e);
+      }
+    };
+
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      // 100 ms timeout caps worst-case snap staleness even under heavy load.
+      this._snapIdleHandle = w.requestIdleCallback(run, { timeout: 100 });
+    } else {
+      this._snapIdleHandle = (setTimeout(run, 0) as unknown) as number;
+    }
+  }
+
   syncMesh(): void {
     const edgeLines = this.bridge.getEdgeLines();
     this.edgeMap = this.bridge.getEdgeMap();
@@ -1924,7 +1979,7 @@ export class ToolManager {
           );
           this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
           const snapF64 = this.bridge.getSnapVerticesF64();
-          this.snap.updateFromMesh(
+          this.scheduleSnapRefresh(
             buffersForUpdate.positions, buffersForUpdate.indices, buffersForUpdate.faceMap,
             edgeLines, snapF64,
           );
@@ -1954,7 +2009,7 @@ export class ToolManager {
 
       // Get f64 precision vertices for snap (avoids f32 truncation)
       const snapF64 = this.bridge.getSnapVerticesF64();
-      this.snap.updateFromMesh(
+      this.scheduleSnapRefresh(
         buffers.positions, buffers.indices, buffers.faceMap,
         edgeLines, snapF64,
       );
@@ -1968,7 +2023,7 @@ export class ToolManager {
       this.faceMap = new Uint32Array(0);
       this.selection.updateBuffers(new Float32Array(0), new Uint32Array(0), new Uint32Array(0));
       this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
-      this.snap.updateFromMesh(
+      this.scheduleSnapRefresh(
         new Float32Array(0), new Uint32Array(0), new Uint32Array(0),
         edgeLines, null,
       );
