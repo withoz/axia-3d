@@ -91,11 +91,13 @@ fn four_rect_chain() {
         "4-rect total area should be 4,940,000 (got {})", total);
 }
 
-/// Known-failing (2026-04-24): adding a small inner rect E after 4
-/// overlapping outer rects produces face area 5,100,000 vs expected
-/// union 4,940,000 — a 160k over-count where some overlap sub-face is
-/// duplicated. Separate from the 1-corner-in fix (437a5ea); tracked as
-/// ADR-008 M1 chain-stability deferred work.
+/// Progressive improvement (2026-04-24):
+///   - Phase 3c' polygon_geom fix (f6b9b27): over-count reduced from
+///     systematic misclassification to pure algorithmic issue.
+///   - Phase 3c''-B Step 4.95 B1 second-pass: 160,000 mm² → 100,000
+///     mm² (37% reduction), one face successfully hole-promoted.
+///   - Remaining 100k over-count requires partial-overlap intersection
+///     (not just containment). Tracked as future work.
 #[test]
 #[ignore]
 fn five_rects_with_small_inner() {

@@ -1064,8 +1064,17 @@ impl Mesh {
     /// 이때 B를 dissolve. B 자체가 다른 C를 감싸는 관계도 재귀적으로 처리 가능.
     /// 반환: dissolve된 face_ids.
     pub fn dissolve_containing_faces(&mut self) -> Vec<FaceId> {
+        self.dissolve_containing_faces_opts(false)
+    }
+
+    /// `skip_ring_faces=true` 일 때, inner loop (hole) 이 이미 존재하는 face 를
+    /// outer 후보에서 제외. Phase 3c second-pass (Step 4.95) 에서 B1 hole-
+    /// promote 된 ring face 가 같은 inner 에 다시 매칭되어 이중 dissolve 되는
+    /// 것을 방지.
+    pub fn dissolve_containing_faces_opts(&mut self, skip_ring_faces: bool) -> Vec<FaceId> {
         let active: Vec<FaceId> = self.faces.iter()
             .filter(|(_, f)| f.is_active())
+            .filter(|(_, f)| !(skip_ring_faces && !f.inners().is_empty()))
             .map(|(id, _)| id)
             .collect();
         // Containment requires ≥2 faces; single-face scene has nothing to

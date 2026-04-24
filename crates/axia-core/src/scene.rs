@@ -1087,6 +1087,42 @@ impl Scene {
         {
             self.run_mixed_cycle_splits(touched_verts, new_edges, all_created_faces);
         }
+
+        // Step 4.95 — second B1 hole-promote pass (Phase 3c''-B).
+        //   M1 이 만든 새 sub-face 가 기존 face 안에 완전히 포함되는 경우,
+        //   해당 inner 를 outer 의 hole 로 승격시켜 면적 이중계산 제거.
+        //   Step 4.8 B1 이 이미 돌았지만 그때는 M1 sub-face 가 존재하지
+        //   않았으므로 M1 이후 한 번 더 돌린다. Single-pass — 반복 돌리면
+        //   먼저 생긴 ring 이 다음 라운드에서 degenerate 후보로 잘못
+        //   선정되는 경우가 있어 1 pass 로 제한.
+        {
+            let candidates: Vec<FaceId> = self.mesh.faces.iter()
+                .filter(|(_, f)| f.is_active())
+                .map(|(id, _)| id)
+                .collect();
+            for inner_fid in candidates {
+                if !self.mesh.faces.contains(inner_fid) { continue; }
+                if !self.mesh.faces[inner_fid].is_active() { continue; }
+                if !self.mesh.faces[inner_fid].inners().is_empty() { continue; }
+                let Some(outer_fid) = self.find_enclosing_face(inner_fid) else { continue; };
+                if !self.mesh.faces[outer_fid].inners().is_empty() { continue; }
+                if let Ok(new_outer) = self.promote_face_to_hole(outer_fid, inner_fid) {
+                    if let Some(old_xia) = self.face_to_xia.remove(&outer_fid) {
+                        if let Some(xia) = self.xias.get_mut(&old_xia) {
+                            xia.face_ids.retain(|&f| f != outer_fid);
+                            xia.face_ids.push(new_outer);
+                        }
+                        self.face_to_xia.insert(new_outer, old_xia);
+                    } else {
+                        self.unregister_face_from_xia(outer_fid);
+                    }
+                    all_created_faces.retain(|&f| f != outer_fid);
+                    if !all_created_faces.contains(&new_outer) {
+                        all_created_faces.push(new_outer);
+                    }
+                }
+            }
+        }
     }
 
     /// Step 4.9 worker — find and execute all mixed-cycle splits in the
