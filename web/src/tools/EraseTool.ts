@@ -108,26 +108,27 @@ export class EraseTool implements ITool {
       return; // 빈 클릭 — 아무것도 할 일 없음
     }
 
-    // SketchUp-style: try merge first (two coplanar faces collapse to one),
-    // fall back to cascade-delete for any edge that can't merge. Everything
-    // runs inside a single Rust undo transaction — one Ctrl+Z restores all.
-    //
-    // Shift at mousedown forces cascade-only (keep adjacent faces separate).
+    // 2026-04-24: Non-destructive by default.
+    //   · Coplanar faces within tolerance → merge (two faces → one).
+    //   · Non-coplanar faces → edge becomes SOFT (hidden, faces stay).
+    //     User intent "remove this line" honored without destroying geometry.
+    //   · Shift at mousedown → force cascade-delete (legacy destructive path).
+    // Single Rust undo transaction — one Ctrl+Z restores all.
     const tol = getMergeTolerance();
     const cascadeOnly = this.cascadeOnly;
-    const res = this.ctx.bridge.batchEraseEdgesWithMerge(faces, edges, tol, cascadeOnly);
+    const res = this.ctx.bridge.batchEraseEdgesSoftFallback(faces, edges, tol, cascadeOnly);
 
     let mergedCount = 0;
     let cascadedFaces = faces.length;
     let cascadedEdges = edges.length;
+    let softenedCount = 0;
     let ok = true;
 
     if (res) {
       mergedCount = res.merged;
-      cascadedFaces = res.cascadedFaces + faces.length;  // batch API already includes face_ids
       cascadedEdges = res.cascadedEdges;
-      // Wait — the batch WASM call also removes `faces`; don't double-count.
       cascadedFaces = res.cascadedFaces;
+      softenedCount = res.softened;
     } else {
       // Older WASM without batchEraseEdgesWithMerge — fall back to previous logic.
       const edgesToCascade: number[] = [];
@@ -146,7 +147,7 @@ export class EraseTool implements ITool {
     if (ok) {
       this.ctx.selection.clearSelection();
       this.ctx.syncMesh();
-      const total = cascadedFaces + cascadedEdges + mergedCount;
+      const total = cascadedFaces + cascadedEdges + mergedCount + softenedCount;
       debugLog(`[Erase] ${mergedCount} merged, ${cascadedFaces} faces, ${cascadedEdges} edges cascaded`
         + (cascadeOnly ? ' (shift: cascade-only)' : ''));
 
@@ -157,12 +158,13 @@ export class EraseTool implements ITool {
           debugLog(`[Erase] first merge failure: ${reason} (tol=${tol}°)`);
         }
       }
-      if (total > 1 || mergedCount > 0) {
+      if (total > 1 || mergedCount > 0 || softenedCount > 0) {
         const parts: string[] = [];
         if (mergedCount > 0) parts.push(`${mergedCount}개 면 통합`);
+        if (softenedCount > 0) parts.push(`${softenedCount}개 엣지 숨김 (면 유지)`);
         if (cascadedFaces > 0) parts.push(`${cascadedFaces}개 면 삭제`);
         if (cascadedEdges > 0) parts.push(`${cascadedEdges}개 엣지 삭제`);
-        if (cascadeOnly) parts.push('(Shift: 병합 안 함)');
+        if (cascadeOnly) parts.push('(Shift: 강제 삭제)');
         Toast.info(parts.join(', '), 2500);
       }
     } else {

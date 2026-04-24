@@ -186,6 +186,33 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * New variant: merge failure falls back to SOFT edge (hidden, topology
+     * preserved) instead of destroying the adjacent faces. Recommended
+     * default for interactive Erase tool.
+     * @param {Uint32Array} face_ids
+     * @param {Uint32Array} edge_ids
+     * @param {number} angle_tol_deg
+     * @param {boolean} cascade_only
+     * @returns {Int32Array}
+     */
+    batchEraseEdgesSoftFallback(face_ids, edge_ids, angle_tol_deg, cascade_only) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(edge_ids, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_batchEraseEdgesSoftFallback(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, angle_tol_deg, cascade_only);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v3 = getArrayI32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v3;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Atomic "erase with auto-merge" — primary delete path for the Erase tool.
      *
      * For each edge in `edge_ids`:
@@ -208,6 +235,20 @@ export class AxiaEngine {
      * Returns a packed `[merged, cascaded_faces, cascaded_edges]` triple
      * (one i32 each) for the tool to surface in its Toast feedback. All
      * values are >= 0 on success.
+     * Batch erase edges (and optional faces).
+     *
+     * For each edge:
+     *   1. cascade_only=true → force hard delete (faces destroyed).
+     *   2. else try `merge_faces_by_edge_with_tolerance`:
+     *      a) Success → two faces become one.
+     *      b) Failure (non-coplanar / non-manifold / material mismatch):
+     *         · soft_on_fail=true → mark the edge SOFT (rendering-hidden);
+     *           topology intact, two faces read as one surface.
+     *         · soft_on_fail=false → cascade-delete faces (legacy behaviour).
+     *
+     * Returns `[merged, cascaded_faces, cascaded_edges, softened]`.
+     * (Older callers that expect length 3 still work since Vec<i32> is
+     * returned — JS just reads indices it needs.)
      * @param {Uint32Array} face_ids
      * @param {Uint32Array} edge_ids
      * @param {number} angle_tol_deg

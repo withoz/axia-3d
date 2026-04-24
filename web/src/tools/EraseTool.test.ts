@@ -17,7 +17,10 @@ function mockToolContext() {
       // Primary path: returns { merged, cascadedFaces, cascadedEdges }.
       // Tests that want to force the fallback override this with null.
       batchEraseEdgesWithMerge: vi.fn().mockReturnValue({
-        merged: 0, cascadedFaces: 0, cascadedEdges: 0,
+        merged: 0, cascadedFaces: 0, cascadedEdges: 0, softened: 0,
+      }),
+      batchEraseEdgesSoftFallback: vi.fn().mockReturnValue({
+        merged: 0, cascadedFaces: 0, cascadedEdges: 0, softened: 0,
       }),
       previewEdgeEraseMerge: vi.fn().mockReturnValue(null),
       lastMergeFailureReason: vi.fn().mockReturnValue(''),
@@ -106,12 +109,12 @@ describe('EraseTool', () => {
     it('accumulates face on mousedown and deletes via batchDelete on mouseup', () => {
       mockFaceHit(ctx, 3);
       tool.onMouseDown({ clientX: 10, clientY: 10 } as MouseEvent, null);
-      expect(ctx.bridge.batchEraseEdgesWithMerge).not.toHaveBeenCalled();
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).not.toHaveBeenCalled();
 
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
 
       expect(ctx.getFaceId).toHaveBeenCalledWith(3);
-      expect(ctx.bridge.batchEraseEdgesWithMerge).toHaveBeenCalledWith([5], [], expect.any(Number), false);
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).toHaveBeenCalledWith([5], [], expect.any(Number), false);
       expect(ctx.selection.clearSelection).toHaveBeenCalled();
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
@@ -122,7 +125,7 @@ describe('EraseTool', () => {
       tool.onMouseDown({ clientX: 10, clientY: 10 } as MouseEvent, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
 
-      expect(ctx.bridge.batchEraseEdgesWithMerge).not.toHaveBeenCalled();
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).not.toHaveBeenCalled();
     });
   });
 
@@ -133,14 +136,14 @@ describe('EraseTool', () => {
       tool.onMouseDown({ clientX: 10, clientY: 10 } as MouseEvent, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
 
-      expect(ctx.bridge.batchEraseEdgesWithMerge).toHaveBeenCalledWith([], [20], expect.any(Number), false);
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).toHaveBeenCalledWith([], [20], expect.any(Number), false);
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
     it('does nothing when nothing is hit', () => {
       tool.onMouseDown({ clientX: 10, clientY: 10 } as MouseEvent, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
-      expect(ctx.bridge.batchEraseEdgesWithMerge).not.toHaveBeenCalled();
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).not.toHaveBeenCalled();
     });
   });
 
@@ -162,8 +165,8 @@ describe('EraseTool', () => {
 
       tool.onMouseUp({ clientX: 30, clientY: 30 } as MouseEvent);
 
-      expect(ctx.bridge.batchEraseEdgesWithMerge).toHaveBeenCalledTimes(1);
-      const callArgs = ctx.bridge.batchEraseEdgesWithMerge.mock.calls[0];
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).toHaveBeenCalledTimes(1);
+      const callArgs = ctx.bridge.batchEraseEdgesSoftFallback.mock.calls[0];
       expect([...callArgs[0]].sort()).toEqual([100, 101, 102]);
       expect(callArgs[1]).toEqual([]);
       expect(callArgs[3]).toBe(false); // cascadeOnly
@@ -177,7 +180,7 @@ describe('EraseTool', () => {
       tool.onMouseMove({ clientX: 10, clientY: 10 } as MouseEvent, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
 
-      const callArgs = ctx.bridge.batchEraseEdgesWithMerge.mock.calls[0];
+      const callArgs = ctx.bridge.batchEraseEdgesSoftFallback.mock.calls[0];
       expect(callArgs[0]).toEqual([100]);
     });
 
@@ -185,7 +188,7 @@ describe('EraseTool', () => {
       mockEdgeHit(ctx, 1);
       tool.onMouseDown({ clientX: 10, clientY: 10, shiftKey: true } as any, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
-      const callArgs = ctx.bridge.batchEraseEdgesWithMerge.mock.calls[0];
+      const callArgs = ctx.bridge.batchEraseEdgesSoftFallback.mock.calls[0];
       expect(callArgs[3]).toBe(true); // cascadeOnly flag
     });
 
@@ -196,7 +199,7 @@ describe('EraseTool', () => {
       mockEdgeHit(ctx, 0);
       tool.onMouseDown({ clientX: 10, clientY: 10, shiftKey: false } as any, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
-      const calls = ctx.bridge.batchEraseEdgesWithMerge.mock.calls;
+      const calls = ctx.bridge.batchEraseEdgesSoftFallback.mock.calls;
       expect(calls[0][3]).toBe(true);
       expect(calls[1][3]).toBe(false);
     });
@@ -216,8 +219,8 @@ describe('EraseTool', () => {
       expect(ctx.bridge.previewEdgeEraseMerge).not.toHaveBeenCalled();
     });
 
-    it('falls back to batchDelete when WASM lacks batchEraseEdgesWithMerge', () => {
-      ctx.bridge.batchEraseEdgesWithMerge.mockReturnValue(null); // simulate missing
+    it('falls back to batchDelete when WASM lacks batchEraseEdgesSoftFallback', () => {
+      ctx.bridge.batchEraseEdgesSoftFallback.mockReturnValue(null); // simulate missing
       mockEdgeHit(ctx, 0); // edge 10
       tool.onMouseDown({ clientX: 10, clientY: 10 } as MouseEvent, null);
       tool.onMouseUp({ clientX: 10, clientY: 10 } as MouseEvent);
@@ -231,7 +234,7 @@ describe('EraseTool', () => {
 
       expect(tool.isBusy()).toBe(false);
       tool.onMouseUp({ clientX: 0, clientY: 0 } as MouseEvent);
-      expect(ctx.bridge.batchEraseEdgesWithMerge).not.toHaveBeenCalled();
+      expect(ctx.bridge.batchEraseEdgesSoftFallback).not.toHaveBeenCalled();
     });
   });
 

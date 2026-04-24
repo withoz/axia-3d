@@ -1830,6 +1830,20 @@ impl AxiaEngine {
     /// Returns a packed `[merged, cascaded_faces, cascaded_edges]` triple
     /// (one i32 each) for the tool to surface in its Toast feedback. All
     /// values are >= 0 on success.
+    /// Batch erase edges (and optional faces).
+    ///
+    /// For each edge:
+    ///   1. cascade_only=true → force hard delete (faces destroyed).
+    ///   2. else try `merge_faces_by_edge_with_tolerance`:
+    ///      a) Success → two faces become one.
+    ///      b) Failure (non-coplanar / non-manifold / material mismatch):
+    ///         · soft_on_fail=true → mark the edge SOFT (rendering-hidden);
+    ///           topology intact, two faces read as one surface.
+    ///         · soft_on_fail=false → cascade-delete faces (legacy behaviour).
+    ///
+    /// Returns `[merged, cascaded_faces, cascaded_edges, softened]`.
+    /// (Older callers that expect length 3 still work since Vec<i32> is
+    /// returned — JS just reads indices it needs.)
     #[wasm_bindgen(js_name = "batchEraseEdgesWithMerge")]
     pub fn batch_erase_edges_with_merge(
         &mut self,
@@ -1837,6 +1851,34 @@ impl AxiaEngine {
         edge_ids: &[u32],
         angle_tol_deg: f64,
         cascade_only: bool,
+    ) -> Vec<i32> {
+        // Legacy signature retained; soft_on_fail defaults to false to keep
+        // current callers identical until they opt in. Use the _soft variant
+        // below for the non-destructive path.
+        self.batch_erase_edges_impl(face_ids, edge_ids, angle_tol_deg, cascade_only, false)
+    }
+
+    /// New variant: merge failure falls back to SOFT edge (hidden, topology
+    /// preserved) instead of destroying the adjacent faces. Recommended
+    /// default for interactive Erase tool.
+    #[wasm_bindgen(js_name = "batchEraseEdgesSoftFallback")]
+    pub fn batch_erase_edges_soft_fallback(
+        &mut self,
+        face_ids: &[u32],
+        edge_ids: &[u32],
+        angle_tol_deg: f64,
+        cascade_only: bool,
+    ) -> Vec<i32> {
+        self.batch_erase_edges_impl(face_ids, edge_ids, angle_tol_deg, cascade_only, true)
+    }
+
+    fn batch_erase_edges_impl(
+        &mut self,
+        face_ids: &[u32],
+        edge_ids: &[u32],
+        angle_tol_deg: f64,
+        cascade_only: bool,
+        soft_on_fail: bool,
     ) -> Vec<i32> {
         if face_ids.is_empty() && edge_ids.is_empty() {
             return vec![0, 0, 0];
@@ -1848,6 +1890,7 @@ impl AxiaEngine {
         let mut merged: i32 = 0;
         let mut cascaded_faces: i32 = 0;
         let mut cascaded_edges: i32 = 0;
+        let mut softened: i32 = 0;
         let mut all_removed_faces: Vec<FaceId> = Vec::new();
 
         // Capture the first merge failure for diagnostic purposes — surfaces
@@ -1878,7 +1921,16 @@ impl AxiaEngine {
                 }
             }
 
-            // Cascade-delete: remove sharing faces + the edge itself.
+            // Merge failed → choose fallback based on soft_on_fail flag.
+            if soft_on_fail && !cascade_only && self.scene.mesh.edges.contains(eid) {
+                // Non-destructive: mark edge SOFT. Topology stays intact, two
+                // faces remain but read as one surface (edge hidden in render).
+                self.scene.mesh.mark_edge_soft(eid);
+                softened += 1;
+                continue;
+            }
+
+            // Destructive cascade-delete: remove both sharing faces + the edge.
             if self.scene.mesh.edges.contains(eid) {
                 let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
                 for fid in &faces { all_removed_faces.push(*fid); }
@@ -1910,7 +1962,9 @@ impl AxiaEngine {
         }
 
         self.scene.unregister_faces_from_xia(&all_removed_faces);
-        self.scene.mesh.remove_isolated_verts();
+        // Phase: post-merge/erase cleanup — dangling edges (face-merged leftovers)
+        //   + isolated vertices. Prevents "선의 잔재" 보고된 문제.
+        let _ = self.scene.mesh.cleanup_dangling();
 
         self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
         self.scene.transactions.commit();
@@ -1925,7 +1979,7 @@ impl AxiaEngine {
             self.last_merge_failure.clear();
         }
 
-        vec![merged, cascaded_faces, cascaded_edges]
+        vec![merged, cascaded_faces, cascaded_edges, softened]
     }
 
     /// Diagnostic — first merge failure reason from the most recent

@@ -11,6 +11,7 @@ export const axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: num
 export const axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_arrayRadialFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
 export const axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
+export const axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;

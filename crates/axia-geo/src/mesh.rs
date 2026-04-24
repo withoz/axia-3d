@@ -1318,6 +1318,29 @@ impl Mesh {
         false
     }
 
+    /// Mark an edge as SOFT (rendering-suppressed). Sets SOFTEN_COPLANAR and
+    /// clears HARD. The DCEL topology stays intact — the edge is only hidden
+    /// visually and excluded from wireframe output.
+    ///
+    /// 2026-04-24: introduced for the "merge failed → soften instead of
+    /// cascade-delete" branch in `batch_erase_edges_with_merge`. Non-coplanar
+    /// face merges cannot be topologically flattened (a DCEL face must be
+    /// planar), but the user's intent "make this edge disappear" is honoured
+    /// by hiding it. Two faces remain but read as one surface.
+    pub fn mark_edge_soft(&mut self, edge_id: EdgeId) {
+        if !self.edges.contains(edge_id) { return; }
+        let he_start = self.edges[edge_id].any_he();
+        if he_start.is_null() { return; }
+        let mut he_id = he_start;
+        loop {
+            let mut new_flags = self.hes[he_id].flags() | HeFlags::SOFTEN_COPLANAR;
+            new_flags.remove(HeFlags::HARD);
+            self.hes[he_id].set_flags(new_flags);
+            he_id = self.hes[he_id].next_rad();
+            if he_id == he_start { break; }
+        }
+    }
+
     /// Mark both half-edges of an edge with HARD flag.
     /// HARD edges always render (even between coplanar faces) — used for user-drawn
     /// lines and face-split edges so the user's intent stays visible.
@@ -3744,6 +3767,61 @@ impl Mesh {
         // Orphans may remain after face removal
         self.remove_isolated_verts();
         count
+    }
+
+    /// Remove dangling edges — edges with zero half-edges referencing an
+    /// active face AND not in the scene's standalone-edge list. These appear
+    /// after face merges when the old shared edge's topology wasn't fully
+    /// dismantled.
+    ///
+    /// 2026-04-24: companion to the smooth-on-merge-fail path. After a
+    /// successful merge, shelve residual edges/verts that have no geometric
+    /// meaning left so they don't leak into render buffers.
+    ///
+    /// Returns (removed_edges, removed_vertices).
+    pub fn cleanup_dangling(&mut self) -> (usize, usize) {
+        // Step 1 — edges whose half-edges all point to inactive faces.
+        //   The DCEL guarantees every edge has ≤ 2 half-edges; if both point
+        //   to inactive faces (or null), the edge is dangling.
+        let mut to_remove: Vec<EdgeId> = Vec::new();
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let he_a = edge.any_he();
+            if he_a.is_null() {
+                to_remove.push(eid);
+                continue;
+            }
+            // Walk the radial chain; if no half-edge references an active face,
+            // the edge is orphaned.
+            let mut has_active_face = false;
+            let mut he_id = he_a;
+            loop {
+                let he = &self.hes[he_id];
+                let fid = he.face();
+                if !fid.is_null() && self.faces.contains(fid) && self.faces[fid].is_active() {
+                    has_active_face = true;
+                    break;
+                }
+                he_id = he.next_rad();
+                if he_id == he_a || he_id.is_null() { break; }
+            }
+            if !has_active_face {
+                to_remove.push(eid);
+            }
+        }
+        let edge_removed = to_remove.len();
+        for eid in to_remove {
+            let _ = self.remove_edge_and_halfedges(eid);
+            if self.edges.contains(eid) { self.edges.remove(eid); }
+        }
+
+        // Step 2 — vertices with no remaining edge references.
+        let before_verts = self.verts.iter().count();
+        self.remove_isolated_verts();
+        let after_verts = self.verts.iter().count();
+        let vert_removed = before_verts - after_verts;
+
+        (edge_removed, vert_removed)
     }
 
     /// Remove vertices that have no edges referencing them.

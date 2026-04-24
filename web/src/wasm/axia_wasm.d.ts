@@ -62,6 +62,12 @@ export class AxiaEngine {
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
     /**
+     * New variant: merge failure falls back to SOFT edge (hidden, topology
+     * preserved) instead of destroying the adjacent faces. Recommended
+     * default for interactive Erase tool.
+     */
+    batchEraseEdgesSoftFallback(face_ids: Uint32Array, edge_ids: Uint32Array, angle_tol_deg: number, cascade_only: boolean): Int32Array;
+    /**
      * Atomic "erase with auto-merge" — primary delete path for the Erase tool.
      *
      * For each edge in `edge_ids`:
@@ -84,6 +90,20 @@ export class AxiaEngine {
      * Returns a packed `[merged, cascaded_faces, cascaded_edges]` triple
      * (one i32 each) for the tool to surface in its Toast feedback. All
      * values are >= 0 on success.
+     * Batch erase edges (and optional faces).
+     *
+     * For each edge:
+     *   1. cascade_only=true → force hard delete (faces destroyed).
+     *   2. else try `merge_faces_by_edge_with_tolerance`:
+     *      a) Success → two faces become one.
+     *      b) Failure (non-coplanar / non-manifold / material mismatch):
+     *         · soft_on_fail=true → mark the edge SOFT (rendering-hidden);
+     *           topology intact, two faces read as one surface.
+     *         · soft_on_fail=false → cascade-delete faces (legacy behaviour).
+     *
+     * Returns `[merged, cascaded_faces, cascaded_edges, softened]`.
+     * (Older callers that expect length 3 still work since Vec<i32> is
+     * returned — JS just reads indices it needs.)
      */
     batchEraseEdgesWithMerge(face_ids: Uint32Array, edge_ids: Uint32Array, angle_tol_deg: number, cascade_only: boolean): Int32Array;
     /**
@@ -797,6 +817,7 @@ export interface InitOutput {
     readonly axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_arrayRadialFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;

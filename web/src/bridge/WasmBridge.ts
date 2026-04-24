@@ -71,6 +71,13 @@ type AxiaEngineExtended = AxiaEngine & {
     angleTolDeg: number,
     cascadeOnly: boolean,
   ): Int32Array;
+  /** 2026-04-24: non-destructive variant. merge 실패 → edge soften (hidden). */
+  batchEraseEdgesSoftFallback?(
+    faceIds: Uint32Array,
+    edgeIds: Uint32Array,
+    angleTolDeg: number,
+    cascadeOnly: boolean,
+  ): Int32Array;
   previewEdgeEraseMerge?(edgeId: number, angleTolDeg: number): Uint32Array;
   lastMergeFailureReason?(): string;
   // Constraint Solver Level 1 (vertex-level ops + edge/vertex queries)
@@ -659,7 +666,7 @@ export class WasmBridge {
     edgeIds: number[],
     angleTolDeg: number,
     cascadeOnly: boolean,
-  ): { merged: number; cascadedFaces: number; cascadedEdges: number } | null {
+  ): { merged: number; cascadedFaces: number; cascadedEdges: number; softened: number } | null {
     if (!this.engine?.batchEraseEdgesWithMerge) return null;
     this.markDirty();
     try {
@@ -673,9 +680,41 @@ export class WasmBridge {
         merged: out[0] ?? 0,
         cascadedFaces: out[1] ?? 0,
         cascadedEdges: out[2] ?? 0,
+        softened: out[3] ?? 0,
       };
     } catch (e) {
       this.recordBridgeError('batchEraseEdgesWithMerge', e);
+      return null;
+    }
+  }
+
+  /** 2026-04-24: non-destructive default. Merge 실패 → edge SOFT로 숨김. */
+  batchEraseEdgesSoftFallback(
+    faceIds: number[],
+    edgeIds: number[],
+    angleTolDeg: number,
+    cascadeOnly: boolean,
+  ): { merged: number; cascadedFaces: number; cascadedEdges: number; softened: number } | null {
+    if (!this.engine?.batchEraseEdgesSoftFallback) {
+      // Fallback to the legacy destructive path if new API not available.
+      return this.batchEraseEdgesWithMerge(faceIds, edgeIds, angleTolDeg, cascadeOnly);
+    }
+    this.markDirty();
+    try {
+      const out = this.engine.batchEraseEdgesSoftFallback(
+        new Uint32Array(faceIds),
+        new Uint32Array(edgeIds),
+        angleTolDeg,
+        cascadeOnly,
+      );
+      return {
+        merged: out[0] ?? 0,
+        cascadedFaces: out[1] ?? 0,
+        cascadedEdges: out[2] ?? 0,
+        softened: out[3] ?? 0,
+      };
+    } catch (e) {
+      this.recordBridgeError('batchEraseEdgesSoftFallback', e);
       return null;
     }
   }
