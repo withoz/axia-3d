@@ -1,5 +1,13 @@
 /**
- * Offset Tool — CAD style offset (select object → click side → repeat)
+ * Offset Tool — SketchUp-style face-boundary offset.
+ *
+ * Principle 1 (2026-04-24): edge-only offset was removed from the UI to
+ * eliminate the ambiguity between "offset this one edge" and "offset the
+ * whole face boundary". Users always act on a face; every edge of that
+ * face's outer loop is moved in parallel by the given distance. The
+ * underlying Mesh::offset_edge API is retained internally for future
+ * tooling (e.g. bounded offset may reuse it), but is not reachable from
+ * the UI tool.
  */
 
 import * as THREE from 'three';
@@ -12,16 +20,11 @@ export class OffsetTool implements ITool {
   private ctx: ToolContext;
   private offsetPhase: 0 | 1 | 2 = 0;
   private offsetFaceId: number = -1;
-  private offsetEdgeId: number = -1;
   private offsetNormal: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
   private offsetHitPoint: THREE.Vector3 = new THREE.Vector3();
   private offsetGhost: THREE.Group | null = null;
   private offsetFaceVerts: THREE.Vector3[] = [];
   private lastOffsetDist: number = 0;
-  private offsetEdgeDir: THREE.Vector3 = new THREE.Vector3();
-  private offsetEdgeP0: THREE.Vector3 = new THREE.Vector3();
-  private offsetEdgeP1: THREE.Vector3 = new THREE.Vector3();
-  private offsetEdgeHighlight: THREE.Line | null = null;
   private offsetHoverHighlight: THREE.Line | null = null;
   private offsetCurrentSign: number = 1;
 
@@ -32,7 +35,7 @@ export class OffsetTool implements ITool {
   onActivate(): void {
     const canvas = this.ctx.viewport.renderer.domElement;
     canvas.style.cursor = 'none';
-    debugLog('[OffsetTool] Activated');
+    debugLog('[OffsetTool] Activated (face-only)');
   }
 
   onDeactivate(): void {
@@ -41,57 +44,30 @@ export class OffsetTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     if (this.offsetPhase === 0) {
-      // Phase 0 → 1: select object
-      const picked = this.pickOffsetTarget(e);
-      if (picked) {
+      // Phase 0 → 1: pick a face.
+      if (this.pickFaceTarget(e)) {
         this.offsetPhase = 1;
         this.removeOffsetHover();
-        debugLog('[Offset] Phase 1: object selected,',
-          picked.type === 'edge' ? 'edgeId=' + this.offsetEdgeId : 'faceId=' + this.offsetFaceId);
+        debugLog('[Offset] Phase 1: faceId=', this.offsetFaceId);
       }
     } else if (this.offsetPhase === 1) {
-      // Phase 1 → execute: determine direction (second click)
+      // Phase 1 → execute: direction from click.
       const clickPt = this.ctx.getGroundPoint(e);
       if (!clickPt) return;
 
-      let dist = 0;
+      let dist = this.offsetRayDist(e);
+      if (this.lastOffsetDist > 0) {
+        const sign = dist >= 0 ? 1 : -1;
+        dist = this.lastOffsetDist * sign;
+      }
 
-      if (this.offsetEdgeId >= 0) {
-        const midPt = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-        const clickDir = new THREE.Vector3().subVectors(clickPt, midPt);
-        const side = clickDir.dot(this.offsetEdgeDir) >= 0 ? 1 : -1;
-
-        if (this.lastOffsetDist > 0) {
-          dist = this.lastOffsetDist * side;
-        } else {
-          dist = clickDir.dot(this.offsetEdgeDir);
-        }
-
-        if (Math.abs(dist) > 0.1) {
-          const planeN: [number, number, number] = [
-            this.offsetNormal.x, this.offsetNormal.y, this.offsetNormal.z
-          ];
-          const result = this.ctx.bridge.offsetEdge(this.offsetEdgeId, dist, planeN);
-          if (result && result.ok) {
-            this.lastOffsetDist = Math.abs(dist);
-            debugLog('[Offset/Edge] Applied: dist=', dist.toFixed(1), 'newEdge=', result.newEdge);
-          }
-        }
-      } else if (this.offsetFaceId >= 0) {
-        dist = this.offsetRayDist(e);
-        if (this.lastOffsetDist > 0) {
-          const sign = dist >= 0 ? 1 : -1;
-          dist = this.lastOffsetDist * sign;
-        }
-
-        if (Math.abs(dist) > 0.1) {
-          const result = this.ctx.bridge.offsetFace(this.offsetFaceId, dist);
-          if (result && result.ok) {
-            this.lastOffsetDist = Math.abs(dist);
-            debugLog('[Offset/Face] Applied: dist=', dist.toFixed(1), 'innerFace=', result.innerFace);
-          }
+      if (Math.abs(dist) > 0.1 && this.offsetFaceId >= 0) {
+        const result = this.ctx.bridge.offsetFace(this.offsetFaceId, dist);
+        if (result && result.ok) {
+          this.lastOffsetDist = Math.abs(dist);
+          debugLog('[Offset/Face] Applied: dist=', dist.toFixed(1), 'innerFace=', result.innerFace);
         }
       }
 
@@ -100,7 +76,7 @@ export class OffsetTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     const pickBox = this.ctx.pickBox;
     if (pickBox) {
       pickBox.visible = true;
@@ -108,85 +84,39 @@ export class OffsetTool implements ITool {
     }
 
     if (this.offsetPhase === 0) {
-      // Phase 0: object hover highlight
-      const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-      if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-        const segIndex = Math.floor(edgeHit.index / 2);
-        this.showEdgeHover(segIndex);
+      // Hover: face highlight only (no edge picking).
+      const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
+      if (hit && hit.faceIndex != null && hit.faceIndex >= 0) {
+        // Viewport's built-in hover paints the face; we do nothing here.
       } else {
         this.removeOffsetHover();
       }
-    } else if (this.offsetPhase === 1) {
-      // Phase 1: direction preview + dimension display
-      if (this.offsetEdgeId >= 0) {
-        const groundPt = this.ctx.getGroundPoint(e);
-        if (groundPt) {
-          const midPt = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-          const clickDir = new THREE.Vector3().subVectors(groundPt, midPt);
-          const projDist = clickDir.dot(this.offsetEdgeDir);
+    } else if (this.offsetPhase === 1 && this.offsetFaceId >= 0) {
+      const dist = this.offsetRayDist(e);
+      if (Math.abs(dist) > 0.1) {
+        this.offsetCurrentSign = dist >= 0 ? 1 : -1;
+      }
+      const previewDist = this.lastOffsetDist > 0
+        ? this.lastOffsetDist * this.offsetCurrentSign
+        : dist;
+      this.updateOffsetGhost(previewDist);
 
-          if (Math.abs(projDist) > 0.1) {
-            this.offsetCurrentSign = projDist >= 0 ? 1 : -1;
-          }
-
-          let previewDist = this.lastOffsetDist > 0
-            ? this.lastOffsetDist * this.offsetCurrentSign
-            : projDist;
-
-          if (Math.abs(previewDist) > 0.1) {
-            const offset = this.offsetEdgeDir.clone().multiplyScalar(previewDist);
-            const prevP0 = this.offsetEdgeP0.clone().add(offset);
-            const prevP1 = this.offsetEdgeP1.clone().add(offset);
-
-            this.removeOffsetHover();
-            const geo = new THREE.BufferGeometry();
-            geo.setAttribute('position', new THREE.BufferAttribute(
-              new Float32Array([prevP0.x, prevP0.y, prevP0.z, prevP1.x, prevP1.y, prevP1.z]), 3
-            ));
-            const mat = new THREE.LineBasicMaterial({
-              color: 0xff9f43, linewidth: 2, depthTest: false,
-            });
-            this.offsetHoverHighlight = new THREE.Line(geo, mat);
-            this.offsetHoverHighlight.renderOrder = 998;
-            this.ctx.viewport.scene.add(this.offsetHoverHighlight);
-
-            const text = this.ctx.units.format(Math.abs(previewDist));
-            const midFrom = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-            const midTo = midFrom.clone().add(this.offsetEdgeDir.clone().multiplyScalar(previewDist));
-            this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-              { from: midFrom, to: midTo, text, color: '#ff9f43' },
-            ]);
-          }
-        }
-      } else if (this.offsetFaceId >= 0) {
-        const dist = this.offsetRayDist(e);
-        if (Math.abs(dist) > 0.1) {
-          this.offsetCurrentSign = dist >= 0 ? 1 : -1;
-        }
-        let previewDist = this.lastOffsetDist > 0
-          ? this.lastOffsetDist * this.offsetCurrentSign
-          : dist;
-        this.updateOffsetGhost(previewDist);
-
-        if (Math.abs(previewDist) > 0.1) {
-          const text = this.ctx.units.format(Math.abs(previewDist));
-          const label = previewDist >= 0 ? 'Inset' : 'Outset';
-          if (this.offsetFaceVerts.length >= 2) {
-            const midA = new THREE.Vector3().addVectors(
-              this.offsetFaceVerts[0], this.offsetFaceVerts[1]
-            ).multiplyScalar(0.5);
-            const edge = new THREE.Vector3().subVectors(
-              this.offsetFaceVerts[1], this.offsetFaceVerts[0]
-            );
-            const inward = new THREE.Vector3().crossVectors(edge, this.offsetNormal).normalize();
-            const midB = midA.clone().add(inward.multiplyScalar(previewDist));
-            this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-              { from: midA, to: midB, text: `${label}: ${text}`, color: '#ff9f43' },
-            ]);
-          }
-        } else {
-          this.ctx.dimLabel.clear();
-        }
+      if (Math.abs(previewDist) > 0.1 && this.offsetFaceVerts.length >= 2) {
+        const text = this.ctx.units.format(Math.abs(previewDist));
+        const label = previewDist >= 0 ? 'Inset' : 'Outset';
+        const midA = new THREE.Vector3().addVectors(
+          this.offsetFaceVerts[0], this.offsetFaceVerts[1],
+        ).multiplyScalar(0.5);
+        const edge = new THREE.Vector3().subVectors(
+          this.offsetFaceVerts[1], this.offsetFaceVerts[0],
+        );
+        const inward = new THREE.Vector3().crossVectors(edge, this.offsetNormal).normalize();
+        const midB = midA.clone().add(inward.multiplyScalar(previewDist));
+        this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
+          { from: midA, to: midB, text: `${label}: ${text}`, color: '#ff9f43' },
+        ]);
+      } else {
+        this.ctx.dimLabel.clear();
       }
     }
   }
@@ -201,23 +131,12 @@ export class OffsetTool implements ITool {
     if (this.offsetPhase === 0) {
       this.lastOffsetDist = value;
       debugLog('[VCB/Offset] Distance set:', value);
-    } else if (this.offsetPhase === 1) {
+    } else if (this.offsetPhase === 1 && this.offsetFaceId >= 0) {
       const signedValue = value * this.offsetCurrentSign;
-      if (this.offsetEdgeId >= 0) {
-        const planeN: [number, number, number] = [
-          this.offsetNormal.x, this.offsetNormal.y, this.offsetNormal.z
-        ];
-        const result = this.ctx.bridge.offsetEdge(this.offsetEdgeId, signedValue, planeN);
-        if (result && result.ok) {
-          this.lastOffsetDist = value;
-          debugLog('[VCB/Offset/Edge] Applied:', signedValue, 'newEdge=', result.newEdge);
-        }
-      } else if (this.offsetFaceId >= 0) {
-        const result = this.ctx.bridge.offsetFace(this.offsetFaceId, signedValue);
-        if (result && result.ok) {
-          this.lastOffsetDist = value;
-          debugLog('[VCB/Offset/Face] Applied:', signedValue, 'innerFace=', result.innerFace);
-        }
+      const result = this.ctx.bridge.offsetFace(this.offsetFaceId, signedValue);
+      if (result && result.ok) {
+        this.lastOffsetDist = value;
+        debugLog('[VCB/Offset/Face] Applied:', signedValue, 'innerFace=', result.innerFace);
       }
       this.ctx.syncMesh();
       this.resetOffsetState();
@@ -236,15 +155,13 @@ export class OffsetTool implements ITool {
   private resetOffsetState(): void {
     this.offsetPhase = 0;
     this.offsetFaceId = -1;
-    this.offsetEdgeId = -1;
     this.offsetCurrentSign = 1;
     this.removeOffsetGhost();
-    this.removeEdgeHighlight();
     this.removeOffsetHover();
     this.ctx.selection.clearSelection();
   }
 
-  private pickOffsetTarget(e: MouseEvent): { type: 'face' | 'edge' } | null {
+  private pickFaceTarget(e: MouseEvent): boolean {
     const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
     let rustFaceId = -1;
     let hitPoint: THREE.Vector3 | null = null;
@@ -265,42 +182,14 @@ export class OffsetTool implements ITool {
 
     if (rustFaceId >= 0 && hitPoint) {
       this.offsetFaceId = rustFaceId;
-      this.offsetEdgeId = -1;
       const normal = this.ctx.bridge.getFaceNormal(rustFaceId);
       this.offsetNormal = new THREE.Vector3(normal[0], normal[1], normal[2]);
       this.offsetHitPoint = hitPoint;
       this.createOffsetGhost(rustFaceId);
       this.ctx.selection.handleClick(rustFaceId, false, false);
-      return { type: 'face' };
+      return true;
     }
-
-    const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-    if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-      const segIndex = Math.floor(edgeHit.index / 2);
-      const edgeId = this.ctx.edgeMap[segIndex];
-      if (edgeId != null) {
-        this.offsetEdgeId = edgeId;
-        this.offsetFaceId = -1;
-        this.offsetNormal = new THREE.Vector3(0, 1, 0);
-
-        const edgeLines = this.ctx.bridge.getEdgeLines();
-        if (edgeLines) {
-          const base = segIndex * 6;
-          this.offsetEdgeP0 = new THREE.Vector3(edgeLines[base], edgeLines[base+1], edgeLines[base+2]);
-          this.offsetEdgeP1 = new THREE.Vector3(edgeLines[base+3], edgeLines[base+4], edgeLines[base+5]);
-          const edgeDir = new THREE.Vector3().subVectors(this.offsetEdgeP1, this.offsetEdgeP0).normalize();
-          this.offsetEdgeDir = new THREE.Vector3().crossVectors(edgeDir, this.offsetNormal).normalize();
-
-          const midPt = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-          this.offsetHitPoint = midPt;
-
-          this.showEdgeSelected(this.offsetEdgeP0, this.offsetEdgeP1);
-        }
-        return { type: 'edge' };
-      }
-    }
-
-    return null;
+    return false;
   }
 
   private offsetRayDist(e: MouseEvent): number {
@@ -316,16 +205,10 @@ export class OffsetTool implements ITool {
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(this.offsetNormal, this.offsetHitPoint);
     const intersection = new THREE.Vector3();
     const hit = ray.ray.intersectPlane(plane, intersection);
-
     if (!hit) return 0;
 
     const diff = new THREE.Vector3().subVectors(intersection, this.offsetHitPoint);
     const absDist = diff.length();
-
-    if (this.offsetEdgeId >= 0 && this.offsetEdgeDir.lengthSq() > 0.001) {
-      const sign = diff.dot(this.offsetEdgeDir) >= 0 ? 1 : -1;
-      return absDist * sign;
-    }
 
     if (this.offsetFaceVerts.length >= 3) {
       const centroid = new THREE.Vector3();
@@ -337,13 +220,11 @@ export class OffsetTool implements ITool {
 
       return mouseToCentroid < hitToCentroid ? absDist : -absDist;
     }
-
     return absDist;
   }
 
   private createOffsetGhost(faceId: number): void {
     this.removeOffsetGhost();
-    this.removeEdgeHighlight();
     this.offsetFaceVerts = this.ctx.extractFaceBoundary(faceId);
     if (this.offsetFaceVerts.length < 3) return;
 
@@ -391,7 +272,7 @@ export class OffsetTool implements ITool {
       const clampedDist = Math.min(moveDist, absDist * 3);
 
       offsetVerts.push(
-        this.offsetFaceVerts[i].clone().add(bisector.multiplyScalar(clampedDist * direction))
+        this.offsetFaceVerts[i].clone().add(bisector.multiplyScalar(clampedDist * direction)),
       );
     }
 
@@ -465,15 +346,6 @@ export class OffsetTool implements ITool {
     this.offsetFaceVerts = [];
   }
 
-  private removeEdgeHighlight(): void {
-    if (this.offsetEdgeHighlight) {
-      this.offsetEdgeHighlight.geometry.dispose();
-      (this.offsetEdgeHighlight.material as THREE.Material).dispose();
-      this.ctx.viewport.scene.remove(this.offsetEdgeHighlight);
-      this.offsetEdgeHighlight = null;
-    }
-  }
-
   private removeOffsetHover(): void {
     if (this.offsetHoverHighlight) {
       this.offsetHoverHighlight.geometry.dispose();
@@ -481,42 +353,5 @@ export class OffsetTool implements ITool {
       this.ctx.viewport.scene.remove(this.offsetHoverHighlight);
       this.offsetHoverHighlight = null;
     }
-  }
-
-  private showEdgeHover(segIndex: number): void {
-    this.removeOffsetHover();
-    const edgeLines = this.ctx.bridge.getEdgeLines();
-    if (!edgeLines) return;
-
-    const base = segIndex * 6;
-    if (base + 5 >= edgeLines.length) return;
-
-    const p0x = edgeLines[base], p0y = edgeLines[base+1], p0z = edgeLines[base+2];
-    const p1x = edgeLines[base+3], p1y = edgeLines[base+4], p1z = edgeLines[base+5];
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(
-      new Float32Array([p0x, p0y, p0z, p1x, p1y, p1z]), 3
-    ));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0x00ffff, linewidth: 2, depthTest: false,
-    });
-    this.offsetHoverHighlight = new THREE.Line(geo, mat);
-    this.offsetHoverHighlight.renderOrder = 998;
-    this.ctx.viewport.scene.add(this.offsetHoverHighlight);
-  }
-
-  private showEdgeSelected(p0: THREE.Vector3, p1: THREE.Vector3): void {
-    this.removeEdgeHighlight();
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(
-      new Float32Array([p0.x, p0.y, p0.z, p1.x, p1.y, p1.z]), 3
-    ));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xffff00, linewidth: 3, depthTest: false,
-    });
-    this.offsetEdgeHighlight = new THREE.Line(geo, mat);
-    this.offsetEdgeHighlight.renderOrder = 999;
-    this.ctx.viewport.scene.add(this.offsetEdgeHighlight);
   }
 }

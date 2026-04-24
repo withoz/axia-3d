@@ -21,6 +21,24 @@ const SNAPSHOT_VERSION: u32 = 1;
 const AXIA_MAGIC: [u8; 4] = [b'A', b'X', b'I', b'A'];
 
 /// The AXiA scene — owns the geometry mesh and all XIA entities.
+/// Principle 3 (ADR-008) — Face Operation Epoch.
+///
+/// Accumulates the per-line topology work from a multi-line user command
+/// (exec_draw_rect = 4×, exec_draw_circle = N×) so the heavy post-process
+/// steps (fan-split, containment dissolve, planar free-face resolver,
+/// dedup, B1 hole promotion) run once at the end of the command instead
+/// of once per line. The intermediate lines still do their own crossings
+/// + split_face_by_line + free-edge loop detection for correctness; only
+/// the scene-wide cleanup/synthesis sweeps are deferred.
+#[derive(Default, Debug)]
+struct EpochContext {
+    touched_verts: Vec<VertId>,
+    new_edges: Vec<EdgeId>,
+    created_faces: Vec<FaceId>,
+    loop_edge_ids: Vec<EdgeId>,
+    surface_normal: Option<DVec3>,
+}
+
 pub struct Scene {
     /// The geometry kernel mesh
     pub mesh: Mesh,
@@ -40,6 +58,10 @@ pub struct Scene {
     pub groups: GroupManager,
     /// Constraint Solver Level 2 — persistent constraint graph
     pub constraints: ConstraintGraph,
+    /// Active epoch for Principle 3 batching. Set by exec_draw_rect/circle,
+    /// cleared in the epoch finalizer. When `Some`, inner exec_draw_line
+    /// calls contribute to this buffer and skip their per-line post-process.
+    epoch: Option<EpochContext>,
 }
 
 impl Scene {
@@ -54,6 +76,7 @@ impl Scene {
             default_material: MaterialId::new(0),
             groups: GroupManager::new(),
             constraints: ConstraintGraph::new(),
+            epoch: None,
         }
     }
 
@@ -679,6 +702,108 @@ impl Scene {
         Ok(new_outer)
     }
 
+    /// Principle 3 (Face Operation Epoch) — consolidate the post-line
+    /// synthesis steps into one reusable routine. Called by exec_draw_line
+    /// when no epoch is active (single-line command) AND by the epoch
+    /// finalizer in exec_draw_rect / exec_draw_circle after all sides are
+    /// drawn. Keeps the semantics identical to the former inlined block.
+    fn run_face_synthesis_postprocess(
+        &mut self,
+        touched_verts: &[VertId],
+        new_edges: &[EdgeId],
+        all_created_faces: &mut Vec<FaceId>,
+    ) {
+        // Step 4.5 — fan-tessellation, scoped to faces whose AABB contains
+        //   at least one touched vertex (Perf cut from earlier session).
+        {
+            let touched_pts: Vec<DVec3> = touched_verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
+            let candidates: Vec<FaceId> = self.mesh.faces.iter()
+                .filter(|(_, f)| f.is_active())
+                .filter_map(|(fid, f)| {
+                    let verts = self.mesh.collect_loop_verts(f.outer().start).ok()?;
+                    let mut mn = DVec3::splat(f64::INFINITY);
+                    let mut mx = DVec3::splat(f64::NEG_INFINITY);
+                    for &v in &verts {
+                        let p = self.mesh.vertex_pos(v).ok()?;
+                        mn = mn.min(p);
+                        mx = mx.max(p);
+                    }
+                    let pad = DVec3::splat(1e-3);
+                    mn -= pad;
+                    mx += pad;
+                    let has_inside = touched_pts.iter().any(|p| {
+                        p.x >= mn.x && p.x <= mx.x
+                            && p.y >= mn.y && p.y <= mx.y
+                            && p.z >= mn.z && p.z <= mx.z
+                    });
+                    if has_inside { Some(fid) } else { None }
+                })
+                .collect();
+            for fid in candidates {
+                let new_faces = self.mesh.dissolve_and_fan_split(fid);
+                if !new_faces.is_empty() {
+                    if let Some(xia_id) = self.get_xia_for_face(fid) {
+                        self.unregister_face_from_xia(fid);
+                        if self.xias.get(&xia_id).is_some() {
+                            self.register_faces_to_xia(xia_id, &new_faces);
+                            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                                for &f in &new_faces { xia.face_ids.push(f); }
+                            }
+                        }
+                    }
+                    for f in new_faces {
+                        if !all_created_faces.contains(&f) { all_created_faces.push(f); }
+                    }
+                }
+            }
+        }
+
+        // Step 4.55 — nested face dissolve
+        {
+            let dissolved = self.mesh.dissolve_containing_faces();
+            for fid in dissolved {
+                self.unregister_face_from_xia(fid);
+                all_created_faces.retain(|&f| f != fid);
+            }
+        }
+
+        // Step 4.6 — D resolver
+        {
+            let resolved = self.mesh.resolve_planar_free_faces_scoped(
+                self.default_material,
+                Some(touched_verts),
+                Some(new_edges),
+            );
+            for f in resolved {
+                if !all_created_faces.contains(&f) { all_created_faces.push(f); }
+            }
+        }
+
+        // Step 4.7 — dedup
+        {
+            let removed = self.mesh.deduplicate_overlapping_faces();
+            for fid in removed {
+                self.unregister_face_from_xia(fid);
+                all_created_faces.retain(|&f| f != fid);
+            }
+        }
+
+        // Step 4.8 — B1 enclosed-face hole promotion
+        {
+            let candidates: Vec<FaceId> = all_created_faces.clone();
+            for inner_fid in candidates {
+                if !self.mesh.faces.contains(inner_fid) { continue; }
+                if let Some(outer_fid) = self.find_enclosing_face(inner_fid) {
+                    if self.promote_face_to_hole(outer_fid, inner_fid).is_ok() {
+                        self.unregister_face_from_xia(outer_fid);
+                    }
+                }
+            }
+        }
+    }
+
     /// 주어진 vertex 루프가 기존 face 중 하나 이상의 centroid를 감싸고 있는지 검사.
     /// True이면 이 루프는 "외부 unbounded boundary"로 판정 → 면 생성 스킵.
     ///
@@ -956,136 +1081,44 @@ impl Scene {
             }
         }
 
-        // ── Step 4.5: Fan-tessellation 검출 ──
-        // 이 시점엔 새 엣지들이 모두 draw_line으로 생성된 상태. 기존 face의 interior에
-        // ≥2 boundary spoke를 가진 vertex가 있으면 그 face를 dissolve+fan split.
-        // loop detection은 Step 4(b)에서 "interior vertex" 케이스를 이미 skip했으므로
-        // 여기서 처리해도 중복 face 생성 없음.
-        //
-        // Perf (2026-04-24): 기존엔 모든 활성 face를 후보로 삼았다. 그러나
-        // fan-split은 touched_verts(이번 drawLine이 건드린 vertex) 중 하나가
-        // face interior에 있을 때만 의미가 있다. face의 3D AABB 안에 touched
-        // vertex가 없으면 즉시 스킵 → 대형 씬에서 O(F × V)를 O(k) 수준으로
-        // 절감.
-        {
-            // touched_verts의 3D 좌표 수집 (1회)
-            let touched_pts: Vec<DVec3> = touched_verts.iter()
-                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
-                .collect();
-            let candidates: Vec<FaceId> = self.mesh.faces.iter()
-                .filter(|(_, f)| f.is_active())
-                .filter_map(|(fid, f)| {
-                    // face AABB 계산 — outer loop verts만
-                    let verts = self.mesh.collect_loop_verts(f.outer().start).ok()?;
-                    let mut mn = DVec3::splat(f64::INFINITY);
-                    let mut mx = DVec3::splat(f64::NEG_INFINITY);
-                    for &v in &verts {
-                        let p = self.mesh.vertex_pos(v).ok()?;
-                        mn = mn.min(p);
-                        mx = mx.max(p);
-                    }
-                    // padding — touched_verts가 face boundary에 정확히 있을
-                    // 수 있으므로 살짝 확장
-                    let pad = DVec3::splat(1e-3);
-                    mn -= pad;
-                    mx += pad;
-                    let has_inside = touched_pts.iter().any(|p| {
-                        p.x >= mn.x && p.x <= mx.x
-                            && p.y >= mn.y && p.y <= mx.y
-                            && p.z >= mn.z && p.z <= mx.z
-                    });
-                    if has_inside { Some(fid) } else { None }
-                })
-                .collect();
-            for fid in candidates {
-                let new_faces = self.mesh.dissolve_and_fan_split(fid);
-                if !new_faces.is_empty() {
-                    if let Some(xia_id) = self.get_xia_for_face(fid) {
-                        self.unregister_face_from_xia(fid);
-                        if self.xias.get(&xia_id).is_some() {
-                            self.register_faces_to_xia(xia_id, &new_faces);
-                            if let Some(xia) = self.xias.get_mut(&xia_id) {
-                                for &f in &new_faces { xia.face_ids.push(f); }
-                            }
-                        }
-                    }
-                    for f in new_faces {
-                        if !all_created_faces.contains(&f) { all_created_faces.push(f); }
-                    }
+        // ── Steps 4.5–4.8: Face synthesis post-process ──
+        // Principle 3 (ADR-008): if an outer multi-line command (draw_rect,
+        // draw_circle) has an epoch active, defer the whole post-process to
+        // the epoch finalizer. Contribute our per-line findings to the
+        // epoch buffer so the outer sees everything.
+        if self.epoch.is_some() {
+            if let Some(ep) = self.epoch.as_mut() {
+                for v in &touched_verts {
+                    if !ep.touched_verts.contains(v) { ep.touched_verts.push(*v); }
+                }
+                for e in &new_edges {
+                    if !ep.new_edges.contains(e) { ep.new_edges.push(*e); }
+                }
+                for f in &all_created_faces {
+                    if !ep.created_faces.contains(f) { ep.created_faces.push(*f); }
+                }
+                for e in &all_loop_edge_ids {
+                    if !ep.loop_edge_ids.contains(e) { ep.loop_edge_ids.push(*e); }
                 }
             }
-        }
-
-        // ── Step 4.55: Nested face dissolve ──
-        // 다른 face를 감싸는 face(outer tri 안에 inner tri를 그린 경우)를 dissolve해서
-        // 경계 HE를 해방. D resolver가 이어서 wedge 영역들을 재구성.
-        {
-            let dissolved = self.mesh.dissolve_containing_faces();
-            for fid in dissolved {
-                // XIA 연결 정리
-                self.unregister_face_from_xia(fid);
-                all_created_faces.retain(|&f| f != fid);
-            }
-        }
-
-        // ── Step 4.6: Planar free-face resolver (Phase D) — SCOPED + REQUIRED ──
-        // **이중 필터**:
-        //   (1) seed_verts: 현재 drawLine이 관여한 vertex의 component만 처리.
-        //   (2) required_edges: cycle이 새로 그린 edge를 최소 하나 포함해야 face 생성.
-        // 두 조건 모두 충족해야 face 생성 → 이전에 삭제된 면의 자유 엣지 cycle을
-        // "우연히 통과한" 경우도 절대 재생성되지 않음.
-        {
-            let resolved = self.mesh.resolve_planar_free_faces_scoped(
-                self.default_material,
-                Some(&touched_verts),
-                Some(&new_edges),
+        } else {
+            self.run_face_synthesis_postprocess(
+                &touched_verts,
+                &new_edges,
+                &mut all_created_faces,
             );
-            for f in resolved {
-                if !all_created_faces.contains(&f) { all_created_faces.push(f); }
-            }
-        }
-
-        // ── Step 4.7: Overlapping face dedup ──
-        // fan_split + loop_detect 경쟁 또는 split_face 잔여물 등으로 같은 boundary를 가진
-        // 중복 face가 남으면 하나만 남기고 제거. 중복 제거 시 XIA 연결도 정리.
-        {
-            let removed = self.mesh.deduplicate_overlapping_faces();
-            for fid in removed {
-                // XIA face_ids 목록에서 제거
-                self.unregister_face_from_xia(fid);
-                // all_created_faces에서도 제거
-                all_created_faces.retain(|&f| f != fid);
-            }
-        }
-
-        // ── Step 4.8: Enclosed-face hole promotion (ADR-008 B1) ──
-        // For each face just created, check if it is fully contained within
-        // a larger coplanar existing face. If so, "promote" the container
-        // so that the new face becomes an inner hole loop — the container
-        // stays intact as a ring (outer boundary + one hole), and the new
-        // face sits independently as a sub-face the user can paint, push-
-        // pull, etc.
-        //
-        // Why only newly-created faces are candidates: an already-existing
-        // face inside another existing face would have been promoted when
-        // it was first created. Scoping the scan to `all_created_faces`
-        // keeps this step cheap.
-        {
-            let candidates: Vec<FaceId> = all_created_faces.clone();
-            for inner_fid in candidates {
-                if !self.mesh.faces.contains(inner_fid) { continue; }
-                if let Some(outer_fid) = self.find_enclosing_face(inner_fid) {
-                    // Re-create outer with inner's boundary as a hole.
-                    if self.promote_face_to_hole(outer_fid, inner_fid).is_ok() {
-                        // outer_fid is now stale — unregister from XIA so the
-                        // XIA system doesn't reference a dead face.
-                        self.unregister_face_from_xia(outer_fid);
-                    }
-                }
-            }
         }
 
         // ── Step 5: 결과 XIA 생성 ──
+        // If an epoch is open, the outer command (draw_rect / draw_circle)
+        // will create the XIA once all sides are drawn and the deferred
+        // post-process has run. Return a sentinel so callers inside the
+        // command know "no Line XIA to consolidate", and skip commit
+        // (outer owns the transaction).
+        if self.epoch.is_some() {
+            return CommandResult::EntityCreated(0);
+        }
+
         if !all_created_faces.is_empty() {
             // 기존 standalone-edge XIA 정리
             let xias_to_remove: Vec<XiaId> = self.xias.iter()
@@ -1334,102 +1367,79 @@ impl Scene {
         }
         // ═══════════════════════════════════════════════════════════════
 
+        // Principle 3 (Face Operation Epoch): open an epoch so the inner
+        // exec_draw_line calls defer their Steps 4.5–4.8 post-process to
+        // the single sweep at the end of this command. Collapses 4× of
+        // those scans into 1×.
+        self.epoch = Some(EpochContext {
+            surface_normal: Some(n_norm),
+            ..Default::default()
+        });
+
         // Call exec_draw_line 4 times within our outer transaction. Each
         //   invocation runs the FULL LINE pipeline — crossings, edge split,
         //   face synthesis, cross-face split — but skips its own tx
-        //   management (re-entrant, detecting our outer begin()).
+        //   management (re-entrant, detecting our outer begin()) AND its
+        //   post-process (epoch active — deferred to finalizer below).
         //
         //   Note: face synthesis may happen on call 2 OR call 3, not
         //   necessarily on the closing line. E.g., when the 4th segment
         //   reuses an EXISTING edge (adjacent to a previously drawn rect),
         //   the closed cycle forms as soon as the 3rd new segment is drawn.
-        //   Therefore we track ALL XIAs produced and pick the "face-owning"
-        //   one at the end, rather than relying on last-call result.
-        let mut face_xias: Vec<XiaId> = Vec::new();
-        let mut line_xias: Vec<XiaId> = Vec::new();
+        //   With the epoch active, inner exec_draw_line calls return a
+        //   sentinel EntityCreated(0) and defer post-process + XIA creation.
+        //   Any error from an inner call aborts the whole command.
         for i in 0..4 {
             let s_start = corners[i];
             let s_end = corners[(i + 1) % 4];
-            match self.exec_draw_line(s_start, s_end, Some(n_norm)) {
-                CommandResult::EntityCreated(xid) => {
-                    if let Some(xia) = self.xias.get(&xid) {
-                        if !xia.face_ids.is_empty() {
-                            face_xias.push(xid);
-                        } else {
-                            line_xias.push(xid);
-                        }
-                    }
-                }
-                CommandResult::Error(e) => {
-                    self.transactions.cancel();
-                    return CommandResult::Error(
-                        format!("draw_rect side {}: {}", i, e)
-                    );
-                }
-                other => {
-                    self.transactions.cancel();
-                    return CommandResult::Error(
-                        format!("draw_rect side {} unexpected: {:?}", i, other)
-                    );
-                }
+            if let CommandResult::Error(e) = self.exec_draw_line(s_start, s_end, Some(n_norm)) {
+                self.epoch = None;
+                self.transactions.cancel();
+                return CommandResult::Error(format!("draw_rect side {}: {}", i, e));
             }
         }
 
-        // Prefer a face-owning XIA (which contains the synthesized rect face).
-        //   If multiple face XIAs appear (rare — happens when rect crosses
-        //   existing faces producing sub-faces), we pick the FIRST one and
-        //   consolidate other rect-owned face XIAs into it.
-        //
-        //   Any stale Line XIAs pointing to edges that are now face boundaries
-        //   get dissolved by exec_draw_line's own cleanup; any Line XIAs that
-        //   were created during rect drawing but no longer needed (e.g., the
-        //   "last call produced a Line XIA because the closing edge already
-        //   existed") are cleaned up here.
-        if let Some(&primary) = face_xias.first() {
-            // Remove any Line XIAs we produced during drawing — they're
-            //   redundant artefacts of the 4-call expansion, not meaningful
-            //   entities from the user's perspective.
-            for line_xid in &line_xias {
-                self.xias.remove(line_xid);
-            }
-            // Consolidate additional face XIAs (if any) into the primary one.
-            for &other in face_xias.iter().skip(1) {
-                if other == primary { continue; }
-                if let Some(other_xia) = self.xias.remove(&other) {
-                    let face_ids = other_xia.face_ids.clone();
-                    if let Some(prim_xia) = self.xias.get_mut(&primary) {
-                        for fid in &face_ids {
-                            if !prim_xia.face_ids.contains(fid) {
-                                prim_xia.face_ids.push(*fid);
-                            }
-                        }
-                    }
-                    for fid in face_ids {
-                        self.face_to_xia.insert(fid, primary);
-                    }
-                }
-            }
-            if let Some(xia) = self.xias.get_mut(&primary) {
-                xia.name = "Rectangle".to_string();
-                xia.surface_normal = Some(n_norm);
-                xia.position = center;
-            }
-            self.transactions.set_after_snapshot(self.scene_snapshot());
-            self.transactions.commit();
-            CommandResult::EntityCreated(primary)
-        } else if let Some(&line_xid) = line_xias.first() {
-            // No face synthesized (unexpected — 4 closed segments should
-            //   always produce one). Leave the line XIA as-is for undo
-            //   visibility; surface the situation as an error.
-            self.transactions.cancel();
-            CommandResult::Error(format!(
-                "draw_rect: 4 segments drawn but no face synthesized (xia={})",
-                line_xid,
-            ))
-        } else {
-            self.transactions.cancel();
-            CommandResult::Error("draw_rect: no XIA produced".to_string())
+        // Finalize epoch — 1× post-process sweep over all accumulated state.
+        let mut epoch = self.epoch.take().unwrap_or_default();
+        self.run_face_synthesis_postprocess(
+            &epoch.touched_verts,
+            &epoch.new_edges,
+            &mut epoch.created_faces,
+        );
+
+        // Clean any stale Line XIAs whose standalone edge is now a face
+        //   boundary (these may have been created by earlier commands).
+        let xias_to_remove: Vec<XiaId> = self.xias.iter()
+            .filter(|(_, x)| {
+                if let Some(eid) = x.standalone_edge_id {
+                    epoch.loop_edge_ids.contains(&eid)
+                } else { false }
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        for xid in &xias_to_remove {
+            self.xias.remove(xid);
         }
+
+        if epoch.created_faces.is_empty() {
+            self.transactions.cancel();
+            return CommandResult::Error(
+                "draw_rect: 4 segments drawn but no face synthesized".to_string(),
+            );
+        }
+
+        let xia_id = self.create_xia("Rectangle".to_string());
+        if let Some(xia) = self.xias.get_mut(&xia_id) {
+            xia.position = center;
+            xia.surface_normal = Some(n_norm);
+            for &fid in &epoch.created_faces {
+                xia.face_ids.push(fid);
+            }
+        }
+        self.register_faces_to_xia(xia_id, &epoch.created_faces);
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+        CommandResult::EntityCreated(xia_id)
     }
 
     fn exec_draw_circle(
