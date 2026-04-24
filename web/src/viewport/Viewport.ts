@@ -110,16 +110,14 @@ export class Viewport {
   private _ssaoPass: SSAOPass | null = null;
   private _renderPass: RenderPass | null = null;
   // 2026-04-22: 기본값 true → false. SSAO는 screen-space sampling으로
-  // flat surface에 noise pattern(깃털·해치 모양)을 만드는 고유 artifact를
-  // 가짐. CAD 작업에서는 깔끔한 solid face가 더 가치 있으므로 기본 off.
-  // View 메뉴 → "AO (주변광 차폐) 토글" 로 필요 시 활성화 가능.
-  //
-  // 2026-04-24: 기본 true로 되돌림 — 사용자 보고로 캐비티/홀 내부가 평평
-  // 해 보이는 문제 해결. SSAO가 켜지면 오목한 부위(모서리, 구멍, 캐비티)
-  // 가 자연스럽게 어두워져 입체감이 살아남. noise artifact는 SSAOPass
-  // 파라미터 튜닝(kernelRadius, minDistance)으로 완화. 불필요하면 View
-  // 메뉴에서 여전히 토글 가능.
-  private _ssaoEnabled: boolean = true;
+  //   flat surface에 noise pattern(깃털·해치 모양)을 만드는 고유 artifact를
+  //   가짐. CAD 작업에서는 깔끔한 solid face가 더 가치 있으므로 기본 off.
+  //   View 메뉴 → "AO (주변광 차폐) 토글" 로 필요 시 활성화 가능.
+  // 2026-04-24: 기본 true로 되돌림 — 캐비티/홀 입체감 살리기 위해.
+  // 2026-04-25: 다시 false. 사용자 선호 — 평면 위 noise hatching 이
+  //   거슬려 CAD 스타일의 깔끔한 flat shading 이 기본. 필요하면 View
+  //   메뉴 > "AO (주변광 차폐) 토글" 로 즉시 켤 수 있음.
+  private _ssaoEnabled: boolean = false;
 
   // ═══ Fur shell overlay (toggle-able; off by default) ═══
   private _fur: FurShell | null = null;
