@@ -615,8 +615,16 @@ impl Scene {
         end: DVec3,
         surface_normal: Option<DVec3>,
     ) -> CommandResult {
-        self.transactions.begin();
-        self.transactions.set_before_snapshot(self.scene_snapshot());
+        // 2026-04-24 Re-entrancy: when called from within another exec_*
+        //   (e.g., exec_draw_rect's 4-line expansion), the outer command already
+        //   owns the transaction frame. Nested begin() would reset current_frame
+        //   and lose the outer's accumulated changes, so we skip our own tx
+        //   management and let the outer handle commit/cancel.
+        let own_transaction = !self.transactions.is_recording();
+        if own_transaction {
+            self.transactions.begin();
+            self.transactions.set_before_snapshot(self.scene_snapshot());
+        }
 
         // ── Step 1: 기존 엣지 교차점 + 기존 vertex on-line 탐지 ──
         // (a) 새 line이 기존 엣지 interior와 교차 → split_edge로 vertex 삽입
@@ -868,8 +876,10 @@ impl Scene {
             }
             self.register_faces_to_xia(xia_id, &all_created_faces);
 
-            self.transactions.set_after_snapshot(self.scene_snapshot());
-            self.transactions.commit();
+            if own_transaction {
+                self.transactions.set_after_snapshot(self.scene_snapshot());
+                self.transactions.commit();
+            }
             return CommandResult::EntityCreated(xia_id);
         }
 
@@ -881,11 +891,13 @@ impl Scene {
                 xia.surface_normal = surface_normal;
                 xia.standalone_edge_id = Some(edge_id);
             }
-            self.transactions.set_after_snapshot(self.scene_snapshot());
-            self.transactions.commit();
+            if own_transaction {
+                self.transactions.set_after_snapshot(self.scene_snapshot());
+                self.transactions.commit();
+            }
             CommandResult::EntityCreated(xia_id)
         } else {
-            self.transactions.cancel();
+            if own_transaction { self.transactions.cancel(); }
             CommandResult::Error("draw_line produced no edges".to_string())
         }
     }
@@ -1004,67 +1016,102 @@ impl Scene {
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
-        // Draw 4 line segments with dedup via add_vertex's spatial hash.
-        //   If any of the corners coincide with existing vertices in the
-        //   mesh (either from the previous RECT, a LINE, or anything else),
-        //   they'll be reused through the standard LINE path.
-        let draw_4_lines = |s: &mut Self| -> Result<([VertId; 4], [EdgeId; 4])> {
-            let mut vs: [VertId; 4] = [VertId::NULL; 4];
-            let mut es: [EdgeId; 4] = [EdgeId::NULL; 4];
-            for i in 0..4 {
-                let (v_a, v_b, eid) = s.mesh.draw_line(corners[i], corners[(i + 1) % 4])?;
-                anyhow::ensure!(v_a != v_b,
-                    "draw_rect side {} collapsed to a single vertex (degenerate)", i);
-                vs[i] = v_a;
-                if i == 3 { let _ = v_b; }  // last v_b should equal vs[0] (loop close)
-                es[i] = eid;
-                s.mesh.mark_edge_hard(eid);
-            }
-            Ok((vs, es))
-        };
-
-        let (corner_vids, _edge_ids) = match draw_4_lines(self) {
-            Ok(r) => r,
-            Err(e) => {
-                self.transactions.cancel();
-                return CommandResult::Error(e.to_string());
-            }
-        };
-
-        // Create face from the known corner vertices.
-        //   We know the 4 corners explicitly (just drew them in order), so
-        //   there's no need to call detect_free_edge_loop — which would
-        //   ambiguously pick EITHER side of a shared edge (e.g., with a
-        //   neighbour rect, it could trace back through the neighbour's
-        //   boundary instead of the newly-drawn rect). add_face on the
-        //   explicit vertex list guarantees the correct loop.
+        // Call exec_draw_line 4 times within our outer transaction. Each
+        //   invocation runs the FULL LINE pipeline — crossings, edge split,
+        //   face synthesis, cross-face split — but skips its own tx
+        //   management (re-entrant, detecting our outer begin()).
         //
-        //   add_face handles edge dedup (existing edges reused via vert_to_edge
-        //   lookup) and half-edge face assignment (the FREE HE on the
-        //   shared edge gets this face's id, while the existing face's HE
-        //   is untouched). This is the exact shared-edge scenario that
-        //   lets merge_faces_by_edge find both faces.
-        let face_id = match self.mesh.add_face(&corner_vids, self.default_material) {
-            Ok(fid) => fid,
-            Err(e) => {
-                self.transactions.cancel();
-                return CommandResult::Error(
-                    format!("draw_rect face synthesis failed: {}", e),
-                );
+        //   Note: face synthesis may happen on call 2 OR call 3, not
+        //   necessarily on the closing line. E.g., when the 4th segment
+        //   reuses an EXISTING edge (adjacent to a previously drawn rect),
+        //   the closed cycle forms as soon as the 3rd new segment is drawn.
+        //   Therefore we track ALL XIAs produced and pick the "face-owning"
+        //   one at the end, rather than relying on last-call result.
+        let mut face_xias: Vec<XiaId> = Vec::new();
+        let mut line_xias: Vec<XiaId> = Vec::new();
+        for i in 0..4 {
+            let s_start = corners[i];
+            let s_end = corners[(i + 1) % 4];
+            match self.exec_draw_line(s_start, s_end, Some(n_norm)) {
+                CommandResult::EntityCreated(xid) => {
+                    if let Some(xia) = self.xias.get(&xid) {
+                        if !xia.face_ids.is_empty() {
+                            face_xias.push(xid);
+                        } else {
+                            line_xias.push(xid);
+                        }
+                    }
+                }
+                CommandResult::Error(e) => {
+                    self.transactions.cancel();
+                    return CommandResult::Error(
+                        format!("draw_rect side {}: {}", i, e)
+                    );
+                }
+                other => {
+                    self.transactions.cancel();
+                    return CommandResult::Error(
+                        format!("draw_rect side {} unexpected: {:?}", i, other)
+                    );
+                }
             }
-        };
-
-        let xia_id = self.create_xia("Rectangle".to_string());
-        if let Some(xia) = self.xias.get_mut(&xia_id) {
-            xia.position = center;
-            xia.surface_normal = Some(normal);
-            xia.face_ids.push(face_id);
         }
-        self.register_faces_to_xia(xia_id, &[face_id]);
 
-        self.transactions.set_after_snapshot(self.scene_snapshot());
-        self.transactions.commit();
-        CommandResult::EntityCreated(xia_id)
+        // Prefer a face-owning XIA (which contains the synthesized rect face).
+        //   If multiple face XIAs appear (rare — happens when rect crosses
+        //   existing faces producing sub-faces), we pick the FIRST one and
+        //   consolidate other rect-owned face XIAs into it.
+        //
+        //   Any stale Line XIAs pointing to edges that are now face boundaries
+        //   get dissolved by exec_draw_line's own cleanup; any Line XIAs that
+        //   were created during rect drawing but no longer needed (e.g., the
+        //   "last call produced a Line XIA because the closing edge already
+        //   existed") are cleaned up here.
+        if let Some(&primary) = face_xias.first() {
+            // Remove any Line XIAs we produced during drawing — they're
+            //   redundant artefacts of the 4-call expansion, not meaningful
+            //   entities from the user's perspective.
+            for line_xid in &line_xias {
+                self.xias.remove(line_xid);
+            }
+            // Consolidate additional face XIAs (if any) into the primary one.
+            for &other in face_xias.iter().skip(1) {
+                if other == primary { continue; }
+                if let Some(other_xia) = self.xias.remove(&other) {
+                    let face_ids = other_xia.face_ids.clone();
+                    if let Some(prim_xia) = self.xias.get_mut(&primary) {
+                        for fid in &face_ids {
+                            if !prim_xia.face_ids.contains(fid) {
+                                prim_xia.face_ids.push(*fid);
+                            }
+                        }
+                    }
+                    for fid in face_ids {
+                        self.face_to_xia.insert(fid, primary);
+                    }
+                }
+            }
+            if let Some(xia) = self.xias.get_mut(&primary) {
+                xia.name = "Rectangle".to_string();
+                xia.surface_normal = Some(n_norm);
+                xia.position = center;
+            }
+            self.transactions.set_after_snapshot(self.scene_snapshot());
+            self.transactions.commit();
+            CommandResult::EntityCreated(primary)
+        } else if let Some(&line_xid) = line_xias.first() {
+            // No face synthesized (unexpected — 4 closed segments should
+            //   always produce one). Leave the line XIA as-is for undo
+            //   visibility; surface the situation as an error.
+            self.transactions.cancel();
+            CommandResult::Error(format!(
+                "draw_rect: 4 segments drawn but no face synthesized (xia={})",
+                line_xid,
+            ))
+        } else {
+            self.transactions.cancel();
+            CommandResult::Error("draw_rect: no XIA produced".to_string())
+        }
     }
 
     fn exec_draw_circle(

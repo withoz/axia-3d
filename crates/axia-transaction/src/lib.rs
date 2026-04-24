@@ -69,6 +69,9 @@ impl TransactionManager {
         self.touched_entities.clear();
     }
 
+    // is_recording() is defined further below (used by re-entrant callers
+    //   to avoid nested begin() wiping the outer transaction's frame).
+
     /// Record an entity creation
     pub fn record_create(&mut self, entity: EntityRef) {
         if self.is_recording {

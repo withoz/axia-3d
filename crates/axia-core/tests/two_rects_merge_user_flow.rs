@@ -44,6 +44,12 @@ fn two_adjacent_rects_share_edge_through_scene_api() {
     };
 
     eprintln!("XIA A: {:?}, XIA B: {:?}", xia_a, xia_b);
+    eprintln!("Total XIAs: {}", scene.xias.len());
+    for (id, xia) in scene.xias.iter() {
+        eprintln!("  XIA {}: name={:?} face_ids={:?} standalone_edge={:?}",
+                  id, xia.name, xia.face_ids, xia.standalone_edge_id);
+    }
+    eprintln!("Total faces: {}", scene.mesh.face_count());
 
     // Collect face IDs.
     let face_a = scene.xias.get(&xia_a).unwrap().face_ids[0];
@@ -136,4 +142,87 @@ fn two_rects_with_snap_drift_fail_standard_merge() {
         "🔴 Geometric merge should recover drifted rects, got: {:?}",
         gm_result.err());
     eprintln!("✅ Geometric merge recovers from snap drift.");
+}
+
+/// Axiom 2 (RECT == 4 LINE): RECT drawn via DrawRect command must produce
+/// the same face count as 4 manually drawn LINEs forming the same rectangle.
+#[test]
+fn rect_equivalent_to_4_lines() {
+    // Via RECT command.
+    let mut rect_scene = Scene::default();
+    rect_scene.execute(Command::DrawRect {
+        center: DVec3::new(500.0, 0.0, 500.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 1000.0,
+    });
+
+    // Via 4 separate LINE commands.
+    let mut line_scene = Scene::default();
+    let corners = [
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(0.0, 0.0, 1000.0),
+        DVec3::new(1000.0, 0.0, 1000.0),
+        DVec3::new(1000.0, 0.0, 0.0),
+    ];
+    for i in 0..4 {
+        line_scene.execute(Command::DrawLine {
+            start: corners[i],
+            end: corners[(i + 1) % 4],
+            surface_normal: None,
+        });
+    }
+
+    assert_eq!(rect_scene.mesh.face_count(), line_scene.mesh.face_count(),
+        "RECT face count must match 4-LINE equivalent");
+    assert_eq!(rect_scene.mesh.vert_count(), line_scene.mesh.vert_count(),
+        "RECT vert count must match 4-LINE equivalent");
+    assert_eq!(rect_scene.mesh.edge_count(), line_scene.mesh.edge_count(),
+        "RECT edge count must match 4-LINE equivalent");
+}
+
+/// Axiom 7 (future — Phase B/expansion): RECT 을 기존 RECT 위에 **겹치게**
+/// 그리면 면이 sub-face 로 쪼개져야 한다. Current LINE pipeline handles this
+/// only when the new segment CROSSES existing edges (`find_line_crossings`);
+/// endpoint-on-edge cases need an additional split_edge pass that is not yet
+/// wired. Marked #[ignore] until Phase B enables it.
+#[test]
+#[ignore = "Phase B — requires endpoint-on-edge split, not yet implemented"]
+fn overlapping_rect_splits_into_subfaces() {
+    let mut scene = Scene::default();
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(500.0, 0.0, 500.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 1000.0,
+    });
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(1000.0, 0.0, 500.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 1000.0,
+    });
+    assert!(scene.mesh.face_count() >= 3,
+        "Overlapping rects should split (Axiom 7)");
+}
+
+/// Axiom 4 (Q4): 독립 RECT 그리기 → 1 face + 4 edges.
+#[test]
+fn single_rect_produces_one_face() {
+    let mut scene = Scene::default();
+    let result = scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 500.0,
+    });
+    assert!(matches!(result, CommandResult::EntityCreated(_)));
+    assert_eq!(scene.mesh.face_count(), 1, "single rect → 1 face");
+    // 4 edges, 4 vertices
+    assert_eq!(scene.mesh.vert_count(), 4);
+    assert_eq!(scene.mesh.edge_count(), 4);
 }
