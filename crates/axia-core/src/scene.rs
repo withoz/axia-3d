@@ -537,6 +537,148 @@ impl Scene {
         false
     }
 
+    /// ADR-008 B1 — Find the smallest coplanar face that fully encloses
+    /// the boundary of `inner_fid`. Returns Some(outer_fid) if such a face
+    /// exists, or None if `inner_fid` is not contained in any face.
+    fn find_enclosing_face(&self, inner_fid: FaceId) -> Option<FaceId> {
+        let inner_face = self.mesh.faces.get(inner_fid)?;
+        if !inner_face.is_active() { return None; }
+        let inner_verts = self.mesh.collect_loop_verts(inner_face.outer().start).ok()?;
+        if inner_verts.len() < 3 { return None; }
+        // Sample any inner vertex (use first); all should be inside the
+        //   enclosing face since inner is a contiguous polygon inside it.
+        let inner_pos = self.mesh.vertex_pos(inner_verts[0]).ok()?;
+        let inner_normal = inner_face.normal();
+        if inner_normal.length_squared() < 1e-10 { return None; }
+
+        // Compute inner area (rough, 3D) for "strictly smaller" comparison.
+        let inner_area = {
+            let pts: Vec<DVec3> = inner_verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
+            let mut a_vec = DVec3::ZERO;
+            for i in 1..pts.len().saturating_sub(1) {
+                a_vec += (pts[i] - pts[0]).cross(pts[i + 1] - pts[0]);
+            }
+            a_vec.length() * 0.5
+        };
+        if inner_area < 1e-9 { return None; }
+
+        let mut best: Option<(FaceId, f64)> = None;
+        for (outer_fid, outer_face) in self.mesh.faces.iter() {
+            if outer_fid == inner_fid { continue; }
+            if !outer_face.is_active() { continue; }
+
+            // Coplanar check
+            let outer_normal = outer_face.normal();
+            if outer_normal.length_squared() < 1e-10 { continue; }
+            let n_dot = outer_normal.dot(inner_normal).abs();
+            if n_dot < 0.999 { continue; }
+
+            let outer_verts = match self.mesh.collect_loop_verts(outer_face.outer().start) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if outer_verts.len() < 3 { continue; }
+            let outer_pts: Vec<DVec3> = outer_verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
+            if outer_pts.len() < 3 { continue; }
+
+            // Outer area
+            let outer_area = {
+                let mut a_vec = DVec3::ZERO;
+                for i in 1..outer_pts.len() - 1 {
+                    a_vec += (outer_pts[i] - outer_pts[0]).cross(outer_pts[i + 1] - outer_pts[0]);
+                }
+                a_vec.length() * 0.5
+            };
+            if outer_area <= inner_area { continue; } // outer must be larger
+
+            // Project inner_pos onto outer's plane basis, test point-in-polygon.
+            let p0 = outer_pts[0];
+            let e1 = (outer_pts[1] - p0).normalize_or_zero();
+            if e1.length_squared() < 1e-10 { continue; }
+            let mut e2 = DVec3::ZERO;
+            for p in &outer_pts[2..] {
+                let v = *p - p0;
+                let proj = e1 * v.dot(e1);
+                let ortho = v - proj;
+                if ortho.length_squared() > 1e-6 {
+                    e2 = ortho.normalize_or_zero();
+                    break;
+                }
+            }
+            if e2.length_squared() < 1e-10 { continue; }
+            // Plane distance sanity
+            let pn = e1.cross(e2).normalize_or_zero();
+            let d = (inner_pos - p0).dot(pn).abs();
+            let tol = (outer_area.sqrt() * 1e-4).max(1e-3);
+            if d > tol { continue; }
+
+            let poly_2d: Vec<(f64, f64)> = outer_pts.iter()
+                .map(|p| ((*p - p0).dot(e1), (*p - p0).dot(e2)))
+                .collect();
+            let px = (inner_pos - p0).dot(e1);
+            let py = (inner_pos - p0).dot(e2);
+            let mut inside = false;
+            let nv = poly_2d.len();
+            let mut j = nv - 1;
+            for i in 0..nv {
+                let (xi, yi) = poly_2d[i];
+                let (xj, yj) = poly_2d[j];
+                if ((yi > py) != (yj > py)) &&
+                   (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi) {
+                    inside = !inside;
+                }
+                j = i;
+            }
+            if !inside { continue; }
+
+            // Keep the smallest valid outer (closest container).
+            match best {
+                None => best = Some((outer_fid, outer_area)),
+                Some((_, a)) if outer_area < a => best = Some((outer_fid, outer_area)),
+                _ => {}
+            }
+        }
+        best.map(|(fid, _)| fid)
+    }
+
+    /// ADR-008 B1 — Rebuild `outer_fid` so that `inner_fid`'s boundary
+    /// becomes one of its inner holes. Preserves edges/verts; `inner_fid`
+    /// remains as a separate sub-face the user can edit independently.
+    fn promote_face_to_hole(&mut self, outer_fid: FaceId, inner_fid: FaceId) -> anyhow::Result<FaceId> {
+        let outer_verts = self.mesh.collect_loop_verts(
+            self.mesh.faces.get(outer_fid)
+                .ok_or_else(|| anyhow::anyhow!("outer not found"))?.outer().start
+        )?;
+        let inner_verts = self.mesh.collect_loop_verts(
+            self.mesh.faces.get(inner_fid)
+                .ok_or_else(|| anyhow::anyhow!("inner not found"))?.outer().start
+        )?;
+        // Hole winding is opposite to outer.
+        let mut hole_verts = inner_verts.clone();
+        hole_verts.reverse();
+        // Preserve existing inner holes too (face may already have holes).
+        let existing_inners: Vec<Vec<axia_geo::VertId>> = self.mesh.faces[outer_fid].inners()
+            .iter()
+            .filter_map(|lr| self.mesh.collect_loop_verts(lr.start).ok())
+            .collect();
+        let material = self.mesh.faces[outer_fid].material();
+
+        // Soft-remove: preserve HE next/prev so add_face_with_holes can find
+        //   the right free half-edges.
+        self.mesh.soft_remove_face(outer_fid)?;
+
+        // Rebuild with inner verts as a new hole.
+        let mut all_holes: Vec<Vec<axia_geo::VertId>> = existing_inners;
+        all_holes.push(hole_verts);
+        let hole_refs: Vec<&[axia_geo::VertId]> = all_holes.iter().map(|h| h.as_slice()).collect();
+        let new_outer = self.mesh.add_face_with_holes(&outer_verts, &hole_refs, material)?;
+        Ok(new_outer)
+    }
+
     /// 주어진 vertex 루프가 기존 face 중 하나 이상의 centroid를 감싸고 있는지 검사.
     /// True이면 이 루프는 "외부 unbounded boundary"로 판정 → 면 생성 스킵.
     ///
@@ -916,6 +1058,33 @@ impl Scene {
             }
         }
 
+        // ── Step 4.8: Enclosed-face hole promotion (ADR-008 B1) ──
+        // For each face just created, check if it is fully contained within
+        // a larger coplanar existing face. If so, "promote" the container
+        // so that the new face becomes an inner hole loop — the container
+        // stays intact as a ring (outer boundary + one hole), and the new
+        // face sits independently as a sub-face the user can paint, push-
+        // pull, etc.
+        //
+        // Why only newly-created faces are candidates: an already-existing
+        // face inside another existing face would have been promoted when
+        // it was first created. Scoping the scan to `all_created_faces`
+        // keeps this step cheap.
+        {
+            let candidates: Vec<FaceId> = all_created_faces.clone();
+            for inner_fid in candidates {
+                if !self.mesh.faces.contains(inner_fid) { continue; }
+                if let Some(outer_fid) = self.find_enclosing_face(inner_fid) {
+                    // Re-create outer with inner's boundary as a hole.
+                    if self.promote_face_to_hole(outer_fid, inner_fid).is_ok() {
+                        // outer_fid is now stale — unregister from XIA so the
+                        // XIA system doesn't reference a dead face.
+                        self.unregister_face_from_xia(outer_fid);
+                    }
+                }
+            }
+        }
+
         // ── Step 5: 결과 XIA 생성 ──
         if !all_created_faces.is_empty() {
             // 기존 standalone-edge XIA 정리
@@ -1082,6 +1251,88 @@ impl Scene {
 
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        // ═══ Fast-path: RECT in empty scene space ═══════════════════════
+        //
+        // ADR-008 Axiom 2 ("RECT = 4 LINEs") requires behaviour equivalence,
+        // not code-path equivalence. When the rectangle's AABB does not
+        // intersect any active edge or vertex, the 4-line pipeline would
+        // produce the same result as a single atomic draw_rectangle — just
+        // much slower (4× crossings / verts-on-line / fan-split / resolve
+        // scans instead of one add_vertex × 4 + add_face call).
+        //
+        // We detect "no interaction" with a separating-axis AABB test over
+        // active edges. If none overlaps the rect's AABB, take the atomic
+        // path. Any edge overlap → full pipeline (Phase A behaviour).
+        let rect_aabb_min = {
+            let mut m = corners[0];
+            for c in &corners[1..] { m = m.min(*c); }
+            m
+        };
+        let rect_aabb_max = {
+            let mut m = corners[0];
+            for c in &corners[1..] { m = m.max(*c); }
+            m
+        };
+        // Pad by a small tol so edges exactly touching the boundary aren't
+        //   mis-classified as "no interaction".
+        let pad = (width.max(height) * 1e-6).max(1e-3);
+        let rect_min = rect_aabb_min - DVec3::splat(pad);
+        let rect_max = rect_aabb_max + DVec3::splat(pad);
+
+        let aabb_overlap = |emin: DVec3, emax: DVec3| -> bool {
+            !(emax.x < rect_min.x || emin.x > rect_max.x
+              || emax.y < rect_min.y || emin.y > rect_max.y
+              || emax.z < rect_min.z || emin.z > rect_max.z)
+        };
+        let edge_interaction = self.mesh.edges.iter().any(|(_, edge)| {
+            if !edge.is_active() { return false; }
+            if !edge.class().is_topological() { return false; }
+            let Ok(va) = self.mesh.vertex_pos(edge.v_small()) else { return false; };
+            let Ok(vb) = self.mesh.vertex_pos(edge.v_large()) else { return false; };
+            aabb_overlap(va.min(vb), va.max(vb))
+        });
+        // Also check face interiors — a RECT drawn INSIDE a bigger face
+        // shares no edge AABB overlap but still needs the unified
+        // pipeline (so B1 can split the container into sub-faces).
+        let face_interaction = !edge_interaction && self.mesh.faces.iter().any(|(_, f)| {
+            if !f.is_active() { return false; }
+            let Ok(verts) = self.mesh.collect_loop_verts(f.outer().start) else { return false; };
+            if verts.is_empty() { return false; }
+            let mut mn = DVec3::splat(f64::INFINITY);
+            let mut mx = DVec3::splat(f64::NEG_INFINITY);
+            for &v in &verts {
+                if let Ok(p) = self.mesh.vertex_pos(v) {
+                    mn = mn.min(p);
+                    mx = mx.max(p);
+                }
+            }
+            aabb_overlap(mn, mx)
+        });
+        let has_interaction = edge_interaction || face_interaction;
+
+        if !has_interaction {
+            // Atomic path — identical result to unified path, no scans.
+            match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
+                Ok((face_id, _verts)) => {
+                    let xia_id = self.create_xia("Rectangle".to_string());
+                    if let Some(xia) = self.xias.get_mut(&xia_id) {
+                        xia.position = center;
+                        xia.surface_normal = Some(n_norm);
+                        xia.face_ids.push(face_id);
+                    }
+                    self.register_faces_to_xia(xia_id, &[face_id]);
+                    self.transactions.set_after_snapshot(self.scene_snapshot());
+                    self.transactions.commit();
+                    return CommandResult::EntityCreated(xia_id);
+                }
+                Err(e) => {
+                    self.transactions.cancel();
+                    return CommandResult::Error(format!("draw_rect atomic: {}", e));
+                }
+            }
+        }
+        // ═══════════════════════════════════════════════════════════════
 
         // Call exec_draw_line 4 times within our outer transaction. Each
         //   invocation runs the FULL LINE pipeline — crossings, edge split,

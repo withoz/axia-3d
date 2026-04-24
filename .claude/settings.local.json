@@ -122,7 +122,8 @@
       "Bash(grep -o \"uSmallAlpha[^,}]\\\\{1,20\\\\}\" assets/index-B2iyMt66.js)",
       "Bash(grep -o \"uBigAlpha[^,}]\\\\{1,20\\\\}\" assets/index-B2iyMt66.js)",
       "Bash(grep -o \"uFadeFar[^,}]\\\\{1,30\\\\}\" assets/index-B2iyMt66.js)",
-      "Bash(cargo bench *)"
+      "Bash(cargo bench *)",
+      "Bash(gh pr *)"
     ]
   }
 }

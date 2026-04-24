@@ -252,6 +252,61 @@ fn outer_rect_enclosing_inner_rects_creates_overlapping_faces() {
         "outer face must synthesize alongside inner (ADR-008 Axiom 7)");
 }
 
+/// ADR-008 B1 — small RECT drawn INSIDE a larger existing face should
+/// split into sub-face: inner RECT stays as its own face, the bigger
+/// face becomes a ring with the inner cycle as a hole loop.
+#[test]
+fn inner_rect_inside_bigger_face_creates_subface_with_hole() {
+    let mut scene = Scene::default();
+
+    // Big face first — a 1000×1000 rectangle at origin.
+    scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 1000.0,
+        height: 1000.0,
+    });
+    assert_eq!(scene.mesh.face_count(), 1, "big face → 1 face");
+
+    // Small RECT fully inside.
+    let inner = scene.execute(Command::DrawRect {
+        center: DVec3::new(0.0, 0.0, 0.0),
+        normal: DVec3::new(0.0, 1.0, 0.0),
+        up: DVec3::new(0.0, 0.0, 1.0),
+        width: 200.0,
+        height: 200.0,
+    });
+    assert!(matches!(inner, CommandResult::EntityCreated(_)),
+        "inner rect command succeeds");
+
+    // After B1 promotion: big face stays (as ring with hole) + inner sub-face.
+    assert_eq!(scene.mesh.face_count(), 2,
+        "B1: 1 outer ring (with hole) + 1 inner sub-face");
+
+    // Find the inner face and verify the other face has one hole.
+    let faces: Vec<_> = scene.mesh.faces.iter()
+        .filter(|(_, f)| f.is_active())
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(faces.len(), 2);
+    let mut has_ring = false;
+    let mut has_inner = false;
+    for fid in faces {
+        let face = scene.mesh.faces.get(fid).unwrap();
+        let outer_verts = scene.mesh.collect_loop_verts(face.outer().start).unwrap();
+        if outer_verts.len() == 4 {
+            if !face.inners().is_empty() {
+                has_ring = true;
+            } else {
+                has_inner = true;
+            }
+        }
+    }
+    assert!(has_ring, "big face must have become a ring with a hole");
+    assert!(has_inner, "inner sub-face must exist on its own");
+}
+
 /// Axiom 4 (Q4): 독립 RECT 그리기 → 1 face + 4 edges.
 #[test]
 fn single_rect_produces_one_face() {

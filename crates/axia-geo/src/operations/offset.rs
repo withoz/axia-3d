@@ -185,7 +185,7 @@ impl Mesh {
     /// Face만 storage에서 제거하되, half-edge의 face 참조만 NULL로 설정.
     /// next/prev/radial 연결은 보존하여 인접 face topology가 깨지지 않음.
     /// add_face가 find_halfedge에서 face==NULL인 free HE를 찾아 재사용할 수 있게 함.
-    fn soft_remove_face(&mut self, face_id: FaceId) -> Result<()> {
+    pub fn soft_remove_face(&mut self, face_id: FaceId) -> Result<()> {
         if !self.faces.contains(face_id) {
             bail!("Face {:?} not found for soft removal", face_id);
         }
