@@ -245,6 +245,21 @@ export class PushPullTool implements ITool {
   onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       this.cleanup();
+      return;
+    }
+    // ADR-007 Rev 2 Phase B-1 — Tab key flips push direction.
+    //   Useful when the auto camera-based detection (sheet) chose the
+    //   "wrong" side, or when the user wants to override the cached
+    //   normal on a wall face. Updates ghost preview live.
+    if (e.key === 'Tab' && this.ppActive) {
+      e.preventDefault();
+      this.ppNormal.negate();
+      // Re-render ghost with the new direction so the user sees it
+      // flip instantly (carries over current drag distance if any).
+      const dist = this.currentDragDist !== 0 ? this.currentDragDist : 0;
+      this.updatePPGhost(dist);
+      Toast.info(`방향 반전 (Tab) — normal=(${this.ppNormal.x.toFixed(2)}, ${this.ppNormal.y.toFixed(2)}, ${this.ppNormal.z.toFixed(2)})`, 1500);
+      debugLog('[PP] Tab pressed — normal flipped, new=', this.ppNormal.toArray());
     }
   }
 

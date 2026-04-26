@@ -84,8 +84,30 @@ fn open_lid_box_is_classified_as_sheet_for_lid_neighbors() {
     }
 }
 
+/// ADR-007 Rev 2 Phase B-2 — verify_face_invariants_rev2 ignores
+/// winding-mismatch on sheet faces, keeps it on walls.
 #[test]
-fn deactivated_face_not_volume() {
+fn rev2_invariant_filters_sheet_winding_violations() {
+    let mut mesh = Mesh::new();
+    let m = MaterialId::new(0);
+    // Standalone sheet
+    let v0 = mesh.add_vertex(DVec3::new(-500.0, -500.0, 0.0));
+    let v1 = mesh.add_vertex(DVec3::new( 500.0, -500.0, 0.0));
+    let v2 = mesh.add_vertex(DVec3::new( 500.0,  500.0, 0.0));
+    let v3 = mesh.add_vertex(DVec3::new(-500.0,  500.0, 0.0));
+    let sheet_fid = mesh.add_face(&[v0, v1, v2, v3], m).unwrap();
+    assert!(mesh.is_sheet_face(sheet_fid));
+
+    let r1 = mesh.verify_face_invariants();
+    let r2 = mesh.verify_face_invariants_rev2();
+    // 두 결과는 본 케이스에선 같음 (정상 face). 즉 둘 다 valid.
+    assert!(r1.is_valid(), "r1 violations: {:?}", r1.violations);
+    assert!(r2.is_valid());
+    assert_eq!(r2.checked_faces, r1.checked_faces);
+}
+
+#[test]
+fn deactivated_rect_classifies_as_not_in_volume() {
     let mut mesh = Mesh::new();
     let m = MaterialId::new(0);
     let v0 = mesh.add_vertex(DVec3::new(-500.0, -500.0, 0.0));

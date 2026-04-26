@@ -2191,8 +2191,14 @@ impl Scene {
     ///
     /// 사용자가 "Save as" 등 중요한 저장 지점에서 쓸 수 있는 변형.
     /// 기본 `export_versioned_snapshot`은 경고만 출력하여 호환성 유지.
+    ///
+    /// Rev 2 (2026-04-25 B-2): `verify_face_invariants_rev2` 사용 →
+    /// Sheet 면의 winding-mismatch 는 violation 에서 제외. Wall 의
+    /// 구조적 invariant 만 fail 로 취급. 이로써 단일 sheet 가 포함된
+    /// 씬도 strict 저장이 가능해진다 (이전엔 sheet winding 임의 방향
+    /// 으로 인해 거의 무조건 거부됐음).
     pub fn export_versioned_snapshot_strict(&self) -> Result<Vec<u8>> {
-        let report = self.mesh.verify_face_invariants();
+        let report = self.mesh.verify_face_invariants_rev2();
         if !report.is_valid() {
             anyhow::bail!(
                 "Refusing strict export — {} invariant violation(s). First: {}",
