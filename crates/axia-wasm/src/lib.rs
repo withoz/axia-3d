@@ -3525,6 +3525,35 @@ impl AxiaEngine {
         }
     }
 
+    /// Sheet 2D Boolean (Tier 4 B-5).
+    /// 두 coplanar Sheet face에 대해 union/subtract/intersect 수행.
+    /// op: "union" | "subtract" | "intersect"
+    /// 반환: JSON `{ok, resultFace}` 또는 `{ok:false, error}`
+    #[wasm_bindgen(js_name = "sheetBoolean")]
+    pub fn sheet_boolean(&mut self, a: u32, b: u32, op: &str) -> String {
+        let fa = FaceId::new(a);
+        let fb = FaceId::new(b);
+        let mat = self.scene.default_material;
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.sheet_boolean(fa, fb, op, mat) {
+            Ok(new_face) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                format!(r#"{{"ok":true,"op":"{}","resultFace":{}}}"#, op, new_face.raw())
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] sheetBoolean ERROR: {}", e);
+                format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
+            }
+        }
+    }
+
     /// Phase 2 — auto_intersect_on_draw 토글. 기본 true.
     #[wasm_bindgen(js_name = "setAutoIntersectOnDraw")]
     pub fn set_auto_intersect_on_draw(&mut self, enabled: bool) {

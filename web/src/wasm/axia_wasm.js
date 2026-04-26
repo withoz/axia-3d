@@ -2082,6 +2082,34 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Sheet 2D Boolean (Tier 4 B-5).
+     * 두 coplanar Sheet face에 대해 union/subtract/intersect 수행.
+     * op: "union" | "subtract" | "intersect"
+     * 반환: JSON `{ok, resultFace}` 또는 `{ok:false, error}`
+     * @param {number} a
+     * @param {number} b
+     * @param {string} op
+     * @returns {string}
+     */
+    sheetBoolean(a, b, op) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(op, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_sheetBoolean(retptr, this.__wbg_ptr, a, b, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.
      *
      * For 2+ faces the user selected and explicitly asked to "merge" even

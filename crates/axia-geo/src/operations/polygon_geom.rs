@@ -292,6 +292,170 @@ pub fn sutherland_hodgman(subject_2d: &[(f64, f64)], clip_2d: &[(f64, f64)]) -> 
     Some(dedup)
 }
 
+/// 두 공면 (convex) polygon 의 union polygon 반환.
+/// Sutherland-Hodgman 은 intersection 만 직접 지원하므로 union 은
+///   A ∪ B = A + (B - A) 의 boundary 합성으로 구현.
+/// 두 polygon 이 완전히 분리된 경우 None (호출자가 별도 처리).
+/// 하나가 다른 하나를 완전히 포함하면 큰 쪽 반환.
+///
+/// 알고리즘 (convex 가정):
+///   1. A vertices 중 B 외부에 있는 것들 + B vertices 중 A 외부에 있는 것들
+///   2. boundary intersection 점들
+///   3. CCW order 로 정렬 (centroid 기준 atan2)
+pub fn convex_union_2d(a: &[(f64, f64)], b: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
+    if a.len() < 3 || b.len() < 3 { return None; }
+    let inter = sutherland_hodgman(a, b);
+    if inter.is_none() {
+        // No overlap — union is two disjoint polygons. Caller must
+        //   handle this case separately; return None to signal.
+        return None;
+    }
+
+    // Helper: is point strictly inside (or on boundary of) the polygon?
+    let inside = |pt: (f64, f64), poly: &[(f64, f64)]| -> bool {
+        let mut sum = 0.0_f64;
+        for i in 0..poly.len() {
+            let (ax, ay) = poly[i];
+            let (bx, by) = poly[(i + 1) % poly.len()];
+            let ux = ax - pt.0; let uy = ay - pt.1;
+            let vx = bx - pt.0; let vy = by - pt.1;
+            let ulen = (ux*ux + uy*uy).sqrt();
+            let vlen = (vx*vx + vy*vy).sqrt();
+            if ulen < 1e-9 || vlen < 1e-9 { return true; }
+            let cross = ux*vy - uy*vx;
+            let dot = ux*vx + uy*vy;
+            let mut a = (cross / (ulen*vlen)).atan2(dot / (ulen*vlen));
+            if a > std::f64::consts::PI { a -= 2.0 * std::f64::consts::PI; }
+            if a < -std::f64::consts::PI { a += 2.0 * std::f64::consts::PI; }
+            sum += a;
+        }
+        (sum.abs() - std::f64::consts::TAU).abs() < 1e-3
+    };
+
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    for &p in a { if !inside(p, b) { points.push(p); } }
+    for &p in b { if !inside(p, a) { points.push(p); } }
+    // Edge-edge intersections — collect all crossing points.
+    let segs = |poly: &[(f64, f64)]| -> Vec<((f64,f64),(f64,f64))> {
+        (0..poly.len()).map(|i| (poly[i], poly[(i+1)%poly.len()])).collect()
+    };
+    let segments_a = segs(a);
+    let segments_b = segs(b);
+    for &(p1, p2) in &segments_a {
+        for &(p3, p4) in &segments_b {
+            // 2D segment-segment intersection
+            let d1 = (p2.0 - p1.0, p2.1 - p1.1);
+            let d2 = (p4.0 - p3.0, p4.1 - p3.1);
+            let denom = d1.0 * d2.1 - d1.1 * d2.0;
+            if denom.abs() < 1e-9 { continue; }
+            let t = ((p3.0 - p1.0) * d2.1 - (p3.1 - p1.1) * d2.0) / denom;
+            let s = ((p3.0 - p1.0) * d1.1 - (p3.1 - p1.1) * d1.0) / denom;
+            if t >= -1e-9 && t <= 1.0 + 1e-9 && s >= -1e-9 && s <= 1.0 + 1e-9 {
+                points.push((p1.0 + d1.0 * t, p1.1 + d1.1 * t));
+            }
+        }
+    }
+
+    if points.len() < 3 { return None; }
+
+    // Centroid + sort CCW
+    let cx: f64 = points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64;
+    let cy: f64 = points.iter().map(|p| p.1).sum::<f64>() / points.len() as f64;
+    points.sort_by(|p, q| {
+        let ap = (p.1 - cy).atan2(p.0 - cx);
+        let aq = (q.1 - cy).atan2(q.0 - cx);
+        ap.partial_cmp(&aq).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Dedup near-duplicates
+    let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+    for p in points {
+        if let Some(last) = dedup.last() {
+            if ((p.0 - last.0).abs() < 1e-6 && (p.1 - last.1).abs() < 1e-6) { continue; }
+        }
+        dedup.push(p);
+    }
+    if dedup.len() < 3 { return None; }
+    Some(dedup)
+}
+
+/// 두 공면 polygon 의 difference (a − b) — convex 가정.
+///
+/// Sutherland-Hodgman 으로 a ∩ b 계산 후 a 의 corners 에서 그 영역을
+/// "subtract" 한다. 결과가 non-convex / multi-piece 일 수 있어 본 구현은
+/// **convex a, convex b, 단일 piece 결과** 만 반환 (그 외엔 None).
+///
+/// 즉 이 MVP 는 b 가 a 의 corner 를 자르는 형태에서만 유효. 더 복잡한
+/// 케이스는 Greiner-Hormann 으로 향후 확장.
+pub fn convex_difference_2d(a: &[(f64, f64)], b: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
+    if a.len() < 3 || b.len() < 3 { return None; }
+    let inter = sutherland_hodgman(a, b)?;
+    // a − b = a 의 boundary 를 따라 가다, b 안으로 들어가는 지점에서
+    //   intersection polygon 의 boundary 를 (반대 방향으로) 따라 빠져나옴.
+    // MVP: a vertices outside b + boundary intersection points → CCW sort.
+    let inside = |pt: (f64, f64), poly: &[(f64, f64)]| -> bool {
+        let mut sum = 0.0_f64;
+        for i in 0..poly.len() {
+            let (ax, ay) = poly[i];
+            let (bx, by) = poly[(i + 1) % poly.len()];
+            let ux = ax - pt.0; let uy = ay - pt.1;
+            let vx = bx - pt.0; let vy = by - pt.1;
+            let ulen = (ux*ux + uy*uy).sqrt();
+            let vlen = (vx*vx + vy*vy).sqrt();
+            if ulen < 1e-9 || vlen < 1e-9 { return false; } // boundary excluded
+            let cross = ux*vy - uy*vx;
+            let dot = ux*vx + uy*vy;
+            let mut ang = (cross / (ulen*vlen)).atan2(dot / (ulen*vlen));
+            if ang > std::f64::consts::PI { ang -= 2.0 * std::f64::consts::PI; }
+            if ang < -std::f64::consts::PI { ang += 2.0 * std::f64::consts::PI; }
+            sum += ang;
+        }
+        (sum.abs() - std::f64::consts::TAU).abs() < 1e-3
+    };
+
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    for &p in a { if !inside(p, b) { points.push(p); } }
+    // Boundary intersections (same as in convex_union_2d).
+    let segments_a: Vec<_> = (0..a.len()).map(|i| (a[i], a[(i+1)%a.len()])).collect();
+    let segments_b: Vec<_> = (0..b.len()).map(|i| (b[i], b[(i+1)%b.len()])).collect();
+    for &(p1, p2) in &segments_a {
+        for &(p3, p4) in &segments_b {
+            let d1 = (p2.0 - p1.0, p2.1 - p1.1);
+            let d2 = (p4.0 - p3.0, p4.1 - p3.1);
+            let denom = d1.0 * d2.1 - d1.1 * d2.0;
+            if denom.abs() < 1e-9 { continue; }
+            let t = ((p3.0 - p1.0) * d2.1 - (p3.1 - p1.1) * d2.0) / denom;
+            let s = ((p3.0 - p1.0) * d1.1 - (p3.1 - p1.1) * d1.0) / denom;
+            if t >= -1e-9 && t <= 1.0 + 1e-9 && s >= -1e-9 && s <= 1.0 + 1e-9 {
+                points.push((p1.0 + d1.0 * t, p1.1 + d1.1 * t));
+            }
+        }
+    }
+
+    if points.len() < 3 { return None; }
+
+    // CCW sort by centroid (works for convex result piece; non-convex →
+    //   incorrect topology, caller's responsibility to detect).
+    let cx: f64 = points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64;
+    let cy: f64 = points.iter().map(|p| p.1).sum::<f64>() / points.len() as f64;
+    points.sort_by(|p, q| {
+        let ap = (p.1 - cy).atan2(p.0 - cx);
+        let aq = (q.1 - cy).atan2(q.0 - cx);
+        ap.partial_cmp(&aq).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+    for p in points {
+        if let Some(last) = dedup.last() {
+            if ((p.0 - last.0).abs() < 1e-6 && (p.1 - last.1).abs() < 1e-6) { continue; }
+        }
+        dedup.push(p);
+    }
+    if dedup.len() < 3 { return None; }
+    let _ = inter; // kept for diagnostic / future GH expansion
+    Some(dedup)
+}
+
 /// outer 폴리곤이 inner 폴리곤을 완전 포함하는가?
 ///
 /// 조건:

@@ -4236,6 +4236,96 @@ impl Mesh {
         }
     }
 
+    /// ADR-007 Rev 2 Tier 4 D — 2D Boolean for two coplanar Sheet faces.
+    ///
+    /// Operations:
+    ///   "intersect" — sutherland_hodgman convex clip
+    ///   "union"     — convex_union_2d (centroid-CCW from boundary verts)
+    ///   "subtract"  — convex_difference_2d (a − b, single piece)
+    ///
+    /// MVP가정 (Convex polygons only, single-piece result). Non-convex
+    /// 입력이거나 결과가 multi-piece 이면 Err — 향후 Greiner-Hormann
+    /// 풀 구현으로 확장 예정.
+    ///
+    /// 인자:
+    ///   `a`, `b`: Sheet face id (둘 다 same plane)
+    ///   `op`: "union" | "subtract" | "intersect"
+    ///
+    /// 반환:
+    ///   결과 face id (a 와 b 는 inactive 처리됨)
+    pub fn sheet_boolean(
+        &mut self,
+        a: FaceId,
+        b: FaceId,
+        op: &str,
+        material: MaterialId,
+    ) -> Result<FaceId> {
+        // Both must be active sheets.
+        if !self.faces.contains(a) || !self.faces.contains(b) {
+            anyhow::bail!("sheet_boolean: face {:?} or {:?} not found", a, b);
+        }
+        if !self.faces[a].is_active() || !self.faces[b].is_active() {
+            anyhow::bail!("sheet_boolean: inactive face");
+        }
+        if !self.is_sheet_face(a) || !self.is_sheet_face(b) {
+            anyhow::bail!("sheet_boolean: both inputs must be Sheet (not Wall)");
+        }
+        let verts_a = self.collect_loop_verts(self.faces[a].outer().start)?;
+        let verts_b = self.collect_loop_verts(self.faces[b].outer().start)?;
+        if verts_a.len() < 3 || verts_b.len() < 3 {
+            anyhow::bail!("sheet_boolean: degenerate face boundary");
+        }
+        let pts_a: Vec<DVec3> = verts_a.iter()
+            .filter_map(|&v| self.verts.get(v).map(|vx| vx.pos()))
+            .collect();
+        let pts_b: Vec<DVec3> = verts_b.iter()
+            .filter_map(|&v| self.verts.get(v).map(|vx| vx.pos()))
+            .collect();
+
+        // Coplanarity check via face normal alignment + plane distance.
+        let basis = crate::operations::polygon_geom::PlaneBasis::from_polygon(&pts_a)
+            .ok_or_else(|| anyhow::anyhow!("sheet_boolean: cannot derive plane from face a"))?;
+        for p in &pts_b {
+            let dist = (*p - basis.origin).dot(basis.normal).abs();
+            let scale = pts_b.iter().map(|q| (*q - basis.origin).length()).fold(0.0_f64, f64::max);
+            let tol = (scale * 1e-4).max(1.0);
+            if dist > tol {
+                anyhow::bail!(
+                    "sheet_boolean: face b not coplanar with a (max dist {:.2} > tol {:.2})",
+                    dist, tol,
+                );
+            }
+        }
+
+        let poly_a: Vec<(f64, f64)> = pts_a.iter().map(|p| basis.project(*p)).collect();
+        let poly_b: Vec<(f64, f64)> = pts_b.iter().map(|p| basis.project(*p)).collect();
+
+        let result_2d = match op {
+            "intersect" => crate::operations::polygon_geom::sutherland_hodgman(&poly_a, &poly_b),
+            "union"     => crate::operations::polygon_geom::convex_union_2d(&poly_a, &poly_b),
+            "subtract"  => crate::operations::polygon_geom::convex_difference_2d(&poly_a, &poly_b),
+            _ => anyhow::bail!("sheet_boolean: unknown op '{}' (expect union/subtract/intersect)", op),
+        };
+        let result_2d = result_2d.ok_or_else(|| anyhow::anyhow!(
+            "sheet_boolean: {} produced no result (disjoint or non-convex)", op
+        ))?;
+        if result_2d.len() < 3 {
+            anyhow::bail!("sheet_boolean: degenerate result polygon ({} verts)", result_2d.len());
+        }
+
+        // Lift back to 3D + add new face.
+        let new_verts: Vec<VertId> = result_2d.iter()
+            .map(|&(x, y)| self.add_vertex(basis.lift(x, y)))
+            .collect();
+        let new_face = self.add_face(&new_verts, material)?;
+
+        // Remove originals (soft if you want undo; hard here for simplicity).
+        let _ = self.remove_face(a);
+        let _ = self.remove_face(b);
+
+        Ok(new_face)
+    }
+
     /// ADR-007 Rev 2 Phase B-3 — Recompute every active face's cached
     /// `normal` from its current outer-loop winding and write it back.
     ///

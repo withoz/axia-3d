@@ -715,6 +715,13 @@ export class AxiaEngine {
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
     /**
+     * Sheet 2D Boolean (Tier 4 B-5).
+     * 두 coplanar Sheet face에 대해 union/subtract/intersect 수행.
+     * op: "union" | "subtract" | "intersect"
+     * 반환: JSON `{ok, resultFace}` 또는 `{ok:false, error}`
+     */
+    sheetBoolean(a: number, b: number, op: string): string;
+    /**
      * Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.
      *
      * For 2+ faces the user selected and explicitly asked to "merge" even
@@ -1001,6 +1008,7 @@ export interface InitOutput {
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
+    readonly axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_softenInternalEdges: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

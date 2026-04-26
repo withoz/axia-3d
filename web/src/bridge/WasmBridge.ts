@@ -266,6 +266,7 @@ type AxiaEngineExtended = AxiaEngine & {
   is_face_locked?(face_id_raw: number): boolean;
   // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
+  sheetBoolean?(a: number, b: number, op: string): string;
   intersectWithModel?(faceIds: Uint32Array): string;
   isFaceInVolume?(faceIdRaw: number): boolean;
   getFaceVolumeFlags?(): Uint8Array;
@@ -2176,6 +2177,28 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] booleanOp failed:', e);
       Toast.error(`Boolean 연산 실패: ${String(e)}`);
+      return null;
+    }
+  }
+
+  /** Tier 4 B-5 — Sheet 2D Boolean.
+   *  두 coplanar Sheet face에 대해 union/subtract/intersect 수행.
+   *  반환: 성공 시 새로 생성된 face id, 실패 시 null. */
+  sheetBoolean(a: number, b: number, op: 'union' | 'subtract' | 'intersect'): number | null {
+    if (!this.engine?.sheetBoolean) return null;
+    this.markDirty();
+    try {
+      const json = this.engine.sheetBoolean(a, b, op);
+      const res = JSON.parse(json) as { ok: boolean; resultFace?: number; error?: string };
+      if (!res.ok) {
+        Toast.error(`Sheet ${op} 실패: ${res.error ?? '알 수 없는 오류'}`);
+        return null;
+      }
+      Toast.success(`Sheet ${op} 성공`);
+      return res.resultFace ?? null;
+    } catch (e) {
+      console.error('[WasmBridge] sheetBoolean failed:', e);
+      Toast.error(`Sheet 연산 실패: ${String(e)}`);
       return null;
     }
   }

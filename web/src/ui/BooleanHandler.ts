@@ -51,18 +51,42 @@ export function startBooleanOp(
     return;
   }
 
-  // ADR-007 Rev 2 — Sheet 면은 inside/outside 미정의 → Boolean operand 거부.
-  //   선택 중 하나라도 Sheet 면 있으면 안내 후 중단.
+  // ADR-007 Rev 2 — Sheet 면은 Wall과 다른 경로 (Sheet 2D Boolean).
+  //   - 모든 operand가 Sheet → sheet_boolean (Tier 4 B-5)
+  //   - 일부만 Sheet → 혼합 거부 (안내)
+  //   - 전부 Wall → 기존 Mesh boolean
   const sheetIds: number[] = [];
+  const wallIds: number[] = [];
   for (const f of selection) {
     if (bridge.isFaceInVolume?.(f) === false) sheetIds.push(f);
+    else wallIds.push(f);
   }
-  if (sheetIds.length > 0) {
+  if (sheetIds.length > 0 && wallIds.length > 0) {
     Toast.warning(
-      `Boolean 은 닫힌 볼륨 (Wall) 면에만 사용 가능합니다.\n` +
-      `Sheet ${sheetIds.length}개 포함 — Push/Pull 로 입체화 후 다시 시도하세요.`,
+      `Sheet ${sheetIds.length}개 + Wall ${wallIds.length}개 혼합 선택 — ` +
+      `Sheet끼리 또는 Wall끼리만 가능합니다.`,
       6000,
     );
+    return;
+  }
+  // Sheet-only 경로 — 정확히 2개 필요 (MVP, convex만 지원)
+  if (sheetIds.length === selection.length) {
+    if (selection.length !== 2) {
+      Toast.warning(
+        `Sheet Boolean은 정확히 2개의 동일 평면 Sheet 면이 필요합니다 (현재 ${selection.length}개).`,
+        5000,
+      );
+      return;
+    }
+    const newFace = bridge.sheetBoolean(selection[0], selection[1], op);
+    if (newFace == null) {
+      // sheetBoolean 내부에서 이미 Toast.error 호출됨
+      return;
+    }
+    toolManager.syncMesh();
+    const nameKo = op === 'union' ? '합집합' : op === 'subtract' ? '차집합' : '교집합';
+    Toast.info(`Sheet ${nameKo} 완료 — 결과 face #${newFace}`, 2500);
+    debugLog(`[SheetBool] ${op} 완료: 결과 face=${newFace}`);
     return;
   }
 
