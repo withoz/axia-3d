@@ -349,6 +349,26 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-sphere': setActiveTool('sphere'); break;
       case 'tool-cylinder': setActiveTool('cylinder'); break;
       case 'tool-cone': setActiveTool('cone'); break;
+      case 'tool-box': {
+        // ADR-007 Rev 2 Tier 3 — Quick centered box. Prompts for one
+        //   side length (mm). For SketchUp-style draw-then-extrude UX,
+        //   use Rect tool + Push/Pull instead.
+        const input = window.prompt('박스 한 변 길이 (mm):', '1000');
+        if (!input) break;
+        const size = parseFloat(input);
+        if (!Number.isFinite(size) || size <= 0) {
+          Toast.warning('유효한 양수를 입력하세요');
+          break;
+        }
+        const baseFace = bridge.create_box(0, size / 2, 0, size, size, size);
+        if (baseFace < 0) {
+          Toast.error('박스 생성 실패: ' + (bridge.lastError() || '알 수 없는 오류'));
+        } else {
+          toolManager.syncMesh();
+          Toast.success(`박스 ${size}mm × ${size}mm × ${size}mm 생성됨`, 2200);
+        }
+        break;
+      }
       case 'tool-move': setActiveTool('move'); break;
       case 'tool-rotate': setActiveTool('rotate'); break;
       case 'tool-scale': setActiveTool('scale'); break;

@@ -300,6 +300,7 @@ type AxiaEngineExtended = AxiaEngine & {
   create_cylinder?(cx: number, cy: number, cz: number, radius: number, height: number, segments: number): number;
   create_cone?(cx: number, cy: number, cz: number, radius: number, height: number, segments: number): number;
   create_sphere?(cx: number, cy: number, cz: number, radius: number, u_segments: number, v_segments: number): number;
+  create_box?(cx: number, cy: number, cz: number, width: number, height: number, depth: number): number;
   // Delta Buffer Export
   getDirtyFaceBuffers?(): WasmDeltaBuffers | undefined;
   getCacheVersion?(): number;
@@ -2267,6 +2268,20 @@ export class WasmBridge {
       return this.engine.create_sphere(cx, cy, cz, radius, u_segments, v_segments);
     } catch (e) {
       console.error('[WasmBridge] create_sphere failed:', e);
+      return -1;
+    }
+  }
+
+  /** Create an axis-aligned box primitive (closed cuboid).
+   *  Returns a face ID for Push/Pull operations. Auto-intersects with the
+   *  rest of the scene when auto_intersect_on_draw is enabled. */
+  create_box(cx: number, cy: number, cz: number, width: number, height: number, depth: number): number {
+    if (!this.engine?.create_box) return -1;
+    this.markDirty();
+    try {
+      return this.engine.create_box(cx, cy, cz, width, height, depth);
+    } catch (e) {
+      console.error('[WasmBridge] create_box failed:', e);
       return -1;
     }
   }

@@ -68,6 +68,54 @@ impl Mesh {
         Ok(faces)
     }
 
+    /// Create an axis-aligned box (6 faces, closed solid).
+    ///
+    /// `center` is the box centroid. `width` is the X-extent, `height` the
+    /// Y-extent, `depth` the Z-extent. All 6 faces wound CCW from outside
+    /// so the result satisfies ADR-007 invariants out of the box (pun
+    /// intended) — every face classifies as Wall, normal points outward.
+    pub fn create_box(
+        &mut self,
+        center: DVec3,
+        width: f64,
+        height: f64,
+        depth: f64,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        let hx = width  * 0.5;
+        let hy = height * 0.5;
+        let hz = depth  * 0.5;
+
+        // 8 corners — naming: x{0|1}y{0|1}z{0|1}
+        // 0 = -half, 1 = +half along that axis.
+        let v000 = self.add_vertex(center + DVec3::new(-hx, -hy, -hz));
+        let v100 = self.add_vertex(center + DVec3::new( hx, -hy, -hz));
+        let v110 = self.add_vertex(center + DVec3::new( hx,  hy, -hz));
+        let v010 = self.add_vertex(center + DVec3::new(-hx,  hy, -hz));
+        let v001 = self.add_vertex(center + DVec3::new(-hx, -hy,  hz));
+        let v101 = self.add_vertex(center + DVec3::new( hx, -hy,  hz));
+        let v111 = self.add_vertex(center + DVec3::new( hx,  hy,  hz));
+        let v011 = self.add_vertex(center + DVec3::new(-hx,  hy,  hz));
+
+        // Right-hand rule winding: outward normal points away from box
+        // interior. Each face uses ONLY the four corners on its plane.
+        let mut faces = Vec::with_capacity(6);
+        // Bottom (Y=-hy, normal -Y) verts where y bit = 0
+        faces.push(self.add_face(&[v000, v100, v101, v001], material)?);
+        // Top (Y=+hy, normal +Y) verts where y bit = 1
+        faces.push(self.add_face(&[v010, v011, v111, v110], material)?);
+        // Front (Z=+hz, normal +Z) verts where z bit = 1
+        faces.push(self.add_face(&[v001, v101, v111, v011], material)?);
+        // Back (Z=-hz, normal -Z) verts where z bit = 0
+        faces.push(self.add_face(&[v000, v010, v110, v100], material)?);
+        // Right (X=+hx, normal +X) verts where x bit = 1
+        faces.push(self.add_face(&[v100, v110, v111, v101], material)?);
+        // Left (X=-hx, normal -X) verts where x bit = 0
+        faces.push(self.add_face(&[v000, v001, v011, v010], material)?);
+
+        Ok(faces)
+    }
+
     /// Create a truncated cone (proper geometry, no degenerate faces).
     pub fn create_cone(
         &mut self,

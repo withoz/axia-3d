@@ -564,6 +564,45 @@ impl AxiaEngine {
         }
     }
 
+    /// Create an axis-aligned box primitive (6-face closed solid).
+    /// Returns the bottom face ID for Push/Pull operations.
+    pub fn create_box(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        width: f64, height: f64, depth: f64,
+    ) -> f64 {
+        let position = DVec3::new(cx, cy, cz);
+        self.scene.transactions.begin();
+        let before = self.scene.scene_snapshot();
+        self.scene.transactions.set_before_snapshot(before);
+        match self.scene.mesh.create_box(
+            position, width, height, depth, self.scene.default_material,
+        ) {
+            Ok(faces) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                let xia_id = self.scene.create_xia_with_faces(
+                    "Box".to_string(), position, faces.clone(),
+                );
+                if self.scene.auto_intersect_on_draw {
+                    let _ = self.scene.intersect_faces_inner(&faces);
+                }
+                let after = self.scene.scene_snapshot();
+                self.scene.transactions.set_after_snapshot(after);
+                self.scene.transactions.commit();
+                if let Some(&base_face) = faces.first() {
+                    debug_log!("[RUST] create_box: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
+                    base_face.raw() as f64
+                } else { -1.0 }
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] create_box error: {}", e);
+                -1.0
+            }
+        }
+    }
+
     /// Create a sphere primitive (UV sphere).
     /// Returns a face ID from the sphere for Push/Pull operations.
     pub fn create_sphere(

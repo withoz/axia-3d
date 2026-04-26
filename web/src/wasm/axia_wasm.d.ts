@@ -172,6 +172,11 @@ export class AxiaEngine {
      */
     countFreeEdges(): number;
     /**
+     * Create an axis-aligned box primitive (6-face closed solid).
+     * Returns the bottom face ID for Push/Pull operations.
+     */
+    create_box(cx: number, cy: number, cz: number, width: number, height: number, depth: number): number;
+    /**
      * Create a cone primitive.
      * Returns the base face ID for Push/Pull operations.
      */
@@ -896,6 +901,7 @@ export interface InitOutput {
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
     readonly axiaengine_countFreeEdges: (a: number) => number;
+    readonly axiaengine_create_box: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;

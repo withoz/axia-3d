@@ -50,6 +50,22 @@ fn primitive_cylinder_intersects_existing_rect() {
 }
 
 #[test]
+fn primitive_box_is_closed_volume() {
+    // Box should produce 6 faces, all classifying as Wall (closed).
+    let mut scene = Scene::default();
+    let faces = scene.mesh.create_box(
+        DVec3::new(0.0, 500.0, 0.0),  // center
+        1000.0, 1000.0, 1000.0,        // 1m cube
+        scene.default_material,
+    ).expect("box creates");
+    assert_eq!(faces.len(), 6, "box has exactly 6 faces");
+    for &fid in &faces {
+        assert!(scene.mesh.is_face_in_volume(fid),
+            "every box face should classify as Wall (closed volume)");
+    }
+}
+
+#[test]
 fn primitive_no_intersection_when_disjoint() {
     let mut scene = Scene::default();
     scene.execute(Command::DrawRect {

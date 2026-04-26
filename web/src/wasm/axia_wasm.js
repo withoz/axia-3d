@@ -477,6 +477,21 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * Create an axis-aligned box primitive (6-face closed solid).
+     * Returns the bottom face ID for Push/Pull operations.
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} width
+     * @param {number} height
+     * @param {number} depth
+     * @returns {number}
+     */
+    create_box(cx, cy, cz, width, height, depth) {
+        const ret = wasm.axiaengine_create_box(this.__wbg_ptr, cx, cy, cz, width, height, depth);
+        return ret;
+    }
+    /**
      * Create a cone primitive.
      * Returns the base face ID for Push/Pull operations.
      * @param {number} cx

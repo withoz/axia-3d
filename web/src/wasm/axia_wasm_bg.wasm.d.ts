@@ -24,6 +24,7 @@ export const axiaengine_collectEdgeChain: (a: number, b: number, c: number) => v
 export const axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
 export const axiaengine_constraintCount: (a: number) => number;
 export const axiaengine_countFreeEdges: (a: number) => number;
+export const axiaengine_create_box: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
