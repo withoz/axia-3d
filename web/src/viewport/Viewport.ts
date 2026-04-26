@@ -1665,7 +1665,24 @@ export class Viewport {
     this.raycaster.params.Line.threshold = prevLine;
     if (raycasterParams.Line2) raycasterParams.Line2.threshold = prevLine2;
 
-    return hits.length > 0 ? hits[0] : null;
+    if (hits.length === 0) return null;
+    const hit = hits[0];
+
+    // Normalize `index` to "first-vertex-index" convention.
+    //   Legacy THREE.LineSegments: hit.index = first vertex index of the
+    //     segment (seg n starts at index 2n). Callers compute
+    //     segIndex = Math.floor(index / 2).
+    //   LineSegments2:             hit.index = segment index (n directly);
+    //     hit.faceIndex = same. Without adjustment callers would halve it
+    //     and look up the wrong edgeMap slot → edge pick reads back the
+    //     wrong edge id, erase hits the wrong edge or misses entirely.
+    const isL2 = (hit.object as THREE.Object3D & { isLineSegments2?: boolean }).isLineSegments2 === true
+      || hit.object.type === 'LineSegments2';
+    if (isL2) {
+      const segIndex = hit.faceIndex ?? hit.index ?? 0;
+      (hit as THREE.Intersection & { index?: number }).index = segIndex * 2;
+    }
+    return hit;
   }
 
   /** index buffer 백업 */
