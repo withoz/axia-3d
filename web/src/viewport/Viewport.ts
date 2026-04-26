@@ -1008,14 +1008,22 @@ export class Viewport {
 
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
-      // VSM 보조 layer를 위해 shadow 기능 활성. renderer.shadowMap.enabled가
-      // false면 GPU 측에서 shadow pass 생략하므로 기본 상태에서 비용 없음.
-      frontMesh.castShadow = true;
+      // ADR-007 Rev 2 Shadow Phase 3 (B): Sheet 면은 양면 동등 평면이라
+      //   VSM 자체 그림자가 의미 없는 데다 flat surface 위에 noisy band
+      //   를 뿌려 미관을 해친다. 그래서 frontMesh 의 castShadow 는 OFF
+      //   로 두고, 별도의 invisible "wall-only shadow caster" 가 wall
+      //   삼각형만 그림자 맵에 기여하도록 분리.
+      frontMesh.castShadow = false;
       frontMesh.receiveShadow = true;
       this.meshGroup.add(frontMesh);
 
       // ── Store reference for color updates ──
       this.frontMesh = frontMesh;
+
+      // Phase 3 — wall-only invisible shadow caster (built later in
+      //   the same flow once volumeFlags has been used to split
+      //   indices). Falls back to whole-geometry caster when
+      //   volumeFlags is unavailable (legacy / non-Rust path).
 
       // If fur was enabled before this mesh rebuild, re-attach so the
       // shell overlay tracks the new geometry automatically.
@@ -1030,6 +1038,13 @@ export class Viewport {
       //   position/normal 은 원본과 공유 (BufferAttribute 재사용).
       //   frontMesh 는 모든 삼각형을 단일 front-color 로 렌더 (원본 geometry).
       //   raycast/BVH 는 frontMesh 유지 → 선택/픽 동작 변화 없음.
+      //
+      // Single-sided (CAD) 모드에선 back-mesh 분기를 통째로 건너뛰므로
+      //   wall-only shadow caster 도 만들어지지 않는다. 그 경우 fall-back
+      //   으로 frontMesh 자체에 castShadow 를 다시 ON 으로 두어야 한다.
+      if (this._singleSidedRender) {
+        frontMesh.castShadow = true;
+      }
       if (!this._singleSidedRender) {
         const wallIndices: number[] = [];
         const sheetIndices: number[] = [];
@@ -1066,6 +1081,24 @@ export class Viewport {
           const wallBackMesh = new THREE.Mesh(wallBackGeo, cyanMat);
           wallBackMesh.name = 'back-mesh-wall';
           this.meshGroup.add(wallBackMesh);
+
+          // Phase 3 — invisible wall-only shadow caster.
+          //   Geometry shares attributes with frontMesh (no extra GPU
+          //   memory beyond the index buffer). Casts shadows but never
+          //   rendered itself, so we use a cheap depth material via
+          //   visible=false. Sheets are excluded from this caster, so
+          //   they don't pollute VSM with noisy band artefacts on flat
+          //   coplanar faces.
+          const shadowGeo = new THREE.BufferGeometry();
+          shadowGeo.setAttribute('position', geometry.getAttribute('position'));
+          shadowGeo.setAttribute('normal', geometry.getAttribute('normal'));
+          shadowGeo.setIndex(wallIndices);
+          const shadowMat = new THREE.MeshBasicMaterial({ visible: false });
+          const wallShadowCaster = new THREE.Mesh(shadowGeo, shadowMat);
+          wallShadowCaster.name = 'wall-shadow-caster';
+          wallShadowCaster.castShadow = true;
+          wallShadowCaster.receiveShadow = false;
+          this.meshGroup.add(wallShadowCaster);
         }
 
         if (sheetIndices.length > 0) {
