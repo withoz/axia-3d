@@ -134,6 +134,13 @@ export class Viewport {
   // castShadow은 기본 false, setProjectedShadowEnabled(true) 시 켜짐.
   // VSM shadow는 Projected와 함께 "건축 모드" 일괄 관리.
   private _dirLight: THREE.DirectionalLight | null = null;
+  /** Shadow Phase 2 — dynamic frustum fit (2026-04-26).
+   *  When `true`, every frame the dir-light shadow camera is resized to
+   *  cover only the geometry within the current view, dramatically
+   *  improving texel-per-meter density when zoomed-in on detail. Static
+   *  fallback (Phase 1) used otherwise. Texel-snap stabilises edges so
+   *  panning doesn't shimmer the shadow boundary. */
+  private _dynamicShadowFit: boolean = true;
 
   // ═══ Sketch plane visual (Tier 3A) ═══
   // Tinted translucent plane + border to show which plane sketching locks to.
@@ -2061,6 +2068,112 @@ export class Viewport {
     this._onFrameCallbacks.push(cb);
   }
 
+  /** Toggle dynamic shadow frustum fit (Shadow Phase 2). */
+  setDynamicShadowFit(enabled: boolean): void {
+    this._dynamicShadowFit = enabled;
+    if (!enabled && this._dirLight) {
+      // Restore Phase 1 static frustum.
+      const s = this._dirLight.shadow;
+      s.camera.left = -15000; s.camera.right = 15000;
+      s.camera.top = 15000;   s.camera.bottom = -15000;
+      s.camera.near = 100;    s.camera.far = 60000;
+      s.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** Recompute the directional light's shadow frustum each frame so it
+   *  hugs the visible scene. Called from animate() when the toggle is
+   *  on (default).
+   *
+   *  Strategy:
+   *    - Light-space bbox of all active mesh AABBs (in light-view coords).
+   *    - Pad slightly so geometry near the edge isn't clipped.
+   *    - Texel-snap left/bottom to integer texels so the shadow doesn't
+   *      crawl across surfaces during camera pan ("shadow shimmering").
+   *
+   *  No-op when the dir light has no castShadow or when the scene is
+   *  empty. */
+  private _updateDynamicShadowFrustum(): void {
+    if (!this._dynamicShadowFit) return;
+    const dl = this._dirLight;
+    if (!dl || !dl.castShadow) return;
+
+    // Build light-view basis (z = -light direction, x/y orthonormal).
+    const lightDir = dl.position.clone().sub(dl.target.position).normalize();
+    if (lightDir.lengthSq() < 1e-6) return;
+    const upGuess = Math.abs(lightDir.y) > 0.99 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(upGuess, lightDir).normalize();
+    const up = new THREE.Vector3().crossVectors(lightDir, right).normalize();
+
+    // Walk active meshes; project their AABB corners into light-view
+    //   coords and accumulate min/max per axis.
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    const tmp = new THREE.Vector3();
+    let foundAny = false;
+    this.scene.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      if (!obj.visible || !obj.castShadow) return;
+      const geo = obj.geometry as THREE.BufferGeometry;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      // 8 AABB corners in object space
+      for (let i = 0; i < 8; i++) {
+        tmp.set(
+          (i & 1) ? bb.max.x : bb.min.x,
+          (i & 2) ? bb.max.y : bb.min.y,
+          (i & 4) ? bb.max.z : bb.min.z,
+        );
+        tmp.applyMatrix4(obj.matrixWorld);
+        // Project onto light basis
+        const lx = tmp.dot(right);
+        const ly = tmp.dot(up);
+        const lz = tmp.dot(lightDir);
+        if (lx < minX) minX = lx;
+        if (lx > maxX) maxX = lx;
+        if (ly < minY) minY = ly;
+        if (ly > maxY) maxY = ly;
+        if (lz < minZ) minZ = lz;
+        if (lz > maxZ) maxZ = lz;
+        foundAny = true;
+      }
+    });
+    if (!foundAny) return;
+
+    // Pad the box a bit so anti-aliased silhouettes don't clip.
+    const padXY = Math.max(50, (maxX - minX) * 0.05);
+    const padZ = Math.max(50, (maxZ - minZ) * 0.05);
+    minX -= padXY; maxX += padXY;
+    minY -= padXY; maxY += padXY;
+    minZ -= padZ;  maxZ += padZ;
+
+    // Texel-snap: round left/bottom to whole texels so silhouettes
+    //   don't wobble between frames as the camera pans.
+    const s = dl.shadow;
+    const mapSize = s.mapSize.x;
+    if (mapSize > 0) {
+      const tx = (maxX - minX) / mapSize;
+      const ty = (maxY - minY) / mapSize;
+      if (tx > 0) {
+        minX = Math.floor(minX / tx) * tx;
+        maxX = minX + tx * mapSize;
+      }
+      if (ty > 0) {
+        minY = Math.floor(minY / ty) * ty;
+        maxY = minY + ty * mapSize;
+      }
+    }
+
+    s.camera.left = minX; s.camera.right = maxX;
+    s.camera.bottom = minY; s.camera.top = maxY;
+    // light-view Z grows opposite to lightDir; remap to near/far.
+    s.camera.near = Math.max(1, -maxZ);
+    s.camera.far = Math.max(s.camera.near + 100, -minZ);
+    s.camera.updateProjectionMatrix();
+  }
+
   start() {
     // Build the post-processing composer on first start if SSAO is on
     // and we haven't built it yet. Lazy so any headless test that
@@ -2071,6 +2184,9 @@ export class Viewport {
     const animate = () => {
       this._frameId = requestAnimationFrame(animate);
       for (const cb of this._onFrameCallbacks) cb();
+      // Shadow Phase 2 — refit the directional light frustum to the
+      //   visible scene each frame (texel-snapped to avoid shimmer).
+      this._updateDynamicShadowFrustum();
       if (this._ssaoEnabled && this._composer) {
         // Keep the SSAO pass's camera in sync with the active camera —
         // we switch between perspective and orthographic on view-mode
