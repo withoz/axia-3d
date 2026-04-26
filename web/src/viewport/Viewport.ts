@@ -954,19 +954,22 @@ export class Viewport {
       // render via vertex color (white * texture ≈ texture on default color).
       // Multi-texture via geometry groups is future work (v2).
       const firstTex = this.findFirstTexturedMaterial(faceMap);
-      if (firstTex) {
+      const firstAux = this.findFirstAuxMaterial(faceMap);
+      // UV must be present if EITHER base color OR aux maps are textured.
+      if (firstTex || firstAux) {
+        // Use base-color projection if available, otherwise fall back to
+        // a default planar projection so aux maps still get UVs.
+        const projParams: UVProjectionParams = firstTex
+          ? { mode: firstTex.projection, scale: firstTex.scale, rotation: firstTex.rotation ?? 0 }
+          : { mode: 'planar', scale: 0.001, rotation: 0 };
         const uvs = computeUVsFromBuffers(
           geometry.getAttribute('position').array as Float32Array,
           geometry.getAttribute('normal').array as Float32Array,
-          {
-            mode: firstTex.projection,
-            scale: firstTex.scale,
-            rotation: firstTex.rotation ?? 0,
-          } as UVProjectionParams,
+          projParams,
         );
         geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-        // Kick off async texture load; refresh material when ready.
-        this.applyTextureAsync(firstTex);
+        if (firstTex) this.applyTextureAsync(firstTex);
+        if (firstAux) this.applyAuxTexturesAsync(firstAux);
       }
 
       const frontMat = new THREE.MeshStandardMaterial({
@@ -1469,6 +1472,25 @@ export class Viewport {
     return null;
   }
 
+  /** A. Material 확장 — find first material that has any aux PBR map
+   *  (normal or roughness). Same single-texture limitation as
+   *  findFirstTexturedMaterial. */
+  private findFirstAuxMaterial(faceMap?: Uint32Array): import('../materials/MaterialLibrary').AuxTextureInfo | null {
+    if (!faceMap || faceMap.length === 0) return null;
+    const matLib = getMaterialLibrary();
+    const seen = new Set<number>();
+    for (let i = 0; i < faceMap.length; i++) {
+      const fid = faceMap[i];
+      if (seen.has(fid)) continue;
+      seen.add(fid);
+      const mat = matLib.getMaterialForFace(fid);
+      if (mat?.visual.aux && (mat.visual.aux.normal || mat.visual.aux.roughness)) {
+        return mat.visual.aux;
+      }
+    }
+    return null;
+  }
+
   /**
    * Load the texture from cache (or fetch asynchronously) and apply it to the
    * current frontMesh's material. Called after geometry build when a textured
@@ -1489,6 +1511,46 @@ export class Viewport {
         mat.needsUpdate = true;
       })
       .catch((err) => console.warn('[Viewport] texture load failed:', err));
+  }
+
+  /** A. Material 확장 (2026-04-26) — Apply auxiliary PBR maps (normal,
+   *  roughness) to the front mesh's material. Loaded via the same
+   *  TextureCache so multiple faces sharing the same texture only
+   *  decode once. Called after applyTextureAsync (or on first build).
+   *
+   *  Limitations: only the FIRST face's aux maps are honoured (matching
+   *  the existing single-texture path). Multi-texture per-face is future
+   *  work via geometry groups. */
+  private applyAuxTexturesAsync(aux: import('../materials/MaterialLibrary').AuxTextureInfo): void {
+    if (!this.frontMesh) return;
+    const mat = this.frontMesh.material as THREE.MeshStandardMaterial;
+    const cache = getTextureCache();
+
+    if (aux.normal) {
+      const intensity = aux.normalIntensity ?? 1.0;
+      const apply = (tex: THREE.Texture) => {
+        if (!this.frontMesh) return;
+        mat.normalMap = tex;
+        mat.normalScale = new THREE.Vector2(intensity, intensity);
+        mat.needsUpdate = true;
+      };
+      const cached = cache.get(aux.normal.dataUrl);
+      if (cached) apply(cached);
+      else cache.load(aux.normal.dataUrl).then(apply).catch(err =>
+        console.warn('[Viewport] normal map load failed:', err));
+    }
+
+    if (aux.roughness) {
+      const apply = (tex: THREE.Texture) => {
+        if (!this.frontMesh) return;
+        mat.roughnessMap = tex;
+        mat.needsUpdate = true;
+      };
+      const cached = cache.get(aux.roughness.dataUrl);
+      if (cached) apply(cached);
+      else cache.load(aux.roughness.dataUrl).then(apply).catch(err =>
+        console.warn('[Viewport] roughness map load failed:', err));
+    }
   }
 
   /**

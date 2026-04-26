@@ -4,7 +4,7 @@
  * 스크린샷 형식: 일반/물리/시각 속성 섹션별 표시
  */
 
-import { Material, MaterialCategory, FireRating, TextureInfo } from '../materials/MaterialLibrary';
+import { Material, MaterialCategory, FireRating, TextureInfo, AuxTextureInfo } from '../materials/MaterialLibrary';
 import { Toast } from './Toast';
 
 /** 최대 텍스처 파일 크기 (base64 인코딩 후 AXIA 파일 크기 고려) */
@@ -170,6 +170,12 @@ export class MaterialPropertiesPanel {
         <div class="mat-panel-title">텍스처</div>
         ${this.renderTextureSection(m.visual.texture)}
       </div>
+
+      <!-- PBR 보조 채널 (Normal / Roughness) -->
+      <div class="mat-panel-section">
+        <div class="mat-panel-title">PBR 보조 채널</div>
+        ${this.renderAuxSection(m.visual.aux)}
+      </div>
     `;
 
     this.container.innerHTML = html;
@@ -214,6 +220,8 @@ export class MaterialPropertiesPanel {
 
     // 텍스처 섹션 전용 리스너
     this.attachTextureListeners();
+    // PBR 보조 채널 리스너
+    this.attachAuxListeners();
   }
 
   /** 속성 변경 처리 */
@@ -397,6 +405,131 @@ export class MaterialPropertiesPanel {
     reader.readAsDataURL(file);
     // 같은 파일 다시 선택 가능하도록 초기화
     input.value = '';
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  Aux PBR section (Normal / Roughness map)
+  //  ADR-007 도구는 wall/sheet 무관하게 동일 적용. 2026-04-26 추가.
+  // ═══════════════════════════════════════════════════
+
+  private renderAuxSection(aux?: AuxTextureInfo): string {
+    const normal = aux?.normal;
+    const roughness = aux?.roughness;
+    const intensity = aux?.normalIntensity ?? 1.0;
+
+    const slot = (label: string, kind: 'normal' | 'roughness', tex?: TextureInfo) => {
+      const has = !!tex;
+      const preview = has
+        ? `<img class="mat-tex-preview" src="${tex!.dataUrl}" alt="${tex!.label ?? label}">`
+        : `<div class="mat-tex-placeholder">없음</div>`;
+      return `
+        <div class="mat-panel-row mat-tex-row">
+          <label>${label}</label>
+          <div class="mat-tex-slot">
+            ${preview}
+            <div class="mat-tex-label">${tex?.label ?? '—'}</div>
+            <div class="mat-tex-actions">
+              <button type="button" class="mat-aux-load" data-kind="${kind}">불러오기</button>
+              ${has ? `<button type="button" class="mat-aux-remove" data-kind="${kind}">제거</button>` : ''}
+            </div>
+            <input type="file" class="mat-aux-file" data-kind="${kind}" accept="image/png,image/jpeg,image/webp" style="display:none">
+          </div>
+        </div>
+      `;
+    };
+
+    return `
+      ${slot('Normal Map', 'normal', normal)}
+      ${normal ? `
+        <div class="mat-panel-row">
+          <label>강도</label>
+          <div class="mat-input-unit">
+            <input type="range" class="mat-input-slider" data-field="aux-normal-intensity"
+              value="${intensity}" step="0.05" min="0" max="3">
+            <span class="mat-value">${intensity.toFixed(2)}</span>
+          </div>
+        </div>
+      ` : ''}
+      ${slot('Roughness Map', 'roughness', roughness)}
+    `;
+  }
+
+  /** 보조 PBR 채널 listeners — render 뒤 attachEventListeners 끝에서 호출 */
+  private attachAuxListeners(): void {
+    this.container.querySelectorAll<HTMLButtonElement>('.mat-aux-load').forEach(btn => {
+      const kind = btn.dataset.kind as 'normal' | 'roughness';
+      const fileInput = this.container.querySelector<HTMLInputElement>(`.mat-aux-file[data-kind="${kind}"]`);
+      if (!fileInput) return;
+      btn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => this.handleAuxFile(fileInput, kind));
+    });
+    this.container.querySelectorAll<HTMLButtonElement>('.mat-aux-remove').forEach(btn => {
+      const kind = btn.dataset.kind as 'normal' | 'roughness';
+      btn.addEventListener('click', () => this.updateAux(kind, undefined));
+    });
+    const intensitySlider = this.container.querySelector<HTMLInputElement>('[data-field="aux-normal-intensity"]');
+    if (intensitySlider) {
+      intensitySlider.addEventListener('input', (e) => {
+        const target = e.target as HTMLInputElement;
+        const span = target.closest('.mat-input-unit')?.querySelector('.mat-value');
+        if (span) span.textContent = parseFloat(target.value).toFixed(2);
+      });
+      intensitySlider.addEventListener('change', () => {
+        if (!this.material) return;
+        const v = parseFloat(intensitySlider.value);
+        const aux: AuxTextureInfo = { ...(this.material.visual.aux ?? {}), normalIntensity: v };
+        this.material = {
+          ...this.material,
+          visual: { ...this.material.visual, aux },
+        };
+        if (this.onPropertyChange) this.onPropertyChange(this.material);
+      });
+    }
+  }
+
+  private handleAuxFile(input: HTMLInputElement, kind: 'normal' | 'roughness'): void {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_TEXTURE_BYTES) {
+      Toast.warning(`텍스처 파일이 너무 큽니다 (${(file.size / 1024 / 1024).toFixed(1)}MB > 4MB)`);
+      input.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      if (typeof dataUrl !== 'string') {
+        Toast.error('텍스처를 읽을 수 없습니다');
+        return;
+      }
+      this.updateAux(kind, {
+        dataUrl,
+        projection: 'planar',
+        scale: this.material?.visual.texture?.scale ?? 0.001,
+        rotation: 0,
+        label: file.name,
+      });
+      Toast.info(`${kind === 'normal' ? 'Normal' : 'Roughness'} map 로드: ${file.name}`);
+    };
+    reader.onerror = () => Toast.error('텍스처 로드 실패');
+    reader.readAsDataURL(file);
+    input.value = '';
+  }
+
+  private updateAux(kind: 'normal' | 'roughness', tex: TextureInfo | undefined): void {
+    if (!this.material) return;
+    const cur: AuxTextureInfo = { ...(this.material.visual.aux ?? {}) };
+    if (kind === 'normal') cur.normal = tex;
+    else cur.roughness = tex;
+    // Empty aux object → store undefined for clean serialization.
+    const empty = !cur.normal && !cur.roughness;
+    const newMaterial: Material = {
+      ...this.material,
+      visual: { ...this.material.visual, aux: empty ? undefined : cur },
+    };
+    this.material = newMaterial;
+    if (this.onPropertyChange) this.onPropertyChange(newMaterial);
+    this.render();
   }
 
   /** 텍스처 업데이트 후 material 전파 + 리렌더 */

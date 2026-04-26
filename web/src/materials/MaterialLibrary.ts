@@ -106,13 +106,25 @@ export interface TextureInfo {
   label?: string;
 }
 
+/** 추가 채널 텍스처 (PBR 보조 — 모두 옵션) */
+export interface AuxTextureInfo {
+  /** Normal map (tangent-space). Three.js MeshStandardMaterial.normalMap. */
+  normal?: TextureInfo;
+  /** Normal map intensity (default 1.0). Three.js normalScale.x/y. */
+  normalIntensity?: number;
+  /** Roughness map (greyscale; brighter = rougher). Multiplied by `roughness` field. */
+  roughness?: TextureInfo;
+}
+
 /** 시각적 속성 */
 export interface VisualProperties {
   color: number;              // hex color (0xRRGGBB)
   roughness: number;          // 0.0 ~ 1.0
   metalness: number;          // 0.0 ~ 1.0
   opacity: number;            // 0.0 ~ 1.0
-  texture?: TextureInfo;      // 옵션: 텍스처 매핑
+  texture?: TextureInfo;      // 옵션: 베이스 컬러 텍스처
+  /** 옵션: 노멀/러프니스 등 보조 PBR 채널 (2026-04-26 추가) */
+  aux?: AuxTextureInfo;
 }
 
 /** Material 전체 정의 */
