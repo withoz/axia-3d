@@ -4236,6 +4236,36 @@ impl Mesh {
         }
     }
 
+    /// ADR-007 Rev 2 — Sheet-aware invariant report.
+    ///
+    /// `verify_face_invariants` 의 결과 중 Wall 면에 적용되는 winding-기반
+    /// violation (현재 I2 normal-mismatch) 는 그대로 두고, Sheet 면의 동일
+    /// violation 은 자동으로 OK 로 간주해 리포트에서 제외.
+    ///
+    /// I1 (loop 존재), I3 (inner loop 유효성), I4 (HE 소속), I5 (non-manifold)
+    /// 같은 *구조적* invariant 는 모든 face 에 그대로 적용 — 이들은 winding
+    /// 방향과 무관한 mesh integrity 검증.
+    ///
+    /// 사용처: `Scene::export_versioned_snapshot_strict` 등 strict 검증
+    /// 경로에서 Rev 2 정책에 맞는 분류별 검증을 원할 때.
+    pub fn verify_face_invariants_rev2(&self) -> InvariantReport {
+        let mut report = self.verify_face_invariants();
+        // I2 violation 은 메시지에 "cached normal opposite to winding" 패턴.
+        // Sheet 면은 winding 자유이므로 이 케이스만 필터링.
+        report.violations.retain(|msg| {
+            if !msg.contains("cached normal opposite to winding") { return true; }
+            // "face FaceId(N): cached..." 에서 N 파싱
+            let Some(start) = msg.find("FaceId(") else { return true; };
+            let after = &msg[start + 7..];
+            let Some(end) = after.find(')') else { return true; };
+            let Ok(raw) = after[..end].parse::<u32>() else { return true; };
+            let fid = FaceId::new(raw);
+            // Sheet 면이면 violation 제거 (true 가 아닌 false 반환 = drop)
+            !self.is_sheet_face(fid)
+        });
+        report
+    }
+
     /// ADR-007 원칙 1 확장 — 닫힌 solid에서 각 face normal이 outward 향하는지 검증.
     ///
     /// 닫힌 2-manifold solid가 아니면 (open surface 등) 빈 리포트 반환.

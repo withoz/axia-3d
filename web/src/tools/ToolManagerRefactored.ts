@@ -549,7 +549,25 @@ export class ToolManager {
         Toast.warning('반전할 면을 먼저 선택하세요');
         return;
       }
-      const flipped = this.bridge.flipFaces(faces);
+      // ADR-007 Rev 2 — Sheet 면은 양면 동등 → flip 의미 없음.
+      //   선택에 Sheet 가 포함되면 Wall 만 처리 + Sheet 는 Toast 안내.
+      const wallOnly: number[] = [];
+      let sheetSkipped = 0;
+      for (const f of faces) {
+        if (this.bridge.isFaceInVolume?.(f) === false) sheetSkipped++;
+        else wallOnly.push(f);
+      }
+      if (wallOnly.length === 0) {
+        Toast.info(
+          'Sheet 면은 앞/뒷면 구분이 없어 반전할 필요가 없습니다 (ADR-007 Rev 2)',
+          3500,
+        );
+        return;
+      }
+      if (sheetSkipped > 0) {
+        Toast.info(`${sheetSkipped}개 sheet 면 건너뜀 (Wall 면만 반전)`, 2500);
+      }
+      const flipped = this.bridge.flipFaces(wallOnly);
       if (flipped > 0) {
         this.syncMesh();
         Toast.info(`${flipped}개 면 반전됨`, 1800);

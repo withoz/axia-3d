@@ -170,7 +170,9 @@ function mockBridge() {
     pushPull: vi.fn().mockReturnValue(true),
     getCenterlineLines: vi.fn().mockReturnValue(null),
     getFaceVolumeFlags: vi.fn().mockReturnValue(null),
-    isFaceInVolume: vi.fn().mockReturnValue(false),
+    // Default to Wall (true) so legacy tests that don't care about
+    // classification continue to exercise wall-path behavior.
+    isFaceInVolume: vi.fn().mockReturnValue(true),
     drawCenterline: vi.fn().mockReturnValue(0),
     edgeClass: vi.fn().mockReturnValue(0),
     setEdgeClass: vi.fn().mockReturnValue(true),

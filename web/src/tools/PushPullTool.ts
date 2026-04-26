@@ -88,6 +88,21 @@ export class PushPullTool implements ITool {
         }
         this.ppNormal = new THREE.Vector3(normalArr[0], normalArr[1], normalArr[2]);
 
+        // ADR-007 Rev 2 — Sheet 의 normal 은 임의 winding 산물이므로
+        //   사용자가 클릭한 측에서 보았을 때 "drag-outward = 카메라 쪽"
+        //   직관을 유지하도록 normal 방향을 카메라 위치 기반으로 보정.
+        //   Wall 은 외부=Front 로 well-defined 이므로 보정 안 함.
+        if (this.ctx.bridge.isFaceInVolume?.(rustFaceId) === false) {
+          const cam = this.ctx.viewport.activeCamera;
+          const toCamera = new THREE.Vector3()
+            .subVectors(cam.position, hitPoint)
+            .normalize();
+          if (toCamera.dot(this.ppNormal) < 0) {
+            this.ppNormal.negate();
+            debugLog('[PP] Sheet detected — flipped normal to face camera');
+          }
+        }
+
         this.ppFaceId = rustFaceId;
         this.ppStartX = e.clientX;
         this.ppStartY = e.clientY;

@@ -51,6 +51,21 @@ export function startBooleanOp(
     return;
   }
 
+  // ADR-007 Rev 2 — Sheet 면은 inside/outside 미정의 → Boolean operand 거부.
+  //   선택 중 하나라도 Sheet 면 있으면 안내 후 중단.
+  const sheetIds: number[] = [];
+  for (const f of selection) {
+    if (bridge.isFaceInVolume?.(f) === false) sheetIds.push(f);
+  }
+  if (sheetIds.length > 0) {
+    Toast.warning(
+      `Boolean 은 닫힌 볼륨 (Wall) 면에만 사용 가능합니다.\n` +
+      `Sheet ${sheetIds.length}개 포함 — Push/Pull 로 입체화 후 다시 시도하세요.`,
+      6000,
+    );
+    return;
+  }
+
   // 간단 분리: 선택 목록의 절반을 A, 나머지를 B로 처리
   // (향후: 솔리드 단위 자동 그룹핑)
   const mid = Math.ceil(selection.length / 2);
