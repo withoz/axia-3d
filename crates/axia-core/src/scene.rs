@@ -1330,7 +1330,13 @@ impl Scene {
             let mut any_split = false;
             for face_id in candidate_faces {
                 if !self.mesh.faces.contains(face_id) { continue; }
-                let Some(chain) = self.find_mixed_cycle_chain(face_id, new_edges) else { continue };
+                // 2순위 (Tier 4 C-2) — left-turn-rule chain finder replaces
+                // the older BFS. Geometrically deterministic, picks the
+                // chain that tightly hugs the face boundary.
+                let Some(chain) = axia_geo::operations::planar_walk::find_first_left_turn_path(
+                    &self.mesh, face_id,
+                ) else { continue };
+                let _ = new_edges; // signature kept for the legacy fallback below
                 let split_res = axia_geo::operations::face_split::split_face_by_chain(
                     &mut self.mesh,
                     face_id,
@@ -1376,6 +1382,11 @@ impl Scene {
     ///      the exit.
     ///   3. Reject "chain" if the BFS fails or loops through only boundary
     ///      (would be a redundant cut).
+    /// Legacy BFS-based chain finder. Superseded by
+    /// `axia_geo::operations::planar_walk::find_first_left_turn_path`
+    /// (Tier 4 C-2 — 2026-04-26). Kept around as reference and as a
+    /// potential fallback; not currently called.
+    #[allow(dead_code)]
     fn find_mixed_cycle_chain(
         &self,
         face_id: FaceId,
