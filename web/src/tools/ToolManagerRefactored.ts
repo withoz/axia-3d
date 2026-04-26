@@ -47,6 +47,7 @@ import { DrawCenterlineTool } from './DrawCenterlineTool';
 import { SphereTool } from '../primitives/SphereTool';
 import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
+import { BoxTool } from './BoxTool';
 
 export class ToolManager {
   // 2026-04-23: private→public. KeyboardShortcuts/SnapVisual 등 외부 소비자가
@@ -227,6 +228,7 @@ export class ToolManager {
     this.tools.set('sphere', new SphereTool(this.toolContext));
     this.tools.set('cylinder', new CylinderTool(this.toolContext));
     this.tools.set('cone', new ConeTool(this.toolContext));
+    this.tools.set('box', new BoxTool(this.toolContext));
 
     this.setupMouseHandlers();
     this.setupKeyboardHandlers();
