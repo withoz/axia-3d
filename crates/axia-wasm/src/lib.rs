@@ -3525,6 +3525,52 @@ impl AxiaEngine {
         }
     }
 
+    /// Slice (Plane Cut) — split a closed Wall volume into two volumes.
+    ///
+    /// Inputs:
+    ///   `face_ids`     — face IDs of a single closed volume (one XIA).
+    ///   `origin_x/y/z` — point on the cutting plane (mm).
+    ///   `normal_x/y/z` — plane normal (any non-zero length, will be normalized).
+    ///
+    /// Returns: JSON `{ok, newXia, aboveCount, belowCount}` or `{ok:false, error}`.
+    /// On success the original XIA keeps the above half; the below half is
+    /// returned as a new XIA id.
+    #[wasm_bindgen(js_name = "sliceVolumeByPlane")]
+    pub fn slice_volume_by_plane(
+        &mut self,
+        face_ids: &[u32],
+        origin_x: f64, origin_y: f64, origin_z: f64,
+        normal_x: f64, normal_y: f64, normal_z: f64,
+    ) -> String {
+        let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();
+        let plane = match axia_geo::operations::slice::SlicePlane::new(
+            DVec3::new(origin_x, origin_y, origin_z),
+            DVec3::new(normal_x, normal_y, normal_z),
+        ) {
+            Ok(p) => p,
+            Err(e) => return format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'")),
+        };
+
+        debug_log!("[RUST] sliceVolumeByPlane: {} faces, plane n=({},{},{})",
+            fids.len(), normal_x, normal_y, normal_z);
+
+        match self.scene.slice_volume_by_plane(&fids, plane) {
+            Ok(new_xia) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                let total = self.scene.mesh.face_count();
+                format!(
+                    r#"{{"ok":true,"newXia":{},"totalFaces":{}}}"#,
+                    new_xia, total
+                )
+            }
+            Err(e) => {
+                console_error!("[RUST] sliceVolumeByPlane ERROR: {}", e);
+                format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'"))
+            }
+        }
+    }
+
     /// Sheet 2D Boolean (Tier 4 B-5).
     /// 두 coplanar Sheet face에 대해 union/subtract/intersect 수행.
     /// op: "union" | "subtract" | "intersect"

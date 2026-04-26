@@ -722,6 +722,19 @@ export class AxiaEngine {
      */
     sheetBoolean(a: number, b: number, op: string): string;
     /**
+     * Slice (Plane Cut) — split a closed Wall volume into two volumes.
+     *
+     * Inputs:
+     *   `face_ids`     — face IDs of a single closed volume (one XIA).
+     *   `origin_x/y/z` — point on the cutting plane (mm).
+     *   `normal_x/y/z` — plane normal (any non-zero length, will be normalized).
+     *
+     * Returns: JSON `{ok, newXia, aboveCount, belowCount}` or `{ok:false, error}`.
+     * On success the original XIA keeps the above half; the below half is
+     * returned as a new XIA id.
+     */
+    sliceVolumeByPlane(face_ids: Uint32Array, origin_x: number, origin_y: number, origin_z: number, normal_x: number, normal_y: number, normal_z: number): string;
+    /**
      * Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.
      *
      * For 2+ faces the user selected and explicitly asked to "merge" even
@@ -1009,6 +1022,7 @@ export interface InitOutput {
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly axiaengine_sliceVolumeByPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_softenInternalEdges: (a: number, b: number, c: number) => number;
     readonly axiaengine_splitEdge: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_splitFaceByLine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

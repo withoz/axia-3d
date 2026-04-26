@@ -22,3 +22,4 @@ pub mod array_op;
 pub mod projected_shadow;
 pub mod geometric_merge;
 pub mod polygon_geom;
+pub mod slice;

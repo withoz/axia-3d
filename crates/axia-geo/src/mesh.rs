@@ -294,6 +294,19 @@ impl Mesh {
         vid
     }
 
+    /// Insert a NEW vertex at `pos`, bypassing the spatial-hash dedup that
+    /// `add_vertex` normally performs. Used by topology-splitting operations
+    /// (e.g. Slice / Plane Cut) that need two coincident-but-independent
+    /// vertices to keep the two resulting halves topologically disjoint.
+    /// The new vertex still gets registered in the spatial hash so future
+    /// queries see it.
+    pub fn add_vertex_force_new(&mut self, pos: DVec3) -> VertId {
+        let vid = self.verts.insert(Vertex::new(pos, VERTEX_TOLERANCE));
+        let key = spatial_key(pos);
+        self.spatial_hash.entry(key).or_default().push(vid);
+        vid
+    }
+
     /// Rebuild the spatial hash from existing vertices.
     /// Call after `restore_snapshot()` since spatial_hash is not serialized.
     pub fn rebuild_spatial_hash(&mut self) {

@@ -350,6 +350,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-cylinder': setActiveTool('cylinder'); break;
       case 'tool-cone': setActiveTool('cone'); break;
       case 'tool-box': setActiveTool('box'); break;
+      case 'tool-slice': setActiveTool('slice'); break;
       case 'tool-move': setActiveTool('move'); break;
       case 'tool-rotate': setActiveTool('rotate'); break;
       case 'tool-scale': setActiveTool('scale'); break;

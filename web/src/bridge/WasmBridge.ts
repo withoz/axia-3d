@@ -267,6 +267,10 @@ type AxiaEngineExtended = AxiaEngine & {
   // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
   sheetBoolean?(a: number, b: number, op: string): string;
+  sliceVolumeByPlane?(faceIds: Uint32Array,
+    ox: number, oy: number, oz: number,
+    nx: number, ny: number, nz: number): string;
+  getXiaFaceIds?(xiaId: number): Uint32Array;
   intersectWithModel?(faceIds: Uint32Array): string;
   isFaceInVolume?(faceIdRaw: number): boolean;
   getFaceVolumeFlags?(): Uint8Array;

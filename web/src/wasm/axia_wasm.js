@@ -2110,6 +2110,44 @@ export class AxiaEngine {
         }
     }
     /**
+     * Slice (Plane Cut) — split a closed Wall volume into two volumes.
+     *
+     * Inputs:
+     *   `face_ids`     — face IDs of a single closed volume (one XIA).
+     *   `origin_x/y/z` — point on the cutting plane (mm).
+     *   `normal_x/y/z` — plane normal (any non-zero length, will be normalized).
+     *
+     * Returns: JSON `{ok, newXia, aboveCount, belowCount}` or `{ok:false, error}`.
+     * On success the original XIA keeps the above half; the below half is
+     * returned as a new XIA id.
+     * @param {Uint32Array} face_ids
+     * @param {number} origin_x
+     * @param {number} origin_y
+     * @param {number} origin_z
+     * @param {number} normal_x
+     * @param {number} normal_y
+     * @param {number} normal_z
+     * @returns {string}
+     */
+    sliceVolumeByPlane(face_ids, origin_x, origin_y, origin_z, normal_x, normal_y, normal_z) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_sliceVolumeByPlane(retptr, this.__wbg_ptr, ptr0, len0, origin_x, origin_y, origin_z, normal_x, normal_y, normal_z);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Phase D (ADR-008 Axiom 9 row 3): forced polygon-mesh merge.
      *
      * For 2+ faces the user selected and explicitly asked to "merge" even

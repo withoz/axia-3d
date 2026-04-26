@@ -279,6 +279,111 @@ impl Scene {
         }
     }
 
+    /// Slice (Plane Cut) — split a closed Wall volume into two volumes
+    /// with a cutting plane. Single-XIA only (all input faces must belong
+    /// to a single XIA = one logical volume).
+    ///
+    /// On success:
+    /// - Original XIA keeps the **above** half (above sub-walls + cap_above).
+    /// - A new XIA is created for the **below** half (below sub-walls + cap_below).
+    /// - The new XIA's name is `<original>_below` and its position is the
+    ///   centroid of the below cap.
+    ///
+    /// Returns the new XIA id (below half) on success.
+    pub fn slice_volume_by_plane(
+        &mut self,
+        face_ids: &[axia_geo::FaceId],
+        plane: axia_geo::operations::slice::SlicePlane,
+    ) -> anyhow::Result<crate::xia::XiaId> {
+        if face_ids.is_empty() {
+            anyhow::bail!("slice_volume_by_plane: empty face set");
+        }
+
+        // Determine the source XIA — must be unique across the input set.
+        let mut source_xia: Option<crate::xia::XiaId> = None;
+        for &fid in face_ids {
+            match (source_xia, self.face_to_xia.get(&fid).copied()) {
+                (None, Some(x)) => source_xia = Some(x),
+                (Some(prev), Some(x)) if prev == x => {}
+                (Some(_), Some(_)) => anyhow::bail!(
+                    "slice_volume_by_plane: input faces span multiple XIAs — \
+                    select faces from a single volume only"),
+                (_, None) => anyhow::bail!(
+                    "slice_volume_by_plane: face {:?} has no owning XIA", fid),
+            }
+        }
+        let source_xia = source_xia
+            .ok_or_else(|| anyhow::anyhow!("slice_volume_by_plane: cannot determine source XIA"))?;
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        // Run the geometric slice.
+        let mat = self.default_material;
+        let result = match self.mesh.slice_volume_by_plane(face_ids, plane, mat) {
+            Ok(r) => r,
+            Err(e) => {
+                self.transactions.cancel();
+                return Err(e);
+            }
+        };
+
+        // ── XIA management ──────────────────────────────────────────────
+        // 1. Strip original XIA's face_ids of the consumed input faces.
+        //    Some input faces still exist (split into sub-faces with same id
+        //    for the "kept" half). To avoid stale mappings we reset the XIA's
+        //    face_ids entirely from the above set.
+        for &fid in face_ids {
+            self.face_to_xia.remove(&fid);
+        }
+        // Above half — assigned to the source XIA.
+        let above_all: Vec<axia_geo::FaceId> = result.above_walls.iter()
+            .chain(result.cap_above.iter())
+            .copied()
+            .collect();
+        if let Some(xia) = self.xias.get_mut(&source_xia) {
+            xia.face_ids = above_all.clone();
+        }
+        for &f in &above_all {
+            self.face_to_xia.insert(f, source_xia);
+        }
+
+        // Below half — new XIA.
+        let below_all: Vec<axia_geo::FaceId> = result.below_walls.iter()
+            .chain(result.cap_below.iter())
+            .copied()
+            .collect();
+
+        // Centroid of below cap face(s) for position.
+        let mut centroid = glam::DVec3::ZERO;
+        let mut count = 0usize;
+        for &fid in &result.cap_below {
+            if let Ok(verts) = self.mesh.collect_loop_verts(self.mesh.faces[fid].outer().start) {
+                for v in verts {
+                    if let Some(p) = self.mesh.verts.get(v).map(|x| x.pos()) {
+                        centroid += p;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        if count > 0 { centroid /= count as f64; }
+
+        let original_name = self.xias.get(&source_xia)
+            .map(|x| x.name.clone())
+            .unwrap_or_else(|| "Volume".to_string());
+        let below_name = format!("{}_below", original_name);
+        let new_xia = self.create_xia_with_faces(below_name, centroid, below_all);
+
+        // Inherit material assignment for new faces (default already set).
+        // Future: copy any per-face material attributes from source if needed.
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        Ok(new_xia)
+    }
+
     /// "Intersect with Model" (Phase 1, ADR-008 Axiom 7 extension).
     ///
     /// 선택된 face 집합과 나머지 씬 face 사이의 3D 교차선을 edge 로 생성.

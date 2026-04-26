@@ -48,6 +48,7 @@ import { SphereTool } from '../primitives/SphereTool';
 import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
 import { BoxTool } from './BoxTool';
+import { SliceTool } from './SliceTool';
 import {
   mergeFaces, mergeFacesGeometric, mergeFacesForce,
   mergeXiaCoplanar, mergeAsHole,
@@ -234,6 +235,7 @@ export class ToolManager {
     this.tools.set('cylinder', new CylinderTool(this.toolContext));
     this.tools.set('cone', new ConeTool(this.toolContext));
     this.tools.set('box', new BoxTool(this.toolContext));
+    this.tools.set('slice', new SliceTool(this.toolContext));
 
     this.setupMouseHandlers();
     this.setupKeyboardHandlers();
