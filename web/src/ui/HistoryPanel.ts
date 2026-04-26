@@ -139,6 +139,21 @@ export class HistoryPanel {
   }
 
   private handleRerun(e: OperationEntry): void {
+    // Phase 2 — cascade warning: if this op has dependents, warn the user
+    // before re-running so they understand downstream geometry will be
+    // affected (their original outputs no longer exist after a re-run).
+    const dependents = this.log.getCascadeChain(e.id);
+    if (dependents.length > 0) {
+      const names = dependents.slice(0, 3).map(d => d.displayName).join(', ');
+      const more = dependents.length > 3 ? ` 외 ${dependents.length - 3}개` : '';
+      const ok = window.confirm(
+        `⚠️ "${e.displayName}" 재실행 시 ${dependents.length}개 후속 작업이 영향받습니다:\n` +
+        `  ${names}${more}\n\n` +
+        `Phase 2 MVP는 자동 cascade 재계산을 아직 수행하지 않습니다 — 후속 작업은\n` +
+        `별도로 다시 실행해야 합니다. 계속하시겠습니까?`
+      );
+      if (!ok) return;
+    }
     // Unified dialog flow: prompt pre-filled with last params.
     const promptLabel = this.promptLabelFor(e.kind);
     const newParams = window.prompt(promptLabel, e.params);

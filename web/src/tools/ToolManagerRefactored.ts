@@ -865,6 +865,7 @@ export class ToolManager {
           'array-linear',
           `선형 배열 ${count}회, (${dx},${dy},${dz})`,
           input,
+          { inputs: sel, outputs: newFaces },
         );
         Toast.info(`${sel.length}개 면을 ${count}회 복제 (총 ${newFaces.length}개)`, 2500);
         debugLog(`[Action] array-linear: count=${count}, offset=(${dx},${dy},${dz})`);
@@ -916,6 +917,7 @@ export class ToolManager {
           'thicken-faces',
           `두께 ${distance}mm × ${success}개 면`,
           String(distance),
+          { inputs: selFaces.slice() },
         );
         if (success === selFaces.length) {
           Toast.info(`${success}개 면에 두께 ${distance}mm 부여`, 2500);
@@ -1130,6 +1132,7 @@ export class ToolManager {
           'thicken-faces',
           `스케치 Extrude ${height}mm × ${ok}개 프로필`,
           String(height),
+          { inputs: Array.from(targets) },
         );
         Toast.info(
           `✅ 스케치 완료 — ${created}개 프로필 → ${ok}개 3D 매스 (높이 ${height}mm)`,
@@ -1283,6 +1286,7 @@ export class ToolManager {
           'array-radial',
           `원형 배열 ${count}회 · ${axisChar}축 · ${totalDeg}°`,
           input,
+          { inputs: sel, outputs: newFaces },
         );
         Toast.info(`${sel.length}개 면을 ${count}회 원형 복제 (${axisChar}축, ${totalDeg}°)`, 2500);
         debugLog(`[Action] array-radial: count=${count}, axis=${axisChar}, deg=${totalDeg}`);
@@ -1368,7 +1372,8 @@ export class ToolManager {
       if (n >= 0) {
         this.syncMesh();
         this.selection.clearSelection();
-        getOperationLog().record('chamfer-edge', `모따기 ${distance}mm`, String(distance));
+        getOperationLog().record('chamfer-edge', `모따기 ${distance}mm`, String(distance),
+          { inputs: edges.slice(0, 1) });
         Toast.info(`모따기 완료 — 거리 ${distance}mm`, 2500);
         debugLog(`[Action] chamfer-edge: distance=${distance}, n=${n}`);
       } else {
@@ -1421,6 +1426,7 @@ export class ToolManager {
           'fillet-edge',
           `모깎기 ${radius}mm × ${successEdges}개 엣지`,
           String(radius),
+          { inputs: edges.slice() },
         );
         if (successEdges === edges.length) {
           Toast.info(

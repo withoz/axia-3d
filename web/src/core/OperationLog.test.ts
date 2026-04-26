@@ -47,4 +47,57 @@ describe('OperationLog', () => {
     log.clear();
     expect(log.getAll().length).toBe(0);
   });
+
+  // ── Phase 2 — Dependency graph ──
+  it('record stores inputs/outputs (default empty)', () => {
+    const e = log.record('fillet-edge', 'a', '1');
+    expect(e.inputs).toEqual([]);
+    expect(e.outputs).toEqual([]);
+    const e2 = log.record('thicken-faces', 'b', '50',
+      { inputs: [10, 20], outputs: [100, 101] });
+    expect(e2.inputs).toEqual([10, 20]);
+    expect(e2.outputs).toEqual([100, 101]);
+  });
+
+  it('getDependents finds direct successors via output → input intersection', () => {
+    const a = log.record('thicken-faces', 'a', '10',
+      { inputs: [1], outputs: [2, 3] });
+    const b = log.record('fillet-edge', 'b', '5',
+      { inputs: [3], outputs: [4] });
+    const _c = log.record('subdivide', 'c', '2',
+      { inputs: [99], outputs: [100] }); // unrelated
+    const dep = log.getDependents(a.id);
+    expect(dep.map(e => e.id)).toEqual([b.id]);
+  });
+
+  it('getCascadeChain returns transitive closure', () => {
+    const a = log.record('thicken-faces', 'a', '10',
+      { inputs: [1], outputs: [2] });
+    const b = log.record('fillet-edge', 'b', '5',
+      { inputs: [2], outputs: [3] });
+    const c = log.record('chamfer-edge', 'c', '1',
+      { inputs: [3], outputs: [4] });
+    const chain = log.getCascadeChain(a.id);
+    expect(chain.map(e => e.id)).toEqual([b.id, c.id]);
+  });
+
+  it('findUpstream finds predecessors via input → output intersection', () => {
+    const a = log.record('thicken-faces', 'a', '10',
+      { inputs: [1], outputs: [2] });
+    const b = log.record('fillet-edge', 'b', '5',
+      { inputs: [2], outputs: [3] });
+    expect(log.findUpstream(b.id).map(e => e.id)).toEqual([a.id]);
+    expect(log.findUpstream(a.id)).toEqual([]);
+  });
+
+  it('getDependents handles multiple branches', () => {
+    const a = log.record('thicken-faces', 'a', '10',
+      { inputs: [1], outputs: [2, 3] });
+    const b = log.record('fillet-edge', 'b', '5',
+      { inputs: [2], outputs: [10] });
+    const c = log.record('chamfer-edge', 'c', '1',
+      { inputs: [3], outputs: [11] });
+    const dep = log.getDependents(a.id);
+    expect(dep.map(e => e.id).sort()).toEqual([b.id, c.id].sort());
+  });
 });
