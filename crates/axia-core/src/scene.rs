@@ -2197,7 +2197,17 @@ impl Scene {
     /// 구조적 invariant 만 fail 로 취급. 이로써 단일 sheet 가 포함된
     /// 씬도 strict 저장이 가능해진다 (이전엔 sheet winding 임의 방향
     /// 으로 인해 거의 무조건 거부됐음).
-    pub fn export_versioned_snapshot_strict(&self) -> Result<Vec<u8>> {
+    pub fn export_versioned_snapshot_strict(&mut self) -> Result<Vec<u8>> {
+        // ADR-007 Rev 2 Phase B-3 — Auto-correct cached face.normal to
+        //   match current winding before strict checking. winding 은
+        //   single source of truth; stale 캐시는 silent fix.
+        let fixed = self.mesh.reconcile_face_normals();
+        if fixed > 0 {
+            // Caller can log this for transparency. We don't fail just
+            //   because some normals were stale — they're now correct.
+            #[cfg(debug_assertions)]
+            eprintln!("[strict-export] reconciled {} face normals", fixed);
+        }
         let report = self.mesh.verify_face_invariants_rev2();
         if !report.is_valid() {
             anyhow::bail!(
@@ -2245,14 +2255,23 @@ impl Scene {
                      Orphan recovery recommended.",
                     self.mesh.face_count(),
                 );
+                // ADR-007 Rev 2 Phase B-4 — Post-import: reconcile
+                //   cached normals to match winding, then verify with
+                //   the Rev 2 (sheet-aware) reporter.
+                let fixed = self.mesh.reconcile_face_normals();
                 #[cfg(debug_assertions)]
                 {
-                    let report = self.mesh.verify_face_invariants();
+                    if fixed > 0 {
+                        eprintln!("[ADR-007] Post-import: reconciled {} face normals", fixed);
+                    }
+                    let report = self.mesh.verify_face_invariants_rev2();
                     if !report.is_valid() {
                         eprintln!("[ADR-007] Post-import invariant violations:\n{}",
                             report.summary());
                     }
                 }
+                let _ = fixed; // silence unused in release
+
                 Ok(())
             }
             2 => {
@@ -2270,14 +2289,23 @@ impl Scene {
                 }
                 let payload = &data[16..16+payload_len];
                 self.restore_scene_snapshot(payload);
+                // ADR-007 Rev 2 Phase B-4 — Post-import: reconcile
+                //   cached normals to match winding, then verify with
+                //   the Rev 2 (sheet-aware) reporter.
+                let fixed = self.mesh.reconcile_face_normals();
                 #[cfg(debug_assertions)]
                 {
-                    let report = self.mesh.verify_face_invariants();
+                    if fixed > 0 {
+                        eprintln!("[ADR-007] Post-import: reconciled {} face normals", fixed);
+                    }
+                    let report = self.mesh.verify_face_invariants_rev2();
                     if !report.is_valid() {
                         eprintln!("[ADR-007] Post-import invariant violations:\n{}",
                             report.summary());
                     }
                 }
+                let _ = fixed; // silence unused in release
+
                 Ok(())
             }
             v => anyhow::bail!(
@@ -2289,14 +2317,20 @@ impl Scene {
     /// Import legacy snapshot format (no version header, direct bincode)
     fn import_legacy_snapshot(&mut self, data: &[u8]) -> Result<()> {
         self.mesh = bincode::deserialize(data)?;
+        // Rev 2 Phase B-4 — same reconcile + sheet-aware verify path.
+        let fixed = self.mesh.reconcile_face_normals();
         #[cfg(debug_assertions)]
         {
-            let report = self.mesh.verify_face_invariants();
+            if fixed > 0 {
+                eprintln!("[ADR-007] Legacy-import: reconciled {} face normals", fixed);
+            }
+            let report = self.mesh.verify_face_invariants_rev2();
             if !report.is_valid() {
                 eprintln!("[ADR-007] Legacy-import invariant violations:\n{}",
                     report.summary());
             }
         }
+        let _ = fixed;
         Ok(())
     }
 }

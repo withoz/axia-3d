@@ -106,6 +106,52 @@ fn rev2_invariant_filters_sheet_winding_violations() {
     assert_eq!(r2.checked_faces, r1.checked_faces);
 }
 
+/// ADR-007 Rev 2 Phase B-3 — reconcile_face_normals re-syncs cached
+/// normal to current winding. After flipping winding manually, the
+/// stored cache becomes wrong; reconcile fixes it silently.
+#[test]
+fn reconcile_face_normals_fixes_stale_cache() {
+    let mut mesh = Mesh::new();
+    let m = MaterialId::new(0);
+    let v0 = mesh.add_vertex(DVec3::new(-500.0, -500.0, 0.0));
+    let v1 = mesh.add_vertex(DVec3::new( 500.0, -500.0, 0.0));
+    let v2 = mesh.add_vertex(DVec3::new( 500.0,  500.0, 0.0));
+    let v3 = mesh.add_vertex(DVec3::new(-500.0,  500.0, 0.0));
+    let fid = mesh.add_face(&[v0, v1, v2, v3], m).unwrap();
+
+    // Forcibly corrupt the cache: store opposite normal.
+    let stored = mesh.faces[fid].normal();
+    mesh.faces[fid].set_normal(-stored);
+
+    // Verifier should flag cache mismatch.
+    let r1 = mesh.verify_face_invariants();
+    assert!(!r1.is_valid(),
+        "after corruption verifier must flag winding mismatch; report={:?}",
+        r1.violations);
+
+    // Reconcile re-syncs.
+    let fixed = mesh.reconcile_face_normals();
+    assert_eq!(fixed, 1, "exactly one face needed reconcile");
+
+    // Now both verifiers pass.
+    let r2 = mesh.verify_face_invariants();
+    assert!(r2.is_valid(), "after reconcile no violations: {:?}", r2.violations);
+}
+
+/// reconcile is a no-op when caches already match winding.
+#[test]
+fn reconcile_face_normals_noop_when_clean() {
+    let mut mesh = Mesh::new();
+    let m = MaterialId::new(0);
+    let v0 = mesh.add_vertex(DVec3::new(-500.0, -500.0, 0.0));
+    let v1 = mesh.add_vertex(DVec3::new( 500.0, -500.0, 0.0));
+    let v2 = mesh.add_vertex(DVec3::new( 500.0,  500.0, 0.0));
+    let v3 = mesh.add_vertex(DVec3::new(-500.0,  500.0, 0.0));
+    let _ = mesh.add_face(&[v0, v1, v2, v3], m).unwrap();
+    let fixed = mesh.reconcile_face_normals();
+    assert_eq!(fixed, 0, "fresh face has consistent normal cache, no fix needed");
+}
+
 #[test]
 fn deactivated_rect_classifies_as_not_in_volume() {
     let mut mesh = Mesh::new();

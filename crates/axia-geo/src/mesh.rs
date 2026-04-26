@@ -4236,6 +4236,50 @@ impl Mesh {
         }
     }
 
+    /// ADR-007 Rev 2 Phase B-3 — Recompute every active face's cached
+    /// `normal` from its current outer-loop winding and write it back.
+    ///
+    /// Acts as the "auto-correct on save" step described in the ADR:
+    /// the winding is the single source of truth (Principle 3), so any
+    /// stale cached normal that disagrees with topology gets silently
+    /// fixed before serialization. Wall and Sheet faces are treated
+    /// the same here — the cache should always match topology.
+    ///
+    /// Returns the count of faces whose cached normal was changed.
+    /// Caller can log this for transparency.
+    ///
+    /// Use this *before* `export_versioned_snapshot()` /
+    /// `export_versioned_snapshot_strict()` when you want the
+    /// resulting bytes to round-trip cleanly through the Rev 2
+    /// invariant verifier.
+    pub fn reconcile_face_normals(&mut self) -> usize {
+        let active: Vec<FaceId> = self.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        let mut changed = 0usize;
+        for fid in active {
+            let outer_start = self.faces[fid].outer().start;
+            if outer_start.is_null() { continue; }
+            let Ok(verts) = self.collect_loop_verts(outer_start) else { continue; };
+            if verts.len() < 3 { continue; }
+            let Ok(computed) = self.compute_normal(&verts) else { continue; };
+            if computed.length_squared() < 1e-10 { continue; }
+            let stored = self.faces[fid].normal();
+            // Only write if direction actually disagrees (avoids touching
+            // every face every save when nothing's wrong).
+            let stored_n = stored.normalize_or_zero();
+            let computed_n = computed.normalize_or_zero();
+            if stored_n.length_squared() < 1e-10
+                || stored_n.dot(computed_n) < 0.999
+            {
+                self.faces[fid].set_normal(computed);
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     /// ADR-007 Rev 2 — Sheet-aware invariant report.
     ///
     /// `verify_face_invariants` 의 결과 중 Wall 면에 적용되는 winding-기반
