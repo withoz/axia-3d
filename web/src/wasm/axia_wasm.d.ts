@@ -276,6 +276,12 @@ export class AxiaEngine {
      */
     filletEdge(edge_id_raw: number, radius: number, segments: number): number;
     /**
+     * Diagnose non-manifold edges (ADR-007 I5) without modifying the
+     * scene. Returns JSON: `{count, edges:[{edge, faceCount}, …]}`.
+     * Useful for the UI's "씬 무결성 검사" command.
+     */
+    findNonManifoldEdges(): string;
+    /**
      * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
      *
      * Flips orientation of the given faces. Locked (inside grouped/component)
@@ -651,6 +657,12 @@ export class AxiaEngine {
      */
     rename_group(group_id: number, new_name: string): boolean;
     /**
+     * Repair non-manifold edges (ADR-007 I5) — XIA-aware where possible,
+     * geometric fallback otherwise. Returns JSON report:
+     * `{ok, edgesExamined, edgesRepaired, edgesSkipped, facesDetached, vertsCreated}`.
+     */
+    repairNonManifoldEdges(): string;
+    /**
      * Re-solve all active constraints. Returns number of constraints that
      * actually moved geometry.
      */
@@ -943,6 +955,7 @@ export interface InitOutput {
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_findNonManifoldEdges: (a: number, b: number) => void;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_getAutoIntersectOnDraw: (a: number) => number;
     readonly axiaengine_getCacheVersion: (a: number) => number;
@@ -1009,6 +1022,7 @@ export interface InitOutput {
     readonly axiaengine_remove_faces_from_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_remove_material: (a: number, b: number, c: number) => number;
     readonly axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_repairNonManifoldEdges: (a: number, b: number) => void;
     readonly axiaengine_resolveAllConstraints: (a: number) => number;
     readonly axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_revolveProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;

@@ -3525,6 +3525,51 @@ impl AxiaEngine {
         }
     }
 
+    /// Diagnose non-manifold edges (ADR-007 I5) without modifying the
+    /// scene. Returns JSON: `{count, edges:[{edge, faceCount}, …]}`.
+    /// Useful for the UI's "씬 무결성 검사" command.
+    #[wasm_bindgen(js_name = "findNonManifoldEdges")]
+    pub fn find_non_manifold_edges(&self) -> String {
+        let bad = self.scene.mesh.find_non_manifold_edges();
+        let mut out = String::from("{\"count\":");
+        out.push_str(&bad.len().to_string());
+        out.push_str(",\"edges\":[");
+        for (i, nm) in bad.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            out.push_str(&format!(
+                r#"{{"edge":{},"faceCount":{}}}"#,
+                nm.edge.raw(), nm.faces.len()
+            ));
+        }
+        out.push_str("]}");
+        out
+    }
+
+    /// Repair non-manifold edges (ADR-007 I5) — XIA-aware where possible,
+    /// geometric fallback otherwise. Returns JSON report:
+    /// `{ok, edgesExamined, edgesRepaired, edgesSkipped, facesDetached, vertsCreated}`.
+    #[wasm_bindgen(js_name = "repairNonManifoldEdges")]
+    pub fn repair_non_manifold_edges(&mut self) -> String {
+        // Wrap in transaction so the user can undo a repair.
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let r = self.scene.repair_non_manifold_edges();
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        if r.faces_detached > 0 {
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        }
+
+        format!(
+            r#"{{"ok":true,"edgesExamined":{},"edgesRepaired":{},"edgesSkipped":{},"facesDetached":{},"vertsCreated":{}}}"#,
+            r.edges_examined, r.edges_repaired, r.edges_skipped.len(),
+            r.faces_detached, r.vertices_created,
+        )
+    }
+
     /// Slice (Plane Cut) — split a closed Wall volume into two volumes.
     ///
     /// Inputs:

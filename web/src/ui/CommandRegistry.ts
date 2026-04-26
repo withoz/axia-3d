@@ -222,6 +222,59 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
     },
   });
 
+  // 1순위 (2026-04-26) — non-manifold edge 진단 및 자동 수리.
+  commandInput.registerHandler({
+    name: 'repair',
+    aliases: ['fix-mesh'],
+    help: '비-manifold edge (3+ face) 자동 수리. 사용: repair [diag|fix]',
+    execute: (args) => {
+      const sub = (args[0] || 'fix').toLowerCase();
+      const engine = bridge.engine as any;
+      if (sub === 'diag' || sub === 'check') {
+        if (!engine?.findNonManifoldEdges) {
+          commandInput.printError('repair: WASM에 findNonManifoldEdges 미노출 — rebuild 필요');
+          return;
+        }
+        const json = engine.findNonManifoldEdges();
+        const result = JSON.parse(json);
+        if (result.count === 0) {
+          commandInput.printSuccess('✓ 비-manifold edge 0개 — 메시 깨끗');
+        } else {
+          const sample = result.edges.slice(0, 5).map((e: any) =>
+            `edge ${e.edge}: ${e.faceCount} faces`).join('\n  ');
+          const more = result.edges.length > 5 ? `\n  ... (+${result.edges.length - 5} more)` : '';
+          commandInput.printError(
+            `✗ 비-manifold edge ${result.count}개:\n  ${sample}${more}\n` +
+            `  → "repair fix" 명령으로 자동 수리`
+          );
+        }
+        return;
+      }
+      // Default = fix
+      if (!engine?.repairNonManifoldEdges) {
+        commandInput.printError('repair: WASM에 repairNonManifoldEdges 미노출 — rebuild 필요');
+        return;
+      }
+      const json = engine.repairNonManifoldEdges();
+      const r = JSON.parse(json);
+      bridge.markDirty();
+      const tm = (window as any).__axia?.services?.get?.('toolManager');
+      tm?.syncMesh?.();
+      if (r.facesDetached === 0) {
+        commandInput.printSuccess(
+          `✓ 수리할 non-manifold edge 없음 (검사 ${r.edgesExamined}개)`
+        );
+      } else {
+        commandInput.printSuccess(
+          `✓ 수리 완료: edge ${r.edgesRepaired}개 정리, ` +
+          `${r.facesDetached}개 face 분리, ` +
+          `${r.vertsCreated}개 vertex 복제` +
+          (r.edgesSkipped > 0 ? ` (${r.edgesSkipped}개 skip)` : '')
+        );
+      }
+    },
+  });
+
   // ADR-007 Phase 4 — CAD 모드 (single-sided 렌더) 토글
   commandInput.registerHandler({
     name: 'cadmode',

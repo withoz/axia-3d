@@ -781,6 +781,28 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * Diagnose non-manifold edges (ADR-007 I5) without modifying the
+     * scene. Returns JSON: `{count, edges:[{edge, faceCount}, …]}`.
+     * Useful for the UI's "씬 무결성 검사" command.
+     * @returns {string}
+     */
+    findNonManifoldEdges() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_findNonManifoldEdges(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
      *
      * Flips orientation of the given faces. Locked (inside grouped/component)
@@ -1893,6 +1915,28 @@ export class AxiaEngine {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_rename_group(this.__wbg_ptr, group_id, ptr0, len0);
         return ret !== 0;
+    }
+    /**
+     * Repair non-manifold edges (ADR-007 I5) — XIA-aware where possible,
+     * geometric fallback otherwise. Returns JSON report:
+     * `{ok, edgesExamined, edgesRepaired, edgesSkipped, facesDetached, vertsCreated}`.
+     * @returns {string}
+     */
+    repairNonManifoldEdges() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_repairNonManifoldEdges(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Re-solve all active constraints. Returns number of constraints that

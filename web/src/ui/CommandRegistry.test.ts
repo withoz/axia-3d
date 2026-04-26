@@ -39,7 +39,7 @@ describe('CommandRegistry', () => {
 
   describe('initCommandRegistry', () => {
     it('registers all Phase H+I + prior handlers', () => {
-      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(10);
+      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(11);
       const calls = (deps.commandInput.registerHandler as any).mock.calls;
       const names = calls.map((c: any) => c[0].name);
       expect(names).toContain('line');
@@ -52,6 +52,7 @@ describe('CommandRegistry', () => {
       expect(names).toContain('synthfaces');
       expect(names).toContain('verify');
       expect(names).toContain('help');
+      expect(names).toContain('repair');
     });
   });
 

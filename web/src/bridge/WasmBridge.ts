@@ -225,6 +225,8 @@ type AxiaEngineExtended = AxiaEngine & {
   // Phase H — Import Normalizer (ADR-007 Barrier)
   normalizeForImport?(optionsJson: string): string;
   verifyInvariants?(): string;
+  findNonManifoldEdges?(): string;
+  repairNonManifoldEdges?(): string;
   verifyOutwardNormals?(): string;
   exportSnapshotStrict?(): Uint8Array;
   synthesizeFacesFromFreeEdges?(): number;

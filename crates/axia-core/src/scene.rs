@@ -384,6 +384,114 @@ impl Scene {
         Ok(new_xia)
     }
 
+    /// Scene-level repair of non-manifold edges (ADR-007 I5).
+    ///
+    /// Strategy (XIA-aware, with geometric fallback):
+    /// 1. Find every active edge with > 2 active incident faces.
+    /// 2. Group those faces by owning XIA. The "anchor" group is the
+    ///    XIA contributing the most faces to the edge (ties broken by
+    ///    smallest XIA id). All other faces are detached using
+    ///    `Mesh::detach_face_groups`, duplicating any vertex shared
+    ///    with the anchor group.
+    /// 3. After XIA-aware repair, run a final geometric pass to mop up
+    ///    any edges where all incident faces share the same XIA (rare —
+    ///    indicates a single tool produced bad topology).
+    /// 4. Refresh face_to_xia for any faces that got remapped during
+    ///    detachment, and run reconcile_face_normals.
+    ///
+    /// Returns a report summarising what changed. Always succeeds — if
+    /// some edges cannot be repaired the report lists them.
+    pub fn repair_non_manifold_edges(&mut self) -> axia_geo::operations::repair::RepairReport {
+        use axia_geo::operations::repair::RepairReport;
+        let mut report = RepairReport::default();
+
+        let bad = self.mesh.find_non_manifold_edges();
+        report.edges_examined = bad.len();
+        if bad.is_empty() {
+            return report;
+        }
+
+        for nm in bad {
+            // Re-fetch after earlier passes.
+            if !self.mesh.edges.contains(nm.edge) ||
+               !self.mesh.edges[nm.edge].is_active() {
+                continue;
+            }
+            let (cur_faces, _) = self.mesh.get_faces_sharing_edge(nm.edge);
+            if cur_faces.len() <= 2 { continue; }
+
+            // Group by XIA.
+            use std::collections::HashMap;
+            let mut by_xia: HashMap<Option<crate::xia::XiaId>, Vec<axia_geo::FaceId>> = HashMap::new();
+            for &f in &cur_faces {
+                let xid = self.face_to_xia.get(&f).copied();
+                by_xia.entry(xid).or_default().push(f);
+            }
+
+            // Pick anchor: group with most faces. Ties → smallest XIA id, None last.
+            let mut groups: Vec<(_, _)> = by_xia.into_iter().collect();
+            groups.sort_by(|a, b| {
+                b.1.len().cmp(&a.1.len())
+                    .then_with(|| match (a.0, b.0) {
+                        (Some(ax), Some(bx)) => ax.cmp(&bx),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => std::cmp::Ordering::Equal,
+                    })
+            });
+            let (_anchor_xia, anchor_faces) = groups.remove(0);
+
+            // Detach each remaining group from anchor. After detachment a
+            // group's face ids may change — update face_to_xia.
+            for (group_xia, group_faces) in &groups {
+                match self.mesh.detach_face_groups(&anchor_faces, group_faces) {
+                    Ok((mapping, n_verts)) => {
+                        report.faces_detached += group_faces.len();
+                        report.vertices_created += n_verts;
+                        // Re-route face_to_xia for any face that got remapped.
+                        for &(old_fid, new_fid) in &mapping {
+                            if old_fid == new_fid { continue; }
+                            // Remove old, register new under same XIA (if any).
+                            if let Some(xid) = self.face_to_xia.remove(&old_fid) {
+                                self.face_to_xia.insert(new_fid, xid);
+                                if let Some(xia) = self.xias.get_mut(&xid) {
+                                    for f in xia.face_ids.iter_mut() {
+                                        if *f == old_fid { *f = new_fid; }
+                                    }
+                                }
+                            } else if let Some(xid) = group_xia {
+                                // Group's faces had no entry in face_to_xia
+                                // (orphan) but their XIA exists — re-link.
+                                self.face_to_xia.insert(new_fid, *xid);
+                                if let Some(xia) = self.xias.get_mut(xid) {
+                                    if !xia.face_ids.contains(&new_fid) {
+                                        xia.face_ids.push(new_fid);
+                                    }
+                                    xia.face_ids.retain(|f| *f != old_fid);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        report.edges_skipped.push((nm.edge,
+                            format!("XIA-aware detach failed: {}", e)));
+                    }
+                }
+            }
+            report.edges_repaired += 1;
+        }
+
+        // Final geometric mop-up — handles single-XIA edges with > 2 faces
+        // (rare but possible if an op left a self-non-manifold body).
+        let geo = self.mesh.repair_non_manifold_edges_geometric();
+        report.faces_detached += geo.faces_detached;
+        report.vertices_created += geo.vertices_created;
+        report.edges_repaired += geo.edges_repaired;
+        for s in geo.edges_skipped { report.edges_skipped.push(s); }
+
+        report
+    }
+
     /// "Intersect with Model" (Phase 1, ADR-008 Axiom 7 extension).
     ///
     /// 선택된 face 집합과 나머지 씬 face 사이의 3D 교차선을 edge 로 생성.
@@ -2312,6 +2420,14 @@ impl Scene {
             //   because some normals were stale — they're now correct.
             #[cfg(debug_assertions)]
             eprintln!("[strict-export] reconciled {} face normals", fixed);
+        }
+        // 1순위 정책 — non-manifold edges 도 silent auto-repair (ADR-007 I5).
+        // XIA 그룹 정보를 활용한 의미-인지 repair 가 가능하면 그쪽 우선,
+        // 그 외는 geometric 폴백.
+        let nm_report = self.repair_non_manifold_edges();
+        if nm_report.faces_detached > 0 {
+            #[cfg(debug_assertions)]
+            eprintln!("[strict-export] repaired non-manifold: {}", nm_report.summary());
         }
         let report = self.mesh.verify_face_invariants_rev2();
         if !report.is_valid() {
