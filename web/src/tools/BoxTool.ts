@@ -51,14 +51,17 @@ export class BoxTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(_e: MouseEvent, point: THREE.Vector3 | null): void {
-    if (!point) return;
+  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+    // For phases 1-2 we need the snapped 3D point. Phase 3 uses ray
+    //   projection and doesn't require a `point`.
+    if (this.phase !== 'awaiting_height' && !point) return;
     if (this.phase === 'idle') {
+      if (!point) return;
       this.corner1 = point.clone();
       this.phase = 'awaiting_corner2';
       debugLog('[Box] click 1 — corner1', this.corner1.toArray());
     } else if (this.phase === 'awaiting_corner2') {
-      if (!this.corner1) return;
+      if (!this.corner1 || !point) return;
       // Snap corner2 to same Y as corner1 (rectangle is on a horizontal plane).
       const c2 = point.clone();
       c2.y = this.corner1.y;
@@ -72,12 +75,15 @@ export class BoxTool implements ITool {
       debugLog('[Box] click 2 — corner2', this.corner2.toArray());
     } else if (this.phase === 'awaiting_height') {
       if (!this.corner1 || !this.corner2) return;
-      const height = Math.abs(point.y - this.corner1.y);
-      if (height < 0.5) {
+      // Use the same ray-vs-vertical-line projection that drives the
+      //   live preview so the click commits to whatever the user is
+      //   visually seeing. Sign preserved (negative = box grows down).
+      const h = this.heightFromCursor(e);
+      if (Math.abs(h) < 0.5) {
         Toast.warning('높이가 0 입니다 — 위/아래로 이동 후 다시 클릭');
         return;
       }
-      this.commit(height);
+      this.commit(h);
     }
   }
 
@@ -87,17 +93,53 @@ export class BoxTool implements ITool {
       c2.y = this.corner1.y;
       this.updateRectPreview(this.corner1, c2);
     } else if (this.phase === 'awaiting_height' && this.corner1 && this.corner2) {
-      // Use ray vs vertical plane through corner2 to derive height.
-      // Simpler: take cursor 3D Y (free space) — but if no point, fall back.
-      let h = 0;
-      if (point) {
-        h = point.y - this.corner1.y;
-      } else {
-        // Cursor on ground plane (no mesh) — use raw screen Y delta heuristic.
-        h = -(e.clientY - (e.target as HTMLElement).getBoundingClientRect().top) * 5;
-      }
+      // ground point.y = corner1.y 이므로 그것만으론 height 변화 없음.
+      // 마우스 → 카메라 ray 를 사각형 중심을 지나는 수직선(world Y 축)에
+      // 투영해 Y(=height) 도출. 직관적: cursor 가 화면에서 위로 가면 box
+      // 가 위로 자라남.
+      const h = this.heightFromCursor(e);
       this.updateBoxPreview(this.corner1, this.corner2, h);
     }
+  }
+
+  /** Phase 3 — derive box height from cursor screen position by
+   *  projecting the camera ray onto the vertical line through the
+   *  rectangle's center. Returns world-Y delta from corner1. */
+  private heightFromCursor(e: MouseEvent): number {
+    if (!this.corner1 || !this.corner2) return 0;
+    const viewport = this.ctx.viewport;
+    const camera = viewport.activeCamera;
+    const rect = viewport.renderer.domElement.getBoundingClientRect();
+    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Build ray from camera through cursor.
+    const rayDir = new THREE.Vector3(ndcX, ndcY, 0.5)
+      .unproject(camera as THREE.PerspectiveCamera)
+      .sub(camera.position)
+      .normalize();
+    const rayOrigin = camera.position.clone();
+
+    // Vertical line through rectangle center (world Y axis at midpoint).
+    const cx = (this.corner1.x + this.corner2.x) * 0.5;
+    const cz = (this.corner1.z + this.corner2.z) * 0.5;
+    const lineOrigin = new THREE.Vector3(cx, this.corner1.y, cz);
+    const lineDir = new THREE.Vector3(0, 1, 0);
+
+    // Closest point on the line to the ray (skew-line-distance closed form).
+    //   p1 = rayOrigin, d1 = rayDir
+    //   p2 = lineOrigin, d2 = lineDir
+    //   t2 minimises distance; we want lineOrigin + t2*lineDir
+    const w0 = rayOrigin.clone().sub(lineOrigin);
+    const a = rayDir.dot(rayDir);     // 1 (unit)
+    const b = rayDir.dot(lineDir);
+    const c = lineDir.dot(lineDir);   // 1 (unit)
+    const d = rayDir.dot(w0);
+    const e2 = lineDir.dot(w0);
+    const denom = a * c - b * b;
+    if (Math.abs(denom) < 1e-6) return 0; // ray parallel to line — no height change
+    const t2 = (a * e2 - b * d) / denom;
+    return t2; // Y delta from corner1.y along world Y
   }
 
   onKeyDown(e: KeyboardEvent): void {
@@ -124,14 +166,16 @@ export class BoxTool implements ITool {
     const maxZ = Math.max(this.corner1.z, this.corner2.z);
     const w = maxX - minX;
     const d = maxZ - minZ;
-    const h = height;
-    if (w < 0.5 || d < 0.5 || h < 0.5) {
-      Toast.warning(`박스 크기가 너무 작습니다 (${w.toFixed(1)} × ${d.toFixed(1)} × ${h.toFixed(1)})`);
+    const absH = Math.abs(height);
+    if (w < 0.5 || d < 0.5 || absH < 0.5) {
+      Toast.warning(`박스 크기가 너무 작습니다 (${w.toFixed(1)} × ${d.toFixed(1)} × ${absH.toFixed(1)})`);
       return;
     }
     const cx = (minX + maxX) * 0.5;
-    const cy = this.corner1.y + h * 0.5;
+    // Signed height: negative grows the box downward from corner1.
+    const cy = this.corner1.y + height * 0.5;
     const cz = (minZ + maxZ) * 0.5;
+    const h = absH;
 
     debugLog(`[Box] commit center=(${cx},${cy},${cz}) size=${w}×${h}×${d}`);
 
