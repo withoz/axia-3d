@@ -474,6 +474,10 @@ impl AxiaEngine {
         segments: u32,
     ) -> f64 {
         let position = DVec3::new(cx, cy, cz);
+        // ADR-007 Rev 2 Tier 3 — transaction + auto-intersect for primitives.
+        self.scene.transactions.begin();
+        let before = self.scene.scene_snapshot();
+        self.scene.transactions.set_before_snapshot(before);
         match self.scene.mesh.create_cylinder(
             position,
             radius,
@@ -490,6 +494,12 @@ impl AxiaEngine {
                     position,
                     faces.clone(),
                 );
+                if self.scene.auto_intersect_on_draw {
+                    let _ = self.scene.intersect_faces_inner(&faces);
+                }
+                let after = self.scene.scene_snapshot();
+                self.scene.transactions.set_after_snapshot(after);
+                self.scene.transactions.commit();
                 if let Some(&base_face) = faces.first() {
                     debug_log!("[RUST] create_cylinder: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
                     base_face.raw() as f64
@@ -498,6 +508,7 @@ impl AxiaEngine {
                 }
             }
             Err(e) => {
+                self.scene.transactions.cancel();
                 console_error!("[RUST] create_cylinder error: {}", e);
                 -1.0
             }
@@ -513,6 +524,10 @@ impl AxiaEngine {
         segments: u32,
     ) -> f64 {
         let position = DVec3::new(cx, cy, cz);
+        // Tier 3 — transaction + auto-intersect.
+        self.scene.transactions.begin();
+        let before = self.scene.scene_snapshot();
+        self.scene.transactions.set_before_snapshot(before);
         match self.scene.mesh.create_cone(
             position,
             radius,
@@ -523,12 +538,17 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
-                // XIA 생성 — state는 face_ids.len()에서 자동 계산
                 let xia_id = self.scene.create_xia_with_faces(
                     "Cone".to_string(),
                     position,
                     faces.clone(),
                 );
+                if self.scene.auto_intersect_on_draw {
+                    let _ = self.scene.intersect_faces_inner(&faces);
+                }
+                let after = self.scene.scene_snapshot();
+                self.scene.transactions.set_after_snapshot(after);
+                self.scene.transactions.commit();
                 if let Some(&base_face) = faces.first() {
                     debug_log!("[RUST] create_cone: faces={} base_id={} xia={}", faces.len(), base_face.raw(), xia_id);
                     base_face.raw() as f64
@@ -537,6 +557,7 @@ impl AxiaEngine {
                 }
             }
             Err(e) => {
+                self.scene.transactions.cancel();
                 console_error!("[RUST] create_cone error: {}", e);
                 -1.0
             }
@@ -553,6 +574,10 @@ impl AxiaEngine {
         v_segments: u32,
     ) -> f64 {
         let position = DVec3::new(cx, cy, cz);
+        // Tier 3 — transaction + auto-intersect.
+        self.scene.transactions.begin();
+        let before = self.scene.scene_snapshot();
+        self.scene.transactions.set_before_snapshot(before);
         match self.scene.mesh.create_sphere(
             position,
             radius,
@@ -563,12 +588,17 @@ impl AxiaEngine {
             Ok(faces) => {
                 self.mark_topology_changed();
                 self.invalidate_cache();
-                // XIA 생성 — state는 face_ids.len()에서 자동 계산
                 let xia_id = self.scene.create_xia_with_faces(
                     "Sphere".to_string(),
                     position,
                     faces.clone(),
                 );
+                if self.scene.auto_intersect_on_draw {
+                    let _ = self.scene.intersect_faces_inner(&faces);
+                }
+                let after = self.scene.scene_snapshot();
+                self.scene.transactions.set_after_snapshot(after);
+                self.scene.transactions.commit();
                 if let Some(&first_face) = faces.first() {
                     debug_log!("[RUST] create_sphere: faces={} first_id={} xia={}", faces.len(), first_face.raw(), xia_id);
                     first_face.raw() as f64
@@ -577,6 +607,7 @@ impl AxiaEngine {
                 }
             }
             Err(e) => {
+                self.scene.transactions.cancel();
                 console_error!("[RUST] create_sphere error: {}", e);
                 -1.0
             }
