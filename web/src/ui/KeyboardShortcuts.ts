@@ -257,6 +257,13 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
     if (e.key === 'ArrowLeft')  { e.preventDefault(); toolManager.setAxisLock('z'); return; }
     if (e.key === 'ArrowDown')  { e.preventDefault(); toolManager.setAxisLock(null); return; }
 
+    // Shift+S: 스케치 자동 평면 감지 (Phase 4).
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'S' || e.key === 's')) {
+      e.preventDefault();
+      toolManager.executeAction('sketch-start-auto');
+      return;
+    }
+
     // Ctrl+S: 저장
     if (e.ctrlKey && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();

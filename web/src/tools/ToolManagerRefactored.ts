@@ -393,6 +393,9 @@ export class ToolManager {
     'sketch-start-xy': '스케치 시작 — XY 정면 평면',
     'sketch-start-yz': '스케치 시작 — YZ 측면 평면',
     'sketch-start-face': '스케치 시작 — 선택 면',
+    'sketch-start-auto': '스케치 시작 — 자동 평면 감지',
+    'sketch-align-up': '스케치 up 방향을 카메라에 정렬',
+    'sketch-resume-last': '마지막 스케치 평면 재진입',
     'sketch-exit': '스케치 종료',
     'convert-to-centerline': '선택 엣지 → 중심선 변환',
     'convert-to-geometry': '선택 엣지 → 일반선 변환',
@@ -988,6 +991,31 @@ export class ToolManager {
         up,
       });
       Toast.info(`✏️ 스케치 시작 — 면 #${faces[0]}. 모든 드로잉이 이 평면에 고정됩니다.`, 4000);
+    } else if (action === 'sketch-start-auto') {
+      // Phase 4 — auto-detect 평면.
+      this.startSketchAuto();
+    } else if (action === 'sketch-align-up') {
+      this.alignSketchUpToCamera();
+    } else if (action === 'sketch-resume-last') {
+      try {
+        const raw = localStorage.getItem('axia.sketch.lastPlane');
+        if (!raw) {
+          Toast.warning('이전에 사용한 스케치 평면 정보가 없습니다', 2500);
+          return;
+        }
+        const data = JSON.parse(raw) as {
+          label: string; origin: number[]; normal: number[]; up: number[];
+        };
+        this.enterSketch({
+          label: `${data.label} (재개)`,
+          origin: new THREE.Vector3().fromArray(data.origin),
+          normal: new THREE.Vector3().fromArray(data.normal),
+          up: new THREE.Vector3().fromArray(data.up),
+        });
+        Toast.info(`✏️ 스케치 재개 — ${data.label}`, 3000);
+      } catch (e) {
+        Toast.error(`스케치 재개 실패: ${String(e)}`, 3000);
+      }
     } else if (action === 'convert-to-centerline' || action === 'convert-to-geometry') {
       // 선택된 엣지들의 class를 일괄 flip. Geometry → Centerline은 face를
       // 감싸는 엣지는 Rust에서 거부됨 (dangling face 방지).
@@ -2030,12 +2058,71 @@ export class ToolManager {
     this.viewport.setSketchPlaneVisual(this._sketch);
     // 툴바 배지 (DOM status bar 내부 요소) 갱신.
     this.updateSketchStatusBadge();
+    // Phase 4 — last-used plane을 localStorage에 저장 (auto 모드 fallback).
+    try {
+      localStorage.setItem('axia.sketch.lastPlane', JSON.stringify({
+        label: this._sketch.label,
+        origin: this._sketch.origin.toArray(),
+        normal: this._sketch.normal.toArray(),
+        up: this._sketch.up.toArray(),
+      }));
+    } catch { /* localStorage may be disabled */ }
     // Constraint Panel 자동 열기 — 스케치 중에는 제약 사용이 권장되므로
     // 사용자가 J 키를 누르지 않아도 즉시 보이게.
     const panel = (window as unknown as { __axia_constraintPanel?: { show(): void } })
       .__axia_constraintPanel;
     panel?.show();
     debugLog(`[Sketch] enter: ${opts.label}`);
+  }
+
+  /** Phase 4 — Auto-detect best sketch plane.
+   *
+   *  Priority:
+   *    1. If exactly 1 face is selected → use that face's plane.
+   *    2. Else if camera direction is dominantly aligned with a world axis →
+   *       use the perpendicular world plane (looking down → XZ floor;
+   *       looking front → XY wall; looking sideways → YZ wall).
+   *    3. Else → fall back to last-used plane from localStorage.
+   *    4. Else → XZ floor (Y=0).
+   */
+  startSketchAuto(): void {
+    const sel = this.selection.getSelectedFaces();
+    if (sel.length === 1) {
+      this.executeAction('sketch-start-face');
+      return;
+    }
+    // Camera dominant-axis heuristic.
+    const cam = this.viewport.activeCamera;
+    const dir = new THREE.Vector3();
+    cam.getWorldDirection(dir);
+    const ax = Math.abs(dir.x), ay = Math.abs(dir.y), az = Math.abs(dir.z);
+    let chosen: 'xz' | 'xy' | 'yz';
+    if (ay >= ax && ay >= az) chosen = 'xz';
+    else if (az >= ax && az >= ay) chosen = 'xy';
+    else chosen = 'yz';
+    this.executeAction(`sketch-start-${chosen}`);
+  }
+
+  /** Phase 4 — Re-orient the current sketch's `up` vector to the
+   *  projected camera-up direction (keeps drawing aligned with view). */
+  alignSketchUpToCamera(): void {
+    if (!this._sketch) {
+      Toast.warning('스케치 모드가 아닙니다', 2500);
+      return;
+    }
+    const cam = this.viewport.activeCamera;
+    const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+    // Project camUp onto sketch plane (remove component along normal).
+    const n = this._sketch.normal;
+    const u = camUp.clone().sub(n.clone().multiplyScalar(camUp.dot(n)));
+    if (u.lengthSq() < 1e-6) {
+      Toast.warning('카메라가 스케치 평면에 직각 — 정렬 불가', 2500);
+      return;
+    }
+    u.normalize();
+    this._sketch.up = u;
+    this.viewport.setSketchPlaneVisual(this._sketch);
+    Toast.info('스케치 up 방향을 카메라에 정렬했습니다', 2000);
   }
 
   /** Exit sketch mode. Geometry created during the session stays in the
