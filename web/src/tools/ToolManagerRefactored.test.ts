@@ -169,6 +169,8 @@ function mockBridge() {
     synthesizeFacesFromFreeEdges: vi.fn().mockReturnValue(0),
     pushPull: vi.fn().mockReturnValue(true),
     getCenterlineLines: vi.fn().mockReturnValue(null),
+    getFaceVolumeFlags: vi.fn().mockReturnValue(null),
+    isFaceInVolume: vi.fn().mockReturnValue(false),
     drawCenterline: vi.fn().mockReturnValue(0),
     edgeClass: vi.fn().mockReturnValue(0),
     setEdgeClass: vi.fn().mockReturnValue(true),

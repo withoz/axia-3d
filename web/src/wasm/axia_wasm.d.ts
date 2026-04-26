@@ -324,6 +324,16 @@ export class AxiaEngine {
      */
     getFaceVertices(face_id_raw: number): Uint32Array;
     /**
+     * ADR-007 Rev 2 — 모든 active face 의 분류를 비트 array (Uint8) 로
+     * 일괄 반환. 인덱스는 mesh buffer 의 face_map 슬롯과 1:1 매핑이
+     * 아니라 raw FaceId 와 1:1. 호출자(Viewport.syncMesh)는 face_map
+     * 으로 lookup 하면 됨.
+     *
+     * 반환: 활성 face 마다 1 = Wall, 0 = Sheet.
+     * 길이 = max active FaceId raw + 1 (편의상 sparse vec).
+     */
+    getFaceVolumeFlags(): Uint8Array;
+    /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
      * Use for dimension display, snap matching, and precision-sensitive operations.
@@ -453,6 +463,14 @@ export class AxiaEngine {
      *       실패 시 {"ok":false,"error":"..."}
      */
     intersectWithModel(face_ids: Uint32Array): string;
+    /**
+     * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
+     * UI에서 "정합성 검사" 버튼에 바인딩.
+     * ADR-007 Rev 2 — face 가 닫힌 볼륨의 일원(Wall)인지 stand-alone
+     * sheet 인지 판정. 렌더러가 sheet 는 양면, wall 은 single-sided
+     * 로 표시하는데 사용.
+     */
+    isFaceInVolume(face_id_raw: number): boolean;
     /**
      * face가 잠긴 그룹에 속하는지 확인
      */
@@ -798,10 +816,6 @@ export class AxiaEngine {
      */
     twistVerts(vert_ids: Uint32Array, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, degrees_per_unit: number): boolean;
     undo(): boolean;
-    /**
-     * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
-     * UI에서 "정합성 검사" 버튼에 바인딩.
-     */
     verifyInvariants(): string;
     /**
      * ADR-007 원칙 1 확장 — 닫힌 solid의 outward normal 검증.
@@ -911,6 +925,7 @@ export interface InitOutput {
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
     readonly axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
@@ -939,6 +954,7 @@ export interface InitOutput {
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
     readonly axiaengine_intersectWithModel: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_isFaceInVolume: (a: number, b: number) => number;
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
     readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_lastMergeFailureReason: (a: number, b: number) => void;

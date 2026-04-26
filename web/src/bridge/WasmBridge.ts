@@ -267,6 +267,8 @@ type AxiaEngineExtended = AxiaEngine & {
   // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
   intersectWithModel?(faceIds: Uint32Array): string;
+  isFaceInVolume?(faceIdRaw: number): boolean;
+  getFaceVolumeFlags?(): Uint8Array;
   setAutoIntersectOnDraw?(enabled: boolean): void;
   getAutoIntersectOnDraw?(): boolean;
   // Group / Component
@@ -2173,6 +2175,26 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] booleanOp failed:', e);
       Toast.error(`Boolean 연산 실패: ${String(e)}`);
+      return null;
+    }
+  }
+
+  /** ADR-007 Rev 2 — face 가 닫힌 볼륨의 일원(Wall)인지 stand-alone
+   *  sheet 인지 판정. */
+  isFaceInVolume(faceIdRaw: number): boolean {
+    return this.engine?.isFaceInVolume?.(faceIdRaw) ?? false;
+  }
+
+  /** ADR-007 Rev 2 — 모든 active face 의 분류 비트 array.
+   *  index = FaceId raw, value = 1 (Wall) | 0 (Sheet 또는 inactive).
+   *  Viewport 가 sheet/wall 분리 렌더 시 사용. */
+  getFaceVolumeFlags(): Uint8Array | null {
+    if (!this.engine) return null;
+    try {
+      const flags = this.engine.getFaceVolumeFlags?.();
+      return flags instanceof Uint8Array ? flags : null;
+    } catch (e) {
+      console.warn('[WasmBridge] getFaceVolumeFlags failed:', e);
       return null;
     }
   }

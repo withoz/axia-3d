@@ -885,6 +885,29 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-007 Rev 2 — 모든 active face 의 분류를 비트 array (Uint8) 로
+     * 일괄 반환. 인덱스는 mesh buffer 의 face_map 슬롯과 1:1 매핑이
+     * 아니라 raw FaceId 와 1:1. 호출자(Viewport.syncMesh)는 face_map
+     * 으로 lookup 하면 됨.
+     *
+     * 반환: 활성 face 마다 1 = Wall, 0 = Sheet.
+     * 길이 = max active FaceId raw + 1 (편의상 sparse vec).
+     * @returns {Uint8Array}
+     */
+    getFaceVolumeFlags() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getFaceVolumeFlags(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
      * Use for dimension display, snap matching, and precision-sensitive operations.
@@ -1380,6 +1403,19 @@ export class AxiaEngine {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
         }
+    }
+    /**
+     * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
+     * UI에서 "정합성 검사" 버튼에 바인딩.
+     * ADR-007 Rev 2 — face 가 닫힌 볼륨의 일원(Wall)인지 stand-alone
+     * sheet 인지 판정. 렌더러가 sheet 는 양면, wall 은 single-sided
+     * 로 표시하는데 사용.
+     * @param {number} face_id_raw
+     * @returns {boolean}
+     */
+    isFaceInVolume(face_id_raw) {
+        const ret = wasm.axiaengine_isFaceInVolume(this.__wbg_ptr, face_id_raw);
+        return ret !== 0;
     }
     /**
      * face가 잠긴 그룹에 속하는지 확인
@@ -2285,8 +2321,6 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
-     * 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
-     * UI에서 "정합성 검사" 버튼에 바인딩.
      * @returns {string}
      */
     verifyInvariants() {

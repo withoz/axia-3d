@@ -886,6 +886,7 @@ export class Viewport {
     edgeLines?: Float32Array,
     faceMap?: Uint32Array,
     centerLines?: Float32Array | null,
+    volumeFlags?: Uint8Array | null,
   ) {
     // ── 1) 기존 geometry + material 완전 제거 ──
     while (this.meshGroup.children.length > 0) {
@@ -1010,16 +1011,33 @@ export class Viewport {
       // shell overlay tracks the new geometry automatically.
       this._refreshFur();
 
-      // ADR-007 Phase 4 — CAD 모드 (single-sided) 활성화 시 BackSide mesh 생략
-      // 이점:
-      //   - 렌더 draw call 절반 (face 당 front + back → front only)
-      //   - GPU 픽셀 셰이딩 작업량 감소 (back-face culling 정상 동작)
-      //   - 외부=Front 불변식 가정 시 뒤쪽 면은 사용자가 볼 일 없음
-      // 단점:
-      //   - 볼륨 안에서 바라보면 면이 안 보임 (원칙상 OK — 일관된 "outer=front")
-      //   - 뒤집힌 레거시 모델은 수동 flip 필요
+      // ADR-007 Rev 2 — Sheet vs Wall 분리 렌더.
+      //   Wall (closed-volume member): two-tone (front=front-color, back=cyan)
+      //   Sheet (standalone planar)  : 양면 동등 (back 도 front-color)
+      //
+      //   구현: backMesh 를 두 개 — wall 전용 (cyan) + sheet 전용 (front color).
+      //   각각 cloned geometry 가 wall 또는 sheet 삼각형 indices 만 포함.
+      //   position/normal 은 원본과 공유 (BufferAttribute 재사용).
+      //   frontMesh 는 모든 삼각형을 단일 front-color 로 렌더 (원본 geometry).
+      //   raycast/BVH 는 frontMesh 유지 → 선택/픽 동작 변화 없음.
       if (!this._singleSidedRender) {
-        const backMat = new THREE.MeshBasicMaterial({
+        const wallIndices: number[] = [];
+        const sheetIndices: number[] = [];
+        const idxArr = indices as Uint32Array;
+        if (volumeFlags && faceMap) {
+          for (let ti = 0; ti < faceMap.length; ti++) {
+            const fid = faceMap[ti];
+            const isWall = (fid < volumeFlags.length) && volumeFlags[fid] === 1;
+            const i0 = idxArr[ti * 3], i1 = idxArr[ti * 3 + 1], i2 = idxArr[ti * 3 + 2];
+            if (isWall) wallIndices.push(i0, i1, i2);
+            else sheetIndices.push(i0, i1, i2);
+          }
+        } else {
+          // Fallback (volume flags unavailable) — treat everything as wall
+          for (let i = 0; i < idxArr.length; i++) wallIndices.push(idxArr[i]);
+        }
+
+        const cyanMat = new THREE.MeshBasicMaterial({
           color: useVertexColors ? 0xb0b0c8 : 0x9898b4,
           side: THREE.BackSide,
           polygonOffset: true,
@@ -1027,9 +1045,37 @@ export class Viewport {
           polygonOffsetUnits: 1,
           vertexColors: useVertexColors,
         });
-        const backMesh = new THREE.Mesh(geometry, backMat);
-        backMesh.name = 'back-mesh';
-        this.meshGroup.add(backMesh);
+        if (wallIndices.length > 0) {
+          const wallBackGeo = new THREE.BufferGeometry();
+          wallBackGeo.setAttribute('position', geometry.getAttribute('position'));
+          wallBackGeo.setAttribute('normal', geometry.getAttribute('normal'));
+          if (useVertexColors && geometry.getAttribute('color')) {
+            wallBackGeo.setAttribute('color', geometry.getAttribute('color'));
+          }
+          wallBackGeo.setIndex(wallIndices);
+          const wallBackMesh = new THREE.Mesh(wallBackGeo, cyanMat);
+          wallBackMesh.name = 'back-mesh-wall';
+          this.meshGroup.add(wallBackMesh);
+        }
+
+        if (sheetIndices.length > 0) {
+          // Sheet back: same material as front, just BackSide so it
+          //   renders when camera is on the opposite side. Cloning the
+          //   front material keeps everything in sync (texture, color,
+          //   roughness etc.) without re-instantiating logic.
+          const sheetBackMat = frontMat.clone();
+          (sheetBackMat as THREE.MeshStandardMaterial).side = THREE.BackSide;
+          const sheetBackGeo = new THREE.BufferGeometry();
+          sheetBackGeo.setAttribute('position', geometry.getAttribute('position'));
+          sheetBackGeo.setAttribute('normal', geometry.getAttribute('normal'));
+          if (useVertexColors && geometry.getAttribute('color')) {
+            sheetBackGeo.setAttribute('color', geometry.getAttribute('color'));
+          }
+          sheetBackGeo.setIndex(sheetIndices);
+          const sheetBackMesh = new THREE.Mesh(sheetBackGeo, sheetBackMat);
+          sheetBackMesh.name = 'back-mesh-sheet';
+          this.meshGroup.add(sheetBackMesh);
+        }
       }
 
       // 엣지 렌더링: DCEL edge lines 우선, 없으면 EdgesGeometry fallback.

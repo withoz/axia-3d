@@ -1995,12 +1995,16 @@ export class ToolManager {
     const buffers = this.bridge.getMeshBuffers();
 
     const centerLines = this.bridge.getCenterlineLines();
+    // ADR-007 Rev 2 — face 분류 비트 array (Wall=1, Sheet=0).
+    //   Viewport 가 sheet 의 BackSide 를 front-color 로 렌더하는 데 사용.
+    const volumeFlags = this.bridge.getFaceVolumeFlags();
     if (buffers) {
       this.viewport.updateMesh(
         buffers.positions, buffers.normals, buffers.indices,
         edgeLines ?? undefined,
         buffers.faceMap,
         centerLines,
+        volumeFlags,
       );
       this.faceMap = buffers.faceMap;
 

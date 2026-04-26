@@ -2413,6 +2413,50 @@ impl Mesh {
     }
 
     /// Collect all half-edge IDs in a face loop.
+    /// ADR-007 Rev 2 — Face classification.
+    ///
+    /// Returns `true` if the face is part of a closed volume (Wall),
+    /// `false` if it is a standalone sheet (boundary face or open surface).
+    ///
+    /// Rule: a face is a Wall iff every half-edge on its outer loop AND
+    /// every inner-hole loop has a twin that belongs to another active
+    /// face. If any HE has a null twin or a twin that points to an
+    /// inactive face, the face is a Sheet (manifold-with-boundary).
+    ///
+    /// This drives renderer choice (DoubleSide for Sheet, FrontSide for
+    /// Wall), Boolean operand validity, and winding-invariant checks.
+    pub fn is_face_in_volume(&self, face_id: FaceId) -> bool {
+        let Some(face) = self.faces.get(face_id) else { return false; };
+        if !face.is_active() { return false; }
+
+        let check_loop = |start: HeId| -> bool {
+            let Ok(hes) = self.collect_loop_hes(start) else { return false; };
+            for he_id in hes {
+                let twin_id = self.he_twin(he_id);
+                if twin_id.is_null() { return false; }
+                let Some(twin) = self.hes.get(twin_id) else { return false; };
+                if !twin.is_active() { return false; }
+                let twin_face = twin.face();
+                if twin_face.is_null() { return false; }
+                let Some(tf) = self.faces.get(twin_face) else { return false; };
+                if !tf.is_active() { return false; }
+                if twin_face == face_id { return false; } // self-twin = degenerate
+            }
+            true
+        };
+
+        if !check_loop(face.outer().start) { return false; }
+        for inner in face.inners() {
+            if !check_loop(inner.start) { return false; }
+        }
+        true
+    }
+
+    /// Convenience inverse of `is_face_in_volume`.
+    pub fn is_sheet_face(&self, face_id: FaceId) -> bool {
+        !self.is_face_in_volume(face_id)
+    }
+
     pub fn collect_loop_hes(&self, start: HeId) -> Result<Vec<HeId>> {
         let mut result = Vec::new();
         let mut he_id = start;

@@ -2870,6 +2870,37 @@ impl AxiaEngine {
 
     /// 마지막 verify_face_invariants 결과를 요약 JSON으로 반환.
     /// UI에서 "정합성 검사" 버튼에 바인딩.
+    /// ADR-007 Rev 2 — face 가 닫힌 볼륨의 일원(Wall)인지 stand-alone
+    /// sheet 인지 판정. 렌더러가 sheet 는 양면, wall 은 single-sided
+    /// 로 표시하는데 사용.
+    #[wasm_bindgen(js_name = "isFaceInVolume")]
+    pub fn is_face_in_volume(&self, face_id_raw: u32) -> bool {
+        self.scene.mesh.is_face_in_volume(FaceId::new(face_id_raw))
+    }
+
+    /// ADR-007 Rev 2 — 모든 active face 의 분류를 비트 array (Uint8) 로
+    /// 일괄 반환. 인덱스는 mesh buffer 의 face_map 슬롯과 1:1 매핑이
+    /// 아니라 raw FaceId 와 1:1. 호출자(Viewport.syncMesh)는 face_map
+    /// 으로 lookup 하면 됨.
+    ///
+    /// 반환: 활성 face 마다 1 = Wall, 0 = Sheet.
+    /// 길이 = max active FaceId raw + 1 (편의상 sparse vec).
+    #[wasm_bindgen(js_name = "getFaceVolumeFlags")]
+    pub fn get_face_volume_flags(&self) -> Vec<u8> {
+        let mut max_raw = 0u32;
+        for (fid, _f) in self.scene.mesh.faces.iter() {
+            if fid.raw() > max_raw { max_raw = fid.raw(); }
+        }
+        let mut out = vec![0u8; (max_raw as usize) + 1];
+        for (fid, f) in self.scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if self.scene.mesh.is_face_in_volume(fid) {
+                out[fid.raw() as usize] = 1;
+            }
+        }
+        out
+    }
+
     #[wasm_bindgen(js_name = "verifyInvariants")]
     pub fn verify_invariants(&self) -> String {
         let report = self.scene.mesh.verify_face_invariants();
