@@ -82,7 +82,7 @@ export class SelectionManager {
   //   WebGL 에서도 실제 두께가 보임 (LineBasicMaterial linewidth 는 1px 고정).
   private static readonly HOVER_COLOR = 0xff3030;       // 선명한 빨강
   private static readonly HOVER_OPACITY = 0.10;          // 약간 더 보이게
-  private static readonly HOVER_LINE_WIDTH_PX = 4;       // Line2 픽셀 두께
+  private static readonly HOVER_LINE_WIDTH_PX = 3;       // Line2 픽셀 두께
   private static readonly SELECT_COLOR = 0x2196f3;      // 파랑 — face 선택
   private static readonly SELECT_OPACITY = 0.18;
   private static readonly EDGE_SELECT_COLOR = 0xff6f00;  // 오렌지 — edge 선택 (대비↑)
