@@ -4120,6 +4120,32 @@ impl AxiaEngine {
         }
     }
 
+    /// 주어진 world 좌표 (x,y,z) 에 가장 가까운 활성 vertex 의 VertId 반환.
+    /// `tol` 거리 안에 vertex 가 없으면 -1.
+    ///
+    /// Move tool 의 vertex pick 경로 — 사용자가 endpoint snap 위에서 클릭한
+    /// 위치를 VertId 로 변환하여 단일 정점 이동을 가능하게 한다.
+    #[wasm_bindgen(js_name = "findVertexIdAt")]
+    pub fn find_vertex_id_at(&self, x: f64, y: f64, z: f64, tol: f64) -> i32 {
+        let target = DVec3::new(x, y, z);
+        let tol_sq = (tol.max(1e-6)) * (tol.max(1e-6));
+        let mut best: Option<(VertId, f64)> = None;
+        for (vid, _) in self.scene.mesh.verts.iter() {
+            if let Ok(pos) = self.scene.mesh.vertex_pos(vid) {
+                let d_sq = (pos - target).length_squared();
+                if d_sq <= tol_sq {
+                    if best.map(|b| d_sq < b.1).unwrap_or(true) {
+                        best = Some((vid, d_sq));
+                    }
+                }
+            }
+        }
+        match best {
+            Some((vid, _)) => vid.raw() as i32,
+            None => -1,
+        }
+    }
+
     // ========================================================================
     // Constraint Solver Level 2 — persistent graph (Scene.constraints)
     // ========================================================================

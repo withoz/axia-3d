@@ -207,6 +207,7 @@ type AxiaEngineExtended = AxiaEngine & {
   setEdgeClass?(edgeId: number, classRaw: number): boolean;
   getCenterlineLines?(): Float32Array;
   getVertexPos?(vertId: number): Float64Array;
+  findVertexIdAt?(x: number, y: number, z: number, tol: number): number;
   splitEdge?(edgeId: number, px: number, py: number, pz: number): number;
   // Constraint Solver Level 2 (persistent graph)
   addEdgeConstraint?(kind: string, eaVa: number, eaVb: number, ebVa: number, ebVb: number): number;
@@ -1668,6 +1669,18 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] getVertexPos failed:', e);
       return null;
+    }
+  }
+
+  /** 주어진 world 좌표에서 `tol` 거리 안의 가장 가까운 활성 vertex 의 VertId.
+   *  없으면 -1. Move tool 의 vertex pick 경로에서 사용. */
+  findVertexIdAt(x: number, y: number, z: number, tol: number): number {
+    if (!this.engine?.findVertexIdAt) return -1;
+    try {
+      return this.engine.findVertexIdAt(x, y, z, tol);
+    } catch (e) {
+      console.error('[WasmBridge] findVertexIdAt failed:', e);
+      return -1;
     }
   }
 

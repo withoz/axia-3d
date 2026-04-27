@@ -14,6 +14,7 @@ function mockToolContext() {
       translateFaces: vi.fn(),
       translateVerts: vi.fn(),
       getEdgeEndpoints: vi.fn().mockReturnValue([] as number[]),
+      findVertexIdAt: vi.fn().mockReturnValue(-1),
     },
     viewport: {
       activeCamera: new THREE.PerspectiveCamera(),
@@ -195,6 +196,55 @@ describe('MoveTool', () => {
       tool.onMouseMove({} as MouseEvent, new THREE.Vector3(10, 0, 0));
       expect(ctx.bridge.translateFaces).toHaveBeenCalled();
       expect(ctx.bridge.translateVerts).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('vertex pick (no selection, cursor on vertex)', () => {
+    it('uses findVertexIdAt fallback to grab single vertex', () => {
+      // No face/edge selected
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
+      ctx.bridge.findVertexIdAt.mockReturnValue(42);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 100 } as MouseEvent,
+        new THREE.Vector3(10, 0, 20),
+      );
+      expect(ctx.bridge.findVertexIdAt).toHaveBeenCalledWith(10, 0, 20, 1.0);
+      expect(tool.isBusy()).toBe(true);
+
+      // Drag → translateVerts called for the picked vertex
+      tool.onMouseMove(
+        { clientX: 200, clientY: 100 } as MouseEvent,
+        new THREE.Vector3(20, 0, 20),
+      );
+      expect(ctx.bridge.translateVerts).toHaveBeenCalled();
+      const call = ctx.bridge.translateVerts.mock.calls[0];
+      expect(call[0]).toEqual([42]);
+    });
+
+    it('shows hint Toast when no selection AND no vertex at cursor', () => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([]);
+      ctx.bridge.findVertexIdAt.mockReturnValue(-1);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 100 } as MouseEvent,
+        new THREE.Vector3(10, 0, 20),
+      );
+      expect(tool.isBusy()).toBe(false);
+    });
+
+    it('selection takes precedence over vertex pick', () => {
+      // faces selected — should NOT call findVertexIdAt
+      ctx.getSelectedFaces.mockReturnValue([5]);
+      tool.onMouseDown(
+        { clientX: 100, clientY: 100 } as MouseEvent,
+        new THREE.Vector3(10, 0, 20),
+      );
+      expect(ctx.bridge.findVertexIdAt).not.toHaveBeenCalled();
     });
   });
 

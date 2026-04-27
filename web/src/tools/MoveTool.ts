@@ -49,6 +49,9 @@ export class MoveTool implements ITool {
   /**
    * 현재 선택을 Move 대상으로 변환.
    * 우선순위: 면 → 에지(정점으로 변환) → null.
+   *
+   * 2026-04-27 — 선택이 비어 있고 cursor 가 정점 위에 있으면 (snap endpoint
+   * 등) 그 단일 정점을 target 으로 사용 가능 (`resolveTargetWithPoint`).
    */
   private resolveTarget(): Target | null {
     const faces = this.ctx.getSelectedFaces();
@@ -68,6 +71,22 @@ export class MoveTool implements ITool {
     }
     if (vertSet.size === 0) return null;
     return { kind: 'verts', ids: Array.from(vertSet), edgeCount: edges.length };
+  }
+
+  /**
+   * Vertex pick 폴백: 선택이 비어 있을 때 cursor 의 snapped 좌표가 활성
+   * 정점 위에 있으면 그 단일 정점을 target 으로 반환.
+   *
+   * `point` 는 ToolManager 가 snap 으로 이미 정확한 vertex 좌표로 보정
+   * 했으므로 작은 tol (1mm) 로 충분.
+   */
+  private resolveTargetWithPoint(point: THREE.Vector3): Target | null {
+    const t = this.resolveTarget();
+    if (t) return t;
+    const vid = this.ctx.bridge.findVertexIdAt(point.x, point.y, point.z, 1.0);
+    if (vid < 0) return null;
+    debugLog(`[Move] Vertex pick → vid=${vid}`);
+    return { kind: 'verts', ids: [vid], edgeCount: 0 };
   }
 
   private translate(t: Target, dx: number, dy: number, dz: number): void {
@@ -125,14 +144,15 @@ export class MoveTool implements ITool {
     }
 
     if (this.transformActive) return;
+    if (!point) return;
 
-    const t = this.resolveTarget();
+    // 선택이 있으면 그것, 없으면 cursor 위치의 정점을 target 으로 (vertex pick).
+    const t = this.resolveTargetWithPoint(point);
     if (!t) {
-      // #13: 빈 선택 시 사용자 안내
-      Toast.info('이동할 면 또는 에지를 먼저 선택하세요', 2000);
+      // #13: 빈 선택 시 사용자 안내 (정점 hover 도 아닌 경우)
+      Toast.info('이동할 면/에지를 선택하거나 정점을 클릭하세요', 2000);
       return;
     }
-    if (!point) return;
 
     this.target = t;
     this.transformStartPt = point.clone();

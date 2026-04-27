@@ -48,6 +48,7 @@ export const axiaengine_face_count: (a: number) => number;
 export const axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_findNonManifoldEdges: (a: number, b: number) => void;
+export const axiaengine_findVertexIdAt: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_flipFaces: (a: number, b: number, c: number) => number;
 export const axiaengine_getAutoIntersectOnDraw: (a: number) => number;
 export const axiaengine_getCacheVersion: (a: number) => number;

@@ -819,6 +819,22 @@ export class AxiaEngine {
         }
     }
     /**
+     * 주어진 world 좌표 (x,y,z) 에 가장 가까운 활성 vertex 의 VertId 반환.
+     * `tol` 거리 안에 vertex 가 없으면 -1.
+     *
+     * Move tool 의 vertex pick 경로 — 사용자가 endpoint snap 위에서 클릭한
+     * 위치를 VertId 로 변환하여 단일 정점 이동을 가능하게 한다.
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     * @param {number} tol
+     * @returns {number}
+     */
+    findVertexIdAt(x, y, z, tol) {
+        const ret = wasm.axiaengine_findVertexIdAt(this.__wbg_ptr, x, y, z, tol);
+        return ret;
+    }
+    /**
      * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
      *
      * Flips orientation of the given faces. Locked (inside grouped/component)

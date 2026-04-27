@@ -291,6 +291,14 @@ export class AxiaEngine {
      */
     findNonManifoldEdges(): string;
     /**
+     * 주어진 world 좌표 (x,y,z) 에 가장 가까운 활성 vertex 의 VertId 반환.
+     * `tol` 거리 안에 vertex 가 없으면 -1.
+     *
+     * Move tool 의 vertex pick 경로 — 사용자가 endpoint snap 위에서 클릭한
+     * 위치를 VertId 로 변환하여 단일 정점 이동을 가능하게 한다.
+     */
+    findVertexIdAt(x: number, y: number, z: number, tol: number): number;
+    /**
      * **User-triggered Face Reverse** (SketchUp "Reverse Faces").
      *
      * Flips orientation of the given faces. Locked (inside grouped/component)
@@ -991,6 +999,7 @@ export interface InitOutput {
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_findNonManifoldEdges: (a: number, b: number) => void;
+    readonly axiaengine_findVertexIdAt: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_getAutoIntersectOnDraw: (a: number) => number;
     readonly axiaengine_getCacheVersion: (a: number) => number;
