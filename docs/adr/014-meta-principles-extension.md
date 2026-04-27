@@ -1,6 +1,6 @@
 # ADR-014 — 메타-원칙 확장 (#11, #12, #13)
 
-**Status**: Proposed
+**Status**: Accepted (2026-04-27, Sprint 1)
 **Date**: 2026-04-27
 **Axis**: 모든 축 (메타)
 **Related**: 기존 메타-원칙 #1~#10

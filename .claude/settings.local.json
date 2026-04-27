@@ -128,7 +128,13 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(grep -nB1 -A4 \"bottom:\\\\s*0\\\\b\" \"E:/AXiA 3D/.claude/worktrees/zealous-boyd/web/index.html\")"
+      "Bash(grep -nB1 -A4 \"bottom:\\\\s*0\\\\b\" \"E:/AXiA 3D/.claude/worktrees/zealous-boyd/web/index.html\")",
+      "Bash(grep -E \"^[A-Z][^/]*$|^### |^## \" \"E:/AXiA 3D/.claude/worktrees/zealous-boyd/CONVENTIONS.md\" \"E:/AXiA 3D/.claude/worktrees/zealous-boyd/PROTECTED_FILES.md\")",
+      "Bash(grep -iE \"md$|MD$|conventions|policy|principles\")",
+      "Bash(grep \"\\\\.md$\")",
+      "Bash(grep -rnE \"/// .*ADR-00[0-9]|//! .*ADR-00[0-9]\" \"E:/AXiA 3D/.claude/worktrees/zealous-boyd/crates/axia-core/src/scene.rs\")",
+      "Bash(git -C \"E:/AXiA 3D/.claude/worktrees/zealous-boyd\" mv docs/ADR-008-face-operation-axioms.md docs/adr/008-face-operation-axioms.md)",
+      "Bash(git -C \"E:/AXiA 3D/.claude/worktrees/zealous-boyd\" mv docs/ADR-009-orphan-face-recovery.md docs/adr/009-orphan-face-recovery.md)"
     ]
   }
 }

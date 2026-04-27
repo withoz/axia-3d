@@ -1727,6 +1727,20 @@ export class ToolManager {
   }
 
   syncMesh(): void {
+    // ADR-012 telemetry — full syncMesh budget = 33 ms (one frame).
+    // Lazy import to keep WASM bridge dep-free.
+    const t0 = performance.now();
+    try {
+      this._syncMeshInternal();
+    } finally {
+      const elapsed = performance.now() - t0;
+      const w = window as unknown as { __AXIA_TELEMETRY_RECORD?: (key: string, ms: number) => void };
+      w.__AXIA_TELEMETRY_RECORD?.('syncMesh', elapsed);
+    }
+  }
+
+  /** Internal — original syncMesh body. Wrapped by syncMesh() for telemetry. */
+  private _syncMeshInternal(): void {
     const edgeLines = this.bridge.getEdgeLines();
     this.edgeMap = this.bridge.getEdgeMap();
     // 스케치 모드가 활성화된 경우 매 mesh 변경마다 free-edge 수를 상태바

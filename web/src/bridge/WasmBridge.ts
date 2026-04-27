@@ -355,9 +355,18 @@ export class WasmBridge {
     return this.engine !== null;
   }
 
-  /** Mark buffers as dirty (call after any topology-changing operation) */
+  /** Mark buffers as dirty (call after any topology-changing operation).
+   *  Also bumps the WASM-crossing counter for ADR-012 telemetry —
+   *  every mutating call into Rust passes through here. */
   markDirty(): void {
     this.bufferCache.dirty = true;
+    // Lazy import to avoid circular dep at module load.
+    // Cost is one map lookup when telemetry module already loaded.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const t = (window as unknown as { __AXIA_TELEMETRY_TICK?: () => void });
+      t.__AXIA_TELEMETRY_TICK?.();
+    } catch { /* ignore — telemetry not installed */ }
   }
 
   drawLine(

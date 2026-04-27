@@ -693,10 +693,32 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - Fillet 3-way corner (같은 vertex 공유 다중 엣지) 미해결 — 별도 작업
 - STEP/IGES OCCT.js 통합 미구현 — 10MB+ 번들 검토 필요
 
+## 메타-원칙 (#1~#13, ADR-014 까지 통과)
+
+설계 결정 시 참조하는 13개 메타-원칙. 자세한 출처는
+`docs/adr/README.md` 참조.
+
+| # | 원칙 | 축 |
+|---|------|-----|
+| 1 | 기존 명령은 모두 그대로 | 호환 |
+| 2 | 외부 참조는 형태/모양만 | 호환 |
+| 3 | 상태바는 보호 | UX |
+| 4 | 단일 진실 원천 (SSOT) | 일관성 |
+| 5 | 사용자 편의 최우선 (명확하면 자동, 모호하면 명시 동의) | UX |
+| 6 | Preventive over Curative | 안정성 |
+| 7 | Topology > Cache | 일관성 |
+| 8 | 즉각 반응 > 완전성 | UX/성능 |
+| 9 | 회귀 없음 (테스트 통과 후 커밋) | 품질 |
+| 10 | ADR 불변 (변경 시 새 ADR + Superseded) | 거버넌스 |
+| 11 | **Latency Budget First** (Hover 16/Click 33/Commit 100/Heavy 500 ms) | 성능 |
+| 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
+| 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
+
 ## 향후 과제
 - Phase G case (c): endpoint-on-hole-boundary "bridge" topology
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - STEP/IGES 지원
 - Electron/Tauri 데스크톱 앱
 - Boundary Extraction (Solid → Face)
-- Worker thread / GPU picking (대형 씬 필요 시)
+- Worker thread / GPU picking (ADR-012 강등 정책 트리거 시)
+- ADR-010~013 시리즈 구현 (Sprint 2~6)

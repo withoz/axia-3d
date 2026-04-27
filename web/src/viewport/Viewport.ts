@@ -2307,6 +2307,11 @@ export class Viewport {
     }
     const animate = () => {
       this._frameId = requestAnimationFrame(animate);
+      // Frame boundary marker for ADR-012 telemetry — installs no-ops
+      // when the telemetry module isn't loaded. Lookup is one window
+      // property access; Hidden when __AXIA_DEBUG=false anyway.
+      const w = window as unknown as { __AXIA_TELEMETRY_FRAME_START?: () => void };
+      w.__AXIA_TELEMETRY_FRAME_START?.();
       for (const cb of this._onFrameCallbacks) cb();
       // Shadow Phase 2 — refit the directional light frustum to the
       //   visible scene each frame (texel-snapped to avoid shimmer).
@@ -2321,6 +2326,9 @@ export class Viewport {
       } else {
         this.renderer.render(this.scene, this.activeCamera);
       }
+      // End-of-frame telemetry hook (mirror of start hook above).
+      const w2 = window as unknown as { __AXIA_TELEMETRY_FRAME_END?: () => void };
+      w2.__AXIA_TELEMETRY_FRAME_END?.();
     };
     animate();
   }

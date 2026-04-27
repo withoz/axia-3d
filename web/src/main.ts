@@ -182,6 +182,13 @@ async function main() {
 
   // Export single container to window (replaces all window.__axia_* globals)
   (window as any).__axia = container;
+
+  // ADR-012 telemetry — install BEFORE any draw/sync work happens.
+  //   Lookups are guarded by `?.` so cost is ~0 when window props missing
+  //   (tests, headless), and bound minimal closures otherwise.
+  void import('./core/telemetry').then(({ installTelemetryGlobal }) => {
+    installTelemetryGlobal();
+  });
   debugLog('[Main] ServiceContainer initialized with services:', container.keys());
 
   // Register commands (line, help, backtick toggle)
