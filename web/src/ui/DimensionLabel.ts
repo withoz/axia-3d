@@ -224,15 +224,19 @@ export class DimensionLabel {
           let a = ux / ulen, b = uy / ulen;
           let c = vx / vlen, d = vy / vlen;
 
-          // 글자 가독성 보정 — viewer 시점에서 항상 읽기 쉬운 방향으로:
+          // 글자 가독성 보정 — viewer 시점에서 항상 읽기 쉬운 방향으로.
           //
-          //   1. U 방향이 screen 좌측 향함 (a < 0) → 글자가 거꾸로 mirror.
-          //      전체 매트릭스 -1 곱셈 = 180° 회전 → 글자 정방향 복원.
-          //   2. 그 다음 V 방향이 screen-up (d < 0) → face 뒷면 시점이므로
-          //      V 부호 flip → face 앞면에 lying flat.
+          //   1) Reading direction (head 방향) 보정:
+          //      atan2(b, a) ∉ (-π/2, π/2] 이면 180° 회전. 즉 b > 0 인 경우
+          //      글자가 거꾸로 (head 가 화면 아래로) 처지므로 flip.
+          //      vertical edge (a ≈ 0) 케이스도 b 부호로 깔끔히 결정.
+          //   2) V 방향 보정 (d < 0 이면 face 뒷면) — face 앞면에 lying
+          //      flat 되도록 V flip.
           //
-          //   순서 중요: a check 먼저 (회전), 그 다음 d check (V 보정).
-          if (a < 0) { a = -a; b = -b; c = -c; d = -d; }
+          //   순서: 1) → 2) (역순이면 1) 가 d 부호를 다시 뒤집을 수 있음).
+          if (b > 0 || (Math.abs(b) < 1e-9 && a < 0)) {
+            a = -a; b = -b; c = -c; d = -d;
+          }
           if (d < 0) { c = -c; d = -d; }
 
           label.style.left = sa.x + 'px';
