@@ -142,9 +142,9 @@ export class HistoryPanel {
     // Phase 2 — cascade warning: if this op has dependents, warn the user
     // before re-running so they understand downstream geometry will be
     // affected (their original outputs no longer exist after a re-run).
-    const dependents = this.log.getCascadeChain(e.id);
+    const dependents = getOperationLog().getCascadeChain(e.id);
     if (dependents.length > 0) {
-      const names = dependents.slice(0, 3).map(d => d.displayName).join(', ');
+      const names = dependents.slice(0, 3).map((d: OperationEntry) => d.displayName).join(', ');
       const more = dependents.length > 3 ? ` 외 ${dependents.length - 3}개` : '';
       const ok = window.confirm(
         `⚠️ "${e.displayName}" 재실행 시 ${dependents.length}개 후속 작업이 영향받습니다:\n` +

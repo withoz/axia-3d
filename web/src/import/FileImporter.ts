@@ -407,35 +407,29 @@ export class FileImporter {
       throw new Error(`DXF 파일 파싱 실패: ${(err as Error).message}`);
     }
 
-    const group = new THREE.Group();
-    group.name = `import-dxf-${file.name}`;
+    return this.buildDxfScene(dxfData, file.name);
+  }
 
-    // 엔티티를 Three.js 형상으로 변환
-    if (dxfData.entities) {
-      const entities = Array.isArray(dxfData.entities)
-        ? dxfData.entities
-        : (dxfData.entities.value || []);
-
-      debugLog(`[FileImporter] DXF 엔티티 개수: ${entities.length}`);
-
-      for (const entity of entities) {
-        debugLog(`[FileImporter] DXF 엔티티 처리: type=${entity.type}`);
-        const mesh = this.convertDxfEntityToMesh(entity);
-        if (mesh) {
-          group.add(mesh);
-        }
-      }
-    } else {
-      console.warn('[FileImporter] DXF 데이터에 entities가 없습니다');
-      debugLog('[FileImporter] DXF 데이터 구조:', Object.keys(dxfData));
+  /** Lazy-built DXF scene builder — converts a parsed DXF document into a
+   *  fully hierarchical THREE.Group with layers, blocks, and full entity
+   *  coverage. Shared by DXF and DWG paths. */
+  private async buildDxfScene(dxfData: any, sourceFile: string): Promise<THREE.Group> {
+    const { DxfSceneBuilder } = await import('./DxfSceneBuilder');
+    const builder = new DxfSceneBuilder();
+    const result = builder.build(dxfData, sourceFile);
+    debugLog(
+      `[FileImporter] DXF scene 빌드 완료: layers=${result.stats.layers}, ` +
+      `blocks=${result.stats.blocks}, entities=${result.stats.entities}, ` +
+      `inserts=${result.stats.inserts}, skipped=${result.stats.skipped}`
+    );
+    if (result.stats.warnings.length > 0) {
+      console.warn(`[FileImporter] DXF 경고 ${result.stats.warnings.length}개:`,
+        result.stats.warnings.slice(0, 5));
     }
-
-    // 그룹이 비어있으면 기본 경고
-    if (group.children.length === 0) {
+    if (result.stats.entities === 0) {
       console.warn('[FileImporter] DXF에서 렌더링 가능한 엔티티를 찾을 수 없습니다');
     }
-
-    return group;
+    return result.group;
   }
 
   /** DXF 엔티티를 Three.js 메시로 변환 */
@@ -693,29 +687,7 @@ export class FileImporter {
       console.error('[FileImporter] DXF 텍스트 파싱 실패:', err);
       throw new Error(`DXF 파싱 실패: ${(err as Error).message}`);
     }
-
-    const group = new THREE.Group();
-    group.name = `import-dxf-${sourceFile}`;
-
-    // 엔티티를 Three.js 형상으로 변환
-    if (dxfData.entities) {
-      const entities = Array.isArray(dxfData.entities)
-        ? dxfData.entities
-        : (dxfData.entities.value || []);
-
-      for (const entity of entities) {
-        const mesh = this.convertDxfEntityToMesh(entity);
-        if (mesh) {
-          group.add(mesh);
-        }
-      }
-    }
-
-    if (group.children.length === 0) {
-      console.warn('[FileImporter] DXF에서 렌더링 가능한 엔티티를 찾을 수 없습니다');
-    }
-
-    return group;
+    return this.buildDxfScene(dxfData, sourceFile);
   }
 
   // ─── 3DM (Rhino 3D) ─────────────────────────────────────

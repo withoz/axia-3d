@@ -100,11 +100,16 @@ export class Raycaster {
 
 export class Color {
   r: number; g: number; b: number;
-  constructor(c?: string | number) { this.r = 0; this.g = 0; this.b = 0; if (c) this.set(c); }
-  set(_c: any) { return this; }
-  setHex(_h: number) { return this; }
-  setRGB(r: number, g: number, b: number) { this.r = r; this.g = g; this.b = b; return this; }
-  copy(c: Color) { this.r = c.r; this.g = c.g; this.b = c.b; return this; }
+  private _hex = 0;
+  constructor(c?: string | number) { this.r = 0; this.g = 0; this.b = 0; if (c !== undefined) this.set(c); }
+  set(c: any) {
+    if (typeof c === 'number') { this._hex = c; this.r = ((c >> 16) & 0xff) / 255; this.g = ((c >> 8) & 0xff) / 255; this.b = (c & 0xff) / 255; }
+    return this;
+  }
+  setHex(h: number) { return this.set(h); }
+  setRGB(r: number, g: number, b: number) { this.r = r; this.g = g; this.b = b; this._hex = (Math.round(r*255)<<16)|(Math.round(g*255)<<8)|Math.round(b*255); return this; }
+  getHex() { return this._hex; }
+  copy(c: Color) { this.r = c.r; this.g = c.g; this.b = c.b; this._hex = c._hex; return this; }
 }
 
 export class BufferGeometry {
@@ -134,9 +139,25 @@ export class BufferAttribute {
 }
 
 export class Material { dispose() {} }
-export class MeshStandardMaterial extends Material { color = new Color(); }
-export class MeshBasicMaterial extends Material { color = new Color(); }
-export class LineBasicMaterial extends Material { color = new Color(); }
+export class MeshStandardMaterial extends Material {
+  color = new Color();
+  constructor(opts: any = {}) { super(); if (opts.color !== undefined) this.color.set(opts.color); }
+}
+export class MeshBasicMaterial extends Material {
+  color = new Color();
+  side: any; transparent = false; opacity = 1;
+  constructor(opts: any = {}) {
+    super();
+    if (opts.color !== undefined) this.color.set(opts.color);
+    if (opts.side !== undefined) this.side = opts.side;
+    if (opts.transparent !== undefined) this.transparent = opts.transparent;
+    if (opts.opacity !== undefined) this.opacity = opts.opacity;
+  }
+}
+export class LineBasicMaterial extends Material {
+  color = new Color();
+  constructor(opts: any = {}) { super(); if (opts.color !== undefined) this.color.set(opts.color); }
+}
 export class PointsMaterial extends Material { color = new Color(); size = 1; }
 
 export class Object3D {
@@ -157,6 +178,22 @@ export class Object3D {
   traverse(callback: (obj: Object3D) => void) {
     callback(this);
     this.children.forEach(c => c.traverse(callback));
+  }
+  clone(recursive = true): Object3D {
+    const c = new (this.constructor as any)();
+    c.name = (this as any).name;
+    c.visible = this.visible;
+    c.userData = JSON.parse(JSON.stringify(this.userData ?? {}));
+    c.position = new Vector3(this.position.x, this.position.y, this.position.z);
+    c.scale = new Vector3(this.scale.x, this.scale.y, this.scale.z);
+    c.rotation = { x: this.rotation.x, y: this.rotation.y, z: this.rotation.z };
+    if (recursive) {
+      for (const child of this.children) {
+        const cc = (child as any).clone ? (child as any).clone(true) : child;
+        c.add(cc);
+      }
+    }
+    return c;
   }
 }
 

@@ -94,7 +94,7 @@ export class SliceTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(_e: MouseEvent, point: THREE.Vector3 | null): void {
     if (!point) return;
     if (this.phase === 'idle') {
       this.p1 = point.clone();
@@ -124,7 +124,7 @@ export class SliceTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(_e: MouseEvent, point: THREE.Vector3 | null): void {
     if (!point) return;
     if (this.phase === 'awaiting_p2' && this.p1) {
       this.updateLinePreview(this.p1, point);
