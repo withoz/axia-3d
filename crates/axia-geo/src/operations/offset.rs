@@ -154,23 +154,34 @@ impl Mesh {
         // 5) offset face 생성 (동일 winding)
         let inner_face = self.add_face(&offset_vids, material)?;
 
-        // 6) strip faces 생성 (원본 → offset 사이 quad strip)
-        //    원본 vertex 재사용 (아직 storage에 남아있음)
-        let mut strip_faces = Vec::with_capacity(n);
-        for i in 0..n {
-            let j = (i + 1) % n;
-
-            // Inset과 Outset에서 strip quad의 winding 방향이 다름.
-            // Inset: offset 정점이 안쪽 → [orig, offset, offset_next, orig_next] = CCW
-            // Outset: offset 정점이 바깥 → [orig, orig_next, offset_next, offset] = CCW
-            let quad_verts = if dist > 0.0 {
-                [loop_vids[i], offset_vids[i], offset_vids[j], loop_vids[j]]
-            } else {
-                [loop_vids[i], loop_vids[j], offset_vids[j], offset_vids[i]]
-            };
-            let strip_fid = self.add_face(&quad_verts, material)?;
-            strip_faces.push(strip_fid);
-        }
+        // 6) 2026-04-27 — 사용자 요청: "offset 명령시 offset 된 라인과 모서리선이
+        //    연결되면 안됨. 모서리 연결선을 지워서 완성".
+        //
+        //    이전: N 개 strip quad 를 만들어 inset 과 outer boundary 사이를 채움
+        //    → 모서리에서 quad 끼리 만나는 corner-connector 엣지가 보임.
+        //
+        //    새로운 방식: 단일 frame face 를 multi-loop 으로 생성.
+        //      outer loop = 원본 boundary
+        //      inner hole = offset polygon (winding 반대 — hole 규약)
+        //    → corner connector 엣지 없음. inner_face 와 frame 이 함께 원래
+        //      면 영역을 덮음.
+        //
+        //    Inset (dist > 0): hole 은 outer 와 같은 CCW (자동 hole 처리에서
+        //      add_face_with_holes 가 내부 winding 을 적절히 정규화).
+        //    Outset (dist < 0): outer 가 offset polygon, 원본은 hole. → 두
+        //      loop 의 역할이 바뀜.
+        let (frame_outer, frame_hole): (Vec<VertId>, Vec<VertId>) = if dist > 0.0 {
+            (loop_vids.to_vec(), offset_vids.clone())
+        } else {
+            (offset_vids.clone(), loop_vids.to_vec())
+        };
+        let frame_face = self.add_face_with_holes(
+            &frame_outer,
+            &[&frame_hole],
+            material,
+        )?;
+        // strip_faces 는 이제 frame_face 하나로 대체. 호환성 위해 vec 에 담아 반환.
+        let strip_faces = vec![frame_face];
 
         // ADR-007 — offset 후 invariants 검증
         self.debug_verify_invariants();
@@ -326,14 +337,14 @@ mod tests {
 
         let result = mesh.offset_face(fid, 100.0).unwrap();
 
-        // inner face + 4 strip faces = 5 총 면
+        // 2026-04-27 — frame face (multi-loop with hole) + inner = 2 faces.
         let faces_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
-        assert_eq!(faces_after, 5); // 1 inner + 4 strips
+        assert_eq!(faces_after, 2); // 1 inner + 1 frame (with hole)
 
-        // strip faces 수 검증
-        assert_eq!(result.strip_faces.len(), 4);
+        // strip_faces 는 이제 [frame_face] 하나만 (호환 vec).
+        assert_eq!(result.strip_faces.len(), 1);
 
-        // inner face가 존재하는지
+        // inner face 존재
         assert!(mesh.faces.get(result.inner_face).is_some());
     }
 
@@ -344,10 +355,10 @@ mod tests {
 
         let result = mesh.offset_face(fid, -100.0).unwrap();
 
-        // 동일 구조: inner face + 4 strip
+        // outset 도 동일 — frame + inner.
         let faces_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
-        assert_eq!(faces_after, 5);
-        assert_eq!(result.strip_faces.len(), 4);
+        assert_eq!(faces_after, 2);
+        assert_eq!(result.strip_faces.len(), 1);
     }
 
     #[test]
@@ -361,8 +372,8 @@ mod tests {
         let result = mesh.offset_face(fid, 50.0).unwrap();
 
         let faces_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
-        assert_eq!(faces_after, 4); // 1 inner + 3 strips
-        assert_eq!(result.strip_faces.len(), 3);
+        assert_eq!(faces_after, 2); // 1 inner + 1 frame
+        assert_eq!(result.strip_faces.len(), 1);
     }
 
     #[test]
@@ -421,9 +432,9 @@ mod tests {
         // Offset top face
         let _result = mesh.offset_face(pp.top_face, 100.0).unwrap();
 
-        // box 6면 - top(삭제) + inner + 4 strips = 10면
+        // box 6면 - top(삭제) + inner + frame(with hole) = 7면
         let face_count_after_offset = mesh.face_count();
-        assert_eq!(face_count_after_offset, 10); // 5 original sides + 1 inner + 4 strips
+        assert_eq!(face_count_after_offset, 7); // 5 original sides + 1 inner + 1 frame
 
         // 모든 face가 렌더링 가능한지 (export_buffers가 크래시하지 않는지)
         let buffers = mesh.export_buffers();
