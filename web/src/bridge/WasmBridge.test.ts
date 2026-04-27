@@ -68,7 +68,8 @@ vi.mock('../wasm/axia_wasm', () => {
     }
   }
   return {
-    default: vi.fn().mockResolvedValue(undefined),
+    // wasm-bindgen `init()` resolves to InitOutput { memory, ... }
+    default: vi.fn().mockResolvedValue({ memory: new WebAssembly.Memory({ initial: 1 }) }),
     AxiaEngine: MockAxiaEngine,
   };
 });

@@ -270,6 +270,16 @@ type AxiaEngineExtended = AxiaEngine & {
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
   sheetBoolean?(a: number, b: number, op: string): string;
   drawPolyline?(points: Float64Array): number;
+  getPositionsPtr?(): number;
+  getPositionsLen?(): number;
+  getNormalsPtr?(): number;
+  getNormalsLen?(): number;
+  getIndicesPtr?(): number;
+  getIndicesLen?(): number;
+  getFaceMapPtr?(): number;
+  getFaceMapLen?(): number;
+  /** WASM linear memory — wasm-bindgen exposes this as `memory`. */
+  memory?: WebAssembly.Memory;
   sliceVolumeByPlane?(faceIds: Uint32Array,
     ox: number, oy: number, oz: number,
     nx: number, ny: number, nz: number): string;
@@ -339,9 +349,14 @@ export class WasmBridge {
     dirty: boolean;
   } = { positions: null, positionsF64: null, normals: null, indices: null, faceMap: null, edgeLines: null, edgeMap: null, dirty: true };
 
+  /** WASM linear memory — captured on init().
+   *  Used by zero-copy buffer access (ADR-013 §4). null if WASM init failed. */
+  private wasmMemory: WebAssembly.Memory | null = null;
+
   async init(): Promise<void> {
     try {
-      await init();
+      const wasmExports = await init();
+      this.wasmMemory = wasmExports.memory;
       this.engine = new AxiaEngine() as unknown as AxiaEngineExtended;
       debugLog('[WasmBridge] ✓ Engine initialized.');
     } catch (e) {
@@ -532,6 +547,43 @@ export class WasmBridge {
     w.__AXIA_TELEMETRY_COPY?.(totalBytes);
     this.bufferCache = { positions, positionsF64: positionsF64 ?? null, normals, indices, faceMap, edgeLines: null, edgeMap: null, dirty: false };
     return { positions, normals, indices, faceMap, positionsF64 };
+  }
+
+  /** ADR-013 §4 zero-copy mesh buffers.
+   *
+   *  Returns Float32Array / Uint32Array views directly onto the WASM
+   *  linear memory — no JS-side copy. Each call re-fetches ptr+len so
+   *  WASM heap growth is handled transparently.
+   *
+   *  CAVEAT: views are ONLY valid until the next mutating WASM call
+   *  (anything that may resize the memory). Caller must consume the
+   *  data immediately and not retain references across mutations.
+   *  Returns null if the engine isn't loaded or buffers are empty.
+   *
+   *  Used by the new fast path in syncMesh; the legacy
+   *  `getMeshBuffers()` (which copies) is kept for callers that need
+   *  to retain the data.
+   */
+  getMeshBuffersZeroCopy(): {
+    positions: Float32Array;
+    normals: Float32Array;
+    indices: Uint32Array;
+    faceMap: Uint32Array;
+  } | null {
+    const eng = this.engine;
+    if (!eng?.getPositionsPtr || !eng.getPositionsLen) return null;
+    if (!this.wasmMemory) return null;
+    const posLen = eng.getPositionsLen();
+    if (posLen === 0) return null;
+    // Re-fetch each ptr after each rebuild_cache (in WASM impl) — heap
+    // growth invalidates earlier ptrs.
+    const buffer = this.wasmMemory.buffer;
+    const positions = new Float32Array(buffer, eng.getPositionsPtr(), posLen);
+    const normals   = new Float32Array(buffer, eng.getNormalsPtr!(),   eng.getNormalsLen!());
+    const indices   = new Uint32Array (buffer, eng.getIndicesPtr!(),   eng.getIndicesLen!());
+    const faceMap   = new Uint32Array (buffer, eng.getFaceMapPtr!(),   eng.getFaceMapLen!());
+    // Telemetry — view creation, no copy. No bytes counted (intentional).
+    return { positions, normals, indices, faceMap };
   }
 
   /** Get CAD-grade f64 vertex positions (Float64Array).

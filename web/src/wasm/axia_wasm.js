@@ -919,6 +919,20 @@ export class AxiaEngine {
         }
     }
     /**
+     * @returns {number}
+     */
+    getFaceMapLen() {
+        const ret = wasm.axiaengine_getFaceMapLen(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    getFaceMapPtr() {
+        const ret = wasm.axiaengine_getFaceMapPtr(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * Return the outer-loop vertex IDs of a face in walk order.
      * Empty vec on error (face missing, degenerate, etc.).
      * @param {number} face_id_raw
@@ -961,6 +975,34 @@ export class AxiaEngine {
         }
     }
     /**
+     * @returns {number}
+     */
+    getIndicesLen() {
+        const ret = wasm.axiaengine_getIndicesLen(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    getIndicesPtr() {
+        const ret = wasm.axiaengine_getIndicesPtr(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    getNormalsLen() {
+        const ret = wasm.axiaengine_getNormalsLen(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    getNormalsPtr() {
+        const ret = wasm.axiaengine_getNormalsPtr(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
      * Use for dimension display, snap matching, and precision-sensitive operations.
@@ -978,6 +1020,24 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
+    }
+    /**
+     * @returns {number}
+     */
+    getPositionsLen() {
+        const ret = wasm.axiaengine_getPositionsLen(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * ADR-013 §4 zero-copy view — returns raw pointer + length so JS can
+     * build a `Float32Array(memory.buffer, ptr, len)` without copying.
+     * Caller MUST refresh after any WASM allocation (memory may grow).
+     * 길이/포인터 둘 다 필요하므로 별도 함수 2개로 노출.
+     * @returns {number}
+     */
+    getPositionsPtr() {
+        const ret = wasm.axiaengine_getPositionsPtr(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * Get unique vertex positions in f64 precision for snap system.

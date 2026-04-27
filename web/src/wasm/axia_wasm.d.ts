@@ -338,6 +338,8 @@ export class AxiaEngine {
      * 실패 시 빈 벡터.
      */
     getEdgeEndpoints(edge_id_raw: number): Uint32Array;
+    getFaceMapLen(): number;
+    getFaceMapPtr(): number;
     /**
      * Return the outer-loop vertex IDs of a face in walk order.
      * Empty vec on error (face missing, degenerate, etc.).
@@ -353,12 +355,24 @@ export class AxiaEngine {
      * 길이 = max active FaceId raw + 1 (편의상 sparse vec).
      */
     getFaceVolumeFlags(): Uint8Array;
+    getIndicesLen(): number;
+    getIndicesPtr(): number;
+    getNormalsLen(): number;
+    getNormalsPtr(): number;
     /**
      * Get vertex positions in f64 precision (CAD-grade).
      * Same layout as get_positions() but Float64Array — no f32 truncation.
      * Use for dimension display, snap matching, and precision-sensitive operations.
      */
     getPositionsF64(): Float64Array;
+    getPositionsLen(): number;
+    /**
+     * ADR-013 §4 zero-copy view — returns raw pointer + length so JS can
+     * build a `Float32Array(memory.buffer, ptr, len)` without copying.
+     * Caller MUST refresh after any WASM allocation (memory may grow).
+     * 길이/포인터 둘 다 필요하므로 별도 함수 2개로 노출.
+     */
+    getPositionsPtr(): number;
     /**
      * Get unique vertex positions in f64 precision for snap system.
      * Returns flat [x0,y0,z0, x1,y1,z1, ...] as Float64Array.
@@ -973,9 +987,17 @@ export interface InitOutput {
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getFaceMapLen: (a: number) => number;
+    readonly axiaengine_getFaceMapPtr: (a: number) => number;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
+    readonly axiaengine_getIndicesLen: (a: number) => number;
+    readonly axiaengine_getIndicesPtr: (a: number) => number;
+    readonly axiaengine_getNormalsLen: (a: number) => number;
+    readonly axiaengine_getNormalsPtr: (a: number) => number;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
+    readonly axiaengine_getPositionsLen: (a: number) => number;
+    readonly axiaengine_getPositionsPtr: (a: number) => number;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
     readonly axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
     readonly axiaengine_getXiaFaceIds: (a: number, b: number, c: number) => void;

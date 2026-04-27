@@ -1046,6 +1046,51 @@ impl AxiaEngine {
         self.cached_positions.clone()
     }
 
+    /// ADR-013 §4 zero-copy view — returns raw pointer + length so JS can
+    /// build a `Float32Array(memory.buffer, ptr, len)` without copying.
+    /// Caller MUST refresh after any WASM allocation (memory may grow).
+    /// 길이/포인터 둘 다 필요하므로 별도 함수 2개로 노출.
+    #[wasm_bindgen(js_name = "getPositionsPtr")]
+    pub fn get_positions_ptr(&mut self) -> *const f32 {
+        self.rebuild_cache();
+        self.cached_positions.as_ptr()
+    }
+    #[wasm_bindgen(js_name = "getPositionsLen")]
+    pub fn get_positions_len(&mut self) -> usize {
+        self.rebuild_cache();
+        self.cached_positions.len()
+    }
+    #[wasm_bindgen(js_name = "getNormalsPtr")]
+    pub fn get_normals_ptr(&mut self) -> *const f32 {
+        self.rebuild_cache();
+        self.cached_normals.as_ptr()
+    }
+    #[wasm_bindgen(js_name = "getNormalsLen")]
+    pub fn get_normals_len(&mut self) -> usize {
+        self.rebuild_cache();
+        self.cached_normals.len()
+    }
+    #[wasm_bindgen(js_name = "getIndicesPtr")]
+    pub fn get_indices_ptr(&mut self) -> *const u32 {
+        self.rebuild_cache();
+        self.cached_indices.as_ptr()
+    }
+    #[wasm_bindgen(js_name = "getIndicesLen")]
+    pub fn get_indices_len(&mut self) -> usize {
+        self.rebuild_cache();
+        self.cached_indices.len()
+    }
+    #[wasm_bindgen(js_name = "getFaceMapPtr")]
+    pub fn get_face_map_ptr(&mut self) -> *const u32 {
+        self.rebuild_cache();
+        self.cached_face_map.as_ptr()
+    }
+    #[wasm_bindgen(js_name = "getFaceMapLen")]
+    pub fn get_face_map_len(&mut self) -> usize {
+        self.rebuild_cache();
+        self.cached_face_map.len()
+    }
+
     /// Get vertex positions in f64 precision (CAD-grade).
     /// Same layout as get_positions() but Float64Array — no f32 truncation.
     /// Use for dimension display, snap matching, and precision-sensitive operations.

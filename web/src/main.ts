@@ -192,8 +192,27 @@ async function main() {
   // ADR-013 §1·§2 memory budget — installs window.__AXIA_MEMORY getter.
   // Other modules (SnapManager, BVH, History) can register samplers via
   // memoryBudget.registerSampler(area, () => byteCount) at any point.
-  void import('./core/memory').then(({ installMemoryGlobal, memoryBudget }) => {
+  void import('./core/memory').then(async ({ installMemoryGlobal, memoryBudget }) => {
     installMemoryGlobal();
+    // ADR-013 §3 — eviction policy. Register handlers per area.
+    const { evictionPolicy, installEvictionGlobal } = await import('./core/eviction');
+    installEvictionGlobal();
+    // Telemetry buffer evict — clears violation/frame history.
+    evictionPolicy.register('telemetry', 4, () => {
+      const t = (window as any).__AXIA_TELEMETRY_RESET as (() => void) | undefined;
+      if (!t) return 0;
+      // Estimate bytes freed: ~50 bytes/violation × cap 1000 = 50KB max.
+      t();
+      return 50_000;
+    });
+    // History evict — drop oldest entries from OperationLog.
+    evictionPolicy.register('history', 3, () => {
+      const log = (container.tryGet?.('operationLog') as { clear?: () => void; getAll?: () => unknown[] } | undefined);
+      if (!log?.clear) return 0;
+      const before = (log.getAll?.() ?? []).length;
+      log.clear();
+      return before * 200;  // ~200 bytes/entry
+    });
     // Three.js geometry size sampler.
     memoryBudget.registerSampler('geometry', () => {
       const vp = container.tryGet?.('viewport') as { meshGroup?: { traverse?: (cb: (o: any) => void) => void } } | undefined;
