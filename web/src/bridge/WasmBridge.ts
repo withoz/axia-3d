@@ -823,13 +823,37 @@ export class WasmBridge {
    *
    * Returns the two face IDs that would merge, or `null` if erase would
    * cascade (non-coplanar / not shared by exactly 2 / WASM unavailable).
+   *
+   * 2026-04-27 — false-negative 제거 (Option A):
+   *   실제 erase 경로 (`batch_erase_edges_impl`) 는 standard merge 가
+   *   실패하면 `merge_coplanar_faces_geometric` 를 `max(tol*4, 2°)` 로 한 번
+   *   더 시도한다. 이전엔 preview 가 user tolerance 한 번만 봐서, 작은 면의
+   *   normal precision 흔들림으로 0.5° 안엔 안 들어가지만 실제로는 geometric
+   *   fallback 으로 합성되는 케이스가 cyan 으로 표시되지 않았다.
+   *
+   *   해결: WASM `previewEdgeEraseMerge` 가 이미 angle tol 을 인자로 받으므로
+   *   JS-side 에서 두 번 호출 (user tol → 실패 시 geo tol). 두 호출 모두
+   *   순수 dry-run (mutation 없음) 이라 안전.
+   *
+   *   동등성 한계: geometric fallback 의 polygon-rebuild 경로 (C-slit /
+   *   다중 공유 엣지) 까지는 시뮬레이션하지 않음 — 그건 별도 분석/구현 필요.
    */
   previewEdgeEraseMerge(edgeId: number, angleTolDeg = 0.5): [number, number] | null {
     if (!this.engine?.previewEdgeEraseMerge) return null;
     try {
-      const out = this.engine.previewEdgeEraseMerge(edgeId, angleTolDeg);
-      if (out && out.length === 2) {
-        return [out[0], out[1]];
+      // 1) Standard merge tolerance — user setting (default 0.5°).
+      const first = this.engine.previewEdgeEraseMerge(edgeId, angleTolDeg);
+      if (first && first.length === 2) {
+        return [first[0], first[1]];
+      }
+      // 2) Geometric fallback tolerance — must match batch_erase_edges_impl
+      //    `let geo_tol = (angle_tol_deg * 4.0).max(2.0);` (lib.rs:2212).
+      const geoTol = Math.max(angleTolDeg * 4, 2.0);
+      if (geoTol > angleTolDeg) {
+        const second = this.engine.previewEdgeEraseMerge(edgeId, geoTol);
+        if (second && second.length === 2) {
+          return [second[0], second[1]];
+        }
       }
       return null;
     } catch (e) {

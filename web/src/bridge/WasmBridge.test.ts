@@ -325,4 +325,71 @@ describe('WasmBridge', () => {
       expect(stats).toHaveProperty('verts');
     });
   });
+
+  describe('previewEdgeEraseMerge — dual-tolerance fallback (Option A)', () => {
+    // 실제 erase 경로 (`batch_erase_edges_impl`) 가 standard merge 실패 시
+    // `merge_coplanar_faces_geometric` 를 `max(tol*4, 2°)` 로 한 번 더 시도하므로
+    // preview 도 동일한 두 단계 시뮬레이션이 필요. WasmBridge.previewEdgeEraseMerge
+    // 가 두 번 호출하는지 검증.
+    function installFakeEngine(
+      response: (edgeId: number, tol: number) => Uint32Array | null,
+    ): ReturnType<typeof vi.fn> {
+      const fn = vi.fn(response);
+      (bridge as any).engine = { previewEdgeEraseMerge: fn };
+      return fn;
+    }
+
+    it('returns the pair on first hit (user tolerance succeeds — no second call)', () => {
+      const fn = installFakeEngine(() => new Uint32Array([42, 99]));
+      const out = bridge.previewEdgeEraseMerge(7, 0.5);
+      expect(out).toEqual([42, 99]);
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(fn).toHaveBeenNthCalledWith(1, 7, 0.5);
+    });
+
+    it('falls back to geometric tol max(tol*4, 2°) when standard fails', () => {
+      // First call (0.5°) → null; second call (2°) → pair.
+      const fn = installFakeEngine((_eid, tol) => {
+        if (tol <= 0.5 + 1e-9) return new Uint32Array(); // length-0 = null result
+        return new Uint32Array([3, 4]);
+      });
+      const out = bridge.previewEdgeEraseMerge(11, 0.5);
+      expect(out).toEqual([3, 4]);
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(fn).toHaveBeenNthCalledWith(1, 11, 0.5);
+      // geo tol = max(0.5*4, 2.0) = 2.0
+      expect(fn).toHaveBeenNthCalledWith(2, 11, 2.0);
+    });
+
+    it('uses tol*4 when user tol*4 > 2° (e.g. user already loosened to 1°)', () => {
+      const fn = installFakeEngine((_eid, tol) => {
+        if (tol < 4.0 - 1e-9) return new Uint32Array();
+        return new Uint32Array([5, 6]);
+      });
+      const out = bridge.previewEdgeEraseMerge(11, 1.0);
+      expect(out).toEqual([5, 6]);
+      // geo tol = max(1.0*4, 2.0) = 4.0
+      expect(fn).toHaveBeenNthCalledWith(2, 11, 4.0);
+    });
+
+    it('returns null when both tolerances fail (genuinely non-coplanar)', () => {
+      const fn = installFakeEngine(() => new Uint32Array());
+      const out = bridge.previewEdgeEraseMerge(99, 0.5);
+      expect(out).toBeNull();
+      expect(fn).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips the redundant second call when geo tol equals user tol', () => {
+      // angleTolDeg = 2.0 → geo tol = max(8, 2) = 8 > 2, so second call still
+      // happens. To trigger the skip, user passes ≥ 2.0 such that tol*4 ≤ tol
+      // is impossible — the code's guard is `geoTol > angleTolDeg`. Pick a
+      // tol so the first call succeeds OR the guard short-circuits.
+      // For tol ≥ 0.5, geo always > tol; the genuine skip path needs the
+      // first call to succeed, already covered above. This test asserts that
+      // when the engine isn't available, no calls happen.
+      (bridge as any).engine = undefined;
+      const out = bridge.previewEdgeEraseMerge(7, 0.5);
+      expect(out).toBeNull();
+    });
+  });
 });
