@@ -113,12 +113,20 @@ describe('MoveTool', () => {
     });
   });
 
-  describe('onMouseUp', () => {
-    it('ends transform', () => {
+  describe('CAD-style 2-click commit', () => {
+    it('mouseup does NOT end transform (CAD 2-click flow)', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       expect(tool.isBusy()).toBe(true);
-
       tool.onMouseUp({} as MouseEvent);
+      // mouseup 은 끝나지 않음 — 2nd click 을 기다림.
+      expect(tool.isBusy()).toBe(true);
+    });
+
+    it('second mousedown ends transform (commit)', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      expect(tool.isBusy()).toBe(true);
+      // 2nd click → commit
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(100, 0, 0));
       expect(tool.isBusy()).toBe(false);
       expect(ctx.dimLabel.clear).toHaveBeenCalled();
     });

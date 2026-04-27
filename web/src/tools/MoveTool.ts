@@ -143,23 +143,38 @@ export class MoveTool implements ITool {
       return;
     }
 
-    if (this.transformActive) return;
+    // 2026-04-27 — CAD-style 2-click move (사용자 요청).
+    //   1st click: 객체 + 기준점 캡처
+    //   mousemove: 미리보기 이동
+    //   2nd click: 도착점 확정.
+    //   mouseup 은 끝나지 않음 (드래그 모드 폐기).
+    if (this.transformActive) {
+      // 2nd click → COMMIT.
+      debugLog('[Move] CAD-style commit (2nd click)');
+      this.transformActive = false;
+      this.transformStartPt = null;
+      this.target = null;
+      this.transformLastDelta.set(0, 0, 0);
+      this.ctx.dimLabel.clear();
+      return;
+    }
+
     if (!point) return;
 
     // 선택이 있으면 그것, 없으면 cursor 위치의 정점을 target 으로 (vertex pick).
     const t = this.resolveTargetWithPoint(point);
     if (!t) {
-      // #13: 빈 선택 시 사용자 안내 (정점 hover 도 아닌 경우)
       Toast.info('이동할 면/에지를 선택하거나 정점을 클릭하세요', 2000);
       return;
     }
 
     this.target = t;
-    this.transformStartPt = point.clone();
+    this.transformStartPt = point.clone();  // 기준점 (base point)
     this.transformActive = true;
     this.transformLastDelta.set(0, 0, 0);
     const label = t.kind === 'faces' ? `${t.ids.length} faces` : `${t.edgeCount} edges (${t.ids.length} verts)`;
-    debugLog(`[Move] Start drag, ${label}`);
+    debugLog(`[Move] Base point captured, ${label} — move cursor + click to commit`);
+    Toast.info('도착점을 클릭하세요 (Esc: 취소)', 2500);
   }
 
   onMouseMove(_e: MouseEvent, point: THREE.Vector3 | null): void {
@@ -205,16 +220,10 @@ export class MoveTool implements ITool {
   }
 
   onMouseUp(_e: MouseEvent): void {
-    // Placement mode doesn't react to mouseup — commit happens on mousedown.
-    if (this.placementMode) return;
-    if (this.transformActive) {
-      debugLog('[Move] End drag');
-      this.transformActive = false;
-      this.transformStartPt = null;
-      this.target = null;
-      this.transformLastDelta.set(0, 0, 0);
-      this.ctx.dimLabel.clear();
-    }
+    // 2026-04-27 — CAD-style 2-click move 에서는 mouseup 에서 종료 안 함.
+    //   첫 click 후 cursor 이동 → 두 번째 click 으로 commit.
+    //   placement mode (paste/duplicate) 와 동일.
+    // 즉 NO-OP. 호환성만 유지.
   }
 
   onKeyDown(e: KeyboardEvent): void {
