@@ -7,7 +7,7 @@ function mockDeps(): InitialSceneDeps {
   return {
     bridge: {
       create_cylinder: vi.fn().mockReturnValue(0),
-      faceCount: vi.fn().mockReturnValue(1),
+      faceCount: vi.fn().mockReturnValue(0),
       drawRect: vi.fn().mockReturnValue(0),
       drawCircle: vi.fn().mockReturnValue(0),
       pushPull: vi.fn(),
@@ -35,19 +35,22 @@ describe('InitialScene', () => {
   });
 
   describe('loadInitialScene', () => {
-    it('creates cat scene (revolve legs+body+ears, spheres head/snout/nose/eyes, sweep tail)', async () => {
+    it('starts with empty scene (no geometry creation calls)', async () => {
       loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 50));
 
       expect((deps.bridge.create_cylinder as any).mock.calls.length).toBe(0);
       expect((deps.bridge.create_cone as any).mock.calls.length).toBe(0);
-      // 4 legs + body + 2 ears = 7 revolves
-      expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(7);
-      // head + snout + nose + 2 eyes = 5 spheres
-      expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(5);
-      // 1 tail sweep
-      expect((deps.bridge.sweepProfileAlongPath as any).mock.calls.length).toBe(1);
-      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.sweepProfileAlongPath as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.drawRect as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.drawCircle as any).mock.calls.length).toBe(0);
+    });
+
+    it('syncs the (empty) mesh once so viewport / BVH initialise cleanly', () => {
+      loadInitialScene(deps);
+      expect(deps.toolManager.syncMesh).toHaveBeenCalledTimes(1);
     });
 
     it('sets file status to untitled', () => {
@@ -55,7 +58,7 @@ describe('InitialScene', () => {
       expect(deps.updateFileStatus).toHaveBeenCalledWith('untitled');
     });
 
-    it('does not fetch .xia file (always generates fresh scene)', () => {
+    it('does not fetch .xia file (always starts fresh)', () => {
       const fetchSpy = vi.fn();
       globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
       loadInitialScene(deps);
