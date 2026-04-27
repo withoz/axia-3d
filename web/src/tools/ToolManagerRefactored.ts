@@ -3123,14 +3123,15 @@ export class ToolManager {
   /**
    * Handle dimension edit: 사용자가 dim label 을 클릭해 새 값을 입력했을 때.
    *
-   * 2026-04-27 (사용자 요청 "각 치수에 새 치수 기입 시 그 객체만 변환"):
-   *   해당 엣지의 2 정점만 이동. 엣지 midpoint 유지, 두 endpoint 가 edge
-   *   direction 으로 ±(newLen − oldLen)/2 만큼 대칭 translate.
-   *   이전 동작 (전체 face scale) 폐기 — 면이 변하면 다른 차원도 함께
-   *   바뀌어 의도와 어긋남.
+   * 2026-04-27 (사용자 요청 "기준은 중앙이 아니라 면/선이 구속된 부분"):
+   *   엣지의 한쪽 endpoint 를 anchor 로 고정, 반대쪽 endpoint 만 edge
+   *   direction 으로 full Δ translate.
+   *   anchor 선택 — 엣지 valence (외부 연결 엣지 수) 가 더 큰 endpoint
+   *   = 더 "구속된" 정점. 동률이면 originalFrom 우선.
    *
-   *   결과: 사각형 한 변만 늘리면 사다리꼴이 되고, 인접 엣지는 변화 없음.
-   *   직접적 "그 엣지만 변환".
+   *   이전 동작 (midpoint-대칭) 폐기 — 사용자가 "중앙 기준 X" 요청.
+   *   결과: 한 변 편집 시 anchor 쪽은 그대로, 반대쪽 모서리만 슬라이드.
+   *   인접 엣지는 자동 변형 (사용자 직접 stretch UX).
    */
   private handleDimensionEdit(_index: number, newValue: number, dimLine: DimLine): void {
     const oldLength = dimLine.from.distanceTo(dimLine.to);
@@ -3138,49 +3139,67 @@ export class ToolManager {
     const delta = newValue - oldLength;
     if (Math.abs(delta) < 0.01) return;
 
-    // dim line 의 from/to 는 외곽 offset 적용된 좌표일 수 있음.
-    //   원본 엣지 endpoint 는 originalFrom/originalTo 에 보존돼 있음.
+    // 외곽 offset 적용 전 좌표 — 원본 엣지 endpoint.
     const edgeFrom = dimLine.originalFrom ?? dimLine.from;
     const edgeTo = dimLine.originalTo ?? dimLine.to;
 
-    // 두 endpoint 의 VertId 검색 (1mm tolerance — snap 정확도).
     const vidA = this.bridge.findVertexIdAt(edgeFrom.x, edgeFrom.y, edgeFrom.z, 1.0);
     const vidB = this.bridge.findVertexIdAt(edgeTo.x, edgeTo.y, edgeTo.z, 1.0);
     if (vidA < 0 || vidB < 0) {
       debugLog(`[DimEdit] vertex lookup failed (vidA=${vidA}, vidB=${vidB})`);
       return;
     }
+    if (vidA === vidB) return; // degenerate
 
-    // Edge 방향 단위 벡터.
-    const edgeDir = new THREE.Vector3().subVectors(edgeTo, edgeFrom).normalize();
-    // 양 endpoint 가 midpoint 유지하며 대칭 이동.
-    const halfDelta = delta / 2;
-    const dxA = -edgeDir.x * halfDelta;
-    const dyA = -edgeDir.y * halfDelta;
-    const dzA = -edgeDir.z * halfDelta;
-    const dxB =  edgeDir.x * halfDelta;
-    const dyB =  edgeDir.y * halfDelta;
-    const dzB =  edgeDir.z * halfDelta;
+    // Anchor 결정 — 더 많은 엣지에 연결된 (valence 큰) 정점이 더 "구속된"
+    //   상태로 간주. helper 가 없으면 from 우선.
+    const valA = this.countEdgesAtVertex(vidA);
+    const valB = this.countEdgesAtVertex(vidB);
+    let anchorVid: number, moveVid: number;
+    let anchorPos: THREE.Vector3, movePos: THREE.Vector3;
+    if (valA > valB) {
+      anchorVid = vidA; moveVid = vidB;
+      anchorPos = edgeFrom; movePos = edgeTo;
+    } else if (valB > valA) {
+      anchorVid = vidB; moveVid = vidA;
+      anchorPos = edgeTo; movePos = edgeFrom;
+    } else {
+      // 동률 — from 을 anchor 로.
+      anchorVid = vidA; moveVid = vidB;
+      anchorPos = edgeFrom; movePos = edgeTo;
+    }
+    void anchorVid; void anchorPos;  // anchor 는 그대로 두므로 translate 호출 안 함
 
-    // 두 정점 각각 translate. 동일 vertex id 이면 한 번만 (degenerate edge).
-    const okA = this.bridge.translateVerts([vidA], dxA, dyA, dzA);
-    const okB = vidA !== vidB
-      ? this.bridge.translateVerts([vidB], dxB, dyB, dzB)
-      : true;
+    // moveVid 만 edge direction 으로 full Δ translate. direction 은 anchor → move.
+    const edgeDir = new THREE.Vector3().subVectors(movePos, anchorPos).normalize();
+    const dx = edgeDir.x * delta;
+    const dy = edgeDir.y * delta;
+    const dz = edgeDir.z * delta;
+    const ok = this.bridge.translateVerts([moveVid], dx, dy, dz);
 
-    if (okA && okB) {
+    if (ok) {
       this.syncMesh();
       const newFaces = this.selection.getSelectedFaces();
       const newEdges = this.selection.getSelectedEdges();
       if (newFaces.length > 0 || newEdges.length > 0) {
         this.updateSelectionDimensions(newFaces, newEdges);
       }
-      debugLog(`[DimEdit] ✓ ${oldLength.toFixed(2)} → ${newValue.toFixed(2)} (vidA=${vidA}, vidB=${vidB})`);
+      debugLog(`[DimEdit] ✓ ${oldLength.toFixed(2)} → ${newValue.toFixed(2)} ` +
+               `(anchor=${anchorVid} val=${valA===valB ? '=' : (valA>valB?'A>B':'B>A')}, move=${moveVid})`);
     } else {
-      debugLog(`[DimEdit] ✗ translateVerts failed (okA=${okA}, okB=${okB})`);
-      // Best-effort rollback — 한쪽만 성공했으면 undo.
-      if (okA && !okB) this.bridge.undo();
+      debugLog(`[DimEdit] ✗ translateVerts failed`);
     }
+  }
+
+  /** Vertex 의 incident 엣지 수 — anchor 결정용 휴리스틱. */
+  private countEdgesAtVertex(vid: number): number {
+    if (!this.edgeMap) return 0;
+    let count = 0;
+    for (const eid of this.edgeMap) {
+      const eps = this.bridge.getEdgeEndpoints(eid);
+      if (eps.length === 2 && (eps[0] === vid || eps[1] === vid)) count++;
+    }
+    return count;
   }
 
   private setupMouseHandlers(): void {
