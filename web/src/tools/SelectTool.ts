@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
+import { pickingRouter } from '../core/PickingRouter';
 
 export class SelectTool implements ITool {
   readonly name = 'select';
@@ -41,8 +42,15 @@ export class SelectTool implements ITool {
   }
 
   onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
-    // Edge/Face 지능형 우선순위 픽 (커서에서 5px 이내 엣지 → edge 우선, 그 외 → face)
-    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY);
+    // ADR-012 §4 — picking 은 PickingRouter 단일 진입점 통과.
+    //   매 query 의 elapsed 가 자동으로 'picking.face' budget(8ms) 에 기록.
+    const r = pickingRouter.route({
+      kind: 'edgeOrFace',
+      x: e.clientX, y: e.clientY,
+      viewport: this.ctx.viewport,
+    });
+    // 기존 코드 호환을 위해 pickEdgeOrFace 형식의 객체로 정규화.
+    const picked = r ? { type: r.kind, hit: r.hit } : null;
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       // ── 엣지 선택 경로 ──

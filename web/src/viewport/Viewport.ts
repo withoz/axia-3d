@@ -23,6 +23,7 @@ import { getMaterialLibrary, TextureInfo } from '../materials/MaterialLibrary';
 import { getTextureCache } from '../materials/TextureCache';
 import { computeUVsFromBuffers, UVProjectionParams } from '../materials/UVProjection';
 import { WasmBridge, DeltaBuffers } from '../bridge/WasmBridge';
+import { frameScheduler } from '../core/FrameScheduler';
 
 // Phase C1: Patch Three.js Mesh/BufferGeometry with BVH-accelerated raycast.
 // All raycaster.intersectObjects calls now use BVH automatically on meshes
@@ -1343,15 +1344,16 @@ export class Viewport {
    * Schedule smoothNormals on the next animation frame so the new mesh
    * paints immediately with WASM-supplied normals. If a previous schedule
    * is still pending it gets cancelled — only the latest mesh is smoothed.
+   *
+   * ADR-012 §2 — uses FrameScheduler so rAF chain depth stays ≤ 1 even
+   * when multiple modules independently defer work to the next frame.
+   * Same TaskKey ('smoothNormals') auto-deduplicates (latest geometry wins).
    */
   private _scheduleSmoothNormals(geometry: THREE.BufferGeometry, angleDeg: number): void {
-    if (this._pendingSmoothNormalsRaf != null) {
-      cancelAnimationFrame(this._pendingSmoothNormalsRaf);
-    }
-    this._pendingSmoothNormalsRaf = requestAnimationFrame(() => {
-      this._pendingSmoothNormalsRaf = null;
+    // Reference cleared (legacy field still on instance for back-compat)
+    this._pendingSmoothNormalsRaf = null;
+    frameScheduler.schedule('smoothNormals', () => {
       // Geometry might have been disposed if a newer updateMesh() ran.
-      // Detect via a simple sentinel: position attribute removed on dispose.
       const pos = geometry.getAttribute('position');
       if (!pos) return;
       try { this.smoothNormals(geometry, angleDeg); }

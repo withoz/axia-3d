@@ -48,7 +48,17 @@ export type BudgetKey =
   | 'bvhRebuild'
   | 'meshRefresh'  // mesh refresh chain
   | 'drawCommand'  // bridge.drawLine / drawRect / drawCircle
-  | 'wasmCall';    // 단일 WASM 호출 (boundary)
+  | 'wasmCall'     // 단일 WASM 호출 (boundary)
+  // ── syncMesh sub-steps (Sprint 2 §2 분해 측정) ──
+  | 'syncMesh.bridgeQueries'  // getEdgeLines + getEdgeMap + getDelta + getBuffers
+  | 'syncMesh.deltaApply'     // viewport.applyDelta
+  | 'syncMesh.fullUpdate'     // viewport.updateMesh full path
+  | 'syncMesh.selection'      // selection.updateBuffers + updateEdgeBuffers
+  | 'syncMesh.snapSchedule'   // scheduleSnapRefresh enqueue (≠ rebuild)
+  // ── Picking router (ADR-012 §4) ──
+  | 'picking.face'
+  | 'picking.edge'
+  | 'picking.snap';
 
 /** ADR-012 §1 - 단계별 latency budget (ms). */
 export const BUDGETS: Record<BudgetKey, number> = {
@@ -65,6 +75,16 @@ export const BUDGETS: Record<BudgetKey, number> = {
   meshRefresh: 33,
   drawCommand: 100,  // 사용자가 즉각 반응 기대하는 단위
   wasmCall: 50,      // 단일 호출은 충분히 빠르게
+  // syncMesh sub-step budgets — 합쳐서 syncMesh budget(33ms) 이내가 목표.
+  'syncMesh.bridgeQueries': 8,
+  'syncMesh.deltaApply':    8,
+  'syncMesh.fullUpdate':   16,
+  'syncMesh.selection':     6,
+  'syncMesh.snapSchedule':  3,
+  // Picking — hover budget(16ms) 안에 들어가야 함.
+  'picking.face': 8,
+  'picking.edge': 8,
+  'picking.snap': 8,
 };
 
 // ── Data shapes ───────────────────────────────────────────────────

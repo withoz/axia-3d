@@ -1739,18 +1739,30 @@ export class ToolManager {
     }
   }
 
-  /** Internal — original syncMesh body. Wrapped by syncMesh() for telemetry. */
+  /** Internal — original syncMesh body. Wrapped by syncMesh() for telemetry.
+   *
+   *  Sprint 2 §2 — 각 sub-step 을 따로 측정해 어디가 over-budget 인지
+   *  telemetry 가 알려주도록 분해한다. 합산은 syncMesh budget(33ms)
+   *  안에 들어가야 하며 부분 budget 은 BUDGETS["syncMesh.*"] 참조. */
   private _syncMeshInternal(): void {
+    const recordStep = (key: string, ms: number): void => {
+      const w = window as unknown as { __AXIA_TELEMETRY_RECORD?: (key: string, ms: number) => void };
+      w.__AXIA_TELEMETRY_RECORD?.(key, ms);
+    };
+
+    // ── (a) Bridge queries ─ getEdgeLines / getEdgeMap / getDeltaBuffers ──
+    const tBridge0 = performance.now();
     const edgeLines = this.bridge.getEdgeLines();
     this.edgeMap = this.bridge.getEdgeMap();
-    // 스케치 모드가 활성화된 경우 매 mesh 변경마다 free-edge 수를 상태바
-    // 배지에 반영해 사용자에게 "얼마나 닫혔는지" 실시간 피드백.
     if (this._sketch) this.updateSketchStatusBadge();
+    const delta = this.bridge.getDeltaBuffers();
+    recordStep('syncMesh.bridgeQueries', performance.now() - tBridge0);
 
     // ════ Phase 1 Optimization: Try delta first (fast path) ════
-    const delta = this.bridge.getDeltaBuffers();
     if (delta && delta.positions.length > 0) {
+      const tDelta0 = performance.now();
       const deltaApplied = this.viewport.applyDelta(delta);
+      recordStep('syncMesh.deltaApply', performance.now() - tDelta0);
       if (deltaApplied) {
         // ✅ Delta successfully applied — only updated changed vertices
         debugLog('[ToolManager] Delta applied:', {
@@ -1766,15 +1778,19 @@ export class ToolManager {
         const buffersForUpdate = this.bridge.getMeshBuffers();
         if (buffersForUpdate) {
           this.faceMap = buffersForUpdate.faceMap;
+          const tSel0 = performance.now();
           this.selection.updateBuffers(
             buffersForUpdate.positions, buffersForUpdate.indices, buffersForUpdate.faceMap,
           );
           this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
+          recordStep('syncMesh.selection', performance.now() - tSel0);
           const snapF64 = this.bridge.getSnapVerticesF64();
+          const tSnap0 = performance.now();
           this.scheduleSnapRefresh(
             buffersForUpdate.positions, buffersForUpdate.indices, buffersForUpdate.faceMap,
             edgeLines, snapF64,
           );
+          recordStep('syncMesh.snapSchedule', performance.now() - tSnap0);
         }
         const stats = this.bridge.getStats();
         this.viewport.setStats(stats.verts, stats.faces);
@@ -1784,13 +1800,17 @@ export class ToolManager {
 
     // ════ Fallback: Full buffer update (slow path) ════
     debugLog('[ToolManager] Using full buffer update (delta unavailable or failed)');
+    // Sprint 2 § 추가 — getMeshBuffers / getCenterlineLines / getFaceVolumeFlags
+    // 도 bridge query 의 일부. 통합해서 'syncMesh.bridgeQueries' 에 누적.
+    const tBridge1 = performance.now();
     const buffers = this.bridge.getMeshBuffers();
-
     const centerLines = this.bridge.getCenterlineLines();
     // ADR-007 Rev 2 — face 분류 비트 array (Wall=1, Sheet=0).
     //   Viewport 가 sheet 의 BackSide 를 front-color 로 렌더하는 데 사용.
     const volumeFlags = this.bridge.getFaceVolumeFlags();
+    recordStep('syncMesh.bridgeQueries', performance.now() - tBridge1);
     if (buffers) {
+      const tFull0 = performance.now();
       this.viewport.updateMesh(
         buffers.positions, buffers.normals, buffers.indices,
         edgeLines ?? undefined,
@@ -1798,17 +1818,24 @@ export class ToolManager {
         centerLines,
         volumeFlags,
       );
+      recordStep('syncMesh.fullUpdate', performance.now() - tFull0);
       this.faceMap = buffers.faceMap;
 
+      const tSel0 = performance.now();
       this.selection.updateBuffers(buffers.positions, buffers.indices, buffers.faceMap);
       this.selection.updateEdgeBuffers(edgeLines, this.edgeMap);
+      recordStep('syncMesh.selection', performance.now() - tSel0);
 
       // Get f64 precision vertices for snap (avoids f32 truncation)
+      const tBridge2 = performance.now();
       const snapF64 = this.bridge.getSnapVerticesF64();
+      recordStep('syncMesh.bridgeQueries', performance.now() - tBridge2);
+      const tSnap0 = performance.now();
       this.scheduleSnapRefresh(
         buffers.positions, buffers.indices, buffers.faceMap,
         edgeLines, snapF64,
       );
+      recordStep('syncMesh.snapSchedule', performance.now() - tSnap0);
     } else {
       this.viewport.updateMesh(
         new Float32Array(0), new Float32Array(0), new Uint32Array(0),
