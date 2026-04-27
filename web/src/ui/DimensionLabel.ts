@@ -174,94 +174,14 @@ export class DimensionLabel {
       label.style.display = 'block';
       label.style.setProperty('--dim-color', color);
 
-      if (line.faceNormal && len > 0.5) {
-        // ═══ Face-aligned 모드 (사용자 요청 "면에 평행하게") ═══
-        // 면 평면의 두 단위 직교 벡터 (U=엣지 방향, V=면 위 직교)를
-        //   3D 에서 정의 → 작은 거리로 이동한 두 점을 screen 으로
-        //   project → CSS matrix() 로 글자를 그 평면 평행하게 skew 시킴.
-        //   결과: 글자가 perspective 에서 face 위에 lying flat 인 효과.
-        const mid3 = new THREE.Vector3()
-          .addVectors(line.from, line.to)
-          .multiplyScalar(0.5);
-        const u3 = new THREE.Vector3()
-          .subVectors(line.to, line.from)
-          .normalize();
-        let v3 = new THREE.Vector3()
-          .crossVectors(line.faceNormal, u3)
-          .normalize();
-        // V 의 부호: face normal 이 카메라 쪽이 되도록 보정 (글자가
-        //   face 뒤가 아닌 앞에서 보이게).
-        const camDir = new THREE.Vector3()
-          .subVectors(camera.position, mid3)
-          .normalize();
-        if (v3.dot(camDir) < 0) v3 = v3.multiplyScalar(-1);
-
-        // 라벨 위치 anchor — dim line 정중앙. 사용자 reference image
-        //   처럼 글자가 dim line 위에 lying flat. 두 unit 벡터 sample
-        //   거리는 face bbox 비례로 충분히 길게 (작으면 매트릭스 노이즈).
-        const stride = Math.max(line.from.distanceTo(line.to) * 0.04, 5);
-        const anchor3 = mid3.clone();  // dim line 중점
-        const anchorU = anchor3.clone().addScaledVector(u3, stride);
-        const anchorV = anchor3.clone().addScaledVector(v3, stride);
-
-        const sa = this.toScreen(anchor3, camera, w, h);
-        const su = this.toScreen(anchorU, camera, w, h);
-        const sv = this.toScreen(anchorV, camera, w, h);
-
-        if (sa && su && sv) {
-          // CSS matrix(a,b,c,d,e,f): x' = a*x + c*y + e
-          // text-local x 축 → su - sa, y 축 → sv - sa.
-          //   stride 한 단위가 그 화면 거리에 매핑되도록 정규화는
-          //   필요 없음 — element 의 width/height 가 실제 글자 크기 라
-          //   matrix 단위는 1px 기준. 따라서 (su-sa)/stride_screen 같은
-          //   정규화 대신 직접 단위벡터화.
-          const ux = (su.x - sa.x);
-          const uy = (su.y - sa.y);
-          const vx = (sv.x - sa.x);
-          const vy = (sv.y - sa.y);
-          const ulen = Math.sqrt(ux*ux + uy*uy) || 1;
-          const vlen = Math.sqrt(vx*vx + vy*vy) || 1;
-          let a = ux / ulen, b = uy / ulen;
-          let c = vx / vlen, d = vy / vlen;
-
-          // 글자 가독성 보정 — viewer 시점에서 항상 읽기 쉬운 방향으로.
-          //
-          //   CSS matrix(a,b,c,d,..): local-x → (a,b) on screen.
-          //   글자가 mirror 되지 않으려면 local-x 가 screen 의 "오른쪽 또는
-          //   위쪽" 절반을 향해야 함 — 즉 a > 0 (좌→우 reading) 가 절대
-          //   기준. a == 0 (vertical edge) 인 경우엔 b < 0 (head up) 가 기준.
-          //
-          //   1) a < 0 (또는 a ≈ 0 & b > 0) → 180° 회전 → 좌→우 reading
-          //      direction + head up 동시에 보장.
-          //   2) V 방향 보정 (d < 0) → face 앞면 lying flat.
-          //
-          //   순서: 1) → 2). 역순일 경우 1) 이 d 부호를 다시 뒤집을 수 있음.
-          if (a < -1e-9 || (Math.abs(a) <= 1e-9 && b > 0)) {
-            a = -a; b = -b; c = -c; d = -d;
-          }
-          if (d < 0) { c = -c; d = -d; }
-
-          label.style.left = sa.x + 'px';
-          label.style.top = sa.y + 'px';
-          // Note: matrix(a, b, c, d, e, f) — 마지막 e/f 는 0 이고 left/top
-          //   에서 위치 잡음. translate(-50%, -50%) 는 matrix 와 함께 쓸 수
-          //   없으므로 element width/height 의 절반만큼 offset 보정.
-          const labelHalfW = label.offsetWidth / 2 || 0;
-          const labelHalfH = label.offsetHeight / 2 || 0;
-          // 보정: matrix 에 element 중심을 anchor 로 가져오는 변환 추가.
-          //   (translate(-w/2,-h/2) 후 matrix 적용 == 두 매트릭스 합성)
-          //   합성: x' = a*(-w/2) + c*(-h/2) + 0; y' = b*(-w/2) + d*(-h/2) + 0
-          const tx = -(a * labelHalfW + c * labelHalfH);
-          const ty = -(b * labelHalfW + d * labelHalfH);
-          label.style.transform = `matrix(${a},${b},${c},${d},${tx},${ty})`;
-        } else {
-          // toScreen 실패 → fallback rotate
-          this.applyRotateFallback(label, screenFrom, screenTo, len, dy, dx);
-        }
-      } else {
-        // ═══ Fallback: 화면 회전 (face normal 없을 때 / edge-only 선택) ═══
-        this.applyRotateFallback(label, screenFrom, screenTo, len, dy, dx);
-      }
+      // ═══ 단순 화면 회전 ═══
+      // 2026-04-27 — 사용자 요청 "단순하게 처리".
+      //   이전 face-aligned matrix 변환은 카메라 각도에 따라 글자 mirror
+      //   /upside-down 케이스가 다양해 보정 로직이 복잡해짐 (top view 의
+      //   vertical edge 등). 화면 회전 ±90° 클램프 fallback 으로 통일 →
+      //   글자가 항상 dim line 따라 정렬 + head 항상 위 → 어느 각도에서도
+      //   읽힘. face plane lying-flat 효과는 포기 (단순성 trade-off).
+      this.applyRotateFallback(label, screenFrom, screenTo, len, dy, dx);
 
       // Editable labels get pointer-events and click handler
       if (line.editable && this._onEdit) {
