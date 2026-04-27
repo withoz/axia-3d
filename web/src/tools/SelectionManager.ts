@@ -37,7 +37,7 @@ export class SelectionManager {
   private hoverOutline: THREE.LineSegments | null = null;
   private selectionMesh: THREE.Mesh | null = null;
   private selectionOutline: THREE.LineSegments | null = null;
-  private edgeSelectionLine: THREE.LineSegments | null = null;  // 선택된 edge 하이라이트
+  private edgeSelectionLine: LineSegments2 | null = null;  // 선택된 edge 하이라이트 (Line2)
   private edgeHoverLine: LineSegments2 | null = null;  // hover edge 하이라이트 (Line2)
 
   // ── XIA 전체 선택 (트리플 클릭) 도트 표시 ──
@@ -104,10 +104,11 @@ export class SelectionManager {
   /** ToolManager 에서 viewport resize 시 호출. Line2 픽셀 두께 정확도 유지. */
   setRendererResolution(width: number, height: number): void {
     this.rendererResolution.set(width, height);
-    // 현재 그려진 hover line 의 LineMaterial 도 업데이트.
     if (this.edgeHoverLine) {
-      const mat = this.edgeHoverLine.material as LineMaterial;
-      mat.resolution.set(width, height);
+      (this.edgeHoverLine.material as LineMaterial).resolution.set(width, height);
+    }
+    if (this.edgeSelectionLine) {
+      (this.edgeSelectionLine.material as LineMaterial).resolution.set(width, height);
     }
   }
 
@@ -1402,14 +1403,21 @@ export class SelectionManager {
 
     if (verts.length === 0) return;
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: SelectionManager.EDGE_SELECT_COLOR,  // 오렌지 — face 선택(파랑)과 구분
-      linewidth: 3,  // 대부분 브라우저가 clamp(1)하지만 지원 시 굵게
+    // 2026-04-27 — 사용자 요청: 2-click / 3-click 시 boundary 엣지 선택
+    //   하이라이트를 hover 색상/두께와 동일하게 (HOVER_COLOR red 2px Line2).
+    //   이전 LineBasicMaterial linewidth=3 은 Windows GL 에서 clamp(1px) 라
+    //   사실상 1px 만 표시.
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(new Float32Array(verts));
+    const mat = new LineMaterial({
+      color: SelectionManager.HOVER_COLOR,
+      linewidth: SelectionManager.HOVER_LINE_WIDTH_PX,
       depthTest: false,
+      transparent: true,
+      resolution: new THREE.Vector2(this.rendererResolution.x, this.rendererResolution.y),
     });
-    this.edgeSelectionLine = new THREE.LineSegments(geo, mat);
+    this.edgeSelectionLine = new LineSegments2(geo, mat);
+    this.edgeSelectionLine.computeLineDistances();
     this.edgeSelectionLine.renderOrder = 999;
     this.highlightGroup.add(this.edgeSelectionLine);
   }
@@ -1442,7 +1450,7 @@ export class SelectionManager {
       linewidth: SelectionManager.HOVER_LINE_WIDTH_PX,
       depthTest: false,
       transparent: true,
-      resolution: this.rendererResolution.clone(),
+      resolution: new THREE.Vector2(this.rendererResolution.x, this.rendererResolution.y),
     });
     this.edgeHoverLine = new LineSegments2(geo, mat);
     this.edgeHoverLine.renderOrder = 998;
