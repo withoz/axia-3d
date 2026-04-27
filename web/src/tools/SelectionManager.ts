@@ -836,21 +836,11 @@ export class SelectionManager {
     this.selectionMesh.renderOrder = 2;
     this.highlightGroup.add(this.selectionMesh);
 
-    // 윤곽선 (선택된 face의 경계 에지) — 단, selectedEdges 에 이미 들어
-    //   있는 엣지는 제외 (Option A — rebuildEdgeSelectionLine 이 주황으로
-    //   별도 그릴 예정이므로 outline 의 시안과 겹치는 이중 렌더 방지).
-    const edgeGeo = this.buildBoundaryEdges(this.selected, this.selectedEdges);
-    if (edgeGeo) {
-      const edgeMat = new THREE.LineBasicMaterial({
-        color: 0x1565c0,
-        linewidth: 2,
-        depthTest: true,
-      });
-      this.selectionOutline = new THREE.LineSegments(edgeGeo, edgeMat);
-      this.selectionOutline.name = 'selection-outline';
-      this.selectionOutline.renderOrder = 2;
-      this.highlightGroup.add(this.selectionOutline);
-    }
+    // 2026-04-27 — 면 선택 시 boundary outline 렌더링 폐기.
+    //   사용자 보고: "면 선택시 면만 선택되어야 한다" (엣지 강조 동시 노출
+    //   금지). 면 overlay (cyan fill) 만으로 충분한 시각 신호.
+    //   엣지 선택은 명시적 edge click 또는 double-click selectFaceWithEdges
+    //   경로에서만 발생하며 그건 rebuildEdgeSelectionLine 이 주황색으로 처리.
   }
 
   private rebuildHoverMesh() {
