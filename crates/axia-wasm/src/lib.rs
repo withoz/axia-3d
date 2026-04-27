@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use axia_core::scene::Scene;
 use axia_core::commands::Command;
 use axia_core::commands::CommandResult;
-use axia_geo::{FaceId, EdgeId, VertId};
+use axia_geo::{FaceId, EdgeId, VertId, HeId};
 use axia_geo::operations::boolean::BoolOp;
 use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all, resolve_iterative, max_residual};
 use axia_core::orphan_recovery::RecoveryPlan;
@@ -2284,7 +2284,42 @@ impl AxiaEngine {
             }
         }
 
-        // Face-only deletions.
+        // ── Face-only deletions ──
+        // 2026-04-27 UX: 사용자가 면만 지우면 boundary edge 는 standalone
+        // wireframe 으로 남아야 한다 (SketchUp-style — "면 지우고 윤곽선
+        // 유지"). 따라서 face-only 삭제 대상의 outer + hole loop 엣지를
+        // 미리 snapshot 해서 cleanup_dangling 의 보호 집합으로 넘긴다.
+        // edge-erase cascade 경로의 orphan 은 보호 안 함 — 사용자가 명시적
+        // 으로 edge 도 지우라고 한 작업이라 전부 정리되는게 자연스럽다.
+        let mut protected_orphan_edges: std::collections::HashSet<EdgeId>
+            = std::collections::HashSet::new();
+        for &fid_raw in face_ids {
+            let fid = FaceId::new(fid_raw);
+            let face = match self.scene.mesh.faces.get(fid) {
+                Some(f) if f.is_active() => f,
+                _ => continue,
+            };
+            let outer_start = face.outer().start;
+            let inner_starts: Vec<HeId> = face.inners().iter()
+                .map(|i| i.start)
+                .filter(|s| !s.is_null())
+                .collect();
+            if !outer_start.is_null() {
+                if let Ok(hes) = self.scene.mesh.collect_loop_hes(outer_start) {
+                    for he in hes {
+                        protected_orphan_edges.insert(self.scene.mesh.hes[he].edge());
+                    }
+                }
+            }
+            for inner_start in inner_starts {
+                if let Ok(hes) = self.scene.mesh.collect_loop_hes(inner_start) {
+                    for he in hes {
+                        protected_orphan_edges.insert(self.scene.mesh.hes[he].edge());
+                    }
+                }
+            }
+        }
+
         for &fid_raw in face_ids {
             let fid = FaceId::new(fid_raw);
             if self.scene.mesh.faces.contains(fid) {
@@ -2297,9 +2332,10 @@ impl AxiaEngine {
         }
 
         self.scene.unregister_faces_from_xia(&all_removed_faces);
-        // Phase: post-merge/erase cleanup — dangling edges (face-merged leftovers)
-        //   + isolated vertices. Prevents "선의 잔재" 보고된 문제.
-        let _ = self.scene.mesh.cleanup_dangling();
+        // Post-merge/erase cleanup — merged-leftover dangling edges + isolated
+        // vertices. Boundary edges of face-only deletes are protected (they
+        // remain as standalone wireframe per CAD UX convention).
+        let _ = self.scene.mesh.cleanup_dangling_excluding(&protected_orphan_edges);
 
         // ── Phase B step 2 (ADR-008 Axiom 6): erase re-synthesis ──
         // Among the watched edges, find those that SURVIVED the erase but

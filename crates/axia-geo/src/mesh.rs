@@ -4098,12 +4098,30 @@ impl Mesh {
     ///
     /// Returns (removed_edges, removed_vertices).
     pub fn cleanup_dangling(&mut self) -> (usize, usize) {
+        self.cleanup_dangling_excluding(&std::collections::HashSet::new())
+    }
+
+    /// Same as `cleanup_dangling` but keeps any edge listed in `protected`
+    /// even if it has lost all face references. Used by the Erase tool's
+    /// face-only delete path so that boundary edges remain as standalone
+    /// wireframe instead of vanishing along with the face (SketchUp-style
+    /// CAD UX: "면만 지우고 엣지는 남긴다").
+    ///
+    /// The vertex-cleanup pass (step 2) still runs — orphan vertices that
+    /// no edge references are removed unconditionally. Protected orphan
+    /// edges are by definition still referencing their endpoints, so those
+    /// vertices stay alive automatically.
+    pub fn cleanup_dangling_excluding(
+        &mut self,
+        protected: &std::collections::HashSet<EdgeId>,
+    ) -> (usize, usize) {
         // Step 1 — edges whose half-edges all point to inactive faces.
         //   The DCEL guarantees every edge has ≤ 2 half-edges; if both point
         //   to inactive faces (or null), the edge is dangling.
         let mut to_remove: Vec<EdgeId> = Vec::new();
         for (eid, edge) in self.edges.iter() {
             if !edge.is_active() { continue; }
+            if protected.contains(&eid) { continue; }
             let he_a = edge.any_he();
             if he_a.is_null() {
                 to_remove.push(eid);
@@ -4912,6 +4930,59 @@ mod tests {
     }
 
     // ── Face 추가/제거 테스트 ────────────────────────
+
+    #[test]
+    fn test_cleanup_dangling_excluding_keeps_protected_orphan_edges() {
+        // Build an isolated quad. Remove the face. By default cleanup_dangling
+        // would purge all 4 boundary edges as orphans; with the protected
+        // set they remain as standalone wireframe.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+
+        // Snapshot the boundary edges before removing the face (collect_loop_hes
+        // requires the loop to be intact).
+        let boundary_edges: std::collections::HashSet<EdgeId> = {
+            let start = mesh.faces[f].outer().start;
+            let hes = mesh.collect_loop_hes(start).unwrap();
+            hes.into_iter().map(|h| mesh.hes[h].edge()).collect()
+        };
+        assert_eq!(boundary_edges.len(), 4, "quad should have 4 boundary edges");
+
+        mesh.remove_face(f).unwrap();
+        if mesh.faces.contains(f) { mesh.faces.remove(f); }
+
+        // Run protected cleanup → boundary edges must still be present.
+        let (edge_removed, _vert_removed) = mesh.cleanup_dangling_excluding(&boundary_edges);
+        assert_eq!(edge_removed, 0, "no orphan edge should be removed when protected");
+        for &eid in &boundary_edges {
+            assert!(mesh.edges.contains(eid),
+                "protected edge {:?} must still be present after cleanup", eid);
+        }
+        // Vertices must also remain — they're still referenced by the surviving edges.
+        for vid in &[v0, v1, v2, v3] {
+            assert!(mesh.verts.contains(*vid),
+                "vertex {:?} should remain (referenced by surviving edge)", vid);
+        }
+    }
+
+    #[test]
+    fn test_cleanup_dangling_default_still_removes_orphans() {
+        // Sanity: without protection, cleanup_dangling behaves as before.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        mesh.remove_face(f).unwrap();
+        if mesh.faces.contains(f) { mesh.faces.remove(f); }
+        let (edge_removed, _) = mesh.cleanup_dangling();
+        assert_eq!(edge_removed, 4, "all 4 boundary edges should be cleaned up by default");
+    }
 
     #[test]
     fn test_add_and_remove_face() {
