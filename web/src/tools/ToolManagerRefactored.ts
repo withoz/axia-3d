@@ -2950,62 +2950,86 @@ export class ToolManager {
       debugLog(`[Selection] ${chains.length} chains, showing ${MAX_DIM_LABELS}`);
     }
 
-    // ═══ 입체(Volume) bbox 라벨 ═══
-    // 면이 4개 이상 선택되면 closed-solid 가능성. 전체 vertex AABB 의
-    //   width / height / depth 3개 라벨 추가. 사용자 요청: "선/면/입체
-    //   각각 선택된 객체에 대하여 모두 표기".
+    // ═══ 입체(Volume) 치수 라벨 — 지오메트리 방향 따라 표기 ═══
+    //
+    // 사용자 요청: "치수는 면이나 축과 같은 방향으로 표기 나란히".
+    //   AABB (world-axis aligned) 는 회전된 솔리드에서 면과 어긋남.
+    //   대신 선택된 face 들의 실제 boundary edge 중 방향이 서로 다른 3개
+    //   대표 엣지를 골라 그 위에 W/H/D 라벨을 배치 → 자동으로 객체 방향
+    //   을 따라 정렬됨 (axis-aligned 박스에선 결과가 기존 AABB 와 동일).
+    //
+    // 알고리즘:
+    //   1. 선택된 face 들의 모든 unique boundary edge 수집 (perimeter 아닌
+    //      shared 엣지도 포함 — closed solid 의 경우 perimeter 가 비어
+    //      있으므로 모든 엣지를 봐야 함).
+    //   2. 각 엣지의 방향 (정규화) 으로 그룹핑 (cos similarity > 0.995 ≈
+    //      ~5.7° 안쪽이면 같은 방향).
+    //   3. 각 그룹에서 가장 긴 엣지를 대표로.
+    //   4. 길이 내림차순으로 정렬 → 최대 3개 직교/근직교 그룹 선택.
     if (faceIds.length >= 4 && this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
-      const allPts: THREE.Vector3[] = [];
+      type EdgeSeg = { a: THREE.Vector3; b: THREE.Vector3; len: number; dir: THREE.Vector3 };
+      const allEdges: EdgeSeg[] = [];
+      const seenEdges = new Set<string>();
       for (const fid of faceIds) {
         const loop = this.extractFaceBoundary(fid);
-        for (const p of loop) allPts.push(p);
+        if (loop.length < 2) continue;
+        for (let i = 0; i < loop.length; i++) {
+          const a = loop[i];
+          const b = loop[(i + 1) % loop.length];
+          const ka = `${Math.round(a.x*1000)},${Math.round(a.y*1000)},${Math.round(a.z*1000)}`;
+          const kb = `${Math.round(b.x*1000)},${Math.round(b.y*1000)},${Math.round(b.z*1000)}`;
+          const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+          if (seenEdges.has(k)) continue;
+          seenEdges.add(k);
+          const len = a.distanceTo(b);
+          if (len < 0.1) continue;
+          const dir = new THREE.Vector3().subVectors(b, a).normalize();
+          allEdges.push({ a: a.clone(), b: b.clone(), len, dir });
+        }
       }
-      if (allPts.length >= 8) {
-        const min = new THREE.Vector3(Infinity, Infinity, Infinity);
-        const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-        for (const p of allPts) { min.min(p); max.max(p); }
-        const dx = max.x - min.x;
-        const dy = max.y - min.y;
-        const dz = max.z - min.z;
-        const epsAxis = Math.max(dx, dy, dz) * 0.001 + 1e-3;
-        // dx, dy, dz 모두 의미있는 값일 때만 (= 정말 입체) bbox 표시.
-        // dy ≈ 0 인 평면은 면 단위 라벨로 충분.
-        if (dx > epsAxis && dy > epsAxis && dz > epsAxis) {
-          const cx = (min.x + max.x) / 2;
-          const cy = (min.y + max.y) / 2;
-          const cz = (min.z + max.z) / 2;
-          // 라벨은 bbox 의 한 모서리 위에 그려 가독성 확보.
-          // (min.x → max.x) at y=min, z=min  → W
-          // (min.y → max.y) at x=max, z=min  → H
-          // (min.z → max.z) at x=max, y=max  → D
-          if (this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
-            this.selectionDimLines.push({
-              from: new THREE.Vector3(min.x, min.y, min.z),
-              to:   new THREE.Vector3(max.x, min.y, min.z),
-              text: `W ${this.units.format(dx)}`,
-              color: '#74c0fc',
-              editable: false,
-            });
+      if (allEdges.length >= 3) {
+        // 방향 그룹핑 (cos sim > 0.995, opposite 방향도 같은 그룹)
+        type DirGroup = { dir: THREE.Vector3; longest: EdgeSeg };
+        const groups: DirGroup[] = [];
+        const COS_THRESHOLD = 0.995;
+        for (const e of allEdges) {
+          let matched: DirGroup | null = null;
+          for (const g of groups) {
+            const dot = Math.abs(e.dir.dot(g.dir));
+            if (dot >= COS_THRESHOLD) { matched = g; break; }
           }
-          if (this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
-            this.selectionDimLines.push({
-              from: new THREE.Vector3(max.x, min.y, min.z),
-              to:   new THREE.Vector3(max.x, max.y, min.z),
-              text: `H ${this.units.format(dy)}`,
-              color: '#74c0fc',
-              editable: false,
-            });
+          if (matched) {
+            if (e.len > matched.longest.len) matched.longest = e;
+          } else {
+            groups.push({ dir: e.dir.clone(), longest: e });
           }
-          if (this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
-            this.selectionDimLines.push({
-              from: new THREE.Vector3(max.x, max.y, min.z),
-              to:   new THREE.Vector3(max.x, max.y, max.z),
-              text: `D ${this.units.format(dz)}`,
-              color: '#74c0fc',
-              editable: false,
-            });
+        }
+        // 길이 내림차순 → 상위 3개. 두 번째/세 번째는 첫 번째와 가능하면
+        //   덜 평행한 (직교에 가까운) 방향을 우선.
+        groups.sort((a, b) => b.longest.len - a.longest.len);
+        const picked: DirGroup[] = [];
+        for (const g of groups) {
+          if (picked.length >= 3) break;
+          // 이미 picked 의 어느 방향과도 거의 평행하지 않은 그룹만.
+          let parallel = false;
+          for (const p of picked) {
+            if (Math.abs(g.dir.dot(p.dir)) >= COS_THRESHOLD) { parallel = true; break; }
           }
-          void cx; void cy; void cz; // 향후 dim 위치 fine-tune 시 사용
+          if (parallel) continue;
+          picked.push(g);
+        }
+        const labels = ['W', 'H', 'D'];
+        const color = '#74c0fc';
+        for (let i = 0; i < picked.length; i++) {
+          if (this.selectionDimLines.length >= MAX_DIM_LABELS_TOTAL) break;
+          const e = picked[i].longest;
+          this.selectionDimLines.push({
+            from: e.a.clone(),
+            to: e.b.clone(),
+            text: `${labels[i]} ${this.units.format(e.len)}`,
+            color,
+            editable: false,
+          });
         }
       }
     }
