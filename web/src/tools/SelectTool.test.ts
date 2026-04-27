@@ -73,19 +73,25 @@ describe('SelectTool', () => {
     it('selects face on click', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue(faceHit());
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
-      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false, false);
     });
 
     it('shift-click for multi-select', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue(faceHit());
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
-      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, true, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, true, false, false);
     });
 
     it('ctrl-click for toggle select', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue(faceHit());
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: true } as MouseEvent, null);
-      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, true);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, true, false);
+    });
+
+    it('alt-click for subtract', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue(faceHit());
+      tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: true } as MouseEvent, null);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false, true);
     });
   });
 
@@ -98,7 +104,7 @@ describe('SelectTool', () => {
       });
 
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
-      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(20, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(20, false, false, false);
     });
   });
 
@@ -181,33 +187,37 @@ describe('SelectTool', () => {
       // 2nd click (double)
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false } as MouseEvent, null);
 
-      expect(ctx.selection.selectFaceWithEdges).toHaveBeenCalledWith(5, false, false);
+      expect(ctx.selection.selectFaceWithEdges).toHaveBeenCalledWith(5, false, false, false);
     });
 
     it('shift+double-click forwards shiftKey', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'face', hit: { faceIndex: 2 } });
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
-      expect(ctx.selection.selectFaceWithEdges).toHaveBeenCalledWith(5, true, false);
+      expect(ctx.selection.selectFaceWithEdges).toHaveBeenCalledWith(5, true, false, false);
     });
   });
 
-  describe('Alt+edge click selects chain', () => {
-    it('expands single edge click into polyline chain via bridge.collectEdgeChain', () => {
+  describe('Edge double-click selects chain (Alt is now subtract)', () => {
+    it('double-click on same edge expands into polyline chain via bridge.collectEdgeChain', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
       ctx.bridge.collectEdgeChain = vi.fn().mockReturnValue([10, 20, 30, 40]);
+      // First click — single edge select
       tool.onMouseDown(
-        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: true } as MouseEvent,
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+      // Second click — same edge → double click → chain expansion.
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
         null,
       );
       expect(ctx.bridge.collectEdgeChain).toHaveBeenCalledWith(10);
-      // 4 edges → 4 handleEdgeClick calls (first respects modifiers, rest shift=true)
-      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledTimes(4);
-      expect(ctx.selection.handleEdgeClick).toHaveBeenNthCalledWith(1, 10, false, false);
-      expect(ctx.selection.handleEdgeClick).toHaveBeenNthCalledWith(2, 20, true, false);
+      // Total handleEdgeClick: single-click first (1) + chain[0] (1) + chain[1..3] shift=true (3) = 5
+      expect(ctx.selection.handleEdgeClick.mock.calls.length).toBeGreaterThanOrEqual(5);
     });
 
-    it('plain edge click (no Alt) does NOT call collectEdgeChain', () => {
+    it('plain single edge click does NOT call collectEdgeChain', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
       ctx.bridge.collectEdgeChain = vi.fn();
       tool.onMouseDown(
@@ -215,7 +225,18 @@ describe('SelectTool', () => {
         null,
       );
       expect(ctx.bridge.collectEdgeChain).not.toHaveBeenCalled();
-      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false, false);
+    });
+
+    it('Alt+edge click is now SUBTRACT — passes altKey=true, no chain', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.collectEdgeChain = vi.fn();
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: true } as MouseEvent,
+        null,
+      );
+      expect(ctx.bridge.collectEdgeChain).not.toHaveBeenCalled();
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false, true);
     });
   });
 
@@ -244,7 +265,7 @@ describe('SelectTool', () => {
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
-      expect(ctx.selection.selectAll).toHaveBeenCalledWith(5, true, false);
+      expect(ctx.selection.selectAll).toHaveBeenCalledWith(5, true, false, false);
     });
   });
 

@@ -148,8 +148,13 @@ export class SelectionManager {
   // 선택 조작
   // ════════════════════════════════════════════════
 
-  /** 클릭 처리 — modifier key에 따라 동작 분기 */
-  handleClick(faceId: number, shiftKey: boolean, ctrlKey: boolean) {
+  /** 클릭 처리 — modifier key에 따라 동작 분기.
+   *  Windows 표준 + 3D CAD 관습:
+   *    Shift = 추가 (Add)
+   *    Alt   = 빼기 (Subtract)
+   *    Ctrl  = 토글 (Toggle, Windows Explorer 스타일)
+   *    none  = 교체 (Replace) */
+  handleClick(faceId: number, shiftKey: boolean, ctrlKey: boolean, altKey = false) {
     if (faceId < 0) {
       // 빈 공간 클릭 → 전체 해제
       this.clearSelection();
@@ -167,7 +172,10 @@ export class SelectionManager {
     // 곡면 그룹 확장: 클릭된 면과 법선 각도 < 30°로 연결된 모든 면을 한 그룹으로 선택
     const smoothGroup = this.findSmoothGroup(faceId);
 
-    if (shiftKey) {
+    if (altKey) {
+      // Alt+클릭: 빼기 — 곡면 그룹 전체를 선택에서 제거
+      for (const fid of smoothGroup) this.selected.delete(fid);
+    } else if (shiftKey) {
       // Shift+클릭: 추가 (기존 edge 선택도 유지)
       for (const fid of smoothGroup) this.selected.add(fid);
     } else if (ctrlKey) {
@@ -191,8 +199,8 @@ export class SelectionManager {
     this.notifyChange();
   }
 
-  /** Edge 클릭 처리 */
-  handleEdgeClick(edgeId: number, shiftKey: boolean, ctrlKey: boolean) {
+  /** Edge 클릭 처리. Modifier 규약: Shift=추가, Alt=빼기, Ctrl=토글. */
+  handleEdgeClick(edgeId: number, shiftKey: boolean, ctrlKey: boolean, altKey = false) {
     if (edgeId < 0) {
       this.selectedEdges.clear();
       this.rebuildEdgeSelectionLine();
@@ -200,7 +208,10 @@ export class SelectionManager {
       return;
     }
 
-    if (shiftKey) {
+    if (altKey) {
+      // Alt+엣지: 빼기 — 선택에서 제거 (없으면 무동작)
+      this.selectedEdges.delete(edgeId);
+    } else if (shiftKey) {
       this.selectedEdges.add(edgeId);
     } else if (ctrlKey) {
       if (this.selectedEdges.has(edgeId)) {
@@ -246,7 +257,7 @@ export class SelectionManager {
    * - shift: 기존 선택 유지하며 face + 경계 edges **추가**
    * - ctrl:  face가 이미 선택되어 있으면 face + 경계 edges **제거**, 아니면 추가
    */
-  selectFaceWithEdges(faceId: number, shiftKey: boolean = false, ctrlKey: boolean = false) {
+  selectFaceWithEdges(faceId: number, shiftKey: boolean = false, ctrlKey: boolean = false, altKey: boolean = false) {
     if (faceId < 0) return;
 
     this.clearXiaDots(); // XIA 도트 모드 해제
@@ -254,7 +265,11 @@ export class SelectionManager {
     const faceSet = new Set<number>([faceId]);
     const borderEdges = this.computeBorderEdges(faceSet);
 
-    if (shiftKey) {
+    if (altKey) {
+      // 빼기
+      this.selected.delete(faceId);
+      for (const eid of borderEdges) this.selectedEdges.delete(eid);
+    } else if (shiftKey) {
       // 추가 (기존 유지)
       this.selected.add(faceId);
       for (const eid of borderEdges) this.selectedEdges.add(eid);
@@ -326,7 +341,7 @@ export class SelectionManager {
    * - shift: 기존 선택에 XIA 전체 추가
    * - ctrl:  XIA가 모두 선택되어 있으면 제거, 아니면 추가
    */
-  selectAll(seedFaceId: number, shiftKey: boolean = false, ctrlKey: boolean = false) {
+  selectAll(seedFaceId: number, shiftKey: boolean = false, ctrlKey: boolean = false, altKey: boolean = false) {
     if (seedFaceId < 0) return;
 
     // 그룹이 있으면 그룹 면을 우선 선택
@@ -334,7 +349,11 @@ export class SelectionManager {
     const targetFaces = groupFaces ?? this.findConnectedFaces(seedFaceId);
     const targetBorderEdges = this.computeBorderEdges(targetFaces);
 
-    if (shiftKey) {
+    if (altKey) {
+      // 빼기
+      for (const fid of targetFaces) this.selected.delete(fid);
+      for (const eid of targetBorderEdges) this.selectedEdges.delete(eid);
+    } else if (shiftKey) {
       // 추가
       for (const fid of targetFaces) this.selected.add(fid);
       for (const eid of targetBorderEdges) this.selectedEdges.add(eid);
@@ -356,7 +375,8 @@ export class SelectionManager {
       for (const eid of targetBorderEdges) this.selectedEdges.add(eid);
     }
 
-    this.isXiaSelected = !shiftKey && !ctrlKey;  // 교체 케이스에서만 XIA 도트 모드
+    // 교체 케이스에서만 XIA 도트 모드 — Shift/Alt/Ctrl 의 추가/빼기/토글은 도트 모드 제외.
+    this.isXiaSelected = !shiftKey && !ctrlKey && !altKey;
     this.rebuildSelectionMesh();
     this.rebuildEdgeSelectionLine();
     if (this.isXiaSelected) this.rebuildXiaDots();
@@ -619,7 +639,7 @@ export class SelectionManager {
   }
 
   /** 그룹 편집 모드에서 클릭 처리 — 그룹 내부 face만 선택 가능 */
-  handleGroupEditClick(faceId: number, shiftKey: boolean, ctrlKey: boolean): boolean {
+  handleGroupEditClick(faceId: number, shiftKey: boolean, ctrlKey: boolean, altKey = false): boolean {
     if (this.editingGroupId === null) return false;
 
     const groupFaces = this.groups.get(this.editingGroupId);
@@ -640,7 +660,7 @@ export class SelectionManager {
     }
 
     // 그룹 내부 face 선택
-    this.handleClick(faceId, shiftKey, ctrlKey);
+    this.handleClick(faceId, shiftKey, ctrlKey, altKey);
     return true;
   }
 

@@ -16,12 +16,16 @@ export class SelectTool implements ITool {
   private dragSelectBox: HTMLDivElement | null = null;
   private isDragSelecting: boolean = false;
   /** mousedown 시점의 modifier 상태 — performBoxSelect / 빈클릭 해제 로직이 사용 */
-  private dragModifiers: { shift: boolean; ctrl: boolean } = { shift: false, ctrl: false };
+  private dragModifiers: { shift: boolean; ctrl: boolean; alt: boolean } = { shift: false, ctrl: false, alt: false };
 
-  // Multi-click detection (double/triple)
+  // Multi-click detection (double/triple) — face
   private clickCount: number = 0;
   private clickTimer: ReturnType<typeof setTimeout> | null = null;
   private lastClickFaceId: number = -1;
+  // Multi-click — edge (double-click ⇒ chain selection)
+  private edgeClickCount: number = 0;
+  private edgeClickTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastClickEdgeId: number = -1;
   private readonly MULTI_CLICK_DELAY = 400; // ms
 
   constructor(ctx: ToolContext) {
@@ -42,29 +46,53 @@ export class SelectTool implements ITool {
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       // ── 엣지 선택 경로 ──
-      // Bug 4 fix: 엣지 클릭은 면 multi-click 시퀀스를 끊어야 함.
-      this.resetMultiClickState();
-
       const segIndex = Math.floor(picked.hit.index / 2);
       const edgeId = this.ctx.edgeMap[segIndex];
-      if (edgeId != null) {
-        // Alt+클릭: 엣지 체인(폴리라인) 자동 확장 선택
-        // — 양 끝점에서 valence-2 vertex를 따라 퍼짐, 교차점에서 정지.
-        // Shift 조합: 기존 선택에 체인 추가 / 단독: 체인으로 대체.
-        if (e.altKey) {
-          const chain = this.ctx.bridge.collectEdgeChain(edgeId);
-          if (chain.length === 0) return;
-          // Alt 없는 클릭처럼 기존 선택 대체(단독 Alt) 또는 추가(Alt+Shift).
-          // 첫 엣지는 기존 SelectionManager 규칙(shift/ctrl) 그대로 처리해
-          // 일반 클릭 UX와 일관성을 유지하고, 이후는 shift=true로 누적.
-          this.ctx.selection.handleEdgeClick(chain[0], e.shiftKey, e.ctrlKey);
-          for (let i = 1; i < chain.length; i++) {
-            this.ctx.selection.handleEdgeClick(chain[i], /*shift*/ true, /*ctrl*/ false);
-          }
-          debugLog(`[SelectTool] Alt+edge chain → ${chain.length} edges`);
-        } else {
-          this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey);
+      if (edgeId == null) return;
+
+      // 엣지에서도 multi-click 추적 (double-click → 체인 선택).
+      // 먼저 면 multi-click 만 끊고 (전체 reset 하면 자기 자신도 리셋됨),
+      // 그 다음 엣지 카운터를 갱신.
+      this.clickCount = 0;
+      this.lastClickFaceId = -1;
+      if (this.clickTimer) { clearTimeout(this.clickTimer); this.clickTimer = null; }
+      if (edgeId === this.lastClickEdgeId) {
+        this.edgeClickCount++;
+      } else {
+        this.edgeClickCount = 1;
+        this.lastClickEdgeId = edgeId;
+      }
+      if (this.edgeClickTimer) clearTimeout(this.edgeClickTimer);
+      this.edgeClickTimer = setTimeout(() => {
+        this.edgeClickCount = 0;
+        this.lastClickEdgeId = -1;
+      }, this.MULTI_CLICK_DELAY);
+
+      if (this.edgeClickCount >= 2) {
+        // Double-click on edge: 체인(폴리라인) 자동 확장 선택.
+        //   — valence-2 vertex 따라 양 끝점에서 퍼짐, 교차점/dead-end 에서 정지.
+        // Modifier 규약은 동일하게 Shift=추가 / Alt=빼기 / Ctrl=토글.
+        const chain = this.ctx.bridge.collectEdgeChain(edgeId);
+        if (chain.length === 0) {
+          this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
+          return;
         }
+        this.ctx.selection.handleEdgeClick(chain[0], e.shiftKey, e.ctrlKey, !!e.altKey);
+        // 나머지 체인 엣지는 같은 추가/빼기 모드를 일관되게 적용.
+        if (e.altKey) {
+          for (let i = 1; i < chain.length; i++) {
+            this.ctx.selection.handleEdgeClick(chain[i], false, false, true);
+          }
+        } else {
+          for (let i = 1; i < chain.length; i++) {
+            this.ctx.selection.handleEdgeClick(chain[i], /*shift=*/true, false, false);
+          }
+        }
+        debugLog(`[SelectTool] Double-click edge → chain ${chain.length} edges`);
+        this.edgeClickCount = 0;
+        this.lastClickEdgeId = -1;
+      } else {
+        this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
       }
       return;
     }
@@ -91,17 +119,17 @@ export class SelectTool implements ITool {
       }, this.MULTI_CLICK_DELAY);
 
       if (this.clickCount >= 3) {
-        // Bug 5 fix: modifier 전달 — shift+triple은 추가, ctrl+triple은 토글
+        // Triple-click 전체 XIA 선택 — Shift=추가, Alt=빼기, Ctrl=토글.
         debugLog('[SelectTool] Triple-click → selectAll from face', fid);
-        this.ctx.selection.selectAll(fid, e.shiftKey, e.ctrlKey);
+        this.ctx.selection.selectAll(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
         this.clickCount = 0;
         this.lastClickFaceId = -1;
       } else if (this.clickCount === 2) {
-        // Bug 2+5 fix: selectFaceWithEdges를 한 번에 호출 (대칭적 clear + modifier 지원)
+        // Double-click 면 + 인접 엣지.
         debugLog('[SelectTool] Double-click → face + adjacent edges', fid);
-        this.ctx.selection.selectFaceWithEdges(fid, e.shiftKey, e.ctrlKey);
+        this.ctx.selection.selectFaceWithEdges(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
       } else {
-        this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey);
+        this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
       }
       return;
     }
@@ -109,7 +137,7 @@ export class SelectTool implements ITool {
     // ── 빈 공간 → drag-select 시작 + multi-click 리셋 ──
     this.resetMultiClickState();
     this.dragSelectStart = { x: e.clientX, y: e.clientY };
-    this.dragModifiers = { shift: e.shiftKey, ctrl: e.ctrlKey };
+    this.dragModifiers = { shift: !!e.shiftKey, ctrl: !!e.ctrlKey, alt: !!e.altKey };
     this.isDragSelecting = false;
   }
 
@@ -121,6 +149,12 @@ export class SelectTool implements ITool {
       clearTimeout(this.clickTimer);
       this.clickTimer = null;
     }
+    this.edgeClickCount = 0;
+    this.lastClickEdgeId = -1;
+    if (this.edgeClickTimer) {
+      clearTimeout(this.edgeClickTimer);
+      this.edgeClickTimer = null;
+    }
   }
 
   onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
@@ -130,8 +164,8 @@ export class SelectTool implements ITool {
       if (!this.isDragSelecting && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
         // 5px movement threshold → start actual drag-select
         this.isDragSelecting = true;
-        // Bug 6 fix: shift/ctrl 드래그는 기존 선택 유지하며 누적/토글
-        if (!this.dragModifiers.shift && !this.dragModifiers.ctrl) {
+        // Shift/Alt/Ctrl 드래그는 기존 선택 유지하며 누적/빼기/토글.
+        if (!this.dragModifiers.shift && !this.dragModifiers.ctrl && !this.dragModifiers.alt) {
           this.ctx.selection.clearSelection();
         }
         this.createDragSelectBox();
@@ -153,11 +187,12 @@ export class SelectTool implements ITool {
           e.clientX, e.clientY,
           this.dragModifiers.shift,
           this.dragModifiers.ctrl,
+          this.dragModifiers.alt,
         );
         this.removeDragSelectBox();
       } else {
-        // Bug 7 fix: shift/ctrl 눌린 빈 클릭은 선택 유지
-        if (!this.dragModifiers.shift && !this.dragModifiers.ctrl) {
+        // Shift/Alt/Ctrl 눌린 빈 클릭은 선택 유지.
+        if (!this.dragModifiers.shift && !this.dragModifiers.ctrl && !this.dragModifiers.alt) {
           this.ctx.selection.clearSelection();
         }
       }
@@ -186,7 +221,7 @@ export class SelectTool implements ITool {
     this.removeDragSelectBox();
     // Bug 8 fix: multi-click 추적 상태 + 타이머 초기화 (tool 전환 시 누수 방지)
     this.resetMultiClickState();
-    this.dragModifiers = { shift: false, ctrl: false };
+    this.dragModifiers = { shift: false, ctrl: false, alt: false };
   }
 
   private createDragSelectBox(): void {
@@ -241,7 +276,7 @@ export class SelectTool implements ITool {
 
   private performBoxSelect(
     startX: number, startY: number, endX: number, endY: number,
-    shiftKey: boolean = false, ctrlKey: boolean = false,
+    shiftKey: boolean = false, ctrlKey: boolean = false, altKey: boolean = false,
   ): void {
     const camera = this.ctx.viewport.activeCamera;
     const canvas = this.ctx.viewport.renderer.domElement;
@@ -331,28 +366,34 @@ export class SelectTool implements ITool {
       }
     }
 
-    // ── Apply selection (Bug 3 fix: modifier 존중) ──
-    // plain drag: 기존 선택 대체 (onMouseMove가 이미 clearSelection 호출함)
-    // shift drag: 기존 선택에 박스 내용 추가
-    // ctrl  drag: 박스 내용을 토글 (이미 선택된 건 해제, 없는 건 추가)
-    if (ctrlKey) {
-      // 토글
+    // ── Apply selection (modifier 존중) ──
+    //   plain drag: 기존 선택 대체 (onMouseMove가 이미 clearSelection 호출함)
+    //   shift drag: 기존 선택에 박스 내용 **추가**
+    //   alt   drag: 박스 내용 **빼기**
+    //   ctrl  drag: 박스 내용 **토글**
+    if (altKey) {
       for (const fid of selectedFaces) {
-        this.ctx.selection.handleClick(fid, false, true);
+        this.ctx.selection.handleClick(fid, false, false, true);
       }
       for (const eid of selectedEdges) {
-        this.ctx.selection.handleEdgeClick(eid, false, true);
+        this.ctx.selection.handleEdgeClick(eid, false, false, true);
+      }
+    } else if (ctrlKey) {
+      for (const fid of selectedFaces) {
+        this.ctx.selection.handleClick(fid, false, true, false);
+      }
+      for (const eid of selectedEdges) {
+        this.ctx.selection.handleEdgeClick(eid, false, true, false);
       }
     } else {
-      // 추가 (plain drag는 이미 clearSelection 됐으므로 빈 상태에 추가, shift drag는 기존에 추가)
+      // shift drag 또는 plain drag (이미 clear 됨) — 추가 동작.
       for (const fid of selectedFaces) {
-        this.ctx.selection.handleClick(fid, true, false);
+        this.ctx.selection.handleClick(fid, true, false, false);
       }
       for (const eid of selectedEdges) {
-        this.ctx.selection.handleEdgeClick(eid, true, false);
+        this.ctx.selection.handleEdgeClick(eid, true, false, false);
       }
     }
-    // shiftKey 참조 제거 경고 방지 — 향후 확장용으로 함수 시그니처에 유지
-    void shiftKey;
+    void shiftKey; // 시그니처에 유지 (향후 확장용)
   }
 }

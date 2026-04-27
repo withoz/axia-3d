@@ -61,11 +61,11 @@ export class GroupTool implements ITool {
       if (fid >= 0) {
         // 그룹에 속한 face 클릭 → 그룹 전체 선택
         const groupId = this.ctx.selection.getGroupId(fid);
-        if (groupId !== undefined && !e.shiftKey && !e.ctrlKey) {
+        if (groupId !== undefined && !e.shiftKey && !e.ctrlKey && !e.altKey) {
           this.ctx.selection.selectGroup(groupId);
           Toast.info(`Group-${groupId} 선택됨 — 더블클릭으로 편집`);
         } else {
-          this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey);
+          this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
         }
       }
     } else {
