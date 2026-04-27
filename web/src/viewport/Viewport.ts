@@ -1823,9 +1823,23 @@ export class Viewport {
       return { type: 'face', hit: faceHit };
     }
 
-    // 화면 상 엣지까지 거리로 판정 (edge가 face와 같은 평면상이거나 앞에 있을 때만)
+    // 화면 상 엣지까지 거리로 판정 (edge가 face와 같은 평면상이거나 앞에 있을 때만).
+    //
+    // ❗ 2026-04-27 엔진 결함 수정: 이전엔 `edgeHit.point` 를 screen 으로
+    //   project 해서 거리를 측정했는데, Three.js raycaster 의 Line/Line2 는
+    //   `point` 를 카메라 ray 위의 closest 점으로 설정한다 (즉 cursor 가
+    //   투영되는 screen 좌표와 거의 동일). 결과: edgePixelDist 가 항상 ≈ 0
+    //   → preferEdgeWithinPx 검사가 무력화되어 엣지가 거의 항상 우선.
+    //   사용자 보고 "면을 선택했는데 엣지라인이 선택돼 있다" 의 원인.
+    //
+    //   올바른 좌표는 `intersection.pointOnLine` — 엣지 segment 위의 실제
+    //   closest 점. Three.js LineSegments raycast 와 LineSegments2 (Line2)
+    //   raycast 모두 이 필드를 채워준다. 이 점을 screen 으로 project 해야
+    //   "cursor 와 edge line 사이 픽셀 거리" 라는 본래 의도가 살아난다.
     const rect = this.renderer.domElement.getBoundingClientRect();
-    const edgeProj = edgeHit.point.clone().project(cam);
+    const onEdge = (edgeHit as THREE.Intersection & { pointOnLine?: THREE.Vector3 })
+      .pointOnLine ?? edgeHit.point;
+    const edgeProj = onEdge.clone().project(cam);
     const edgeScreenX = ((edgeProj.x + 1) / 2) * rect.width + rect.left;
     const edgeScreenY = ((1 - edgeProj.y) / 2) * rect.height + rect.top;
     const dx = edgeScreenX - screenX;
