@@ -2840,10 +2840,27 @@ export class ToolManager {
     // 2026-04-27 — 사용자 요청 (기술 도면 스타일):
     //   · 숫자만 표기 (단위 'mm' 접미사 제거)
     //   · 색상 단일 (dark gray) — rainbow 제거
+    //   · 외곽 offset 균일 — 선택 영역의 bbox diagonal × 5% (모든 dim line
+    //     이 같은 거리만큼 띄워져 시각적으로 일률적).
     const DIM_COLOR = '#222e44';
     let colorIdx = 0;  // 호환용 (kept-around for future re-color schemes)
     void colorIdx;
     const MAX_DIM_LABELS = 20;
+
+    // 균일 offset 계산 — 선택된 face 들의 전체 bbox diagonal 의 5%, 최소 80mm.
+    let uniformOffsetDist = 80;
+    {
+      const bbMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+      const bbMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+      for (const e of perimeter) {
+        bbMin.min(e.from); bbMin.min(e.to);
+        bbMax.max(e.from); bbMax.max(e.to);
+      }
+      const diag = bbMin.distanceTo(bbMax);
+      if (Number.isFinite(diag) && diag > 0) {
+        uniformOffsetDist = Math.max(diag * 0.05, 80);
+      }
+    }
 
     // 집계 기준: 이 값 미만 길이의 chain은 개별 edge 라벨 유지
     // (직사각형 4 edge, 오각형 5 edge 등은 개별로 보여야 자연스러움)
@@ -2882,9 +2899,8 @@ export class ToolManager {
             const toCentroid = new THREE.Vector3().subVectors(e.faceCentroid, mid);
             // V 가 centroid 쪽이면 outward 가 아니므로 flip.
             if (v.dot(toCentroid) > 0) v.multiplyScalar(-1);
-            // offset distance — 엣지 길이의 12%, 최소 80mm.
-            const offsetDist = Math.max(len * 0.12, 80);
-            const offset = v.multiplyScalar(offsetDist);
+            // 균일 offset — 선택 영역 bbox 기준 (모든 dim line 이 같은 거리).
+            const offset = v.multiplyScalar(uniformOffsetDist);
             offFrom = e.from.clone().add(offset);
             offTo = e.to.clone().add(offset);
             originalFrom = e.from;

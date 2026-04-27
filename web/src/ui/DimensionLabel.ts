@@ -196,11 +196,11 @@ export class DimensionLabel {
           .normalize();
         if (v3.dot(camDir) < 0) v3 = v3.multiplyScalar(-1);
 
-        // 면 두께 거리 — face bbox 대각선 비례. 너무 작으면 노이즈.
+        // 라벨 위치 anchor — dim line 정중앙. 사용자 reference image
+        //   처럼 글자가 dim line 위에 lying flat. 두 unit 벡터 sample
+        //   거리는 face bbox 비례로 충분히 길게 (작으면 매트릭스 노이즈).
         const stride = Math.max(line.from.distanceTo(line.to) * 0.04, 5);
-
-        // anchor = 엣지 중점에서 V 방향으로 약간 오프셋해 엣지 위 겹침 회피.
-        const anchor3 = mid3.clone().addScaledVector(v3, stride * 1.2);
+        const anchor3 = mid3.clone();  // dim line 중점
         const anchorU = anchor3.clone().addScaledVector(u3, stride);
         const anchorV = anchor3.clone().addScaledVector(v3, stride);
 
