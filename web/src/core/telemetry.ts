@@ -58,6 +58,11 @@ export type BudgetKey =
   // ── syncMesh sub-steps (Sprint 3 추가 측정) ──
   | 'syncMesh.stats'          // viewport.setStats (DOM update)
   | 'syncMesh.shadow'         // computeGroundProjectedShadows + updateProjectedShadow
+  // ── viewport.updateMesh 내부 분해 (Sprint 4 §3) ──
+  | 'updateMesh.dispose'      // 이전 mesh dispose
+  | 'updateMesh.geometry'     // BufferGeometry + setAttribute
+  | 'updateMesh.material'     // material 생성/조회
+  | 'updateMesh.edges'        // edge LineSegments2 빌드
   // ── Picking router (ADR-012 §4) ──
   | 'picking.face'
   | 'picking.edge'
@@ -92,6 +97,11 @@ export const BUDGETS: Record<BudgetKey, number> = {
   'syncMesh.snapSchedule':  3,
   'syncMesh.stats':         2,
   'syncMesh.shadow':       16,  // 가장 무거울 가능성 — frame budget 의 절반 허용
+  // updateMesh sub-steps — 합쳐서 syncMesh.fullUpdate budget(16ms) 안.
+  'updateMesh.dispose':     3,
+  'updateMesh.geometry':    8,
+  'updateMesh.material':    3,
+  'updateMesh.edges':       3,
   // Picking — hover budget(16ms) 안에 들어가야 함.
   'picking.face': 8,
   'picking.edge': 8,
@@ -119,6 +129,11 @@ export interface TelemetrySnapshot {
   crossingsThisFrame: number;
   /** Average WASM crossings per frame. */
   avgCrossingsPerFrame: number;
+  /** Bytes copied across WASM↔JS this frame (snapshot 시점). */
+  copyBytesThisFrame: number;
+  /** Avg / Max bytes copied per frame (last 120 frames). */
+  avgCopyBytesPerFrame: number;
+  maxCopyBytesPerFrame: number;
   /** Largest single task observed (over violations). */
   largestTask: BudgetViolation | null;
   /** Current rAF chain depth (should always be ≤ 1). */
@@ -157,6 +172,9 @@ class TelemetryCore {
   // Per-frame state
   private currentFrameStart = 0;
   private crossingsThisFrame = 0;
+  private copyBytesThisFrame = 0;
+  // Rolling history for copy bytes (last N frames).
+  private copyBytesHistory = new RingBuffer<number>(120);
 
   // Rolling stats
   private rafChainDepth = 0;
@@ -205,6 +223,15 @@ class TelemetryCore {
     this.crossingsThisFrame++;
   }
 
+  /** Bytes copied across the WASM↔JS boundary this frame (ADR-013 §4).
+   *  Bridges call this with the byte size of each Vec<T> result they
+   *  receive from Rust (which wasm-bindgen materialises as a TypedArray
+   *  copy by default). Monitoring this lets us decide when to migrate
+   *  hot paths to zero-copy memory views. */
+  recordCopyBytes(bytes: number): void {
+    if (bytes > 0) this.copyBytesThisFrame += bytes;
+  }
+
   /** Enter rAF callback — increments chain depth (should never go > 1). */
   enterRaf(): void {
     this.rafChainDepth++;
@@ -228,6 +255,8 @@ class TelemetryCore {
     const elapsed = performance.now() - this.currentFrameStart;
     this.frameTimings.push(elapsed);
     this.crossingsHistory.push(this.crossingsThisFrame);
+    this.copyBytesHistory.push(this.copyBytesThisFrame);
+    this.copyBytesThisFrame = 0;
     if (this.crossingsThisFrame > CROSSING_PER_FRAME_LIMIT) {
       // wasmCall budget(50ms) 자리에 frame 단위 crossing 초과를 기록.
       // budget 비교는 BUDGETS['wasmCall'] 와 무관하지만 violation 분류
@@ -248,6 +277,7 @@ class TelemetryCore {
   snapshot(): TelemetrySnapshot {
     const ft = this.frameTimings.toArray();
     const ch = this.crossingsHistory.toArray();
+    const cb = this.copyBytesHistory.toArray();
     const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
     const max = (a: number[]) => a.length === 0 ? 0 : Math.max(...a);
     return {
@@ -257,6 +287,10 @@ class TelemetryCore {
       crossingsThisFrame: this.crossingsThisFrame,
       avgCrossingsPerFrame: ch.length === 0 ? 0 :
         +(sum(ch) / ch.length).toFixed(2),
+      copyBytesThisFrame: this.copyBytesThisFrame,
+      avgCopyBytesPerFrame: cb.length === 0 ? 0 :
+        Math.round(sum(cb) / cb.length),
+      maxCopyBytesPerFrame: max(cb),
       largestTask: this.largestTask ? { ...this.largestTask } : null,
       rafChainDepth: this.rafChainDepth,
       maxRafChainDepth: this.maxRafChainDepth,
@@ -270,8 +304,10 @@ class TelemetryCore {
     this.violations.clear();
     this.frameTimings.clear();
     this.crossingsHistory.clear();
+    this.copyBytesHistory.clear();
     this.currentFrameStart = 0;
     this.crossingsThisFrame = 0;
+    this.copyBytesThisFrame = 0;
     this.rafChainDepth = 0;
     this.maxRafChainDepth = 0;
     this.largestTask = null;
@@ -302,6 +338,9 @@ declare global {
     __AXIA_TELEMETRY_FRAME_END?: () => void;
     /** Generic record hook — modules without telemetry import call this. */
     __AXIA_TELEMETRY_RECORD?: (key: string, ms: number) => void;
+    /** Copy-bytes hook — WasmBridge calls this with byte size of each
+     *  Vec<T> result it materialises as a JS TypedArray. */
+    __AXIA_TELEMETRY_COPY?: (bytes: number) => void;
   }
 }
 
@@ -339,4 +378,5 @@ export function installTelemetryGlobal(): void {
       telemetry.record(key as BudgetKey, ms);
     }
   };
+  (window as Window).__AXIA_TELEMETRY_COPY = (bytes: number) => telemetry.recordCopyBytes(bytes);
 }

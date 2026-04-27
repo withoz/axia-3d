@@ -520,6 +520,16 @@ export class WasmBridge {
     if (positions.length === 0) return null;
     // Fetch f64 positions for CAD-grade precision
     const positionsF64 = this.engine.getPositionsF64?.();
+    // ADR-013 §4 — Vec<f32>.clone() then wasm-bindgen→Float32Array copy.
+    // Record bytes copied across the boundary for telemetry.
+    const w = window as unknown as { __AXIA_TELEMETRY_COPY?: (bytes: number) => void };
+    const totalBytes =
+      (positions?.byteLength ?? 0) +
+      (normals?.byteLength ?? 0) +
+      (indices?.byteLength ?? 0) +
+      (faceMap?.byteLength ?? 0) +
+      (positionsF64?.byteLength ?? 0);
+    w.__AXIA_TELEMETRY_COPY?.(totalBytes);
     this.bufferCache = { positions, positionsF64: positionsF64 ?? null, normals, indices, faceMap, edgeLines: null, edgeMap: null, dirty: false };
     return { positions, normals, indices, faceMap, positionsF64 };
   }

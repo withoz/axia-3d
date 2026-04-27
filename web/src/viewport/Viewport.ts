@@ -900,7 +900,16 @@ export class Viewport {
     centerLines?: Float32Array | null,
     volumeFlags?: Uint8Array | null,
   ) {
+    // Sprint 4 §3 — updateMesh 내부 분해 측정.
+    //   syncMesh.fullUpdate(16ms budget) 의 어느 phase 가 dominator 인지
+    //   격리. record helper — 외부 telemetry 모듈 dep 없이 동작.
+    const recordStep = (key: string, ms: number): void => {
+      const w = window as unknown as { __AXIA_TELEMETRY_RECORD?: (key: string, ms: number) => void };
+      w.__AXIA_TELEMETRY_RECORD?.(key, ms);
+    };
+
     // ── 1) 기존 geometry + material 완전 제거 ──
+    const tDispose0 = performance.now();
     while (this.meshGroup.children.length > 0) {
       const child = this.meshGroup.children[0];
       this.meshGroup.remove(child);
@@ -925,9 +934,11 @@ export class Viewport {
     }
     // 이전 frame의 mesh-edge LineMaterial 캐시 리셋 (dispose는 위에서 이미 함)
     this._meshEdgeMaterials.length = 0;
+    recordStep('updateMesh.dispose', performance.now() - tDispose0);
 
     // ── 2) Face geometry (면이 있을 때만) ──
     if (positions.length > 0) {
+      const tGeom0 = performance.now();
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position',
         new THREE.BufferAttribute(new Float32Array(positions), 3));
@@ -937,6 +948,7 @@ export class Viewport {
         new THREE.BufferAttribute(new Uint32Array(indices), 1));
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
+      recordStep('updateMesh.geometry', performance.now() - tGeom0);
 
       // ── Smooth normals: 인접 면 각도 < 30°이면 법선 보간 (원통 등 곡면 부드럽게).
       // ⚡ 성능 최적화 (2026-04-27): smoothNormals 는 O(V·T) 로 드로잉 시
@@ -1139,6 +1151,7 @@ export class Viewport {
       //   그리므로 모든 각도에서 연속된 선으로 렌더. 과거 artifact 재발
       //   방지: polygonOffset 로 face 보다 약간 앞으로, depthWrite 유지,
       //   transparent:false, worldUnits:false (픽셀 굵기 고정).
+      const tEdges0 = performance.now();
       if (edgeLines && edgeLines.length > 0) {
         const geo = new LineSegmentsGeometry();
         geo.setPositions(edgeLines);
@@ -1169,6 +1182,7 @@ export class Viewport {
         this.meshGroup.add(obj);
         edgesGeo.dispose();
       }
+      recordStep('updateMesh.edges', performance.now() - tEdges0);
     }
 
     // ── 4) Standalone edge lines (면 없이 Line 도구로 그린 선) ──

@@ -189,6 +189,35 @@ async function main() {
   void import('./core/telemetry').then(({ installTelemetryGlobal }) => {
     installTelemetryGlobal();
   });
+  // ADR-013 §1·§2 memory budget — installs window.__AXIA_MEMORY getter.
+  // Other modules (SnapManager, BVH, History) can register samplers via
+  // memoryBudget.registerSampler(area, () => byteCount) at any point.
+  void import('./core/memory').then(({ installMemoryGlobal, memoryBudget }) => {
+    installMemoryGlobal();
+    // Three.js geometry size sampler.
+    memoryBudget.registerSampler('geometry', () => {
+      const vp = container.tryGet?.('viewport') as { meshGroup?: { traverse?: (cb: (o: any) => void) => void } } | undefined;
+      let bytes = 0;
+      vp?.meshGroup?.traverse?.((obj: any) => {
+        const geo = obj.geometry;
+        if (!geo || !geo.attributes) return;
+        for (const attr of Object.values(geo.attributes) as Array<{ array?: { byteLength?: number } }>) {
+          bytes += attr.array?.byteLength ?? 0;
+        }
+        if (geo.index?.array?.byteLength) bytes += geo.index.array.byteLength;
+      });
+      return bytes;
+    });
+    // History (OperationLog) size sampler.
+    memoryBudget.registerSampler('history', () => {
+      try {
+        const log = (container.tryGet?.('operationLog') as { getAll?: () => unknown[] } | undefined);
+        const arr = log?.getAll?.() ?? [];
+        // Approximate: 200 bytes/entry (id, kind, name, params, ts, inputs, outputs).
+        return arr.length * 200;
+      } catch { return 0; }
+    });
+  });
   debugLog('[Main] ServiceContainer initialized with services:', container.keys());
 
   // Register commands (line, help, backtick toggle)
