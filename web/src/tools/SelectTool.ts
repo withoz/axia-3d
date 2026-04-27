@@ -44,14 +44,16 @@ export class SelectTool implements ITool {
   onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     // ADR-012 §4 — picking 은 PickingRouter 단일 진입점 통과.
     //   매 query 의 elapsed 가 자동으로 'picking.face' budget(8ms) 에 기록.
-    // 사용자 보고 (2026-04-27): "엣지라인이 우선으로 잡혀야 합니다 (지우개·선택)".
-    //   기본 5px → 12px 로 상향. 커서 근방의 엣지가 hit 가능하면 면보다
-    //   엣지를 우선 선택. 면 중앙 클릭은 여전히 face 로 정확히 잡힘.
+    //
+    // 2026-04-27 (재조정): 12px → 5px (default) 로 환원. 12px 일 때 사용자
+    //   가 면 내부를 클릭해도 가까운 엣지가 가로채는 문제 보고됨 ("면을
+    //   선택했는데 엣지라인 하나가 선택되어 있다"). 엣지 우선은 EraseTool
+    //   에서만 12px 유지 — 지우개는 엣지 작업 빈도가 더 높음.
     const r = pickingRouter.route({
       kind: 'edgeOrFace',
       x: e.clientX, y: e.clientY,
       viewport: this.ctx.viewport,
-      preferEdgeWithinPx: 12,
+      preferEdgeWithinPx: 5,
     });
     // 기존 코드 호환을 위해 pickEdgeOrFace 형식의 객체로 정규화.
     const picked = r ? { type: r.kind, hit: r.hit } : null;
