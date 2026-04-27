@@ -108,20 +108,23 @@ export class EraseTool implements ITool {
       return; // 빈 클릭 — 아무것도 할 일 없음
     }
 
-    // 2026-04-24: Non-destructive by default.
-    //   · Coplanar faces within tolerance → merge (two faces → one).
-    //   · Non-coplanar faces → edge becomes SOFT (hidden, faces stay).
-    //     User intent "remove this line" honored without destroying geometry.
-    //   · Shift at mousedown → force cascade-delete (legacy destructive path).
+    // 2026-04-27: Topology-consistent default (Meta-principle #7 Topology > Cache).
+    //   · Coplanar faces within tolerance → merge (두 면 → 한 면).
+    //   · Non-coplanar OR multi-shared-edge → CASCADE (엣지 + 인접 두 면 모두 삭제).
+    //   · Shift at mousedown → cascade-only (merge 시도 생략, 즉시 삭제).
+    //
+    // 이전 default 였던 SOFT fallback (엣지 hidden + 면 유지) 은 사용자에게
+    //   "엣지가 지워졌는데 면이 안없어진다" 로 인식되어 topology 와 visual
+    //   일관성이 깨짐. SOFT 는 Soften Edges 같은 명시적 명령에서만 사용하고
+    //   Erase 도구의 default 는 SketchUp 식 cascade 로 환원.
     // Single Rust undo transaction — one Ctrl+Z restores all.
     const tol = getMergeTolerance();
     const cascadeOnly = this.cascadeOnly;
-    const res = this.ctx.bridge.batchEraseEdgesSoftFallback(faces, edges, tol, cascadeOnly);
+    const res = this.ctx.bridge.batchEraseEdgesWithMerge(faces, edges, tol, cascadeOnly);
 
     let mergedCount = 0;
     let cascadedFaces = faces.length;
     let cascadedEdges = edges.length;
-    let softenedCount = 0;
     let synthesizedCount = 0;
     let desolidifiedCount = 0;
     let ok = true;
@@ -130,7 +133,6 @@ export class EraseTool implements ITool {
       mergedCount = res.merged;
       cascadedEdges = res.cascadedEdges;
       cascadedFaces = res.cascadedFaces;
-      softenedCount = res.softened;
       synthesizedCount = res.synthesized;
       desolidifiedCount = res.desolidified;
     } else {
@@ -151,7 +153,7 @@ export class EraseTool implements ITool {
     if (ok) {
       this.ctx.selection.clearSelection();
       this.ctx.syncMesh();
-      const total = cascadedFaces + cascadedEdges + mergedCount + softenedCount;
+      const total = cascadedFaces + cascadedEdges + mergedCount;
       debugLog(`[Erase] ${mergedCount} merged, ${cascadedFaces} faces, ${cascadedEdges} edges cascaded`
         + (cascadeOnly ? ' (shift: cascade-only)' : ''));
 
@@ -162,11 +164,10 @@ export class EraseTool implements ITool {
           debugLog(`[Erase] first merge failure: ${reason} (tol=${tol}°)`);
         }
       }
-      if (total > 1 || mergedCount > 0 || softenedCount > 0 || synthesizedCount > 0) {
+      if (total > 1 || mergedCount > 0 || synthesizedCount > 0) {
         const parts: string[] = [];
         if (mergedCount > 0) parts.push(`${mergedCount}개 면 통합`);
         if (synthesizedCount > 0) parts.push(`${synthesizedCount}개 면 자동 생성`);
-        if (softenedCount > 0) parts.push(`${softenedCount}개 엣지 숨김 (면 유지)`);
         if (cascadedFaces > 0) parts.push(`${cascadedFaces}개 면 삭제`);
         if (cascadedEdges > 0) parts.push(`${cascadedEdges}개 엣지 삭제`);
         if (cascadeOnly) parts.push('(Shift: 강제 삭제)');
@@ -184,28 +185,10 @@ export class EraseTool implements ITool {
         Toast.warning(label, 3500);
       }
 
-      // Option X2 (2026-04-24) — diagnostic when auto-merge didn't happen.
-      //
-      // If the user erased an edge and the topology ended up as SOFT-only
-      // (edge hidden but faces still split), they likely expected a merge
-      // and got a non-merge. Surface the first failure reason so they can
-      // react (adjust tolerance, use geometric merge, etc).
-      //
-      // Suppressed when:
-      //   • Shift held (cascadeOnly — user chose destructive)
-      //   • Actual merge succeeded (mergedCount > 0)
-      //   • Nothing softened (result was clean cascade/synth)
-      if (!cascadeOnly && mergedCount === 0 && softenedCount > 0) {
-        const reason = this.ctx.bridge.lastMergeFailureReason();
-        const base = `${softenedCount}개 엣지는 숨겨졌지만 면은 통합되지 않음.`;
-        const hint = reason
-          ? `원인: ${reason}.\n`
-            + `• 허용치 완화 → 커맨드 "mergetol 5"\n`
-            + `• 폴리곤 병합 → 두 면 선택 후 "🧲 기하 병합" 컨텍스트 메뉴`
-          : `• 허용치 완화: "mergetol 5"\n`
-            + `• 수동 병합: 두 면 선택 + Ctrl+M`;
-        Toast.warning(`${base}\n${hint}`, 5000);
-      }
+      // 2026-04-27 — SOFT fallback 정책 폐기. 이제 merge 실패 시 cascade
+      //   (엣지 + 인접 면) 가 default 라 "엣지는 사라졌는데 면이 그대로"
+      //   상태가 발생하지 않음. softened > 0 은 explicit Soften Edges
+      //   명령 경로에서만 발생하므로 Erase 도구는 별도 안내 없음.
     } else {
       Toast.error('삭제에 실패했습니다');
     }
