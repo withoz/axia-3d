@@ -239,6 +239,21 @@ async function main() {
   // ═══ Project Save/Load (.xia) — MenuBar/KeyboardShortcuts보다 먼저 초기화 ═══
   const { saveProject, openProject } = initProjectSerializer({ bridge, viewport, toolManager, units });
 
+  // ═══ Command Catalog — single source of truth for command metadata.
+  //   NOT a new dispatcher — each entry's `execute` callback delegates
+  //   into the existing ToolManager / MenuBar paths. Adding a new
+  //   command still happens in ToolManagerRefactored.executeAction or
+  //   MenuBar; the catalog just gathers the metadata so toolbar / menu
+  //   / keyboard / palette can all consult one list.
+  void import('./commands/AxiaCommands').then(({ registerAxiaCommands }) => {
+    registerAxiaCommands({ toolManager });
+  });
+  // Command Palette — Ctrl+K / Ctrl+Shift+P opens a searchable list of every
+  //   registered command (single visible surface for the catalog).
+  void import('./ui/CommandPalette').then(({ bindCommandPaletteHotkey }) => {
+    bindCommandPaletteHotkey();
+  });
+
   // ═══ 4a. CAD Menu Bar — see ui/MenuBar.ts ═══
   initMenuBar({ viewport, bridge, toolManager, scene: viewport.scene, fileManager, saveProject, openProject, openOsnapPanel });
 
