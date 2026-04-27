@@ -2790,10 +2790,12 @@ export class ToolManager {
       if (e.count === 1 && e.from.distanceTo(e.to) >= 0.1) perimeter.push(e);
     }
 
-    if (perimeter.length === 0) {
-      this.dimLabel.clear();
-      return;
-    }
+    // perimeter 가 비어 있어도 closed solid (모든 엣지가 face 2개 공유)
+    //   케이스에서 volume bbox W/H/D 라벨은 그려야 하므로 early return 하지
+    //   않음. chain processing 만 skip.
+    const hasPerimeter = perimeter.length > 0;
+    const chains: EdgeRec[][] = [];
+    if (hasPerimeter) {
 
     // ═══ Phase 2: Edge chain 재구성 (vertex connectivity로 연결된 체인 묶기) ═══
     // 같은 vertex key를 공유하는 edge들을 따라가며 연속 체인 형성.
@@ -2804,7 +2806,6 @@ export class ToolManager {
       (adj.get(e.toKey) ?? adj.set(e.toKey, []).get(e.toKey)!).push(e);
     }
     const visited = new Set<EdgeRec>();
-    const chains: EdgeRec[][] = [];
     for (const start of perimeter) {
       if (visited.has(start)) continue;
       const chain: EdgeRec[] = [start];
@@ -3021,6 +3022,8 @@ export class ToolManager {
       // 라벨 배열은 이미 MAX로 잘렸고, 단순 경고만 debugLog
       debugLog(`[Selection] ${chains.length} chains, showing ${MAX_DIM_LABELS}`);
     }
+
+    } // end of `if (hasPerimeter) { ... }`
 
     // ═══ 입체(Volume) 치수 라벨 — 지오메트리 방향 따라 표기 ═══
     //
