@@ -221,12 +221,19 @@ export class DimensionLabel {
           const vy = (sv.y - sa.y);
           const ulen = Math.sqrt(ux*ux + uy*uy) || 1;
           const vlen = Math.sqrt(vx*vx + vy*vy) || 1;
-          const a = ux / ulen, b = uy / ulen;
+          let a = ux / ulen, b = uy / ulen;
           let c = vx / vlen, d = vy / vlen;
-          // 글자가 위아래 뒤집히지 않도록 V 방향이 화면 down 이면 flip.
+
+          // 글자 가독성 보정 — viewer 시점에서 항상 읽기 쉬운 방향으로:
+          //
+          //   1. U 방향이 screen 좌측 향함 (a < 0) → 글자가 거꾸로 mirror.
+          //      전체 매트릭스 -1 곱셈 = 180° 회전 → 글자 정방향 복원.
+          //   2. 그 다음 V 방향이 screen-up (d < 0) → face 뒷면 시점이므로
+          //      V 부호 flip → face 앞면에 lying flat.
+          //
+          //   순서 중요: a check 먼저 (회전), 그 다음 d check (V 보정).
+          if (a < 0) { a = -a; b = -b; c = -c; d = -d; }
           if (d < 0) { c = -c; d = -d; }
-          // 또한 글자가 좌우로 거꾸로 (U 방향이 화면 left 향함) 이면 flip.
-          if (a < 0) { /* a=cos, 음수면 글자가 거꾸로 */ }
 
           label.style.left = sa.x + 'px';
           label.style.top = sa.y + 'px';
