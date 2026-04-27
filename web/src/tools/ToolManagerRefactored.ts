@@ -2698,7 +2698,9 @@ export class ToolManager {
     const MAX_DIM_LABELS_TOTAL = 24;
 
     // ═══ Edge 길이 라벨 (선택된 엣지) ═══
-    if (edgeIds.length > 0) {
+    // 면이 함께 선택돼 있으면 face perimeter 가 동일 엣지를 이미 라벨하므로
+    //   중복 방지를 위해 edge-only 라벨은 건너뜀.
+    if (edgeIds.length > 0 && faceIds.length === 0) {
       const edgeColors = ['#ff6f00', '#ffa726', '#ffb74d'];
       let ec = 0;
       for (const eid of edgeIds) {
@@ -2730,6 +2732,8 @@ export class ToolManager {
       }
       return;
     }
+    // 이 지점부터 faceIds.length > 0 — face 가 있으므로 perimeter 분석 진행.
+    // edgeIds 가 함께 있더라도 edge-only 라벨은 위에서 skip 했음.
 
     // ═══ Phase 1: Perimeter edge 추출 (count==1인 것만) ═══
     // 이전엔 edgeSet으로 중복만 제거했는데, 인접한 두 선택 면이
@@ -2739,12 +2743,18 @@ export class ToolManager {
       `${Math.round(v.x * 1000)},${Math.round(v.y * 1000)},${Math.round(v.z * 1000)}`;
     const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
-    type EdgeRec = { from: THREE.Vector3; to: THREE.Vector3; fromKey: string; toKey: string; count: number };
+    type EdgeRec = { from: THREE.Vector3; to: THREE.Vector3; fromKey: string; toKey: string; count: number; faceNormal: THREE.Vector3 | null };
     const edges = new Map<string, EdgeRec>();
 
     for (const faceId of faceIds) {
       const loop = this.extractFaceBoundary(faceId);
       if (loop.length < 2) continue;
+      // 면 normal — DimLine 의 faceNormal 로 전달해 라벨이 면 평면에
+      //   lying flat 처럼 보이도록.
+      const n = this.bridge.getFaceNormal(faceId);
+      const faceNormal = n && (n[0] !== 0 || n[1] !== 0 || n[2] !== 0)
+        ? new THREE.Vector3(n[0], n[1], n[2]).normalize()
+        : null;
       for (let i = 0; i < loop.length; i++) {
         const a = loop[i];
         const b = loop[(i + 1) % loop.length];
@@ -2755,7 +2765,7 @@ export class ToolManager {
         if (ex) {
           ex.count++;
         } else {
-          edges.set(k, { from: a.clone(), to: b.clone(), fromKey: ka, toKey: kb, count: 1 });
+          edges.set(k, { from: a.clone(), to: b.clone(), fromKey: ka, toKey: kb, count: 1, faceNormal });
         }
       }
     }
@@ -2841,6 +2851,7 @@ export class ToolManager {
           this.selectionDimLines.push({
             from: e.from, to: e.to, text: this.units.format(len),
             color: colors[colorIdx++ % colors.length], editable: true,
+            faceNormal: e.faceNormal ?? undefined,
           });
         }
         continue;

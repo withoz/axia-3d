@@ -137,7 +137,8 @@
       "Bash(git -C \"E:/AXiA 3D/.claude/worktrees/zealous-boyd\" mv docs/ADR-009-orphan-face-recovery.md docs/adr/009-orphan-face-recovery.md)",
       "Bash(git commit *)",
       "Bash(선 \\\\|새 라인 XIA\\\\|wireframeEdge\" web/src 2>&1 | head -10)",
-      "Bash(grep -rn \"선 1개\\\\|'선'\\\\|`선 \\\\|새 라인 XIA\\\\|wireframeEdge\" web/src 2>&1 | head -10)"
+      "Bash(grep -rn \"선 1개\\\\|'선'\\\\|`선 \\\\|새 라인 XIA\\\\|wireframeEdge\" web/src 2>&1 | head -10)",
+      "Bash(grep -n \"isCircular\\\\|arcLabel\\\\|cylinderHeight\\\\|H \\\\\\\\\\\\${this.units.format\" web/src/tools/ToolManagerRefactored.ts)"
     ]
   }
 }

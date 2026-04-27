@@ -23,6 +23,10 @@ export interface DimLine {
   color?: string;
   /** If true, this label can be clicked to edit the value */
   editable?: boolean;
+  /** Optional face normal (3D unit vector). 제공되면 라벨을 그 면 평면에
+   *  실제로 lying flat 처럼 표기 (CSS matrix transform 으로 perspective 반영).
+   *  없으면 화면 회전 fallback. */
+  faceNormal?: THREE.Vector3;
 }
 
 /** Callback when a dimension value is edited */
@@ -146,26 +150,85 @@ export class DimensionLabel {
       const dy = screenTo.y - screenFrom.y;
       const len = Math.sqrt(dx * dx + dy * dy);
 
-      // 선과 평행한 각도 (라디안)
-      let angle = Math.atan2(dy, dx);
-      // 텍스트가 뒤집히지 않도록 -90°~90° 범위로 보정
-      if (angle > Math.PI / 2) angle -= Math.PI;
-      if (angle < -Math.PI / 2) angle += Math.PI;
-
-      // 법선 방향으로 약간 오프셋 (선 위에 겹치지 않게)
-      const nx = len > 0 ? -dy / len : 0;
-      const ny = len > 0 ? dx / len : -1;
-      const offset = 14;
-
-      const mx = (screenFrom.x + screenTo.x) / 2 + nx * offset;
-      const my = (screenFrom.y + screenTo.y) / 2 + ny * offset;
-
       label.textContent = line.text;
       label.style.display = 'block';
-      label.style.left = mx + 'px';
-      label.style.top = my + 'px';
-      label.style.transform = `translate(-50%, -50%) rotate(${angle}rad)`;
       label.style.setProperty('--dim-color', color);
+
+      if (line.faceNormal && len > 0.5) {
+        // ═══ Face-aligned 모드 (사용자 요청 "면에 평행하게") ═══
+        // 면 평면의 두 단위 직교 벡터 (U=엣지 방향, V=면 위 직교)를
+        //   3D 에서 정의 → 작은 거리로 이동한 두 점을 screen 으로
+        //   project → CSS matrix() 로 글자를 그 평면 평행하게 skew 시킴.
+        //   결과: 글자가 perspective 에서 face 위에 lying flat 인 효과.
+        const mid3 = new THREE.Vector3()
+          .addVectors(line.from, line.to)
+          .multiplyScalar(0.5);
+        const u3 = new THREE.Vector3()
+          .subVectors(line.to, line.from)
+          .normalize();
+        let v3 = new THREE.Vector3()
+          .crossVectors(line.faceNormal, u3)
+          .normalize();
+        // V 의 부호: face normal 이 카메라 쪽이 되도록 보정 (글자가
+        //   face 뒤가 아닌 앞에서 보이게).
+        const camDir = new THREE.Vector3()
+          .subVectors(camera.position, mid3)
+          .normalize();
+        if (v3.dot(camDir) < 0) v3 = v3.multiplyScalar(-1);
+
+        // 면 두께 거리 — face bbox 대각선 비례. 너무 작으면 노이즈.
+        const stride = Math.max(line.from.distanceTo(line.to) * 0.04, 5);
+
+        // anchor = 엣지 중점에서 V 방향으로 약간 오프셋해 엣지 위 겹침 회피.
+        const anchor3 = mid3.clone().addScaledVector(v3, stride * 1.2);
+        const anchorU = anchor3.clone().addScaledVector(u3, stride);
+        const anchorV = anchor3.clone().addScaledVector(v3, stride);
+
+        const sa = this.toScreen(anchor3, camera, w, h);
+        const su = this.toScreen(anchorU, camera, w, h);
+        const sv = this.toScreen(anchorV, camera, w, h);
+
+        if (sa && su && sv) {
+          // CSS matrix(a,b,c,d,e,f): x' = a*x + c*y + e
+          // text-local x 축 → su - sa, y 축 → sv - sa.
+          //   stride 한 단위가 그 화면 거리에 매핑되도록 정규화는
+          //   필요 없음 — element 의 width/height 가 실제 글자 크기 라
+          //   matrix 단위는 1px 기준. 따라서 (su-sa)/stride_screen 같은
+          //   정규화 대신 직접 단위벡터화.
+          const ux = (su.x - sa.x);
+          const uy = (su.y - sa.y);
+          const vx = (sv.x - sa.x);
+          const vy = (sv.y - sa.y);
+          const ulen = Math.sqrt(ux*ux + uy*uy) || 1;
+          const vlen = Math.sqrt(vx*vx + vy*vy) || 1;
+          const a = ux / ulen, b = uy / ulen;
+          let c = vx / vlen, d = vy / vlen;
+          // 글자가 위아래 뒤집히지 않도록 V 방향이 화면 down 이면 flip.
+          if (d < 0) { c = -c; d = -d; }
+          // 또한 글자가 좌우로 거꾸로 (U 방향이 화면 left 향함) 이면 flip.
+          if (a < 0) { /* a=cos, 음수면 글자가 거꾸로 */ }
+
+          label.style.left = sa.x + 'px';
+          label.style.top = sa.y + 'px';
+          // Note: matrix(a, b, c, d, e, f) — 마지막 e/f 는 0 이고 left/top
+          //   에서 위치 잡음. translate(-50%, -50%) 는 matrix 와 함께 쓸 수
+          //   없으므로 element width/height 의 절반만큼 offset 보정.
+          const labelHalfW = label.offsetWidth / 2 || 0;
+          const labelHalfH = label.offsetHeight / 2 || 0;
+          // 보정: matrix 에 element 중심을 anchor 로 가져오는 변환 추가.
+          //   (translate(-w/2,-h/2) 후 matrix 적용 == 두 매트릭스 합성)
+          //   합성: x' = a*(-w/2) + c*(-h/2) + 0; y' = b*(-w/2) + d*(-h/2) + 0
+          const tx = -(a * labelHalfW + c * labelHalfH);
+          const ty = -(b * labelHalfW + d * labelHalfH);
+          label.style.transform = `matrix(${a},${b},${c},${d},${tx},${ty})`;
+        } else {
+          // toScreen 실패 → fallback rotate
+          this.applyRotateFallback(label, screenFrom, screenTo, len, dy, dx);
+        }
+      } else {
+        // ═══ Fallback: 화면 회전 (face normal 없을 때 / edge-only 선택) ═══
+        this.applyRotateFallback(label, screenFrom, screenTo, len, dy, dx);
+      }
 
       // Editable labels get pointer-events and click handler
       if (line.editable && this._onEdit) {
@@ -390,6 +453,28 @@ export class DimensionLabel {
     this.ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
     this.ctx.clearRect(0, 0, w, h);
     this.ctx.restore();
+  }
+
+  /** Fallback: face normal 없을 때의 화면 회전 라벨 배치. */
+  private applyRotateFallback(
+    label: HTMLElement,
+    screenFrom: { x: number; y: number },
+    screenTo: { x: number; y: number },
+    len: number,
+    dy: number,
+    dx: number,
+  ): void {
+    let angle = Math.atan2(dy, dx);
+    if (angle > Math.PI / 2) angle -= Math.PI;
+    if (angle < -Math.PI / 2) angle += Math.PI;
+    const nx = len > 0 ? -dy / len : 0;
+    const ny = len > 0 ? dx / len : -1;
+    const offset = 14;
+    const mx = (screenFrom.x + screenTo.x) / 2 + nx * offset;
+    const my = (screenFrom.y + screenTo.y) / 2 + ny * offset;
+    label.style.left = mx + 'px';
+    label.style.top = my + 'px';
+    label.style.transform = `translate(-50%, -50%) rotate(${angle}rad)`;
   }
 
   /** 3D → 스크린 좌표 변환 */
