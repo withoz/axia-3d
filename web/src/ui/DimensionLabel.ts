@@ -226,15 +226,17 @@ export class DimensionLabel {
 
           // 글자 가독성 보정 — viewer 시점에서 항상 읽기 쉬운 방향으로.
           //
-          //   1) Reading direction (head 방향) 보정:
-          //      atan2(b, a) ∉ (-π/2, π/2] 이면 180° 회전. 즉 b > 0 인 경우
-          //      글자가 거꾸로 (head 가 화면 아래로) 처지므로 flip.
-          //      vertical edge (a ≈ 0) 케이스도 b 부호로 깔끔히 결정.
-          //   2) V 방향 보정 (d < 0 이면 face 뒷면) — face 앞면에 lying
-          //      flat 되도록 V flip.
+          //   CSS matrix(a,b,c,d,..): local-x → (a,b) on screen.
+          //   글자가 mirror 되지 않으려면 local-x 가 screen 의 "오른쪽 또는
+          //   위쪽" 절반을 향해야 함 — 즉 a > 0 (좌→우 reading) 가 절대
+          //   기준. a == 0 (vertical edge) 인 경우엔 b < 0 (head up) 가 기준.
           //
-          //   순서: 1) → 2) (역순이면 1) 가 d 부호를 다시 뒤집을 수 있음).
-          if (b > 0 || (Math.abs(b) < 1e-9 && a < 0)) {
+          //   1) a < 0 (또는 a ≈ 0 & b > 0) → 180° 회전 → 좌→우 reading
+          //      direction + head up 동시에 보장.
+          //   2) V 방향 보정 (d < 0) → face 앞면 lying flat.
+          //
+          //   순서: 1) → 2). 역순일 경우 1) 이 d 부호를 다시 뒤집을 수 있음.
+          if (a < -1e-9 || (Math.abs(a) <= 1e-9 && b > 0)) {
             a = -a; b = -b; c = -c; d = -d;
           }
           if (d < 0) { c = -c; d = -d; }
