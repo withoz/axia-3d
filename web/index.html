@@ -765,28 +765,30 @@
     }
 
     /* ═══ Dimension Labels (치수 표시) ═══ */
-    /* 2026-04-27 — 사용자 요청: 테두리/배경 제거, 글자만 엣지 위에 표기. */
+    /* 2026-04-27 — 기술 도면 스타일:
+     *   · 테두리/배경 제거 (글자만 dim line 위에).
+     *   · 단일 색상 (dark) — 도면 표준.
+     *   · 작고 깔끔한 sans-serif. */
     .dim-label {
       position: absolute;
       transform: translate(-50%, -50%);
       background: transparent;
-      color: var(--dim-color, #4ac1ff);
-      font-size: 11px;
-      font-weight: 600;
-      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+      color: var(--dim-color, #222e44);
+      font-size: 12px;
+      font-weight: 500;
+      font-family: 'Segoe UI', 'Arial', sans-serif;
       padding: 0;
       border-radius: 0;
       border: none;
       white-space: nowrap;
       pointer-events: none;
-      letter-spacing: 0.3px;
-      /* 글자가 배경 어떤 색에서도 잘 보이도록 흑백 양방향 stroke */
+      letter-spacing: 0.2px;
+      /* 흰 배경에서 또렷하게 — 가는 흰 stroke 로 테두리 효과 */
       text-shadow:
-        -1px -1px 0 rgba(255,255,255,0.85),
-         1px -1px 0 rgba(255,255,255,0.85),
-        -1px  1px 0 rgba(255,255,255,0.85),
-         1px  1px 0 rgba(255,255,255,0.85),
-         0    2px 3px rgba(0,0,0,0.5);
+        -1px -1px 0 rgba(255,255,255,0.95),
+         1px -1px 0 rgba(255,255,255,0.95),
+        -1px  1px 0 rgba(255,255,255,0.95),
+         1px  1px 0 rgba(255,255,255,0.95);
       transition: opacity 0.15s ease;
     }
 

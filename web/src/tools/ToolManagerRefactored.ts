@@ -2701,8 +2701,7 @@ export class ToolManager {
     // 면이 함께 선택돼 있으면 face perimeter 가 동일 엣지를 이미 라벨하므로
     //   중복 방지를 위해 edge-only 라벨은 건너뜀.
     if (edgeIds.length > 0 && faceIds.length === 0) {
-      const edgeColors = ['#ff6f00', '#ffa726', '#ffb74d'];
-      let ec = 0;
+      const EDGE_DIM_COLOR = '#222e44';
       for (const eid of edgeIds) {
         if (this.selectionDimLines.length >= MAX_DIM_LABELS_TOTAL) break;
         const eps = this.bridge.getEdgeEndpoints(eid);
@@ -2716,8 +2715,8 @@ export class ToolManager {
         if (len < 0.1) continue;
         this.selectionDimLines.push({
           from, to,
-          text: this.units.format(len),
-          color: edgeColors[ec++ % edgeColors.length],
+          text: this.units.format(len, false),
+          color: EDGE_DIM_COLOR,
           editable: true,
         });
       }
@@ -2837,8 +2836,13 @@ export class ToolManager {
     // ═══ Phase 3: 각 체인을 분석하여 표시 결정 ═══
     // - 원형 감지: 닫힌 체인의 모든 vertex가 centroid에서 등거리 → R 라벨
     // - 기타 체인: 단일 선분이면 길이 라벨, 다중 선분이면 총 길이 (⌒)
-    const colors = ['#ff6b6b', '#51cf66', '#4dabf7', '#ffd43b', '#cc5de8', '#ff922b'];
-    let colorIdx = 0;
+    //
+    // 2026-04-27 — 사용자 요청 (기술 도면 스타일):
+    //   · 숫자만 표기 (단위 'mm' 접미사 제거)
+    //   · 색상 단일 (dark gray) — rainbow 제거
+    const DIM_COLOR = '#222e44';
+    let colorIdx = 0;  // 호환용 (kept-around for future re-color schemes)
+    void colorIdx;
     const MAX_DIM_LABELS = 20;
 
     // 집계 기준: 이 값 미만 길이의 chain은 개별 edge 라벨 유지
@@ -2856,7 +2860,7 @@ export class ToolManager {
          chain[0].toKey === chain[chain.length - 1].toKey ||
          chain[0].toKey === chain[chain.length - 1].fromKey);
 
-      const color = colors[colorIdx++ % colors.length];
+      const color = DIM_COLOR;
 
       // 짧은 chain (직사각형·다각형) — 개별 edge 라벨 유지.
       // AutoCAD 식 외곽 offset: dim line 을 face 외부 방향으로 띄우고
@@ -2889,8 +2893,8 @@ export class ToolManager {
 
           this.selectionDimLines.push({
             from: offFrom, to: offTo,
-            text: this.units.format(len),
-            color: colors[colorIdx++ % colors.length], editable: true,
+            text: this.units.format(len, false),  // 단위 접미사 제거 — 기술 도면 스타일
+            color, editable: true,
             faceNormal: e.faceNormal ?? undefined,
             originalFrom, originalTo,
           });
@@ -2940,7 +2944,7 @@ export class ToolManager {
         this.selectionDimLines.push({
           from: centroid,
           to: verts[0],
-          text: `R ${this.units.format(radius)}`,
+          text: `R${this.units.format(radius, false)}`,
           color,
           editable: true,
         });
@@ -2950,8 +2954,8 @@ export class ToolManager {
         // 체인 중간 edge 한 개 골라서 arc 심볼 + 총 길이
         const mid = chain[Math.floor(chain.length / 2)];
         const arcLabel = isClosed
-          ? `⌒ ${this.units.format(totalLen)} (닫힘)`
-          : `⌒ ${this.units.format(totalLen)}`;
+          ? `⌒${this.units.format(totalLen, false)}`
+          : `⌒${this.units.format(totalLen, false)}`;
         this.selectionDimLines.push({
           from: mid.from, to: mid.to, text: arcLabel, color, editable: false,
         });
@@ -2988,8 +2992,8 @@ export class ToolManager {
           this.selectionDimLines.push({
             from: best[0],
             to: best[1],
-            text: `H ${this.units.format(maxDist)}`,
-            color: '#ffa94d', // 원통 높이 — 오렌지 계열로 radius(R)와 구분
+            text: this.units.format(maxDist, false),
+            color: DIM_COLOR,
             editable: true,
           });
         }
@@ -3070,15 +3074,14 @@ export class ToolManager {
           if (parallel) continue;
           picked.push(g);
         }
-        const labels = ['W', 'H', 'D'];
-        const color = '#74c0fc';
+        const color = DIM_COLOR;
         for (let i = 0; i < picked.length; i++) {
           if (this.selectionDimLines.length >= MAX_DIM_LABELS_TOTAL) break;
           const e = picked[i].longest;
           this.selectionDimLines.push({
             from: e.a.clone(),
             to: e.b.clone(),
-            text: `${labels[i]} ${this.units.format(e.len)}`,
+            text: this.units.format(e.len, false),  // 숫자만
             color,
             editable: false,
           });

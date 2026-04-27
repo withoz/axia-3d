@@ -137,40 +137,33 @@ export class DimensionLabel {
       }
 
       // 연장선 (extension lines) — original 엣지 → 외곽 dim line 까지.
-      //   AutoCAD 식 dim 표시.
+      //   기술 도면 스타일: 가는 solid line.
       if (line.originalFrom && line.originalTo) {
         const oFrom = this.toScreen(line.originalFrom, camera, w, h);
         const oTo = this.toScreen(line.originalTo, camera, w, h);
         if (oFrom && oTo) {
           this.ctx.strokeStyle = color;
-          this.ctx.lineWidth = 1;
-          this.ctx.setLineDash([3, 3]);
+          this.ctx.lineWidth = 0.8;
           this.ctx.beginPath();
           this.ctx.moveTo(oFrom.x, oFrom.y);
           this.ctx.lineTo(screenFrom.x, screenFrom.y);
           this.ctx.moveTo(oTo.x, oTo.y);
           this.ctx.lineTo(screenTo.x, screenTo.y);
           this.ctx.stroke();
-          this.ctx.setLineDash([]);
-          // 원본 엣지 끝점에도 작은 마커
-          this.drawEndpoint(oFrom.x, oFrom.y, color);
-          this.drawEndpoint(oTo.x, oTo.y, color);
         }
       }
 
-      // 치수선 그리기
+      // 치수선 — solid (기술 도면 표준).
       this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = 1.5;
-      this.ctx.setLineDash([4, 3]);
+      this.ctx.lineWidth = 1;
       this.ctx.beginPath();
       this.ctx.moveTo(screenFrom.x, screenFrom.y);
       this.ctx.lineTo(screenTo.x, screenTo.y);
       this.ctx.stroke();
-      this.ctx.setLineDash([]);
 
-      // 양쪽 끝 작은 다이아몬드
-      this.drawEndpoint(screenFrom.x, screenFrom.y, color);
-      this.drawEndpoint(screenTo.x, screenTo.y, color);
+      // 양쪽 끝 화살표 (다이아몬드 → tick mark, 더 도면스럽게)
+      this.drawDimTick(screenFrom.x, screenFrom.y, screenTo.x, screenTo.y, color);
+      this.drawDimTick(screenTo.x, screenTo.y, screenFrom.x, screenFrom.y, color);
 
       // 선의 방향 및 각도 계산
       const dx = screenTo.x - screenFrom.x;
@@ -514,6 +507,31 @@ export class DimensionLabel {
       x: (v.x * 0.5 + 0.5) * w,
       y: (-v.y * 0.5 + 0.5) * h,
     };
+  }
+
+  /** 치수선 끝의 짧은 화살표 — 도면 스타일 dim tick.
+   *  (px, py) 끝점, (ox, oy) 다른쪽 끝 (방향 기준). */
+  private drawDimTick(px: number, py: number, ox: number, oy: number, color: string) {
+    const dx = ox - px;
+    const dy = oy - py;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1) return;
+    const ux = dx / len, uy = dy / len;
+    const size = 6;
+    // 양쪽 화살날 (perpendicular ± 30°)
+    const cos30 = 0.866, sin30 = 0.5;
+    const ax = ux * cos30 - uy * sin30;
+    const ay = uy * cos30 + ux * sin30;
+    const bx = ux * cos30 + uy * sin30;
+    const by = uy * cos30 - ux * sin30;
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.moveTo(px, py);
+    this.ctx.lineTo(px + ax * size, py + ay * size);
+    this.ctx.moveTo(px, py);
+    this.ctx.lineTo(px + bx * size, py + by * size);
+    this.ctx.stroke();
   }
 
   /** 끝점 마커 (작은 다이아몬드) */
