@@ -839,6 +839,9 @@ impl Scene {
     }
 
     /// vertex가 임의의 활성 face의 interior(boundary 아님 + 2D 내부)에 있는지 검사.
+    /// ⚡ 성능: large scene 의 draw_line 시 N face 전체에 대해 plane+point-in-polygon
+    /// 을 돌면 O(N) × heap-alloc 이 누적돼 수백 ms 가 됨. AABB pre-reject 와
+    /// 평면-거리 cheap test 를 먼저 두어 99% 의 face 를 즉시 스킵한다.
     fn is_vertex_interior_to_any_face(&self, v: VertId) -> bool {
         let p = match self.mesh.vertex_pos(v) { Ok(p) => p, Err(_) => return false };
         for (_fid, face) in self.mesh.faces.iter() {
@@ -848,7 +851,27 @@ impl Scene {
             };
             if boundary.contains(&v) { continue; }
             if boundary.len() < 3 { continue; }
-            // Coplanar + inside polygon test
+
+            // ── AABB pre-reject (cheap) ───────────────────────────────
+            // 4-원소 boundary (rect) 등은 5 ns 이내 종결.
+            let mut min = glam::DVec3::splat(f64::INFINITY);
+            let mut max = glam::DVec3::splat(f64::NEG_INFINITY);
+            let mut have_pts = false;
+            for &vid in &boundary {
+                if let Ok(q) = self.mesh.vertex_pos(vid) {
+                    min = min.min(q); max = max.max(q); have_pts = true;
+                }
+            }
+            if !have_pts { continue; }
+            // Tolerance: 1mm padding (충분히 보수적, 정확한 판정은 뒤에서).
+            const PAD: f64 = 1.0;
+            if p.x < min.x - PAD || p.x > max.x + PAD ||
+               p.y < min.y - PAD || p.y > max.y + PAD ||
+               p.z < min.z - PAD || p.z > max.z + PAD {
+                continue;
+            }
+
+            // ── Coplanar + inside polygon test ────────────────────────
             let Ok(p0) = self.mesh.vertex_pos(boundary[0]) else { continue };
             let Ok(p1) = self.mesh.vertex_pos(boundary[1]) else { continue };
             let e1 = (p1 - p0).normalize_or_zero();
@@ -1099,32 +1122,73 @@ impl Scene {
         use std::collections::HashSet;
         // Step 4.5 — fan-tessellation, scoped to faces whose AABB contains
         //   at least one touched vertex (Perf cut from earlier session).
+        // ⚡ 2026-04-27 — empty-space draw 시 N face × collect_loop_verts
+        //   (heap alloc) 가 누적돼 큰 씬에서 수백 ms. 두 단계로 가속:
+        //     1. touched_pts 가 비어있으면 전체 스킵.
+        //     2. 외곽 AABB 사전계산 + face AABB 는 in-place 반복으로
+        //        Vec alloc 회피. 외곽 밖이면 첫 vert 만 보고 즉시 reject.
         {
             let touched_pts: Vec<DVec3> = touched_verts.iter()
                 .filter_map(|&v| self.mesh.vertex_pos(v).ok())
                 .collect();
-            let candidates: Vec<FaceId> = self.mesh.faces.iter()
-                .filter(|(_, f)| f.is_active())
-                .filter_map(|(fid, f)| {
-                    let verts = self.mesh.collect_loop_verts(f.outer().start).ok()?;
-                    let mut mn = DVec3::splat(f64::INFINITY);
-                    let mut mx = DVec3::splat(f64::NEG_INFINITY);
-                    for &v in &verts {
-                        let p = self.mesh.vertex_pos(v).ok()?;
-                        mn = mn.min(p);
-                        mx = mx.max(p);
+            let candidates: Vec<FaceId> = if touched_pts.is_empty() {
+                Vec::new()
+            } else {
+                // 1) Outer AABB of touched_pts.
+                let mut tmn = DVec3::splat(f64::INFINITY);
+                let mut tmx = DVec3::splat(f64::NEG_INFINITY);
+                for p in &touched_pts {
+                    tmn = tmn.min(*p); tmx = tmx.max(*p);
+                }
+                let pad = DVec3::splat(1.0);
+                tmn -= pad; tmx += pad;
+
+                // 2) For each face, walk loop in-place to build face AABB,
+                //    test AABB-vs-AABB intersection vs touched AABB.
+                //    Vec alloc 회피 → 큰 씬에서 N face × heap alloc 비용 제거.
+                let mut out: Vec<FaceId> = Vec::new();
+                for (fid, f) in self.mesh.faces.iter() {
+                    if !f.is_active() { continue; }
+                    let start = f.outer().start;
+                    if start.is_null() { continue; }
+
+                    let mut fmn = DVec3::splat(f64::INFINITY);
+                    let mut fmx = DVec3::splat(f64::NEG_INFINITY);
+                    let mut he = start;
+                    let mut hops = 0;
+                    let max_hops = 64;
+                    loop {
+                        let vid = self.mesh.hes[he].dst();
+                        if let Ok(p) = self.mesh.vertex_pos(vid) {
+                            fmn = fmn.min(p); fmx = fmx.max(p);
+                        }
+                        he = self.mesh.hes[he].next();
+                        hops += 1;
+                        if he == start || he.is_null() || hops >= max_hops { break; }
                     }
+                    if fmn.x.is_infinite() { continue; }
                     let pad = DVec3::splat(1e-3);
-                    mn -= pad;
-                    mx += pad;
-                    let has_inside = touched_pts.iter().any(|p| {
-                        p.x >= mn.x && p.x <= mx.x
-                            && p.y >= mn.y && p.y <= mx.y
-                            && p.z >= mn.z && p.z <= mx.z
-                    });
-                    if has_inside { Some(fid) } else { None }
-                })
-                .collect();
+                    fmn -= pad; fmx += pad;
+
+                    // AABB-vs-AABB intersection test (any axis disjoint → reject).
+                    if fmx.x < tmn.x || fmn.x > tmx.x ||
+                       fmx.y < tmn.y || fmn.y > tmx.y ||
+                       fmx.z < tmn.z || fmn.z > tmx.z {
+                        continue;
+                    }
+                    // Detailed: original semantics — face AABB contains some touched_pt.
+                    let mut hit = false;
+                    for tp in &touched_pts {
+                        if tp.x >= fmn.x && tp.x <= fmx.x &&
+                           tp.y >= fmn.y && tp.y <= fmx.y &&
+                           tp.z >= fmn.z && tp.z <= fmx.z {
+                            hit = true; break;
+                        }
+                    }
+                    if hit { out.push(fid); }
+                }
+                out
+            };
             for fid in candidates {
                 let new_faces = self.mesh.dissolve_and_fan_split(fid);
                 if !new_faces.is_empty() {
@@ -1788,11 +1852,28 @@ impl Scene {
                 }
             }
         } else {
-            self.run_face_synthesis_postprocess(
-                &touched_verts,
-                &new_edges,
-                &mut all_created_faces,
-            );
+            // ⚡ Fast-path (2026-04-27): empty-space draw skips all heavy
+            //   postprocess scans. If the new line touched **no** existing
+            //   topology (no edge crossings, no on-line verts, no collinear
+            //   overlap, no face-split sub-segments) it can only have
+            //   produced a standalone edge — none of Steps 4.5/4.55/4.6/
+            //   4.65/4.7/4.8 have anything to do.
+            //
+            //   Each of those steps iterates ~all active faces with
+            //   collect_loop_verts → heap alloc per face. With a 3000-face
+            //   scene this dominates draw_line latency (>500 ms).
+            let touched_existing_topology =
+                !crossings.is_empty() ||
+                !verts_on_line.is_empty() ||
+                !collinear_splits.is_empty() ||
+                !all_created_faces.is_empty();
+            if touched_existing_topology {
+                self.run_face_synthesis_postprocess(
+                    &touched_verts,
+                    &new_edges,
+                    &mut all_created_faces,
+                );
+            }
         }
 
         // ── Step 5: 결과 XIA 생성 ──

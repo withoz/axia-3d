@@ -94,6 +94,10 @@ export class Viewport {
   /** Cache of Mesh-edge LineMaterials so resize + width changes are fast.
    *  Separate from the axis LineMaterials (lineMaterials arr in constructor). */
   private _meshEdgeMaterials: LineMaterial[] = [];
+  /** Pending requestAnimationFrame id for deferred smoothNormals.
+   *  Cancel-and-replace ensures we never run an old normal pass on top
+   *  of a fresher mesh. */
+  private _pendingSmoothNormalsRaf: number | null = null;
   private bgCanvas: HTMLCanvasElement | null = null;
 
   // Cleanup references
@@ -933,8 +937,13 @@ export class Viewport {
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
 
-      // ── Smooth normals: 인접 면 각도 < 30°이면 법선 보간 (원통 등 곡면 부드럽게) ──
-      this.smoothNormals(geometry, 30);
+      // ── Smooth normals: 인접 면 각도 < 30°이면 법선 보간 (원통 등 곡면 부드럽게).
+      // ⚡ 성능 최적화 (2026-04-27): smoothNormals 는 O(V·T) 로 드로잉 시
+      //   가장 큰 단일 비용. 화면에는 WASM 이 준 법선으로 즉시 표시하고
+      //   부드러운 노멀은 다음 프레임에 적용 → 사용자 체감 반응 속도 ↑.
+      //   `_pendingSmoothNormals` 가 RAF 스케줄을 들고 있으므로 새 mesh
+      //   가 도착하면 이전 RAF 는 자동 취소됨.
+      this._scheduleSmoothNormals(geometry, 30);
 
       // ── Store faceMap, indexBuffer and create per-face color attribute ──
       this.indexBuffer = new Uint32Array(indices);
@@ -1330,6 +1339,26 @@ export class Viewport {
    * 3. 같은 위치의 정점들 중, 면 노멀 각도가 threshold 이내인 것만 합산
    * 4. 결과: 원통 옆면 → 부드러운 곡면, 직각 모서리 → 날카로운 엣지 유지
    */
+  /**
+   * Schedule smoothNormals on the next animation frame so the new mesh
+   * paints immediately with WASM-supplied normals. If a previous schedule
+   * is still pending it gets cancelled — only the latest mesh is smoothed.
+   */
+  private _scheduleSmoothNormals(geometry: THREE.BufferGeometry, angleDeg: number): void {
+    if (this._pendingSmoothNormalsRaf != null) {
+      cancelAnimationFrame(this._pendingSmoothNormalsRaf);
+    }
+    this._pendingSmoothNormalsRaf = requestAnimationFrame(() => {
+      this._pendingSmoothNormalsRaf = null;
+      // Geometry might have been disposed if a newer updateMesh() ran.
+      // Detect via a simple sentinel: position attribute removed on dispose.
+      const pos = geometry.getAttribute('position');
+      if (!pos) return;
+      try { this.smoothNormals(geometry, angleDeg); }
+      catch (e) { console.warn('[Viewport] deferred smoothNormals failed:', e); }
+    });
+  }
+
   private smoothNormals(geometry: THREE.BufferGeometry, angleDeg: number): void {
     const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
     const normAttr = geometry.getAttribute('normal') as THREE.BufferAttribute;

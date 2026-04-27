@@ -614,8 +614,40 @@ impl Mesh {
 
     /// 두 vertex 모두가 경계 위에 있는 활성 face의 ID를 반환 (있다면).
     /// 여러 face가 공유하는 경우 첫 번째 매치 반환.
+    ///
+    /// ⚡ 성능: large scene 의 draw_line 시 N face 전체를 순회하며
+    /// `collect_loop_verts` 를 돌리면 face 수에 비례한 heap-alloc 이 누적돼
+    /// 수백 ms 가 됨. v1 의 incident edges 만 추적해 후보 face 수를 평균
+    /// 4 이하로 줄인다.
     pub fn find_face_containing_both_verts(&self, v1: VertId, v2: VertId) -> Option<FaceId> {
-        for (face_id, face) in self.faces.iter() {
+        // v1 의 모든 incident half-edge 의 face 후보 수집 (radial chain 순회).
+        // vert_to_edge 는 두 vert 쌍 → 단일 edge id 매핑이라 v1 의 모든
+        // incident edge 를 직접 얻기 어렵다. 대안: edges 슬롯스토리지를
+        // v1 또는 v2 가 endpoint 인 것만 1-pass 스캔하고, 그 edge 의
+        // any_he 로부터 radial chain 을 따라 face 를 찾는다. 일반 manifold
+        // 메시에서 v1 incident edge 수는 ~6 이내라 매우 빠름.
+        use rustc_hash::FxHashSet;
+        let mut candidates: FxHashSet<FaceId> = FxHashSet::default();
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            if edge.v_small() != v1 && edge.v_large() != v1 { continue; }
+            // walk radial chain to gather faces
+            let start_he = edge.any_he();
+            if start_he.is_null() { continue; }
+            let mut he = start_he;
+            for _ in 0..32 {
+                let f = self.hes[he].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    candidates.insert(f);
+                }
+                he = self.hes[he].next_rad();
+                if he == start_he { break; }
+            }
+            let _ = eid;
+        }
+
+        for face_id in candidates {
+            let face = match self.faces.get(face_id) { Some(f) => f, None => continue };
             if !face.is_active() { continue; }
             let verts = match self.collect_loop_verts(face.outer().start) {
                 Ok(v) => v,

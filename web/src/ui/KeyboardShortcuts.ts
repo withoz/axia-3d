@@ -325,14 +325,20 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
-    if (e.ctrlKey && e.key === 'z') {
+    // Windows 표준 Undo/Redo. case-insensitive 처리 + Ctrl+Shift+Z 도 Redo (Adobe 관습).
+    const isUndoKey = e.ctrlKey && !e.shiftKey && (e.key === 'z' || e.key === 'Z');
+    const isRedoKey = e.ctrlKey && (
+      (e.key === 'y' || e.key === 'Y') ||
+      (e.shiftKey && (e.key === 'z' || e.key === 'Z'))
+    );
+    if (isUndoKey) {
       e.preventDefault();
       if (e.repeat) return;
       if (!e.isTrusted) { console.warn('[Undo] blocked non-trusted event'); return; }
       toolManager.executeAction('undo');
       const undoBtn = toolbar.querySelector('[data-tool="undo"]');
       if (undoBtn) { undoBtn.classList.add('flash'); undoBtn.addEventListener('animationend', () => undoBtn.classList.remove('flash'), { once: true }); }
-    } else if (e.ctrlKey && e.key === 'y') {
+    } else if (isRedoKey) {
       e.preventDefault();
       if (e.repeat) return;
       if (!e.isTrusted) { console.warn('[Redo] blocked non-trusted event'); return; }
