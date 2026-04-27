@@ -158,6 +158,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;
+      case 'toggle-selection-dims': toolManager.executeAction('toggle-selection-dims'); break;
       // 그룹 / 컴포넌트
       case 'group': toolManager.executeAction('group'); break;
       case 'ungroup': toolManager.executeAction('ungroup'); break;

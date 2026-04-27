@@ -80,6 +80,8 @@ export class ToolManager {
 
   // ═══ Selection Dimension Display (Stage 1) ═══
   private selectionDimLines: DimLine[] = [];
+  /** 선택 치수 표시 ON/OFF — 우클릭 메뉴에서 토글. default OFF. */
+  private _selectionDimsEnabled: boolean = false;
 
   // ═══ 3D Axis Inference (SketchUp style) ═══
   private axisLock: 'x' | 'y' | 'z' | 'free' | null = null;
@@ -172,8 +174,9 @@ export class ToolManager {
     this.drawPlaneIndicator = new DrawPlaneIndicator(viewport.scene);
 
     // ═══ Selection Dimension Display: show edge dims when faces selected ═══
+    // 2026-04-27 — default OFF (사용자 요청). 우클릭 메뉴 "치수 표시" 로 토글.
     this.selection.onChange((faces: number[]) => {
-      if (this._currentTool === 'select' && faces.length > 0) {
+      if (this._selectionDimsEnabled && this._currentTool === 'select' && faces.length > 0) {
         this.updateSelectionDimensions(faces);
       } else {
         this.selectionDimLines = [];
@@ -295,8 +298,9 @@ export class ToolManager {
     if (name !== 'select') {
       this.selectionDimLines = [];
       this.dimLabel.clear();
-    } else {
-      // Re-entering select tool: recompute dims for current selection
+    } else if (this._selectionDimsEnabled) {
+      // Re-entering select tool: recompute dims for current selection (only
+      //   when 사용자가 "치수 표시" 를 켜둔 경우).
       const faces = this.selection.getSelectedFaces();
       if (faces.length > 0) {
         this.updateSelectionDimensions(faces);
@@ -455,6 +459,18 @@ export class ToolManager {
         this.syncMesh();
         getMaterialLibrary().syncFromRust();
       }
+    } else if (action === 'toggle-selection-dims') {
+      // 우클릭 메뉴 "치수 표시" 토글 (사용자 요청 2026-04-27)
+      this._selectionDimsEnabled = !this._selectionDimsEnabled;
+      const faces = this.selection.getSelectedFaces();
+      if (this._selectionDimsEnabled && this._currentTool === 'select' && faces.length > 0) {
+        this.updateSelectionDimensions(faces);
+      } else {
+        this.selectionDimLines = [];
+        this.dimLabel.clear();
+      }
+      Toast.info(`치수 표시: ${this._selectionDimsEnabled ? 'ON' : 'OFF'}`, 1500);
+      debugLog(`[Action] toggle-selection-dims → ${this._selectionDimsEnabled}`);
     } else if (action === 'clipboard-copy' || action === 'clipboard-cut') {
       // Ctrl+C / Ctrl+X — 현재 선택된 face를 클립보드에 저장.
       // MVP: face만 지원. Edge-only 선택은 별도 안내.
