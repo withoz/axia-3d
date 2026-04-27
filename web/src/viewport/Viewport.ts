@@ -1120,6 +1120,11 @@ export class Viewport {
           wallShadowCaster.name = 'wall-shadow-caster';
           wallShadowCaster.castShadow = true;
           wallShadowCaster.receiveShadow = false;
+          // ✱ 2026-04-27 — pick() 가 invisible mesh 를 제외하지 않는
+          //   raycaster 동작 때문에 같은 wall geometry 가 frontMesh 와
+          //   동일 distance hit → 사용자가 클릭한 면이 비결정적으로 선택됨.
+          //   noPick 협약 + 이름 기반 제외 둘 다 적용.
+          wallShadowCaster.userData.noPick = true;
           this.meshGroup.add(wallShadowCaster);
         }
 
@@ -1728,7 +1733,15 @@ export class Viewport {
     }
   }
 
-  /** Perform a raycast pick */
+  /** Perform a raycast pick.
+   *
+   * 제외 규칙:
+   *   - userData.noPick === true 인 메시는 제외 (협약).
+   *   - wall-shadow-caster (invisible 그림자 caster) 는 같은 좌표라
+   *     frontMesh 와 distance 동일 hit → tie-break 비결정적이라 제외.
+   *   - back-mesh-wall / back-mesh-sheet 는 대상에 포함 (사용자가 솔리드
+   *     안쪽에서 클릭하는 경우 지원). FrontSide 메시가 같은 거리에 있으면
+   *     hits 정렬 후 그쪽이 우선됨. */
   pick(screenX: number, screenY: number): THREE.Intersection | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(
@@ -1736,16 +1749,31 @@ export class Viewport {
       -((screenY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(mouse, this.activeCamera as THREE.PerspectiveCamera);
-    // FrontSide + BackSide 메시 모두 raycast 대상
-    // → 바닥면(노말이 위를 향함)도 아래에서 클릭 가능
-    const meshes = this.meshGroup.children.filter(c => c instanceof THREE.Mesh);
+    const meshes = this.meshGroup.children.filter(c => {
+      if (!(c instanceof THREE.Mesh)) return false;
+      if (c.userData?.noPick === true) return false;
+      // 그림자 caster — invisible 이지만 raycaster 가 잡음. 명시 제외.
+      if (c.name === 'wall-shadow-caster') return false;
+      return true;
+    });
     const hits = this.raycaster.intersectObjects(meshes, false);
     if (hits.length === 0) return null;
-    // ✱ Bug fix (2026-04-19): 이전 구현은 FrontSide를 선호하려고 BackSide hit을
-    // 스킵했으나, front/back 메시가 *같은 geometry를 공유*하므로 정면 hit은 frontMesh,
-    // 뒷면 hit은 backMesh로 동일 거리에 기록됨. 따라서 hits[0]이 BackSide일 때
-    // "다음 FrontSide"는 뒤쪽 **다른 오브젝트**의 정면이 되어 엉뚱한 오브젝트가
-    // 선택됨. 거리 정렬된 hits[0]을 그대로 사용한다 (front/back 무관하게 가장 가까운 면).
+    // distance 정렬된 hits[0] — front/back 메시가 동일 거리면 raycaster
+    // 가 자체 정렬한 결과를 그대로 사용. front-mesh 가 보통 먼저 children
+    // 에 추가되므로 tie-break 시 우선됨.
+    // ✱ FrontSide 우선 — same-distance 동률 시 front-mesh 우선 선택.
+    if (hits.length >= 2) {
+      const eps = Math.max(hits[0].distance * 1e-4, 0.001);
+      // hits 가 distance 정렬돼 있다고 가정 (Three.js raycaster 기본 동작).
+      // [0] 와 [1] 이 거의 같은 거리면 front-mesh 가 있는지 확인 후 우선.
+      if (Math.abs(hits[0].distance - hits[1].distance) < eps) {
+        for (const h of hits) {
+          const obj = h.object as THREE.Object3D & { name?: string };
+          if (Math.abs(h.distance - hits[0].distance) > eps) break;
+          if (obj.name === 'front-mesh') return h;
+        }
+      }
+    }
     return hits[0];
   }
 
@@ -1847,6 +1875,7 @@ export class Viewport {
 
     // Pick any edge-ish child: both LineSegments and LineSegments2.
     const isEdgeChild = (c: THREE.Object3D): boolean => {
+      if (c.userData?.noPick === true) return false;
       if (c instanceof THREE.LineSegments) return true;
       // LineSegments2 extends Mesh but has a distinct type string.
       return (c as THREE.Object3D & { isLineSegments2?: boolean }).isLineSegments2 === true
