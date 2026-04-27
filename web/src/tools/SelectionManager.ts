@@ -169,29 +169,26 @@ export class SelectionManager {
 
     this.clearXiaDots(); // XIA 도트 모드 해제
 
-    // 곡면 그룹 확장: 클릭된 면과 법선 각도 < 30°로 연결된 모든 면을 한 그룹으로 선택
-    const smoothGroup = this.findSmoothGroup(faceId);
-
+    // 2026-04-27 — 1-click = 단일 오브젝트 (face) 만 선택.
+    //   이전엔 findSmoothGroup 으로 30° 이내 인접 coplanar/곡면 면을 자동
+    //   확장했으나, 사용자 모델 ("한번클릭은 오브젝트 만") 위반.
+    //   곡면 그룹 확장이 필요하면 더블클릭 (selectFaceWithEdges) 또는
+    //   트리플클릭 (selectAll) 으로 단계적 확장.
     if (altKey) {
-      // Alt+클릭: 빼기 — 곡면 그룹 전체를 선택에서 제거
-      for (const fid of smoothGroup) this.selected.delete(fid);
+      // Alt: 빼기
+      this.selected.delete(faceId);
     } else if (shiftKey) {
-      // Shift+클릭: 추가 (기존 edge 선택도 유지)
-      for (const fid of smoothGroup) this.selected.add(fid);
+      // Shift: 추가
+      this.selected.add(faceId);
     } else if (ctrlKey) {
-      // Ctrl+클릭: 토글 (edge 선택은 건드리지 않음)
-      const allSelected = [...smoothGroup].every(fid => this.selected.has(fid));
-      if (allSelected) {
-        for (const fid of smoothGroup) this.selected.delete(fid);
-      } else {
-        for (const fid of smoothGroup) this.selected.add(fid);
-      }
+      // Ctrl: 토글
+      if (this.selected.has(faceId)) this.selected.delete(faceId);
+      else this.selected.add(faceId);
     } else {
-      // 일반 클릭: 면과 엣지 **모두** 해제 후 곡면 그룹 선택 (Bug 1 fix, 2026-04-17)
-      // handleEdgeClick의 대칭성 맞춤 — 이전엔 edge만 남아있어 혼란 유발했음
+      // 일반 클릭: 단일 face 만 (edge 선택도 해제)
       this.selected.clear();
       this.selectedEdges.clear();
-      for (const fid of smoothGroup) this.selected.add(fid);
+      this.selected.add(faceId);
     }
 
     this.rebuildSelectionMesh();
@@ -293,6 +290,83 @@ export class SelectionManager {
     this.rebuildSelectionMesh();
     this.rebuildEdgeSelectionLine();
     this.notifyChange();
+  }
+
+  /**
+   * Edge 더블클릭: 엣지 + 인접 면 선택 (2-click "직접 관련 오브젝트").
+   *
+   * Modifier:
+   *  - plain: 교체 (기존 선택 해제 → edge + adjacent faces)
+   *  - shift: 추가
+   *  - ctrl: 토글 (모두 선택 상태면 해제, 아니면 추가)
+   *  - alt:  빼기
+   */
+  selectEdgeWithFaces(edgeId: number, shiftKey = false, ctrlKey = false, altKey = false) {
+    if (edgeId < 0) return;
+    this.clearXiaDots();
+
+    const adjFaces = this.computeAdjacentFaces(edgeId);
+
+    if (altKey) {
+      this.selectedEdges.delete(edgeId);
+      for (const fid of adjFaces) this.selected.delete(fid);
+    } else if (shiftKey) {
+      this.selectedEdges.add(edgeId);
+      for (const fid of adjFaces) this.selected.add(fid);
+    } else if (ctrlKey) {
+      const allOn = this.selectedEdges.has(edgeId)
+        && adjFaces.every(f => this.selected.has(f));
+      if (allOn) {
+        this.selectedEdges.delete(edgeId);
+        for (const fid of adjFaces) this.selected.delete(fid);
+      } else {
+        this.selectedEdges.add(edgeId);
+        for (const fid of adjFaces) this.selected.add(fid);
+      }
+    } else {
+      this.selected.clear();
+      this.selectedEdges.clear();
+      this.selectedEdges.add(edgeId);
+      for (const fid of adjFaces) this.selected.add(fid);
+    }
+
+    this.rebuildSelectionMesh();
+    this.rebuildEdgeSelectionLine();
+    this.notifyChange();
+  }
+
+  /**
+   * Edge ID 의 인접 face IDs 를 mesh 버퍼 기하 매칭으로 계산.
+   * WASM round-trip 없이 클라이언트 측에서 endpoint 일치로 결정.
+   */
+  private computeAdjacentFaces(edgeId: number): number[] {
+    if (!this.edgeMap || !this.edgeLines) return [];
+    let edgeIdx = -1;
+    for (let i = 0; i < this.edgeMap.length; i++) {
+      if (this.edgeMap[i] === edgeId) { edgeIdx = i; break; }
+    }
+    if (edgeIdx < 0) return [];
+    const base = edgeIdx * 6;
+    if (base + 5 >= this.edgeLines.length) return [];
+
+    const fmt = (v: number) => v.toFixed(1);
+    const keyA = `${fmt(this.edgeLines[base])},${fmt(this.edgeLines[base+1])},${fmt(this.edgeLines[base+2])}`;
+    const keyB = `${fmt(this.edgeLines[base+3])},${fmt(this.edgeLines[base+4])},${fmt(this.edgeLines[base+5])}`;
+
+    const adjacent = new Set<number>();
+    for (let tri = 0; tri < this.faceMap.length; tri++) {
+      const triBase = tri * 3;
+      if (triBase + 2 >= this.indices.length) continue;
+      let foundA = false, foundB = false;
+      for (let j = 0; j < 3; j++) {
+        const idx = this.indices[triBase + j];
+        const k = `${fmt(this.positions[idx*3])},${fmt(this.positions[idx*3+1])},${fmt(this.positions[idx*3+2])}`;
+        if (k === keyA) foundA = true;
+        if (k === keyB) foundB = true;
+      }
+      if (foundA && foundB) adjacent.add(this.faceMap[tri]);
+    }
+    return [...adjacent];
   }
 
   /**

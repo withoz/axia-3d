@@ -33,6 +33,8 @@ function mockToolContext() {
       selectAll: vi.fn(),
       selectAdjacentEdges: vi.fn(),
       selectFaceWithEdges: vi.fn(),
+      selectEdgeWithFaces: vi.fn(),
+      computeAdjacentFaces: vi.fn().mockReturnValue([]),
       clearSelection: vi.fn(),
     },
     bridge: {
@@ -198,23 +200,45 @@ describe('SelectTool', () => {
     });
   });
 
-  describe('Edge double-click selects chain (Alt is now subtract)', () => {
-    it('double-click on same edge expands into polyline chain via bridge.collectEdgeChain', () => {
+  describe('Edge multi-click — 2026-04-27 3-단계 의미', () => {
+    it('double-click on same edge → selectEdgeWithFaces (엣지 + 인접 면)', () => {
       ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
-      ctx.bridge.collectEdgeChain = vi.fn().mockReturnValue([10, 20, 30, 40]);
       // First click — single edge select
       tool.onMouseDown(
         { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
         null,
       );
-      // Second click — same edge → double click → chain expansion.
+      // Second click — same edge → double click → edge + adjacent faces.
       tool.onMouseDown(
         { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
         null,
       );
+      expect(ctx.selection.selectEdgeWithFaces).toHaveBeenCalledWith(10, false, false, false);
+    });
+
+    it('triple-click on standalone edge → chain expansion (구성 전체)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.collectEdgeChain = vi.fn().mockReturnValue([10, 20, 30, 40]);
+      ctx.selection.computeAdjacentFaces = vi.fn().mockReturnValue([]);
+      for (let i = 0; i < 3; i++) {
+        tool.onMouseDown(
+          { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+          null,
+        );
+      }
       expect(ctx.bridge.collectEdgeChain).toHaveBeenCalledWith(10);
-      // Total handleEdgeClick: single-click first (1) + chain[0] (1) + chain[1..3] shift=true (3) = 5
-      expect(ctx.selection.handleEdgeClick.mock.calls.length).toBeGreaterThanOrEqual(5);
+    });
+
+    it('triple-click on edge with adjacent face → selectAll on that face XIA', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.selection.computeAdjacentFaces = vi.fn().mockReturnValue([42]);
+      for (let i = 0; i < 3; i++) {
+        tool.onMouseDown(
+          { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+          null,
+        );
+      }
+      expect(ctx.selection.selectAll).toHaveBeenCalledWith(42, false, false, false);
     });
 
     it('plain single edge click does NOT call collectEdgeChain', () => {

@@ -80,30 +80,46 @@ export class SelectTool implements ITool {
         this.lastClickEdgeId = -1;
       }, this.MULTI_CLICK_DELAY);
 
-      if (this.edgeClickCount >= 2) {
-        // Double-click on edge: 체인(폴리라인) 자동 확장 선택.
-        //   — valence-2 vertex 따라 양 끝점에서 퍼짐, 교차점/dead-end 에서 정지.
-        // Modifier 규약은 동일하게 Shift=추가 / Alt=빼기 / Ctrl=토글.
-        const chain = this.ctx.bridge.collectEdgeChain(edgeId);
-        if (chain.length === 0) {
-          this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
-          return;
-        }
-        this.ctx.selection.handleEdgeClick(chain[0], e.shiftKey, e.ctrlKey, !!e.altKey);
-        // 나머지 체인 엣지는 같은 추가/빼기 모드를 일관되게 적용.
-        if (e.altKey) {
-          for (let i = 1; i < chain.length; i++) {
-            this.ctx.selection.handleEdgeClick(chain[i], false, false, true);
-          }
+      // 2026-04-27 — 3-단계 클릭 의미 (사용자 요청):
+      //   1-click: 엣지 자체만
+      //   2-click: 엣지 + 인접 면 (직접 관련)
+      //   3-click: 엣지 chain / 또는 인접 면 의 XIA (구성 전체)
+      if (this.edgeClickCount >= 3) {
+        // Triple-click — 구성 전체 (XIA / 체인).
+        //   인접 면이 있으면 그 면이 속한 XIA 전체 (selectAll).
+        //   없으면 (standalone polyline edge) → collectEdgeChain.
+        const adjFaces = (this.ctx.selection as unknown as {
+          computeAdjacentFaces?: (eid: number) => number[];
+        }).computeAdjacentFaces?.(edgeId) ?? [];
+        if (adjFaces.length > 0) {
+          this.ctx.selection.selectAll(adjFaces[0], e.shiftKey, e.ctrlKey, !!e.altKey);
+          debugLog(`[SelectTool] Triple-click edge → selectAll on adjacent face ${adjFaces[0]}`);
         } else {
-          for (let i = 1; i < chain.length; i++) {
-            this.ctx.selection.handleEdgeClick(chain[i], /*shift=*/true, false, false);
+          const chain = this.ctx.bridge.collectEdgeChain(edgeId);
+          if (chain.length === 0) {
+            this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
+          } else {
+            this.ctx.selection.handleEdgeClick(chain[0], e.shiftKey, e.ctrlKey, !!e.altKey);
+            if (e.altKey) {
+              for (let i = 1; i < chain.length; i++) {
+                this.ctx.selection.handleEdgeClick(chain[i], false, false, true);
+              }
+            } else {
+              for (let i = 1; i < chain.length; i++) {
+                this.ctx.selection.handleEdgeClick(chain[i], true, false, false);
+              }
+            }
+            debugLog(`[SelectTool] Triple-click edge → chain ${chain.length} edges`);
           }
         }
-        debugLog(`[SelectTool] Double-click edge → chain ${chain.length} edges`);
         this.edgeClickCount = 0;
         this.lastClickEdgeId = -1;
+      } else if (this.edgeClickCount === 2) {
+        // Double-click — 엣지 + 인접 면.
+        debugLog(`[SelectTool] Double-click edge → edge + adjacent faces`);
+        this.ctx.selection.selectEdgeWithFaces(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
       } else {
+        // Single-click — 엣지 자체만.
         this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
       }
       return;
