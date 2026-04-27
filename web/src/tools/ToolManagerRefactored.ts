@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { Viewport } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
+import { frameScheduler } from '../core/FrameScheduler';
 import { DimensionLabel, DimLine } from '../ui/DimensionLabel';
 import { UnitSystem } from '../units/UnitSystem';
 import { SnapManager } from '../snap/SnapManager';
@@ -1852,18 +1853,31 @@ export class ToolManager {
       );
     }
 
+    // Sprint 3 §1 — stats + projected shadow 측정 추가.
+    //   syncMesh 의 미계측 31ms 의 dominator 를 telemetry 로 격리.
+    const tStats0 = performance.now();
     const stats = this.bridge.getStats();
     this.viewport.setStats(stats.verts, stats.faces);
+    recordStep('syncMesh.stats', performance.now() - tStats0);
 
-    // ━━━ Projected shadow update (enabled 시만) ━━━
-    // Sun 방향은 viewport에서 얻어 Rust compute → triangle buffer → viewport 렌더.
-    // Disabled 상태에도 호출은 가볍게 early-return하므로 매 sync마다 호출.
+    // ━━━ Projected shadow update — Sprint 3 §1 fix ━━━
+    // Sprint 3 telemetry 가 syncMesh.shadow 를 31ms 의 dominator 로
+    //   격리. compute + mesh update 가 무거우므로 FrameScheduler 로
+    //   다음 frame 에 batch 처리 → syncMesh 자체는 즉각 정상화.
+    //   동일 key 는 자동 dedup (latest wins) — 연속 syncMesh 시 마지막
+    //   요청만 실행되므로 비용 ↓.
     if (this.viewport.isProjectedShadowEnabled()) {
-      const sun = this.viewport.getSunTravelDirection();
-      const tris = this.bridge.computeGroundProjectedShadows(sun.x, sun.y, sun.z);
-      this.viewport.updateProjectedShadow(tris);
+      frameScheduler.schedule('syncMesh.shadow', () => {
+        const sun = this.viewport.getSunTravelDirection();
+        const tris = this.bridge.computeGroundProjectedShadows(sun.x, sun.y, sun.z);
+        this.viewport.updateProjectedShadow(tris);
+      });
     } else {
-      this.viewport.updateProjectedShadow(null);
+      // Disabled 상태에서는 viewport.updateProjectedShadow(null) 가
+      //   기존 그림자 메시를 정리한다. 가볍지만 일관성 위해 같이 schedule.
+      frameScheduler.schedule('syncMesh.shadow', () => {
+        this.viewport.updateProjectedShadow(null);
+      });
     }
   }
 

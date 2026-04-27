@@ -269,6 +269,7 @@ type AxiaEngineExtended = AxiaEngine & {
   // Boolean
   boolean_op?(a: Uint32Array, b: Uint32Array, op: string): string;
   sheetBoolean?(a: number, b: number, op: string): string;
+  drawPolyline?(points: Float64Array): number;
   sliceVolumeByPlane?(faceIds: Uint32Array,
     ox: number, oy: number, oz: number,
     nx: number, ny: number, nz: number): string;
@@ -377,6 +378,21 @@ export class WasmBridge {
     if (!this.engine) return -1;
     this.markDirty();
     return this.engine.draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz);
+  }
+
+  /** ADR-012 §3 BatchCommand — N개 연속 line 을 단일 WASM crossing 에
+   *  묶는다. `points` 는 [x0,y0,z0, x1,y1,z1, …] 평탄화 배열.
+   *  Arc / Bezier / Freehand 등 tessellated curve 에서 사용.
+   *  단일 transaction 이라 Ctrl+Z 한 번으로 전체 polyline undo. */
+  drawPolyline(points: Float64Array | number[]): number {
+    if (!this.engine) return -1;
+    this.markDirty();
+    const arr = points instanceof Float64Array ? points : new Float64Array(points);
+    const fn = (this.engine as unknown as {
+      drawPolyline?: (points: Float64Array) => number;
+    }).drawPolyline;
+    if (!fn) return -1;
+    return fn.call(this.engine, arr);
   }
 
   drawRect(

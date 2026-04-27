@@ -110,18 +110,26 @@ export class DrawFreehandTool implements ITool {
     );
     getCurveRegistry().add(curve);
 
-    // Tessellate → DCEL drawLine 시퀀스
+    // ADR-012 §3 BatchCommand — N 회 crossing 대신 1 회.
+    //   퇴화 방지 필터 후 평탄화 배열로 한 번에 전송.
     const pts = tessellateCurve(curve);
+    const filtered: Array<{ x: number; y: number; z: number }> = [];
+    for (const p of pts) {
+      if (filtered.length === 0 ||
+          p.distanceTo(filtered[filtered.length - 1] as any) >= 0.1) {
+        filtered.push(p);
+      }
+    }
     let edgeCount = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i];
-      const p1 = pts[i + 1];
-      if (p0.distanceTo(p1) < 0.1) continue; // 퇴화 방지
-      this.ctx.bridge.drawLine(
-        p0.x, p0.y, p0.z,
-        p1.x, p1.y, p1.z,
-      );
-      edgeCount++;
+    if (filtered.length >= 2) {
+      const flat = new Float64Array(filtered.length * 3);
+      for (let i = 0; i < filtered.length; i++) {
+        flat[i * 3]     = filtered[i].x;
+        flat[i * 3 + 1] = filtered[i].y;
+        flat[i * 3 + 2] = filtered[i].z;
+      }
+      this.ctx.bridge.drawPolyline(flat);
+      edgeCount = filtered.length - 1;
     }
 
     this.ctx.syncMesh();

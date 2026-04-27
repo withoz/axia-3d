@@ -401,6 +401,53 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-012 §3 BatchCommand — N 개 연속 line 을 단일 WASM crossing 에 묶는다.
+    /// `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수). N point ⇒
+    /// (N-1) 개 line.
+    /// 반환: 마지막으로 만들어진 segment 의 결과 — 0 (success) 또는 -1.
+    /// 호출자: DrawArcTool / DrawFreehandTool / DrawBezierTool — 이전엔 N
+    /// 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
+    #[wasm_bindgen(js_name = "drawPolyline")]
+    pub fn draw_polyline(&mut self, points: &[f64]) -> f64 {
+        if points.len() < 6 || points.len() % 3 != 0 {
+            console_error!("[RUST] drawPolyline: invalid points length {}", points.len());
+            return -1.0;
+        }
+        let n = points.len() / 3;
+        if n < 2 {
+            return -1.0;
+        }
+
+        debug_log!("[RUST] drawPolyline: {} points → {} segments", n, n - 1);
+
+        // 단일 트랜잭션 — Ctrl+Z 한 번에 전체 polyline 되돌림.
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut any_failed = false;
+        for i in 0..n - 1 {
+            let start = DVec3::new(
+                points[i * 3], points[i * 3 + 1], points[i * 3 + 2],
+            );
+            let end = DVec3::new(
+                points[(i + 1) * 3], points[(i + 1) * 3 + 1], points[(i + 1) * 3 + 2],
+            );
+            let cmd = Command::DrawLine { start, end, surface_normal: None };
+            let result = self.scene.execute(cmd);
+            if matches!(result, axia_core::commands::CommandResult::Error(_)) {
+                any_failed = true;
+            }
+        }
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        if any_failed { -1.0 } else { 0.0 }
+    }
+
     pub fn draw_rect(
         &mut self,
         cx: f64, cy: f64, cz: f64,

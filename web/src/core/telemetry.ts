@@ -55,10 +55,19 @@ export type BudgetKey =
   | 'syncMesh.fullUpdate'     // viewport.updateMesh full path
   | 'syncMesh.selection'      // selection.updateBuffers + updateEdgeBuffers
   | 'syncMesh.snapSchedule'   // scheduleSnapRefresh enqueue (≠ rebuild)
+  // ── syncMesh sub-steps (Sprint 3 추가 측정) ──
+  | 'syncMesh.stats'          // viewport.setStats (DOM update)
+  | 'syncMesh.shadow'         // computeGroundProjectedShadows + updateProjectedShadow
   // ── Picking router (ADR-012 §4) ──
   | 'picking.face'
   | 'picking.edge'
   | 'picking.snap';
+
+/** ADR-012 §3 — frame 당 WASM crossing 상한.
+ *   "1 Command = 1 입력 + 1 mesh 결과 = 2회" 가 ideal,
+ *   syncMesh 의 buffer 조회 등이 추가되어도 4회 안.
+ *   초과 시 BatchCommand 도입 또는 query 통합 신호. */
+export const CROSSING_PER_FRAME_LIMIT = 4;
 
 /** ADR-012 §1 - 단계별 latency budget (ms). */
 export const BUDGETS: Record<BudgetKey, number> = {
@@ -81,6 +90,8 @@ export const BUDGETS: Record<BudgetKey, number> = {
   'syncMesh.fullUpdate':   16,
   'syncMesh.selection':     6,
   'syncMesh.snapSchedule':  3,
+  'syncMesh.stats':         2,
+  'syncMesh.shadow':       16,  // 가장 무거울 가능성 — frame budget 의 절반 허용
   // Picking — hover budget(16ms) 안에 들어가야 함.
   'picking.face': 8,
   'picking.edge': 8,
@@ -210,11 +221,25 @@ class TelemetryCore {
     this.currentFrameStart = performance.now();
   }
 
-  /** Mark end of frame; records frame timing + resets per-frame counters. */
+  /** Mark end of frame; records frame timing + resets per-frame counters.
+   *  ADR-012 §3 — `crossingsPerFrame > 4` 면 경고 violation 으로 기록
+   *  ('wasmCall' key 차용 — frame 단위 누적 위반은 단일 record). */
   endFrame(): void {
     const elapsed = performance.now() - this.currentFrameStart;
     this.frameTimings.push(elapsed);
     this.crossingsHistory.push(this.crossingsThisFrame);
+    if (this.crossingsThisFrame > CROSSING_PER_FRAME_LIMIT) {
+      // wasmCall budget(50ms) 자리에 frame 단위 crossing 초과를 기록.
+      // budget 비교는 BUDGETS['wasmCall'] 와 무관하지만 violation 분류
+      // 용 key 로 사용. elapsed 자리에 crossings 수 (ms 가 아님).
+      const v: BudgetViolation = {
+        key: 'wasmCall',
+        elapsed: this.crossingsThisFrame,
+        budget: CROSSING_PER_FRAME_LIMIT,
+        ts: Date.now(),
+      };
+      this.violations.push(v);
+    }
     this.crossingsThisFrame = 0;
     this.framesObserved++;
   }

@@ -230,6 +230,15 @@ export class AxiaEngine {
      * Returns the new edge raw id, or -1 on failure.
      */
     drawCenterline(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number;
+    /**
+     * ADR-012 §3 BatchCommand — N 개 연속 line 을 단일 WASM crossing 에 묶는다.
+     * `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수). N point ⇒
+     * (N-1) 개 line.
+     * 반환: 마지막으로 만들어진 segment 의 결과 — 0 (success) 또는 -1.
+     * 호출자: DrawArcTool / DrawFreehandTool / DrawBezierTool — 이전엔 N
+     * 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
+     */
+    drawPolyline(points: Float64Array): number;
     draw_circle(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
     draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
@@ -943,6 +952,7 @@ export interface InitOutput {
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;

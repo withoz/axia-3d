@@ -125,16 +125,15 @@ export class DrawArcTool implements ITool {
     // Curve layer에 등록
     getCurveRegistry().add(arc);
 
-    // Tessellate → DCEL drawLine 시퀀스
+    // Tessellate → 단일 BatchCommand (ADR-012 §3) — N 회 crossing 대신 1 회.
     const pts = tessellateCurve(arc);
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i];
-      const p1 = pts[i + 1];
-      this.ctx.bridge.drawLine(
-        p0.x, p0.y, p0.z,
-        p1.x, p1.y, p1.z,
-      );
+    const flat = new Float64Array(pts.length * 3);
+    for (let i = 0; i < pts.length; i++) {
+      flat[i * 3]     = pts[i].x;
+      flat[i * 3 + 1] = pts[i].y;
+      flat[i * 3 + 2] = pts[i].z;
     }
+    this.ctx.bridge.drawPolyline(flat);
 
     this.ctx.syncMesh();
     debugLog(

@@ -114,12 +114,23 @@ export class DrawBezierTool implements ITool {
     };
     getCurveRegistry().add(curve);
 
+    // ADR-012 §3 BatchCommand — N 회 crossing 대신 1 회.
+    //   너무 가까운 점은 건너뛴 후 평탄화 배열로 묶어 한 번에 호출.
     const pts = tessellateCurve(curve);
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      if (a.distanceTo(b) < 0.1) continue;
-      this.ctx.bridge.drawLine(a.x, a.y, a.z, b.x, b.y, b.z);
+    const filtered: Array<{ x: number; y: number; z: number }> = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (filtered.length === 0 || pts[i].distanceTo(pts[i - 1]) >= 0.1) {
+        filtered.push(pts[i]);
+      }
+    }
+    if (filtered.length >= 2) {
+      const flat = new Float64Array(filtered.length * 3);
+      for (let i = 0; i < filtered.length; i++) {
+        flat[i * 3]     = filtered[i].x;
+        flat[i * 3 + 1] = filtered[i].y;
+        flat[i * 3 + 2] = filtered[i].z;
+      }
+      this.ctx.bridge.drawPolyline(flat);
     }
     this.ctx.syncMesh();
     debugLog(`[Bezier] 4 control points → ${pts.length - 1} segments`);

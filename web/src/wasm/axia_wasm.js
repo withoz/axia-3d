@@ -616,6 +616,22 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-012 §3 BatchCommand — N 개 연속 line 을 단일 WASM crossing 에 묶는다.
+     * `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수). N point ⇒
+     * (N-1) 개 line.
+     * 반환: 마지막으로 만들어진 segment 의 결과 — 0 (success) 또는 -1.
+     * 호출자: DrawArcTool / DrawFreehandTool / DrawBezierTool — 이전엔 N
+     * 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
+     * @param {Float64Array} points
+     * @returns {number}
+     */
+    drawPolyline(points) {
+        const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawPolyline(this.__wbg_ptr, ptr0, len0);
+        return ret;
+    }
+    /**
      * @param {number} cx
      * @param {number} cy
      * @param {number} cz

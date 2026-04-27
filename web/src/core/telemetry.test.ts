@@ -107,6 +107,36 @@ describe('telemetry — ADR-012 Latency Budget instrumentation', () => {
     });
   });
 
+  describe('frame crossing limit (ADR-012 §3)', () => {
+    it('records a violation when crossings/frame > 4', () => {
+      telemetry.startFrame();
+      for (let i = 0; i < 5; i++) telemetry.recordCrossing();
+      telemetry.endFrame();
+      const violations = telemetry.violationsByKey('wasmCall');
+      expect(violations.length).toBe(1);
+      expect(violations[0].elapsed).toBe(5);  // crossings count
+      expect(violations[0].budget).toBe(4);   // CROSSING_PER_FRAME_LIMIT
+    });
+
+    it('no violation when crossings ≤ 4', () => {
+      telemetry.startFrame();
+      for (let i = 0; i < 4; i++) telemetry.recordCrossing();
+      telemetry.endFrame();
+      expect(telemetry.violationsByKey('wasmCall').length).toBe(0);
+    });
+
+    it('crossings reset between frames (no carry-over)', () => {
+      telemetry.startFrame();
+      for (let i = 0; i < 5; i++) telemetry.recordCrossing();
+      telemetry.endFrame();
+      telemetry.startFrame();
+      telemetry.recordCrossing();
+      telemetry.endFrame();
+      // First frame violated (5), second frame clean (1)
+      expect(telemetry.violationsByKey('wasmCall').length).toBe(1);
+    });
+  });
+
   describe('bounded collections (ADR-013 §2)', () => {
     it('violations ring buffer caps at 1000', () => {
       for (let i = 0; i < 1500; i++) telemetry.record('hover', 100);
