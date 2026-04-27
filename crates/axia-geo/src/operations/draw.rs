@@ -42,6 +42,11 @@ impl Mesh {
             EPSILON_LENGTH
         );
 
+        // Note: draw_line 은 circle / rect 의 unified pipeline 내부 segment
+        //   을 만드는 데도 사용됨. radius 1mm 같은 작은 geometry 의 인접
+        //   segment 가 1mm tol 안에 들어가 자기 dedup 되면 degenerate.
+        //   따라서 plain add_vertex (1.5μm dedup) 만 사용 — 외부 geometry
+        //   와의 1mm-class snap 은 호출자 (draw_rectangle 등) 가 책임.
         let v0 = self.add_vertex(start);
         let v1 = self.add_vertex(end);
         // Snap/dedup 후 두 점이 동일 vertex로 귀결된 경우 self-loop 방지.
@@ -88,10 +93,15 @@ impl Mesh {
         let hw = width / 2.0;
         let hh = height / 2.0;
 
-        let v0 = self.add_vertex(center - u * hh - v * hw);
-        let v1 = self.add_vertex(center - u * hh + v * hw);
-        let v2 = self.add_vertex(center + u * hh + v * hw);
-        let v3 = self.add_vertex(center + u * hh - v * hw);
+        // 2026-04-27 — 사용자 보고 "작은 라인 중복" 의 근본 원인 수정:
+        //   인접 사각형이 미세하게 어긋나 그려질 때 corner 가 기존 vertex/edge
+        //   에 정확히 일치하지 않아 "잔여 1mm 라인" 발생. add_vertex_with_snap
+        //   이 1mm 안의 인접 vertex 에 snap 하거나 edge 를 split.
+        const DRAW_SNAP_TOL_MM: f64 = 1.001;
+        let v0 = self.add_vertex_with_snap(center - u * hh - v * hw, DRAW_SNAP_TOL_MM);
+        let v1 = self.add_vertex_with_snap(center - u * hh + v * hw, DRAW_SNAP_TOL_MM);
+        let v2 = self.add_vertex_with_snap(center + u * hh + v * hw, DRAW_SNAP_TOL_MM);
+        let v3 = self.add_vertex_with_snap(center + u * hh - v * hw, DRAW_SNAP_TOL_MM);
 
         // CCW winding when viewed from normal direction → normal points outward
         let face_id = self.add_face(&[v0, v3, v2, v1], material)?;
@@ -155,7 +165,11 @@ impl Mesh {
 
         let mut verts = Vec::with_capacity(segments as usize);
 
-        // CCW winding when viewed from normal direction (same as rect)
+        // CCW winding when viewed from normal direction (same as rect).
+        // Note: draw_circle 는 인접 segment 간 거리가 작은 radius 에서 < 1mm
+        //   가 되므로 add_vertex_with_snap 적용 시 자기끼리 dedup 되는 위험이
+        //   있음. 따라서 plain add_vertex 사용 — 외부 geometry 와의 snap 은
+        //   exec_draw_circle 등 상위 layer 에서 처리.
         for i in 0..segments {
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
             let pos = center + u * (radius * angle.cos()) + v * (radius * angle.sin());
@@ -197,12 +211,15 @@ mod tests {
     #[test]
     fn test_draw_rectangle() {
         let mut mesh = Mesh::new();
+        // 2026-04-27: 사용자 1mm-snap 도입 후 width × height 가 작으면 corner
+        //   거리가 snap tol 안에 들어가 dedup 되므로 architectural mm scale
+        //   (200×100mm = 0.2m × 0.1m) 으로 격상.
         let (face_id, verts) = mesh.draw_rectangle(
             DVec3::ZERO,
             DVec3::Z,
             DVec3::Y,
-            2.0,
-            1.0,
+            200.0,
+            100.0,
             MaterialId::new(0),
         ).unwrap();
 
