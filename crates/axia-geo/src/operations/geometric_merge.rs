@@ -63,7 +63,19 @@ impl Mesh {
                 return Ok(new_face);
             }
             // If direct merge fails (e.g., multi-loop issue), fall through to
-            // geometric rebuild which re-derives the polygon.
+            // multi-shared / polygon rebuild which re-derives the polygon.
+        }
+
+        // 2026-04-27 — Multi-shared edge fix (사용자 보고 "잔여 선이 면과 일체화"):
+        //   두 face 가 N>1 개의 outer edge 를 공유 (예: L자 잘린 큰 면 + 작은 사각형
+        //   이 e8, e9 두 엣지 공유) 케이스. Single-overlap stitch 가 한 쪽만
+        //   처리해 잔여 corner 발생 → 사용자가 잔여 edge erase 시 face cascade.
+        //   Graph-based boundary tracing 으로 모든 shared edge 를 한 번에 제거.
+        if self.count_shared_edges_outer(f1, f2) >= 2 {
+            if let Ok(new_face) = self.merge_via_multi_shared_edges(f1, f2, tol_deg) {
+                return Ok(new_face);
+            }
+            // 실패 시 polygon rebuild fallback.
         }
 
         let face1 = self.faces.get(f1)
@@ -193,6 +205,173 @@ impl Mesh {
         self.debug_verify_invariants();
 
         Ok(new_fid)
+    }
+
+    /// Multi-shared edge merge — graph-based union polygon construction.
+    ///
+    /// 두 face 가 `>= 2` 개 outer edge 를 공유할 때 단일-overlap stitch 가
+    /// 잔여 corner 를 만드는 문제 (사용자 보고 2026-04-27) 를 해결.
+    ///
+    /// 알고리즘:
+    /// 1. f1 / f2 의 outer loop edge 들을 `(VertId, VertId)` pair 로 수집.
+    /// 2. 두 face 가 같은 vertex pair (방향 무관) 의 edge 를 가지면 "shared"
+    ///    표시. shared edge 들은 union polygon 의 internal — boundary 에서 제외.
+    /// 3. 남은 (non-shared) edge 들로 무방향 graph 구성.
+    /// 4. cycle walk 로 외곽 boundary 추출 → simplify_collinear_loop 적용.
+    /// 5. 기존 두 face 제거 + add_face_with_holes 로 새 merged face 생성.
+    ///
+    /// 제약: shared edges 가 두 face 에서 contiguous (한 덩어리) 일 때만
+    /// 잘 동작. 분리된 다중 shared 영역은 비단순 polygon 가 되어 fallback
+    /// 으로 빠짐.
+    pub fn merge_via_multi_shared_edges(
+        &mut self,
+        f1: FaceId,
+        f2: FaceId,
+        tol_deg: f64,
+    ) -> Result<FaceId> {
+        if f1 == f2 { bail!("cannot merge a face with itself"); }
+        let face1 = self.faces.get(f1).ok_or_else(|| anyhow::anyhow!("f1 missing"))?;
+        let face2 = self.faces.get(f2).ok_or_else(|| anyhow::anyhow!("f2 missing"))?;
+        if !face1.is_active() || !face2.is_active() {
+            bail!("face inactive");
+        }
+        // Coplanarity check (재확인 — caller 가 먼저 검사하지만 안전망).
+        if !self.are_faces_coplanar_with_tolerance(f1, f2, tol_deg.max(0.5))? {
+            bail!("faces not coplanar");
+        }
+        let original_normal = face1.normal();
+        let material = face1.material();
+
+        // 1. outer loop verts.
+        let v1 = self.collect_loop_verts(face1.outer().start)?;
+        let v2 = self.collect_loop_verts(face2.outer().start)?;
+        if v1.len() < 3 || v2.len() < 3 { bail!("loop too short"); }
+
+        // 2. edges (vertex pairs) — same direction in CCW.
+        let mut f1_edges: Vec<(VertId, VertId)> = (0..v1.len())
+            .map(|i| (v1[i], v1[(i + 1) % v1.len()]))
+            .collect();
+        let mut f2_edges: Vec<(VertId, VertId)> = (0..v2.len())
+            .map(|i| (v2[i], v2[(i + 1) % v2.len()]))
+            .collect();
+
+        // 3. shared mark — direction-agnostic.
+        let mut shared_f1 = vec![false; f1_edges.len()];
+        let mut shared_f2 = vec![false; f2_edges.len()];
+        for (i, e1) in f1_edges.iter().enumerate() {
+            for (j, e2) in f2_edges.iter().enumerate() {
+                if shared_f2[j] { continue; }
+                if (e1.0 == e2.0 && e1.1 == e2.1) || (e1.0 == e2.1 && e1.1 == e2.0) {
+                    shared_f1[i] = true;
+                    shared_f2[j] = true;
+                    break;
+                }
+            }
+        }
+        let shared_count = shared_f1.iter().filter(|&&b| b).count();
+        if shared_count == 0 {
+            bail!("no shared edges (use containing-merge instead)");
+        }
+
+        // 4. graph adjacency from non-shared edges.
+        use rustc_hash::FxHashMap;
+        let mut adj: FxHashMap<VertId, Vec<VertId>> = FxHashMap::default();
+        for (i, e) in f1_edges.iter().enumerate() {
+            if !shared_f1[i] {
+                adj.entry(e.0).or_default().push(e.1);
+                adj.entry(e.1).or_default().push(e.0);
+            }
+        }
+        for (j, e) in f2_edges.iter().enumerate() {
+            if !shared_f2[j] {
+                adj.entry(e.0).or_default().push(e.1);
+                adj.entry(e.1).or_default().push(e.0);
+            }
+        }
+
+        // 5. cycle walk. degree-2 graph (simple cycle) 가정.
+        // 시작 vertex 는 임의. CCW 순서 보장은 walking 후 normal 비교로.
+        let start = *adj.keys().next()
+            .ok_or_else(|| anyhow::anyhow!("empty graph after shared removal"))?;
+        // 각 vertex 는 valence 2 여야 함 (simple polygon). 아니면 비단순 → bail.
+        for (v, ns) in &adj {
+            if ns.len() != 2 {
+                bail!("non-simple boundary (vertex {:?} has {} neighbors)", v, ns.len());
+            }
+        }
+        let mut walked: Vec<VertId> = Vec::with_capacity(v1.len() + v2.len());
+        walked.push(start);
+        let mut prev = start;
+        let mut cur = adj[&start][0];
+        let max_iter = v1.len() + v2.len() + 4;
+        let mut iter = 0;
+        while cur != start && iter < max_iter {
+            walked.push(cur);
+            let nbrs = &adj[&cur];
+            let next = if nbrs[0] == prev { nbrs[1] } else { nbrs[0] };
+            prev = cur;
+            cur = next;
+            iter += 1;
+        }
+        if iter >= max_iter {
+            bail!("cycle walk overflow");
+        }
+
+        // 6. simplify collinear.
+        let simplified = self.simplify_collinear_loop(&walked);
+        if simplified.len() < 3 {
+            bail!("merged loop degenerate after simplify");
+        }
+
+        // 7. winding 검증 — normal 이 원래 방향과 같으면 OK, 아니면 reverse.
+        let merged_normal = self.compute_normal(&simplified)?;
+        let final_loop = if merged_normal.dot(original_normal) < 0.0 {
+            simplified.iter().rev().copied().collect::<Vec<_>>()
+        } else {
+            simplified
+        };
+
+        // 8. inner loops (holes) 보존.
+        let mut inner_loops: Vec<Vec<VertId>> = Vec::new();
+        for &fid in &[f1, f2] {
+            let inners: Vec<_> = self.faces[fid].inners().to_vec();
+            for inner_ref in inners {
+                if inner_ref.start.is_null() { continue; }
+                if let Ok(loop_v) = self.collect_loop_verts(inner_ref.start) {
+                    if loop_v.len() >= 3 { inner_loops.push(loop_v); }
+                }
+            }
+        }
+
+        // 9. destructive — 모든 shared edge 제거 + 두 face 제거.
+        let mut shared_eids: Vec<EdgeId> = Vec::new();
+        for (i, &shared) in shared_f1.iter().enumerate() {
+            if !shared { continue; }
+            let (a, b) = f1_edges[i];
+            if let Some(eid) = self.find_edge(a, b) {
+                shared_eids.push(eid);
+            }
+        }
+        f1_edges.clear(); f2_edges.clear();
+        for eid in &shared_eids {
+            let _ = self.remove_edge_and_halfedges(*eid);
+        }
+        let _ = self.remove_face(f1);
+        let _ = self.remove_face(f2);
+        if self.faces.contains(f1) { self.faces.remove(f1); }
+        if self.faces.contains(f2) { self.faces.remove(f2); }
+
+        // 10. 새 merged face.
+        let hole_slices: Vec<&[VertId]> = inner_loops.iter().map(|v| v.as_slice()).collect();
+        let new_face = self.add_face_with_holes(&final_loop, &hole_slices, material)?;
+
+        // 11. dangling cleanup — 시뮬레이션 중 남은 split-vertex 의 stub edges.
+        let _ = self.cleanup_dangling();
+
+        #[cfg(debug_assertions)]
+        self.debug_verify_invariants();
+
+        Ok(new_face)
     }
 
     /// Read-only dry-run for `merge_coplanar_faces_geometric` — does NOT

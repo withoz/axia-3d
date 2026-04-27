@@ -3717,6 +3717,16 @@ impl Mesh {
         // 9. Create new merged face with preserved holes (F3)
         let hole_slices: Vec<&[VertId]> = inner_loops.iter().map(|v| v.as_slice()).collect();
         let new_face = self.add_face_with_holes(&merged_verts, &hole_slices, material)?;
+
+        // 10. 2026-04-27 — 사용자 보고 "면은 합성되지만 잔여 선이 면과 일체화":
+        //   simplify_collinear_loop 가 중간 vertex 를 제거해도, 그 vertex 가
+        //   다른 dangling 엣지 (이전 split 결과의 stub) 의 endpoint 라면
+        //   merged face 의 새 loop 에는 안 들어가지만 mesh 에는 그대로 남아
+        //   "보이는 잔여 선" 이 됨. cleanup_dangling 이 엣지의 양쪽 half-edge
+        //   가 모두 inactive face 인 경우만 제거하므로 안전 (다른 face 가
+        //   여전히 사용하는 엣지는 보존).
+        let _ = self.cleanup_dangling();
+
         // ADR-007 — merge 후 invariants 검증 (debug only)
         self.debug_verify_invariants();
         Ok(new_face)
