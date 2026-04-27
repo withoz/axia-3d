@@ -836,8 +836,10 @@ export class SelectionManager {
     this.selectionMesh.renderOrder = 2;
     this.highlightGroup.add(this.selectionMesh);
 
-    // 윤곽선 (선택된 face의 경계 에지)
-    const edgeGeo = this.buildBoundaryEdges(this.selected);
+    // 윤곽선 (선택된 face의 경계 에지) — 단, selectedEdges 에 이미 들어
+    //   있는 엣지는 제외 (Option A — rebuildEdgeSelectionLine 이 주황으로
+    //   별도 그릴 예정이므로 outline 의 시안과 겹치는 이중 렌더 방지).
+    const edgeGeo = this.buildBoundaryEdges(this.selected, this.selectedEdges);
     if (edgeGeo) {
       const edgeMat = new THREE.LineBasicMaterial({
         color: 0x1565c0,
@@ -929,7 +931,14 @@ export class SelectionManager {
   }
 
   /** faceId 집합의 외곽 경계 에지를 LineSegments 용 BufferGeometry로 생성 */
-  private buildBoundaryEdges(faceIds: Set<number>): THREE.BufferGeometry | null {
+  private buildBoundaryEdges(
+    faceIds: Set<number>,
+    /** Optional Set<edgeId> — 이 ID 에 속한 boundary 엣지는 outline 에서
+     *  제외 (Option A — selectedEdges 와 selectionOutline 의 색 충돌 방지).
+     *  selectedEdges 는 별도 주황 라인으로 그려지므로 outline 에서 빼면
+     *  중복 렌더가 사라진다. */
+    excludeEdgeIds?: Set<number>,
+  ): THREE.BufferGeometry | null {
     if (this.positions.length === 0 || this.indices.length === 0) return null;
 
     // 에지 카운트: 선택된 face 내 삼각형들의 에지 중, 1번만 등장하는 에지 = 경계.
@@ -944,6 +953,22 @@ export class SelectionManager {
       const ka = posKey(a), kb = posKey(b);
       return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
     };
+
+    // selectedEdges → position-key set 변환 (rebuildSelectionMesh 에서
+    //   excludeEdgeIds 로 전달된 경우만). edgeMap[i] ↔ edgeLines[i*6..i*6+5].
+    const excludeKeys = new Set<string>();
+    if (excludeEdgeIds && excludeEdgeIds.size > 0 &&
+        this.edgeMap && this.edgeLines) {
+      const fmt = (v: number) => Math.round(v * 1000).toString();
+      for (let i = 0; i < this.edgeMap.length; i++) {
+        if (!excludeEdgeIds.has(this.edgeMap[i])) continue;
+        const base = i * 6;
+        if (base + 5 >= this.edgeLines.length) continue;
+        const ka = `${fmt(this.edgeLines[base])},${fmt(this.edgeLines[base+1])},${fmt(this.edgeLines[base+2])}`;
+        const kb = `${fmt(this.edgeLines[base+3])},${fmt(this.edgeLines[base+4])},${fmt(this.edgeLines[base+5])}`;
+        excludeKeys.add(ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+      }
+    }
 
     type EdgeRec = { a: number; b: number; keyA: string; keyB: string };
     const edgeEndpoints = new Map<string, EdgeRec>();
@@ -966,10 +991,12 @@ export class SelectionManager {
       }
     }
 
-    // 경계 에지 추출 (count == 1)
+    // 경계 에지 추출 (count == 1) + selectedEdges 와 겹치는 것은 제외.
     const perimeter: EdgeRec[] = [];
     for (const [key, rec] of edgeEndpoints) {
-      if ((edgeHits.get(key) || 0) === 1) perimeter.push(rec);
+      if ((edgeHits.get(key) || 0) !== 1) continue;
+      if (excludeKeys.has(key)) continue;  // selectedEdges 가 별도 주황 라인으로 그릴 예정
+      perimeter.push(rec);
     }
     if (perimeter.length === 0) return null;
 
