@@ -36,7 +36,7 @@ import { telemetry, type BudgetKey } from './telemetry';
 export interface ViewportPickerLike {
   pick(x: number, y: number): THREE.Intersection | null;
   pickEdge(x: number, y: number): THREE.Intersection | null;
-  pickEdgeOrFace(x: number, y: number): {
+  pickEdgeOrFace(x: number, y: number, preferEdgeWithinPx?: number): {
     type: 'edge' | 'face';
     hit: THREE.Intersection;
   } | null;
@@ -45,7 +45,16 @@ export interface ViewportPickerLike {
 export type PickQuery =
   | { kind: 'face'; x: number; y: number; viewport: ViewportPickerLike }
   | { kind: 'edge'; x: number; y: number; viewport: ViewportPickerLike }
-  | { kind: 'edgeOrFace'; x: number; y: number; viewport: ViewportPickerLike };
+  | {
+      kind: 'edgeOrFace';
+      x: number; y: number;
+      viewport: ViewportPickerLike;
+      /** Optional override for the edge-preference radius (px).
+       *  Default in Viewport.pickEdgeOrFace = 5. Select / Erase tools
+       *  pass a larger value (12) so casual cursor proximity to a
+       *  visible edge yields edge selection. */
+      preferEdgeWithinPx?: number;
+    };
 
 export type PickResult =
   | { kind: 'face'; hit: THREE.Intersection }
@@ -82,7 +91,9 @@ class PickingRouterCore {
         return hit ? { kind: 'edge', hit } : null;
       }
       case 'edgeOrFace': {
-        const r = query.viewport.pickEdgeOrFace(query.x, query.y);
+        const r = query.viewport.pickEdgeOrFace(
+          query.x, query.y, query.preferEdgeWithinPx,
+        );
         if (!r) return null;
         return r.type === 'edge'
           ? { kind: 'edge', hit: r.hit, via: 'edgeOrFace' }

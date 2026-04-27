@@ -43,6 +43,15 @@ describe('PickingRouter — ADR-012 §4 단일 진입점', () => {
     expect(r).toEqual({ kind: 'edge', hit: edgeHit, via: 'edgeOrFace' });
   });
 
+  it('forwards preferEdgeWithinPx to pickEdgeOrFace', () => {
+    const vp = mockViewport();
+    pickingRouter.route({
+      kind: 'edgeOrFace', x: 10, y: 20,
+      viewport: vp, preferEdgeWithinPx: 12,
+    });
+    expect(vp.pickEdgeOrFace).toHaveBeenCalledWith(10, 20, 12);
+  });
+
   it('returns null when picker returns null', () => {
     const vp = mockViewport();
     expect(pickingRouter.route({ kind: 'face', x: 0, y: 0, viewport: vp })).toBe(null);
