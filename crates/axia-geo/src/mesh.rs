@@ -3854,7 +3854,7 @@ impl Mesh {
     }
 
     /// Count edges shared by the outer loops of two faces (F4 helper).
-    fn count_shared_edges_outer(&self, f1: FaceId, f2: FaceId) -> usize {
+    pub fn count_shared_edges_outer(&self, f1: FaceId, f2: FaceId) -> usize {
         let mut set = rustc_hash::FxHashSet::default();
         if let Ok(hes) = self.collect_loop_hes(self.faces[f1].outer().start) {
             for he in hes { set.insert(self.hes[he].edge()); }

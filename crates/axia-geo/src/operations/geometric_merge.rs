@@ -194,6 +194,75 @@ impl Mesh {
 
         Ok(new_fid)
     }
+
+    /// Read-only dry-run for `merge_coplanar_faces_geometric` — does NOT
+    /// mutate the mesh. Returns true iff all gating checks pass:
+    ///   1. Both faces active.
+    ///   2. Normals coplanar within `tol_deg` (same OR opposite — the actual
+    ///      merge handles flip).
+    ///   3. Every f2 vertex lies on f1's plane within 5 mm.
+    ///   4. `find_overlap` finds at least one collinear-with-overlap edge pair
+    ///      (SEG_TOL = 5 mm).
+    ///
+    /// `build_merged_boundary` is NOT exercised — it has additional shape
+    /// constraints that are hard to predict cheaply, but in practice it
+    /// succeeds whenever steps 1–4 do. False positives from this dry-run are
+    /// therefore rare.
+    ///
+    /// Used by the Erase-tool hover preview (ADR-012 hover-budget 16 ms) to
+    /// distinguish "this edge will geometrically merge" (cyan) from "merge
+    /// will fall back to SOFT/cascade" (no cyan / red).
+    pub fn would_geometric_merge_succeed(
+        &self,
+        f1: FaceId,
+        f2: FaceId,
+        tol_deg: f64,
+    ) -> bool {
+        if f1 == f2 { return false; }
+        let face1 = match self.faces.get(f1) { Some(f) => f, None => return false };
+        let face2 = match self.faces.get(f2) { Some(f) => f, None => return false };
+        if !face1.is_active() || !face2.is_active() { return false; }
+
+        let n1 = face1.normal().normalize_or_zero();
+        let n2 = face2.normal().normalize_or_zero();
+        if n1.length_squared() < 1e-20 || n2.length_squared() < 1e-20 {
+            return false;
+        }
+
+        // Step 2 — coplanarity (same or opposite normal direction).
+        let tol_rad = tol_deg.to_radians();
+        let cos_tol = tol_rad.cos();
+        let nd = n1.dot(n2);
+        let opposite_normal = nd < 0.0;
+        if nd.abs() < cos_tol { return false; }
+
+        // Step 3 — plane distance: every f2 vert ≤ 5 mm from f1 plane.
+        let v1_ids = match self.collect_loop_verts(face1.outer().start) {
+            Ok(v) => v, Err(_) => return false,
+        };
+        let v2_ids = match self.collect_loop_verts(face2.outer().start) {
+            Ok(v) => v, Err(_) => return false,
+        };
+        if v1_ids.len() < 3 || v2_ids.len() < 3 { return false; }
+
+        let v1_pos: Vec<DVec3> = v1_ids.iter()
+            .map(|&v| self.vertex_pos(v).unwrap_or(DVec3::ZERO))
+            .collect();
+        let mut v2_pos: Vec<DVec3> = v2_ids.iter()
+            .map(|&v| self.vertex_pos(v).unwrap_or(DVec3::ZERO))
+            .collect();
+        if opposite_normal { v2_pos.reverse(); }
+
+        let plane_pt = v1_pos[0];
+        let plane_d_max = v2_pos.iter()
+            .map(|p| (*p - plane_pt).dot(n1).abs())
+            .fold(0.0_f64, f64::max);
+        if plane_d_max > 5.0 { return false; }
+
+        // Step 4 — collinear-with-overlap edge pair must exist.
+        const SEG_TOL: f64 = 5.0;
+        find_overlap(&v1_pos, &v2_pos, SEG_TOL).is_some()
+    }
 }
 
 /// Find one collinear overlap between any edge of `v1` and any edge of `v2`.
@@ -605,5 +674,88 @@ mod tests {
 
         let result = mesh.merge_coplanar_faces_geometric(f1, f2, 1.0);
         assert!(result.is_err(), "disjoint faces must be rejected");
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  would_geometric_merge_succeed — read-only dry-run regression
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dryrun_accepts_adjacent_coplanar_rects() {
+        let mut mesh = Mesh::new();
+        let a = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let c = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
+        let d = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let f1 = mesh.add_face_with_holes(&[a, d, c, b], &[], MaterialId::new(0)).unwrap();
+        let e = mesh.add_vertex(DVec3::new(2000.0, 0.0, 0.0));
+        let f = mesh.add_vertex(DVec3::new(2000.0, 0.0, 1000.0));
+        let f2 = mesh.add_face_with_holes(&[b, c, f, e], &[], MaterialId::new(0)).unwrap();
+        assert!(mesh.would_geometric_merge_succeed(f1, f2, 1.0));
+    }
+
+    #[test]
+    fn dryrun_rejects_non_coplanar() {
+        let mut mesh = Mesh::new();
+        let a = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let c = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
+        let d = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let f1 = mesh.add_face_with_holes(&[a, d, c, b], &[], MaterialId::new(0)).unwrap();
+        let e = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
+        let f = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 1000.0));
+        let f2 = mesh.add_face_with_holes(&[b, c, f, e], &[], MaterialId::new(0)).unwrap();
+        assert!(!mesh.would_geometric_merge_succeed(f1, f2, 5.0));
+    }
+
+    #[test]
+    fn dryrun_rejects_disjoint_coplanar_no_overlap() {
+        // Two coplanar faces with a gap — coplanarity passes but find_overlap
+        // returns None → must reject.
+        let mut mesh = Mesh::new();
+        let a0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let a1 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let a2 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
+        let a3 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let f1 = mesh.add_face_with_holes(&[a0, a1, a2, a3], &[], MaterialId::new(0)).unwrap();
+        let b0 = mesh.add_vertex(DVec3::new(3000.0, 0.0, 0.0));
+        let b1 = mesh.add_vertex(DVec3::new(3000.0, 0.0, 1000.0));
+        let b2 = mesh.add_vertex(DVec3::new(4000.0, 0.0, 1000.0));
+        let b3 = mesh.add_vertex(DVec3::new(4000.0, 0.0, 0.0));
+        let f2 = mesh.add_face_with_holes(&[b0, b1, b2, b3], &[], MaterialId::new(0)).unwrap();
+        assert!(!mesh.would_geometric_merge_succeed(f1, f2, 1.0));
+    }
+
+    #[test]
+    fn dryrun_does_not_mutate_mesh() {
+        let mut mesh = Mesh::new();
+        let a = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let c = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
+        let d = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let f1 = mesh.add_face_with_holes(&[a, d, c, b], &[], MaterialId::new(0)).unwrap();
+        let e = mesh.add_vertex(DVec3::new(2000.0, 0.0, 0.0));
+        let f = mesh.add_vertex(DVec3::new(2000.0, 0.0, 1000.0));
+        let f2 = mesh.add_face_with_holes(&[b, c, f, e], &[], MaterialId::new(0)).unwrap();
+
+        let face_count_before = mesh.faces.iter().count();
+        let vert_count_before = mesh.verts.iter().count();
+        let _ = mesh.would_geometric_merge_succeed(f1, f2, 1.0);
+        let _ = mesh.would_geometric_merge_succeed(f1, f2, 5.0);
+        assert_eq!(mesh.faces.iter().count(), face_count_before, "dry-run mutated faces");
+        assert_eq!(mesh.verts.iter().count(), vert_count_before, "dry-run mutated verts");
+    }
+
+    #[test]
+    fn dryrun_rejects_inactive_face() {
+        let mut mesh = Mesh::new();
+        let a = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let c = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
+        let d = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let f1 = mesh.add_face_with_holes(&[a, d, c, b], &[], MaterialId::new(0)).unwrap();
+        let bogus = FaceId::new(9999);
+        assert!(!mesh.would_geometric_merge_succeed(f1, bogus, 1.0));
+        assert!(!mesh.would_geometric_merge_succeed(f1, f1, 1.0));
     }
 }

@@ -1483,8 +1483,19 @@ impl AxiaEngine {
     ///
     /// Returns:
     ///   • `[f1, f2]` — the two adjacent faces that would merge into one
-    ///   • `[]`      — merge would fail (non-coplanar, C-slit, or edge not
-    ///                 shared by exactly 2 faces); erase would cascade
+    ///   • `[]`      — merge would fail; erase would soft-hide or cascade
+    ///
+    /// Decision tree mirrors `batch_erase_edges_impl`:
+    ///   1. Edge must exist + shared by exactly 2 active faces.
+    ///   2. Faces coplanar at `angle_tol_deg`.
+    ///   3a. If exactly 1 outer-loop edge shared → standard merge will succeed.
+    ///   3b. Else (C-slit / no DCEL edge) → require `would_geometric_merge_succeed`
+    ///       at the same `angle_tol_deg`. This excludes cases where coplanarity
+    ///       passes but no collinear overlap exists, preventing false-positive
+    ///       cyan tints (the user clicks expecting merge → SOFT fallback).
+    ///
+    /// JS side calls this twice (user_tol → max(user_tol·4, 2°)) to mirror the
+    /// real path's geometric fallback tolerance widening.
     ///
     /// Pure inspection — no state mutation, safe to call on every mousemove.
     #[wasm_bindgen(js_name = "previewEdgeEraseMerge")]
@@ -1497,12 +1508,29 @@ impl AxiaEngine {
         if faces.len() != 2 {
             return vec![];
         }
-        match self.scene.mesh.are_faces_coplanar_with_tolerance(
-            faces[0], faces[1], angle_tol_deg,
-        ) {
-            Ok(true) => vec![faces[0].raw(), faces[1].raw()],
-            _ => vec![],
+        let f1 = faces[0];
+        let f2 = faces[1];
+
+        // Step 2 — coplanarity gate (cheap; identical for both branches below).
+        match self.scene.mesh.are_faces_coplanar_with_tolerance(f1, f2, angle_tol_deg) {
+            Ok(true) => {}
+            _ => return vec![],
         }
+
+        // Step 3a — standard merge precondition: faces share exactly 1 outer
+        // edge. Standard `merge_faces_by_edge_with_tolerance` will succeed.
+        if self.scene.mesh.count_shared_edges_outer(f1, f2) == 1 {
+            return vec![f1.raw(), f2.raw()];
+        }
+
+        // Step 3b — geometric polygon-rebuild dry-run. Catches C-slit /
+        // multi-shared-edge cases where coplanar holds but the real merge
+        // would also fail (no collinear overlap, plane drift > 5 mm, etc).
+        if self.scene.mesh.would_geometric_merge_succeed(f1, f2, angle_tol_deg) {
+            return vec![f1.raw(), f2.raw()];
+        }
+
+        vec![]
     }
 
     /// Measure helpers — pure queries, no state mutation.
