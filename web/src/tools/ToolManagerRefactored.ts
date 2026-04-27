@@ -94,8 +94,11 @@ export class ToolManager {
   private toolContext!: ToolContext;
 
   // ═══ Hover tools (static sets) ═══
-  private static readonly HOVER_TOOLS = new Set(['select', 'pushpull', 'offset', 'move', 'rotate', 'scale', 'group']);
-  private static readonly EDGE_HOVER_TOOLS = new Set(['offset', 'erase']);
+  private static readonly HOVER_TOOLS = new Set(['select', 'pushpull', 'offset', 'move', 'rotate', 'scale', 'group', 'erase']);
+  // 2026-04-27 — select / move 도 엣지 hover 표시 (사용자 요청 "선택관련
+  //   명령에 모두 적용 — 이동·지우개 등"). pickEdgeOrFace 가 적절한 우선
+  //   순위로 face vs edge 를 구분하므로 두 모드 모두 안전하게 활성.
+  private static readonly EDGE_HOVER_TOOLS = new Set(['select', 'move', 'offset', 'erase']);
   /** Tools that benefit from a hover-time draw-plane preview (tiny RGB gizmo). */
   private static readonly DRAW_PLANE_TOOLS = new Set(['line', 'rect', 'circle', 'arc', 'freehand', 'bezier']);
 
@@ -150,6 +153,17 @@ export class ToolManager {
     // Initialize selection system
     this.selection = new SelectionManager(viewport.scene);
     this.selection.setBridge(bridge); // DCEL topology 기반 연결 탐색 활성화
+    // Line2 픽셀 두께 정확도용 — 초기 + resize 시 동기화.
+    {
+      const sz = new THREE.Vector2();
+      viewport.renderer.getSize(sz);
+      this.selection.setRendererResolution(sz.x, sz.y);
+    }
+    if (typeof viewport.onResize === 'function') {
+      viewport.onResize((w: number, h: number) => {
+        this.selection.setRendererResolution(w, h);
+      });
+    }
 
     // Initialize pickbox
     this.pickBox = new PickBox(viewport.container);
@@ -3073,25 +3087,37 @@ export class ToolManager {
         tool.onMouseMove(e, point);
       }
 
-      // Hover highlight for applicable tools
+      // Hover highlight for applicable tools.
+      //
+      // 2026-04-27 — pickEdgeOrFace 단일 진입점으로 통합. 이전엔 face 가
+      //   잡히면 edge hover 가 막히는 구조였으나 (face 내부 hover 시 엣지
+      //   하이라이트 안 보임), 사용자 요청 "라인 선택이 쉽도록 조정" 에
+      //   맞춰 picker 의 우선순위 (preferEdgeWithinPx ≈ 18px) 결과를 그대로
+      //   따른다. select / move / offset / erase 공통.
       const isOperating = this.isToolBusy();
       if (!isOperating && ToolManager.HOVER_TOOLS.has(this._currentTool)) {
-        const hit = this.viewport.pick(e.clientX, e.clientY);
-        if (hit && hit.faceIndex != null) {
-          const fid = this.getFaceId(hit.faceIndex);
+        const wantsEdgeHover = ToolManager.EDGE_HOVER_TOOLS.has(this._currentTool);
+        const picked = wantsEdgeHover
+          ? this.viewport.pickEdgeOrFace(e.clientX, e.clientY, /*preferEdgeWithinPx*/ 18)
+          : null;
+        if (picked && picked.type === 'edge' && picked.hit.index != null) {
+          this.selection.clearHover();
+          const segIndex = Math.floor(picked.hit.index / 2);
+          this.selection.setEdgeHover(segIndex);
+        } else if (picked && picked.type === 'face' && picked.hit.faceIndex != null) {
+          const fid = this.getFaceId(picked.hit.faceIndex);
           this.selection.setHover(fid);
           this.selection.clearEdgeHover();
         } else {
-          this.selection.clearHover();
-          if (ToolManager.EDGE_HOVER_TOOLS.has(this._currentTool)) {
-            const edgeHit = this.viewport.pickEdge(e.clientX, e.clientY);
-            if (edgeHit && edgeHit.index != null) {
-              const segIndex = Math.floor(edgeHit.index / 2);
-              this.selection.setEdgeHover(segIndex);
-            } else {
-              this.selection.clearEdgeHover();
-            }
+          // edge-hover 가 비활성인 도구 (pushpull/rotate/scale/group) 는
+          //   기존 face-only 경로 유지.
+          const hit = this.viewport.pick(e.clientX, e.clientY);
+          if (hit && hit.faceIndex != null) {
+            const fid = this.getFaceId(hit.faceIndex);
+            this.selection.setHover(fid);
+            this.selection.clearEdgeHover();
           } else {
+            this.selection.clearHover();
             this.selection.clearEdgeHover();
           }
         }

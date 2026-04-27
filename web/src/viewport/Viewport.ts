@@ -103,6 +103,18 @@ export class Viewport {
 
   // Cleanup references
   private _resizeObserver: ResizeObserver | null = null;
+  /** External resize subscribers — called with (width, height) after the
+   *  internal renderer + composer + line-material updates. */
+  private _resizeListeners: Array<(w: number, h: number) => void> = [];
+
+  /** Subscribe to viewport resize events. Returns an unsubscribe fn. */
+  onResize(cb: (w: number, h: number) => void): () => void {
+    this._resizeListeners.push(cb);
+    return () => {
+      const i = this._resizeListeners.indexOf(cb);
+      if (i >= 0) this._resizeListeners.splice(i, 1);
+    };
+  }
   private _boundHandlers: { target: EventTarget; type: string; handler: EventListener }[] = [];
   private _frameId: number | null = null;
   private _onFrameCallbacks: (() => void)[] = [];
@@ -584,6 +596,10 @@ export class Viewport {
       // 정확히 유지되려면 DPR 반영 resolution이 필수.
       for (const mat of this._meshEdgeMaterials) {
         mat.resolution.set(w, h);
+      }
+      // 외부 구독자 (SelectionManager 등) 에 resize 알림.
+      for (const cb of this._resizeListeners) {
+        try { cb(w, h); } catch { /* swallow */ }
       }
     });
     this._resizeObserver.observe(this.container);
@@ -1902,7 +1918,32 @@ export class Viewport {
     if (raycasterParams.Line2) raycasterParams.Line2.threshold = prevLine2;
 
     if (hits.length === 0) return null;
-    const hit = hits[0];
+
+    // 2026-04-27 — pick the *visually-closest* edge in screen space, not
+    //   the ray-closest. Three.js `intersectObjects` returns hits sorted by
+    //   ray distance (which prefers edges whose perpendicular-from-ray
+    //   distance is smallest), but for "라인 선택이 쉽도록" 의도엔 화면
+    //   상에서 가장 가까운 엣지가 더 자연스럽다. pointOnLine → screen
+    //   project → smallest distance from cursor wins.
+    const cursorRect = this.renderer.domElement.getBoundingClientRect();
+    let best: THREE.Intersection | null = null;
+    let bestPx = Infinity;
+    for (const h of hits) {
+      const onEdge = (h as THREE.Intersection & { pointOnLine?: THREE.Vector3 })
+        .pointOnLine ?? h.point;
+      if (!onEdge) continue;
+      const proj = onEdge.clone().project(cam);
+      const x = ((proj.x + 1) / 2) * cursorRect.width + cursorRect.left;
+      const y = ((1 - proj.y) / 2) * cursorRect.height + cursorRect.top;
+      const dx = x - screenX;
+      const dy = y - screenY;
+      const px = Math.sqrt(dx * dx + dy * dy);
+      if (px < bestPx) {
+        bestPx = px;
+        best = h;
+      }
+    }
+    const hit = best ?? hits[0];
 
     // Normalize `index` to "first-vertex-index" convention.
     //   Legacy THREE.LineSegments: hit.index = first vertex index of the

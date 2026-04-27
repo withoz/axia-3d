@@ -118,7 +118,11 @@ function mockViewport() {
   return {
     container,
     scene: { add: vi.fn(), remove: vi.fn(), children: [] },
-    renderer: { domElement: canvas },
+    renderer: {
+      domElement: canvas,
+      getSize: (v: { x: number; y: number }) => { v.x = 1280; v.y = 720; return v; },
+    },
+    onResize: () => () => {},
     activeCamera: {
       isPerspectiveCamera: true,
       position: { x: 0, y: 10, z: 10 },

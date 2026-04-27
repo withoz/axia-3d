@@ -234,7 +234,7 @@ export class EraseTool implements ITool {
   private tryAccumulate(e: MouseEvent): void {
     // Edge/Face 지능형 우선순위 — 사용자 보고 (2026-04-27) 에 따라 12px 로
     // 상향. 지우개는 엣지 작업이 잦아 엣지 우선이 자연스러움.
-    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY, 12);
+    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY, 18);
     if (!picked) return;
 
     if (picked.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
@@ -261,7 +261,7 @@ export class EraseTool implements ITool {
   private updateHoverVisuals(e: MouseEvent): void {
     // Edge/Face 지능형 우선순위 호버 — Select/Erase 모두 12px 동일 정책
     // (commit 시점과 hover 시점 동작 일치 보장).
-    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY, 12);
+    const picked = this.ctx.viewport.pickEdgeOrFace(e.clientX, e.clientY, 18);
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       const segIndex = Math.floor(picked.hit.index / 2);

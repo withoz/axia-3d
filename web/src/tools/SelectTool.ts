@@ -51,7 +51,7 @@ export class SelectTool implements ITool {
       kind: 'edgeOrFace',
       x: e.clientX, y: e.clientY,
       viewport: this.ctx.viewport,
-      preferEdgeWithinPx: 12,
+      preferEdgeWithinPx: 18,
     });
     // 기존 코드 호환을 위해 pickEdgeOrFace 형식의 객체로 정규화.
     const picked = r ? { type: r.kind, hit: r.hit } : null;

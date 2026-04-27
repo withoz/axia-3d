@@ -10,6 +10,9 @@
  */
 
 import * as THREE from 'three';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { debugLog, debugWarn } from '../utils/debug';
 import { COS_SMOOTH_GROUP, COS_EXACT_COPLANAR } from '../constants';
 
@@ -35,7 +38,7 @@ export class SelectionManager {
   private selectionMesh: THREE.Mesh | null = null;
   private selectionOutline: THREE.LineSegments | null = null;
   private edgeSelectionLine: THREE.LineSegments | null = null;  // 선택된 edge 하이라이트
-  private edgeHoverLine: THREE.Line | null = null;  // hover edge 하이라이트
+  private edgeHoverLine: LineSegments2 | null = null;  // hover edge 하이라이트 (Line2)
 
   // ── XIA 전체 선택 (트리플 클릭) 도트 표시 ──
   private isXiaSelected = false;
@@ -73,17 +76,39 @@ export class SelectionManager {
   // Face: 파랑(fill) — 기존 유지
   // Edge: 오렌지(line) — 기본 엣지 색(#333366) 및 face 선택색과 명확히 구분 (2026-04-17)
   // Hover: 밝은 파랑 — 엣지 hover에도 공용
-  private static readonly HOVER_COLOR = 0x4fc3f7;       // 밝은 파랑
-  private static readonly HOVER_OPACITY = 0.08;          // 매우 은은한 오버레이
+  // 2026-04-27 — hover 색을 red 로 변경 (사용자 요청).
+  //   "라인 선택이 쉽도록 + 호버 색상을 좀더 두껍게하고 빨강색으로 변경".
+  //   엣지 hover 는 LineMaterial (Line2) 로 두꺼운 px 라인을 그려야 Windows
+  //   WebGL 에서도 실제 두께가 보임 (LineBasicMaterial linewidth 는 1px 고정).
+  private static readonly HOVER_COLOR = 0xff3030;       // 선명한 빨강
+  private static readonly HOVER_OPACITY = 0.10;          // 약간 더 보이게
+  private static readonly HOVER_LINE_WIDTH_PX = 4;       // Line2 픽셀 두께
   private static readonly SELECT_COLOR = 0x2196f3;      // 파랑 — face 선택
   private static readonly SELECT_OPACITY = 0.18;
   private static readonly EDGE_SELECT_COLOR = 0xff6f00;  // 오렌지 — edge 선택 (대비↑)
+
+  /** Renderer resolution — Line2 가 정확한 픽셀 두께 계산에 필요.
+   *  ToolManager 에서 setRendererResolution() 으로 주입. 없으면 window 크기. */
+  private rendererResolution: THREE.Vector2 = new THREE.Vector2(
+    typeof window !== 'undefined' ? window.innerWidth : 1280,
+    typeof window !== 'undefined' ? window.innerHeight : 720,
+  );
 
   constructor(scene: THREE.Scene) {
     this.highlightGroup = new THREE.Group();
     this.highlightGroup.name = 'selection-highlights';
     this.highlightGroup.renderOrder = 1;
     scene.add(this.highlightGroup);
+  }
+
+  /** ToolManager 에서 viewport resize 시 호출. Line2 픽셀 두께 정확도 유지. */
+  setRendererResolution(width: number, height: number): void {
+    this.rendererResolution.set(width, height);
+    // 현재 그려진 hover line 의 LineMaterial 도 업데이트.
+    if (this.edgeHoverLine) {
+      const mat = this.edgeHoverLine.material as LineMaterial;
+      mat.resolution.set(width, height);
+    }
   }
 
   /** WASM Bridge 연결 — DCEL topology 기반 연결 탐색 활성화 */
@@ -1405,18 +1430,23 @@ export class SelectionManager {
     // 이미 선택된 edge는 hover 표시 생략
     if (this.edgeMap && this.selectedEdges.has(this.edgeMap[this.hoveredEdgeSegIndex])) return;
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+    // Line2 — LineMaterial 의 linewidth 는 픽셀 단위로 정확히 적용 (Windows
+    // WebGL 의 LineBasicMaterial 1px 한계 회피).
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(new Float32Array([
       this.edgeLines[base], this.edgeLines[base+1], this.edgeLines[base+2],
       this.edgeLines[base+3], this.edgeLines[base+4], this.edgeLines[base+5],
-    ], 3));
-    const mat = new THREE.LineBasicMaterial({
+    ]));
+    const mat = new LineMaterial({
       color: SelectionManager.HOVER_COLOR,
-      linewidth: 2,
+      linewidth: SelectionManager.HOVER_LINE_WIDTH_PX,
       depthTest: false,
+      transparent: true,
+      resolution: this.rendererResolution.clone(),
     });
-    this.edgeHoverLine = new THREE.Line(geo, mat);
+    this.edgeHoverLine = new LineSegments2(geo, mat);
     this.edgeHoverLine.renderOrder = 998;
+    this.edgeHoverLine.computeLineDistances();
     this.highlightGroup.add(this.edgeHoverLine);
   }
 
