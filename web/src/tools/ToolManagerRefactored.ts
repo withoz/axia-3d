@@ -3121,114 +3121,65 @@ export class ToolManager {
   }
 
   /**
-   * Handle dimension edit: user clicked a dimension label and entered a new value.
+   * Handle dimension edit: 사용자가 dim label 을 클릭해 새 값을 입력했을 때.
    *
-   * Strategy:
-   *   1. Scale center = face centroid (symmetric, both parallel edges change equally)
-   *   2. For axis-aligned edges: direct scaleFaces (exact, 0% error)
-   *   3. For non-axis-aligned edges: rotate → scale → rotate-back (exact, 0% error)
+   * 2026-04-27 (사용자 요청 "각 치수에 새 치수 기입 시 그 객체만 변환"):
+   *   해당 엣지의 2 정점만 이동. 엣지 midpoint 유지, 두 endpoint 가 edge
+   *   direction 으로 ±(newLen − oldLen)/2 만큼 대칭 translate.
+   *   이전 동작 (전체 face scale) 폐기 — 면이 변하면 다른 차원도 함께
+   *   바뀌어 의도와 어긋남.
    *
-   * Result: The edited edge AND its parallel opposite edge both become newLength.
-   * The face stays rectangular (no shear/distortion).
+   *   결과: 사각형 한 변만 늘리면 사다리꼴이 되고, 인접 엣지는 변화 없음.
+   *   직접적 "그 엣지만 변환".
    */
   private handleDimensionEdit(_index: number, newValue: number, dimLine: DimLine): void {
-    const selectedFaces = this.selection.getSelectedFaces();
-    if (selectedFaces.length === 0) return;
-
     const oldLength = dimLine.from.distanceTo(dimLine.to);
     if (oldLength < 0.001) return;
-
     const delta = newValue - oldLength;
-    if (Math.abs(delta) < 0.01) return; // No meaningful change
+    if (Math.abs(delta) < 0.01) return;
 
-    const scaleFactor = newValue / oldLength;
+    // dim line 의 from/to 는 외곽 offset 적용된 좌표일 수 있음.
+    //   원본 엣지 endpoint 는 originalFrom/originalTo 에 보존돼 있음.
+    const edgeFrom = dimLine.originalFrom ?? dimLine.from;
+    const edgeTo = dimLine.originalTo ?? dimLine.to;
 
-    // Edge direction (unit vector along the edge)
-    const edgeDir = new THREE.Vector3().subVectors(dimLine.to, dimLine.from).normalize();
-
-    // Face centroid as scale center (symmetric scaling)
-    const allVerts: THREE.Vector3[] = [];
-    for (const fid of selectedFaces) {
-      const loop = this.extractFaceBoundary(fid);
-      allVerts.push(...loop);
-    }
-    if (allVerts.length === 0) return;
-
-    const centroid = new THREE.Vector3();
-    for (const v of allVerts) centroid.add(v);
-    centroid.divideScalar(allVerts.length);
-    const cx = centroid.x, cy = centroid.y, cz = centroid.z;
-
-    // Check if edge is axis-aligned (fast path, exact)
-    const ax = Math.abs(edgeDir.x);
-    const ay = Math.abs(edgeDir.y);
-    const az = Math.abs(edgeDir.z);
-    const isAxisAligned = (ax > 0.999) || (ay > 0.999) || (az > 0.999);
-
-    let ok = false;
-
-    if (isAxisAligned) {
-      // ═══ Fast path: axis-aligned edge → direct scale (exact) ═══
-      const sx = ax > 0.999 ? scaleFactor : 1;
-      const sy = ay > 0.999 ? scaleFactor : 1;
-      const sz = az > 0.999 ? scaleFactor : 1;
-
-      debugLog(`[DimEdit] Axis-aligned: ${oldLength.toFixed(2)} → ${newValue.toFixed(2)}, scale=(${sx},${sy},${sz})`);
-      ok = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, sx, sy, sz);
-    } else {
-      // ═══ General path: rotate → scale → rotate-back (exact) ═══
-      // Rotate so edgeDir aligns with X-axis, then scale X, then rotate back.
-      //
-      // Rotation angle: angle from edgeDir to X-axis around their cross product
-      const xAxis = new THREE.Vector3(1, 0, 0);
-      const rotAxis = new THREE.Vector3().crossVectors(edgeDir, xAxis);
-      const rotAxisLen = rotAxis.length();
-
-      if (rotAxisLen < 0.0001) {
-        // edgeDir is already ±X → should have been caught by isAxisAligned
-        ok = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, scaleFactor, 1, 1);
-      } else {
-        rotAxis.divideScalar(rotAxisLen); // normalize
-        const angleDeg = Math.acos(Math.max(-1, Math.min(1, edgeDir.dot(xAxis)))) * (180 / Math.PI);
-
-        debugLog(`[DimEdit] Non-axis: rotate ${angleDeg.toFixed(2)}° around (${rotAxis.x.toFixed(3)},${rotAxis.y.toFixed(3)},${rotAxis.z.toFixed(3)}), scale X×${scaleFactor.toFixed(4)}, rotate back`);
-
-        // Step 1: Rotate to align edge with X-axis
-        let stepsCompleted = 0;
-        const r1 = this.bridge.rotateFaces(
-          selectedFaces, cx, cy, cz,
-          rotAxis.x, rotAxis.y, rotAxis.z, angleDeg,
-        );
-        if (r1) {
-          stepsCompleted++;
-          // Step 2: Scale along X-axis (now exact)
-          const s = this.bridge.scaleFaces(selectedFaces, cx, cy, cz, scaleFactor, 1, 1);
-          if (s) {
-            stepsCompleted++;
-            // Step 3: Rotate back
-            ok = this.bridge.rotateFaces(
-              selectedFaces, cx, cy, cz,
-              rotAxis.x, rotAxis.y, rotAxis.z, -angleDeg,
-            );
-            if (ok) stepsCompleted++;
-          }
-        }
-        if (!ok) {
-          debugLog(`[DimEdit] Rotate-scale-rotate failed at step ${stepsCompleted + 1}/3, undoing ${stepsCompleted} ops`);
-          for (let u = 0; u < stepsCompleted; u++) this.bridge.undo();
-        }
-      }
+    // 두 endpoint 의 VertId 검색 (1mm tolerance — snap 정확도).
+    const vidA = this.bridge.findVertexIdAt(edgeFrom.x, edgeFrom.y, edgeFrom.z, 1.0);
+    const vidB = this.bridge.findVertexIdAt(edgeTo.x, edgeTo.y, edgeTo.z, 1.0);
+    if (vidA < 0 || vidB < 0) {
+      debugLog(`[DimEdit] vertex lookup failed (vidA=${vidA}, vidB=${vidB})`);
+      return;
     }
 
-    if (ok) {
+    // Edge 방향 단위 벡터.
+    const edgeDir = new THREE.Vector3().subVectors(edgeTo, edgeFrom).normalize();
+    // 양 endpoint 가 midpoint 유지하며 대칭 이동.
+    const halfDelta = delta / 2;
+    const dxA = -edgeDir.x * halfDelta;
+    const dyA = -edgeDir.y * halfDelta;
+    const dzA = -edgeDir.z * halfDelta;
+    const dxB =  edgeDir.x * halfDelta;
+    const dyB =  edgeDir.y * halfDelta;
+    const dzB =  edgeDir.z * halfDelta;
+
+    // 두 정점 각각 translate. 동일 vertex id 이면 한 번만 (degenerate edge).
+    const okA = this.bridge.translateVerts([vidA], dxA, dyA, dzA);
+    const okB = vidA !== vidB
+      ? this.bridge.translateVerts([vidB], dxB, dyB, dzB)
+      : true;
+
+    if (okA && okB) {
       this.syncMesh();
       const newFaces = this.selection.getSelectedFaces();
-      if (newFaces.length > 0) {
-        this.updateSelectionDimensions(newFaces);
+      const newEdges = this.selection.getSelectedEdges();
+      if (newFaces.length > 0 || newEdges.length > 0) {
+        this.updateSelectionDimensions(newFaces, newEdges);
       }
-      debugLog(`[DimEdit] ✓ ${oldLength.toFixed(2)} → ${newValue.toFixed(2)} mm (exact)`);
+      debugLog(`[DimEdit] ✓ ${oldLength.toFixed(2)} → ${newValue.toFixed(2)} (vidA=${vidA}, vidB=${vidB})`);
     } else {
-      debugLog(`[DimEdit] ✗ Failed`);
+      debugLog(`[DimEdit] ✗ translateVerts failed (okA=${okA}, okB=${okB})`);
+      // Best-effort rollback — 한쪽만 성공했으면 undo.
+      if (okA && !okB) this.bridge.undo();
     }
   }
 
