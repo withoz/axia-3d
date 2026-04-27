@@ -2743,7 +2743,13 @@ export class ToolManager {
       `${Math.round(v.x * 1000)},${Math.round(v.y * 1000)},${Math.round(v.z * 1000)}`;
     const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
-    type EdgeRec = { from: THREE.Vector3; to: THREE.Vector3; fromKey: string; toKey: string; count: number; faceNormal: THREE.Vector3 | null };
+    type EdgeRec = {
+      from: THREE.Vector3; to: THREE.Vector3;
+      fromKey: string; toKey: string; count: number;
+      faceNormal: THREE.Vector3 | null;
+      /** 외곽 offset 방향 결정용 — 이 엣지가 속한 face 의 centroid. */
+      faceCentroid: THREE.Vector3 | null;
+    };
     const edges = new Map<string, EdgeRec>();
 
     for (const faceId of faceIds) {
@@ -2755,6 +2761,10 @@ export class ToolManager {
       const faceNormal = n && (n[0] !== 0 || n[1] !== 0 || n[2] !== 0)
         ? new THREE.Vector3(n[0], n[1], n[2]).normalize()
         : null;
+      // Face centroid — outward offset 방향 결정용.
+      const centroid = new THREE.Vector3();
+      for (const p of loop) centroid.add(p);
+      centroid.divideScalar(loop.length);
       for (let i = 0; i < loop.length; i++) {
         const a = loop[i];
         const b = loop[(i + 1) % loop.length];
@@ -2765,7 +2775,12 @@ export class ToolManager {
         if (ex) {
           ex.count++;
         } else {
-          edges.set(k, { from: a.clone(), to: b.clone(), fromKey: ka, toKey: kb, count: 1, faceNormal });
+          edges.set(k, {
+            from: a.clone(), to: b.clone(),
+            fromKey: ka, toKey: kb, count: 1,
+            faceNormal,
+            faceCentroid: centroid.clone(),
+          });
         }
       }
     }
@@ -2843,15 +2858,41 @@ export class ToolManager {
 
       const color = colors[colorIdx++ % colors.length];
 
-      // 짧은 chain (직사각형·다각형) — 개별 edge 라벨 유지
+      // 짧은 chain (직사각형·다각형) — 개별 edge 라벨 유지.
+      // AutoCAD 식 외곽 offset: dim line 을 face 외부 방향으로 띄우고
+      //   원본 엣지 → dim line 사이에 dashed extension line 그림.
       if (chain.length < AGGREGATE_MIN_EDGES) {
         for (const e of chain) {
           if (this.selectionDimLines.length >= MAX_DIM_LABELS) break;
           const len = e.from.distanceTo(e.to);
+
+          // 외곽 offset 방향 계산 (face_normal 과 centroid 둘 다 있을 때만).
+          let offFrom = e.from;
+          let offTo = e.to;
+          let originalFrom: THREE.Vector3 | undefined;
+          let originalTo: THREE.Vector3 | undefined;
+          if (e.faceNormal && e.faceCentroid) {
+            const u = new THREE.Vector3().subVectors(e.to, e.from).normalize();
+            let v = new THREE.Vector3().crossVectors(e.faceNormal, u).normalize();
+            const mid = new THREE.Vector3().addVectors(e.from, e.to).multiplyScalar(0.5);
+            const toCentroid = new THREE.Vector3().subVectors(e.faceCentroid, mid);
+            // V 가 centroid 쪽이면 outward 가 아니므로 flip.
+            if (v.dot(toCentroid) > 0) v.multiplyScalar(-1);
+            // offset distance — 엣지 길이의 12%, 최소 80mm.
+            const offsetDist = Math.max(len * 0.12, 80);
+            const offset = v.multiplyScalar(offsetDist);
+            offFrom = e.from.clone().add(offset);
+            offTo = e.to.clone().add(offset);
+            originalFrom = e.from;
+            originalTo = e.to;
+          }
+
           this.selectionDimLines.push({
-            from: e.from, to: e.to, text: this.units.format(len),
+            from: offFrom, to: offTo,
+            text: this.units.format(len),
             color: colors[colorIdx++ % colors.length], editable: true,
             faceNormal: e.faceNormal ?? undefined,
+            originalFrom, originalTo,
           });
         }
         continue;

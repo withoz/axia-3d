@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 
 export interface DimLine {
-  /** 3D 시작점 */
+  /** 3D 시작점 (= dim line 의 endpoint, 외곽 offset 적용 후 좌표) */
   from: THREE.Vector3;
   /** 3D 끝점 */
   to: THREE.Vector3;
@@ -27,6 +27,11 @@ export interface DimLine {
    *  실제로 lying flat 처럼 표기 (CSS matrix transform 으로 perspective 반영).
    *  없으면 화면 회전 fallback. */
   faceNormal?: THREE.Vector3;
+  /** Optional 원본 엣지 시작점 (offset 전). 제공되면 originalFrom→from
+   *  사이에 dashed extension line (연장선) 그림. AutoCAD 스타일. */
+  originalFrom?: THREE.Vector3;
+  /** Optional 원본 엣지 끝점 (offset 전). originalTo→to extension line. */
+  originalTo?: THREE.Vector3;
 }
 
 /** Callback when a dimension value is edited */
@@ -129,6 +134,28 @@ export class DimensionLabel {
       if (!screenFrom || !screenTo) {
         label.style.display = 'none';
         continue;
+      }
+
+      // 연장선 (extension lines) — original 엣지 → 외곽 dim line 까지.
+      //   AutoCAD 식 dim 표시.
+      if (line.originalFrom && line.originalTo) {
+        const oFrom = this.toScreen(line.originalFrom, camera, w, h);
+        const oTo = this.toScreen(line.originalTo, camera, w, h);
+        if (oFrom && oTo) {
+          this.ctx.strokeStyle = color;
+          this.ctx.lineWidth = 1;
+          this.ctx.setLineDash([3, 3]);
+          this.ctx.beginPath();
+          this.ctx.moveTo(oFrom.x, oFrom.y);
+          this.ctx.lineTo(screenFrom.x, screenFrom.y);
+          this.ctx.moveTo(oTo.x, oTo.y);
+          this.ctx.lineTo(screenTo.x, screenTo.y);
+          this.ctx.stroke();
+          this.ctx.setLineDash([]);
+          // 원본 엣지 끝점에도 작은 마커
+          this.drawEndpoint(oFrom.x, oFrom.y, color);
+          this.drawEndpoint(oTo.x, oTo.y, color);
+        }
       }
 
       // 치수선 그리기
