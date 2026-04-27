@@ -127,7 +127,8 @@
       "Bash(grep -c '\\\\*/$' web/src/wasm/axia_wasm.d.ts)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(grep -nB1 -A4 \"bottom:\\\\s*0\\\\b\" \"E:/AXiA 3D/.claude/worktrees/zealous-boyd/web/index.html\")"
     ]
   }
 }

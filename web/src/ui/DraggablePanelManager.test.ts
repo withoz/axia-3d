@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { DraggablePanelManager } from './DraggablePanelManager';
+import { DraggablePanelManager, clampFloatingRect, TOP_RESERVED, BOTTOM_RESERVED } from './DraggablePanelManager';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
 
@@ -97,6 +97,39 @@ describe('DraggablePanelManager', () => {
     it('hidden → hidden is invalid (no-op)', () => {
       const result = manager.transition('osnap-panel', 'hide-request' as any);
       expect(result).toBe(false);
+    });
+  });
+
+  describe('clampFloatingRect — keeps panels off the status bar', () => {
+    it('respects top + bottom reserved zones', () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 });
+      Object.defineProperty(window, 'innerWidth',  { configurable: true, value: 1280 });
+      // Panel that wants to start above menubar.
+      const r = clampFloatingRect({ x: 100, y: 5, width: 320, height: 400 });
+      expect(r.y).toBeGreaterThanOrEqual(TOP_RESERVED);
+    });
+
+    it('forces panel up when its bottom would cover the status bar', () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 });
+      Object.defineProperty(window, 'innerWidth',  { configurable: true, value: 1280 });
+      const r = clampFloatingRect({ x: 100, y: 600, width: 320, height: 200 });
+      // Bottom must not exceed innerHeight - BOTTOM_RESERVED.
+      expect(r.y + r.height).toBeLessThanOrEqual(720 - BOTTOM_RESERVED);
+    });
+
+    it('caps height when panel is taller than usable region', () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 });
+      const usable = 720 - TOP_RESERVED - BOTTOM_RESERVED;
+      const r = clampFloatingRect({ x: 0, y: 0, width: 320, height: 9999 });
+      expect(r.height).toBeLessThanOrEqual(usable);
+    });
+
+    it('keeps panel inside horizontal bounds', () => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 });
+      Object.defineProperty(window, 'innerWidth',  { configurable: true, value: 1280 });
+      const r = clampFloatingRect({ x: 5000, y: 100, width: 320, height: 400 });
+      expect(r.x).toBeGreaterThanOrEqual(0);
+      expect(r.x + r.width).toBeLessThanOrEqual(1280);
     });
   });
 

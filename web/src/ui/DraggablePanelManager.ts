@@ -15,6 +15,34 @@
 
 import { debugLog } from '../utils/debug';
 
+/** Layout chrome offsets the manager must respect so panels don't cover
+ *  fixed UI:
+ *   - top 28px = #menubar
+ *   - bottom 36px = #bottombar (30px) + 1px gap + 5px clearance
+ *  Floating panels' `y + height` must not exceed `innerHeight - BOTTOM_RESERVED`.
+ */
+export const TOP_RESERVED = 28;
+export const BOTTOM_RESERVED = 36;
+
+/** Clamp a floating rect so it stays within the safe viewport region. */
+export function clampFloatingRect(rect: { x: number; y: number; width: number; height: number; }): { x: number; y: number; width: number; height: number; } {
+  const vh = (typeof window !== 'undefined' ? window.innerHeight : 720);
+  const vw = (typeof window !== 'undefined' ? window.innerWidth : 1280);
+  const usableTop = TOP_RESERVED;
+  const usableBottom = vh - BOTTOM_RESERVED;
+  const usableHeight = Math.max(120, usableBottom - usableTop);
+
+  const width = Math.max(150, Math.min(rect.width, vw));
+  // Cap height to fit inside the usable region.
+  const height = Math.max(120, Math.min(rect.height, usableHeight));
+  // Push y up if the panel would extend below the safe zone.
+  let y = Math.max(usableTop, rect.y);
+  if (y + height > usableBottom) y = Math.max(usableTop, usableBottom - height);
+  // Keep horizontal in-bounds.
+  let x = Math.max(0, Math.min(rect.x, vw - width));
+  return { x, y, width, height };
+}
+
 enum PanelState {
   Floating = 'floating',
   Docked = 'docked',
@@ -107,11 +135,15 @@ export class DraggablePanelManager {
    */
   private initializePanels(): void {
     const defaultPanels = [
+      // Defaults sized to the visible viewport — heights tuned so two
+      // stacked right-side panels (Inspector above Style) fit between
+      // the menubar (top 28px) and statusbar (bottom 36px) without
+      // overlapping either.
       {
         id: 'xia-inspector',
         name: 'Inspector',
         state: PanelState.Floating,
-        floatingRect: { x: window.innerWidth - 340, y: 60, width: 320, height: 400 },
+        floatingRect: clampFloatingRect({ x: window.innerWidth - 340, y: 60, width: 320, height: 380 }),
         sizeConstraints: { minWidth: 250, minHeight: 300, maxWidth: 600, maxHeight: 1000 },
         isVisible: true
       },
@@ -119,15 +151,16 @@ export class DraggablePanelManager {
         id: 'style-panel',
         name: 'Style',
         state: PanelState.Floating,
-        floatingRect: { x: window.innerWidth - 340, y: 480, width: 320, height: 360 },
-        sizeConstraints: { minWidth: 250, minHeight: 250, maxWidth: 600, maxHeight: 800 },
+        // Stack below Inspector — y picked so Style ends ≥ 36px above bottom.
+        floatingRect: clampFloatingRect({ x: window.innerWidth - 340, y: 460, width: 320, height: 220 }),
+        sizeConstraints: { minWidth: 250, minHeight: 200, maxWidth: 600, maxHeight: 800 },
         isVisible: true
       },
       {
         id: 'osnap-panel',
         name: 'Snap',
         state: PanelState.Hidden,
-        floatingRect: { x: 20, y: 700, width: 300, height: 200 },
+        floatingRect: clampFloatingRect({ x: 20, y: 480, width: 300, height: 200 }),
         sizeConstraints: { minWidth: 200, minHeight: 150, maxWidth: 600, maxHeight: 400 },
         isVisible: false
       }
@@ -163,6 +196,9 @@ export class DraggablePanelManager {
       el.style.zIndex = String(panel.zIndex);
 
       if (panel.state === PanelState.Floating) {
+        // Clamp the persisted rect so panels never extend over the
+        // status bar (#bottombar) or up past the menubar.
+        panel.floatingRect = clampFloatingRect(panel.floatingRect);
         el.style.position = 'fixed';
         el.style.left = `${panel.floatingRect.x}px`;
         el.style.top = `${panel.floatingRect.y}px`;
@@ -263,9 +299,12 @@ export class DraggablePanelManager {
     el.classList.add(`state-${panel.state}`);
 
     if (panel.state === PanelState.Floating) {
+      panel.floatingRect = clampFloatingRect(panel.floatingRect);
       el.style.position = 'fixed';
       el.style.left = `${panel.floatingRect.x}px`;
       el.style.top = `${panel.floatingRect.y}px`;
+      el.style.width = `${panel.floatingRect.width}px`;
+      el.style.height = `${panel.floatingRect.height}px`;
       el.style.display = panel.isVisible ? 'block' : 'none';
     } else if (panel.state === PanelState.Hidden) {
       el.style.display = 'none';
@@ -346,8 +385,17 @@ export class DraggablePanelManager {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
 
-      panel.floatingRect.x = startPanelX + dx;
-      panel.floatingRect.y = startPanelY + dy;
+      // Clamp dragged position so panel cannot cover the status bar.
+      const clamped = clampFloatingRect({
+        x: startPanelX + dx,
+        y: startPanelY + dy,
+        width: panel.floatingRect.width,
+        height: panel.floatingRect.height,
+      });
+      panel.floatingRect.x = clamped.x;
+      panel.floatingRect.y = clamped.y;
+      panel.floatingRect.width = clamped.width;
+      panel.floatingRect.height = clamped.height;
 
       // Snap to dock zones if close enough
       const dockZone = this.detectDockZone(panel.floatingRect.x, panel.floatingRect.y);

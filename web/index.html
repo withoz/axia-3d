@@ -1052,7 +1052,9 @@
     /* ═══ Style Side Panel ═══ */
     #style-panel {
       position: absolute;
-      top: 28px; right: 0; bottom: 0;
+      /* 28px = menubar height. 36px bottom = 30px status bar + 1px gap + 5px clearance.
+         사이드 패널이 상태바를 가리지 않도록. */
+      top: 28px; right: 0; bottom: 36px;
       width: 280px;
       z-index: 8000;
       background: rgba(22, 22, 30, 0.96);
@@ -1259,10 +1261,12 @@
 
     /* Style panel toggle button in toolbar */
 
-    /* ═══ XIA Inspector Panel ═══ */
+    /* ═══ XIA Inspector Panel (특성바) ═══ */
     #xia-inspector {
       position: absolute;
-      top: 28px; left: 0; bottom: 0;
+      /* 28px = menubar 높이. 36px bottom = 30px 상태바 + 1px 간격 + 5px 여유.
+         특성바가 상태바를 가리지 않도록. */
+      top: 28px; left: 0; bottom: 36px;
       width: 320px;
       z-index: 8000;
       background: rgba(18, 18, 26, 0.97);
