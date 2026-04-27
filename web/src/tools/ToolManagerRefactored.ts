@@ -173,11 +173,15 @@ export class ToolManager {
     // Initialize draw-plane hover indicator (shown only for drawing tools)
     this.drawPlaneIndicator = new DrawPlaneIndicator(viewport.scene);
 
-    // ═══ Selection Dimension Display: show edge dims when faces selected ═══
-    // 2026-04-27 — default OFF (사용자 요청). 우클릭 메뉴 "치수 표시" 로 토글.
+    // ═══ Selection Dimension Display ═══
+    // 2026-04-27:
+    //   · default OFF (사용자 요청). 우클릭 메뉴 "치수 표시" 로 토글.
+    //   · ON 시 선/면/입체 모두 치수 라벨 표시 (사용자 요청).
     this.selection.onChange((faces: number[]) => {
-      if (this._selectionDimsEnabled && this._currentTool === 'select' && faces.length > 0) {
-        this.updateSelectionDimensions(faces);
+      const edges = this.selection.getSelectedEdges();
+      const hasAny = faces.length > 0 || edges.length > 0;
+      if (this._selectionDimsEnabled && this._currentTool === 'select' && hasAny) {
+        this.updateSelectionDimensions(faces, edges);
       } else {
         this.selectionDimLines = [];
         this.dimLabel.clear();
@@ -302,8 +306,9 @@ export class ToolManager {
       // Re-entering select tool: recompute dims for current selection (only
       //   when 사용자가 "치수 표시" 를 켜둔 경우).
       const faces = this.selection.getSelectedFaces();
-      if (faces.length > 0) {
-        this.updateSelectionDimensions(faces);
+      const edges = this.selection.getSelectedEdges();
+      if (faces.length > 0 || edges.length > 0) {
+        this.updateSelectionDimensions(faces, edges);
       }
     }
 
@@ -461,10 +466,13 @@ export class ToolManager {
       }
     } else if (action === 'toggle-selection-dims') {
       // 우클릭 메뉴 "치수 표시" 토글 (사용자 요청 2026-04-27)
+      // ON 시 선/면/입체 모두 치수 표시.
       this._selectionDimsEnabled = !this._selectionDimsEnabled;
       const faces = this.selection.getSelectedFaces();
-      if (this._selectionDimsEnabled && this._currentTool === 'select' && faces.length > 0) {
-        this.updateSelectionDimensions(faces);
+      const edges = this.selection.getSelectedEdges();
+      const hasAny = faces.length > 0 || edges.length > 0;
+      if (this._selectionDimsEnabled && this._currentTool === 'select' && hasAny) {
+        this.updateSelectionDimensions(faces, edges);
       } else {
         this.selectionDimLines = [];
         this.dimLabel.clear();
@@ -2670,14 +2678,56 @@ export class ToolManager {
   // ═══════════════════════════════════════════════════
 
   /**
-   * Compute dimension lines for selected faces' boundary edges.
+   * Compute dimension lines for the current selection.
+   *
+   * 2026-04-27 — 선/면/입체 모두 표시:
+   *   · 선택된 엣지 → 각 엣지 길이 라벨.
+   *   · 선택된 면 → perimeter edge 라벨 (기존 로직).
+   *   · 입체 (면 ≥ 4 또는 closed-solid 휴리스틱) → bbox W×H×D 라벨 추가.
+   *
    * Called on selection change — caches the result for per-frame rendering.
    */
-  private updateSelectionDimensions(faceIds: number[]): void {
+  private updateSelectionDimensions(faceIds: number[], edgeIds: number[] = []): void {
     this.selectionDimLines = [];
 
-    if (faceIds.length === 0) {
+    if (faceIds.length === 0 && edgeIds.length === 0) {
       this.dimLabel.clear();
+      return;
+    }
+
+    const MAX_DIM_LABELS_TOTAL = 24;
+
+    // ═══ Edge 길이 라벨 (선택된 엣지) ═══
+    if (edgeIds.length > 0) {
+      const edgeColors = ['#ff6f00', '#ffa726', '#ffb74d'];
+      let ec = 0;
+      for (const eid of edgeIds) {
+        if (this.selectionDimLines.length >= MAX_DIM_LABELS_TOTAL) break;
+        const eps = this.bridge.getEdgeEndpoints(eid);
+        if (eps.length !== 2) continue;
+        const pa = this.bridge.getVertexPos(eps[0]);
+        const pb = this.bridge.getVertexPos(eps[1]);
+        if (!pa || !pb) continue;
+        const from = new THREE.Vector3(pa[0], pa[1], pa[2]);
+        const to = new THREE.Vector3(pb[0], pb[1], pb[2]);
+        const len = from.distanceTo(to);
+        if (len < 0.1) continue;
+        this.selectionDimLines.push({
+          from, to,
+          text: this.units.format(len),
+          color: edgeColors[ec++ % edgeColors.length],
+          editable: true,
+        });
+      }
+    }
+
+    if (faceIds.length === 0) {
+      // Edge-only 선택 — bbox / perimeter 분석 없음. 라벨만 push.
+      if (this.selectionDimLines.length > 0) {
+        this.dimLabel.update(this.viewport.activeCamera, this.selectionDimLines);
+      } else {
+        this.dimLabel.clear();
+      }
       return;
     }
 
@@ -2898,6 +2948,66 @@ export class ToolManager {
     if (chains.length > MAX_DIM_LABELS) {
       // 라벨 배열은 이미 MAX로 잘렸고, 단순 경고만 debugLog
       debugLog(`[Selection] ${chains.length} chains, showing ${MAX_DIM_LABELS}`);
+    }
+
+    // ═══ 입체(Volume) bbox 라벨 ═══
+    // 면이 4개 이상 선택되면 closed-solid 가능성. 전체 vertex AABB 의
+    //   width / height / depth 3개 라벨 추가. 사용자 요청: "선/면/입체
+    //   각각 선택된 객체에 대하여 모두 표기".
+    if (faceIds.length >= 4 && this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
+      const allPts: THREE.Vector3[] = [];
+      for (const fid of faceIds) {
+        const loop = this.extractFaceBoundary(fid);
+        for (const p of loop) allPts.push(p);
+      }
+      if (allPts.length >= 8) {
+        const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+        const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+        for (const p of allPts) { min.min(p); max.max(p); }
+        const dx = max.x - min.x;
+        const dy = max.y - min.y;
+        const dz = max.z - min.z;
+        const epsAxis = Math.max(dx, dy, dz) * 0.001 + 1e-3;
+        // dx, dy, dz 모두 의미있는 값일 때만 (= 정말 입체) bbox 표시.
+        // dy ≈ 0 인 평면은 면 단위 라벨로 충분.
+        if (dx > epsAxis && dy > epsAxis && dz > epsAxis) {
+          const cx = (min.x + max.x) / 2;
+          const cy = (min.y + max.y) / 2;
+          const cz = (min.z + max.z) / 2;
+          // 라벨은 bbox 의 한 모서리 위에 그려 가독성 확보.
+          // (min.x → max.x) at y=min, z=min  → W
+          // (min.y → max.y) at x=max, z=min  → H
+          // (min.z → max.z) at x=max, y=max  → D
+          if (this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
+            this.selectionDimLines.push({
+              from: new THREE.Vector3(min.x, min.y, min.z),
+              to:   new THREE.Vector3(max.x, min.y, min.z),
+              text: `W ${this.units.format(dx)}`,
+              color: '#74c0fc',
+              editable: false,
+            });
+          }
+          if (this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
+            this.selectionDimLines.push({
+              from: new THREE.Vector3(max.x, min.y, min.z),
+              to:   new THREE.Vector3(max.x, max.y, min.z),
+              text: `H ${this.units.format(dy)}`,
+              color: '#74c0fc',
+              editable: false,
+            });
+          }
+          if (this.selectionDimLines.length < MAX_DIM_LABELS_TOTAL) {
+            this.selectionDimLines.push({
+              from: new THREE.Vector3(max.x, max.y, min.z),
+              to:   new THREE.Vector3(max.x, max.y, max.z),
+              text: `D ${this.units.format(dz)}`,
+              color: '#74c0fc',
+              editable: false,
+            });
+          }
+          void cx; void cy; void cz; // 향후 dim 위치 fine-tune 시 사용
+        }
+      }
     }
 
     if (this.selectionDimLines.length > 0) {
