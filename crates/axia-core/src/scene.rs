@@ -3369,4 +3369,159 @@ mod tests {
 
         assert_eq!(scene.mesh.face_count(), 2, "redo should restore all");
     }
+
+    /// 사용자 보고 2026-04-28 — RECT 가 RECT 위에 겹쳐 그려질 때 교차
+    /// 영역(overlap region) 이 사라져 두 면이 비결합 상태로 남는 회귀.
+    /// 기대: 부분-overlap 시 3 sub-face (RECT1-only, overlap, RECT2-only).
+    #[test]
+    fn test_overlapping_rects_preserve_overlap_region() {
+        let mut scene = Scene::new();
+
+        // RECT1 — center (0,0,0), 4×4 on Z=0 plane
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 4.0,
+            height: 4.0,
+        });
+        assert!(matches!(r1, CommandResult::EntityCreated(_)));
+        assert_eq!(scene.mesh.face_count(), 1, "rect1 = 1 face");
+
+        // RECT2 — center (3,0,0), 4×4 → overlaps RECT1 on x∈[1, 2]×y∈[-2, 2]
+        let r2 = scene.execute(Command::DrawRect {
+            center: DVec3::new(3.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 4.0,
+            height: 4.0,
+        });
+        assert!(matches!(r2, CommandResult::EntityCreated(_)));
+
+        // 기대: 3 sub-face — left (RECT1-only), overlap, right (RECT2-only)
+        let face_count = scene.mesh.face_count();
+        assert_eq!(
+            face_count, 3,
+            "overlap region must NOT vanish — expected 3 sub-faces, got {}",
+            face_count
+        );
+
+        // 모든 sub-face 의 면적 합 == RECT1 면적 + RECT2 면적 - overlap 면적
+        //   = 16 + 16 - 8 = 24
+        let mut total_area = 0.0;
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if let Ok(verts) = scene.mesh.collect_loop_verts(f.outer().start) {
+                if verts.len() < 3 { continue; }
+                let positions: Vec<DVec3> = verts.iter()
+                    .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+                    .collect();
+                if positions.len() < 3 { continue; }
+                // Shoelace on XY plane
+                let mut a = 0.0;
+                for i in 0..positions.len() {
+                    let p = positions[i];
+                    let q = positions[(i + 1) % positions.len()];
+                    a += p.x * q.y - q.x * p.y;
+                }
+                total_area += (a * 0.5).abs();
+                let _ = fid;
+            }
+        }
+        // Overlap = x∈[1,2]×y∈[-2,2] = 1×4 = 4
+        // Union area = 16+16-4 = 28
+        assert!(
+            (total_area - 28.0).abs() < 0.1,
+            "total area should be 28 (16+16-4), got {}",
+            total_area
+        );
+    }
+
+    /// 사용자 스크린샷 케이스 — RECT2 가 RECT1 의 코너에 걸쳐 그려짐.
+    #[test]
+    fn test_overlapping_rects_corner_overlap() {
+        let mut scene = Scene::new();
+
+        // RECT1 — 6×6 centered at origin (XY: -3..3)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 6.0,
+            height: 6.0,
+        });
+
+        // RECT2 — 4×4 at center (4, -2) → overlaps RECT1 at lower-right corner
+        //   RECT2 spans x∈[2, 6], y∈[-4, 0] → overlap = x∈[2,3]×y∈[-3, 0] = 3
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(4.0, -2.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 4.0,
+            height: 4.0,
+        });
+
+        // 기대: 3 sub-face (RECT1 L-shape, overlap, RECT2 L-shape)
+        let face_count = scene.mesh.face_count();
+        assert_eq!(
+            face_count, 3,
+            "corner-overlap should produce 3 sub-faces, got {} — overlap missing!",
+            face_count
+        );
+
+        // Union area = 36 + 16 - 3 = 49
+        let mut total_area = 0.0;
+        for (_, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if let Ok(verts) = scene.mesh.collect_loop_verts(f.outer().start) {
+                let positions: Vec<DVec3> = verts.iter()
+                    .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+                    .collect();
+                if positions.len() < 3 { continue; }
+                let mut a = 0.0;
+                for i in 0..positions.len() {
+                    let p = positions[i];
+                    let q = positions[(i + 1) % positions.len()];
+                    a += p.x * q.y - q.x * p.y;
+                }
+                total_area += (a * 0.5).abs();
+            }
+        }
+        assert!(
+            (total_area - 49.0).abs() < 0.1,
+            "corner-overlap total area should be 49 (36+16-3), got {}",
+            total_area
+        );
+
+        // 모든 active face 가 XIA 에 등록되어 있어야 한다 — 등록 안 된 face 는
+        // 뷰포트에서 보이지 않는 회귀의 원인이 됨.
+        let mut orphans = 0;
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !scene.face_to_xia.contains_key(&fid) {
+                orphans += 1;
+            }
+        }
+        assert_eq!(
+            orphans, 0,
+            "every active face must belong to a XIA — {} orphan(s) detected",
+            orphans
+        );
+
+        // 모든 active face 가 viewport 의 mesh buffer 에 포함돼야 한다 —
+        // export_buffers 에서 빠지면 화면에서 보이지 않음 (사용자 보고 회귀).
+        let (_pos, _norm, indices, face_map, _pos64) = scene.export_mesh_buffers().unwrap();
+        let exported_faces: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(
+                exported_faces.contains(&fid),
+                "active face {:?} missing from exported buffers — invisible in viewport!",
+                fid
+            );
+        }
+        assert!(!indices.is_empty(), "must have triangle indices");
+    }
 }
