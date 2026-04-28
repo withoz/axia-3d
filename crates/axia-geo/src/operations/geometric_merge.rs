@@ -403,6 +403,38 @@ impl Mesh {
         // 11. dangling cleanup — 시뮬레이션 중 남은 split-vertex 의 stub edges.
         let _ = self.cleanup_dangling();
 
+        // 2026-04-28 — second pass 강화 (사용자 보고: L-shape merge 후 잔여
+        //   선). cleanup_dangling 이 비-manifold edge 일부 face=null 케이스를
+        //   놓치는 회귀 차단.
+        let mut second_pass: Vec<EdgeId> = Vec::new();
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let any_he = edge.any_he();
+            if any_he.is_null() {
+                second_pass.push(eid);
+                continue;
+            }
+            let mut all_null = true;
+            let mut he = any_he;
+            let mut guard = 0;
+            loop {
+                let f = self.hes[he].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    all_null = false;
+                    break;
+                }
+                he = self.hes[he].next_rad();
+                guard += 1;
+                if he == any_he || he.is_null() || guard > 10 { break; }
+            }
+            if all_null { second_pass.push(eid); }
+        }
+        for eid in second_pass {
+            let _ = self.remove_edge_and_halfedges(eid);
+            if self.edges.contains(eid) { self.edges.remove(eid); }
+        }
+        self.remove_isolated_verts();
+
         #[cfg(debug_assertions)]
         self.debug_verify_invariants();
 

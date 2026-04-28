@@ -3739,6 +3739,37 @@ impl Mesh {
         //   여전히 사용하는 엣지는 보존).
         let _ = self.cleanup_dangling();
 
+        // 2026-04-28 — 사용자 보고 후속: 단일-shared standard merge 경로에서도
+        //   비-manifold edge / split-vertex stub 잔재 가능. second pass 강화.
+        let mut second_pass_remove: Vec<EdgeId> = Vec::new();
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let any_he = edge.any_he();
+            if any_he.is_null() {
+                second_pass_remove.push(eid);
+                continue;
+            }
+            let mut all_null = true;
+            let mut he = any_he;
+            let mut guard = 0;
+            loop {
+                let f = self.hes[he].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    all_null = false;
+                    break;
+                }
+                he = self.hes[he].next_rad();
+                guard += 1;
+                if he == any_he || he.is_null() || guard > 10 { break; }
+            }
+            if all_null { second_pass_remove.push(eid); }
+        }
+        for eid in second_pass_remove {
+            let _ = self.remove_edge_and_halfedges(eid);
+            if self.edges.contains(eid) { self.edges.remove(eid); }
+        }
+        self.remove_isolated_verts();
+
         // ADR-007 — merge 후 invariants 검증 (debug only)
         self.debug_verify_invariants();
         Ok(new_face)
