@@ -4066,6 +4066,136 @@ mod tests {
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
     }
 
+    /// 사용자 보고 2026-04-28 (10) — 다양한 partial-overlap 케이스에서
+    /// degenerate (NaN / sliver) face 와 shadow 렌더 검증.
+    #[test]
+    fn test_partial_overlap_no_degenerate_faces() {
+        let configurations = [
+            // (label, rects)
+            ("A: 2 rect partial overlap", vec![
+                (DVec3::new(0.0, 0.0, 0.0), 4.0, 2.0),
+                (DVec3::new(2.0, 0.0, 0.0), 4.0, 2.0),
+            ]),
+            ("B: 3 rect chain", vec![
+                (DVec3::new(0.0, 0.0, 0.0), 4.0, 2.0),
+                (DVec3::new(2.0, 0.0, 0.0), 4.0, 2.0),
+                (DVec3::new(4.0, 0.0, 0.0), 4.0, 2.0),
+            ]),
+            ("C: rect crossing rect", vec![
+                (DVec3::new(0.0, 0.0, 0.0), 4.0, 1.0),
+                (DVec3::new(0.0, 0.0, 0.0), 1.0, 4.0),
+            ]),
+            ("D: shared corner", vec![
+                (DVec3::new(0.0, 0.0, 0.0), 4.0, 4.0),
+                (DVec3::new(4.0, 4.0, 0.0), 4.0, 4.0),
+            ]),
+            ("E: shared edge", vec![
+                (DVec3::new(0.0, 0.0, 0.0), 4.0, 4.0),
+                (DVec3::new(4.0, 0.0, 0.0), 4.0, 4.0),
+            ]),
+            ("F: outer + 2 partial inners", vec![
+                (DVec3::ZERO, 12.0, 6.0),
+                (DVec3::new(-2.0, 0.0, 0.0), 4.0, 3.0),
+                (DVec3::new(1.0, 0.0, 0.0), 4.0, 3.0),
+            ]),
+        ];
+
+        for (label, rects) in configurations {
+            let mut scene = Scene::new();
+            for &(c, w, h) in &rects {
+                scene.execute(Command::DrawRect {
+                    center: c, normal: DVec3::Z, up: DVec3::Y,
+                    width: w, height: h,
+                });
+            }
+            for (fid, f) in scene.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                let n = f.normal();
+                assert!(n.x.is_finite() && n.y.is_finite() && n.z.is_finite(),
+                    "[{}] face {:?} NaN normal", label, fid);
+                assert!(n.length_squared() > 1e-12,
+                    "[{}] face {:?} zero normal", label, fid);
+                assert!(n.z > 0.0,
+                    "[{}] face {:?} flipped: {:?}", label, fid, n);
+            }
+            // 모든 active face 가 XIA 등록 + export 됨
+            let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+            let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+                .map(|&fm| axia_geo::FaceId::new(fm)).collect();
+            for (fid, f) in scene.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                assert!(scene.face_to_xia.contains_key(&fid),
+                    "[{}] face {:?} no XIA mapping", label, fid);
+                assert!(exported.contains(&fid),
+                    "[{}] face {:?} missing from buffer", label, fid);
+            }
+        }
+    }
+
+    /// 사용자 보고 2026-04-28 (9) — 사용자 화면 사진 그대로 reproduction:
+    /// outer RECT + 2개 partially-overlapping inner RECT. outer 의 face 가
+    /// 보존되고, overlap 영역에 shadow degenerate 없어야.
+    #[test]
+    fn test_outer_with_two_partial_overlap_inners() {
+        let mut scene = Scene::new();
+        // Outer big rect
+        let r0 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        let outer_xia = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+
+        // Inner rect 1 — left portion
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 2.0,
+        });
+
+        // Inner rect 2 — right portion, partially overlapping inner1
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 2.0,
+        });
+
+        // outer XIA 가 face 보유
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            report.push_str(&format!("  {:?} n={:.2?} verts={} xia={:?}\n",
+                fid, (n.x, n.y, n.z), v.len(), xia));
+        }
+        assert!(
+            outer_face_count >= 1,
+            "outer XIA lost face\n{}", report
+        );
+
+        // 모든 active face: 정상 winding (no NaN / no -Z)
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            assert!(n.x.is_finite() && n.y.is_finite() && n.z.is_finite(),
+                "face {:?} has NaN normal", fid);
+            assert!(n.length_squared() > 1e-12,
+                "face {:?} has zero normal", fid);
+            assert!(n.z > 0.0,
+                "face {:?} flipped: {:?}", fid, n);
+        }
+
+        // 모든 active face 가 export buffer 에 포함
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(exported.contains(&fid), "face {:?} missing from buffer", fid);
+        }
+    }
+
     /// 사용자 보고 2026-04-28 (7) — outer RECT 를 inner RECT 들 위에 그렸을 때
     /// outer 의 face 가 사라지는 회귀.
     #[test]
