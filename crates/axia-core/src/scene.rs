@@ -986,6 +986,41 @@ impl Scene {
         best.map(|(fid, _)| fid)
     }
 
+    /// ADR-016 §2 (Path B) — Helper used by WASM `eraseEdgeResynthesize`.
+    /// Updates the XIA mappings after a re-synthesis: drops removed-face
+    /// entries and inherits the first non-None container XIA into all new faces.
+    pub fn apply_resynth_xia_inheritance(
+        &mut self,
+        removed_faces: &[FaceId],
+        new_faces: &[FaceId],
+    ) {
+        // Capture the inheritance candidate (first XIA that owned a removed
+        // face — typically the outer/container).
+        let inherit_xia = removed_faces.iter()
+            .find_map(|fid| self.face_to_xia.get(fid).copied());
+
+        // Drop removed faces from their XIAs and from the reverse index.
+        for &fid in removed_faces {
+            if let Some(xid) = self.face_to_xia.remove(&fid) {
+                if let Some(xia) = self.xias.get_mut(&xid) {
+                    xia.face_ids.retain(|&f| f != fid);
+                }
+            }
+        }
+
+        // Attach new faces to the inherited XIA.
+        if let Some(xid) = inherit_xia {
+            for &new_f in new_faces {
+                if let Some(xia) = self.xias.get_mut(&xid) {
+                    if !xia.face_ids.contains(&new_f) {
+                        xia.face_ids.push(new_f);
+                    }
+                }
+                self.face_to_xia.insert(new_f, xid);
+            }
+        }
+    }
+
     /// ADR-008 B1 — Rebuild `outer_fid` so that `inner_fid`'s boundary
     /// becomes one of its inner holes. Preserves edges/verts; `inner_fid`
     /// remains as a separate sub-face the user can edit independently.
@@ -1018,6 +1053,59 @@ impl Scene {
         let hole_refs: Vec<&[axia_geo::VertId]> = all_holes.iter().map(|h| h.as_slice()).collect();
         let new_outer = self.mesh.add_face_with_holes(&outer_verts, &hole_refs, material)?;
         Ok(new_outer)
+    }
+
+    /// ADR-016 — gate for conditional B1 auto hole-promote.
+    ///
+    /// SketchUp-style: only the FIRST inner inside an outer auto-promotes.
+    /// Subsequent inners stay as separate floating faces to preserve the
+    /// stacked-inner manifold safety (ADR-015 motivation).
+    ///
+    /// Conditions (all must hold):
+    ///   1. `container` has no existing inner holes (single-promote).
+    ///   2. `inner` has no inner holes itself (only simple faces promote).
+    ///   3. Manifold safety — every perimeter HE of `inner` has its `face`
+    ///      either == `container` OR == `null` (free). If any HE is already
+    ///      claimed by a different face / hole loop, promotion would violate
+    ///      the DCEL "1 HE → 1 face" invariant.
+    fn b1_promote_safe(&self, container: FaceId, inner: FaceId) -> bool {
+        let container_face = match self.mesh.faces.get(container) {
+            Some(f) if f.is_active() => f, _ => return false,
+        };
+        let inner_face = match self.mesh.faces.get(inner) {
+            Some(f) if f.is_active() => f, _ => return false,
+        };
+        // (1) Single-promote heuristic.
+        if !container_face.inners().is_empty() { return false; }
+        // (2) inner must be a simple face.
+        if !inner_face.inners().is_empty() { return false; }
+        // (3) Manifold safety — walk inner's outer loop HEs.
+        let start = inner_face.outer().start;
+        let mut he = start;
+        let mut guard = 0usize;
+        loop {
+            guard += 1;
+            if guard > 4096 { return false; }
+            let he_ref = match self.mesh.hes.get(he) {
+                Some(h) => h, None => return false,
+            };
+            // CCW-side (he itself) must belong to inner.
+            if he_ref.face() != inner { return false; }
+            // The CW-side (twin) HE belongs to "outside" of inner. After
+            // promote, it becomes ring's hole loop. Must currently be either
+            // container's outer-loop HE (face=container) or free (null).
+            let twin = self.mesh.he_twin(he);
+            let twin_ref = match self.mesh.hes.get(twin) {
+                Some(h) => h, None => return false,
+            };
+            let twin_face = twin_ref.face();
+            if !twin_face.is_null() && twin_face != container {
+                return false;
+            }
+            he = he_ref.next();
+            if he == start { break; }
+        }
+        true
     }
 
     /// Principle 6 classifier — if every one of `corners` lies strictly
@@ -1334,9 +1422,11 @@ impl Scene {
         // 임시 우회: 사용자는 인접 inner RECT 를 그릴 때 약간의 gap 을 두거나
         //   4 LINE 으로 직접 그리기. 자동 free-cycle 합성은 정상 작동.
 
-        // Step 4.95 — second B1 hole-promote pass (DISABLED per ADR-015).
-        //   B1 auto-promote 비활성으로 second-pass 도 의미 없음.
-        if false {
+        // Step 4.95 — second B1 hole-promote pass (ADR-016 conditional).
+        //   inner→outer 순서로 그렸을 때 (먼저 inner 그리고 나중에 outer 가
+        //   감싸는 케이스): 각 active simple face 가 다른 face 안에 strict
+        //   interior 면 b1_promote_safe 검사 후 통과 시 promote.
+        {
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
                 .filter(|(_, f)| f.is_active())
                 .map(|(id, _)| id)
@@ -1344,14 +1434,15 @@ impl Scene {
             for inner_fid in candidates {
                 if !self.mesh.faces.contains(inner_fid) { continue; }
                 if !self.mesh.faces[inner_fid].is_active() { continue; }
-                if !self.mesh.faces[inner_fid].inners().is_empty() { continue; }
                 let Some(outer_fid) = self.find_enclosing_face(inner_fid) else { continue; };
-                if !self.mesh.faces[outer_fid].inners().is_empty() { continue; }
+                if !self.b1_promote_safe(outer_fid, inner_fid) { continue; }
                 if let Ok(new_outer) = self.promote_face_to_hole(outer_fid, inner_fid) {
                     if let Some(old_xia) = self.face_to_xia.remove(&outer_fid) {
                         if let Some(xia) = self.xias.get_mut(&old_xia) {
                             xia.face_ids.retain(|&f| f != outer_fid);
-                            xia.face_ids.push(new_outer);
+                            if !xia.face_ids.contains(&new_outer) {
+                                xia.face_ids.push(new_outer);
+                            }
                         }
                         self.face_to_xia.insert(new_outer, old_xia);
                     } else {
@@ -2201,21 +2292,14 @@ impl Scene {
 
         // ═══ Fast-path: RECT interior to a single face ═════════════════════
         //
-        // 2026-04-28 — ADR-015 Phase 2 정합:
-        //   기존 (Phase E): 새 RECT 가 기존 face 안에 strict interior 면 자동
-        //     B1 hole-promote → outer 가 ring face 로 변환, inner 는 hole.
-        //   변경: B1 auto-promote 비활성. inner 와 outer 를 별개 simple face 로
-        //     공존시킴 (geometric overlap 허용).
-        //
-        // 사유: B1 hole-promote 는 inner 의 perimeter HEs 를 ring 의 hole
-        //   loop 에 claim 하여 ADR-008 Axiom 7 ("adjacent RECTs share DCEL
-        //   edge") 와 충돌 — 이후 인접 inner RECT 의 면 합성 차단.
-        //
-        // 명시적 promote 가 필요하면 사용자가 우클릭 메뉴 "merge-as-hole"
-        //   호출. 이때만 B1 promote 실행.
+        // 2026-04-28 — ADR-016 Conditional B1 Auto Hole-Promote:
+        //   새 RECT 가 기존 face 의 strict interior 면 inner 단순 face 로
+        //   생성 후, b1_promote_safe 검사 통과 시 outer 를 ring 으로 변환하고
+        //   inner 를 hole 로 흡수. 둘째 inner (container 가 이미 ring) 는
+        //   skip → 별개 floating face 유지 (manifold 안전).
         if !edge_interaction && face_interaction {
-            if self.single_face_containing_corners(&corners, n_norm).is_some() {
-                // Atomic: add 4 vertices, add_face. NO auto B1 promote.
+            if let Some(container_fid) = self.single_face_containing_corners(&corners, n_norm) {
+                // Atomic: add 4 vertices, add_face.
                 match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
                     Ok((inner_fid, _verts)) => {
                         let xia_id = self.create_xia("Rectangle".to_string());
@@ -2225,7 +2309,31 @@ impl Scene {
                             xia.face_ids.push(inner_fid);
                         }
                         self.register_faces_to_xia(xia_id, &[inner_fid]);
-                        if self.auto_intersect_on_draw {
+
+                        // ADR-016 conditional B1 promote.
+                        let mut b1_fired = false;
+                        if self.b1_promote_safe(container_fid, inner_fid) {
+                            if let Ok(new_outer) = self.promote_face_to_hole(container_fid, inner_fid) {
+                                b1_fired = true;
+                                // Update container's XIA mapping (outer → new_outer).
+                                if let Some(old_xia) = self.face_to_xia.remove(&container_fid) {
+                                    if let Some(xia) = self.xias.get_mut(&old_xia) {
+                                        xia.face_ids.retain(|&f| f != container_fid);
+                                        if !xia.face_ids.contains(&new_outer) {
+                                            xia.face_ids.push(new_outer);
+                                        }
+                                    }
+                                    self.face_to_xia.insert(new_outer, old_xia);
+                                }
+                            }
+                        }
+
+                        // Skip auto-intersect when B1 fired — inner is fully
+                        // inside container with no boundary crossings, so no
+                        // additional intersections to find. Running intersect
+                        // would unnecessarily revisit the freshly-built ring's
+                        // hole loop edges and can split/destroy the topology.
+                        if !b1_fired && self.auto_intersect_on_draw {
                             let _ = self.intersect_faces_inner(&[inner_fid]);
                         }
                         self.transactions.set_after_snapshot(self.scene_snapshot());
@@ -3802,6 +3910,63 @@ mod tests {
 
         // 모든 조건 통과 → preview 가 cyan 으로 표시되어야
         // (preview 함수는 wasm 에 있어 직접 호출 불가하지만 동등 조건 검증)
+    }
+
+    /// 사용자 보고 2026-04-28 — 면이 split-point 로 7+ boundary edge 를
+    /// 가질 때 인접 면 merge preview 가 빨간색.
+    /// 시나리오: 큰 RECT 의 boundary 가 여러 split point 로 나뉜 후,
+    /// 인접 새 RECT 와의 merge 가능성 검증.
+    #[test]
+    fn test_face_with_split_boundary_can_merge() {
+        let mut scene = Scene::new();
+        // 큰 RECT
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 8.0,
+        });
+        // 여러 작은 RECT 가 큰 RECT 의 boundary 를 split (corner overlap 식)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(8.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 3.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-8.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 3.0,
+        });
+
+        // 모든 인접 face pair 에 대해 hover preview 조건 검사
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).map(|(id, _)| id).collect();
+
+        // adjacent face pair 중 cyan 으로 표시되어야 하는 것들 검증
+        let mut tested_pairs = 0;
+        for i in 0..active.len() {
+            for j in (i + 1)..active.len() {
+                let n_shared = scene.mesh.count_shared_edges_outer(active[i], active[j]);
+                if n_shared == 0 { continue; }
+                tested_pairs += 1;
+
+                // Coplanar check
+                let coplanar = scene.mesh.are_faces_coplanar_with_tolerance(
+                    active[i], active[j], 0.5
+                ).unwrap_or(false);
+                assert!(coplanar, "adjacent faces should be coplanar");
+
+                // Hover preview 동등 조건
+                let mergeable = if n_shared == 1 {
+                    true // standard merge path
+                } else {
+                    // Multi-shared: my recent fix should return true
+                    scene.mesh.would_geometric_merge_succeed(active[i], active[j], 0.5)
+                };
+                assert!(
+                    mergeable,
+                    "adjacent face pair (shared={}) should be mergeable but isn't",
+                    n_shared
+                );
+            }
+        }
+        assert!(tested_pairs > 0, "no adjacent face pairs found");
     }
 
     /// 사용자 보고 2026-04-28 — RECT 를 다른 RECT 의 edge 위에 그리면
@@ -5618,6 +5783,291 @@ mod tests {
                     label, fid, n.z
                 );
             }
+        }
+    }
+
+    /// ADR-016 §2 Path B — 그리기 순서 무관 (inner-first 도 outer-first 와
+    /// 동일 결과). 사용자 보고 회귀: inner 그리고 outer 그린 뒤 inner 의
+    /// edge 를 erase 했을 때 면이 사라짐.
+    #[test]
+    fn test_adr016_path_b_inner_first_then_outer_resynthesize() {
+        let mut scene = Scene::new();
+        // Inner 4×2 먼저
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // Outer 10×6 (inner 를 둘러쌈) — Step 4.95 가 B1 promote 해야 함
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+
+        // 토폴로지 검증: ring (1 hole) + inner sub-face = 2 active faces.
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, f)| (id, f.inners().len()))
+            .collect();
+        let ring_count = active.iter().filter(|(_, n)| *n == 1).count();
+        let simple_count = active.iter().filter(|(_, n)| *n == 0).count();
+        assert_eq!(
+            ring_count, 1,
+            "expected 1 ring face after Step 4.95 promote; got faces={:?}",
+            active
+        );
+        assert_eq!(simple_count, 1, "expected 1 inner sub-face; got faces={:?}", active);
+
+        let ring_fid = active.iter().find(|(_, n)| *n == 1).map(|(f, _)| *f).unwrap();
+        let hole_eid = {
+            let ring = &scene.mesh.faces[ring_fid];
+            let inner_loop = &ring.inners()[0];
+            let he = inner_loop.start;
+            scene.mesh.hes.get(he).expect("hole HE").edge()
+        };
+
+        let mat = scene.default_material;
+        let result = scene.mesh.erase_edge_resynthesize(hole_eid, mat, false)
+            .expect("erase_edge_resynthesize");
+        assert_eq!(result.removed_faces.len(), 2, "ring+inner removed");
+        assert_eq!(
+            result.new_faces.len(), 1,
+            "expected 1 re-synthesized outer face; got {}",
+            result.new_faces.len()
+        );
+        let new_fid = result.new_faces[0];
+        let new_face = &scene.mesh.faces[new_fid];
+        assert!(new_face.inners().is_empty(), "new face should be simple");
+        let verts = scene.mesh.collect_loop_verts(new_face.outer().start).unwrap();
+        assert_eq!(verts.len(), 4, "expected 4-vert outer rectangle");
+    }
+
+    /// ADR-016 §2 Path B — hole edge erase 시 ring + inner 가 re-resolve 로
+    /// 단일 simple face 로 재합성됨을 검증.
+    #[test]
+    fn test_adr016_path_b_hole_edge_resynthesize() {
+        use axia_geo::Mesh;
+        let mut scene = Scene::new();
+        // Outer 10×6
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        // Inner 4×2 inside → B1 promote → ring + inner sub-face.
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+
+        // Topology check: 1 ring (1 hole) + 1 inner sub-face.
+        let ring_fid = scene.mesh.faces.iter()
+            .find(|(_, f)| f.is_active() && f.inners().len() == 1)
+            .map(|(id, _)| id)
+            .expect("ring face missing — B1 didn't fire");
+
+        // Pick one edge from the ring's hole loop.
+        let hole_eid = {
+            let ring = &scene.mesh.faces[ring_fid];
+            let inner_loop = &ring.inners()[0];
+            let he = inner_loop.start;
+            scene.mesh.hes.get(he).expect("hole HE").edge()
+        };
+
+        // Path B: erase + re-resolve.
+        let mat = scene.default_material;
+        let result = scene.mesh.erase_edge_resynthesize(hole_eid, mat, false)
+            .expect("erase_edge_resynthesize");
+
+        // 2 faces removed (ring + inner), 1 face synthesized (outer rect).
+        assert_eq!(result.removed_faces.len(), 2);
+        assert_eq!(result.new_faces.len(), 1, "expected 1 re-synthesized face");
+
+        let new_fid = result.new_faces[0];
+        let new_face = &scene.mesh.faces[new_fid];
+        // New face should be a simple 4-vert rectangle (outer perimeter).
+        assert!(new_face.inners().is_empty(), "new face should have no holes");
+        let verts = scene.mesh.collect_loop_verts(new_face.outer().start).unwrap();
+        assert_eq!(verts.len(), 4, "expected 4-vert outer rectangle");
+    }
+
+    /// ADR-016 — 첫 inner 만 B1 promote 검증.
+    #[test]
+    fn test_adr016_single_inner_promotes_to_hole() {
+        let mut scene = Scene::new();
+        // Outer 10×6 — 정확히 JS bridge 와 동일 파라미터 (center=(100,100,0)).
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(100.0, 100.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        // Inner 4×2 strictly inside — 같은 center.
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(100.0, 100.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+
+        // After B1 promote: outer 의 inners().len() == 1
+        let mut ring_with_hole = 0;
+        let mut simple_active = 0;
+        for (_fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if f.inners().len() == 1 { ring_with_hole += 1; }
+            else if f.inners().is_empty() { simple_active += 1; }
+        }
+        // Boundary edge count: ring's outer 4 = boundary, hole 4 = NOT boundary
+        // (twin face is inner). Inner's 4 perimeter edges: face=inner on one
+        // side, face=ring (hole) on twin side → NOT boundary.
+        // Total boundary = 4.
+        let mut boundary_count = 0;
+        for (_, edge) in scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            // boundary = at least one side has face=null
+            // We need to find both HEs of this edge.
+            // Simpler: check is_boundary via mesh helper if available.
+        }
+        // Fallback: count via halfedges with face=null.
+        let mut he_with_null_face = 0;
+        for (_, he) in scene.mesh.hes.iter() {
+            if !he.is_active() { continue; }
+            if he.face().is_null() { he_with_null_face += 1; }
+            let _ = boundary_count;
+        }
+
+        assert_eq!(
+            ring_with_hole, 1,
+            "expected exactly 1 ring face with hole; got {} (simple={}, null-HEs={})",
+            ring_with_hole, simple_active, he_with_null_face
+        );
+        assert_eq!(
+            simple_active, 1,
+            "expected exactly 1 simple sub-face (inner); got {} (null-HEs={})",
+            simple_active, he_with_null_face
+        );
+        assert_eq!(
+            he_with_null_face, 4,
+            "expected 4 null-face HEs (only outer ring's outside); got {}",
+            he_with_null_face
+        );
+    }
+
+    /// ADR-016 — 둘째 inner 는 ring 이 이미 hole 보유 → skip 되어 별개 face 유지.
+    #[test]
+    fn test_adr016_second_inner_stays_separate() {
+        let mut scene = Scene::new();
+        // Outer 12×8
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 8.0,
+        });
+        // First inner — should promote
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 2.0,
+        });
+        // Second inner — should NOT promote (single-promote heuristic)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 2.0,
+        });
+
+        let mut ring_with_one_hole = 0;
+        let mut ring_with_two_holes = 0;
+        let mut simple_active = 0;
+        for (_fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            match f.inners().len() {
+                0 => simple_active += 1,
+                1 => ring_with_one_hole += 1,
+                2 => ring_with_two_holes += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            ring_with_one_hole, 1,
+            "expected 1 ring with 1 hole; got {} (two-hole={}, simple={})",
+            ring_with_one_hole, ring_with_two_holes, simple_active
+        );
+        assert_eq!(
+            ring_with_two_holes, 0,
+            "second inner should NOT auto-promote; got {} ring with 2 holes",
+            ring_with_two_holes
+        );
+        assert_eq!(
+            simple_active, 2,
+            "expected 2 simple faces (first inner sub-face + second inner standalone); got {}",
+            simple_active
+        );
+    }
+
+    /// 사용자 보고 2026-04-28 (12) — 인접한 면과 통합 미리보기가 빨간색 (cascade)
+    /// 으로 표시되는 회귀. 사용자 화면: outer + 부분-overlap 안쪽 inner 가
+    /// 만드는 sub-face 들 사이의 shared edge 를 hover 했을 때 통합 가능
+    /// (cyan) 이어야 한다.
+    ///
+    /// 검증: 모든 active face 쌍에 대해 (1) shared outer edge 가 있고
+    /// (2) coplanar 인 경우 → preview predicate (count==1 OR
+    /// would_geometric_merge_succeed) 가 true 를 반환해야 한다.
+    #[test]
+    fn test_partial_overlap_all_adjacent_faces_mergeable() {
+        // 사용자 스크린 패턴: outer 14×6, 한쪽으로 extending overlap inner.
+        let configs: &[&[(f64, f64, f64, f64)]] = &[
+            // (cx, cy, w, h)
+            &[(0.0, 0.0, 14.0, 6.0), (5.0, 0.0, 6.0, 4.0)],
+            &[(0.0, 0.0, 14.0, 6.0), (-5.0, 0.0, 6.0, 4.0)],
+            &[(0.0, 0.0, 14.0, 6.0), (5.0, 0.0, 6.0, 4.0), (-5.0, 0.0, 6.0, 4.0)],
+            // L-shape 두 개
+            &[(0.0, 0.0, 10.0, 4.0), (3.0, 2.0, 6.0, 4.0)],
+            // 사용자 image: 큰 outer + 부분-overlap inner extending right
+            &[(0.0, 0.0, 16.0, 8.0), (10.0, 0.0, 8.0, 5.0)],
+        ];
+
+        for (config_idx, rects) in configs.iter().enumerate() {
+            let mut scene = Scene::new();
+            for &(cx, cy, w, h) in *rects {
+                scene.execute(Command::DrawRect {
+                    center: DVec3::new(cx, cy, 0.0),
+                    normal: DVec3::Z, up: DVec3::Y,
+                    width: w, height: h,
+                });
+            }
+
+            let active: Vec<_> = scene.mesh.faces.iter()
+                .filter(|(_, f)| f.is_active()).map(|(id, _)| id).collect();
+
+            let mut tested = 0;
+            let mut failures = Vec::<String>::new();
+            for i in 0..active.len() {
+                for j in (i + 1)..active.len() {
+                    let n_shared = scene.mesh.count_shared_edges_outer(active[i], active[j]);
+                    if n_shared == 0 { continue; }
+                    let coplanar = scene.mesh.are_faces_coplanar_with_tolerance(
+                        active[i], active[j], 0.5
+                    ).unwrap_or(false);
+                    if !coplanar { continue; }
+                    tested += 1;
+
+                    // Mirror preview_edge_erase_merge predicate.
+                    let mergeable = if n_shared == 1 {
+                        true
+                    } else {
+                        scene.mesh.would_geometric_merge_succeed(active[i], active[j], 0.5)
+                    };
+                    if !mergeable {
+                        failures.push(format!(
+                            "  config[{}]: face pair ({:?},{:?}) shared={} coplanar=true \
+                             but predicate=false",
+                            config_idx, active[i], active[j], n_shared
+                        ));
+                    }
+                }
+            }
+            assert!(tested > 0, "config[{}] no adjacent pairs found", config_idx);
+            assert!(
+                failures.is_empty(),
+                "config[{}] preview predicate FALSE on adjacent coplanar faces:\n{}",
+                config_idx,
+                failures.join("\n")
+            );
         }
     }
 }

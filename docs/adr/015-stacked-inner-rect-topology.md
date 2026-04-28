@@ -1,8 +1,14 @@
 # ADR-015: Stacked Inner RECT Topology — Manifold-First B1 Policy
 
-**Status**: 🔒 **Accepted & LOCKED** (2026-04-28)
+**Status**: ⛔ **Superseded by ADR-016** (2026-04-28)
 **Supersedes**: ADR-008 Phase E (B1 auto-promote, partial)
+**Superseded by**: ADR-016 (Conditional Auto Hole-Promote)
 **Related**: ADR-007 (Face Orientation Policy), ADR-008 (Face Operation Axioms), ADR-006 (Multi-loop Face)
+
+> ⚠️ 본 ADR 은 ADR-016 으로 대체되었습니다. ADR-015 의 "B1 전면 비활성"
+> 정책은 사용자 UX 손해가 컸습니다 (SketchUp 식 inner-in-outer 워크플로우
+> 매번 우클릭 필요). ADR-016 에서 manifold safety 검사를 통한 conditional
+> B1 promote 로 변경되었습니다.
 
 > ⚠️ **DO NOT MODIFY** without explicit user consent.
 > 사용자가 명시적으로 거부 또는 변경 요청 전까지 본 ADR 의 결정은

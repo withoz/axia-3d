@@ -6,11 +6,19 @@
 **모든 후속 세션에서 그대로 유지**되어야 한다. ADR-014 메타-원칙 #10
 ("ADR 불변 — 변경 시 새 ADR + Superseded") 적용.
 
-### 1. ADR-015 — Stacked Inner RECT Manifold-First B1 Policy
-- **B1 auto hole-promote 비활성** — `exec_draw_rect` interior fast-path,
-  `run_face_synthesis_postprocess` Step 4.8 / 4.95 에서 자동 promote 금지.
-- 명시적 promote (`merge-as-hole` 우클릭 메뉴) 만 허용.
-- ADR-008 Axiom 7 (adjacent RECTs share DCEL edge) 정합 우선.
+### 1. ADR-016 — Conditional Auto Hole-Promote (SketchUp-style)
+- **첫 inner 만 auto B1 promote** — `exec_draw_rect` interior fast-path
+  + `run_face_synthesis_postprocess` Step 4.95 가 `b1_promote_safe` 통과 시
+  promote 실행. 둘째 inner (container 가 이미 ring) 부터는 skip → 별개
+  floating face (manifold 안전).
+- `b1_promote_safe` 조건: ① container.inners 가 비어 있음 ② inner 가 simple
+  face ③ inner 의 perimeter HE 들이 모두 face=container 또는 null (twin 검사).
+- Multi-loop face 도구 정책 (ADR-016 Q2): Push/Pull / Boolean / Offset /
+  hole boundary fillet → 거부 + Toast (Solid Tools 관행).
+- 기존 ADR-015 시기 저장 파일 마이그레이션 없음 (ADR-016 Q3 (a)).
+- 명시적 promote (`merge-as-hole`) 는 stacked-inner 의 둘째 inner 도 합치고
+  싶을 때 사용.
+- ADR-015 는 `Superseded by ADR-016`.
 
 ### 2. ADR-007 Invariant 2 — Winding 일괄 강제
 - 모든 face 의 `normal.dot(surface_normal_hint) >= 0` 보장.

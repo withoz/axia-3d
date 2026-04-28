@@ -252,10 +252,28 @@ export class AxiaEngine {
      */
     edgeClass(edge_id_raw: number): number;
     /**
+     * ADR-016 §2 — true ⇔ this edge is on the hole boundary of any active face.
+     * JS hover layer uses this to show an explicit-op hint instead of the
+     * generic cascade-red preview.
+     */
+    edgeIsHoleBoundary(edge_id_raw: number): boolean;
+    /**
      * edgeLength returns the straight-line distance between an edge's
      * two endpoints. Zero on missing / degenerate edge.
      */
     edgeLength(edge_id_raw: number): number;
+    /**
+     * ADR-016 §2 (Path B) — Erase + Re-synthesize.
+     *
+     * 사용자 정책: "바운더리가 깨지면 새 boundary 찾아서 새 면 생성".
+     * fast-path (`merge_faces_by_edge`) 가 거부하는 hole boundary edge 등
+     * 비정형 케이스 처리. 인접 face soft-remove → edge 제거 → free-edge
+     * re-resolver 실행.
+     *
+     * Returns JSON `{ ok, removedFaces, newFaces, cleanedEdges, cleanedVerts, error? }`.
+     * 트랜잭션 1 개 (Ctrl+Z 한 번에 원복).
+     */
+    eraseEdgeResynthesize(edge_id_raw: number, cleanup_dangling: boolean): string;
     /**
      * ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
      * 파일 저장 대화창 등에서 데이터 무결성이 중요한 경우 사용.
@@ -272,6 +290,11 @@ export class AxiaEngine {
      * cross-product magnitude / 2). Returns 0 on error / missing face.
      */
     faceArea(face_id_raw: number): number;
+    /**
+     * Number of inner hole loops on a face. 0 = simple face.
+     * Returns u32::MAX when the face is missing or inactive.
+     */
+    faceInnerLoopCount(face_id_raw: number): number;
     face_count(): number;
     /**
      * face 집합의 중심점 반환 [x, y, z]
@@ -991,10 +1014,13 @@ export interface InitOutput {
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_edgeAngleThreshold: (a: number) => number;
     readonly axiaengine_edgeClass: (a: number, b: number) => number;
+    readonly axiaengine_edgeIsHoleBoundary: (a: number, b: number) => number;
     readonly axiaengine_edgeLength: (a: number, b: number) => number;
+    readonly axiaengine_eraseEdgeResynthesize: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
     readonly axiaengine_faceArea: (a: number, b: number) => number;
+    readonly axiaengine_faceInnerLoopCount: (a: number, b: number) => number;
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;

@@ -18,6 +18,8 @@ import { getMergeTolerance } from './MergeSettings';
 const ERASE_COLOR = 0xff4444;
 /** "이 엣지를 지우면 두 coplanar 면이 병합됩니다" 미리보기 색상. */
 const MERGE_PREVIEW_COLOR = 0x4dd2ff;
+/** ADR-016 §2 Path B — hole edge 위 hover 시 "re-synthesize" amber 색상. */
+const RESYNTH_PREVIEW_COLOR = 0xffb84d;
 
 /**
  * Erase 도구 전용 원형 커서 (SVG 데이터 URL).
@@ -53,6 +55,8 @@ export class EraseTool implements ITool {
   private dragFaceOverlay: THREE.Mesh | null = null;
   /** Persistent red overlay for edges accumulated during a drag. */
   private dragEdgeOverlay: THREE.LineSegments | null = null;
+  /** ADR-016 §2 hint dedup — only show toast once per hovered hole edge. */
+  private lastHintedHoleEdge: number | null = null;
 
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
@@ -117,15 +121,46 @@ export class EraseTool implements ITool {
     //   "엣지가 지워졌는데 면이 안없어진다" 로 인식되어 topology 와 visual
     //   일관성이 깨짐. SOFT 는 Soften Edges 같은 명시적 명령에서만 사용하고
     //   Erase 도구의 default 는 SketchUp 식 cascade 로 환원.
+    // ADR-016 §2 Path B — split out hole-boundary edges for re-synthesize.
+    //   Erase tool 의 단일 클릭 / 드래그에서 hole edge 가 섞여 있으면
+    //   해당 edge 들은 별도 트랜잭션으로 erase_edge_resynthesize 호출.
+    //   Shift cascade-only 모드는 그대로 cascade 적용 (사용자 명시 의도 우선).
+    const holeEdges: number[] = [];
+    const regularEdges: number[] = [];
+    const holeCheckAvail = typeof this.ctx.bridge.edgeIsHoleBoundary === 'function'
+      && typeof this.ctx.bridge.eraseEdgeResynthesize === 'function';
+    if (!this.cascadeOnly && holeCheckAvail) {
+      for (const eid of edges) {
+        if (this.ctx.bridge.edgeIsHoleBoundary(eid)) holeEdges.push(eid);
+        else regularEdges.push(eid);
+      }
+    } else {
+      regularEdges.push(...edges);
+    }
+
+    // Path B 실행 — 각 hole edge 마다 별도 호출. Note: 각 호출이 자체
+    //   transaction 을 가지므로 다중 hole edge 시 undo 가 N 번 필요. 일반
+    //   사용 시 1 개 hole edge click 이 가장 흔함.
+    const resynthSummary = { newFaces: 0, removedFaces: 0 };
+    for (const eid of holeEdges) {
+      const r = this.ctx.bridge.eraseEdgeResynthesize(eid, false);
+      if (r.ok) {
+        resynthSummary.newFaces += r.newFaces;
+        resynthSummary.removedFaces += r.removedFaces;
+      }
+    }
+
     // Single Rust undo transaction — one Ctrl+Z restores all.
     const tol = getMergeTolerance();
     const cascadeOnly = this.cascadeOnly;
-    const res = this.ctx.bridge.batchEraseEdgesWithMerge(faces, edges, tol, cascadeOnly);
+    const res = (faces.length > 0 || regularEdges.length > 0)
+      ? this.ctx.bridge.batchEraseEdgesWithMerge(faces, regularEdges, tol, cascadeOnly)
+      : null;
 
     let mergedCount = 0;
     let cascadedFaces = faces.length;
-    let cascadedEdges = edges.length;
-    let synthesizedCount = 0;
+    let cascadedEdges = regularEdges.length;
+    let synthesizedCount = resynthSummary.newFaces;
     let desolidifiedCount = 0;
     let ok = true;
 
@@ -133,12 +168,12 @@ export class EraseTool implements ITool {
       mergedCount = res.merged;
       cascadedEdges = res.cascadedEdges;
       cascadedFaces = res.cascadedFaces;
-      synthesizedCount = res.synthesized;
+      synthesizedCount += res.synthesized;
       desolidifiedCount = res.desolidified;
-    } else {
+    } else if (regularEdges.length > 0 || faces.length > 0) {
       // Older WASM without batchEraseEdgesWithMerge — fall back to previous logic.
       const edgesToCascade: number[] = [];
-      for (const edgeId of edges) {
+      for (const edgeId of regularEdges) {
         const result = cascadeOnly ? -1 : this.ctx.bridge.mergeFacesByEdge(edgeId, tol);
         if (result >= 0) mergedCount++;
         else edgesToCascade.push(edgeId);
@@ -271,14 +306,27 @@ export class EraseTool implements ITool {
       const mergePair = (!e.shiftKey && edgeId != null)
         ? this.ctx.bridge.previewEdgeEraseMerge(edgeId, getMergeTolerance())
         : null;
-      this.showEdgeHover(segIndex, mergePair != null);
+      // ADR-016 §2 Path B — hole edge 면 amber "재합성" preview.
+      const isHoleEdge = !e.shiftKey && edgeId != null && mergePair == null
+        && typeof this.ctx.bridge.edgeIsHoleBoundary === 'function'
+        && this.ctx.bridge.edgeIsHoleBoundary(edgeId);
+      this.showEdgeHover(segIndex, mergePair != null, isHoleEdge);
       if (mergePair) {
         this.showMergePreviewFaces(mergePair);
       } else {
         this.removeFaceHover();
+        if (isHoleEdge && edgeId !== this.lastHintedHoleEdge) {
+          Toast.info(
+            '바운더리 재합성 — 새 면을 자동으로 찾습니다 (잔여 wire 가능)',
+            2500,
+          );
+          this.lastHintedHoleEdge = edgeId;
+        }
       }
       return;
     }
+    // 다른 edge 또는 비-edge 로 이동 시 hint dedup 리셋.
+    this.lastHintedHoleEdge = null;
 
     if (picked?.type === 'face' && picked.hit.faceIndex != null && picked.hit.faceIndex >= 0) {
       const fid = this.ctx.getFaceId(picked.hit.faceIndex);
@@ -294,7 +342,11 @@ export class EraseTool implements ITool {
     this.removeEdgeHover();
   }
 
-  private showEdgeHover(segIndex: number, willMerge: boolean = false): void {
+  private showEdgeHover(
+    segIndex: number,
+    willMerge: boolean = false,
+    willResynth: boolean = false,
+  ): void {
     this.removeEdgeHover();
     const edgeLines = this.ctx.bridge.getEdgeLines();
     if (!edgeLines) return;
@@ -309,9 +361,11 @@ export class EraseTool implements ITool {
         edgeLines[base + 3], edgeLines[base + 4], edgeLines[base + 5],
       ]), 3
     ));
+    const color = willMerge ? MERGE_PREVIEW_COLOR
+      : willResynth ? RESYNTH_PREVIEW_COLOR
+      : ERASE_COLOR;
     const mat = new THREE.LineBasicMaterial({
-      color: willMerge ? MERGE_PREVIEW_COLOR : ERASE_COLOR,
-      linewidth: 2, depthTest: false,
+      color, linewidth: 2, depthTest: false,
     });
     this.edgeHoverHighlight = new THREE.Line(geo, mat);
     this.edgeHoverHighlight.renderOrder = 998;

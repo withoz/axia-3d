@@ -25,3 +25,4 @@ pub mod polygon_geom;
 pub mod slice;
 pub mod repair;
 pub mod planar_walk;
+pub mod erase_resynth;

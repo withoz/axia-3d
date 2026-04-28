@@ -40,10 +40,13 @@ export const axiaengine_draw_line: (a: number, b: number, c: number, d: number, 
 export const axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
 export const axiaengine_edgeAngleThreshold: (a: number) => number;
 export const axiaengine_edgeClass: (a: number, b: number) => number;
+export const axiaengine_edgeIsHoleBoundary: (a: number, b: number) => number;
 export const axiaengine_edgeLength: (a: number, b: number) => number;
+export const axiaengine_eraseEdgeResynthesize: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
 export const axiaengine_export_snapshot: (a: number, b: number) => void;
 export const axiaengine_faceArea: (a: number, b: number) => number;
+export const axiaengine_faceInnerLoopCount: (a: number, b: number) => number;
 export const axiaengine_face_count: (a: number) => number;
 export const axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;

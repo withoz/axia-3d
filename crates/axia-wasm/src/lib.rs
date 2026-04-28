@@ -186,6 +186,92 @@ impl AxiaEngine {
         self.last_error.clone()
     }
 
+    /// Number of inner hole loops on a face. 0 = simple face.
+    /// Returns u32::MAX when the face is missing or inactive.
+    #[wasm_bindgen(js_name = "faceInnerLoopCount")]
+    pub fn face_inner_loop_count(&self, face_id_raw: u32) -> u32 {
+        let fid = FaceId::new(face_id_raw);
+        match self.scene.mesh.faces.get(fid) {
+            Some(f) if f.is_active() => f.inners().len() as u32,
+            _ => u32::MAX,
+        }
+    }
+
+    /// ADR-016 §2 (Path B) — Erase + Re-synthesize.
+    ///
+    /// 사용자 정책: "바운더리가 깨지면 새 boundary 찾아서 새 면 생성".
+    /// fast-path (`merge_faces_by_edge`) 가 거부하는 hole boundary edge 등
+    /// 비정형 케이스 처리. 인접 face soft-remove → edge 제거 → free-edge
+    /// re-resolver 실행.
+    ///
+    /// Returns JSON `{ ok, removedFaces, newFaces, cleanedEdges, cleanedVerts, error? }`.
+    /// 트랜잭션 1 개 (Ctrl+Z 한 번에 원복).
+    #[wasm_bindgen(js_name = "eraseEdgeResynthesize")]
+    pub fn erase_edge_resynthesize(&mut self, edge_id_raw: u32, cleanup_dangling: bool) -> String {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            return r#"{"ok":false,"error":"edge not found"}"#.to_string();
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mat = self.scene.default_material;
+        let result = match self.scene.mesh.erase_edge_resynthesize(eid, mat, cleanup_dangling) {
+            Ok(r) => r,
+            Err(e) => {
+                self.scene.transactions.cancel();
+                return format!("{{\"ok\":false,\"error\":\"{}\"}}", e);
+            }
+        };
+
+        // XIA inheritance — handled in Scene helper.
+        self.scene.apply_resynth_xia_inheritance(&result.removed_faces, &result.new_faces);
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        format!(
+            "{{\"ok\":true,\"removedFaces\":{},\"newFaces\":{},\"cleanedEdges\":{},\"cleanedVerts\":{}}}",
+            result.removed_faces.len(),
+            result.new_faces.len(),
+            result.cleaned_edges,
+            result.cleaned_verts
+        )
+    }
+
+    /// ADR-016 §2 — true ⇔ this edge is on the hole boundary of any active face.
+    /// JS hover layer uses this to show an explicit-op hint instead of the
+    /// generic cascade-red preview.
+    #[wasm_bindgen(js_name = "edgeIsHoleBoundary")]
+    pub fn edge_is_hole_boundary(&self, edge_id_raw: u32) -> bool {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) { return false; }
+        let (faces, hes) = self.scene.mesh.get_faces_sharing_edge(eid);
+        for (i, &fid) in faces.iter().enumerate() {
+            let Some(face) = self.scene.mesh.faces.get(fid) else { continue };
+            if !face.is_active() { continue; }
+            let he_id = hes[i];
+            for inner in face.inners() {
+                let mut h = inner.start;
+                let mut guard = 0usize;
+                loop {
+                    guard += 1;
+                    if guard > 4096 { return false; }
+                    if h == he_id { return true; }
+                    let next = match self.scene.mesh.hes.get(h) {
+                        Some(he) => he.next(), None => return false,
+                    };
+                    h = next;
+                    if h == inner.start { break; }
+                }
+            }
+        }
+        false
+    }
+
     /// 에러 기록용 내부 헬퍼. 각 연산이 실패 시 호출.
     fn set_error(&mut self, msg: impl Into<String>) {
         self.last_error = msg.into();
@@ -774,6 +860,17 @@ impl AxiaEngine {
         dist: f64,
     ) -> bool {
         let fid = FaceId::new(face_id_raw);
+
+        // ADR-016 Q2 — multi-loop face (ring with holes) 거부.
+        if let Some(face) = self.scene.mesh.faces.get(fid) {
+            if !face.inners().is_empty() {
+                debug_log!("[RUST] push_pull rejected: face {} has {} hole(s) — \
+                            multi-loop face Push/Pull unsupported (ADR-016 Q2)",
+                            face_id_raw, face.inners().len());
+                return false;
+            }
+        }
+
         let faces_before = self.scene.mesh.face_count();
 
         // Log face normal for direction debugging
@@ -1504,12 +1601,37 @@ impl AxiaEngine {
         if !self.scene.mesh.edges.contains(eid) {
             return vec![];
         }
-        let (faces, _) = self.scene.mesh.get_faces_sharing_edge(eid);
+        let (faces, hes) = self.scene.mesh.get_faces_sharing_edge(eid);
         if faces.len() != 2 {
             return vec![];
         }
         let f1 = faces[0];
         let f2 = faces[1];
+
+        // ADR-016 §2 — Hole boundary edges require explicit operations.
+        //   Erase auto-fill applies only to coplanar INTERIOR SPLIT edges
+        //   (outer-loop ↔ outer-loop). If this edge appears on either
+        //   face's hole loop, return empty so the preview shows the
+        //   cascade red — JS layer will surface the explicit-op hint.
+        for (i, &fid) in faces.iter().enumerate() {
+            if let Some(face) = self.scene.mesh.faces.get(fid) {
+                let he_id = hes[i];
+                for inner in face.inners() {
+                    let mut h = inner.start;
+                    let mut guard = 0usize;
+                    loop {
+                        guard += 1;
+                        if guard > 4096 { return vec![]; }
+                        if h == he_id { return vec![]; }
+                        let next = match self.scene.mesh.hes.get(h) {
+                            Some(he) => he.next(), None => return vec![],
+                        };
+                        h = next;
+                        if h == inner.start { break; }
+                    }
+                }
+            }
+        }
 
         // Step 2 — coplanarity gate (cheap; identical for both branches below).
         match self.scene.mesh.are_faces_coplanar_with_tolerance(f1, f2, angle_tol_deg) {
@@ -4328,6 +4450,16 @@ impl AxiaEngine {
     /// 반환: JSON 결과 { ok, innerFace, stripFaces, ... }
     pub fn offset_face(&mut self, face_id_raw: u32, dist: f64) -> String {
         let fid = FaceId::new(face_id_raw);
+
+        // ADR-016 Q2 — multi-loop face (ring with holes) 거부.
+        if let Some(face) = self.scene.mesh.faces.get(fid) {
+            if !face.inners().is_empty() {
+                return format!(
+                    "{{\"ok\":false,\"error\":\"multi-loop face Offset unsupported (ADR-016 Q2): face {} has {} hole(s)\"}}",
+                    face_id_raw, face.inners().len()
+                );
+            }
+        }
 
         // 트랜잭션 시작
         self.scene.transactions.begin();

@@ -699,6 +699,17 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * ADR-016 §2 — true ⇔ this edge is on the hole boundary of any active face.
+     * JS hover layer uses this to show an explicit-op hint instead of the
+     * generic cascade-red preview.
+     * @param {number} edge_id_raw
+     * @returns {boolean}
+     */
+    edgeIsHoleBoundary(edge_id_raw) {
+        const ret = wasm.axiaengine_edgeIsHoleBoundary(this.__wbg_ptr, edge_id_raw);
+        return ret !== 0;
+    }
+    /**
      * edgeLength returns the straight-line distance between an edge's
      * two endpoints. Zero on missing / degenerate edge.
      * @param {number} edge_id_raw
@@ -707,6 +718,36 @@ export class AxiaEngine {
     edgeLength(edge_id_raw) {
         const ret = wasm.axiaengine_edgeLength(this.__wbg_ptr, edge_id_raw);
         return ret;
+    }
+    /**
+     * ADR-016 §2 (Path B) — Erase + Re-synthesize.
+     *
+     * 사용자 정책: "바운더리가 깨지면 새 boundary 찾아서 새 면 생성".
+     * fast-path (`merge_faces_by_edge`) 가 거부하는 hole boundary edge 등
+     * 비정형 케이스 처리. 인접 face soft-remove → edge 제거 → free-edge
+     * re-resolver 실행.
+     *
+     * Returns JSON `{ ok, removedFaces, newFaces, cleanedEdges, cleanedVerts, error? }`.
+     * 트랜잭션 1 개 (Ctrl+Z 한 번에 원복).
+     * @param {number} edge_id_raw
+     * @param {boolean} cleanup_dangling
+     * @returns {string}
+     */
+    eraseEdgeResynthesize(edge_id_raw, cleanup_dangling) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_eraseEdgeResynthesize(retptr, this.__wbg_ptr, edge_id_raw, cleanup_dangling);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * ADR-007 Phase 5 — 엄격 export: invariant 위반 시 빈 배열 반환 + lastError 설정.
@@ -754,6 +795,16 @@ export class AxiaEngine {
     faceArea(face_id_raw) {
         const ret = wasm.axiaengine_faceArea(this.__wbg_ptr, face_id_raw);
         return ret;
+    }
+    /**
+     * Number of inner hole loops on a face. 0 = simple face.
+     * Returns u32::MAX when the face is missing or inactive.
+     * @param {number} face_id_raw
+     * @returns {number}
+     */
+    faceInnerLoopCount(face_id_raw) {
+        const ret = wasm.axiaengine_faceInnerLoopCount(this.__wbg_ptr, face_id_raw);
+        return ret >>> 0;
     }
     /**
      * @returns {number}

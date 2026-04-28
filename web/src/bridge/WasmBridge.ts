@@ -123,6 +123,10 @@ type AxiaEngineExtended = AxiaEngine & {
     cascadeOnly: boolean,
   ): Int32Array;
   previewEdgeEraseMerge?(edgeId: number, angleTolDeg: number): Uint32Array;
+  /** ADR-016 §2 — true ⇔ edge is on a face's hole boundary loop. */
+  edgeIsHoleBoundary?(edgeId: number): boolean;
+  /** ADR-016 §2 (Path B) — Erase + Re-synthesize. Returns JSON. */
+  eraseEdgeResynthesize?(edgeId: number, cleanupDangling: boolean): string;
   lastMergeFailureReason?(): string;
   /** ADR-009 Orphan recovery */
   classifyOrphans?(): string;
@@ -860,6 +864,53 @@ export class WasmBridge {
     } catch (e) {
       console.error('[WasmBridge] previewEdgeEraseMerge failed:', e);
       return null;
+    }
+  }
+
+  /**
+   * ADR-016 §2 — true ⇔ this edge is on a face's hole boundary loop.
+   * EraseTool uses this on hover to show an explicit-op hint toast
+   * instead of the generic cascade-red preview.
+   */
+  edgeIsHoleBoundary(edgeId: number): boolean {
+    if (!this.engine?.edgeIsHoleBoundary) return false;
+    try {
+      return this.engine.edgeIsHoleBoundary(edgeId);
+    } catch (e) {
+      console.error('[WasmBridge] edgeIsHoleBoundary failed:', e);
+      return false;
+    }
+  }
+
+  /**
+   * ADR-016 §2 (Path B) — Erase + Re-synthesize.
+   * "바운더리가 깨지면 새 boundary 찾아서 새 면 생성" 정책 구현.
+   * 인접 face soft-remove → edge 제거 → free-edge resolver → new face.
+   *
+   * @param edgeId — target edge id
+   * @param cleanupDangling — if true, removes orphan wires after re-synth
+   *   (default false — SketchUp 식 wire 보존)
+   * @returns parsed result `{ ok, removedFaces, newFaces, cleanedEdges, cleanedVerts, error? }`
+   */
+  eraseEdgeResynthesize(edgeId: number, cleanupDangling = false): {
+    ok: boolean;
+    removedFaces: number;
+    newFaces: number;
+    cleanedEdges: number;
+    cleanedVerts: number;
+    error?: string;
+  } {
+    const fail = { ok: false, removedFaces: 0, newFaces: 0, cleanedEdges: 0, cleanedVerts: 0 };
+    if (!this.engine?.eraseEdgeResynthesize) {
+      return { ...fail, error: 'WASM method unavailable' };
+    }
+    try {
+      this.markDirty();
+      const json = this.engine.eraseEdgeResynthesize(edgeId, cleanupDangling);
+      return JSON.parse(json);
+    } catch (e) {
+      console.error('[WasmBridge] eraseEdgeResynthesize failed:', e);
+      return { ...fail, error: String(e) };
     }
   }
 
