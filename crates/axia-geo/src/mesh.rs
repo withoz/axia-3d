@@ -936,7 +936,7 @@ impl Mesh {
                 let next_he = outs[next_idx];
 
                 if !self.hes[next_he].face().is_null() { break; }
-                if !free_set.contains(&next_he) { break; } // 다른 component의 free HE (드문 케이스)
+                if !free_set.contains(&next_he) { break; }
 
                 if next_he == start { closed = true; break; }
                 current = next_he;
@@ -1064,16 +1064,9 @@ impl Mesh {
             let dx = (max_x - min_x).max(1e-3) * 0.05;
             let dy = (max_y - min_y).max(1e-3) * 0.05;
 
-            // (B) Local-containment — AABB 내부의 face centroid만 enclose 검사.
-            //
-            // 2026-04-24 (ADR-008 Axiom 7): the cycle must be entirely on
-            // completely-free edges. Mixed cycles (some edges already
-            // bounding a face) are rejected here and are handled by the
-            // scene's Step 4.9 M1 `split_face_by_chain`.
-            //
-            // Adjacent-RECT case (B shares one edge with A) is unaffected:
-            // that face is created by exec_draw_line's Step 4(b) via
-            // `detect_free_edge_loop` before this resolver runs.
+            // (B) Local-containment / all-edges-free check (ADR-008 Axiom 7).
+            // The cycle must be entirely on completely-free edges. Mixed
+            // cycles are handled by Step 4.9 M1 split_face_by_chain.
             let all_edges_free = verts.iter().enumerate().all(|(i, _)| {
                 let va = verts[i];
                 let vb = verts[(i + 1) % verts.len()];

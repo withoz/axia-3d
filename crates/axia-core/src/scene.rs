@@ -1290,33 +1290,15 @@ impl Scene {
             }
         }
 
-        // Step 4.8 — B1 enclosed-face hole promotion
-        {
-            let candidates: Vec<FaceId> = all_created_faces.clone();
-            for inner_fid in candidates {
-                if !self.mesh.faces.contains(inner_fid) { continue; }
-                if let Some(outer_fid) = self.find_enclosing_face(inner_fid) {
-                    if let Ok(new_outer) = self.promote_face_to_hole(outer_fid, inner_fid) {
-                        // Fix 1 (2026-04-24): transfer old face's XIA
-                        //   membership to the new ring face so the container
-                        //   XIA stays connected to its geometry. Previously
-                        //   unregister_face_from_xia dropped the old face
-                        //   and left the new ring as an orphan → selection /
-                        //   push-pull on the container returned empty.
-                        if let Some(old_xia) = self.face_to_xia.remove(&outer_fid) {
-                            if let Some(xia) = self.xias.get_mut(&old_xia) {
-                                xia.face_ids.retain(|&f| f != outer_fid);
-                                xia.face_ids.push(new_outer);
-                            }
-                            self.face_to_xia.insert(new_outer, old_xia);
-                        } else {
-                            // No XIA owned the old face — just forget it.
-                            self.unregister_face_from_xia(outer_fid);
-                        }
-                    }
-                }
-            }
-        }
+        // Step 4.8 — B1 enclosed-face hole promotion (DISABLED per ADR-015).
+        //
+        // 2026-04-28 — ADR-015: B1 auto hole-promote 비활성. inner face 가
+        //   기존 outer face 안에 그려졌을 때 자동 ring 화 안 함. 두 face 가
+        //   별개 simple face 로 공존. 명시적 promote 는 사용자 우클릭 메뉴
+        //   "merge-as-hole" 로만.
+        //
+        // 사유: B1 auto-promote 는 inner perimeter HE 를 ring hole loop 에
+        //   claim → ADR-008 Axiom 7 위반 (인접 inner 의 면 합성 차단).
 
         // Step 4.9 — M1 Mixed-Cycle Split (ADR-008 Axiom 7 partial-overlap).
         //
@@ -1345,15 +1327,9 @@ impl Scene {
         // 임시 우회: 사용자는 인접 inner RECT 를 그릴 때 약간의 gap 을 두거나
         //   4 LINE 으로 직접 그리기. 자동 free-cycle 합성은 정상 작동.
 
-        // Step 4.95 — second B1 hole-promote pass (Phase 3c''-B).
-        //   M1 이 만든 새 sub-face 가 기존 face 안에 완전히 포함되는 경우,
-        //   해당 inner 를 outer 의 hole 로 승격시켜 면적 이중계산 제거.
-        //   Step 4.8 B1 이 이미 돌았지만 그때는 M1 sub-face 가 존재하지
-        //   않았으므로 M1 이후 한 번 더 돌린다. Single-pass — 반복 돌리면
-        //   먼저 생긴 ring 이 다음 라운드에서 degenerate 후보로 잘못
-        //   선정되는 경우가 있어 1 pass 로 제한.
-        //
-        {
+        // Step 4.95 — second B1 hole-promote pass (DISABLED per ADR-015).
+        //   B1 auto-promote 비활성으로 second-pass 도 의미 없음.
+        if false {
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
                 .filter(|(_, f)| f.is_active())
                 .map(|(id, _)| id)
@@ -2187,37 +2163,25 @@ impl Scene {
             }
         }
 
-        // ═══ Fast-path: RECT interior to a single face (B1 scenario) ═════
+        // ═══ Fast-path: RECT interior to a single face ═════════════════════
         //
-        // Principle 6 classification: when the rect touches no active edge
-        // and its four corners all lie strictly inside ONE existing face's
-        // polygon (same plane, inside point-in-polygon test), the unified
-        // pipeline would run 4× drawLine → same outcome as atomic add_face
-        // + B1 hole-promote. Skip straight to the atomic branch.
+        // 2026-04-28 — ADR-015 Phase 2 정합:
+        //   기존 (Phase E): 새 RECT 가 기존 face 안에 strict interior 면 자동
+        //     B1 hole-promote → outer 가 ring face 로 변환, inner 는 hole.
+        //   변경: B1 auto-promote 비활성. inner 와 outer 를 별개 simple face 로
+        //     공존시킴 (geometric overlap 허용).
+        //
+        // 사유: B1 hole-promote 는 inner 의 perimeter HEs 를 ring 의 hole
+        //   loop 에 claim 하여 ADR-008 Axiom 7 ("adjacent RECTs share DCEL
+        //   edge") 와 충돌 — 이후 인접 inner RECT 의 면 합성 차단.
+        //
+        // 명시적 promote 가 필요하면 사용자가 우클릭 메뉴 "merge-as-hole"
+        //   호출. 이때만 B1 promote 실행.
         if !edge_interaction && face_interaction {
-            if let Some(container_fid) = self.single_face_containing_corners(&corners, n_norm) {
-                // Atomic: add 4 vertices, add_face, then B1 promote.
+            if self.single_face_containing_corners(&corners, n_norm).is_some() {
+                // Atomic: add 4 vertices, add_face. NO auto B1 promote.
                 match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
                     Ok((inner_fid, _verts)) => {
-                        // Run B1 promotion directly against the known container.
-                        // Fix 1 (2026-04-24): hand the container XIA over to
-                        //   the ring that promote_face_to_hole built, same
-                        //   as the Step 4.8 branch above. Keeps the
-                        //   container face pickable / editable after the
-                        //   interior RECT lands on top of it.
-                        if let Ok(new_outer) = self.promote_face_to_hole(container_fid, inner_fid) {
-                            if let Some(old_xia) = self.face_to_xia.remove(&container_fid) {
-                                if let Some(xia) = self.xias.get_mut(&old_xia) {
-                                    xia.face_ids.retain(|&f| f != container_fid);
-                                    xia.face_ids.push(new_outer);
-                                }
-                                self.face_to_xia.insert(new_outer, old_xia);
-                            } else {
-                                self.unregister_face_from_xia(container_fid);
-                            }
-                        } else {
-                            self.unregister_face_from_xia(container_fid);
-                        }
                         let xia_id = self.create_xia("Rectangle".to_string());
                         if let Some(xia) = self.xias.get_mut(&xia_id) {
                             xia.position = center;
@@ -2295,6 +2259,38 @@ impl Scene {
             .collect();
         for xid in &xias_to_remove {
             self.xias.remove(xid);
+        }
+
+        // 2026-04-28 — ADR-015 explicit fallback: if standard postprocess
+        //   didn't synthesize the new RECT's face (typically due to mixed-edge
+        //   cycle that the resolver's all_edges_free filter rejects), try
+        //   `add_face_with_holes` directly using the 4 corner vertices.
+        //
+        //   This handles the stacked-inner scenario:
+        //     - inner1 already exists (sharing an edge with new RECT)
+        //     - shared edge is partially-claimed (HE1=inner1, HE2=free)
+        //     - resolver's filter rejects mixed-edge cycle
+        //     - direct add_face_with_holes claims the cycle-direction HEs
+        //       (HE2 of shared + 3 new edges' HEs) → manifold-correct face.
+        if epoch.created_faces.is_empty() {
+            // add_vertex dedups to existing — returns the existing vert id
+            // when corners already exist (the typical stacked-inner case).
+            let corner_vids: Vec<axia_geo::VertId> = corners.iter()
+                .map(|&pos| self.mesh.add_vertex(pos))
+                .collect();
+            // Try add_face — claims cycle-direction HEs. May fail if HEs
+            //   are already claimed by another face in conflict, but for the
+            //   stacked-inner case the cycle-direction HEs are free.
+            if let Ok(fid) = self.mesh.add_face_with_holes(&corner_vids, &[], self.default_material) {
+                let aligned = self.mesh.align_face_with_neighbors(fid);
+                if !aligned {
+                    let face_n = self.mesh.faces[fid].normal();
+                    if face_n.dot(n_norm) < 0.0 {
+                        let _ = self.mesh.flip_face_safe(fid);
+                    }
+                }
+                epoch.created_faces.push(fid);
+            }
         }
 
         if epoch.created_faces.is_empty() {
@@ -3987,15 +3983,9 @@ mod tests {
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
     }
 
-    /// 사용자 보고 2026-04-28 — 2 stacked inner rects (가장 최소 reproduction).
-    /// 큰 RECT 안에 두 RECT 가 edge 공유로 위/아래 stack.
-    /// **알려진 제약**: ADR-008 Axiom 7 ("adjacent RECTs share DCEL edge") 와
-    /// Phase E B1 hole-promote 의 충돌. shared edge 의 HE2 가 ring hole loop 에
-    /// claim 됨 → 새 RECT 면 합성 불가. M1 interior guard 가 inner1 손실은
-    /// 막아주지만 inner2 자체는 wire-only. 적절한 fix 는 ring topology rebuild
-    /// (Phase 2). 우회: gap 두고 그리거나 4 LINE 로 직접.
+    /// 사용자 보고 2026-04-28 — 2 stacked inner rects.
+    /// ADR-015 Phase 2: B1 auto hole-promote 비활성으로 자연스럽게 작동.
     #[test]
-    #[ignore = "stacked-inner: B1 vs Axiom 7 conflict (Phase 2)"]
     fn test_two_stacked_inner_rects_both_faced() {
         let mut scene = Scene::new();
         // RECT outer 10×6
@@ -4045,11 +4035,9 @@ mod tests {
         );
     }
 
-    /// 사용자 화면 사진 (2026-04-28-3) 와 가장 유사한 시나리오 reproduction:
-    /// 큰 RECT 안에 작은 RECT 들이 vertically 쌓여 column 을 이루는 케이스.
-    /// 인접 RECT 끼리 edge 공유. (test_two_stacked_inner_rects 의 일반화)
+    /// 사용자 화면 사진 (2026-04-28-3) — 큰 RECT 안에 작은 RECT 들이
+    /// vertically 쌓여 column 을 이루는 케이스. ADR-015 로 해결.
     #[test]
-    #[ignore = "stacked-inner: B1 vs Axiom 7 conflict (Phase 2)"]
     fn test_column_of_inner_rects_all_faced() {
         let mut scene = Scene::new();
         // RECT1 — big outer (10×9, 9 height to fit 3 stacked 2-height rects in 6 + margins)

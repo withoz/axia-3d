@@ -39,6 +39,7 @@
 | [012](./012-latency-budget.md) | Latency Budget (지연 예산) ⭐ | 성능 | **Proposed** P1 |
 | [013](./013-memory-budget.md) | Memory Budget & Bounded Collections ⭐ | 메모리 | **Proposed** P1 |
 | [014](./014-meta-principles-extension.md) | 메타-원칙 확장 (#11~#13) | 메타 | **Proposed** P0 |
+| [015](./015-stacked-inner-rect-topology.md) | Stacked Inner RECT — Manifold-First B1 | 토폴로지 | Accepted |
 
 ## ADR-010 ~ ADR-014 시리즈 — 프레임 끊김 대응
 
