@@ -603,6 +603,45 @@ pub fn split_face_by_chain(
         );
     }
 
+    // 2026-04-28 — ADR-007 Invariant 2 (Winding) guard.
+    //   `find_first_left_turn_path` 가 chain 을 face 의 CCW outer 방향과
+    //   반대로 walk 한 경우, face_a 또는 face_b 한 쪽이 CW 로 만들어져
+    //   normal 이 -Z 로 뒤집힌다. CAD single-sided 렌더에서 안 보임 (사용자
+    //   2026-04-28 보고). 사전에 2D signed area 를 검사해 CW 면 vertex 순서
+    //   를 reverse → add_face_with_holes 가 CCW 좌표로 face 생성.
+    //
+    //   Plane basis: original face 의 normal 로부터 (e1, e2) 정사영. 좌표
+    //   값은 normal 평행 성분을 제거한 2D 다각형. signed area 음수 → CW.
+    {
+        let face_normal = mesh.faces[face_id].normal();
+        if face_normal.length_squared() > 1e-12 {
+            let n = face_normal.normalize();
+            let seed = if n.x.abs() < 0.9 { glam::DVec3::X } else { glam::DVec3::Y };
+            let e1 = seed.cross(n).normalize_or_zero();
+            let e2 = n.cross(e1).normalize_or_zero();
+            if e1.length_squared() > 1e-12 && e2.length_squared() > 1e-12 {
+                let signed_area_2d = |verts: &[VertId]| -> f64 {
+                    let mut a = 0.0_f64;
+                    let n_v = verts.len();
+                    for i in 0..n_v {
+                        let p = match mesh.vertex_pos(verts[i]) { Ok(p) => p, Err(_) => return 0.0 };
+                        let q = match mesh.vertex_pos(verts[(i + 1) % n_v]) { Ok(p) => p, Err(_) => return 0.0 };
+                        let (px, py) = (p.dot(e1), p.dot(e2));
+                        let (qx, qy) = (q.dot(e1), q.dot(e2));
+                        a += px * qy - qx * py;
+                    }
+                    a * 0.5
+                };
+                if signed_area_2d(&face_a_verts) < 0.0 {
+                    face_a_verts.reverse();
+                }
+                if signed_area_2d(&face_b_verts) < 0.0 {
+                    face_b_verts.reverse();
+                }
+            }
+        }
+    }
+
     // Soft-remove the old face. Preserves HE next/prev so add_face_with_holes
     //   can rediscover the free HEs. Temporarily clears inners so the
     //   soft_remove doesn't touch hole HEs (we'll reattach to whichever

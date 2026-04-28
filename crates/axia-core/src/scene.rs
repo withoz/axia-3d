@@ -3524,4 +3524,260 @@ mod tests {
         }
         assert!(!indices.is_empty(), "must have triangle indices");
     }
+
+    /// 사용자 보고 2026-04-28 — snap 으로 여러 RECT 를 겹쳐 그리면 하나의
+    /// 셀이 화면에서 사라짐 (transparent). 3-RECT 시나리오 회귀.
+    #[test]
+    fn test_three_overlapping_rects_no_missing_cell() {
+        let mut scene = Scene::new();
+
+        // RECT1 — 대형 outer (10×6 at origin, XY plane)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 10.0,
+            height: 6.0,
+        });
+
+        // RECT2 — RECT1 안쪽에 inset (4×3, 살짝 우측 이동) → B1 hole-promote
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(1.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 4.0,
+            height: 3.0,
+        });
+        let after_rect2 = scene.mesh.face_count();
+
+        // RECT3 — RECT2 와 RECT1 경계 모두 가로지름 (중첩)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 1.5, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 6.0,
+            height: 2.0,
+        });
+        let after_rect3 = scene.mesh.face_count();
+
+        // 모든 active face 가 export_mesh_buffers 에 포함돼야 함 (투명 영역 없음)
+        let (pos, _norm, indices, face_map, _pos64) = scene.export_mesh_buffers().unwrap();
+        let exported_faces: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+
+        let mut missing: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !exported_faces.contains(&fid) {
+                missing.push(fid);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "active faces missing from buffers (invisible cells): {:?}\n\
+             face_count: rect2_step={}, rect3_step={}, indices_len={}, positions_len={}",
+            missing, after_rect2, after_rect3, indices.len(), pos.len()
+        );
+
+        // 모든 active face 가 XIA 에 등록돼야 함 (orphan 없음)
+        let mut orphans = 0;
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !scene.face_to_xia.contains_key(&fid) {
+                orphans += 1;
+            }
+        }
+        assert_eq!(orphans, 0, "orphan faces (no XIA): {}", orphans);
+
+        // Total area 검증: 합집합은 최소한 RECT1 의 면적 (60) 이상이어야 함
+        let mut total_area = 0.0;
+        for (_, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if let Ok(verts) = scene.mesh.collect_loop_verts(f.outer().start) {
+                let positions: Vec<DVec3> = verts.iter()
+                    .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+                    .collect();
+                if positions.len() < 3 { continue; }
+                let mut a = 0.0;
+                for i in 0..positions.len() {
+                    let p = positions[i];
+                    let q = positions[(i + 1) % positions.len()];
+                    a += p.x * q.y - q.x * p.y;
+                }
+                total_area += (a * 0.5).abs();
+            }
+        }
+        assert!(
+            total_area >= 59.9,
+            "total area {} < 60 — significant region(s) missing from union",
+            total_area
+        );
+    }
+
+    /// 사용자 보고 (snap 으로 정확히 그렸는데 면 사라짐) — 회귀 분리 테스트.
+    /// Case D 가 단독으로 reversed-normal face 를 만든다는 사실을 검증.
+    #[test]
+    fn test_nested_plus_side_rect_no_flipped_normal() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        // After RECT1: 1 face, all CCW
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0, "after RECT1: face {:?} flipped", fid);
+        }
+
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // After RECT2: ring (RECT1 outer + RECT2 hole) + RECT2 inner
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0, "after RECT2: face {:?} flipped", fid);
+        }
+
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(5.0, 0.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 6.0, height: 2.0,
+        });
+
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let verts = scene.mesh.collect_loop_verts(f.outer().start)
+                .unwrap_or_default();
+            let pts: Vec<DVec3> = verts.iter()
+                .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+                .collect();
+            report.push_str(&format!(
+                "  {:?}: n.z={:.2} verts={:?} pts={:?}\n",
+                fid, n.z, verts, pts
+            ));
+        }
+
+        let mut flipped: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if f.normal().z <= 0.0 { flipped.push(fid); }
+        }
+        assert!(
+            flipped.is_empty(),
+            "after RECT3: flipped normals: {:?}\nFace report:\n{}",
+            flipped, report
+        );
+    }
+
+    /// 다양한 overlap 구성 stress test — 각 구성에서 모든 active face 가
+    /// 1) export buffer 에 포함되고 2) XIA 에 등록됐는지 확인.
+    #[test]
+    fn test_multi_rect_stress_no_missing_cells() {
+        // (label, [(center_x, center_y, w, h), ...])
+        let configs: Vec<(&str, Vec<(f64, f64, f64, f64)>)> = vec![
+            // case A: 두 RECT 한 코너에서 만남 (snap 시뮬)
+            ("A: corner-shared", vec![
+                (0.0, 0.0, 4.0, 4.0),
+                (4.0, 4.0, 4.0, 4.0),  // shares one corner (2,2) ... actually (2,2) vs (2,2) yes
+            ]),
+            // case B: T자 — RECT2 의 한 변이 RECT1 한 변에 정확히 맞닿음
+            ("B: T-junction", vec![
+                (0.0, 0.0, 6.0, 4.0),
+                (0.0, 3.0, 4.0, 2.0),  // bottom edge at y=2, top of RECT1 at y=2
+            ]),
+            // case C: 4 RECT cross (대표 case — 사용자 시나리오와 유사)
+            ("C: cross-overlap-4", vec![
+                (0.0, 0.0, 6.0, 4.0),
+                (3.0, 0.0, 4.0, 2.0),
+                (0.0, 2.0, 3.0, 3.0),
+                (4.0, 3.0, 3.0, 3.0),
+            ]),
+            // case D: nested + side rect
+            ("D: nested+side", vec![
+                (0.0, 0.0, 10.0, 6.0),
+                (0.0, 0.0, 4.0, 2.0),     // inside RECT1 (B1 hole-promote)
+                (5.0, 0.0, 6.0, 2.0),     // crosses RECT1 right boundary
+            ]),
+            // case E: snap-aligned grid (3개 RECT 가 정확히 corner share)
+            ("E: aligned-grid", vec![
+                (0.0, 0.0, 4.0, 4.0),     // [-2,2]×[-2,2]
+                (4.0, 0.0, 4.0, 4.0),     // [2,6]×[-2,2] (shares right edge of RECT1)
+                (2.0, 4.0, 4.0, 4.0),     // [0,4]×[2,6] (shares top with both)
+            ]),
+        ];
+
+        for (label, rects) in configs {
+            let mut scene = Scene::new();
+            for &(cx, cy, w, h) in &rects {
+                let r = scene.execute(Command::DrawRect {
+                    center: DVec3::new(cx, cy, 0.0),
+                    normal: DVec3::Z,
+                    up: DVec3::Y,
+                    width: w,
+                    height: h,
+                });
+                assert!(
+                    matches!(r, CommandResult::EntityCreated(_)),
+                    "{}: rect ({},{},{}x{}) failed: {:?}",
+                    label, cx, cy, w, h, r
+                );
+            }
+
+            // Check: every active face appears in mesh buffer
+            let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+            let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+                .map(|&fm| axia_geo::FaceId::new(fm))
+                .collect();
+
+            let mut missing: Vec<axia_geo::FaceId> = Vec::new();
+            for (fid, f) in scene.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                if !exported.contains(&fid) { missing.push(fid); }
+            }
+            assert!(
+                missing.is_empty(),
+                "{}: active faces missing from buffer: {:?}",
+                label, missing
+            );
+
+            // Check: every active face has XIA
+            let mut orphans: Vec<axia_geo::FaceId> = Vec::new();
+            for (fid, f) in scene.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                if !scene.face_to_xia.contains_key(&fid) { orphans.push(fid); }
+            }
+            assert!(
+                orphans.is_empty(),
+                "{}: orphan faces (no XIA): {:?}",
+                label, orphans
+            );
+
+            // Check: every active face has visible flag
+            for (fid, f) in scene.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                assert!(
+                    f.is_visible(),
+                    "{}: face {:?} is active but not visible",
+                    label, fid
+                );
+            }
+
+            // Check: 모든 face 가 같은 방향 (Z+) — XY plane 위에 그렸으니 CCW
+            //   wound 면은 normal.z > 0. 한 face 라도 normal.z < 0 이면 CAD
+            //   single-sided 렌더에서 보이지 않음 (사용자 보고 회귀).
+            for (fid, f) in scene.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                let n = f.normal();
+                assert!(
+                    n.z > 0.0,
+                    "{}: face {:?} has flipped normal (z={}) — invisible in CAD single-sided render",
+                    label, fid, n.z
+                );
+            }
+        }
+    }
 }
