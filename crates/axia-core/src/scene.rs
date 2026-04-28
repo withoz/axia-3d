@@ -3768,6 +3768,105 @@ mod tests {
         }
     }
 
+    /// 사용자 보고 2026-04-28 — 인접 면 hover 시 빨간 색 (cascade) 표시
+    /// 회귀. 단순 시나리오: 2 RECT 인접 그린 후 shared edge 의 preview 검증.
+    #[test]
+    fn test_simple_adjacent_rects_preview_is_mergeable() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-2.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 4.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(2.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 4.0,
+        });
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).map(|(id, _)| id).collect();
+        assert_eq!(active.len(), 2);
+
+        // shared edge 찾기
+        let shared = scene.mesh.find_shared_edge_between_faces(active[0], active[1])
+            .expect("shared edge should exist");
+
+        // get_faces_sharing_edge 가 정확히 2 face 반환
+        let (faces, _) = scene.mesh.get_faces_sharing_edge(shared);
+        assert_eq!(faces.len(), 2, "shared edge should have exactly 2 active faces");
+
+        // count_shared == 1 (단순 인접)
+        let n = scene.mesh.count_shared_edges_outer(active[0], active[1]);
+        assert_eq!(n, 1, "expected 1 shared edge");
+
+        // coplanar check
+        assert!(scene.mesh.are_faces_coplanar_with_tolerance(active[0], active[1], 0.5).unwrap());
+
+        // 모든 조건 통과 → preview 가 cyan 으로 표시되어야
+        // (preview 함수는 wasm 에 있어 직접 호출 불가하지만 동등 조건 검증)
+    }
+
+    /// 사용자 보고 2026-04-28 — RECT 를 다른 RECT 의 edge 위에 그리면
+    /// 비-manifold 발생 (find_halfedge 가 새 HE pair 생성).
+    /// 그 결과 인접 면 인식 / 합성 로직에 영향 가능.
+    #[test]
+    fn test_rect_on_existing_edge_preserves_topology() {
+        let mut scene = Scene::new();
+        // RECT A 먼저
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-2.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 4.0,
+        });
+        // RECT B 와 A 의 right edge 를 공유 (snap 시뮬레이션)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(2.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 4.0,
+        });
+        // RECT C 가 A 의 RIGHT edge 와 B 의 LEFT edge (= 같은 edge) 를 가로지름
+        // → 이 edge 가 split 될 수 있음. 그 후 인접 face 인식 검증.
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 3.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 8.0, height: 2.0,
+        });
+
+        // 모든 active face: winding +Z, non-degenerate
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            assert!(n.x.is_finite() && n.length_squared() > 1e-12,
+                "face {:?} degenerate", fid);
+            assert!(n.z > 0.0, "face {:?} flipped", fid);
+        }
+
+        // 모든 active edge: 어느 face 의 boundary 에 위치 (orphan 없음)
+        for (eid, edge) in scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            let any_he = edge.any_he();
+            if any_he.is_null() { continue; }
+            let mut has_face = false;
+            let mut he = any_he;
+            for _ in 0..10 {
+                if !scene.mesh.hes[he].face().is_null() {
+                    has_face = true; break;
+                }
+                he = scene.mesh.hes[he].next_rad();
+                if he == any_he || he.is_null() { break; }
+            }
+            assert!(has_face, "edge {:?} orphan after rect-on-edge", eid);
+        }
+
+        // 모든 인접 face pair: 정확히 2 active faces sharing edge
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).map(|(id, _)| id).collect();
+        for i in 0..active.len() {
+            for j in (i+1)..active.len() {
+                if let Some(eid) = scene.mesh.find_shared_edge_between_faces(active[i], active[j]) {
+                    let (faces, _) = scene.mesh.get_faces_sharing_edge(eid);
+                    assert!(faces.len() <= 2,
+                        "edge {:?} has {} faces (non-manifold)", eid, faces.len());
+                }
+            }
+        }
+    }
+
     /// 사용자 보고 2026-04-28 — L-shape merge 후 잔여 edge 가 남는 회귀.
     /// 큰 RECT 와 작은 RECT 가 한 corner 에서 partial overlap → merge 시
     /// L 형 face. merged face 내부에 dashed 잔여 line 이 보인다고 보고됨.
