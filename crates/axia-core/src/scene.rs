@@ -2252,6 +2252,38 @@ impl Scene {
             &mut epoch.created_faces,
         );
 
+        // 2026-04-28 — ADR-007 Invariant 2 enforcement (post-pipeline).
+        //   D-resolver / M1 split / dissolve_and_fan_split 등 일부 step 은
+        //   surface_normal hint 를 받지 않아 인접 neighbor 와 align 만 함.
+        //   인접 neighbor 가 flipped 이면 신규 face 도 flipped 가능.
+        //   → 모든 created_faces 의 normal 을 n_norm 과 비교, dot < 0 이면 flip.
+        //   degenerate (NaN / zero-length normal) face 는 invariant 위반 +
+        //   render artifact 유발 → 제거.
+        let mut degenerate_to_remove: Vec<axia_geo::FaceId> = Vec::new();
+        for &fid in &epoch.created_faces {
+            if !self.mesh.faces.contains(fid) { continue; }
+            if !self.mesh.faces[fid].is_active() { continue; }
+            let face_n = self.mesh.faces[fid].normal();
+            // Degenerate detection: NaN, infinity, or zero-length.
+            if !face_n.x.is_finite() || !face_n.y.is_finite() || !face_n.z.is_finite()
+                || face_n.length_squared() < 1e-12
+            {
+                degenerate_to_remove.push(fid);
+                continue;
+            }
+            if face_n.dot(n_norm) < 0.0 {
+                let _ = self.mesh.flip_face_safe(fid);
+            }
+        }
+        for fid in degenerate_to_remove {
+            self.unregister_face_from_xia(fid);
+            let _ = self.mesh.remove_face(fid);
+            if self.mesh.faces.contains(fid) {
+                self.mesh.faces.remove(fid);
+            }
+            epoch.created_faces.retain(|&f| f != fid);
+        }
+
         // Clean any stale Line XIAs whose standalone edge is now a face
         //   boundary (these may have been created by earlier commands).
         let xias_to_remove: Vec<XiaId> = self.xias.iter()
@@ -3987,6 +4019,108 @@ mod tests {
             if !scene.face_to_xia.contains_key(&fid) { orphans.push(fid); }
         }
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
+    }
+
+    /// 사용자 보고 2026-04-28 (6) — 많은 RECT 가 다양하게 overlap 할 때
+    /// 일부 영역이 채워지지 않거나 ("미면화"), shadow 처럼 렌더링 ("z-fight").
+    /// 다양한 overlap 케이스 stress test.
+    #[test]
+    fn test_complex_overlap_no_missing_faces() {
+        let mut scene = Scene::new();
+        // 사용자 화면과 유사 — 여러 rect 가 부분/전체 겹침
+        let rects = [
+            (DVec3::ZERO, 16.0, 8.0),                       // outer big
+            (DVec3::new(-3.0, -2.0, 0.0), 4.0, 2.0),
+            (DVec3::new(0.0, -2.0, 0.0), 4.0, 2.0),
+            (DVec3::new(3.0, -2.0, 0.0), 4.0, 2.0),
+            (DVec3::new(-3.0, 1.0, 0.0), 4.0, 2.0),
+            (DVec3::new(0.0, 1.0, 0.0), 4.0, 2.0),
+            (DVec3::new(3.0, 1.0, 0.0), 4.0, 2.0),
+            (DVec3::new(5.0, 0.0, 0.0), 6.0, 6.0),  // overlapping right
+            (DVec3::new(-5.0, 0.0, 0.0), 6.0, 6.0), // overlapping left
+        ];
+        for &(c, w, h) in &rects {
+            let r = scene.execute(Command::DrawRect {
+                center: c, normal: DVec3::Z, up: DVec3::Y,
+                width: w, height: h,
+            });
+            assert!(matches!(r, CommandResult::EntityCreated(_)),
+                "rect at {:?} {}×{} failed: {:?}", c, w, h, r);
+        }
+
+        // 모든 active face: normal.z > 0, in export buffer, has XIA
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            // Winding
+            assert!(f.normal().z > 0.0, "face {:?} flipped: {:?}", fid, f.normal());
+            // Export
+            assert!(exported.contains(&fid), "face {:?} missing from buffer", fid);
+            // XIA
+            assert!(scene.face_to_xia.contains_key(&fid),
+                "face {:?} has no XIA mapping", fid);
+        }
+    }
+
+    /// 사용자 보고 2026-04-28 (5) — outer RECT 그린 후 inner RECT 여러 개 그릴 때
+    /// outer 의 face 가 사라지는 회귀 검증. outer 는 항상 active 여야 함.
+    #[test]
+    fn test_outer_rect_preserved_after_many_inners() {
+        let mut scene = Scene::new();
+        // Outer 큰 rect
+        let r0 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 8.0,
+        });
+        let outer_xia = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+
+        // 8 inner rects 다양한 위치
+        let inners = [
+            (-4.0, -2.0, 2.0, 2.0),
+            (-1.0, -2.0, 2.0, 2.0),
+            (2.0, -2.0, 2.0, 2.0),
+            (4.0, -2.0, 1.5, 2.0),
+            (-4.0, 2.0, 2.0, 2.0),
+            (-1.0, 2.0, 2.0, 2.0),
+            (2.0, 2.0, 2.0, 2.0),
+            (4.0, 2.0, 1.5, 2.0),
+        ];
+        for &(cx, cy, w, h) in &inners {
+            scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: w, height: h,
+            });
+        }
+
+        // outer XIA 가 여전히 face 보유
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+        assert!(
+            outer_face_count >= 1,
+            "outer XIA lost its face after {} inner rects drawn", inners.len()
+        );
+
+        // 모든 active face normal.z > 0
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(
+                f.normal().z > 0.0,
+                "face {:?} flipped: normal {:?}", fid, f.normal()
+            );
+        }
+
+        // 모든 active face 가 export buffer 에 포함
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(exported.contains(&fid), "face {:?} missing from buffer", fid);
+        }
     }
 
     /// 사용자 보고 2026-04-28 — 면이 그리는 방향에 따라 뒤집혀 BackSide
