@@ -93,15 +93,14 @@ impl Mesh {
         let hw = width / 2.0;
         let hh = height / 2.0;
 
-        // 2026-04-27 — 사용자 보고 "작은 라인 중복" 의 근본 원인 수정:
-        //   인접 사각형이 미세하게 어긋나 그려질 때 corner 가 기존 vertex/edge
-        //   에 정확히 일치하지 않아 "잔여 1mm 라인" 발생. add_vertex_with_snap
-        //   이 1mm 안의 인접 vertex 에 snap 하거나 edge 를 split.
-        const DRAW_SNAP_TOL_MM: f64 = 1.001;
-        let v0 = self.add_vertex_with_snap(center - u * hh - v * hw, DRAW_SNAP_TOL_MM);
-        let v1 = self.add_vertex_with_snap(center - u * hh + v * hw, DRAW_SNAP_TOL_MM);
-        let v2 = self.add_vertex_with_snap(center + u * hh + v * hw, DRAW_SNAP_TOL_MM);
-        let v3 = self.add_vertex_with_snap(center + u * hh - v * hw, DRAW_SNAP_TOL_MM);
+        // 2026-04-27 — 엔진 허용오차 정책 (사용자 정책):
+        //   mesh 층은 exact input 만 처리. UI snap (osnap) 이 cursor 를
+        //   정확한 위치로 옮겨주므로 미세 어긋남은 입력 단계에서 해소됨.
+        //   기본 add_vertex 의 1.5μm dedup 만 사용 (f32 drift 흡수용).
+        let v0 = self.add_vertex(center - u * hh - v * hw);
+        let v1 = self.add_vertex(center - u * hh + v * hw);
+        let v2 = self.add_vertex(center + u * hh + v * hw);
+        let v3 = self.add_vertex(center + u * hh - v * hw);
 
         // CCW winding when viewed from normal direction → normal points outward
         let face_id = self.add_face(&[v0, v3, v2, v1], material)?;
@@ -166,10 +165,7 @@ impl Mesh {
         let mut verts = Vec::with_capacity(segments as usize);
 
         // CCW winding when viewed from normal direction (same as rect).
-        // Note: draw_circle 는 인접 segment 간 거리가 작은 radius 에서 < 1mm
-        //   가 되므로 add_vertex_with_snap 적용 시 자기끼리 dedup 되는 위험이
-        //   있음. 따라서 plain add_vertex 사용 — 외부 geometry 와의 snap 은
-        //   exec_draw_circle 등 상위 layer 에서 처리.
+        // 엔진 허용오차 정책: plain add_vertex 만 사용 (1.5μm dedup).
         for i in 0..segments {
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
             let pos = center + u * (radius * angle.cos()) + v * (radius * angle.sin());
@@ -211,15 +207,12 @@ mod tests {
     #[test]
     fn test_draw_rectangle() {
         let mut mesh = Mesh::new();
-        // 2026-04-27: 사용자 1mm-snap 도입 후 width × height 가 작으면 corner
-        //   거리가 snap tol 안에 들어가 dedup 되므로 architectural mm scale
-        //   (200×100mm = 0.2m × 0.1m) 으로 격상.
         let (face_id, verts) = mesh.draw_rectangle(
             DVec3::ZERO,
             DVec3::Z,
             DVec3::Y,
-            200.0,
-            100.0,
+            2.0,
+            1.0,
             MaterialId::new(0),
         ).unwrap();
 

@@ -294,66 +294,6 @@ impl Mesh {
         vid
     }
 
-    /// 그리기 도구 전용 vertex 추가 — `tol` mm 안의 인접 vertex 에 snap
-    /// 하거나, 인접 edge 위에 떨어지면 그 edge 를 split 해 mid-vertex 를
-    /// 생성한다. 작은 어긋남으로 인한 "duplicate small line" 문제 (사용자
-    /// 보고 2026-04-27) 의 근본 원인 해결.
-    ///
-    /// 동작 순서:
-    /// 1. 기존 active vertex 가 `tol` 안에 있으면 그 VertId 반환.
-    /// 2. 기존 active edge 의 segment 에 perpendicular distance ≤ tol &
-    ///    parametric 0.001 < t < 0.999 (endpoint 제외) 면 split → mid-vertex.
-    /// 3. fallback: regular `add_vertex` (1.5μm 일반 dedup).
-    ///
-    /// `tol` 은 mm 단위 (예: DrawRect → 1.0).
-    pub fn add_vertex_with_snap(&mut self, pos: DVec3, tol: f64) -> VertId {
-        let tol_sq = tol * tol;
-
-        // Step 1 — 인접 active vertex 검색.
-        // 작은 mesh 는 O(V) 충분. 큰 mesh 면 spatial hash 활용 (현재는 1.5μm 셀).
-        // tol 이 cell 보다 크면 여러 cell 검사 — 일단 단순 O(V) 로.
-        let mut best_v: Option<(VertId, f64)> = None;
-        for (vid, vert) in self.verts.iter() {
-            if !vert.is_active() { continue; }
-            let d_sq = (vert.pos() - pos).length_squared();
-            if d_sq < tol_sq && best_v.map(|(_, dd)| d_sq < dd).unwrap_or(true) {
-                best_v = Some((vid, d_sq));
-            }
-        }
-        if let Some((vid, _)) = best_v {
-            return vid;
-        }
-
-        // Step 2 — 인접 active edge 의 segment 위에 점이 떨어지는지.
-        let mut best_edge: Option<(EdgeId, f64, DVec3)> = None;
-        for (eid, edge) in self.edges.iter() {
-            if !edge.is_active() { continue; }
-            let va = match self.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
-            let vb = match self.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
-            let ab = vb - va;
-            let len_sq = ab.length_squared();
-            if len_sq < 1e-12 { continue; }
-            let t = ((pos - va).dot(ab) / len_sq).clamp(0.0, 1.0);
-            // endpoint 부근 (0.001 미만 / 0.999 초과) 은 step 1 에서 잡혔어야 함 — skip.
-            if t < 0.001 || t > 0.999 { continue; }
-            let proj = va + ab * t;
-            let d_sq = (proj - pos).length_squared();
-            if d_sq > tol_sq + 1e-12 { continue; }
-            if best_edge.map(|(_, dd, _)| d_sq < dd).unwrap_or(true) {
-                best_edge = Some((eid, d_sq, proj));
-            }
-        }
-        if let Some((eid, _, proj)) = best_edge {
-            if let Ok((new_vid, _, _)) = self.split_edge(eid, proj) {
-                return new_vid;
-            }
-            // split_edge 실패 시 fallback.
-        }
-
-        // Step 3 — fallback.
-        self.add_vertex(pos)
-    }
-
     /// Insert a NEW vertex at `pos`, bypassing the spatial-hash dedup that
     /// `add_vertex` normally performs. Used by topology-splitting operations
     /// (e.g. Slice / Plane Cut) that need two coincident-but-independent

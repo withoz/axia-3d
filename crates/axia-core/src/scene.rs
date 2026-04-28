@@ -2042,45 +2042,15 @@ impl Scene {
         }
         let hw = width / 2.0;
         let hh = height / 2.0;
-        // 2026-04-27 — 사용자 보고 "작은 라인 중복" 의 근본 수정:
-        //   인접 사각형이 미세 어긋나 그려질 때 corner 가 기존 vertex/edge
-        //   와 1mm 안이면 그곳으로 snap. atomic path (mesh.draw_rectangle)
-        //   는 이미 add_vertex_with_snap 사용. unified pipeline 은 corner
-        //   를 미리 snap 해 exec_draw_line 호출 전에 정렬.
-        // 1.001mm — 정확히 1.0mm 어긋난 사용자 시나리오는 catch, 작은 unit-
-        //   test geometry (corner 간 거리 == 1.0) 는 strict `<` 로 보호.
-        const DRAW_SNAP_TOL_MM: f64 = 1.001;
-        let snap_to_existing = |raw: DVec3, mesh: &crate::scene::Mesh| -> DVec3 {
-            let tol_sq = DRAW_SNAP_TOL_MM * DRAW_SNAP_TOL_MM;
-            // Nearby vertex check
-            for (_vid, vert) in mesh.verts.iter() {
-                if !vert.is_active() { continue; }
-                if (vert.pos() - raw).length_squared() < tol_sq {
-                    return vert.pos();
-                }
-            }
-            // Nearby edge check (project + clamp)
-            for (_eid, edge) in mesh.edges.iter() {
-                if !edge.is_active() { continue; }
-                let va = match mesh.vertex_pos(edge.v_small()) { Ok(p) => p, Err(_) => continue };
-                let vb = match mesh.vertex_pos(edge.v_large()) { Ok(p) => p, Err(_) => continue };
-                let ab = vb - va;
-                let len_sq = ab.length_squared();
-                if len_sq < 1e-12 { continue; }
-                let t = ((raw - va).dot(ab) / len_sq).clamp(0.0, 1.0);
-                if t < 0.001 || t > 0.999 { continue; }
-                let proj = va + ab * t;
-                if (proj - raw).length_squared() < tol_sq {
-                    return proj;
-                }
-            }
-            raw
-        };
+        // 2026-04-27 — 엔진 허용오차 정책 (사용자 정책):
+        //   mesh 층은 exact input 만 처리. UI snap (osnap) 이 cursor 를
+        //   정확한 위치로 옮겨주므로 미세 어긋남은 입력 단계에서 해소됨.
+        //   기본 add_vertex 의 1.5μm dedup 만 사용 (f32 drift 흡수용).
         let corners = [
-            snap_to_existing(center - u * hh - v * hw, &self.mesh),
-            snap_to_existing(center - u * hh + v * hw, &self.mesh),
-            snap_to_existing(center + u * hh + v * hw, &self.mesh),
-            snap_to_existing(center + u * hh - v * hw, &self.mesh),
+            center - u * hh - v * hw,
+            center - u * hh + v * hw,
+            center + u * hh + v * hw,
+            center + u * hh - v * hw,
         ];
 
         self.transactions.begin();
