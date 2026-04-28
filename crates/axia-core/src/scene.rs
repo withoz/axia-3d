@@ -4066,6 +4066,106 @@ mod tests {
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
     }
 
+    /// 사용자 보고 2026-04-28 (12) — 사용자 화면 사진 reproduction:
+    /// 큰 RECT + 여러 partial-overlap RECT + 가장 작은 RECT 가 면 사라짐.
+    #[test]
+    fn test_user_pattern_no_missing_faces() {
+        let mut scene = Scene::new();
+        // 사용자 화면 패턴: 다양한 크기의 RECT 가 partial overlap
+        let rects = [
+            (DVec3::new(0.0, 4.0, 0.0), 12.0, 2.0),   // top long
+            (DVec3::new(-2.0, 1.0, 0.0), 6.0, 3.0),   // upper left
+            (DVec3::new(2.0, 1.0, 0.0), 6.0, 3.0),    // upper right (overlaps)
+            (DVec3::new(-2.0, -1.0, 0.0), 5.0, 2.0),  // lower left
+            (DVec3::new(2.0, -1.0, 0.0), 5.0, 2.0),   // lower right (overlaps)
+            (DVec3::new(0.0, -1.0, 0.0), 1.5, 1.0),   // small middle (likely missing in user's case)
+        ];
+        let mut xia_ids = Vec::new();
+        for (i, &(c, w, h)) in rects.iter().enumerate() {
+            let r = scene.execute(Command::DrawRect {
+                center: c, normal: DVec3::Z, up: DVec3::Y,
+                width: w, height: h,
+            });
+            match r {
+                CommandResult::EntityCreated(id) => xia_ids.push((i, c, id)),
+                e => panic!("rect {} at {:?} {}×{} failed: {:?}", i, c, w, h, e),
+            }
+        }
+
+        // 모든 XIA 가 face_ids 보유 (wire-only XIA 없음)
+        let mut wire_only: Vec<(usize, DVec3)> = Vec::new();
+        for &(i, c, xid) in &xia_ids {
+            let fc = scene.xias.get(&xid).map(|x| x.face_ids.len()).unwrap_or(0);
+            if fc == 0 {
+                wire_only.push((i, c));
+            }
+        }
+
+        // Diagnostic
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            report.push_str(&format!("  {:?} n={:.2?} verts={} xia={:?}\n",
+                fid, (n.x, n.y, n.z), v.len(), xia));
+        }
+        assert!(
+            wire_only.is_empty(),
+            "wire-only XIAs: {:?}\nFace report:\n{}", wire_only, report
+        );
+
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            assert!(n.x.is_finite() && n.length_squared() > 1e-12,
+                "face {:?} degenerate n={:?}", fid, n);
+            assert!(n.z > 0.0, "face {:?} flipped n={:?}", fid, n);
+        }
+    }
+
+    /// 사용자 보고 2026-04-28 (11) — deeply nested RECT 사진 reproduction.
+    /// 각 RECT 가 이전 것 안에 들어가는 nested 구조 (러시아 인형식).
+    #[test]
+    fn test_deeply_nested_rects_all_have_faces() {
+        let mut scene = Scene::new();
+        // 6 levels of nested rects (largest to smallest)
+        let levels = [12.0, 8.0, 5.0, 3.0, 2.0, 1.0];
+        let mut xia_ids = Vec::new();
+        for (i, &size) in levels.iter().enumerate() {
+            let r = scene.execute(Command::DrawRect {
+                center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+                width: size, height: size * 0.6,
+            });
+            match r {
+                CommandResult::EntityCreated(id) => xia_ids.push((i, size, id)),
+                e => panic!("level {} size={} failed: {:?}", i, size, e),
+            }
+        }
+        // 모든 XIA 가 face_ids 보유
+        let mut wire_only: Vec<(usize, f64)> = Vec::new();
+        for &(i, size, xid) in &xia_ids {
+            let fc = scene.xias.get(&xid).map(|x| x.face_ids.len()).unwrap_or(0);
+            if fc == 0 {
+                wire_only.push((i, size));
+            }
+        }
+        assert!(
+            wire_only.is_empty(),
+            "wire-only XIAs (no face): {:?}", wire_only
+        );
+
+        // 모든 active face: winding + non-degenerate
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            assert!(n.x.is_finite() && n.length_squared() > 1e-12,
+                "face {:?} degenerate", fid);
+            assert!(n.z > 0.0, "face {:?} flipped: {:?}", fid, n);
+        }
+    }
+
     /// 사용자 보고 2026-04-28 (10) — 다양한 partial-overlap 케이스에서
     /// degenerate (NaN / sliver) face 와 shadow 렌더 검증.
     #[test]
