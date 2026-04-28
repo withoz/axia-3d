@@ -705,6 +705,10 @@ export class DrawLineTool implements ITool {
         default:                    normal = new THREE.Vector3(0, 1, 0); break;
       }
       const pt = this.ctx.get3DPoint(e) ?? new THREE.Vector3();
+      // 2026-04-28 — 바닥면 (default cardinal plane) 좌표 정확히 0 으로 snap.
+      if (Math.abs(normal.x) > 0.999) pt.x = 0;
+      else if (Math.abs(normal.y) > 0.999) pt.y = 0;
+      else if (Math.abs(normal.z) > 0.999) pt.z = 0;
       this.drawingPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, pt);
       debugLog('[Line] Drawing plane locked to workplane, normal=',
         normal.toArray());

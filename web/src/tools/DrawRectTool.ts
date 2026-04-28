@@ -50,6 +50,21 @@ export class DrawRectTool implements ITool {
       this.plane = this.ctx.getDrawPlane(e);
       this.rectStart = point.clone();
 
+      // 2026-04-28 — 사용자 요청: 바닥면에 그릴 때 z=0 정확히.
+      //   Default cardinal plane (onFace=false) 인 경우 picked point 의
+      //   normal-axis 좌표를 정확히 0 으로 snap.
+      //   - 3D/Top/Bottom 뷰: floor = Three.js y=0 (= 사용자 z=0)
+      //   - Front/Back 뷰: wall = Three.js z=0 (= 사용자 y=0)
+      //   - Right/Left 뷰: wall = Three.js x=0
+      //   Mouse picking 의 ray-plane intersection 정밀도 한계로 ε 오차가
+      //   있으면 모든 후속 RECT 가 ε 만큼 떨어진 위치에 그려짐.
+      if (!this.plane.onFace) {
+        const n = this.plane.normal;
+        if (Math.abs(n.x) > 0.999) this.rectStart.x = 0;
+        else if (Math.abs(n.y) > 0.999) this.rectStart.y = 0;
+        else if (Math.abs(n.z) > 0.999) this.rectStart.z = 0;
+      }
+
       // Build Three.js Plane from normal + coplanar point for future ray intersections
       this.drawPlane3 = new THREE.Plane().setFromNormalAndCoplanarPoint(
         this.plane.normal, this.rectStart,

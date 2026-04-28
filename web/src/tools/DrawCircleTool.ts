@@ -50,6 +50,15 @@ export class DrawCircleTool implements ITool {
       this.plane = this.ctx.getDrawPlane(e);
       this.circleCenter = point.clone();
 
+      // 2026-04-28 — 바닥면 (default cardinal plane) 에서 z/y/x 좌표 정확히 0.
+      //   Mouse picking 의 ray-plane intersection ε 오차 흡수.
+      if (!this.plane.onFace) {
+        const n = this.plane.normal;
+        if (Math.abs(n.x) > 0.999) this.circleCenter.x = 0;
+        else if (Math.abs(n.y) > 0.999) this.circleCenter.y = 0;
+        else if (Math.abs(n.z) > 0.999) this.circleCenter.z = 0;
+      }
+
       // Build Three.js Plane from normal + coplanar point for future ray intersections
       this.drawPlane3 = new THREE.Plane().setFromNormalAndCoplanarPoint(
         this.plane.normal, this.circleCenter,
