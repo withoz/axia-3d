@@ -4066,6 +4066,196 @@ mod tests {
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
     }
 
+    /// 사용자 보고 2026-04-28 (19) — outer 의 한 edge 가 inner 의 edge 와
+    /// 정확히 일치 (collinear overlap, snap 사용).
+    #[test]
+    fn test_outer_edge_collinear_overlap_with_inner() {
+        let mut scene = Scene::new();
+        // Inner1: bottom-left at (0,0), top-right at (4,2)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(2.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // Inner2: starts where inner1 ends, bottom-left at (4,0), top-right at (8,2)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(6.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // Outer: bottom-left at (0,0)=inner1 BL, top-right at (8,2)=inner2 TR.
+        // Outer's bottom edge IS inner1+inner2's bottom edge (collinear, same x range).
+        // Outer's top edge similar.
+        let r_outer = scene.execute(Command::DrawRect {
+            center: DVec3::new(4.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 8.0, height: 2.0,
+        });
+        let outer_xia = match r_outer {
+            CommandResult::EntityCreated(id) => id,
+            e => panic!("outer failed: {:?}", e),
+        };
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            report.push_str(&format!(
+                "  {:?} n.z={:.2} verts={} xia={:?}\n", fid, n.z, v.len(), xia
+            ));
+        }
+        assert!(outer_face_count >= 1, "outer XIA lost face\n{}", report);
+
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0, "face {:?} flipped {:?}", fid, f.normal());
+        }
+    }
+
+    /// 사용자 보고 2026-04-28 (18) — VERY LARGE outer drawn after inners.
+    /// 사용자 화면: 큰 outline 만 보이는 outer, 작은 inner rects 가 lower-right
+    /// 에 모여있음.
+    #[test]
+    fn test_very_large_outer_after_small_inners() {
+        let mut scene = Scene::new();
+        // 사용자 화면 처럼 inner rects 는 작고 lower-right 에 위치
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(8.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 5.0, height: 2.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(11.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 5.0, height: 2.0,
+        });
+        // VERY LARGE outer covering far upper-left area + reaching to inner rects
+        let r_outer = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 30.0, height: 20.0,
+        });
+        let outer_xia = match r_outer {
+            CommandResult::EntityCreated(id) => id,
+            e => panic!("outer failed: {:?}", e),
+        };
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            report.push_str(&format!(
+                "  {:?} n.z={:.2} verts={} xia={:?}\n", fid, n.z, v.len(), xia
+            ));
+        }
+        assert!(outer_face_count >= 1, "outer XIA lost face\n{}", report);
+    }
+
+    /// 사용자 보고 2026-04-28 (17) — outer RECT 의 edge 가 inner 의 edge 와
+    /// 일부 일치 (snap drawing). outer 의 face 가 사라지는지 확인.
+    #[test]
+    fn test_outer_edge_coincides_with_inner_edge() {
+        let mut scene = Scene::new();
+        // Inner rect 1 at corner — its corners might align with outer's corners
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(2.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // Inner rect 2 (partial overlap with inner 1)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(5.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // Outer rect — its bottom edge at y=0 (= inners' bottom y=0)
+        // and right edge at x=7 (= inner2's right x=7).
+        // → outer shares 2 corners + partial edges with inners.
+        let r_outer = scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 4.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 14.0, height: 8.0,
+        });
+        let outer_xia = match r_outer {
+            CommandResult::EntityCreated(id) => id,
+            e => panic!("outer failed: {:?}", e),
+        };
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            report.push_str(&format!(
+                "  {:?} n.z={:.2} verts={} xia={:?}\n", fid, n.z, v.len(), xia
+            ));
+        }
+        assert!(outer_face_count >= 1, "outer XIA lost face\n{}", report);
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0, "face {:?} flipped {:?}", fid, f.normal());
+        }
+    }
+
+    /// 사용자 보고 2026-04-28 (16) — 화면 사진 정확 reproduction:
+    /// 2 개 partial-overlap inner RECT 후 ENCLOSING outer RECT 그리면
+    /// outer 의 face 가 사라짐.
+    #[test]
+    fn test_enclosing_outer_after_overlapping_inners() {
+        let mut scene = Scene::new();
+        // Inner rect 1
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 2.0,
+        });
+        // Inner rect 2 (partial overlap with inner 1)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(1.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 2.0,
+        });
+        // Outer rect ENCLOSING both inners (drawn last)
+        let r_outer = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        let outer_xia = match r_outer {
+            CommandResult::EntityCreated(id) => id,
+            e => panic!("outer failed: {:?}", e),
+        };
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        // 진단 정보
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            let pts: Vec<DVec3> = v.iter().filter_map(|&v| scene.mesh.vertex_pos(v).ok()).collect();
+            let mut xmn = f64::INFINITY; let mut xmx = f64::NEG_INFINITY;
+            let mut ymn = f64::INFINITY; let mut ymx = f64::NEG_INFINITY;
+            for p in &pts {
+                xmn = xmn.min(p.x); xmx = xmx.max(p.x);
+                ymn = ymn.min(p.y); ymx = ymx.max(p.y);
+            }
+            report.push_str(&format!(
+                "  {:?} n.z={:.2} verts={} aabb=({:.1}..{:.1},{:.1}..{:.1}) xia={:?}\n",
+                fid, n.z, v.len(), xmn, xmx, ymn, ymx, xia
+            ));
+        }
+
+        assert!(
+            outer_face_count >= 1,
+            "outer XIA lost face — only outline visible.\n{}", report
+        );
+
+        // 모든 active face: winding +Z
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0,
+                "face {:?} flipped {:?}", fid, f.normal());
+        }
+    }
+
     /// 사용자 보고 2026-04-28 (13) — 그리는 순서 무관성 검증.
     /// 같은 RECT 집합을 다른 순서로 그려도 같은 face 토폴로지 (face_count
     /// 동일, 각 face 의 area 동일, missing 없음) 가 나와야 함.
