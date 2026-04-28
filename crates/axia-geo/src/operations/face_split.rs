@@ -503,38 +503,83 @@ pub fn split_face_by_chain(
     ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
 
     let outer_start = mesh.faces[face_id].outer().start;
-    let boundary = mesh.collect_loop_verts(outer_start)?;
-    let n_b = boundary.len();
-    ensure!(n_b >= 3, "face boundary has <3 verts");
+    let outer_boundary = mesh.collect_loop_verts(outer_start)?;
+    ensure!(outer_boundary.len() >= 3, "face boundary has <3 verts");
 
-    // Locate chain[0] and chain[last] positions on boundary.
+    // Locate chain[0] and chain[last]. They may be on the OUTER boundary or
+    // on one of the INNER (hole) loops. We pick the first loop that contains
+    // both endpoints (must be the same loop — chain bridging two loops is not
+    // supported here).
     let start = chain_verts[0];
     let end = *chain_verts.last().unwrap();
-    let i_start = boundary.iter().position(|v| *v == start).ok_or_else(|| {
-        anyhow::anyhow!(
-            "split_face_by_chain: chain start vert {} not on face {} boundary",
-            start.raw(),
-            face_id.raw(),
-        )
-    })?;
-    let i_end = boundary.iter().position(|v| *v == end).ok_or_else(|| {
-        anyhow::anyhow!(
-            "split_face_by_chain: chain end vert {} not on face {} boundary",
-            end.raw(),
-            face_id.raw(),
-        )
-    })?;
-    ensure!(i_start != i_end, "chain endpoints collapsed to same boundary vert");
 
-    // Intermediate chain verts must NOT be on boundary.
+    let pos_on = |loop_verts: &[VertId], v: VertId| -> Option<usize> {
+        loop_verts.iter().position(|&x| x == v)
+    };
+
+    // Try outer first.
+    let mut chosen_loop_verts: Vec<VertId> = outer_boundary.clone();
+    let mut i_start_opt = pos_on(&chosen_loop_verts, start);
+    let mut i_end_opt = pos_on(&chosen_loop_verts, end);
+    let mut chosen_is_inner = false;
+
+    if i_start_opt.is_none() || i_end_opt.is_none() {
+        // Search inner loops for a loop containing both endpoints.
+        let inners = mesh.faces[face_id].inners().to_vec();
+        for inner in &inners {
+            if inner.start.is_null() { continue; }
+            let inner_verts = match mesh.collect_loop_verts(inner.start) {
+                Ok(v) => v, Err(_) => continue,
+            };
+            let pa = pos_on(&inner_verts, start);
+            let pb = pos_on(&inner_verts, end);
+            if pa.is_some() && pb.is_some() {
+                chosen_loop_verts = inner_verts;
+                i_start_opt = pa;
+                i_end_opt = pb;
+                chosen_is_inner = true;
+                break;
+            }
+        }
+    }
+
+    let i_start = i_start_opt.ok_or_else(|| {
+        anyhow::anyhow!(
+            "split_face_by_chain: chain start vert {} not on any loop of face {}",
+            start.raw(), face_id.raw(),
+        )
+    })?;
+    let i_end = i_end_opt.ok_or_else(|| {
+        anyhow::anyhow!(
+            "split_face_by_chain: chain end vert {} not on any loop of face {}",
+            end.raw(), face_id.raw(),
+        )
+    })?;
+    let n_b = chosen_loop_verts.len();
+    let boundary = chosen_loop_verts;
+    ensure!(i_start != i_end, "chain endpoints collapsed to same loop vert");
+
+    // Intermediate chain verts must NOT be on the chosen loop.
     for (i, &v) in chain_verts.iter().enumerate().take(chain_verts.len() - 1).skip(1) {
         if boundary.contains(&v) {
             bail!(
-                "split_face_by_chain: intermediate chain vert {} at index {} is on face boundary — \
+                "split_face_by_chain: intermediate chain vert {} at index {} is on chosen loop — \
                  would require multi-seam split (not supported)",
                 v.raw(), i,
             );
         }
+    }
+
+    // 2026-04-28 — chain endpoints on INNER (hole) loop: not yet implemented in
+    //   the split_into_two-simple-faces path below. The correct topology
+    //   would produce one simple face (chain area) + one face-with-hole (rest).
+    //   Bail with a clear message so caller can route to the alternate fix.
+    if chosen_is_inner {
+        bail!(
+            "split_face_by_chain: chain endpoints on inner (hole) loop of face {} — \
+             not yet supported (would need face-with-hole split)",
+            face_id.raw(),
+        );
     }
 
     // Chain edges must exist.

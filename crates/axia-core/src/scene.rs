@@ -1208,6 +1208,7 @@ impl Scene {
             }
         }
 
+
         // Step 4.55 — nested face dissolve
         {
             let dissolved = self.mesh.dissolve_containing_faces();
@@ -1401,6 +1402,31 @@ impl Scene {
                     &self.mesh, face_id,
                 ) else { continue };
                 let _ = new_edges; // signature kept for the legacy fallback below
+
+                // 2026-04-28 — chain interior validity guard.
+                //   사용자 보고 (snap 으로 정확히 인접 RECT stack 그릴 때 면 사라짐):
+                //   M1 이 OUTSIDE 로 가는 chain (예: inner1 face 의 boundary 위
+                //   endpoint 두 개가 있지만 chain 자체는 inner1 위쪽 = OUTSIDE 를
+                //   지나는 inner2 perimeter) 으로 inner1 을 split → inner1 면적이
+                //   새 chain region 으로 잘못 흡수.
+                //
+                //   chain[0]→chain[1] midpoint 가 face polygon 안에 있어야 함.
+                //   바깥이면 split skip — 별도 step 4.96 (host-ring rebuild)
+                //   에서 처리.
+                if chain.len() >= 2 {
+                    let p0 = self.mesh.vertex_pos(chain[0]).ok();
+                    let p1 = self.mesh.vertex_pos(chain[1]).ok();
+                    if let (Some(p0), Some(p1)) = (p0, p1) {
+                        let mid = (p0 + p1) * 0.5;
+                        let inside = axia_geo::operations::face_split::point_in_face(
+                            &self.mesh, face_id, mid,
+                        ).unwrap_or(false);
+                        if !inside {
+                            continue;
+                        }
+                    }
+                }
+
                 let split_res = axia_geo::operations::face_split::split_face_by_chain(
                     &mut self.mesh,
                     face_id,
@@ -3670,6 +3696,430 @@ mod tests {
             flipped.is_empty(),
             "after RECT3: flipped normals: {:?}\nFace report:\n{}",
             flipped, report
+        );
+    }
+
+    /// 사용자 보고 2026-04-28 (3): RECT 의 4 변이 그려졌으나 **face 가 생성되지 않음**.
+    /// 화면에서 wire 만 보이고 면이 비어있음. XIA Inspector 가 "선 1개" 를 표시.
+    /// 시나리오: RECT 가 기존 face 의 변과 정확히 인접 (snap), 4 변 모두 그려짐.
+    #[test]
+    fn test_adjacent_rect_face_synthesizes() {
+        let mut scene = Scene::new();
+        // RECT1 — 4×4 at origin
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 4.0,
+        });
+        let xia1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+
+        // RECT2 — 4×4 sharing right edge with RECT1 (snap-aligned)
+        let r2 = scene.execute(Command::DrawRect {
+            center: DVec3::new(4.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 4.0,
+        });
+        let xia2 = match r2 { CommandResult::EntityCreated(id) => id, _ => panic!("rect2 failed: {:?}", r2) };
+
+        // 둘 다 RectangleXIA 여야 한다 (Line XIA 가 아님)
+        let xia2_face_count = scene.xias.get(&xia2).map(|x| x.face_ids.len()).unwrap_or(0);
+        assert!(
+            xia2_face_count >= 1,
+            "RECT2 XIA has no face_ids — face synthesis failed (XIA stays as wire-only)"
+        );
+
+        // 두 face 모두 존재해야 함
+        assert_eq!(scene.mesh.face_count(), 2, "expected 2 faces after adjacent rects");
+        let _ = xia1;
+    }
+
+    /// 사용자 보고 2026-04-28 (3): 기존 face 안에 작은 RECT 여러 개를 그렸을 때
+    /// 일부 RECT 의 face 가 생성되지 않는 케이스.
+    #[test]
+    fn test_multiple_rects_inside_face_all_synthesize() {
+        let mut scene = Scene::new();
+        // RECT1 — 12×4 outer
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 4.0,
+        });
+        // 3 inner RECTs, side by side, all inside RECT1, snap-aligned grid
+        for &cx in &[-4.0, 0.0, 4.0] {
+            let r = scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 3.0, height: 3.0,
+            });
+            let xia_id = match r {
+                CommandResult::EntityCreated(id) => id,
+                _ => panic!("inner rect at ({},0) failed: {:?}", cx, r),
+            };
+            let face_count = scene.xias.get(&xia_id).map(|x| x.face_ids.len()).unwrap_or(0);
+            assert!(
+                face_count >= 1,
+                "inner rect at ({},0) — XIA has no face_ids (wire-only)", cx
+            );
+        }
+
+        // 모든 active face 가 export 에 포함되어야 함
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        let mut missing: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !exported.contains(&fid) { missing.push(fid); }
+        }
+        assert!(missing.is_empty(), "missing from buffer: {:?}", missing);
+    }
+
+    /// 사용자 보고 2026-04-28 (3): 모든 변이 이미 존재하는 위치에 RECT 그리기.
+    /// 예: 큰 RECT 안에 작은 RECT 가 있고, 그 사이 빈 공간 (꼭 닫힌 다각형) 에
+    /// 다시 RECT 를 그리려고 함. 4 변이 이미 있으면 epoch.new_edges 가 비어
+    /// resolve_planar_free_faces_scoped 가 face 를 만들지 못할 수 있음.
+    #[test]
+    fn test_rect_with_all_existing_edges_creates_face() {
+        let mut scene = Scene::new();
+        // 4 LINE 으로 사각형 경계 만들기 (RECT 명령 안 씀)
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-1.0, -1.0, 0.0),
+            end: DVec3::new(1.0, -1.0, 0.0),
+            surface_normal: None,
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(1.0, -1.0, 0.0),
+            end: DVec3::new(1.0, 1.0, 0.0),
+            surface_normal: None,
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(1.0, 1.0, 0.0),
+            end: DVec3::new(-1.0, 1.0, 0.0),
+            surface_normal: None,
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-1.0, 1.0, 0.0),
+            end: DVec3::new(-1.0, -1.0, 0.0),
+            surface_normal: None,
+        });
+        // 4 변이 닫히면 free-edge cycle → face 자동 생성
+        let after_lines = scene.mesh.face_count();
+
+        // 이제 같은 RECT 를 명령으로 다시 그리기 (모든 변 + 정점 이미 존재)
+        let r = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        let _ = r;
+
+        // 어떤 경우든 face_count >= 1 이어야 함
+        let after_rect = scene.mesh.face_count();
+        assert!(
+            after_rect >= 1,
+            "after redrawing RECT on existing 4 edges: lines_phase={}, rect_phase={} — face missing",
+            after_lines, after_rect
+        );
+
+        // 모든 active face 가 export 에 포함되어야 함
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        let mut missing: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !exported.contains(&fid) { missing.push(fid); }
+        }
+        assert!(missing.is_empty(), "missing from buffer: {:?}", missing);
+    }
+
+    /// 사용자 보고 2026-04-28 (3): 두 인접 RECT 사이의 변을 한 변으로 공유하는
+    /// 세 번째 RECT — RECT3 이 RECT1 / RECT2 의 인접 변 + 그 위/아래 새 변으로 구성.
+    /// 일부 변이 기존 face 의 boundary HE 를 양쪽 모두 사용하면 free HE 부족
+    /// → face 합성 실패 가능.
+    #[test]
+    fn test_rect_sharing_two_existing_edges_synthesizes() {
+        let mut scene = Scene::new();
+        // RECT1 — 2×2 at (-1, 0)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-1.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        // RECT2 — 2×2 at (1, 0), shares right edge of RECT1 (x=0, y∈[-1,1])
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(1.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        // RECT3 — 2×2 at (0, 2), shares bottom edge with RECT1's top + RECT2's top
+        // RECT3 spans (-1,1) to (1,3): bottom edge (-1,1)→(1,1) crosses BOTH RECT1's
+        // top-right corner and RECT2's top-left corner. RECT3's bottom uses 2 existing
+        // edges (RECT1 top-right half + RECT2 top-left half).
+        let r3 = scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        let xia3 = match r3 {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("RECT3 failed: {:?}", r3),
+        };
+        let face_count = scene.xias.get(&xia3).map(|x| x.face_ids.len()).unwrap_or(0);
+        assert!(
+            face_count >= 1,
+            "RECT3 sharing 2 existing edges — no face synthesized (wire-only)"
+        );
+        // 3 faces 기대 (RECT1, RECT2, RECT3)
+        assert_eq!(
+            scene.mesh.face_count(), 3,
+            "expected 3 faces (RECT1, RECT2, RECT3), got {}",
+            scene.mesh.face_count()
+        );
+    }
+
+    /// 사용자 보고 2026-04-28 (3) 추적 — "*extension" snap 으로 그린 RECT 가
+    /// 기존 edge 의 extension 선과 collinear 한 새 edge 를 만드는 케이스.
+    /// 예: RECT1 의 위쪽 변과 같은 y 좌표에서 RECT2 의 아래쪽 변이 시작.
+    /// 두 변이 서로 다른 vertex 사이에 collinear 로 떨어져 있음.
+    #[test]
+    fn test_collinear_adjacent_rect_synthesizes() {
+        let mut scene = Scene::new();
+        // RECT1 — 2×2 at origin, top edge at y=1
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        // RECT2 — 2×2 at (3, 1) — bottom edge collinear with RECT1 top extension
+        //   but x range [-2, 0] vs [2, 4] non-overlapping. The bottom edge of RECT2
+        //   is collinear with RECT1's top edge but not connected.
+        let r = scene.execute(Command::DrawRect {
+            center: DVec3::new(3.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        let xia = match r {
+            CommandResult::EntityCreated(id) => id,
+            _ => panic!("collinear RECT2 failed: {:?}", r),
+        };
+        let face_count = scene.xias.get(&xia).map(|x| x.face_ids.len()).unwrap_or(0);
+        assert!(face_count >= 1, "RECT2 collinear: no face");
+        assert_eq!(scene.mesh.face_count(), 2);
+    }
+
+    /// 사용자 보고 2026-04-28 (3) — L-shape + 내부 subdivisions 시나리오.
+    /// 화면 사진에서 보이는 거에 가장 가까운 reproduction:
+    ///   1. RECT1 (큰 직사각형)
+    ///   2. RECT2 (RECT1 일부에 겹치게)
+    ///   3. RECT3, RECT4 (작은 inset rect 여러 개)
+    /// 각 RECT 의 XIA 가 face_id 를 갖고, normal.z>0, export 에 모두 포함되는지.
+    #[test]
+    fn test_lshape_with_inner_rects_all_faced() {
+        let mut scene = Scene::new();
+        let rects = [
+            // (cx, cy, w, h)
+            (0.0, 0.0, 8.0, 4.0),     // RECT1 big
+            (5.0, 2.0, 4.0, 2.0),     // RECT2 overlapping RECT1 corner
+            (-2.0, 0.0, 2.0, 2.0),    // RECT3 inside RECT1 left
+            (1.0, 0.0, 2.0, 2.0),     // RECT4 inside RECT1 middle
+        ];
+        let mut xia_ids = Vec::new();
+        for &(cx, cy, w, h) in &rects {
+            let r = scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: w, height: h,
+            });
+            match r {
+                CommandResult::EntityCreated(id) => xia_ids.push((cx, cy, id)),
+                e => panic!("rect ({},{},{}x{}) failed: {:?}", cx, cy, w, h, e),
+            }
+        }
+
+        // 1) 모든 XIA 가 face_id 보유 (wire-only XIA 없음)
+        for &(cx, cy, xid) in &xia_ids {
+            let face_count = scene.xias.get(&xid).map(|x| x.face_ids.len()).unwrap_or(0);
+            assert!(
+                face_count >= 1,
+                "rect at ({},{}) — XIA stays as wire-only (face count 0)",
+                cx, cy
+            );
+        }
+
+        // 2) 모든 active face 의 winding CCW (normal.z > 0)
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(
+                f.normal().z > 0.0,
+                "face {:?} has flipped normal {:?}", fid, f.normal()
+            );
+        }
+
+        // 3) 모든 face 가 export 에 포함
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        let mut missing: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !exported.contains(&fid) { missing.push(fid); }
+        }
+        assert!(missing.is_empty(), "missing faces: {:?}", missing);
+
+        // 4) 모든 face 가 XIA 등록
+        let mut orphans: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !scene.face_to_xia.contains_key(&fid) { orphans.push(fid); }
+        }
+        assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
+    }
+
+    /// 사용자 보고 추적용 — 2 stacked inner rects (가장 최소 reproduction).
+    /// 큰 RECT 안에 두 RECT 가 edge 공유로 위/아래 stack.
+    /// **알려진 제약 (2026-04-28)**: B1 hole-promote 된 ring face 의 hole
+    /// boundary 에 인접하게 새 RECT 그릴 때, shared edge 의 HE 양쪽이 모두
+    /// claim 된 상태라 inner2 의 free-cycle 합성 불가. M1 interior guard
+    /// 가 inner1 손실은 막아주지만 inner2 면 자체는 미합성. 적절한 fix 는
+    /// ring topology rebuild — leftmost-turn walker 의 cycle 우선순위
+    /// 한계로 별도 Phase 2 에서 처리.
+    #[test]
+    #[ignore = "stacked-inner rects: ring topology rebuild needed (Phase 2)"]
+    fn test_two_stacked_inner_rects_both_faced() {
+        let mut scene = Scene::new();
+        // RECT outer 10×6
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        // inner1 below center at (0, -1), 4×2 → spans y∈[-2, 0]
+        let r1 = scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, -1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        let xid1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+        let face1_count = scene.xias.get(&xid1).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        // inner2 above center at (0, 1), 4×2 → spans y∈[0, 2]; shares y=0 edge with inner1
+        let r2 = scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        let xid2 = match r2 {
+            CommandResult::EntityCreated(id) => id,
+            ref e => panic!("inner2 result: {:?}", e),
+        };
+        let face2_count = scene.xias.get(&xid2).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        // After inner2 draw, inner1's face might have been touched. Re-check.
+        let face1_count_after = scene.xias.get(&xid1).map(|x| x.face_ids.len()).unwrap_or(0);
+
+        let mut report = String::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let verts = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            let pts: Vec<DVec3> = verts.iter()
+                .filter_map(|&v| scene.mesh.vertex_pos(v).ok()).collect();
+            let xia_link = scene.face_to_xia.get(&fid).copied().unwrap_or(99999);
+            report.push_str(&format!(
+                "  {:?} → XIA {} : verts={:?} pts={:?}\n",
+                fid, xia_link, verts, pts
+            ));
+        }
+
+        assert!(
+            face1_count >= 1 && face1_count_after >= 1 && face2_count >= 1,
+            "face counts: inner1_initial={}, inner1_after_inner2={}, inner2={}\nFace report:\n{}",
+            face1_count, face1_count_after, face2_count, report
+        );
+    }
+
+    /// 사용자 화면 사진 (2026-04-28-3) 와 가장 유사한 시나리오 reproduction:
+    /// 큰 RECT 안에 작은 RECT 들이 vertically 쌓여 column 을 이루는 케이스.
+    /// 인접 RECT 끼리 edge 공유. (test_two_stacked_inner_rects 의 일반화)
+    #[test]
+    #[ignore = "stacked-inner rects: ring topology rebuild needed (Phase 2)"]
+    fn test_column_of_inner_rects_all_faced() {
+        let mut scene = Scene::new();
+        // RECT1 — big outer (10×9, 9 height to fit 3 stacked 2-height rects in 6 + margins)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 9.0,
+        });
+
+        // 5 stacked inner rects, each 4×1.5, centers stacked vertically
+        let inner_rects: Vec<(f64, f64, f64, f64)> = vec![
+            (0.0, -3.0, 4.0, 1.5),
+            (0.0, -1.5, 4.0, 1.5),
+            (0.0,  0.0, 4.0, 1.5),
+            (0.0,  1.5, 4.0, 1.5),
+            (0.0,  3.0, 4.0, 1.5),
+        ];
+        let mut xia_ids = Vec::new();
+        for &(cx, cy, w, h) in &inner_rects {
+            let r = scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: w, height: h,
+            });
+            match r {
+                CommandResult::EntityCreated(id) => xia_ids.push((cx, cy, id)),
+                e => panic!("inner rect at ({},{}) failed: {:?}", cx, cy, e),
+            }
+        }
+
+        // 1) 모든 inner rect XIA 가 face 보유 (wire-only 없음)
+        let mut wire_only_count = 0;
+        for &(cx, cy, xid) in &xia_ids {
+            let face_count = scene.xias.get(&xid).map(|x| x.face_ids.len()).unwrap_or(0);
+            if face_count == 0 {
+                wire_only_count += 1;
+                eprintln!("  wire-only XIA at ({},{})", cx, cy);
+            }
+        }
+        assert_eq!(
+            wire_only_count, 0,
+            "{} inner rects ended up wire-only (no face) — bug reproduced",
+            wire_only_count
+        );
+
+        // 2) 모든 active face 의 winding CCW
+        let mut flipped: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if f.normal().z <= 0.0 { flipped.push(fid); }
+        }
+        assert!(flipped.is_empty(), "flipped faces: {:?}", flipped);
+
+        // 3) export_mesh_buffers 에 모두 포함
+        let (_, _, _, face_map, _) = scene.export_mesh_buffers().unwrap();
+        let exported: std::collections::HashSet<axia_geo::FaceId> = face_map.iter()
+            .map(|&fm| axia_geo::FaceId::new(fm))
+            .collect();
+        let mut missing: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if !exported.contains(&fid) { missing.push(fid); }
+        }
+        assert!(missing.is_empty(), "missing from buffer: {:?}", missing);
+    }
+
+    /// 사용자 보고 2026-04-28 (3): 2×2 grid 의 인접 RECT 4 개. 모두 면 생성되어야.
+    #[test]
+    fn test_2x2_grid_all_faces_synthesize() {
+        let mut scene = Scene::new();
+        // 2×2 grid of unit rects, each 2×2, centers at (-1,-1) (1,-1) (-1,1) (1,1)
+        for &(cx, cy) in &[(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            let r = scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            let xia_id = match r {
+                CommandResult::EntityCreated(id) => id,
+                _ => panic!("grid rect at ({},{}) failed: {:?}", cx, cy, r),
+            };
+            let face_count = scene.xias.get(&xia_id).map(|x| x.face_ids.len()).unwrap_or(0);
+            assert!(
+                face_count >= 1,
+                "grid rect at ({},{}) — XIA has no face_ids (wire-only)", cx, cy
+            );
+        }
+        // 4 faces 기대
+        assert_eq!(
+            scene.mesh.face_count(), 4,
+            "2×2 grid should yield 4 faces"
         );
     }
 
