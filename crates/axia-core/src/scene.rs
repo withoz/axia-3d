@@ -1430,14 +1430,38 @@ impl Scene {
                 );
                 match split_res {
                     Ok(res) => {
-                        // Old face is gone; remove from all_created_faces
-                        //   (in case it was just created by this op) and from
-                        //   its XIA.
+                        // 2026-04-28 — XIA inheritance fix: M1 split 의 sub-face
+                        //   는 ORIGINAL XIA 에 inherit 되어야 함 (face_id 가
+                        //   원래 속한 XIA). 이전엔 unregister 후 new RECT 의
+                        //   XIA 로 옮겨져 원본 XIA 가 face_ids 비어버림.
+                        //
+                        //   사용자 UX: "RECT_orig 가 RECT_new 에 의해 split 됐을
+                        //   때, RECT_orig 의 모든 sub-face 는 RECT_orig 의 XIA
+                        //   에 그대로 속함". RECT_new 의 XIA 는 자신의 다른
+                        //   영역 (RECT_orig 밖) face 만 가짐.
+                        let old_xia = self.face_to_xia.get(&face_id).copied();
                         all_created_faces.retain(|&f| f != face_id);
                         self.unregister_face_from_xia(face_id);
-                        for &f in &res.new_faces {
-                            if !all_created_faces.contains(&f) {
-                                all_created_faces.push(f);
+                        if let Some(xid) = old_xia {
+                            // Sub-faces inherit original XIA.
+                            self.register_faces_to_xia(xid, &res.new_faces);
+                            if let Some(xia) = self.xias.get_mut(&xid) {
+                                for &f in &res.new_faces {
+                                    if !xia.face_ids.contains(&f) {
+                                        xia.face_ids.push(f);
+                                    }
+                                }
+                            }
+                            // Sub-faces not added to all_created_faces — they
+                            //   inherited and shouldn't go to the new RECT's
+                            //   XIA at end of exec_draw_rect.
+                        } else {
+                            // Original face had no XIA — sub-faces become
+                            //   "owned" by the current draw operation.
+                            for &f in &res.new_faces {
+                                if !all_created_faces.contains(&f) {
+                                    all_created_faces.push(f);
+                                }
                             }
                         }
                         any_split = true;
@@ -4019,6 +4043,90 @@ mod tests {
             if !scene.face_to_xia.contains_key(&fid) { orphans.push(fid); }
         }
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
+    }
+
+    /// 사용자 보고 2026-04-28 (7) — outer RECT 를 inner RECT 들 위에 그렸을 때
+    /// outer 의 face 가 사라지는 회귀.
+    #[test]
+    fn test_outer_rect_drawn_after_inners_keeps_face() {
+        let mut scene = Scene::new();
+        // 작은 inner rects 먼저
+        for &(cx, cy) in &[(-2.0, -2.0), (2.0, -2.0), (-2.0, 2.0), (2.0, 2.0)] {
+            let r = scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            assert!(matches!(r, CommandResult::EntityCreated(_)));
+        }
+        // 큰 outer rect 가 inner 들을 enclose
+        let r_outer = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 8.0,
+        });
+        let outer_xia = match r_outer {
+            CommandResult::EntityCreated(id) => id,
+            e => panic!("outer failed: {:?}", e),
+        };
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+        assert!(outer_face_count >= 1, "outer XIA has no face after drawing over inners");
+
+        // 모든 active face: normal.z > 0
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0, "face {:?} flipped: {:?}", fid, f.normal());
+        }
+    }
+
+    /// 사용자 보고 2026-04-28 (8) — outer 큰 RECT 와 그 안 + 바깥에 걸친 RECT.
+    /// outer 의 face 가 사라지지 않아야.
+    #[test]
+    fn test_outer_with_overlapping_extending_rects() {
+        let mut scene = Scene::new();
+        // Outer big rect
+        let r_outer = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 14.0, height: 6.0,
+        });
+        let outer_xia = match r_outer { CommandResult::EntityCreated(id) => id, _ => panic!() };
+
+        // Rects 일부는 outer 안, 일부는 outer 경계 가로지름
+        let crossings = [
+            (5.0, 0.0, 6.0, 4.0),     // crosses right boundary
+            (-5.0, 0.0, 6.0, 4.0),    // crosses left boundary
+            (0.0, 0.0, 4.0, 8.0),     // crosses top + bottom
+        ];
+        for &(cx, cy, w, h) in &crossings {
+            scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: w, height: h,
+            });
+        }
+
+        // outer XIA 가 face 보유
+        let outer_face_count = scene.xias.get(&outer_xia).map(|x| x.face_ids.len()).unwrap_or(0);
+        // 모든 active face 정보 출력
+        let mut report = String::new();
+        report.push_str("Active faces:\n");
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let xia = scene.face_to_xia.get(&fid).copied();
+            let v = scene.mesh.collect_loop_verts(f.outer().start).unwrap_or_default();
+            let n_verts = v.len();
+            report.push_str(&format!("  {:?}: {} verts → xia {:?}\n", fid, n_verts, xia));
+        }
+        let total_active: usize = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(
+            outer_face_count >= 1 && total_active >= 1,
+            "outer face_count={}, total active={}\n{}",
+            outer_face_count, total_active, report
+        );
+
+        // 모든 active face winding
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            assert!(f.normal().z > 0.0, "face {:?} flipped: {:?}", fid, f.normal());
+        }
     }
 
     /// 사용자 보고 2026-04-28 (6) — 많은 RECT 가 다양하게 overlap 할 때
