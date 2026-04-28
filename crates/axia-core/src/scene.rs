@@ -3768,6 +3768,57 @@ mod tests {
         }
     }
 
+    /// 사용자 보고 2026-04-28 — L-shape merge 후 잔여 edge 가 남는 회귀.
+    /// 큰 RECT 와 작은 RECT 가 한 corner 에서 partial overlap → merge 시
+    /// L 형 face. merged face 내부에 dashed 잔여 line 이 보인다고 보고됨.
+    /// 모든 active edge 가 face 의 boundary 에 위치해야 함 (orphan 없음).
+    #[test]
+    fn test_lshape_merge_no_residual_edges() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(6.0, 2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 6.0, height: 4.0,
+        });
+
+        // 한 번의 merge_coplanar_faces_geometric 호출 후 잔여 edge 검사.
+        // 처음 두 active face 만 사용 (geometric 호출 후 ID stale 되므로 1번만).
+        let initial: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).map(|(id, _)| id).collect();
+        if initial.len() >= 2 {
+            let _ = scene.mesh.merge_coplanar_faces_geometric(
+                initial[0], initial[1], 1.0
+            );
+        }
+        let _ = scene.mesh.cleanup_dangling();
+
+        // Orphan edge 검사 (모든 active edge 는 어느 face 에 attached 여야)
+        let mut orphan_edges: Vec<axia_geo::EdgeId> = Vec::new();
+        for (eid, edge) in scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            let any_he = edge.any_he();
+            if any_he.is_null() { continue; }
+            let mut has_face = false;
+            let mut he = any_he;
+            for _ in 0..8 {  // safety bound
+                if !scene.mesh.hes.get(he).map(|h| h.face().is_null()).unwrap_or(true) {
+                    has_face = true; break;
+                }
+                he = scene.mesh.hes.get(he).map(|h| h.next_rad()).unwrap_or(axia_geo::HeId::NULL);
+                if he == any_he || he.is_null() { break; }
+            }
+            if !has_face { orphan_edges.push(eid); }
+        }
+        assert!(
+            orphan_edges.is_empty(),
+            "{} orphan edges after L-shape merge: {:?}",
+            orphan_edges.len(), orphan_edges
+        );
+    }
+
     /// 사용자 보고 2026-04-28 — multi-shared edge case 의 hover preview 가
     /// 빨간색 (cascade) 으로 표시되는 회귀.
     /// would_geometric_merge_succeed 가 multi-shared (count >= 2) 도 인식해야.

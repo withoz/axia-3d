@@ -200,6 +200,41 @@ impl Mesh {
         // Post-merge cleanup: orphan edges/vertices from the removed faces.
         let _ = self.cleanup_dangling();
 
+        // 2026-04-28 — 사용자 보고: L-shape merge 후 잔여 선 (dashed lines
+        //   inside merged face). 추가 정밀 검사: cleanup_dangling 이후에도
+        //   active edge 가 모든 HE 에서 face=null (orphan) 이면 강제 제거.
+        //   특히 비-manifold edge (HE 4개 이상) 의 일부 HE 만 face=null 인
+        //   경우 has_active_face=true 로 판정되어 잔류할 수 있음.
+        let mut second_pass_remove: Vec<EdgeId> = Vec::new();
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            let any_he = edge.any_he();
+            if any_he.is_null() {
+                second_pass_remove.push(eid);
+                continue;
+            }
+            // 모든 HE 가 face=null 또는 inactive face 인지 확인
+            let mut all_null = true;
+            let mut he = any_he;
+            let mut guard = 0;
+            loop {
+                let f = self.hes[he].face();
+                if !f.is_null() && self.faces.contains(f) && self.faces[f].is_active() {
+                    all_null = false;
+                    break;
+                }
+                he = self.hes[he].next_rad();
+                guard += 1;
+                if he == any_he || he.is_null() || guard > 10 { break; }
+            }
+            if all_null { second_pass_remove.push(eid); }
+        }
+        for eid in second_pass_remove {
+            let _ = self.remove_edge_and_halfedges(eid);
+            if self.edges.contains(eid) { self.edges.remove(eid); }
+        }
+        self.remove_isolated_verts();
+
         // Verify ADR-007 invariants in debug builds.
         #[cfg(debug_assertions)]
         self.debug_verify_invariants();
