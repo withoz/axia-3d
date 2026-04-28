@@ -438,7 +438,27 @@ impl Mesh {
             .fold(0.0_f64, f64::max);
         if plane_d_max > 5.0 { return false; }
 
-        // Step 4 — collinear-with-overlap edge pair must exist.
+        // 2026-04-28 — Multi-shared 케이스 인식 (사용자 보고: 인접 면 hover
+        //   preview 가 빨간색).
+        //
+        //   merge_coplanar_faces_geometric 의 fast-path 가 실패 (count!=1)
+        //   하면 multi-shared graph merge 로 fallback. 사용자가 두 face 가
+        //   2개 이상 edge 공유 (예: 이전 merge 후 boundary 가 split 된 상태)
+        //   인 경우 preview 도 cyan 으로 표시되어야.
+        //
+        //   조건: shared edge 가 1 개 이상 (multi 포함) + 같은 vertex pair
+        //   이면 multi-shared graph merge 가 동작. preview 에서도 동일 조건
+        //   확인.
+        let shared_count = self.count_shared_edges_outer(f1, f2);
+        if shared_count >= 2 {
+            // Multi-shared 케이스 — graph merge 로 합성 가능
+            // (실제 graph cycle walk 까진 dry-run 비용 때문에 생략, 위
+            // coplanarity + plane-distance 이미 통과했으므로 success 추정).
+            return true;
+        }
+
+        // Step 4 — collinear-with-overlap edge pair must exist (single shared
+        //   or non-shared geometric overlap case).
         const SEG_TOL: f64 = 5.0;
         find_overlap(&v1_pos, &v2_pos, SEG_TOL).is_some()
     }
