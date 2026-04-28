@@ -1212,6 +1212,8 @@ impl Scene {
         // Step 4.55 — nested face dissolve
         {
             let dissolved = self.mesh.dissolve_containing_faces();
+            if !dissolved.is_empty() {
+            }
             for fid in dissolved {
                 self.unregister_face_from_xia(fid);
                 all_created_faces.retain(|&f| f != fid);
@@ -1280,6 +1282,8 @@ impl Scene {
         // Step 4.7 — dedup
         {
             let removed = self.mesh.deduplicate_overlapping_faces();
+            if !removed.is_empty() {
+            }
             for fid in removed {
                 self.unregister_face_from_xia(fid);
                 all_created_faces.retain(|&f| f != fid);
@@ -1328,6 +1332,19 @@ impl Scene {
             self.run_mixed_cycle_splits(touched_verts, new_edges, all_created_faces);
         }
 
+        // 알려진 제약 (2026-04-28, ADR-008 Axiom 7 vs Phase E B1 hole-promote 충돌):
+        //   B1 hole-promote 된 ring face 의 hole boundary 에 인접하게 새 RECT
+        //   그릴 때, shared edge 의 HE2 가 ring 의 hole loop 에 claim 됨 →
+        //   새 RECT 의 free-cycle 합성 불가. M1 interior guard 가 inner1 face
+        //   손실은 막아주지만 inner2 자체는 wire-only 로 남음.
+        //   적절한 fix 는 ring topology rebuild — 그러나 leftmost-turn walker
+        //   의 cycle 우선순위 + dedup 의 oldest-first 정책으로 인해 단순한
+        //   dissolve+resolve 패턴이 inner1 의 face 마저 잘못 흡수. 별도 Phase
+        //   에서 처리.
+        //
+        // 임시 우회: 사용자는 인접 inner RECT 를 그릴 때 약간의 gap 을 두거나
+        //   4 LINE 으로 직접 그리기. 자동 free-cycle 합성은 정상 작동.
+
         // Step 4.95 — second B1 hole-promote pass (Phase 3c''-B).
         //   M1 이 만든 새 sub-face 가 기존 face 안에 완전히 포함되는 경우,
         //   해당 inner 를 outer 의 hole 로 승격시켜 면적 이중계산 제거.
@@ -1335,6 +1352,7 @@ impl Scene {
         //   않았으므로 M1 이후 한 번 더 돌린다. Single-pass — 반복 돌리면
         //   먼저 생긴 ring 이 다음 라운드에서 degenerate 후보로 잘못
         //   선정되는 경우가 있어 1 pass 로 제한.
+        //
         {
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
                 .filter(|(_, f)| f.is_active())
@@ -1364,6 +1382,7 @@ impl Scene {
             }
         }
     }
+
 
     /// Step 4.9 worker — find and execute all mixed-cycle splits in the
     /// scope of this epoch's touched vertices. Extracted for clarity.
@@ -3968,16 +3987,15 @@ mod tests {
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
     }
 
-    /// 사용자 보고 추적용 — 2 stacked inner rects (가장 최소 reproduction).
+    /// 사용자 보고 2026-04-28 — 2 stacked inner rects (가장 최소 reproduction).
     /// 큰 RECT 안에 두 RECT 가 edge 공유로 위/아래 stack.
-    /// **알려진 제약 (2026-04-28)**: B1 hole-promote 된 ring face 의 hole
-    /// boundary 에 인접하게 새 RECT 그릴 때, shared edge 의 HE 양쪽이 모두
-    /// claim 된 상태라 inner2 의 free-cycle 합성 불가. M1 interior guard
-    /// 가 inner1 손실은 막아주지만 inner2 면 자체는 미합성. 적절한 fix 는
-    /// ring topology rebuild — leftmost-turn walker 의 cycle 우선순위
-    /// 한계로 별도 Phase 2 에서 처리.
+    /// **알려진 제약**: ADR-008 Axiom 7 ("adjacent RECTs share DCEL edge") 와
+    /// Phase E B1 hole-promote 의 충돌. shared edge 의 HE2 가 ring hole loop 에
+    /// claim 됨 → 새 RECT 면 합성 불가. M1 interior guard 가 inner1 손실은
+    /// 막아주지만 inner2 자체는 wire-only. 적절한 fix 는 ring topology rebuild
+    /// (Phase 2). 우회: gap 두고 그리거나 4 LINE 로 직접.
     #[test]
-    #[ignore = "stacked-inner rects: ring topology rebuild needed (Phase 2)"]
+    #[ignore = "stacked-inner: B1 vs Axiom 7 conflict (Phase 2)"]
     fn test_two_stacked_inner_rects_both_faced() {
         let mut scene = Scene::new();
         // RECT outer 10×6
@@ -4031,7 +4049,7 @@ mod tests {
     /// 큰 RECT 안에 작은 RECT 들이 vertically 쌓여 column 을 이루는 케이스.
     /// 인접 RECT 끼리 edge 공유. (test_two_stacked_inner_rects 의 일반화)
     #[test]
-    #[ignore = "stacked-inner rects: ring topology rebuild needed (Phase 2)"]
+    #[ignore = "stacked-inner: B1 vs Axiom 7 conflict (Phase 2)"]
     fn test_column_of_inner_rects_all_faced() {
         let mut scene = Scene::new();
         // RECT1 — big outer (10×9, 9 height to fit 3 stacked 2-height rects in 6 + margins)
@@ -4066,7 +4084,7 @@ mod tests {
             let face_count = scene.xias.get(&xid).map(|x| x.face_ids.len()).unwrap_or(0);
             if face_count == 0 {
                 wire_only_count += 1;
-                eprintln!("  wire-only XIA at ({},{})", cx, cy);
+                let _ = (cx, cy);
             }
         }
         assert_eq!(

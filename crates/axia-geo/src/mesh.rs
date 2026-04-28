@@ -1246,14 +1246,33 @@ impl Mesh {
                     self.faces[inner].outer().start
                 ).unwrap_or_default().into_iter().collect();
 
+                // 2026-04-28 — connector 정의 강화 (사용자 보고: stacked-inner
+                //   RECT 그릴 때 인접 RECT 의 면이 사라짐).
+                //
+                //   기존 logic 은 SHARED edge (outer 와 inner 가 corner 를
+                //   공유) 를 connector 로 오판 → adjacent RECT 시나리오에서
+                //   둘 다 dissolve.
+                //
+                //   진짜 connector 의 의미: outer 와 inner 사이를 BRIDGE 하는
+                //   true interior edge — 즉 두 polygon 사이의 "free space" 에
+                //   놓인 edge. SHARED edge (양쪽 boundary 모두에 속한 edge) 는
+                //   connector 가 아니라 그냥 인접 boundary 일 뿐.
+                //
+                //   조건 강화: 한쪽 vert 는 outer 에만, 다른쪽 vert 는 inner
+                //   에만 속해야 진짜 connector. 양쪽 vert 가 양 boundary 에
+                //   동시 속하면 그건 shared edge (다른 의미).
                 let has_connector = self.vert_to_edge.iter().any(|(key, &eid)| {
                     if !self.edges[eid].is_active() { return false; }
                     let a_in_outer = outer_boundary_verts.contains(&key.v_small);
                     let a_in_inner = inner_boundary_verts.contains(&key.v_small);
                     let b_in_outer = outer_boundary_verts.contains(&key.v_large);
                     let b_in_inner = inner_boundary_verts.contains(&key.v_large);
-                    // outer ↔ inner 연결 (한쪽 끝은 outer, 다른 끝은 inner)
-                    (a_in_outer && b_in_inner) || (a_in_inner && b_in_outer)
+                    // True connector: 한 vert 는 outer-ONLY, 다른 vert 는 inner-ONLY.
+                    let a_outer_only = a_in_outer && !a_in_inner;
+                    let a_inner_only = a_in_inner && !a_in_outer;
+                    let b_outer_only = b_in_outer && !b_in_inner;
+                    let b_inner_only = b_in_inner && !b_in_outer;
+                    (a_outer_only && b_inner_only) || (a_inner_only && b_outer_only)
                 });
 
                 if has_connector {
