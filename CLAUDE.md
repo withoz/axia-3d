@@ -714,6 +714,92 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 | 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
 | 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
 
+## Session 2026-04-28 완료 내역 (11 commits — RECT 면 합성 정책 정비)
+
+이 세션의 테마: 사용자 보고로 시작된 RECT 면 합성 회귀 (winding flip,
+missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
+경로 audit 으로 근본 해결.
+
+### ADR-015: Stacked Inner RECT — Manifold-First B1 Policy
+
+**ADR-008 Axiom 7 ↔ Phase E B1 hole-promote 충돌 해소.**
+
+- B1 auto hole-promote **비활성** (interior fast-path + Step 4.8 + 4.95).
+- inner face 가 outer face 안에 그려져도 자동 ring 변환 안 함.
+- 두 face 가 별개 simple face 로 공존 (geometric overlap 허용).
+- 명시적 promote 는 우클릭 메뉴 `merge-as-hole` 로만.
+- 결과: 인접 inner RECT (stacked) 자연스럽게 작동, manifold 보장.
+
+자세한 결정/근거: `docs/adr/015-stacked-inner-rect-topology.md`
+
+### 발견한 root cause (11개)
+
+| # | 영역 | 수정 |
+|---|------|------|
+| 1 | M1 mixed-cycle | `split_face_by_chain` winding flip — projection plane 기준 signed area pre-check + reverse |
+| 2 | Step 4.55 | `dissolve_containing_faces` shared corner 오판 — true connector 정의 강화 (한쪽은 outer-only, 한쪽은 inner-only) |
+| 3 | **ADR-015** | B1 auto hole-promote 비활성 |
+| 4 | exec_draw_line | `align_face_with_neighbors` 결과 무관 항상 `surface_normal` hint 검사 |
+| 5 | post-pipeline | NaN/zero normal degenerate face 제거 + winding 일괄 강제 |
+| 6 | M1 split | sub-face 가 ORIGINAL XIA inherit (이전엔 새 RECT XIA 로 잘못 이전) |
+| 7 | Step 4.5 | `dissolve_and_fan_split` 도 동일 inheritance 패턴 |
+| 8 | post-pipeline | 검사 범위 broadening — touched_verts 위 모든 active face + degenerate 는 전역 scan |
+| 9 | RECT tool (TS) | 바닥면 (cardinal plane) 좌표 정확히 0 으로 snap — mouse pick 의 ε 정밀도 한계 흡수 |
+
+### 새 회귀 테스트 (axia-core, +30 가까이 추가)
+
+`scene::tests` 에 추가된 stress test:
+- `test_overlapping_rects_*` — partial / corner overlap
+- `test_three_overlapping_rects_no_missing_cell` — 3-RECT 중첩
+- `test_nested_plus_side_rect_no_flipped_normal` — winding regression
+- `test_lshape_with_inner_rects_all_faced` — L-shape + inner
+- `test_2x2_grid_all_faces_synthesize` — 2×2 grid
+- `test_multi_rect_stress_no_missing_cells` — 5 구성 stress
+- `test_two_stacked_inner_rects_both_faced` — ADR-015 핵심 케이스
+- `test_column_of_inner_rects_all_faced` — 5-RECT vertical stack
+- `test_collinear_adjacent_rect_synthesizes`
+- `test_adjacent_rect_face_synthesizes`
+- `test_rect_sharing_two_existing_edges_synthesizes`
+- `test_rect_with_all_existing_edges_creates_face`
+- `test_complex_overlap_no_missing_faces` — 9-RECT 복잡 overlap
+- `test_outer_rect_preserved_after_many_inners`
+- `test_outer_rect_drawn_after_inners_keeps_face`
+- `test_outer_with_overlapping_extending_rects`
+- `test_all_rects_have_consistent_winding`
+- `test_user_pattern_no_missing_faces` — 사용자 화면 reproduction
+- `test_deeply_nested_rects_all_have_faces`
+- `test_partial_overlap_no_degenerate_faces` — 6 가지 overlap 구성
+- `test_outer_with_two_partial_overlap_inners`
+- `test_draw_order_independence` — 그리기 순서 무관성
+- `test_enclosing_outer_after_overlapping_inners`
+- `test_outer_edge_coincides_with_inner_edge`
+- `test_very_large_outer_after_small_inners`
+- `test_outer_edge_collinear_overlap_with_inner`
+
+### ADR 정합성 회복
+
+- **ADR-007 Invariant 2 (Winding)**: 모든 face CCW 강제 — neighbor 의존
+  alignment 가 잘못된 방향으로 propagate 되는 케이스 차단.
+- **ADR-008 Axiom 1 (Face = byproduct)**: 토폴로지가 그리기 순서에 무관
+  하게 deterministic — `test_draw_order_independence` 로 검증.
+- **ADR-008 Axiom 2 (RECT = 4 LINEs)**: per-line + epoch 처리 일관.
+- **ADR-008 Axiom 7 (Adjacent shared edge)**: ADR-015 로 정합 (B1 비활성).
+
+### 통계
+
+- Rust 테스트: 288 (axia-geo) + 67 (axia-core, +30) + 2 (transaction) = **357 passed**
+- TypeScript 테스트: **1156 passed** (69 files)
+- 회귀: 없음
+- 신규 ADR: ADR-015
+- WASM 재빌드: ✓
+
+### 사용자 측 영향
+
+- 인접 inner RECT 가 자연스럽게 작동 — gap 두기/4-LINE 우회 불필요.
+- 모든 face 일관된 winding (gray front-side 렌더).
+- 바닥면 RECT 가 정확히 z=0 에 위치 — 후속 z-search/sort 안정.
+- Trade-off: outer 의 hole 영역 자동 인식 안 됨 (push/pull 시 명시 처리).
+
 ## 향후 과제
 - Phase G case (c): endpoint-on-hole-boundary "bridge" topology
 - Material / Texture (텍스처 이미지 매핑 미구현)
