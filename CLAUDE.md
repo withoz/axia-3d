@@ -1,5 +1,65 @@
 # AXiA 3D — 프로젝트 지침 (Claude 세션용)
 
+## 🔒 불변 정책 — 절대 변경 금지 (LOCKED 2026-04-28)
+
+다음 정책들은 사용자가 **명시적으로 거부 또는 변경 요청** 하기 전까지
+**모든 후속 세션에서 그대로 유지**되어야 한다. ADR-014 메타-원칙 #10
+("ADR 불변 — 변경 시 새 ADR + Superseded") 적용.
+
+### 1. ADR-015 — Stacked Inner RECT Manifold-First B1 Policy
+- **B1 auto hole-promote 비활성** — `exec_draw_rect` interior fast-path,
+  `run_face_synthesis_postprocess` Step 4.8 / 4.95 에서 자동 promote 금지.
+- 명시적 promote (`merge-as-hole` 우클릭 메뉴) 만 허용.
+- ADR-008 Axiom 7 (adjacent RECTs share DCEL edge) 정합 우선.
+
+### 2. ADR-007 Invariant 2 — Winding 일괄 강제
+- 모든 face 의 `normal.dot(surface_normal_hint) >= 0` 보장.
+- `align_face_with_neighbors` 결과와 **무관하게** 항상 hint 기준 검사.
+- post-pipeline scan: degenerate (NaN/zero normal) 제거 + winding flip
+  (touched_verts 위 boundary 가진 face 만).
+
+### 3. M1 / Step 4.5 sub-face XIA Inheritance
+- `run_mixed_cycle_splits` 의 sub-face 는 **원본 XIA** 에 inherit.
+- `dissolve_and_fan_split` sub-face 도 동일 inheritance.
+- 새 RECT 의 XIA 로 옮기지 말 것 (face_to_xia ↔ xia.face_ids 일관성).
+
+### 4. dissolve_containing_faces Connector 정의
+- True connector: 한 vert 는 outer-only, 다른 vert 는 inner-only.
+- shared corner (양쪽 boundary 모두에 속함) 는 connector 가 아님.
+
+### 5. 엔진 허용오차 정책 (사용자 정책 2026-04-27)
+- Mesh 층은 **exact input** 만 처리. mm 단위 fuzzy snap 금지.
+- 1.5μm spatial-hash dedup 만 허용 (f32 drift 흡수용).
+- UI Snap (osnap) 이 정렬 책임 — 입력 단계에서 해소.
+- `add_vertex_with_snap` 같은 mesh-level 허용오차 함수 추가 금지.
+
+### 6. 바닥면 좌표 정확성 (사용자 요청 2026-04-28)
+- DrawRectTool / DrawCircleTool / DrawLineTool 의 cardinal plane snap.
+- `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
+- 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
+
+### 변경 시 필수 절차
+이 정책들 중 하나라도 변경하려면:
+1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
+2. 사용자가 동의한 경우에만 진행
+3. 변경 시 새 ADR 작성 (기존 ADR 은 `Superseded by ADR-XXX` 표시)
+4. CLAUDE.md 의 본 섹션 업데이트
+5. 변경 사유 + 영향 범위를 commit message 에 명시
+
+### 회귀 방지 테스트 (절대 #[ignore] 금지)
+
+이 테스트들이 깨지면 위 불변 정책 중 하나가 위반된 것이다:
+- `test_two_stacked_inner_rects_both_faced`
+- `test_column_of_inner_rects_all_faced`
+- `test_all_rects_have_consistent_winding`
+- `test_complex_overlap_no_missing_faces`
+- `test_outer_with_overlapping_extending_rects`
+- `test_outer_rect_drawn_after_inners_keeps_face`
+- `test_draw_order_independence`
+- `test_user_pattern_no_missing_faces`
+
+---
+
 ## 프로젝트 목표
 블렌더보다 쉽고, 스케치업보다 정확한 3D 모델링 플랫폼.
 CAD를 대치하는 가벼운 동작의 모델링 프로그램.

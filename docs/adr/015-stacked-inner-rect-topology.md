@@ -1,8 +1,13 @@
 # ADR-015: Stacked Inner RECT Topology — Manifold-First B1 Policy
 
-**Status**: Accepted (2026-04-28)
+**Status**: 🔒 **Accepted & LOCKED** (2026-04-28)
 **Supersedes**: ADR-008 Phase E (B1 auto-promote, partial)
 **Related**: ADR-007 (Face Orientation Policy), ADR-008 (Face Operation Axioms), ADR-006 (Multi-loop Face)
+
+> ⚠️ **DO NOT MODIFY** without explicit user consent.
+> 사용자가 명시적으로 거부 또는 변경 요청 전까지 본 ADR 의 결정은
+> 모든 후속 세션에서 그대로 유지되어야 합니다 (ADR-014 메타-원칙 #10).
+> 변경 필요 시: 새 ADR 작성 + 본 ADR 에 `Superseded by ADR-XXX` 표시.
 
 ---
 
