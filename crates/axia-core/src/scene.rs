@@ -1192,17 +1192,24 @@ impl Scene {
             for fid in candidates {
                 let new_faces = self.mesh.dissolve_and_fan_split(fid);
                 if !new_faces.is_empty() {
-                    if let Some(xia_id) = self.get_xia_for_face(fid) {
-                        self.unregister_face_from_xia(fid);
+                    let old_xia = self.get_xia_for_face(fid);
+                    self.unregister_face_from_xia(fid);
+                    if let Some(xia_id) = old_xia {
                         if self.xias.get(&xia_id).is_some() {
                             self.register_faces_to_xia(xia_id, &new_faces);
                             if let Some(xia) = self.xias.get_mut(&xia_id) {
                                 for &f in &new_faces { xia.face_ids.push(f); }
                             }
                         }
-                    }
-                    for f in new_faces {
-                        if !all_created_faces.contains(&f) { all_created_faces.push(f); }
+                        // 2026-04-28 — XIA inheritance preserved. Sub-faces NOT
+                        //   added to all_created_faces — would cause new RECT's
+                        //   XIA registration to overwrite face_to_xia at end
+                        //   of exec_draw_rect (state inconsistency).
+                    } else {
+                        // No original XIA — sub-faces become "owned" by current op.
+                        for f in new_faces {
+                            if !all_created_faces.contains(&f) { all_created_faces.push(f); }
+                        }
                     }
                 }
             }
@@ -2279,25 +2286,39 @@ impl Scene {
         // 2026-04-28 — ADR-007 Invariant 2 enforcement (post-pipeline).
         //   D-resolver / M1 split / dissolve_and_fan_split 등 일부 step 은
         //   surface_normal hint 를 받지 않아 인접 neighbor 와 align 만 함.
-        //   인접 neighbor 가 flipped 이면 신규 face 도 flipped 가능.
-        //   → 모든 created_faces 의 normal 을 n_norm 과 비교, dot < 0 이면 flip.
         //   degenerate (NaN / zero-length normal) face 는 invariant 위반 +
-        //   render artifact 유발 → 제거.
+        //   render artifact ("shadow") 유발.
+        //
+        //   1) Degenerate scan — 모든 active face 대상 (이전 draw 의 잔재
+        //      포함 가능). NaN/zero normal 은 무조건 제거.
+        //   2) Winding flip — touched_verts 위 boundary 가진 face 만.
+        //      Unrelated geometry 의 normal 은 사용자 의도 그대로 보존.
+        let touched_set: std::collections::HashSet<VertId> =
+            epoch.touched_verts.iter().copied().collect();
         let mut degenerate_to_remove: Vec<axia_geo::FaceId> = Vec::new();
-        for &fid in &epoch.created_faces {
-            if !self.mesh.faces.contains(fid) { continue; }
-            if !self.mesh.faces[fid].is_active() { continue; }
-            let face_n = self.mesh.faces[fid].normal();
-            // Degenerate detection: NaN, infinity, or zero-length.
+        let mut to_flip: Vec<axia_geo::FaceId> = Vec::new();
+        for (fid, f) in self.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let face_n = f.normal();
+            // Degenerate detection
             if !face_n.x.is_finite() || !face_n.y.is_finite() || !face_n.z.is_finite()
                 || face_n.length_squared() < 1e-12
             {
                 degenerate_to_remove.push(fid);
                 continue;
             }
+            // Winding check — only for faces touched by this draw
             if face_n.dot(n_norm) < 0.0 {
-                let _ = self.mesh.flip_face_safe(fid);
+                let verts = match self.mesh.collect_loop_verts(f.outer().start) {
+                    Ok(v) => v, Err(_) => continue,
+                };
+                if verts.iter().any(|v| touched_set.contains(v)) {
+                    to_flip.push(fid);
+                }
             }
+        }
+        for fid in to_flip {
+            let _ = self.mesh.flip_face_safe(fid);
         }
         for fid in degenerate_to_remove {
             self.unregister_face_from_xia(fid);
