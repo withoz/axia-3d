@@ -1832,16 +1832,21 @@ impl Scene {
                 }
                 match self.mesh.add_face(&loop_verts, self.default_material) {
                     Ok(fid) => {
-                        // Normal 방향 일관성:
-                        // 1) 인접 face가 있으면 그들과 같은 방향으로 flip (solid manifold).
-                        // 2) 인접 face 없거나 inconclusive면 surface_normal 힌트 / +Y 기본값.
-                        let aligned = self.mesh.align_face_with_neighbors(fid);
-                        if !aligned {
-                            let face_n = self.mesh.faces[fid].normal();
-                            let target = surface_normal.unwrap_or(DVec3::Y);
-                            if face_n.dot(target) < 0.0 {
-                                let _ = self.mesh.flip_face_safe(fid);
-                            }
+                        // ADR-007 Invariant 2 (Winding): face's normal MUST
+                        //   align with surface_normal hint. Always enforce —
+                        //   neighbor alignment alone is insufficient as
+                        //   neighbors might themselves be flipped.
+                        //
+                        // 2026-04-28 — 사용자 보고: 그리는 방향에 따라 면이
+                        //   뒤집혀 BackSide 로 렌더되는 현상. 기존 logic 은
+                        //   align_face_with_neighbors 가 true 반환 시 (= flip
+                        //   수행) surface_normal 검사를 skip 해 결과가 hint 와
+                        //   반대일 수 있었음. 항상 hint 기준으로 검사.
+                        self.mesh.align_face_with_neighbors(fid);
+                        let face_n = self.mesh.faces[fid].normal();
+                        let target = surface_normal.unwrap_or(DVec3::Y);
+                        if face_n.dot(target) < 0.0 {
+                            let _ = self.mesh.flip_face_safe(fid);
                         }
                         all_created_faces.push(fid);
                         seg_faces += 1;
@@ -2282,12 +2287,13 @@ impl Scene {
             //   are already claimed by another face in conflict, but for the
             //   stacked-inner case the cycle-direction HEs are free.
             if let Ok(fid) = self.mesh.add_face_with_holes(&corner_vids, &[], self.default_material) {
-                let aligned = self.mesh.align_face_with_neighbors(fid);
-                if !aligned {
-                    let face_n = self.mesh.faces[fid].normal();
-                    if face_n.dot(n_norm) < 0.0 {
-                        let _ = self.mesh.flip_face_safe(fid);
-                    }
+                // ADR-007 Invariant 2 (Winding): face's normal MUST align with
+                //   surface_normal hint. Always enforce regardless of neighbor
+                //   alignment result — neighbors might be wrongly oriented and
+                //   propagate the flip.
+                let face_n = self.mesh.faces[fid].normal();
+                if face_n.dot(n_norm) < 0.0 {
+                    let _ = self.mesh.flip_face_safe(fid);
                 }
                 epoch.created_faces.push(fid);
             }
@@ -3981,6 +3987,39 @@ mod tests {
             if !scene.face_to_xia.contains_key(&fid) { orphans.push(fid); }
         }
         assert!(orphans.is_empty(), "orphan faces (no XIA): {:?}", orphans);
+    }
+
+    /// 사용자 보고 2026-04-28 — 면이 그리는 방향에 따라 뒤집혀 BackSide
+    /// 로 렌더되는 현상. ADR-007 Invariant 2 (Winding) 정합 검증:
+    /// 어느 방향으로 RECT 를 그리든 모든 face 가 surface_normal 방향과
+    /// 같은 normal 을 가져야 함 (XY plane → +Z normal).
+    #[test]
+    fn test_all_rects_have_consistent_winding() {
+        let mut scene = Scene::new();
+        // 다양한 RECT — 모두 XY 평면, normal +Z 기대.
+        let rects = [
+            (DVec3::new(0.0, 0.0, 0.0), DVec3::Y, 4.0, 4.0),
+            (DVec3::new(5.0, 0.0, 0.0), DVec3::Y, 3.0, 3.0),
+            (DVec3::new(-5.0, 0.0, 0.0), DVec3::Y, 3.0, 3.0),
+            (DVec3::new(0.0, 5.0, 0.0), DVec3::Y, 4.0, 2.0),
+            (DVec3::new(0.0, -5.0, 0.0), DVec3::Y, 2.0, 4.0),
+        ];
+        for &(center, up, w, h) in &rects {
+            scene.execute(Command::DrawRect {
+                center, normal: DVec3::Z, up,
+                width: w, height: h,
+            });
+        }
+        // 모든 active face 의 normal.z > 0 (CCW = front)
+        for (fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            let n = f.normal();
+            assert!(
+                n.z > 0.0,
+                "face {:?} has flipped normal {:?} — BackSide rendering",
+                fid, n
+            );
+        }
     }
 
     /// 사용자 보고 2026-04-28 — 2 stacked inner rects.
