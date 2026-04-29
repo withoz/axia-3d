@@ -38,6 +38,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "axia-foreign"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axia-geo",
+ "glam",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "axia-geo"
 version = "0.1.0"
 dependencies = [
