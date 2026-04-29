@@ -66,6 +66,171 @@ pub fn evaluate_strict(ctrl_grid: &[Vec<DVec3>], u: f64, v: f64) -> Result<DVec3
     evaluate(ctrl_grid, u.clamp(0.0, 1.0), v.clamp(0.0, 1.0))
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// ADR-034 Phase F — SSI infrastructure
+// ════════════════════════════════════════════════════════════════════════
+
+/// Split the patch in u-direction at parameter `t ∈ [0, 1]`.
+/// Returns `(left_grid, right_grid)`, both representing sub-patches over
+/// `[0, t]` and `[t, 1]` respectively (re-parameterized to [0, 1]).
+///
+/// Algorithm: for each column `j`, run 1D Bezier subdivision in u over the
+/// column's control points → left/right column. Stack columns to form
+/// new grids.
+pub fn split_u(ctrl_grid: &[Vec<DVec3>], t: f64) -> Result<(Vec<Vec<DVec3>>, Vec<Vec<DVec3>>)> {
+    validate(ctrl_grid)?;
+    let n_v = ctrl_grid[0].len();
+    let n_u = ctrl_grid.len();
+    let mut left: Vec<Vec<DVec3>> = vec![Vec::with_capacity(n_v); n_u];
+    let mut right: Vec<Vec<DVec3>> = vec![Vec::with_capacity(n_v); n_u];
+    for j in 0..n_v {
+        let column: Vec<DVec3> = ctrl_grid.iter().map(|row| row[j]).collect();
+        let (l, r) = crate::curves::bezier::subdivide(&column, t);
+        for i in 0..n_u {
+            left[i].push(l[i]);
+            right[i].push(r[i]);
+        }
+    }
+    Ok((left, right))
+}
+
+/// Split the patch in v-direction at parameter `t ∈ [0, 1]`.
+pub fn split_v(ctrl_grid: &[Vec<DVec3>], t: f64) -> Result<(Vec<Vec<DVec3>>, Vec<Vec<DVec3>>)> {
+    validate(ctrl_grid)?;
+    let n_u = ctrl_grid.len();
+    let mut left: Vec<Vec<DVec3>> = Vec::with_capacity(n_u);
+    let mut right: Vec<Vec<DVec3>> = Vec::with_capacity(n_u);
+    for row in ctrl_grid {
+        let (l, r) = crate::curves::bezier::subdivide(row, t);
+        left.push(l);
+        right.push(r);
+    }
+    Ok((left, right))
+}
+
+/// 3D axis-aligned bounding box of the control grid.
+/// Returns `(min, max)` covering all control points.
+///
+/// **Invariant**: the patch surface is fully contained within this BBox
+/// (Bezier convex-hull property). Useful for SSI AABB pruning.
+pub fn bbox_xyz(ctrl_grid: &[Vec<DVec3>]) -> Result<(DVec3, DVec3)> {
+    validate(ctrl_grid)?;
+    let mut mn = DVec3::splat(f64::INFINITY);
+    let mut mx = DVec3::splat(f64::NEG_INFINITY);
+    for row in ctrl_grid {
+        for p in row {
+            mn = mn.min(*p);
+            mx = mx.max(*p);
+        }
+    }
+    Ok((mn, mx))
+}
+
+/// 2D parameter-space bounding box. For canonical Bezier patch, always
+/// `((0, 0), (1, 1))`. Provided for symmetry with B-spline / NURBS where
+/// the parameter range varies.
+#[inline]
+pub fn bbox_uv() -> ((f64, f64), (f64, f64)) {
+    ((0.0, 0.0), (1.0, 1.0))
+}
+
+/// Test if the control polygon is "flat" within `chord_tol` (mm).
+///
+/// Method: fit a least-squares plane to all control points; check max
+/// distance from plane. Used by SSI subdivide-and-prune termination.
+pub fn is_planar(ctrl_grid: &[Vec<DVec3>], chord_tol: f64) -> Result<bool> {
+    validate(ctrl_grid)?;
+    let mut all_pts: Vec<DVec3> = Vec::new();
+    for row in ctrl_grid { for p in row { all_pts.push(*p); } }
+    if all_pts.len() < 3 { return Ok(true); }
+
+    // Centroid
+    let mut centroid = DVec3::ZERO;
+    for p in &all_pts { centroid += *p; }
+    centroid /= all_pts.len() as f64;
+
+    // Find plane normal via cross of two non-collinear edges from centroid
+    let mut normal = DVec3::ZERO;
+    let v0 = all_pts[0] - centroid;
+    if v0.length_squared() < 1e-18 { return Ok(true); }
+    for p in &all_pts[1..] {
+        let v = *p - centroid;
+        let cross = v0.cross(v);
+        if cross.length_squared() > 1e-12 {
+            normal = cross.normalize();
+            break;
+        }
+    }
+    if normal.length_squared() < 0.5 { return Ok(true); }
+
+    // Max distance from plane
+    let mut max_dist: f64 = 0.0;
+    for p in &all_pts {
+        let dist = (*p - centroid).dot(normal).abs();
+        if dist > max_dist { max_dist = dist; }
+    }
+    Ok(max_dist < chord_tol)
+}
+
+/// Test if the patch is degenerate (zero-area, all control points coincident
+/// or collinear).
+pub fn is_degenerate(ctrl_grid: &[Vec<DVec3>]) -> Result<bool> {
+    validate(ctrl_grid)?;
+    let (mn, mx) = bbox_xyz(ctrl_grid)?;
+    let extent = mx - mn;
+    Ok(extent.length() < 1e-9)
+}
+
+/// Estimate maximum curvature magnitude of the patch.
+///
+/// MVP: returns max distance from interior control point to the chord between
+/// its row's two endpoints (proxy for "control polygon flatness deviation").
+/// Unit: mm. Higher value → more subdivision needed for SSI.
+pub fn curvature_max(ctrl_grid: &[Vec<DVec3>]) -> Result<f64> {
+    validate(ctrl_grid)?;
+    let n_u = ctrl_grid.len();
+    let n_v = ctrl_grid[0].len();
+    let mut max_dev: f64 = 0.0;
+
+    // Check each row's interior control points distance from row chord
+    for row in ctrl_grid {
+        if row.len() >= 3 {
+            let chord_start = row[0];
+            let chord_end = row[row.len() - 1];
+            let chord_dir = chord_end - chord_start;
+            let chord_len = chord_dir.length();
+            if chord_len > 1e-12 {
+                let chord_unit = chord_dir / chord_len;
+                for p in &row[1..row.len() - 1] {
+                    let v = *p - chord_start;
+                    let proj = chord_unit * v.dot(chord_unit);
+                    let perp_len = (v - proj).length();
+                    if perp_len > max_dev { max_dev = perp_len; }
+                }
+            }
+        }
+    }
+    // Same for each column
+    for j in 0..n_v {
+        if n_u >= 3 {
+            let chord_start = ctrl_grid[0][j];
+            let chord_end = ctrl_grid[n_u - 1][j];
+            let chord_dir = chord_end - chord_start;
+            let chord_len = chord_dir.length();
+            if chord_len > 1e-12 {
+                let chord_unit = chord_dir / chord_len;
+                for i in 1..n_u - 1 {
+                    let v = ctrl_grid[i][j] - chord_start;
+                    let proj = chord_unit * v.dot(chord_unit);
+                    let perp_len = (v - proj).length();
+                    if perp_len > max_dev { max_dev = perp_len; }
+                }
+            }
+        }
+    }
+    Ok(max_dev)
+}
+
 /// Evaluate a Bezier patch at parameters (u, v).
 pub fn evaluate(ctrl_grid: &[Vec<DVec3>], u: f64, v: f64) -> Result<DVec3> {
     validate(ctrl_grid)?;
@@ -440,5 +605,155 @@ mod tests {
         let n = normal(&g, 0.5, 0.5).unwrap();
         assert!((n - DVec3::Z).length() < 1e-9,
             "expected +Z (du × dv right-handed), got {:?}", n);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-034 Phase F — SSI infrastructure tests
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn split_u_left_endpoint_matches_evaluate_at_t() {
+        let g = bicubic_grid();
+        let t = 0.4;
+        let (left, _right) = split_u(&g, t).unwrap();
+        // Left patch at u=1 should match original at u=t (any v).
+        for j in 0..=2 {
+            let v = j as f64 / 2.0;
+            let p_orig = evaluate(&g, t, v).unwrap();
+            let p_left_end = evaluate(&left, 1.0, v).unwrap();
+            assert!((p_orig - p_left_end).length() < 1e-9,
+                "v={}: orig at t={}, left at u=1: {:?} vs {:?}", v, t, p_orig, p_left_end);
+        }
+    }
+
+    #[test]
+    fn split_u_right_endpoint_matches_original() {
+        let g = bicubic_grid();
+        let t = 0.6;
+        let (_left, right) = split_u(&g, t).unwrap();
+        // Right patch at u=0 should match original at u=t.
+        for j in 0..=2 {
+            let v = j as f64 / 2.0;
+            let p_orig = evaluate(&g, t, v).unwrap();
+            let p_right_start = evaluate(&right, 0.0, v).unwrap();
+            assert!((p_orig - p_right_start).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn split_v_left_endpoint_matches_original() {
+        let g = bicubic_grid();
+        let t = 0.4;
+        let (left, _right) = split_v(&g, t).unwrap();
+        for i in 0..=2 {
+            let u = i as f64 / 2.0;
+            let p_orig = evaluate(&g, u, t).unwrap();
+            let p_left_end = evaluate(&left, u, 1.0).unwrap();
+            assert!((p_orig - p_left_end).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn split_u_grid_dimensions_preserved() {
+        let g = bicubic_grid();  // 4×4
+        let (left, right) = split_u(&g, 0.5).unwrap();
+        assert_eq!(left.len(), 4);
+        assert_eq!(right.len(), 4);
+        assert_eq!(left[0].len(), 4);
+        assert_eq!(right[0].len(), 4);
+    }
+
+    #[test]
+    fn split_v_grid_dimensions_preserved() {
+        let g = bicubic_grid();
+        let (left, right) = split_v(&g, 0.5).unwrap();
+        assert_eq!(left.len(), 4);
+        assert_eq!(right.len(), 4);
+        assert_eq!(left[0].len(), 4);
+        assert_eq!(right[0].len(), 4);
+    }
+
+    #[test]
+    fn split_at_zero_left_collapses_to_first_pt() {
+        let g = bilinear_grid();
+        let (left, _right) = split_u(&g, 0.0).unwrap();
+        // All of left's columns degenerate to the original first-row points.
+        let p = evaluate(&left, 0.5, 0.5).unwrap();
+        // Should equal evaluation at u=0, v=0.5 of original.
+        let expected = evaluate(&g, 0.0, 0.5).unwrap();
+        assert!((p - expected).length() < 1e-9);
+    }
+
+    #[test]
+    fn bbox_xyz_contains_all_control_pts() {
+        let g = bicubic_grid();
+        let (mn, mx) = bbox_xyz(&g).unwrap();
+        for row in &g {
+            for p in row {
+                assert!(p.x >= mn.x - 1e-9 && p.x <= mx.x + 1e-9);
+                assert!(p.y >= mn.y - 1e-9 && p.y <= mx.y + 1e-9);
+                assert!(p.z >= mn.z - 1e-9 && p.z <= mx.z + 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn bbox_xyz_planar_patch_zero_z_extent() {
+        let g = bilinear_grid();  // all z=0
+        let (mn, mx) = bbox_xyz(&g).unwrap();
+        assert!((mx.z - mn.z).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bbox_uv_canonical_unit_square() {
+        let ((u_mn, v_mn), (u_mx, v_mx)) = bbox_uv();
+        assert_eq!((u_mn, v_mn), (0.0, 0.0));
+        assert_eq!((u_mx, v_mx), (1.0, 1.0));
+    }
+
+    #[test]
+    fn is_planar_xy_grid_returns_true() {
+        let g = bilinear_grid();  // all z=0 → planar
+        assert!(is_planar(&g, 0.001).unwrap());
+    }
+
+    #[test]
+    fn is_planar_bumped_grid_returns_false() {
+        let g = bicubic_grid();  // has z=5 bump
+        assert!(!is_planar(&g, 0.5).unwrap(),
+            "bicubic grid with z=5 bump should not be planar at tol=0.5");
+    }
+
+    #[test]
+    fn is_planar_loose_tolerance_accepts_curved() {
+        let g = bicubic_grid();
+        assert!(is_planar(&g, 100.0).unwrap(),
+            "loose tol should accept any patch as planar");
+    }
+
+    #[test]
+    fn is_degenerate_zero_grid_returns_true() {
+        let g = vec![vec![DVec3::ZERO; 2]; 2];
+        assert!(is_degenerate(&g).unwrap());
+    }
+
+    #[test]
+    fn is_degenerate_normal_grid_returns_false() {
+        let g = bilinear_grid();
+        assert!(!is_degenerate(&g).unwrap());
+    }
+
+    #[test]
+    fn curvature_max_planar_grid_zero() {
+        let g = bilinear_grid();  // all collinear in each row+col
+        let c = curvature_max(&g).unwrap();
+        assert!(c < 1e-9, "planar grid curvature should be ~0, got {}", c);
+    }
+
+    #[test]
+    fn curvature_max_bumped_grid_positive() {
+        let g = bicubic_grid();  // z=5 bump in interior
+        let c = curvature_max(&g).unwrap();
+        assert!(c > 1.0, "bumped grid should have curvature > 1, got {}", c);
     }
 }

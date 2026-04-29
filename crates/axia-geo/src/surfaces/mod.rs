@@ -49,8 +49,10 @@ pub mod bezier_patch;
 pub mod bspline_surface;
 pub mod nurbs_surface;
 pub mod trim;
+pub mod ssi;
 
 pub use trim::{TrimCurve2D, TrimLoop};
+pub use ssi::SurfaceIntersection;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
