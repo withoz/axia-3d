@@ -57,10 +57,19 @@
   표시 (디버그)" 체크박스. 기본 OFF.
 - ADR-007 winding 정책 자체는 변경 없음 — 시각 노출만 정책 변경.
 
-### 7. 바닥면 좌표 정확성 (사용자 요청 2026-04-28, 원래 #6)
-- DrawRectTool / DrawCircleTool / DrawLineTool 의 cardinal plane snap.
-- `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
-- 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
+### 7. 바닥면 좌표 정확성 (사용자 요청 2026-04-28, 격상 2026-04-29)
+- **ADR-026 P12** — Bridge 계층 SSOT (Single Source of Truth):
+  - `WasmBridge.drawRect / drawLine / drawCircle / drawPolyline` 가 cardinal
+    plane snap 의 단일 진실 원천
+  - Normal 이 cardinal axis (`|n.{x|y|z}|>0.999`) + 좌표가 sub-tol (`<1e-3`)
+    이면 정확히 0 으로 강제
+  - 모든 도구 / 테스트 / 스크립트 호출 경로에 자동 적용
+- **Defense in Depth**: LOCKED #7 의 도구별 snap (DrawRectTool /
+  DrawCircleTool / DrawLineTool 의 첫 클릭 + projection 결과) 는 UI 단계
+  방어선으로 유지. Bridge SSOT 는 마지막 방어선.
+- 회귀 테스트: `WasmBridge.test.ts` 의 `describe('ADR-026 P12 cardinal plane
+  SSOT')` 8 tests (절대 #[ignore] 금지).
+- f32 ray-plane intersection ε 정밀도 손실 → 엔진 단계 누적 오차 차단.
 
 ### 12. ADR-025 — Closed Edge Cycle MUST Synthesize Face (P11, 2026-04-29)
 - **새 원칙 P11 (사용자 강조)**: "닫힌 엣지에는 반드시 면이 생성되어야 한다."

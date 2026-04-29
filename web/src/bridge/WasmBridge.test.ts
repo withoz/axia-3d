@@ -140,6 +140,126 @@ describe('WasmBridge', () => {
     });
   });
 
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-026 P12 — Cardinal Plane SSOT verification
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-026 P12 cardinal plane SSOT', () => {
+    it('drawRect() snaps center.y to exact 0 when normal=(0,1,0) and y is sub-tol', () => {
+      // Mock the engine to capture arguments
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+          captured.push(cx, cy, cz, ...rest);
+          return 1;
+        },
+      };
+      bridge.drawRect(1.0, 1e-7, 2.0, 0, 1, 0, 0, 0, 1, 5, 5);
+      expect(captured[0]).toBe(1.0);
+      expect(captured[1]).toBe(0);  // ε snapped exactly to 0
+      expect(captured[2]).toBe(2.0);
+    });
+
+    it('drawRect() snaps center.z to exact 0 when normal=(0,0,1) and z is sub-tol', () => {
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+          captured.push(cx, cy, cz, ...rest);
+          return 1;
+        },
+      };
+      bridge.drawRect(1.0, 2.0, 5e-8, 0, 0, 1, 1, 0, 0, 5, 5);
+      expect(captured[2]).toBe(0);
+    });
+
+    it('drawRect() preserves non-cardinal normal coords', () => {
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+          captured.push(cx, cy, cz, ...rest);
+          return 1;
+        },
+      };
+      // Normal not axis-aligned → no snap
+      bridge.drawRect(1.0, 1e-7, 2.0, 0.7, 0.7, 0, 0, 0, 1, 5, 5);
+      expect(captured[1]).toBeCloseTo(1e-7, 12);  // unchanged
+    });
+
+    it('drawRect() preserves coords above tolerance', () => {
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+          captured.push(cx, cy, cz, ...rest);
+          return 1;
+        },
+      };
+      // 0.5 is way above 1e-3 tol → not snapped
+      bridge.drawRect(1.0, 0.5, 2.0, 0, 1, 0, 0, 0, 1, 5, 5);
+      expect(captured[1]).toBe(0.5);
+    });
+
+    it('drawCircle() snaps center y to 0 when normal=(0,1,0)', () => {
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_circle: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+          captured.push(cx, cy, cz, ...rest);
+          return 1;
+        },
+      };
+      bridge.drawCircle(1.0, 1e-7, 2.0, 0, 1, 0, 5, 24);
+      expect(captured[1]).toBe(0);
+    });
+
+    it('drawLine() snaps both endpoints when both on cardinal y=0 plane', () => {
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_line: (...args: number[]) => {
+          captured.push(...args);
+          return 1;
+        },
+      };
+      bridge.drawLine(1.0, 1e-7, 2.0, 5.0, 3e-8, 7.0);
+      expect(captured[1]).toBe(0);  // y0 snapped
+      expect(captured[4]).toBe(0);  // y1 snapped
+    });
+
+    it('drawLine() does NOT snap when only one endpoint near 0', () => {
+      const captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_line: (...args: number[]) => {
+          captured.push(...args);
+          return 1;
+        },
+      };
+      // y0 ≈ 0 but y1 = 5 → not coplanar with y=0 plane → no snap
+      bridge.drawLine(1.0, 1e-7, 2.0, 5.0, 5.0, 7.0);
+      expect(captured[1]).toBeCloseTo(1e-7, 12);  // preserved
+    });
+
+    it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
+      const captured: Float64Array[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        drawPolyline: (arr: Float64Array) => {
+          captured.push(arr.slice());
+          return 1;
+        },
+      };
+      bridge.drawPolyline([0, 1e-7, 0,  5, 2e-8, 0,  5, 3e-8, 5,  0, 1e-7, 5]);
+      const arr = captured[0];
+      expect(arr[1]).toBe(0);
+      expect(arr[4]).toBe(0);
+      expect(arr[7]).toBe(0);
+      expect(arr[10]).toBe(0);
+    });
+  });
+
   describe('push/pull', () => {
     it('pushPull() returns boolean', () => {
       const result = bridge.pushPull(1, 5.0);

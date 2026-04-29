@@ -8,6 +8,76 @@ import init, { AxiaEngine } from '../wasm/axia_wasm';
 import { Toast } from '../ui/Toast';
 import { debugLog } from '../utils/debug';
 
+// ════════════════════════════════════════════════════════════════════════
+// ADR-026 P12 — Cardinal Plane SSOT (Single Source of Truth)
+// ════════════════════════════════════════════════════════════════════════
+//
+// 정책: 모든 draw* API 호출의 좌표는 normal 이 cardinal axis (±X / ±Y / ±Z) 일 때
+// 해당 axis 좌표가 정확히 0 으로 강제된다. f32 ray-plane intersection 의
+// ε 정밀도 손실 (보통 1e-7 ~ 1e-5) 을 엔진 단계 이전에 차단하여 후속 작업
+// (face merge, push/pull, intersection) 의 누적 오차 방지.
+//
+// SSOT 위치: bridge 계층 — 모든 도구 (DrawRect/Line/Circle/Polyline) 가 이 경로를
+// 통과하므로, 도구별 수동 snap 누락 위험 제거.
+//
+// LOCKED #7 의 적용 범위 확장 (도구 → 모든 호출 경로).
+
+const CARDINAL_THRESHOLD = 0.999;
+const CARDINAL_SNAP_TOL = 1e-3;  // 1μm — engine 1.5μm spatial-hash 미만
+
+/** Returns the cardinal axis index (0=x, 1=y, 2=z) if normal is axis-aligned, else -1. */
+function cardinalAxis(nx: number, ny: number, nz: number): number {
+  if (Math.abs(nx) > CARDINAL_THRESHOLD) return 0;
+  if (Math.abs(ny) > CARDINAL_THRESHOLD) return 1;
+  if (Math.abs(nz) > CARDINAL_THRESHOLD) return 2;
+  return -1;
+}
+
+/** Snap rect/circle center's normal-axis coord to 0 (within tol). */
+function snapCardinalCenter(
+  cx: number, cy: number, cz: number,
+  nx: number, ny: number, nz: number,
+): [number, number, number] {
+  const axis = cardinalAxis(nx, ny, nz);
+  if (axis === 0 && Math.abs(cx) < CARDINAL_SNAP_TOL) cx = 0;
+  else if (axis === 1 && Math.abs(cy) < CARDINAL_SNAP_TOL) cy = 0;
+  else if (axis === 2 && Math.abs(cz) < CARDINAL_SNAP_TOL) cz = 0;
+  return [cx, cy, cz];
+}
+
+/** Snap line endpoints if both share the same cardinal axis = 0 plane. */
+function snapCoplanarCardinal6(
+  x0: number, y0: number, z0: number,
+  x1: number, y1: number, z1: number,
+): [number, number, number, number, number, number] {
+  // X plane
+  if (Math.abs(x0) < CARDINAL_SNAP_TOL && Math.abs(x1) < CARDINAL_SNAP_TOL) {
+    x0 = 0; x1 = 0;
+  }
+  if (Math.abs(y0) < CARDINAL_SNAP_TOL && Math.abs(y1) < CARDINAL_SNAP_TOL) {
+    y0 = 0; y1 = 0;
+  }
+  if (Math.abs(z0) < CARDINAL_SNAP_TOL && Math.abs(z1) < CARDINAL_SNAP_TOL) {
+    z0 = 0; z1 = 0;
+  }
+  return [x0, y0, z0, x1, y1, z1];
+}
+
+/** Snap polyline points if all share the same cardinal axis = 0 plane. */
+function snapPolylineCardinal(arr: Float64Array): void {
+  if (arr.length < 6 || arr.length % 3 !== 0) return;
+  // Check each axis independently — if all points have |coord| < tol, snap to 0.
+  for (let axis = 0; axis < 3; axis++) {
+    let allNear = true;
+    for (let i = axis; i < arr.length; i += 3) {
+      if (Math.abs(arr[i]) >= CARDINAL_SNAP_TOL) { allNear = false; break; }
+    }
+    if (allNear) {
+      for (let i = axis; i < arr.length; i += 3) arr[i] = 0;
+    }
+  }
+}
+
 // ═══ ADR-009 Orphan Recovery types ════════════════════════════════════
 export type OrphanCategory =
   | { kind: 'C1Pure' }
@@ -397,6 +467,9 @@ export class WasmBridge {
   ): number {
     if (!this.engine) return -1;
     this.markDirty();
+    // ADR-026 P12 — Cardinal Plane SSOT: 두 endpoint 가 동일 cardinal plane 위면
+    // 정확한 axis-0 좌표로 강제. (양쪽 endpoint 가 같은 normal-axis 값을 가질 때만.)
+    [x0, y0, z0, x1, y1, z1] = snapCoplanarCardinal6(x0, y0, z0, x1, y1, z1);
     return this.engine.draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz);
   }
 
@@ -408,6 +481,8 @@ export class WasmBridge {
     if (!this.engine) return -1;
     this.markDirty();
     const arr = points instanceof Float64Array ? points : new Float64Array(points);
+    // ADR-026 P12 — 모든 point 가 같은 cardinal plane 위면 정확히 axis-0 강제.
+    snapPolylineCardinal(arr);
     const fn = (this.engine as unknown as {
       drawPolyline?: (points: Float64Array) => number;
     }).drawPolyline;
@@ -423,6 +498,9 @@ export class WasmBridge {
   ): number {
     if (!this.engine) return -1;
     this.markDirty();
+    // ADR-026 P12 — Cardinal Plane SSOT: normal 이 cardinal axis 면 center 의
+    // 해당 axis 좌표를 정확히 0 으로 강제 (ε 정밀도 손실 차단).
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
     return this.engine.draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
   }
 
@@ -433,6 +511,7 @@ export class WasmBridge {
   ): number {
     if (!this.engine) return -1;
     this.markDirty();
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
     return this.engine.draw_circle(cx, cy, cz, nx, ny, nz, radius, segments);
   }
 
