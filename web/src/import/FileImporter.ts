@@ -21,7 +21,7 @@ import { parseString as parseDxf } from 'dxf';
 import { convertDwgToDxf, init as initDwgDxf } from 'dwgdxf';
 import { debugLog } from '../utils/debug';
 
-export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp' | '3dm';
+export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp' | '3dm' | 'step' | 'iges';
 
 export interface ImportResult {
   format: ImportFormat;
@@ -31,6 +31,8 @@ export interface ImportResult {
   vertexCount: number;
   faceCount: number;
   metadata?: DWGMetadata;
+  /** STEP/IGES import warnings (ADR-035 P20.7). */
+  warnings?: string[];
 }
 
 export interface DWGMetadata {
@@ -54,6 +56,8 @@ const FORMAT_ACCEPT: Record<ImportFormat, string> = {
   'dwg':  '.dwg',
   'skp':  '.skp',
   '3dm':  '.3dm',
+  'step': '.step,.stp',
+  'iges': '.iges,.igs',
 };
 
 /** 포맷별 표시 이름 */
@@ -68,6 +72,8 @@ const FORMAT_LABEL: Record<ImportFormat, string> = {
   'dwg':  'AutoCAD DWG',
   'skp':  'SketchUp',
   '3dm':  'Rhino 3DM',
+  'step': 'STEP (AP203/AP214/AP242)',
+  'iges': 'IGES 5.3',
 };
 
 /** 모든 지원 확장자. STEP/IGES도 picker에 노출하되 importFile에서 명시 안내 메시지로
@@ -177,18 +183,36 @@ export class FileImporter {
   async importFile(file: File, formatHint?: ImportFormat): Promise<ImportResult> {
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
-    // STEP/IGES는 의도적으로 "지원 예정" 명시 — 조용한 실패보다 대안 안내가
-    // UX적으로 낫다. 구현 로드맵은 OCCT.js 통합 (10MB+ WASM 번들 필요),
-    // BRep→Half-Edge DCEL 변환 레이어, LGPL 라이선스 검토 후 진행 예정.
+    // STEP/IGES — ADR-035 P20.7 dynamic loader 로 위임.
+    // OCCT.js 가 설치되지 않은 환경에서는 StepIgesImporter 가 명확한
+    // 안내 메시지로 throw → 사용자는 alternate format (OBJ/STL/DXF) 안내
+    // 를 받게 된다. 메인 번들에는 영향 0 (dynamic import).
     if (ext === 'step' || ext === 'stp' || ext === 'iges' || ext === 'igs') {
-      throw new Error(
-        `.${ext} (STEP/IGES)는 아직 지원하지 않습니다 — 2026년 하반기 예정.\n\n` +
-        `지금 사용 가능한 우회법:\n` +
-        `• FreeCAD (무료): 파일 → Export → STL 또는 DXF\n` +
-        `• Fusion 360: 내보내기 → STEP 변환 가능한 포맷\n` +
-        `• Rhino / SolidWorks: Save As → OBJ / 3DM\n\n` +
-        `변환 후 AXiA는 .obj, .stl, .dxf, .3dm을 직접 읽습니다.`
-      );
+      const { StepIgesImporter } = await import('./StepIgesImporter');
+      const importer = StepIgesImporter.getInstance();
+      const result = await importer.importFile(file);
+      // FileImporter 의 ImportResult schema 와 매핑
+      const meshCount = result.faceCount;  // OCCT face count → mesh count proxy
+      let vertexCount = 0;
+      let faceCount = 0;
+      result.group.traverse(obj => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.isMesh && mesh.geometry) {
+          const pos = mesh.geometry.getAttribute('position');
+          if (pos) vertexCount += pos.count;
+          const idx = mesh.geometry.getIndex();
+          faceCount += (idx ? idx.count / 3 : (pos?.count ?? 0) / 3);
+        }
+      });
+      return {
+        group: result.group,
+        format: result.format,
+        fileName: file.name,
+        meshCount,
+        vertexCount,
+        faceCount: Math.floor(faceCount),
+        warnings: result.warnings,
+      };
     }
 
     const format = formatHint || this.detectFormat(ext);

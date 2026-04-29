@@ -41,9 +41,9 @@ describe('FileImporter', () => {
   // --- getSupportedFormats ---
 
   describe('getSupportedFormats', () => {
-    it('returns all 10 supported formats', () => {
+    it('returns all 12 supported formats (incl. STEP/IGES per ADR-035)', () => {
       const formats = FileImporter.getSupportedFormats();
-      expect(formats).toHaveLength(10);
+      expect(formats).toHaveLength(12);
     });
 
     it('each entry has format, label, and accept fields', () => {
@@ -74,26 +74,31 @@ describe('FileImporter', () => {
     });
   });
 
-  // --- STEP/IGES rejection (Tier 3C) ---
+  // --- STEP/IGES dispatch (ADR-035 P20.7) ---
+  //
+  // Behavior change: STEP/IGES no longer hard-rejects in FileImporter.
+  // Instead they dispatch to StepIgesImporter which dynamically loads
+  // OCCT.js. In test env (no opencascade.js installed), this throws a
+  // clear "엔진이 설치되지 않았습니다" message + alternate format hints.
 
-  describe('STEP/IGES 미지원 안내', () => {
+  describe('STEP/IGES OCCT.js 동적 로딩 (ADR-035)', () => {
     async function tryImport(name: string) {
       const f = new File([''], name, { type: 'application/octet-stream' });
       await importer.importFile(f);
     }
-    it('rejects .step with guidance message', async () => {
-      await expect(tryImport('model.step')).rejects.toThrow(/STEP\/IGES.*아직 지원/);
+    it('dispatches .step to StepIgesImporter (no static rejection)', async () => {
+      await expect(tryImport('model.step')).rejects.toThrow(/opencascade\.js|설치/);
     });
-    it('rejects .stp', async () => {
-      await expect(tryImport('part.stp')).rejects.toThrow(/STEP\/IGES/);
+    it('dispatches .stp', async () => {
+      await expect(tryImport('part.stp')).rejects.toThrow(/opencascade\.js|설치/);
     });
-    it('rejects .iges', async () => {
-      await expect(tryImport('drawing.iges')).rejects.toThrow(/STEP\/IGES/);
+    it('dispatches .iges', async () => {
+      await expect(tryImport('drawing.iges')).rejects.toThrow(/opencascade\.js|설치/);
     });
-    it('rejects .igs', async () => {
-      await expect(tryImport('legacy.igs')).rejects.toThrow(/STEP\/IGES/);
+    it('dispatches .igs', async () => {
+      await expect(tryImport('legacy.igs')).rejects.toThrow(/opencascade\.js|설치/);
     });
-    it('error includes alternatives (FreeCAD / Fusion)', async () => {
+    it('error includes alternatives (FreeCAD / Fusion / Rhino)', async () => {
       try { await tryImport('foo.step'); } catch (e) {
         expect((e as Error).message).toContain('FreeCAD');
         expect((e as Error).message).toContain('Fusion');

@@ -1,6 +1,6 @@
 # ADR-035: STEP / IGES 전략 — Hybrid (OCCT.js 옵션 + 자체 파서 spike)
 
-**Status**: **Accepted** (2026-04-29) — Phase G Stage 4 kickoff
+**Status**: **Accepted** (2026-04-29, rev 1 보강 사용자 승인 2026-04-30) — Phase G Stage 4 kickoff
 **Plan**: [PLAN-001](../plans/PLAN-001-nurbs-kernel.md) Phase G Stage 4
 **Initiative**: ADR-027 (Accepted)
 **Builds on**: ADR-028~034 (Phases A~F + G1~G3)

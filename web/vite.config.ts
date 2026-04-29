@@ -23,6 +23,11 @@ export default defineConfig({
               id.includes('node_modules/rhino3dm')) {
             return 'file-io-libs';
           }
+          // OCCT.js (STEP/IGES) → 분리 청크 (ADR-035 P20.1).
+          // optionalDependency — 설치 시에만 chunk 생성. 메인 번들 영향 0.
+          if (id.includes('node_modules/opencascade.js')) {
+            return 'opencascade-deps';
+          }
         },
       },
     },
