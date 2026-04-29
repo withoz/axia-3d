@@ -10,6 +10,7 @@ pub mod analytic;
 pub mod subdivide;
 pub mod newton;
 pub mod topology;
+pub mod nurbs_wrapper;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};

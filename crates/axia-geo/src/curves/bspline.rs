@@ -174,6 +174,112 @@ pub fn clamped_uniform_knots(n_ctrl: usize, degree: usize) -> Vec<f64> {
     knots
 }
 
+/// Extract Bezier strips from a clamped non-rational B-spline curve.
+///
+/// Returns `(strips, ranges)` where each strip is a `degree+1`-point Bezier
+/// control array and `ranges[i]` is the parameter sub-range
+/// `(u_min_i, u_max_i)` that strip `i` covers in the original B-spline
+/// parameterization.
+///
+/// Algorithm: repeatedly insert each interior knot until its multiplicity
+/// equals `degree`. After full insertion, every consecutive `degree+1`
+/// control points (with stride `degree`) form one Bezier segment.
+///
+/// **Non-rational only**: weights treated as 1.0. For rational NURBS use
+/// `nurbs::extract_bezier_strips` (see follow-up).
+pub fn extract_bezier_strips(
+    control_pts: &[DVec3],
+    knots: &[f64],
+    degree: usize,
+) -> Result<(Vec<Vec<DVec3>>, Vec<(f64, f64)>)> {
+    validate(control_pts, knots, degree)?;
+    let p = degree;
+    let n_ctrl = control_pts.len();
+    let (u_min, u_max) = parameter_range_inner(knots, p, n_ctrl);
+
+    // Compute unique interior knot breakpoints from ORIGINAL knot vector
+    // (insertion only adds multiplicities, doesn't introduce new break values).
+    let mut breaks: Vec<f64> = vec![u_min];
+    for i in (p + 1)..(knots.len() - p - 1) {
+        let k = knots[i];
+        if k > u_min + 1e-12
+            && k < u_max - 1e-12
+            && (*breaks.last().unwrap() - k).abs() > 1e-12
+        {
+            breaks.push(k);
+        }
+    }
+    breaks.push(u_max);
+    let num_strips = breaks.len() - 1;
+
+    // Trivial case: already a single Bezier (no interior knots).
+    if num_strips == 1 {
+        // Verify control count matches degree+1 (clamped Bezier).
+        if n_ctrl != p + 1 {
+            // Knot structure says one strip but we have non-Bezier ctrl count
+            // → fall through to insertion (handles non-clamped or weird cases).
+        } else {
+            return Ok((vec![control_pts.to_vec()], vec![(u_min, u_max)]));
+        }
+    }
+
+    // Iteratively insert each interior knot until it has multiplicity `p`.
+    let mut working_ctrl = control_pts.to_vec();
+    let mut working_knots = knots.to_vec();
+    loop {
+        // Find first interior knot with mult < p.
+        let mut to_insert: Option<f64> = None;
+        let n_now = working_ctrl.len();
+        let mut i = p + 1;
+        while i < working_knots.len() - p - 1 {
+            let t = working_knots[i];
+            if t <= u_min + 1e-12 || t >= u_max - 1e-12 {
+                i += 1;
+                continue;
+            }
+            let mut mult = 0;
+            let mut j = i;
+            while j < working_knots.len() && (working_knots[j] - t).abs() < 1e-12 {
+                mult += 1;
+                j += 1;
+            }
+            if mult < p {
+                to_insert = Some(t);
+                break;
+            }
+            i = j;
+        }
+        match to_insert {
+            None => break,
+            Some(t) => {
+                let weights = vec![1.0_f64; n_now];
+                let (new_ctrl, _new_w, new_knots) = crate::curves::nurbs::knot_insert(
+                    &working_ctrl, &weights, &working_knots, p, t,
+                )?;
+                working_ctrl = new_ctrl;
+                working_knots = new_knots;
+            }
+        }
+    }
+
+    // Partition: strip k uses ctrl[k*p ..= k*p + p].
+    let mut strips = Vec::with_capacity(num_strips);
+    let mut ranges = Vec::with_capacity(num_strips);
+    for k in 0..num_strips {
+        let start = k * p;
+        let end = start + p + 1;
+        if end > working_ctrl.len() {
+            bail!(
+                "bspline::extract_bezier_strips: partition index OOB \
+                ({} > {}); knot/ctrl mismatch", end, working_ctrl.len()
+            );
+        }
+        strips.push(working_ctrl[start..end].to_vec());
+        ranges.push((breaks[k], breaks[k + 1]));
+    }
+    Ok((strips, ranges))
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────
@@ -502,6 +608,71 @@ mod tests {
         // validate would reject degree 0, but the public derivative routes
         // through validate first. So we just confirm it errors:
         assert!(derivative(&pts, &knots, 0, 0.5).is_err());
+    }
+
+    #[test]
+    fn extract_bezier_single_segment_when_no_interior_knots() {
+        // Clamped Bezier: 4 ctrl, degree 3, knots = [0,0,0,0,1,1,1,1].
+        let pts = vec![
+            DVec3::ZERO,
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(2.0, 1.0, 0.0),
+            DVec3::new(3.0, 0.0, 0.0),
+        ];
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let (strips, ranges) = extract_bezier_strips(&pts, &knots, 3).unwrap();
+        assert_eq!(strips.len(), 1);
+        assert_eq!(strips[0].len(), 4);
+        assert_eq!(ranges, vec![(0.0, 1.0)]);
+        // Control points unchanged.
+        for i in 0..4 {
+            assert!((strips[0][i] - pts[i]).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn extract_bezier_uniform_cubic_yields_multiple_strips() {
+        // 6 ctrl, degree 3, clamped uniform.
+        let pts: Vec<DVec3> = (0..6)
+            .map(|i| DVec3::new(i as f64, (i as f64).sin(), 0.0))
+            .collect();
+        let knots = clamped_uniform_knots(6, 3);
+        // Knots: [0,0,0,0, 1/3, 2/3, 1,1,1,1] → 2 interior breakpoints
+        // → 3 Bezier strips.
+        let (strips, ranges) = extract_bezier_strips(&pts, &knots, 3).unwrap();
+        assert_eq!(strips.len(), 3);
+        for s in &strips {
+            assert_eq!(s.len(), 4);  // degree+1
+        }
+        // Ranges should cover [0, 1] contiguously.
+        assert!((ranges[0].0 - 0.0).abs() < 1e-12);
+        assert!((ranges.last().unwrap().1 - 1.0).abs() < 1e-12);
+        for i in 0..ranges.len() - 1 {
+            assert!((ranges[i].1 - ranges[i + 1].0).abs() < 1e-12,
+                "ranges not contiguous: {:?}", ranges);
+        }
+    }
+
+    #[test]
+    fn extract_bezier_evaluations_match_original_curve() {
+        let pts: Vec<DVec3> = (0..7)
+            .map(|i| DVec3::new(i as f64, (i as f64 * 0.5).cos() * 3.0, 0.0))
+            .collect();
+        let knots = clamped_uniform_knots(7, 3);
+        let (strips, ranges) = extract_bezier_strips(&pts, &knots, 3).unwrap();
+
+        // Sample each strip at t=0, 0.5, 1 (Bezier local) and compare against
+        // B-spline evaluate at corresponding global parameter.
+        for (strip, &(u0, u1)) in strips.iter().zip(ranges.iter()) {
+            for &lt in &[0.0_f64, 0.25, 0.5, 0.75, 1.0] {
+                let bezier_pt = crate::curves::bezier::evaluate(strip, lt).unwrap();
+                let global_u = u0 + lt * (u1 - u0);
+                let bspline_pt = evaluate(&pts, &knots, 3, global_u).unwrap();
+                let err = (bezier_pt - bspline_pt).length();
+                assert!(err < 1e-9,
+                    "Bezier strip mismatch at lt={}, u={}: err={}", lt, global_u, err);
+            }
+        }
     }
 
     #[test]

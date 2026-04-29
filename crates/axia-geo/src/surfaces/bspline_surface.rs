@@ -126,6 +126,86 @@ pub fn derivative_v(
     Ok(bspline::de_boor(&dv_row_pts, knots_u, deg_u, span_u, u))
 }
 
+/// Extract Bezier patches from a non-rational tensor B-spline surface.
+///
+/// Returns `Vec<(patch_ctrl, u_range, v_range)>` — one tensor-product Bezier
+/// patch per (u-strip, v-strip) pair. Each patch's control grid is
+/// `(deg_u + 1) × (deg_v + 1)`.
+///
+/// **Non-rational only.** Rational NURBS surface needs a 4D-lift variant.
+pub fn extract_bezier_patches(
+    ctrl_grid: &[Vec<DVec3>],
+    knots_u: &[f64],
+    knots_v: &[f64],
+    deg_u: usize,
+    deg_v: usize,
+) -> Result<Vec<(Vec<Vec<DVec3>>, (f64, f64), (f64, f64))>> {
+    validate(ctrl_grid, knots_u, knots_v, deg_u, deg_v)?;
+    let n_u = ctrl_grid.len();
+    let n_v = ctrl_grid[0].len();
+
+    // Step 1 — u-direction extraction per v-column.
+    let mut strips_per_col: Vec<Vec<Vec<DVec3>>> = Vec::with_capacity(n_v);
+    let mut shared_u_ranges: Option<Vec<(f64, f64)>> = None;
+    for j in 0..n_v {
+        let column: Vec<DVec3> = (0..n_u).map(|i| ctrl_grid[i][j]).collect();
+        let (strips, ranges) = crate::curves::bspline::extract_bezier_strips(
+            &column, knots_u, deg_u,
+        )?;
+        if let Some(ref existing) = shared_u_ranges {
+            if existing.len() != ranges.len() {
+                bail!(
+                    "bspline_surface::extract_bezier_patches: u-extraction \
+                    inconsistency across v-columns ({} vs {})",
+                    existing.len(), ranges.len()
+                );
+            }
+        } else {
+            shared_u_ranges = Some(ranges);
+        }
+        strips_per_col.push(strips);
+    }
+    let u_ranges = shared_u_ranges.unwrap();
+    let num_u_strips = u_ranges.len();
+
+    // Step 2 — per u-strip, v-direction extraction.
+    let mut patches: Vec<(Vec<Vec<DVec3>>, (f64, f64), (f64, f64))> = Vec::new();
+    for s_u in 0..num_u_strips {
+        let sub_grid_u: Vec<Vec<DVec3>> = (0..=deg_u).map(|k| {
+            (0..n_v).map(|j| strips_per_col[j][s_u][k]).collect()
+        }).collect();
+
+        let mut row_v_strips: Vec<Vec<Vec<DVec3>>> = Vec::with_capacity(deg_u + 1);
+        let mut shared_v_ranges: Option<Vec<(f64, f64)>> = None;
+        for k in 0..=deg_u {
+            let (strips_v, ranges_v) = crate::curves::bspline::extract_bezier_strips(
+                &sub_grid_u[k], knots_v, deg_v,
+            )?;
+            if let Some(ref existing) = shared_v_ranges {
+                if existing.len() != ranges_v.len() {
+                    bail!(
+                        "bspline_surface::extract_bezier_patches: v-extraction \
+                        inconsistency across u-rows"
+                    );
+                }
+            } else {
+                shared_v_ranges = Some(ranges_v);
+            }
+            row_v_strips.push(strips_v);
+        }
+        let v_ranges = shared_v_ranges.unwrap();
+        let num_v_strips = v_ranges.len();
+
+        for s_v in 0..num_v_strips {
+            let patch: Vec<Vec<DVec3>> = (0..=deg_u).map(|k| {
+                row_v_strips[k][s_v].clone()
+            }).collect();
+            patches.push((patch, u_ranges[s_u], v_ranges[s_v]));
+        }
+    }
+    Ok(patches)
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Validation
 // ────────────────────────────────────────────────────────────────────────
