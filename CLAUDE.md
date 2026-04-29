@@ -1012,12 +1012,19 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 
 ## 향후 과제
 
-### Major Initiative: 자체 NURBS Kernel (계획서 작성 완료, 승인 대기)
+### Major Initiative: 자체 NURBS Kernel (진행 중 — Phase A 완료)
 - **PLAN-001**: `docs/plans/PLAN-001-nurbs-kernel.md` — 7-Phase 점진 진화
-- **ADR-027** (Proposed): NURBS Kernel Initiative kickoff
-- 외부 의존 없이 Rust 자체 작성 (옵션 A 채택)
-- 36 개월 자체 핵심, 60+ 개월 산업 동급
-- 점진 단계: Analytic Edge Curve → Bezier/B-spline → NURBS curve → Surface
+- **ADR-027** (Accepted, 2026-04-29): NURBS Kernel Initiative kickoff
+- **ADR-028** (Phase A): Analytic Edge Curve Foundation — **완료**
+  - `crates/axia-geo/src/curves/` — Line/Circle/Arc primitives + CurveOps trait
+  - `Edge.curve: Option<AnalyticCurve>` (`#[serde(default)]` legacy 호환)
+  - `Mesh::add_edge_with_curve` / `Mesh::tessellate_edge` API
+  - WASM bridge: `tessellateEdge` / `setEdgeArcCurve` / `setEdgeCircleCurve`
+  - DrawCircle 마이그레이션: 모든 segment edge 가 sub-arc curve 보유 →
+    view-time LOD refinement 가능 (사용자 zoom-in 시 부드러움)
+  - 회귀 테스트 59개 (curves 42 + Edge integration 8 + WASM/TS 6 + DrawCircle 3)
+- **다음 단계**: Phase B (Bezier/B-spline curves, 3개월 예정)
+- 점진 단계: Analytic Edge Curve ✅ → Bezier/B-spline → NURBS curve → Surface
   primitives → NURBS surfaces → SSI → Boolean + STEP/IGES
 - 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026) 모두 보존
 

@@ -3015,6 +3015,31 @@ impl Scene {
                 );
             }
         };
+
+        // ADR-028 Phase A — attach Arc curve metadata to each segment.
+        //
+        // Each segment edge i bridges θᵢ → θᵢ₊₁ on the analytic circle. Storing
+        // the sub-arc as an AnalyticCurve allows view-time refinement (LOD)
+        // and preserves the original geometric intent (true circle, not just
+        // a polygon). The polyline topology remains unchanged — DCEL ops
+        // (push/pull, boolean) still operate on N straight segments. Render
+        // path can opt into curve-aware tessellation via tessellate_edge.
+        let two_pi = std::f64::consts::TAU;
+        for i in 0..n {
+            let theta_start = (i as f64) * two_pi / (n as f64);
+            let theta_end = ((i + 1) as f64) * two_pi / (n as f64);
+            let curve = axia_geo::AnalyticCurve::Arc {
+                center,
+                radius,
+                normal: n_norm,
+                basis_u: u,
+                start_angle: theta_start,
+                end_angle: theta_end,
+            };
+            if let Some(e) = self.mesh.edges.get_mut(edge_ids[i]) {
+                e.set_curve(Some(curve));
+            }
+        }
         let _ = edge_ids;
 
         let xia_id = self.create_xia("Circle".to_string());
@@ -6997,6 +7022,83 @@ mod tests {
     // 발견: 얇은 crossing RECT 가 다중 ring container 를 가로지를 때
     // 일부 sliver region 이 합성되지 않음 (M1 mixed-cycle 한계). 별도 phase.
     // ────────────────────────────────────────────────────────────────────
+
+    /// ADR-028 Phase A — DrawCircle 의 모든 edge 가 Arc curve 보유.
+    /// 분석적 곡선 마이그레이션 후 view-time tessellation 가능.
+    #[test]
+    fn test_drawcircle_edges_carry_arc_curve() {
+        let mut scene = Scene::new();
+        let n_segments = 24u32;
+        scene.execute(Command::DrawCircle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments: n_segments,
+        });
+        // Find all active topological edges
+        let active_edges: Vec<axia_geo::EdgeId> = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.class().is_topological())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(active_edges.len(), n_segments as usize,
+            "expected {} segment edges, got {}", n_segments, active_edges.len());
+        // Every edge must have an Arc curve attached
+        let mut arc_count = 0;
+        for &eid in &active_edges {
+            let e = &scene.mesh.edges[eid];
+            match e.curve() {
+                Some(axia_geo::AnalyticCurve::Arc { radius, .. }) => {
+                    assert!((radius - 5.0).abs() < 1e-12);
+                    arc_count += 1;
+                }
+                _ => panic!("edge {:?} missing Arc curve", eid),
+            }
+        }
+        assert_eq!(arc_count, n_segments as usize);
+    }
+
+    /// ADR-028 Phase A — Tessellation refines circle (LOD).
+    /// View-time tessellate_edge 가 실제 chord_tol 충족.
+    #[test]
+    fn test_drawcircle_lod_refinement_via_tessellate_edge() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 100.0,
+            segments: 8,  // intentionally coarse
+        });
+        let first_edge = scene.mesh.edges.iter()
+            .find(|(_, e)| e.is_active() && e.curve().is_some())
+            .map(|(id, _)| id)
+            .expect("at least one curve edge");
+        // Coarse: 1 mm tolerance — should match drawn segment
+        let coarse = scene.mesh.tessellate_edge(first_edge, 50.0).unwrap();
+        // Fine: 0.01 mm tolerance — should produce more points
+        let fine = scene.mesh.tessellate_edge(first_edge, 0.01).unwrap();
+        assert!(fine.len() > coarse.len(),
+            "fine LOD ({} pts) must exceed coarse LOD ({} pts)",
+            fine.len(), coarse.len());
+    }
+
+    /// ADR-028 Phase A — Curve metadata 가 폴리곤 위상에 영향 없음.
+    /// DrawCircle 후 face count, edge count 가 기존 동작과 동일.
+    #[test]
+    fn test_drawcircle_topology_unchanged_after_curve_attach() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments: 12,
+        });
+        let face_count = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        let edge_count = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        assert_eq!(face_count, 1, "expected 1 face for a circle");
+        assert_eq!(edge_count, 12, "expected 12 segment edges");
+    }
 
     /// ADR-025 P11 — Drawing-order independent: 27 RECT, 어느 순서든 동일 결과
     /// (orphan count 가 절대 증가하지 않음 — Phase 4 final-sweep regression guard).
