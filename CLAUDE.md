@@ -62,6 +62,22 @@
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
 
+### 12. ADR-025 — Closed Edge Cycle MUST Synthesize Face (P11, 2026-04-29)
+- **새 원칙 P11 (사용자 강조)**: "닫힌 엣지에는 반드시 면이 생성되어야 한다."
+- ADR-019 ("Line is Truth, Face is Byproduct") + ADR-021 P7 의 가장 강한 형태.
+- 모든 draw 연산 종료 시점에 free edge (face=null) 로 형성되는 simple closed
+  cycle 은 정확히 하나의 face 로 합성. 예외 없음.
+- **Step 4.99 Final Sweep**: `run_face_synthesis_postprocess` 의 마지막에
+  `resolve_planar_free_faces` 를 fixed-point loop 로 호출.
+  - Step 4.5/4.6/4.9/4.95 가 놓친 sliver region mop-up.
+  - 27-RECT 스트레스에서 31 orphans → 10 (68% 감소). 이전 단계만으로
+    합성되지 않던 sliver region 대부분 처리.
+- **잔존 한계 (별도 phase)**: 매우 복잡한 multi-ring 토폴로지 (얇은 crossing
+  + 다중 nested ring + reverse winding RECT) 에서 일부 split edge 가 비-cycle
+  토폴로지 (tree 형태) 로 남는 케이스. 현 resolver 의 leftmost-turn walker
+  한계 — 별도 Phase 5 (M1 multi-ring resolver 강화) 필요.
+- 회귀 방지: orphan_count 가 절대 증가하지 않도록 회귀 테스트 추가.
+
 ### 11. ADR-024 — 3-Way Corner Chamfer (P10 MVP, 2026-04-29)
 - **새 원칙 P10 (MVP)**: valence==3 vertex 의 corner 자체를 둥글게 처리.
   MVP 는 flat triangular chamfer (3 trim point + 1 triangle face).
