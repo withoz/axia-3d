@@ -710,7 +710,7 @@ export class AxiaEngine {
     /**
      * Check whether an edge has an analytic curve attached.
      * Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
-     * 4 = Bezier, 5 = BSpline. -1 if edge_id invalid.
+     * 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.
      * @param {number} edge_id
      * @returns {number}
      */
@@ -1577,6 +1577,31 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-030 Phase C — Compute intersections between two edges' analytic
+     * curves. Returns a flat Float64Array `[x0, y0, z0, t1_0, t2_0, angle_0,
+     * x1, y1, z1, t1_1, t2_1, angle_1, ...]` — 6 floats per intersection.
+     *
+     * If either edge has no curve attached, the edge is treated as a straight
+     * line between its two endpoints.
+     * @param {number} edge_id_a
+     * @param {number} edge_id_b
+     * @param {number} tol
+     * @returns {Float64Array}
+     */
+    intersectEdges(edge_id_a, edge_id_b, tol) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_intersectEdges(retptr, this.__wbg_ptr, edge_id_a, edge_id_b, tol);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
      * 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
      * inside/outside 판정 없이 모든 sub-face 유지.
@@ -2375,6 +2400,33 @@ export class AxiaEngine {
      */
     setEdgeClass(edge_id_raw, class_raw) {
         const ret = wasm.axiaengine_setEdgeClass(this.__wbg_ptr, edge_id_raw, class_raw);
+        return ret !== 0;
+    }
+    /**
+     * ADR-030 Phase C — Set a NURBS curve on an existing edge.
+     *
+     * Args:
+     * - `control_pts_flat`: 3·(n+1) floats `[x0,y0,z0, x1,y1,z1, ...]`
+     * - `weights`: n+1 strictly-positive weights
+     * - `knots`: n + degree + 2 = `(n+1) + degree + 1` non-decreasing values
+     * - `degree`: spline degree (≥ 1)
+     *
+     * Returns true on success.
+     * @param {number} edge_id
+     * @param {Float64Array} control_pts_flat
+     * @param {Float64Array} weights
+     * @param {Float64Array} knots
+     * @param {number} degree
+     * @returns {boolean}
+     */
+    setEdgeNurbsCurve(edge_id, control_pts_flat, weights, knots, degree) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(weights, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayF64ToWasm0(knots, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_setEdgeNurbsCurve(this.__wbg_ptr, edge_id, ptr0, len0, ptr1, len1, ptr2, len2, degree);
         return ret !== 0;
     }
     /**

@@ -258,7 +258,7 @@ export class AxiaEngine {
     /**
      * Check whether an edge has an analytic curve attached.
      * Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
-     * 4 = Bezier, 5 = BSpline. -1 if edge_id invalid.
+     * 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.
      */
     edgeCurveKind(edge_id: number): number;
     /**
@@ -529,6 +529,15 @@ export class AxiaEngine {
      * 바이너리 스냅샷으로부터 프로젝트 복원 (supports versioned and legacy formats)
      */
     import_snapshot(data: Uint8Array): boolean;
+    /**
+     * ADR-030 Phase C — Compute intersections between two edges' analytic
+     * curves. Returns a flat Float64Array `[x0, y0, z0, t1_0, t2_0, angle_0,
+     * x1, y1, z1, t1_1, t2_1, angle_1, ...]` — 6 floats per intersection.
+     *
+     * If either edge has no curve attached, the edge is treated as a straight
+     * line between its two endpoints.
+     */
+    intersectEdges(edge_id_a: number, edge_id_b: number, tol: number): Float64Array;
     /**
      * "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
      * 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
@@ -834,6 +843,18 @@ export class AxiaEngine {
      */
     setEdgeClass(edge_id_raw: number, class_raw: number): boolean;
     /**
+     * ADR-030 Phase C — Set a NURBS curve on an existing edge.
+     *
+     * Args:
+     * - `control_pts_flat`: 3·(n+1) floats `[x0,y0,z0, x1,y1,z1, ...]`
+     * - `weights`: n+1 strictly-positive weights
+     * - `knots`: n + degree + 2 = `(n+1) + degree + 1` non-decreasing values
+     * - `degree`: spline degree (≥ 1)
+     *
+     * Returns true on success.
+     */
+    setEdgeNurbsCurve(edge_id: number, control_pts_flat: Float64Array, weights: Float64Array, knots: Float64Array, degree: number): boolean;
+    /**
      * 중첩 그룹 설정
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
@@ -1132,6 +1153,7 @@ export interface InitOutput {
     readonly axiaengine_group_count: (a: number) => number;
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
+    readonly axiaengine_intersectEdges: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_intersectWithModel: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_isFaceInVolume: (a: number, b: number) => number;
     readonly axiaengine_is_face_locked: (a: number, b: number) => number;
@@ -1178,6 +1200,7 @@ export interface InitOutput {
     readonly axiaengine_setEdgeBezierCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_setEdgeCircleCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
+    readonly axiaengine_setEdgeNurbsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_sliceVolumeByPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;

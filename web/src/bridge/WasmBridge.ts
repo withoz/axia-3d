@@ -406,6 +406,15 @@ type AxiaEngineExtended = AxiaEngine & {
     knots: Float64Array,
     degree: number,
   ): boolean;
+  // ADR-030 Phase C — NURBS + CCI
+  setEdgeNurbsCurve?(
+    edgeId: number,
+    controlPts: Float64Array,
+    weights: Float64Array,
+    knots: Float64Array,
+    degree: number,
+  ): boolean;
+  intersectEdges?(edgeIdA: number, edgeIdB: number, tol: number): Float64Array;
   // Material operations
   assign_material?(faceIds: Uint32Array, materialIdRaw: number): boolean;
   remove_material?(faceIds: Uint32Array): boolean;
@@ -652,6 +661,50 @@ export class WasmBridge {
         (eid: number, pts: Float64Array, knots: Float64Array, degree: number) => boolean;
     }).setEdgeBSplineCurve;
     return fn ? fn.call(this.engine, edgeId, ptsArr, knotsArr, degree) : false;
+  }
+
+  /**
+   * ADR-030 Phase C — Set a NURBS curve on an existing edge.
+   * Rational B-spline: `weights` (one per control point, all > 0) makes
+   * conics (circle/ellipse) representable exactly.
+   */
+  setEdgeNurbsCurve(
+    edgeId: number,
+    controlPts: Float64Array | number[],
+    weights: Float64Array | number[],
+    knots: Float64Array | number[],
+    degree: number,
+  ): boolean {
+    if (!this.engine) return false;
+    const ptsArr = controlPts instanceof Float64Array
+      ? controlPts : new Float64Array(controlPts);
+    const wArr = weights instanceof Float64Array
+      ? weights : new Float64Array(weights);
+    const knotsArr = knots instanceof Float64Array
+      ? knots : new Float64Array(knots);
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      setEdgeNurbsCurve?: (
+        eid: number, pts: Float64Array, w: Float64Array,
+        k: Float64Array, d: number,
+      ) => boolean;
+    }).setEdgeNurbsCurve;
+    return fn ? fn.call(this.engine, edgeId, ptsArr, wArr, knotsArr, degree) : false;
+  }
+
+  /**
+   * ADR-030 Phase C — Compute curve-curve intersections between two edges.
+   * Returns `Float64Array` of shape 6·N: `[x, y, z, t1, t2, angle, ...]`.
+   * Edges without an analytic curve are treated as straight line segments.
+   */
+  intersectEdges(edgeIdA: number, edgeIdB: number, tol = 1e-6): Float64Array {
+    if (!this.engine) return new Float64Array(0);
+    const fn = (this.engine as unknown as {
+      intersectEdges?: (a: number, b: number, t: number) => Float64Array;
+    }).intersectEdges;
+    if (!fn) return new Float64Array(0);
+    const result = fn.call(this.engine, edgeIdA, edgeIdB, tol);
+    return result instanceof Float64Array ? result : new Float64Array(result as number[]);
   }
 
   /** Get the first face ID owned by a XIA entity (drawRect returns XIA ID, pushPull needs face ID) */

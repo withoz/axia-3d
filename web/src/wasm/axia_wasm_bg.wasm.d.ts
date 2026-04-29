@@ -98,6 +98,7 @@ export const axiaengine_get_xia_info: (a: number, b: number, c: number, d: numbe
 export const axiaengine_group_count: (a: number) => number;
 export const axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
+export const axiaengine_intersectEdges: (a: number, b: number, c: number, d: number, e: number) => void;
 export const axiaengine_intersectWithModel: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_isFaceInVolume: (a: number, b: number) => number;
 export const axiaengine_is_face_locked: (a: number, b: number) => number;
@@ -144,6 +145,7 @@ export const axiaengine_setEdgeBSplineCurve: (a: number, b: number, c: number, d
 export const axiaengine_setEdgeBezierCurve: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_setEdgeCircleCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
 export const axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
+export const axiaengine_setEdgeNurbsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
 export const axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const axiaengine_sliceVolumeByPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;

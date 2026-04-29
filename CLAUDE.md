@@ -1018,18 +1018,21 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 - **ADR-028** (Phase A): Analytic Edge Curve Foundation — **완료**
   - Line/Circle/Arc primitives + CurveOps trait, 59 회귀 테스트
 - **ADR-029** (Phase B): Free-form Curves — **완료**
-  - `bezier.rs` — de Casteljau evaluation, hodograph derivative, adaptive
-    subdivision tessellation, arc length
-  - `bspline.rs` — de Boor evaluation, knot span search, derivative spline,
-    clamped uniform knot construction, adaptive midpoint refinement
-  - `AnalyticCurve::Bezier { control_pts }` + `BSpline { control_pts, knots, degree }`
-    enum variants
-  - WASM bridge: `setEdgeBezierCurve(eid, ctrlPts)`, `setEdgeBSplineCurve(eid, ctrlPts, knots, degree)`
-  - `edgeCurveKind` 확장: 4 = Bezier, 5 = BSpline
-  - 회귀 테스트 43개 (Bezier 17 + BSpline 16 + Mesh integration 6 + TS bridge 4)
-- **다음 단계**: Phase C (NURBS curves + CCI, 3개월 예정)
-- 점진 단계: Analytic Edge Curve ✅ → Bezier/B-spline ✅ → NURBS curve → Surface
-  primitives → NURBS surfaces → SSI → Boolean + STEP/IGES
+  - Bezier (de Casteljau) + B-spline (de Boor) + 43 tests
+- **ADR-030** (Phase C): NURBS curves + Curve-Curve Intersection — **완료**
+  - `nurbs.rs` — rational B-spline via homogeneous coordinate lifting (4D
+    B-spline 평가), 정확 derivative via quotient rule, Boehm's knot insertion
+  - `intersect.rs` — robust CCI: AABB pruning + nearest-segment-pair init +
+    Newton's method via 2x2 normal-equation pseudo-inverse, 50 iter max
+  - `conic.rs` — `arc_as_nurbs()` helper: quadratic NURBS exact representation
+    of conic sections (weight = cos(half_angle))
+  - `AnalyticCurve::NURBS { control_pts, weights, knots, degree }` 추가
+  - WASM bridge: `setEdgeNurbsCurve(eid, pts, w, knots, deg)`, `intersectEdges(a, b, tol)`
+  - `edgeCurveKind` 확장: 6 = NURBS
+  - 회귀 테스트 67개 (NURBS 21 + intersect 16 + conic 6 + TS bridge 5 + 기존 통합 19)
+- **다음 단계**: Phase D (Analytic surface primitives, 6개월 예정)
+- 점진 단계: Analytic Edge Curve ✅ → Bezier/B-spline ✅ → NURBS curve ✅ →
+  Surface primitives → NURBS surfaces → SSI → Boolean + STEP/IGES
 - 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026) 모두 보존
 
 ### 기타

@@ -715,7 +715,7 @@ impl AxiaEngine {
 
     /// Check whether an edge has an analytic curve attached.
     /// Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
-    /// 4 = Bezier, 5 = BSpline. -1 if edge_id invalid.
+    /// 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.
     #[wasm_bindgen(js_name = "edgeCurveKind")]
     pub fn edge_curve_kind(&self, edge_id: u32) -> i32 {
         use axia_geo::{EdgeId, AnalyticCurve};
@@ -730,7 +730,100 @@ impl AxiaEngine {
             Some(AnalyticCurve::Arc { .. }) => 3,
             Some(AnalyticCurve::Bezier { .. }) => 4,
             Some(AnalyticCurve::BSpline { .. }) => 5,
+            Some(AnalyticCurve::NURBS { .. }) => 6,
         }
+    }
+
+    /// ADR-030 Phase C — Set a NURBS curve on an existing edge.
+    ///
+    /// Args:
+    /// - `control_pts_flat`: 3·(n+1) floats `[x0,y0,z0, x1,y1,z1, ...]`
+    /// - `weights`: n+1 strictly-positive weights
+    /// - `knots`: n + degree + 2 = `(n+1) + degree + 1` non-decreasing values
+    /// - `degree`: spline degree (≥ 1)
+    ///
+    /// Returns true on success.
+    #[wasm_bindgen(js_name = "setEdgeNurbsCurve")]
+    pub fn set_edge_nurbs_curve(
+        &mut self,
+        edge_id: u32,
+        control_pts_flat: Vec<f64>,
+        weights: Vec<f64>,
+        knots: Vec<f64>,
+        degree: u32,
+    ) -> bool {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        use glam::DVec3;
+        if control_pts_flat.is_empty() || control_pts_flat.len() % 3 != 0 {
+            return false;
+        }
+        let mut pts = Vec::with_capacity(control_pts_flat.len() / 3);
+        let mut i = 0;
+        while i + 2 < control_pts_flat.len() {
+            pts.push(DVec3::new(
+                control_pts_flat[i], control_pts_flat[i + 1], control_pts_flat[i + 2],
+            ));
+            i += 3;
+        }
+        // Validation will happen on the engine side via the AnalyticCurve eval;
+        // sanity-check sizes here for early rejection.
+        let expected_knots = pts.len() + degree as usize + 1;
+        if pts.len() != weights.len()
+            || knots.len() != expected_knots
+            || pts.len() < degree as usize + 1
+            || degree == 0
+            || weights.iter().any(|&w| w <= 0.0)
+        {
+            return false;
+        }
+        let eid = EdgeId::new(edge_id);
+        if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+            e.set_curve(Some(AnalyticCurve::NURBS {
+                control_pts: pts, weights, knots, degree,
+            }));
+            self.mark_topology_changed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-030 Phase C — Compute intersections between two edges' analytic
+    /// curves. Returns a flat Float64Array `[x0, y0, z0, t1_0, t2_0, angle_0,
+    /// x1, y1, z1, t1_1, t2_1, angle_1, ...]` — 6 floats per intersection.
+    ///
+    /// If either edge has no curve attached, the edge is treated as a straight
+    /// line between its two endpoints.
+    #[wasm_bindgen(js_name = "intersectEdges")]
+    pub fn intersect_edges(&self, edge_id_a: u32, edge_id_b: u32, tol: f64) -> Vec<f64> {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        let eid_a = EdgeId::new(edge_id_a);
+        let eid_b = EdgeId::new(edge_id_b);
+        let mesh = &self.scene.mesh;
+        let make_curve = |eid: EdgeId| -> Option<AnalyticCurve> {
+            let edge = mesh.edges.get(eid)?;
+            if let Some(c) = edge.curve() {
+                return Some(c.clone());
+            }
+            // Straight-line fallback.
+            Some(AnalyticCurve::Line { start: edge.v_small(), end: edge.v_large() })
+        };
+        let c1 = match make_curve(eid_a) { Some(c) => c, None => return Vec::new() };
+        let c2 = match make_curve(eid_b) { Some(c) => c, None => return Vec::new() };
+        let xs = match axia_geo::curves::intersect::intersect_curves(&c1, &c2, mesh, tol) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        let mut flat = Vec::with_capacity(xs.len() * 6);
+        for x in xs {
+            flat.push(x.point.x);
+            flat.push(x.point.y);
+            flat.push(x.point.z);
+            flat.push(x.t1);
+            flat.push(x.t2);
+            flat.push(x.angle);
+        }
+        flat
     }
 
     /// ADR-029 Phase B — Set a Bezier curve on an existing edge.

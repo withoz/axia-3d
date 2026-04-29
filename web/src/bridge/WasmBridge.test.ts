@@ -390,6 +390,78 @@ describe('WasmBridge', () => {
       expect(arr.length).toBe(6);
     });
 
+    // ──────────────────────────────────────────────────────────────────
+    // ADR-030 Phase C — NURBS + CCI bridge tests
+    // ──────────────────────────────────────────────────────────────────
+
+    it('setEdgeNurbsCurve() forwards control points + weights + knots + degree', () => {
+      let capturedPts: Float64Array | null = null;
+      let capturedW: Float64Array | null = null;
+      let capturedKnots: Float64Array | null = null;
+      let capturedDeg = -1;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setEdgeNurbsCurve: (
+          _eid: number, pts: Float64Array, w: Float64Array,
+          k: Float64Array, d: number,
+        ) => {
+          capturedPts = pts;
+          capturedW = w;
+          capturedKnots = k;
+          capturedDeg = d;
+          return true;
+        },
+      };
+      // Quadratic NURBS quarter-circle: 3 ctrl, 3 weights, 6 knots, deg=2.
+      const pts = [5, 0, 0,  5, 5, 0,  0, 5, 0];
+      const weights = [1, Math.SQRT1_2, 1];
+      const knots = [0, 0, 0, 1, 1, 1];
+      const ok = bridge.setEdgeNurbsCurve(11, pts, weights, knots, 2);
+      expect(ok).toBe(true);
+      expect(capturedDeg).toBe(2);
+      const a = capturedPts as unknown as Float64Array;
+      const b = capturedW as unknown as Float64Array;
+      const c = capturedKnots as unknown as Float64Array;
+      expect(a.length).toBe(9);
+      expect(b.length).toBe(3);
+      expect(c.length).toBe(6);
+    });
+
+    it('setEdgeNurbsCurve() returns false when engine missing the method', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const ok = bridge.setEdgeNurbsCurve(0, [0, 0, 0], [1], [0, 0], 1);
+      expect(ok).toBe(false);
+    });
+
+    it('intersectEdges() returns flat Float64Array of intersections', () => {
+      // Mock engine returning a single intersection (6 floats)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        intersectEdges: (_a: number, _b: number, _tol: number) =>
+          new Float64Array([1.0, 2.0, 3.0, 0.5, 0.5, Math.PI / 2]),
+      };
+      const result = bridge.intersectEdges(1, 2, 1e-6);
+      expect(result.length).toBe(6);
+      expect(result[0]).toBe(1.0);
+      expect(result[3]).toBe(0.5);
+      expect(Math.abs(result[5] - Math.PI / 2)).toBeLessThan(1e-9);
+    });
+
+    it('intersectEdges() returns empty array when engine missing the method', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const result = bridge.intersectEdges(0, 1);
+      expect(result.length).toBe(0);
+    });
+
+    it('intersectEdges() returns empty when no engine', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      const result = bridge.intersectEdges(0, 1);
+      expect(result.length).toBe(0);
+    });
+
     it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

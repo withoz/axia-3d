@@ -124,6 +124,7 @@ impl Edge {
                 | AnalyticCurve::Arc { .. }
                 | AnalyticCurve::Bezier { .. }
                 | AnalyticCurve::BSpline { .. }
+                | AnalyticCurve::NURBS { .. }
             )
         )
     }

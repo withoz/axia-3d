@@ -30,6 +30,9 @@ pub mod circle;
 pub mod arc;
 pub mod bezier;
 pub mod bspline;
+pub mod nurbs;
+pub mod intersect;
+pub mod conic;
 
 use anyhow::Result;
 use glam::DVec3;
@@ -84,6 +87,14 @@ pub enum AnalyticCurve {
         knots: Vec<f64>,
         degree: u32,
     },
+    /// ADR-030 Phase C — NURBS (rational B-spline) curve.
+    /// All weights must be > 0. Parameter range as B-spline.
+    NURBS {
+        control_pts: Vec<DVec3>,
+        weights: Vec<f64>,
+        knots: Vec<f64>,
+        degree: u32,
+    },
 }
 
 /// Operations common to all curve variants.
@@ -121,6 +132,9 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::BSpline { control_pts, knots, degree } => {
                 bspline::evaluate(control_pts, knots, *degree as usize, t)
             }
+            AnalyticCurve::NURBS { control_pts, weights, knots, degree } => {
+                nurbs::evaluate(control_pts, weights, knots, *degree as usize, t)
+            }
         }
     }
 
@@ -136,6 +150,9 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::Bezier { control_pts } => bezier::derivative(control_pts, t),
             AnalyticCurve::BSpline { control_pts, knots, degree } => {
                 bspline::derivative(control_pts, knots, *degree as usize, t)
+            }
+            AnalyticCurve::NURBS { control_pts, weights, knots, degree } => {
+                nurbs::derivative(control_pts, weights, knots, *degree as usize, t)
             }
         }
     }
@@ -155,6 +172,9 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::BSpline { control_pts, knots, degree } => {
                 bspline::tessellate(control_pts, knots, *degree as usize, chord_tol)
             }
+            AnalyticCurve::NURBS { control_pts, weights, knots, degree } => {
+                nurbs::tessellate(control_pts, weights, knots, *degree as usize, chord_tol)
+            }
         }
     }
 
@@ -171,6 +191,9 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::BSpline { control_pts, knots, degree } => {
                 bspline::arc_length(control_pts, knots, *degree as usize)
             }
+            AnalyticCurve::NURBS { control_pts, weights, knots, degree } => {
+                nurbs::arc_length(control_pts, weights, knots, *degree as usize)
+            }
         }
     }
 
@@ -181,6 +204,13 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::Arc { start_angle, end_angle, .. } => (*start_angle, *end_angle),
             AnalyticCurve::Bezier { .. } => (0.0, 1.0),
             AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                if knots.len() >= *degree as usize + 1 + control_pts.len() {
+                    (knots[*degree as usize], knots[control_pts.len()])
+                } else {
+                    (0.0, 1.0)
+                }
+            }
+            AnalyticCurve::NURBS { control_pts, knots, degree, .. } => {
                 if knots.len() >= *degree as usize + 1 + control_pts.len() {
                     (knots[*degree as usize], knots[control_pts.len()])
                 } else {
