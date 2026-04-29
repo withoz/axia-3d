@@ -1011,9 +1011,18 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 - Trade-off: outer 의 hole 영역 자동 인식 안 됨 (push/pull 시 명시 처리).
 
 ## 향후 과제
-- Phase G case (c): endpoint-on-hole-boundary "bridge" topology
+
+### Major Initiative: 자체 NURBS Kernel (계획서 작성 완료, 승인 대기)
+- **PLAN-001**: `docs/plans/PLAN-001-nurbs-kernel.md` — 7-Phase 점진 진화
+- **ADR-027** (Proposed): NURBS Kernel Initiative kickoff
+- 외부 의존 없이 Rust 자체 작성 (옵션 A 채택)
+- 36 개월 자체 핵심, 60+ 개월 산업 동급
+- 점진 단계: Analytic Edge Curve → Bezier/B-spline → NURBS curve → Surface
+  primitives → NURBS surfaces → SSI → Boolean + STEP/IGES
+- 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026) 모두 보존
+
+### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
-- STEP/IGES 지원
 - Electron/Tauri 데스크톱 앱
 - Boundary Extraction (Solid → Face)
 - Worker thread / GPU picking (ADR-012 강등 정책 트리거 시)
