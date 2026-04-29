@@ -11,6 +11,7 @@ pub mod subdivide;
 pub mod newton;
 pub mod topology;
 pub mod nurbs_wrapper;
+pub mod trim_gen;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
