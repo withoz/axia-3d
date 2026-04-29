@@ -415,6 +415,8 @@ type AxiaEngineExtended = AxiaEngine & {
     degree: number,
   ): boolean;
   intersectEdges?(edgeIdA: number, edgeIdB: number, tol: number): Float64Array;
+  // ADR-032 P17 — Promote on creation
+  drawArcWithCurve?(...args: number[]): number;
   // ADR-031 Phase D — Analytic surfaces
   setFaceSurfacePlane?(...args: number[]): boolean;
   setFaceSurfaceCylinder?(...args: number[]): boolean;
@@ -627,6 +629,31 @@ export class WasmBridge {
   edgeCurveKind(edgeId: number): number {
     if (!this.engine) return -1;
     return this.engine.edgeCurveKind(edgeId);
+  }
+
+  /**
+   * ADR-032 P17 — Atomic arc drawing with analytic curve promotion.
+   * Draws N tessellated segments + attaches AnalyticCurve::Arc to each.
+   * Returns 0 on success, -1 on error.
+   */
+  drawArcWithCurve(
+    cx: number, cy: number, cz: number,
+    radius: number,
+    nx: number, ny: number, nz: number,
+    ux: number, uy: number, uz: number,
+    startAngle: number, endAngle: number,
+    segments: number,
+  ): number {
+    if (!this.engine) return -1;
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      drawArcWithCurve?: (...args: number[]) => number;
+    }).drawArcWithCurve;
+    return fn ? fn.call(this.engine,
+      cx, cy, cz, radius, nx, ny, nz, ux, uy, uz,
+      startAngle, endAngle, segments,
+    ) : -1;
   }
 
   /**

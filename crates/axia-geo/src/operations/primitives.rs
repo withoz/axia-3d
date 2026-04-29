@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::entities::id::*;
 use crate::mesh::Mesh;
+use crate::surfaces::AnalyticSurface;
 
 impl Mesh {
     /// Create a cylinder (quads only).
@@ -56,7 +57,47 @@ impl Mesh {
                 top_verts[i as usize],
             ];
             let side_face = self.add_face(&quad, material)?;
+
+            // ADR-032 P17 — attach Cylinder analytic surface to each side
+            // face for view-time refinement and downstream analytical ops.
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let theta_start = two_pi * (i as f64) / (segments as f64);
+            let theta_end = two_pi * ((i + 1) as f64) / (segments as f64);
+            let surface = AnalyticSurface::Cylinder {
+                axis_origin: bottom_center,
+                axis_dir: up,
+                radius,
+                ref_dir: radial,
+                u_range: (theta_start, theta_end),
+                v_range: (0.0, height),
+            };
+            if let Some(f) = self.faces.get_mut(side_face) {
+                f.set_surface(Some(surface));
+            }
             faces.push(side_face);
+        }
+
+        // ADR-032 P17 — caps get Plane surface (axis-perpendicular planes).
+        let v_perp = up.cross(radial).normalize_or_zero();
+        let plane_basis_u = if v_perp.length_squared() > 0.5 { v_perp } else { radial };
+        let cap_range = (-radius * 1.5, radius * 1.5);
+        if let Some(f) = self.faces.get_mut(base_face) {
+            f.set_surface(Some(AnalyticSurface::Plane {
+                origin: bottom_center,
+                normal: -up,                 // outward at base = -axis
+                basis_u: plane_basis_u,
+                u_range: cap_range,
+                v_range: cap_range,
+            }));
+        }
+        if let Some(f) = self.faces.get_mut(top_face) {
+            f.set_surface(Some(AnalyticSurface::Plane {
+                origin: top_center,
+                normal: up,                  // outward at top = +axis
+                basis_u: plane_basis_u,
+                u_range: cap_range,
+                v_range: cap_range,
+            }));
         }
 
         // Hide tessellation chord edges on top/bottom rings so the cylinder
@@ -159,6 +200,25 @@ impl Mesh {
         let top_face = self.add_face(&top_verts, material)?;
         faces.push(top_face);
 
+        // ADR-032 P17 — compute extrapolated full cone parameters from the
+        // (possibly truncated) frustum. Apex sits below the base when the
+        // taper opens upward (radius > top_radius).
+        // Slope tan(half_angle) = (radius - top_radius) / height.
+        let radius_diff = radius - top_radius;
+        let cone_half_angle = (radius_diff / height).atan().abs();
+        // Apex offset from base along axis (negative direction since cone narrows up).
+        let apex_offset = if radius_diff.abs() > 1e-9 {
+            radius * height / radius_diff
+        } else {
+            // Cylinder-like (no taper) — fallback: place apex far away
+            f64::INFINITY
+        };
+        let apex_pt = if apex_offset.is_finite() {
+            base_center - up * apex_offset.abs() * radius_diff.signum()
+        } else {
+            base_center
+        };
+
         // Side quads
         for i in 0..segments {
             let next = (i + 1) % segments;
@@ -169,6 +229,29 @@ impl Mesh {
                 top_verts[i as usize],
             ];
             let side_face = self.add_face(&quad, material)?;
+
+            // Attach analytic Cone surface (or fallback to Plane stripes for
+            // cylinder-like degenerate cases).
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let theta_start = two_pi * (i as f64) / (segments as f64);
+            let theta_end = two_pi * ((i + 1) as f64) / (segments as f64);
+            if apex_offset.is_finite() && cone_half_angle > 1e-9 {
+                let v_base = (base_center - apex_pt).dot(up);
+                let v_top = (top_center - apex_pt).dot(up);
+                let v_min = v_base.min(v_top);
+                let v_max = v_base.max(v_top);
+                let surface = AnalyticSurface::Cone {
+                    apex: apex_pt,
+                    axis_dir: up,
+                    half_angle: cone_half_angle,
+                    ref_dir: radial,
+                    u_range: (theta_start, theta_end),
+                    v_range: (v_min, v_max),
+                };
+                if let Some(f) = self.faces.get_mut(side_face) {
+                    f.set_surface(Some(surface));
+                }
+            }
             faces.push(side_face);
         }
 
@@ -230,6 +313,23 @@ impl Mesh {
             rings.push(ring);
         }
 
+        // ADR-032 P17 — helper: build a Sphere analytic surface for a face
+        // covering parameter sub-range [u_min, u_max] × [v_lat_min, v_lat_max].
+        // The mesh uses sphere convention: y = radius·cos(θ), where θ ∈ [0,π]
+        // is the polar (theta) angle from north pole. Convert to our latitude
+        // convention: latitude = π/2 - θ ∈ [-π/2, +π/2].
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let make_sphere_surface = |u_min: f64, u_max: f64, lat_min: f64, lat_max: f64| {
+            AnalyticSurface::Sphere {
+                center,
+                radius,
+                u_range: (u_min, u_max),
+                v_range: (lat_min, lat_max),
+            }
+        };
+        let theta_for_v = |v: u32| std::f64::consts::PI * (v as f64) / (v_segments as f64);
+        let lat_for_v = |v: u32| std::f64::consts::FRAC_PI_2 - theta_for_v(v);
+
         // 북극 cap — 삼각형 fan (winding: pole, next, u → outward +Y)
         // u→next가 구의 측면에서 CCW이지만, pole 중심의 fan에서는 반대로
         // 돌려야 normal이 +Y (바깥쪽)로 향함.
@@ -242,6 +342,15 @@ impl Mesh {
                     first_ring[u as usize],
                 ];
                 let f = self.add_face(&tri, material)?;
+                let u_min = two_pi * (u as f64) / (u_segments as f64);
+                let u_max = two_pi * ((u + 1) as f64) / (u_segments as f64);
+                let surface = make_sphere_surface(
+                    u_min, u_max,
+                    lat_for_v(1), std::f64::consts::FRAC_PI_2,
+                );
+                if let Some(face_ref) = self.faces.get_mut(f) {
+                    face_ref.set_surface(Some(surface));
+                }
                 faces.push(f);
             }
         }
@@ -257,6 +366,19 @@ impl Mesh {
                     rings[v + 1][u as usize],
                 ];
                 let f = self.add_face(&quad, material)?;
+                let u_min = two_pi * (u as f64) / (u_segments as f64);
+                let u_max = two_pi * ((u + 1) as f64) / (u_segments as f64);
+                let lat_lower = lat_for_v((v + 2) as u32);  // smaller latitude (going south)
+                let lat_upper = lat_for_v((v + 1) as u32);
+                let (lat_min, lat_max) = if lat_lower < lat_upper {
+                    (lat_lower, lat_upper)
+                } else {
+                    (lat_upper, lat_lower)
+                };
+                let surface = make_sphere_surface(u_min, u_max, lat_min, lat_max);
+                if let Some(face_ref) = self.faces.get_mut(f) {
+                    face_ref.set_surface(Some(surface));
+                }
                 faces.push(f);
             }
         }
@@ -272,6 +394,16 @@ impl Mesh {
                     pole_s,
                 ];
                 let f = self.add_face(&tri, material)?;
+                let u_min = two_pi * (u as f64) / (u_segments as f64);
+                let u_max = two_pi * ((u + 1) as f64) / (u_segments as f64);
+                let surface = make_sphere_surface(
+                    u_min, u_max,
+                    -std::f64::consts::FRAC_PI_2,
+                    lat_for_v(v_segments - 1),
+                );
+                if let Some(face_ref) = self.faces.get_mut(f) {
+                    face_ref.set_surface(Some(surface));
+                }
                 faces.push(f);
             }
         }
@@ -294,6 +426,104 @@ mod tests {
         mesh.create_cylinder(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "cylinder: {}", report.summary());
+    }
+
+    /// ADR-032 P17 — Cylinder side faces carry analytic Cylinder surface.
+    #[test]
+    fn cylinder_side_faces_have_cylinder_surface() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let segments = 16u32;
+        let faces = mesh.create_cylinder(DVec3::ZERO, 50.0, 100.0, segments, mat).unwrap();
+        // Faces[0] = base, faces[1] = top, faces[2..] = N side faces.
+        assert_eq!(faces.len() as u32, 2 + segments);
+        let mut cylinder_count = 0;
+        for &fid in &faces[2..] {
+            match mesh.face_surface(fid) {
+                Some(AnalyticSurface::Cylinder { radius, .. }) => {
+                    assert!((radius - 50.0).abs() < 1e-9);
+                    cylinder_count += 1;
+                }
+                other => panic!("expected Cylinder surface on side face, got {:?}", other),
+            }
+        }
+        assert_eq!(cylinder_count, segments as usize);
+    }
+
+    #[test]
+    fn cylinder_caps_have_plane_surface() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 25.0, 50.0, 8, mat).unwrap();
+        // Both caps should be Plane surfaces.
+        for &fid in &faces[..2] {
+            match mesh.face_surface(fid) {
+                Some(AnalyticSurface::Plane { .. }) => {}
+                other => panic!("expected Plane surface on cap face, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_surface_radius_matches_input() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let r = 12.345;
+        let faces = mesh.create_cylinder(DVec3::ZERO, r, 100.0, 12, mat).unwrap();
+        for &fid in &faces[2..] {
+            if let Some(AnalyticSurface::Cylinder { radius, .. }) = mesh.face_surface(fid) {
+                assert!((radius - r).abs() < 1e-12, "radius {} != input {}", radius, r);
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_side_faces_have_sphere_surface() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let r = 25.0;
+        let faces = mesh.create_sphere(DVec3::ZERO, r, 16, 8, mat).unwrap();
+        let mut sphere_count = 0;
+        for &fid in &faces {
+            if let Some(AnalyticSurface::Sphere { radius, .. }) = mesh.face_surface(fid) {
+                assert!((radius - r).abs() < 1e-9);
+                sphere_count += 1;
+            }
+        }
+        assert!(sphere_count > 0,
+            "expected at least 1 Sphere surface, got 0 / {}", faces.len());
+    }
+
+    #[test]
+    fn cone_side_faces_have_cone_surface() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let radius = 50.0;
+        let faces = mesh.create_cone(DVec3::ZERO, radius, 100.0, 16, mat).unwrap();
+        let mut cone_count = 0;
+        for &fid in &faces {
+            if let Some(AnalyticSurface::Cone { half_angle, .. }) = mesh.face_surface(fid) {
+                // Truncated cone: top_radius = 0.1 × radius, height = 100
+                // tan(half_angle) = (50 - 5) / 100 = 0.45 → half_angle ≈ 0.4225 rad
+                let expected = 0.45_f64.atan();
+                assert!((half_angle - expected).abs() < 1e-6,
+                    "half_angle {} ≠ expected {}", half_angle, expected);
+                cone_count += 1;
+            }
+        }
+        assert!(cone_count > 0, "expected ≥ 1 Cone surface");
+    }
+
+    /// 회귀 보장 — Box (non-curved primitive) 는 surface 가 None.
+    #[test]
+    fn box_faces_have_no_surface() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
+        for &fid in &faces {
+            assert!(mesh.face_surface(fid).is_none(),
+                "box face should have no analytic surface");
+        }
     }
 
     #[test]

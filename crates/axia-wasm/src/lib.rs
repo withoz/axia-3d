@@ -699,6 +699,79 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-032 P17 — Draw a tessellated arc and attach analytic Arc curves
+    /// to each segment edge in one atomic op.
+    ///
+    /// Encapsulates the DrawArc tool's full promotion path: tessellate +
+    /// drawLine ×N + setEdgeArcCurve ×N, all in a single transaction.
+    /// Returns 0.0 on success, -1.0 on any error.
+    #[wasm_bindgen(js_name = "drawArcWithCurve")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_arc_with_curve(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        radius: f64,
+        nx: f64, ny: f64, nz: f64,
+        ux: f64, uy: f64, uz: f64,
+        start_angle: f64, end_angle: f64,
+        segments: u32,
+    ) -> f64 {
+        use axia_geo::{AnalyticCurve, EdgeId};
+        use glam::DVec3;
+        if segments < 1 || radius <= 0.0 {
+            return -1.0;
+        }
+        let center = DVec3::new(cx, cy, cz);
+        let normal = DVec3::new(nx, ny, nz);
+        let basis_u = DVec3::new(ux, uy, uz);
+        let basis_v = normal.cross(basis_u).normalize_or_zero();
+        if normal.length_squared() < 1e-12 || basis_u.length_squared() < 1e-12
+            || basis_v.length_squared() < 1e-12
+        {
+            return -1.0;
+        }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut edge_ids: Vec<EdgeId> = Vec::with_capacity(segments as usize);
+        let mut any_failed = false;
+        for i in 0..segments {
+            let theta_a = start_angle + (end_angle - start_angle) * (i as f64) / (segments as f64);
+            let theta_b = start_angle + (end_angle - start_angle) * ((i + 1) as f64) / (segments as f64);
+            let p_a = center + basis_u * (radius * theta_a.cos()) + basis_v * (radius * theta_a.sin());
+            let p_b = center + basis_u * (radius * theta_b.cos()) + basis_v * (radius * theta_b.sin());
+            match self.scene.mesh.draw_line(p_a, p_b) {
+                Ok((_va, _vb, eid)) => edge_ids.push(eid),
+                Err(_) => { any_failed = true; break; }
+            }
+        }
+
+        if !any_failed {
+            // Attach sub-arc curve metadata.
+            for (i, &eid) in edge_ids.iter().enumerate() {
+                let theta_a = start_angle
+                    + (end_angle - start_angle) * (i as f64) / (segments as f64);
+                let theta_b = start_angle
+                    + (end_angle - start_angle) * ((i + 1) as f64) / (segments as f64);
+                if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+                    e.set_curve(Some(AnalyticCurve::Arc {
+                        center, radius, normal, basis_u,
+                        start_angle: theta_a,
+                        end_angle: theta_b,
+                    }));
+                }
+            }
+        }
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        if any_failed { -1.0 } else { 0.0 }
+    }
+
     /// Clear any analytic curve from an edge (revert to straight line).
     #[wasm_bindgen(js_name = "clearEdgeCurve")]
     pub fn clear_edge_curve(&mut self, edge_id: u32) -> bool {

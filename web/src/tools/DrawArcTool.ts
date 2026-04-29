@@ -122,23 +122,37 @@ export class DrawArcTool implements ITool {
       return;
     }
 
-    // Curve layer에 등록
+    // Curve layer에 등록 (display / edit 용)
     getCurveRegistry().add(arc);
 
-    // Tessellate → 단일 BatchCommand (ADR-012 §3) — N 회 crossing 대신 1 회.
-    const pts = tessellateCurve(arc);
-    const flat = new Float64Array(pts.length * 3);
-    for (let i = 0; i < pts.length; i++) {
-      flat[i * 3]     = pts[i].x;
-      flat[i * 3 + 1] = pts[i].y;
-      flat[i * 3 + 2] = pts[i].z;
+    // ADR-032 P17 — Promote on creation: drawArcWithCurve atomic API
+    // attaches AnalyticCurve::Arc to each segment edge.
+    const segments = arc.segments ?? 32;
+    const ok = this.ctx.bridge.drawArcWithCurve(
+      arc.center[0], arc.center[1], arc.center[2],
+      arc.radius,
+      arc.planeNormal[0], arc.planeNormal[1], arc.planeNormal[2],
+      arc.xAxis[0], arc.xAxis[1], arc.xAxis[2],
+      arc.startAngle, arc.endAngle,
+      segments,
+    );
+
+    if (ok < 0) {
+      // Fallback to plain polyline if engine missing the promote API.
+      const pts = tessellateCurve(arc);
+      const flat = new Float64Array(pts.length * 3);
+      for (let i = 0; i < pts.length; i++) {
+        flat[i * 3]     = pts[i].x;
+        flat[i * 3 + 1] = pts[i].y;
+        flat[i * 3 + 2] = pts[i].z;
+      }
+      this.ctx.bridge.drawPolyline(flat);
     }
-    this.ctx.bridge.drawPolyline(flat);
 
     this.ctx.syncMesh();
     debugLog(
       `[Arc] R=${arc.radius.toFixed(2)} angle=${((arc.endAngle - arc.startAngle) * 180 / Math.PI).toFixed(1)}°` +
-      ` (${pts.length - 1} segments)`
+      ` (${segments} segments, analytic Arc attached)`
     );
   }
 

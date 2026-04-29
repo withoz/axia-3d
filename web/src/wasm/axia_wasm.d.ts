@@ -232,6 +232,15 @@ export class AxiaEngine {
      */
     delete_group(group_id: number): boolean;
     /**
+     * ADR-032 P17 — Draw a tessellated arc and attach analytic Arc curves
+     * to each segment edge in one atomic op.
+     *
+     * Encapsulates the DrawArc tool's full promotion path: tessellate +
+     * drawLine ×N + setEdgeArcCurve ×N, all in a single transaction.
+     * Returns 0.0 on success, -1.0 on any error.
+     */
+    drawArcWithCurve(cx: number, cy: number, cz: number, radius: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, start_angle: number, end_angle: number, segments: number): number;
+    /**
      * Draw a centerline (reference axis). Unlike drawLine, bypasses
      * intersection-split / face synthesis / loop detection. Creates one
      * edge tagged Centerline; crossing other edges does not split them.
@@ -1126,6 +1135,7 @@ export interface InitOutput {
     readonly axiaengine_delete_edge: (a: number, b: number) => number;
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
+    readonly axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

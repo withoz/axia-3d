@@ -617,6 +617,32 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-032 P17 — Draw a tessellated arc and attach analytic Arc curves
+     * to each segment edge in one atomic op.
+     *
+     * Encapsulates the DrawArc tool's full promotion path: tessellate +
+     * drawLine ×N + setEdgeArcCurve ×N, all in a single transaction.
+     * Returns 0.0 on success, -1.0 on any error.
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} radius
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} ux
+     * @param {number} uy
+     * @param {number} uz
+     * @param {number} start_angle
+     * @param {number} end_angle
+     * @param {number} segments
+     * @returns {number}
+     */
+    drawArcWithCurve(cx, cy, cz, radius, nx, ny, nz, ux, uy, uz, start_angle, end_angle, segments) {
+        const ret = wasm.axiaengine_drawArcWithCurve(this.__wbg_ptr, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz, start_angle, end_angle, segments);
+        return ret;
+    }
+    /**
      * Draw a centerline (reference axis). Unlike drawLine, bypasses
      * intersection-split / face synthesis / loop detection. Creates one
      * edge tagged Centerline; crossing other edges does not split them.

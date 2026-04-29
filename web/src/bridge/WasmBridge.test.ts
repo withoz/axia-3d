@@ -551,6 +551,69 @@ describe('WasmBridge', () => {
       expect(result.length).toBe(0);
     });
 
+    // ──────────────────────────────────────────────────────────────────
+    // ADR-032 P17 — Promotion on creation tests
+    // ──────────────────────────────────────────────────────────────────
+
+    it('drawArcWithCurve() forwards 13 args to engine', () => {
+      let captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        drawArcWithCurve: (...args: number[]) => {
+          captured = args;
+          return 0;
+        },
+      };
+      const result = bridge.drawArcWithCurve(
+        0, 0, 0,         // center
+        5,                 // radius
+        0, 0, 1,           // normal Z
+        1, 0, 0,           // basis_u X
+        0, Math.PI / 2,    // start, end angle
+        12,                // segments
+      );
+      expect(result).toBe(0);
+      expect(captured.length).toBe(13);
+      expect(captured[3]).toBe(5);     // radius
+      expect(captured[12]).toBe(12);   // segments
+    });
+
+    it('drawArcWithCurve() snaps center to cardinal axis', () => {
+      let captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        drawArcWithCurve: (...args: number[]) => {
+          captured = args;
+          return 0;
+        },
+      };
+      // y component sub-tol with normal=Y → should snap to 0
+      bridge.drawArcWithCurve(
+        1.0, 1e-7, 2.0, 5,
+        0, 1, 0,           // normal Y → cardinal axis 1
+        1, 0, 0, 0, Math.PI, 8,
+      );
+      expect(captured[1]).toBe(0);  // y snapped
+    });
+
+    it('drawArcWithCurve() returns -1 when engine missing the method', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const result = bridge.drawArcWithCurve(
+        0, 0, 0, 5, 0, 0, 1, 1, 0, 0, 0, Math.PI, 8,
+      );
+      expect(result).toBe(-1);
+    });
+
+    it('drawArcWithCurve() returns -1 when no engine', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      const result = bridge.drawArcWithCurve(
+        0, 0, 0, 5, 0, 0, 1, 1, 0, 0, 0, Math.PI, 8,
+      );
+      expect(result).toBe(-1);
+    });
+
     it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
