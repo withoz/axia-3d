@@ -414,6 +414,45 @@ impl Mesh {
         self.edges.get(edge_id).and_then(|e| e.curve())
     }
 
+    /// ADR-031 Phase D — Attach an analytic surface to a face.
+    ///
+    /// `surface = None` reverts to a polygon face (default behavior).
+    /// Returns true if the face exists, false otherwise. The DCEL topology
+    /// (boundary loops, neighbors) is unchanged — only the surface metadata
+    /// is set.
+    pub fn set_face_surface(
+        &mut self,
+        face_id: FaceId,
+        surface: Option<crate::surfaces::AnalyticSurface>,
+    ) -> bool {
+        if let Some(f) = self.faces.get_mut(face_id) {
+            f.set_surface(surface);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-031 Phase D — Get the analytic surface attached to a face, if any.
+    pub fn face_surface(&self, face_id: FaceId) -> Option<&crate::surfaces::AnalyticSurface> {
+        self.faces.get(face_id).and_then(|f| f.surface())
+    }
+
+    /// ADR-031 Phase D — Tessellate a face's analytic surface for rendering.
+    ///
+    /// - If the face has no surface (default polygon), returns None.
+    /// - Otherwise returns a triangle mesh trimmed to the face's parameter
+    ///   range, sampled to chord error ≤ `chord_tol`.
+    pub fn tessellate_face_surface(
+        &self,
+        face_id: FaceId,
+        chord_tol: f64,
+    ) -> Option<crate::surfaces::SurfaceTessellation> {
+        use crate::surfaces::SurfaceOps;
+        let face = self.faces.get(face_id)?;
+        face.surface().map(|s| s.tessellate(chord_tol))
+    }
+
     /// 새 line segment (start→end) 위에 있는 기존 vertex들을 찾음.
     /// 반환: (VertId, 3D pos, t_on_new_line) — t 오름차순 정렬.
     /// 이들은 edge split이 불필요 (vertex 이미 존재) — 새 line 자체가 이 vertex에서
@@ -5351,6 +5390,148 @@ mod tests {
         let json = serde_json::to_string(&bs).unwrap();
         let bs2: AnalyticCurve = serde_json::from_str(&json).unwrap();
         assert_eq!(bs, bs2);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-031 Phase D — Face.surface integration
+    // ────────────────────────────────────────────────────────────────────
+
+    use crate::surfaces::{AnalyticSurface, SurfaceOps};
+
+    fn unit_square_face(mesh: &mut Mesh) -> FaceId {
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap()
+    }
+
+    #[test]
+    fn face_surface_default_none() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        assert!(mesh.face_surface(fid).is_none());
+        assert!(!mesh.faces[fid].has_curved_surface());
+    }
+
+    #[test]
+    fn set_face_surface_cylinder_persists() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 10.0),
+        };
+        let ok = mesh.set_face_surface(fid, Some(cyl.clone()));
+        assert!(ok);
+        assert_eq!(mesh.face_surface(fid), Some(&cyl));
+        assert!(mesh.faces[fid].has_curved_surface());
+    }
+
+    #[test]
+    fn set_face_surface_invalid_face_returns_false() {
+        let mut mesh = Mesh::new();
+        let bogus = FaceId::new(999_999);
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-1.0, 1.0), v_range: (-1.0, 1.0),
+        };
+        assert!(!mesh.set_face_surface(bogus, Some(plane)));
+    }
+
+    #[test]
+    fn clear_face_surface_reverts_to_polygon() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        mesh.set_face_surface(fid, Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-1.0, 1.0), v_range: (-1.0, 1.0),
+        }));
+        assert!(mesh.face_surface(fid).is_some());
+        mesh.set_face_surface(fid, None);
+        assert!(mesh.face_surface(fid).is_none());
+    }
+
+    #[test]
+    fn tessellate_face_surface_cylinder_returns_triangles() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 10.0),
+        };
+        mesh.set_face_surface(fid, Some(cyl));
+        let tess = mesh.tessellate_face_surface(fid, 0.5).unwrap();
+        assert!(tess.vertices.len() > 16, "expected substantial tessellation");
+        assert!(!tess.triangles.is_empty());
+        assert_eq!(tess.uv.len(), tess.vertices.len());
+        // Each vertex within [r-tol, r+tol] of axis (radius invariant).
+        for p in &tess.vertices {
+            let radial = DVec3::new(p.x, p.y, 0.0).length();
+            assert!((radial - 5.0).abs() < 1e-9,
+                "vertex {:?} radial = {}", p, radial);
+        }
+    }
+
+    #[test]
+    fn tessellate_face_surface_no_surface_returns_none() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        assert!(mesh.tessellate_face_surface(fid, 0.5).is_none());
+    }
+
+    #[test]
+    fn face_surface_lod_more_triangles_with_finer_tol() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        mesh.set_face_surface(fid, Some(AnalyticSurface::Sphere {
+            center: DVec3::ZERO, radius: 10.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        }));
+        let coarse = mesh.tessellate_face_surface(fid, 1.0).unwrap();
+        let fine = mesh.tessellate_face_surface(fid, 0.05).unwrap();
+        assert!(fine.triangles.len() > coarse.triangles.len(),
+            "fine ({}) > coarse ({})", fine.triangles.len(), coarse.triangles.len());
+    }
+
+    #[test]
+    fn face_surface_serialize_roundtrip() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let surface = AnalyticSurface::Sphere {
+            center: DVec3::new(1.0, 2.0, 3.0), radius: 7.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        mesh.set_face_surface(fid, Some(surface.clone()));
+        let json = serde_json::to_string(&mesh.faces[fid]).unwrap();
+        let face2: crate::Face = serde_json::from_str(&json).unwrap();
+        assert_eq!(face2.surface(), Some(&surface));
+    }
+
+    #[test]
+    fn legacy_face_loads_with_surface_none() {
+        // Hand-craft a JSON without `surface` field — must load with None.
+        let original = unit_square_face(&mut Mesh::new());
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let json = serde_json::to_string(&mesh.faces[fid]).unwrap();
+        // Strip the surface field
+        let legacy = json
+            .replace(r#","surface":null"#, "")
+            .replace(r#""surface":null,"#, "");
+        let face2: crate::Face = serde_json::from_str(&legacy).expect("legacy face");
+        assert!(face2.surface().is_none());
+        let _ = original;
     }
 
     /// 회귀 보장 — Phase A 도입 후에도 기존 polygon 동작 무변동.

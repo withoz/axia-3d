@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use super::id::*;
 use super::flags::SharedFlags;
+use crate::surfaces::AnalyticSurface;
 
 /// Reference to a half-edge loop (outer boundary or hole).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -57,6 +58,11 @@ pub struct Face {
     visible: bool,
     /// Shared flags (selection, etc.)
     flags: SharedFlags,
+    /// ADR-031 Phase D — optional analytic surface definition.
+    /// `None` = polygon face (default, backward-compat).
+    /// `Some` = parametric surface, view-time tessellation.
+    #[serde(default)]
+    surface: Option<AnalyticSurface>,
 }
 
 impl Face {
@@ -72,7 +78,35 @@ impl Face {
             active: true,
             visible: true,
             flags: SharedFlags::empty(),
+            surface: None,
         }
+    }
+
+    /// ADR-031 Phase D — read the optional analytic surface.
+    #[inline]
+    pub fn surface(&self) -> Option<&AnalyticSurface> {
+        self.surface.as_ref()
+    }
+
+    /// ADR-031 Phase D — set or clear the analytic surface.
+    /// `None` reverts to a planar polygon face.
+    #[inline]
+    pub fn set_surface(&mut self, surface: Option<AnalyticSurface>) {
+        self.surface = surface;
+    }
+
+    /// ADR-031 Phase D — true if a non-Plane analytic surface is attached.
+    #[inline]
+    pub fn has_curved_surface(&self) -> bool {
+        matches!(
+            self.surface,
+            Some(
+                AnalyticSurface::Cylinder { .. }
+                | AnalyticSurface::Sphere { .. }
+                | AnalyticSurface::Cone { .. }
+                | AnalyticSurface::Torus { .. }
+            )
+        )
     }
 
     // --- Getters ---

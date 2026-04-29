@@ -1019,20 +1019,25 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   - Line/Circle/Arc primitives + CurveOps trait, 59 회귀 테스트
 - **ADR-029** (Phase B): Free-form Curves — **완료**
   - Bezier (de Casteljau) + B-spline (de Boor) + 43 tests
-- **ADR-030** (Phase C): NURBS curves + Curve-Curve Intersection — **완료**
-  - `nurbs.rs` — rational B-spline via homogeneous coordinate lifting (4D
-    B-spline 평가), 정확 derivative via quotient rule, Boehm's knot insertion
-  - `intersect.rs` — robust CCI: AABB pruning + nearest-segment-pair init +
-    Newton's method via 2x2 normal-equation pseudo-inverse, 50 iter max
-  - `conic.rs` — `arc_as_nurbs()` helper: quadratic NURBS exact representation
-    of conic sections (weight = cos(half_angle))
-  - `AnalyticCurve::NURBS { control_pts, weights, knots, degree }` 추가
-  - WASM bridge: `setEdgeNurbsCurve(eid, pts, w, knots, deg)`, `intersectEdges(a, b, tol)`
-  - `edgeCurveKind` 확장: 6 = NURBS
-  - 회귀 테스트 67개 (NURBS 21 + intersect 16 + conic 6 + TS bridge 5 + 기존 통합 19)
-- **다음 단계**: Phase D (Analytic surface primitives, 6개월 예정)
+- **ADR-030** (Phase C): NURBS curves + CCI — **완료** (67 tests)
+- **ADR-031** (Phase D): Analytic Surface Primitives — **완료**
+  - `crates/axia-geo/src/surfaces/`:
+    - `plane.rs` — flat surface
+    - `cylinder.rs` — right-circular cylinder (axis + ref_dir)
+    - `sphere.rs` — Z-up parametric sphere (longitude/latitude)
+    - `cone.rs` — right-circular cone (apex + half_angle)
+    - `torus.rs` — major/minor radius torus
+  - `AnalyticSurface` enum + `SurfaceOps` trait
+    (evaluate / normal / derivative_u / derivative_v / tessellate / parameter_range)
+  - `Face.surface: Option<AnalyticSurface>` (`#[serde(default)]` legacy 호환)
+  - `Mesh::set_face_surface` / `face_surface` / `tessellate_face_surface` API
+  - WASM bridge: `setFaceSurfacePlane/Cylinder/Sphere/Cone/Torus`,
+    `clearFaceSurface`, `faceSurfaceKind` (0..5), `tessellateFaceSurface`
+  - 회귀 테스트 78개 (60 surface unit + 9 mesh integration + 1 NURBS edge +
+    1 legacy serde + 7 TS bridge)
+- **다음 단계**: Phase E (NURBS surfaces, trimmed, 6개월 예정)
 - 점진 단계: Analytic Edge Curve ✅ → Bezier/B-spline ✅ → NURBS curve ✅ →
-  Surface primitives → NURBS surfaces → SSI → Boolean + STEP/IGES
+  Surface primitives ✅ → NURBS surfaces → SSI → Boolean + STEP/IGES
 - 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026) 모두 보존
 
 ### 기타

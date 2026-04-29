@@ -418,6 +418,15 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Clear any analytic surface from a face (revert to polygon).
+     * @param {number} face_id
+     * @returns {boolean}
+     */
+    clearFaceSurface(face_id) {
+        const ret = wasm.axiaengine_clearFaceSurface(this.__wbg_ptr, face_id);
+        return ret !== 0;
+    }
+    /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
      * Empty Vec on invalid / inactive edge.
@@ -825,6 +834,16 @@ export class AxiaEngine {
     faceInnerLoopCount(face_id_raw) {
         const ret = wasm.axiaengine_faceInnerLoopCount(this.__wbg_ptr, face_id_raw);
         return ret >>> 0;
+    }
+    /**
+     * Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
+     * 4 = Cone, 5 = Torus, -1 = invalid face id.
+     * @param {number} face_id
+     * @returns {number}
+     */
+    faceSurfaceKind(face_id) {
+        const ret = wasm.axiaengine_faceSurfaceKind(this.__wbg_ptr, face_id);
+        return ret;
     }
     /**
      * @returns {number}
@@ -2430,6 +2449,116 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Set a Cone surface on an existing face.
+     * @param {number} face_id
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} half_angle
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} rz
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @returns {boolean}
+     */
+    setFaceSurfaceCone(face_id, ax, ay, az, dx, dy, dz, half_angle, rx, ry, rz, u_min, u_max, v_min, v_max) {
+        const ret = wasm.axiaengine_setFaceSurfaceCone(this.__wbg_ptr, face_id, ax, ay, az, dx, dy, dz, half_angle, rx, ry, rz, u_min, u_max, v_min, v_max);
+        return ret !== 0;
+    }
+    /**
+     * Set a Cylinder surface on an existing face.
+     * @param {number} face_id
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} radius
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} rz
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @returns {boolean}
+     */
+    setFaceSurfaceCylinder(face_id, ox, oy, oz, ax, ay, az, radius, rx, ry, rz, u_min, u_max, v_min, v_max) {
+        const ret = wasm.axiaengine_setFaceSurfaceCylinder(this.__wbg_ptr, face_id, ox, oy, oz, ax, ay, az, radius, rx, ry, rz, u_min, u_max, v_min, v_max);
+        return ret !== 0;
+    }
+    /**
+     * Set a Plane surface on an existing face.
+     * Args: origin (3), normal (3), basis_u (3), u_range (2), v_range (2).
+     * @param {number} face_id
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} ux
+     * @param {number} uy
+     * @param {number} uz
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @returns {boolean}
+     */
+    setFaceSurfacePlane(face_id, ox, oy, oz, nx, ny, nz, ux, uy, uz, u_min, u_max, v_min, v_max) {
+        const ret = wasm.axiaengine_setFaceSurfacePlane(this.__wbg_ptr, face_id, ox, oy, oz, nx, ny, nz, ux, uy, uz, u_min, u_max, v_min, v_max);
+        return ret !== 0;
+    }
+    /**
+     * Set a Sphere surface on an existing face.
+     * @param {number} face_id
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} radius
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @returns {boolean}
+     */
+    setFaceSurfaceSphere(face_id, cx, cy, cz, radius, u_min, u_max, v_min, v_max) {
+        const ret = wasm.axiaengine_setFaceSurfaceSphere(this.__wbg_ptr, face_id, cx, cy, cz, radius, u_min, u_max, v_min, v_max);
+        return ret !== 0;
+    }
+    /**
+     * Set a Torus surface on an existing face.
+     * @param {number} face_id
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} rz
+     * @param {number} major_radius
+     * @param {number} minor_radius
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @returns {boolean}
+     */
+    setFaceSurfaceTorus(face_id, cx, cy, cz, ax, ay, az, rx, ry, rz, major_radius, minor_radius, u_min, u_max, v_min, v_max) {
+        const ret = wasm.axiaengine_setFaceSurfaceTorus(this.__wbg_ptr, face_id, cx, cy, cz, ax, ay, az, rx, ry, rz, major_radius, minor_radius, u_min, u_max, v_min, v_max);
+        return ret !== 0;
+    }
+    /**
      * 중첩 그룹 설정
      * @param {number} child_id
      * @param {number} parent_id
@@ -2677,6 +2806,27 @@ export class AxiaEngine {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             wasm.axiaengine_tessellateEdge(retptr, this.__wbg_ptr, edge_id, chord_tol);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Tessellate a face's analytic surface for rendering. Returns flat
+     * `[v_count, t_count, vx, vy, vz, ..., t0_a, t0_b, t0_c, t1_a, ...]`.
+     * Returns empty array if face has no surface.
+     * @param {number} face_id
+     * @param {number} chord_tol
+     * @returns {Float64Array}
+     */
+    tessellateFaceSurface(face_id, chord_tol) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_tessellateFaceSurface(retptr, this.__wbg_ptr, face_id, chord_tol);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var v1 = getArrayF64FromWasm0(r0, r1).slice();

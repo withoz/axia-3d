@@ -905,6 +905,198 @@ impl AxiaEngine {
     }
 
     // ========================================================================
+    // ADR-031 Phase D — Analytic Surface API
+    // ========================================================================
+
+    /// Set a Plane surface on an existing face.
+    /// Args: origin (3), normal (3), basis_u (3), u_range (2), v_range (2).
+    #[wasm_bindgen(js_name = "setFaceSurfacePlane")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_face_surface_plane(
+        &mut self, face_id: u32,
+        ox: f64, oy: f64, oz: f64,
+        nx: f64, ny: f64, nz: f64,
+        ux: f64, uy: f64, uz: f64,
+        u_min: f64, u_max: f64,
+        v_min: f64, v_max: f64,
+    ) -> bool {
+        use axia_geo::{FaceId, AnalyticSurface};
+        use glam::DVec3;
+        let surface = AnalyticSurface::Plane {
+            origin: DVec3::new(ox, oy, oz),
+            normal: DVec3::new(nx, ny, nz),
+            basis_u: DVec3::new(ux, uy, uz),
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        let fid = FaceId::new(face_id);
+        let result = self.scene.mesh.set_face_surface(fid, Some(surface));
+        if result { self.mark_topology_changed(); }
+        result
+    }
+
+    /// Set a Cylinder surface on an existing face.
+    #[wasm_bindgen(js_name = "setFaceSurfaceCylinder")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_face_surface_cylinder(
+        &mut self, face_id: u32,
+        ox: f64, oy: f64, oz: f64,
+        ax: f64, ay: f64, az: f64,
+        radius: f64,
+        rx: f64, ry: f64, rz: f64,
+        u_min: f64, u_max: f64,
+        v_min: f64, v_max: f64,
+    ) -> bool {
+        use axia_geo::{FaceId, AnalyticSurface};
+        use glam::DVec3;
+        let surface = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::new(ox, oy, oz),
+            axis_dir: DVec3::new(ax, ay, az),
+            radius,
+            ref_dir: DVec3::new(rx, ry, rz),
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        let fid = FaceId::new(face_id);
+        let result = self.scene.mesh.set_face_surface(fid, Some(surface));
+        if result { self.mark_topology_changed(); }
+        result
+    }
+
+    /// Set a Sphere surface on an existing face.
+    #[wasm_bindgen(js_name = "setFaceSurfaceSphere")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_face_surface_sphere(
+        &mut self, face_id: u32,
+        cx: f64, cy: f64, cz: f64, radius: f64,
+        u_min: f64, u_max: f64, v_min: f64, v_max: f64,
+    ) -> bool {
+        use axia_geo::{FaceId, AnalyticSurface};
+        use glam::DVec3;
+        let surface = AnalyticSurface::Sphere {
+            center: DVec3::new(cx, cy, cz),
+            radius,
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        let fid = FaceId::new(face_id);
+        let result = self.scene.mesh.set_face_surface(fid, Some(surface));
+        if result { self.mark_topology_changed(); }
+        result
+    }
+
+    /// Set a Cone surface on an existing face.
+    #[wasm_bindgen(js_name = "setFaceSurfaceCone")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_face_surface_cone(
+        &mut self, face_id: u32,
+        ax: f64, ay: f64, az: f64,
+        dx: f64, dy: f64, dz: f64,
+        half_angle: f64,
+        rx: f64, ry: f64, rz: f64,
+        u_min: f64, u_max: f64, v_min: f64, v_max: f64,
+    ) -> bool {
+        use axia_geo::{FaceId, AnalyticSurface};
+        use glam::DVec3;
+        let surface = AnalyticSurface::Cone {
+            apex: DVec3::new(ax, ay, az),
+            axis_dir: DVec3::new(dx, dy, dz),
+            half_angle,
+            ref_dir: DVec3::new(rx, ry, rz),
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        let fid = FaceId::new(face_id);
+        let result = self.scene.mesh.set_face_surface(fid, Some(surface));
+        if result { self.mark_topology_changed(); }
+        result
+    }
+
+    /// Set a Torus surface on an existing face.
+    #[wasm_bindgen(js_name = "setFaceSurfaceTorus")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_face_surface_torus(
+        &mut self, face_id: u32,
+        cx: f64, cy: f64, cz: f64,
+        ax: f64, ay: f64, az: f64,
+        rx: f64, ry: f64, rz: f64,
+        major_radius: f64, minor_radius: f64,
+        u_min: f64, u_max: f64, v_min: f64, v_max: f64,
+    ) -> bool {
+        use axia_geo::{FaceId, AnalyticSurface};
+        use glam::DVec3;
+        let surface = AnalyticSurface::Torus {
+            center: DVec3::new(cx, cy, cz),
+            axis_dir: DVec3::new(ax, ay, az),
+            ref_dir: DVec3::new(rx, ry, rz),
+            major_radius,
+            minor_radius,
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        let fid = FaceId::new(face_id);
+        let result = self.scene.mesh.set_face_surface(fid, Some(surface));
+        if result { self.mark_topology_changed(); }
+        result
+    }
+
+    /// Clear any analytic surface from a face (revert to polygon).
+    #[wasm_bindgen(js_name = "clearFaceSurface")]
+    pub fn clear_face_surface(&mut self, face_id: u32) -> bool {
+        use axia_geo::FaceId;
+        let fid = FaceId::new(face_id);
+        let ok = self.scene.mesh.set_face_surface(fid, None);
+        if ok { self.mark_topology_changed(); }
+        ok
+    }
+
+    /// Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
+    /// 4 = Cone, 5 = Torus, -1 = invalid face id.
+    #[wasm_bindgen(js_name = "faceSurfaceKind")]
+    pub fn face_surface_kind(&self, face_id: u32) -> i32 {
+        use axia_geo::{FaceId, AnalyticSurface};
+        let fid = FaceId::new(face_id);
+        match self.scene.mesh.face_surface(fid) {
+            None => match self.scene.mesh.faces.get(fid) {
+                Some(_) => 0,
+                None => -1,
+            },
+            Some(AnalyticSurface::Plane { .. }) => 1,
+            Some(AnalyticSurface::Cylinder { .. }) => 2,
+            Some(AnalyticSurface::Sphere { .. }) => 3,
+            Some(AnalyticSurface::Cone { .. }) => 4,
+            Some(AnalyticSurface::Torus { .. }) => 5,
+        }
+    }
+
+    /// Tessellate a face's analytic surface for rendering. Returns flat
+    /// `[v_count, t_count, vx, vy, vz, ..., t0_a, t0_b, t0_c, t1_a, ...]`.
+    /// Returns empty array if face has no surface.
+    #[wasm_bindgen(js_name = "tessellateFaceSurface")]
+    pub fn tessellate_face_surface(&self, face_id: u32, chord_tol: f64) -> Vec<f64> {
+        use axia_geo::FaceId;
+        let fid = FaceId::new(face_id);
+        let tess = match self.scene.mesh.tessellate_face_surface(fid, chord_tol) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let mut flat = Vec::with_capacity(2 + tess.vertices.len() * 3 + tess.triangles.len() * 3);
+        flat.push(tess.vertices.len() as f64);
+        flat.push(tess.triangles.len() as f64);
+        for p in tess.vertices {
+            flat.push(p.x);
+            flat.push(p.y);
+            flat.push(p.z);
+        }
+        for [a, b, c] in tess.triangles {
+            flat.push(a as f64);
+            flat.push(b as f64);
+            flat.push(c as f64);
+        }
+        flat
+    }
+
+    // ========================================================================
     // Primitive shapes (Cylinder, Cone, Sphere)
     // ========================================================================
 

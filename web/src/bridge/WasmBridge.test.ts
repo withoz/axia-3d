@@ -462,6 +462,95 @@ describe('WasmBridge', () => {
       expect(result.length).toBe(0);
     });
 
+    // ──────────────────────────────────────────────────────────────────
+    // ADR-031 Phase D — Analytic surfaces bridge tests
+    // ──────────────────────────────────────────────────────────────────
+
+    it('setFaceSurfaceCylinder() forwards 15 args', () => {
+      let captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setFaceSurfaceCylinder: (...args: number[]) => {
+          captured = args;
+          return true;
+        },
+      };
+      const ok = bridge.setFaceSurfaceCylinder(
+        7,
+        0, 0, 0,    // axis origin
+        0, 0, 1,    // axis dir Z
+        5.0,         // radius
+        1, 0, 0,    // ref dir X
+        0, Math.PI * 2, 0, 10,  // u/v range
+      );
+      expect(ok).toBe(true);
+      expect(captured.length).toBe(15);
+      expect(captured[0]).toBe(7);
+      expect(captured[7]).toBe(5.0);  // radius
+    });
+
+    it('setFaceSurfaceSphere() forwards 9 args', () => {
+      let captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setFaceSurfaceSphere: (...args: number[]) => {
+          captured = args;
+          return true;
+        },
+      };
+      bridge.setFaceSurfaceSphere(
+        3, 1, 2, 3, 7.0,
+        0, Math.PI * 2, -Math.PI / 2, Math.PI / 2,
+      );
+      expect(captured.length).toBe(9);
+      expect(captured[4]).toBe(7.0);
+    });
+
+    it('faceSurfaceKind() returns engine value', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        faceSurfaceKind: (_id: number) => 2,  // Cylinder
+      };
+      expect(bridge.faceSurfaceKind(0)).toBe(2);
+    });
+
+    it('faceSurfaceKind() returns -1 without engine', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      expect(bridge.faceSurfaceKind(0)).toBe(-1);
+    });
+
+    it('clearFaceSurface() forwards to engine', () => {
+      let captured = -1;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        clearFaceSurface: (id: number) => { captured = id; return true; },
+      };
+      const ok = bridge.clearFaceSurface(99);
+      expect(ok).toBe(true);
+      expect(captured).toBe(99);
+    });
+
+    it('tessellateFaceSurface() returns Float64Array with header', () => {
+      // Mock returns 2 vertices + 1 triangle = [2, 1, x0,y0,z0, x1,y1,z1, 0,1,2]
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        tessellateFaceSurface: (_id: number, _tol: number) =>
+          new Float64Array([2, 1,  0, 0, 0,  1, 1, 1,  0, 1, 0]),
+      };
+      const result = bridge.tessellateFaceSurface(0, 0.1);
+      expect(result.length).toBe(11);
+      expect(result[0]).toBe(2);  // vertex count
+      expect(result[1]).toBe(1);  // triangle count
+    });
+
+    it('tessellateFaceSurface() returns empty when missing engine', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      const result = bridge.tessellateFaceSurface(0, 0.1);
+      expect(result.length).toBe(0);
+    });
+
     it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

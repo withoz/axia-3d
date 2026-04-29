@@ -17,6 +17,7 @@ pub mod mesh;
 pub mod operations;
 pub mod tolerances;
 pub mod curves;
+pub mod surfaces;
 
 // Re-export main types
 pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, InvariantReport, ManifoldInfo};
@@ -24,3 +25,4 @@ pub use entities::id::*;
 pub use entities::{Vertex, Edge, EdgeClass, HalfEdge, Face, LoopRef};
 pub use tolerances::*;
 pub use curves::{AnalyticCurve, CurveOps};
+pub use surfaces::{AnalyticSurface, SurfaceOps, SurfaceTessellation};

@@ -271,4 +271,20 @@ mod tests {
         // Line variant of AnalyticCurve is treated as straight line — not curved.
         assert!(!e.is_curved());
     }
+
+    #[test]
+    fn edge_is_curved_true_for_nurbs() {
+        let mut e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        e.set_curve(Some(AnalyticCurve::NURBS {
+            control_pts: vec![
+                glam::DVec3::ZERO,
+                glam::DVec3::X,
+                glam::DVec3::new(2.0, 0.0, 0.0),
+            ],
+            weights: vec![1.0, 1.0, 1.0],
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            degree: 2,
+        }));
+        assert!(e.is_curved());
+    }
 }

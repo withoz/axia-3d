@@ -415,6 +415,15 @@ type AxiaEngineExtended = AxiaEngine & {
     degree: number,
   ): boolean;
   intersectEdges?(edgeIdA: number, edgeIdB: number, tol: number): Float64Array;
+  // ADR-031 Phase D — Analytic surfaces
+  setFaceSurfacePlane?(...args: number[]): boolean;
+  setFaceSurfaceCylinder?(...args: number[]): boolean;
+  setFaceSurfaceSphere?(...args: number[]): boolean;
+  setFaceSurfaceCone?(...args: number[]): boolean;
+  setFaceSurfaceTorus?(...args: number[]): boolean;
+  clearFaceSurface?(faceId: number): boolean;
+  faceSurfaceKind?(faceId: number): number;
+  tessellateFaceSurface?(faceId: number, chordTol: number): Float64Array;
   // Material operations
   assign_material?(faceIds: Uint32Array, materialIdRaw: number): boolean;
   remove_material?(faceIds: Uint32Array): boolean;
@@ -704,6 +713,82 @@ export class WasmBridge {
     }).intersectEdges;
     if (!fn) return new Float64Array(0);
     const result = fn.call(this.engine, edgeIdA, edgeIdB, tol);
+    return result instanceof Float64Array ? result : new Float64Array(result as number[]);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-031 Phase D — Analytic Surface API
+  // ════════════════════════════════════════════════════════════════════════
+
+  /** Set a Cylinder surface on a face. */
+  setFaceSurfaceCylinder(
+    faceId: number,
+    axisOriginX: number, axisOriginY: number, axisOriginZ: number,
+    axisDirX: number, axisDirY: number, axisDirZ: number,
+    radius: number,
+    refDirX: number, refDirY: number, refDirZ: number,
+    uMin: number, uMax: number, vMin: number, vMax: number,
+  ): boolean {
+    if (!this.engine) return false;
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      setFaceSurfaceCylinder?: (...args: number[]) => boolean;
+    }).setFaceSurfaceCylinder;
+    return fn ? fn.call(this.engine,
+      faceId, axisOriginX, axisOriginY, axisOriginZ,
+      axisDirX, axisDirY, axisDirZ, radius,
+      refDirX, refDirY, refDirZ, uMin, uMax, vMin, vMax,
+    ) : false;
+  }
+
+  /** Set a Sphere surface on a face. */
+  setFaceSurfaceSphere(
+    faceId: number,
+    cx: number, cy: number, cz: number, radius: number,
+    uMin: number, uMax: number, vMin: number, vMax: number,
+  ): boolean {
+    if (!this.engine) return false;
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      setFaceSurfaceSphere?: (...args: number[]) => boolean;
+    }).setFaceSurfaceSphere;
+    return fn ? fn.call(this.engine, faceId, cx, cy, cz, radius, uMin, uMax, vMin, vMax) : false;
+  }
+
+  /** Clear any surface from a face (revert to polygon). */
+  clearFaceSurface(faceId: number): boolean {
+    if (!this.engine) return false;
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      clearFaceSurface?: (id: number) => boolean;
+    }).clearFaceSurface;
+    return fn ? fn.call(this.engine, faceId) : false;
+  }
+
+  /**
+   * Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
+   * 4 = Cone, 5 = Torus, -1 = invalid.
+   */
+  faceSurfaceKind(faceId: number): number {
+    if (!this.engine) return -1;
+    const fn = (this.engine as unknown as {
+      faceSurfaceKind?: (id: number) => number;
+    }).faceSurfaceKind;
+    return fn ? fn.call(this.engine, faceId) : -1;
+  }
+
+  /**
+   * Tessellate a face's analytic surface. Returns `Float64Array` with header
+   * `[v_count, t_count, vx0, vy0, vz0, ..., t0a, t0b, t0c, ...]`. Empty
+   * array if no surface.
+   */
+  tessellateFaceSurface(faceId: number, chordTol: number): Float64Array {
+    if (!this.engine) return new Float64Array(0);
+    const fn = (this.engine as unknown as {
+      tessellateFaceSurface?: (id: number, tol: number) => Float64Array;
+    }).tessellateFaceSurface;
+    if (!fn) return new Float64Array(0);
+    const result = fn.call(this.engine, faceId, chordTol);
     return result instanceof Float64Array ? result : new Float64Array(result as number[]);
   }
 

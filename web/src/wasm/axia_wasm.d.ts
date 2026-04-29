@@ -146,6 +146,10 @@ export class AxiaEngine {
      */
     clearEdgeCurve(edge_id: number): boolean;
     /**
+     * Clear any analytic surface from a face (revert to polygon).
+     */
+    clearFaceSurface(face_id: number): boolean;
+    /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
      * Empty Vec on invalid / inactive edge.
@@ -305,6 +309,11 @@ export class AxiaEngine {
      * Returns u32::MAX when the face is missing or inactive.
      */
     faceInnerLoopCount(face_id_raw: number): number;
+    /**
+     * Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
+     * 4 = Cone, 5 = Torus, -1 = invalid face id.
+     */
+    faceSurfaceKind(face_id: number): number;
     face_count(): number;
     /**
      * face 집합의 중심점 반환 [x, y, z]
@@ -855,6 +864,27 @@ export class AxiaEngine {
      */
     setEdgeNurbsCurve(edge_id: number, control_pts_flat: Float64Array, weights: Float64Array, knots: Float64Array, degree: number): boolean;
     /**
+     * Set a Cone surface on an existing face.
+     */
+    setFaceSurfaceCone(face_id: number, ax: number, ay: number, az: number, dx: number, dy: number, dz: number, half_angle: number, rx: number, ry: number, rz: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
+    /**
+     * Set a Cylinder surface on an existing face.
+     */
+    setFaceSurfaceCylinder(face_id: number, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, radius: number, rx: number, ry: number, rz: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
+    /**
+     * Set a Plane surface on an existing face.
+     * Args: origin (3), normal (3), basis_u (3), u_range (2), v_range (2).
+     */
+    setFaceSurfacePlane(face_id: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
+    /**
+     * Set a Sphere surface on an existing face.
+     */
+    setFaceSurfaceSphere(face_id: number, cx: number, cy: number, cz: number, radius: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
+    /**
+     * Set a Torus surface on an existing face.
+     */
+    setFaceSurfaceTorus(face_id: number, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, rx: number, ry: number, rz: number, major_radius: number, minor_radius: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
+    /**
      * 중첩 그룹 설정
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
@@ -962,6 +992,12 @@ export class AxiaEngine {
      * Returns empty array if edge_id is invalid.
      */
     tessellateEdge(edge_id: number, chord_tol: number): Float64Array;
+    /**
+     * Tessellate a face's analytic surface for rendering. Returns flat
+     * `[v_count, t_count, vx, vy, vz, ..., t0_a, t0_b, t0_c, t1_a, ...]`.
+     * Returns empty array if face has no surface.
+     */
+    tessellateFaceSurface(face_id: number, chord_tol: number): Float64Array;
     /**
      * 그룹 잠금 토글
      */
@@ -1076,6 +1112,7 @@ export interface InitOutput {
     readonly axiaengine_can_undo: (a: number) => number;
     readonly axiaengine_classifyOrphans: (a: number, b: number) => void;
     readonly axiaengine_clearEdgeCurve: (a: number, b: number) => number;
+    readonly axiaengine_clearFaceSurface: (a: number, b: number) => number;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
@@ -1104,6 +1141,7 @@ export interface InitOutput {
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
     readonly axiaengine_faceArea: (a: number, b: number) => number;
     readonly axiaengine_faceInnerLoopCount: (a: number, b: number) => number;
+    readonly axiaengine_faceSurfaceKind: (a: number, b: number) => number;
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
@@ -1201,6 +1239,11 @@ export interface InitOutput {
     readonly axiaengine_setEdgeCircleCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_setEdgeNurbsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+    readonly axiaengine_setFaceSurfaceCone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
+    readonly axiaengine_setFaceSurfaceCylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
+    readonly axiaengine_setFaceSurfacePlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
+    readonly axiaengine_setFaceSurfaceSphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+    readonly axiaengine_setFaceSurfaceTorus: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_sliceVolumeByPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
@@ -1212,6 +1255,7 @@ export interface InitOutput {
     readonly axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
     readonly axiaengine_taperVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_tessellateEdge: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_tessellateFaceSurface: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
     readonly axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
