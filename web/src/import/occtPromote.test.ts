@@ -36,12 +36,21 @@ describe('occtCurvePromote — ADR-036 P21.1 매핑 SSOT', () => {
     expect(SUPPORTED_CURVE_KINDS).toHaveLength(11);
   });
 
-  it('promoteCurve 는 Tessellate fallback 을 항상 반환 (스텁)', () => {
+  it('promoteCurve 는 wrapper { promotion, warnings } 반환 (스텁 단계)', () => {
     const result = promoteCurve(null, null);
-    expect(result.kind).toBe('Tessellate');
-    if (result.kind === 'Tessellate') {
-      expect(result.reason).toContain('unsupported');
+    expect(result).toHaveProperty('promotion');
+    expect(result).toHaveProperty('warnings');
+    expect(Array.isArray(result.warnings)).toBe(true);
+    expect(result.promotion.kind).toBe('Tessellate');
+    if (result.promotion.kind === 'Tessellate') {
+      expect(result.promotion.reason).toContain('unsupported');
     }
+  });
+
+  it('promoteCurve 의 warnings 는 항상 배열 (Tessellate fallback 시에도 누적)', () => {
+    const result = promoteCurve(null, null);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(typeof result.warnings[0]).toBe('string');
   });
 
   it('CurvePromotion 의 모든 variant 가 ADR-036 의 AnalyticCurve enum 과 매칭', () => {
@@ -83,12 +92,21 @@ describe('occtSurfacePromote — ADR-036 P21.2 매핑 SSOT', () => {
     expect(SUPPORTED_SURFACE_KINDS).toHaveLength(12);
   });
 
-  it('promoteSurface 는 Tessellate fallback 을 항상 반환 (스텁)', () => {
+  it('promoteSurface 는 wrapper { promotion, warnings } 반환 (스텁 단계)', () => {
     const result = promoteSurface(null, null);
-    expect(result.kind).toBe('Tessellate');
-    if (result.kind === 'Tessellate') {
-      expect(result.reason).toContain('unsupported');
+    expect(result).toHaveProperty('promotion');
+    expect(result).toHaveProperty('warnings');
+    expect(Array.isArray(result.warnings)).toBe(true);
+    expect(result.promotion.kind).toBe('Tessellate');
+    if (result.promotion.kind === 'Tessellate') {
+      expect(result.promotion.reason).toContain('unsupported');
     }
+  });
+
+  it('promoteSurface 의 warnings 는 항상 배열 (Tessellate fallback 시에도 누적)', () => {
+    const result = promoteSurface(null, null);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(typeof result.warnings[0]).toBe('string');
   });
 
   it('SurfacePromotion 의 모든 direct mapping variant 포함', () => {
@@ -113,6 +131,32 @@ describe('occtSurfacePromote — ADR-036 P21.2 매핑 SSOT', () => {
 
   it('Fitting fallback (OffsetSurface) 는 SUPPORTED 에 포함', () => {
     expect(SUPPORTED_SURFACE_KINDS).toContain('OffsetSurface');
+  });
+});
+
+describe('Optional 필드 — uvBounds / parameterRange / warnings (P21.5, P21.7)', () => {
+  it('CurvePromotion 의 모든 variant 는 parameterRange 를 carry 가능', () => {
+    // Compile-time: 각 variant 가 optional parameterRange 필드를 받을 수 있는지
+    // 컴파일러가 검증. 본 it 는 runtime 의미 없음 — TypeScript type-check 가 핵심.
+    const samples: CurvePromotion[] = [
+      { kind: 'Line', start: [0, 0, 0], end: [1, 0, 0], parameterRange: [0, 1] },
+      { kind: 'Circle', center: [0, 0, 0], normal: [0, 0, 1], radius: 5, parameterRange: [0, 2 * Math.PI] },
+      { kind: 'NURBS', controlPts: [[0,0,0]], weights: [1], knots: [0, 0, 1, 1], degree: 1, parameterRange: [0, 1] },
+      { kind: 'Tessellate', reason: 'r', parameterRange: [0, 1] },
+    ];
+    expect(samples.length).toBe(4);
+    samples.forEach(s => expect(s.parameterRange).toBeDefined());
+  });
+
+  it('SurfacePromotion 의 모든 variant 는 uvBounds 를 carry 가능', () => {
+    const samples: SurfacePromotion[] = [
+      { kind: 'Plane', origin: [0,0,0], normal: [0,0,1], uvBounds: [0, 1, 0, 1] },
+      { kind: 'BezierPatch', ctrlGrid: [[[0,0,0]]], uvBounds: [0, 0.5, 0, 1] },
+      { kind: 'NURBSSurface', ctrlGrid: [[[0,0,0]]], weightsGrid: [[1]], knotsU: [0,0,1,1], knotsV: [0,0,1,1], degU: 1, degV: 1, uvBounds: [0.1, 0.9, 0.2, 0.8] },
+      { kind: 'Tessellate', reason: 'r', uvBounds: [0, 1, 0, 1] },
+    ];
+    expect(samples.length).toBe(4);
+    samples.forEach(s => expect(s.uvBounds).toBeDefined());
   });
 });
 
