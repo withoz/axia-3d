@@ -1,4 +1,4 @@
-//! Bezier patch — tensor product Bezier surface (Phase E, ADR-033).
+//! Bezier patch — tensor product Bezier surface (Phase E, ADR-033 v1.1).
 //!
 //! Given a `(deg_u + 1) × (deg_v + 1)` control point grid `P[i][j]`:
 //!
@@ -10,13 +10,61 @@
 //! in `v` over `P[i][·]` → intermediate point `R_i(v)`. Then run de Casteljau
 //! in `u` over `R_·(v)` → final point `S(u, v)`.
 //!
-//! Parameter range: `(u, v) ∈ [0, 1]²`. Endpoint interpolation:
+//! Parameter range: canonical `(u, v) ∈ [0, 1]²`. Endpoint interpolation:
 //! `S(0,0) = P[0][0]`, `S(1,1) = P[deg_u][deg_v]`, etc.
+//!
+//! ## Contracts (ADR-033 v1.1)
+//!
+//! ### P18.7 Validation
+//! - `deg_u ≥ 1 AND deg_v ≥ 1` strictly enforced — `1×N` or `N×1` grids
+//!   are degenerate and rejected.
+//!
+//! ### P18.8 Parameter range policy
+//! - `evaluate(u, v)` — **raw**: extrapolation allowed (Newton overshoot OK).
+//! - `evaluate_strict(u, v)` — returns `Err` if `(u, v)` is outside [0, 1]².
+//!
+//! ### P18.9 Normal direction contract
+//! - `normal(u, v) = (∂P/∂u × ∂P/∂v).normalize()` — **right-handed**.
+//! - Direction follows parameterization. Reverse v-axis to flip normal.
+//! - ADR-007 winding alignment is the caller's responsibility.
+//!
+//! ### P18.10 Surface ≠ Face
+//! - This module provides **pure geometric surface** semantics. Face
+//!   topology, trim loops, and boundary handling live elsewhere.
+//!
+//! ### P18.12 SSOT helpers (no redundant `deg_u/deg_v` fields)
+//! - `deg_u() = ctrl_grid.len() - 1`
+//! - `deg_v() = ctrl_grid[0].len() - 1`
 
 use anyhow::{bail, Result};
 use glam::DVec3;
 
 use crate::curves::bezier;
+
+/// SSOT helper — `deg_u = ctrl_grid.len() - 1`. Returns 0 for empty grid.
+#[inline]
+pub fn deg_u(ctrl_grid: &[Vec<DVec3>]) -> usize {
+    ctrl_grid.len().saturating_sub(1)
+}
+
+/// SSOT helper — `deg_v = ctrl_grid[0].len() - 1`. Returns 0 for empty grid.
+#[inline]
+pub fn deg_v(ctrl_grid: &[Vec<DVec3>]) -> usize {
+    ctrl_grid.first().map(|r| r.len().saturating_sub(1)).unwrap_or(0)
+}
+
+/// Strict variant of `evaluate` — returns `Err` if `(u, v)` is outside [0, 1]².
+/// Use this when caller cannot tolerate extrapolation (trim eval, SSI boundary).
+pub fn evaluate_strict(ctrl_grid: &[Vec<DVec3>], u: f64, v: f64) -> Result<DVec3> {
+    const EPS: f64 = 1e-9;
+    if !(-EPS..=1.0 + EPS).contains(&u) {
+        bail!("bezier_patch::evaluate_strict: u={} outside [0, 1]", u);
+    }
+    if !(-EPS..=1.0 + EPS).contains(&v) {
+        bail!("bezier_patch::evaluate_strict: v={} outside [0, 1]", v);
+    }
+    evaluate(ctrl_grid, u.clamp(0.0, 1.0), v.clamp(0.0, 1.0))
+}
 
 /// Evaluate a Bezier patch at parameters (u, v).
 pub fn evaluate(ctrl_grid: &[Vec<DVec3>], u: f64, v: f64) -> Result<DVec3> {
@@ -82,6 +130,20 @@ fn validate(ctrl_grid: &[Vec<DVec3>]) -> Result<()> {
         if row.len() != n_v {
             bail!("bezier_patch: row {} has len {}, expected {}", i, row.len(), n_v);
         }
+    }
+    // P18.7 — deg_u ≥ 1 AND deg_v ≥ 1 strictly enforced.
+    // A 1×N or N×1 grid is degenerate (curve, not surface).
+    if ctrl_grid.len() < 2 {
+        bail!(
+            "bezier_patch: deg_u = 0 (grid has {} rows) — degenerate, surface requires ≥ 2 rows",
+            ctrl_grid.len()
+        );
+    }
+    if n_v < 2 {
+        bail!(
+            "bezier_patch: deg_v = 0 (grid rows have {} cols) — degenerate, surface requires ≥ 2 cols",
+            n_v
+        );
     }
     Ok(())
 }
@@ -198,12 +260,22 @@ mod tests {
         assert!(p.z > 0.5, "expected center bump, got z={}", p.z);
     }
 
+    /// ADR-033 v1.1 P18.7 — 1×N (degenerate) grid is rejected as a surface.
+    /// (Was: derivative_u_zero_when_n_u_is_one — replaced post-amendment.)
     #[test]
-    fn derivative_u_zero_when_n_u_is_one() {
-        // 1×N grid → degree 0 in u → derivative is zero.
+    fn validate_rejects_degenerate_1xN_grid() {
         let g = vec![vec![DVec3::ZERO, DVec3::X, DVec3::Y]];
-        let d = derivative_u(&g, 0.5, 0.5).unwrap();
-        assert!(d.length() < 1e-12);
+        let err = validate(&g);
+        assert!(err.is_err(), "1×N grid must be rejected as degenerate");
+        // derivative_u via public API should also error.
+        assert!(derivative_u(&g, 0.5, 0.5).is_err());
+    }
+
+    /// ADR-033 v1.1 P18.7 — N×1 grid (single column) is also degenerate.
+    #[test]
+    fn validate_rejects_degenerate_Nx1_grid() {
+        let g = vec![vec![DVec3::ZERO], vec![DVec3::X], vec![DVec3::Y]];
+        assert!(validate(&g).is_err());
     }
 
     #[test]
@@ -284,5 +356,89 @@ mod tests {
         let p = evaluate(&g, 0.5, 0.5).unwrap();
         let centroid = (g[0][0] + g[0][1] + g[1][0] + g[1][1]) / 4.0;
         assert!(approx_eq(p, centroid, 1e-12));
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-033 v1.1 amendment tests
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn deg_helpers_match_grid_size_minus_one() {
+        let g = bicubic_grid();  // 4×4
+        assert_eq!(deg_u(&g), 3);
+        assert_eq!(deg_v(&g), 3);
+
+        let g2 = bilinear_grid();  // 2×2
+        assert_eq!(deg_u(&g2), 1);
+        assert_eq!(deg_v(&g2), 1);
+    }
+
+    #[test]
+    fn deg_helpers_handle_empty_grid() {
+        let g: Vec<Vec<DVec3>> = vec![];
+        assert_eq!(deg_u(&g), 0);
+        assert_eq!(deg_v(&g), 0);
+    }
+
+    #[test]
+    fn evaluate_strict_accepts_in_range() {
+        let g = bilinear_grid();
+        let result = evaluate_strict(&g, 0.5, 0.5);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn evaluate_strict_accepts_corners() {
+        let g = bilinear_grid();
+        for (u, v) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            assert!(evaluate_strict(&g, u, v).is_ok(),
+                "corner ({}, {}) should be accepted", u, v);
+        }
+    }
+
+    #[test]
+    fn evaluate_strict_rejects_u_above_one() {
+        let g = bilinear_grid();
+        assert!(evaluate_strict(&g, 1.5, 0.5).is_err());
+    }
+
+    #[test]
+    fn evaluate_strict_rejects_u_below_zero() {
+        let g = bilinear_grid();
+        assert!(evaluate_strict(&g, -0.1, 0.5).is_err());
+    }
+
+    #[test]
+    fn evaluate_strict_rejects_v_outside_range() {
+        let g = bilinear_grid();
+        assert!(evaluate_strict(&g, 0.5, -0.1).is_err());
+        assert!(evaluate_strict(&g, 0.5, 1.5).is_err());
+    }
+
+    #[test]
+    fn evaluate_strict_tolerates_epsilon_boundary() {
+        // ε boundary tolerance — slightly outside [0, 1] within 1e-9 is OK.
+        let g = bilinear_grid();
+        assert!(evaluate_strict(&g, -1e-12, 0.5).is_ok());
+        assert!(evaluate_strict(&g, 1.0 + 1e-12, 0.5).is_ok());
+    }
+
+    #[test]
+    fn evaluate_raw_allows_extrapolation() {
+        // ADR-033 v1.1 P18.8 — raw evaluate() permits extrapolation.
+        let g = bilinear_grid();
+        let result = evaluate(&g, 1.5, 1.5);
+        assert!(result.is_ok(), "raw evaluate must allow extrapolation");
+    }
+
+    #[test]
+    fn normal_contract_right_handed() {
+        // ADR-033 v1.1 P18.9 — normal = du × dv (right-handed).
+        // Bilinear XY-plane patch with u-axis along +X, v-axis along +Y →
+        // du × dv should be +Z.
+        let g = bilinear_grid();
+        let n = normal(&g, 0.5, 0.5).unwrap();
+        assert!((n - DVec3::Z).length() < 1e-9,
+            "expected +Z (du × dv right-handed), got {:?}", n);
     }
 }

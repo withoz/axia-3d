@@ -1,4 +1,4 @@
-//! B-spline surface — tensor product B-spline (Phase E, ADR-033).
+//! B-spline surface — tensor product B-spline (Phase E, ADR-033 v1.1).
 //!
 //! Given control grid `P[i][j]` of size `(n+1) × (m+1)`, knot vectors
 //! `U` (length `n + p + 2`) and `V` (length `m + q + 2`), degrees `p, q`:
@@ -9,6 +9,14 @@
 //!
 //! Evaluation: tensor de Boor — for each row `i`, run de Boor in `v` →
 //! intermediate `R_i(v)`. Then run de Boor in `u` over R values → final.
+//!
+//! ## Contracts (ADR-033 v1.1)
+//!
+//! - **P18.7 Validation**: `deg_u ≥ 1 AND deg_v ≥ 1` (already enforced).
+//! - **P18.8 Parameter range**: `evaluate(u, v)` raw; `evaluate_strict(u, v)`
+//!   rejects (u, v) outside `[knots_u[deg_u], knots_u[n_u]] × [...similar v]`.
+//! - **P18.9 Normal contract**: `normal = (du × dv).normalize()` right-handed.
+//! - **P18.10 Surface ≠ Face**: pure geometric surface only.
 
 use anyhow::{bail, Result};
 use glam::DVec3;
@@ -39,6 +47,33 @@ pub fn evaluate(
     // Step 2: collapse u-direction.
     let span_u = bspline::find_knot_span(knots_u, deg_u, n_u, u);
     Ok(bspline::de_boor(&row_pts, knots_u, deg_u, span_u, u))
+}
+
+/// Strict variant — returns Err if (u, v) outside valid parameter range.
+/// Use in trim eval / SSI marching where extrapolation is meaningless.
+pub fn evaluate_strict(
+    ctrl_grid: &[Vec<DVec3>],
+    knots_u: &[f64],
+    knots_v: &[f64],
+    deg_u: usize,
+    deg_v: usize,
+    u: f64,
+    v: f64,
+) -> Result<DVec3> {
+    validate(ctrl_grid, knots_u, knots_v, deg_u, deg_v)?;
+    let n_u = ctrl_grid.len();
+    let n_v = ctrl_grid[0].len();
+    let (u_min, u_max) = (knots_u[deg_u], knots_u[n_u]);
+    let (v_min, v_max) = (knots_v[deg_v], knots_v[n_v]);
+    const EPS: f64 = 1e-9;
+    if !(u_min - EPS..=u_max + EPS).contains(&u) {
+        bail!("bspline_surface::evaluate_strict: u={} outside [{}, {}]", u, u_min, u_max);
+    }
+    if !(v_min - EPS..=v_max + EPS).contains(&v) {
+        bail!("bspline_surface::evaluate_strict: v={} outside [{}, {}]", v, v_min, v_max);
+    }
+    evaluate(ctrl_grid, knots_u, knots_v, deg_u, deg_v,
+        u.clamp(u_min, u_max), v.clamp(v_min, v_max))
 }
 
 /// Partial derivative ∂S/∂u.
@@ -243,6 +278,29 @@ mod tests {
         let fd = (p_plus - p_minus) / (2.0 * h);
         let analytic = derivative_v(&g, &ku, &kv, 3, 3, 0.5, 0.5).unwrap();
         assert!((fd - analytic).length() < 1e-3);
+    }
+
+    /// ADR-033 v1.1 P18.8 — evaluate_strict rejects out-of-range.
+    #[test]
+    fn evaluate_strict_rejects_u_outside_range() {
+        let (g, ku, kv) = cubic_grid();
+        // For clamped uniform [0, 1] knots, u must be in [0, 1].
+        assert!(evaluate_strict(&g, &ku, &kv, 3, 3, 1.5, 0.5).is_err());
+        assert!(evaluate_strict(&g, &ku, &kv, 3, 3, -0.5, 0.5).is_err());
+    }
+
+    #[test]
+    fn evaluate_strict_rejects_v_outside_range() {
+        let (g, ku, kv) = cubic_grid();
+        assert!(evaluate_strict(&g, &ku, &kv, 3, 3, 0.5, 1.5).is_err());
+    }
+
+    #[test]
+    fn evaluate_strict_accepts_in_range() {
+        let (g, ku, kv) = cubic_grid();
+        for (u, v) in [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)] {
+            assert!(evaluate_strict(&g, &ku, &kv, 3, 3, u, v).is_ok());
+        }
     }
 
     #[test]

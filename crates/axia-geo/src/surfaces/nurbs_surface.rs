@@ -68,6 +68,33 @@ pub fn evaluate_homogeneous(
     Ok((h, w_pt.x))
 }
 
+/// Strict variant — Err if (u, v) outside parameter range.
+pub fn evaluate_strict(
+    ctrl_grid: &[Vec<DVec3>],
+    weights: &[Vec<f64>],
+    knots_u: &[f64],
+    knots_v: &[f64],
+    deg_u: usize,
+    deg_v: usize,
+    u: f64,
+    v: f64,
+) -> Result<DVec3> {
+    validate(ctrl_grid, weights, knots_u, knots_v, deg_u, deg_v)?;
+    let n_u = ctrl_grid.len();
+    let n_v = ctrl_grid[0].len();
+    let (u_min, u_max) = (knots_u[deg_u], knots_u[n_u]);
+    let (v_min, v_max) = (knots_v[deg_v], knots_v[n_v]);
+    const EPS: f64 = 1e-9;
+    if !(u_min - EPS..=u_max + EPS).contains(&u) {
+        bail!("nurbs_surface::evaluate_strict: u={} outside [{}, {}]", u, u_min, u_max);
+    }
+    if !(v_min - EPS..=v_max + EPS).contains(&v) {
+        bail!("nurbs_surface::evaluate_strict: v={} outside [{}, {}]", v, v_min, v_max);
+    }
+    evaluate(ctrl_grid, weights, knots_u, knots_v, deg_u, deg_v,
+        u.clamp(u_min, u_max), v.clamp(v_min, v_max))
+}
+
 /// Partial derivative ∂S/∂u via quotient rule.
 pub fn derivative_u(
     ctrl_grid: &[Vec<DVec3>],
@@ -283,6 +310,22 @@ mod tests {
         let fd = (p_plus - p_minus) / (2.0 * h);
         let analytic = derivative_v(&grid, &weights, &ku, &kv, 3, 3, 0.5, 0.5).unwrap();
         assert!((fd - analytic).length() < 1e-3);
+    }
+
+    /// ADR-033 v1.1 P18.8 — evaluate_strict rejects out-of-range.
+    #[test]
+    fn evaluate_strict_rejects_outside_range() {
+        let (grid, weights, ku, kv) = unit_weighted_grid();
+        assert!(evaluate_strict(&grid, &weights, &ku, &kv, 3, 3, 1.5, 0.5).is_err());
+        assert!(evaluate_strict(&grid, &weights, &ku, &kv, 3, 3, 0.5, -0.5).is_err());
+    }
+
+    #[test]
+    fn evaluate_strict_accepts_in_range() {
+        let (grid, weights, ku, kv) = unit_weighted_grid();
+        assert!(evaluate_strict(&grid, &weights, &ku, &kv, 3, 3, 0.5, 0.5).is_ok());
+        assert!(evaluate_strict(&grid, &weights, &ku, &kv, 3, 3, 0.0, 0.0).is_ok());
+        assert!(evaluate_strict(&grid, &weights, &ku, &kv, 3, 3, 1.0, 1.0).is_ok());
     }
 
     #[test]

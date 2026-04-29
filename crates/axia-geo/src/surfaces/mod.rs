@@ -1,16 +1,44 @@
-//! Analytic Surface Primitives — Phase D (ADR-031).
+//! Analytic Surface Primitives — Phase D + E (ADR-031, ADR-033 v1.1).
 //!
 //! Surface = 2D parametric `(u, v) → ℝ³`. Each primitive supports:
-//! - `evaluate(u, v)` — point on surface
-//! - `normal(u, v)` — unit outward normal
+//! - `evaluate(u, v)` — point on surface (raw — extrapolation allowed)
+//! - `normal(u, v)` — unit normal `(du × dv).normalize()` (right-handed)
 //! - `derivative_u / derivative_v` — partial derivatives
 //! - `tessellate(chord_tol)` — adaptive triangle mesh
 //!
-//! ## Right-handed UV convention
+//! ## Right-handed UV convention (ADR-033 v1.1 P18.9)
 //!
-//! For all primitives: `dP/du × dP/dv` is co-directional with `normal(u, v)`.
-//! This ensures CCW outer winding when viewed from the outward normal side
-//! (ADR-007 P-Invariant 2 compatible).
+//! For all primitives: `(∂P/∂u) × (∂P/∂v)` defines the normal direction.
+//! - **Direction follows parameterization** — reverse v-axis to flip normal.
+//! - For ADR-007 outer-winding alignment, the **caller** is responsible for
+//!   choosing parameterization that produces face-outward normals.
+//! - SSI / Boolean / Trim contracts assume this right-handed convention
+//!   strictly.
+//!
+//! ## Surface ≠ Face (ADR-033 v1.1 P18.10)
+//!
+//! `AnalyticSurface` is **pure geometric surface** — no topology, no trim,
+//! no boundary loop. To form a usable face:
+//!
+//! ```text
+//! [Geometric Surface]   AnalyticSurface (this module)
+//!     ↓
+//! [Trimmed Surface]    Surface + uv_bounds + trim_loops
+//!     ↓
+//! [Topological Face]   Face struct (DCEL boundary + trimmed surface attached)
+//! ```
+//!
+//! `Face::set_surface(...)` attaches a surface; the face's DCEL boundary
+//! defines the topological extent. Trim curves on `NURBSSurface` are MVP
+//! data; full trim handling is Phase F.
+//!
+//! ## Parameter range policy (ADR-033 v1.1 P18.8)
+//!
+//! Two evaluation modes per surface:
+//! - **`evaluate(u, v)`** — raw; extrapolation outside parameter range
+//!   produces best-effort result (Newton overshoot tolerance).
+//! - **`evaluate_strict(u, v)`** — Err if outside range. Use for trim
+//!   curve eval, SSI boundary checks.
 
 pub mod plane;
 pub mod cylinder;
