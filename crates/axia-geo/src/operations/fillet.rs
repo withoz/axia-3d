@@ -341,6 +341,157 @@ impl Mesh {
     }
 }
 
+/// ADR-024 P10 result of `chamfer_vertex_3way`.
+#[derive(Clone, Debug)]
+pub struct ChamferResult {
+    /// The new triangular chamfer face replacing the corner.
+    pub trim_face: FaceId,
+    /// The 3 rebuilt incident faces (with v replaced by the trim points).
+    pub modified_faces: Vec<FaceId>,
+}
+
+impl Mesh {
+    /// ADR-024 P10 — Flat triangular chamfer at a 3-way corner vertex.
+    ///
+    /// MVP: replaces a valence-3 vertex with 3 trim points (one per
+    /// incident face) and a single triangular face. Future expansion
+    /// will tessellate as a spherical patch when segments ≥ 2.
+    pub fn chamfer_vertex_3way(
+        &mut self,
+        v: VertId,
+        radius: f64,
+    ) -> Result<ChamferResult> {
+        ensure!(radius > EPSILON_LENGTH, "chamfer: radius must be positive");
+        ensure!(self.verts.contains(v) && self.verts[v].is_active(),
+            "chamfer: vertex {} not active", v.raw());
+
+        // 1) Collect 3 active incident faces.
+        let faces = incident_faces_at_vertex(self, v);
+        ensure!(faces.len() == 3,
+            "chamfer: MVP requires valence==3, got {} incident faces", faces.len());
+        let (f1, f2, f3) = (faces[0], faces[1], faces[2]);
+
+        // 2) Loop verts per face.
+        let f1_verts = self.collect_loop_verts(self.faces[f1].outer().start)?;
+        let f2_verts = self.collect_loop_verts(self.faces[f2].outer().start)?;
+        let f3_verts = self.collect_loop_verts(self.faces[f3].outer().start)?;
+
+        // 3) Trim points on each face.
+        let p1 = compute_trim_point(self, &f1_verts, v, radius)?;
+        let p2 = compute_trim_point(self, &f2_verts, v, radius)?;
+        let p3 = compute_trim_point(self, &f3_verts, v, radius)?;
+
+        // 4) Capture face data + normals before mutation.
+        let m1 = self.faces[f1].material();
+        let m2 = self.faces[f2].material();
+        let m3 = self.faces[f3].material();
+        let n_sum = self.faces[f1].normal() + self.faces[f2].normal() + self.faces[f3].normal();
+
+        // 5) Materialize trim point vertices.
+        let pv1 = self.add_vertex(p1);
+        let pv2 = self.add_vertex(p2);
+        let pv3 = self.add_vertex(p3);
+
+        // 6) Splice each face's loop: replace v with [pv_i].
+        let f1_new = splice_vertex_replacement(&f1_verts, v, &[pv1])?;
+        let f2_new = splice_vertex_replacement(&f2_verts, v, &[pv2])?;
+        let f3_new = splice_vertex_replacement(&f3_verts, v, &[pv3])?;
+
+        // 7) Tear down original faces.
+        for fid in &[f1, f2, f3] {
+            let _ = self.remove_face(*fid);
+            if self.faces.contains(*fid) {
+                self.faces.remove(*fid);
+            }
+        }
+
+        // 8) Rebuild incident faces.
+        let new_f1 = self.add_face_with_holes(&f1_new, &[], m1)?;
+        let new_f2 = self.add_face_with_holes(&f2_new, &[], m2)?;
+        let new_f3 = self.add_face_with_holes(&f3_new, &[], m3)?;
+
+        // 9) Add chamfer triangle. Winding: must point outward (n_sum direction).
+        let tri_normal_ccw = (p2 - p1).cross(p3 - p1);
+        let winding: [VertId; 3] = if tri_normal_ccw.dot(n_sum) > 0.0 {
+            [pv1, pv2, pv3]
+        } else {
+            [pv1, pv3, pv2]
+        };
+        let trim_face = self.add_face_with_holes(&winding, &[], m1)?;
+
+        // 10) Cleanup orphan edges + isolated v.
+        let all_edges: Vec<EdgeId> = self.edges.iter().map(|(id, _)| id).collect();
+        for eid in all_edges {
+            if !self.edges.contains(eid) { continue; }
+            let (faces, _) = self.get_faces_sharing_edge(eid);
+            let has_active = faces.iter().any(|&f|
+                self.faces.contains(f) && self.faces[f].is_active());
+            if !has_active {
+                let _ = self.remove_edge_and_halfedges(eid);
+                if self.edges.contains(eid) { self.edges.remove(eid); }
+            }
+        }
+        self.remove_isolated_verts();
+
+        // ADR-007
+        self.debug_verify_invariants();
+
+        Ok(ChamferResult {
+            trim_face,
+            modified_faces: vec![new_f1, new_f2, new_f3],
+        })
+    }
+}
+
+/// Compute the trim point on a face for a 3-way chamfer.
+/// Returns `v + radius * bisector_in_face`, where bisector is the
+/// normalized sum of unit directions from v to its two loop neighbors.
+fn compute_trim_point(
+    mesh: &Mesh,
+    loop_verts: &[VertId],
+    v: VertId,
+    radius: f64,
+) -> Result<DVec3> {
+    let n = loop_verts.len();
+    for i in 0..n {
+        if loop_verts[i] == v {
+            let prev = loop_verts[(i + n - 1) % n];
+            let next = loop_verts[(i + 1) % n];
+            let v_pos = mesh.vertex_pos(v)?;
+            let dir_prev = (mesh.vertex_pos(prev)? - v_pos).normalize();
+            let dir_next = (mesh.vertex_pos(next)? - v_pos).normalize();
+            let bisector = (dir_prev + dir_next).normalize();
+            ensure!(bisector.length_squared() > 0.5,
+                "chamfer: degenerate bisector at v{} (collinear edges)", v.raw());
+            return Ok(v_pos + bisector * radius);
+        }
+    }
+    bail!("chamfer: vertex {} not in face loop", v.raw())
+}
+
+/// Collect unique active incident faces of a vertex via the v_next radial
+/// chain. Returns at most ~32 faces (real-world meshes are far smaller).
+fn incident_faces_at_vertex(mesh: &Mesh, v: VertId) -> Vec<FaceId> {
+    use std::collections::HashSet;
+    let anchor = match mesh.verts.get(v).and_then(|vt| vt.outgoing()) {
+        Some(h) if !h.is_null() => h,
+        _ => return Vec::new(),
+    };
+    let mut seen: HashSet<FaceId> = HashSet::new();
+    let mut cur = anchor;
+    for _ in 0..128 {
+        if !mesh.hes.contains(cur) { break; }
+        let f = mesh.hes[cur].face();
+        if !f.is_null() && mesh.faces.contains(f) && mesh.faces[f].is_active() {
+            seen.insert(f);
+        }
+        let nxt = mesh.hes[cur].v_next();
+        if nxt.is_null() || nxt == anchor { break; }
+        cur = nxt;
+    }
+    seen.into_iter().collect()
+}
+
 /// Find the loop-neighbor verts: the vertex before `a` and the one after
 /// `b` in the cyclic walk, ensuring `b` comes right after `a` (i.e. edge
 /// `(a, b)` is a walked edge in this direction).
@@ -521,6 +672,58 @@ mod tests {
         m.add_face_with_holes(&[a, b, c], &[], mat).unwrap();
         let edge = m.find_edge(a, b).unwrap();
         assert!(m.fillet_edge(edge, 0.1, 4).is_err());
+    }
+
+    /// ADR-024 P10 — Flat triangular chamfer at cube corner v000.
+    /// 6 cube faces. v000 has 3 incident faces (bottom, front, left).
+    /// After chamfer: 3 modified faces + 1 new triangle. v000 removed.
+    #[test]
+    fn chamfer_3way_cube_corner_creates_triangle() {
+        let (mut m, v) = cube_mesh();
+        let v000 = v[0];
+        let before_faces = m.face_count();
+
+        let res = m.chamfer_vertex_3way(v000, 2.0).unwrap();
+        assert_eq!(res.modified_faces.len(), 3, "3 incident faces rebuilt");
+
+        // Net: 3 removed + 4 added (3 incident + 1 triangle) = +1 face.
+        assert_eq!(m.face_count(), before_faces + 1,
+            "chamfer should add 1 face net");
+
+        // The trim face has 3 vertices.
+        let trim_verts = m.collect_loop_verts(m.faces[res.trim_face].outer().start).unwrap();
+        assert_eq!(trim_verts.len(), 3, "trim face is triangular");
+
+        // v000 should no longer be active (removed by remove_isolated_verts).
+        assert!(!m.verts.contains(v000) || !m.verts[v000].is_active(),
+            "v000 should be removed after chamfer");
+
+        let report = m.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after 3-way chamfer:\n{}", report.summary());
+    }
+
+    /// ADR-024 P10 — Reject vertex with valence != 3.
+    #[test]
+    fn chamfer_3way_rejects_non_3way() {
+        // Build a flat 4-vertex square: vertex shared by only 1 face.
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = m.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let c = m.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let d = m.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        m.add_face_with_holes(&[a, b, c, d], &[], mat).unwrap();
+        // Vertex `a` has only 1 incident face.
+        assert!(m.chamfer_vertex_3way(a, 0.1).is_err());
+    }
+
+    /// ADR-024 P10 — Reject zero / negative radius.
+    #[test]
+    fn chamfer_3way_rejects_bad_radius() {
+        let (mut m, v) = cube_mesh();
+        assert!(m.chamfer_vertex_3way(v[0],  0.0).is_err());
+        assert!(m.chamfer_vertex_3way(v[0], -1.0).is_err());
     }
 
     #[test]

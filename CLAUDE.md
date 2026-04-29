@@ -62,6 +62,21 @@
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
 
+### 11. ADR-024 — 3-Way Corner Chamfer (P10 MVP, 2026-04-29)
+- **새 원칙 P10 (MVP)**: valence==3 vertex 의 corner 자체를 둥글게 처리.
+  MVP 는 flat triangular chamfer (3 trim point + 1 triangle face).
+- ADR-021 v1.1 known limitation "Fillet 3-way corner singularity" 해결.
+- API: `Mesh::chamfer_vertex_3way(v, radius)` → `ChamferResult { trim_face,
+  modified_faces }`
+- 알고리즘:
+  - 3 incident face 각각에서 v 의 두 인접 edge 방향 bisector 계산
+  - P_i = v + radius * bisector_in_face_i (3 trim point)
+  - 각 face 의 outer loop 에서 v → P_i 로 splice
+  - 새 triangle face [P_1, P_2, P_3] 추가 (outward winding 자동 결정)
+  - v isolated → 자동 제거
+- Manifold invariant 보존 (`verify_face_invariants` 0 violations).
+- **Future**: segments ≥ 2 시 spherical octant tessellation (별도 ADR).
+
 ### 10. ADR-023 — Bridge Topology, Endpoint-On-Hole-Boundary (P8, 2026-04-29)
 - **새 원칙 P8**: 절단선 endpoint 가 hole boundary (vertex 또는 edge) 위에
   정확히 닿으면 그 점을 bridge target H 로 사용. Edge 위면 split_edge,
