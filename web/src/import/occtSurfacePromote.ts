@@ -222,146 +222,136 @@ function promoteTorus(_occt: unknown, _faceHandle: unknown, _w: string[]): Surfa
 // ────────────────────────────────────────────────────────────────────────
 
 function promoteBezierSurface(_occt: unknown, _faceHandle: unknown, warnings: string[]): SurfacePromotion {
-  // TODO (구체 스켈레톤):
-  //   const surfH = occt.BRep_Tool.Surface_2(faceHandle);
-  //   const bezH = occt.Handle_Geom_BezierSurface_2.DownCast(surfH);
-  //   const bez = bezH?.get();
+  // TODO (구체 스켈레톤 — Pole(i,j) 직접 accessor 패턴):
+  //
+  //   import { pntToVec3, readFaceSurface, readUvBounds, downCastTo } from './occtAccessors';
+  //
+  //   const surfH = readFaceSurface(occt, faceHandle);
+  //   if (!surfH) { warnings.push('readFaceSurface returned null'); return Tessellate; }
+  //
+  //   const bez = downCastTo(occt, 'Handle_Geom_BezierSurface_2', surfH) as any;
   //   if (!bez) { warnings.push('BezierSurface DownCast failed'); return Tessellate; }
   //
-  //   const nU = bez.NbUPoles();  // u-direction control point count
-  //   const nV = bez.NbVPoles();  // v-direction
-  //   const poles = bez.Poles();  // NCollection_Array2<gp_Pnt>, 1-based
+  //   const nU = Number(bez.NbUPoles?.());
+  //   const nV = Number(bez.NbVPoles?.());
   //
-  //   const ctrlGrid: Array<Array<[number, number, number]>> = [];
-  //   for (let i = 1; i <= nU; i++) {  // OCCT 1-based
-  //     const row: Array<[number, number, number]> = [];
-  //     for (let j = 1; j <= nV; j++) {
-  //       const p = poles.Value(i, j);  // gp_Pnt
-  //       row.push([p.X(), p.Y(), p.Z()]);
-  //     }
-  //     ctrlGrid.push(row);  // 0-based row-major: ctrlGrid[i-1][j-1]
-  //   }
-  //
-  //   // BRepTools::UVBounds → uvBounds
-  //   return { kind: 'BezierPatch', ctrlGrid, uvBounds };
-  void warnings;  // suppress unused
-  return { kind: 'Tessellate', reason: 'promoteBezierSurface not yet wired' };
-}
-
-function promoteBSplineSurface(_occt: unknown, _faceHandle: unknown, warnings: string[]): SurfacePromotion {
-  // TODO (구체 스켈레톤 — non-rational 만):
-  //   const surfH = occt.BRep_Tool.Surface_2(faceHandle);
-  //   const bsH = occt.Handle_Geom_BSplineSurface_2.DownCast(surfH);
-  //   const bs = bsH?.get();
-  //   if (!bs) { warnings.push('BSplineSurface DownCast failed'); return Tessellate; }
-  //
-  //   // Rational 재검증 (identify 단계와 일관 보장 — 동시 변경 시 footgun 차단)
-  //   if (bs.IsURational() || bs.IsVRational()) {
-  //     warnings.push('BSplineSurface unexpectedly rational; routing to promoteNurbsSurface');
-  //     return promoteNurbsSurface(occt, faceHandle, warnings);
-  //   }
-  //
-  //   const degU = bs.UDegree();
-  //   const degV = bs.VDegree();
-  //   const nU = bs.NbUPoles();
-  //   const nV = bs.NbVPoles();
-  //   const poles = bs.Poles();  // NCollection_Array2<gp_Pnt>, 1-based
-  //
-  //   // ctrlGrid: row-major (i = u-index, j = v-index), 0-based
-  //   const ctrlGrid: Array<Array<[number, number, number]>> = [];
+  //   // Pole(i, j) 직접 accessor → NCollection_Array2 base 문제 우회 (검토자 권고)
+  //   const ctrlGrid: Vec3[][] = [];
   //   for (let i = 1; i <= nU; i++) {
-  //     const row: Array<[number, number, number]> = [];
+  //     const row: Vec3[] = [];
   //     for (let j = 1; j <= nV; j++) {
-  //       const p = poles.Value(i, j);
-  //       row.push([p.X(), p.Y(), p.Z()]);
+  //       row.push(pntToVec3(bez.Pole(i, j)));
   //     }
   //     ctrlGrid.push(row);
   //   }
   //
-  //   // KnotSequence (expanded — 우리 AnalyticSurface 가 사용하는 형식):
-  //   //   - bs.UKnotSequence() / bs.VKnotSequence() returns TColStd_Array1<Real>
-  //   //   - 1-based; length = nU + degU + 1 (clamped) for u
-  //   const uSeq = bs.UKnotSequence();
-  //   const vSeq = bs.VKnotSequence();
-  //   const knotsU: number[] = [];
-  //   for (let i = uSeq.Lower(); i <= uSeq.Upper(); i++) knotsU.push(uSeq.Value(i));
-  //   const knotsV: number[] = [];
-  //   for (let i = vSeq.Lower(); i <= vSeq.Upper(); i++) knotsV.push(vSeq.Value(i));
+  //   const uvBounds = readUvBounds(occt, faceHandle);
+  //   return { kind: 'BezierPatch', ctrlGrid, uvBounds };
+  void warnings;
+  return { kind: 'Tessellate', reason: 'promoteBezierSurface not yet wired' };
+}
+
+function promoteBSplineSurface(_occt: unknown, _faceHandle: unknown, warnings: string[]): SurfacePromotion {
+  // TODO (구체 스켈레톤 — non-rational, Pole(i,j) 직접 accessor 패턴):
   //
-  //   // Validate counts (Rust validate() 와 동일 invariant):
+  //   import { pntToVec3, readArray1Real, readFaceSurface, readUvBounds, downCastTo } from './occtAccessors';
+  //
+  //   const surfH = readFaceSurface(occt, faceHandle);
+  //   if (!surfH) { warnings.push('readFaceSurface returned null'); return Tessellate; }
+  //
+  //   const bs = downCastTo(occt, 'Handle_Geom_BSplineSurface_2', surfH) as any;
+  //   if (!bs) { warnings.push('BSplineSurface DownCast failed'); return Tessellate; }
+  //
+  //   // Rational 재검증 — defensive cross-route (footgun: identify 와 promote 동시 변경)
+  //   const isRat = !!(bs.IsURational?.() || bs.IsVRational?.());
+  //   if (isRat) {
+  //     warnings.push('BSplineSurface unexpectedly rational → routing to promoteNurbsSurface');
+  //     return promoteNurbsSurface(occt, faceHandle, warnings);
+  //   }
+  //
+  //   const degU = Number(bs.UDegree?.());
+  //   const degV = Number(bs.VDegree?.());
+  //   const nU = Number(bs.NbUPoles?.());
+  //   const nV = Number(bs.NbVPoles?.());
+  //
+  //   // Pole(i, j) 직접 accessor (검토자 권고 — Array2 base 우회)
+  //   const ctrlGrid: Vec3[][] = [];
+  //   for (let i = 1; i <= nU; i++) {
+  //     const row: Vec3[] = [];
+  //     for (let j = 1; j <= nV; j++) {
+  //       row.push(pntToVec3(bs.Pole(i, j)));  // gp_Pnt → Vec3
+  //     }
+  //     ctrlGrid.push(row);  // 0-based row-major: ctrlGrid[i-1][j-1]
+  //   }
+  //
+  //   // KnotSequence (expanded — 우리 AnalyticSurface 형식과 정합).
+  //   // 'UKnotSequence_1' overload suffix 와 plain 둘 다 시도 (occt.js 빌드 차이 흡수)
+  //   const knotsU = readArray1Real(bs.UKnotSequence_1?.() ?? bs.UKnotSequence?.());
+  //   const knotsV = readArray1Real(bs.VKnotSequence_1?.() ?? bs.VKnotSequence?.());
+  //
+  //   // Knot count invariant (Rust validate() 와 동일):
   //   if (knotsU.length !== nU + degU + 1) {
-  //     warnings.push(`knotsU length mismatch: ${knotsU.length} vs ${nU + degU + 1}`);
-  //     return { kind: 'Tessellate', reason: 'BSpline knot count mismatch' };
+  //     warnings.push(`knotsU length ${knotsU.length} ≠ ${nU + degU + 1}`);
+  //     return { kind: 'Tessellate', reason: 'BSpline U knot count mismatch' };
   //   }
   //   if (knotsV.length !== nV + degV + 1) {
-  //     warnings.push(`knotsV length mismatch: ${knotsV.length} vs ${nV + degV + 1}`);
-  //     return { kind: 'Tessellate', reason: 'BSpline knot count mismatch' };
+  //     warnings.push(`knotsV length ${knotsV.length} ≠ ${nV + degV + 1}`);
+  //     return { kind: 'Tessellate', reason: 'BSpline V knot count mismatch' };
   //   }
   //
-  //   // BRepTools::UVBounds(face, umin, umax, vmin, vmax) → uvBounds
+  //   const uvBounds = readUvBounds(occt, faceHandle);
   //   return { kind: 'BSplineSurface', ctrlGrid, knotsU, knotsV, degU, degV, uvBounds };
   void warnings;
   return { kind: 'Tessellate', reason: 'promoteBSplineSurface not yet wired' };
 }
 
 function promoteNurbsSurface(_occt: unknown, _faceHandle: unknown, warnings: string[]): SurfacePromotion {
-  // TODO (구체 스켈레톤 — rational):
-  //   const surfH = occt.BRep_Tool.Surface_2(faceHandle);
-  //   const bsH = occt.Handle_Geom_BSplineSurface_2.DownCast(surfH);
-  //   const bs = bsH?.get();
+  // TODO (구체 스켈레톤 — rational, Pole(i,j) + Weight(i,j) 직접 accessor):
+  //
+  //   import { pntToVec3, readArray1Real, readFaceSurface, readUvBounds, downCastTo } from './occtAccessors';
+  //
+  //   const surfH = readFaceSurface(occt, faceHandle);
+  //   if (!surfH) { warnings.push('readFaceSurface returned null'); return Tessellate; }
+  //
+  //   const bs = downCastTo(occt, 'Handle_Geom_BSplineSurface_2', surfH) as any;
   //   if (!bs) { warnings.push('NURBSSurface DownCast failed'); return Tessellate; }
   //
-  //   const degU = bs.UDegree();
-  //   const degV = bs.VDegree();
-  //   const nU = bs.NbUPoles();
-  //   const nV = bs.NbVPoles();
-  //   const poles = bs.Poles();   // NCollection_Array2<gp_Pnt>, 1-based
-  //
-  //   // Weights — note: occt.js 의 Weights() 는 NULL 반환 가능
-  //   //   (non-rational 면 weights 없음). 본 함수는 rational 만 호출되어야 함.
-  //   const weightsArr = bs.Weights();
-  //   if (!weightsArr || weightsArr.IsNull?.()) {
-  //     warnings.push('NURBSSurface called on non-rational BSplineSurface');
-  //     return { kind: 'Tessellate', reason: 'no weights array' };
+  //   // Rational 재검증 — defensive cross-route (검토자 권고)
+  //   const isRat = !!(bs.IsURational?.() || bs.IsVRational?.());
+  //   if (!isRat) {
+  //     warnings.push('NURBSSurface unexpectedly non-rational → routing to promoteBSplineSurface');
+  //     return promoteBSplineSurface(occt, faceHandle, warnings);
   //   }
   //
-  //   // Dimension 일치 검증 (P21.7 footgun):
-  //   //   weights array2 size 가 (nU, nV) 와 일치해야 함.
-  //   if (weightsArr.LowerRow() !== 1 || weightsArr.UpperRow() !== nU
-  //    || weightsArr.LowerCol() !== 1 || weightsArr.UpperCol() !== nV) {
-  //     warnings.push(`Weights dimension ${[weightsArr.LowerRow(), weightsArr.UpperRow(),
-  //                    weightsArr.LowerCol(), weightsArr.UpperCol()]} != (1..${nU}, 1..${nV})`);
-  //     return { kind: 'Tessellate', reason: 'Weights/Poles dimension mismatch' };
-  //   }
+  //   const degU = Number(bs.UDegree?.());
+  //   const degV = Number(bs.VDegree?.());
+  //   const nU = Number(bs.NbUPoles?.());
+  //   const nV = Number(bs.NbVPoles?.());
   //
-  //   const ctrlGrid: Array<Array<[number, number, number]>> = [];
+  //   // Pole(i, j) + Weight(i, j) 직접 accessor — Array2 dimension 검증 footgun 우회
+  //   const ctrlGrid: Vec3[][] = [];
   //   const weightsGrid: number[][] = [];
   //   for (let i = 1; i <= nU; i++) {
-  //     const row: Array<[number, number, number]> = [];
+  //     const row: Vec3[] = [];
   //     const wRow: number[] = [];
   //     for (let j = 1; j <= nV; j++) {
-  //       const p = poles.Value(i, j);
-  //       row.push([p.X(), p.Y(), p.Z()]);
-  //       wRow.push(weightsArr.Value(i, j));
+  //       row.push(pntToVec3(bs.Pole(i, j)));
+  //       wRow.push(Number(bs.Weight(i, j)));
   //     }
   //     ctrlGrid.push(row);
   //     weightsGrid.push(wRow);
   //   }
   //
   //   // KnotSequence (expanded)
-  //   const uSeq = bs.UKnotSequence();
-  //   const vSeq = bs.VKnotSequence();
-  //   const knotsU: number[] = [];
-  //   for (let i = uSeq.Lower(); i <= uSeq.Upper(); i++) knotsU.push(uSeq.Value(i));
-  //   const knotsV: number[] = [];
-  //   for (let i = vSeq.Lower(); i <= vSeq.Upper(); i++) knotsV.push(vSeq.Value(i));
+  //   const knotsU = readArray1Real(bs.UKnotSequence_1?.() ?? bs.UKnotSequence?.());
+  //   const knotsV = readArray1Real(bs.VKnotSequence_1?.() ?? bs.VKnotSequence?.());
   //
   //   if (knotsU.length !== nU + degU + 1 || knotsV.length !== nV + degV + 1) {
-  //     warnings.push('NURBS knot count mismatch');
+  //     warnings.push(`NURBS knot count mismatch: U=${knotsU.length}/${nU+degU+1}, V=${knotsV.length}/${nV+degV+1}`);
   //     return { kind: 'Tessellate', reason: 'NURBS knot count mismatch' };
   //   }
   //
-  //   // BRepTools::UVBounds → uvBounds
+  //   const uvBounds = readUvBounds(occt, faceHandle);
   //   return { kind: 'NURBSSurface', ctrlGrid, weightsGrid, knotsU, knotsV, degU, degV, uvBounds };
   void warnings;
   return { kind: 'Tessellate', reason: 'promoteNurbsSurface not yet wired' };
