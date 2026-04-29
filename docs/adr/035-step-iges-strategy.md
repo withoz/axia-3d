@@ -100,6 +100,83 @@ Phase G1~G3 으로 NURBS surface SSI + trim curve 변환 + Boolean MVP 완성.
 - Import 자체: ADR-014 메타-원칙 #11 "Heavy 500ms" 초과 → 모달 진행률 필수
 - 메모리: OCCT.js heap separate (WASM linear memory 분리)
 
+### P20.A — Format Priority (이후 논쟁 종료)
+
+| 형식 | 우선순위 | MVP 범위 |
+|---|---|---|
+| **STEP AP242** | **Primary** (managed model-based 3D) | NURBS surface + curve + trim |
+| **STEP AP214 / AP203** | Secondary (best-effort) | AP203 backward-compat 만 |
+| **IGES 5.3** | Legacy support | Trimmed NURBS only |
+| **STEP AP238 (STEP-NC)** | 범위 제외 | 별도 ADR |
+| **IFC** | 범위 제외 | 별도 ADR |
+
+### P20.B — Non-Goals (Stage 4 전체)
+
+오해 방지를 위해 명시:
+- ❌ **STEP / IGES Export** — Stage 4 는 import 우선, export 는 Stage 5
+  로 격상 (사용자 검증 후 우선순위 재평가)
+- ❌ **Assembly hierarchy 보존** — 단일 part 만 처리, sub-assembly 는
+  flatten 또는 거부
+- ❌ **PMI / GD&T import** — annotation, dimension, tolerance 정보 무시
+- ❌ **Material / Texture metadata** — 형상만 import
+- ❌ **Drawing views / projections** — 2D drafting 정보 제외
+
+### P20.C — Stage 4-A 성공 기준 (Acceptance Criteria)
+
+OCCT.js 통합 (Stage 4-A) 의 OK 판단 기준:
+
+1. **기능적 정확성**:
+   - STEP/IGES import → NURBS face / wire 생성 (trim loop 포함)
+   - 생성된 face 가 G1~G3 Boolean 연산을 정상 통과 (union /
+     subtract / intersect)
+   - ADR-007 invariant (winding, face validity) 위반 0건
+2. **성능 / 번들**:
+   - **Dynamic import → initial bundle size 증가 0 MB** (vite analyzer
+     검증)
+   - 첫 import 시 OCCT.js init < 3초 (hot HTTP cache 기준)
+   - 5MB 미만 STEP 파일 import < 5초 (P95)
+3. **회복력**:
+   - OCCT.js 네트워크 fetch 실패 시 graceful fallback
+     (Toast 안내 + alternate format DXF/OBJ 추천)
+   - Malformed 파일 → 명확한 에러 메시지 (silent failure 금지)
+4. **회귀**:
+   - 기존 750+ 회귀 테스트 0건 깨짐
+   - 5개 검증 코퍼스 파일 round-trip < 1e-3 mm
+
+### P20.D — 검증 코퍼스 출처
+
+신뢰성 확보를 위해 **공개 + 벤더별 + 사용자 제공** 3축 혼합:
+
+1. **공개 샘플 (2 파일)**:
+   - NIST CAD test corpus (https://www.nist.gov/cad-test-files)
+   - OCCT test models (`opencascade/data/`)
+2. **CAD 벤더별 (3 파일, 1개씩)**:
+   - SolidWorks 출력 STEP AP203
+   - Fusion 360 출력 STEP AP242
+   - CATIA 출력 IGES 5.3
+3. **사용자 제공 (선택)**:
+   - 익명화된 실제 산업 파일 — 사용자가 제공 시 fixtures 에 추가
+
+위치: `crates/axia-foreign/tests/fixtures/`. 라이선스 중립 또는 명시
+허가된 파일만 commit.
+
+### P20.E — 12개월 Default 결정 트리거
+
+자체 파서 (axia-foreign) 가 OCCT.js 를 대체할 자격을 얻는 정량 기준:
+
+| 트리거 | 임계값 | 측정 방법 |
+|---|---|---|
+| **커버리지** | ≥ 80% 사용자 STEP/IGES 파일이 자체 파서로 import 가능 | 12개월 telemetry (opt-in) |
+| **정확도** | OCCT.js 와 동일한 파일에서 ≤ 1e-3 mm 좌표 차이 | cross-validation harness |
+| **유지보수 비용** | axia-foreign LOC < 8000, OCCT 회귀 bug ≤ 3건/분기 | git log + issue tracker |
+| **번들 절감 체감** | OCCT.js 제거 시 dist 번들 ≥ 8 MB 감소 | vite-bundle-analyzer |
+| **사용자 만족도** | NPS ≥ 7 (자체 파서 default 유저 설문) | 12개월 시점 설문 |
+
+**결정 매트릭스**:
+- 5개 트리거 모두 통과 → **자체 파서 default promote**, OCCT.js 옵션 유지
+- 3~4개 통과 → **6개월 추가 spike** 후 재평가
+- 2개 이하 통과 → **OCCT.js 영구 default**, 자체 파서는 학습용 보존
+
 ### P20.7 — Stage 4-A MVP 산출물 (이 ADR commit 의 명시 scope)
 
 **이 ADR 은 결정의 고정만**. 코드 변경은 없음.
@@ -142,11 +219,14 @@ Phase G1~G3 으로 NURBS surface SSI + trim curve 변환 + Boolean MVP 완성.
 
 ## Success Criteria
 
+세부 기준은 P20.C (Stage 4-A) 와 P20.E (12개월 default 결정) 참조.
+
 - ✅ ADR-035 의 결정이 commit 으로 고정됨 (이 PR)
-- ⏳ OCCT.js dynamic loader 로 cube.stp 라운드트립 통과
-- ⏳ 5개 실제 STEP/IGES 파일 import 성공
+- ⏳ OCCT.js dynamic loader 로 cube.stp 라운드트립 통과 (P20.C #1)
+- ⏳ Dynamic import → initial bundle 증가 0 MB (P20.C #2)
+- ⏳ 5개 검증 코퍼스 파일 import 성공 + 1e-3 mm 라운드트립 (P20.C #4 + P20.D)
 - ⏳ axia-foreign spike 가 cube.stp / IGES 라운드트립 통과
-- ⏳ 12개월 시점 promote/keep 결정 회의
+- ⏳ 12개월 시점 P20.E 5개 트리거 측정 → promote/keep 결정 회의
 
 ## References
 
@@ -161,3 +241,8 @@ Phase G1~G3 으로 NURBS surface SSI + trim curve 변환 + Boolean MVP 완성.
 
 - **2026-04-29 (initial)**: Hybrid 전략 채택. Stage 4-A OCCT.js 즉시 +
   Stage 4-B 자체 파서 spike 병행. 12개월 후 default 결정.
+- **2026-04-30 (rev 1)**: 사용자 검토 보강 — P20.A (Format priority:
+  AP242 primary), P20.B (Non-goals: export/assembly/PMI 제외),
+  P20.C (Stage 4-A 4축 acceptance criteria), P20.D (검증 코퍼스 3축
+  혼합: NIST + 벤더별 + 사용자), P20.E (12개월 5-트리거 정량 결정
+  매트릭스).
