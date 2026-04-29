@@ -1,342 +1,347 @@
-# ADR-019: Line is Truth, Face is Byproduct (v2)
+# ADR-019: Line is Truth, Face is Byproduct (v2.1)
 
-**Status**: 🔒 **Accepted & LOCKED** (2026-04-29, v2 갱신)
-**Supersedes**: ADR-016 §2 (Erase auto-fill table) — interior split fast-path 폐기
-**Related**: ADR-007 (Winding), ADR-008 (Axioms — Axiom 1 운영 명시화),
-ADR-016 (Conditional B1 + Path B), ADR-017 (Line 격상, 후속 ADR),
-ADR-020 (Centerline Layer Separation, 별도 ADR 후보)
-
-> ⚠️ **DO NOT MODIFY** without explicit user consent.
-> 사용자가 명시적으로 거부 또는 변경 요청 전까지 본 ADR 의 결정은
-> 모든 후속 세션에서 그대로 유지되어야 합니다 (ADR-014 메타-원칙 #10).
-
-> **v2 변경 (2026-04-29)**:
-> - R1 ε = 1.5μm (B7) 명시
-> - R2 EdgeClass::Geometry only 명시
-> - R3 새 face surface_normal 결정 우선순위 추가 (3단계)
-> - R4 sibling 정의 + Path B 직접 reference
-> - R5 split_edge 의 ID 보존 약속 폐기 — 현재 동작 (원본 deactivate, 두 새 ID) 명시
-> - R6 centerline 절단 효과 없음 명시. "별도 레이어" 는 ADR-020 후보로 분리
+**Status**: Draft
+**Owner**: AXiA Geometry/Core
+**Related**: ADR-007 (Winding), ADR-008 (Axioms), ADR-016 (Conditional B1),
+ADR-017 (Edge/Line elevation; future), ADR-018 (Uniform Surface Render),
+ADR-020 (Centerline layer separation; candidate)
 
 ---
 
-## Context
+## 0. Summary (Decision Summary — 4 lines)
 
-ADR-008 Axiom 1 ("Face = byproduct of topology") 은 선언적이었음.
-실제 운영에서는 face 가 별개 entity 처럼 취급되었고:
-
-- Erase fast-path 가 "면 통합" 동작으로 인식됨
-- Edge 가 익명 boundary 로 취급 (1급 시민 아님)
-- 사용자 시각으로 "라인이 사라지면 면이 사라진다" 와 "면을 합친다"
-  가 분리된 동작으로 보임
-
-사용자 원칙 정의 (2026-04-29):
-
-> 선이란 존재는 있지만 크게 역할이 없을 수도 있습니다.
-> 선을 그리는 것은 경계이자 엣지를 만드는 것입니다.
-> 그러므로 엣지는 모든 면과 엣지, 선의 절단 도구입니다.
-
-이는 ADR-008 Axiom 1 의 운영 차원 명시화. 본 ADR 은 이 원칙을 코드 정책 +
-회귀 테스트로 고정한다.
+> Line is Truth. Face is Byproduct.
+> Erase는 깨고, 다시 만든다.
+> 모든 CCW 닫힌 경계는 면화한다.
+> Ring/Hole은 의도적 동작(그릴 때)에만 형성한다.
 
 ---
 
-## Decision
+## 1. Context
 
-### 핵심 원칙 (사용자 정의 P1-P6)
+AXiA는 SketchUp/CAD 계열의 "선 중심" 편집 모델을 목표로 한다. 기존에는
+일부 fast-path(자동 merge)와 예외 분기들이 혼재되어, 사용자가 기대하는
+"선을 지우면 경계가 재구성되고 면이 다시 생기는" 경험이 일관되지 않았다.
 
-```
-P1. Line 은 1급 entity (ADR-017 격상 후 더 강화).
-    단독으로 의미 있을 수 있음 (wire, 주석선, 중심선),
-    또는 face boundary 의 일부로 의미 발생.
+본 ADR은 다음을 명확히 한다.
 
-P2. Line 그리기 = Edge 만들기 = 잠재적 boundary 형성.
+- 선(Line/Edge)은 1급 본질
+- 면(Face)은 선들의 토폴로지 결과
+- 삭제/편집은 **경계 무효화 → 재평가(re-resolve)** 로 통일
 
-P3. Edge 는 모든 면/엣지/선의 절단 도구 (cutting tool).
-
-P4. 면 위에 edge 가 추가되는 순간 기존 면은 자동 분할.
-
-P5. 면의 edge (line) 를 지우면 그 line 만 제거 — 주변 line 은 상태 유지.
-    영향 region 토폴로지 재평가 → 닫힌 boundary 있으면 새 면 자동 생성.
-
-P6. 인접 면 사이의 edge 를 지우면 P5 와 동일 메커니즘 — 닫힌 boundary
-    찾아 새 면 생성.
-```
-
-### 보강 정의 (Claude 추가, A1-A5 + R1-R6 반영)
-
-```
-A1. Centerline class edge 는 절단/면화에 참여하지 않음 (가상 기준선).
-    Geometry class edge 만 P3 의 절단 효과 발휘.
-    Erase 시 centerline 은 자기 자신만 제거 — 주변 face/edge 영향 없음.
-    re-resolve 단계의 free-edge collection 은 EdgeClass::Geometry only,
-    Centerline 제외.
-    (참고: centerline 의 별도 storage / 별도 layer 는 ADR-020 후보로 분리.)
-
-A2. Vertex 는 edge endpoint 로만 존재 — 단독 1급 entity 아님.
-    사용자가 단독 vertex 를 그릴 수 없음.
-
-A3. P4 자동 분할 조건:
-      (i) Edge 의 양 endpoint 가 같은 face 의 boundary loop (outer 또는 hole)
-          위 (definition 아래)
-      (ii) Edge 가 face 와 coplanar (1.5μm exact, B7)
-    → 둘 다 만족 시에만 자동 분할.
-    한 endpoint 만 boundary, 나머지 face 안 → 분할 안 됨, wire 추가만.
-    Skew (비-coplanar) → 분할 안 됨, 3D 공간에 line 만 추가.
-
-    Definition — "boundary loop 위 (on a boundary loop)":
-      어떤 점 P 가 face 의 boundary loop "위" 에 있다 ⇔
-      (a) P 가 boundary 의 기존 vertex 와 정확히 일치 (snap 후 dedup
-          기준 1.5μm = ε, B7), OR
-      (b) P 가 boundary edge 의 interior (끝점 제외) 위에 있음 (1.5μm 이내).
-      (b) 의 경우 해당 boundary edge 는 split_edge 로 분할되어 새 vertex
-      가 생성된 후 분할 진행.
-      "boundary loop 위" 의 정의는 (a) ∪ (b) 이며, ε = 1.5μm = B7 정책.
-
-A4. 닫힌 cycle 자동 면화 정책 (사용자 Q1=동의):
-      • 모든 CCW 닫힌 cycle 이 새 face 가 됨 (signed_area > 0).
-      • CW (외곽) cycle 은 skip — 무한 외부 영역 표현 안 함.
-      • 다중 cycle 가능 — 모두 처리.
-
-      CCW 판정 기준:
-        해당 평면의 surface_normal (오른손 법칙) 기준 signed_area 부호.
-        동일 free-edge component 에서 walker 가 동일 경계를 양방향으로
-        발견 가능 — surface_normal 기준 CCW 만 채택, CW 는 skip.
-
-      새 face 의 surface_normal 결정 우선순위 (R3):
-        1. Erase 영향 face 들의 normal 평균 (가장 자연스러움)
-        2. (1) 가 zero / 미가용이면: epoch surface_normal hint
-        3. (1)(2) 모두 없으면: 3-vertex 기반 자동 추론 (cross product)
-      이 surface_normal 을 ADR-007 Invariant 2 의 hint 로 사용해 winding 강제.
-
-A5. Wire ↔ face boundary 의 통일:
-      • Wire = face=null on every HE of the edge
-      • Face boundary = face=fid on at least one HE
-      • 둘은 같은 entity, 단지 인접 face 유무가 다름.
-      • 사용자 시각으로 동일 line 표시 (wire 도 일반 line 처럼 보임).
-```
-
-### 운영 정책 (B1-B7, 사용자 결정 반영)
-
-```
-B1. Re-resolve 범위 = local:
-    삭제된 edge 의 양 endpoint 주변 connected component 만 재평가.
-    Free-edge collection: EdgeClass::Geometry only (R6 정합).
-    Global re-resolve 는 비용 큼, 사용 안 함.
-    → resolve_planar_free_faces_scoped(seed_verts) 사용.
-
-    Definition — "닫힌 boundary (closed boundary)":
-      Erase 후 re-resolve 에서의 "닫힌 boundary" 는, 영향 영역 (scope =
-      B1 의 local component) 안에서 face=null 이고 EdgeClass::Geometry 인
-      free edges 집합을 대상으로 leftmost-turn walker 가 보행했을 때 닫힌
-      cycle 을 형성하는 경계를 말한다.
-      해당 cycle 이 과거 face 의 일부였든 빈 영역이었든 무관 (A4) — 새
-      face 생성 후보가 된다.
-      cycle 을 만들지 못하는 격리된 wire chain 은 face 로 승격되지 않음.
-
-B2. Edge 이동 ≡ 양 endpoint vertex 이동:
-    "Line 자체 이동" 은 별도 동작 아님 — vertex 위치 변경의 결과.
-
-    B2-addendum — Line / Edge ID stability:
-      EdgeId 보존 케이스:
-        • vertex translate / rotate / scale (endpoint 이동만)
-        • 다른 edge 를 erase 한 후에도 잔존 edge 의 ID 는 유지.
-      EdgeId 분기 / 폐기 케이스 (R5 — Option A 채택):
-        • split_edge 발생 시 원본 EdgeId 는 deactivate.
-          두 조각 모두 새 EdgeId 를 받는다 (현재 split_edge 구현 그대로).
-          → 사용자가 "동일 line" 으로 인식하더라도 내부적으로 새 ID.
-          향후 ADR-017 (Edge 격상) 단계에서 ID 보존 / metadata 승계
-          정책 별도 검토.
-        • Boolean / Push-Pull 등에서 만들어지는 교차 / 측면 edge 는
-          새 EdgeId — 원본 과 무관.
-
-B3. 자동 생성 sub-edge / sub-vertex 의 owner:
-    P4 자동 분할 / P5 재평가로 만들어진 sub-edge / vertex →
-    default (no owner). 사용자 직접 그린 line 만 owner XIA 가짐
-    (ADR-017 격상 후).
-
-B4. 분할 sub-face XIA 승계:
-    P4 자동 분할 결과 sub-face 들 → 원본 face 의 XIA 승계.
-    이미 ADR-015 LOCKED #3 정책. 본 ADR 도 동일 유지.
-
-B5. Cascade 모드 (Shift+erase) — 유지 (사용자 Q2=(b)):
-    Shift 누르고 erase → "면도 함께 삭제" 명시 cascade.
-    재평가 안 함 — 사용자 명시 의도 우선.
-    Hover 색상: red (cascade) 그대로 유지.
-
-B6. 재평가 시 ring topology — 명시 promote 만 (사용자 Q3=명시):
-    ADR-016 의 conditional B1 promote 는 draw 시점에만 발동.
-    Erase 후 re-resolve 단계에서는 ring topology 자동 형성 안 함 —
-    발견된 CCW cycle 은 기본적으로 simple face 로 승격.
-
-    Definition — "Sibling" (R4):
-      ADR-016 의 ring face 의 hole loop 과 그 안의 inner sub-face 의
-      관계. 둘이 같은 hole 영역의 양면 (ring 측 hole HE + inner 측
-      outer HE) 을 공유하면 sibling.
-
-    Sibling 관계가 깨지는 경우 (예: hole boundary edge 1개 erase) →
-    ADR-016 §2 Path B 의 결과와 동일:
-      • Ring 의 hole 제거 → simple face 로 변환
-      • Inner sub-face 제거
-      • 잔여 wire 보존 (cleanup_dangling = false)
-    (ADR-016 §2 Path B 정책 그대로 reference, 본 ADR 에서 재정의 안 함.)
-
-    사용자 명시 op 는 그대로 유지:
-      • `merge-as-hole` (우클릭 메뉴) — inner 면을 outer 의 hole 로 명시
-        promote. ADR-019 P5/P6 의 자동 동작 위에 사용자 의도 추가.
-
-B7. Coplanar tolerance — 1.5μm exact (사용자 Q4=동의):
-    A3 의 coplanar 판정은 spatial-hash dedup 기준 (1.5μm).
-    Mesh 층에서 mm 단위 fuzzy snap 금지 (LOCKED 정책 #5 유지).
-    UI snap 으로 정렬 — 입력 단계에서 해소.
-```
-
-### 통합된 Erase Pipeline (ADR-019 단일 정책)
-
-기존 ADR-016 §2 의 cyan/amber/red 3단 분기 단순화:
-
-```
-Erase 동작 (Shift 없을 때 — default):
-  사용자가 line 1개 클릭 → 그 line 만 제거 (B2 의 "edge 이동" 과 대조)
-  → 영향받은 face 들 soft-remove
-  → seed_verts 기반 local re-resolve (B1)
-  → 닫힌 CCW cycle 발견 시 새 face (A4, B6: simple only)
-  → 다른 line 모두 상태 유지 (P5)
-  → orphan wire 도 보존 (cleanup_dangling = false 항상)
-
-Erase + Shift (cascade):
-  사용자 명시 cascade → 인접 face 도 직접 삭제, 재평가 안 함 (B5)
-```
-
-Hover preview 단순화:
-- **amber** — default mode (line 제거 + 토폴로지 재평가)
-- **red** — Shift cascade mode
-
-### Hover preview 추가 정보
-
-amber preview 시 영향 시각화:
-- 제거되는 line: amber 굵게 강조
-- 영향 face 영역: amber tint
-- 새로 생길 face (예측): cyan tint (선택적, 성능 허용 시 — 의미 재정의:
-  "merge 가능" 이 아니라 "예측되는 새 face 영역")
+그리고 **Undo-first UX** 를 기본 철학으로 둔다.
 
 ---
 
-## Implementation Plan
+## 2. Principles (User-defined)
 
-### Phase 1 — 진단 + Path B Universal 통일 (2-3일)
-
-- 사용자 화면 시나리오 재현 (인접 floating rect 의 dividing line erase)
-- `erase_edge_resynthesize` 를 default erase path 로 통일
-- ADR-016 의 hole-edge 분기 + 신규 interior split 분기 통합
-- `merge_faces_by_edge_with_tolerance` fast-path → Path B 내부 fast-route 또는 폐기
-- Cascade 분기 (Shift) 는 그대로 유지 (B5)
-
-### Phase 1.5 — 회귀 점검 (mid-checkpoint)
-
-Phase 1 끝나고 기존 LOCKED 8개 회귀 모두 통과 확인 후 Phase 2 진행.
-통과 못하면 Phase 1 재작업 (or ADR 재검토).
-
-### Phase 2 — 인접 (geometric) 처리 (2일)
-
-- 1.5μm 이내 collinear edge geometric 인접 자동 dedup
-- 사용자가 한 line erase 시 같은 위치의 인접 line 동시 처리 옵션
-- 또는: 양쪽 별개 line 각각 erase 한 후 자연 재평가로 합성
-
-### Phase 3 — UI (1-2일)
-
-- EraseTool hover preview: amber 단일 (cyan = "merge 가능" 의미 폐기)
-- 영향 시각화: face tint + 예측 cycle 표시 (cyan 색상 의미 재정의)
-- Cascade (Shift) red 유지
-
-### Phase 4 — 회귀 테스트 (2일)
-
-새 회귀 테스트 (~20개):
 ```
-test_p4_edge_added_on_face_auto_splits
-test_p4_edge_skew_no_split
-test_p4_centerline_no_split
-test_p5_erase_face_edge_keeps_other_lines
-test_p5_erase_creates_new_face_when_cycle_closes
-test_p5_orphan_wire_preserved
-test_p6_adjacent_face_erase_creates_merged_face
-test_p6_drawing_order_independent
-test_a3_endpoint_only_no_split
-test_a3_boundary_loop_position_definition
-test_a4_multiple_cycles_all_become_faces
-test_a4_surface_normal_priority
-test_b5_shift_erase_cascades_unchanged
-test_b6_no_auto_ring_on_resynthesize
-test_b6_sibling_break_uses_path_b
-test_b7_coplanar_tolerance_exact
-test_b2_edge_id_split_creates_two_new_ids
-test_xia_inheritance_preserved
-test_constraint_cleanup_on_erase
+P1. Line은 1급(entity)이다. 단독으로도 존재하며 의미를 가진다.
+P2. Line 그리기 = Edge 만들기 = 잠재적 boundary 생성.
+P3. Edge는 모든 면/엣지/선의 절단 도구이다.
+P4. Edge 추가 → (조건 충족 시) 기존 면 자동 분할.
+P5. Edge 삭제 → 그 Edge만 제거. 다른 Line 상태는 유지.
+    이후 토폴로지 재평가(re-resolve) 수행, 닫힌 boundary가 있으면
+    새 면 자동 생성.
+P6. 인접 면의 공유 Edge 삭제 → P5와 동일 메커니즘으로 처리.
 ```
-
-기존 LOCKED 회귀 테스트 8개 + ADR-018 새 회귀 그대로 유지.
-
-### Phase 5 — 문서화 + 정합 (1일)
-
-- ADR-016 §2 의 erase table 업데이트 (cyan 분기 폐기)
-- ADR-008 Axiom 1 의 본문에 "ADR-019 로 운영 명시화" 주석
-- ADR-017 (Edge 격상, 미래) 와의 정합 명시
-- ADR-020 (Centerline Layer Separation) 별도 ADR 작성 후보 확인
-- CLAUDE.md LOCKED 섹션 갱신
-
-**총 작업량**: 1.5-2주
 
 ---
 
-## Trade-offs
+## 3. Augmentations (R1–R6 반영, 명료화)
+
+### A1. EdgeClass and operational participation (Centerline 포함)
+
+- **Geometry class edge** 만 절단/분할/면화/re-resolve 에 참여한다.
+- **Centerline class edge** 는 기하 조작 (Move/Offset/Erase) 은 가능하나,
+  절단/분할/면화/re-resolve 에는 참여하지 않는다.
+- re-resolve 단계의 free-edge collection 에는 `EdgeClass::Geometry` 만
+  포함하고 Centerline 은 제외한다.
+- **검증 의무 (Phase 1)**: Move/Offset/Erase 도구가 Centerline 을 차별
+  없이 처리하는지 회귀 테스트로 확인.
+- 참고: Centerline 의 storage / render 분리("레이어")는 범위가 크므로
+  **ADR-020** 에서 별도 정의.
+
+### A2. Vertex
+
+- Vertex 는 Edge 의 endpoint 로만 존재한다.
+- 단독 vertex 는 1급 엔티티로 취급하지 않는다.
+
+### A3. Auto-split 조건 (R1 포함)
+
+Edge 가 face 를 자동 분할하려면 둘 다 만족해야 한다.
+
+1. 새 Edge 의 양 endpoint 가 같은 face 의 boundary loop "위"
+2. 새 Edge 가 해당 face 와 coplanar
+
+**Definition — "boundary loop 위 (on a boundary loop)"** (R1)
+
+점 P 가 boundary loop "위" 에 있음을 의미하는 조건:
+
+- **(a)** P 가 boundary 의 기존 vertex 와 정확히 일치 (snap 포함)
+- **(b)** P 가 boundary edge 의 interior (끝점 제외) 위에 있으며 허용오차
+  ε 이내. 이 경우 boundary edge 를 split 하여 새 vertex 를 만든 뒤 분할 진행.
+
+ε = **1.5 μm** (= LOCKED #5 의 spatial-hash dedup tolerance — f32 drift
+흡수만 허용. 그 이상의 fuzzy snap 은 mesh 층에서 금지).
+
+그 외:
+
+- 한 endpoint 만 boundary 위 → 분할 없음, wire 추가
+- non-coplanar → 분할 없음, 3D line 추가
+
+### A4. Closed boundary → face 생성 규칙 (R2/R3)
+
+**Definition — "닫힌 boundary (closed boundary)"** (R2)
+
+Erase 후 re-resolve 에서의 닫힌 boundary 는,
+
+- 영향 영역 (scope; B1 local component) 안에서
+- `face = null` 이며
+- `EdgeClass::Geometry` 인 free edges 를 대상으로
+- leftmost-turn walker 로 보행 시 닫힌 cycle 을 형성하는 경계
+
+를 말한다. cycle 을 만들지 못하는 격리된 wire chain 은 face 로 승격되지
+않는다.
+
+**CCW vs CW 선택** (R3)
+
+- CCW 판정은 해당 평면의 surface_normal (오른손 법칙) 기준 signed area 로
+  결정한다.
+- 동일 free-edge component 에서 동일 경계를 양방향으로 발견하면,
+  surface_normal 기준 CCW cycle 만 채택하고 반대 (CW) 는 skip 한다.
+- 결과적으로 무한 외부 영역에 해당하는 cycle 은 채택되지 않는다.
+
+### A5. Wire vs Face boundary
+
+- Wire 와 face boundary 는 같은 Edge 이며 차이는 **face 인접 여부 (토폴로지
+  결과)** 뿐이다.
+- 사용자 시각 표시는 동일 (스타일은 힌트 수준).
+
+---
+
+## 4. Operational Policies
+
+### B1. Re-resolve scope
+
+- 기본은 **Local scope**: 삭제된 Edge 의 endpoint (또는 seed verts) 에서
+  시작하는 연결 성분만 재평가.
+- Global 재평가 함수는 backend 에 존재 (`resolve_planar_free_faces`) 하나
+  사용자 노출은 하지 않음. 향후 진단 도구로 활용 가능.
+
+### B2. Transform semantics (+ ID stability; R5)
+
+- Edge 이동 = endpoint vertex 이동의 결과.
+- 일반 이동/회전/스케일은 edge ID 유지.
+
+**B2-addendum — ID stability**
+
+| 케이스 | 정책 |
+|--------|------|
+| Vertex translate/rotate/scale | EdgeId 유지 |
+| 다른 edge erase 후 잔존 edge | EdgeId 유지 |
+| `split_edge` | 원본 EdgeId 비활성화, sub-edge 모두 새 EdgeId 부여 (현 구현 정합) |
+| Boolean / Push-Pull 신규 edge | 신규 EdgeId |
+
+EdgeId 보존/승계 변경은 **ADR-017** 에서 재검토.
+
+### B3. Auto-generated sub-edge ownership
+
+- 자동 생성 (split / sub) edge 는 owner 없음 (default).
+- 사용자 명시 입력 (직접 그린) edge 만 owner / 메타 보유.
+
+### B4. Sub-face XIA inheritance
+
+- 자동 분할 sub-face 는 원본 face 의 XIA 승계 (LOCKED).
+
+### B5. Cascade mode (Undo-first)
+
+- 기본 Erase 는 P5/P6 re-resolve.
+- **Shift+Erase 는 "면도 함께 지우기" 보조 모드로 유지한다** (Q2=b).
+- 모든 모드는 Undo-first 를 전제로 즉시 반영.
+
+### B6. Ring/Hole on re-resolve (R4)
+
+- ADR-016 의 conditional B1 promote 는 **draw 시점에만** 적용.
+- Erase 후 re-resolve 에서는 ring/hole 을 자동 형성하지 않음.
+
+**Definition — "Sibling"** (R4)
+
+ADR-016 ring face 의 hole loop 와, 그 hole 의 perimeter edges 를 공유하는
+**inner sub-face (면 영역은 hole 안쪽)** 의 관계.
+
+Sibling 관계가 끊어질 경우 (예: hole boundary 일부 erase) 는
+**ADR-016 §2 Path B** 를 따른다:
+
+- ring → simple face 로 수렴
+- inner sub-face → 제거
+- 잔여 wire → 보존
+
+(향후 detach-hole 명시 op 로 standalone 복귀 옵션을 도입할 수 있으나,
+본 ADR 범위 외)
+
+---
+
+## 5. Erase Semantics (Unified)
+
+> **Erase = merge 가 아니다.**
+
+표준 흐름:
+
+1. Edge 제거
+2. 인접 face soft-remove
+3. free-edge re-resolve (`EdgeClass::Geometry` 만)
+4. CCW 닫힌 boundary → face 생성
+
+**Centerline edge**:
+
+- Move/Offset/Erase 가능
+- 절단/면화/re-resolve 불참
+- erase 시 자기 자신만 제거
+
+---
+
+## 6. Compatibility & Guardrails
+
+### 6.1 Winding (ADR-007)
+
+- Outer loop → CCW
+- Hole loop → CW
+- 새 face 생성 시 winding 강제
+
+### 6.2 surface_normal 결정 우선순위 (R3)
+
+re-resolve 로 새 face 생성 시 surface_normal (hint) 을 아래 우선순위로
+결정하고, 이를 ADR-007 의 `normal.dot(hint) >= 0` 조건의 hint 로 사용해
+winding 을 강제한다.
+
+1. 영향 face 들의 normal 평균
+2. (1) 이 0 에 가까우면 epoch surface_normal hint
+3. 둘 다 없으면 3-vertex 기반 자동 추론 (cross product)
+
+### 6.3 Coplanar tolerance (I2)
+
+- kernel 의 거리/평면 판정은 **1.5 μm tolerance** 만 허용
+- 그 이상의 fuzzy 는 금지, fuzzy 는 UI snap 입력 단계에서만 허용
+
+### 6.4 Undo-first UX
+
+- 위험한 자동 판단 대신 **즉시 적용 + Undo** 가 기본
+- 확인 다이얼로그 / 거부 메시지 남발 지양
+
+### 6.5 Render 정합 (ADR-018)
+
+- 새 face 생성 시 ADR-018 의 wall/sheet 분류 (`isFaceInVolume` +
+  `isClosedSolid` gate) 자동 적용
+- Open mesh 새 face → uniform white
+- Closed solid 새 face → 2-tone
+
+---
+
+## 7. Implementation Plan
+
+### Phase 1 — Erase 파이프라인 표준화
+
+- Erase 기본 경로를 re-resolve 표준으로 고정 (`erase_edge_resynthesize`)
+- Cascade (Shift) 분기 유지
+- Centerline 도구 호환성 검증 포함
+
+### Phase 1.5 — Mid-checkpoint (회귀 검증)
+
+다음 통과 시 Phase 2 진행:
+
+- 기존 LOCKED 회귀 8개 전부
+- Appendix B 핵심 5개: #1, #3, #5, #6, #16
+
+미통과 시 Phase 1 재작업 또는 ADR 재검토.
+
+### Phase 2 — 도구별 정합
+
+- Offset / Fillet / Boolean / Push-Pull 의 edge 생성 규칙을 ADR-019 에 정합
+- 도구별 회귀 테스트 추가
+
+### Phase 3 — Hover preview 의미 정리
+
+- 기존 cyan (merge 가능) 의미 폐기
+- 새 cyan tint = **"새 face 예측 영역"**
+- amber = 기본 re-resolve preview
+- red = Shift cascade preview
+
+### Phase 4 — Out-of-scope
+
+- Edge/Line metadata elevation 은 **ADR-017** 에서 별도 진행
+- ADR-019 구현은 Phase 1–3 으로 종료
+
+### CLAUDE.md 동기화 (필수)
+
+v2.1 커밋과 함께 LOCKED #8 업데이트:
+
+- R5 (`split_edge` ID 정책) 반영
+- "별도 레이어" 문구 제거
+- ADR-018 / ADR-020 참조 추가
+
+---
+
+## Appendix A — Decision Record (Q1–Q5)
+
+| # | 질문 | 결정 | 근거 |
+|---|------|------|------|
+| Q1 | A4 "닫힌 cycle 자동 면화 (CCW 모두)" | **YES** | SketchUp 방식, Axiom 1 운영화, Undo-first |
+| Q2 | Cascade 모드 (B5) | **유지 (b)** | 보조 모드 가치 + 기본 re-resolve 병행 |
+| Q3 | re-resolve 시 ring topology 자동 형성 | **NO** | stacked-inner 회귀 방지, 의도 기반 hole 정책 |
+| Q4 | coplanar tolerance (1.5 μm) | **YES** | kernel fuzzy 금지, UI snap만 보정 |
+| Q5 | ADR-019 작성/유지 | **YES** | ADR-008 선언을 운영 규칙으로 승격 |
+
+추가 결정:
+
+- **R5**: `split_edge` → 원본 ID 비활성, 새 ID 부여 (현 구현 수용)
+- **R6**: Centerline "별도 레이어" 는 ADR-020 분리
+- **I1–I13**: 전부 반영 (auto-link artifact 제거 / table 포맷 / 각 항목)
+
+---
+
+## Appendix B — Regression Checklist (20)
+
+1. `erase_interior_split_edge_merges_face`
+2. `erase_boundary_edge_breaks_face_then_resolve_if_cycle`
+3. `erase_shared_edge_two_faces_resolves_to_merged`
+4. `erase_edge_no_cycle_leaves_wires_only`
+5. `erase_hole_boundary_triggers_pathB`
+6. `centerline_move_offset_erase_no_topology_effect`
+7. `centerline_excluded_from_reresolve`
+8. `auto_split_requires_both_endpoints_on_same_boundary`
+9. `auto_split_endpoint_on_edge_interior_splits_boundary_edge`
+10. `auto_split_rejects_non_coplanar`
+11. `reresolve_generates_all_ccw_regions`
+12. `reresolve_skips_cw_cycles`
+13. `surface_normal_hint_uses_affected_faces_average`
+14. `surface_normal_fallback_epoch_hint_then_infer`
+15. `split_edge_deactivates_original_creates_two_new_ids`
+16. `draw_order_independence_rect_inner_outer`
+17. `stacked_inner_second_is_separate_face_not_hole`
+18. `local_scope_reresolve_does_not_touch_unrelated_components`
+19. `coplanar_tolerance_15um_enforced`
+20. `undo_first_no_preventive_blocking`
+
+---
+
+## Appendix C — Trade-offs
 
 ### Gained
-1. **Mental model 일관성** — Line 1급, Face 결과 — 사용자 직관 정합
-2. **Erase 동작 통일** — cyan/amber/red 3단 → amber/red 2단
-3. **그리기 순서 무관 자동 보장** — 토폴로지가 진실, 순서 무관
-4. **ADR-008 Axiom 1 운영 명시화** — 추후 도구 추가 시 일관 기준
-5. **Edge 격상 (ADR-017) 과 자연 정합**
+
+1. 일관된 멘탈 모델 (Line 1급, Face 결과)
+2. Erase 동작 통일 (예외 제거)
+3. 그리기 순서 무관 보장
+4. ADR-008 Axiom 의 운영 규칙화
+5. ADR-017 격상과 자연 정합
 
 ### Lost
-1. **Fast-path merge 의 미묘한 동작 손실 가능** — 일부 회귀 케이스 검증 필요
-2. **자동 ring formation 안 함** — Erase 후 hole 자동 안 생김 (B6, 사용자 결정)
-3. **Cyan preview 색상의 기존 의미 폐기** — 단순화 trade-off
-4. **EdgeId 보존 약속 폐기** — split_edge 시 ID 분기 (Option A, B2-addendum)
 
-### Future Work
-1. **ADR-017 (Edge 격상)** — line 1급 metadata layer + 가능 시 ID 보존 정책
-2. **ADR-020 (Centerline Layer Separation)** — centerline storage / render 분리
-3. **Curve 메타데이터 (Stage 1)** — 곡선 line 도 동일 원칙 적용
-4. **Boolean / Push-Pull 의 동일 원칙 표현** — 복합 도구도 line 추가/삭제의 합
+1. 일부 fast-path merge 의 즉시 편의/성능
+2. split 시 EdgeId 보존 (ADR-017 까지 수용)
+3. cyan = "merge 가능" 직관 (의미 재정의로 학습 비용)
 
 ---
 
-## Decision Record
-
-### What we decided (사용자 결정)
-1. **A4** — 닫힌 CCW cycle 모두 자동 면화 (Q1=동의)
-2. **B5** — Cascade 모드 유지 (Shift+erase) (Q2=b)
-3. **B6** — 재평가 시 명시 promote 만 — auto ring 형성 안 함 (Q3=명시)
-4. **B7** — Coplanar 1.5μm exact tolerance (Q4=동의)
-5. **신규 ADR 작성 진행** (Q5=동의)
-6. **v2 보강** — R1~R6 반영, R5=(A) 정책, R6 의 "별도 레이어" 는 ADR-020 분리
-
-### What we rejected
-- **자동 통합 (auto-merge) 동작** — 사용자 명시 거부. "통합" 은 별개
-  동작이 아니라 토폴로지 재평가의 결과.
-- **Cyan/amber/red 3단 hover** — amber 단일 + red(cascade) 만으로 단순화.
-- **Cleanup_dangling 자동 호출** — orphan wire 자동 정리 안 함. line 상태 유지.
-- **EdgeId 보존 (split_edge)** — 현재 구현 변경 안 함. 두 새 ID 사용. ADR-017
-  격상 시점에 재검토.
-- **"Centerline 별도 레이어"** — ADR-019 범위 초과. ADR-020 후보로 분리.
-
-### Open questions
-- ADR-017 (Edge 격상) 과 ADR-019 의 시점 — 동시? 별개? 본 ADR 은
-  격상 전후 모두 호환되도록 설계됨.
-- Boolean / Push-Pull 의 P1-P6 표현 방식 — 별도 ADR 후보.
-- ADR-020 의 "별도 레이어" 정의 — 별도 ADR 에서 확정.
-
----
-
-*Author*: AXiA development (사용자 원칙 정의 + Claude 보강) |
-*Implementation*: Phase 1-5 계획, 1.5-2주 (commit hash TBD)
+*Document version*: v2.1 final — I1–I13 전부 반영
+*Date*: 2026-04-29

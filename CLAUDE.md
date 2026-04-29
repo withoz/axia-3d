@@ -60,21 +60,44 @@
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
 
-### 8. ADR-019 — Line is Truth, Face is Byproduct (2026-04-29)
-- **Line (Edge) 1급 정책** — 사용자 정의 P1-P6 + Claude 보강 A1-A5 + 운영 B1-B7.
-- 핵심: "엣지는 모든 면/엣지/선의 절단 도구. 면은 토폴로지 byproduct."
-- **자동 분할 (P4)**: 양 endpoint 가 같은 face boundary + coplanar 1.5μm exact (A3, B7)
-- **Erase (P5/P6)**:
+### 8. ADR-019 v2.1 — Line is Truth, Face is Byproduct (2026-04-29)
+- **Line (Edge) 1급 정책** — 사용자 정의 P1-P6 + Claude 보강 A1-A5 + 운영 B1-B6.
+- **Decision Summary**: Line is Truth. Face is Byproduct. Erase는 깨고
+  다시 만든다. 모든 CCW 닫힌 경계는 면화한다. Ring/Hole 은 의도적 동작
+  (그릴 때) 에만 형성한다.
+- **자동 분할 (P4 / A3)**: 양 endpoint 가 같은 face boundary loop "위" +
+  coplanar 1.5μm tolerance.
+  - "boundary loop 위" 정의: vertex 일치 OR edge interior 위 + ε 이내
+    (ε=1.5μm = LOCKED #5 spatial-hash dedup tolerance, B7).
+- **Erase (P5/P6 통일 정책)**:
   - line 1개만 제거 → 다른 line 모두 상태 유지
-  - 영향 region local re-resolve → 닫힌 CCW cycle 자동 면화 (A4)
-  - 재평가 시 ring topology 자동 형성 안 함 — 명시 promote 만 (B6)
-  - orphan wire 보존 — cleanup_dangling = false 항상
-- **Cascade (Shift+erase)**: 명시적 cascade 모드 유지 (B5)
-- **Centerline class**: 절단 효과 없음 (A1)
+  - 영향 region local re-resolve (B1) → 닫힌 CCW cycle 자동 면화 (A4)
+  - CCW 판정 = surface_normal 기준 signed area 부호
+  - 새 face 의 surface_normal 우선순위: 영향 face 평균 → epoch hint
+    → 3-vertex 자동 추론 (6.2)
+  - 재평가 시 ring topology 자동 형성 안 함 — draw 시점 conditional B1
+    promote (ADR-016) 만 (B6)
+  - Sibling 끊어짐 → ADR-016 §2 Path B (ring 수렴, inner 제거, wire 보존)
+  - orphan wire 보존 (cleanup_dangling = false 항상)
+- **Cascade (Shift+erase)**: 명시적 cascade 모드 유지 — Q2=b (B5).
+  Undo-first UX 와 공존.
+- **Centerline class (A1)**:
+  - Move/Offset/Erase 도구 동작 가능
+  - 절단/분할/면화/re-resolve 에는 불참
+  - re-resolve 의 free-edge collection 에 미포함
+  - storage / render 분리 ("별도 레이어") 는 ADR-020 별도 진행
 - **Vertex**: edge endpoint 로만 존재, 1급 아님 (A2)
-- **Hover preview**: amber (default) / red (cascade) 2단으로 단순화. cyan 폐기.
-- ADR-016 §2 의 erase table 일부 supersede (interior split fast-path → Path B 통일).
-- ADR-008 Axiom 1 의 운영 명시화. ADR-017 (Edge 격상) 과 자연 정합.
+- **Wire ↔ face boundary**: 같은 Edge, face 인접 여부만 차이 (A5)
+- **EdgeId stability (B2-addendum, R5)**: vertex 변형 / 다른 erase 후
+  잔존 edge → ID 유지. `split_edge` → 원본 비활성, sub-edge 모두 새 ID
+  (현 구현 정합). ADR-017 격상 시 재검토.
+- **Hover preview**: amber (default re-resolve) / red (Shift cascade) 2단.
+  기존 cyan ("merge 가능") 의미 폐기. 새 cyan tint 의미 = "새 face 예측
+  영역" 으로 재정의 (선택적 사용).
+- **Render 정합 (6.5)**: 새 face 는 ADR-018 의 wall/sheet 분류 자동 적용.
+- ADR-016 §2 erase table 일부 supersede (interior split fast-path →
+  Path B 통일).
+- ADR-008 Axiom 1 의 운영 명시화.
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
