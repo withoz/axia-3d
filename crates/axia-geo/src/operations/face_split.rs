@@ -292,6 +292,26 @@ pub fn split_face_by_line(
     // be resolved via find_boundary_point on outer (it's in void), so we
     // dispatch here before the normal outer-resolution step fails.
     if !saved_holes.is_empty() {
+        // ─── Step 0.5a: ADR-023 P8 case (d) — BEFORE case (c) ──────────────
+        // Endpoint exactly on hole boundary (vertex or edge). Must run before
+        // case (c) because point_inside_loop_3d is undefined for boundary
+        // points — ray casting may classify them as inside, mis-dispatching
+        // to case (c) which then fails with "expected 1 hole crossing".
+        let snap_tol_d = face_diag * 0.02;
+        if let Some((hole_idx, which_end, hole_bp)) =
+            detect_case_d(mesh, proj_start, proj_end, &saved_holes, snap_tol_d)?
+        {
+            return split_face_case_d(
+                mesh, face_id,
+                proj_start, proj_end,
+                which_end, hole_idx, hole_bp,
+                &saved_holes,
+                &loop_verts, &loop_hes, face_diag,
+                new_verts, new_edges, debug,
+            );
+        }
+
+        // ─── Step 0.5b: case (c) — endpoint strictly inside hole ──────────
         let early_classifications = classify_holes(mesh, proj_start, proj_end, &saved_holes)?;
         let case_c_match = detect_case_c(&early_classifications);
         if let Some((hole_idx, which_end)) = case_c_match {
@@ -1239,6 +1259,202 @@ fn split_face_case_c(
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
 
     debug.push(format!("case (c) result: face={} ({}v, {} holes)",
+        new_face.raw(), bridged.len(), other_holes.len()));
+
+    mesh.debug_verify_invariants();
+
+    Ok(FaceSplitResult {
+        new_faces: vec![new_face],
+        new_verts,
+        new_edges,
+        debug,
+    })
+}
+
+/// ADR-023 P8 — Strict boundary point detection on a hole loop.
+///
+/// Returns `Some(BoundaryPoint)` only if `point` is within `tol` of the loop's
+/// vertex or edge. No closest-fallback (unlike `find_boundary_point` which
+/// always returns something). Used by `detect_case_d` to identify endpoints
+/// landing exactly on a hole boundary.
+fn try_find_hole_boundary_point(
+    mesh: &Mesh,
+    point: DVec3,
+    hole_verts: &[VertId],
+    hole_hes: &[HeId],
+    tol: f64,
+) -> Result<Option<BoundaryPoint>> {
+    if hole_verts.is_empty() { return Ok(None); }
+
+    // Pass 1: vertex match
+    let mut best_v: Option<(VertId, f64)> = None;
+    for &vid in hole_verts {
+        let d = (mesh.vertex_pos(vid)? - point).length();
+        if d < tol && (best_v.is_none() || d < best_v.unwrap().1) {
+            best_v = Some((vid, d));
+        }
+    }
+    if let Some((vid, _)) = best_v {
+        return Ok(Some(BoundaryPoint::ExistingVertex(vid)));
+    }
+
+    // Pass 2: edge match (tight only — no fallback)
+    let mut best_e: Option<(EdgeId, DVec3, f64, f64)> = None; // (edge, pos, t, dist)
+    for i in 0..hole_verts.len() {
+        let he = hole_hes[i];
+        let edge_id = mesh.hes[he].edge();
+        let edge = &mesh.edges[edge_id];
+        let a = mesh.vertex_pos(edge.v_small())?;
+        let b = mesh.vertex_pos(edge.v_large())?;
+        let d = b - a;
+        let len2 = d.length_squared();
+        if len2 < 1e-20 { continue; }
+        let t = ((point - a).dot(d) / len2).clamp(0.0, 1.0);
+        let proj = a + d * t;
+        let dist = (point - proj).length();
+        if dist < tol && (best_e.is_none() || dist < best_e.as_ref().unwrap().3) {
+            best_e = Some((edge_id, proj, t, dist));
+        }
+    }
+    if let Some((edge_id, position, t, _)) = best_e {
+        // Reject if t is extremely close to endpoints — should have matched vertex.
+        if t > 1e-6 && t < 1.0 - 1e-6 {
+            return Ok(Some(BoundaryPoint::OnEdge { edge_id, position, t }));
+        }
+    }
+    Ok(None)
+}
+
+/// ADR-023 P8 — Detect "endpoint exactly on hole boundary" case.
+///
+/// Returns `Some((hole_idx, which_end, BoundaryPoint))` if exactly one
+/// endpoint of the cutting line lies on exactly one hole's boundary while
+/// the other endpoint does NOT lie on the same hole's boundary. Multi-hole
+/// scenarios (both endpoints on different holes) are deferred — return None.
+fn detect_case_d(
+    mesh: &Mesh,
+    proj_start: DVec3,
+    proj_end: DVec3,
+    saved_holes: &[SavedHole],
+    tol: f64,
+) -> Result<Option<(usize, InsideEnd, BoundaryPoint)>> {
+    let mut start_match: Option<(usize, BoundaryPoint)> = None;
+    let mut end_match: Option<(usize, BoundaryPoint)> = None;
+    for (hole_idx, hole) in saved_holes.iter().enumerate() {
+        let hole_verts = mesh.collect_loop_verts(hole.loop_ref.start)?;
+        let hole_hes = mesh.collect_loop_hes(hole.loop_ref.start)?;
+        if start_match.is_none() {
+            if let Some(bp) = try_find_hole_boundary_point(
+                mesh, proj_start, &hole_verts, &hole_hes, tol,
+            )? {
+                start_match = Some((hole_idx, bp));
+            }
+        }
+        if end_match.is_none() {
+            if let Some(bp) = try_find_hole_boundary_point(
+                mesh, proj_end, &hole_verts, &hole_hes, tol,
+            )? {
+                end_match = Some((hole_idx, bp));
+            }
+        }
+    }
+    match (start_match, end_match) {
+        (Some(_), Some(_)) => Ok(None),  // both endpoints on hole boundary — defer
+        (Some((idx, bp)), None) => Ok(Some((idx, InsideEnd::Start, bp))),
+        (None, Some((idx, bp))) => Ok(Some((idx, InsideEnd::End, bp))),
+        (None, None) => Ok(None),
+    }
+}
+
+/// ADR-023 P8 (Phase G case d) — Bridge with endpoint exactly on hole boundary.
+///
+/// Outer endpoint (resolved on outer loop as usual) → A. Hole endpoint
+/// (BoundaryPoint provided by `detect_case_d`) → H (existing vertex or
+/// realized via `split_edge`). Same bridge composition as case (c).
+fn split_face_case_d(
+    mesh: &mut Mesh,
+    face_id: FaceId,
+    proj_start: DVec3,
+    proj_end: DVec3,
+    which_end: InsideEnd,
+    hole_idx: usize,
+    hole_bp: BoundaryPoint,
+    saved_holes: &[SavedHole],
+    outer_loop_verts: &[VertId],
+    outer_loop_hes: &[HeId],
+    face_diag: f64,
+    mut new_verts: Vec<VertId>,
+    mut new_edges: Vec<EdgeId>,
+    mut debug: Vec<String>,
+) -> Result<FaceSplitResult> {
+    let outer_pt = match which_end {
+        InsideEnd::End   => proj_start,  // hole-side is end → outer-side is start
+        InsideEnd::Start => proj_end,
+    };
+    debug.push(format!(
+        "case (d) P8: hole_idx={}, which_end={:?}, outer_pt={:?}",
+        hole_idx, which_end, outer_pt,
+    ));
+
+    // ── Resolve A on outer ─────────────────────────────────────────────
+    let snap_tol = face_diag * 0.02;
+    let outer_bp = find_boundary_point(
+        mesh, face_id, outer_pt, outer_loop_verts, outer_loop_hes, snap_tol,
+    )?;
+    let outer_a = realize_boundary_point(
+        mesh, &outer_bp, &mut new_verts, &mut new_edges, &mut debug,
+    )?;
+
+    // ── Realize H from hole_bp ─────────────────────────────────────────
+    let h_vert = realize_boundary_point(
+        mesh, &hole_bp, &mut new_verts, &mut new_edges, &mut debug,
+    )?;
+    debug.push(format!("  case (d) H = v{}", h_vert.raw()));
+
+    // ── Compose bridged outer loop (same shape as case c) ──────────────
+    let outer_post = mesh.collect_loop_verts(mesh.faces[face_id].outer().start)?;
+    let hole_post  = mesh.collect_loop_verts(
+        mesh.faces[face_id].inners()[hole_idx].start,
+    )?;
+
+    let a_pos = outer_post.iter().position(|&v| v == outer_a)
+        .ok_or_else(|| anyhow::anyhow!("case (d): outer_a lost from outer loop"))?;
+    let mut outer_seq: Vec<VertId> = Vec::with_capacity(outer_post.len());
+    for k in 0..outer_post.len() {
+        outer_seq.push(outer_post[(a_pos + k) % outer_post.len()]);
+    }
+
+    let h_pos = hole_post.iter().position(|&v| v == h_vert)
+        .ok_or_else(|| anyhow::anyhow!("case (d): H lost from hole loop"))?;
+    let mut hole_seq: Vec<VertId> = Vec::with_capacity(hole_post.len());
+    for k in 0..hole_post.len() {
+        hole_seq.push(hole_post[(h_pos + k) % hole_post.len()]);
+    }
+
+    let mut bridged: Vec<VertId> = Vec::with_capacity(outer_seq.len() + hole_seq.len() + 2);
+    bridged.extend_from_slice(&outer_seq);
+    bridged.push(h_vert);
+    bridged.extend_from_slice(&hole_seq[1..]);
+    bridged.push(h_vert);
+
+    // ── Preserve other holes ───────────────────────────────────────────
+    let mut other_holes: Vec<Vec<VertId>> = Vec::new();
+    for (i, _hole) in saved_holes.iter().enumerate() {
+        if i == hole_idx { continue; }
+        let start = mesh.faces[face_id].inners()[i].start;
+        other_holes.push(mesh.collect_loop_verts(start)?);
+    }
+
+    // ── Rebuild ────────────────────────────────────────────────────────
+    let material = mesh.faces[face_id].material();
+    mesh.remove_face(face_id)?;
+
+    let other_slices: Vec<&[VertId]> = other_holes.iter().map(|v| v.as_slice()).collect();
+    let new_face = mesh.add_face_with_holes(&bridged, &other_slices, material)?;
+
+    if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
+
+    debug.push(format!("case (d) result: face={} ({}v, {} holes)",
         new_face.raw(), bridged.len(), other_holes.len()));
 
     mesh.debug_verify_invariants();
@@ -2899,6 +3115,96 @@ mod tests {
                 || msg.contains("zero-length"),
             "expected InsideBoth rejection, got: {}", msg,
         );
+    }
+
+    /// ADR-023 P8 — Bridge endpoint exactly ON hole vertex.
+    /// Cut from outer (-100, 0, 60) to hole vertex h0 (-20, 0, -20).
+    /// Expected: bridge fuses hole into outer (similar to case (c) but
+    /// the hole-side endpoint coincides with an existing hole vertex
+    /// → no edge split needed there.
+    #[test]
+    fn phase_g4_bridge_endpoint_on_hole_vertex() {
+        let (mut mesh, f) = build_holed_face();
+        let before_faces = mesh.face_count();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 60.0),
+            DVec3::new( -20.0, 0.0, -20.0),  // exactly on hole vertex h0
+        ).unwrap_or_else(|e| panic!("P8 endpoint-on-hole-vertex failed: {}", e));
+
+        assert_eq!(res.new_faces.len(), 1, "P8 bridge → 1 face");
+        let nf = res.new_faces[0];
+        assert!(mesh.faces[nf].inners().is_empty(),
+            "P8 bridged face: 0 inner loops, got {}", mesh.faces[nf].inners().len());
+        assert_eq!(mesh.face_count(), before_faces);
+
+        let report = mesh.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after P8 endpoint-on-hole-vertex:\n{}", report.summary());
+    }
+
+    /// ADR-023 P8 — Two holes; bridge to hole A only; hole B preserved.
+    #[test]
+    fn phase_g4_bridge_preserves_other_holes() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let o0 = m.add_vertex(DVec3::new(-200.0, 0.0, -200.0));
+        let o1 = m.add_vertex(DVec3::new( 200.0, 0.0, -200.0));
+        let o2 = m.add_vertex(DVec3::new( 200.0, 0.0,  200.0));
+        let o3 = m.add_vertex(DVec3::new(-200.0, 0.0,  200.0));
+        // Hole A (will be bridged)
+        let a0 = m.add_vertex(DVec3::new(-20.0, 0.0, -20.0));
+        let a1 = m.add_vertex(DVec3::new(-20.0, 0.0,  20.0));
+        let a2 = m.add_vertex(DVec3::new( 20.0, 0.0,  20.0));
+        let a3 = m.add_vertex(DVec3::new( 20.0, 0.0, -20.0));
+        // Hole B (unaffected)
+        let b0 = m.add_vertex(DVec3::new(-20.0, 0.0, 120.0));
+        let b1 = m.add_vertex(DVec3::new(-20.0, 0.0, 160.0));
+        let b2 = m.add_vertex(DVec3::new( 20.0, 0.0, 160.0));
+        let b3 = m.add_vertex(DVec3::new( 20.0, 0.0, 120.0));
+        let f = m.add_face_with_holes(
+            &[o0, o1, o2, o3],
+            &[&[a0, a1, a2, a3], &[b0, b1, b2, b3]],
+            mat,
+        ).unwrap();
+
+        // Cut from outer to hole A's vertex a0
+        let res = split_face_by_line(
+            &mut m, f,
+            DVec3::new(-200.0, 0.0, -100.0),
+            DVec3::new( -20.0, 0.0,  -20.0),  // = a0
+        ).unwrap_or_else(|e| panic!("P8 multi-hole bridge failed: {}", e));
+
+        assert_eq!(res.new_faces.len(), 1, "P8: 1 face (bridge fuse)");
+        let nf = res.new_faces[0];
+        assert_eq!(m.faces[nf].inners().len(), 1,
+            "P8: hole B preserved as inner; got {}", m.faces[nf].inners().len());
+
+        let report = m.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after multi-hole P8 bridge:\n{}", report.summary());
+    }
+
+    /// ADR-023 P8 — Bridge endpoint exactly ON hole edge midpoint.
+    /// Cut from outer to hole's edge midpoint (-20, 0, 0) (midpoint of h0-h1).
+    /// Expected: the hole edge is split at the midpoint, then bridge fuses.
+    #[test]
+    fn phase_g4_bridge_endpoint_on_hole_edge() {
+        let (mut mesh, f) = build_holed_face();
+        let res = split_face_by_line(
+            &mut mesh, f,
+            DVec3::new(-100.0, 0.0, 60.0),
+            DVec3::new( -20.0, 0.0,   0.0),  // midpoint of hole edge h0-h1
+        ).unwrap_or_else(|e| panic!("P8 endpoint-on-hole-edge failed: {}", e));
+
+        assert_eq!(res.new_faces.len(), 1, "P8 bridge → 1 face");
+        let nf = res.new_faces[0];
+        assert!(mesh.faces[nf].inners().is_empty(),
+            "P8 bridged face: 0 inner loops, got {}", mesh.faces[nf].inners().len());
+
+        let report = mesh.verify_face_invariants();
+        assert_eq!(report.violations.len(), 0,
+            "invariants after P8 endpoint-on-hole-edge:\n{}", report.summary());
     }
 
     #[test]

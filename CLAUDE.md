@@ -62,6 +62,17 @@
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
 
+### 10. ADR-023 — Bridge Topology, Endpoint-On-Hole-Boundary (P8, 2026-04-29)
+- **새 원칙 P8**: 절단선 endpoint 가 hole boundary (vertex 또는 edge) 위에
+  정확히 닿으면 그 점을 bridge target H 로 사용. Edge 위면 split_edge,
+  vertex 위면 H = 그 vertex.
+- ADR-021 v1.1 known limitation "Phase G case (c) endpoint-on-hole-boundary" 해결.
+- Case D 는 case (c) BEFORE 에 dispatch — `point_inside_loop_3d` 가 boundary
+  점에서 undefined 이라 case (c) 로 잘못 라우팅되는 회귀 차단.
+- `try_find_hole_boundary_point` strict variant (closest-fallback 없음)
+  로 정확한 분류 보장.
+- 결과: 단일 면 (split 아닌 fuse), 다른 holes 는 inner 로 보존.
+
 ### 9. ADR-022 — Vertex-Shared Pinch Auto-Promote (P9, 2026-04-29)
 - **새 원칙 P9**: 새 inner 의 outer-loop 가 container 의 기존 hole loop /
   sub-face 와 **1 vertex 만 공유** (pinch case) 시 자동 promote 허용.

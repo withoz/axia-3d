@@ -138,7 +138,12 @@
       "Bash(git commit *)",
       "Bash(선 \\\\|새 라인 XIA\\\\|wireframeEdge\" web/src 2>&1 | head -10)",
       "Bash(grep -rn \"선 1개\\\\|'선'\\\\|`선 \\\\|새 라인 XIA\\\\|wireframeEdge\" web/src 2>&1 | head -10)",
-      "Bash(grep -n \"isCircular\\\\|arcLabel\\\\|cylinderHeight\\\\|H \\\\\\\\\\\\${this.units.format\" web/src/tools/ToolManagerRefactored.ts)"
+      "Bash(grep -n \"isCircular\\\\|arcLabel\\\\|cylinderHeight\\\\|H \\\\\\\\\\\\${this.units.format\" web/src/tools/ToolManagerRefactored.ts)",
+      "Bash(AXIA_DEBUG_POSTPROCESS=1 cargo test -p axia-core --lib test_two_stacked_inner_rects_both_faced)",
+      "Bash(sed -i '/step_dump!/d' crates/axia-core/src/scene.rs)",
+      "Bash(sed -i '/if _debug { eprintln!\\(\"\\\\[postprocess\\\\]   Step 4.65 dissolving/d' crates/axia-core/src/scene.rs)",
+      "Bash(grep -n \"Debug: face count\\\\|active faces:\\\\|XIA at \\({},{}\\)\" crates/axia-core/src/scene.rs)",
+      "Bash(AXIA_DEBUG_RESOLVER=1 cargo test -p axia-core --lib test_two_stacked_inner_rects_both_faced -- --nocapture)"
     ]
   }
 }
