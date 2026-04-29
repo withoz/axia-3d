@@ -1075,10 +1075,35 @@ impl Scene {
         let inner_face = match self.mesh.faces.get(inner) {
             Some(f) if f.is_active() => f, _ => return false,
         };
-        // (1) Single-promote heuristic.
-        if !container_face.inners().is_empty() { return false; }
         // (2) inner must be a simple face.
         if !inner_face.inners().is_empty() { return false; }
+        // (1) Single-promote OR disjoint-additional-hole.
+        //   Container 가 simple → 1st promote (기존 동작).
+        //   Container 가 ring → 새 inner 가 기존 sub-face 들과 disjoint 인 경우만
+        //   추가 hole 로 promote (Phase C 1B/4B 부분 fix).
+        let container_is_ring = !container_face.inners().is_empty();
+        if container_is_ring {
+            // 기존 hole loop 들의 verts 수집 (= 기존 sub-face 들의 perimeter).
+            let mut existing_subface_verts: std::collections::HashSet<axia_geo::VertId> =
+                std::collections::HashSet::new();
+            for inner_loop in container_face.inners() {
+                if let Ok(loop_verts) = self.mesh.collect_loop_verts(inner_loop.start) {
+                    for v in loop_verts {
+                        existing_subface_verts.insert(v);
+                    }
+                }
+            }
+            // 새 inner 의 verts 와 비교 — vertex 공유 시 disjoint 아님.
+            let new_inner_verts = match self.mesh.collect_loop_verts(inner_face.outer().start) {
+                Ok(v) => v, Err(_) => return false,
+            };
+            for v in &new_inner_verts {
+                if existing_subface_verts.contains(v) {
+                    // Connected to existing sub-face → Connected Case B 회피.
+                    return false;
+                }
+            }
+        }
         // (3) Manifold safety — walk inner's outer loop HEs.
         let start = inner_face.outer().start;
         let mut he = start;
@@ -6529,21 +6554,23 @@ mod tests {
         );
     }
 
-    /// ADR-016 — 둘째 inner 는 ring 이 이미 hole 보유 → skip 되어 별개 face 유지.
+    /// ADR-021 P7 (Phase C, supersedes ADR-016 LOCKED #1) —
+    /// 둘 다 disjoint inner 면, 둘 다 hole 로 promote 되어 multi-hole ring 형성.
+    /// 이전 ADR-016 single-promote heuristic 은 폐기됨 (CLAUDE.md LOCKED #1).
     #[test]
-    fn test_adr016_second_inner_stays_separate() {
+    fn test_adr021_disjoint_second_inner_promotes() {
         let mut scene = Scene::new();
         // Outer 12×8
         scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
             width: 12.0, height: 8.0,
         });
-        // First inner — should promote
+        // First inner — promote
         scene.execute(Command::DrawRect {
             center: DVec3::new(-3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
             width: 3.0, height: 2.0,
         });
-        // Second inner — should NOT promote (single-promote heuristic)
+        // Second inner — disjoint from first → also promotes (P7 multi-hole ring).
         scene.execute(Command::DrawRect {
             center: DVec3::new(3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
             width: 3.0, height: 2.0,
@@ -6562,18 +6589,17 @@ mod tests {
             }
         }
         assert_eq!(
-            ring_with_one_hole, 1,
-            "expected 1 ring with 1 hole; got {} (two-hole={}, simple={})",
-            ring_with_one_hole, ring_with_two_holes, simple_active
+            ring_with_two_holes, 1,
+            "expected 1 ring with 2 holes (P7 disjoint multi-hole); got {} (one-hole={}, simple={})",
+            ring_with_two_holes, ring_with_one_hole, simple_active
         );
         assert_eq!(
-            ring_with_two_holes, 0,
-            "second inner should NOT auto-promote; got {} ring with 2 holes",
-            ring_with_two_holes
+            ring_with_one_hole, 0,
+            "no single-hole ring expected; got {}", ring_with_one_hole
         );
         assert_eq!(
             simple_active, 2,
-            "expected 2 simple faces (first inner sub-face + second inner standalone); got {}",
+            "expected 2 simple sub-faces (each inner); got {}",
             simple_active
         );
     }
