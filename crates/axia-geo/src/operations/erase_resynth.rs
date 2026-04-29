@@ -67,6 +67,37 @@ impl Mesh {
             );
         }
 
+        // 2.5) INTERIOR-SPLIT FAST PATH (ADR-019 Phase 1) — Axiom 7 의
+        //    인접 RECT 의 공유 edge 같은 일반적 케이스. 두 simple face 가
+        //    정확히 1 edge 공유 + coplanar → merge_faces_by_edge_with_tolerance
+        //    가 직접 처리. ADR-019 의 사용자 시각으로는 "edge 제거 → 새 면
+        //    합성" 의 결과와 동일하지만, 표준 re-resolver 가 이 케이스에서
+        //    cycle 을 못 찾는 known limitation 우회.
+        if adjacent_faces.len() == 2 {
+            let f1 = adjacent_faces[0];
+            let f2 = adjacent_faces[1];
+            let f1_simple = self.faces.get(f1).map(|f| f.inners().is_empty()).unwrap_or(false);
+            let f2_simple = self.faces.get(f2).map(|f| f.inners().is_empty()).unwrap_or(false);
+            if f1_simple && f2_simple
+                && self.count_shared_edges_outer(f1, f2) == 1
+            {
+                // Try the proven merge path (~0.5 degree default tolerance —
+                // ADR-019 6.3 says coplanar 1.5μm exact, but merge predicate
+                // uses angle. 0.5° angle ≈ 0.0087 rad — much tighter than
+                // 1.5μm requires for typical face sizes).
+                if let Ok(new_fid) = self.merge_faces_by_edge_with_tolerance(edge_id, 0.5) {
+                    let cleaned = if cleanup_dangling { self.cleanup_dangling() } else { (0, 0) };
+                    return Ok(EraseResynthResult {
+                        removed_faces: vec![f1, f2],
+                        new_faces: vec![new_fid],
+                        cleaned_edges: cleaned.0,
+                        cleaned_verts: cleaned.1,
+                    });
+                }
+                // merge fail → fall through to standard re-resolve
+            }
+        }
+
         // 3) NON-HOLE PATH — capture seed verts BEFORE destruction so the
         //    resolver can scope its planar component search.
         let edge_ref = self.edges.get(edge_id)

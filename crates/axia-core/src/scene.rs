@@ -5786,6 +5786,59 @@ mod tests {
         }
     }
 
+    /// ADR-019 P5/P6 — 인접 두 RECT 의 공유 edge erase 시 새 통합 face 생성.
+    /// 사용자 보고 회귀: "두 인접면의 라인을 지우면 새 큰 면이 생성되어야"
+    /// (Phase 1 핵심 회귀 #3 — Appendix B).
+    #[test]
+    fn test_adr019_p6_adjacent_face_erase_creates_merged() {
+        let mut scene = Scene::new();
+        // 두 인접 RECT (Axiom 7 공유 edge).
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-5.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(5.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        // 토폴로지: 2 simple face + 1 shared edge
+        let active_before: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).map(|(id, _)| id).collect();
+        assert_eq!(active_before.len(), 2);
+
+        // 공유 edge 찾기 (interior — 양 HE 모두 face 보유)
+        let shared_eid = scene.mesh.edges.iter()
+            .find(|(_, e)| {
+                if !e.is_active() { return false; }
+                let any = e.any_he();
+                if any.is_null() { return false; }
+                let twin = scene.mesh.he_twin(any);
+                let f1 = scene.mesh.hes.get(any).map(|h| h.face());
+                let f2 = scene.mesh.hes.get(twin).map(|h| h.face());
+                matches!((f1, f2), (Some(a), Some(b)) if !a.is_null() && !b.is_null())
+            })
+            .map(|(id, _)| id)
+            .expect("shared edge missing");
+
+        let mat = scene.default_material;
+        let result = scene.mesh.erase_edge_resynthesize(shared_eid, mat, false)
+            .expect("erase_edge_resynthesize");
+
+        assert_eq!(result.removed_faces.len(), 2, "two adjacent RECTs removed");
+        assert_eq!(
+            result.new_faces.len(), 1,
+            "expected 1 merged 6-vert face; got {}",
+            result.new_faces.len()
+        );
+        let new_fid = result.new_faces[0];
+        let verts = scene.mesh.collect_loop_verts(scene.mesh.faces[new_fid].outer().start).unwrap();
+        // F6 collinear cleanup: 두 인접 10×6 → 20×6 단순 rect (4 corners).
+        // 8 original verts - 2 shared - 2 collinear T-junction = 4.
+        assert_eq!(verts.len(), 4, "merged face after F6 collinear cleanup = 4 corners (20×6 rect)");
+        let f = &scene.mesh.faces[new_fid];
+        assert!(f.inners().is_empty(), "merged face should be simple (no holes)");
+    }
+
     /// ADR-016 §2 Path B — 그리기 순서 무관 (inner-first 도 outer-first 와
     /// 동일 결과). 사용자 보고 회귀: inner 그리고 outer 그린 뒤 inner 의
     /// edge 를 erase 했을 때 면이 사라짐.

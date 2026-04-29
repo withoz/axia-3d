@@ -204,12 +204,14 @@ describe('EraseTool', () => {
       expect(calls[1][3]).toBe(false);
     });
 
-    it('hover over edge that would merge calls previewEdgeEraseMerge and tints in merge color', () => {
-      // No drag — just hover
+    it('hover over edge in default mode does NOT call previewEdgeEraseMerge (ADR-019: cyan merge preview retired)', () => {
+      // ADR-019 Phase 1 — hover preview unified to amber (re-resolve) /
+      // red (Shift cascade). Cyan "merge 가능" 의미 폐기 — `previewEdgeEraseMerge`
+      // 가 더 이상 hover path 에서 호출되지 않는다.
       ctx.bridge.previewEdgeEraseMerge.mockReturnValue([100, 200]);
       mockEdgeHit(ctx, 0); // segment 0 → edgeMap[0]=10
       tool.onMouseMove({ clientX: 50, clientY: 50 } as MouseEvent, null);
-      expect(ctx.bridge.previewEdgeEraseMerge).toHaveBeenCalledWith(10, expect.any(Number));
+      expect(ctx.bridge.previewEdgeEraseMerge).not.toHaveBeenCalled();
     });
 
     it('hover with Shift skips previewEdgeEraseMerge (cascade preview)', () => {

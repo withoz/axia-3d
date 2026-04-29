@@ -112,54 +112,51 @@ export class EraseTool implements ITool {
       return; // 빈 클릭 — 아무것도 할 일 없음
     }
 
-    // 2026-04-27: Topology-consistent default (Meta-principle #7 Topology > Cache).
-    //   · Coplanar faces within tolerance → merge (두 면 → 한 면).
-    //   · Non-coplanar OR multi-shared-edge → CASCADE (엣지 + 인접 두 면 모두 삭제).
-    //   · Shift at mousedown → cascade-only (merge 시도 생략, 즉시 삭제).
+    // ADR-019 Phase 1 — Erase 파이프라인 표준화 (2026-04-29).
     //
-    // 이전 default 였던 SOFT fallback (엣지 hidden + 면 유지) 은 사용자에게
-    //   "엣지가 지워졌는데 면이 안없어진다" 로 인식되어 topology 와 visual
-    //   일관성이 깨짐. SOFT 는 Soften Edges 같은 명시적 명령에서만 사용하고
-    //   Erase 도구의 default 는 SketchUp 식 cascade 로 환원.
-    // ADR-016 §2 Path B — split out hole-boundary edges for re-synthesize.
-    //   Erase tool 의 단일 클릭 / 드래그에서 hole edge 가 섞여 있으면
-    //   해당 edge 들은 별도 트랜잭션으로 erase_edge_resynthesize 호출.
-    //   Shift cascade-only 모드는 그대로 cascade 적용 (사용자 명시 의도 우선).
-    const holeEdges: number[] = [];
-    const regularEdges: number[] = [];
-    const holeCheckAvail = typeof this.ctx.bridge.edgeIsHoleBoundary === 'function'
-      && typeof this.ctx.bridge.eraseEdgeResynthesize === 'function';
-    if (!this.cascadeOnly && holeCheckAvail) {
+    // 정책 (ADR-019 Decision Summary):
+    //   "Erase는 깨고, 다시 만든다."
+    //
+    //   default (Shift 없음):
+    //     Edge 클릭 → erase_edge_resynthesize (Path B, re-resolve 표준)
+    //     Face 직접 클릭 → 그 face 만 cascade 삭제 (사용자 명시 의도)
+    //   cascadeOnly (Shift 누름):
+    //     모두 batch cascade — face/edge 모두 명시 삭제
+    //
+    //   기존 cyan "merge 가능" fast-path 폐기 (ADR-019 Phase 3 hover 정리).
+    //   ADR-016 §2 Path B 의 hole-edge 분기는 erase_edge_resynthesize 내부에
+    //   유지 — 같은 함수가 hole / interior / sibling 모든 케이스 처리.
+    const cascadeOnly = this.cascadeOnly;
+    const tol = getMergeTolerance();
+    const resynthAvail = typeof this.ctx.bridge.eraseEdgeResynthesize === 'function';
+
+    // Path B 통일 — default 모드의 모든 edge 가 re-resolve 표준 거침.
+    //   각 호출이 자체 transaction (다중 edge 시 undo N 번 — 향후 개선 후보).
+    const resynthSummary = { newFaces: 0, removedFaces: 0 };
+    const edgesForBatch: number[] = [];
+    if (!cascadeOnly && resynthAvail) {
       for (const eid of edges) {
-        if (this.ctx.bridge.edgeIsHoleBoundary(eid)) holeEdges.push(eid);
-        else regularEdges.push(eid);
+        const r = this.ctx.bridge.eraseEdgeResynthesize(eid, false);
+        if (r.ok) {
+          resynthSummary.newFaces += r.newFaces;
+          resynthSummary.removedFaces += r.removedFaces;
+        } else {
+          // Path B 실패 시 batch path 로 fallback (구 동작 보존)
+          edgesForBatch.push(eid);
+        }
       }
     } else {
-      regularEdges.push(...edges);
+      edgesForBatch.push(...edges);
     }
 
-    // Path B 실행 — 각 hole edge 마다 별도 호출. Note: 각 호출이 자체
-    //   transaction 을 가지므로 다중 hole edge 시 undo 가 N 번 필요. 일반
-    //   사용 시 1 개 hole edge click 이 가장 흔함.
-    const resynthSummary = { newFaces: 0, removedFaces: 0 };
-    for (const eid of holeEdges) {
-      const r = this.ctx.bridge.eraseEdgeResynthesize(eid, false);
-      if (r.ok) {
-        resynthSummary.newFaces += r.newFaces;
-        resynthSummary.removedFaces += r.removedFaces;
-      }
-    }
-
-    // Single Rust undo transaction — one Ctrl+Z restores all.
-    const tol = getMergeTolerance();
-    const cascadeOnly = this.cascadeOnly;
-    const res = (faces.length > 0 || regularEdges.length > 0)
-      ? this.ctx.bridge.batchEraseEdgesWithMerge(faces, regularEdges, tol, cascadeOnly)
+    // Single Rust undo transaction — face 직접 클릭 + Path B 실패한 edge 처리.
+    const res = (faces.length > 0 || edgesForBatch.length > 0)
+      ? this.ctx.bridge.batchEraseEdgesWithMerge(faces, edgesForBatch, tol, cascadeOnly)
       : null;
 
     let mergedCount = 0;
     let cascadedFaces = faces.length;
-    let cascadedEdges = regularEdges.length;
+    let cascadedEdges = edgesForBatch.length;
     let synthesizedCount = resynthSummary.newFaces;
     let desolidifiedCount = 0;
     let ok = true;
@@ -170,10 +167,10 @@ export class EraseTool implements ITool {
       cascadedFaces = res.cascadedFaces;
       synthesizedCount += res.synthesized;
       desolidifiedCount = res.desolidified;
-    } else if (regularEdges.length > 0 || faces.length > 0) {
+    } else if (edgesForBatch.length > 0 || faces.length > 0) {
       // Older WASM without batchEraseEdgesWithMerge — fall back to previous logic.
       const edgesToCascade: number[] = [];
-      for (const edgeId of regularEdges) {
+      for (const edgeId of edgesForBatch) {
         const result = cascadeOnly ? -1 : this.ctx.bridge.mergeFacesByEdge(edgeId, tol);
         if (result >= 0) mergedCount++;
         else edgesToCascade.push(edgeId);
@@ -300,29 +297,15 @@ export class EraseTool implements ITool {
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       const segIndex = Math.floor(picked.hit.index / 2);
-      // 이 엣지를 지우면 양옆 coplanar 면이 병합될지 미리 확인.
-      // Shift는 cascade-only 모드이므로 preview 비활성.
+      // ADR-019 Phase 1 hover preview 정책:
+      //   default (Shift 없음): edge 클릭 = re-resolve (amber preview).
+      //   cascadeOnly (Shift): cascade-delete (red preview, 기존).
+      // 기존 cyan = "merge 가능" 의미 폐기 (ADR-019 Phase 3 — 의미 재정의는
+      // 별도 commit). 모든 default-mode edge hover 는 amber.
       const edgeId = this.ctx.edgeMap[segIndex];
-      const mergePair = (!e.shiftKey && edgeId != null)
-        ? this.ctx.bridge.previewEdgeEraseMerge(edgeId, getMergeTolerance())
-        : null;
-      // ADR-016 §2 Path B — hole edge 면 amber "재합성" preview.
-      const isHoleEdge = !e.shiftKey && edgeId != null && mergePair == null
-        && typeof this.ctx.bridge.edgeIsHoleBoundary === 'function'
-        && this.ctx.bridge.edgeIsHoleBoundary(edgeId);
-      this.showEdgeHover(segIndex, mergePair != null, isHoleEdge);
-      if (mergePair) {
-        this.showMergePreviewFaces(mergePair);
-      } else {
-        this.removeFaceHover();
-        if (isHoleEdge && edgeId !== this.lastHintedHoleEdge) {
-          Toast.info(
-            '바운더리 재합성 — 새 면을 자동으로 찾습니다 (잔여 wire 가능)',
-            2500,
-          );
-          this.lastHintedHoleEdge = edgeId;
-        }
-      }
+      const showAmber = !e.shiftKey && edgeId != null;
+      this.showEdgeHover(segIndex, false, showAmber);
+      this.removeFaceHover();
       return;
     }
     // 다른 edge 또는 비-edge 로 이동 시 hint dedup 리셋.
