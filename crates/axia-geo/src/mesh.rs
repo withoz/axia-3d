@@ -357,6 +357,63 @@ impl Mesh {
         Ok((edge_id, true))
     }
 
+    /// ADR-028 Phase A — Add an edge between two vertices, attaching an
+    /// analytic curve definition.
+    ///
+    /// Behavior:
+    /// - If the edge is **new**: created via `add_edge` and curve is set.
+    /// - If the edge **already exists**: curve is set on the existing edge
+    ///   (overwriting any previous curve). This allows merging or upgrading
+    ///   straight edges to curves without topological surgery.
+    ///
+    /// The two endpoints of the analytic curve must geometrically match
+    /// `v_start` and `v_end` positions within tolerance — caller is
+    /// responsible (this method does NOT verify endpoint coincidence).
+    ///
+    /// Returns the EdgeId.
+    pub fn add_edge_with_curve(
+        &mut self,
+        v_start: VertId,
+        v_end: VertId,
+        curve: crate::curves::AnalyticCurve,
+    ) -> Result<EdgeId> {
+        let (edge_id, _is_new) = self.add_edge(v_start, v_end)?;
+        if let Some(e) = self.edges.get_mut(edge_id) {
+            e.set_curve(Some(curve));
+        }
+        Ok(edge_id)
+    }
+
+    /// ADR-028 Phase A — Tessellate an edge for rendering / operation use.
+    ///
+    /// - If the edge has no curve (default straight line): returns
+    ///   `[v_start_pos, v_end_pos]` (2-point polyline).
+    /// - If the edge has an analytic curve: tessellates with given chord
+    ///   tolerance (mm), returning n+1 points for n segments.
+    ///
+    /// This is the **canonical** tessellation path — UI / WASM bridge
+    /// callers should use this for view-dependent LOD rendering.
+    pub fn tessellate_edge(&self, edge_id: EdgeId, chord_tol: f64) -> Result<Vec<DVec3>> {
+        use crate::curves::CurveOps;
+        let edge = self.edges.get(edge_id)
+            .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", edge_id))?;
+        match edge.curve() {
+            Some(curve) => curve.tessellate(chord_tol, self),
+            None => {
+                // Straight line — endpoints only.
+                let p0 = self.vertex_pos(edge.v_small())?;
+                let p1 = self.vertex_pos(edge.v_large())?;
+                Ok(vec![p0, p1])
+            }
+        }
+    }
+
+    /// ADR-028 Phase A — Get the analytic curve attached to an edge, if any.
+    /// Convenience wrapper for callers that don't want to deal with `Option`.
+    pub fn edge_curve(&self, edge_id: EdgeId) -> Option<&crate::curves::AnalyticCurve> {
+        self.edges.get(edge_id).and_then(|e| e.curve())
+    }
+
     /// 새 line segment (start→end) 위에 있는 기존 vertex들을 찾음.
     /// 반환: (VertId, 3D pos, t_on_new_line) — t 오름차순 정렬.
     /// 이들은 edge split이 불필요 (vertex 이미 존재) — 새 line 자체가 이 vertex에서
@@ -5042,6 +5099,154 @@ impl Default for Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ADR-028 Phase A — Mesh ↔ AnalyticCurve integration tests
+    // ════════════════════════════════════════════════════════════════════════
+
+    use crate::curves::{AnalyticCurve, CurveOps};
+
+    #[test]
+    fn add_edge_with_curve_creates_new_edge_with_curve() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, 5.0, 0.0));
+        let arc = AnalyticCurve::Arc {
+            center: DVec3::ZERO, radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, arc.clone()).unwrap();
+        assert!(mesh.edges.contains(eid));
+        assert_eq!(mesh.edge_curve(eid), Some(&arc));
+    }
+
+    #[test]
+    fn add_edge_with_curve_overwrites_existing_edge_curve() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, 5.0, 0.0));
+        // First add a plain edge
+        let (eid_first, was_new) = mesh.add_edge(v0, v1).unwrap();
+        assert!(was_new);
+        assert!(mesh.edge_curve(eid_first).is_none());
+        // Now upgrade it with a curve.
+        let circ = AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let eid_again = mesh.add_edge_with_curve(v0, v1, circ.clone()).unwrap();
+        assert_eq!(eid_first, eid_again, "should reuse existing edge");
+        assert_eq!(mesh.edge_curve(eid_again), Some(&circ));
+    }
+
+    #[test]
+    fn tessellate_edge_straight_line_returns_two_points() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let (eid, _) = mesh.add_edge(v0, v1).unwrap();
+        let pts = mesh.tessellate_edge(eid, 0.1).unwrap();
+        assert_eq!(pts.len(), 2);
+        assert!((pts[0] - DVec3::ZERO).length() < 1e-12);
+        assert!((pts[1] - DVec3::new(10.0, 0.0, 0.0)).length() < 1e-12);
+    }
+
+    #[test]
+    fn tessellate_edge_arc_chord_tol() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(50.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, 50.0, 0.0));
+        let arc = AnalyticCurve::Arc {
+            center: DVec3::ZERO, radius: 50.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, arc).unwrap();
+        let chord_tol = 0.5;
+        let pts = mesh.tessellate_edge(eid, chord_tol).unwrap();
+        assert!(pts.len() >= 3);  // at least 2 segments for a quarter arc
+
+        // Sagitta check
+        for i in 0..pts.len() - 1 {
+            let mid = (pts[i] + pts[i + 1]) * 0.5;
+            let radial = (mid - DVec3::ZERO).length();
+            let sagitta = (50.0 - radial).abs();
+            assert!(sagitta <= chord_tol * 1.01,
+                "sagitta {} > chord_tol {} at i={}", sagitta, chord_tol, i);
+        }
+    }
+
+    #[test]
+    fn tessellate_edge_circle_returns_first_eq_last() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        // For a full circle, both "endpoints" coincide — but DCEL needs
+        // distinct verts; use add_vertex_force_new to keep them topologically
+        // distinct while geometrically coincident.
+        let v1 = mesh.add_vertex_force_new(DVec3::new(5.0, 0.0, 0.0));
+        let circ = AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, circ).unwrap();
+        let pts = mesh.tessellate_edge(eid, 0.5).unwrap();
+        let first = pts.first().unwrap();
+        let last = pts.last().unwrap();
+        assert!((*first - *last).length() < 1e-9,
+            "full circle tessellation: first={:?} != last={:?}", first, last);
+    }
+
+    #[test]
+    fn tessellate_edge_lod_chord_tol_changes_segment_count() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(-100.0, 0.0, 0.0));
+        let arc = AnalyticCurve::Arc {
+            center: DVec3::ZERO, radius: 100.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::PI,
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, arc).unwrap();
+        let coarse = mesh.tessellate_edge(eid, 5.0).unwrap();
+        let fine = mesh.tessellate_edge(eid, 0.05).unwrap();
+        assert!(fine.len() > coarse.len(),
+            "fine LOD should produce more points: coarse={}, fine={}",
+            coarse.len(), fine.len());
+    }
+
+    #[test]
+    fn edge_curve_returns_none_for_plain_edge() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let (eid, _) = mesh.add_edge(v0, v1).unwrap();
+        assert!(mesh.edge_curve(eid).is_none());
+    }
+
+    /// 회귀 보장 — Phase A 도입 후에도 기존 polygon 동작 무변동.
+    /// 4-line RECT 그렸을 때 4 edge 모두 curve = None.
+    #[test]
+    fn regression_polygon_rect_edges_have_no_curve() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        let _f = mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], mat).unwrap();
+        // Every edge must have curve == None (default).
+        let mut count = 0;
+        for (_, e) in mesh.edges.iter() {
+            assert!(e.curve().is_none(),
+                "regression: polygon edge unexpectedly has analytic curve");
+            count += 1;
+        }
+        assert_eq!(count, 4, "expected 4 edges in a rect");
+    }
 
     /// "엣지 없으면 면 없음" 원칙 회귀 테스트 (transactional rollback).
     ///
