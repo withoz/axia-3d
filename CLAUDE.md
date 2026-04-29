@@ -80,8 +80,12 @@
 - **Phase 5 보강 (2026-04-29)**: DFS cycle finder 추가 (`mop_up_orphan_cycles_via_dfs`).
   resolve_planar_free_faces 의 leftmost-turn walker 가 dangling 가지 후 dead-end
   하는 케이스를 brute-force DFS 로 처리. 27-RECT 스트레스: 10 → 6 (60% 감소).
-  잔존 6 = true dangling strand (free graph 에 cycle 없음) — Phase 6 별도 작업
-  (face boundary 에 strand 흡수 / 또는 deletion).
+- **Phase 6 (2026-04-29)**: Strand absorption via `split_face_by_chain`.
+  양 endpoint 가 같은 face 의 outer loop 위에 있는 strand 를 face 분할로 흡수.
+- **Phase 7 (2026-04-29) STRICT**: closed-shape 명령 (DrawRect / DrawCircle) 의
+  finalizer 에서만 dangling topological edge cleanup. DrawLine intermediate wire
+  는 영향 안 받음. **27-RECT 스트레스: 6 → 0 orphans**. P11 원칙
+  ("닫힌 엣지 = 반드시 면") **strict 보장 완료**.
 
 ### 11. ADR-024 — 3-Way Corner Chamfer (P10 MVP, 2026-04-29)
 - **새 원칙 P10 (MVP)**: valence==3 vertex 의 corner 자체를 둥글게 처리.

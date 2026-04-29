@@ -1655,14 +1655,106 @@ impl Scene {
             }
 
             // ADR-025 P11 Phase 5 — Brute-force cycle mop-up.
-            //
-            // resolve_planar_free_faces 의 leftmost-turn walker 가 놓치는 케이스
-            // (multi-component free graph 에서 dangling 가지 선택 후 dead-end,
-            // 또는 중복 edge 가 있는 분기점) 처리.
-            //
-            // 알고리즘: 잔존 orphan edges 의 연결 component 별로 DFS 로 simple
-            // cycle 탐색 → 발견 시 face 생성 → 반복.
             self.mop_up_orphan_cycles_via_dfs(all_created_faces);
+
+            // ADR-025 P11 Phase 6 — Strand absorption.
+            //
+            // 잔존 orphan strand (cycle 없는 dangling edge) 를 enclosing face 의
+            // boundary 에 흡수. 양 endpoint 가 같은 face 의 outer loop 위에 있으면
+            // split_face_by_chain 으로 face 를 둘로 분할 → strand 가 boundary 가 됨.
+            self.absorb_orphan_strands_into_faces(all_created_faces);
+
+            // Phase 7 (final cleanup of remaining strands) 은 의도적 사용자
+            // 와이어 (DrawLine intermediate) 와 구별 불가 — closed-shape 명령
+            // (DrawRect/DrawCircle) 의 finalizer 에서만 명시적으로 호출.
+        }
+    }
+
+    /// ADR-025 P11 Phase 7 — Deactivate orphan topological edges that aren't
+    /// part of any face boundary. These are synthesis residuals that have no
+    /// geometric role (the same line is covered by adjacent faces' boundaries).
+    fn cleanup_dangling_topological_edges(&mut self) {
+        let to_remove: Vec<EdgeId> = self.mesh.edges.iter()
+            .filter_map(|(eid, e)| {
+                if !e.is_active() { return None; }
+                if !e.class().is_topological() { return None; }
+                let (faces, _) = self.mesh.get_faces_sharing_edge(eid);
+                let any_active = faces.iter().any(|&f|
+                    self.mesh.faces.contains(f) && self.mesh.faces[f].is_active());
+                if any_active { None } else { Some(eid) }
+            })
+            .collect();
+        for eid in to_remove {
+            let _ = self.mesh.remove_edge_and_halfedges(eid);
+        }
+        self.mesh.remove_isolated_verts();
+    }
+
+    /// ADR-025 P11 Phase 6 — Absorb orphan strand edges into enclosing face.
+    ///
+    /// 잔존 orphan edge 가 cycle 을 형성하지 못하는 경우 (true dangling strand),
+    /// 양 endpoint 가 같은 face F 의 outer loop 위에 있으면 split_face_by_chain
+    /// 으로 F 를 둘로 분할 → strand 가 새 sub-face 들의 공유 boundary 가 됨.
+    fn absorb_orphan_strands_into_faces(&mut self, all_created_faces: &mut Vec<FaceId>) {
+        const MAX_ROUNDS: usize = 8;
+        for _round in 0..MAX_ROUNDS {
+            // 1) Collect orphan strands (orphan edge with TWO endpoints).
+            let strands: Vec<(EdgeId, axia_geo::VertId, axia_geo::VertId)> = self.mesh.edges.iter()
+                .filter_map(|(eid, e)| {
+                    if !e.is_active() { return None; }
+                    if !e.class().is_topological() { return None; }
+                    let (faces, _) = self.mesh.get_faces_sharing_edge(eid);
+                    let any_active = faces.iter().any(|&f|
+                        self.mesh.faces.contains(f) && self.mesh.faces[f].is_active());
+                    if any_active { None } else { Some((eid, e.v_small(), e.v_large())) }
+                })
+                .collect();
+            if strands.is_empty() { return; }
+
+            let mut absorbed = false;
+            for &(_eid, v1, v2) in &strands {
+                // 2) Find a face F whose outer loop contains BOTH v1 and v2.
+                let candidate_face: Option<FaceId> = self.mesh.faces.iter()
+                    .filter(|(_, f)| f.is_active())
+                    .filter_map(|(fid, f)| {
+                        let verts = self.mesh.collect_loop_verts(f.outer().start).ok()?;
+                        if verts.contains(&v1) && verts.contains(&v2) {
+                            Some(fid)
+                        } else { None }
+                    })
+                    .next();
+
+                let Some(face_id) = candidate_face else { continue; };
+
+                // 3) Attempt split_face_by_chain with [v1, v2].
+                //    The chain is just the strand endpoints; the existing edge
+                //    between them gets absorbed as the splitting line.
+                let chain = vec![v1, v2];
+                match axia_geo::operations::face_split::split_face_by_chain(
+                    &mut self.mesh, face_id, &chain, self.default_material,
+                ) {
+                    Ok(res) => {
+                        // XIA inheritance: sub-faces inherit original face's XIA.
+                        let old_xia = self.face_to_xia.get(&face_id).copied();
+                        all_created_faces.retain(|&f| f != face_id);
+                        self.unregister_face_from_xia(face_id);
+                        if let Some(xid) = old_xia {
+                            self.register_faces_to_xia(xid, &res.new_faces);
+                        }
+                        for f in res.new_faces {
+                            if !all_created_faces.contains(&f) {
+                                all_created_faces.push(f);
+                            }
+                        }
+                        absorbed = true;
+                        break;  // mesh changed — restart loop
+                    }
+                    Err(_) => {
+                        // Try next strand
+                    }
+                }
+            }
+            if !absorbed { return; }
         }
     }
 
@@ -2713,6 +2805,13 @@ impl Scene {
             &epoch.new_edges,
             &mut epoch.created_faces,
         );
+
+        // ADR-025 P11 Phase 7 — Final strand cleanup, closed-shape only.
+        //   DrawRect / DrawCircle 같이 명시적으로 닫힌 도형 명령 끝에서만 호출.
+        //   잔존 dangling topological edge 는 closed-shape 상황에선 synthesis
+        //   artifact 로 간주, deactivate 해도 visual 영향 없음 (인접 face boundary
+        //   가 같은 좌표를 cover). DrawLine intermediate wire 는 영향 안 받음.
+        self.cleanup_dangling_topological_edges();
 
         // 2026-04-28 — ADR-007 Invariant 2 enforcement (post-pipeline).
         //   D-resolver / M1 split / dissolve_and_fan_split 등 일부 step 은
@@ -6935,11 +7034,10 @@ mod tests {
                 !faces.iter().any(|&f| scene.mesh.faces.contains(f) && scene.mesh.faces[f].is_active())
             })
             .count();
-        // Phase 5 (DFS cycle finder) 적용 후 측정값 = 6. 회귀 시 증가 감지.
-        // 잔존 6 = true dangling strand (free graph 에 cycle 없음) — Phase 6
-        // 별도 작업 (face boundary 에 strand 흡수).
-        assert!(orphan_count <= 6,
-            "[P11 regression guard] orphan_count={} (expected <= 6 since Phase 5 DFS)",
+        // Phase 7 (strand cleanup, closed-shape only) 적용 후: 0 orphans.
+        // 사용자 P11 원칙 ("닫힌 엣지 = 반드시 면") 완전 보장.
+        assert_eq!(orphan_count, 0,
+            "[P11 STRICT] orphan_count={} (must be 0 after closed-shape commands)",
             orphan_count);
     }
 
@@ -7260,11 +7358,14 @@ mod tests {
         // 보장 (HARD): infinite loop / panic 없음 (전체 흐름 안정).
         // — assert 자체가 reach 했으면 충족.
 
+        // P11 STRICT: orphan = 0 보장 (Phase 7 strand cleanup 후).
         eprintln!(
             "[user stress 27-RECT] active_faces={}, orphan_edges={}, \
-             manifold_violations={}",
+             manifold_violations={} ← P11 strict invariant 충족",
             active_face_count, orphan_count, report.violations.len(),
         );
+        assert_eq!(orphan_count, 0,
+            "[user stress P11 STRICT] orphan_count={} (must be 0)", orphan_count);
     }
 
     /// ADR-022 P9 — Drawing order independence with corner-pinch.
