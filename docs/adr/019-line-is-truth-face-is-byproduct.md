@@ -118,6 +118,29 @@ Erase 후 re-resolve 에서의 닫힌 boundary 는,
   결과)** 뿐이다.
 - 사용자 시각 표시는 동일 (스타일은 힌트 수준).
 
+### A6. Closed wire loop in face interior — auto-synthesize (2026-04-29 추가)
+
+P3 ("Edge 는 절단 도구") 의 운영 보강.
+
+DrawLine 으로 face 의 interior 에 닫힌 loop 를 형성하면, 입력 방법
+(DrawRect/DrawCircle interior fast-path 또는 4-line 수동) 에 무관하게
+같은 결과를 보장한다.
+
+**조건 / 동작**:
+
+- DrawLine 의 endpoint 가 기존 vertex 와 dedup (1.5μm) 매칭하거나,
+  기존 vertex 와 같은 위치인 경우 → "wire chain extension" 으로 인식
+- 즉시 face_synthesis_postprocess 발동 (기존 perf-cut 우회)
+- Resolver 가 닫힌 CCW cycle 발견 시 sub-face 자동 합성 (A4 와 정합)
+- 합성된 sub-face 는 ADR-016 conditional B1 promote 정책 적용 가능
+  (첫 inner 면 hole-promote, 둘째부터 별개 floating face)
+
+**구현 위치**: `exec_draw_line` 의 perf-cut 조건에
+`endpoint_connects_existing` 추가.
+
+**사용자 시각 결과**: DrawRect 와 DrawLine 4번이 동일 결과 — "엣지는
+어떤 도구로 그리든 절단/면화에 동일하게 참여한다" (P3 정합).
+
 ---
 
 ## 4. Operational Policies

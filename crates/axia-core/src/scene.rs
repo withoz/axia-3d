@@ -2010,11 +2010,34 @@ impl Scene {
             //   Each of those steps iterates ~all active faces with
             //   collect_loop_verts → heap alloc per face. With a 3000-face
             //   scene this dominates draw_line latency (>500 ms).
+            //
+            // ADR-019 A6 (2026-04-29) — closed-cycle detection for wire loops.
+            //   Earlier optimization missed the case where the new line
+            //   *connects* to an existing vertex (dedup match) inside a face's
+            //   interior — a wire-chain extension that may close a cycle on
+            //   completion. We additionally trigger postprocess when either
+            //   endpoint of the new edge has more than 1 incident edge after
+            //   creation (i.e. the new line is connecting to existing
+            //   topology — wire chain or face boundary). This lets users
+            //   form sub-faces by manually drawing 4 lines inside an existing
+            //   face (DrawLine equivalent of DrawRect interior fast-path).
+            let count_incident = |mesh: &axia_geo::Mesh, vid: VertId| -> usize {
+                mesh.edges.iter()
+                    .filter(|(_, e)| {
+                        e.is_active() && (e.v_small() == vid || e.v_large() == vid)
+                    })
+                    .take(2)
+                    .count()
+            };
+            let endpoint_connects_existing = touched_verts.iter()
+                .any(|&v| count_incident(&self.mesh, v) > 1);
+
             let touched_existing_topology =
                 !crossings.is_empty() ||
                 !verts_on_line.is_empty() ||
                 !collinear_splits.is_empty() ||
-                !all_created_faces.is_empty();
+                !all_created_faces.is_empty() ||
+                endpoint_connects_existing;
             if touched_existing_topology {
                 self.run_face_synthesis_postprocess(
                     &touched_verts,
@@ -5784,6 +5807,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ADR-019 A6 — 4 line 으로 face 안에 닫힌 loop 그리면 sub-face 자동 합성.
+    /// 사용자 보고 (2026-04-29): face 안에 4 line 으로 작은 사각형 그려도 면 분할
+    /// 안 됨. A6 는 wire chain 의 endpoint 가 기존 vertex 와 dedup 시 postprocess
+    /// 발동 → resolver 가 닫힌 cycle 발견 → sub-face 합성 (ADR-016 conditional B1
+    /// promote 도 발동 가능).
+    #[test]
+    fn test_adr019_a6_closed_wire_loop_in_face_interior_synthesizes() {
+        let mut scene = Scene::new();
+        // 큰 RECT (face)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 20.0, height: 12.0,
+        });
+        let after_big = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(after_big, 1, "big rect = 1 face");
+
+        // 4 line 으로 작은 사각형 (face 안 strict interior).
+        let p0 = DVec3::new(-2.0, -1.0, 0.0);
+        let p1 = DVec3::new( 2.0, -1.0, 0.0);
+        let p2 = DVec3::new( 2.0,  1.0, 0.0);
+        let p3 = DVec3::new(-2.0,  1.0, 0.0);
+        scene.execute(Command::DrawLine { start: p0, end: p1, surface_normal: Some(DVec3::Z) });
+        scene.execute(Command::DrawLine { start: p1, end: p2, surface_normal: Some(DVec3::Z) });
+        scene.execute(Command::DrawLine { start: p2, end: p3, surface_normal: Some(DVec3::Z) });
+        scene.execute(Command::DrawLine { start: p3, end: p0, surface_normal: Some(DVec3::Z) });
+
+        // 결과: 큰 face + 작은 sub-face 또는 ring + sub-face (B1 promote 시).
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).map(|(id, f)| (id, f.inners().len())).collect();
+        assert!(
+            active.len() >= 2,
+            "expected big face + small sub-face (ADR-019 A6); got faces={:?}",
+            active
+        );
     }
 
     /// ADR-019 P5/P6 — 인접 두 RECT 의 공유 edge erase 시 새 통합 face 생성.

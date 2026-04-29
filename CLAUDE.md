@@ -88,6 +88,9 @@
   - storage / render 분리 ("별도 레이어") 는 ADR-020 별도 진행
 - **Vertex**: edge endpoint 로만 존재, 1급 아님 (A2)
 - **Wire ↔ face boundary**: 같은 Edge, face 인접 여부만 차이 (A5)
+- **A6 (DrawLine closed loop)**: face interior 에 4 line 으로 닫힌 사각형
+  그리면 sub-face 자동 합성 (DrawRect interior fast-path 와 동일 결과).
+  endpoint dedup 시 postprocess 발동, resolver 가 cycle 합성.
 - **EdgeId stability (B2-addendum, R5)**: vertex 변형 / 다른 erase 후
   잔존 edge → ID 유지. `split_edge` → 원본 비활성, sub-edge 모두 새 ID
   (현 구현 정합). ADR-017 격상 시 재검토.
