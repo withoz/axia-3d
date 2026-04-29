@@ -191,6 +191,13 @@ impl Mesh {
 
     /// Reverse a half-edge loop in place.
     /// Swaps next/prev pointers and shifts dst vertices one slot backwards.
+    ///
+    /// **Manifold-safety (2026-04-29 fix)**: When a loop HE's dst is shifted,
+    /// its TWIN HE (on the same edge, opposite direction) must also be updated
+    /// to point in the new opposite direction. Otherwise both HEs on the edge
+    /// end up with the same dst → 2-manifold invariant violated. This was
+    /// the root cause of HE radial corruption observed after Step 4.95
+    /// promote in postprocess flow (ADR-021 Limitations §7).
     fn reverse_loop(&mut self, start: HeId) -> Result<()> {
         let hes = self.collect_loop_hes(start)?;
         let n = hes.len();
@@ -208,10 +215,38 @@ impl Mesh {
         }
 
         // Update dst vertices: after reversal, he[i].dst = old dst of he[i-1]
+        // AND update the twin's dst to point in the now-opposite direction.
         let dsts: Vec<VertId> = hes.iter().map(|&h| self.hes[h].dst()).collect();
         for i in 0..n {
             let prev_idx = if i == 0 { n - 1 } else { i - 1 };
-            self.hes[hes[i]].set_dst(dsts[prev_idx]);
+            let new_dst = dsts[prev_idx];
+            // Old loop HE dst before swap (the dst we're moving away from):
+            let old_dst = dsts[i];
+            // Apply new dst to loop HE
+            self.hes[hes[i]].set_dst(new_dst);
+            // Twin must now point to the OLD loop HE's dst (= source after
+            // reversal). Walk radial chain to find the twin.
+            // CRITICAL: only update twin if it's free (face=null). If twin is
+            // claimed by another face, we cannot flip its dst without
+            // corrupting that face's loop. In multi-shared edge cases this
+            // means flip is incomplete on shared edges (caller's responsibility).
+            let edge_id = self.hes[hes[i]].edge();
+            let any_he = self.edges[edge_id].any_he();
+            let mut tw = any_he;
+            let mut guard = 0usize;
+            loop {
+                guard += 1;
+                if guard > 16 { break; }
+                if tw != hes[i] && self.hes.contains(tw) {
+                    // Only update twin if it's free (face=null)
+                    if self.hes[tw].face().is_null() {
+                        self.hes[tw].set_dst(old_dst);
+                    }
+                    break;
+                }
+                tw = self.hes[tw].next_rad();
+                if tw == any_he { break; }
+            }
         }
         Ok(())
     }

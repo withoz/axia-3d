@@ -213,7 +213,39 @@ ADR-015 시기 LOCKED 회귀 테스트 의미 재정의:
 
 ---
 
-## 7. Known Limitations (v1 — 2026-04-29)
+## 6.6 Phase A/B Implementation Update (2026-04-29 v1.1)
+
+### Phase A — HE manifold reverse_loop fix ✅
+
+**Bug 발견 + 수정**: `reverse_loop` (operations/orient.rs) 가 loop HE 의
+dst 를 shift 했지만 그 **twin HE 의 dst 는 업데이트 안 함** → 2-manifold
+invariant 위반 (edge 의 두 HE 가 같은 dst 를 가짐).
+
+수정: reverse_loop 에서 twin 도 업데이트 (단 twin.face=null 인 경우만 —
+multi-shared edge 는 다른 face 의 loop 이라 보호).
+
+영향: Step 4.95 postprocess promote 후 ring 의 outer edge radial 일관성
+보장.
+
+### Phase B — Ring as inner candidate ✅ (Test 3B fix)
+
+`run_face_synthesis_postprocess` Step 4.95 의 candidates filter 에서
+`f.inners().is_empty()` 제거 — ring 도 더 큰 simple container 의 hole
+loop 후보로 인식.
+
+결과: Test 3B (smallest first → middle → largest) 가 두 nested ring 으로
+정상 promote.
+
+### Phase C — Ring as container (deferred)
+
+Test 1B (outer first → 2 disjoint inner) + 4B (mixed) 는 container 가
+ring 인 경우 처리. 시도 결과 Connected Case B 의 add_face Pass 2 잔존
+non-manifold edge 와 충돌 → 회귀.
+
+**별도 후속 작업**: add_face / find_halfedge 의 manifold 회복 로직 강화 후
+재시도. 현재 상태로 1B/4B 는 명시적 `merge-as-hole` 우클릭 사용.
+
+## 7. Known Limitations (v1.1 — 2026-04-29)
 
 검토 결과 발견된 v1 의 그리기 순서 의존성:
 

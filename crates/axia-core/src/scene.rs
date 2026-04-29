@@ -1435,13 +1435,15 @@ impl Scene {
         //   순서 무관성 (ADR-021 §4): Case A (inner 먼저) = Case B (outer 먼저).
         //   Manifold 안전: shared edge 는 hole loop 미경유 → 위반 없음.
         //
-        //   현재 v1: container 가 simple (no holes) 인 경우만 처리.
-        //   향후 ring 의 hole 재구성은 별도 작업.
+        //   v1.1 (2026-04-29): Phase A HE manifold fix + Phase B 적용.
+        //   - Phase A (reverse_loop twin update): manifold 보장
+        //   - Phase B: ring 도 inner candidate (Test 3B nested)
+        //   - Phase C (ring as container, Test 1B/4B): 별도 후속 — 회귀 위험.
         use std::collections::HashMap;
         {
-            // 1) 모든 active simple face 수집 + container 별 그룹
+            // 1) Phase B: 모든 active face 수집 — simple + ring 둘 다 inner.
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
-                .filter(|(_, f)| f.is_active() && f.inners().is_empty())
+                .filter(|(_, f)| f.is_active())
                 .map(|(id, _)| id)
                 .collect();
 
@@ -1449,9 +1451,8 @@ impl Scene {
             for inner_fid in &candidates {
                 if !self.mesh.faces.contains(*inner_fid) { continue; }
                 if !self.mesh.faces[*inner_fid].is_active() { continue; }
-                if !self.mesh.faces[*inner_fid].inners().is_empty() { continue; }
                 let Some(container) = self.find_enclosing_face(*inner_fid) else { continue; };
-                // Container 도 simple 일 때만 처리 (v1 제약)
+                // Container 는 simple 만 처리 (Phase C 후속).
                 if !self.mesh.faces.get(container)
                     .map(|f| f.is_active() && f.inners().is_empty())
                     .unwrap_or(false)
@@ -5878,6 +5879,322 @@ mod tests {
                     label, fid, n.z
                 );
             }
+        }
+    }
+
+    /// Phase A 디버그: 단일 inner promote 후 ring 의 outer edge radial 검증.
+    /// promote_face_to_hole 가 HE manifold 를 깨끗하게 유지하는지 검증.
+    #[test]
+    fn test_phaseA_promote_keeps_outer_radial_manifold() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+
+        let ring_fid = scene.mesh.faces.iter()
+            .find(|(_, f)| f.is_active() && f.inners().len() == 1)
+            .map(|(id, _)| id)
+            .expect("ring face should exist");
+
+        let outer_start = scene.mesh.faces[ring_fid].outer().start;
+        let mut h = outer_start;
+        let mut violations = Vec::<String>::new();
+        let mut guard = 0;
+        loop {
+            guard += 1; if guard > 32 { break; }
+            let he = &scene.mesh.hes[h];
+            let mut radial_entries = Vec::new();
+            let mut rh = h;
+            let mut rg = 0;
+            loop {
+                rg += 1; if rg > 16 { break; }
+                let rhe = &scene.mesh.hes[rh];
+                radial_entries.push((rh, rhe.dst(), rhe.face()));
+                rh = rhe.next_rad();
+                if rh == h { break; }
+            }
+            let mut by_dst: std::collections::HashMap<axia_geo::VertId, Vec<axia_geo::HeId>> =
+                std::collections::HashMap::new();
+            for (h_id, dst, _f) in &radial_entries {
+                by_dst.entry(*dst).or_default().push(*h_id);
+            }
+            for (dst, hes) in &by_dst {
+                if hes.len() > 1 {
+                    violations.push(format!(
+                        "edge of HE {:?}: {} HEs share dst={:?}: {:?}",
+                        h, hes.len(), dst, hes
+                    ));
+                }
+            }
+            h = he.next();
+            if h == outer_start { break; }
+        }
+        assert!(
+            violations.is_empty(),
+            "HE manifold corruption in ring outer:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    /// ADR-021 Phase B (3B fix) — 3-level nested, smallest first.
+    /// Phase A HE manifold fix 후 ring 을 inner candidate 로 허용.
+    #[test]
+    fn test_adr021_phaseB_3level_nested_smallest_first() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 20.0, height: 12.0,
+        });
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, f)| (id, f.inners().len()))
+            .collect();
+        let ring_count = active.iter().filter(|(_, n)| *n == 1).count();
+        let simple_count = active.iter().filter(|(_, n)| *n == 0).count();
+        assert_eq!(
+            ring_count, 2,
+            "3B Phase B: expected 2 nested rings; got {:?}",
+            active
+        );
+        assert_eq!(
+            simple_count, 1,
+            "3B Phase B: expected 1 innermost sub-face; got {:?}",
+            active
+        );
+    }
+
+    /// Phase A: 4 line 으로 단독 RECT 그렸을 때 (no promote) HE manifold 검증.
+    /// resolver 결과 corruption 인지 promote 결과 corruption 인지 분리.
+    #[test]
+    fn test_phaseA_isolated_4line_rect_no_promote() {
+        let mut scene = Scene::new();
+        // No prior face. Draw 4 lines forming a rect — resolver creates simple face.
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-5.0, -3.0, 0.0),
+            end: DVec3::new(5.0, -3.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(5.0, -3.0, 0.0),
+            end: DVec3::new(5.0, 3.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(5.0, 3.0, 0.0),
+            end: DVec3::new(-5.0, 3.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-5.0, 3.0, 0.0),
+            end: DVec3::new(-5.0, -3.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+
+        let face = scene.mesh.faces.iter()
+            .find(|(_, f)| f.is_active())
+            .map(|(id, _)| id);
+        // Closed loop should auto-synthesize per ADR-019 A6
+        assert!(face.is_some(), "4-line closed loop should produce a face");
+        let fid = face.unwrap();
+
+        let outer_start = scene.mesh.faces[fid].outer().start;
+        let mut h = outer_start;
+        let mut violations = Vec::<String>::new();
+        let mut guard = 0;
+        loop {
+            guard += 1; if guard > 32 { break; }
+            let he = &scene.mesh.hes[h];
+            let mut radial: Vec<(axia_geo::HeId, axia_geo::VertId, axia_geo::FaceId)> = Vec::new();
+            let mut rh = h;
+            let mut rg = 0;
+            loop {
+                rg += 1; if rg > 16 { break; }
+                let rhe = &scene.mesh.hes[rh];
+                radial.push((rh, rhe.dst(), rhe.face()));
+                rh = rhe.next_rad();
+                if rh == h { break; }
+            }
+            let mut by_dst: std::collections::HashMap<axia_geo::VertId, usize> =
+                std::collections::HashMap::new();
+            for (_, dst, _) in &radial {
+                *by_dst.entry(*dst).or_insert(0) += 1;
+            }
+            for (dst, count) in &by_dst {
+                if *count > 1 {
+                    violations.push(format!(
+                        "HE {:?}: dst={:?} count={} radial={:?}",
+                        h, dst, count, radial
+                    ));
+                }
+            }
+            h = he.next();
+            if h == outer_start { break; }
+        }
+        assert!(
+            violations.is_empty(),
+            "4-line resolver corruption (no promote):\n{}",
+            violations.join("\n")
+        );
+    }
+
+    /// Phase A: postprocess 경로의 promote 가 corruption 일으키는지 검증.
+    /// inner-first 후 outer-around (Step 4.95 second-pass 경로).
+    #[test]
+    fn test_phaseA_postprocess_promote_path_radial() {
+        let mut scene = Scene::new();
+        // inner first
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        // outer around (4 lines + epoch + Step 4.95 promote)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+
+        // Find ring face
+        let ring_fid = scene.mesh.faces.iter()
+            .find(|(_, f)| f.is_active() && f.inners().len() == 1)
+            .map(|(id, _)| id)
+            .expect("ring face should exist (postprocess promote)");
+
+        let outer_start = scene.mesh.faces[ring_fid].outer().start;
+        let mut h = outer_start;
+        let mut violations = Vec::<String>::new();
+        let mut guard = 0;
+        loop {
+            guard += 1; if guard > 32 { break; }
+            let he = &scene.mesh.hes[h];
+            let mut radial: Vec<(axia_geo::HeId, axia_geo::VertId, axia_geo::FaceId)> = Vec::new();
+            let mut rh = h;
+            let mut rg = 0;
+            loop {
+                rg += 1; if rg > 16 { break; }
+                let rhe = &scene.mesh.hes[rh];
+                radial.push((rh, rhe.dst(), rhe.face()));
+                rh = rhe.next_rad();
+                if rh == h { break; }
+            }
+            let mut by_dst: std::collections::HashMap<axia_geo::VertId, usize> =
+                std::collections::HashMap::new();
+            for (_, dst, _) in &radial {
+                *by_dst.entry(*dst).or_insert(0) += 1;
+            }
+            for (dst, count) in &by_dst {
+                if *count > 1 {
+                    violations.push(format!(
+                        "HE {:?}: dst={:?} count={} radial={:?}",
+                        h, dst, count, radial
+                    ));
+                }
+            }
+            h = he.next();
+            if h == outer_start { break; }
+        }
+        // Print edge endpoints for diagnostic
+        if !violations.is_empty() {
+            let mut h2 = outer_start;
+            let mut g2 = 0;
+            loop {
+                g2 += 1; if g2 > 32 { break; }
+                let he = &scene.mesh.hes[h2];
+                let edge = &scene.mesh.edges[he.edge()];
+                eprintln!("[edge dbg] HE {:?} edge {:?} v_small={:?} v_large={:?}",
+                    h2, he.edge(), edge.v_small(), edge.v_large());
+                h2 = he.next();
+                if h2 == outer_start { break; }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "Manifold corruption (postprocess promote):\n{}",
+            violations.join("\n")
+        );
+    }
+
+    /// Phase A 디버그: 3-level nested 시나리오 (3B style) 에서 corruption 시점 추적.
+    #[test]
+    fn test_phaseA_3level_nested_radial_check_after_each_step() {
+        // Helper closure
+        fn check_all_radials(scene: &Scene, label: &str) -> Vec<String> {
+            let mut violations = Vec::new();
+            for (fid, face) in scene.mesh.faces.iter() {
+                if !face.is_active() { continue; }
+                let outer_start = face.outer().start;
+                if outer_start.is_null() { continue; }
+                let mut h = outer_start;
+                let mut guard = 0;
+                loop {
+                    guard += 1; if guard > 32 { break; }
+                    let he = &scene.mesh.hes[h];
+                    // Check radial chain
+                    let mut radial_entries: Vec<(axia_geo::HeId, axia_geo::VertId, axia_geo::FaceId)> = Vec::new();
+                    let mut rh = h;
+                    let mut rg = 0;
+                    loop {
+                        rg += 1; if rg > 16 { break; }
+                        let rhe = &scene.mesh.hes[rh];
+                        radial_entries.push((rh, rhe.dst(), rhe.face()));
+                        rh = rhe.next_rad();
+                        if rh == h { break; }
+                    }
+                    let mut by_dst: std::collections::HashMap<axia_geo::VertId, usize> =
+                        std::collections::HashMap::new();
+                    for (_, dst, _) in &radial_entries {
+                        *by_dst.entry(*dst).or_insert(0) += 1;
+                    }
+                    for (dst, count) in &by_dst {
+                        if *count > 1 {
+                            violations.push(format!(
+                                "{}: face {:?} edge of HE {:?}: {} HEs with dst={:?}, radial={:?}",
+                                label, fid, h, count, dst, radial_entries
+                            ));
+                        }
+                    }
+                    h = he.next();
+                    if h == outer_start { break; }
+                }
+            }
+            violations
+        }
+
+        let mut scene = Scene::new();
+        // Step 1: innermost (4×2)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        let v1 = check_all_radials(&scene, "after_step1_innermost");
+        // Step 2: middle (10×6)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        let v2 = check_all_radials(&scene, "after_step2_middle_drawn");
+        // Step 3: outer (20×12)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 20.0, height: 12.0,
+        });
+        let v3 = check_all_radials(&scene, "after_step3_outer_drawn");
+
+        let all: Vec<String> = [v1, v2, v3].concat();
+        if !all.is_empty() {
+            panic!("Manifold corruption detected:\n{}", all.join("\n"));
         }
     }
 
