@@ -12,6 +12,7 @@ pub mod newton;
 pub mod topology;
 pub mod nurbs_wrapper;
 pub mod trim_gen;
+pub mod boolean;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
