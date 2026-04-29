@@ -1813,6 +1813,12 @@ impl Mesh {
         // Compute face normal
         let normal = self.compute_normal(outer_verts)?;
 
+        // ADR-019 + "엣지 없으면 면 없음" 원칙 (transactional rollback):
+        //   make_loop 가 부분 실패 시 face 가 빈 LoopRef 로 leak 되지 않도록
+        //   pre-snapshot edges/HEs → 실패 시 face 제거 + best-effort cleanup.
+        let edges_before: FxHashSet<EdgeId> = self.edges.iter().map(|(id, _)| id).collect();
+        let hes_before: FxHashSet<HeId> = self.hes.iter().map(|(id, _)| id).collect();
+
         // Create face with placeholder loop
         let face_id = self.faces.insert(Face::new(
             LoopRef::default(),
@@ -1821,17 +1827,81 @@ impl Mesh {
             material,
         ));
 
-        // Build outer loop
-        let outer_loop = self.make_loop(outer_verts, true, face_id)?;
-        self.faces[face_id].set_outer(outer_loop);
+        // Try to build outer + inner loops. On error, rollback.
+        let build_result: Result<()> = (|| {
+            let outer_loop = self.make_loop(outer_verts, true, face_id)?;
+            self.faces[face_id].set_outer(outer_loop);
+            for hole_verts in holes {
+                let inner_loop = self.make_loop(hole_verts, false, face_id)?;
+                self.faces[face_id].add_inner(inner_loop);
+            }
+            Ok(())
+        })();
 
-        // Build inner loops (holes)
-        for hole_verts in holes {
-            let inner_loop = self.make_loop(hole_verts, false, face_id)?;
-            self.faces[face_id].add_inner(inner_loop);
+        match build_result {
+            Ok(()) => Ok(face_id),
+            Err(e) => {
+                self.rollback_partial_face_creation(face_id, &edges_before, &hes_before);
+                Err(e)
+            }
+        }
+    }
+
+    /// Rollback a partially-constructed face after `add_face_with_holes` failure.
+    ///
+    /// Steps:
+    ///   1. Remove the face (clears any wired HE.face references).
+    ///   2. For each NEW edge (not in `edges_before`), if no live HE points to
+    ///      a face on it, remove the edge + its half-edges.
+    ///   3. Best-effort: any newly-created orphan HEs whose parent edge is
+    ///      already gone → directly remove.
+    ///
+    /// Guarantees the "엣지 없으면 면 없음" principle: after failure, the
+    /// mesh has no face with an empty LoopRef.
+    fn rollback_partial_face_creation(
+        &mut self,
+        face_id: FaceId,
+        edges_before: &FxHashSet<EdgeId>,
+        hes_before: &FxHashSet<HeId>,
+    ) {
+        // Step 1: remove the face entry. `remove_face` clears HE.face pointers
+        // for any wired loop HEs.
+        let _ = self.remove_face(face_id);
+        if self.faces.contains(face_id) {
+            self.faces.remove(face_id);
         }
 
-        Ok(face_id)
+        // Step 2: clean up new edges that no longer have any face-attached HE.
+        let new_edges: Vec<EdgeId> = self.edges.iter()
+            .map(|(id, _)| id)
+            .filter(|id| !edges_before.contains(id))
+            .collect();
+        for eid in &new_edges {
+            if !self.edges.contains(*eid) { continue; }
+            // Is any live HE on this edge attached to a non-NULL face?
+            let still_used = self.hes.iter().any(|(_, he)|
+                he.is_active() && he.edge() == *eid && !he.face().is_null()
+            );
+            if !still_used {
+                let _ = self.remove_edge_and_halfedges(*eid);
+            }
+        }
+
+        // Step 3: defensive — remove any newly-created orphan HEs whose edge
+        // was already removed (stale ID). Should be rare with step 2 covering
+        // most cases.
+        let stale_hes: Vec<HeId> = self.hes.iter()
+            .map(|(id, _)| id)
+            .filter(|id| !hes_before.contains(id))
+            .filter(|id| {
+                if let Some(he) = self.hes.get(*id) {
+                    !self.edges.contains(he.edge())
+                } else { false }
+            })
+            .collect();
+        for hid in stale_hes {
+            self.hes.remove(hid);
+        }
     }
 
     /// Wire a half-edge loop from vertex IDs and assign to a face.
@@ -4972,6 +5042,86 @@ impl Default for Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "엣지 없으면 면 없음" 원칙 회귀 테스트 (transactional rollback).
+    ///
+    /// `add_face_with_holes` 의 hole vertex 가 < 3 → make_loop 실패 →
+    /// rollback. 이전엔 outer loop 만 부분 wired 된 채 face 가 leak 됐음.
+    /// 수정 후엔 face 가 mesh 에 남지 않음.
+    #[test]
+    fn add_face_with_holes_rollback_on_invalid_inner() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        // Invalid hole: only 2 verts (need ≥ 3) → make_loop will bail.
+        let h0 = mesh.add_vertex(DVec3::new(2.0, 2.0, 0.0));
+        let h1 = mesh.add_vertex(DVec3::new(8.0, 8.0, 0.0));
+
+        let face_count_before = mesh.face_count();
+        let edge_count_before = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+
+        let result = mesh.add_face_with_holes(
+            &[v0, v1, v2, v3],
+            &[&[h0, h1]],  // ← invalid hole
+            mat,
+        );
+
+        // 1. Operation must error.
+        assert!(result.is_err(), "expected error, got {:?}", result);
+
+        // 2. CRITICAL: face count must equal pre-call (no leaked face).
+        assert_eq!(mesh.face_count(), face_count_before,
+            "rollback failed: face leaked after partial failure");
+
+        // 3. verify_face_invariants must show no I1 violation (no empty LoopRef).
+        let report = mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "rollback left invariant violations: {:?}", report.violations);
+
+        // 4. Best-effort: edge count should not have grown by more than the
+        //    outer loop edges that succeeded (edges may persist if part of
+        //    successful outer build — that's OK for the principle).
+        let edge_count_after = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        assert!(edge_count_after <= edge_count_before + 4,
+            "edge leak too large: before={}, after={}", edge_count_before, edge_count_after);
+    }
+
+    /// Rollback also must not affect existing valid faces.
+    #[test]
+    fn add_face_with_holes_rollback_preserves_existing_faces() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // First, create a valid face.
+        let a = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let c = mesh.add_vertex(DVec3::new(0.5, 1.0, 0.0));
+        let f1 = mesh.add_face_with_holes(&[a, b, c], &[], mat).unwrap();
+
+        let face_count_before = mesh.face_count();
+
+        // Now try to create a face with invalid hole — must rollback without
+        // affecting f1.
+        let d = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let e = mesh.add_vertex(DVec3::new(11.0, 0.0, 0.0));
+        let f = mesh.add_vertex(DVec3::new(10.5, 1.0, 0.0));
+        let h0 = mesh.add_vertex(DVec3::new(10.2, 0.2, 0.0));
+        let h1 = mesh.add_vertex(DVec3::new(10.8, 0.2, 0.0));
+        let result = mesh.add_face_with_holes(&[d, e, f], &[&[h0, h1]], mat);
+        assert!(result.is_err());
+
+        // f1 must still exist + be valid.
+        assert!(mesh.faces.contains(f1) && mesh.faces[f1].is_active(),
+            "existing face f1 was affected by rollback");
+        assert_eq!(mesh.face_count(), face_count_before,
+            "no extra face after rollback");
+
+        let report = mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "rollback corrupted existing face invariants: {:?}", report.violations);
+    }
 
     #[test]
     fn edge_chain_selects_polyline_through_degree2_verts() {
