@@ -167,22 +167,31 @@ export class DrawCircleTool implements ITool {
     // First check snap — if there's a snap point, project it onto the plane
     const rawPt = this.ctx.get3DPoint(e);
     const snapped = this.ctx.getSnappedPoint(e, rawPt);
+    let result: THREE.Vector3 | null = null;
     if (snapped) {
-      return this.projectOntoPlane(snapped);
+      result = this.projectOntoPlane(snapped);
+    } else {
+      // No snap — intersect camera ray with drawing plane
+      const ray = this.ctx.getRay(e);
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(this.drawPlane3, target);
+      if (!hit) return null;
+      const dist = target.distanceTo(this.circleCenter);
+      if (dist > MAX_DRAW_DISTANCE) return null;
+      result = target;
     }
+    if (!result) return null;
 
-    // No snap — intersect camera ray with drawing plane
-    const ray = this.ctx.getRay(e);
-    const target = new THREE.Vector3();
-    const hit = ray.ray.intersectPlane(this.drawPlane3, target);
-
-    if (!hit) return null; // Ray parallel to plane
-
-    // Guard against grazing angles producing points far away
-    const dist = target.distanceTo(this.circleCenter);
-    if (dist > MAX_DRAW_DISTANCE) return null;
-
-    return target;
+    // 2026-04-29 — 사용자 요청: 바닥면 cardinal plane 에서 normal-axis 좌표를
+    //   circleCenter 의 같은 좌표 (정확히 0) 로 강제. f32 ray-plane intersection
+    //   ε 오차 차단.
+    if (this.plane && !this.plane.onFace) {
+      const n = this.plane.normal;
+      if (Math.abs(n.x) > 0.999) result.x = this.circleCenter.x;
+      else if (Math.abs(n.y) > 0.999) result.y = this.circleCenter.y;
+      else if (Math.abs(n.z) > 0.999) result.z = this.circleCenter.z;
+    }
+    return result;
   }
 
   /**

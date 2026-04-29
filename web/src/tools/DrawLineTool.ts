@@ -737,6 +737,13 @@ export class DrawLineTool implements ITool {
     if (!Number.isFinite(result.x) || !Number.isFinite(result.y) || !Number.isFinite(result.z)) {
       return null;
     }
+
+    // 2026-04-29 — 사용자 요청: 바닥면 cardinal plane 에서 그릴 때 normal-axis
+    //   좌표를 정확히 0 으로 강제 (f32 ray-plane intersection ε 오차 차단).
+    const n = this.drawingPlane.normal;
+    if (Math.abs(n.x) > 0.999 && Math.abs(this.drawingPlane.constant) < 1e-3) result.x = 0;
+    else if (Math.abs(n.y) > 0.999 && Math.abs(this.drawingPlane.constant) < 1e-3) result.y = 0;
+    else if (Math.abs(n.z) > 0.999 && Math.abs(this.drawingPlane.constant) < 1e-3) result.z = 0;
     return result;
   }
 

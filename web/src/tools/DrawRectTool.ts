@@ -188,23 +188,34 @@ export class DrawRectTool implements ITool {
     // First check snap — if there's a snap point, project it onto the plane
     const rawPt = this.ctx.get3DPoint(e);
     const snapped = this.ctx.getSnappedPoint(e, rawPt);
+    let result: THREE.Vector3 | null = null;
     if (snapped) {
-      // Project snap point onto drawing plane
-      return this.projectOntoPlane(snapped);
+      result = this.projectOntoPlane(snapped);
+    } else {
+      // No snap — intersect camera ray with drawing plane
+      const ray = this.ctx.getRay(e);
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(this.drawPlane3, target);
+      if (!hit) return null; // Ray parallel to plane
+      // Guard against grazing angles producing points far away
+      const dist = target.distanceTo(this.rectStart);
+      if (dist > MAX_DRAW_DISTANCE) return null;
+      result = target;
     }
+    if (!result) return null;
 
-    // No snap — intersect camera ray with drawing plane
-    const ray = this.ctx.getRay(e);
-    const target = new THREE.Vector3();
-    const hit = ray.ray.intersectPlane(this.drawPlane3, target);
-
-    if (!hit) return null; // Ray parallel to plane
-
-    // Guard against grazing angles producing points far away
-    const dist = target.distanceTo(this.rectStart);
-    if (dist > MAX_DRAW_DISTANCE) return null;
-
-    return target;
+    // 2026-04-29 — 사용자 요청: 바닥면 (default cardinal plane) 에서 그릴 때
+    //   ray-plane intersection 의 f32 정밀도 한계로 ε 오차가 발생할 수 있음.
+    //   첫 클릭 (rectStart) 은 이미 axis=0 으로 snap 됐고 plane 이 그 점을
+    //   지나가므로, 결과 point 의 normal-axis 좌표를 rectStart 의 같은 좌표
+    //   (정확히 0) 로 강제. mouse picking ε 오차 → 엔진 단계 z 정밀도 손실 차단.
+    if (this.plane && !this.plane.onFace) {
+      const n = this.plane.normal;
+      if (Math.abs(n.x) > 0.999) result.x = this.rectStart.x;
+      else if (Math.abs(n.y) > 0.999) result.y = this.rectStart.y;
+      else if (Math.abs(n.z) > 0.999) result.z = this.rectStart.z;
+    }
+    return result;
   }
 
   /**
