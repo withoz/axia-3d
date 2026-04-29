@@ -213,7 +213,63 @@ ADR-015 시기 LOCKED 회귀 테스트 의미 재정의:
 
 ---
 
-## 7. Decision Record
+## 7. Known Limitations (v1 — 2026-04-29)
+
+검토 결과 발견된 v1 의 그리기 순서 의존성:
+
+### Test Matrix
+
+| 시나리오 | Result | 원인 |
+|---------|--------|------|
+| Inner first → outer (1A, 4A) | ✅ 정상 | v1 P7 정합 |
+| Outer first → disjoint inners (1B) | ❌ 1 hole only | container 가 ring 이면 skip |
+| Smallest → largest nested (3B) | ❌ outermost simple | inner 가 ring 이면 skip + HE corruption |
+| Outer first → mixed (4B) | ❌ 1 hole only | 1B 와 동일 |
+| Adjacent Axiom 7 (5A/5B) | ✅ 정상 | edge 공유 자연 처리 |
+| M1 partial overlap (2A/2B) | ✅ 정상 | M1 split 안정 |
+
+### 근본 원인
+
+1. **Step 4.95 v1 의 simple-only 제약**:
+   ```rust
+   if !self.mesh.faces.get(container)
+       .map(|f| f.is_active() && f.inners().is_empty())
+       .unwrap_or(false)
+   { continue; }
+   ```
+   Container 가 ring 이면 promote 처리 skip. 결과: 추가 inner 들이 새 hole 로 흡수 안 됨.
+
+2. **promote_face_to_hole 의 HE manifold corruption**:
+   v1.1 디버깅 중 발견 — middle ring 의 outer edge radial chain 에 두
+   HE 가 같은 dst 를 가지는 비정상 상태:
+   ```
+   HE 12: dst=v6 face=middle
+   HE 13: dst=v6 face=NULL  ← 정상이라면 dst=v_other
+   ```
+   → `he_twin` 이 self 반환 → boundary 검출 실패.
+   → ring 을 component perimeter walk 시 실패.
+
+   추정 원인: `make_loop` / `find_halfedge` / `add_face_with_holes` 가
+   기존 edge 재사용 시 HE 방향 / dst 를 잘못 설정하는 케이스.
+
+### Workaround (현재)
+
+사용자 측면:
+- inner 먼저 그리고 outer 둘러싸기 (Case A 패턴) → 정상 작동
+- outer 먼저 그리는 경우 첫 inner 만 hole 로 promote, 후속 inner 는
+  명시적 `merge-as-hole` 우클릭 메뉴 사용
+
+### 후속 작업 계획
+
+- **Phase A**: HE manifold corruption 디버깅 (최우선)
+  - `add_face_with_holes` 의 HE 재사용 로직 검토
+  - 단일 inner promote 도 잠재적으로 영향 (현재는 안 깨지만 위험)
+- **Phase B**: ring as inner 처리 (3B 해결, Phase A 후)
+- **Phase C**: ring as container 처리 (1B/4B 해결, Phase A/B 후)
+
+---
+
+## 8. Decision Record
 
 ### What we decided
 1. **P7 신규 원칙** — 닫힌 edge loop 가 면을 나눈다.
