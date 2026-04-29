@@ -83,6 +83,10 @@ export class Viewport {
   private _edgeColor = 0x0a0a14;
   /** ADR-007 Phase 4 — CAD 모드: single-sided 렌더링 (BackSide mesh 생략, GPU ↑) */
   private _singleSidedRender = false;
+  /** ADR-018 dev toggle — when true, every face renders two-tone (legacy
+   *  mode 그대로). false (기본): open mesh 는 양면 동일 white,
+   *  closed solid 만 두 톤. 사용자 StylePanel 토글로 제어. */
+  private _showFaceOrientation = false;
   private _faceOpacity = 1.0;
   private _edgeVisible = true;
   private _profileEdge = true;
@@ -915,6 +919,11 @@ export class Viewport {
     faceMap?: Uint32Array,
     centerLines?: Float32Array | null,
     volumeFlags?: Uint8Array | null,
+    /** ADR-018 — true 일 때만 volumeFlags 의 wall 비트가 두 톤 렌더에 반영
+     *  된다. open mesh (false) 는 volumeFlags 무시하고 전부 sheet (양면 동일).
+     *  is_face_in_volume 이 planar overlap face 도 wall 로 분류하는 false-
+     *  positive 를 차단. */
+    isClosedSolid?: boolean,
   ) {
     // Sprint 4 §3 — updateMesh 내부 분해 측정.
     //   syncMesh.fullUpdate(16ms budget) 의 어느 phase 가 dominator 인지
@@ -1067,19 +1076,24 @@ export class Viewport {
       // shell overlay tracks the new geometry automatically.
       this._refreshFur();
 
-      // ADR-007 Rev 2 — Sheet vs Wall 분리 렌더.
+      // ADR-018 — Uniform Surface Render Policy:
       //   Wall (closed-volume member): two-tone (front=front-color, back=cyan)
       //   Sheet (standalone planar)  : 양면 동등 (back 도 front-color)
       //
-      //   구현: backMesh 를 두 개 — wall 전용 (cyan) + sheet 전용 (front color).
-      //   각각 cloned geometry 가 wall 또는 sheet 삼각형 indices 만 포함.
-      //   position/normal 은 원본과 공유 (BufferAttribute 재사용).
-      //   frontMesh 는 모든 삼각형을 단일 front-color 로 렌더 (원본 geometry).
-      //   raycast/BVH 는 frontMesh 유지 → 선택/픽 동작 변화 없음.
+      //   결정 driver: volumeFlags[fid] === 1 → wall, else → sheet.
+      //   ADR-018 의 핵심 원칙: 사용자 작업 중 의도치 않은 lavender (BackSide)
+      //   노출 차단. open mesh 는 항상 양면 white. closed solid 만 cavity
+      //   가시화 위해 두 톤 유지.
       //
-      // Single-sided (CAD) 모드에선 back-mesh 분기를 통째로 건너뛰므로
-      //   wall-only shadow caster 도 만들어지지 않는다. 그 경우 fall-back
-      //   으로 frontMesh 자체에 castShadow 를 다시 ON 으로 두어야 한다.
+      //   Phase 3 의 "Show face orientation (debug)" 토글 활성 시:
+      //   _showFaceOrientation = true → legacy 모드 (모든 face 양면 차이)
+      //
+      //   구현: backMesh 두 개 — wall 전용 (cyan) + sheet 전용 (front color).
+      //   각각 cloned geometry 가 wall 또는 sheet 삼각형 indices 만 포함.
+      //   position/normal 은 원본과 공유. frontMesh 는 모든 삼각형 단일 색.
+      //
+      // Single-sided (CAD) 모드: back-mesh 통째 skip → wall-only shadow caster
+      //   도 만들어지지 않음. frontMesh.castShadow = true 로 fallback.
       if (this._singleSidedRender) {
         frontMesh.castShadow = true;
       }
@@ -1087,7 +1101,12 @@ export class Viewport {
         const wallIndices: number[] = [];
         const sheetIndices: number[] = [];
         const idxArr = indices as Uint32Array;
-        if (volumeFlags && faceMap) {
+        const debugOrientation = this._showFaceOrientation === true;
+        // ADR-018: open mesh (isClosedSolid=false) 면 모든 face 를 sheet 로
+        //   강제. volumeFlags 의 wall 비트를 무시한다. (is_face_in_volume 이
+        //   planar overlap face 를 false-positive 로 wall 분류하는 케이스 차단.)
+        const useVolumeFlags = (isClosedSolid !== false) && !debugOrientation;
+        if (faceMap && volumeFlags && useVolumeFlags) {
           for (let ti = 0; ti < faceMap.length; ti++) {
             const fid = faceMap[ti];
             const isWall = (fid < volumeFlags.length) && volumeFlags[fid] === 1;
@@ -1096,8 +1115,16 @@ export class Viewport {
             else sheetIndices.push(i0, i1, i2);
           }
         } else {
-          // Fallback (volume flags unavailable) — treat everything as wall
-          for (let i = 0; i < idxArr.length; i++) wallIndices.push(idxArr[i]);
+          // ADR-018: 다음 케이스는 모두 동일 처리 — 모든 삼각형을 sheet 로
+          //   (또는 debug toggle 활성 시 wall 로):
+          //     1) volumeFlags / faceMap 미가용
+          //     2) isClosedSolid=false (open mesh) — useVolumeFlags=false
+          //     3) debug toggle ON
+          if (debugOrientation) {
+            for (let i = 0; i < idxArr.length; i++) wallIndices.push(idxArr[i]);
+          } else {
+            for (let i = 0; i < idxArr.length; i++) sheetIndices.push(idxArr[i]);
+          }
         }
 
         const cyanMat = new THREE.MeshBasicMaterial({
@@ -2251,6 +2278,16 @@ export class Viewport {
   /** 현재 single-sided 모드 여부 */
   isSingleSidedRender(): boolean {
     return this._singleSidedRender;
+  }
+
+  /** ADR-018 dev toggle — face orientation 가시화 (legacy 두 톤 모드). */
+  setShowFaceOrientation(enabled: boolean) {
+    this._showFaceOrientation = enabled;
+  }
+
+  /** ADR-018 — 현재 face orientation 가시화 모드 여부. */
+  isShowFaceOrientation(): boolean {
+    return this._showFaceOrientation;
   }
 
   /** 현재 스타일 설정값 반환 (프리셋 비교/저장용) */

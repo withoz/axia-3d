@@ -25,6 +25,9 @@
 - `align_face_with_neighbors` 결과와 **무관하게** 항상 hint 기준 검사.
 - post-pipeline scan: degenerate (NaN/zero normal) 제거 + winding flip
   (touched_verts 위 boundary 가진 face 만).
+- **시각 노출 정책 변경 (ADR-018)**: 사용자 동의로 "winding 시각 노출"
+  원칙 폐기. Open mesh 의 sheet 는 양면 동일 white, closed solid 의 wall
+  만 두 톤. Dev toggle "면 방향 표시" 로 legacy 모드 복원 가능.
 
 ### 3. M1 / Step 4.5 sub-face XIA Inheritance
 - `run_mixed_cycle_splits` 의 sub-face 는 **원본 XIA** 에 inherit.
@@ -41,7 +44,18 @@
 - UI Snap (osnap) 이 정렬 책임 — 입력 단계에서 해소.
 - `add_vertex_with_snap` 같은 mesh-level 허용오차 함수 추가 금지.
 
-### 6. 바닥면 좌표 정확성 (사용자 요청 2026-04-28)
+### 6. ADR-018 — Uniform Surface Render Policy (2026-04-29)
+- **Open mesh 의 sheet face**: 양면 동일 white (#e8e8e8). BackSide 도
+  frontMat 클론 사용 → lavender 절대 안 보임.
+- **Closed solid 의 wall face**: 두 톤 유지 (외 #e8e8e8, 내 #9898b4).
+  Cavity / 단면 가시화용.
+- 판정: `volumeFlags[fid]` per-face. fallback (미가용) 은 모두 sheet
+  (이전 모두 wall 회귀 수정).
+- Dev toggle: `Viewport.setShowFaceOrientation(bool)`, StylePanel "면 방향
+  표시 (디버그)" 체크박스. 기본 OFF.
+- ADR-007 winding 정책 자체는 변경 없음 — 시각 노출만 정책 변경.
+
+### 7. 바닥면 좌표 정확성 (사용자 요청 2026-04-28, 원래 #6)
 - DrawRectTool / DrawCircleTool / DrawLineTool 의 cardinal plane snap.
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.

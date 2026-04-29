@@ -1847,6 +1847,13 @@ export class ToolManager {
     // ADR-007 Rev 2 — face 분류 비트 array (Wall=1, Sheet=0).
     //   Viewport 가 sheet 의 BackSide 를 front-color 로 렌더하는 데 사용.
     const volumeFlags = this.bridge.getFaceVolumeFlags();
+    // ADR-018 — closed solid 여부 추가 전달. open mesh 면 viewport 가
+    //   volumeFlags 의 wall 비트를 무시하고 모두 sheet 로 처리한다.
+    let isClosedSolid: boolean | undefined;
+    try {
+      const info = this.bridge.meshManifoldInfo();
+      isClosedSolid = info && typeof info === 'object' ? !!info.isClosedSolid : undefined;
+    } catch (_err) { /* defensive — unsupported */ }
     recordStep('syncMesh.bridgeQueries', performance.now() - tBridge1);
     if (buffers) {
       const tFull0 = performance.now();
@@ -1856,6 +1863,7 @@ export class ToolManager {
         buffers.faceMap,
         centerLines,
         volumeFlags,
+        isClosedSolid,
       );
       recordStep('syncMesh.fullUpdate', performance.now() - tFull0);
       this.faceMap = buffers.faceMap;

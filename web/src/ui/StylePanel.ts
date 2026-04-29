@@ -304,4 +304,63 @@ export function initStylePanel(deps: StylePanelDeps): void {
     const hex = parseInt((e.target as HTMLInputElement).value.replace('#', ''), 16);
     viewport.setGridColor(hex);
   });
+
+  // ADR-018 — "Show face orientation (debug)" toggle.
+  //   기본 OFF: open mesh 의 양면이 동일 white (라벤더 노출 없음).
+  //   ON: legacy 모드 — 모든 face 가 두 톤 (winding 시각 디버그용).
+  //   StylePanel HTML 에 element 가 없으므로 프로그램매틱 주입.
+  injectFaceOrientationToggle(viewport);
+}
+
+/** ADR-018 dev toggle injection. StylePanel 의 끝에 체크박스를 추가한다. */
+function injectFaceOrientationToggle(viewport: Viewport): void {
+  if (document.getElementById('sty-show-face-orient')) return; // 중복 방지
+
+  const panel = document.getElementById('style-panel');
+  const body = panel?.querySelector('.style-panel-body') ?? panel;
+  if (!body) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'sty-row';
+  wrap.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid #444;';
+  wrap.innerHTML = `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#bbb;cursor:pointer;">
+      <input type="checkbox" id="sty-show-face-orient" />
+      <span>면 방향 표시 (디버그)</span>
+    </label>
+    <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.4;padding-left:24px;">
+      ON: 모든 면 양면 다른 색 (winding 가시화).<br/>
+      OFF: open mesh 양면 동일, closed solid 만 두 톤. (ADR-018)
+    </div>
+  `;
+  body.appendChild(wrap);
+
+  const checkbox = wrap.querySelector('#sty-show-face-orient') as HTMLInputElement;
+  if (checkbox) {
+    // Defensive — older mocks / pre-ADR-018 viewports may not have these methods.
+    const vp = viewport as Viewport & {
+      isShowFaceOrientation?: () => boolean;
+      setShowFaceOrientation?: (v: boolean) => void;
+    };
+    if (typeof vp.isShowFaceOrientation !== 'function'
+        || typeof vp.setShowFaceOrientation !== 'function') {
+      // 미지원 viewport — toggle 비활성.
+      wrap.style.display = 'none';
+      return;
+    }
+    checkbox.checked = vp.isShowFaceOrientation();
+    checkbox.addEventListener('change', (e) => {
+      const enabled = (e.target as HTMLInputElement).checked;
+      vp.setShowFaceOrientation!(enabled);
+      // 즉각 재렌더 — markDirty 가 없으므로 mesh sync 통해 viewport rebuild.
+      // 실제 적용은 다음 syncMesh / mesh update 시점.
+      const w = window as unknown as {
+        __axia?: { services?: { get: (k: string) => unknown } };
+      };
+      const tm = w.__axia?.services?.get('toolManager');
+      if (tm && typeof (tm as { syncMesh?: () => void }).syncMesh === 'function') {
+        (tm as { syncMesh: () => void }).syncMesh();
+      }
+    });
+  }
 }
