@@ -85,13 +85,52 @@ pub struct SurfaceIntersection {
 - AABB pad: 2 × tol
 - Newton: convergence 1e-6, max iter 50
 
-### P19.6 — Stage 1 MVP (이 commit)
+### P19.6 — Stage 1 MVP (초기 commit)
 
-이 ADR commit 의 scope:
+초기 ADR commit 의 scope:
 - ✅ ADR-033 v1.1 P18.13 의 4 인프라 항목 모두 구현
 - ✅ Plane-Plane analytic intersection (closed-form line)
 - ✅ Plane-Cylinder analytic intersection (ellipse / circle / line / point)
-- ⏳ General patch SSI: 별도 commit (P19.2 + P19.3 implementation)
+- ✅ General patch SSI: 후속 commit (P19.2~P19.4 implementation, 아래 P19.7 참조)
+
+### P19.7 — Phase F 완료 (2026-04-29 후속 commits)
+
+- ✅ **Plane-Sphere analytic** — 거리 기반 (circle / tangent point / empty)
+- ✅ **Plane-Cone analytic** — ray-from-apex sweep (ellipse / parabola /
+  hyperbola 자동 dispatch + apex degenerate)
+- ✅ **Cylinder-Cylinder analytic** (parallel-axis) — 2D circle-circle
+  reduction (두 평행 line / external / internal tangent / nested empty /
+  coincident warning); non-parallel 은 Stage 2 로 위임
+- ✅ **Stage 2 Subdivide-and-prune** (`ssi::subdivide`)
+  - `PatchRegion` (ctrl_grid + uv_bounds tracking in original param space)
+  - AABB pad-overlap test (`pad = 2 · tol`)
+  - Adaptive split: chord-length heuristic 으로 split_u vs split_v 결정
+  - Termination: bbox_diag < tol → emit / depth ≥ 16 → emit + warning
+- ✅ **Stage 3 Newton refinement** (`ssi::newton`)
+  - Pseudo-inverse via `J Jᵀ` inversion (3×3, PSD)
+  - Damped step (max |Δ| = 0.5) — overshoot 방지
+  - UV clamping to [0,1] each iter
+  - Default: tol 1e-6, max_iter 50
+- ✅ **Stage 4 Topology assembly** (`ssi::topology`)
+  - Greedy nearest-neighbor chain walking (forward + backward extend)
+  - Dedup within `merge_tol` (smaller residual wins)
+  - Closure detection: chain.len ≥ 3 + endpoints within 4·merge_tol
+  - Multiple disconnected chains → multiple SurfaceIntersection
+- ✅ **Top-level pipeline** — `intersect_bezier_pair(a, b, tol)`
+  - tol → newton tol = tol·1e-3, gap_tol = tol·100
+
+**Phase F 회귀 테스트 (44 SSI unit + 2 pipeline = 46 신규)**:
+- analytic: plane_plane (4) + plane_cylinder (7) + plane_sphere (6) +
+  plane_cone (5) + cyl_cyl (6) + helpers (1) = 29
+- subdivide: 6, newton: 4, topology: 5, pipeline: 2
+
+**알려진 한계 (follow-up)**:
+- B-spline / NURBS surface SSI 은 Bezier 만 직접 지원 — knot interval 별
+  Bezier extraction 후 pair-wise SSI 호출 필요 (별도 phase)
+- Singular point (branching) 자동 분기 미구현 — 다중 분기 곡선은 분리
+  chain 으로 emit
+- Self-intersecting intersection curve detection 없음
+- Cylinder-Cylinder 비-평행 축은 Stage 2 fallback (analytic shortcut 없음)
 
 ## Implementation
 

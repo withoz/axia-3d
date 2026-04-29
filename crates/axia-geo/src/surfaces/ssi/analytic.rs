@@ -289,6 +289,220 @@ pub fn plane_sphere(
     }
 }
 
+/// Plane-Cone intersection.
+///
+/// Cone defined by `apex`, `axis_dir` (unit, pointing into the nappe), and
+/// `half_angle` α (radians, 0 < α < π/2). Surface points: for s ≥ 0,
+///   `P(s, θ) = apex + s·(axis·cosα + r_dir(θ)·sinα)`
+///
+/// For each sweep angle θ, we intersect the generator ray with the plane.
+/// The resulting point set traces the conic section uniformly:
+/// - Plane perpendicular to axis (|n·axis|=1) and not through apex → **circle**
+/// - Plane through apex (n·(plane_origin-apex)=0) → degenerate (apex only,
+///   `tangent_warning=true`)
+/// - Plane oblique, all generator rays hit positive s → **ellipse** (closed)
+/// - Plane parallel to one generator → **parabola** (open, missing one
+///   sample where denominator ≈ 0)
+/// - Plane tilted past slant angle → **hyperbola** branch (open)
+///
+/// `n_samples` controls angular sweep density.
+pub fn plane_cone(
+    plane_origin: DVec3, plane_normal: DVec3,
+    apex: DVec3, axis_dir: DVec3, half_angle: f64,
+    n_samples: usize,
+) -> SurfaceIntersection {
+    let n = plane_normal.normalize_or_zero();
+    let a = axis_dir.normalize_or_zero();
+    if n.length_squared() < 0.5 || a.length_squared() < 0.5 {
+        return SurfaceIntersection::default();
+    }
+    if !(half_angle > 1e-9 && half_angle < std::f64::consts::FRAC_PI_2 - 1e-9) {
+        return SurfaceIntersection::default();
+    }
+
+    let cos_a = half_angle.cos();
+    let sin_a = half_angle.sin();
+
+    // Plane-apex distance (signed)
+    let d_apex = (apex - plane_origin).dot(n);
+
+    // If plane passes through apex → degenerate (line(s) through apex). MVP
+    // returns apex with tangent_warning.
+    if d_apex.abs() < 1e-9 {
+        return SurfaceIntersection {
+            points: vec![apex],
+            uv_a: vec![(0.5, 0.5)],
+            uv_b: vec![(0.0, 0.0)],
+            closed: false,
+            tangent_warning: true,
+        };
+    }
+
+    // Build orthonormal basis perpendicular to axis for r_dir(θ).
+    let arb = if a.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+    let u_basis = a.cross(arb).normalize_or_zero();
+    let v_basis = a.cross(u_basis).normalize_or_zero();
+
+    let n_pts = n_samples.max(16);
+    let mut points = Vec::with_capacity(n_pts + 1);
+    let mut uv_a = Vec::with_capacity(n_pts + 1);
+    let mut uv_b = Vec::with_capacity(n_pts + 1);
+    let mut all_valid = true;
+    let plane_d_const = (plane_origin - apex).dot(n);  // numerator constant
+
+    for i in 0..=n_pts {
+        let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n_pts as f64);
+        let r_dir = u_basis * theta.cos() + v_basis * theta.sin();
+        let gen = a * cos_a + r_dir * sin_a;
+        let denom = gen.dot(n);
+        if denom.abs() < 1e-12 {
+            // Generator parallel to plane — parabola asymptote miss.
+            all_valid = false;
+            continue;
+        }
+        let s = plane_d_const / denom;
+        if s < 0.0 {
+            // Hits opposite nappe (negative s) — skip.
+            all_valid = false;
+            continue;
+        }
+        let p = apex + gen * s;
+        points.push(p);
+        uv_a.push((0.5, 0.5));
+        uv_b.push((theta, s));
+    }
+
+    if points.is_empty() {
+        return SurfaceIntersection::default();
+    }
+
+    SurfaceIntersection {
+        points, uv_a, uv_b,
+        closed: all_valid,
+        tangent_warning: false,
+    }
+}
+
+/// Cylinder-Cylinder intersection (parallel-axis special case).
+///
+/// Two right-circular cylinders sharing parallel axes reduce to the 2D
+/// circle-circle problem in the plane perpendicular to the axes:
+/// - `d > r1 + r2`        → empty
+/// - `d == r1 + r2` (±ε) → external tangent line
+/// - `|r1-r2| < d < r1+r2` → two intersection lines parallel to axis
+/// - `d == |r1-r2|`       → internal tangent line
+/// - `d < |r1-r2|`        → one cylinder inside the other, empty
+/// - `d ≈ 0 && r1 ≈ r2`  → coincident (`tangent_warning=true`)
+///
+/// **Non-parallel axes** → returns `tangent_warning=true` with empty points
+/// to signal "use Stage 2 subdivision."
+pub fn cylinder_cylinder(
+    axis_origin_a: DVec3, axis_dir_a: DVec3, radius_a: f64,
+    axis_origin_b: DVec3, axis_dir_b: DVec3, radius_b: f64,
+    n_samples: usize,
+    extent: f64,
+) -> SurfaceIntersection {
+    let aa = axis_dir_a.normalize_or_zero();
+    let ab = axis_dir_b.normalize_or_zero();
+    if aa.length_squared() < 0.5 || ab.length_squared() < 0.5
+        || radius_a <= 0.0 || radius_b <= 0.0
+    {
+        return SurfaceIntersection::default();
+    }
+
+    // Check parallel: |aa · ab| ≈ 1
+    let parallel = aa.dot(ab).abs() > 1.0 - 1e-9;
+    if !parallel {
+        // Defer to general subdivision.
+        return SurfaceIntersection {
+            points: Vec::new(),
+            uv_a: Vec::new(),
+            uv_b: Vec::new(),
+            closed: false,
+            tangent_warning: true,
+        };
+    }
+
+    // Project axis_origin_b onto plane through axis_origin_a perpendicular to aa.
+    let delta = axis_origin_b - axis_origin_a;
+    let perp_offset = delta - aa * delta.dot(aa);
+    let d = perp_offset.length();
+
+    // Coincident
+    if d < 1e-9 && (radius_a - radius_b).abs() < 1e-9 {
+        return SurfaceIntersection {
+            points: Vec::new(),
+            uv_a: Vec::new(),
+            uv_b: Vec::new(),
+            closed: false,
+            tangent_warning: true,
+        };
+    }
+
+    // Disjoint (external)
+    if d > radius_a + radius_b + 1e-9 {
+        return SurfaceIntersection::default();
+    }
+    // Disjoint (internal nesting, no intersection)
+    if d + 1e-9 < (radius_a - radius_b).abs() {
+        return SurfaceIntersection::default();
+    }
+
+    // Tangent (external or internal)
+    let is_ext_tangent = (d - (radius_a + radius_b)).abs() < 1e-9;
+    let is_int_tangent = (d - (radius_a - radius_b).abs()).abs() < 1e-9;
+
+    // 2D circle-circle: solve in (u, v) basis where u = perp_offset/d
+    // Center A at origin, center B at (d, 0).
+    // Circle A: x² + y² = r1² ; Circle B: (x-d)² + y² = r2²
+    // Subtract: -2dx + d² = r2² - r1² → x = (d² + r1² - r2²) / (2d)
+    let u_basis = if d > 1e-12 {
+        perp_offset / d
+    } else {
+        // d ≈ 0 fallback (shouldn't reach here unless tangent edge case)
+        let arb = if aa.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+        aa.cross(arb).normalize_or_zero()
+    };
+    let v_basis = aa.cross(u_basis).normalize_or_zero();
+
+    let x = if d > 1e-12 {
+        (d * d + radius_a * radius_a - radius_b * radius_b) / (2.0 * d)
+    } else {
+        0.0
+    };
+    let y_sq = (radius_a * radius_a - x * x).max(0.0);
+    let y = y_sq.sqrt();
+
+    let n_pts = n_samples.max(4);
+    let mut points = Vec::new();
+    let mut uv_a = Vec::new();
+    let mut uv_b = Vec::new();
+
+    let signs: &[f64] = if is_ext_tangent || is_int_tangent {
+        &[1.0]  // single tangent line
+    } else {
+        &[1.0, -1.0]  // two intersection lines
+    };
+
+    for &sign in signs {
+        let line_origin_2d = u_basis * x + v_basis * (y * sign);
+        let line_origin = axis_origin_a + line_origin_2d;
+        for i in 0..n_pts {
+            let t = -extent + 2.0 * extent * (i as f64) / ((n_pts - 1) as f64);
+            let p = line_origin + aa * t;
+            points.push(p);
+            uv_a.push((0.0, t));
+            uv_b.push((0.0, t));
+        }
+    }
+
+    SurfaceIntersection {
+        points, uv_a, uv_b,
+        closed: false,
+        tangent_warning: is_ext_tangent || is_int_tangent,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +771,176 @@ mod tests {
             // Lies on plane: p · n ≈ 0
             assert!(p.dot(n).abs() < 1e-9);
         }
+    }
+
+    // ─── Plane-Cone ────────────────────────────────────────────────────────
+
+    #[test]
+    fn plane_cone_perpendicular_yields_circle() {
+        // Cone apex at origin, axis +Y, half-angle 30°.
+        // Plane y=4 perpendicular to axis → circle at radius 4·tan(30°).
+        let alpha = 30f64.to_radians();
+        let result = plane_cone(
+            DVec3::new(0.0, 4.0, 0.0), DVec3::Y,
+            DVec3::ZERO, DVec3::Y, alpha,
+            32,
+        );
+        assert!(!result.is_empty() && result.closed);
+        let expected_r = 4.0 * alpha.tan();
+        for p in &result.points {
+            assert!((p.y - 4.0).abs() < 1e-6);
+            let radial = (p.x * p.x + p.z * p.z).sqrt();
+            assert!((radial - expected_r).abs() < 1e-6,
+                "radial {} ≠ {}", radial, expected_r);
+        }
+    }
+
+    #[test]
+    fn plane_cone_through_apex_yields_apex_point() {
+        let alpha = 30f64.to_radians();
+        let result = plane_cone(
+            DVec3::ZERO, DVec3::Z,        // plane through apex
+            DVec3::ZERO, DVec3::Y, alpha,
+            16,
+        );
+        assert_eq!(result.len(), 1);
+        assert!(result.tangent_warning);
+        assert!(approx_eq(result.points[0], DVec3::ZERO, 1e-9));
+    }
+
+    #[test]
+    fn plane_cone_oblique_below_slant_yields_ellipse() {
+        // Slight tilt — should produce ellipse (closed loop, all samples valid).
+        let alpha = 20f64.to_radians();
+        let normal = DVec3::new(0.0, 1.0, 0.2).normalize();  // 11° tilt
+        let result = plane_cone(
+            DVec3::new(0.0, 5.0, 0.0), normal,
+            DVec3::ZERO, DVec3::Y, alpha,
+            32,
+        );
+        assert!(!result.is_empty(), "should intersect");
+        assert!(result.closed, "ellipse must be closed");
+        // All points lie on plane: (p - plane_origin) · normal ≈ 0
+        for p in &result.points {
+            let pp = *p - DVec3::new(0.0, 5.0, 0.0);
+            assert!(pp.dot(normal).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn plane_cone_steep_plane_yields_open_curve() {
+        // Plane tilted past slant angle → hyperbola branch (open curve).
+        let alpha = 20f64.to_radians();
+        // Normal pointing mostly along +Z (perpendicular to axis +Y) → very steep.
+        let normal = DVec3::new(0.0, 0.1, 1.0).normalize();
+        let result = plane_cone(
+            DVec3::new(0.0, 0.0, 3.0), normal,
+            DVec3::ZERO, DVec3::Y, alpha,
+            64,
+        );
+        // Some samples should be valid (hits cone), others skipped.
+        assert!(!result.is_empty());
+        assert!(!result.closed, "hyperbola is open");
+    }
+
+    #[test]
+    fn plane_cone_invalid_half_angle_returns_empty() {
+        // half-angle = 0 (degenerate to line)
+        let result = plane_cone(
+            DVec3::new(0.0, 4.0, 0.0), DVec3::Y,
+            DVec3::ZERO, DVec3::Y, 0.0,
+            16,
+        );
+        assert!(result.is_empty());
+        // half-angle ≥ π/2 (degenerate to plane)
+        let result = plane_cone(
+            DVec3::new(0.0, 4.0, 0.0), DVec3::Y,
+            DVec3::ZERO, DVec3::Y, std::f64::consts::FRAC_PI_2,
+            16,
+        );
+        assert!(result.is_empty());
+    }
+
+    // ─── Cylinder-Cylinder ─────────────────────────────────────────────────
+
+    #[test]
+    fn cyl_cyl_parallel_offset_yields_two_lines() {
+        // Both axes along Y, offset 4 in X, both radius 3 → two intersection
+        // lines (since d=4, r1+r2=6, so 4 < 6).
+        let result = cylinder_cylinder(
+            DVec3::ZERO, DVec3::Y, 3.0,
+            DVec3::new(4.0, 0.0, 0.0), DVec3::Y, 3.0,
+            8, 10.0,
+        );
+        assert!(!result.is_empty());
+        // x = (16 + 9 - 9) / 8 = 2; y = √(9-4) = √5
+        // So lines at (2, t, ±√5).
+        let sqrt5 = 5f64.sqrt();
+        let mut found_pos = false;
+        let mut found_neg = false;
+        for p in &result.points {
+            assert!((p.x - 2.0).abs() < 1e-6);
+            if (p.z - sqrt5).abs() < 1e-6 { found_pos = true; }
+            if (p.z + sqrt5).abs() < 1e-6 { found_neg = true; }
+        }
+        assert!(found_pos && found_neg, "should have both ±√5 lines");
+    }
+
+    #[test]
+    fn cyl_cyl_parallel_external_tangent() {
+        // d = r1 + r2 exactly → single tangent line.
+        let result = cylinder_cylinder(
+            DVec3::ZERO, DVec3::Y, 3.0,
+            DVec3::new(7.0, 0.0, 0.0), DVec3::Y, 4.0,
+            8, 10.0,
+        );
+        assert!(!result.is_empty());
+        assert!(result.tangent_warning);
+    }
+
+    #[test]
+    fn cyl_cyl_parallel_too_far_empty() {
+        let result = cylinder_cylinder(
+            DVec3::ZERO, DVec3::Y, 3.0,
+            DVec3::new(20.0, 0.0, 0.0), DVec3::Y, 4.0,
+            8, 10.0,
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn cyl_cyl_parallel_nested_empty() {
+        // Smaller cylinder fully inside larger, no surface intersection.
+        let result = cylinder_cylinder(
+            DVec3::ZERO, DVec3::Y, 10.0,
+            DVec3::new(2.0, 0.0, 0.0), DVec3::Y, 3.0,  // d=2, |r1-r2|=7 → nested
+            8, 10.0,
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn cyl_cyl_parallel_coincident_warns() {
+        let result = cylinder_cylinder(
+            DVec3::ZERO, DVec3::Y, 5.0,
+            DVec3::ZERO, DVec3::Y, 5.0,
+            8, 10.0,
+        );
+        assert!(result.is_empty());
+        assert!(result.tangent_warning);
+    }
+
+    #[test]
+    fn cyl_cyl_non_parallel_defers_to_subdivision() {
+        // Crossing axes — analytic shortcut returns empty + warning to signal
+        // "use Stage 2 subdivision."
+        let result = cylinder_cylinder(
+            DVec3::ZERO, DVec3::Y, 3.0,
+            DVec3::ZERO, DVec3::X, 3.0,
+            8, 10.0,
+        );
+        assert!(result.is_empty());
+        assert!(result.tangent_warning);
     }
 
     // ─── SurfaceIntersection helpers ─────────────────────────────────────
