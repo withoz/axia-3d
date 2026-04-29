@@ -241,6 +241,22 @@ export class AxiaEngine {
      */
     drawArcWithCurve(cx: number, cy: number, cz: number, radius: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, start_angle: number, end_angle: number, segments: number): number;
     /**
+     * ADR-032 P17 — Atomic B-spline drawing with curve promotion.
+     * Like Bezier; same curve metadata replicated on each segment edge.
+     */
+    drawBSplineWithCurve(control_pts_flat: Float64Array, knots: Float64Array, degree: number): number;
+    /**
+     * ADR-032 P17 — Atomic Bezier drawing with analytic curve promotion.
+     *
+     * `control_pts_flat`: 3·(n+1) floats. `segments`: tessellation count.
+     * All N segment edges receive the SAME Bezier curve metadata (the full
+     * curve), since Bezier doesn't sub-divide naturally per-segment without
+     * re-parameterization. View-time tessellation uses the full curve.
+     *
+     * Returns 0 on success, -1 on error.
+     */
+    drawBezierWithCurve(control_pts_flat: Float64Array, segments: number): number;
+    /**
      * Draw a centerline (reference axis). Unlike drawLine, bypasses
      * intersection-split / face synthesis / loop detection. Creates one
      * edge tagged Centerline; crossing other edges does not split them.
@@ -1136,6 +1152,8 @@ export interface InitOutput {
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
     readonly axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+    readonly axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

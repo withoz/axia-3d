@@ -643,6 +643,41 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-032 P17 — Atomic B-spline drawing with curve promotion.
+     * Like Bezier; same curve metadata replicated on each segment edge.
+     * @param {Float64Array} control_pts_flat
+     * @param {Float64Array} knots
+     * @param {number} degree
+     * @returns {number}
+     */
+    drawBSplineWithCurve(control_pts_flat, knots, degree) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(knots, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawBSplineWithCurve(this.__wbg_ptr, ptr0, len0, ptr1, len1, degree);
+        return ret;
+    }
+    /**
+     * ADR-032 P17 — Atomic Bezier drawing with analytic curve promotion.
+     *
+     * `control_pts_flat`: 3·(n+1) floats. `segments`: tessellation count.
+     * All N segment edges receive the SAME Bezier curve metadata (the full
+     * curve), since Bezier doesn't sub-divide naturally per-segment without
+     * re-parameterization. View-time tessellation uses the full curve.
+     *
+     * Returns 0 on success, -1 on error.
+     * @param {Float64Array} control_pts_flat
+     * @param {number} segments
+     * @returns {number}
+     */
+    drawBezierWithCurve(control_pts_flat, segments) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawBezierWithCurve(this.__wbg_ptr, ptr0, len0, segments);
+        return ret;
+    }
+    /**
      * Draw a centerline (reference axis). Unlike drawLine, bypasses
      * intersection-split / face synthesis / loop detection. Creates one
      * edge tagged Centerline; crossing other edges does not split them.

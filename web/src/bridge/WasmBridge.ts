@@ -417,6 +417,8 @@ type AxiaEngineExtended = AxiaEngine & {
   intersectEdges?(edgeIdA: number, edgeIdB: number, tol: number): Float64Array;
   // ADR-032 P17 — Promote on creation
   drawArcWithCurve?(...args: number[]): number;
+  drawBezierWithCurve?(controlPts: Float64Array, segments: number): number;
+  drawBSplineWithCurve?(controlPts: Float64Array, knots: Float64Array, degree: number): number;
   // ADR-031 Phase D — Analytic surfaces
   setFaceSurfacePlane?(...args: number[]): boolean;
   setFaceSurfaceCylinder?(...args: number[]): boolean;
@@ -654,6 +656,46 @@ export class WasmBridge {
       cx, cy, cz, radius, nx, ny, nz, ux, uy, uz,
       startAngle, endAngle, segments,
     ) : -1;
+  }
+
+  /**
+   * ADR-032 P17 — Atomic Bezier drawing with curve promotion.
+   * `controlPts` flat: 3·(n+1) floats. `segments` is a hint; engine uses
+   * adaptive tessellation. Returns 0 on success, -1 on error.
+   */
+  drawBezierWithCurve(
+    controlPts: Float64Array | number[],
+    segments: number,
+  ): number {
+    if (!this.engine) return -1;
+    const ptsArr = controlPts instanceof Float64Array
+      ? controlPts : new Float64Array(controlPts);
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      drawBezierWithCurve?: (pts: Float64Array, segs: number) => number;
+    }).drawBezierWithCurve;
+    return fn ? fn.call(this.engine, ptsArr, segments) : -1;
+  }
+
+  /**
+   * ADR-032 P17 — Atomic B-spline drawing with curve promotion.
+   * `knots` length must equal `(controlPts.length / 3) + degree + 1`.
+   */
+  drawBSplineWithCurve(
+    controlPts: Float64Array | number[],
+    knots: Float64Array | number[],
+    degree: number,
+  ): number {
+    if (!this.engine) return -1;
+    const ptsArr = controlPts instanceof Float64Array
+      ? controlPts : new Float64Array(controlPts);
+    const knotsArr = knots instanceof Float64Array
+      ? knots : new Float64Array(knots);
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      drawBSplineWithCurve?: (pts: Float64Array, knots: Float64Array, deg: number) => number;
+    }).drawBSplineWithCurve;
+    return fn ? fn.call(this.engine, ptsArr, knotsArr, degree) : -1;
   }
 
   /**

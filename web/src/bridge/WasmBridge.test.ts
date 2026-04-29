@@ -614,6 +614,61 @@ describe('WasmBridge', () => {
       expect(result).toBe(-1);
     });
 
+    it('drawBezierWithCurve() forwards control points + segments', () => {
+      let capturedPts: Float64Array | null = null;
+      let capturedSeg = -1;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        drawBezierWithCurve: (pts: Float64Array, segs: number) => {
+          capturedPts = pts;
+          capturedSeg = segs;
+          return 0;
+        },
+      };
+      const result = bridge.drawBezierWithCurve(
+        [0, 0, 0,  5, 10, 0,  10, 0, 0],
+        16,
+      );
+      expect(result).toBe(0);
+      expect(capturedSeg).toBe(16);
+      const arr = capturedPts as unknown as Float64Array;
+      expect(arr.length).toBe(9);
+    });
+
+    it('drawBezierWithCurve() returns -1 when engine missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const result = bridge.drawBezierWithCurve([0, 0, 0, 1, 1, 0], 8);
+      expect(result).toBe(-1);
+    });
+
+    it('drawBSplineWithCurve() forwards pts + knots + degree', () => {
+      let captured = { pts: null as Float64Array | null, knots: null as Float64Array | null, deg: -1 };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        drawBSplineWithCurve: (pts: Float64Array, knots: Float64Array, deg: number) => {
+          captured = { pts, knots, deg };
+          return 0;
+        },
+      };
+      const ok = bridge.drawBSplineWithCurve(
+        [0,0,0, 1,5,0, 5,5,0, 10,0,0],
+        [0,0,0,0, 1,1,1,1],
+        3,
+      );
+      expect(ok).toBe(0);
+      expect(captured.deg).toBe(3);
+      expect(captured.pts!.length).toBe(12);
+      expect(captured.knots!.length).toBe(8);
+    });
+
+    it('drawBSplineWithCurve() returns -1 when engine missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const result = bridge.drawBSplineWithCurve([0, 0, 0], [0, 0, 1], 1);
+      expect(result).toBe(-1);
+    });
+
     it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

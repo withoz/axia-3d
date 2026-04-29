@@ -114,26 +114,37 @@ export class DrawBezierTool implements ITool {
     };
     getCurveRegistry().add(curve);
 
-    // ADR-012 §3 BatchCommand — N 회 crossing 대신 1 회.
-    //   너무 가까운 점은 건너뛴 후 평탄화 배열로 묶어 한 번에 호출.
-    const pts = tessellateCurve(curve);
-    const filtered: Array<{ x: number; y: number; z: number }> = [];
-    for (let i = 0; i < pts.length; i++) {
-      if (filtered.length === 0 || pts[i].distanceTo(pts[i - 1]) >= 0.1) {
-        filtered.push(pts[i]);
-      }
+    // ADR-032 P17 — Promote on creation: drawBezierWithCurve atomic API
+    // attaches AnalyticCurve::Bezier to each segment edge.
+    const ctrlFlat = new Float64Array(curve.controlPoints.length * 3);
+    for (let i = 0; i < curve.controlPoints.length; i++) {
+      ctrlFlat[i * 3]     = curve.controlPoints[i][0];
+      ctrlFlat[i * 3 + 1] = curve.controlPoints[i][1];
+      ctrlFlat[i * 3 + 2] = curve.controlPoints[i][2];
     }
-    if (filtered.length >= 2) {
-      const flat = new Float64Array(filtered.length * 3);
-      for (let i = 0; i < filtered.length; i++) {
-        flat[i * 3]     = filtered[i].x;
-        flat[i * 3 + 1] = filtered[i].y;
-        flat[i * 3 + 2] = filtered[i].z;
+    const ok = this.ctx.bridge.drawBezierWithCurve(ctrlFlat, curve.segments ?? 32);
+
+    if (ok < 0) {
+      // Fallback to plain polyline.
+      const pts = tessellateCurve(curve);
+      const filtered: Array<{ x: number; y: number; z: number }> = [];
+      for (let i = 0; i < pts.length; i++) {
+        if (filtered.length === 0 || pts[i].distanceTo(pts[i - 1]) >= 0.1) {
+          filtered.push(pts[i]);
+        }
       }
-      this.ctx.bridge.drawPolyline(flat);
+      if (filtered.length >= 2) {
+        const flat = new Float64Array(filtered.length * 3);
+        for (let i = 0; i < filtered.length; i++) {
+          flat[i * 3]     = filtered[i].x;
+          flat[i * 3 + 1] = filtered[i].y;
+          flat[i * 3 + 2] = filtered[i].z;
+        }
+        this.ctx.bridge.drawPolyline(flat);
+      }
     }
     this.ctx.syncMesh();
-    debugLog(`[Bezier] 4 control points → ${pts.length - 1} segments`);
+    debugLog(`[Bezier] 4 control points → drawBezierWithCurve (ok=${ok}, analytic Bezier attached)`);
   }
 
   // ═══════════════════════════════════════════════════

@@ -772,6 +772,134 @@ impl AxiaEngine {
         if any_failed { -1.0 } else { 0.0 }
     }
 
+    /// ADR-032 P17 — Atomic Bezier drawing with analytic curve promotion.
+    ///
+    /// `control_pts_flat`: 3·(n+1) floats. `segments`: tessellation count.
+    /// All N segment edges receive the SAME Bezier curve metadata (the full
+    /// curve), since Bezier doesn't sub-divide naturally per-segment without
+    /// re-parameterization. View-time tessellation uses the full curve.
+    ///
+    /// Returns 0 on success, -1 on error.
+    #[wasm_bindgen(js_name = "drawBezierWithCurve")]
+    pub fn draw_bezier_with_curve(
+        &mut self,
+        control_pts_flat: Vec<f64>,
+        segments: u32,
+    ) -> f64 {
+        use axia_geo::{AnalyticCurve, EdgeId};
+        use axia_geo::curves::CurveOps;
+        use glam::DVec3;
+        if control_pts_flat.len() < 6 || control_pts_flat.len() % 3 != 0 || segments < 1 {
+            return -1.0;
+        }
+        let mut ctrl = Vec::with_capacity(control_pts_flat.len() / 3);
+        let mut i = 0;
+        while i + 2 < control_pts_flat.len() {
+            ctrl.push(DVec3::new(
+                control_pts_flat[i], control_pts_flat[i + 1], control_pts_flat[i + 2],
+            ));
+            i += 3;
+        }
+        let curve = AnalyticCurve::Bezier { control_pts: ctrl };
+        let pts = match curve.tessellate(0.001, &self.scene.mesh) {
+            Ok(p) => p, Err(_) => return -1.0,
+        };
+
+        // Adjust segments to match tessellation.
+        if pts.len() < 2 { return -1.0; }
+        let _ = segments;  // tessellation determined adaptively; segments hint ignored
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut edge_ids: Vec<EdgeId> = Vec::with_capacity(pts.len());
+        let mut any_failed = false;
+        for i in 0..pts.len() - 1 {
+            match self.scene.mesh.draw_line(pts[i], pts[i + 1]) {
+                Ok((_, _, eid)) => edge_ids.push(eid),
+                Err(_) => { any_failed = true; break; }
+            }
+        }
+
+        if !any_failed {
+            for &eid in &edge_ids {
+                if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+                    e.set_curve(Some(curve.clone()));
+                }
+            }
+        }
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        if any_failed { -1.0 } else { 0.0 }
+    }
+
+    /// ADR-032 P17 — Atomic B-spline drawing with curve promotion.
+    /// Like Bezier; same curve metadata replicated on each segment edge.
+    #[wasm_bindgen(js_name = "drawBSplineWithCurve")]
+    pub fn draw_bspline_with_curve(
+        &mut self,
+        control_pts_flat: Vec<f64>,
+        knots: Vec<f64>,
+        degree: u32,
+    ) -> f64 {
+        use axia_geo::{AnalyticCurve, EdgeId};
+        use axia_geo::curves::CurveOps;
+        use glam::DVec3;
+        if control_pts_flat.is_empty() || control_pts_flat.len() % 3 != 0 || degree == 0 {
+            return -1.0;
+        }
+        let mut ctrl = Vec::with_capacity(control_pts_flat.len() / 3);
+        let mut i = 0;
+        while i + 2 < control_pts_flat.len() {
+            ctrl.push(DVec3::new(
+                control_pts_flat[i], control_pts_flat[i + 1], control_pts_flat[i + 2],
+            ));
+            i += 3;
+        }
+        let expected_knots = ctrl.len() + degree as usize + 1;
+        if knots.len() != expected_knots || ctrl.len() < degree as usize + 1 {
+            return -1.0;
+        }
+        let curve = AnalyticCurve::BSpline {
+            control_pts: ctrl, knots, degree,
+        };
+        let pts = match curve.tessellate(0.001, &self.scene.mesh) {
+            Ok(p) => p, Err(_) => return -1.0,
+        };
+        if pts.len() < 2 { return -1.0; }
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut edge_ids: Vec<EdgeId> = Vec::with_capacity(pts.len());
+        let mut any_failed = false;
+        for i in 0..pts.len() - 1 {
+            match self.scene.mesh.draw_line(pts[i], pts[i + 1]) {
+                Ok((_, _, eid)) => edge_ids.push(eid),
+                Err(_) => { any_failed = true; break; }
+            }
+        }
+
+        if !any_failed {
+            for &eid in &edge_ids {
+                if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+                    e.set_curve(Some(curve.clone()));
+                }
+            }
+        }
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        if any_failed { -1.0 } else { 0.0 }
+    }
+
     /// Clear any analytic curve from an edge (revert to straight line).
     #[wasm_bindgen(js_name = "clearEdgeCurve")]
     pub fn clear_edge_curve(&mut self, edge_id: u32) -> bool {

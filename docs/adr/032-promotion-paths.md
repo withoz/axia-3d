@@ -60,6 +60,25 @@ cylinder primitive 의 side face 에 analytic surface 가 attach 되지 않음.
 - Phase G: STEP/IGES import 의 NURBS 직접 사용
 - 별도: 사용자 명시 "convert to arc/circle/spline" 명령 (RANSAC fitting)
 
+### P17.4 — Phase D' 구현 결과 (2026-04-29 종료)
+
+#### ✅ 완료
+1. **Primitive surface auto-attach** — create_cylinder/sphere/cone 결과 face
+   에 AnalyticSurface 자동 attach (cylinder 16 segments cap/side, sphere
+   poles+rings, cone frustum→full cone parameters)
+2. **drawArcWithCurve atomic API** — Rust 측 단일 트랜잭션 + DrawArcTool
+   migration
+3. **drawBezierWithCurve atomic API** — DrawBezierTool migration
+4. **drawBSplineWithCurve atomic API** — bridge wrapper (UI 도구는 follow-up)
+
+#### ⏭ 적용 불가 (현 codebase 에 entry point 없음)
+- **DrawSplineTool**: 별도 도구 미존재. DrawFreehandTool 은 Catmull-Rom
+  사용 — NURBS 변환 필요 (별도 phase: Catmull→B-spline conversion).
+- **DXF Import 승격**: DxfSceneBuilder 는 Three.js display 전용 (overlay
+  geometry), 엔진 mesh 로 import 하는 path 가 현재 codebase 에 없음.
+  사용자가 import 후 수동 trace — 별도 "DXF→Mesh import" 기능이 추가될 때
+  본 ADR 의 promotion 패턴 적용 가능.
+
 ## Implementation
 
 ### Rust 측 (axia-geo 의 primitives.rs)
