@@ -60,6 +60,22 @@
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
 
+### 8. ADR-019 — Line is Truth, Face is Byproduct (2026-04-29)
+- **Line (Edge) 1급 정책** — 사용자 정의 P1-P6 + Claude 보강 A1-A5 + 운영 B1-B7.
+- 핵심: "엣지는 모든 면/엣지/선의 절단 도구. 면은 토폴로지 byproduct."
+- **자동 분할 (P4)**: 양 endpoint 가 같은 face boundary + coplanar 1.5μm exact (A3, B7)
+- **Erase (P5/P6)**:
+  - line 1개만 제거 → 다른 line 모두 상태 유지
+  - 영향 region local re-resolve → 닫힌 CCW cycle 자동 면화 (A4)
+  - 재평가 시 ring topology 자동 형성 안 함 — 명시 promote 만 (B6)
+  - orphan wire 보존 — cleanup_dangling = false 항상
+- **Cascade (Shift+erase)**: 명시적 cascade 모드 유지 (B5)
+- **Centerline class**: 절단 효과 없음 (A1)
+- **Vertex**: edge endpoint 로만 존재, 1급 아님 (A2)
+- **Hover preview**: amber (default) / red (cascade) 2단으로 단순화. cyan 폐기.
+- ADR-016 §2 의 erase table 일부 supersede (interior split fast-path → Path B 통일).
+- ADR-008 Axiom 1 의 운영 명시화. ADR-017 (Edge 격상) 과 자연 정합.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
@@ -79,6 +95,17 @@
 - `test_outer_rect_drawn_after_inners_keeps_face`
 - `test_draw_order_independence`
 - `test_user_pattern_no_missing_faces`
+
+ADR-019 구현 후 추가될 회귀 테스트 (절대 #[ignore] 금지):
+- `test_p4_edge_added_on_face_auto_splits`
+- `test_p5_erase_face_edge_keeps_other_lines`
+- `test_p5_erase_creates_new_face_when_cycle_closes`
+- `test_p6_adjacent_face_erase_creates_merged_face`
+- `test_p6_drawing_order_independent`
+- `test_a4_multiple_cycles_all_become_faces`
+- `test_b5_shift_erase_cascades_unchanged`
+- `test_b6_no_auto_ring_on_resynthesize`
+- `test_xia_inheritance_preserved`
 
 ---
 
