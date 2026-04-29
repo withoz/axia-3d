@@ -182,11 +182,9 @@ fn rect_equivalent_to_4_lines() {
         "RECT edge count must match 4-LINE equivalent");
 }
 
-/// Axiom 7 (future — Phase B/expansion): RECT 을 기존 RECT 위에 **겹치게**
-/// 그리면 면이 sub-face 로 쪼개져야 한다. Current LINE pipeline handles this
-/// only when the new segment CROSSES existing edges (`find_line_crossings`);
-/// endpoint-on-edge cases need an additional split_edge pass that is not yet
-/// wired. Marked #[ignore] until Phase B enables it.
+/// Axiom 7 (ADR-008) + ADR-021 P7: RECT 을 기존 RECT 위에 **겹치게**
+/// 그리면 면이 sub-face 로 쪼개져야 한다. Phase B/C 이후로 endpoint-on-edge
+/// case 도 처리됨 — split_edge 패스 + ADR-021 component-based promote 로 해결.
 #[test]
 fn overlapping_rect_splits_into_subfaces() {
     let mut scene = Scene::default();
