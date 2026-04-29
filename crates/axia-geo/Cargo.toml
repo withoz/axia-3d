@@ -18,6 +18,9 @@ bincode = { workspace = true }
 bytemuck = { workspace = true }
 axia-transaction = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [[bench]]
 name = "practicality_bench"
 harness = false

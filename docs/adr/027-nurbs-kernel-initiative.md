@@ -1,6 +1,6 @@
 # ADR-027: NURBS Kernel Initiative — Kickoff
 
-**Status**: **Proposed** (2026-04-29) — 사용자 승인 대기
+**Status**: **Accepted** (2026-04-29) — 사용자 승인 완료, Phase A 즉시 시작
 **Plan**: [PLAN-001](../plans/PLAN-001-nurbs-kernel.md)
 **Related**: ADR-007/019/021/025/026 (모두 보존)
 

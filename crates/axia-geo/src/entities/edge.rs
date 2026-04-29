@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use super::id::*;
 use super::flags::SharedFlags;
+use crate::curves::AnalyticCurve;
 
 /// Edge semantic class — distinguishes real geometry (participates in face
 /// synthesis, intersection-splitting, boolean) from reference lines that
@@ -70,6 +71,19 @@ pub struct Edge {
     /// `#[serde(default)]` allows old AXIA files (no field) to deserialize.
     #[serde(default)]
     class: EdgeClass,
+    /// ADR-028 Phase A — optional analytic curve definition.
+    ///
+    /// When `None`, the edge is a straight line between v_small and v_large
+    /// (default, 100% backward compatible with pre-Phase-A meshes).
+    ///
+    /// When `Some`, the edge represents an analytic curve. The two endpoints
+    /// (v_small, v_large) still anchor the topology — they correspond to the
+    /// curve's start/end positions — but the geometric path between them is
+    /// defined by the variant (Circle, Arc, etc.).
+    ///
+    /// `#[serde(default)]` ensures old AXIA files load with `curve = None`.
+    #[serde(default)]
+    curve: Option<AnalyticCurve>,
 }
 
 impl Edge {
@@ -82,7 +96,28 @@ impl Edge {
             active: true,
             flags: SharedFlags::empty(),
             class: EdgeClass::default(),
+            curve: None,
         }
+    }
+
+    /// ADR-028 Phase A — read the optional analytic curve.
+    #[inline]
+    pub fn curve(&self) -> Option<&AnalyticCurve> {
+        self.curve.as_ref()
+    }
+
+    /// ADR-028 Phase A — set or clear the analytic curve.
+    /// `None` reverts to a straight-line edge.
+    #[inline]
+    pub fn set_curve(&mut self, curve: Option<AnalyticCurve>) {
+        self.curve = curve;
+    }
+
+    /// ADR-028 Phase A — convenience: true if this edge has an analytic
+    /// curve other than a Line (i.e., it's a real curve, not a default line).
+    #[inline]
+    pub fn is_curved(&self) -> bool {
+        matches!(self.curve, Some(AnalyticCurve::Circle { .. } | AnalyticCurve::Arc { .. }))
     }
 
     #[inline]
@@ -140,5 +175,91 @@ impl Edge {
     pub fn connects(&self, a: VertId, b: VertId) -> bool {
         let key = VertPairKey::new(a, b);
         self.v_small == key.v_small && self.v_large == key.v_large
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_default_curve_is_none() {
+        let e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        assert!(e.curve().is_none(), "default Edge.curve should be None");
+        assert!(!e.is_curved());
+    }
+
+    #[test]
+    fn edge_set_curve_to_arc() {
+        let mut e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        let arc = AnalyticCurve::Arc {
+            center: glam::DVec3::ZERO,
+            radius: 5.0,
+            normal: glam::DVec3::Z,
+            basis_u: glam::DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        };
+        e.set_curve(Some(arc.clone()));
+        assert!(e.curve().is_some());
+        assert!(e.is_curved());
+        assert_eq!(e.curve(), Some(&arc));
+    }
+
+    #[test]
+    fn edge_set_curve_clear() {
+        let mut e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        e.set_curve(Some(AnalyticCurve::Circle {
+            center: glam::DVec3::ZERO,
+            radius: 1.0,
+            normal: glam::DVec3::Z,
+            basis_u: glam::DVec3::X,
+        }));
+        assert!(e.is_curved());
+        e.set_curve(None);
+        assert!(!e.is_curved());
+        assert!(e.curve().is_none());
+    }
+
+    #[test]
+    fn edge_serialize_with_curve_roundtrip() {
+        let mut e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        e.set_curve(Some(AnalyticCurve::Circle {
+            center: glam::DVec3::new(1.0, 2.0, 3.0),
+            radius: 4.0,
+            normal: glam::DVec3::Y,
+            basis_u: glam::DVec3::X,
+        }));
+        let json = serde_json::to_string(&e).expect("serialize");
+        let e2: Edge = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(e.curve(), e2.curve());
+    }
+
+    #[test]
+    fn edge_serialize_legacy_no_curve_field_loads_as_none() {
+        // Round-trip: serialize, strip the "curve" field (mimicking legacy AXIA
+        // files that pre-date Phase A), deserialize → must load with None.
+        let original = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        let json = serde_json::to_string(&original).expect("serialize");
+        // Strip "curve":null entry to simulate a pre-Phase-A file.
+        let legacy = json
+            .replace(r#","curve":null"#, "")
+            .replace(r#""curve":null,"#, "");
+        // Confirm we actually stripped it.
+        assert!(!legacy.contains("\"curve\""),
+            "test setup failed: curve field still present in legacy JSON");
+        let e: Edge = serde_json::from_str(&legacy).expect("legacy roundtrip");
+        assert!(e.curve().is_none(), "legacy edge must load with curve=None");
+    }
+
+    #[test]
+    fn edge_is_curved_false_for_line_variant() {
+        let mut e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        e.set_curve(Some(AnalyticCurve::Line {
+            start: VertId::default(),
+            end: VertId::default(),
+        }));
+        // Line variant of AnalyticCurve is treated as straight line — not curved.
+        assert!(!e.is_curved());
     }
 }
