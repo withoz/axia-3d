@@ -1077,13 +1077,16 @@ impl Scene {
         };
         // (2) inner must be a simple face.
         if !inner_face.inners().is_empty() { return false; }
-        // (1) Single-promote OR disjoint-additional-hole.
+        // (1) Single-promote OR disjoint-additional-hole OR pinch (ADR-022 P9).
         //   Container 가 simple → 1st promote (기존 동작).
-        //   Container 가 ring → 새 inner 가 기존 sub-face 들과 disjoint 인 경우만
-        //   추가 hole 로 promote (Phase C 1B/4B 부분 fix).
+        //   Container 가 ring → 새 inner 의 기존 sub-face 와의 vertex overlap:
+        //     - 0 verts 공유 → disjoint, allow (Phase C).
+        //     - 1 vertex 공유 → pinch case (P9), allow. Manifold check (3) 으로
+        //       실제 corruption 만 거르기.
+        //     - 2+ verts 공유 → edge 공유 가능성, 거부 (combined-perimeter 경로
+        //       로 처리되어야 함).
         let container_is_ring = !container_face.inners().is_empty();
         if container_is_ring {
-            // 기존 hole loop 들의 verts 수집 (= 기존 sub-face 들의 perimeter).
             let mut existing_subface_verts: std::collections::HashSet<axia_geo::VertId> =
                 std::collections::HashSet::new();
             for inner_loop in container_face.inners() {
@@ -1093,16 +1096,21 @@ impl Scene {
                     }
                 }
             }
-            // 새 inner 의 verts 와 비교 — vertex 공유 시 disjoint 아님.
             let new_inner_verts = match self.mesh.collect_loop_verts(inner_face.outer().start) {
                 Ok(v) => v, Err(_) => return false,
             };
+            let mut shared_count = 0usize;
             for v in &new_inner_verts {
                 if existing_subface_verts.contains(v) {
-                    // Connected to existing sub-face → Connected Case B 회피.
-                    return false;
+                    shared_count += 1;
                 }
             }
+            if shared_count >= 2 {
+                // Likely edge-shared → reject (handled by combined-perimeter elsewhere).
+                return false;
+            }
+            // shared_count == 0 (disjoint) or 1 (pinch, P9): allow → fall through
+            // to manifold check (3).
         }
         // (3) Manifold safety — walk inner's outer loop HEs.
         let start = inner_face.outer().start;
@@ -1477,14 +1485,31 @@ impl Scene {
                 if !self.mesh.faces.contains(*inner_fid) { continue; }
                 if !self.mesh.faces[*inner_fid].is_active() { continue; }
                 let Some(container) = self.find_enclosing_face(*inner_fid) else { continue; };
-                // Container 는 simple 만 처리 (Phase C 후속).
+                // ADR-022 P9: Container 가 simple OR ring 둘 다 처리.
+                // Ring 인 경우 기존 hole loops 를 보존하면서 새 hole 추가.
                 if !self.mesh.faces.get(container)
-                    .map(|f| f.is_active() && f.inners().is_empty())
+                    .map(|f| f.is_active())
                     .unwrap_or(false)
                 {
                     continue;
                 }
                 if container == *inner_fid { continue; }
+                // ADR-022 P9: inner 의 outer-loop verts 가 container 의 기존 hole
+                // loop 와 동일 vertex set 이면 이미 promote 된 sub-face → skip.
+                // (Inner 가 ring 인 경우는 Phase B 정책에 따라 candidate 로 유지.)
+                let inner_verts_set: std::collections::HashSet<axia_geo::VertId> =
+                    match self.mesh.collect_loop_verts(self.mesh.faces[*inner_fid].outer().start) {
+                        Ok(v) => v.into_iter().collect(),
+                        Err(_) => continue,
+                    };
+                let already_hole = self.mesh.faces[container].inners().iter().any(|lr| {
+                    if let Ok(hole_verts) = self.mesh.collect_loop_verts(lr.start) {
+                        let hole_set: std::collections::HashSet<axia_geo::VertId> =
+                            hole_verts.into_iter().collect();
+                        hole_set == inner_verts_set
+                    } else { false }
+                });
+                if already_hole { continue; }
                 by_container.entry(container).or_default().push(*inner_fid);
             }
 
@@ -1512,18 +1537,49 @@ impl Scene {
                 }
                 if !all_safe || hole_loops.is_empty() { continue; }
 
-                // 2c) Container 의 outer + material 캡처
+                // 2c) Container 의 outer + 기존 hole loops + material 캡처.
+                //     ADR-022 P9: ring container 인 경우 기존 hole loops 보존.
                 let outer_verts = match self.mesh.collect_loop_verts(
                     self.mesh.faces[*container].outer().start
                 ) {
                     Ok(v) => v, Err(_) => continue,
                 };
+                let existing_hole_loops: Vec<Vec<axia_geo::VertId>> = self.mesh.faces[*container]
+                    .inners().iter()
+                    .filter_map(|lr| self.mesh.collect_loop_verts(lr.start).ok())
+                    .collect();
                 let material = self.mesh.faces[*container].material();
 
-                // 2d) Container soft-remove + ring 재구성
+                // 2c-bis) ADR-022 P9 — pinch safety: 새 hole loops 와 기존 hole
+                //   loops / outer 사이의 vertex 공유 검사.
+                //   - shared_count >= 2 (edge 공유 가능성) → reject
+                //   - shared_count <= 1 (disjoint or pinch) → allow
+                if !existing_hole_loops.is_empty() {
+                    use std::collections::HashSet;
+                    let mut existing_verts: HashSet<axia_geo::VertId> = HashSet::new();
+                    for h in &existing_hole_loops {
+                        for &v in h { existing_verts.insert(v); }
+                    }
+                    let mut p9_safe = true;
+                    for new_hole in &hole_loops {
+                        let mut shared = 0usize;
+                        for &v in new_hole {
+                            if existing_verts.contains(&v) { shared += 1; }
+                        }
+                        if shared >= 2 {
+                            p9_safe = false;
+                            break;
+                        }
+                    }
+                    if !p9_safe { continue; }
+                }
+
+                // 2d) Container soft-remove + ring 재구성 (기존 + 새 holes 결합).
                 if self.mesh.soft_remove_face(*container).is_err() { continue; }
+                let mut all_holes: Vec<Vec<axia_geo::VertId>> = existing_hole_loops;
+                all_holes.extend(hole_loops);
                 let hole_refs: Vec<&[axia_geo::VertId]> =
-                    hole_loops.iter().map(|h| h.as_slice()).collect();
+                    all_holes.iter().map(|h| h.as_slice()).collect();
                 let new_outer = match self.mesh.add_face_with_holes(
                     &outer_verts, &hole_refs, material,
                 ) {
@@ -6602,6 +6658,128 @@ mod tests {
             "expected 2 simple sub-faces (each inner); got {}",
             simple_active
         );
+    }
+
+    /// ADR-022 P9 (Phase 1) — Connected Case B (vertex 공유 inner) 자동 처리.
+    /// Outer 그린 후 첫 inner, 그 다음 첫 inner 와 corner vertex 하나만
+    /// 공유하는 둘째 inner 를 그린다. 이전: 둘째는 sibling 으로 남아서 promote
+    /// 안 됨. P9 이후: 둘 다 hole 로 promote (multi-hole ring).
+    #[test]
+    fn test_p9_corner_pinch_two_inners_become_two_holes() {
+        let mut scene = Scene::new();
+        // Outer 12×12
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 12.0,
+        });
+        // First inner [-3..-1] x [-3..-1] — corner at (-1, -1)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-2.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        // Second inner [-1..+1] x [-1..+1] — shares corner (-1, -1) with first.
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+
+        // Manifold invariant must hold — no degenerate / non-manifold corruption.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "Manifold invariants violated: {:?}", report.violations);
+
+        let mut ring_holes = 0usize; // total hole count across all rings
+        let mut ring_count = 0;
+        let mut simple_active = 0;
+        for (_fid, f) in scene.mesh.faces.iter() {
+            if !f.is_active() { continue; }
+            if f.inners().is_empty() {
+                simple_active += 1;
+            } else {
+                ring_count += 1;
+                ring_holes += f.inners().len();
+            }
+        }
+        assert_eq!(ring_count, 1, "expected 1 ring (outer); got {}", ring_count);
+        assert_eq!(ring_holes, 2,
+            "expected 2 holes total (P9 corner-pinch both promote); got {}", ring_holes);
+        assert_eq!(simple_active, 2,
+            "expected 2 simple sub-faces; got {}", simple_active);
+    }
+
+    /// ADR-022 P9 — Drawing order independence with corner-pinch.
+    /// outer 먼저 그리든 inner 들 먼저 그리든 동일하게 multi-hole ring 결과.
+    #[test]
+    fn test_p9_pinch_drawing_order_independence() {
+        // Case A: inner1 → inner2 → outer
+        let mut scene_a = Scene::new();
+        scene_a.execute(Command::DrawRect {
+            center: DVec3::new(-2.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        scene_a.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        scene_a.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 12.0,
+        });
+        let count_a = |s: &Scene| -> (usize, usize, usize) {
+            let mut rings = 0; let mut holes = 0; let mut simple = 0;
+            for (_id, f) in s.mesh.faces.iter() {
+                if !f.is_active() { continue; }
+                if f.inners().is_empty() { simple += 1; }
+                else { rings += 1; holes += f.inners().len(); }
+            }
+            (rings, holes, simple)
+        };
+        let result_a = count_a(&scene_a);
+
+        // Case B: outer → inner1 → inner2
+        let mut scene_b = Scene::new();
+        scene_b.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 12.0,
+        });
+        scene_b.execute(Command::DrawRect {
+            center: DVec3::new(-2.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        scene_b.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        let result_b = count_a(&scene_b);
+
+        assert_eq!(result_a, result_b,
+            "P9 drawing-order independence: Case A {:?} vs Case B {:?}",
+            result_a, result_b);
+        // 둘 다 (1 ring, 2 holes, 2 simple) 이어야 함.
+        assert_eq!(result_a, (1, 2, 2),
+            "P9 expected (rings=1, holes=2, simple=2); got {:?}", result_a);
+    }
+
+    /// ADR-022 P9 — Manifold invariant 무손상.
+    /// Pinch case 후 verify_face_invariants 위반 없음.
+    #[test]
+    fn test_p9_manifold_invariant_preserved() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 12.0, height: 12.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-2.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "P9 manifold invariants violated after pinch: {:?}", report.violations);
     }
 
     /// 사용자 보고 2026-04-28 (12) — 인접한 면과 통합 미리보기가 빨간색 (cascade)

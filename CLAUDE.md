@@ -62,6 +62,17 @@
 - `plane.onFace=false` 일 때 first click 좌표를 normal-axis 0 으로 정확히 snap.
 - 후속 ray-plane intersection 의 ε 정밀도 손실 방지.
 
+### 9. ADR-022 — Vertex-Shared Pinch Auto-Promote (P9, 2026-04-29)
+- **새 원칙 P9**: 새 inner 의 outer-loop 가 container 의 기존 hole loop /
+  sub-face 와 **1 vertex 만 공유** (pinch case) 시 자동 promote 허용.
+- 2+ vertex 공유 → edge 공유 가능성 → 거부 (combined-perimeter 경로로 분리).
+- ε-vertex doubling 은 **미구현** — 단일 vertex pinch 는 manifold 자연 보존.
+  (DCEL 의 vertex valence 는 n-valent 허용, manifold 는 edge 단위로 정의됨.)
+- Step 4.95 second-pass 의 simple-only container 제약 폐기 — ring 도 container.
+- 기존 hole loops 는 rebuild 시 보존 (existing_hole_loops + new hole_loops).
+- `b1_promote_safe` (interior fast-path) 도 동일 정책: shared_count ≤ 1 → allow.
+- ADR-021 v1.1 known limitation "Connected Case B" 해결.
+
 ### 8. ADR-019 v2.1 — Line is Truth, Face is Byproduct (2026-04-29)
 - **Line (Edge) 1급 정책** — 사용자 정의 P1-P6 + Claude 보강 A1-A5 + 운영 B1-B6.
 - **Decision Summary**: Line is Truth. Face is Byproduct. Erase는 깨고

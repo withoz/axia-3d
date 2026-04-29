@@ -236,14 +236,20 @@ loop 후보로 인식.
 결과: Test 3B (smallest first → middle → largest) 가 두 nested ring 으로
 정상 promote.
 
-### Phase C — Ring as container (deferred)
+### Phase C — Ring as container ✅ (b1_promote_safe disjoint allow)
 
-Test 1B (outer first → 2 disjoint inner) + 4B (mixed) 는 container 가
-ring 인 경우 처리. 시도 결과 Connected Case B 의 add_face Pass 2 잔존
-non-manifold edge 와 충돌 → 회귀.
+Phase C (commit `c620a88`): `b1_promote_safe` 의 single-promote 제약 완화 →
+container 가 ring 이어도 새 inner 가 기존 sub-face 들과 disjoint 인 경우
+hole 로 추가 promote.
 
-**별도 후속 작업**: add_face / find_halfedge 의 manifold 회복 로직 강화 후
-재시도. 현재 상태로 1B/4B 는 명시적 `merge-as-hole` 우클릭 사용.
+### Phase D — Ring as container in Step 4.95 + P9 pinch ✅ (ADR-022)
+
+ADR-022 에서 Step 4.95 second-pass 의 simple-only container 제약을 폐기,
+ring container 도 처리. 동시에 Connected Case B (vertex 공유 inner) 도
+P9 pinch 정책으로 자동 promote 가능.
+
+**해결**: 1B/4B + Connected Case B 모두 자동 처리. 명시적 `merge-as-hole`
+우클릭은 보조 op 로만 유지.
 
 ## 7. Known Limitations (v1.1 — 2026-04-29)
 
