@@ -595,6 +595,143 @@ impl AxiaEngine {
     }
 
     // ========================================================================
+    // ADR-028 Phase A — Analytic Edge Curve API
+    // ========================================================================
+    //
+    // 모든 좌표는 ADR-026 P12 (Cardinal Plane SSOT) 의 sub-tol snap 후 호출자가
+    // 보장한 값. Bridge 측에서 추가 snap 없이 그대로 engine 에 전달.
+
+    /// Tessellate an edge into a polyline approximating its curve within
+    /// `chord_tol` (mm).
+    ///
+    /// - For straight edges (no curve attached), returns 6 floats — the two
+    ///   endpoint positions: `[x0,y0,z0, x1,y1,z1]`.
+    /// - For curved edges (Arc, Circle), returns 3·n floats where n = number
+    ///   of tessellation points. n+1 points for n segments — first and last
+    ///   coincide for full circles.
+    ///
+    /// The result is a flat `Float64Array` for zero-copy WASM transfer.
+    /// Returns empty array if edge_id is invalid.
+    #[wasm_bindgen(js_name = "tessellateEdge")]
+    pub fn tessellate_edge(&self, edge_id: u32, chord_tol: f64) -> Vec<f64> {
+        use axia_geo::EdgeId;
+        let eid = EdgeId::new(edge_id);
+        match self.scene.mesh.tessellate_edge(eid, chord_tol) {
+            Ok(pts) => {
+                let mut flat = Vec::with_capacity(pts.len() * 3);
+                for p in pts {
+                    flat.push(p.x);
+                    flat.push(p.y);
+                    flat.push(p.z);
+                }
+                flat
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Set an analytic Arc curve on an existing edge.
+    ///
+    /// Arguments encode the Arc variant of `AnalyticCurve`:
+    /// - center: cx, cy, cz
+    /// - radius
+    /// - normal: nx, ny, nz (must be unit-length, axis of Arc plane)
+    /// - basis_u: ux, uy, uz (unit, in-plane, defines θ=0 direction)
+    /// - start_angle, end_angle (radians)
+    ///
+    /// Returns true if successful (edge exists), false otherwise.
+    #[wasm_bindgen(js_name = "setEdgeArcCurve")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_edge_arc_curve(
+        &mut self,
+        edge_id: u32,
+        cx: f64, cy: f64, cz: f64,
+        radius: f64,
+        nx: f64, ny: f64, nz: f64,
+        ux: f64, uy: f64, uz: f64,
+        start_angle: f64, end_angle: f64,
+    ) -> bool {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        use glam::DVec3;
+        let eid = EdgeId::new(edge_id);
+        if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+            e.set_curve(Some(AnalyticCurve::Arc {
+                center: DVec3::new(cx, cy, cz),
+                radius,
+                normal: DVec3::new(nx, ny, nz),
+                basis_u: DVec3::new(ux, uy, uz),
+                start_angle, end_angle,
+            }));
+            self.mark_topology_changed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set an analytic Circle curve on an existing edge.
+    /// Similar arg layout to `setEdgeArcCurve` but no angle range
+    /// (full 2π implied).
+    #[wasm_bindgen(js_name = "setEdgeCircleCurve")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_edge_circle_curve(
+        &mut self,
+        edge_id: u32,
+        cx: f64, cy: f64, cz: f64,
+        radius: f64,
+        nx: f64, ny: f64, nz: f64,
+        ux: f64, uy: f64, uz: f64,
+    ) -> bool {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        use glam::DVec3;
+        let eid = EdgeId::new(edge_id);
+        if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+            e.set_curve(Some(AnalyticCurve::Circle {
+                center: DVec3::new(cx, cy, cz),
+                radius,
+                normal: DVec3::new(nx, ny, nz),
+                basis_u: DVec3::new(ux, uy, uz),
+            }));
+            self.mark_topology_changed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear any analytic curve from an edge (revert to straight line).
+    #[wasm_bindgen(js_name = "clearEdgeCurve")]
+    pub fn clear_edge_curve(&mut self, edge_id: u32) -> bool {
+        use axia_geo::EdgeId;
+        let eid = EdgeId::new(edge_id);
+        if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+            e.set_curve(None);
+            self.mark_topology_changed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check whether an edge has an analytic curve attached.
+    /// Returns 0 = none/straight, 1 = Line variant, 2 = Circle, 3 = Arc.
+    /// (-1 if edge_id invalid.)
+    #[wasm_bindgen(js_name = "edgeCurveKind")]
+    pub fn edge_curve_kind(&self, edge_id: u32) -> i32 {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        let eid = EdgeId::new(edge_id);
+        match self.scene.mesh.edge_curve(eid) {
+            None => match self.scene.mesh.edges.get(eid) {
+                Some(_) => 0,
+                None => -1,
+            },
+            Some(AnalyticCurve::Line { .. }) => 1,
+            Some(AnalyticCurve::Circle { .. }) => 2,
+            Some(AnalyticCurve::Arc { .. }) => 3,
+        }
+    }
+
+    // ========================================================================
     // Primitive shapes (Cylinder, Cone, Sphere)
     // ========================================================================
 

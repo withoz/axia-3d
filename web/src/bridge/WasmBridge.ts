@@ -379,6 +379,25 @@ type AxiaEngineExtended = AxiaEngine & {
   get_group_info?(groupId: number): string;
   get_all_groups?(): string;
   group_count?(): number;
+  // ADR-028 Phase A — Analytic Edge Curve API
+  tessellateEdge?(edgeId: number, chordTol: number): Float64Array;
+  setEdgeArcCurve?(
+    edgeId: number,
+    cx: number, cy: number, cz: number,
+    radius: number,
+    nx: number, ny: number, nz: number,
+    ux: number, uy: number, uz: number,
+    startAngle: number, endAngle: number,
+  ): boolean;
+  setEdgeCircleCurve?(
+    edgeId: number,
+    cx: number, cy: number, cz: number,
+    radius: number,
+    nx: number, ny: number, nz: number,
+    ux: number, uy: number, uz: number,
+  ): boolean;
+  clearEdgeCurve?(edgeId: number): boolean;
+  edgeCurveKind?(edgeId: number): number;
   // Material operations
   assign_material?(faceIds: Uint32Array, materialIdRaw: number): boolean;
   remove_material?(faceIds: Uint32Array): boolean;
@@ -513,6 +532,75 @@ export class WasmBridge {
     this.markDirty();
     [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
     return this.engine.draw_circle(cx, cy, cz, nx, ny, nz, radius, segments);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-028 Phase A — Analytic Edge Curve API
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Tessellate an edge into a polyline with chord-error ≤ `chordTol` (mm).
+   * For straight edges → 2 endpoints. For curved edges → adaptive sampling.
+   * Returns Float64Array of shape `[x0,y0,z0, x1,y1,z1, ...]`.
+   */
+  tessellateEdge(edgeId: number, chordTol: number): Float64Array {
+    if (!this.engine) return new Float64Array(0);
+    const flat = this.engine.tessellateEdge(edgeId, chordTol);
+    return flat instanceof Float64Array ? flat : new Float64Array(flat as number[]);
+  }
+
+  /**
+   * Set an Arc curve on an existing edge. Returns true if successful.
+   * Bridge-level cardinal snap (ADR-026) applies to (cx, cy, cz).
+   */
+  setEdgeArcCurve(
+    edgeId: number,
+    cx: number, cy: number, cz: number,
+    radius: number,
+    nx: number, ny: number, nz: number,
+    ux: number, uy: number, uz: number,
+    startAngle: number, endAngle: number,
+  ): boolean {
+    if (!this.engine) return false;
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
+    this.markDirty();
+    return this.engine.setEdgeArcCurve(
+      edgeId, cx, cy, cz, radius,
+      nx, ny, nz, ux, uy, uz,
+      startAngle, endAngle,
+    );
+  }
+
+  /** Set a full Circle curve on an existing edge. */
+  setEdgeCircleCurve(
+    edgeId: number,
+    cx: number, cy: number, cz: number,
+    radius: number,
+    nx: number, ny: number, nz: number,
+    ux: number, uy: number, uz: number,
+  ): boolean {
+    if (!this.engine) return false;
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
+    this.markDirty();
+    return this.engine.setEdgeCircleCurve(
+      edgeId, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz,
+    );
+  }
+
+  /** Clear any curve from an edge (revert to straight line). */
+  clearEdgeCurve(edgeId: number): boolean {
+    if (!this.engine) return false;
+    this.markDirty();
+    return this.engine.clearEdgeCurve(edgeId);
+  }
+
+  /**
+   * Curve kind on an edge: 0 = straight, 1 = Line variant, 2 = Circle,
+   * 3 = Arc, -1 = invalid edge ID.
+   */
+  edgeCurveKind(edgeId: number): number {
+    if (!this.engine) return -1;
+    return this.engine.edgeCurveKind(edgeId);
   }
 
   /** Get the first face ID owned by a XIA entity (drawRect returns XIA ID, pushPull needs face ID) */

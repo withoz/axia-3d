@@ -242,6 +242,82 @@ describe('WasmBridge', () => {
       expect(captured[1]).toBeCloseTo(1e-7, 12);  // preserved
     });
 
+    it('tessellateEdge() returns polyline for valid edge', () => {
+      // Mock engine with tessellate that returns a 2-point line
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        tessellateEdge: (_eid: number, _tol: number) =>
+          new Float64Array([0, 0, 0, 10, 0, 0]),
+      };
+      const result = bridge.tessellateEdge(0, 0.1);
+      expect(result.length).toBe(6);
+      expect(result[0]).toBe(0);
+      expect(result[3]).toBe(10);
+    });
+
+    it('tessellateEdge() returns empty for null engine', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      const result = bridge.tessellateEdge(0, 0.1);
+      expect(result.length).toBe(0);
+    });
+
+    it('setEdgeArcCurve() applies cardinal snap to center', () => {
+      let captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setEdgeArcCurve: (...args: number[]) => {
+          captured = args;
+          return true;
+        },
+      };
+      // y is sub-tol → must snap to 0 (normal=Y → cardinal axis 1)
+      const ok = bridge.setEdgeArcCurve(
+        7, 1.0, 1e-7, 2.0,  // edge_id, cx, cy, cz
+        5.0,                  // radius
+        0, 1, 0,             // normal=Y
+        1, 0, 0,             // basis_u=X
+        0, Math.PI / 2,      // start, end angle
+      );
+      expect(ok).toBe(true);
+      expect(captured[0]).toBe(7);   // edge id
+      expect(captured[2]).toBe(0);   // y snapped
+    });
+
+    it('setEdgeCircleCurve() applies cardinal snap to center', () => {
+      let captured: number[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setEdgeCircleCurve: (...args: number[]) => {
+          captured = args;
+          return true;
+        },
+      };
+      bridge.setEdgeCircleCurve(
+        9, 1.0, 2.0, 5e-8, 4.0, 0, 0, 1, 1, 0, 0,
+      );
+      expect(captured[3]).toBe(0);  // z snapped
+    });
+
+    it('clearEdgeCurve() forwards to engine', () => {
+      let cleared = -1;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        clearEdgeCurve: (eid: number) => { cleared = eid; return true; },
+      };
+      const ok = bridge.clearEdgeCurve(42);
+      expect(ok).toBe(true);
+      expect(cleared).toBe(42);
+    });
+
+    it('edgeCurveKind() returns engine value', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        edgeCurveKind: (_eid: number) => 3,  // Arc
+      };
+      expect(bridge.edgeCurveKind(0)).toBe(3);
+    });
+
     it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

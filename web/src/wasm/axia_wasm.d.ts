@@ -142,6 +142,10 @@ export class AxiaEngine {
      */
     classifyOrphans(): string;
     /**
+     * Clear any analytic curve from an edge (revert to straight line).
+     */
+    clearEdgeCurve(edge_id: number): boolean;
+    /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
      * Empty Vec on invalid / inactive edge.
@@ -251,6 +255,12 @@ export class AxiaEngine {
      * Returns 0 for missing/inactive edges (safe default).
      */
     edgeClass(edge_id_raw: number): number;
+    /**
+     * Check whether an edge has an analytic curve attached.
+     * Returns 0 = none/straight, 1 = Line variant, 2 = Circle, 3 = Arc.
+     * (-1 if edge_id invalid.)
+     */
+    edgeCurveKind(edge_id: number): number;
     /**
      * ADR-016 §2 — true ⇔ this edge is on the hole boundary of any active face.
      * JS hover layer uses this to show an explicit-op hint instead of the
@@ -782,6 +792,25 @@ export class AxiaEngine {
      */
     setEdgeAngleThreshold(deg: number): void;
     /**
+     * Set an analytic Arc curve on an existing edge.
+     *
+     * Arguments encode the Arc variant of `AnalyticCurve`:
+     * - center: cx, cy, cz
+     * - radius
+     * - normal: nx, ny, nz (must be unit-length, axis of Arc plane)
+     * - basis_u: ux, uy, uz (unit, in-plane, defines θ=0 direction)
+     * - start_angle, end_angle (radians)
+     *
+     * Returns true if successful (edge exists), false otherwise.
+     */
+    setEdgeArcCurve(edge_id: number, cx: number, cy: number, cz: number, radius: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, start_angle: number, end_angle: number): boolean;
+    /**
+     * Set an analytic Circle curve on an existing edge.
+     * Similar arg layout to `setEdgeArcCurve` but no angle range
+     * (full 2π implied).
+     */
+    setEdgeCircleCurve(edge_id: number, cx: number, cy: number, cz: number, radius: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number): boolean;
+    /**
      * Change an edge's semantic class. Rejects Geometry→Centerline if the
      * edge bounds an active face (would orphan the face).
      * Returns true on success.
@@ -881,6 +910,20 @@ export class AxiaEngine {
      * `start_scale` at t=0 to `end_scale` at t=length.
      */
     taperVerts(vert_ids: Uint32Array, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, start_scale: number, end_scale: number, length: number): boolean;
+    /**
+     * Tessellate an edge into a polyline approximating its curve within
+     * `chord_tol` (mm).
+     *
+     * - For straight edges (no curve attached), returns 6 floats — the two
+     *   endpoint positions: `[x0,y0,z0, x1,y1,z1]`.
+     * - For curved edges (Arc, Circle), returns 3·n floats where n = number
+     *   of tessellation points. n+1 points for n segments — first and last
+     *   coincide for full circles.
+     *
+     * The result is a flat `Float64Array` for zero-copy WASM transfer.
+     * Returns empty array if edge_id is invalid.
+     */
+    tessellateEdge(edge_id: number, chord_tol: number): Float64Array;
     /**
      * 그룹 잠금 토글
      */
@@ -994,6 +1037,7 @@ export interface InitOutput {
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
     readonly axiaengine_classifyOrphans: (a: number, b: number) => void;
+    readonly axiaengine_clearEdgeCurve: (a: number, b: number) => number;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
@@ -1014,6 +1058,7 @@ export interface InitOutput {
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_edgeAngleThreshold: (a: number) => number;
     readonly axiaengine_edgeClass: (a: number, b: number) => number;
+    readonly axiaengine_edgeCurveKind: (a: number, b: number) => number;
     readonly axiaengine_edgeIsHoleBoundary: (a: number, b: number) => number;
     readonly axiaengine_edgeLength: (a: number, b: number) => number;
     readonly axiaengine_eraseEdgeResynthesize: (a: number, b: number, c: number, d: number) => void;
@@ -1111,6 +1156,8 @@ export interface InitOutput {
     readonly axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
+    readonly axiaengine_setEdgeArcCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+    readonly axiaengine_setEdgeCircleCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -1122,6 +1169,7 @@ export interface InitOutput {
     readonly axiaengine_sweepProfileAlongPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
     readonly axiaengine_taperVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly axiaengine_tessellateEdge: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_toggle_group_lock: (a: number, b: number) => number;
     readonly axiaengine_toggle_group_visibility: (a: number, b: number) => number;
     readonly axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;

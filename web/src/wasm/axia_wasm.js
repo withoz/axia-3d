@@ -409,6 +409,15 @@ export class AxiaEngine {
         }
     }
     /**
+     * Clear any analytic curve from an edge (revert to straight line).
+     * @param {number} edge_id
+     * @returns {boolean}
+     */
+    clearEdgeCurve(edge_id) {
+        const ret = wasm.axiaengine_clearEdgeCurve(this.__wbg_ptr, edge_id);
+        return ret !== 0;
+    }
+    /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
      * Empty Vec on invalid / inactive edge.
@@ -697,6 +706,17 @@ export class AxiaEngine {
     edgeClass(edge_id_raw) {
         const ret = wasm.axiaengine_edgeClass(this.__wbg_ptr, edge_id_raw);
         return ret >>> 0;
+    }
+    /**
+     * Check whether an edge has an analytic curve attached.
+     * Returns 0 = none/straight, 1 = Line variant, 2 = Circle, 3 = Arc.
+     * (-1 if edge_id invalid.)
+     * @param {number} edge_id
+     * @returns {number}
+     */
+    edgeCurveKind(edge_id) {
+        const ret = wasm.axiaengine_edgeCurveKind(this.__wbg_ptr, edge_id);
+        return ret;
     }
     /**
      * ADR-016 §2 — true ⇔ this edge is on the hole boundary of any active face.
@@ -2258,6 +2278,57 @@ export class AxiaEngine {
         wasm.axiaengine_setEdgeAngleThreshold(this.__wbg_ptr, deg);
     }
     /**
+     * Set an analytic Arc curve on an existing edge.
+     *
+     * Arguments encode the Arc variant of `AnalyticCurve`:
+     * - center: cx, cy, cz
+     * - radius
+     * - normal: nx, ny, nz (must be unit-length, axis of Arc plane)
+     * - basis_u: ux, uy, uz (unit, in-plane, defines θ=0 direction)
+     * - start_angle, end_angle (radians)
+     *
+     * Returns true if successful (edge exists), false otherwise.
+     * @param {number} edge_id
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} radius
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} ux
+     * @param {number} uy
+     * @param {number} uz
+     * @param {number} start_angle
+     * @param {number} end_angle
+     * @returns {boolean}
+     */
+    setEdgeArcCurve(edge_id, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz, start_angle, end_angle) {
+        const ret = wasm.axiaengine_setEdgeArcCurve(this.__wbg_ptr, edge_id, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz, start_angle, end_angle);
+        return ret !== 0;
+    }
+    /**
+     * Set an analytic Circle curve on an existing edge.
+     * Similar arg layout to `setEdgeArcCurve` but no angle range
+     * (full 2π implied).
+     * @param {number} edge_id
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} radius
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} ux
+     * @param {number} uy
+     * @param {number} uz
+     * @returns {boolean}
+     */
+    setEdgeCircleCurve(edge_id, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz) {
+        const ret = wasm.axiaengine_setEdgeCircleCurve(this.__wbg_ptr, edge_id, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz);
+        return ret !== 0;
+    }
+    /**
      * Change an edge's semantic class. Rejects Geometry→Centerline if the
      * edge bounds an active face (would orphan the face).
      * Returns true on success.
@@ -2496,6 +2567,35 @@ export class AxiaEngine {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.axiaengine_taperVerts(this.__wbg_ptr, ptr0, len0, ox, oy, oz, ax, ay, az, start_scale, end_scale, length);
         return ret !== 0;
+    }
+    /**
+     * Tessellate an edge into a polyline approximating its curve within
+     * `chord_tol` (mm).
+     *
+     * - For straight edges (no curve attached), returns 6 floats — the two
+     *   endpoint positions: `[x0,y0,z0, x1,y1,z1]`.
+     * - For curved edges (Arc, Circle), returns 3·n floats where n = number
+     *   of tessellation points. n+1 points for n segments — first and last
+     *   coincide for full circles.
+     *
+     * The result is a flat `Float64Array` for zero-copy WASM transfer.
+     * Returns empty array if edge_id is invalid.
+     * @param {number} edge_id
+     * @param {number} chord_tol
+     * @returns {Float64Array}
+     */
+    tessellateEdge(edge_id, chord_tol) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_tessellateEdge(retptr, this.__wbg_ptr, edge_id, chord_tol);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * 그룹 잠금 토글

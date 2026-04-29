@@ -20,6 +20,7 @@ export const axiaengine_boolean_op: (a: number, b: number, c: number, d: number,
 export const axiaengine_can_redo: (a: number) => number;
 export const axiaengine_can_undo: (a: number) => number;
 export const axiaengine_classifyOrphans: (a: number, b: number) => void;
+export const axiaengine_clearEdgeCurve: (a: number, b: number) => number;
 export const axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
 export const axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
 export const axiaengine_constraintCount: (a: number) => number;
@@ -40,6 +41,7 @@ export const axiaengine_draw_line: (a: number, b: number, c: number, d: number, 
 export const axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
 export const axiaengine_edgeAngleThreshold: (a: number) => number;
 export const axiaengine_edgeClass: (a: number, b: number) => number;
+export const axiaengine_edgeCurveKind: (a: number, b: number) => number;
 export const axiaengine_edgeIsHoleBoundary: (a: number, b: number) => number;
 export const axiaengine_edgeLength: (a: number, b: number) => number;
 export const axiaengine_eraseEdgeResynthesize: (a: number, b: number, c: number, d: number) => void;
@@ -137,6 +139,8 @@ export const axiaengine_scale_faces: (a: number, b: number, c: number, d: number
 export const axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
 export const axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
 export const axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
+export const axiaengine_setEdgeArcCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+export const axiaengine_setEdgeCircleCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
 export const axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
 export const axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
 export const axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -148,6 +152,7 @@ export const axiaengine_subdivideCatmullClark: (a: number) => number;
 export const axiaengine_sweepProfileAlongPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const axiaengine_synthesizeFacesFromFreeEdges: (a: number) => number;
 export const axiaengine_taperVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+export const axiaengine_tessellateEdge: (a: number, b: number, c: number, d: number) => void;
 export const axiaengine_toggle_group_lock: (a: number, b: number) => number;
 export const axiaengine_toggle_group_visibility: (a: number, b: number) => number;
 export const axiaengine_translateVerts: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
