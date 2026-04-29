@@ -5227,6 +5227,132 @@ mod tests {
         assert!(mesh.edge_curve(eid).is_none());
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-029 Phase B — Mesh ↔ Bezier / BSpline integration
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn add_edge_with_bezier_curve_then_tessellate() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let bz = AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(3.0, 5.0, 0.0),
+                DVec3::new(7.0, 5.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+            ],
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, bz).unwrap();
+        let pts = mesh.tessellate_edge(eid, 0.05).unwrap();
+        assert!(pts.len() >= 4, "expected adaptive tessellation > 4 pts");
+        // Endpoints preserved
+        assert!((pts[0] - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-9);
+        assert!((*pts.last().unwrap() - DVec3::new(10.0, 0.0, 0.0)).length() < 1e-9);
+    }
+
+    #[test]
+    fn add_edge_with_bspline_curve_clamped_endpoints() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let pts: Vec<DVec3> = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(2.0, 4.0, 0.0),
+            DVec3::new(8.0, 4.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+        ];
+        let knots = crate::curves::bspline::clamped_uniform_knots(pts.len(), 3);
+        let bs = AnalyticCurve::BSpline {
+            control_pts: pts.clone(),
+            knots,
+            degree: 3,
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, bs).unwrap();
+        let tess = mesh.tessellate_edge(eid, 0.1).unwrap();
+        assert!(tess.len() >= 4);
+        // Clamped: first point = first ctrl, last = last ctrl
+        assert!((tess[0] - pts[0]).length() < 1e-6);
+        assert!((*tess.last().unwrap() - *pts.last().unwrap()).length() < 1e-6);
+    }
+
+    #[test]
+    fn bezier_lod_more_segments_with_finer_tol() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let bz = AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(50.0, 100.0, 0.0),
+                DVec3::new(100.0, 0.0, 0.0),
+            ],
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, bz).unwrap();
+        let coarse = mesh.tessellate_edge(eid, 5.0).unwrap();
+        let fine = mesh.tessellate_edge(eid, 0.05).unwrap();
+        assert!(fine.len() > coarse.len(),
+            "fine ({}) > coarse ({})", fine.len(), coarse.len());
+    }
+
+    #[test]
+    fn bspline_lod_more_segments_with_finer_tol() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(150.0, 0.0, 0.0));
+        let pts: Vec<DVec3> = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(50.0, 100.0, 0.0),
+            DVec3::new(100.0, -50.0, 0.0),
+            DVec3::new(150.0, 0.0, 0.0),
+        ];
+        let knots = crate::curves::bspline::clamped_uniform_knots(pts.len(), 3);
+        let bs = AnalyticCurve::BSpline {
+            control_pts: pts, knots, degree: 3,
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, bs).unwrap();
+        let coarse = mesh.tessellate_edge(eid, 5.0).unwrap();
+        let fine = mesh.tessellate_edge(eid, 0.05).unwrap();
+        assert!(fine.len() > coarse.len(),
+            "fine ({}) > coarse ({})", fine.len(), coarse.len());
+    }
+
+    #[test]
+    fn bezier_curve_is_curved_returns_true() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let bz = AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(5.0, 5.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+            ],
+        };
+        let eid = mesh.add_edge_with_curve(v0, v1, bz).unwrap();
+        assert!(mesh.edges[eid].is_curved());
+    }
+
+    #[test]
+    fn bspline_serialize_roundtrip() {
+        let pts: Vec<DVec3> = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(2.0, 4.0, 0.0),
+            DVec3::new(8.0, 4.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+        ];
+        let knots = crate::curves::bspline::clamped_uniform_knots(4, 3);
+        let bs = AnalyticCurve::BSpline {
+            control_pts: pts.clone(),
+            knots: knots.clone(),
+            degree: 3,
+        };
+        let json = serde_json::to_string(&bs).unwrap();
+        let bs2: AnalyticCurve = serde_json::from_str(&json).unwrap();
+        assert_eq!(bs, bs2);
+    }
+
     /// 회귀 보장 — Phase A 도입 후에도 기존 polygon 동작 무변동.
     /// 4-line RECT 그렸을 때 4 edge 모두 curve = None.
     #[test]

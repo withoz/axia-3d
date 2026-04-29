@@ -113,11 +113,19 @@ impl Edge {
         self.curve = curve;
     }
 
-    /// ADR-028 Phase A — convenience: true if this edge has an analytic
-    /// curve other than a Line (i.e., it's a real curve, not a default line).
+    /// ADR-028 Phase A / ADR-029 Phase B — convenience: true if this edge
+    /// has an analytic curve other than a Line variant.
     #[inline]
     pub fn is_curved(&self) -> bool {
-        matches!(self.curve, Some(AnalyticCurve::Circle { .. } | AnalyticCurve::Arc { .. }))
+        matches!(
+            self.curve,
+            Some(
+                AnalyticCurve::Circle { .. }
+                | AnalyticCurve::Arc { .. }
+                | AnalyticCurve::Bezier { .. }
+                | AnalyticCurve::BSpline { .. }
+            )
+        )
     }
 
     #[inline]

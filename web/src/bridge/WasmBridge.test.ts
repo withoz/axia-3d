@@ -318,6 +318,78 @@ describe('WasmBridge', () => {
       expect(bridge.edgeCurveKind(0)).toBe(3);
     });
 
+    // ──────────────────────────────────────────────────────────────────
+    // ADR-029 Phase B — Bezier / B-spline bridge tests
+    // ──────────────────────────────────────────────────────────────────
+
+    it('setEdgeBezierCurve() forwards control points as Float64Array', () => {
+      let captured: Float64Array | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setEdgeBezierCurve: (_eid: number, pts: Float64Array) => {
+          captured = pts;
+          return true;
+        },
+      };
+      const ok = bridge.setEdgeBezierCurve(5, [0, 0, 0, 5, 10, 0, 10, 0, 0]);
+      expect(ok).toBe(true);
+      expect(captured).not.toBeNull();
+      const arr = captured as unknown as Float64Array;
+      expect(arr.length).toBe(9);
+      expect(arr[3]).toBe(5);
+      expect(arr[4]).toBe(10);
+    });
+
+    it('setEdgeBezierCurve() returns false when engine missing the method', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};  // no setEdgeBezierCurve
+      const ok = bridge.setEdgeBezierCurve(0, [0, 0, 0, 1, 1, 1]);
+      expect(ok).toBe(false);
+    });
+
+    it('setEdgeBSplineCurve() forwards control points + knots + degree', () => {
+      let capturedPts: Float64Array | null = null;
+      let capturedKnots: Float64Array | null = null;
+      let capturedDeg = -1;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setEdgeBSplineCurve: (
+          _eid: number, pts: Float64Array, knots: Float64Array, deg: number,
+        ) => {
+          capturedPts = pts;
+          capturedKnots = knots;
+          capturedDeg = deg;
+          return true;
+        },
+      };
+      // 4 control points, cubic (degree=3) → 4+3+1 = 8 knots
+      const pts = [0, 0, 0,  1, 5, 0,  5, 5, 0,  10, 0, 0];
+      const knots = [0, 0, 0, 0, 1, 1, 1, 1];
+      const ok = bridge.setEdgeBSplineCurve(7, pts, knots, 3);
+      expect(ok).toBe(true);
+      expect(capturedDeg).toBe(3);
+      const a = capturedPts as unknown as Float64Array;
+      const b = capturedKnots as unknown as Float64Array;
+      expect(a.length).toBe(12);
+      expect(b.length).toBe(8);
+    });
+
+    it('setEdgeBezierCurve() accepts Float64Array directly', () => {
+      let captured: Float64Array | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        setEdgeBezierCurve: (_eid: number, pts: Float64Array) => {
+          captured = pts;
+          return true;
+        },
+      };
+      const f64 = new Float64Array([0, 0, 0, 10, 0, 0]);
+      bridge.setEdgeBezierCurve(0, f64);
+      expect(captured).not.toBeNull();
+      const arr = captured as unknown as Float64Array;
+      expect(arr.length).toBe(6);
+    });
+
     it('drawPolyline() snaps all points when all on cardinal y=0 plane', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

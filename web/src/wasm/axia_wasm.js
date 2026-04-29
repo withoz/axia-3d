@@ -709,8 +709,8 @@ export class AxiaEngine {
     }
     /**
      * Check whether an edge has an analytic curve attached.
-     * Returns 0 = none/straight, 1 = Line variant, 2 = Circle, 3 = Arc.
-     * (-1 if edge_id invalid.)
+     * Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
+     * 4 = Bezier, 5 = BSpline. -1 if edge_id invalid.
      * @param {number} edge_id
      * @returns {number}
      */
@@ -2305,6 +2305,43 @@ export class AxiaEngine {
      */
     setEdgeArcCurve(edge_id, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz, start_angle, end_angle) {
         const ret = wasm.axiaengine_setEdgeArcCurve(this.__wbg_ptr, edge_id, cx, cy, cz, radius, nx, ny, nz, ux, uy, uz, start_angle, end_angle);
+        return ret !== 0;
+    }
+    /**
+     * ADR-029 Phase B — Set a B-spline curve on an existing edge.
+     *
+     * `control_pts_flat`: flat array of n+1 control points (3·(n+1) floats).
+     * `knots`: m+1 knot values (m = n + degree + 1), non-decreasing.
+     * `degree`: spline degree (≥ 1).
+     * Returns true if successful and knot vector is valid.
+     * @param {number} edge_id
+     * @param {Float64Array} control_pts_flat
+     * @param {Float64Array} knots
+     * @param {number} degree
+     * @returns {boolean}
+     */
+    setEdgeBSplineCurve(edge_id, control_pts_flat, knots, degree) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(knots, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_setEdgeBSplineCurve(this.__wbg_ptr, edge_id, ptr0, len0, ptr1, len1, degree);
+        return ret !== 0;
+    }
+    /**
+     * ADR-029 Phase B — Set a Bezier curve on an existing edge.
+     *
+     * `control_pts_flat` is a flat Float64Array `[x0,y0,z0, x1,y1,z1, ...]`
+     * of n+1 control points (n = degree). Need ≥ 2 points (degree ≥ 1).
+     * Returns true if successful.
+     * @param {number} edge_id
+     * @param {Float64Array} control_pts_flat
+     * @returns {boolean}
+     */
+    setEdgeBezierCurve(edge_id, control_pts_flat) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_setEdgeBezierCurve(this.__wbg_ptr, edge_id, ptr0, len0);
         return ret !== 0;
     }
     /**

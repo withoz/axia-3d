@@ -714,8 +714,8 @@ impl AxiaEngine {
     }
 
     /// Check whether an edge has an analytic curve attached.
-    /// Returns 0 = none/straight, 1 = Line variant, 2 = Circle, 3 = Arc.
-    /// (-1 if edge_id invalid.)
+    /// Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
+    /// 4 = Bezier, 5 = BSpline. -1 if edge_id invalid.
     #[wasm_bindgen(js_name = "edgeCurveKind")]
     pub fn edge_curve_kind(&self, edge_id: u32) -> i32 {
         use axia_geo::{EdgeId, AnalyticCurve};
@@ -728,6 +728,86 @@ impl AxiaEngine {
             Some(AnalyticCurve::Line { .. }) => 1,
             Some(AnalyticCurve::Circle { .. }) => 2,
             Some(AnalyticCurve::Arc { .. }) => 3,
+            Some(AnalyticCurve::Bezier { .. }) => 4,
+            Some(AnalyticCurve::BSpline { .. }) => 5,
+        }
+    }
+
+    /// ADR-029 Phase B — Set a Bezier curve on an existing edge.
+    ///
+    /// `control_pts_flat` is a flat Float64Array `[x0,y0,z0, x1,y1,z1, ...]`
+    /// of n+1 control points (n = degree). Need ≥ 2 points (degree ≥ 1).
+    /// Returns true if successful.
+    #[wasm_bindgen(js_name = "setEdgeBezierCurve")]
+    pub fn set_edge_bezier_curve(
+        &mut self,
+        edge_id: u32,
+        control_pts_flat: Vec<f64>,
+    ) -> bool {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        use glam::DVec3;
+        if control_pts_flat.len() < 6 || control_pts_flat.len() % 3 != 0 {
+            return false;
+        }
+        let mut pts = Vec::with_capacity(control_pts_flat.len() / 3);
+        let mut i = 0;
+        while i + 2 < control_pts_flat.len() {
+            pts.push(DVec3::new(
+                control_pts_flat[i], control_pts_flat[i + 1], control_pts_flat[i + 2],
+            ));
+            i += 3;
+        }
+        let eid = EdgeId::new(edge_id);
+        if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+            e.set_curve(Some(AnalyticCurve::Bezier { control_pts: pts }));
+            self.mark_topology_changed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-029 Phase B — Set a B-spline curve on an existing edge.
+    ///
+    /// `control_pts_flat`: flat array of n+1 control points (3·(n+1) floats).
+    /// `knots`: m+1 knot values (m = n + degree + 1), non-decreasing.
+    /// `degree`: spline degree (≥ 1).
+    /// Returns true if successful and knot vector is valid.
+    #[wasm_bindgen(js_name = "setEdgeBSplineCurve")]
+    pub fn set_edge_bspline_curve(
+        &mut self,
+        edge_id: u32,
+        control_pts_flat: Vec<f64>,
+        knots: Vec<f64>,
+        degree: u32,
+    ) -> bool {
+        use axia_geo::{EdgeId, AnalyticCurve};
+        use glam::DVec3;
+        if control_pts_flat.is_empty() || control_pts_flat.len() % 3 != 0 {
+            return false;
+        }
+        let mut pts = Vec::with_capacity(control_pts_flat.len() / 3);
+        let mut i = 0;
+        while i + 2 < control_pts_flat.len() {
+            pts.push(DVec3::new(
+                control_pts_flat[i], control_pts_flat[i + 1], control_pts_flat[i + 2],
+            ));
+            i += 3;
+        }
+        // Sanity: knots.len() must equal pts.len() + degree + 1
+        let expected = pts.len() + degree as usize + 1;
+        if knots.len() != expected || pts.len() < degree as usize + 1 || degree == 0 {
+            return false;
+        }
+        let eid = EdgeId::new(edge_id);
+        if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
+            e.set_curve(Some(AnalyticCurve::BSpline {
+                control_pts: pts, knots, degree,
+            }));
+            self.mark_topology_changed();
+            true
+        } else {
+            false
         }
     }
 

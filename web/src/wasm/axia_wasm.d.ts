@@ -257,8 +257,8 @@ export class AxiaEngine {
     edgeClass(edge_id_raw: number): number;
     /**
      * Check whether an edge has an analytic curve attached.
-     * Returns 0 = none/straight, 1 = Line variant, 2 = Circle, 3 = Arc.
-     * (-1 if edge_id invalid.)
+     * Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
+     * 4 = Bezier, 5 = BSpline. -1 if edge_id invalid.
      */
     edgeCurveKind(edge_id: number): number;
     /**
@@ -805,6 +805,23 @@ export class AxiaEngine {
      */
     setEdgeArcCurve(edge_id: number, cx: number, cy: number, cz: number, radius: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, start_angle: number, end_angle: number): boolean;
     /**
+     * ADR-029 Phase B — Set a B-spline curve on an existing edge.
+     *
+     * `control_pts_flat`: flat array of n+1 control points (3·(n+1) floats).
+     * `knots`: m+1 knot values (m = n + degree + 1), non-decreasing.
+     * `degree`: spline degree (≥ 1).
+     * Returns true if successful and knot vector is valid.
+     */
+    setEdgeBSplineCurve(edge_id: number, control_pts_flat: Float64Array, knots: Float64Array, degree: number): boolean;
+    /**
+     * ADR-029 Phase B — Set a Bezier curve on an existing edge.
+     *
+     * `control_pts_flat` is a flat Float64Array `[x0,y0,z0, x1,y1,z1, ...]`
+     * of n+1 control points (n = degree). Need ≥ 2 points (degree ≥ 1).
+     * Returns true if successful.
+     */
+    setEdgeBezierCurve(edge_id: number, control_pts_flat: Float64Array): boolean;
+    /**
      * Set an analytic Circle curve on an existing edge.
      * Similar arg layout to `setEdgeArcCurve` but no angle range
      * (full 2π implied).
@@ -1157,6 +1174,8 @@ export interface InitOutput {
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeArcCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+    readonly axiaengine_setEdgeBSplineCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly axiaengine_setEdgeBezierCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_setEdgeCircleCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_setEdgeClass: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;

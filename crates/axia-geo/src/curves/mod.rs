@@ -28,6 +28,8 @@
 pub mod line;
 pub mod circle;
 pub mod arc;
+pub mod bezier;
+pub mod bspline;
 
 use anyhow::Result;
 use glam::DVec3;
@@ -70,6 +72,18 @@ pub enum AnalyticCurve {
         /// Direction: positive (CCW around `normal`) when `end_angle > start_angle`.
         end_angle: f64,
     },
+    /// ADR-029 Phase B — Bezier curve of degree `n = control_pts.len() - 1`.
+    /// Parameter range is `[0, 1]`.
+    Bezier {
+        control_pts: Vec<DVec3>,
+    },
+    /// ADR-029 Phase B — B-spline curve.
+    /// Parameter range is `[knots[degree], knots[control_pts.len()]]`.
+    BSpline {
+        control_pts: Vec<DVec3>,
+        knots: Vec<f64>,
+        degree: u32,
+    },
 }
 
 /// Operations common to all curve variants.
@@ -103,6 +117,10 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::Arc { center, radius, normal, basis_u, .. } => {
                 Ok(circle::evaluate(*center, *radius, *normal, *basis_u, t))
             }
+            AnalyticCurve::Bezier { control_pts } => bezier::evaluate(control_pts, t),
+            AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                bspline::evaluate(control_pts, knots, *degree as usize, t)
+            }
         }
     }
 
@@ -114,6 +132,10 @@ impl CurveOps for AnalyticCurve {
             }
             AnalyticCurve::Arc { radius, normal, basis_u, .. } => {
                 Ok(circle::derivative(*radius, *normal, *basis_u, t))
+            }
+            AnalyticCurve::Bezier { control_pts } => bezier::derivative(control_pts, t),
+            AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                bspline::derivative(control_pts, knots, *degree as usize, t)
             }
         }
     }
@@ -129,6 +151,10 @@ impl CurveOps for AnalyticCurve {
             } => Ok(arc::tessellate(
                 *center, *radius, *normal, *basis_u, *start_angle, *end_angle, chord_tol,
             )),
+            AnalyticCurve::Bezier { control_pts } => bezier::tessellate(control_pts, chord_tol),
+            AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                bspline::tessellate(control_pts, knots, *degree as usize, chord_tol)
+            }
         }
     }
 
@@ -141,6 +167,10 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::Arc { radius, start_angle, end_angle, .. } => {
                 Ok(radius * (end_angle - start_angle).abs())
             }
+            AnalyticCurve::Bezier { control_pts } => bezier::arc_length(control_pts),
+            AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                bspline::arc_length(control_pts, knots, *degree as usize)
+            }
         }
     }
 
@@ -149,6 +179,14 @@ impl CurveOps for AnalyticCurve {
             AnalyticCurve::Line { .. } => (0.0, 1.0),
             AnalyticCurve::Circle { .. } => (0.0, 2.0 * std::f64::consts::PI),
             AnalyticCurve::Arc { start_angle, end_angle, .. } => (*start_angle, *end_angle),
+            AnalyticCurve::Bezier { .. } => (0.0, 1.0),
+            AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                if knots.len() >= *degree as usize + 1 + control_pts.len() {
+                    (knots[*degree as usize], knots[control_pts.len()])
+                } else {
+                    (0.0, 1.0)
+                }
+            }
         }
     }
 }

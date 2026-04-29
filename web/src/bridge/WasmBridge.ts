@@ -398,6 +398,14 @@ type AxiaEngineExtended = AxiaEngine & {
   ): boolean;
   clearEdgeCurve?(edgeId: number): boolean;
   edgeCurveKind?(edgeId: number): number;
+  // ADR-029 Phase B — Free-form curves
+  setEdgeBezierCurve?(edgeId: number, controlPts: Float64Array): boolean;
+  setEdgeBSplineCurve?(
+    edgeId: number,
+    controlPts: Float64Array,
+    knots: Float64Array,
+    degree: number,
+  ): boolean;
   // Material operations
   assign_material?(faceIds: Uint32Array, materialIdRaw: number): boolean;
   remove_material?(faceIds: Uint32Array): boolean;
@@ -596,11 +604,54 @@ export class WasmBridge {
 
   /**
    * Curve kind on an edge: 0 = straight, 1 = Line variant, 2 = Circle,
-   * 3 = Arc, -1 = invalid edge ID.
+   * 3 = Arc, 4 = Bezier (Phase B), 5 = BSpline (Phase B), -1 invalid.
    */
   edgeCurveKind(edgeId: number): number {
     if (!this.engine) return -1;
     return this.engine.edgeCurveKind(edgeId);
+  }
+
+  /**
+   * ADR-029 Phase B — Set a Bezier curve on an existing edge.
+   * `controlPts` is a flat array `[x0,y0,z0, x1,y1,z1, ...]` of n+1 points
+   * (need ≥ 2 for degree-1 line-equivalent).
+   */
+  setEdgeBezierCurve(edgeId: number, controlPts: Float64Array | number[]): boolean {
+    if (!this.engine) return false;
+    const arr = controlPts instanceof Float64Array
+      ? controlPts
+      : new Float64Array(controlPts);
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      setEdgeBezierCurve?: (eid: number, pts: Float64Array) => boolean;
+    }).setEdgeBezierCurve;
+    return fn ? fn.call(this.engine, edgeId, arr) : false;
+  }
+
+  /**
+   * ADR-029 Phase B — Set a B-spline curve on an existing edge.
+   * `controlPts` flat as for Bezier; `knots` length must equal
+   * `(controlPts.length / 3) + degree + 1` and be non-decreasing.
+   */
+  setEdgeBSplineCurve(
+    edgeId: number,
+    controlPts: Float64Array | number[],
+    knots: Float64Array | number[],
+    degree: number,
+  ): boolean {
+    if (!this.engine) return false;
+    const ptsArr = controlPts instanceof Float64Array
+      ? controlPts
+      : new Float64Array(controlPts);
+    const knotsArr = knots instanceof Float64Array
+      ? knots
+      : new Float64Array(knots);
+    this.markDirty();
+    const fn = (this.engine as unknown as {
+      setEdgeBSplineCurve?:
+        (eid: number, pts: Float64Array, knots: Float64Array, degree: number) => boolean;
+    }).setEdgeBSplineCurve;
+    return fn ? fn.call(this.engine, edgeId, ptsArr, knotsArr, degree) : false;
   }
 
   /** Get the first face ID owned by a XIA entity (drawRect returns XIA ID, pushPull needs face ID) */
