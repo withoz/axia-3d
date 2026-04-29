@@ -77,6 +77,11 @@
   토폴로지 (tree 형태) 로 남는 케이스. 현 resolver 의 leftmost-turn walker
   한계 — 별도 Phase 5 (M1 multi-ring resolver 강화) 필요.
 - 회귀 방지: orphan_count 가 절대 증가하지 않도록 회귀 테스트 추가.
+- **Phase 5 보강 (2026-04-29)**: DFS cycle finder 추가 (`mop_up_orphan_cycles_via_dfs`).
+  resolve_planar_free_faces 의 leftmost-turn walker 가 dangling 가지 후 dead-end
+  하는 케이스를 brute-force DFS 로 처리. 27-RECT 스트레스: 10 → 6 (60% 감소).
+  잔존 6 = true dangling strand (free graph 에 cycle 없음) — Phase 6 별도 작업
+  (face boundary 에 strand 흡수 / 또는 deletion).
 
 ### 11. ADR-024 — 3-Way Corner Chamfer (P10 MVP, 2026-04-29)
 - **새 원칙 P10 (MVP)**: valence==3 vertex 의 corner 자체를 둥글게 처리.

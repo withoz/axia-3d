@@ -1653,6 +1653,107 @@ impl Scene {
                     if !still_orphan { break; }
                 }
             }
+
+            // ADR-025 P11 Phase 5 — Brute-force cycle mop-up.
+            //
+            // resolve_planar_free_faces 의 leftmost-turn walker 가 놓치는 케이스
+            // (multi-component free graph 에서 dangling 가지 선택 후 dead-end,
+            // 또는 중복 edge 가 있는 분기점) 처리.
+            //
+            // 알고리즘: 잔존 orphan edges 의 연결 component 별로 DFS 로 simple
+            // cycle 탐색 → 발견 시 face 생성 → 반복.
+            self.mop_up_orphan_cycles_via_dfs(all_created_faces);
+        }
+    }
+
+    /// ADR-025 P11 Phase 5 — DFS-based orphan cycle mop-up.
+    ///
+    /// `resolve_planar_free_faces` 가 leftmost-turn 단일 패스로 놓치는 케이스
+    /// 를 brute-force DFS 로 처리. 잔존 orphan edges 그래프에서 simple cycle
+    /// 을 찾아 face 로 합성. Component 가 작아 (보통 < 20 edges) 비용 낮음.
+    fn mop_up_orphan_cycles_via_dfs(&mut self, all_created_faces: &mut Vec<FaceId>) {
+        use std::collections::{HashMap, HashSet};
+        const MAX_ROUNDS: usize = 8;
+        for _round in 0..MAX_ROUNDS {
+            // 1) Collect orphan edges
+            let orphan_edges: Vec<(EdgeId, axia_geo::VertId, axia_geo::VertId)> = self.mesh.edges.iter()
+                .filter_map(|(eid, e)| {
+                    if !e.is_active() { return None; }
+                    if !e.class().is_topological() { return None; }
+                    let (faces, _) = self.mesh.get_faces_sharing_edge(eid);
+                    let any_active = faces.iter().any(|&f|
+                        self.mesh.faces.contains(f) && self.mesh.faces[f].is_active());
+                    if any_active { None } else { Some((eid, e.v_small(), e.v_large())) }
+                })
+                .collect();
+            if orphan_edges.is_empty() { return; }
+
+            // 2) Adjacency: vert → list of (neighbor_vert, edge_id)
+            let mut adj: HashMap<axia_geo::VertId, Vec<(axia_geo::VertId, EdgeId)>> = HashMap::new();
+            for &(eid, va, vb) in &orphan_edges {
+                adj.entry(va).or_default().push((vb, eid));
+                adj.entry(vb).or_default().push((va, eid));
+            }
+
+            // 3) Find ONE simple cycle via DFS from each vert
+            let mut cycle_verts: Option<Vec<axia_geo::VertId>> = None;
+            'outer: for &(_, va, _) in &orphan_edges {
+                // DFS: stack of (vert, path, visited_set)
+                let mut path: Vec<axia_geo::VertId> = vec![va];
+                let mut visited: HashSet<axia_geo::VertId> = HashSet::new();
+                visited.insert(va);
+                if let Some(cyc) = dfs_find_cycle(&adj, va, va, &mut path, &mut visited, 0, 32) {
+                    if cyc.len() >= 3 {
+                        cycle_verts = Some(cyc);
+                        break 'outer;
+                    }
+                }
+            }
+            let cycle_verts = match cycle_verts {
+                Some(c) => c,
+                None => return,  // no more cycles
+            };
+
+            // 4) Compute signed area to determine winding (need CCW for add_face).
+            //    Use surface normal hint from epoch context if available, else
+            //    derive from cycle's own normal.
+            let positions: Vec<DVec3> = cycle_verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
+            if positions.len() < 3 { return; }
+
+            // Compute polygon normal (Newell)
+            let mut poly_normal = DVec3::ZERO;
+            for i in 0..positions.len() {
+                let p = positions[i];
+                let q = positions[(i + 1) % positions.len()];
+                poly_normal.x += (p.y - q.y) * (p.z + q.z);
+                poly_normal.y += (p.z - q.z) * (p.x + q.x);
+                poly_normal.z += (p.x - q.x) * (p.y + q.y);
+            }
+            let surface_hint = self.epoch.as_ref()
+                .and_then(|e| e.surface_normal)
+                .unwrap_or(DVec3::Z);
+            let cycle_verts_oriented = if poly_normal.dot(surface_hint) >= 0.0 {
+                cycle_verts.clone()
+            } else {
+                let mut rev = cycle_verts.clone();
+                rev.reverse();
+                rev
+            };
+
+            // 5) Add face
+            match self.mesh.add_face_with_holes(&cycle_verts_oriented, &[], self.default_material) {
+                Ok(new_face) => {
+                    if !all_created_faces.contains(&new_face) {
+                        all_created_faces.push(new_face);
+                    }
+                }
+                Err(_) => {
+                    // Couldn't add (e.g., manifold violation) — skip this cycle and try next round
+                    return;
+                }
+            }
         }
     }
 
@@ -3110,6 +3211,46 @@ impl Default for Scene {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// ADR-025 P11 Phase 5 — DFS to find a simple cycle in an undirected graph.
+///
+/// `adj`: vertex → list of (neighbor, edge_id) pairs.
+/// `start`: target vertex (cycle must close back to it).
+/// `current`: where we are now in the DFS.
+/// `path`: current path (verts only, including start as path[0]).
+/// `visited`: verts already in path.
+/// `depth` / `max_depth`: bound search to avoid pathological cases.
+///
+/// Returns Some(cycle) where cycle.len() >= 3 if found.
+fn dfs_find_cycle(
+    adj: &std::collections::HashMap<axia_geo::VertId, Vec<(axia_geo::VertId, axia_geo::EdgeId)>>,
+    start: axia_geo::VertId,
+    current: axia_geo::VertId,
+    path: &mut Vec<axia_geo::VertId>,
+    visited: &mut std::collections::HashSet<axia_geo::VertId>,
+    depth: usize,
+    max_depth: usize,
+) -> Option<Vec<axia_geo::VertId>> {
+    if depth > max_depth { return None; }
+    let neighbors = match adj.get(&current) {
+        Some(n) => n, None => return None,
+    };
+    for &(next, _eid) in neighbors {
+        // Found cycle back to start (length >= 3).
+        if next == start && path.len() >= 3 {
+            return Some(path.clone());
+        }
+        if visited.contains(&next) { continue; }
+        path.push(next);
+        visited.insert(next);
+        if let Some(cyc) = dfs_find_cycle(adj, start, next, path, visited, depth + 1, max_depth) {
+            return Some(cyc);
+        }
+        path.pop();
+        visited.remove(&next);
+    }
+    None
 }
 
 #[derive(Clone, Debug)]
@@ -6794,10 +6935,11 @@ mod tests {
                 !faces.iter().any(|&f| scene.mesh.faces.contains(f) && scene.mesh.faces[f].is_active())
             })
             .count();
-        // Phase 4 (final sweep) 적용 후 측정값 = 10. 이 수치가 증가하면 회귀.
-        // 향후 Phase 5 (M1 multi-ring resolver 강화) 시 0 으로 감소.
-        assert!(orphan_count <= 10,
-            "[P11 regression guard] orphan_count={} (expected <= 10 since Phase 4 final sweep)",
+        // Phase 5 (DFS cycle finder) 적용 후 측정값 = 6. 회귀 시 증가 감지.
+        // 잔존 6 = true dangling strand (free graph 에 cycle 없음) — Phase 6
+        // 별도 작업 (face boundary 에 strand 흡수).
+        assert!(orphan_count <= 6,
+            "[P11 regression guard] orphan_count={} (expected <= 6 since Phase 5 DFS)",
             orphan_count);
     }
 
@@ -7123,7 +7265,6 @@ mod tests {
              manifold_violations={}",
             active_face_count, orphan_count, report.violations.len(),
         );
-        // P11 원칙: 닫힌 엣지 = 반드시 면. 잔존 orphan 진단 출력.
     }
 
     /// ADR-022 P9 — Drawing order independence with corner-pinch.
