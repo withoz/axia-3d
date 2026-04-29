@@ -17,6 +17,12 @@ pub mod cylinder;
 pub mod sphere;
 pub mod cone;
 pub mod torus;
+pub mod bezier_patch;
+pub mod bspline_surface;
+pub mod nurbs_surface;
+pub mod trim;
+
+pub use trim::{TrimCurve2D, TrimLoop};
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -74,6 +80,31 @@ pub enum AnalyticSurface {
         u_range: (f64, f64),
         v_range: (f64, f64),
     },
+    /// ADR-033 Phase E — Bezier patch (tensor product Bezier surface).
+    /// `ctrl_grid` is `(deg_u + 1) × (deg_v + 1)` row-major. Range: `[0, 1]²`.
+    BezierPatch {
+        ctrl_grid: Vec<Vec<DVec3>>,
+    },
+    /// ADR-033 Phase E — Tensor product B-spline surface.
+    BSplineSurface {
+        ctrl_grid: Vec<Vec<DVec3>>,
+        knots_u: Vec<f64>,
+        knots_v: Vec<f64>,
+        deg_u: u32,
+        deg_v: u32,
+    },
+    /// ADR-033 Phase E — NURBS surface (rational tensor-product) +
+    /// optional 2D parameter-space trim loops.
+    NURBSSurface {
+        ctrl_grid: Vec<Vec<DVec3>>,
+        weights: Vec<Vec<f64>>,
+        knots_u: Vec<f64>,
+        knots_v: Vec<f64>,
+        deg_u: u32,
+        deg_v: u32,
+        #[serde(default)]
+        trim_loops: Vec<TrimLoop>,
+    },
 }
 
 /// Result of surface tessellation — triangle mesh with UV coordinates.
@@ -119,6 +150,19 @@ impl SurfaceOps for AnalyticSurface {
                 cone::evaluate(*apex, *axis_dir, *half_angle, *ref_dir, u, v),
             AnalyticSurface::Torus { center, axis_dir, ref_dir, major_radius, minor_radius, .. } =>
                 torus::evaluate(*center, *axis_dir, *ref_dir, *major_radius, *minor_radius, u, v),
+            AnalyticSurface::BezierPatch { ctrl_grid } =>
+                bezier_patch::evaluate(ctrl_grid, u, v).unwrap_or(DVec3::ZERO),
+            AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v } =>
+                bspline_surface::evaluate(
+                    ctrl_grid, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO),
+            AnalyticSurface::NURBSSurface {
+                ctrl_grid, weights, knots_u, knots_v, deg_u, deg_v, ..
+            } => nurbs_surface::evaluate(
+                ctrl_grid, weights, knots_u, knots_v,
+                *deg_u as usize, *deg_v as usize, u, v,
+            ).unwrap_or(DVec3::ZERO),
         }
     }
 
@@ -133,6 +177,32 @@ impl SurfaceOps for AnalyticSurface {
                 cone::normal(*apex, *axis_dir, *half_angle, *ref_dir, u, v),
             AnalyticSurface::Torus { center, axis_dir, ref_dir, major_radius, minor_radius, .. } =>
                 torus::normal(*center, *axis_dir, *ref_dir, *major_radius, *minor_radius, u, v),
+            AnalyticSurface::BezierPatch { ctrl_grid } =>
+                bezier_patch::normal(ctrl_grid, u, v).unwrap_or(DVec3::Z),
+            AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v } => {
+                let du = bspline_surface::derivative_u(
+                    ctrl_grid, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO);
+                let dv = bspline_surface::derivative_v(
+                    ctrl_grid, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO);
+                du.cross(dv).normalize_or_zero()
+            }
+            AnalyticSurface::NURBSSurface {
+                ctrl_grid, weights, knots_u, knots_v, deg_u, deg_v, ..
+            } => {
+                let du = nurbs_surface::derivative_u(
+                    ctrl_grid, weights, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO);
+                let dv = nurbs_surface::derivative_v(
+                    ctrl_grid, weights, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO);
+                du.cross(dv).normalize_or_zero()
+            }
         }
     }
 
@@ -147,6 +217,19 @@ impl SurfaceOps for AnalyticSurface {
                 cone::derivative_u(*axis_dir, *half_angle, *ref_dir, u, v),
             AnalyticSurface::Torus { axis_dir, ref_dir, major_radius, minor_radius, .. } =>
                 torus::derivative_u(*axis_dir, *ref_dir, *major_radius, *minor_radius, u, v),
+            AnalyticSurface::BezierPatch { ctrl_grid } =>
+                bezier_patch::derivative_u(ctrl_grid, u, v).unwrap_or(DVec3::ZERO),
+            AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v } =>
+                bspline_surface::derivative_u(
+                    ctrl_grid, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO),
+            AnalyticSurface::NURBSSurface {
+                ctrl_grid, weights, knots_u, knots_v, deg_u, deg_v, ..
+            } => nurbs_surface::derivative_u(
+                ctrl_grid, weights, knots_u, knots_v,
+                *deg_u as usize, *deg_v as usize, u, v,
+            ).unwrap_or(DVec3::ZERO),
         }
     }
 
@@ -160,6 +243,19 @@ impl SurfaceOps for AnalyticSurface {
                 cone::derivative_v(*axis_dir, *half_angle, *ref_dir, u, v),
             AnalyticSurface::Torus { axis_dir, ref_dir, minor_radius, .. } =>
                 torus::derivative_v(*axis_dir, *ref_dir, *minor_radius, u, v),
+            AnalyticSurface::BezierPatch { ctrl_grid } =>
+                bezier_patch::derivative_v(ctrl_grid, u, v).unwrap_or(DVec3::ZERO),
+            AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v } =>
+                bspline_surface::derivative_v(
+                    ctrl_grid, knots_u, knots_v,
+                    *deg_u as usize, *deg_v as usize, u, v,
+                ).unwrap_or(DVec3::ZERO),
+            AnalyticSurface::NURBSSurface {
+                ctrl_grid, weights, knots_u, knots_v, deg_u, deg_v, ..
+            } => nurbs_surface::derivative_v(
+                ctrl_grid, weights, knots_u, knots_v,
+                *deg_u as usize, *deg_v as usize, u, v,
+            ).unwrap_or(DVec3::ZERO),
         }
     }
 
@@ -170,6 +266,29 @@ impl SurfaceOps for AnalyticSurface {
             | AnalyticSurface::Sphere { u_range, v_range, .. }
             | AnalyticSurface::Cone { u_range, v_range, .. }
             | AnalyticSurface::Torus { u_range, v_range, .. } => (*u_range, *v_range),
+            AnalyticSurface::BezierPatch { .. } => ((0.0, 1.0), (0.0, 1.0)),
+            AnalyticSurface::BSplineSurface { knots_u, knots_v, deg_u, deg_v, ctrl_grid } => {
+                let u_range = if knots_u.len() >= *deg_u as usize + 1 + ctrl_grid.len() {
+                    (knots_u[*deg_u as usize], knots_u[ctrl_grid.len()])
+                } else { (0.0, 1.0) };
+                let v_range = if !ctrl_grid.is_empty()
+                    && knots_v.len() >= *deg_v as usize + 1 + ctrl_grid[0].len()
+                {
+                    (knots_v[*deg_v as usize], knots_v[ctrl_grid[0].len()])
+                } else { (0.0, 1.0) };
+                (u_range, v_range)
+            }
+            AnalyticSurface::NURBSSurface { knots_u, knots_v, deg_u, deg_v, ctrl_grid, .. } => {
+                let u_range = if knots_u.len() >= *deg_u as usize + 1 + ctrl_grid.len() {
+                    (knots_u[*deg_u as usize], knots_u[ctrl_grid.len()])
+                } else { (0.0, 1.0) };
+                let v_range = if !ctrl_grid.is_empty()
+                    && knots_v.len() >= *deg_v as usize + 1 + ctrl_grid[0].len()
+                {
+                    (knots_v[*deg_v as usize], knots_v[ctrl_grid[0].len()])
+                } else { (0.0, 1.0) };
+                (u_range, v_range)
+            }
         }
     }
 
@@ -209,6 +328,18 @@ impl AnalyticSurface {
             AnalyticSurface::Torus { major_radius, minor_radius, .. } => {
                 let n_u = sagitta_segments(*major_radius + *minor_radius, u_span, chord_tol).max(16);
                 let n_v = sagitta_segments(*minor_radius, v_span, chord_tol).max(8);
+                (n_u, n_v)
+            }
+            // Phase E free-form surfaces — heuristic based on control-grid size and span.
+            AnalyticSurface::BezierPatch { ctrl_grid }
+            | AnalyticSurface::BSplineSurface { ctrl_grid, .. }
+            | AnalyticSurface::NURBSSurface { ctrl_grid, .. } => {
+                let n_u_ctrl = ctrl_grid.len().max(2);
+                let n_v_ctrl = ctrl_grid.first().map(|r| r.len()).unwrap_or(2).max(2);
+                // Roughly 4 segments per control-segment, scaled by chord tol.
+                let _ = chord_tol;
+                let n_u = (n_u_ctrl * 4).clamp(8, 256);
+                let n_v = (n_v_ctrl * 4).clamp(8, 256);
                 (n_u, n_v)
             }
         }

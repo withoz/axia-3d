@@ -1035,9 +1035,20 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
     `clearFaceSurface`, `faceSurfaceKind` (0..5), `tessellateFaceSurface`
   - 회귀 테스트 78개 (60 surface unit + 9 mesh integration + 1 NURBS edge +
     1 legacy serde + 7 TS bridge)
-- **다음 단계**: Phase E (NURBS surfaces, trimmed, 6개월 예정)
+- **ADR-032** (Phase D'): Promotion paths — primitive surface auto-attach +
+  DrawArc/DrawBezier 마이그레이션 + drawArcWithCurve / drawBezierWithCurve /
+  drawBSplineWithCurve atomic APIs (10 tests)
+- **ADR-033** (Phase E): NURBS Surfaces — **완료**
+  - `bezier_patch.rs` — tensor-product Bezier (de Casteljau in u, then v)
+  - `bspline_surface.rs` — tensor B-spline (de Boor)
+  - `nurbs_surface.rs` — rational tensor B-spline via 4D homogeneous lift
+  - `trim.rs` — 2D parameter-space TrimCurve2D + TrimLoop (Line/Arc/Bezier/BSpline)
+  - `AnalyticSurface::BezierPatch / BSplineSurface / NURBSSurface { trim_loops }`
+  - `faceSurfaceKind` 확장: 6 = BezierPatch, 7 = BSplineSurface, 8 = NURBSSurface
+  - 회귀 테스트 45 (Bezier patch 16 + B-spline surface 9 + NURBS surface 9 + trim 8 + 기타 3)
+- **다음 단계**: Phase F (Surface-Surface Intersection, 9개월 예정 — 박사급 위험 게이트)
 - 점진 단계: Analytic Edge Curve ✅ → Bezier/B-spline ✅ → NURBS curve ✅ →
-  Surface primitives ✅ → NURBS surfaces → SSI → Boolean + STEP/IGES
+  Surface primitives ✅ → NURBS surfaces ✅ → SSI → Boolean + STEP/IGES
 - 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026) 모두 보존
 
 ### 기타

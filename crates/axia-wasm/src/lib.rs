@@ -1252,7 +1252,8 @@ impl AxiaEngine {
     }
 
     /// Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
-    /// 4 = Cone, 5 = Torus, -1 = invalid face id.
+    /// 4 = Cone, 5 = Torus, 6 = BezierPatch, 7 = BSplineSurface,
+    /// 8 = NURBSSurface, -1 = invalid face id.
     #[wasm_bindgen(js_name = "faceSurfaceKind")]
     pub fn face_surface_kind(&self, face_id: u32) -> i32 {
         use axia_geo::{FaceId, AnalyticSurface};
@@ -1267,6 +1268,9 @@ impl AxiaEngine {
             Some(AnalyticSurface::Sphere { .. }) => 3,
             Some(AnalyticSurface::Cone { .. }) => 4,
             Some(AnalyticSurface::Torus { .. }) => 5,
+            Some(AnalyticSurface::BezierPatch { .. }) => 6,
+            Some(AnalyticSurface::BSplineSurface { .. }) => 7,
+            Some(AnalyticSurface::NURBSSurface { .. }) => 8,
         }
     }
 

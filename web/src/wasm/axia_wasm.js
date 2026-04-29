@@ -898,7 +898,8 @@ export class AxiaEngine {
     }
     /**
      * Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
-     * 4 = Cone, 5 = Torus, -1 = invalid face id.
+     * 4 = Cone, 5 = Torus, 6 = BezierPatch, 7 = BSplineSurface,
+     * 8 = NURBSSurface, -1 = invalid face id.
      * @param {number} face_id
      * @returns {number}
      */

@@ -336,7 +336,8 @@ export class AxiaEngine {
     faceInnerLoopCount(face_id_raw: number): number;
     /**
      * Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
-     * 4 = Cone, 5 = Torus, -1 = invalid face id.
+     * 4 = Cone, 5 = Torus, 6 = BezierPatch, 7 = BSplineSurface,
+     * 8 = NURBSSurface, -1 = invalid face id.
      */
     faceSurfaceKind(face_id: number): number;
     face_count(): number;
