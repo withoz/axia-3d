@@ -1,9 +1,38 @@
 # PLAN-001: AXiA 자체 NURBS 커널 작성 계획서
 
-**Status**: Draft (2026-04-29)
-**Target**: 자체 분석적 곡선/곡면 커널 (옵션 A — `truck`/OCCT 의존 없음)
+**Status**: Active (2026-04-29 → updated 2026-04-30)
+**Target**: 자체 분석적 곡선/곡면 커널 (옵션 A — `truck`/OCCT 의존 없음 +
+Phase G STEP/IGES Hybrid via ADR-035: OCCT.js 옵션 + axia-foreign 자체 spike)
 **Owner**: TBD
-**ADR Linkage**: ADR-027 (kickoff), 후속 ADR-028~035 (각 Phase)
+**ADR Linkage**: ADR-027 (kickoff) → ADR-028~034 (Phases A~F 완료) →
+ADR-035 (Phase G STEP/IGES Hybrid Strategy) → ADR-036 (Curve/Surface
+Promotion architectural)
+
+## Phase 진행 상황 (2026-04-30)
+
+| Phase | 기간 | 상태 | ADR | 산출물 |
+|---|---|---|---|---|
+| **A** Analytic Edge Curve | Months 1-3 | ✅ **완료** | ADR-028 | Line/Circle/Arc + CurveOps trait (59 tests) |
+| **B** Free-form Curves | Months 4-6 | ✅ **완료** | ADR-029 | Bezier (de Casteljau) + B-spline (de Boor) (43 tests) |
+| **C** NURBS Curves + CCI | Months 7-9 | ✅ **완료** | ADR-030 | NURBS curves + Curve-Curve Intersection (67 tests) |
+| **D** Analytic Surface Primitives | Months 10-15 | ✅ **완료** | ADR-031 | Plane/Cylinder/Sphere/Cone/Torus (78 tests) |
+| **D'** Promotion Paths | — | ✅ **완료** | ADR-032 | DrawArc/Bezier 마이그레이션 + atomic API (10 tests) |
+| **E** NURBS Surfaces | Months 16-21 | ✅ **완료** | ADR-033 | BezierPatch / BSplineSurface / NURBSSurface + TrimLoop (45 tests) |
+| **F** Surface-Surface Intersection | Months 22-30 | ✅ **완료** | ADR-034 | Stage 1 analytic (5 pairs) + Stage 2 subdivide + Stage 3 Newton + Stage 4 topology (46 tests) |
+| **G1** NURBS surface SSI wrapper | — | ✅ **완료** | — | `bspline::extract_bezier_strips` + `bspline_surface::extract_bezier_patches` + `intersect_bspline_pair` (6 tests) |
+| **G2** SSI → TrimCurve2D 변환 | — | ✅ **완료** | — | `ssi::trim_gen` 모듈 (4 tests) |
+| **G3** NURBS Boolean primitives | — | ✅ **완료 (MVP)** | — | `ssi::boolean::nurbs_boolean(op)` Union/Subtract/Intersect (3 tests) |
+| **G4-A** STEP/IGES via OCCT.js | Months 31-32 | 🔄 **진행 중 (scaffolding)** | ADR-035, ADR-036 | StepIgesImporter + occtCurvePromote/SurfacePromote 스텁 + occtAccessors 헬퍼 (41 tests) |
+| **G4-B** axia-foreign 자체 파서 | Months 31-39 (병행) | ⏳ **대기 (착수 예정)** | ADR-035 P20.2 | STEP AP203 + IGES 5.3 lexer/parser/promote |
+| **G4-decision** Default 결정 | Months 36-43 | ⏳ **+12개월 후** | ADR-035 P20.E | 5-트리거 정량 매트릭스 |
+
+총 회귀 테스트 누적: **Rust 751 + TS 1235 = 1986 passed, 0 회귀**.
+
+**Phase G 커버리지**: Phases A~E (NURBS 인프라) ✅, Phase F (SSI) ✅,
+Phase G1~G3 (NURBS 통합) ✅, Phase G4 (STEP/IGES 외부 연결) 🔄 진행 중.
+초기 번들 영향 0 MB 보장 (P20.C #2) — opencascade.js 설치 시에만 chunk 생성.
+
+
 **Related**: ADR-007 (Face Orientation), ADR-019 (Line is Truth), ADR-021 (Closed loop divides face), ADR-025 (P11), ADR-026 (Cardinal SSOT)
 
 ---

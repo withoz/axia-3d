@@ -175,6 +175,52 @@
   Path B 통일).
 - ADR-008 Axiom 1 의 운영 명시화.
 
+### 13. ADR-035 — STEP/IGES Hybrid Strategy (P20, 2026-04-30)
+- **Stage 4-A (즉시)**: OCCT.js 동적 로딩 옵션 플러그인. 메인 번들 영향 0
+  (initial bundle 0MB 증가 강제 — P20.C #2).
+- **Stage 4-B (병행)**: `axia-foreign` 자체 crate STEP AP203 / IGES 5.3 파서
+  spike (zero-deps).
+- **12개월 default 결정**: 5-트리거 정량 매트릭스 (커버리지 ≥80% / 정확도
+  ≤1e-3 mm / LOC<8000+bug≤3분기 / 번들 절감 ≥8MB / NPS ≥7).
+- **Format priority** (P20.A): AP242 primary, AP203/AP214 secondary, IGES
+  legacy. AP238 / IFC 별도 ADR.
+- **Non-goals** (P20.B): Export, Assembly hierarchy, PMI/GD&T, Material
+  metadata, Drawing views — Stage 4 제외.
+- **검증 코퍼스** (P20.D): 공개 (NIST 2 + OCCT) + 벤더별 1개씩
+  (SolidWorks/Fusion/CATIA) + 사용자 제공 (선택).
+- **결재 포인트**: P20.5 라이선스 호환성 (LGPL/FOSS exception ↔ AXiA),
+  P20.7 Stage 4-A 구현 착수 (✅ 승인 완료 2026-04-30, scaffolding 적용).
+
+### 14. ADR-036 — STEP/IGES Curve & Surface Promotion (P21, 2026-04-30)
+- **P21 Precision-First Promotion**: BRep parametric definition 은 항상
+  AnalyticCurve / AnalyticSurface variant 로 직접 매핑 후 attach.
+  Tessellation 은 fallback 일 뿐 truth 가 아님 (메타-원칙 #13 적용).
+- **P21.1 Curve 매핑 11항목**: Direct 6 (Line/Circle/Arc/Bezier/BSpline/
+  NURBS) + Conic 변환 3 (Ellipse/Parabola/Hyperbola, Piegl A7.1/4/5) +
+  Fitting 1 (OffsetCurve) + TrimmedCurve.
+- **P21.2 Surface 매핑 12항목**: Direct 8 (Plane/Cylinder/Sphere/Cone/
+  Torus/BezierSurface/BSplineSurface/NURBSSurface) + Sweep 2 (Revolution/
+  Extrusion, Piegl A8.1/2) + Fitting 1 (OffsetSurface) + Trim 1
+  (RectangularTrimmedSurface).
+- **P21.5 Parameter range 정합**: OCCT trim range ↔ AnalyticCurve range
+  매핑 규약. CurvePromotion 모든 variant 에 `parameterRange?` optional.
+- **P21.6 라운드트립**: 5 코퍼스 양방향 < 1e-3 mm 검증.
+- **P21.7 실패 처리**: 6 case (DownCast 실패 / 변환 정확도 미달 / fitting
+  tolerance 초과 / rational NURBS surface SSI / PCurve missing /
+  self-intersection) → ImportResult.warnings 누적.
+- **P21.8 Stage 4-A / 4-B 일관성 강제**: 두 경로 동일 매핑 enum 재사용
+  → cross-validation type-safe.
+- **uvBounds (P21.2)**: SurfacePromotion 모든 variant 에 optional
+  `uvBounds?: [umin, umax, vmin, vmax]` — RectangularTrimmedSurface +
+  Phase G2 trim_loops 동기화.
+- **occt.js Handle 래핑 함정**: `occt.Handle_Geom_*::DownCast(handle)?.get()`
+  + `IsNull?.()` chain 일관 적용. NCollection_Array2 base footgun 우회는
+  `Pole(i, j)` / `Weight(i, j)` 직접 accessor 패턴 사용.
+- 회귀 방지 테스트:
+  - `SUPPORTED_CURVE_KINDS` ↔ ADR-036 P21.1 11항목 정합
+  - `SUPPORTED_SURFACE_KINDS` ↔ ADR-036 P21.2 12항목 정합
+  - 매핑 표 갱신 시 본 테스트가 깨짐 → ADR ↔ 코드 drift 차단
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
@@ -1012,7 +1058,7 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 
 ## 향후 과제
 
-### Major Initiative: 자체 NURBS Kernel (진행 중 — Phase A 완료)
+### Major Initiative: 자체 NURBS Kernel (Phases A~E 완료, F 완료, G 진행 중)
 - **PLAN-001**: `docs/plans/PLAN-001-nurbs-kernel.md` — 7-Phase 점진 진화
 - **ADR-027** (Accepted, 2026-04-29): NURBS Kernel Initiative kickoff
 - **ADR-028** (Phase A): Analytic Edge Curve Foundation — **완료**
@@ -1046,10 +1092,67 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   - `AnalyticSurface::BezierPatch / BSplineSurface / NURBSSurface { trim_loops }`
   - `faceSurfaceKind` 확장: 6 = BezierPatch, 7 = BSplineSurface, 8 = NURBSSurface
   - 회귀 테스트 45 (Bezier patch 16 + B-spline surface 9 + NURBS surface 9 + trim 8 + 기타 3)
-- **다음 단계**: Phase F (Surface-Surface Intersection, 9개월 예정 — 박사급 위험 게이트)
+- **ADR-034** (Phase F): Surface-Surface Intersection — **완료** (4 stages)
+  - `surfaces/ssi/` 모듈:
+    - `analytic.rs` — Plane-Plane / Plane-Cylinder / Plane-Sphere /
+      Plane-Cone / Cylinder-Cylinder(parallel) closed-form (29 tests)
+    - `subdivide.rs` — Stage 2 AABB pruning + adaptive split + uv_bounds
+      tracking (6 tests)
+    - `newton.rs` — Stage 3 3×4 Jacobian pseudo-inverse + damped step
+      (4 tests)
+    - `topology.rs` — Stage 4 greedy NN chain walking + closure detection
+      (5 tests)
+  - 통합 pipeline `intersect_bezier_pair(a, b, tol)` (2 tests)
+  - 회귀 테스트 46 (analytic 29 + subdivide 6 + newton 4 + topology 5 +
+    pipeline 2)
+- **ADR-035** (Phase G Stage 4 kickoff): STEP/IGES Hybrid Strategy — **Accepted**
+  - P20: OCCT.js 옵션 (Stage 4-A) + axia-foreign 자체 spike (Stage 4-B)
+    병행. 12개월 후 default 결정 (5-트리거 정량 매트릭스).
+  - P20.A Format priority: AP242 primary, AP203/214 secondary, IGES legacy
+  - P20.B Non-goals: Export, Assembly, PMI, Material metadata, Drawing
+  - P20.C Stage 4-A 4축 acceptance: 기능 / 성능 (initial bundle 0MB) /
+    회복 / 회귀
+  - P20.D 검증 코퍼스: 공개(NIST 2) + 벤더별(SolidWorks/Fusion/CATIA 3) +
+    사용자(선택)
+  - P20.E 12개월 트리거: 커버리지 ≥80% / 정확도 ≤1e-3 mm / LOC<8000+bug≤3
+    분기 / 번들 절감 ≥8MB / NPS ≥7
+- **ADR-036** (Phase G Stage 4-A architectural): STEP/IGES Curve & Surface
+  Promotion — **Accepted**
+  - P21: Precision-First Promotion. BRep parametric definition 을 직접
+    AnalyticCurve / AnalyticSurface 로 매핑. Tessellation = 렌더 캐시.
+  - P21.1 Curve 매핑 11항목 (Direct 6 + Conic conversion 3 + Fitting fallback
+    1 + TrimmedCurve)
+  - P21.2 Surface 매핑 12항목 (Direct 8 + Sweep 2 + Fitting + Trim)
+  - P21.3 Trim Loop (PCurve), P21.5 Parameter range 정합, P21.6 round-trip
+    1e-3 mm
+  - P21.7 실패 처리 6 case → ImportResult.warnings 누적
+  - P21.8 Stage 4-A / 4-B 동일 매핑 강제 → cross-validation harness
+- **Phase G Stage 1~3 완료** (ADR-027 NURBS Kernel)
+  - **G1**: NURBS surface SSI wrapper (non-rational) — `bspline::extract_bezier_strips`
+    + `bspline_surface::extract_bezier_patches` + `ssi::nurbs_wrapper::intersect_bspline_pair`
+    (6 tests)
+  - **G2**: SSI → TrimCurve2D 변환 — `ssi::trim_gen` 모듈 (4 tests)
+  - **G3**: NURBS Boolean primitives MVP — `ssi::boolean::nurbs_boolean(op)`
+    Union/Subtract/Intersect (3 tests)
+- **Phase G Stage 4-A scaffolding 진행 중**
+  - `web/src/import/StepIgesImporter.ts` — OCCT.js dynamic loader
+    (singleton + lazy load + graceful fallback) (8 tests)
+  - `web/src/import/occtCurvePromote.ts` / `occtSurfacePromote.ts` —
+    ADR-036 P21 매핑 SSOT 스텁 (parameterRange / uvBounds / warnings
+    wrapper) (17 tests)
+  - `web/src/import/occtAccessors.ts` — wrapper 호환 헬퍼
+    (pntToVec3 / readArray1Real 다형 / Handle DownCast 우회) (16 tests)
+  - `web/package.json` `opencascade.js` optional dep + `vite.config.ts`
+    `opencascade-deps` chunk
+  - **Initial bundle 619 kB 동일 (P20.C #2 0MB 증가 강제)** — OCCT 미설치
+    환경에서도 build 정상
+- **다음 단계 (PR-by-PR)**:
+  - Stage 4-A 완료: OCCT BRep traversal + 실제 promote* 본체 + 5 코퍼스
+    round-trip 1e-3 mm 검증
+  - Stage 4-B 시작: `axia-foreign` crate 신설 + STEP AP203 lexer/parser
 - 점진 단계: Analytic Edge Curve ✅ → Bezier/B-spline ✅ → NURBS curve ✅ →
-  Surface primitives ✅ → NURBS surfaces ✅ → SSI → Boolean + STEP/IGES
-- 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026) 모두 보존
+  Surface primitives ✅ → NURBS surfaces ✅ → SSI ✅ → Boolean ✅ → STEP/IGES 🔄
+- 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026/035/036) 모두 보존
 
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
