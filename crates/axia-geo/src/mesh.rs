@@ -3417,6 +3417,134 @@ impl Mesh {
         (faces, hes)
     }
 
+    /// ADR-021 P7 — Group simple inner faces by connected component.
+    ///
+    /// 두 face 가 edge 를 공유하면 같은 component. BFS 로 그룹화.
+    /// 사용처: Step 4.95 P7 promote — connected component → 1 combined hole.
+    pub fn find_inner_components(&self, inners: &[FaceId]) -> Vec<Vec<FaceId>> {
+        use rustc_hash::FxHashSet;
+        let inner_set: FxHashSet<FaceId> = inners.iter().copied().collect();
+        let mut visited: FxHashSet<FaceId> = FxHashSet::default();
+        let mut components: Vec<Vec<FaceId>> = Vec::new();
+
+        for &start in inners {
+            if visited.contains(&start) { continue; }
+            let mut comp = Vec::new();
+            let mut queue = vec![start];
+            while let Some(fid) = queue.pop() {
+                if visited.contains(&fid) { continue; }
+                visited.insert(fid);
+                comp.push(fid);
+
+                let face = match self.faces.get(fid) { Some(f) => f, None => continue };
+                let outer_start = face.outer().start;
+                if outer_start.is_null() { continue; }
+                let mut h = outer_start;
+                let mut guard = 0usize;
+                loop {
+                    guard += 1;
+                    if guard > 4096 { break; }
+                    let twin = self.he_twin(h);
+                    let twin_face = self.hes.get(twin).map(|t| t.face()).unwrap_or(FaceId::NULL);
+                    if !twin_face.is_null()
+                        && inner_set.contains(&twin_face)
+                        && !visited.contains(&twin_face)
+                    {
+                        queue.push(twin_face);
+                    }
+                    let he = match self.hes.get(h) { Some(h) => h, None => break };
+                    h = he.next();
+                    if h == outer_start { break; }
+                }
+            }
+            components.push(comp);
+        }
+        components
+    }
+
+    /// ADR-021 P7 — Combined outer perimeter of a connected face component.
+    ///
+    /// Component 의 외곽 boundary 만 모아 CCW order 로 walk.
+    /// Hole loop 으로 사용 시 호출자가 reverse() 하여 CW 로 변환.
+    /// 결과: VertId 시퀀스 (CCW around the union region).
+    pub fn compute_combined_perimeter(&self, component: &[FaceId]) -> anyhow::Result<Vec<VertId>> {
+        use rustc_hash::FxHashSet;
+        if component.is_empty() {
+            anyhow::bail!("compute_combined_perimeter: empty component");
+        }
+        let comp_set: FxHashSet<FaceId> = component.iter().copied().collect();
+
+        // 1) Find any boundary HE: outer-loop HE whose twin's face is NOT in component.
+        let mut start_he: HeId = HeId::NULL;
+        for &fid in component {
+            let face = match self.faces.get(fid) { Some(f) => f, None => continue };
+            let outer_start = face.outer().start;
+            if outer_start.is_null() { continue; }
+            let mut h = outer_start;
+            let mut guard = 0usize;
+            loop {
+                guard += 1;
+                if guard > 4096 { break; }
+                let twin = self.he_twin(h);
+                let twin_face = self.hes.get(twin).map(|t| t.face()).unwrap_or(FaceId::NULL);
+                if twin_face.is_null() || !comp_set.contains(&twin_face) {
+                    start_he = h;
+                    break;
+                }
+                let he = match self.hes.get(h) { Some(h) => h, None => break };
+                h = he.next();
+                if h == outer_start { break; }
+            }
+            if !start_he.is_null() { break; }
+        }
+        if start_he.is_null() {
+            anyhow::bail!("compute_combined_perimeter: no boundary HE in component");
+        }
+
+        // 2) Walk the boundary CCW. At each step, take next; if next is interior
+        //    (twin in component), jump to twin.next to continue along the union.
+        let mut walk: Vec<HeId> = vec![start_he];
+        let mut cur = start_he;
+        let mut guard = 0usize;
+        loop {
+            guard += 1;
+            if guard > 8192 {
+                anyhow::bail!("compute_combined_perimeter: walk too long");
+            }
+            let cur_he = self.hes.get(cur)
+                .ok_or_else(|| anyhow::anyhow!("missing HE in walk"))?;
+            let mut next_he_id = cur_he.next();
+            // Skip interior edges.
+            let mut inner_guard = 0usize;
+            loop {
+                inner_guard += 1;
+                if inner_guard > 4096 {
+                    anyhow::bail!("compute_combined_perimeter: interior skip too long");
+                }
+                let next_he = self.hes.get(next_he_id)
+                    .ok_or_else(|| anyhow::anyhow!("missing HE in skip"))?;
+                let twin = self.he_twin(next_he_id);
+                let twin_face = self.hes.get(twin).map(|t| t.face()).unwrap_or(FaceId::NULL);
+                if twin_face.is_null() || !comp_set.contains(&twin_face) {
+                    break; // boundary
+                }
+                // interior — jump to twin's next
+                next_he_id = self.hes.get(twin)
+                    .ok_or_else(|| anyhow::anyhow!("missing twin"))?.next();
+                let _ = next_he;
+            }
+            if next_he_id == start_he { break; }
+            walk.push(next_he_id);
+            cur = next_he_id;
+        }
+
+        // 3) Convert HEs → source verts (CCW order)
+        let verts: Vec<VertId> = walk.iter()
+            .map(|&h| self.he_source(h))
+            .collect();
+        Ok(verts)
+    }
+
     /// Check if two faces are coplanar: normals nearly parallel AND on the same plane.
     ///
     /// F8 fix (2026-04-17): tolerances are now scale-aware and mutually consistent.

@@ -1422,36 +1422,108 @@ impl Scene {
         // 임시 우회: 사용자는 인접 inner RECT 를 그릴 때 약간의 gap 을 두거나
         //   4 LINE 으로 직접 그리기. 자동 free-cycle 합성은 정상 작동.
 
-        // Step 4.95 — second B1 hole-promote pass (ADR-016 conditional).
-        //   inner→outer 순서로 그렸을 때 (먼저 inner 그리고 나중에 outer 가
-        //   감싸는 케이스): 각 active simple face 가 다른 face 안에 strict
-        //   interior 면 b1_promote_safe 검사 후 통과 시 promote.
+        // Step 4.95 — ADR-021 P7 (Closed Edge Loop Divides Face).
+        //
+        //   "닫힌 라인은 면을 나눈다" 원칙의 운영:
+        //   - 활성 simple face 들 중 다른 container face 안에 enclose 된 것을 수집
+        //   - container 별로 그룹
+        //   - 각 container 의 inners 를 connected component 로 분리
+        //     (edge 공유 = 같은 component)
+        //   - 각 component → 1 hole 로 promote (combined perimeter)
+        //   - 결과: container = ring with N holes (N = component 수)
+        //
+        //   순서 무관성 (ADR-021 §4): Case A (inner 먼저) = Case B (outer 먼저).
+        //   Manifold 안전: shared edge 는 hole loop 미경유 → 위반 없음.
+        //
+        //   현재 v1: container 가 simple (no holes) 인 경우만 처리.
+        //   향후 ring 의 hole 재구성은 별도 작업.
+        use std::collections::HashMap;
         {
+            // 1) 모든 active simple face 수집 + container 별 그룹
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
-                .filter(|(_, f)| f.is_active())
+                .filter(|(_, f)| f.is_active() && f.inners().is_empty())
                 .map(|(id, _)| id)
                 .collect();
-            for inner_fid in candidates {
-                if !self.mesh.faces.contains(inner_fid) { continue; }
-                if !self.mesh.faces[inner_fid].is_active() { continue; }
-                let Some(outer_fid) = self.find_enclosing_face(inner_fid) else { continue; };
-                if !self.b1_promote_safe(outer_fid, inner_fid) { continue; }
-                if let Ok(new_outer) = self.promote_face_to_hole(outer_fid, inner_fid) {
-                    if let Some(old_xia) = self.face_to_xia.remove(&outer_fid) {
-                        if let Some(xia) = self.xias.get_mut(&old_xia) {
-                            xia.face_ids.retain(|&f| f != outer_fid);
-                            if !xia.face_ids.contains(&new_outer) {
-                                xia.face_ids.push(new_outer);
-                            }
+
+            let mut by_container: HashMap<FaceId, Vec<FaceId>> = HashMap::new();
+            for inner_fid in &candidates {
+                if !self.mesh.faces.contains(*inner_fid) { continue; }
+                if !self.mesh.faces[*inner_fid].is_active() { continue; }
+                if !self.mesh.faces[*inner_fid].inners().is_empty() { continue; }
+                let Some(container) = self.find_enclosing_face(*inner_fid) else { continue; };
+                // Container 도 simple 일 때만 처리 (v1 제약)
+                if !self.mesh.faces.get(container)
+                    .map(|f| f.is_active() && f.inners().is_empty())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                if container == *inner_fid { continue; }
+                by_container.entry(container).or_default().push(*inner_fid);
+            }
+
+            // 2) 각 container 처리
+            for (container, inners) in by_container.iter() {
+                if inners.is_empty() { continue; }
+
+                // 2a) Connected component 로 그룹
+                let components = self.mesh.find_inner_components(inners);
+                if components.is_empty() { continue; }
+
+                // 2b) 각 component 의 combined perimeter (CCW around union)
+                //     → reverse 로 CW (hole loop 방향)
+                let mut hole_loops: Vec<Vec<axia_geo::VertId>> = Vec::new();
+                let mut all_safe = true;
+                for comp in &components {
+                    match self.mesh.compute_combined_perimeter(comp) {
+                        Ok(mut perim) => {
+                            if perim.len() < 3 { all_safe = false; break; }
+                            perim.reverse();
+                            hole_loops.push(perim);
                         }
-                        self.face_to_xia.insert(new_outer, old_xia);
-                    } else {
-                        self.unregister_face_from_xia(outer_fid);
+                        Err(_) => { all_safe = false; break; }
                     }
-                    all_created_faces.retain(|&f| f != outer_fid);
-                    if !all_created_faces.contains(&new_outer) {
-                        all_created_faces.push(new_outer);
+                }
+                if !all_safe || hole_loops.is_empty() { continue; }
+
+                // 2c) Container 의 outer + material 캡처
+                let outer_verts = match self.mesh.collect_loop_verts(
+                    self.mesh.faces[*container].outer().start
+                ) {
+                    Ok(v) => v, Err(_) => continue,
+                };
+                let material = self.mesh.faces[*container].material();
+
+                // 2d) Container soft-remove + ring 재구성
+                if self.mesh.soft_remove_face(*container).is_err() { continue; }
+                let hole_refs: Vec<&[axia_geo::VertId]> =
+                    hole_loops.iter().map(|h| h.as_slice()).collect();
+                let new_outer = match self.mesh.add_face_with_holes(
+                    &outer_verts, &hole_refs, material,
+                ) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        // Ring 재구성 실패 — container 가 lost 상태.
+                        // (드물 — soft_remove + add_face_with_holes 같은 verts).
+                        continue;
                     }
+                };
+
+                // 2e) XIA inheritance
+                if let Some(old_xia) = self.face_to_xia.remove(container) {
+                    if let Some(xia) = self.xias.get_mut(&old_xia) {
+                        xia.face_ids.retain(|&f| f != *container);
+                        if !xia.face_ids.contains(&new_outer) {
+                            xia.face_ids.push(new_outer);
+                        }
+                    }
+                    self.face_to_xia.insert(new_outer, old_xia);
+                } else {
+                    self.unregister_face_from_xia(*container);
+                }
+                all_created_faces.retain(|&f| f != *container);
+                if !all_created_faces.contains(&new_outer) {
+                    all_created_faces.push(new_outer);
                 }
             }
         }
@@ -5807,6 +5879,84 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ADR-021 P7 — Closed edge loop divides face. 그리기 순서 무관성 검증.
+    /// Case A (inner 먼저): 2 small + big around → big = ring with 1 combined hole.
+    /// Case B (outer 먼저): big + 2 small inside → big = ring with 1 combined hole.
+    /// 두 case 모두 동일 토폴로지: 1 ring + 2 sub-face = 3 active faces.
+    #[test]
+    fn test_adr021_p7_case_a_inner_first_then_outer() {
+        let mut scene = Scene::new();
+        // 2 inner adjacent (sharing an edge)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 3.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 3.0,
+        });
+        // big rect surrounding both
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 24.0, height: 11.0,
+        });
+
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, f)| (id, f.inners().len()))
+            .collect();
+
+        let ring_count = active.iter().filter(|(_, n)| *n == 1).count();
+        let simple_count = active.iter().filter(|(_, n)| *n == 0).count();
+        assert_eq!(
+            ring_count, 1,
+            "Case A: expected 1 ring with combined hole; got faces={:?}",
+            active
+        );
+        assert_eq!(
+            simple_count, 2,
+            "Case A: expected 2 sub-faces (inners); got faces={:?}",
+            active
+        );
+    }
+
+    #[test]
+    fn test_adr021_p7_case_b_outer_first_then_inner() {
+        let mut scene = Scene::new();
+        // big rect first
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 24.0, height: 11.0,
+        });
+        // 2 inner adjacent inside
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 3.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+            width: 3.0, height: 3.0,
+        });
+
+        let active: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, f)| (id, f.inners().len()))
+            .collect();
+
+        let ring_count = active.iter().filter(|(_, n)| *n == 1).count();
+        let simple_count = active.iter().filter(|(_, n)| *n == 0).count();
+        assert_eq!(
+            ring_count, 1,
+            "Case B: expected 1 ring with combined hole; got faces={:?}",
+            active
+        );
+        assert_eq!(
+            simple_count, 2,
+            "Case B: expected 2 sub-faces (inners); got faces={:?}",
+            active
+        );
     }
 
     /// ADR-019 A6 — 4 line 으로 face 안에 닫힌 loop 그리면 sub-face 자동 합성.

@@ -6,19 +6,21 @@
 **모든 후속 세션에서 그대로 유지**되어야 한다. ADR-014 메타-원칙 #10
 ("ADR 불변 — 변경 시 새 ADR + Superseded") 적용.
 
-### 1. ADR-016 — Conditional Auto Hole-Promote (SketchUp-style)
-- **첫 inner 만 auto B1 promote** — `exec_draw_rect` interior fast-path
-  + `run_face_synthesis_postprocess` Step 4.95 가 `b1_promote_safe` 통과 시
-  promote 실행. 둘째 inner (container 가 이미 ring) 부터는 skip → 별개
-  floating face (manifold 안전).
-- `b1_promote_safe` 조건: ① container.inners 가 비어 있음 ② inner 가 simple
-  face ③ inner 의 perimeter HE 들이 모두 face=container 또는 null (twin 검사).
-- Multi-loop face 도구 정책 (ADR-016 Q2): Push/Pull / Boolean / Offset /
-  hole boundary fillet → 거부 + Toast (Solid Tools 관행).
-- 기존 ADR-015 시기 저장 파일 마이그레이션 없음 (ADR-016 Q3 (a)).
-- 명시적 promote (`merge-as-hole`) 는 stacked-inner 의 둘째 inner 도 합치고
-  싶을 때 사용.
-- ADR-015 는 `Superseded by ADR-016`.
+### 1. ADR-021 — Closed Edge Loop Divides Face (P7, 2026-04-29)
+- **새 원칙 P7**: "닫힌 라인(엣지)는 면을 나눈다."
+- Connected inner components 는 1 combined hole 로 합쳐진다.
+- Disjoint inner components 는 multi-hole ring (별개 hole 들).
+- **그리기 순서 무관**: Case A (inner 먼저) = Case B (outer 먼저) = 동일 결과.
+- ADR-015 LOCKED #1 의 single-promote heuristic 폐기 — combined-perimeter
+  방식으로 manifold 안전 자연 보장.
+- ADR-016 conditional B1 의 single-inner case 는 P7 의 특수 case (1 component → 1 hole) 로 흡수.
+- Step 4.95 second-pass: container 별 inner 그룹 → connected component 분석
+  → 각 component 의 combined perimeter 를 hole loop 로 사용 → ring + N holes.
+- Multi-loop face 도구 정책 (ADR-016 Q2 그대로): Push/Pull / Boolean /
+  Offset / hole boundary fillet → 거부 + Toast.
+- 명시적 promote (`merge-as-hole`) 는 보조 op 로 유지.
+- ADR-015 는 `Superseded by ADR-016`. ADR-016 single-promote 부분은
+  `Superseded by ADR-021` (component-based promote).
 
 ### 2. ADR-007 Invariant 2 — Winding 일괄 강제
 - 모든 face 의 `normal.dot(surface_normal_hint) >= 0` 보장.
@@ -113,7 +115,9 @@
 ### 회귀 방지 테스트 (절대 #[ignore] 금지)
 
 이 테스트들이 깨지면 위 불변 정책 중 하나가 위반된 것이다:
-- `test_two_stacked_inner_rects_both_faced`
+- `test_adr021_p7_case_a_inner_first_then_outer` (P7, 순서 무관성 — 신규)
+- `test_adr021_p7_case_b_outer_first_then_inner` (P7, 순서 무관성 — 신규)
+- `test_two_stacked_inner_rects_both_faced` (의미 변경: stacked 도 sub-face — ADR-021 통합)
 - `test_column_of_inner_rects_all_faced`
 - `test_all_rects_have_consistent_winding`
 - `test_complex_overlap_no_missing_faces`
