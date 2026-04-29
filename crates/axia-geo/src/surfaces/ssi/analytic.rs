@@ -216,6 +216,79 @@ pub fn plane_cylinder(
     }
 }
 
+/// Plane-Sphere intersection.
+///
+/// Given a plane (origin + normal) and a sphere (center + radius), the
+/// intersection is determined by the signed distance `d` from the sphere
+/// center to the plane:
+/// - `|d| > r`        → empty (disjoint)
+/// - `|d| == r` (±ε) → tangent point (1 sample, `tangent_warning=true`)
+/// - `|d| < r`        → circle of radius `√(r² - d²)` centered at the
+///                      projection of the sphere center onto the plane,
+///                      lying in the plane.
+///
+/// `n_samples` is the number of points sampled around the circle (caller
+/// decides density). For the tangent case, exactly one point is returned.
+pub fn plane_sphere(
+    plane_origin: DVec3, plane_normal: DVec3,
+    sphere_center: DVec3, sphere_radius: f64,
+    n_samples: usize,
+) -> SurfaceIntersection {
+    let n = plane_normal.normalize_or_zero();
+    if n.length_squared() < 0.5 || sphere_radius <= 0.0 {
+        return SurfaceIntersection::default();
+    }
+
+    // Signed distance from sphere center to plane.
+    let d = (sphere_center - plane_origin).dot(n);
+    let abs_d = d.abs();
+
+    // Disjoint
+    if abs_d > sphere_radius + 1e-9 {
+        return SurfaceIntersection::default();
+    }
+
+    // Tangent (single point)
+    let foot = sphere_center - n * d;
+    if (abs_d - sphere_radius).abs() < 1e-9 {
+        return SurfaceIntersection {
+            points: vec![foot],
+            uv_a: vec![(0.5, 0.5)],
+            uv_b: vec![(0.0, 0.0)],
+            closed: false,
+            tangent_warning: true,
+        };
+    }
+
+    // Proper circle
+    let r_circ = (sphere_radius * sphere_radius - d * d).max(0.0).sqrt();
+
+    // Build orthonormal basis in plane.
+    let arb = if n.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+    let u_basis = n.cross(arb).normalize_or_zero();
+    let v_basis = n.cross(u_basis).normalize_or_zero();
+
+    let n_pts = n_samples.max(8);
+    let mut points = Vec::with_capacity(n_pts + 1);
+    let mut uv_a = Vec::with_capacity(n_pts + 1);
+    let mut uv_b = Vec::with_capacity(n_pts + 1);
+    for i in 0..=n_pts {
+        let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n_pts as f64);
+        let p = foot + u_basis * (r_circ * theta.cos())
+                     + v_basis * (r_circ * theta.sin());
+        points.push(p);
+        uv_a.push((0.5, 0.5));
+        // Sphere uv: (longitude θ, latitude derived from foot's z relative
+        // to sphere center). Caller can refine via Sphere::project.
+        uv_b.push((theta, 0.0));
+    }
+    SurfaceIntersection {
+        points, uv_a, uv_b,
+        closed: true,
+        tangent_warning: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +467,96 @@ mod tests {
             8,
         );
         assert!(result.is_empty());
+    }
+
+    // ─── Plane-Sphere ──────────────────────────────────────────────────────
+
+    #[test]
+    fn plane_sphere_through_center_yields_great_circle() {
+        // Plane z=0, sphere at origin radius 5 → great circle r=5 in xy.
+        let r = 5.0;
+        let result = plane_sphere(
+            DVec3::ZERO, DVec3::Z,
+            DVec3::ZERO, r,
+            32,
+        );
+        assert!(!result.is_empty() && result.closed);
+        for p in &result.points {
+            assert!(p.z.abs() < 1e-9, "point not on plane: {:?}", p);
+            let radial = (p.x * p.x + p.y * p.y).sqrt();
+            assert!((radial - r).abs() < 1e-6,
+                "radial {} ≠ {}", radial, r);
+        }
+    }
+
+    #[test]
+    fn plane_sphere_offset_yields_smaller_circle() {
+        // Plane z=3, sphere at origin radius 5 → circle radius √(25-9)=4 at z=3.
+        let result = plane_sphere(
+            DVec3::new(0.0, 0.0, 3.0), DVec3::Z,
+            DVec3::ZERO, 5.0,
+            32,
+        );
+        assert!(!result.is_empty() && result.closed);
+        for p in &result.points {
+            assert!((p.z - 3.0).abs() < 1e-9);
+            let radial = (p.x * p.x + p.y * p.y).sqrt();
+            assert!((radial - 4.0).abs() < 1e-6,
+                "radial {} ≠ 4", radial);
+        }
+    }
+
+    #[test]
+    fn plane_sphere_tangent_yields_single_point() {
+        // Plane z=5 tangent to sphere radius 5 at origin → single point (0,0,5).
+        let result = plane_sphere(
+            DVec3::new(0.0, 0.0, 5.0), DVec3::Z,
+            DVec3::ZERO, 5.0,
+            16,
+        );
+        assert_eq!(result.len(), 1);
+        assert!(result.tangent_warning);
+        assert!(approx_eq(result.points[0], DVec3::new(0.0, 0.0, 5.0), 1e-9));
+    }
+
+    #[test]
+    fn plane_sphere_distant_no_intersection() {
+        let result = plane_sphere(
+            DVec3::new(0.0, 0.0, 10.0), DVec3::Z,
+            DVec3::ZERO, 5.0,
+            16,
+        );
+        assert!(result.is_empty());
+        assert!(!result.tangent_warning);
+    }
+
+    #[test]
+    fn plane_sphere_zero_radius_returns_empty() {
+        let result = plane_sphere(
+            DVec3::ZERO, DVec3::Z,
+            DVec3::ZERO, 0.0,
+            16,
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn plane_sphere_oblique_plane_circle_in_plane() {
+        // Tilted plane (normal = (1,1,1)/√3) through origin, sphere at origin r=4
+        // → great circle r=4 lying in that tilted plane.
+        let n = DVec3::new(1.0, 1.0, 1.0).normalize();
+        let result = plane_sphere(
+            DVec3::ZERO, n,
+            DVec3::ZERO, 4.0,
+            32,
+        );
+        assert!(!result.is_empty() && result.closed);
+        for p in &result.points {
+            // Distance from origin = 4
+            assert!((p.length() - 4.0).abs() < 1e-6);
+            // Lies on plane: p · n ≈ 0
+            assert!(p.dot(n).abs() < 1e-9);
+        }
     }
 
     // ─── SurfaceIntersection helpers ─────────────────────────────────────
