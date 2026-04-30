@@ -249,6 +249,44 @@
   - `metadata_rebuilt_after_topology_change` — split/Boolean/draw 후
     stale 차단
 
+### 16. ADR-038 — Surface-Aware Normals (P23, 2026-05-01)
+- **새 원칙 P23**: tessellation vertex 의 normal 우선순위 — (1) Analytic
+  surface evaluate, (2) DCEL fan averaging, (3) per-triangle flat 절대
+  금지.
+- **Step A 진단** (commit 전 측정, ADR-038 정량 근거):
+  - Rust `Mesh::export_buffers` (mesh.rs:3272-3413) — 현재 face
+    평면 normal + DCEL fan averaging (within `EDGE_VISIBILITY_ANGLE_DEG
+    = 20.1°`). `tessellate_face_surface()` 가 mesh.rs:446 에 존재하지만
+    export 에 통합 안 됨.
+  - WASM `getMeshBuffers` — per-vertex layout, face 별 vertex 분리
+    (라인 3410 `vert_offset += positions_3d.len()`).
+  - Three.js `Viewport.smoothNormals` (Viewport.ts:1426-1485) — 위치
+    기준 vertex 용접 (P=0.01mm) + angle threshold 기반 hard edge cull.
+    Rust normal 을 덮어씀.
+  - **Threshold 불일치 발견**: Rust 20.1° vs Three.js 30° (Viewport.ts:984).
+- **P23.1 Analytic evaluate 통합**: `Face.surface = Some(...)` 면
+  `AnalyticSurface::tessellate(chord_tol)` 의 결과 (positions + 정확
+  normal) 사용. `tessellate_face_surface()` API 가 이미 존재 — 통합만
+  남음.
+- **P23.2 Tessellation chord tolerance**: default 0.1mm. LOD 는 별도
+  phase.
+- **P23.3 Edge visibility angle SSOT**: WASM 이 `getEdgeVisibilityAngleDeg()`
+  export. Three.js 가 hardcode `30` 대신 bridge 호출. 단일 truth
+  (Rust tolerances.rs:106).
+- **P23.4 Three.js 가 Rust 결과 존중**: analytic evaluate 한 vertex 는
+  smoothNormals 가 덮어쓰지 않음. flag 기반 선택적 skip.
+- **P23.5 Analytic vertex 의 정확한 normal**: `∂S/∂u × ∂S/∂v` evaluate.
+  averaging 없음 — 산업 CAD 보다 정밀.
+- **P23.6 Selection highlight 일관성** (ADR-037 P22.4 cross-link): owner
+  ID 기준 highlight + analytic normal 결합 → 매끈한 곡면 highlight.
+- **P23.7 회귀 테스트** (절대 #[ignore] 금지):
+  - `analytic_sphere_face_emits_evaluated_normals` — vertex normal =
+    (vertex - center).normalize() 1e-6 일치
+  - `analytic_cylinder_face_emits_radial_normals` — axis 수직 + radial
+  - `planar_face_uses_dcel_averaging_unchanged` — regression guard
+  - `edge_visibility_angle_threshold_matches_rust_and_ts` — WASM /
+    Rust SSOT 일치
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
