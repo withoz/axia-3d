@@ -29,6 +29,7 @@
 pub mod step;
 pub mod step_lexer;
 pub mod step_parser;
+pub mod step_resolver;
 pub mod iges;
 pub mod promote_curve;
 pub mod promote_surface;
