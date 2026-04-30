@@ -26,6 +26,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::step::classify_surface_entity;
+use crate::step_parser::{Entity, StepFile, Value};
+use crate::step_resolver::{
+    Axis2Placement3D, ResolveCache, ResolveError,
+};
+
 /// STEP / IGES surface entity 의 runtime 식별자 (ADR-036 P21.2 매핑 키).
 ///
 /// Stage 4-A `OcctSurfaceKind` 와 1:1 대응.
@@ -171,6 +177,109 @@ pub const SUPPORTED_SURFACE_KINDS: &[ForeignSurfaceKind] = &[
     ForeignSurfaceKind::RectangularTrimmedSurface,
 ];
 
+// ────────────────────────────────────────────────────────────────────────
+// STEP → SurfacePromotion 본체 (A-4, ADR-036 P21.2 직접 매핑)
+// ────────────────────────────────────────────────────────────────────────
+
+/// STEP file 의 surface entity 를 promote.
+///
+/// 직접 매핑 우선 구현 (Plane / Cylinder). 나머지는 후속 PR.
+pub fn promote_step_surface(
+    file: &StepFile,
+    entity_id: u32,
+    cache: &mut ResolveCache,
+) -> SurfacePromotionResult {
+    let mut warnings = Vec::new();
+    let entity = match file.entity(entity_id) {
+        Some(e) => e,
+        None => {
+            let reason = format!("entity #{} not found", entity_id);
+            warnings.push(reason.clone());
+            return SurfacePromotionResult {
+                promotion: Some(SurfacePromotion::Tessellate { reason, uv_bounds: None }),
+                warnings,
+            };
+        }
+    };
+    let kind = classify_surface_entity(&entity.tag);
+
+    let result = match kind {
+        ForeignSurfaceKind::Plane => promote_step_plane(file, entity_id, entity, cache),
+        ForeignSurfaceKind::Cylinder => promote_step_cylinder(file, entity_id, entity, cache),
+        other => Err(ResolveError::at(
+            format!("promote_step_surface_{:?} not yet wired (A-4 follow-up)", other),
+            entity_id,
+        )),
+    };
+
+    match result {
+        Ok(promotion) => SurfacePromotionResult { promotion: Some(promotion), warnings },
+        Err(err) => {
+            let reason = err.message.clone();
+            warnings.push(err.into_warning());
+            SurfacePromotionResult {
+                promotion: Some(SurfacePromotion::Tessellate { reason, uv_bounds: None }),
+                warnings,
+            }
+        }
+    }
+}
+
+/// `PLANE('', placement_ref)` → `SurfacePromotion::Plane`.
+///
+/// AP203: arg[1] = AXIS2_PLACEMENT_3D ref. Plane 은 placement.location
+/// 을 origin 으로, placement.axis 를 normal 로 사용.
+fn promote_step_plane(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    let placement_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at("PLANE arg[1] (placement) not a ref", entity_id))?;
+    let placement: Axis2Placement3D = cache.placement(file, placement_ref)?;
+
+    Ok(SurfacePromotion::Plane {
+        origin: placement.location,
+        normal: placement.axis,
+        uv_bounds: None,  // unbounded by default; trim_loops 가 결정
+    })
+}
+
+/// `CYLINDRICAL_SURFACE('', placement_ref, radius)` → `SurfacePromotion::Cylinder`.
+///
+/// AP203: arg[1] = AXIS2_PLACEMENT_3D, arg[2] = radius.
+/// placement.axis = cylinder axis (z 방향), placement.ref_direction = u=0 의 방향 (x).
+fn promote_step_cylinder(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    let placement_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at("CYLINDRICAL_SURFACE arg[1] (placement) not a ref", entity_id))?;
+    let radius = entity.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("CYLINDRICAL_SURFACE arg[2] (radius) not a real", entity_id))?;
+    if radius <= 0.0 {
+        return Err(ResolveError::at(
+            format!("CYLINDRICAL_SURFACE radius must be positive, got {}", radius),
+            entity_id,
+        ));
+    }
+    let placement: Axis2Placement3D = cache.placement(file, placement_ref)?;
+
+    Ok(SurfacePromotion::Cylinder {
+        axis_origin: placement.location,
+        axis_dir: placement.axis,
+        ref_dir: placement.ref_direction,
+        radius,
+        uv_bounds: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +330,128 @@ mod tests {
     fn promote_unsupported_includes_warning() {
         let result = promote(ForeignSurfaceKind::Unsupported);
         assert!(result.warnings.iter().any(|w| w.contains("unsupported")));
+    }
+
+    // ─── A-4: promote_step_surface direct mapping tests ────────────────────
+
+    use crate::step_parser::parse;
+
+    fn minimal(data_body: &str) -> String {
+        format!(
+            "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('test'),'2;1');\nENDSEC;\nDATA;\n{}\nENDSEC;\nEND-ISO-10303-21;\n",
+            data_body
+        )
+    }
+
+    fn approx_eq3(a: [f64; 3], b: [f64; 3], eps: f64) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < eps)
+    }
+
+    #[test]
+    fn promote_step_plane_xy() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (1., 2., 3.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = PLANE('', #4);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::Plane { origin, normal, uv_bounds } => {
+                assert!(approx_eq3(origin, [1., 2., 3.], 1e-12));
+                assert!(approx_eq3(normal, [0., 0., 1.], 1e-12));
+                assert_eq!(uv_bounds, None);
+            }
+            other => panic!("expected Plane, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_plane_default_directions() {
+        // $ defaults: axis = +z, ref_dir = +x
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = PLANE('', #2);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 3, &mut cache);
+        assert!(result.warnings.is_empty());
+        match result.promotion.unwrap() {
+            SurfacePromotion::Plane { normal, .. } => {
+                assert!(approx_eq3(normal, [0., 0., 1.], 1e-12));
+            }
+            _ => panic!("expected Plane"),
+        }
+    }
+
+    #[test]
+    fn promote_step_cylinder_basic() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (10., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 1., 0.));\n",       // axis = +y
+            "#3 = DIRECTION('', (1., 0., 0.));\n",       // ref_dir = +x
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = CYLINDRICAL_SURFACE('', #4, 7.5);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::Cylinder {
+                axis_origin, axis_dir, ref_dir, radius, uv_bounds,
+            } => {
+                assert!(approx_eq3(axis_origin, [10., 0., 0.], 1e-12));
+                assert!(approx_eq3(axis_dir, [0., 1., 0.], 1e-12));
+                assert!(approx_eq3(ref_dir, [1., 0., 0.], 1e-12));
+                assert_eq!(radius, 7.5);
+                assert_eq!(uv_bounds, None);
+            }
+            other => panic!("expected Cylinder, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_cylinder_zero_radius_errors() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = CYLINDRICAL_SURFACE('', #2, 0.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 3, &mut cache);
+        assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("must be positive")));
+    }
+
+    #[test]
+    fn promote_step_surface_missing_entity() {
+        let f = parse(&minimal("")).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 999, &mut cache);
+        assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("not found")));
+    }
+
+    #[test]
+    fn promote_step_surface_unsupported_kind() {
+        // SPHERICAL_SURFACE not yet wired in A-4 (next sub-PR).
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = SPHERICAL_SURFACE('', #2, 5.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 3, &mut cache);
+        assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("not yet wired")));
     }
 }

@@ -29,8 +29,8 @@ use anyhow::Result;
 
 use crate::ImportResult;
 use crate::ForeignFormat;
-use crate::promote_curve::{self, ForeignCurveKind};
-use crate::promote_surface::{self, ForeignSurfaceKind};
+use crate::promote_curve::ForeignCurveKind;
+use crate::promote_surface::ForeignSurfaceKind;
 
 /// STEP entity tag (예: `LINE`, `B_SPLINE_CURVE_WITH_KNOTS`).
 ///
@@ -136,10 +136,16 @@ impl StepImporter {
 
     /// STEP 파일 텍스트 → ImportResult.
     ///
-    /// **현재 단계 (A-1 + A-2 완료)**: lexer + Part 21 parser 가 작동.
-    /// HEADER section 으로 format (AP203/214/242) 탐지 + DATA section 의
-    /// entity 카운트만 채움. 실제 promotion 본체는 후속 PR (A-3, A-4).
+    /// **A-4 (이번 PR)**: end-to-end pipeline 작동. parse → classify →
+    /// resolve → promote. 직접 매핑된 entity (LINE / CIRCLE /
+    /// B_SPLINE_CURVE_WITH_KNOTS / PLANE / CYLINDRICAL_SURFACE) 는
+    /// AnalyticCurve / AnalyticSurface 로 변환됨. 나머지는 Tessellate
+    /// fallback + warnings 누적 (P21.7 정합).
     pub fn parse_str(&self, content: &str) -> Result<ImportResult> {
+        use crate::promote_curve::{self, CurvePromotion};
+        use crate::promote_surface::{self, SurfacePromotion};
+        use crate::step_resolver::ResolveCache;
+
         let parsed = match crate::step_parser::parse(content) {
             Ok(p) => p,
             Err(e) => {
@@ -149,25 +155,49 @@ impl StepImporter {
             }
         };
 
-        // Format detection from FILE_SCHEMA header entity.
         let header = StepHeader::from_parsed(&parsed);
         let format = header.detect_format();
-
         let mut result = ImportResult::new(format);
 
-        // TODO (A-3, A-4): iterate parsed.data, dispatch via classify_curve_entity /
-        // classify_surface_entity → promote_curve::promote / promote_surface::promote,
-        // resolve CARTESIAN_POINT / DIRECTION / VECTOR / AXIS2_PLACEMENT_3D refs.
-        //
-        // 현재는 진행 상황 가시화를 위해 entity 카운트 + tag breakdown 만 warning
-        // 으로 노출.
-        let entity_count = parsed.data.len();
-        if entity_count > 0 {
-            result.warnings.push(format!(
-                "STEP parsed: {} entities, format={:?}. Promotion not yet wired.",
-                entity_count, format
-            ));
+        // Iterate DATA section entities. For each one, classify its tag and
+        // dispatch to the matching promote_step_*. Skip entities that aren't
+        // top-level curves/surfaces (e.g. CARTESIAN_POINT — building block).
+        let mut cache = ResolveCache::new();
+        let mut ids: Vec<u32> = parsed.data.keys().copied().collect();
+        ids.sort();  // 결정적 순서
+
+        for id in ids {
+            let entity = parsed.data.get(&id).expect("id from keys");
+            let curve_kind = classify_curve_entity(&entity.tag);
+            let surface_kind = classify_surface_entity(&entity.tag);
+
+            if curve_kind != crate::promote_curve::ForeignCurveKind::Unsupported {
+                let promo = promote_curve::promote_step_curve(&parsed, id, &mut cache);
+                for w in promo.warnings { result.warnings.push(w); }
+                if let Some(p) = promo.promotion {
+                    // 모든 curve 가 promotion 결과를 가짐 (Tessellate 포함).
+                    // Tessellate 는 follow-up 에서 점검 가능하도록 보존.
+                    result.curves.push(p);
+                }
+                continue;
+            }
+            if surface_kind != crate::promote_surface::ForeignSurfaceKind::Unsupported {
+                let promo = promote_surface::promote_step_surface(&parsed, id, &mut cache);
+                for w in promo.warnings { result.warnings.push(w); }
+                if let Some(p) = promo.promotion {
+                    result.surfaces.push(p);
+                }
+                continue;
+            }
+            // Building-block entities (CARTESIAN_POINT / DIRECTION / VECTOR /
+            // AXIS2_PLACEMENT_3D / etc) — skipped silently. resolve 시점에
+            // refs 로 자동 해소.
         }
+
+        // Suppress dead_code warning while promote_curve module not all wired:
+        let _: Option<CurvePromotion> = None;
+        let _: Option<SurfacePromotion> = None;
+
         Ok(result)
     }
 
@@ -283,6 +313,7 @@ mod tests {
 
     #[test]
     fn parse_minimal_file_succeeds_via_importer() {
+        // Legitimate LINE with VECTOR ref.
         let src = "ISO-10303-21;\n\
             HEADER;\n\
             FILE_DESCRIPTION(('test'),'2;1');\n\
@@ -290,15 +321,50 @@ mod tests {
             ENDSEC;\n\
             DATA;\n\
             #1 = CARTESIAN_POINT('', (0., 0., 0.));\n\
-            #2 = LINE('', #1, #3);\n\
+            #2 = DIRECTION('', (1., 0., 0.));\n\
+            #3 = VECTOR('', #2, 5.0);\n\
+            #4 = LINE('', #1, #3);\n\
             ENDSEC;\n\
             END-ISO-10303-21;\n";
         let importer = StepImporter::new();
         let result = importer.parse_str(src).unwrap();
-        // AP203 detected from CONFIG_CONTROL_DESIGN schema.
         assert_eq!(result.format, Some(ForeignFormat::StepAp203));
-        // Promotion not yet wired but parser ran successfully.
-        assert!(result.warnings.iter().any(|w| w.contains("2 entities")));
+        // 1 LINE promoted to CurvePromotion::Line.
+        assert_eq!(result.curves.len(), 1);
+        match &result.curves[0] {
+            crate::promote_curve::CurvePromotion::Line { start, end, .. } => {
+                assert_eq!(*start, [0.0, 0.0, 0.0]);
+                assert_eq!(*end, [5.0, 0.0, 0.0]);
+            }
+            other => panic!("expected Line, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn end_to_end_mixed_curve_surface_pipeline() {
+        // 1 LINE + 1 CIRCLE + 1 PLANE + 1 CYLINDRICAL_SURFACE → 4 promotions.
+        let src = "ISO-10303-21;\n\
+            HEADER;\n\
+            FILE_DESCRIPTION(('mixed'),'2;1');\n\
+            FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\n\
+            ENDSEC;\n\
+            DATA;\n\
+            #1 = CARTESIAN_POINT('', (0., 0., 0.));\n\
+            #2 = DIRECTION('', (1., 0., 0.));\n\
+            #3 = DIRECTION('', (0., 0., 1.));\n\
+            #4 = AXIS2_PLACEMENT_3D('', #1, #3, #2);\n\
+            #5 = VECTOR('', #2, 1.0);\n\
+            #6 = LINE('', #1, #5);\n\
+            #7 = CIRCLE('', #4, 5.0);\n\
+            #8 = PLANE('', #4);\n\
+            #9 = CYLINDRICAL_SURFACE('', #4, 3.0);\n\
+            ENDSEC;\n\
+            END-ISO-10303-21;\n";
+        let importer = StepImporter::new();
+        let result = importer.parse_str(src).unwrap();
+        assert_eq!(result.curves.len(), 2);     // LINE + CIRCLE
+        assert_eq!(result.surfaces.len(), 2);   // PLANE + CYLINDRICAL_SURFACE
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
     }
 
     #[test]
@@ -325,9 +391,3 @@ mod tests {
     }
 }
 
-// Suppress unused warning for the dispatch helpers (used after parser wiring).
-#[allow(dead_code)]
-fn _silence_unused() {
-    let _ = promote_curve::promote(ForeignCurveKind::Line);
-    let _ = promote_surface::promote(ForeignSurfaceKind::Plane);
-}
