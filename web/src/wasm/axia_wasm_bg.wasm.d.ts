@@ -52,6 +52,7 @@ export const axiaengine_eraseEdgeResynthesize: (a: number, b: number, c: number,
 export const axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
 export const axiaengine_export_snapshot: (a: number, b: number) => void;
 export const axiaengine_faceArea: (a: number, b: number) => number;
+export const axiaengine_faceHasAnalyticSurface: (a: number, b: number) => number;
 export const axiaengine_faceInnerLoopCount: (a: number, b: number) => number;
 export const axiaengine_faceSurfaceKind: (a: number, b: number) => number;
 export const axiaengine_face_count: (a: number) => number;

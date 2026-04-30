@@ -194,6 +194,13 @@ export class Viewport {
   private colorAttribute: THREE.BufferAttribute | null = null;
   private colorsDirty = false;
 
+  /**
+   * ADR-038 P23.4 — analytic surface face id 집합. smoothNormals 가
+   * 본 집합의 face 에 속한 vertex 는 Rust 의 정확한 evaluate 결과를
+   * 덮어쓰지 않고 그대로 유지.
+   */
+  private analyticFaceIds: Set<number> = new Set();
+
   constructor(container: HTMLElement) {
     this.container = container;
 
@@ -924,7 +931,12 @@ export class Viewport {
      *  is_face_in_volume 이 planar overlap face 도 wall 로 분류하는 false-
      *  positive 를 차단. */
     isClosedSolid?: boolean,
+    /** ADR-038 P23.4 — analytic surface 를 가진 face id 집합. smoothNormals
+     *  가 이 face 의 vertex 는 덮어쓰지 않음 (Rust 정확 evaluate 유지). */
+    analyticFaceIds?: Set<number>,
   ) {
+    // P23.4: store for smoothNormals
+    this.analyticFaceIds = analyticFaceIds ?? new Set();
     // Sprint 4 §3 — updateMesh 내부 분해 측정.
     //   syncMesh.fullUpdate(16ms budget) 의 어느 phase 가 dominator 인지
     //   격리. record helper — 외부 telemetry 모듈 dep 없이 동작.
@@ -1486,7 +1498,32 @@ export class Viewport {
     }
 
     // 4) 각 정점의 스무스 노멀 계산
+    //
+    // ADR-038 P23.4 — analytic face 의 vertex 는 Rust 의 정확한 evaluate
+    // 결과를 그대로 유지한다. newNormals 를 원본 normAttr 로 pre-seed
+    // 하여, analytic vertex 는 본 루프에서 건너뛰어도 원래 값이 보존됨.
     const newNormals = new Float32Array(vertCount * 3);
+    for (let i = 0; i < vertCount; i++) {
+      newNormals[i * 3]     = normAttr.getX(i);
+      newNormals[i * 3 + 1] = normAttr.getY(i);
+      newNormals[i * 3 + 2] = normAttr.getZ(i);
+    }
+
+    // P23.4 — analytic vertex 식별을 위한 helper.
+    // vertex i 가 analytic face 의 triangle 에 속하면 skip.
+    const analyticIds = this.analyticFaceIds;
+    const faceMapArr = this.faceMap;
+    const isAnalyticVertex = (vi: number): boolean => {
+      if (analyticIds.size === 0 || faceMapArr.length === 0) return false;
+      const inc = incident[vi];
+      for (let k = 0; k < inc.length; k++) {
+        const tri = inc[k];
+        if (tri < faceMapArr.length && analyticIds.has(faceMapArr[tri])) {
+          return true;
+        }
+      }
+      return false;
+    };
 
     for (const group of posMap.values()) {
       // 같은 위치의 모든 정점이 연결된 삼각형 목록을 합침
@@ -1499,6 +1536,10 @@ export class Viewport {
       // 같은 위치의 모든 인접 삼각형 중 각도 < threshold인 것의 area-weighted 합산
       for (const vi of group) {
         if (incident[vi].length === 0) continue;
+
+        // ADR-038 P23.4 — analytic vertex 는 Rust 정확 normal 유지.
+        if (isAnalyticVertex(vi)) continue;
+
         const seedTri = incident[vi][0];
         const snx = faceUnitNormals[seedTri * 3];
         const sny = faceUnitNormals[seedTri * 3 + 1];
@@ -1523,12 +1564,8 @@ export class Viewport {
           newNormals[vi * 3] = sx / len;
           newNormals[vi * 3 + 1] = sy / len;
           newNormals[vi * 3 + 2] = sz / len;
-        } else {
-          // fallback: 원래 노멀 유지
-          newNormals[vi * 3] = normAttr.getX(vi);
-          newNormals[vi * 3 + 1] = normAttr.getY(vi);
-          newNormals[vi * 3 + 2] = normAttr.getZ(vi);
         }
+        // else: pre-seeded 원본 normal 그대로 유지
       }
     }
 

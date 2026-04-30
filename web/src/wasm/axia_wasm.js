@@ -887,6 +887,23 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * Face 가 분석적 surface (Plane/Cylinder/Sphere/Cone/Torus/NURBS) 를
+     * 가지고 있는지 여부.
+     *
+     * ADR-038 P23.4 — Three.js Viewport.smoothNormals 가 analytic evaluate
+     * 결과를 덮어쓰지 않도록 식별 메타데이터. `true` 인 face 의 vertex
+     * normal 은 Rust 의 `surface.normal(u, v)` 로 계산된 정확한 값을
+     * 유지해야 함.
+     *
+     * `face_id` 가 무효 / inactive 면 `false`.
+     * @param {number} face_id_raw
+     * @returns {boolean}
+     */
+    faceHasAnalyticSurface(face_id_raw) {
+        const ret = wasm.axiaengine_faceHasAnalyticSurface(this.__wbg_ptr, face_id_raw);
+        return ret !== 0;
+    }
+    /**
      * Number of inner hole loops on a face. 0 = simple face.
      * Returns u32::MAX when the face is missing or inactive.
      * @param {number} face_id_raw

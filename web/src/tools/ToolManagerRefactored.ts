@@ -1856,6 +1856,19 @@ export class ToolManager {
     } catch (_err) { /* defensive — unsupported */ }
     recordStep('syncMesh.bridgeQueries', performance.now() - tBridge1);
     if (buffers) {
+      // ADR-038 P23.4 — analytic face id 집합 빌드.
+      //   smoothNormals 가 본 face 의 vertex 는 덮어쓰지 않도록 viewport 에 전달.
+      //   비용: faceMap 의 unique id 개수만큼 bridge 호출 — 일반적으로 N(face) << N(triangle).
+      const analyticFaceIds = new Set<number>();
+      if (buffers.faceMap && buffers.faceMap.length > 0) {
+        const uniqueFaceIds = new Set<number>(buffers.faceMap);
+        for (const fid of uniqueFaceIds) {
+          if (this.bridge.faceHasAnalyticSurface(fid)) {
+            analyticFaceIds.add(fid);
+          }
+        }
+      }
+
       const tFull0 = performance.now();
       this.viewport.updateMesh(
         buffers.positions, buffers.normals, buffers.indices,
@@ -1864,6 +1877,7 @@ export class ToolManager {
         centerLines,
         volumeFlags,
         isClosedSolid,
+        analyticFaceIds,
       );
       recordStep('syncMesh.fullUpdate', performance.now() - tFull0);
       this.faceMap = buffers.faceMap;

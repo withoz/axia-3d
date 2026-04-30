@@ -174,6 +174,8 @@ type AxiaEngineExtended = AxiaEngine & {
   lastError?(): string;
   // ADR-038 P23.3 — edge visibility angle SSOT (Rust 의 진실, default 20.1°)
   getEdgeVisibilityAngleDeg?(): number;
+  // ADR-038 P23.4 — face 가 analytic surface 를 가지는지 (smoothNormals skip 판단용)
+  faceHasAnalyticSurface?(faceIdRaw: number): boolean;
   // Edge/geometry queries
   get_edge_lines?(): Float32Array;
   get_edge_map?(): Uint32Array;
@@ -1166,6 +1168,24 @@ export class WasmBridge {
     if (!this.engine) return [0, 0, 0];
     const arr = this.engine.get_face_normal(faceId);
     return [arr[0], arr[1], arr[2]];
+  }
+
+  /**
+   * Face 가 analytic surface (Plane/Cylinder/Sphere/Cone/Torus/NURBS) 를
+   * 가지고 있는지 (ADR-038 P23.4).
+   *
+   * `true` 인 face 의 vertex normal 은 Three.js smoothNormals 가 덮어쓰지
+   * 않아야 함 (Rust 의 analytic evaluate 결과 유지).
+   *
+   * WASM 미연결 / face 무효 시 `false` 반환.
+   */
+  faceHasAnalyticSurface(faceId: number): boolean {
+    if (!this.engine?.faceHasAnalyticSurface) return false;
+    try {
+      return this.engine.faceHasAnalyticSurface(faceId);
+    } catch {
+      return false;
+    }
   }
 
   /**

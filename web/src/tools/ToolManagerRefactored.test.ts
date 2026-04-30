@@ -184,6 +184,8 @@ function mockBridge() {
     getPositionsF64: vi.fn().mockReturnValue(null),
     getFaceVertices: vi.fn().mockReturnValue([]),
     getVertexPos: vi.fn().mockReturnValue(null),
+    // ADR-038 P23.4 — analytic surface 여부 (mock: 모두 non-analytic)
+    faceHasAnalyticSurface: vi.fn().mockReturnValue(false),
   } as any;
 }
 

@@ -186,6 +186,24 @@ impl AxiaEngine {
         self.last_error.clone()
     }
 
+    /// Face 가 분석적 surface (Plane/Cylinder/Sphere/Cone/Torus/NURBS) 를
+    /// 가지고 있는지 여부.
+    ///
+    /// ADR-038 P23.4 — Three.js Viewport.smoothNormals 가 analytic evaluate
+    /// 결과를 덮어쓰지 않도록 식별 메타데이터. `true` 인 face 의 vertex
+    /// normal 은 Rust 의 `surface.normal(u, v)` 로 계산된 정확한 값을
+    /// 유지해야 함.
+    ///
+    /// `face_id` 가 무효 / inactive 면 `false`.
+    #[wasm_bindgen(js_name = "faceHasAnalyticSurface")]
+    pub fn face_has_analytic_surface(&self, face_id_raw: u32) -> bool {
+        let fid = axia_geo::FaceId::new(face_id_raw);
+        match self.scene.mesh.faces.get(fid) {
+            Some(f) if f.is_active() => f.surface().is_some(),
+            _ => false,
+        }
+    }
+
     /// Edge visibility angle threshold (도) — Rust 의 SSOT.
     ///
     /// ADR-038 P23.3 — Three.js Viewport.smoothNormals 가 hardcode 30° 대신
