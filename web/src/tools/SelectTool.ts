@@ -7,6 +7,27 @@ import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
 import { pickingRouter } from '../core/PickingRouter';
 
+/**
+ * Hover target — ADR-039 P24.1 tagged union.
+ *
+ * `EdgeId | FaceId` 둘 다 number 라 컴파일 타임 구분이 안 됨 → kind
+ * discriminator 강제. switch case exhaustive check 가능.
+ */
+export type HoverTarget =
+  | { kind: 'edge'; id: number }
+  | { kind: 'face'; id: number }
+  | null;
+
+/**
+ * P24.2 stickiness invariant helper — 두 hover target 의 owner 가
+ * 같은지 비교. 둘 다 null 도 same.
+ */
+export function sameHoverOwner(a: HoverTarget, b: HoverTarget): boolean {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  return a.kind === b.kind && a.id === b.id;
+}
+
 export class SelectTool implements ITool {
   readonly name = 'select';
   // Select uses pickEdgeOrFace (BVH raycast); snap markers are visual noise here.
@@ -29,8 +50,69 @@ export class SelectTool implements ITool {
   private lastClickEdgeId: number = -1;
   private readonly MULTI_CLICK_DELAY = 400; // ms
 
+  /**
+   * ADR-039 P24 — 현재 hover target.
+   *
+   * mousemove → pickEdgeOrFace → promote → setHoverTarget 으로 갱신.
+   */
+  private hovered: HoverTarget = null;
+
+  /**
+   * P24 Stage 3 — hover state 변경 시 발화하는 listener 목록.
+   * Three.js 렌더 (Viewport) / UI overlay 등이 구독.
+   *
+   * ADR-039 P24.2 stickiness 자동 적용 — 동일 owner 일 때는 호출 안 됨.
+   */
+  private hoverListeners: Array<(target: HoverTarget) => void> = [];
+
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
+  }
+
+  /**
+   * Hover state 변경 listener 등록. 반환된 함수 호출 시 unsubscribe.
+   * Render layer (Viewport) 가 mount 시 등록 + unmount 시 해제.
+   */
+  public onHoverChange(listener: (target: HoverTarget) => void): () => void {
+    this.hoverListeners.push(listener);
+    return () => {
+      const idx = this.hoverListeners.indexOf(listener);
+      if (idx >= 0) this.hoverListeners.splice(idx, 1);
+    };
+  }
+
+  /**
+   * Hover target 갱신 (ADR-039 P24.2 stickiness 적용).
+   *
+   * 같은 owner 면 no-op — BVH 1px jitter 자연 흡수. 시각 갱신도 skip.
+   * Owner 변경 시에만 hoverListeners 발화.
+   *
+   * @returns true = state 변경됨 + listener 발화, false = no-op
+   */
+  private setHoverTarget(next: HoverTarget): boolean {
+    if (sameHoverOwner(next, this.hovered)) return false;
+    this.hovered = next;
+    // Stage 3 — 시각 layer 통지 (P24.2 stickiness 통과한 경우만).
+    for (const listener of this.hoverListeners) {
+      try { listener(next); }
+      catch (e) { /* defensive — listener error 가 다른 listener 막지 않음 */
+        debugLog('[SelectTool] hover listener threw:', e);
+      }
+    }
+    return true;
+  }
+
+  /** Test 용 / debug 용 — 현재 hover state 조회. */
+  public getHoverTarget(): HoverTarget {
+    return this.hovered;
+  }
+
+  /**
+   * P24.3 — Tool 변경 / mouseleave / ESC 시 hover clear.
+   * 외부 (ToolManager / Viewport) 가 호출.
+   */
+  public clearHover(): void {
+    this.setHoverTarget(null);
   }
 
   onActivate(): void {
@@ -187,11 +269,14 @@ export class SelectTool implements ITool {
 
   onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     if (this.dragSelectStart) {
+      // P24.3 — drag 중에는 hover state freeze (재계산 안 함).
       const dx = e.clientX - this.dragSelectStart.x;
       const dy = e.clientY - this.dragSelectStart.y;
       if (!this.isDragSelecting && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
         // 5px movement threshold → start actual drag-select
         this.isDragSelecting = true;
+        // Drag 시작 — hover clear (시각 일관성).
+        this.setHoverTarget(null);
         // Shift/Alt/Ctrl 드래그는 기존 선택 유지하며 누적/빼기/토글.
         if (!this.dragModifiers.shift && !this.dragModifiers.ctrl && !this.dragModifiers.alt) {
           this.ctx.selection.clearSelection();
@@ -204,7 +289,54 @@ export class SelectTool implements ITool {
           e.clientX, e.clientY
         );
       }
+      return;
     }
+
+    // ADR-039 P24 — Hover Pick → Promote.
+    // Drag 가 아닐 때만 hover 갱신. 결과를 즉시 owner ID 로 promote 후
+    // tagged union (HoverTarget) 으로 저장. P24.2 stickiness 자동 적용
+    // (setHoverTarget 안에서 sameOwner 비교).
+    const newHover = this.computeHoverTarget(e);
+    this.setHoverTarget(newHover);
+  }
+
+  /**
+   * mousemove → raw hit → owner ID promote → HoverTarget.
+   *
+   * P24.4 — `pickEdgeOrFace` 의 edge/face 우선순위 그대로 사용.
+   * P22.5 (ADR-037) — promotion 결과는 항상 owner ID.
+   *
+   * @returns HoverTarget 또는 null (raycast miss / promote 실패)
+   */
+  private computeHoverTarget(e: MouseEvent): HoverTarget {
+    const rect = this.ctx.viewport.container.getBoundingClientRect?.()
+      ?? this.ctx.viewport.renderer?.domElement?.getBoundingClientRect?.();
+    if (!rect) return null;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const picked = this.ctx.viewport.pickEdgeOrFace?.(x, y);
+    if (!picked) return null;
+
+    if (picked.type === 'edge'
+        && (picked.hit as { index?: number }).index != null
+        && this.ctx.edgeMap) {
+      const rawIdx = (picked.hit as { index: number }).index;
+      const segIdx = Math.floor(rawIdx / 2);
+      if (segIdx < 0 || segIdx >= this.ctx.edgeMap.length) return null;
+      const edgeId = this.ctx.edgeMap[segIdx];
+      return { kind: 'edge', id: edgeId };
+    }
+
+    if (picked.type === 'face'
+        && (picked.hit as { faceIndex?: number }).faceIndex != null) {
+      const triIdx = (picked.hit as { faceIndex: number }).faceIndex;
+      const fid = this.ctx.getFaceId?.(triIdx);
+      if (typeof fid !== 'number') return null;
+      return { kind: 'face', id: fid };
+    }
+
+    return null;
   }
 
   onMouseUp(e: MouseEvent): void {
@@ -250,6 +382,8 @@ export class SelectTool implements ITool {
     // Bug 8 fix: multi-click 추적 상태 + 타이머 초기화 (tool 전환 시 누수 방지)
     this.resetMultiClickState();
     this.dragModifiers = { shift: false, ctrl: false, alt: false };
+    // ADR-039 P24.3 — tool 변경 / cleanup 시 hover clear.
+    this.setHoverTarget(null);
   }
 
   private createDragSelectBox(): void {
