@@ -221,6 +221,34 @@
   - `SUPPORTED_SURFACE_KINDS` ↔ ADR-036 P21.2 12항목 정합
   - 매핑 표 갱신 시 본 테스트가 깨짐 → ADR ↔ 코드 drift 차단
 
+### 15. ADR-037 — Pick → Promote 원칙 (P22, 2026-05-01)
+- **새 원칙 P22**: 모든 raycast 결과는 즉시 owner ID (EdgeId / FaceId /
+  VertexId) 로 promote 후 저장. segment / triangle index 를 selection
+  state 에 저장 금지. highlight / hover / preview 모두 owner ID 기준.
+- **P22.1 Selection state schema**: `selectedFaces / selectedEdges /
+  selectedVertices` 의 원소는 항상 의미 ID. raw index 거부.
+- **P22.2 Tessellation 메타데이터**: `Viewport.faceMap: Uint32Array`
+  (triangle → FaceId), `ctx.edgeMap: Uint32Array` (segment → EdgeId).
+  길이 = geometry tri/seg 수와 정확 일치.
+- **P22.3 Topology rebuild 강제**: split_edge / merge_faces_by_edge /
+  Boolean / Push-Pull / Erase / Draw / STEP-IGES import 후 faceMap /
+  edgeMap 재구축 필수. stale 차단.
+- **P22.4 Highlight by owner ID**: 같은 EdgeId / FaceId 의 모든
+  drawable 동시 강조. "hit 된 한 triangle 만 강조" 절대 금지.
+- **P22.5 분석적 곡선 균일 promotion**: `Edge.curve = Some(...)` 인 edge
+  의 N segments 모두 동일 EdgeId 로 promote. 회귀 테스트로 강제.
+- **P22.6 디버그 모드 분리**: 사용자 UI 의 기본 동작은 owner 단위 only.
+  facet/segment 별 선택은 `__AXIA_DEBUG_FACET_SELECT = true` 토글 전용.
+- **P22.7 STEP/IGES import 통합**: Stage 4-A/4-B 의 promote_curve /
+  promote_surface 결과도 P22 적용. import 직후 metadata rebuild.
+- 회귀 방지 테스트:
+  - `selection_promotes_curve_uniformly` — circle 의 모든 segment 가
+    같은 EdgeId 로 promote
+  - `selection_state_contains_owner_ids_not_indices` — selection state
+    의 원소는 valid EdgeId/FaceId 만
+  - `metadata_rebuilt_after_topology_change` — split/Boolean/draw 후
+    stale 차단
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
