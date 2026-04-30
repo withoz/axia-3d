@@ -95,6 +95,32 @@ impl StepHeader {
         }
         ForeignFormat::StepAp203
     }
+
+    /// `StepFile.header` 의 FILE_SCHEMA / FILE_NAME 으로부터 추출.
+    pub fn from_parsed(file: &crate::step_parser::StepFile) -> Self {
+        let mut header = Self::default();
+        if let Some(schema) = file.header_entity("FILE_SCHEMA") {
+            // FILE_SCHEMA 의 args[0] = list of strings
+            if let Some(crate::step_parser::Value::List(items)) = schema.args.first() {
+                for item in items {
+                    if let crate::step_parser::Value::Str(s) = item {
+                        header.file_schema.push(s.clone());
+                    }
+                }
+            }
+        }
+        if let Some(name) = file.header_entity("FILE_NAME") {
+            // FILE_NAME args: name, time_stamp, author, organization, preprocessor_version,
+            //                 originating_system, authorization
+            if let Some(crate::step_parser::Value::Str(s)) = name.args.get(5) {
+                header.originating_system = Some(s.clone());
+            }
+            if let Some(crate::step_parser::Value::Str(s)) = name.args.get(6) {
+                header.authorization = Some(s.clone());
+            }
+        }
+        header
+    }
 }
 
 /// STEP importer — ISO 10303-21 ASCII parser.
@@ -110,23 +136,38 @@ impl StepImporter {
 
     /// STEP 파일 텍스트 → ImportResult.
     ///
-    /// MVP: header section parsing (schema 탐지) + DATA section
-    /// scaffolding. 실제 entity reference 해소는 후속 PR.
-    pub fn parse_str(&self, _content: &str) -> Result<ImportResult> {
-        // TODO Phase G Stage 4-B:
-        //   1. ISO 10303-21 header section lexer (FILE_DESCRIPTION /
-        //      FILE_NAME / FILE_SCHEMA)
-        //   2. DATA section: `#N = ENTITY_NAME(args);` 시그니처 파서
-        //   3. entity reference resolution (#N -> Box<Entity>)
-        //   4. CARTESIAN_POINT / DIRECTION / VECTOR / AXIS2_PLACEMENT_3D
-        //      basic geometry resolution
-        //   5. classify_*_entity → promote_curve::promote / promote_surface::promote
-        //      dispatch
-        //   6. ImportResult { curves, surfaces, warnings } 누적
-        let mut result = ImportResult::default();
-        result.warnings.push(
-            "STEP parser not yet wired (Phase G Stage 4-B pending)".to_string(),
-        );
+    /// **현재 단계 (A-1 + A-2 완료)**: lexer + Part 21 parser 가 작동.
+    /// HEADER section 으로 format (AP203/214/242) 탐지 + DATA section 의
+    /// entity 카운트만 채움. 실제 promotion 본체는 후속 PR (A-3, A-4).
+    pub fn parse_str(&self, content: &str) -> Result<ImportResult> {
+        let parsed = match crate::step_parser::parse(content) {
+            Ok(p) => p,
+            Err(e) => {
+                let mut result = ImportResult::default();
+                result.warnings.push(format!("STEP parse failed: {}", e));
+                return Ok(result);
+            }
+        };
+
+        // Format detection from FILE_SCHEMA header entity.
+        let header = StepHeader::from_parsed(&parsed);
+        let format = header.detect_format();
+
+        let mut result = ImportResult::new(format);
+
+        // TODO (A-3, A-4): iterate parsed.data, dispatch via classify_curve_entity /
+        // classify_surface_entity → promote_curve::promote / promote_surface::promote,
+        // resolve CARTESIAN_POINT / DIRECTION / VECTOR / AXIS2_PLACEMENT_3D refs.
+        //
+        // 현재는 진행 상황 가시화를 위해 entity 카운트 + tag breakdown 만 warning
+        // 으로 노출.
+        let entity_count = parsed.data.len();
+        if entity_count > 0 {
+            result.warnings.push(format!(
+                "STEP parsed: {} entities, format={:?}. Promotion not yet wired.",
+                entity_count, format
+            ));
+        }
         Ok(result)
     }
 
@@ -232,11 +273,55 @@ mod tests {
 
     #[test]
     fn parse_empty_returns_warning() {
+        // Empty input → parser error (no HEADER) → captured as warning.
         let importer = StepImporter::new();
         let result = importer.parse_str("").unwrap();
         assert!(result.is_empty());
         assert!(!result.warnings.is_empty());
-        assert!(result.warnings[0].contains("not yet wired"));
+        assert!(result.warnings[0].contains("parse failed"));
+    }
+
+    #[test]
+    fn parse_minimal_file_succeeds_via_importer() {
+        let src = "ISO-10303-21;\n\
+            HEADER;\n\
+            FILE_DESCRIPTION(('test'),'2;1');\n\
+            FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\n\
+            ENDSEC;\n\
+            DATA;\n\
+            #1 = CARTESIAN_POINT('', (0., 0., 0.));\n\
+            #2 = LINE('', #1, #3);\n\
+            ENDSEC;\n\
+            END-ISO-10303-21;\n";
+        let importer = StepImporter::new();
+        let result = importer.parse_str(src).unwrap();
+        // AP203 detected from CONFIG_CONTROL_DESIGN schema.
+        assert_eq!(result.format, Some(ForeignFormat::StepAp203));
+        // Promotion not yet wired but parser ran successfully.
+        assert!(result.warnings.iter().any(|w| w.contains("2 entities")));
+    }
+
+    #[test]
+    fn parse_ap242_file_detected() {
+        let src = "ISO-10303-21;\n\
+            HEADER;\n\
+            FILE_DESCRIPTION(('test'),'2;1');\n\
+            FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF'));\n\
+            ENDSEC;\n\
+            DATA;\n\
+            ENDSEC;\n\
+            END-ISO-10303-21;\n";
+        let importer = StepImporter::new();
+        let result = importer.parse_str(src).unwrap();
+        assert_eq!(result.format, Some(ForeignFormat::StepAp242));
+    }
+
+    #[test]
+    fn parse_malformed_returns_warning_not_panic() {
+        let importer = StepImporter::new();
+        let result = importer.parse_str("HEADER;\nGARBAGE_NO_PAREN\nENDSEC;").unwrap();
+        assert!(!result.warnings.is_empty());
+        assert!(result.warnings[0].contains("parse failed"));
     }
 }
 

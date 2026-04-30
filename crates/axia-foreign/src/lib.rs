@@ -27,6 +27,8 @@
 //! enum) + `glam` + `anyhow` + `serde` 만 사용. ADR-035 P20.2 명시 사항.
 
 pub mod step;
+pub mod step_lexer;
+pub mod step_parser;
 pub mod iges;
 pub mod promote_curve;
 pub mod promote_surface;
