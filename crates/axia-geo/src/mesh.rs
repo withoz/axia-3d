@@ -3277,9 +3277,57 @@ impl Mesh {
         let mut face_map: Vec<u32> = Vec::new(); // one FaceId per triangle
         let mut vert_offset: u32 = 0;
 
+        // ADR-038 P23.2 — default chord tolerance for analytic surface tessellation.
+        // 0.1mm 시각 품질 vs 메모리 균형 (LOD 는 별도 phase).
+        const ANALYTIC_CHORD_TOL: f64 = 0.1;
+
         for (face_id, face) in self.faces.iter() {
             if !face.is_active() || !face.is_visible() {
                 continue;
+            }
+
+            // ADR-038 P23.1 — Analytic evaluate priority.
+            // `Face.surface = Some(AnalyticSurface)` 이면 surface 의 정확한
+            // tessellation + analytic normal 사용. 없으면 기존 path
+            // (DCEL fan averaging) 유지.
+            if let Some(surface) = face.surface() {
+                use crate::surfaces::SurfaceOps;
+                let tess = surface.tessellate(ANALYTIC_CHORD_TOL);
+                if tess.vertices.is_empty() || tess.triangles.is_empty() {
+                    continue;
+                }
+
+                // P23.5 — analytic normal 직접 evaluate per (u, v).
+                // averaging 없음 — sphere 폴 같은 degenerate 점도 정확한
+                // 단위 벡터 반환 (SurfaceOps spec 보장).
+                let n_verts = tess.vertices.len();
+                for i in 0..n_verts {
+                    let p = tess.vertices[i];
+                    positions.push(p.x as f32);
+                    positions.push(p.y as f32);
+                    positions.push(p.z as f32);
+                    positions_f64.push(p.x);
+                    positions_f64.push(p.y);
+                    positions_f64.push(p.z);
+
+                    let uv = tess.uv.get(i).copied().unwrap_or([0.0, 0.0]);
+                    let n = surface.normal(uv[0], uv[1]);
+                    // Defensive: degenerate normal → fallback to face plane normal.
+                    let n = if n.length_squared() < 1e-20 { face.normal() } else { n };
+                    normals.push(n.x as f32);
+                    normals.push(n.y as f32);
+                    normals.push(n.z as f32);
+                }
+
+                // Emit triangles with vertex offset.
+                for tri in &tess.triangles {
+                    indices.push(vert_offset + tri[0]);
+                    indices.push(vert_offset + tri[1]);
+                    indices.push(vert_offset + tri[2]);
+                    face_map.push(face_id.raw());  // P22.5 — 모든 삼각형이 같은 FaceId
+                }
+                vert_offset += n_verts as u32;
+                continue;  // skip the planar polygon path below
             }
 
             let normal = face.normal();
@@ -6779,5 +6827,158 @@ mod tests {
             Some(&edges),
         );
         assert_eq!(faces.len(), 1, "large cycle with required edge creates face");
+    }
+
+    // ─── ADR-038 P23.7 회귀 테스트 ─────────────────────────────────────────
+    //
+    // export_buffers 가 Face.surface = Some(AnalyticSurface) 인 face 에 대해
+    // analytic evaluate normal 을 emit 하는지 검증. drift 발생 시 본 테스트
+    // 가 깨짐 → P23.1 위반 알림.
+
+    /// P23.7 #1 — Sphere face 의 vertex normal 이 (vertex - center).normalize()
+    /// 와 1e-6 이내 일치 (analytic evaluate 의 정확도 검증).
+    #[test]
+    fn analytic_sphere_face_emits_evaluated_normals() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let center = DVec3::new(10.0, 20.0, 30.0);
+        let radius = 5.0;
+        let sphere = AnalyticSurface::Sphere {
+            center, radius,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        assert!(mesh.set_face_surface(fid, Some(sphere)));
+
+        let (positions, normals, _indices, face_map, _positions_f64) =
+            mesh.export_buffers().unwrap();
+        assert!(!positions.is_empty(), "sphere should emit triangles");
+        assert!(!face_map.is_empty(), "sphere should emit face_map entries");
+
+        // Verify all vertices have normal = (vertex - center) / radius (within tol).
+        let n_verts = positions.len() / 3;
+        let mut checked = 0;
+        for i in 0..n_verts {
+            let p = DVec3::new(
+                positions[i * 3] as f64,
+                positions[i * 3 + 1] as f64,
+                positions[i * 3 + 2] as f64,
+            );
+            let n = DVec3::new(
+                normals[i * 3] as f64,
+                normals[i * 3 + 1] as f64,
+                normals[i * 3 + 2] as f64,
+            );
+            let expected = (p - center).normalize_or_zero();
+            // f32 → f64 round-trip 의 누적 오차 + sphere 의 폴 점은 spec
+            // fallback 사용 → 1e-3 으로 완화 (1e-6 은 f64 단위에서만 보장).
+            let err = (n - expected).length();
+            if expected.length_squared() > 0.5 {
+                assert!(err < 1e-3, "vertex {} normal err={}, expected={:?}, got={:?}",
+                    i, err, expected, n);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no non-degenerate vertices found to check");
+    }
+
+    /// P23.7 #2 — Cylinder face 의 vertex normal 이 axis 에 수직 + radial
+    /// 방향인지 검증.
+    #[test]
+    fn analytic_cylinder_face_emits_radial_normals() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let axis_origin = DVec3::new(0.0, 0.0, 0.0);
+        let axis_dir = DVec3::Z;
+        let radius = 4.0;
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin, axis_dir, radius,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 10.0),
+        };
+        assert!(mesh.set_face_surface(fid, Some(cyl)));
+
+        let (positions, normals, _indices, _face_map, _) = mesh.export_buffers().unwrap();
+        let n_verts = positions.len() / 3;
+        assert!(n_verts > 0, "cylinder should emit vertices");
+
+        for i in 0..n_verts {
+            let p = DVec3::new(
+                positions[i * 3] as f64,
+                positions[i * 3 + 1] as f64,
+                positions[i * 3 + 2] as f64,
+            );
+            let n = DVec3::new(
+                normals[i * 3] as f64,
+                normals[i * 3 + 1] as f64,
+                normals[i * 3 + 2] as f64,
+            );
+            // Normal must be perpendicular to axis (dot = 0)
+            let axis_dot = n.dot(axis_dir);
+            assert!(axis_dot.abs() < 1e-3,
+                "vertex {} normal not perpendicular to axis: dot={}", i, axis_dot);
+            // Normal must be radial — pointing away from axis projection of vertex
+            let radial = (p - axis_origin) - axis_dir * (p - axis_origin).dot(axis_dir);
+            let radial_unit = radial.normalize_or_zero();
+            if radial_unit.length_squared() > 0.5 {
+                let err = (n - radial_unit).length();
+                assert!(err < 1e-3,
+                    "vertex {} normal not radial: err={}, expected={:?}, got={:?}",
+                    i, err, radial_unit, n);
+            }
+        }
+    }
+
+    /// P23.7 #3 — Planar face (no AnalyticSurface) 의 기존 DCEL fan averaging
+    /// 동작이 그대로 유지되는지 (regression guard).
+    #[test]
+    fn planar_face_uses_dcel_averaging_unchanged() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        // No surface attached — should use the existing path.
+        assert!(mesh.face_surface(fid).is_none());
+
+        let (positions, normals, indices, face_map, _) = mesh.export_buffers().unwrap();
+        let n_verts = positions.len() / 3;
+        assert_eq!(n_verts, 4, "unit square should have 4 vertices");
+        assert_eq!(indices.len(), 6, "unit square should triangulate to 2 triangles");
+        assert_eq!(face_map.len(), 2, "2 triangles per face");
+        assert!(face_map.iter().all(|&f| f == fid.raw()),
+            "all triangles should map to the same FaceId");
+
+        // All normals should be (0, 0, 1) (face on XY plane, normal +Z)
+        for i in 0..n_verts {
+            let n = DVec3::new(
+                normals[i * 3] as f64,
+                normals[i * 3 + 1] as f64,
+                normals[i * 3 + 2] as f64,
+            );
+            let expected = DVec3::Z;
+            let err = (n - expected).length();
+            assert!(err < 1e-3, "planar face vertex {} normal mismatch: {:?}", i, n);
+        }
+    }
+
+    /// P23.7 supplementary — analytic evaluate path 와 polygon path 가 같은
+    /// face_id 를 face_map 에 emit 하는지 (P22.5 cross-link).
+    #[test]
+    fn analytic_face_emits_uniform_face_id_in_face_map() {
+        let mut mesh = Mesh::new();
+        let fid = unit_square_face(&mut mesh);
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z,
+            ref_dir: DVec3::X, radius: 3.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 5.0),
+        };
+        mesh.set_face_surface(fid, Some(cyl));
+
+        let (_, _, _, face_map, _) = mesh.export_buffers().unwrap();
+        assert!(!face_map.is_empty());
+        // P22.5 — 모든 cylinder triangle 이 같은 FaceId
+        let unique: std::collections::HashSet<u32> = face_map.iter().copied().collect();
+        assert_eq!(unique.len(), 1, "cylinder face emits 1 unique FaceId");
+        assert!(unique.contains(&fid.raw()), "FaceId matches the face");
     }
 }
