@@ -287,6 +287,33 @@
   - `edge_visibility_angle_threshold_matches_rust_and_ts` — WASM /
     Rust SSOT 일치
 
+### 17. ADR-039 — Hover & Preselect Owner-ID Unification (P24, 2026-05-01)
+- **새 원칙 P24**: hover / preselect 도 Pick → Promote 적용. mousemove
+  결과의 raw hit 는 즉시 owner ID (EdgeId/FaceId) 로 promote 후 저장.
+  ADR-037 P22 의 자연 연장.
+- **P24.1 HoverTarget tagged union 강제**: `{ kind: 'edge', id } |
+  { kind: 'face', id } | null` — `EdgeId | FaceId` 둘 다 number 라
+  컴파일 타임 구분 안 됨, kind discriminator 필수.
+- **P24.2 Stickiness invariant**: 동일 owner 면 hover state 변경 0.
+  BVH 1px jitter 자연 흡수. "파르르 떨림" 차단.
+- **P24.3 Hover lifecycle 6 케이스**: mouseleave / empty space / tool
+  변경 / drag 시작 freeze / modal open / ESC → 모두 clear.
+- **P24.4 Edge / Face 우선순위**: 기존 `pickEdgeOrFace` 의
+  `preferEdgeWithinPx` 유지 — 결과만 owner ID 로 promote.
+- **P24.5 시각 규칙 분리**: hover 두께 70%, hover 색 연함, z-order
+  selection 보다 아래. transition 시 시각 점프 없음.
+- **P24.6 selected ⊃ hover 일관성**: hover 0 또는 1개, selection 0..n.
+  중복 시 selection 색만 표시 (hover 가려짐).
+- **P24.7 AnalyticCurve 정밀도**: 별도 ADR-040 으로 분리. 본 ADR 은
+  segment-tessellation hover promote 까지.
+- **P24.8 회귀 테스트** (절대 #[ignore] 금지):
+  - `hover_circle_sweep_no_breaking` — 원 sweep 시 hovered 변화 0
+  - `hover_jitter_1px_stable_owner_id` — 1px 흔들림 → 변화 0
+  - `hover_clears_on_tool_change`
+  - `hover_clears_on_mouseleave`
+  - `hover_owner_id_matches_click_result` — 같은 위치 hover ↔ click 일치
+  - `multi_curve_hover_switches_owner_correctly`
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
