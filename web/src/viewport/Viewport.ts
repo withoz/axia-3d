@@ -975,13 +975,16 @@ export class Viewport {
       geometry.computeBoundingSphere();
       recordStep('updateMesh.geometry', performance.now() - tGeom0);
 
-      // ── Smooth normals: 인접 면 각도 < 30°이면 법선 보간 (원통 등 곡면 부드럽게).
+      // ── Smooth normals: 인접 면 각도 < threshold 면 법선 보간 (원통 등 곡면 부드럽게).
       // ⚡ 성능 최적화 (2026-04-27): smoothNormals 는 O(V·T) 로 드로잉 시
       //   가장 큰 단일 비용. 화면에는 WASM 이 준 법선으로 즉시 표시하고
       //   부드러운 노멀은 다음 프레임에 적용 → 사용자 체감 반응 속도 ↑.
       //   `_pendingSmoothNormals` 가 RAF 스케줄을 들고 있으므로 새 mesh
       //   가 도착하면 이전 RAF 는 자동 취소됨.
-      this._scheduleSmoothNormals(geometry, 30);
+      // ✱ ADR-038 P23.3 (2026-05-01): hardcode 30° 제거 → Rust SSOT mirror
+      //   (`WasmBridge.EDGE_VISIBILITY_ANGLE_DEG = 20.1°`). 두 layer 의
+      //   hard/soft edge 판정이 일치하도록 강제. drift 차단.
+      this._scheduleSmoothNormals(geometry, WasmBridge.EDGE_VISIBILITY_ANGLE_DEG);
 
       // ── Store faceMap, indexBuffer and create per-face color attribute ──
       this.indexBuffer = new Uint32Array(indices);

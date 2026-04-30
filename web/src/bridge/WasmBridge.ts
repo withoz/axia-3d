@@ -172,6 +172,8 @@ interface WasmDeltaBuffers {
 type AxiaEngineExtended = AxiaEngine & {
   // Error reporting — last failed op's message (ADR-003)
   lastError?(): string;
+  // ADR-038 P23.3 — edge visibility angle SSOT (Rust 의 진실, default 20.1°)
+  getEdgeVisibilityAngleDeg?(): number;
   // Edge/geometry queries
   get_edge_lines?(): Float32Array;
   get_edge_map?(): Uint32Array;
@@ -450,6 +452,16 @@ type AxiaEngineExtended = AxiaEngine & {
 };
 
 export class WasmBridge {
+  /**
+   * Edge visibility angle threshold (도) — Rust SSOT mirror (ADR-038 P23.3).
+   *
+   * Rust `axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG` 와 동일 값.
+   * Bridge instance 가 없는 위치 (예: Viewport.ts 의 정적 mesh build 단계)
+   * 에서 사용. 두 값이 어긋나면 hard/soft edge 판정이 두 layer 에서 어긋나
+   * 회귀 테스트 (P23.7 #4) 가 깨짐.
+   */
+  public static readonly EDGE_VISIBILITY_ANGLE_DEG = 20.1;
+
   public engine: AxiaEngineExtended | null = null;
 
   /**
@@ -1154,6 +1166,27 @@ export class WasmBridge {
     if (!this.engine) return [0, 0, 0];
     const arr = this.engine.get_face_normal(faceId);
     return [arr[0], arr[1], arr[2]];
+  }
+
+  /**
+   * Edge visibility angle threshold (도) — Rust SSOT 반영 (ADR-038 P23.3).
+   *
+   * Three.js Viewport.smoothNormals 와 Mesh::compute_smooth_normal_at 의
+   * hard/soft edge 판정이 두 layer 에서 일치하도록 본 값 사용.
+   *
+   * @returns Rust EDGE_VISIBILITY_ANGLE_DEG 값 (현재 20.1°). WASM 미연결 시
+   *          fallback 20.1° 반환 (drift 차단 — never 30).
+   */
+  getEdgeVisibilityAngleDeg(): number {
+    if (this.engine?.getEdgeVisibilityAngleDeg) {
+      try {
+        return this.engine.getEdgeVisibilityAngleDeg();
+      } catch {
+        // fall through to fallback
+      }
+    }
+    // Fallback to Rust default (mirror constant — must match tolerances.rs:106)
+    return WasmBridge.EDGE_VISIBILITY_ANGLE_DEG;
   }
 
   deleteFace(faceId: number): boolean {

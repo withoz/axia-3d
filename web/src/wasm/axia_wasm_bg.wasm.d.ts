@@ -66,6 +66,7 @@ export const axiaengine_getCenterlineLines: (a: number, b: number) => void;
 export const axiaengine_getDirtyFaceBuffers: (a: number) => number;
 export const axiaengine_getDirtyFaceCount: (a: number) => number;
 export const axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
+export const axiaengine_getEdgeVisibilityAngleDeg: (a: number) => number;
 export const axiaengine_getFaceMapLen: (a: number) => number;
 export const axiaengine_getFaceMapPtr: (a: number) => number;
 export const axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;

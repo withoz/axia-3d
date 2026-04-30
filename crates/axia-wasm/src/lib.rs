@@ -186,6 +186,17 @@ impl AxiaEngine {
         self.last_error.clone()
     }
 
+    /// Edge visibility angle threshold (도) — Rust 의 SSOT.
+    ///
+    /// ADR-038 P23.3 — Three.js Viewport.smoothNormals 가 hardcode 30° 대신
+    /// 본 값을 사용해야 hard/soft edge 판정이 두 layer 에서 일치.
+    ///
+    /// 현재 값: `axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG = 20.1`
+    #[wasm_bindgen(js_name = "getEdgeVisibilityAngleDeg")]
+    pub fn get_edge_visibility_angle_deg(&self) -> f64 {
+        axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG
+    }
+
     /// Number of inner hole loops on a face. 0 = simple face.
     /// Returns u32::MAX when the face is missing or inactive.
     #[wasm_bindgen(js_name = "faceInnerLoopCount")]

@@ -414,6 +414,15 @@ export class AxiaEngine {
      * 실패 시 빈 벡터.
      */
     getEdgeEndpoints(edge_id_raw: number): Uint32Array;
+    /**
+     * Edge visibility angle threshold (도) — Rust 의 SSOT.
+     *
+     * ADR-038 P23.3 — Three.js Viewport.smoothNormals 가 hardcode 30° 대신
+     * 본 값을 사용해야 hard/soft edge 판정이 두 layer 에서 일치.
+     *
+     * 현재 값: `axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG = 20.1`
+     */
+    getEdgeVisibilityAngleDeg(): number;
     getFaceMapLen(): number;
     getFaceMapPtr(): number;
     /**
@@ -1183,6 +1192,7 @@ export interface InitOutput {
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getEdgeVisibilityAngleDeg: (a: number) => number;
     readonly axiaengine_getFaceMapLen: (a: number) => number;
     readonly axiaengine_getFaceMapPtr: (a: number) => number;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;

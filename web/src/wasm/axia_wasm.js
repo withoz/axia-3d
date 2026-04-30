@@ -1087,6 +1087,19 @@ export class AxiaEngine {
         }
     }
     /**
+     * Edge visibility angle threshold (도) — Rust 의 SSOT.
+     *
+     * ADR-038 P23.3 — Three.js Viewport.smoothNormals 가 hardcode 30° 대신
+     * 본 값을 사용해야 hard/soft edge 판정이 두 layer 에서 일치.
+     *
+     * 현재 값: `axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG = 20.1`
+     * @returns {number}
+     */
+    getEdgeVisibilityAngleDeg() {
+        const ret = wasm.axiaengine_getEdgeVisibilityAngleDeg(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * @returns {number}
      */
     getFaceMapLen() {
