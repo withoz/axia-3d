@@ -1034,6 +1034,29 @@ export class WasmBridge {
     return this.engine.redo();
   }
 
+  /**
+   * ADR-047 R-track — non-manifold edge endpoints for visual overlay.
+   *
+   * Returns flat `[x0,y0,z0, x1,y1,z1, ...]` Float32Array with 2 endpoints
+   * × 3 coords per non-manifold edge (edge shared by ≥3 active faces, the
+   * intentional ADR-021 P7 stacked-inner artifact). The Viewport renders
+   * these as a distinct outline so users perceive the overlapping faces
+   * clearly instead of mistaking them for "missing face / wireframe only".
+   *
+   * Returns empty array when WASM doesn't expose the method (older
+   * engines) or there are no such edges. Safe to call every frame —
+   * underlying scan is O(active edges).
+   */
+  getNonManifoldEdgeSegments(): Float32Array {
+    const e = this.engine as { getNonManifoldEdgeSegments?: () => Float32Array } | null;
+    if (!e?.getNonManifoldEdgeSegments) return new Float32Array(0);
+    try {
+      return e.getNonManifoldEdgeSegments();
+    } catch {
+      return new Float32Array(0);
+    }
+  }
+
   getMeshBuffers(): MeshBuffers | null {
     if (!this.engine) return null;
     if (!this.bufferCache.dirty && this.bufferCache.positions) {

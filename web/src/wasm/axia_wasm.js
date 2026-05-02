@@ -1263,6 +1263,30 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-047 R-track — non-manifold edge endpoints for rendering overlay.
+     *
+     * Returns `Float32Array` of `[x0,y0,z0, x1,y1,z1, ...]` line segments
+     * (2 endpoints × 3 coords per non-manifold edge). The renderer uses
+     * this to draw a highlight outline on edges shared by ≥3 active
+     * faces — these are ADR-021 P7 stacked-inner artifacts; without
+     * the highlight users mistake the overlapping faces for "missing
+     * face / wireframe only" (z-fight visual confusion).
+     * @returns {Float32Array}
+     */
+    getNonManifoldEdgeSegments() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getNonManifoldEdgeSegments(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @returns {number}
      */
     getNormalsLen() {

@@ -160,6 +160,22 @@ Deserialize 후: Wall 만 invariant 검증, 위반 시 자동 보정.
 - [ ] `export_versioned_snapshot_strict`: 분류 별 검증
 - [ ] Import 파이프라인 (DXF/OBJ/STL/3DM): sheet 입력은 winding 자유
 
+## Amendment 2026-05-02 — Non-Manifold Exception (cross-link to ADR-021 P7)
+
+`Mesh::verify_face_invariants` 의 "edge shared by ≥3 active faces (non-
+manifold)" 카테고리는 ADR-021 P7 (Stacked Inner Rectangles) 에서 **의도적
+으로 발생한다**. DCEL 은 edge 당 HE 가 정확히 2 개인데 P7 은 outer ring +
+2 inner face 가 같은 edge 를 공유하는 토폴로지를 명시적으로 형성한다.
+
+**원칙 5 (Boolean/Merge 사전 검증) 의 hard-fail 정책은 변경 없음**:
+- Boolean / Merge 입력에 non-manifold 면 거부 (ADR-007 원칙 5 그대로)
+- Draw 명령 (DrawRect / DrawLine 등) 은 통과 — P7 의도된 산출물
+- Save / Load strict 모드는 wall face 에만 검증 (sheet / inner promotion
+  은 자유)
+
+자세한 결정 / fix 시도 / Strategy C 후속 작업 계획은 ADR-021 의
+`Amendment 2026-05-02 — Non-Manifold By Design (P7-N)` 섹션 참조.
+
 ## 참조
 
 - ADR-003: Geometric Validity Guards (선제 조건)
@@ -167,3 +183,5 @@ Deserialize 후: Wall 만 invariant 검증, 위반 시 자동 보정.
 - ADR-006: Multi-loop Face (hole 지원)
 - ADR-007 Rev 1 (Superseded): Single Truth Winding (`docs/adr/007-face-orientation-policy.rev1.md` 백업)
 - ADR-008: Face Operation Axioms (wall context 전제)
+- **ADR-021 P7 + P7-N Amendment**: stacked-inner non-manifold exception
+- **ADR-047 R-track**: rendering 시각화 (z-fight 완화 / 3-face share outline)

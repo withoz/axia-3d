@@ -3651,6 +3651,30 @@ impl Mesh {
     // Face merge (AixxiA coplanar merge — SketchUp-style)
     // ========================================================================
 
+    /// ADR-047 R-track (2026-05-02) — collect edges shared by ≥3 active faces.
+    ///
+    /// These are non-manifold edges produced by ADR-021 P7 stacked-inner
+    /// rectangles (and other intentional shared-boundary topologies).
+    /// The rendering layer uses this to draw an outline highlight so the
+    /// user perceives the overlapping faces clearly instead of mistaking
+    /// them for "missing face" / wireframe-only.
+    ///
+    /// Returns flat `Vec<EdgeId>`. Use `vertex_pos` on each edge's
+    /// endpoints for screen-space rendering.
+    pub fn collect_non_manifold_edges(&self) -> Vec<EdgeId> {
+        let mut result = Vec::new();
+        for (eid, e) in self.edges.iter() {
+            if !e.is_active() {
+                continue;
+            }
+            let (faces, _) = self.get_faces_sharing_edge(eid);
+            if faces.len() >= 3 {
+                result.push(eid);
+            }
+        }
+        result
+    }
+
     /// Get all faces sharing a given edge, via the radial half-edge chain.
     /// Returns (face_ids, he_ids) — one pair per face found.
     pub fn get_faces_sharing_edge(&self, edge_id: EdgeId) -> (Vec<FaceId>, Vec<HeId>) {

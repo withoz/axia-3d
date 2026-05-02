@@ -1941,6 +1941,21 @@ export class ToolManager {
       );
     }
 
+    // ── ADR-047 R-track R1 — refresh non-manifold edge overlay ──
+    //   ADR-021 P7 stacked-inner intentionally produces edges shared by
+    //   ≥3 faces. Without a visual cue users mistake the resulting z-fight
+    //   for "missing face / wireframe only". Refresh the highlight overlay
+    //   alongside every mesh sync.
+    const tNm0 = performance.now();
+    try {
+      const nmSegs = this.bridge.getNonManifoldEdgeSegments();
+      this.viewport.updateNonManifoldOverlay(nmSegs);
+    } catch (err) {
+      // Defensive: never let overlay refresh break syncMesh.
+      void err;
+    }
+    recordStep('syncMesh.nonManifoldOverlay', performance.now() - tNm0);
+
     // Sprint 3 §1 — stats + projected shadow 측정 추가.
     //   syncMesh 의 미계측 31ms 의 dominator 를 telemetry 로 격리.
     const tStats0 = performance.now();

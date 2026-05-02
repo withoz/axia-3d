@@ -327,6 +327,60 @@ P9 pinch 정책으로 자동 promote 가능.
 
 ---
 
+## Amendment 2026-05-02 — Non-Manifold By Design (P7-N)
+
+P7 의 stacked-inner 케이스 (사용자 보고 시나리오 "RECT 그리면 인접 face 가
+wireframe 만 남음" 수사 결과) 에서 발견된 fundamental 결과:
+
+**Stacked inner rectangles produce non-manifold edges by design.**
+
+### 왜
+
+DCEL 은 edge 당 정확히 2 half-edges 를 가진다. P7 은 outer ring 위에 두
+개의 inner face 가 같은 edge 를 공유하는 토폴로지를 의도적으로 형성한다:
+- Outer ring 의 경계 HE1
+- Inner face A 의 경계 HE2
+- Inner face B 의 경계 HE3 ← 세 번째 face 가 같은 edge 를 share
+
+이는 `Mesh::verify_face_invariants` 가 "edge shared by 3 active faces
+(non-manifold)" 로 보고하는 패턴이다. **위반이 아니라 정책의 직접 산출물**.
+
+### 영향 범위
+
+1. **`Mesh::verify_face_invariants`** 의 non-manifold 카테고리: P7 케이스에선
+   informational. Boolean / Merge 사전 검증에서만 hard-fail (ADR-007 원칙 5).
+2. **렌더링**: 같은 edge 를 공유한 두 inner face 가 같은 평면에 있어 z-fight
+   현상 발생 가능. Rendering layer 가 polygonOffset / outline 강조 등으로
+   대응 (ADR-047 R-track 별도 작업).
+3. **사용자 인지**: "면이 사라진 것처럼 보임" — 실제 face 는 active. 원인은
+   visual artifact. 데이터 손실 아님.
+
+### Pre-commit guard 가 불가능한 이유
+
+verify_face_invariants 만으로는 사용자 버그 패턴과 P7 의 정상 동작을 구분할
+수 없다 (둘 다 동일 "edge shared by 3 active faces" 위반 생성). 따라서
+`exec_draw_rect` 에 manifold guard 추가 시도는 LOCKED #1 ADR-021 P7 회귀
+테스트 (`test_two_stacked_inner_rects_both_faced` /
+`test_column_of_inner_rects_all_faced`) 를 깨뜨림.
+
+엔진 단계 안전망 (Boolean/Merge 거부) 은 그대로 유지, draw 경로엔 가드 없음.
+
+### 향후 root fix (Strategy C, 별도 PR)
+
+`exec_draw_line` 의 `split_edge` HE2 claim 로직을 정밀화해서 사용자 패턴은
+non-manifold 안 만들고 P7 의 의도된 stacked-inner 패턴은 그대로 유지.
+HE 매핑 재설계 + 회귀 광범위 — 신중한 별도 작업 필요.
+
+### Cross-links
+
+- **ADR-007 원칙 5** (Boolean/Merge 사전 검증) — non-manifold 는 거기서만
+  hard-fail. Draw 단계는 통과.
+- **ADR-047 P32** (Snap chain self-touch) 와 같은 맥락: 정책 (P7) 자체는
+  변경하지 않고 enforcement / 시각화 레이어에서 사용자 보호.
+- **CLAUDE.md LOCKED #1** — P7 정책 자체는 LOCKED, 변경 시 새 ADR 필요.
+
+---
+
 *Author*: AXiA development (사용자 P7 정의 + Claude 보강) |
 *Implementation*: Phase 1-3 (~1주) |
 *Date*: 2026-04-29 (charter)

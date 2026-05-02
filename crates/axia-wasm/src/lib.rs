@@ -4204,6 +4204,37 @@ impl AxiaEngine {
         )
     }
 
+    /// ADR-047 R-track — non-manifold edge endpoints for rendering overlay.
+    ///
+    /// Returns `Float32Array` of `[x0,y0,z0, x1,y1,z1, ...]` line segments
+    /// (2 endpoints × 3 coords per non-manifold edge). The renderer uses
+    /// this to draw a highlight outline on edges shared by ≥3 active
+    /// faces — these are ADR-021 P7 stacked-inner artifacts; without
+    /// the highlight users mistake the overlapping faces for "missing
+    /// face / wireframe only" (z-fight visual confusion).
+    #[wasm_bindgen(js_name = "getNonManifoldEdgeSegments")]
+    pub fn get_non_manifold_edge_segments(&self) -> Vec<f32> {
+        let edges = self.scene.mesh.collect_non_manifold_edges();
+        let mut buf = Vec::with_capacity(edges.len() * 6);
+        for eid in edges {
+            let edge = &self.scene.mesh.edges[eid];
+            let v0 = edge.v_small();
+            let v1 = edge.v_large();
+            if let (Ok(p0), Ok(p1)) = (
+                self.scene.mesh.vertex_pos(v0),
+                self.scene.mesh.vertex_pos(v1),
+            ) {
+                buf.push(p0.x as f32);
+                buf.push(p0.y as f32);
+                buf.push(p0.z as f32);
+                buf.push(p1.x as f32);
+                buf.push(p1.y as f32);
+                buf.push(p1.z as f32);
+            }
+        }
+        buf
+    }
+
     /// Per-`getMeshBuffers` skip diagnostics — JSON. Counts faces dropped at
     /// each silent-skip path inside `Mesh::export_buffers`. Use to debug
     /// "face is active in mesh but invisible in render" symptoms.

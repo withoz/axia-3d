@@ -103,6 +103,14 @@ export class Viewport {
   /** Cache of Mesh-edge LineMaterials so resize + width changes are fast.
    *  Separate from the axis LineMaterials (lineMaterials arr in constructor). */
   private _meshEdgeMaterials: LineMaterial[] = [];
+  /** ADR-047 R-track — overlay LineSegments2 highlighting non-manifold
+   *  edges (ADR-021 P7 stacked-inner artifact). Distinct color so users
+   *  see "overlapping faces here", not "missing face". Null when feature
+   *  disabled or no such edges. */
+  private _nonManifoldOverlay: LineSegments2 | null = null;
+  private _nonManifoldOverlayMat: LineMaterial | null = null;
+  /** R1 toggle — non-manifold highlight visibility. Default ON. */
+  private _showNonManifoldHighlight = true;
   /** Pending requestAnimationFrame id for deferred smoothNormals.
    *  Cancel-and-replace ensures we never run an old normal pass on top
    *  of a fresher mesh. */
@@ -1274,6 +1282,10 @@ export class Viewport {
       this._meshEdgeMaterials.push(mat);
       this.meshGroup.add(obj);
     }
+
+    // ── 4.5) ADR-047 R-track — non-manifold edge overlay (3-face share).
+    //    Updated externally via `updateNonManifoldOverlay(segments)` after
+    //    every topology-changing op so the highlight stays in sync.
 
     // ── 5) Centerlines (중심선/참조 축) — 점선 + 옅은 색 + 얇게 ──
     if (centerLines && centerLines.length > 0) {
@@ -2520,6 +2532,66 @@ export class Viewport {
   /** ADR-018 — 현재 face orientation 가시화 모드 여부. */
   isShowFaceOrientation(): boolean {
     return this._showFaceOrientation;
+  }
+
+  /**
+   * ADR-047 R-track R1 — install / refresh the non-manifold edge overlay.
+   *
+   * `segments` is a flat `[x0,y0,z0, x1,y1,z1, ...]` Float32Array (2 endpoints
+   * × 3 coords per non-manifold edge), as returned by
+   * `WasmBridge.getNonManifoldEdgeSegments`. Pass empty array to clear.
+   *
+   * Edges shared by ≥3 active faces are an intentional ADR-021 P7 (stacked
+   * inner) topological artifact. Without this overlay users see only z-fighting
+   * fills + wireframe and mistake them for "missing face / 면 사라짐".
+   */
+  updateNonManifoldOverlay(segments: Float32Array): void {
+    // Tear down stale overlay
+    if (this._nonManifoldOverlay) {
+      this.meshGroup.remove(this._nonManifoldOverlay);
+      const geo = this._nonManifoldOverlay.geometry as LineSegmentsGeometry;
+      geo.dispose();
+      this._nonManifoldOverlay = null;
+    }
+    if (!this._showNonManifoldHighlight || segments.length < 6) return;
+
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(Array.from(segments));
+
+    if (!this._nonManifoldOverlayMat) {
+      const w = this.container.clientWidth || 1;
+      const h = this.container.clientHeight || 1;
+      this._nonManifoldOverlayMat = new LineMaterial({
+        // SketchUp-style attention color — distinct from default edge gray
+        // and from the snap-amber. Magenta-leaning orange (#e85d3a) reads
+        // as "this edge is overlapping faces, not a normal boundary".
+        color: 0xe85d3a,
+        linewidth: 2.5,
+        resolution: new THREE.Vector2(w, h),
+        worldUnits: false,
+        dashed: false,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,   // always visible, even behind other geometry
+        depthWrite: false,
+      });
+      this._meshEdgeMaterials.push(this._nonManifoldOverlayMat);
+    }
+
+    this._nonManifoldOverlay = new LineSegments2(geo, this._nonManifoldOverlayMat);
+    this._nonManifoldOverlay.name = 'non-manifold-overlay';
+    this._nonManifoldOverlay.renderOrder = 1500;  // above edges (1), below snap (2000)
+    this._nonManifoldOverlay.visible = this._showNonManifoldHighlight;
+    this.meshGroup.add(this._nonManifoldOverlay);
+  }
+
+  /** Toggle non-manifold edge highlight visibility (default true). */
+  setShowNonManifoldHighlight(enabled: boolean): void {
+    this._showNonManifoldHighlight = enabled;
+    if (this._nonManifoldOverlay) this._nonManifoldOverlay.visible = enabled;
+  }
+  isShowNonManifoldHighlight(): boolean {
+    return this._showNonManifoldHighlight;
   }
 
   /** 현재 스타일 설정값 반환 (프리셋 비교/저장용) */

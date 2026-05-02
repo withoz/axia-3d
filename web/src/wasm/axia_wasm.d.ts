@@ -481,6 +481,17 @@ export class AxiaEngine {
      * "face is active in mesh but invisible in render" symptoms.
      */
     getLastExportSkipStats(): string;
+    /**
+     * ADR-047 R-track — non-manifold edge endpoints for rendering overlay.
+     *
+     * Returns `Float32Array` of `[x0,y0,z0, x1,y1,z1, ...]` line segments
+     * (2 endpoints × 3 coords per non-manifold edge). The renderer uses
+     * this to draw a highlight outline on edges shared by ≥3 active
+     * faces — these are ADR-021 P7 stacked-inner artifacts; without
+     * the highlight users mistake the overlapping faces for "missing
+     * face / wireframe only" (z-fight visual confusion).
+     */
+    getNonManifoldEdgeSegments(): Float32Array;
     getNormalsLen(): number;
     getNormalsPtr(): number;
     /**
@@ -1293,6 +1304,7 @@ export interface InitOutput {
     readonly axiaengine_getIndicesLen: (a: number) => number;
     readonly axiaengine_getIndicesPtr: (a: number) => number;
     readonly axiaengine_getLastExportSkipStats: (a: number, b: number) => void;
+    readonly axiaengine_getNonManifoldEdgeSegments: (a: number, b: number) => void;
     readonly axiaengine_getNormalsLen: (a: number) => number;
     readonly axiaengine_getNormalsPtr: (a: number) => number;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
