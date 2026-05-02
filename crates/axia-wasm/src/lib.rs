@@ -695,6 +695,51 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-040 Stage 2 — analytic ray-to-edge distance.
+    ///
+    /// For an edge with `Edge.curve = Some(AnalyticCurve)`, returns the
+    /// perpendicular distance (mm) from the cursor ray line to the
+    /// closest point on the analytic curve, plus the closest point.
+    ///
+    /// Return shape: `Float64Array([distance, px, py, pz, t_on_curve])`
+    /// — 5 elements. On failure (no curve / edge invalid / Newton diverges),
+    /// returns an empty array. Caller (TS) treats empty as "fall back to
+    /// polyline BVH" per P25.4.
+    ///
+    /// `ray_dir` MUST be unit length. Caller is responsible for
+    /// normalisation. (Avoids per-call sqrt at the boundary.)
+    #[wasm_bindgen(js_name = "edgeRayDistance")]
+    pub fn edge_ray_distance(
+        &self,
+        edge_id: u32,
+        ox: f64,
+        oy: f64,
+        oz: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+    ) -> Vec<f64> {
+        use axia_geo::curves::distance::ray_to_curve_distance;
+        use axia_geo::EdgeId;
+        let eid = EdgeId::new(edge_id);
+        let curve = match self.scene.mesh.edge_curve(eid) {
+            Some(c) => c.clone(),
+            None => return Vec::new(),
+        };
+        let ray_origin = glam::DVec3::new(ox, oy, oz);
+        let ray_dir = glam::DVec3::new(dx, dy, dz);
+        match ray_to_curve_distance(&curve, ray_origin, ray_dir, &self.scene.mesh) {
+            Some(r) => vec![
+                r.distance,
+                r.point_on_curve.x,
+                r.point_on_curve.y,
+                r.point_on_curve.z,
+                r.t_on_curve,
+            ],
+            None => Vec::new(),
+        }
+    }
+
     /// Set an analytic Arc curve on an existing edge.
     ///
     /// Arguments encode the Arc variant of `AnalyticCurve`:

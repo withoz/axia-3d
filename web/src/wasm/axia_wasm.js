@@ -53,6 +53,24 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * 모든 XIA ID 목록 (정렬됨).
+     * MCP `list_xias` capability 의 backbone (ADR-041 P26.1, ADR-042).
+     * @returns {Uint32Array}
+     */
+    allXiaIds() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_allXiaIds(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Dry-run analysis of merge candidates — does NOT mutate the mesh.
      *
      * For each pair of faces in the selection that shares an edge, checks:
@@ -808,6 +826,42 @@ export class AxiaEngine {
     edgeLength(edge_id_raw) {
         const ret = wasm.axiaengine_edgeLength(this.__wbg_ptr, edge_id_raw);
         return ret;
+    }
+    /**
+     * ADR-040 Stage 2 — analytic ray-to-edge distance.
+     *
+     * For an edge with `Edge.curve = Some(AnalyticCurve)`, returns the
+     * perpendicular distance (mm) from the cursor ray line to the
+     * closest point on the analytic curve, plus the closest point.
+     *
+     * Return shape: `Float64Array([distance, px, py, pz, t_on_curve])`
+     * — 5 elements. On failure (no curve / edge invalid / Newton diverges),
+     * returns an empty array. Caller (TS) treats empty as "fall back to
+     * polyline BVH" per P25.4.
+     *
+     * `ray_dir` MUST be unit length. Caller is responsible for
+     * normalisation. (Avoids per-call sqrt at the boundary.)
+     * @param {number} edge_id
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @returns {Float64Array}
+     */
+    edgeRayDistance(edge_id, ox, oy, oz, dx, dy, dz) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_edgeRayDistance(retptr, this.__wbg_ptr, edge_id, ox, oy, oz, dx, dy, dz);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * ADR-016 §2 (Path B) — Erase + Re-synthesize.
@@ -2387,6 +2441,32 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * 씬의 high-level 요약 JSON. AI / MCP first-look query 에 적합.
+     * 형식:
+     * ```json
+     * { "xia_count": 3, "face_count": 12, "edge_count": 24,
+     *   "free_edge_count": 0, "constraint_count": 0,
+     *   "engine_version": "0.1.0", "schema_version": "1.0.0" }
+     * ```
+     * @returns {string}
+     */
+    sceneSummary() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_sceneSummary(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Phase 2 — auto_intersect_on_draw 토글. 기본 true.
      * @param {boolean} enabled
      */
@@ -3223,6 +3303,50 @@ export class DeltaBuffers {
     }
 }
 if (Symbol.dispose) DeltaBuffers.prototype[Symbol.dispose] = DeltaBuffers.prototype.free;
+
+/**
+ * Engine build version (axia-wasm crate version). For audit logs and
+ * drift detection. ADR-041 P26.2.
+ * @returns {string}
+ */
+export function engine_version() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.engine_version(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        deferred1_0 = r0;
+        deferred1_1 = r1;
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * MCP capability schema version (semver). MCP server must satisfy
+ * `^MAJOR.MINOR` against this string. ADR-041 P26.2.
+ * @returns {string}
+ */
+export function schema_version() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.schema_version(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        deferred1_0 = r0;
+        deferred1_1 = r1;
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

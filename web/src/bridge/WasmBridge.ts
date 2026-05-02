@@ -385,6 +385,12 @@ type AxiaEngineExtended = AxiaEngine & {
   group_count?(): number;
   // ADR-028 Phase A — Analytic Edge Curve API
   tessellateEdge?(edgeId: number, chordTol: number): Float64Array;
+  // ADR-040 Stage 2 — analytic ray-to-edge distance
+  edgeRayDistance?(
+    edgeId: number,
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+  ): Float64Array;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -591,6 +597,40 @@ export class WasmBridge {
     if (!this.engine) return new Float64Array(0);
     const flat = this.engine.tessellateEdge(edgeId, chordTol);
     return flat instanceof Float64Array ? flat : new Float64Array(flat as number[]);
+  }
+
+  /**
+   * ADR-040 Stage 2 — Analytic ray ↔ edge distance.
+   *
+   * For an edge with an attached AnalyticCurve, returns the perpendicular
+   * distance (mm) from the cursor ray line to the closest point on the
+   * curve, plus that point. Returns `null` when:
+   *   - edge has no analytic curve (plain LINE without curve attachment)
+   *   - WASM engine missing
+   *   - Newton diverged (caller should fall back to polyline BVH per P25.4)
+   *
+   * `rayDir` MUST be unit length — caller's responsibility to normalise.
+   */
+  edgeRayDistance(
+    edgeId: number,
+    rayOrigin: { x: number; y: number; z: number },
+    rayDir: { x: number; y: number; z: number },
+  ): { distance: number; point: { x: number; y: number; z: number }; t: number } | null {
+    if (!this.engine || !this.engine.edgeRayDistance) return null;
+    const result = this.engine.edgeRayDistance(
+      edgeId,
+      rayOrigin.x, rayOrigin.y, rayOrigin.z,
+      rayDir.x, rayDir.y, rayDir.z,
+    );
+    const arr = result instanceof Float64Array
+      ? result
+      : new Float64Array(result as number[]);
+    if (arr.length !== 5) return null;
+    return {
+      distance: arr[0]!,
+      point: { x: arr[1]!, y: arr[2]!, z: arr[3]! },
+      t: arr[4]!,
+    };
   }
 
   /**

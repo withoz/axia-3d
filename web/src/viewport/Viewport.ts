@@ -24,6 +24,10 @@ import { getTextureCache } from '../materials/TextureCache';
 import { computeUVsFromBuffers, UVProjectionParams } from '../materials/UVProjection';
 import { WasmBridge, DeltaBuffers } from '../bridge/WasmBridge';
 import { frameScheduler } from '../core/FrameScheduler';
+import {
+  pixelToWorldPerspective,
+  pixelToWorldOrthographic,
+} from './screen_threshold';
 
 // Phase C1: Patch Three.js Mesh/BufferGeometry with BVH-accelerated raycast.
 // All raycaster.intersectObjects calls now use BVH automatically on meshes
@@ -1943,6 +1947,83 @@ export class Viewport {
       return { type: 'edge', hit: edgeHit };
     }
     return { type: 'face', hit: faceHit };
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // ADR-040 Stage 3 — Analytic ray-curve hover refinement (P25)
+  // ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Convert a screen-space pixel threshold to a world-space distance at
+   * the depth of `worldPoint`. ADR-040 P25.3 — keeps the hover threshold
+   * camera-distance-independent.
+   *
+   * Returns the world distance (mm) such that a perpendicular offset of
+   * exactly that amount appears as `pixels` pixels on screen at the
+   * given depth.
+   */
+  pixelToWorldAtDepth(worldPoint: THREE.Vector3, pixels: number): number {
+    const cam = this.activeCamera as THREE.PerspectiveCamera;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (cam.isPerspectiveCamera) {
+      const camToPoint = worldPoint.clone().sub(cam.position).length();
+      return pixelToWorldPerspective(pixels, rect.height, {
+        fovDeg: cam.fov,
+        cameraToPointDistance: camToPoint,
+      });
+    }
+    const ortho = cam as unknown as THREE.OrthographicCamera;
+    return pixelToWorldOrthographic(pixels, rect.height, {
+      topMinusBottom: ortho.top - ortho.bottom,
+      zoom: ortho.zoom || 1,
+    });
+  }
+
+  /**
+   * ADR-040 Stage 3 — refine an edge hover using analytic curve distance.
+   *
+   * Given an existing BVH hit on edge `edgeId`, calls the WASM analytic
+   * distance kernel and reports whether the ray is within `thresholdPx`
+   * (default 12px per P25.3 industrial CAD norm) of the *true* curve.
+   *
+   * Returns:
+   *   - `{ within: true, distance, point }` when analytic distance ≤ threshold
+   *   - `{ within: false, distance, point }` when the polyline-fooled hit
+   *     should be rejected (BVH false positive, P25 main case)
+   *   - `null` when the edge has no analytic curve OR Newton diverged
+   *     (P25.4 — caller keeps the polyline result as-is)
+   */
+  refineEdgeHoverWithAnalytic(
+    bridge: WasmBridge,
+    edgeId: number,
+    screenX: number,
+    screenY: number,
+    thresholdPx: number = 12,
+  ): { within: boolean; distance: number; point: THREE.Vector3 } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((screenX - rect.left) / rect.width) * 2 - 1,
+      -((screenY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(mouse, this.activeCamera as THREE.PerspectiveCamera);
+    const ray = this.raycaster.ray;
+    // Three.js raycaster sets a unit direction; defensive normalise.
+    const dir = ray.direction.clone().normalize();
+
+    const result = bridge.edgeRayDistance(
+      edgeId,
+      { x: ray.origin.x, y: ray.origin.y, z: ray.origin.z },
+      { x: dir.x, y: dir.y, z: dir.z },
+    );
+    if (!result) return null;
+
+    const point = new THREE.Vector3(result.point.x, result.point.y, result.point.z);
+    const worldThreshold = this.pixelToWorldAtDepth(point, thresholdPx);
+    return {
+      within: result.distance <= worldThreshold,
+      distance: result.distance,
+      point,
+    };
   }
 
   /** Perform a raycast pick on wireframe edges.

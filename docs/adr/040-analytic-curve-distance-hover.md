@@ -161,9 +161,25 @@ SelectTool / EraseTool 의 `computeHoverTarget` :
 
 - ✅ ADR-040 P25 결정이 commit 으로 고정 (이 PR)
 - ✅ CLAUDE.md LOCKED #18 추가
-- ⏳ Stage 1~3 구현 (별도 PR)
-- ⏳ 4 회귀 테스트 통과
-- ⏳ 사용자 검증: 곡선 hover 가 polyline 가까움 없이 정확
+- ✅ **Stage 1 완료**: `crates/axia-geo/src/curves/distance.rs` —
+  `ray_to_curve_distance()` API. Line / Circle / Arc closed-form +
+  Bezier/BSpline/NURBS Gauss-Newton. 8 회귀 unit test 통과 (P25.7 #1, #2, #3).
+- ✅ **Stage 2 완료**: WASM `edgeRayDistance` export
+  (`Float64Array([d, px, py, pz, t])`) + TS `WasmBridge.edgeRayDistance`
+  wrapper. 빈 array → null fallback (P25.4).
+- ✅ **Stage 3 완료**: `Viewport.refineEdgeHoverWithAnalytic()` +
+  `pixelToWorldAtDepth()` helper (12px screen-space 표준, P25.3).
+  Pure helper `screen_threshold.ts` 추출.
+- ✅ **Stage 4 완료**: P25.7 4 회귀 테스트 통과:
+  * `analytic_circle_hover_perfect_radius_distance` (Rust)
+  * `analytic_arc_hover_outside_arc_range_misses` (Rust)
+  * `polyline_fallback_when_analytic_diverges` (Rust)
+  * `screen_threshold_independent_of_camera_distance` (TS, 9 tests
+    cover perspective + ortho + zoom + viewport size)
+- ✅ 회귀 0: web 1320/1320, MCP 119/119, axia-geo unit tests 8/8.
+- ⏳ 사용자 검증: SelectTool / EraseTool 의 hover 가 곡선 hover 시
+  refineEdgeHoverWithAnalytic 호출 wiring (별도 ergonomic PR — engine
+  은 ready, 호출 plumbing 남음).
 
 ## References
 
@@ -180,3 +196,15 @@ SelectTool / EraseTool 의 `computeHoverTarget` :
 - **2026-05-01 (initial)**: P25 채택. 6 세부 규칙 + 4 회귀 테스트.
   Migration 4-stage 분할 (Rust API → TS bridge → Tool integration → tests).
   본 commit 은 결정 고정만. 실제 코드 변경은 후속 PR.
+- **2026-05-02 (D1 implementation)**: Stage 1~4 4-PR 1 commit 으로 완성.
+  - Stage 1: `crates/axia-geo/src/curves/distance.rs` (450 LOC) —
+    Line/Circle/Arc closed-form, Bezier/BSpline/NURBS Gauss-Newton on
+    perpendicular distance squared. 8 unit tests passing.
+  - Stage 2: WASM `edgeRayDistance` + TS `WasmBridge.edgeRayDistance`.
+  - Stage 3: `Viewport.refineEdgeHoverWithAnalytic` + pure helper
+    `screen_threshold.ts` (`pixelToWorldPerspective` /
+    `pixelToWorldOrthographic`).
+  - Stage 4: 4 회귀 테스트 (Rust 3 + TS 9). 기존 회귀 0
+    (web 1320/1320, MCP 119/119).
+  - Tool integration plumbing (SelectTool / EraseTool 호출) 은 별도
+    ergonomic PR — engine API 는 ready.

@@ -33,6 +33,7 @@ pub mod bspline;
 pub mod nurbs;
 pub mod intersect;
 pub mod conic;
+pub mod distance;
 
 use anyhow::Result;
 use glam::DVec3;

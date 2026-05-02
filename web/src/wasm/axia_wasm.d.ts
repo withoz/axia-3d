@@ -20,6 +20,11 @@ export class AxiaEngine {
      */
     add_faces_to_group(group_id: number, face_ids: Uint32Array): boolean;
     /**
+     * 모든 XIA ID 목록 (정렬됨).
+     * MCP `list_xias` capability 의 backbone (ADR-041 P26.1, ADR-042).
+     */
+    allXiaIds(): Uint32Array;
+    /**
      * Dry-run analysis of merge candidates — does NOT mutate the mesh.
      *
      * For each pair of faces in the selection that shares an edge, checks:
@@ -301,6 +306,22 @@ export class AxiaEngine {
      * two endpoints. Zero on missing / degenerate edge.
      */
     edgeLength(edge_id_raw: number): number;
+    /**
+     * ADR-040 Stage 2 — analytic ray-to-edge distance.
+     *
+     * For an edge with `Edge.curve = Some(AnalyticCurve)`, returns the
+     * perpendicular distance (mm) from the cursor ray line to the
+     * closest point on the analytic curve, plus the closest point.
+     *
+     * Return shape: `Float64Array([distance, px, py, pz, t_on_curve])`
+     * — 5 elements. On failure (no curve / edge invalid / Newton diverges),
+     * returns an empty array. Caller (TS) treats empty as "fall back to
+     * polyline BVH" per P25.4.
+     *
+     * `ray_dir` MUST be unit length. Caller is responsible for
+     * normalisation. (Avoids per-call sqrt at the boundary.)
+     */
+    edgeRayDistance(edge_id: number, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number): Float64Array;
     /**
      * ADR-016 §2 (Path B) — Erase + Re-synthesize.
      *
@@ -842,6 +863,16 @@ export class AxiaEngine {
      */
     scale_faces(face_ids: Uint32Array, cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): boolean;
     /**
+     * 씬의 high-level 요약 JSON. AI / MCP first-look query 에 적합.
+     * 형식:
+     * ```json
+     * { "xia_count": 3, "face_count": 12, "edge_count": 24,
+     *   "free_edge_count": 0, "constraint_count": 0,
+     *   "engine_version": "0.1.0", "schema_version": "1.0.0" }
+     * ```
+     */
+    sceneSummary(): string;
+    /**
      * Phase 2 — auto_intersect_on_draw 토글. 기본 true.
      */
     setAutoIntersectOnDraw(enabled: boolean): void;
@@ -1135,6 +1166,18 @@ export class DeltaBuffers {
     isTopologyChanged(): boolean;
 }
 
+/**
+ * Engine build version (axia-wasm crate version). For audit logs and
+ * drift detection. ADR-041 P26.2.
+ */
+export function engine_version(): string;
+
+/**
+ * MCP capability schema version (semver). MCP server must satisfy
+ * `^MAJOR.MINOR` against this string. ADR-041 P26.2.
+ */
+export function schema_version(): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -1144,6 +1187,7 @@ export interface InitOutput {
     readonly axiaengine_addDistanceConstraint: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_allXiaIds: (a: number, b: number) => void;
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_analyzeMergeCandidatesTol: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_applyOrphanRecovery: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1186,6 +1230,7 @@ export interface InitOutput {
     readonly axiaengine_edgeCurveKind: (a: number, b: number) => number;
     readonly axiaengine_edgeIsHoleBoundary: (a: number, b: number) => number;
     readonly axiaengine_edgeLength: (a: number, b: number) => number;
+    readonly axiaengine_edgeRayDistance: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_eraseEdgeResynthesize: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_exportSnapshotStrict: (a: number, b: number) => void;
     readonly axiaengine_export_snapshot: (a: number, b: number) => void;
@@ -1282,6 +1327,7 @@ export interface InitOutput {
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_scaleVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+    readonly axiaengine_sceneSummary: (a: number, b: number) => void;
     readonly axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
@@ -1327,6 +1373,8 @@ export interface InitOutput {
     readonly deltabuffers_getNormals: (a: number, b: number) => void;
     readonly deltabuffers_getPositions: (a: number, b: number) => void;
     readonly deltabuffers_isTopologyChanged: (a: number) => number;
+    readonly engine_version: (a: number) => void;
+    readonly schema_version: (a: number) => void;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_export2: (a: number, b: number) => number;
     readonly __wbindgen_export3: (a: number, b: number, c: number, d: number) => number;
