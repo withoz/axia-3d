@@ -103,6 +103,227 @@ fn load_burge_inspect_state() {
     );
 }
 
+/// Draw 20 overlapping RECTs in a controlled stress pattern. After each
+/// commit, snapshot:
+///   - face_count
+///   - non-manifold edge count
+///   - invariant violations
+///   - whether the rect's intended XIA actually owns ≥1 face
+///   - whether resynthesizeOrphanFaces would create a face here (= cycle
+///     was missed by the synthesis pipeline)
+///
+/// This is the user's request "직접 미리보기에 rect를 20개 겹쳐서
+/// 그려보세요" run as an automated test. Output goes to stderr so we
+/// can read the per-step diagnostic without driving the browser.
+#[test]
+fn stress_20_overlapping_rects_detailed_log() {
+    use axia_core::commands::CommandResult;
+
+    let mut scene = Scene::default();
+
+    // 20 rects in a deterministic overlapping pattern. Each rect is
+    // 1000x1000mm, centers walk along a 200mm offset diagonal so every
+    // rect overlaps its 4-5 nearest neighbors.
+    let mut rect_specs: Vec<(DVec3, f64, f64)> = Vec::with_capacity(20);
+    for i in 0..20 {
+        let t = i as f64;
+        rect_specs.push((
+            DVec3::new(t * 200.0, 0.0, t * 200.0),
+            1000.0 + (i % 3) as f64 * 200.0, // varying width
+            1000.0 + ((i + 1) % 3) as f64 * 200.0,
+        ));
+    }
+
+    let mut prev_face_count: usize = 0;
+    let mut anomalies: Vec<String> = Vec::new();
+
+    for (step, (center, w, h)) in rect_specs.iter().enumerate() {
+        let r = scene.execute(Command::DrawRect {
+            center: *center,
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            up: DVec3::new(0.0, 0.0, 1.0),
+            width: *w, height: *h,
+        });
+
+        let xia_id = match r {
+            CommandResult::EntityCreated(x) => Some(x),
+            _ => None,
+        };
+
+        let face_count = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .count();
+        let nm_edges = scene.mesh.collect_non_manifold_edges().len();
+        let inv = scene.mesh.verify_face_invariants();
+
+        // Did the new XIA actually claim ≥1 face?
+        let xia_has_face = xia_id
+            .and_then(|x| scene.xias.get(&x))
+            .map(|x| !x.face_ids.is_empty())
+            .unwrap_or(false);
+
+        // Probe for missed-cycle: count edges that would form a face if
+        // resynthesize were called. Cheap pre-check via collect_orphan
+        // pattern. We don't actually resynthesize (would mutate scene).
+        let orphan_topo_edges = scene.mesh.edges.iter()
+            .filter(|(eid, e)| {
+                if !e.is_active() { return false; }
+                if !e.class().is_topological() { return false; }
+                let (faces, _) = scene.mesh.get_faces_sharing_edge(*eid);
+                let any_active = faces.iter().any(|&f|
+                    scene.mesh.faces.contains(f) && scene.mesh.faces[f].is_active());
+                !any_active
+            })
+            .count();
+
+        eprintln!(
+            "step {:2}: faces {}→{} (Δ{:+}), nm_edges={}, viol={}, xia_has_face={}, orphan_edges={}, result_ok={}",
+            step + 1,
+            prev_face_count,
+            face_count,
+            face_count as i64 - prev_face_count as i64,
+            nm_edges,
+            inv.violations.len(),
+            xia_has_face,
+            orphan_topo_edges,
+            xia_id.is_some(),
+        );
+
+        // Anomaly detectors (the ones the user is debugging):
+        if !xia_id.is_some() {
+            anomalies.push(format!("step {}: RECT command FAILED", step + 1));
+        } else if !xia_has_face {
+            anomalies.push(format!(
+                "step {}: RECT XIA created but owns 0 faces (wireframe-only, the user's symptom)",
+                step + 1,
+            ));
+        }
+        if face_count < prev_face_count {
+            anomalies.push(format!(
+                "step {}: face count DECREASED ({}→{}) — pre-existing face was deactivated",
+                step + 1, prev_face_count, face_count,
+            ));
+        }
+        if orphan_topo_edges >= 3 {
+            anomalies.push(format!(
+                "step {}: ≥3 orphan topological edges — possible missed cycle",
+                step + 1,
+            ));
+        }
+
+        prev_face_count = face_count;
+    }
+
+    // Final state
+    eprintln!("\n=== FINAL ===");
+    eprintln!("xias: {}", scene.xias.len());
+    eprintln!("faces: {}", prev_face_count);
+    eprintln!("anomalies: {}", anomalies.len());
+    for a in &anomalies {
+        eprintln!("  ⚠ {}", a);
+    }
+
+    // Try resynthesize at the end — does it find any missed cycles?
+    let r = scene.resynthesize_orphan_faces();
+    eprintln!(
+        "post-stress resynthesize: created={}, aborted={}, elapsed_ms={:.2}",
+        r.created, r.aborted_by_time_budget, r.elapsed_ms,
+    );
+    if r.created > 0 {
+        eprintln!(
+            "  → engine missed {} cycle(s) during draw — resynthesize recovered them",
+            r.created,
+        );
+    }
+}
+
+/// Same 20-rect stress, but with `auto_intersect_on_draw = false` —
+/// matching the user's setting after they disabled auto-intersect to
+/// debug the original bug. If face loss reproduces here but not in the
+/// auto-intersect-ON variant, the bug is specific to the manual-intersect
+/// path's cycle synthesis in scene.rs.
+#[test]
+fn stress_20_overlapping_rects_auto_intersect_off() {
+    use axia_core::commands::CommandResult;
+
+    let mut scene = Scene::default();
+    scene.auto_intersect_on_draw = false;  // matches user's setting
+
+    let mut rect_specs: Vec<(DVec3, f64, f64)> = Vec::with_capacity(20);
+    for i in 0..20 {
+        let t = i as f64;
+        rect_specs.push((
+            DVec3::new(t * 200.0, 0.0, t * 200.0),
+            1000.0 + (i % 3) as f64 * 200.0,
+            1000.0 + ((i + 1) % 3) as f64 * 200.0,
+        ));
+    }
+
+    let mut prev_face_count: usize = 0;
+    let mut anomalies: Vec<String> = Vec::new();
+
+    for (step, (center, w, h)) in rect_specs.iter().enumerate() {
+        let r = scene.execute(Command::DrawRect {
+            center: *center,
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            up: DVec3::new(0.0, 0.0, 1.0),
+            width: *w, height: *h,
+        });
+        let xia_id = match r { CommandResult::EntityCreated(x) => Some(x), _ => None };
+
+        let face_count = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let nm_edges = scene.mesh.collect_non_manifold_edges().len();
+        let inv = scene.mesh.verify_face_invariants();
+        let xia_has_face = xia_id
+            .and_then(|x| scene.xias.get(&x))
+            .map(|x| !x.face_ids.is_empty())
+            .unwrap_or(false);
+        let orphan_topo_edges = scene.mesh.edges.iter()
+            .filter(|(eid, e)| {
+                if !e.is_active() { return false; }
+                if !e.class().is_topological() { return false; }
+                let (faces, _) = scene.mesh.get_faces_sharing_edge(*eid);
+                let any_active = faces.iter().any(|&f|
+                    scene.mesh.faces.contains(f) && scene.mesh.faces[f].is_active());
+                !any_active
+            })
+            .count();
+
+        eprintln!(
+            "step {:2}: faces {}→{} (Δ{:+}), nm_edges={}, viol={}, xia_has_face={}, orphan_edges={}, ok={}",
+            step + 1, prev_face_count, face_count,
+            face_count as i64 - prev_face_count as i64,
+            nm_edges, inv.violations.len(), xia_has_face, orphan_topo_edges,
+            xia_id.is_some(),
+        );
+
+        if !xia_id.is_some() {
+            anomalies.push(format!("step {}: RECT FAILED", step + 1));
+        } else if !xia_has_face {
+            anomalies.push(format!("step {}: WIREFRAME-ONLY RECT", step + 1));
+        }
+        if face_count < prev_face_count {
+            anomalies.push(format!(
+                "step {}: face DECREASE {}→{}", step + 1, prev_face_count, face_count,
+            ));
+        }
+        prev_face_count = face_count;
+    }
+
+    eprintln!("\n=== auto_intersect=OFF FINAL: faces={}, anomalies={} ===",
+        prev_face_count, anomalies.len());
+    for a in &anomalies { eprintln!("  ⚠ {}", a); }
+
+    let r = scene.resynthesize_orphan_faces();
+    eprintln!(
+        "post-stress resynthesize: created={}, elapsed_ms={:.2}",
+        r.created, r.elapsed_ms,
+    );
+    if r.created > 0 {
+        eprintln!("  → {} cycles missed during draw, recoverable via Resynthesize Faces", r.created);
+    }
+}
+
 /// Verify resynthesize_orphan_faces() doesn't panic on the user-supplied
 /// burge.xia state.
 #[test]
