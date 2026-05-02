@@ -314,6 +314,29 @@
   - `hover_owner_id_matches_click_result` — 같은 위치 hover ↔ click 일치
   - `multi_curve_hover_switches_owner_correctly`
 
+### 18. ADR-040 — AnalyticCurve Distance Hover (P25, 2026-05-01)
+- **새 원칙 P25**: `Edge.curve = Some(AnalyticCurve)` 인 edge 의 hover
+  거리는 polyline tessellation 이 아닌 곡선 자체에 대해 측정. 정확한
+  closed-form / Newton 기반 distance.
+- **P25.1 우선순위**: Analytic curve evaluate → polyline BVH fallback →
+  null hover
+- **P25.2 Curve 별 distance**: Line (cross product 3D), Circle (projection
+  + radial), Arc (+ angle clamp), Bezier/BSpline/NURBS (Newton on
+  `|R(s) - C(t)|²` minimization)
+- **P25.3 Screen-space threshold**: 12px (산업 표준), cursor depth 기준
+  world distance 변환
+- **P25.4 Fallback**: Newton 발산 / NaN → polyline BVH (warning 누적)
+- **P25.5 Performance**: 2-stage — BVH 후보 edges + analytic 거리 refine
+  (~100x 감소)
+- **P25.7 4 회귀 테스트**:
+  - `analytic_circle_hover_perfect_radius_distance` — polyline gap 흡수
+  - `analytic_arc_hover_outside_arc_range_misses` — angle clamp
+  - `polyline_fallback_when_analytic_diverges`
+  - `screen_threshold_independent_of_camera_distance`
+- **Migration 4-stage**: Rust API (`ray_to_curve_distance`) → TS bridge
+  (`pickEdgeAnalytic`) → Tool integration → 회귀 테스트. 본 ADR 은
+  결정 고정만 — 실제 코드는 별도 PR.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
