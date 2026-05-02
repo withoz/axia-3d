@@ -883,16 +883,19 @@ export class AxiaEngine {
     /**
      * ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
      *
-     * Sweeps free orphan edges in the mesh for closed simple cycles and
-     * synthesizes a face for each. Returns number of new faces created.
-     * Use after multi-step edits where face synthesis missed a cycle
-     * (e.g. drew RECT → drew other shapes → original face's boundary now
-     * looks closed but engine didn't reconnect it).
+     * Sweeps free orphan edges for closed simple cycles and synthesizes a
+     * face for each. Returns JSON `{"created":N,"abortedByTimeBudget":bool,
+     * "elapsedMs":N}` so the UI can distinguish "completed" vs "partial,
+     * re-run for the rest" outcomes.
+     *
+     * Soft 100ms budget — for pathological scenes (10k+ orphan edges) the
+     * sweep aborts cleanly between rounds; already-found faces stay
+     * committed. Call again to continue.
      *
      * Call site triggers a topology-change so the next syncMesh rebuilds
      * everything (face buffers, edge wireframe, snap cache).
      */
-    resynthesizeOrphanFaces(): number;
+    resynthesizeOrphanFaces(): string;
     /**
      * Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
      * axis `(origin, dir)` into a surface of revolution. Returns the new
@@ -1384,7 +1387,7 @@ export interface InitOutput {
     readonly axiaengine_repairNonManifoldEdges: (a: number, b: number) => void;
     readonly axiaengine_resolveAllConstraints: (a: number) => number;
     readonly axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
-    readonly axiaengine_resynthesizeOrphanFaces: (a: number) => number;
+    readonly axiaengine_resynthesizeOrphanFaces: (a: number, b: number) => void;
     readonly axiaengine_revolveProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

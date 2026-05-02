@@ -1250,10 +1250,23 @@ export class ToolManager {
       // Use when previous edits left closed line cycles without an
       // associated face (visible as wireframe-only). Sweeps free orphan
       // edges for cycles via DFS and synthesizes a face for each.
-      const created = this.bridge.resynthesizeOrphanFaces();
-      if (created > 0) {
+      // 100ms soft budget — partial sweep returns abortedByTimeBudget=true
+      // and the user can re-run to continue.
+      const r = this.bridge.resynthesizeOrphanFaces();
+      if (r.created > 0) {
         this.syncMesh();
-        Toast.info(`🔄 면 재합성 — 새 면 ${created}개 생성`, 3500);
+        if (r.abortedByTimeBudget) {
+          Toast.warning(
+            `🔄 면 재합성 — 새 면 ${r.created}개 생성 (${r.elapsedMs.toFixed(0)}ms 시간 한도 도달, ` +
+            `남은 cycle 처리하려면 다시 실행)`,
+            6000,
+          );
+        } else {
+          Toast.info(
+            `🔄 면 재합성 — 새 면 ${r.created}개 생성 (${r.elapsedMs.toFixed(0)}ms)`,
+            3500,
+          );
+        }
       } else {
         Toast.info('재합성할 닫힌 라인 cycle 이 없습니다', 2500);
       }

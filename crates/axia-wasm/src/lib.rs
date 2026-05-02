@@ -4206,22 +4206,28 @@ impl AxiaEngine {
 
     /// ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
     ///
-    /// Sweeps free orphan edges in the mesh for closed simple cycles and
-    /// synthesizes a face for each. Returns number of new faces created.
-    /// Use after multi-step edits where face synthesis missed a cycle
-    /// (e.g. drew RECT → drew other shapes → original face's boundary now
-    /// looks closed but engine didn't reconnect it).
+    /// Sweeps free orphan edges for closed simple cycles and synthesizes a
+    /// face for each. Returns JSON `{"created":N,"abortedByTimeBudget":bool,
+    /// "elapsedMs":N}` so the UI can distinguish "completed" vs "partial,
+    /// re-run for the rest" outcomes.
+    ///
+    /// Soft 100ms budget — for pathological scenes (10k+ orphan edges) the
+    /// sweep aborts cleanly between rounds; already-found faces stay
+    /// committed. Call again to continue.
     ///
     /// Call site triggers a topology-change so the next syncMesh rebuilds
     /// everything (face buffers, edge wireframe, snap cache).
     #[wasm_bindgen(js_name = "resynthesizeOrphanFaces")]
-    pub fn resynthesize_orphan_faces(&mut self) -> u32 {
-        let n = self.scene.resynthesize_orphan_faces() as u32;
-        if n > 0 {
+    pub fn resynthesize_orphan_faces(&mut self) -> String {
+        let r = self.scene.resynthesize_orphan_faces();
+        if r.created > 0 {
             self.mark_topology_changed();
             self.invalidate_cache();
         }
-        n
+        format!(
+            r#"{{"created":{},"abortedByTimeBudget":{},"elapsedMs":{:.2}}}"#,
+            r.created, r.aborted_by_time_budget, r.elapsed_ms,
+        )
     }
 
     /// ADR-047 R-track — non-manifold edge endpoints for rendering overlay.

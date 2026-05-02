@@ -1038,22 +1038,30 @@ export class WasmBridge {
    * ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
    *
    * Sweeps free orphan edges for closed cycles and synthesizes a face for
-   * each. Returns number of faces created (0 if nothing to resynthesize).
+   * each. Returns the engine's report so the UI can show different Toast
+   * messages for "completed N faces" vs "100ms budget hit; re-run for rest".
    *
    * Use case: previous edits left a closed line skeleton without an
    * associated face (visible as wireframe only). Triggering this gives
    * the user a manual "fix it" button without redrawing.
    */
-  resynthesizeOrphanFaces(): number {
-    const e = this.engine as { resynthesizeOrphanFaces?: () => number } | null;
-    if (!e?.resynthesizeOrphanFaces) return 0;
+  resynthesizeOrphanFaces(): { created: number; abortedByTimeBudget: boolean; elapsedMs: number } {
+    const fallback = { created: 0, abortedByTimeBudget: false, elapsedMs: 0 };
+    const e = this.engine as { resynthesizeOrphanFaces?: () => string | number } | null;
+    if (!e?.resynthesizeOrphanFaces) return fallback;
     try {
-      const n = e.resynthesizeOrphanFaces();
-      if (n > 0) this.bufferCache.dirty = true;
-      return n;
+      const raw = e.resynthesizeOrphanFaces();
+      // Backward-compat: older WASM returned u32 (count).
+      if (typeof raw === 'number') {
+        if (raw > 0) this.bufferCache.dirty = true;
+        return { created: raw, abortedByTimeBudget: false, elapsedMs: 0 };
+      }
+      const parsed = JSON.parse(raw) as { created: number; abortedByTimeBudget: boolean; elapsedMs: number };
+      if (parsed.created > 0) this.bufferCache.dirty = true;
+      return parsed;
     } catch (err) {
       console.error('[WasmBridge] resynthesizeOrphanFaces failed:', err);
-      return 0;
+      return fallback;
     }
   }
 

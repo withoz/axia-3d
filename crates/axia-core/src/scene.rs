@@ -1784,21 +1784,44 @@ impl Scene {
     /// DrawLine intermediate states / cross-cuts may leak). The user can
     /// trigger this manually instead of redrawing.
     ///
-    /// Returns the number of new faces synthesized (0 if no cycles found).
+    /// **Soft time budget — 100ms.** For pathological scenes (10k+ orphan
+    /// edges, deep cycle topology) the DFS could otherwise freeze the UI.
+    /// When the budget is exceeded between rounds, the sweep aborts cleanly:
+    /// already-created faces stay (committed), the user gets a Toast hint to
+    /// re-run for the remainder. Normal scenes (< 1k orphan edges) finish
+    /// well under 1ms and never hit the budget.
+    ///
+    /// **Sequential numbering** — multiple new faces in the same sweep get
+    /// names like `"Resynthesized 1/3"`, `"Resynthesized 2/3"`, … so users
+    /// can distinguish them in the Outliner. A single new face is just
+    /// `"Resynthesized"`.
+    ///
     /// Wraps in a single transaction so Ctrl+Z reverts the whole sweep.
-    pub fn resynthesize_orphan_faces(&mut self) -> usize {
+    pub fn resynthesize_orphan_faces(&mut self) -> ResynthesizeReport {
+        const TIME_BUDGET_MS: f64 = 100.0;
+        let t_start = std::time::Instant::now();
+
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
         let mut created: Vec<FaceId> = Vec::new();
-        self.mop_up_orphan_cycles_via_dfs(&mut created);
+        let aborted = self.mop_up_orphan_cycles_via_dfs_budgeted(
+            &mut created,
+            t_start,
+            TIME_BUDGET_MS,
+        );
 
         let n = created.len();
         if n > 0 {
-            // Each new face becomes its own "Resynthesized" XIA so the user
-            // can see / select / annotate it like any other face.
-            for fid in &created {
-                let xia_id = self.create_xia("Resynthesized".to_string());
+            // Sequential numbering for clarity in the Outliner — single
+            // sweep = single batch label.
+            for (i, fid) in created.iter().enumerate() {
+                let name = if n == 1 {
+                    "Resynthesized".to_string()
+                } else {
+                    format!("Resynthesized {}/{}", i + 1, n)
+                };
+                let xia_id = self.create_xia(name);
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.face_ids.push(*fid);
                 }
@@ -1811,7 +1834,104 @@ impl Scene {
             // history isn't polluted with a no-op entry.
             self.transactions.cancel();
         }
-        n
+
+        ResynthesizeReport {
+            created: n,
+            aborted_by_time_budget: aborted,
+            elapsed_ms: t_start.elapsed().as_secs_f64() * 1000.0,
+        }
+    }
+
+    /// Time-budgeted variant of `mop_up_orphan_cycles_via_dfs`. Returns
+    /// `true` if the sweep aborted because the budget was exceeded between
+    /// rounds (already-found cycles in `all_created_faces` are still valid).
+    fn mop_up_orphan_cycles_via_dfs_budgeted(
+        &mut self,
+        all_created_faces: &mut Vec<FaceId>,
+        t_start: std::time::Instant,
+        budget_ms: f64,
+    ) -> bool {
+        // Re-implementation of mop_up_orphan_cycles_via_dfs with a between-
+        // rounds time check. Mirrors that function — keep them in sync.
+        use std::collections::{HashMap, HashSet};
+        const MAX_ROUNDS: usize = 8;
+        for _round in 0..MAX_ROUNDS {
+            // Soft budget — abort cleanly between rounds.
+            if t_start.elapsed().as_secs_f64() * 1000.0 > budget_ms {
+                return true;
+            }
+
+            let orphan_edges: Vec<(EdgeId, axia_geo::VertId, axia_geo::VertId)> = self.mesh.edges.iter()
+                .filter_map(|(eid, e)| {
+                    if !e.is_active() { return None; }
+                    if !e.class().is_topological() { return None; }
+                    let (faces, _) = self.mesh.get_faces_sharing_edge(eid);
+                    let any_active = faces.iter().any(|&f|
+                        self.mesh.faces.contains(f) && self.mesh.faces[f].is_active());
+                    if any_active { None } else { Some((eid, e.v_small(), e.v_large())) }
+                })
+                .collect();
+            if orphan_edges.is_empty() { return false; }
+
+            let mut adj: HashMap<axia_geo::VertId, Vec<(axia_geo::VertId, EdgeId)>> = HashMap::new();
+            for &(eid, va, vb) in &orphan_edges {
+                adj.entry(va).or_default().push((vb, eid));
+                adj.entry(vb).or_default().push((va, eid));
+            }
+
+            let mut cycle_verts: Option<Vec<axia_geo::VertId>> = None;
+            'outer: for &(_, va, _) in &orphan_edges {
+                let mut path: Vec<axia_geo::VertId> = vec![va];
+                let mut visited: HashSet<axia_geo::VertId> = HashSet::new();
+                visited.insert(va);
+                if let Some(cyc) = dfs_find_cycle(&adj, va, va, &mut path, &mut visited, 0, 32) {
+                    if cyc.len() >= 3 {
+                        cycle_verts = Some(cyc);
+                        break 'outer;
+                    }
+                }
+            }
+            let cycle_verts = match cycle_verts {
+                Some(c) => c,
+                None => return false,
+            };
+
+            let positions: Vec<DVec3> = cycle_verts.iter()
+                .filter_map(|&v| self.mesh.vertex_pos(v).ok())
+                .collect();
+            if positions.len() < 3 { return false; }
+
+            let mut poly_normal = DVec3::ZERO;
+            for i in 0..positions.len() {
+                let p = positions[i];
+                let q = positions[(i + 1) % positions.len()];
+                poly_normal.x += (p.y - q.y) * (p.z + q.z);
+                poly_normal.y += (p.z - q.z) * (p.x + q.x);
+                poly_normal.z += (p.x - q.x) * (p.y + q.y);
+            }
+            let surface_hint = self.epoch.as_ref()
+                .and_then(|e| e.surface_normal)
+                .unwrap_or(DVec3::Z);
+            let cycle_verts_oriented = if poly_normal.dot(surface_hint) >= 0.0 {
+                cycle_verts.clone()
+            } else {
+                let mut rev = cycle_verts.clone();
+                rev.reverse();
+                rev
+            };
+
+            match self.mesh.add_face_with_holes(&cycle_verts_oriented, &[], self.default_material) {
+                Ok(new_face) => {
+                    if !all_created_faces.contains(&new_face) {
+                        all_created_faces.push(new_face);
+                    }
+                }
+                Err(_) => {
+                    return false;
+                }
+            }
+        }
+        false
     }
 
     fn mop_up_orphan_cycles_via_dfs(&mut self, all_created_faces: &mut Vec<FaceId>) {
@@ -3458,6 +3578,20 @@ fn dfs_find_cycle(
         visited.remove(&next);
     }
     None
+}
+
+/// Outcome of [`Scene::resynthesize_orphan_faces`] — distinguishes the
+/// "ran to completion" vs "hit time budget; partial work" case so callers
+/// can show different Toast messages.
+#[derive(Debug, Clone, Copy)]
+pub struct ResynthesizeReport {
+    /// Number of new faces synthesized.
+    pub created: usize,
+    /// `true` when the soft time budget aborted the sweep mid-way; user
+    /// should call again to continue from current state.
+    pub aborted_by_time_budget: bool,
+    /// Wall-clock duration of this sweep in milliseconds.
+    pub elapsed_ms: f64,
 }
 
 #[derive(Clone, Debug)]

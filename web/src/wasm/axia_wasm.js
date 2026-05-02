@@ -2434,19 +2434,34 @@ export class AxiaEngine {
     /**
      * ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
      *
-     * Sweeps free orphan edges in the mesh for closed simple cycles and
-     * synthesizes a face for each. Returns number of new faces created.
-     * Use after multi-step edits where face synthesis missed a cycle
-     * (e.g. drew RECT → drew other shapes → original face's boundary now
-     * looks closed but engine didn't reconnect it).
+     * Sweeps free orphan edges for closed simple cycles and synthesizes a
+     * face for each. Returns JSON `{"created":N,"abortedByTimeBudget":bool,
+     * "elapsedMs":N}` so the UI can distinguish "completed" vs "partial,
+     * re-run for the rest" outcomes.
+     *
+     * Soft 100ms budget — for pathological scenes (10k+ orphan edges) the
+     * sweep aborts cleanly between rounds; already-found faces stay
+     * committed. Call again to continue.
      *
      * Call site triggers a topology-change so the next syncMesh rebuilds
      * everything (face buffers, edge wireframe, snap cache).
-     * @returns {number}
+     * @returns {string}
      */
     resynthesizeOrphanFaces() {
-        const ret = wasm.axiaengine_resynthesizeOrphanFaces(this.__wbg_ptr);
-        return ret >>> 0;
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_resynthesizeOrphanFaces(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
