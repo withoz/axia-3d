@@ -87,6 +87,9 @@ SnapManager / SnapVisual / ToolContext).
 3. `external_vertex_not_excluded_by_active_chain`
 4. `clearing_exclude_list_restores_snap`
 5. `findNearestEndpoint_also_respects_exclude`
+6. `snap_excluded_falls_back_to_grid_or_ground` — guards against the
+   "snap broke at this vertex" failure mode where filtering the top
+   candidate accidentally drops all lower-priority candidates too.
 
 `web/src/tools/DrawLineTool.test.ts > getExcludedSnapPoints (ADR-047 P32)`:
 1. returns empty when no chain is active
@@ -117,6 +120,8 @@ last-resort safety net (ADR-019/021 invariants intact).
 
 ## Future-proofing
 
+### Adoption
+
 Adopt `getExcludedSnapPoints` in any tool that maintains chain state:
 - DrawPolygonTool (pending corners)
 - DrawFreehandTool (sampled trail)
@@ -124,6 +129,32 @@ Adopt `getExcludedSnapPoints` in any tool that maintains chain state:
 - Future SketchSession multi-line tools
 
 Each tool decides its own exclusion list — SnapManager is policy-agnostic.
+
+### Engine error refinement (separate PR)
+
+`crates/axia-geo/src/operations/face_split.rs` currently fails the
+duplicate-vertex case with a generic `bail!("sub-face boundary has
+duplicate vertex…")`. With the P32 input-layer guard in place this
+codepath is now **unreachable in normal user flow** — but it remains the
+last-resort safety net for programmatic callers (MCP, scripts, future
+import paths).
+
+Recommended follow-up: replace the generic bail with a typed
+`MeshOpError::DuplicateVertexInBoundary { face_id, dup_vert }` so
+TypeScript can render a friendly Toast ("자기 자신을 통과하는 chain 입니다
+— 다른 vertex 를 클릭해주세요") instead of surfacing the engine string.
+
+Out of P32's scope (this ADR is the input-layer fix). Tracked separately
+to keep PRs single-purpose.
+
+### Fallback semantics (regression test 6)
+
+When the excluded vertex was the highest-priority candidate, snap MUST
+fall through to lower-priority candidates (grid / onFace / nearest /
+ground) rather than silently returning `null`. A null result at a
+location where the user expects a snap target reads as "snap broke" —
+worse UX than the original bug. Guarded by
+`snap_excluded_falls_back_to_grid_or_ground`.
 
 ## Anchor to ADR-046 P31
 

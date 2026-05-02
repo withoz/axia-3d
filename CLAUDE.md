@@ -631,16 +631,21 @@
   `snap.setExcludePositions(...)` 로 위임.
 - **No findSnap signature change** — 33+ caller 영향 0. setter API 로
   out-of-band 설정.
-- **9 회귀 테스트** (절대 #[ignore] 금지):
-  * SnapManager.exclude.test.ts (5):
+- **10 회귀 테스트** (절대 #[ignore] 금지):
+  * SnapManager.exclude.test.ts (6):
     chain_vertex_excluded_from_snap_during_polyline /
     chain_start_remains_snappable_for_close /
     external_vertex_not_excluded_by_active_chain /
     clearing_exclude_list_restores_snap /
-    findNearestEndpoint_also_respects_exclude
+    findNearestEndpoint_also_respects_exclude /
+    snap_excluded_falls_back_to_grid_or_ground (silent-null 회귀 차단)
   * DrawLineTool.test.ts > getExcludedSnapPoints (ADR-047 P32) (4):
     returns empty when no chain / returns empty for fresh chainStart only /
     excludes mid-waypoints but NOT chainStart / returns clones
+- **별도 PR 예정**: `face_split.rs` duplicate-vertex `bail!` 를
+  `MeshOpError::DuplicateVertexInBoundary` 로 typed 화. 현재 input-layer
+  가드로 unreachable 이지만 MCP / 스크립트 / import 경로의 last-resort
+  safety net 유지 + TS Toast 친절화 (별도 commit).
 - **ADR-046 P31 Pillar 2 (Precision Visibility) 보강**: snap 의 예측
   가능성이 first-class. "왜 면이 안 만들어지지?" → precision-visibility
   failure 였음.

@@ -120,4 +120,39 @@ describe('ADR-047 P32 — SnapManager.setExcludePositions', () => {
       expect(result.position.distanceTo(vB)).toBeGreaterThan(1e-3);
     }
   });
+
+  /**
+   * ADR-047 P32 — when the excluded vertex was the top candidate, snap must
+   * gracefully fall back to lower-priority candidates (grid here, but in
+   * production also onFace / nearest). NEVER silently return null at a
+   * location where some valid snap exists, otherwise the user perceives
+   * "snap suddenly stopped working" right where they need it most.
+   *
+   * This test guards against a regression where someone might "fix" the
+   * filter to short-circuit findSnap once the highest-priority candidate
+   * is excluded, dropping all lower-priority candidates with it.
+   */
+  it('snap_excluded_falls_back_to_grid_or_ground', () => {
+    // Enable grid snap with a spacing of 0.1 NDC. Grid points within ±0.05
+    // of cursor in NDC coords yield a snap target.
+    snap.setMode('grid', true);
+    (snap as unknown as { config: { gridSpacing: number } }).config.gridSpacing = 0.1;
+
+    // Exclude vB (the would-be top-priority endpoint).
+    snap.setExcludePositions([vB]);
+
+    const sB = worldToScreen(vB);
+    // Provide a groundPoint exactly at vB so the grid snap rounds to (0,0,0)
+    // = same world location as vB — cursor still gets a target.
+    const result = snap.findSnap(sB.x, sB.y, camera, canvas, vB.clone());
+
+    // The excluded endpoint must NOT win.
+    if (result?.type === 'endpoint') {
+      expect(result.position.distanceTo(vB)).toBeGreaterThan(1e-3);
+    }
+    // But SOMETHING (grid here) should still snap — we must not leave the
+    // cursor stranded with no target at this location.
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('grid');
+  });
 });
