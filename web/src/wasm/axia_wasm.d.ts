@@ -733,6 +733,35 @@ export class AxiaEngine {
      */
     normalizeForImport(options_json: string): string;
     /**
+     * ADR-027 Phase G3 — NURBS Boolean (UI integration, 2026-05-XX).
+     *
+     * Performs a parameter-space Boolean operation between two
+     * `BSplineSurface` faces. Both faces must carry an attached
+     * `Edge.surface = Some(BSplineSurface)` (kind = 7) — fails with
+     * `kind:"unsupported_surface"` otherwise.
+     *
+     * Returns JSON describing the resulting trim loops:
+     * ```json
+     * {
+     *   "kind": "ok",
+     *   "op": "union" | "subtract" | "intersect",
+     *   "intersection_chains": <int>,
+     *   "trim_a_count": <int>,
+     *   "trim_b_count": <int>,
+     *   "warning_open_chains_skipped": <bool>,
+     *   "tangent_contact": <bool>,
+     *   "is_disjoint": <bool>
+     * }
+     * ```
+     * On failure: `{"kind":"error","reason":"<short_id>","detail":"..."}`.
+     *
+     * MVP — caller (TS) consumes the JSON for Toast feedback. Mesh-level
+     * trim application is deferred to follow-up (would require per-face
+     * trim_loops storage on `AnalyticSurface::BSplineSurface`, which
+     * currently lives only on `NURBSSurface`).
+     */
+    nurbsBoolean(face_a: number, face_b: number, op: string): string;
+    /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
      * plane_normal: 참조 평면 법선 (Y-up = 0,1,0)
      */
@@ -1307,6 +1336,7 @@ export interface InitOutput {
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_nurbsBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;

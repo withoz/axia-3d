@@ -391,6 +391,8 @@ type AxiaEngineExtended = AxiaEngine & {
     ox: number, oy: number, oz: number,
     dx: number, dy: number, dz: number,
   ): Float64Array;
+  // ADR-027 Phase G3 — NURBS Boolean (UI integration)
+  nurbsBoolean?(faceA: number, faceB: number, op: string): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -632,6 +634,37 @@ export class WasmBridge {
       t: arr[4]!,
     };
   }
+
+  /**
+   * ADR-027 Phase G3 — NURBS Boolean on two BSplineSurface faces.
+   *
+   * Both faces must carry an attached `Edge.surface = Some(BSplineSurface)`
+   * (kind = 7). Returns the parsed JSON envelope, or `null` if the engine
+   * is missing.
+   *
+   * Result shape:
+   *   - `{ kind: 'ok', op, intersection_chains, trim_a_count, trim_b_count,
+   *      warning_open_chains_skipped, tangent_contact, is_disjoint }`
+   *   - `{ kind: 'error', reason, detail }`
+   *
+   * MVP — returns trim metadata for UI Toast feedback. Mesh-level trim
+   * application is deferred (would require BSplineSurface trim_loops
+   * storage; currently lives on NURBSSurface only).
+   */
+  nurbsBoolean(
+    faceA: number,
+    faceB: number,
+    op: 'union' | 'subtract' | 'intersect',
+  ): NurbsBooleanResult | null {
+    if (!this.engine || !this.engine.nurbsBoolean) return null;
+    const json = this.engine.nurbsBoolean(faceA, faceB, op);
+    try {
+      return JSON.parse(json) as NurbsBooleanResult;
+    } catch {
+      return { kind: 'error', reason: 'parse', detail: 'engine returned non-JSON' };
+    }
+  }
+
 
   /**
    * Set an Arc curve on an existing edge. Returns true if successful.
@@ -3035,6 +3068,38 @@ export interface BooleanResult {
   totalVerts?: number;
   totalFaces?: number;
 }
+
+/**
+ * ADR-027 Phase G3 — NURBS Boolean (UI integration) result envelope.
+ *
+ * Returned by `WasmBridge.nurbsBoolean(...)`. Two shapes:
+ *
+ * - `kind: 'ok'`  — operation completed; metadata describes the trim
+ *   loops that the result *would* receive when mesh-level trim
+ *   application lands (deferred MVP).
+ * - `kind: 'error'` — engine refused; UI translates `reason` to
+ *   user-friendly Korean Toast.
+ */
+export type NurbsBooleanResult =
+  | {
+      kind: 'ok';
+      op: 'union' | 'subtract' | 'intersect';
+      intersection_chains: number;
+      trim_a_count: number;
+      trim_b_count: number;
+      warning_open_chains_skipped: boolean;
+      tangent_contact: boolean;
+      is_disjoint: boolean;
+    }
+  | {
+      kind: 'error';
+      reason:
+        | 'unsupported_surface'
+        | 'bad_op'
+        | 'engine'
+        | 'parse';
+      detail: string;
+    };
 
 export interface XiaInfo {
   empty: boolean;

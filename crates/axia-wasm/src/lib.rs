@@ -1361,6 +1361,95 @@ impl AxiaEngine {
         ok
     }
 
+    /// ADR-027 Phase G3 — NURBS Boolean (UI integration, 2026-05-XX).
+    ///
+    /// Performs a parameter-space Boolean operation between two
+    /// `BSplineSurface` faces. Both faces must carry an attached
+    /// `Edge.surface = Some(BSplineSurface)` (kind = 7) — fails with
+    /// `kind:"unsupported_surface"` otherwise.
+    ///
+    /// Returns JSON describing the resulting trim loops:
+    /// ```json
+    /// {
+    ///   "kind": "ok",
+    ///   "op": "union" | "subtract" | "intersect",
+    ///   "intersection_chains": <int>,
+    ///   "trim_a_count": <int>,
+    ///   "trim_b_count": <int>,
+    ///   "warning_open_chains_skipped": <bool>,
+    ///   "tangent_contact": <bool>,
+    ///   "is_disjoint": <bool>
+    /// }
+    /// ```
+    /// On failure: `{"kind":"error","reason":"<short_id>","detail":"..."}`.
+    ///
+    /// MVP — caller (TS) consumes the JSON for Toast feedback. Mesh-level
+    /// trim application is deferred to follow-up (would require per-face
+    /// trim_loops storage on `AnalyticSurface::BSplineSurface`, which
+    /// currently lives only on `NURBSSurface`).
+    #[wasm_bindgen(js_name = "nurbsBoolean")]
+    pub fn nurbs_boolean(&self, face_a: u32, face_b: u32, op: &str) -> String {
+        use axia_geo::{AnalyticSurface, FaceId};
+        use axia_geo::surfaces::ssi::boolean::{nurbs_boolean, BooleanOp};
+
+        let fa = FaceId::new(face_a);
+        let fb = FaceId::new(face_b);
+
+        let parsed_op = match op {
+            "union" => BooleanOp::Union,
+            "subtract" => BooleanOp::Subtract,
+            "intersect" => BooleanOp::Intersect,
+            other => {
+                return format!(
+                    r#"{{"kind":"error","reason":"bad_op","detail":"unknown op '{}'"}}"#,
+                    other,
+                );
+            }
+        };
+
+        // Extract the two BSpline surface descriptions.
+        let surf_a = self.scene.mesh.face_surface(fa);
+        let surf_b = self.scene.mesh.face_surface(fb);
+        let (a_grid, a_ku, a_kv, a_du, a_dv) = match surf_a {
+            Some(AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v }) => {
+                (ctrl_grid, knots_u, knots_v, *deg_u as usize, *deg_v as usize)
+            }
+            _ => {
+                return r#"{"kind":"error","reason":"unsupported_surface","detail":"face A is not a BSplineSurface"}"#.to_string();
+            }
+        };
+        let (b_grid, b_ku, b_kv, b_du, b_dv) = match surf_b {
+            Some(AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v }) => {
+                (ctrl_grid, knots_u, knots_v, *deg_u as usize, *deg_v as usize)
+            }
+            _ => {
+                return r#"{"kind":"error","reason":"unsupported_surface","detail":"face B is not a BSplineSurface"}"#.to_string();
+            }
+        };
+
+        let tol = 1e-3_f64; // ADR-035 P20.E #2 1e-3 mm
+        match nurbs_boolean(
+            a_grid, a_ku, a_kv, a_du, a_dv,
+            b_grid, b_ku, b_kv, b_du, b_dv,
+            parsed_op, tol,
+        ) {
+            Ok(r) => format!(
+                r#"{{"kind":"ok","op":"{}","intersection_chains":{},"trim_a_count":{},"trim_b_count":{},"warning_open_chains_skipped":{},"tangent_contact":{},"is_disjoint":{}}}"#,
+                op,
+                r.intersection.len(),
+                r.trim_a.len(),
+                r.trim_b.len(),
+                r.warning_open_chains_skipped,
+                r.tangent_contact,
+                r.is_disjoint(),
+            ),
+            Err(e) => {
+                let safe = e.to_string().replace('"', "'");
+                format!(r#"{{"kind":"error","reason":"engine","detail":"{}"}}"#, safe)
+            }
+        }
+    }
+
     /// Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
     /// 4 = Cone, 5 = Torus, 6 = BezierPatch, 7 = BSplineSurface,
     /// 8 = NURBSSurface, -1 = invalid face id.

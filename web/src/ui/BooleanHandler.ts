@@ -5,10 +5,58 @@
  * Performs boolean operations on selected face groups via WASM bridge.
  */
 
-import { WasmBridge } from '../bridge/WasmBridge';
+import { WasmBridge, NurbsBooleanResult } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { Toast } from './Toast';
 import { debugLog } from '../utils/debug';
+
+/** ADR-027 Phase G3 — `faceSurfaceKind` codes that pick the NURBS path. */
+const SURFACE_KIND_BSPLINE = 7;
+
+/** Format a successful NURBS Boolean result for the Toast. */
+function formatNurbsBooleanOk(
+  r: Extract<NurbsBooleanResult, { kind: 'ok' }>,
+): string {
+  const opNameKo =
+    r.op === 'union' ? '합집합' : r.op === 'subtract' ? '차집합' : '교집합';
+  if (r.is_disjoint) {
+    return `NURBS ${opNameKo}: 두 곡면이 교차하지 않습니다 (변경 없음).`;
+  }
+  const lines = [
+    `NURBS ${opNameKo} (Phase G3 MVP) — 분석 완료`,
+    `  • 교차 체인: ${r.intersection_chains}`,
+    `  • Trim 루프 A: ${r.trim_a_count}, B: ${r.trim_b_count}`,
+  ];
+  if (r.warning_open_chains_skipped) {
+    lines.push('  ⚠ 열린 체인 일부 생략 (closed chain만 MVP 지원)');
+  }
+  if (r.tangent_contact) {
+    lines.push('  ⚠ 접선 접촉 감지');
+  }
+  lines.push(
+    '  ℹ 메시 적용은 후속 PR — BSplineSurface trim_loops 저장소 추가 후 활성화',
+  );
+  return lines.join('\n');
+}
+
+function formatNurbsBooleanError(
+  r: Extract<NurbsBooleanResult, { kind: 'error' }>,
+): string {
+  switch (r.reason) {
+    case 'unsupported_surface':
+      return (
+        `NURBS Boolean — 선택한 면이 BSplineSurface가 아닙니다.\n` +
+        `(Phase G3 MVP는 NURBS surface 부착 face만 지원)\n\n` +
+        `Detail: ${r.detail}`
+      );
+    case 'bad_op':
+      return `NURBS Boolean — 잘못된 연산 이름. ${r.detail}`;
+    case 'engine':
+      return `NURBS Boolean 엔진 오류:\n${r.detail}`;
+    case 'parse':
+      return `NURBS Boolean — 엔진 응답 파싱 실패. WASM 빌드를 재확인하세요.`;
+  }
+}
 
 /** Rust 엔진 에러 메시지를 한국어 사용자 안내로 변환.
  *  - "hole" 포함 → Phase G 구멍 있는 면 거부 케이스
@@ -49,6 +97,49 @@ export function startBooleanOp(
       6000,
     );
     return;
+  }
+
+  // ADR-027 Phase G3 — NURBS Boolean fast-path.
+  // If exactly two faces selected AND both carry BSplineSurface, dispatch
+  // to the analytic NURBS path (parameter-space CSG via SSI + trim loops).
+  if (selection.length === 2 && bridge.faceSurfaceKind) {
+    const kindA = bridge.faceSurfaceKind(selection[0]);
+    const kindB = bridge.faceSurfaceKind(selection[1]);
+    if (kindA === SURFACE_KIND_BSPLINE && kindB === SURFACE_KIND_BSPLINE) {
+      debugLog(`[NURBS Bool] ${op}: face A=${selection[0]} B=${selection[1]}`);
+      const result =
+        typeof bridge.nurbsBoolean === 'function'
+          ? bridge.nurbsBoolean(selection[0], selection[1], op)
+          : null;
+      if (!result) {
+        Toast.error(
+          'NURBS Boolean 실패: WASM 엔진이 준비되지 않았습니다',
+          4000,
+        );
+        return;
+      }
+      if (result.kind === 'error') {
+        Toast.error(formatNurbsBooleanError(result), 8000);
+        debugLog(`[NURBS Bool] ${op} error: ${result.reason} — ${result.detail}`);
+        return;
+      }
+      Toast.info(formatNurbsBooleanOk(result), 6000);
+      debugLog(
+        `[NURBS Bool] ${op} ok: chains=${result.intersection_chains}, ` +
+          `trim_a=${result.trim_a_count}, trim_b=${result.trim_b_count}`,
+      );
+      // No syncMesh() — MVP does not mutate mesh state yet.
+      return;
+    }
+    // Mixed: one BSpline + one regular → not supported in this pass.
+    if (kindA === SURFACE_KIND_BSPLINE || kindB === SURFACE_KIND_BSPLINE) {
+      Toast.warning(
+        `NURBS Boolean: 두 면이 모두 BSplineSurface여야 합니다 ` +
+          `(현재 kindA=${kindA}, kindB=${kindB}). 일반 Mesh boolean으로 진행합니다.`,
+        5000,
+      );
+      // fall through to regular path
+    }
   }
 
   // ADR-007 Rev 2 — Sheet 면은 Wall과 다른 경로 (Sheet 2D Boolean).

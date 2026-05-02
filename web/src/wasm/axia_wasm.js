@@ -2082,6 +2082,56 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-027 Phase G3 — NURBS Boolean (UI integration, 2026-05-XX).
+     *
+     * Performs a parameter-space Boolean operation between two
+     * `BSplineSurface` faces. Both faces must carry an attached
+     * `Edge.surface = Some(BSplineSurface)` (kind = 7) — fails with
+     * `kind:"unsupported_surface"` otherwise.
+     *
+     * Returns JSON describing the resulting trim loops:
+     * ```json
+     * {
+     *   "kind": "ok",
+     *   "op": "union" | "subtract" | "intersect",
+     *   "intersection_chains": <int>,
+     *   "trim_a_count": <int>,
+     *   "trim_b_count": <int>,
+     *   "warning_open_chains_skipped": <bool>,
+     *   "tangent_contact": <bool>,
+     *   "is_disjoint": <bool>
+     * }
+     * ```
+     * On failure: `{"kind":"error","reason":"<short_id>","detail":"..."}`.
+     *
+     * MVP — caller (TS) consumes the JSON for Toast feedback. Mesh-level
+     * trim application is deferred to follow-up (would require per-face
+     * trim_loops storage on `AnalyticSurface::BSplineSurface`, which
+     * currently lives only on `NURBSSurface`).
+     * @param {number} face_a
+     * @param {number} face_b
+     * @param {string} op
+     * @returns {string}
+     */
+    nurbsBoolean(face_a, face_b, op) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(op, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_nurbsBoolean(retptr, this.__wbg_ptr, face_a, face_b, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
      * plane_normal: 참조 평면 법선 (Y-up = 0,1,0)
      * @param {number} edge_id_raw
