@@ -5,6 +5,9 @@
 # WASM binary (wasm-pack으로 재생성, 용량 큼)
 web/src/wasm/*.wasm
 
+# Node WASM target (ADR-041 — wasm-pack --target nodejs 산출물, 재빌드 가능)
+packages/axia-wasm-node/dist/
+
 # Node
 web/node_modules/
 

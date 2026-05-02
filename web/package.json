@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "wasm:build": "cd ../crates/axia-wasm && wasm-pack build --target web --out-dir ../../web/src/wasm",
+    "wasm:build:nodejs": "cd ../crates/axia-wasm && wasm-pack build --target nodejs --out-dir ../../packages/axia-wasm-node/dist",
     "wasm:verify": "node scripts/verify-wasm.mjs"
   },
   "dependencies": {

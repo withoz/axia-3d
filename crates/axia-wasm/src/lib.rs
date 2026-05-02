@@ -30,6 +30,42 @@ macro_rules! console_error {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// ADR-041 P26.2 — Schema Versioning (3-layer defense)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// SCHEMA_VERSION semantics (semver):
+//   MAJOR — capability removed OR ID semantics changed (breaks AI agents)
+//   MINOR — capability added (backward compatible)
+//   PATCH — bugfix, no API surface change
+//
+// MCP server checks `^MAJOR.MINOR` compatibility on handshake. Engine /
+// server mismatch → SchemaIncompatibleError before any tool call.
+//
+// ENGINE_VERSION = build identity (cargo version + short git sha when
+// available via build script — for now cargo version only).
+
+/// MCP capability schema version. Bumped when any capability surface
+/// (input/output schema, ID semantics, error codes) changes. See ADR-041 P26.2.
+const SCHEMA_VERSION: &str = "1.0.0";
+
+/// Engine build version (from Cargo.toml). For audit / drift detection.
+const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// MCP capability schema version (semver). MCP server must satisfy
+/// `^MAJOR.MINOR` against this string. ADR-041 P26.2.
+#[wasm_bindgen]
+pub fn schema_version() -> String {
+    SCHEMA_VERSION.to_string()
+}
+
+/// Engine build version (axia-wasm crate version). For audit logs and
+/// drift detection. ADR-041 P26.2.
+#[wasm_bindgen]
+pub fn engine_version() -> String {
+    ENGINE_VERSION.to_string()
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Delta Buffer Structure — For incremental updates to JavaScript
 // ════════════════════════════════════════════════════════════════════════════
 
