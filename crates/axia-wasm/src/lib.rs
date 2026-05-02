@@ -351,8 +351,18 @@ impl AxiaEngine {
         if !self.cache_dirty {
             return;
         }
-        match self.scene.export_mesh_buffers() {
-            Ok((p, n, i, fm, p64)) => {
+        // Self-healing variant — auto-deactivates earcut Ok([]) faces.
+        // Restores invariant "every active face has ≥1 emitted triangle".
+        // Without this the degenerate face stays active in mesh but
+        // invisible in render → user's "wireframe-only RECT" symptom.
+        match self.scene.export_mesh_buffers_self_healing() {
+            Ok(((p, n, i, fm, p64), removed)) => {
+                if removed > 0 {
+                    debug_log!(
+                        "[rebuild_cache] auto-deactivated {} earcut-empty face(s) — invariant restored",
+                        removed,
+                    );
+                }
                 self.cached_positions = p;
                 self.cached_positions_f64 = p64;
                 self.cached_normals = n;
@@ -4271,10 +4281,12 @@ impl AxiaEngine {
     pub fn get_last_export_skip_stats(&self) -> String {
         let s = self.scene.mesh.last_export_skip_stats();
         format!(
-            r#"{{"totalActiveFaces":{},"emitted":{},"corruptedOuterLoop":{},"outerTooShort":{},"vertexPosFailed":{},"corruptedInnerLoop":{},"earcutFailed":{},"analyticEmptyTess":{}}}"#,
+            r#"{{"totalActiveFaces":{},"emitted":{},"corruptedOuterLoop":{},"outerTooShort":{},"vertexPosFailed":{},"corruptedInnerLoop":{},"earcutFailed":{},"earcutEmpty":{},"lastEarcutEmptyFid":{},"lastEarcutEmptyOuterN":{},"analyticEmptyTess":{}}}"#,
             s.total_active_faces, s.emitted,
             s.corrupted_outer_loop, s.outer_too_short, s.vertex_pos_failed,
-            s.corrupted_inner_loop, s.earcut_failed, s.analytic_empty_tess,
+            s.corrupted_inner_loop, s.earcut_failed,
+            s.earcut_empty, s.last_earcut_empty_fid, s.last_earcut_empty_outer_n,
+            s.analytic_empty_tess,
         )
     }
 

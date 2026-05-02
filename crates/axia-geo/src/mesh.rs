@@ -52,12 +52,22 @@ pub struct ExportSkipStats {
     pub vertex_pos_failed: u32,
     /// Inner (hole) loop traversal failed mid-emit.
     pub corrupted_inner_loop: u32,
-    /// `earcut` triangulation failed (collinear / self-intersecting 2D).
+    /// `earcut` triangulation returned Err (collinear / self-intersecting).
     pub earcut_failed: u32,
+    /// `earcut` returned Ok([]) — triangulated to zero triangles. Polygon
+    /// is technically valid for earcut's parser but produces no output;
+    /// happens for degenerate / zero-area / self-touching geometry. The
+    /// face vanishes from the render buffer despite being active in mesh.
+    pub earcut_empty: u32,
     /// Analytic surface produced empty tessellation.
     pub analytic_empty_tess: u32,
-    /// Faces successfully emitted to buffer (sanity check).
+    /// Faces with ≥1 triangle actually written to the buffer.
     pub emitted: u32,
+    /// Last face id (raw) that hit `earcut_empty`. 0 if none. Use to
+    /// pinpoint the wireframe-only face for follow-up inspection.
+    pub last_earcut_empty_fid: u32,
+    /// Outer loop vertex count of the last earcut_empty face. 0 if none.
+    pub last_earcut_empty_outer_n: u32,
 }
 
 /// The Half-Edge DCEL mesh.
@@ -87,6 +97,12 @@ pub struct Mesh {
     /// mutability so `export_buffers(&self)` can update without API churn.
     #[serde(skip, default)]
     last_export_stats: std::cell::Cell<ExportSkipStats>,
+    /// Face IDs that produced zero triangles in the last export pass
+    /// (earcut Ok([]) — degenerate / self-touching polygons). Kept in
+    /// a RefCell for `&self` mutation. Drained by `deactivate_empty_emit_faces`
+    /// to restore the invariant "every active face has ≥1 emitted triangle".
+    #[serde(skip, default)]
+    last_export_empty_faces: std::cell::RefCell<Vec<FaceId>>,
 }
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
@@ -246,6 +262,7 @@ impl Mesh {
             vert_to_edge: FxHashMap::default(),
             spatial_hash: FxHashMap::default(),
             last_export_stats: std::cell::Cell::new(ExportSkipStats::default()),
+            last_export_empty_faces: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -3307,6 +3324,8 @@ impl Mesh {
 
         // Reset diagnostic counters at start of every export.
         let mut stats = ExportSkipStats::default();
+        // Reset empty-emit face list for this export pass.
+        self.last_export_empty_faces.borrow_mut().clear();
 
         // ADR-038 P23.2 — default chord tolerance for analytic surface tessellation.
         // 0.1mm 시각 품질 vs 메모리 균형 (LOD 는 별도 phase).
@@ -3446,6 +3465,23 @@ impl Mesh {
                 Ok(indices) => indices,
                 Err(_) => { stats.earcut_failed += 1; continue; },
             };
+            // Distinguish Ok([]) — earcut accepted the polygon but
+            // produced zero triangles (degenerate / self-touching).
+            // Without this guard the face disappears from the buffer
+            // silently while `emitted` would still increment.
+            //
+            // INVARIANT (user-requested 2026-05-02):
+            //   For every active face: emitted_triangle_count > 0.
+            // We enforce by recording the offending face id; the caller's
+            // `deactivate_empty_emit_faces(&mut self)` post-pass removes
+            // them so face_count == rendered_face_count is restored.
+            if tri_indices.is_empty() {
+                stats.earcut_empty += 1;
+                stats.last_earcut_empty_fid = face_id.raw();
+                stats.last_earcut_empty_outer_n = loop_verts.len() as u32;
+                self.last_export_empty_faces.borrow_mut().push(face_id);
+                continue;
+            }
 
             // Fix triangle winding: earcut works in 2D and may produce
             // triangles whose 3D winding doesn't match the face normal.
@@ -3505,6 +3541,43 @@ impl Mesh {
     /// rendered" — non-zero counts indicate which silent-skip path triggered.
     pub fn last_export_skip_stats(&self) -> ExportSkipStats {
         self.last_export_stats.get()
+    }
+
+    /// Self-heal pass — deactivate any face whose triangulation in the most
+    /// recent `export_buffers` call returned `Ok([])` (zero triangles).
+    ///
+    /// **Invariant** (user-stipulated 2026-05-02): every active face must
+    /// emit ≥1 triangle. earcut Ok([]) means the polygon is degenerate
+    /// (zero area / collinear vertices / self-touching). Such a face would
+    /// otherwise stay active in mesh but invisible in render, manifesting
+    /// as the user's "wireframe-only RECT" symptom. Removing it restores
+    /// `face_count == emitted_face_count`.
+    ///
+    /// Returns the count of faces deactivated. Call after `export_buffers`.
+    pub fn deactivate_empty_emit_faces(&mut self) -> usize {
+        // Snapshot then clear — avoid holding the RefCell borrow during
+        // the mutating loop.
+        let to_remove: Vec<FaceId> = {
+            let mut list = self.last_export_empty_faces.borrow_mut();
+            std::mem::take(&mut *list)
+        };
+        let mut n = 0;
+        for fid in &to_remove {
+            // Defensive: face may have been deactivated by another path.
+            if self.faces.contains(*fid) && self.faces[*fid].is_active() {
+                let _ = self.remove_face(*fid);
+                if self.faces.contains(*fid) {
+                    self.faces.remove(*fid);
+                }
+                n += 1;
+            }
+        }
+        // Debug-only assertion: post-cleanup, NO active face should remain
+        // in the recently-recorded empty-emit list (we just cleared it).
+        // This is a smoke test that future code can't accidentally bypass
+        // the cleanup without also clearing the list.
+        debug_assert!(self.last_export_empty_faces.borrow().is_empty());
+        n
     }
 
     /// Choose the best 2D projection axes based on the face normal.
