@@ -58,6 +58,15 @@ export class EraseTool implements ITool {
   /** ADR-016 §2 hint dedup — only show toast once per hovered hole edge. */
   private lastHintedHoleEdge: number | null = null;
 
+  /**
+   * ADR-039 P24.2 stickiness — 같은 hover 상태면 overlay rebuild skip.
+   *
+   * Key 형식: "kind:id:flagMask" (e.g. "edge:42:1" = edge 42, amber preview).
+   * BVH 의 1px jitter 로 같은 owner 가 다시 hit 되면 overlay 재생성 비용
+   * 절감 + 시각적 안정 (깜빡임 차단).
+   */
+  private lastHoverKey: string | null = null;
+
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
   }
@@ -257,6 +266,9 @@ export class EraseTool implements ITool {
     this.dragActive = false;
     this.accumulatedFaces.clear();
     this.accumulatedEdges.clear();
+    // ADR-039 P24.3 — tool 변경 시 hover stickiness state clear.
+    this.lastHoverKey = null;
+    this.lastHintedHoleEdge = null;
   }
 
   // ════════════════════════════════════════════════
@@ -297,15 +309,20 @@ export class EraseTool implements ITool {
 
     if (picked?.type === 'edge' && picked.hit.index != null && this.ctx.edgeMap) {
       const segIndex = Math.floor(picked.hit.index / 2);
-      // ADR-019 Phase 1 hover preview 정책:
-      //   default (Shift 없음): edge 클릭 = re-resolve (amber preview).
-      //   cascadeOnly (Shift): cascade-delete (red preview, 기존).
-      // 기존 cyan = "merge 가능" 의미 폐기 (ADR-019 Phase 3 — 의미 재정의는
-      // 별도 commit). 모든 default-mode edge hover 는 amber.
       const edgeId = this.ctx.edgeMap[segIndex];
       const showAmber = !e.shiftKey && edgeId != null;
-      this.showEdgeHover(segIndex, false, showAmber);
+
+      // ADR-039 P24.2 stickiness — 같은 (edgeId, amber state) 면 skip.
+      // 다른 face 의 hover 가 남아있을 수 있으니 removeFaceHover 는 항상 호출.
+      const key = `edge:${edgeId ?? -1}:${showAmber ? 1 : 0}`;
       this.removeFaceHover();
+      if (key === this.lastHoverKey) return;
+      this.lastHoverKey = key;
+
+      // ADR-037 P22.5 / ADR-039 P24 — owner ID promote.
+      // showEdgeHover 가 edgeId 의 모든 segment 를 강조 → 곡선 (circle 등)
+      // 도 한 덩어리로 보임.
+      this.showEdgeHover(edgeId ?? null, segIndex, false, showAmber);
       return;
     }
     // 다른 edge 또는 비-edge 로 이동 시 hint dedup 리셋.
@@ -314,19 +331,40 @@ export class EraseTool implements ITool {
     if (picked?.type === 'face' && picked.hit.faceIndex != null && picked.hit.faceIndex >= 0) {
       const fid = this.ctx.getFaceId(picked.hit.faceIndex);
       if (fid >= 0) {
-        this.showFaceHover(fid);
+        // ADR-039 P24.2 stickiness — 같은 face 면 rebuild skip.
+        const key = `face:${fid}:0`;
         this.removeEdgeHover();
+        if (key === this.lastHoverKey) return;
+        this.lastHoverKey = key;
+        this.showFaceHover(fid);
         return;
       }
     }
 
-    // 어떤 것도 hit 안 됨
-    this.removeFaceHover();
-    this.removeEdgeHover();
+    // 어떤 것도 hit 안 됨 — 이전 hover state clear.
+    if (this.lastHoverKey !== null) {
+      this.removeFaceHover();
+      this.removeEdgeHover();
+      this.lastHoverKey = null;
+    }
   }
 
+  /**
+   * Edge hover highlight — ADR-037 P22.5 / ADR-039 P24 적용.
+   *
+   * 이전 (segment 단위): `showEdgeHover(segIndex, ...)` 가 1개 segment 만
+   * 빨갛게 강조 → 곡선 (circle 64-segment 등) hover 시 1/64 만 보임 →
+   * "조각조각" 인지 발생.
+   *
+   * 이후 (owner ID 단위): edgeId 를 받아 그 EdgeId 의 **모든 segment** 를
+   * 단일 LineSegments 로 강조. ADR-037 P22.5 의 균일 promotion 시각 적용.
+   *
+   * @param edgeId — 강조할 owner EdgeId (raw u32). null = 강조 해제만.
+   * @param seedSegIndex — 호환용 fallback (edgeMap 미연결 시 단일 segment).
+   */
   private showEdgeHover(
-    segIndex: number,
+    edgeId: number | null,
+    seedSegIndex: number,
     willMerge: boolean = false,
     willResynth: boolean = false,
   ): void {
@@ -334,23 +372,50 @@ export class EraseTool implements ITool {
     const edgeLines = this.ctx.bridge.getEdgeLines();
     if (!edgeLines) return;
 
-    const base = segIndex * 6;
-    if (base + 5 >= edgeLines.length) return;
+    // P22.5 — edgeId 가 valid 면 그 EdgeId 의 모든 segment 수집.
+    // edgeMap 미연결 (legacy) 또는 edgeId null 시 seedSegIndex 만 강조.
+    const edgeMap = this.ctx.edgeMap;
+    const segIndices: number[] = [];
+    if (edgeId != null && edgeMap && edgeMap.length > 0) {
+      for (let s = 0; s < edgeMap.length; s++) {
+        if (edgeMap[s] === edgeId) segIndices.push(s);
+      }
+    }
+    if (segIndices.length === 0) {
+      // Fallback: seed segment 만 (edgeMap 없거나 매칭 0)
+      if (seedSegIndex < 0) return;
+      segIndices.push(seedSegIndex);
+    }
+
+    // 모든 segment 의 두 vertex 를 단일 buffer 에 모음 (LineSegments 형식).
+    const positions = new Float32Array(segIndices.length * 6);
+    let writeIdx = 0;
+    for (const seg of segIndices) {
+      const base = seg * 6;
+      if (base + 5 >= edgeLines.length) continue;
+      positions[writeIdx]     = edgeLines[base];
+      positions[writeIdx + 1] = edgeLines[base + 1];
+      positions[writeIdx + 2] = edgeLines[base + 2];
+      positions[writeIdx + 3] = edgeLines[base + 3];
+      positions[writeIdx + 4] = edgeLines[base + 4];
+      positions[writeIdx + 5] = edgeLines[base + 5];
+      writeIdx += 6;
+    }
+    if (writeIdx === 0) return;
+    // Trim if some segments were OOB
+    const final = writeIdx === positions.length ? positions : positions.slice(0, writeIdx);
 
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(
-      new Float32Array([
-        edgeLines[base], edgeLines[base + 1], edgeLines[base + 2],
-        edgeLines[base + 3], edgeLines[base + 4], edgeLines[base + 5],
-      ]), 3
-    ));
+    geo.setAttribute('position', new THREE.BufferAttribute(final, 3));
+
     const color = willMerge ? MERGE_PREVIEW_COLOR
       : willResynth ? RESYNTH_PREVIEW_COLOR
       : ERASE_COLOR;
     const mat = new THREE.LineBasicMaterial({
       color, linewidth: 2, depthTest: false,
     });
-    this.edgeHoverHighlight = new THREE.Line(geo, mat);
+    // ADR-039 P24: LineSegments (was Line) — 여러 disconnected segment 지원.
+    this.edgeHoverHighlight = new THREE.LineSegments(geo, mat) as unknown as THREE.Line;
     this.edgeHoverHighlight.renderOrder = 998;
     this.ctx.viewport.scene.add(this.edgeHoverHighlight);
   }
