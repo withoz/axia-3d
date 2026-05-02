@@ -355,6 +355,12 @@ impl AxiaEngine {
         // Ok([]) faces internally so the user never sees a wireframe-only
         // RECT. Invariant locked by debug_assert_eq inside the export
         // pipeline (see Mesh::export_buffers CONTRACT comment).
+        //
+        // Cache update policy (2026-05-02):
+        //   - Ok: replace cache fields atomically inside this branch only
+        //   - Err: KEEP previous cache intact for debugging — caller can
+        //     still inspect last-good buffers, and a brief render of stale
+        //     geometry beats a flicker-to-empty during a transient failure.
         match self.scene.export_mesh_buffers() {
             Ok((p, n, i, fm, p64)) => {
                 self.cached_positions = p;
@@ -363,12 +369,11 @@ impl AxiaEngine {
                 self.cached_indices = i;
                 self.cached_face_map = fm;
             }
-            Err(_) => {
-                self.cached_positions.clear();
-                self.cached_positions_f64.clear();
-                self.cached_normals.clear();
-                self.cached_indices.clear();
-                self.cached_face_map.clear();
+            Err(_e) => {
+                // Intentionally retain previous cache. The error already
+                // surfaced via Result; resetting here would erase the
+                // last-good state useful for `getLastExportSkipStats` /
+                // user diagnostics during a session.
             }
         }
         // Edge lines are computed from DCEL topology (not from triangle geometry).

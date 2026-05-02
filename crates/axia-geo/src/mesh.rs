@@ -3325,6 +3325,12 @@ impl Mesh {
     /// Any future change to this method MUST preserve this order. The
     /// `debug_assert_eq!` after deactivation locks the invariant in
     /// debug builds (release auto-corrects via the deactivation pass).
+    ///
+    /// **Guarantee on returned buffers**: `face_map` contains exactly
+    /// one entry per emitted triangle, and the *set* of distinct face
+    /// IDs in `face_map` equals the count of `is_active() && is_visible()`
+    /// faces in the mesh. NO active face with zero triangles can leak
+    /// past this boundary.
     pub fn export_buffers(&mut self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
         let result = self.export_buffers_inner()?;
         // Step 3 — deactivate any face whose triangulation produced 0
