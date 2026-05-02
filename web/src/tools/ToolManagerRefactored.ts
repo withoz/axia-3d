@@ -327,6 +327,21 @@ export class ToolManager {
       newToolObj.onActivate();
     }
 
+    // ADR-039 P24 — Hover wiring (SelectTool 만 적용, 다른 도구는 별도 PR).
+    //   이전 hover unsubscribe + clear → 새 tool 의 hover subscribe.
+    this._unsubscribeHover?.();
+    this._unsubscribeHover = null;
+    // 이전 tool 의 잔여 hover tint 정리
+    this.viewport.setHoveredOwner?.(null);
+    if (name === 'select' && newToolObj && 'onHoverChange' in newToolObj) {
+      const selectTool = newToolObj as unknown as {
+        onHoverChange: (cb: (target: { kind: 'edge' | 'face'; id: number } | null) => void) => () => void;
+      };
+      this._unsubscribeHover = selectTool.onHoverChange(target => {
+        this.viewport.setHoveredOwner?.(target);
+      });
+    }
+
     // Restore selection for transform tools
     if (selectedBefore.length > 0) {
       for (const fid of selectedBefore) {
@@ -334,6 +349,9 @@ export class ToolManager {
       }
     }
   }
+
+  /** ADR-039 P24 hover listener unsubscribe. Tool 변경 시 정리. */
+  private _unsubscribeHover: (() => void) | null = null;
 
   setAxisLock(axis: 'x' | 'y' | 'z' | null): void {
     this.axisLock = axis;

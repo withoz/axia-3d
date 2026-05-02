@@ -201,6 +201,16 @@ export class Viewport {
    */
   private analyticFaceIds: Set<number> = new Set();
 
+  /**
+   * ADR-039 P24.5 — 현재 hover target 과 복원용 색상 cache.
+   *
+   * Face hover 시 colorAttribute 를 in-place 로 tint, hover 해제 시 원본
+   * 복원. Edge hover 는 별도 overlay (별도 PR) — 본 commit 은 face only.
+   */
+  private _hoveredOwner: { kind: 'edge' | 'face'; id: number } | null = null;
+  /** faceId → vertex 별 원본 [r, g, b] 저장 (hover 해제 시 복원). */
+  private _hoverFaceColorCache: Map<number, Float32Array> = new Map();
+
   constructor(container: HTMLElement) {
     this.container = container;
 
@@ -2038,6 +2048,107 @@ export class Viewport {
     const index = frontMesh.geometry.getIndex();
     if (!index) return null;
     return new Uint32Array(index.array as Uint32Array);
+  }
+
+  /**
+   * ADR-039 P24.5 — Hover target 시각 적용.
+   *
+   * SelectTool.onHoverChange 가 호출 — stickiness 통과한 변경에만 들어옴.
+   *
+   * Face hover: 해당 face 의 모든 vertex color 를 hover tint 로 변경.
+   *             원본은 `_hoverFaceColorCache` 에 저장, hover 해제 시 복원.
+   *
+   * Edge hover: 본 commit 은 state 저장만 (실제 시각은 별도 PR — overlay
+   *             LineSegments 추가 필요).
+   *
+   * null: 이전 hover 시각 복원.
+   */
+  setHoveredOwner(target: { kind: 'edge' | 'face'; id: number } | null): void {
+    // 1. 이전 hover 의 시각 복원
+    if (this._hoveredOwner?.kind === 'face') {
+      this._restoreFaceHoverTint(this._hoveredOwner.id);
+    }
+    // (edge restore: 별도 PR)
+
+    // 2. 새 hover 적용
+    this._hoveredOwner = target;
+    if (target?.kind === 'face') {
+      this._applyFaceHoverTint(target.id);
+    }
+    // (edge apply: 별도 PR)
+  }
+
+  /** 진단 / 테스트용 — 현재 hover target 조회. */
+  getHoveredOwner(): { kind: 'edge' | 'face'; id: number } | null {
+    return this._hoveredOwner;
+  }
+
+  /**
+   * Face F 의 모든 vertex 에 hover tint 적용.
+   *
+   * Tint 정책 (P24.5 권장):
+   *   r' = clamp(r * 0.7 + 0.4, 0, 1)
+   *   g' = clamp(g * 0.7 + 0.4, 0, 1)
+   *   b' = clamp(b * 0.7 + 0.6, 0, 1)
+   * → 약간 밝아지면서 파란빛 가미 (산업 CAD 표준 hover 색감).
+   *
+   * 원본 색상은 `_hoverFaceColorCache[faceId]` 에 [vertexIdx, r, g, b]
+   * 형식으로 저장되어 hover 해제 시 정확히 복원.
+   */
+  private _applyFaceHoverTint(faceId: number): void {
+    if (!this.colorAttribute || this.faceMap.length === 0
+        || this.indexBuffer.length === 0) {
+      return;
+    }
+    const colorArr = this.colorAttribute.array as Float32Array;
+    const idxArr = this.indexBuffer;
+
+    // 본 face 의 모든 vertex 수집 (중복 제거)
+    const verts = new Set<number>();
+    for (let tri = 0; tri < this.faceMap.length; tri++) {
+      if (this.faceMap[tri] === faceId) {
+        verts.add(idxArr[tri * 3]);
+        verts.add(idxArr[tri * 3 + 1]);
+        verts.add(idxArr[tri * 3 + 2]);
+      }
+    }
+    if (verts.size === 0) return;
+
+    // 원본 저장 + tint 적용
+    const saved = new Float32Array(verts.size * 4);
+    let i = 0;
+    for (const v of verts) {
+      const r = colorArr[v * 3];
+      const g = colorArr[v * 3 + 1];
+      const b = colorArr[v * 3 + 2];
+      saved[i * 4]     = v;
+      saved[i * 4 + 1] = r;
+      saved[i * 4 + 2] = g;
+      saved[i * 4 + 3] = b;
+      // P24.5 hover tint
+      colorArr[v * 3]     = Math.min(1, r * 0.7 + 0.4);
+      colorArr[v * 3 + 1] = Math.min(1, g * 0.7 + 0.4);
+      colorArr[v * 3 + 2] = Math.min(1, b * 0.7 + 0.6);
+      i++;
+    }
+    this._hoverFaceColorCache.set(faceId, saved);
+    this.colorAttribute.needsUpdate = true;
+  }
+
+  /** Face F 의 hover tint 를 원본으로 복원. */
+  private _restoreFaceHoverTint(faceId: number): void {
+    const saved = this._hoverFaceColorCache.get(faceId);
+    if (!saved || !this.colorAttribute) return;
+    const colorArr = this.colorAttribute.array as Float32Array;
+    const n = saved.length / 4;
+    for (let k = 0; k < n; k++) {
+      const v = saved[k * 4];
+      colorArr[v * 3]     = saved[k * 4 + 1];
+      colorArr[v * 3 + 1] = saved[k * 4 + 2];
+      colorArr[v * 3 + 2] = saved[k * 4 + 3];
+    }
+    this._hoverFaceColorCache.delete(faceId);
+    this.colorAttribute.needsUpdate = true;
   }
 
   /** 특정 face의 삼각형을 index buffer에서 임시 제거 */
