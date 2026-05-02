@@ -2946,6 +2946,26 @@ impl Scene {
             let faces = epoch.created_faces.clone();
             let _ = self.intersect_faces_inner(&faces);
         }
+
+        // ADR-047 D-A investigation note (2026-05-02):
+        //   A pre-commit `verify_face_invariants` guard was attempted to
+        //   detect "edge shared by 3 active faces" — the symptom user
+        //   reported as "RECT 그리면 인접 face 가 wireframe 만 남음". It was
+        //   rejected because LOCKED #1 ADR-021 P7 (stacked-inner RECT) also
+        //   produces the SAME non-manifold pattern intentionally — the
+        //   DCEL has only 2 HEs per edge, but P7 wants 2 inner faces
+        //   sharing an edge with their outer ring = 3 faces. Both delta-
+        //   scope and total-count guards failed: LOCKED #1's new edges
+        //   ALSO get 3-face share when committing the second inner.
+        //
+        //   The user's bug and LOCKED #1 are topologically indistinguishable
+        //   from `verify_face_invariants`'s perspective. The user's
+        //   complaint is the VISUAL outcome (z-fight + wireframe rendering
+        //   of overlapping faces). The proper fix is Strategy C:
+        //   tighten HE claim logic so the user pattern stops producing
+        //   violations on new edges, while still allowing P7 to do so.
+        //   That's a deeper refactor — separate PR.
+
         self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();
         CommandResult::EntityCreated(xia_id)
