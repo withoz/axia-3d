@@ -22,8 +22,37 @@ export interface EngineInstance {
     width: number,
     height: number,
   ): number;
+  draw_circle(
+    cx: number,
+    cy: number,
+    cz: number,
+    nx: number,
+    ny: number,
+    nz: number,
+    radius: number,
+    segments: number,
+  ): number;
+  draw_line(
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+    nx: number,
+    ny: number,
+    nz: number,
+  ): number;
   push_pull(face_id_raw: number, dist: number): boolean;
   exportSnapshotStrict(): Uint8Array;
+  /** ADR-041 P26.1 Tier 0 — list all XiaId in scene (sorted ascending). */
+  allXiaIds(): Uint32Array;
+  /** ADR-041 P26.1 Tier 0 — scene-level JSON summary. */
+  sceneSummary(): string;
+  /** Per-XIA stats JSON: { face_count, edge_count, geometry_state, ... }. */
+  getXiaStats(xia_id: number): string;
+  /** XIA's owned face IDs. */
+  getXiaFaceIds(xia_id: number): Uint32Array;
 }
 
 /** Engine module — has constructor + module-level functions. */

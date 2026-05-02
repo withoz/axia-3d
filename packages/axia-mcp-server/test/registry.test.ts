@@ -19,10 +19,18 @@ describe('capability handler registry', () => {
     }
   });
 
-  it('Stage 3 wires exactly draw_rect / push_pull / export_axia', () => {
-    expect(listRegisteredCapabilities().sort()).toEqual(
-      ['draw_rect', 'export_axia', 'push_pull'],
-    );
+  it('current registry surface (Stage 3 + #2 follow-up)', () => {
+    // Adding/removing handlers requires updating this list AND the
+    // tier declarations in tiers.ts. Drift between the two = bug.
+    expect(listRegisteredCapabilities().sort()).toEqual([
+      'draw_circle',
+      'draw_line',
+      'draw_rect',
+      'export_axia',
+      'get_scene_summary',
+      'list_xias',
+      'push_pull',
+    ]);
   });
 
   it('every handler has non-empty description (MCP tool listing requirement)', () => {

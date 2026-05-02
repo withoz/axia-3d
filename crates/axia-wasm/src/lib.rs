@@ -1605,6 +1605,40 @@ impl AxiaEngine {
         self.scene.xias.len() as u32
     }
 
+    /// 모든 XIA ID 목록 (정렬됨).
+    /// MCP `list_xias` capability 의 backbone (ADR-041 P26.1, ADR-042).
+    #[wasm_bindgen(js_name = "allXiaIds")]
+    pub fn all_xia_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.scene.xias.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 씬의 high-level 요약 JSON. AI / MCP first-look query 에 적합.
+    /// 형식:
+    /// ```json
+    /// { "xia_count": 3, "face_count": 12, "edge_count": 24,
+    ///   "free_edge_count": 0, "constraint_count": 0,
+    ///   "engine_version": "0.1.0", "schema_version": "1.0.0" }
+    /// ```
+    #[wasm_bindgen(js_name = "sceneSummary")]
+    pub fn scene_summary(&self) -> String {
+        use serde_json::json;
+        let edge_count = self.scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .count();
+        let summary = json!({
+            "xia_count": self.scene.xias.len(),
+            "face_count": self.face_count(),
+            "edge_count": edge_count,
+            "free_edge_count": self.count_free_edges(),
+            "constraint_count": self.scene.constraints.len(),
+            "engine_version": ENGINE_VERSION,
+            "schema_version": SCHEMA_VERSION,
+        });
+        summary.to_string()
+    }
+
     /// 특정 XIA ID에 대한 요약 JSON.
     /// `get_xia_info`는 face ID를 받지만, 이 함수는 **XIA ID를 직접 받는다**.
     /// 내부적으로 해당 XIA의 모든 face_ids를 수집해 `get_xia_info`와 동일한 JSON을 반환.

@@ -7,15 +7,26 @@
 //   4. Add e2e regression test under test/capabilities/
 
 import { drawRectCapability } from './draw_rect.js';
+import { drawCircleCapability } from './draw_circle.js';
+import { drawLineCapability } from './draw_line.js';
 import { pushPullCapability } from './push_pull.js';
 import { exportAxiaCapability } from './export_axia.js';
+import { listXiasCapability } from './list_xias.js';
+import { getSceneSummaryCapability } from './get_scene_summary.js';
 import type { CapabilityHandler } from './types.js';
 import { isKnownCapability } from '../tiers.js';
 
 export const ALL_CAPABILITY_HANDLERS: ReadonlyArray<CapabilityHandler<any, any>> = [
+  // Tier 0 — read
+  getSceneSummaryCapability,
+  listXiasCapability,
+  // Tier 1 — constructive
   drawRectCapability,
-  pushPullCapability,
+  drawCircleCapability,
+  drawLineCapability,
   exportAxiaCapability,
+  // Tier 2 — modificative
+  pushPullCapability,
 ];
 
 const REGISTRY = new Map<string, CapabilityHandler<any, any>>();
