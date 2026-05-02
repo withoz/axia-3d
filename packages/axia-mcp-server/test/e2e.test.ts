@@ -19,6 +19,8 @@ async function loadEngine(): Promise<EngineInstance> {
   return new mod.AxiaEngine();
 }
 
+const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
+
 describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
   it('draw_rect → real engine returns positive XiaId', async () => {
     const engine = await loadEngine();
@@ -31,7 +33,7 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
         width: 100,
         height: 50,
       },
-      { engine, client: 'e2e' },
+      { engine, client: 'e2e', versions: VERSIONS },
     );
     const out = result.output as { xia_id: number };
     expect(out.xia_id).toBeGreaterThan(0);
@@ -44,14 +46,14 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
     await dispatch(
       'draw_rect',
       { center: [0, 0, 0], width: 1, height: 1 },
-      { engine },
+      { engine, versions: VERSIONS },
     );
     const samples: number[] = [];
     for (let i = 0; i < 30; i++) {
       const r = await dispatch(
         'draw_rect',
         { center: [i * 10, 0, 0], width: 5, height: 5 },
-        { engine },
+        { engine, versions: VERSIONS },
       );
       samples.push(r.duration_ms);
     }
@@ -68,13 +70,13 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
     await dispatch(
       'draw_rect',
       { center: [0, 0, 0], width: 100, height: 100 },
-      { engine: engineA },
+      { engine: engineA, versions: VERSIONS },
     );
     // engineB still empty — its export should have a different size than
     // engineA's (which has a face). Both should still produce valid AXIA.
-    const exportA = (await dispatch('export_axia', {}, { engine: engineA }))
+    const exportA = (await dispatch('export_axia', {}, { engine: engineA, versions: VERSIONS }))
       .output as { size_bytes: number; format: string };
-    const exportB = (await dispatch('export_axia', {}, { engine: engineB }))
+    const exportB = (await dispatch('export_axia', {}, { engine: engineB, versions: VERSIONS }))
       .output as { size_bytes: number; format: string };
     expect(exportA.format).toBe('AXIA');
     expect(exportB.format).toBe('AXIA');
@@ -86,7 +88,7 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
 
   it('export_axia produces AXIA magic bytes', async () => {
     const engine = await loadEngine();
-    const result = await dispatch('export_axia', {}, { engine });
+    const result = await dispatch('export_axia', {}, { engine, versions: VERSIONS });
     const out = result.output as { bytes_base64: string; format: string; size_bytes: number };
     expect(out.format).toBe('AXIA');
     const bytes = Buffer.from(out.bytes_base64, 'base64');
@@ -108,7 +110,7 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
     await dispatch(
       'draw_rect',
       { center: [0, 0, 0], width: 50, height: 50 },
-      { engine },
+      { engine, versions: VERSIONS },
     );
     try {
       await dispatch(
@@ -119,6 +121,7 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
           config: { enabled_tiers: [0, 1, 2] },
           auditSink: sink,
           client: 'e2e',
+          versions: VERSIONS,
         },
       );
     } catch {

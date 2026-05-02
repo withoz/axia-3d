@@ -1,0 +1,178 @@
+name: MCP Server (ADR-041)
+
+on:
+  push:
+    branches: [main, develop, 'claude/**', 'feature/**']
+    paths:
+      - 'packages/axia-mcp-server/**'
+      - 'packages/axia-wasm-node/**'
+      - 'crates/axia-wasm/**'
+      - 'crates/axia-core/**'
+      - 'crates/axia-geo/**'
+      - 'crates/axia-transaction/**'
+      - 'docs/adr/041-mcp-surface.md'
+      - '.github/workflows/mcp.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'packages/axia-mcp-server/**'
+      - 'packages/axia-wasm-node/**'
+      - 'crates/**'
+      - '.github/workflows/mcp.yml'
+
+# Cancel superseded runs on the same ref to keep CI fast.
+concurrency:
+  group: mcp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # Job 1: build axia-wasm Node target. Cached and uploaded so the
+  # MCP test job can reuse it without re-running wasm-pack.
+  # ─────────────────────────────────────────────────────────────────
+  wasm-node-build:
+    name: Build axia-wasm (--target nodejs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-wasm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-wasm-
+
+      - name: Install wasm-pack
+        # Pin to known-good 0.14 (matches local dev). cargo install is
+        # cached via the cargo cache above on hits.
+        run: |
+          if ! command -v wasm-pack &>/dev/null; then
+            cargo install wasm-pack --version 0.14.0
+          fi
+
+      - name: Build axia-wasm (Node target)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target nodejs --out-dir ../../packages/axia-wasm-node/dist
+
+      - name: Verify schema_version export present
+        run: |
+          if ! grep -q 'function schema_version' packages/axia-wasm-node/dist/axia_wasm.d.ts; then
+            echo "FAIL: schema_version() missing from WASM exports (ADR-041 P26.2)"
+            exit 1
+          fi
+          if ! grep -q 'function engine_version' packages/axia-wasm-node/dist/axia_wasm.d.ts; then
+            echo "FAIL: engine_version() missing from WASM exports (ADR-041 P26.2)"
+            exit 1
+          fi
+          echo "OK: schema_version + engine_version exports present"
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axia-wasm-node
+          path: packages/axia-wasm-node/dist/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────
+  # Job 2: lint + typecheck + unit tests for the MCP server.
+  # Pulls the WASM artifact so e2e tests can hit the real engine.
+  # ─────────────────────────────────────────────────────────────────
+  mcp-server-test:
+    name: Test @axia/mcp-server
+    runs-on: ubuntu-latest
+    needs: wasm-node-build
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: packages/axia-mcp-server/package-lock.json
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: axia-wasm-node
+          path: packages/axia-wasm-node/dist
+
+      - name: Install MCP server deps
+        working-directory: packages/axia-mcp-server
+        # `npm ci` runs the postinstall check-wasm.mjs — verifies artifact
+        # is wired correctly. Should print "WASM artifact OK".
+        run: npm ci
+
+      - name: TypeScript typecheck (strict)
+        working-directory: packages/axia-mcp-server
+        run: npm run typecheck
+
+      - name: Build TypeScript
+        working-directory: packages/axia-mcp-server
+        run: npm run build
+
+      - name: Run all tests (unit + e2e)
+        working-directory: packages/axia-mcp-server
+        # ADR-041 P26.8 — 7 회귀 테스트가 절대 #[ignore] 금지.
+        # Failure here means surface drift / schema mismatch / latency
+        # regression / owner ID leak — block merge.
+        run: npm test
+
+      - name: Smoke-test server boot
+        working-directory: packages/axia-mcp-server
+        # Boot server, capture stderr, kill after handshake. The
+        # "Handshake OK" line is the success criterion.
+        run: |
+          set -e
+          OUT=$(timeout 5 node dist/index.js 2>&1 || true)
+          echo "$OUT"
+          echo "$OUT" | grep -q "Handshake OK" || (echo "FAIL: handshake line not found"; exit 1)
+
+  # ─────────────────────────────────────────────────────────────────
+  # Job 3: surface-drift guard. Runs the 7 ADR-041 P26.8 regression
+  # tests in isolation so failures are obvious in the CI log.
+  # ─────────────────────────────────────────────────────────────────
+  surface-drift-guard:
+    name: ADR-041 P26.8 regression guard
+    runs-on: ubuntu-latest
+    needs: wasm-node-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: packages/axia-mcp-server/package-lock.json
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: axia-wasm-node
+          path: packages/axia-wasm-node/dist
+
+      - name: Install
+        working-directory: packages/axia-mcp-server
+        run: npm ci
+
+      - name: Run only the P26.8 regression tests
+        working-directory: packages/axia-mcp-server
+        # These names map 1:1 to ADR-041 P26.8 — if any goes red, an
+        # invariant was violated.
+        run: |
+          npx vitest run \
+            --testNamePattern "mcp_handshake_rejects_schema_mismatch|mcp_tier3_blocked_when_not_enabled|mcp_owner_ids_only_no_raw_indices|mcp_session_isolation_user_unaffected|mcp_audit_log_records_tier2_calls|mcp_latency_budget_tier1_under_33ms|mcp_capability_surface_matches_adr_041_p26_1"

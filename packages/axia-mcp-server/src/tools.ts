@@ -24,6 +24,7 @@ export interface ToolsWiringOptions {
   config: TierConfig;
   auditSink: AuditSink;
   client: string;
+  versions: { schema_version: string; engine_version: string };
 }
 
 /**
@@ -54,6 +55,7 @@ export function wireTools(server: Server, opts: ToolsWiringOptions): void {
         config: opts.config,
         auditSink: opts.auditSink,
         client: opts.client,
+        versions: opts.versions,
       });
       const response: CallToolResult = {
         content: [

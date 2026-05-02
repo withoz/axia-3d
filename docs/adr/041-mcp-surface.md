@@ -148,12 +148,42 @@ stdio JSON-RPC overhead ≈ 1~2 ms (Node native). WASM 호출 자체는 마이�
 
 **P26.7 — Audit Trail**
 
-모든 Tier 2/3 호출은 `~/.axia/mcp-audit.log` 에 append:
+모든 Tier 2/3 호출 (성공/실패 무관) **+ 모든 tier 의 denied 호출** 은
+JSONL 한 줄로 audit log 에 append. Denied 는 intrusion-detection signal
+이라 무조건 기록.
+
+기록 위치 (UTC 일별 rotation):
 ```
-2026-05-02T10:23:45Z client=claude-desktop tier=2 capability=push_pull
-  args={face_id: 42, distance: 50} duration_ms=23 result=ok
+~/.axia/mcp-audit-YYYY-MM-DD.log
 ```
-사용자가 사후 검토 가능. 실패 호출도 기록.
+환경변수 `AXIA_MCP_AUDIT_DIR` 로 디렉토리 override 가능.
+
+각 entry 의 필드:
+```jsonc
+{
+  "timestamp":      "2026-05-02T10:23:45.123Z",  // ISO-8601 UTC
+  "request_id":     "1f8b3c4a-...",              // UUID v4 (client correlation)
+  "client":         "claude-desktop",
+  "tier":           2,                            // 또는 null (unknown capability)
+  "capability":     "push_pull",
+  "args":           { "face_id": 42, "distance": 50 },
+  "duration_ms":    23.4,
+  "result":         "ok",                         // "ok" | "error" | "denied"
+  "engine_version": "0.1.0",                      // P26.2 drift correlation
+  "schema_version": "1.0.0",
+  "reason":         "...",                        // denied 사유 (선택)
+  "error_message":  "..."                         // engine 실패 사유 (선택)
+}
+```
+
+**왜 분리했나?**
+- `request_id` 가 없으면 동일 capability 다중 호출에서 어느 호출이 어느
+  응답이 됐는지 추적 불가. UUID v4 자동 생성, caller 가 override 가능.
+- `engine_version` / `schema_version` 매 entry 에 stamp 하면 audit log
+  분석 시점에 engine 빌드가 무엇이었는지 영구 보존. handshake 결과만으로
+  는 휘발됨.
+- `result: 'denied'` 분리 — `error` (engine 내부 실패) 와 `denied`
+  (정책 거부) 를 한 필드로 묶으면 보안 분석 시 ambiguous.
 
 **P26.8 — 회귀 테스트** (절대 #[ignore] 금지)
 
@@ -291,3 +321,19 @@ packages/axia-mcp-server/
 - **2026-05-02 (accepted)**: Stage 1~4 4-PR 모두 완료. 회귀 테스트 7/7
   통과, e2e latency 8ms median (budget 24%). Status: **Proposed →
   Accepted**, LOCKED 정책 #19 으로 격상. CLAUDE.md 갱신.
+- **2026-05-02 (post-acceptance follow-up)**: Audit trail 보강 (P26.7
+  강화) + CI 자동화 + 사용자 onboarding 안전장치:
+  - **Audit boost** (B): `request_id` (UUID v4), `engine_version` /
+    `schema_version` per-entry, `denied` result 분리, daily rotation
+    (`mcp-audit-YYYY-MM-DD.log`), `AXIA_MCP_AUDIT_DIR` env override.
+    Denied 는 모든 tier 에서 무조건 기록 (intrusion signal).
+  - **Onboarding guard** (C): `packages/axia-mcp-server` 의 `postinstall`
+    훅 (`scripts/check-wasm.mjs`) — WASM artifact 누락 시 친절한 stderr
+    경고 + exit 0 (npm install fail-soft). Rust 미설치 환경에서도 install
+    안 깨짐.
+  - **CI** (A): `.github/workflows/mcp.yml` 신설. 3-job pipeline:
+    wasm-node-build → mcp-server-test (Node 20/22 matrix) →
+    surface-drift-guard (P26.8 7 회귀 isolated 실행). Server boot
+    smoke test 포함.
+  - 80 tests passing (+13 from boost). 모든 dispatch 호출에 `versions`
+    필수 — 회귀 방어선 강화.

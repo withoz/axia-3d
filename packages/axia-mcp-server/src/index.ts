@@ -61,6 +61,10 @@ export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
     config,
     auditSink,
     client,
+    versions: {
+      schema_version: handshake.engine_schema,
+      engine_version: handshake.engine_version,
+    },
   });
 
   return { server, handshake, config };
@@ -75,7 +79,7 @@ async function main(): Promise<void> {
   const { server, handshake } = buildAxiaMcpServer({
     engineModule: mod,
     engineInstance,
-    auditSink: new FileAuditSink(FileAuditSink.defaultPath()),
+    auditSink: new FileAuditSink(),
     client: process.env.AXIA_MCP_CLIENT ?? 'unknown',
   });
 

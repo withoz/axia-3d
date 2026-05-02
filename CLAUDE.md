@@ -369,9 +369,13 @@
 - **P26.6 Session Isolation**: AI agent 와 사용자 viewport 별개 mesh
   state. 두 AxiaEngine instance 가 독립적으로 동작 — 회귀 테스트
   `mcp_session_isolation_user_unaffected` 로 강제.
-- **P26.7 Audit Trail**: Tier 2/3 호출은 `~/.axia/mcp-audit.log` JSONL
-  append. Tier 0/1 은 미기록 (flooding 방지). engine 실패 시에도
-  audit 기록 (result='error', error_message 포함).
+- **P26.7 Audit Trail (boosted)**: 일별 rotation
+  `~/.axia/mcp-audit-YYYY-MM-DD.log` (UTC). `AXIA_MCP_AUDIT_DIR` env 로
+  디렉토리 override. 매 entry 에 `request_id` (UUID v4) + `engine_version`
+  + `schema_version` stamp — drift correlation. **Denied 는 모든 tier
+  에서 무조건 기록** (intrusion signal). Tier 2/3 success/error +
+  any-tier denied = audit, Tier 0/1 success = no audit (flooding 방지).
+  result 필드: `'ok' | 'error' | 'denied'` 분리.
 - **P26.8 7 회귀 테스트** (절대 #[ignore] 금지):
   - mcp_handshake_rejects_schema_mismatch
   - mcp_tier3_blocked_when_not_enabled
@@ -386,6 +390,12 @@
   (28be6ff / d9deb6d / 8bf0a44 / 본 commit).
 - **통합 가이드**: `docs/integrations/mcp-claude-desktop.md`,
   `docs/integrations/mcp-cursor.md`.
+- **CI**: `.github/workflows/mcp.yml` (post-acceptance follow-up). 3-job
+  pipeline — wasm-node-build → mcp-server-test (Node 20/22 matrix) →
+  surface-drift-guard (P26.8 7 회귀 isolated). PR 마다 schema mismatch
+  / tier drift / owner ID leak 즉시 감지.
+- **Onboarding guard**: `npm install` 시 `scripts/check-wasm.mjs` 가
+  WASM artifact 검증. 누락 시 친절한 경고 + exit 0 (fail-soft).
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:

@@ -16,6 +16,8 @@ function mockEngine(overrides: Partial<EngineInstance> = {}): EngineInstance {
   };
 }
 
+const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
+
 describe('ADR-041 — capability dispatcher', () => {
   describe('Tier 1 — draw_rect (constructive, default-on)', () => {
     it('returns xia_id from engine', async () => {
@@ -28,7 +30,7 @@ describe('ADR-041 — capability dispatcher', () => {
           width: 10,
           height: 5,
         },
-        { engine, auditSink: sink, client: 'test' },
+        { engine, auditSink: sink, client: 'test', versions: VERSIONS },
       );
       expect(result.capability).toBe('draw_rect');
       expect(result.output).toEqual({ xia_id: 42 });
@@ -47,7 +49,7 @@ describe('ADR-041 — capability dispatcher', () => {
       await dispatch(
         'draw_rect',
         { center: [1, 2, 3], width: 4, height: 5 },
-        { engine },
+        { engine, versions: VERSIONS },
       );
       // [cx,cy,cz, nx,ny,nz, ux,uy,uz, w,h]
       expect(captured).toEqual([1, 2, 3, 0, 0, 1, 1, 0, 0, 4, 5]);
@@ -58,7 +60,7 @@ describe('ADR-041 — capability dispatcher', () => {
         dispatch(
           'draw_rect',
           { center: [0, 0, 0], width: -1, height: 5 },
-          { engine: mockEngine() },
+          { engine: mockEngine(), versions: VERSIONS },
         ),
       ).rejects.toThrow(CapabilityInputError);
     });
@@ -68,7 +70,7 @@ describe('ADR-041 — capability dispatcher', () => {
         dispatch(
           'push_pull',
           { face_id: 1.5, distance: 10 },
-          { engine: mockEngine(), config: { enabled_tiers: [0, 1, 2] } },
+          { engine: mockEngine(), config: { enabled_tiers: [0, 1, 2] }, versions: VERSIONS },
         ),
       ).rejects.toThrow(CapabilityInputError);
     });
@@ -80,7 +82,7 @@ describe('ADR-041 — capability dispatcher', () => {
         dispatch(
           'push_pull',
           { face_id: 1, distance: 10 },
-          { engine: mockEngine() },
+          { engine: mockEngine(), versions: VERSIONS },
         ),
       ).rejects.toThrow(CapabilityBlockedError);
     });
@@ -96,6 +98,7 @@ describe('ADR-041 — capability dispatcher', () => {
           config: { enabled_tiers: [0, 1, 2] },
           auditSink: sink,
           client: 'claude-desktop',
+          versions: VERSIONS,
         },
       );
       expect(result.output).toEqual({ success: true });
@@ -122,7 +125,7 @@ describe('ADR-041 — capability dispatcher', () => {
         dispatch(
           'push_pull',
           { face_id: 99, distance: 10 },
-          { engine, config: { enabled_tiers: [0, 1, 2] }, auditSink: sink },
+          { engine, config: { enabled_tiers: [0, 1, 2] }, auditSink: sink, versions: VERSIONS },
         ),
       ).rejects.toThrow('FaceId 99 not found');
       await Promise.resolve();
@@ -136,7 +139,7 @@ describe('ADR-041 — capability dispatcher', () => {
     it('returns base64 + size of AXIA bytes', async () => {
       const sample = new Uint8Array([0x41, 0x58, 0x69, 0x41, 0x01, 0x02]);
       const engine = mockEngine({ exportSnapshotStrict: () => sample });
-      const result = await dispatch('export_axia', {}, { engine });
+      const result = await dispatch('export_axia', {}, { engine, versions: VERSIONS });
       expect(result.output).toMatchObject({
         format: 'AXIA',
         size_bytes: 6,
@@ -151,7 +154,7 @@ describe('ADR-041 — capability dispatcher', () => {
   describe('error paths', () => {
     it('UnknownCapabilityError for unregistered name', async () => {
       await expect(
-        dispatch('rm_rf_slash', {}, { engine: mockEngine() }),
+        dispatch('rm_rf_slash', {}, { engine: mockEngine(), versions: VERSIONS }),
       ).rejects.toThrow(UnknownCapabilityError);
     });
   });
@@ -164,7 +167,7 @@ describe('ADR-041 — capability dispatcher', () => {
         const r = await dispatch(
           'draw_rect',
           { center: [0, 0, 0], width: 1, height: 1 },
-          { engine },
+          { engine, versions: VERSIONS },
         );
         samples.push(r.duration_ms);
       }

@@ -15,7 +15,9 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:wasm": "node scripts/check-wasm.mjs",
+    "postinstall": "node scripts/check-wasm.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
