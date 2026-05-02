@@ -472,6 +472,42 @@
   현재 scaffold 가 만든 package.json 의 dep resolve 안됨. 별도 ADR-044
   (npm publish flow) 필요. 본 PR 은 scaffold 코드 + 회귀 + ADR 까지.
 
+### 22. ADR-044 — AxiA npm Release Process (P29, 2026-05-02)
+- **새 원칙 P29 — Synchronized Schema Release**: 세 publishable
+  (`@axia/wasm-node` + `@axia/mcp-server` + `create-axia-mcp`) 가
+  lockstep semver, `prepublishOnly` hook 으로 build + test +
+  schema-pin 검증, CI-only publish + npm provenance attestation.
+- **P29.1 Lockstep semver**: 세 package version 동일 (string
+  equality 회귀로 강제). 다른 reason 도 셋 다 동시 bump.
+- **P29.2 prepublishOnly**: build + test + verify-schema-pin.mjs.
+  실패 시 publish 거부.
+- **P29.3 npm scope**: `@axia/wasm-node` + `@axia/mcp-server` (scoped,
+  `--access public`), `create-axia-mcp` (unscoped, npm create
+  컨벤션).
+- **P29.4 Required metadata**: license MIT / repository / author /
+  homepage / bugs / keywords 모든 package 강제. 회귀 테스트로 drift
+  방지.
+- **P29.5 files 화이트리스트**: 정확한 publish 포함 경로. 테스트 /
+  src TypeScript / package-lock.json 제외.
+- **P29.6 Publish 환경 강제**: `guard-publish.mjs` 가 `process.env.CI`
+  검사 — 로컬 publish 거부 (exit 1). escape hatch:
+  `AXIA_PUBLISH_BYPASS=1` (provenance 잃음, emergency only).
+  GitHub Actions release.yml 만 정식 publish 경로 (`id-token: write`
+  for provenance).
+- **P29.7 6 회귀 테스트** (절대 #[ignore] 금지):
+  * release_metadata_complete (license/repository/...)
+  * release_files_whitelist_present (files[] 검증, src/.ts 차단)
+  * release_lockstep_versions (3 package version 동일)
+  * release_prepublish_hook_present (guard + build + test)
+  * release_schema_pin_consistent (engine ↔ server ↔ scaffold semver)
+  * release_no_private_flag_on_publishables
+- **구현**: scripts/guard-publish.mjs + scripts/verify-schema-pin.mjs
+  + .github/workflows/release.yml + test/release_meta.test.ts (12 tests).
+  131 / 131 MCP server tests passing.
+- **알려진 미완**:
+  * 실제 npm publish 미실행 — admin 권한 + NPM_TOKEN secret 필요.
+  * `@axia` org 등록 미완 시 ADR-044.1 amendment (재명명).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
