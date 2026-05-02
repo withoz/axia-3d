@@ -8,6 +8,10 @@ web/src/wasm/*.wasm
 # Node WASM target (ADR-041 — wasm-pack --target nodejs 산출물, 재빌드 가능)
 packages/axia-wasm-node/dist/
 
+# MCP server build artifacts (ADR-041)
+packages/axia-mcp-server/dist/
+packages/axia-mcp-server/node_modules/
+
 # Node
 web/node_modules/
 
