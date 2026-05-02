@@ -436,6 +436,42 @@
   UX 발견 후 additive 로 revise (use case 2 가 모든 Tier 1 enumerate
   필요해서). 변경 commit 단계에서 ADR + 구현 + 테스트 동시 변경.
 
+### 21. ADR-043 — `npm create axia-mcp` Init Template (P28, 2026-05-02)
+- **새 원칙 P28**: scaffold 는 `@axia/mcp-server` 의 npm package 를
+  dependency 로 받는 **thin wrapper 4 파일** 만 생성. capability /
+  handler / Zod 코드 절대 복제하지 않음. ADR-041 surface 변경 시
+  사용자는 `npm update` 만 하면 됨.
+- **P28.1 Scaffold 4 파일**: package.json (semver caret pin) +
+  axia-mcp.config.json (P27 tiers/allow/deny) +
+  claude_desktop_config.snippet.json + README.md (5-step quickstart).
+  Capability/handler 코드 미복제 — drift 영구 차단.
+- **P28.2 Schema version pinning**: `@axia/mcp-server: ^MAJOR.MINOR.PATCH`
+  caret-range. ADR-041 P26.2 schema 와 정합 — MINOR 자동 수용, MAJOR 는
+  명시적 upgrade.
+- **P28.3 WASM dependency**: 모드 A (bundled npm `@axia/wasm-node`,
+  default — Rust 미설치 OK) / 모드 B (`--from-source` flag, contributor
+  용). 본 ADR 은 모드 A 만 결정 — 실제 npm publish 는 ADR-044 (release
+  process) 별도.
+- **P28.4 Postinstall guard 재사용**: 기존
+  `@axia/mcp-server/scripts/check-wasm.mjs` 가 SSOT. scaffold 추가
+  guard 없음.
+- **P28.5 5 회귀 테스트** (절대 #[ignore] 금지):
+  * scaffold_creates_minimal_files (4 파일 정확)
+  * scaffold_pins_caret_range (^semver 검증)
+  * scaffold_config_passes_schema_validation
+  * scaffold_does_not_duplicate_handlers (regex deny 로 capability
+    name leak 차단)
+  * scaffold_init_smoke_runs (실제 disk write + JSON parse)
+- **CLI**: `npm create axia-mcp <name> [--tiers] [--allow-caps] [--deny-caps]
+  [--client] [--force]`. `kleur` 로 컬러 출력. 4 파일 생성 후 next-step
+  안내.
+- **구현**: `packages/create-axia-mcp` (kleur 한 종속성). 17 tests passing.
+  실제 scaffold smoke: my-axia-app + tier 0,1,2 + DENY=boolean_subtract
+  실행 확인 (Stage 1).
+- **알려진 한계**: `@axia/mcp-server` 와 `@axia/wasm-node` npm 미공개 →
+  현재 scaffold 가 만든 package.json 의 dep resolve 안됨. 별도 ADR-044
+  (npm publish flow) 필요. 본 PR 은 scaffold 코드 + 회귀 + ADR 까지.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

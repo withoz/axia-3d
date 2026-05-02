@@ -12,6 +12,10 @@ packages/axia-wasm-node/dist/
 packages/axia-mcp-server/dist/
 packages/axia-mcp-server/node_modules/
 
+# create-axia-mcp scaffold build artifacts (ADR-043)
+packages/create-axia-mcp/dist/
+packages/create-axia-mcp/node_modules/
+
 # Node
 web/node_modules/
 
