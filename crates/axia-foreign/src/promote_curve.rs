@@ -202,6 +202,7 @@ pub fn promote_step_curve(
         ForeignCurveKind::Circle => promote_step_circle(file, entity_id, entity, cache),
         ForeignCurveKind::BSpline => promote_step_bspline_curve(file, entity_id, entity, cache),
         ForeignCurveKind::TrimmedCurve => promote_step_trimmed_curve(file, entity_id, entity, cache),
+        ForeignCurveKind::Ellipse => promote_step_ellipse(file, entity_id, entity, cache),
         // Other kinds defer to follow-up PR.
         other => Err(ResolveError::at(
             format!("promote_step_{:?} not yet wired (A-4 follow-up)", other),
@@ -401,6 +402,74 @@ fn promote_step_bspline_curve(
         knots,
         degree,
         parameter_range,
+    })
+}
+
+/// `ELLIPSE('', placement_ref, semi_axis_1, semi_axis_2)` → `Nurbs` (Piegl A7.1).
+///
+/// AP203 인자:
+/// - arg[1] = AXIS2_PLACEMENT_3D ref (center + axis (z) + ref_dir (x))
+/// - arg[2] = semi_axis_1 (semi-major along ref_dir, positive Real)
+/// - arg[3] = semi_axis_2 (semi-minor perpendicular, positive Real)
+///
+/// 변환 (ADR-036 P21.1, Piegl & Tiller A7.1):
+/// - x_axis = ref_direction × semi_axis_1
+/// - y_axis = (axis × ref_direction) × semi_axis_2
+/// - 9 control points + weights `[1, √2/2, 1, ...]` + knots
+///   `[0,0,0, 1/4,1/4, 1/2,1/2, 3/4,3/4, 1,1,1]`
+/// - Degree 2, parameter range [0, 1] (full ellipse)
+///
+/// Trimmed (start/end angle): basis 의 full conversion 후 TRIMMED_CURVE
+/// wrapper 가 parameter_range 갱신 (B2 logic 재활용).
+fn promote_step_ellipse(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<CurvePromotion, ResolveError> {
+    use crate::conic_converter::full_ellipse_to_nurbs;
+
+    let placement_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at("ELLIPSE arg[1] (placement) not a ref", entity_id))?;
+    let semi_axis_1 = entity.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("ELLIPSE arg[2] (semi_axis_1) not a real", entity_id))?;
+    let semi_axis_2 = entity.args.get(3)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("ELLIPSE arg[3] (semi_axis_2) not a real", entity_id))?;
+
+    if semi_axis_1 <= 0.0 || semi_axis_2 <= 0.0 {
+        return Err(ResolveError::at(
+            format!("ELLIPSE semi_axes must be positive, got ({}, {})",
+                semi_axis_1, semi_axis_2),
+            entity_id,
+        ));
+    }
+
+    let placement = cache.placement(file, placement_ref)?;
+    // x_axis = ref_dir × semi_axis_1
+    let x_axis = [
+        placement.ref_direction[0] * semi_axis_1,
+        placement.ref_direction[1] * semi_axis_1,
+        placement.ref_direction[2] * semi_axis_1,
+    ];
+    // y_axis = (axis × ref_dir) × semi_axis_2 — placement.y_axis() helper 사용
+    let y_unit = placement.y_axis();
+    let y_axis = [
+        y_unit[0] * semi_axis_2,
+        y_unit[1] * semi_axis_2,
+        y_unit[2] * semi_axis_2,
+    ];
+
+    let nurbs = full_ellipse_to_nurbs(placement.location, x_axis, y_axis);
+
+    Ok(CurvePromotion::Nurbs {
+        control_pts: nurbs.control_pts,
+        weights: nurbs.weights,
+        knots: nurbs.knots,
+        degree: nurbs.degree,
+        parameter_range: Some([0.0, 1.0]),  // full ellipse
     })
 }
 
@@ -774,11 +843,12 @@ mod tests {
 
     #[test]
     fn promote_step_curve_unsupported_kind() {
-        // ELLIPSE not yet wired (Conic conversion follow-up).
+        // B5 (2026-05-01): ELLIPSE wired (Piegl A7.1).
+        // 이제 PARABOLA / HYPERBOLA / OffsetCurve 가 unsupported.
         let src = minimal(concat!(
             "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
             "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
-            "#3 = ELLIPSE('', #2, 5.0, 3.0);"
+            "#3 = PARABOLA('', #2, 5.0);"
         ));
         let f = parse(&src).unwrap();
         let mut cache = ResolveCache::new();
@@ -896,12 +966,13 @@ mod tests {
 
     #[test]
     fn promote_step_trimmed_curve_basis_unsupported_propagates() {
-        // basis 가 ELLIPSE (unsupported) 일 때 trim 이 적용되어도
-        // Tessellate fallback 그대로.
+        // B5 (2026-05-01): basis ELLIPSE 는 이제 supported (NURBS).
+        // PARABOLA 가 unsupported — basis 가 Tessellate 라도 trim
+        // parameter_range 는 보존됨.
         let src = minimal(concat!(
             "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
             "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
-            "#3 = ELLIPSE('', #2, 5.0, 3.0);\n",
+            "#3 = PARABOLA('', #2, 5.0);\n",
             "#4 = TRIMMED_CURVE('', #3, (PARAMETER_VALUE(0.0)), \
                   (PARAMETER_VALUE(3.14)), .T., .PARAMETER.);"
         ));
@@ -913,7 +984,141 @@ mod tests {
             CurvePromotion::Tessellate { parameter_range, .. } => {
                 assert_eq!(parameter_range, Some([0.0, 3.14]));
             }
-            _ => panic!("expected Tessellate (basis ELLIPSE unsupported)"),
+            _ => panic!("expected Tessellate (basis PARABOLA unsupported)"),
+        }
+    }
+
+    // ─── B5 신규 — ELLIPSE 변환 (Piegl A7.1) ───────────────────────────
+
+    #[test]
+    fn promote_step_ellipse_full_unit() {
+        // Unit ellipse (semi_axes 1, 1 = circle) at origin
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",  // axis = +Z
+            "#3 = DIRECTION('', (1., 0., 0.));\n",  // ref = +X
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = ELLIPSE('', #4, 1.0, 1.0);"  // semi_axis_1=a=1, semi_axis_2=b=1
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            CurvePromotion::Nurbs {
+                control_pts, weights, knots, degree, parameter_range,
+            } => {
+                assert_eq!(control_pts.len(), 9);
+                assert_eq!(weights.len(), 9);
+                assert_eq!(knots.len(), 12);
+                assert_eq!(degree, 2);
+                assert_eq!(parameter_range, Some([0.0, 1.0]));
+                // Spot-check P0 = +X, P2 = +Y, P4 = -X, P6 = -Y
+                assert!(approx_eq3(control_pts[0], [1., 0., 0.], 1e-12));
+                assert!(approx_eq3(control_pts[2], [0., 1., 0.], 1e-12));
+                assert!(approx_eq3(control_pts[4], [-1., 0., 0.], 1e-12));
+                assert!(approx_eq3(control_pts[6], [0., -1., 0.], 1e-12));
+                // Weights pattern [1, √2/2, 1, ...]
+                assert_eq!(weights[0], 1.0);
+                assert!((weights[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-15);
+            }
+            other => panic!("expected Nurbs, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_ellipse_axes_3_5_at_offset() {
+        // semi-axis 3 along +X, 5 along +Y, center (10, 20, 30)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (10., 20., 30.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = ELLIPSE('', #4, 3.0, 5.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty());
+        match result.promotion.unwrap() {
+            CurvePromotion::Nurbs { control_pts, .. } => {
+                // P0 = center + 3 * X = (13, 20, 30)
+                assert!(approx_eq3(control_pts[0], [13., 20., 30.], 1e-12));
+                // P2 = center + 5 * Y = (10, 25, 30)
+                assert!(approx_eq3(control_pts[2], [10., 25., 30.], 1e-12));
+                // P4 = center - 3 * X = (7, 20, 30)
+                assert!(approx_eq3(control_pts[4], [7., 20., 30.], 1e-12));
+                // P6 = center - 5 * Y = (10, 15, 30)
+                assert!(approx_eq3(control_pts[6], [10., 15., 30.], 1e-12));
+            }
+            _ => panic!("expected Nurbs"),
+        }
+    }
+
+    #[test]
+    fn promote_step_ellipse_negative_axis_errors() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = ELLIPSE('', #2, -1.0, 5.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 3, &mut cache);
+        assert!(matches!(result.promotion, Some(CurvePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("must be positive")));
+    }
+
+    #[test]
+    fn promote_step_ellipse_with_3d_placement() {
+        // Ellipse on Y-Z plane (placement.axis = +X, ref_dir = +Y)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (1., 0., 0.));\n",  // axis = +X
+            "#3 = DIRECTION('', (0., 1., 0.));\n",  // ref = +Y
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = ELLIPSE('', #4, 2.0, 4.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty());
+        match result.promotion.unwrap() {
+            CurvePromotion::Nurbs { control_pts, .. } => {
+                // P0 = center + 2 * Y = (0, 2, 0)
+                assert!(approx_eq3(control_pts[0], [0., 2., 0.], 1e-12));
+                // y_axis = axis × ref = X × Y = +Z, P2 = center + 4 * Z = (0, 0, 4)
+                assert!(approx_eq3(control_pts[2], [0., 0., 4.], 1e-12));
+                // P4 = center - 2 * Y = (0, -2, 0)
+                assert!(approx_eq3(control_pts[4], [0., -2., 0.], 1e-12));
+                // P6 = center - 4 * Z = (0, 0, -4)
+                assert!(approx_eq3(control_pts[6], [0., 0., -4.], 1e-12));
+            }
+            _ => panic!("expected Nurbs"),
+        }
+    }
+
+    #[test]
+    fn promote_step_ellipse_trimmed_quarter_arc() {
+        // Ellipse + TRIMMED_CURVE [0, 0.25] (quarter arc in NURBS parameter)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = ELLIPSE('', #2, 5.0, 3.0);\n",
+            "#4 = TRIMMED_CURVE('', #3, (PARAMETER_VALUE(0.0)), \
+                  (PARAMETER_VALUE(0.25)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 4, &mut cache);
+        assert!(result.warnings.is_empty());
+        match result.promotion.unwrap() {
+            CurvePromotion::Nurbs { control_pts, parameter_range, .. } => {
+                // 9 control points 그대로 보존 (full NURBS), parameter_range 만 trim
+                assert_eq!(control_pts.len(), 9);
+                assert_eq!(parameter_range, Some([0.0, 0.25]));
+            }
+            _ => panic!("expected Nurbs (trimmed)"),
         }
     }
 }
