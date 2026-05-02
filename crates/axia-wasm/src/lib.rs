@@ -4204,6 +4204,20 @@ impl AxiaEngine {
         )
     }
 
+    /// Per-`getMeshBuffers` skip diagnostics — JSON. Counts faces dropped at
+    /// each silent-skip path inside `Mesh::export_buffers`. Use to debug
+    /// "face is active in mesh but invisible in render" symptoms.
+    #[wasm_bindgen(js_name = "getLastExportSkipStats")]
+    pub fn get_last_export_skip_stats(&self) -> String {
+        let s = self.scene.mesh.last_export_skip_stats();
+        format!(
+            r#"{{"totalActiveFaces":{},"emitted":{},"corruptedOuterLoop":{},"outerTooShort":{},"vertexPosFailed":{},"corruptedInnerLoop":{},"earcutFailed":{},"analyticEmptyTess":{}}}"#,
+            s.total_active_faces, s.emitted,
+            s.corrupted_outer_loop, s.outer_too_short, s.vertex_pos_failed,
+            s.corrupted_inner_loop, s.earcut_failed, s.analytic_empty_tess,
+        )
+    }
+
     /// 바이너리 스냅샷으로부터 프로젝트 복원 (supports versioned and legacy formats)
     pub fn import_snapshot(&mut self, data: &[u8]) -> bool {
         match self.scene.import_versioned_snapshot(data) {

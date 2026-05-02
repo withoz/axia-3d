@@ -2827,32 +2827,44 @@ impl Scene {
         //   degenerate (NaN / zero-length normal) face 는 invariant 위반 +
         //   render artifact ("shadow") 유발.
         //
-        //   1) Degenerate scan — 모든 active face 대상 (이전 draw 의 잔재
-        //      포함 가능). NaN/zero normal 은 무조건 제거.
-        //   2) Winding flip — touched_verts 위 boundary 가진 face 만.
-        //      Unrelated geometry 의 normal 은 사용자 의도 그대로 보존.
+        // 2026-05-02 — scope-leak fix: 기존 정상 face 가 새 RECT 의 split_edge
+        //   등으로 인해 normal 계산이 일시적 degenerate 로 평가되어 잘못
+        //   제거되는 회귀 ("RECT 그리면 인접 face 가 wireframe 만 남음")
+        //   재현. 검사 대상을 이번 epoch 이 건드린 face 로 한정:
+        //   - epoch.created_faces (이번 draw 가 만든 face)
+        //   - boundary 에 touched_verts 가진 face (split_edge 영향 받은 face)
+        //   Unrelated geometry 의 face 는 normal 평가가 어떻든 보존 — 이번
+        //   draw 가 만든 변화 외엔 손대지 않음 (Phase 7 cleanup scope fix 와
+        //   동일 패턴).
         let touched_set: std::collections::HashSet<VertId> =
             epoch.touched_verts.iter().copied().collect();
+        let created_set: std::collections::HashSet<axia_geo::FaceId> =
+            epoch.created_faces.iter().copied().collect();
         let mut degenerate_to_remove: Vec<axia_geo::FaceId> = Vec::new();
         let mut to_flip: Vec<axia_geo::FaceId> = Vec::new();
         for (fid, f) in self.mesh.faces.iter() {
             if !f.is_active() { continue; }
+
+            // Scope check: only inspect faces this draw touched.
+            let in_scope = created_set.contains(&fid) || {
+                match self.mesh.collect_loop_verts(f.outer().start) {
+                    Ok(verts) => verts.iter().any(|v| touched_set.contains(v)),
+                    Err(_) => false,
+                }
+            };
+            if !in_scope { continue; }
+
             let face_n = f.normal();
-            // Degenerate detection
+            // Degenerate detection (in-scope faces only)
             if !face_n.x.is_finite() || !face_n.y.is_finite() || !face_n.z.is_finite()
                 || face_n.length_squared() < 1e-12
             {
                 degenerate_to_remove.push(fid);
                 continue;
             }
-            // Winding check — only for faces touched by this draw
+            // Winding check — same scope (touched OR created)
             if face_n.dot(n_norm) < 0.0 {
-                let verts = match self.mesh.collect_loop_verts(f.outer().start) {
-                    Ok(v) => v, Err(_) => continue,
-                };
-                if verts.iter().any(|v| touched_set.contains(v)) {
-                    to_flip.push(fid);
-                }
+                to_flip.push(fid);
             }
         }
         for fid in to_flip {
@@ -7623,6 +7635,60 @@ mod tests {
                 failures.join("\n")
             );
         }
+    }
+
+    /// Regression (2026-05-02): drawing a RECT must NOT deactivate pre-
+    /// existing FACES whose normal happens to evaluate degenerate during
+    /// the new draw's post-pipeline scan. The degenerate scan is now
+    /// scope-limited to faces created or touched by the current draw.
+    ///
+    /// Bug: pre-existing face F1 (drawn earlier as a clean rect) had a
+    /// valid normal. New RECT_B was drawn nearby. During RECT_B's post-
+    /// pipeline scan, all active faces were inspected. If F1's normal
+    /// happened to evaluate as NaN/zero (e.g. due to vertex insertion
+    /// elsewhere altering the half-edge loop traversal mid-scan), F1 was
+    /// removed even though its boundary was perfectly fine. The 4 boundary
+    /// edges remained as standalone wires → user saw "면이 사라짐, 라인만
+    /// 남음" symptom.
+    #[test]
+    fn drawing_rect_preserves_pre_existing_faces() {
+        let mut scene = Scene::default();
+
+        // Draw RECT_A → face exists with normal and XIA.
+        let r_a = scene.execute(Command::DrawRect {
+            center: DVec3::new(-2000.0, 0.0, -2000.0),
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            up:     DVec3::new(0.0, 0.0, 1.0),
+            width: 500.0, height: 500.0,
+        });
+        let xia_a = match r_a {
+            CommandResult::EntityCreated(x) => x,
+            _ => panic!("rect A should create XIA"),
+        };
+        let face_count_a = scene.xias.get(&xia_a).map(|x| x.face_ids.len()).unwrap_or(0);
+        assert_eq!(face_count_a, 1, "RECT_A must own exactly 1 face");
+        let face_a_id = scene.xias[&xia_a].face_ids[0];
+        assert!(scene.mesh.faces.contains(face_a_id) && scene.mesh.faces[face_a_id].is_active(),
+            "face A must be active after creation");
+
+        // Draw RECT_B at a different location.
+        let r_b = scene.execute(Command::DrawRect {
+            center: DVec3::new(2000.0, 0.0, 2000.0),
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            up:     DVec3::new(0.0, 0.0, 1.0),
+            width: 500.0, height: 500.0,
+        });
+        assert!(matches!(r_b, CommandResult::EntityCreated(_)), "rect B should create XIA");
+
+        // Face A must still be active — RECT_B's post-pipeline scan must
+        // not have touched it (scope-leak regression).
+        assert!(
+            scene.mesh.faces.contains(face_a_id) && scene.mesh.faces[face_a_id].is_active(),
+            "face A must survive RECT_B's draw — degenerate scan scope-leak guard",
+        );
+        // XIA mapping must also be intact.
+        assert_eq!(scene.face_to_xia.get(&face_a_id).copied(), Some(xia_a),
+            "face A's XIA mapping must persist");
     }
 
     /// Regression (2026-05-02): drawing a RECT must NOT erase pre-existing

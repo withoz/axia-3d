@@ -37,6 +37,29 @@ fn spatial_key(pos: DVec3) -> SpatialKey {
     )
 }
 
+/// Per-`export_buffers` skip diagnostics — counts faces dropped for each
+/// reason. Reset at the start of every `export_buffers` call. Used to
+/// debug "face is active in mesh but invisible in render" symptoms.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExportSkipStats {
+    /// Faces seen (active && visible) before processing.
+    pub total_active_faces: u32,
+    /// `collect_loop_verts(outer)` returned Err.
+    pub corrupted_outer_loop: u32,
+    /// Outer loop had fewer than 3 vertices after collection.
+    pub outer_too_short: u32,
+    /// `vertex_pos` failed (vert removed but loop still references it).
+    pub vertex_pos_failed: u32,
+    /// Inner (hole) loop traversal failed mid-emit.
+    pub corrupted_inner_loop: u32,
+    /// `earcut` triangulation failed (collinear / self-intersecting 2D).
+    pub earcut_failed: u32,
+    /// Analytic surface produced empty tessellation.
+    pub analytic_empty_tess: u32,
+    /// Faces successfully emitted to buffer (sanity check).
+    pub emitted: u32,
+}
+
 /// The Half-Edge DCEL mesh.
 ///
 /// Stores all topology entities (vertices, edges, half-edges, faces)
@@ -60,6 +83,10 @@ pub struct Mesh {
     /// Spatial hash for fast vertex coincidence lookup (O(1) instead of O(n))
     #[serde(skip)]
     spatial_hash: FxHashMap<SpatialKey, Vec<VertId>>,
+    /// Diagnostic counters from the last `export_buffers` call. Interior
+    /// mutability so `export_buffers(&self)` can update without API churn.
+    #[serde(skip, default)]
+    last_export_stats: std::cell::Cell<ExportSkipStats>,
 }
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
@@ -218,6 +245,7 @@ impl Mesh {
             shells: SlotStorage::new(),
             vert_to_edge: FxHashMap::default(),
             spatial_hash: FxHashMap::default(),
+            last_export_stats: std::cell::Cell::new(ExportSkipStats::default()),
         }
     }
 
@@ -3277,6 +3305,9 @@ impl Mesh {
         let mut face_map: Vec<u32> = Vec::new(); // one FaceId per triangle
         let mut vert_offset: u32 = 0;
 
+        // Reset diagnostic counters at start of every export.
+        let mut stats = ExportSkipStats::default();
+
         // ADR-038 P23.2 — default chord tolerance for analytic surface tessellation.
         // 0.1mm 시각 품질 vs 메모리 균형 (LOD 는 별도 phase).
         const ANALYTIC_CHORD_TOL: f64 = 0.1;
@@ -3285,6 +3316,7 @@ impl Mesh {
             if !face.is_active() || !face.is_visible() {
                 continue;
             }
+            stats.total_active_faces += 1;
 
             // ADR-038 P23.1 — Analytic evaluate priority.
             // `Face.surface = Some(AnalyticSurface)` 이면 surface 의 정확한
@@ -3294,6 +3326,7 @@ impl Mesh {
                 use crate::surfaces::SurfaceOps;
                 let tess = surface.tessellate(ANALYTIC_CHORD_TOL);
                 if tess.vertices.is_empty() || tess.triangles.is_empty() {
+                    stats.analytic_empty_tess += 1;
                     continue;
                 }
 
@@ -3327,6 +3360,7 @@ impl Mesh {
                     face_map.push(face_id.raw());  // P22.5 — 모든 삼각형이 같은 FaceId
                 }
                 vert_offset += n_verts as u32;
+                stats.emitted += 1;
                 continue;  // skip the planar polygon path below
             }
 
@@ -3335,13 +3369,14 @@ impl Mesh {
             // Skip faces with corrupted loops (graceful degradation)
             let loop_verts = match self.collect_loop_verts(face.outer().start) {
                 Ok(verts) => verts,
-                Err(_) => continue, // skip corrupted face, don't kill all rendering
+                Err(_) => { stats.corrupted_outer_loop += 1; continue; },
             };
             // Outer loop HEs — parallel to loop_verts (hes[i].dst() == loop_verts[i]).
             // Used for smooth-normal computation around each vertex.
             let loop_hes = self.collect_loop_hes(face.outer().start).unwrap_or_default();
 
             if loop_verts.len() < 3 {
+                stats.outer_too_short += 1;
                 continue;
             }
 
@@ -3373,7 +3408,7 @@ impl Mesh {
                     Err(_) => { skip_face = true; break; }
                 }
             }
-            if skip_face { continue; }
+            if skip_face { stats.vertex_pos_failed += 1; continue; }
 
             // Inner loops (holes) 처리
             let mut hole_indices: Vec<usize> = Vec::new();
@@ -3404,12 +3439,12 @@ impl Mesh {
                 }
                 if skip_face { break; }
             }
-            if skip_face { continue; }
+            if skip_face { stats.corrupted_inner_loop += 1; continue; }
 
             // Triangulate with earcutr (outer + holes)
             let mut tri_indices = match earcutr::earcut(&coords_2d, &hole_indices, 2) {
                 Ok(indices) => indices,
-                Err(_) => continue, // skip un-triangulable face
+                Err(_) => { stats.earcut_failed += 1; continue; },
             };
 
             // Fix triangle winding: earcut works in 2D and may produce
@@ -3456,9 +3491,20 @@ impl Mesh {
             }
 
             vert_offset += positions_3d.len() as u32;
+            stats.emitted += 1;
         }
 
+        // Persist diagnostics for `last_export_skip_stats()` getter.
+        self.last_export_stats.set(stats);
+
         Ok((positions, normals, indices, face_map, positions_f64))
+    }
+
+    /// Returns the per-face skip diagnostics from the most recent
+    /// `export_buffers()` call. Use to debug "face active in mesh but not
+    /// rendered" — non-zero counts indicate which silent-skip path triggered.
+    pub fn last_export_skip_stats(&self) -> ExportSkipStats {
+        self.last_export_stats.get()
     }
 
     /// Choose the best 2D projection axes based on the face normal.

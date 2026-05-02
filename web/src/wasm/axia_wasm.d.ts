@@ -475,6 +475,12 @@ export class AxiaEngine {
     getFaceVolumeFlags(): Uint8Array;
     getIndicesLen(): number;
     getIndicesPtr(): number;
+    /**
+     * Per-`getMeshBuffers` skip diagnostics — JSON. Counts faces dropped at
+     * each silent-skip path inside `Mesh::export_buffers`. Use to debug
+     * "face is active in mesh but invisible in render" symptoms.
+     */
+    getLastExportSkipStats(): string;
     getNormalsLen(): number;
     getNormalsPtr(): number;
     /**
@@ -1286,6 +1292,7 @@ export interface InitOutput {
     readonly axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
     readonly axiaengine_getIndicesLen: (a: number) => number;
     readonly axiaengine_getIndicesPtr: (a: number) => number;
+    readonly axiaengine_getLastExportSkipStats: (a: number, b: number) => void;
     readonly axiaengine_getNormalsLen: (a: number) => number;
     readonly axiaengine_getNormalsPtr: (a: number) => number;
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;

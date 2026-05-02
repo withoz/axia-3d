@@ -76,6 +76,7 @@ export const axiaengine_getFaceVertices: (a: number, b: number, c: number) => vo
 export const axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
 export const axiaengine_getIndicesLen: (a: number) => number;
 export const axiaengine_getIndicesPtr: (a: number) => number;
+export const axiaengine_getLastExportSkipStats: (a: number, b: number) => void;
 export const axiaengine_getNormalsLen: (a: number) => number;
 export const axiaengine_getNormalsPtr: (a: number) => number;
 export const axiaengine_getPositionsF64: (a: number, b: number) => void;
