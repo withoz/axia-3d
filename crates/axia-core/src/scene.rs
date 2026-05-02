@@ -1673,11 +1673,19 @@ impl Scene {
     /// ADR-025 P11 Phase 7 — Deactivate orphan topological edges that aren't
     /// part of any face boundary. These are synthesis residuals that have no
     /// geometric role (the same line is covered by adjacent faces' boundaries).
-    fn cleanup_dangling_topological_edges(&mut self) {
+    ///
+    /// **Scope-aware (2026-05-02 fix)**: only cleans up edges in `scope`
+    /// (typically `epoch.new_edges` from the current closed-shape command).
+    /// Pre-existing user-drawn standalone wires are NOT in `scope` and are
+    /// preserved — fixes regression "rect commit erases free-floating lines".
+    fn cleanup_dangling_topological_edges(&mut self, scope: &[EdgeId]) {
+        use std::collections::HashSet;
+        let scope_set: HashSet<EdgeId> = scope.iter().copied().collect();
         let to_remove: Vec<EdgeId> = self.mesh.edges.iter()
             .filter_map(|(eid, e)| {
                 if !e.is_active() { return None; }
                 if !e.class().is_topological() { return None; }
+                if !scope_set.contains(&eid) { return None; }
                 let (faces, _) = self.mesh.get_faces_sharing_edge(eid);
                 let any_active = faces.iter().any(|&f|
                     self.mesh.faces.contains(f) && self.mesh.faces[f].is_active());
@@ -2811,7 +2819,7 @@ impl Scene {
         //   잔존 dangling topological edge 는 closed-shape 상황에선 synthesis
         //   artifact 로 간주, deactivate 해도 visual 영향 없음 (인접 face boundary
         //   가 같은 좌표를 cover). DrawLine intermediate wire 는 영향 안 받음.
-        self.cleanup_dangling_topological_edges();
+        self.cleanup_dangling_topological_edges(&epoch.new_edges);
 
         // 2026-04-28 — ADR-007 Invariant 2 enforcement (post-pipeline).
         //   D-resolver / M1 split / dissolve_and_fan_split 등 일부 step 은
@@ -7613,6 +7621,79 @@ mod tests {
                 "config[{}] preview predicate FALSE on adjacent coplanar faces:\n{}",
                 config_idx,
                 failures.join("\n")
+            );
+        }
+    }
+
+    /// Regression (2026-05-02): drawing a RECT must NOT erase pre-existing
+    /// standalone user-drawn LINEs. Phase 7 cleanup is now scope-limited to
+    /// edges created during the current closed-shape command.
+    ///
+    /// Bug: `cleanup_dangling_topological_edges` swept ALL active topological
+    /// edges in the mesh that had no incident active face. Free-floating user
+    /// wires fit that description and got deactivated whenever any RECT was
+    /// committed.
+    #[test]
+    fn drawing_rect_preserves_pre_existing_standalone_lines() {
+        let mut scene = Scene::default();
+
+        // Draw 3 free-floating standalone lines, well away from where the
+        // rect will be drawn (so they don't accidentally interact).
+        let line_endpoints = [
+            (DVec3::new(-2000.0, 0.0, -2000.0), DVec3::new(-1500.0, 0.0, -2000.0)),
+            (DVec3::new(-2000.0, 0.0, -1500.0), DVec3::new(-1500.0, 0.0, -1500.0)),
+            (DVec3::new(-2000.0, 0.0, -1000.0), DVec3::new(-1500.0, 0.0, -1000.0)),
+        ];
+        for (a, b) in &line_endpoints {
+            let r = scene.execute(Command::DrawLine {
+                start: *a, end: *b, surface_normal: None,
+            });
+            assert!(
+                matches!(r, CommandResult::EntityCreated(_)),
+                "line draw should succeed",
+            );
+        }
+
+        let active_edges_before = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .count();
+        assert!(active_edges_before >= 3, "≥3 line edges expected");
+
+        // Now draw a RECT in a completely separate location. Phase 7 cleanup
+        // runs as part of the rect finalizer.
+        let r = scene.execute(Command::DrawRect {
+            center: DVec3::new(1000.0, 0.0, 1000.0),
+            normal: DVec3::new(0.0, 1.0, 0.0),
+            up:     DVec3::new(0.0, 0.0, 1.0),
+            width: 500.0, height: 500.0,
+        });
+        assert!(
+            matches!(r, CommandResult::EntityCreated(_)),
+            "rect draw should succeed",
+        );
+
+        // The 3 user-drawn lines must still be active.
+        for (a, b) in &line_endpoints {
+            let v_a = scene.mesh.verts.iter()
+                .find(|(_, v)| (v.pos() - *a).length() < 1e-3)
+                .map(|(id, _)| id);
+            let v_b = scene.mesh.verts.iter()
+                .find(|(_, v)| (v.pos() - *b).length() < 1e-3)
+                .map(|(id, _)| id);
+            assert!(v_a.is_some(), "vert {:?} should still exist", a);
+            assert!(v_b.is_some(), "vert {:?} should still exist", b);
+
+            let v_a = v_a.unwrap();
+            let v_b = v_b.unwrap();
+            let edge_alive = scene.mesh.edges.iter().any(|(_, e)| {
+                e.is_active()
+                    && ((e.v_small() == v_a && e.v_large() == v_b)
+                        || (e.v_small() == v_b && e.v_large() == v_a))
+            });
+            assert!(
+                edge_alive,
+                "standalone line {:?}→{:?} must survive rect commit (Phase 7 scope leak)",
+                a, b,
             );
         }
     }
