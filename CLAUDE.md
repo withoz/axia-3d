@@ -558,6 +558,60 @@
   - PR-4: Debug Panel
 - **회귀 14 invariant 총합** (5 D 분산). 모두 절대 #[ignore] 금지.
 - **본 PR scope**: ADR draft + PR-1 (PR-2~4 별도 세션).
+- **PR-2 진행 (2026-05-02 추가 commit)**: `packages/axia-action-catalog/`
+  workspace package + 82 actions seeded + 4 D1 invariants (23 tests).
+  `delegated` status 추가 (handler module 경유). 마이그레이션은 별도 PR-2.5.
+
+### 24. ADR-046 — UI/UX Long-term Strategy + Product Identity Lock (P31, 2026-05-02)
+- **Product Identity 고정**: "AxiA는 P1 (건축/디자인) primary + P3
+  (AI 협업자) strong secondary 를 위한 엔진." 이전 23 LOCKED 정책은
+  모두 "정확함 / 정합성 / 정밀도" enforce — 본 ADR 이 처음으로
+  **사용자 경험 방향성** 명시 lock.
+- **7 Open Questions 합의** (모두 lock):
+  - Q1 페르소나: P1 + P3 (P2 deprioritized)
+  - Q2 Sketch vs Direct-3D: 둘 다 first-class, mode 분리
+  - Q3 AI 통합: optional sidebar, default off
+  - Q4 Mode switching: 사용자 토글, default off (additive)
+  - Q5 메뉴 재구성: A → B 점진 (muscle memory 보존)
+  - Q6 모바일: 데스크톱 only
+  - Q7 다국어: 한국어 + 영어 (Phase 2)
+- **3 Vector** (engine 목표 정량화):
+  - Easier than Blender: click ≤ 3 (현재 평균 4)
+  - More precise than SketchUp: 수치/snap 기본값 (✅)
+  - Lighter than CAD: 초기 ≤ 500KB (현재 252KB ✅)
+- **5 Pillar UI/UX**:
+  1. Discoverability — Capability Explorer + Cmd-K
+  2. Precision Visibility — VCB + OSNAP + cardinal feedback
+  3. Mode Coherence — Sketch / Model / Inspect / Debug 4-mode
+  4. AI Seam — ActionCatalog SSOT 가 사람/AI 동일 surface
+  5. Progressive Disclosure — Beginner / Intermediate / Power 3 levels
+- **5 핵심 문장** (의사결정 anchor):
+  1. "AxiA 는 P1 primary + P3 strong secondary 위한 엔진"
+  2. "Discoverability 는 정합성/정밀도와 동급 first-class"
+  3. "AI 호출과 사람 클릭은 ActionCatalog SSOT 동일 surface — AxiA
+     는 AI-collaborative CAD first-mover"
+  4. "메뉴 변경은 additive only — muscle memory 파괴 변경은 새 ADR"
+  5. "Mode 는 기존 메뉴를 대체하지 않고 보조 — 사용자 선택 lens"
+- **5-Phase Roadmap**:
+  - Phase 1 (1개월): Polish — ADR-019/023 회귀, ActionCatalog 활성,
+    Capability Explorer, Debug Panel (6 PRs)
+  - Phase 2 (1-3개월): Discoverability — auto-gen ShortcutHelp,
+    onboarding, i18n
+  - Phase 3 (3-6개월): Mode workspace
+  - Phase 4 (6-12개월): AI sidebar (first-mover)
+  - Phase 5 (12개월+): Custom toolbars / macros / plugin / cloud
+- **6 회귀 invariants** (4 자동 + 2 process review):
+  - persona_p2_no_dedicated_features_after_2026_05 (manual review)
+  - mode_switcher_default_off
+  - ai_sidebar_default_hidden
+  - menu_changes_additive_only (ADR amendment 강제, manual review)
+  - actioncatalog_ssot_for_ai_and_human (ADR-045 D1 회귀로 covered)
+  - discoverability_no_orphan_actions
+- **향후 모든 ADR (#47+) 의 anchor**: P31 의 5 핵심 문장에 정합해야.
+  의사결정 시 단 한 질문 — "이 변경이 P1 + P3 가치를 증가시키는가?"
+  답이 No 면 거부.
+- **본 PR scope**: ADR draft + LOCKED #24 + CLAUDE.md 갱신. Phase
+  1 6 PRs 는 후속 작업.
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
