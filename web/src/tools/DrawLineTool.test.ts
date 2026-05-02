@@ -39,6 +39,7 @@ function mockToolContext() {
       saveSnapConfig: vi.fn().mockReturnValue(new Set()),
       restoreSnapConfig: vi.fn(),
       applyFaceCreationPreset: vi.fn(),
+      findNearestEndpoint: vi.fn().mockReturnValue(null),
     },
     snapVisual: { update: vi.fn(), clear: vi.fn() },
     clearAxisGuide: vi.fn(),
@@ -255,6 +256,59 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3());
       tool.cleanup();
       expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  // ADR-047 P32 — Chain self-touch prevention.
+  // The DrawLineTool exposes its pending chain points (excluding chainStart)
+  // so SnapManager can drop them from endpoint-snap candidates.
+  describe('getExcludedSnapPoints (ADR-047 P32)', () => {
+    it('returns empty when no chain is active', () => {
+      expect(tool.getExcludedSnapPoints()).toEqual([]);
+    });
+
+    it('returns empty for a fresh chain with only chainStart', () => {
+      tool.onActivate();
+      // First click → chainStart set, chainPoints = [start]. No mid yet.
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
+      expect(tool.getExcludedSnapPoints()).toEqual([]);
+    });
+
+    it('excludes mid-waypoints but NOT chainStart after multiple clicks', () => {
+      tool.onActivate();
+      // P0 = chainStart
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
+      // P1 = first mid (commits the segment P0→P1, chainPoints becomes [P0, P1])
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
+      // P2 = second mid → chainPoints [P0, P1, P2]
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 100));
+
+      const excluded = tool.getExcludedSnapPoints();
+
+      // chainStart (P0) must NOT be excluded — needed for loop-close.
+      const includesStart = excluded.some(p => p.distanceTo(new THREE.Vector3(0, 0, 0)) < 1e-3);
+      expect(includesStart).toBe(false);
+
+      // P1 and P2 (mid waypoints) MUST be excluded.
+      const includesP1 = excluded.some(p => p.distanceTo(new THREE.Vector3(100, 0, 0)) < 1e-3);
+      const includesP2 = excluded.some(p => p.distanceTo(new THREE.Vector3(100, 0, 100)) < 1e-3);
+      expect(includesP1).toBe(true);
+      expect(includesP2).toBe(true);
+    });
+
+    it('returns clones (mutating result must not affect chain state)', () => {
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(50, 0, 0));
+
+      const excluded1 = tool.getExcludedSnapPoints();
+      if (excluded1.length > 0) excluded1[0].set(9999, 9999, 9999);
+      const excluded2 = tool.getExcludedSnapPoints();
+
+      // Second call must yield original positions, untouched by mutation above.
+      if (excluded2.length > 0) {
+        expect(excluded2[0].x).not.toBe(9999);
+      }
     });
   });
 });

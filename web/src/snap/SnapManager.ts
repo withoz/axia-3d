@@ -244,6 +244,19 @@ export class SnapManager {
   // Callbacks
   private _onSnapChange?: (snap: SnapPoint | null) => void;
 
+  // ═══ ADR-047 P32 — Chain self-touch prevention ═══
+  /**
+   * Positions to EXCLUDE from endpoint/nearest snap (position-based, ε=1.5μm
+   * matching LOCKED #5 spatial-hash dedup tolerance). Set per-frame by the
+   * active tool (e.g. DrawLineTool sets chainPoints[1..] so the chain cannot
+   * snap onto its own pending vertices, while chainStart remains available
+   * for the close gesture).
+   */
+  private _excludePositions: THREE.Vector3[] = [];
+  /** Squared world-space tolerance for position-based exclusion. (1.5μm)² */
+  private static readonly EXCLUDE_TOL_SQ = 1.5e-3 * 1.5e-3;
+
+
   constructor() {
     this.config = {
       enabled: true,
@@ -453,6 +466,29 @@ export class SnapManager {
   // ═══ Always-On Endpoint Inference (SketchUp-style) ═══
 
   /**
+   * ADR-047 P32 — Set vertex positions excluded from endpoint snap.
+   *
+   * Called by ToolManager before each findSnap, sourced from the active
+   * tool's `getExcludedSnapPoints()` (e.g. chainPoints[1..] for an
+   * in-progress DrawLine chain). Pass `[]` to clear.
+   *
+   * Pre-existing chainStart is intentionally NOT excluded — auto-close to
+   * the start point is the user's primary close gesture (loopClose).
+   */
+  setExcludePositions(positions: readonly THREE.Vector3[]): void {
+    this._excludePositions = positions.map(p => p.clone());
+  }
+
+  /** True if `pos` is within tolerance of any excluded position. */
+  private isPositionExcluded(pos: THREE.Vector3): boolean {
+    if (this._excludePositions.length === 0) return false;
+    for (const ex of this._excludePositions) {
+      if (pos.distanceToSquared(ex) <= SnapManager.EXCLUDE_TOL_SQ) return true;
+    }
+    return false;
+  }
+
+  /**
    * Find the nearest endpoint regardless of snap enabled/disabled state.
    * SketchUp's inference engine always pulls toward endpoints.
    * Returns the exact f64 vertex position if within pixel threshold, or null.
@@ -469,6 +505,8 @@ export class SnapManager {
     let bestDist = pxThreshold;
 
     for (const v of this.vertices) {
+      // ADR-047 P32: skip chain-pending vertices to avoid self-touch.
+      if (this.isPositionExcluded(v)) continue;
       const projected = v.clone().project(camera);
       if (projected.z < -1 || projected.z > 1) continue;
       const sx = (projected.x * 0.5 + 0.5) * rect.width + rect.left;
@@ -750,6 +788,9 @@ export class SnapManager {
         ? (fn: (v: THREE.Vector3) => void) => { for (const i of candIdx) fn(this.vertices[i]); }
         : (fn: (v: THREE.Vector3) => void) => { for (const v of this.vertices) fn(v); };
       iter(v => {
+        // ADR-047 P32: skip chain-pending vertices to prevent self-touch
+        // (chainStart remains available for loopClose).
+        if (this.isPositionExcluded(v)) return;
         const s = toScreenPx(v);
         if (s && mousePx.distanceTo(s) <= threshold) {
           addCandidate('endpoint', v, s);

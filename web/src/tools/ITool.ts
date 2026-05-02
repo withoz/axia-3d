@@ -119,4 +119,17 @@ export interface ITool {
 
   /** Optional cleanup when tool is destroyed */
   cleanup?(): void;
+
+  /**
+   * ADR-047 P32 — Vertex positions to EXCLUDE from endpoint snap.
+   *
+   * Tools with chain-state (DrawLine pending polyline, DrawPolygon, etc.)
+   * return their pending vertices (excluding the auto-close start) so the
+   * SnapManager doesn't pull the cursor onto a vertex already in the chain
+   * — that would make the engine bail at face synthesis with a duplicate-
+   * vertex error.
+   *
+   * Returning `[]` or omitting the method = no exclusion (default).
+   */
+  getExcludedSnapPoints?(): THREE.Vector3[];
 }

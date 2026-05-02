@@ -1983,6 +1983,15 @@ export class ToolManager {
       faceHitPoint = null;
     }
 
+    // ADR-047 P32 — pass chain-pending vertices to SnapManager so endpoint
+    // snap doesn't pull the cursor onto a vertex already in the active
+    // tool's chain (which would cause face synthesis to bail with a
+    // duplicate-vertex error). chainStart is intentionally NOT excluded —
+    // it must remain snappable for the loop-close gesture.
+    const activeTool = this.tools.get(this._currentTool);
+    const excluded = activeTool?.getExcludedSnapPoints?.() ?? [];
+    this.snap.setExcludePositions(excluded);
+
     const overrideType = consumeOverride
       ? this.snap.consumeOverride()
       : this.snap.getOverride();

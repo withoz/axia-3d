@@ -8,6 +8,7 @@ export class Vector2 {
   constructor(x = 0, y = 0) { this.x = x; this.y = y; }
   set(x: number, y: number) { this.x = x; this.y = y; return this; }
   copy(v: Vector2) { this.x = v.x; this.y = v.y; return this; }
+  clone() { return new Vector2(this.x, this.y); }
   length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
   normalize() { const l = this.length() || 1; this.x /= l; this.y /= l; return this; }
   distanceTo(v: Vector2) { return Math.hypot(this.x - v.x, this.y - v.y); }

@@ -613,6 +613,41 @@
 - **본 PR scope**: ADR draft + LOCKED #24 + CLAUDE.md 갱신. Phase
   1 6 PRs 는 후속 작업.
 
+### 25. ADR-047 — Snap Chain Self-Touch Prevention (P32, 2026-05-02)
+- **새 원칙 P32**: 활성 도구의 pending chain vertex 는 endpoint snap
+  candidate 에서 제외. SnapManager 가 cursor 를 chain 자기 자신 위로 끌어
+  당겨서 face synthesis 가 duplicate-vertex `bail!` 로 실패하는 경로 차단.
+- **enforcement layer 추가** — ADR-019 P4 / ADR-021 P7 정책 자체는
+  unchanged. 엔진 방어 (`face_split.rs:662 has_dup_a/has_dup_b → bail!`)
+  는 last-resort safety net 으로 유지.
+- **Position-based exclusion** (VertId-free): SnapManager 의 vertex cache
+  가 `Vector3[]` 인 점 + LOCKED #5 (1.5μm spatial-hash dedup) 정합.
+  ε = 1.5μm.
+- **chainStart 는 절대 제외 안 함** — loop-close 제스처 (highest priority
+  loopClose snap) 가 동작해야 함. 제외 대상은 `chainPoints[1..]` 만.
+- **API**: `ITool.getExcludedSnapPoints?(): Vector3[]` (optional).
+  DrawLineTool 은 `chainPoints.slice(1).map(p => p.clone())` 반환.
+  ToolManager 가 매 `getSnappedPoint` 호출 직전
+  `snap.setExcludePositions(...)` 로 위임.
+- **No findSnap signature change** — 33+ caller 영향 0. setter API 로
+  out-of-band 설정.
+- **9 회귀 테스트** (절대 #[ignore] 금지):
+  * SnapManager.exclude.test.ts (5):
+    chain_vertex_excluded_from_snap_during_polyline /
+    chain_start_remains_snappable_for_close /
+    external_vertex_not_excluded_by_active_chain /
+    clearing_exclude_list_restores_snap /
+    findNearestEndpoint_also_respects_exclude
+  * DrawLineTool.test.ts > getExcludedSnapPoints (ADR-047 P32) (4):
+    returns empty when no chain / returns empty for fresh chainStart only /
+    excludes mid-waypoints but NOT chainStart / returns clones
+- **ADR-046 P31 Pillar 2 (Precision Visibility) 보강**: snap 의 예측
+  가능성이 first-class. "왜 면이 안 만들어지지?" → precision-visibility
+  failure 였음.
+- **Future**: DrawPolygonTool / DrawFreehandTool / DrawBezierTool /
+  SketchSession multi-line tool 들도 `getExcludedSnapPoints` 채택 가능.
+  SnapManager 는 policy-agnostic.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

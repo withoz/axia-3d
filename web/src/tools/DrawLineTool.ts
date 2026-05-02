@@ -253,6 +253,22 @@ export class DrawLineTool implements ITool {
     this.transitionTo(LineDrawState.Idle);
   }
 
+  /**
+   * ADR-047 P32 — Chain-pending vertices excluded from endpoint snap.
+   *
+   * Returns all chain waypoints EXCEPT chainStart (which must remain
+   * snappable so the user can close the loop back to where they began).
+   * Without this, SnapManager would pull the cursor onto a vertex
+   * already in the pending chain → face synthesis bails with a duplicate-
+   * vertex error → silent face-creation failure.
+   */
+  getExcludedSnapPoints(): THREE.Vector3[] {
+    if (this.chainPoints.length <= 1) return [];
+    // chainPoints[0] = chainStart (keep snappable for loopClose).
+    // chainPoints[1..] = mid-waypoints (exclude).
+    return this.chainPoints.slice(1).map(p => p.clone());
+  }
+
   // ═══════════════════════════════════════════════════
   //  State Machine — Core
   // ═══════════════════════════════════════════════════
