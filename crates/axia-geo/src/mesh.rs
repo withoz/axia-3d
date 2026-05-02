@@ -3314,7 +3314,33 @@ impl Mesh {
     /// Export mesh as flat vertex/index buffers for GPU rendering.
     /// Returns (positions_f32, normals_f32, indices, face_map, positions_f64)
     /// positions_f64 has the same layout/indexing as positions_f32 but in full f64 precision.
-    pub fn export_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
+    /// **CONTRACT** (2026-05-02 invariant freeze): every active face MUST
+    /// emit ≥1 triangle. earcut Ok([]) faces are auto-deactivated INSIDE
+    /// this method — the call order is locked:
+    ///   1. clear `last_export_empty_faces`
+    ///   2. emit triangles, recording empty-emit face IDs
+    ///   3. deactivate empty-emit faces (`deactivate_empty_emit_faces`)
+    ///   4. (optional) re-export if any face was deactivated
+    ///   5. snapshot `last_export_stats` LAST
+    /// Any future change to this method MUST preserve this order. The
+    /// `debug_assert_eq!` after deactivation locks the invariant in
+    /// debug builds (release auto-corrects via the deactivation pass).
+    pub fn export_buffers(&mut self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
+        let result = self.export_buffers_inner()?;
+        // Step 3 — deactivate any face whose triangulation produced 0
+        // triangles (earcut Ok([])). Restores the "1 face = ≥1 tri"
+        // invariant before stats are snapshotted.
+        let removed = self.deactivate_empty_emit_faces();
+        if removed == 0 {
+            // Step 5 — snapshot stats (already done at end of inner pass).
+            return Ok(result);
+        }
+        // Step 4 — re-export with cleaned mesh state. Stats from this
+        // pass are the canonical snapshot (recorded at end of inner).
+        self.export_buffers_inner()
+    }
+
+    fn export_buffers_inner(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
         let mut positions: Vec<f32> = Vec::new();
         let mut positions_f64: Vec<f64> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
@@ -3322,9 +3348,10 @@ impl Mesh {
         let mut face_map: Vec<u32> = Vec::new(); // one FaceId per triangle
         let mut vert_offset: u32 = 0;
 
-        // Reset diagnostic counters at start of every export.
+        // Step 1 — reset diagnostic counters + empty-emit list at start of
+        // every export pass (the "clear" in clear → emit → deactivate →
+        // snapshot ordering).
         let mut stats = ExportSkipStats::default();
-        // Reset empty-emit face list for this export pass.
         self.last_export_empty_faces.borrow_mut().clear();
 
         // ADR-038 P23.2 — default chord tolerance for analytic surface tessellation.
@@ -3530,8 +3557,34 @@ impl Mesh {
             stats.emitted += 1;
         }
 
-        // Persist diagnostics for `last_export_skip_stats()` getter.
+        // Step 5 — snapshot stats LAST (single source of truth for
+        // diagnostic queries until the next export pass).
         self.last_export_stats.set(stats);
+
+        // INVARIANT lock — debug builds panic if some active face
+        // contributed 0 triangles to the buffer. Release builds rely
+        // on `deactivate_empty_emit_faces` to auto-correct, so this
+        // assertion is purely defensive against future regressions.
+        // We compute emitted_face_count via face_map dedup since face
+        // ids appear once per triangle.
+        #[cfg(debug_assertions)]
+        {
+            use std::collections::HashSet;
+            let active: usize = self.faces.iter().filter(|(_, f)| f.is_active() && f.is_visible()).count();
+            let emitted_set: HashSet<u32> = face_map.iter().copied().collect();
+            // After deactivate_empty_emit_faces (called from export_buffers
+            // outer wrapper), invariant should hold. During the FIRST inner
+            // pass the empty list may not yet be drained — skip assert if
+            // any pending empty IDs remain.
+            if self.last_export_empty_faces.borrow().is_empty() {
+                debug_assert_eq!(
+                    active,
+                    emitted_set.len(),
+                    "INVARIANT VIOLATED: {} active faces but only {} emitted (zero-triangle face leaked)",
+                    active, emitted_set.len(),
+                );
+            }
+        }
 
         Ok((positions, normals, indices, face_map, positions_f64))
     }

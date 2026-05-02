@@ -3229,38 +3229,11 @@ impl Scene {
 
     /// Export the mesh buffers for GPU rendering.
     /// Returns (positions_f32, normals_f32, indices, face_map, positions_f64)
-    pub fn export_mesh_buffers(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
+    /// Mesh buffer export. `Mesh::export_buffers` is self-healing —
+    /// auto-deactivates earcut Ok([]) faces internally before snapshotting
+    /// stats (see Mesh's CONTRACT comment). No additional wrapper needed.
+    pub fn export_mesh_buffers(&mut self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
         self.mesh.export_buffers()
-    }
-
-    /// Self-healing export — runs `export_buffers`, then deactivates any
-    /// face whose triangulation produced 0 triangles (earcut Ok([])), and
-    /// re-runs export so the buffers reflect the cleaned-up mesh state.
-    ///
-    /// **Invariant** (2026-05-02): every active face MUST emit ≥1 triangle.
-    /// This wrapper is the only call site that should be wired into the
-    /// WASM rebuild_cache pipeline so the user never sees a "wireframe-only"
-    /// face — if earcut can't triangulate, the face simply disappears
-    /// (which is the correct outcome for degenerate / self-touching
-    /// polygons that shouldn't have been synthesized in the first place).
-    ///
-    /// Returns the mesh buffers + the count of faces auto-deactivated.
-    pub fn export_mesh_buffers_self_healing(
-        &mut self,
-    ) -> Result<((Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>), usize)> {
-        // First pass to populate the empty-emit list.
-        let _first = self.mesh.export_buffers()?;
-        let removed = self.mesh.deactivate_empty_emit_faces();
-        if removed == 0 {
-            // Reuse the first pass — no cleanup needed.
-            return Ok((_first, 0));
-        }
-        // Cleanup happened — re-export so buffers reflect the new state.
-        // Also unregister deactivated faces from XIA mappings (already
-        // done inside `remove_face`'s callers when reachable; this layer
-        // is just a final guard for any orphaned XIA links).
-        let cleaned = self.mesh.export_buffers()?;
-        Ok((cleaned, removed))
     }
 
     /// Export hard edge line segments for wireframe rendering.

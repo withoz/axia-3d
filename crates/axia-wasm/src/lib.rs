@@ -351,18 +351,12 @@ impl AxiaEngine {
         if !self.cache_dirty {
             return;
         }
-        // Self-healing variant — auto-deactivates earcut Ok([]) faces.
-        // Restores invariant "every active face has ≥1 emitted triangle".
-        // Without this the degenerate face stays active in mesh but
-        // invisible in render → user's "wireframe-only RECT" symptom.
-        match self.scene.export_mesh_buffers_self_healing() {
-            Ok(((p, n, i, fm, p64), removed)) => {
-                if removed > 0 {
-                    debug_log!(
-                        "[rebuild_cache] auto-deactivated {} earcut-empty face(s) — invariant restored",
-                        removed,
-                    );
-                }
+        // `export_mesh_buffers` is self-healing — auto-deactivates earcut
+        // Ok([]) faces internally so the user never sees a wireframe-only
+        // RECT. Invariant locked by debug_assert_eq inside the export
+        // pipeline (see Mesh::export_buffers CONTRACT comment).
+        match self.scene.export_mesh_buffers() {
+            Ok((p, n, i, fm, p64)) => {
                 self.cached_positions = p;
                 self.cached_positions_f64 = p64;
                 self.cached_normals = n;
