@@ -402,6 +402,7 @@ export class ToolManager {
     'thicken-faces',
     'solidify',
     'mesh-repair',
+    'resynthesize-faces',
     'measure-selection',
     'bend-selection', 'twist-selection', 'taper-selection',
     'redo', 'group', 'make-component',
@@ -441,6 +442,7 @@ export class ToolManager {
     'thicken-faces': '선택 면에 두께 부여 (Shell/Thicken)',
     'solidify': '열린 쉘을 닫힌 솔리드로 변환 (Solidify)',
     'mesh-repair': '메시 정리 (퇴화면/와인딩/고립 정점)',
+    'resynthesize-faces': '면 재합성 (닫힌 라인 cycle → face)',
     'sketch-start-xz': '스케치 시작 — XZ 바닥 평면',
     'sketch-start-xy': '스케치 시작 — XY 정면 평면',
     'sketch-start-yz': '스케치 시작 — YZ 측면 평면',
@@ -1241,6 +1243,19 @@ export class ToolManager {
           ? `\n⚠️ 잔여 invariant 위반 ${report.remainingViolations}개 — 수동 점검 필요`
           : '';
         Toast.info(`🩹 Mesh Repair — ${summary}${remain}`, 6000);
+      }
+    } else if (action === 'resynthesize-faces') {
+      // ADR-021 P7 + ADR-025 P11 — manual "Resynthesize Faces".
+      //
+      // Use when previous edits left closed line cycles without an
+      // associated face (visible as wireframe-only). Sweeps free orphan
+      // edges for cycles via DFS and synthesizes a face for each.
+      const created = this.bridge.resynthesizeOrphanFaces();
+      if (created > 0) {
+        this.syncMesh();
+        Toast.info(`🔄 면 재합성 — 새 면 ${created}개 생성`, 3500);
+      } else {
+        Toast.info('재합성할 닫힌 라인 cycle 이 없습니다', 2500);
       }
     } else if (action === 'solidify') {
       // Solidify — 열린 쉘의 boundary edge 루프를 자동 cap. 전형 사용 시나리오:

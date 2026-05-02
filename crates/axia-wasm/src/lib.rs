@@ -4204,6 +4204,26 @@ impl AxiaEngine {
         )
     }
 
+    /// ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
+    ///
+    /// Sweeps free orphan edges in the mesh for closed simple cycles and
+    /// synthesizes a face for each. Returns number of new faces created.
+    /// Use after multi-step edits where face synthesis missed a cycle
+    /// (e.g. drew RECT → drew other shapes → original face's boundary now
+    /// looks closed but engine didn't reconnect it).
+    ///
+    /// Call site triggers a topology-change so the next syncMesh rebuilds
+    /// everything (face buffers, edge wireframe, snap cache).
+    #[wasm_bindgen(js_name = "resynthesizeOrphanFaces")]
+    pub fn resynthesize_orphan_faces(&mut self) -> u32 {
+        let n = self.scene.resynthesize_orphan_faces() as u32;
+        if n > 0 {
+            self.mark_topology_changed();
+            self.invalidate_cache();
+        }
+        n
+    }
+
     /// ADR-047 R-track — non-manifold edge endpoints for rendering overlay.
     ///
     /// Returns `Float32Array` of `[x0,y0,z0, x1,y1,z1, ...]` line segments

@@ -1771,6 +1771,49 @@ impl Scene {
     /// `resolve_planar_free_faces` 가 leftmost-turn 단일 패스로 놓치는 케이스
     /// 를 brute-force DFS 로 처리. 잔존 orphan edges 그래프에서 simple cycle
     /// 을 찾아 face 로 합성. Component 가 작아 (보통 < 20 edges) 비용 낮음.
+    /// ADR-021 P7 + ADR-025 P11 — User-callable "Resynthesize Faces" command.
+    ///
+    /// Walks every active topological edge currently NOT bounding a face and
+    /// looks for closed simple cycles. Each cycle found becomes a new face
+    /// (DFS-based mop-up of `mop_up_orphan_cycles_via_dfs` made public +
+    /// transactional + creates a self-contained XIA per new face).
+    ///
+    /// Use case: a previous draw or edit operation left orphan edges that
+    /// happen to form a closed cycle but the synthesis pipeline missed them
+    /// (LOCKED #1 P11 strict guarantees only for closed-shape commands —
+    /// DrawLine intermediate states / cross-cuts may leak). The user can
+    /// trigger this manually instead of redrawing.
+    ///
+    /// Returns the number of new faces synthesized (0 if no cycles found).
+    /// Wraps in a single transaction so Ctrl+Z reverts the whole sweep.
+    pub fn resynthesize_orphan_faces(&mut self) -> usize {
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        let mut created: Vec<FaceId> = Vec::new();
+        self.mop_up_orphan_cycles_via_dfs(&mut created);
+
+        let n = created.len();
+        if n > 0 {
+            // Each new face becomes its own "Resynthesized" XIA so the user
+            // can see / select / annotate it like any other face.
+            for fid in &created {
+                let xia_id = self.create_xia("Resynthesized".to_string());
+                if let Some(xia) = self.xias.get_mut(&xia_id) {
+                    xia.face_ids.push(*fid);
+                }
+                self.register_faces_to_xia(xia_id, &[*fid]);
+            }
+            self.transactions.set_after_snapshot(self.scene_snapshot());
+            self.transactions.commit();
+        } else {
+            // Nothing changed — discard the empty transaction so undo
+            // history isn't polluted with a no-op entry.
+            self.transactions.cancel();
+        }
+        n
+    }
+
     fn mop_up_orphan_cycles_via_dfs(&mut self, all_created_faces: &mut Vec<FaceId>) {
         use std::collections::{HashMap, HashSet};
         const MAX_ROUNDS: usize = 8;

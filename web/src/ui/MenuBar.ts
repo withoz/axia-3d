@@ -582,6 +582,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       }
       case 'solidify': toolManager.executeAction('solidify'); break;
       case 'mesh-repair': toolManager.executeAction('mesh-repair'); break;
+      case 'resynthesize-faces': toolManager.executeAction('resynthesize-faces'); break;
       // Sketch Mode — 드로잉을 고정 평면에 잠금. Push/Pull로 3D 변환 前 작업.
       case 'sketch-start-auto':
       case 'sketch-start-xz':

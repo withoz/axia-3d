@@ -144,6 +144,7 @@ export const axiaengine_rename_group: (a: number, b: number, c: number, d: numbe
 export const axiaengine_repairNonManifoldEdges: (a: number, b: number) => void;
 export const axiaengine_resolveAllConstraints: (a: number) => number;
 export const axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
+export const axiaengine_resynthesizeOrphanFaces: (a: number) => number;
 export const axiaengine_revolveProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
 export const axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

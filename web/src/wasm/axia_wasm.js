@@ -2432,6 +2432,23 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
+     *
+     * Sweeps free orphan edges in the mesh for closed simple cycles and
+     * synthesizes a face for each. Returns number of new faces created.
+     * Use after multi-step edits where face synthesis missed a cycle
+     * (e.g. drew RECT → drew other shapes → original face's boundary now
+     * looks closed but engine didn't reconnect it).
+     *
+     * Call site triggers a topology-change so the next syncMesh rebuilds
+     * everything (face buffers, edge wireframe, snap cache).
+     * @returns {number}
+     */
+    resynthesizeOrphanFaces() {
+        const ret = wasm.axiaengine_resynthesizeOrphanFaces(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
      * axis `(origin, dir)` into a surface of revolution. Returns the new
      * FaceIds in profile-major, ring-minor order, or an empty vec on

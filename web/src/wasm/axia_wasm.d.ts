@@ -881,6 +881,19 @@ export class AxiaEngine {
      */
     resolveConstraintsIterative(max_iter: number, tolerance: number): string;
     /**
+     * ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
+     *
+     * Sweeps free orphan edges in the mesh for closed simple cycles and
+     * synthesizes a face for each. Returns number of new faces created.
+     * Use after multi-step edits where face synthesis missed a cycle
+     * (e.g. drew RECT → drew other shapes → original face's boundary now
+     * looks closed but engine didn't reconnect it).
+     *
+     * Call site triggers a topology-change so the next syncMesh rebuilds
+     * everything (face buffers, edge wireframe, snap cache).
+     */
+    resynthesizeOrphanFaces(): number;
+    /**
      * Revolve a 2D profile (flat array of [x,y,z, x,y,z, …]) around the
      * axis `(origin, dir)` into a surface of revolution. Returns the new
      * FaceIds in profile-major, ring-minor order, or an empty vec on
@@ -1371,6 +1384,7 @@ export interface InitOutput {
     readonly axiaengine_repairNonManifoldEdges: (a: number, b: number) => void;
     readonly axiaengine_resolveAllConstraints: (a: number) => number;
     readonly axiaengine_resolveConstraintsIterative: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_resynthesizeOrphanFaces: (a: number) => number;
     readonly axiaengine_revolveProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly axiaengine_rotateVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_rotate_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

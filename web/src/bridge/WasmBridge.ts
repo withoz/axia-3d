@@ -1035,6 +1035,29 @@ export class WasmBridge {
   }
 
   /**
+   * ADR-021 P7 + ADR-025 P11 — user-triggered "Resynthesize Faces".
+   *
+   * Sweeps free orphan edges for closed cycles and synthesizes a face for
+   * each. Returns number of faces created (0 if nothing to resynthesize).
+   *
+   * Use case: previous edits left a closed line skeleton without an
+   * associated face (visible as wireframe only). Triggering this gives
+   * the user a manual "fix it" button without redrawing.
+   */
+  resynthesizeOrphanFaces(): number {
+    const e = this.engine as { resynthesizeOrphanFaces?: () => number } | null;
+    if (!e?.resynthesizeOrphanFaces) return 0;
+    try {
+      const n = e.resynthesizeOrphanFaces();
+      if (n > 0) this.bufferCache.dirty = true;
+      return n;
+    } catch (err) {
+      console.error('[WasmBridge] resynthesizeOrphanFaces failed:', err);
+      return 0;
+    }
+  }
+
+  /**
    * ADR-047 R-track — non-manifold edge endpoints for visual overlay.
    *
    * Returns flat `[x0,y0,z0, x1,y1,z1, ...]` Float32Array with 2 endpoints
