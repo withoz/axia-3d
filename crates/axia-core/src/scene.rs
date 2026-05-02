@@ -7750,6 +7750,81 @@ mod tests {
         }
     }
 
+    /// P0 regression (2026-05-02): drawing a RECT MUST always create at
+    /// least one face, regardless of which corner the user starts from
+    /// or which diagonal direction they drag. Equivalent input parameter
+    /// sets (same 4 corners up to rotation/reflection of the input order)
+    /// must produce equivalent face topology — same vertex SET on the
+    /// outer loop.
+    ///
+    /// Internal model: the engine receives (center, normal, up, width,
+    /// height). TS DrawRectTool maps any user drag direction to this
+    /// canonical form. We test the engine layer's invariance under the
+    /// equivalent rotations of (up direction × w/h swap).
+    #[test]
+    fn draw_rect_is_direction_and_order_invariant() {
+        // Logical rect: 1000mm × 500mm centered at origin on the XZ ground
+        // plane. The 4 inputs below all describe THE SAME physical rect.
+        let center = DVec3::new(0.0, 0.0, 0.0);
+        let n = DVec3::new(0.0, 1.0, 0.0);  // ground plane normal
+        let cases: Vec<(&str, DVec3, f64, f64)> = vec![
+            ("up=+Z, 1000×500",  DVec3::new(0.0, 0.0, 1.0),  1000.0, 500.0),
+            // up rotated 90° → swap w/h to keep the SAME physical rect
+            ("up=+X, 500×1000",  DVec3::new(1.0, 0.0, 0.0),  500.0, 1000.0),
+            // up rotated 180° (still ground plane) → same w/h
+            ("up=-Z, 1000×500",  DVec3::new(0.0, 0.0, -1.0), 1000.0, 500.0),
+            // up rotated 270° → swap again
+            ("up=-X, 500×1000",  DVec3::new(-1.0, 0.0, 0.0), 500.0, 1000.0),
+        ];
+
+        // Collect outer-loop vertex SETS (not lists — order can rotate
+        // with up direction, but the set must be identical).
+        let mut vertex_sets: Vec<std::collections::BTreeSet<(i64, i64, i64)>> = Vec::new();
+
+        for (label, up, w, h) in cases {
+            let mut scene = Scene::default();
+            let r = scene.execute(Command::DrawRect { center, normal: n, up, width: w, height: h });
+            let xia = match r {
+                CommandResult::EntityCreated(x) => x,
+                other => panic!("[{}] RECT must create a face, got {:?}", label, other),
+            };
+            assert!(
+                !scene.xias[&xia].face_ids.is_empty(),
+                "[{}] RECT must produce ≥1 face (P0 invariant)", label,
+            );
+            let fid = scene.xias[&xia].face_ids[0];
+            let verts = scene.mesh.collect_loop_verts(scene.mesh.faces[fid].outer().start)
+                .expect("face has outer loop");
+            assert_eq!(verts.len(), 4, "[{}] RECT face should have 4-vert outer loop", label);
+
+            // Quantize positions to nm (1e-6 mm) so f64 jitter doesn't
+            // produce different "set" elements across cases.
+            let qset: std::collections::BTreeSet<(i64, i64, i64)> = verts.iter()
+                .filter_map(|&v| scene.mesh.vertex_pos(v).ok())
+                .map(|p| (
+                    (p.x * 1e6).round() as i64,
+                    (p.y * 1e6).round() as i64,
+                    (p.z * 1e6).round() as i64,
+                ))
+                .collect();
+            assert_eq!(qset.len(), 4, "[{}] outer loop must have 4 distinct vertices", label);
+
+            eprintln!("[{}] vertices: {:?}", label, qset);
+            vertex_sets.push(qset);
+        }
+
+        // ★ Direction/order invariance: ALL cases must yield the SAME
+        // vertex set (the 4 corners of the same physical rect).
+        let canonical = &vertex_sets[0];
+        for (i, vs) in vertex_sets.iter().enumerate().skip(1) {
+            assert_eq!(
+                canonical, vs,
+                "P0 INVARIANT VIOLATED: case[{}] produced different corners than case[0]",
+                i,
+            );
+        }
+    }
+
     /// Regression (2026-05-02): drawing a RECT must NOT deactivate pre-
     /// existing FACES whose normal happens to evaluate degenerate during
     /// the new draw's post-pipeline scan. The degenerate scan is now
