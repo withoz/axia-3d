@@ -1227,6 +1227,30 @@ export class AxiaEngine {
         }
     }
     /**
+     * UX 2026-05-02 — free (face-less) edge endpoints for distinct render.
+     *
+     * Returns `[x0,y0,z0, x1,y1,z1, ...]` flat Float32Array of edges that
+     * don't bound any active face. The renderer draws these with a
+     * distinct dashed/lighter style so users see "this is a line, not a
+     * face boundary" — addresses the "looks like a rect but engine
+     * reports no face" misperception (closed line sets that don't
+     * actually close to within ε tolerance).
+     * @returns {Float32Array}
+     */
+    getFreeEdgeSegments() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getFreeEdgeSegments(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @returns {number}
      */
     getIndicesLen() {

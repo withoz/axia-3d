@@ -473,6 +473,17 @@ export class AxiaEngine {
      * 길이 = max active FaceId raw + 1 (편의상 sparse vec).
      */
     getFaceVolumeFlags(): Uint8Array;
+    /**
+     * UX 2026-05-02 — free (face-less) edge endpoints for distinct render.
+     *
+     * Returns `[x0,y0,z0, x1,y1,z1, ...]` flat Float32Array of edges that
+     * don't bound any active face. The renderer draws these with a
+     * distinct dashed/lighter style so users see "this is a line, not a
+     * face boundary" — addresses the "looks like a rect but engine
+     * reports no face" misperception (closed line sets that don't
+     * actually close to within ε tolerance).
+     */
+    getFreeEdgeSegments(): Float32Array;
     getIndicesLen(): number;
     getIndicesPtr(): number;
     /**
@@ -1318,6 +1329,7 @@ export interface InitOutput {
     readonly axiaengine_getFaceMapPtr: (a: number) => number;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
+    readonly axiaengine_getFreeEdgeSegments: (a: number, b: number) => void;
     readonly axiaengine_getIndicesLen: (a: number) => number;
     readonly axiaengine_getIndicesPtr: (a: number) => number;
     readonly axiaengine_getLastExportSkipStats: (a: number, b: number) => void;

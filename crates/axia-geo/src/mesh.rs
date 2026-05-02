@@ -3783,6 +3783,36 @@ impl Mesh {
     // Face merge (AixxiA coplanar merge — SketchUp-style)
     // ========================================================================
 
+    /// UX (2026-05-02) — collect edges that bound NO active face. These
+    /// are standalone Line XIAs (DrawLine intermediate / orphan splits)
+    /// and are rendered with a distinct dashed style so users see at a
+    /// glance "this is a line, not a face boundary" — addresses the
+    /// "wireframe rect" misperception where multiple separate lines
+    /// happen to look like a rectangle outline.
+    ///
+    /// Returns positions only (segment endpoints, 6 floats per edge).
+    pub fn collect_free_edge_segments(&self) -> Vec<f32> {
+        let mut buf: Vec<f32> = Vec::new();
+        for (eid, e) in self.edges.iter() {
+            if !e.is_active() { continue; }
+            let (faces, _) = self.get_faces_sharing_edge(eid);
+            let any_active = faces.iter().any(|&f|
+                self.faces.contains(f) && self.faces[f].is_active());
+            if any_active { continue; } // edge bounds at least one face → not free
+            let v0 = e.v_small();
+            let v1 = e.v_large();
+            if let (Ok(p0), Ok(p1)) = (self.vertex_pos(v0), self.vertex_pos(v1)) {
+                buf.push(p0.x as f32);
+                buf.push(p0.y as f32);
+                buf.push(p0.z as f32);
+                buf.push(p1.x as f32);
+                buf.push(p1.y as f32);
+                buf.push(p1.z as f32);
+            }
+        }
+        buf
+    }
+
     /// ADR-047 R-track (2026-05-02) — collect edges shared by ≥3 active faces.
     ///
     /// These are non-manifold edges produced by ADR-021 P7 stacked-inner

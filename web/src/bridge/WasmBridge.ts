@@ -1072,6 +1072,24 @@ export class WasmBridge {
   }
 
   /**
+   * UX 2026-05-02 — free (face-less) edges for distinct rendering.
+   *
+   * Returns flat `[x0,y0,z0, x1,y1,z1, ...]` Float32Array of edges that
+   * don't bound any active face. The Viewport renders them with a
+   * distinct dashed style so users see "line, not face boundary".
+   * Empty array when no free edges or older WASM without the method.
+   */
+  getFreeEdgeSegments(): Float32Array {
+    const e = this.engine as { getFreeEdgeSegments?: () => Float32Array } | null;
+    if (!e?.getFreeEdgeSegments) return new Float32Array(0);
+    try {
+      return e.getFreeEdgeSegments();
+    } catch {
+      return new Float32Array(0);
+    }
+  }
+
+  /**
    * ADR-047 R-track — non-manifold edge endpoints for visual overlay.
    *
    * Returns flat `[x0,y0,z0, x1,y1,z1, ...]` Float32Array with 2 endpoints

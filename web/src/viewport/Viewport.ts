@@ -111,6 +111,13 @@ export class Viewport {
   private _nonManifoldOverlayMat: LineMaterial | null = null;
   /** R1 toggle — non-manifold highlight visibility. Default ON. */
   private _showNonManifoldHighlight = true;
+  /** UX 2026-05-02 — overlay LineSegments2 for FREE edges (no incident
+   *  active face). Rendered dashed so users distinguish "line" vs
+   *  "face boundary" at a glance. Closes the "looks like a rect but
+   *  engine sees only lines" misperception. */
+  private _freeEdgeOverlay: LineSegments2 | null = null;
+  private _freeEdgeOverlayMat: LineMaterial | null = null;
+  private _showFreeEdgeStyle = true;
   /** Pending requestAnimationFrame id for deferred smoothNormals.
    *  Cancel-and-replace ensures we never run an old normal pass on top
    *  of a fresher mesh. */
@@ -1271,7 +1278,16 @@ export class Viewport {
     }
 
     // ── 4) Standalone edge lines (면 없이 Line 도구로 그린 선) ──
-    if (positions.length === 0 && edgeLines && edgeLines.length > 0) {
+    //    Legacy fallback — only when the new free-edge dashed overlay is
+    //    explicitly disabled. The overlay (updateFreeEdgeOverlay) is
+    //    refreshed externally per syncMesh and handles BOTH the empty-
+    //    mesh and mixed-mesh cases consistently with a distinct dashed
+    //    style.
+    if (
+      !this._showFreeEdgeStyle &&
+      positions.length === 0 &&
+      edgeLines && edgeLines.length > 0
+    ) {
       const geo = new LineSegmentsGeometry();
       geo.setPositions(edgeLines);
       const mat = this._makeMeshEdgeMaterial();
@@ -2592,6 +2608,68 @@ export class Viewport {
   }
   isShowNonManifoldHighlight(): boolean {
     return this._showNonManifoldHighlight;
+  }
+
+  /**
+   * UX 2026-05-02 — install / refresh the FREE edge overlay (lines that
+   * don't bound any active face). Rendered DASHED + thinner + slightly
+   * desaturated so users immediately distinguish "this is a line" from
+   * "this is a face-bounding edge". Closes the misperception where a
+   * cluster of standalone lines visually resembles a rect outline.
+   *
+   * `segments` is `[x0,y0,z0, x1,y1,z1, ...]` from
+   * `WasmBridge.getFreeEdgeSegments`. Pass empty array to clear.
+   */
+  updateFreeEdgeOverlay(segments: Float32Array): void {
+    if (this._freeEdgeOverlay) {
+      this.meshGroup.remove(this._freeEdgeOverlay);
+      const geo = this._freeEdgeOverlay.geometry as LineSegmentsGeometry;
+      geo.dispose();
+      this._freeEdgeOverlay = null;
+    }
+    if (!this._showFreeEdgeStyle || segments.length < 6) return;
+
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(Array.from(segments));
+
+    if (!this._freeEdgeOverlayMat) {
+      const w = this.container.clientWidth || 1;
+      const h = this.container.clientHeight || 1;
+      this._freeEdgeOverlayMat = new LineMaterial({
+        // Slightly desaturated, thinner, dashed → "this is a line, not
+        // a face boundary". Color reads as muted compared to face edge
+        // (#333366 dark navy) — picks up grid lavender hint.
+        color: 0x6b6b8a,
+        linewidth: 0.8,
+        resolution: new THREE.Vector2(w, h),
+        worldUnits: false,
+        dashed: true,
+        dashSize: 30,
+        gapSize: 10,
+        transparent: false,
+        depthTest: true,
+        depthWrite: true,
+      });
+      this._meshEdgeMaterials.push(this._freeEdgeOverlayMat);
+    }
+
+    this._freeEdgeOverlay = new LineSegments2(geo, this._freeEdgeOverlayMat);
+    this._freeEdgeOverlay.name = 'free-edge-overlay';
+    this._freeEdgeOverlay.renderOrder = 1;  // same layer as standard edges
+    this._freeEdgeOverlay.visible = this._showFreeEdgeStyle && this._edgeVisible;
+    this._freeEdgeOverlay.computeLineDistances();  // dashed material requires this
+    this.meshGroup.add(this._freeEdgeOverlay);
+  }
+
+  /** Toggle the dashed-style free-edge overlay (default true).
+   *  Off = free edges render with the same material as face boundary edges
+   *  (legacy behavior pre-2026-05-02). */
+  setShowFreeEdgeStyle(enabled: boolean): void {
+    this._showFreeEdgeStyle = enabled;
+    if (this._freeEdgeOverlay) this._freeEdgeOverlay.visible = enabled && this._edgeVisible;
+  }
+  isShowFreeEdgeStyle(): boolean {
+    return this._showFreeEdgeStyle;
   }
 
   /** 현재 스타일 설정값 반환 (프리셋 비교/저장용) */

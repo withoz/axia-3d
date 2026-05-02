@@ -1984,6 +1984,20 @@ export class ToolManager {
     }
     recordStep('syncMesh.nonManifoldOverlay', performance.now() - tNm0);
 
+    // ── UX 2026-05-02 — refresh free (face-less) edge dashed overlay ──
+    //   Lines that don't bound any active face render in a distinct
+    //   dashed style so users distinguish "line" from "face boundary"
+    //   at a glance. Closes the "wireframe rect" misperception where
+    //   separate standalone lines visually resemble a rect outline.
+    const tFe0 = performance.now();
+    try {
+      const feSegs = this.bridge.getFreeEdgeSegments();
+      this.viewport.updateFreeEdgeOverlay(feSegs);
+    } catch (err) {
+      void err;
+    }
+    recordStep('syncMesh.freeEdgeOverlay', performance.now() - tFe0);
+
     // Sprint 3 §1 — stats + projected shadow 측정 추가.
     //   syncMesh 의 미계측 31ms 의 dominator 를 telemetry 로 격리.
     const tStats0 = performance.now();

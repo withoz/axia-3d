@@ -74,6 +74,7 @@ export const axiaengine_getFaceMapLen: (a: number) => number;
 export const axiaengine_getFaceMapPtr: (a: number) => number;
 export const axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
 export const axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
+export const axiaengine_getFreeEdgeSegments: (a: number, b: number) => void;
 export const axiaengine_getIndicesLen: (a: number) => number;
 export const axiaengine_getIndicesPtr: (a: number) => number;
 export const axiaengine_getLastExportSkipStats: (a: number, b: number) => void;
