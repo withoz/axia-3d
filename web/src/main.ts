@@ -36,7 +36,13 @@ import { loadInitialScene } from './ui/InitialScene';
 import { initXiaInspector } from './ui/XiaInspector';
 import { debugLog } from './utils/debug';
 import { Toast } from './ui/Toast';
+import { getConsolePanel } from './ui/ConsolePanel';
 import './ui/DraggablePanels.css';
+
+// Install in-UI console panel as early as possible so any errors during
+// app boot are captured and visible to the user without DevTools.
+// (ADR-045 D5 — first cut of Debug Panel surface.)
+getConsolePanel().install();
 
 /**
  * Detect whether the WASM binary on the server is newer than the one the
