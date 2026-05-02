@@ -8,7 +8,7 @@ bool-subtract,Modeling > Boolean > Subtract,,,,booleanOp,boolean_op,boolean,2,OK
 bool-union,Modeling > Boolean > Union,,,,booleanOp,boolean_op,boolean,2,OK,Via BooleanHandler
 chamfer-edge,Modeling > Edge Tools > Chamfer,,엣지 모따기,,filletEdge,filletEdge,fillet-chamfer,3,OK,Reuses fillet with segments=1
 clash-clear,View > Analysis > Clash Clear,,,,(none),(none),debug,1,UI-ONLY,View overlay clearing
-clash-detect,View > Analysis > Clash Detection,,,,(unknown),(unknown),debug,1,UNCLEAR,Need handler trace
+clash-detect,View > Analysis > Clash Detection,,,,(ClashDetection),(none),debug,1,OK,Lazy import in MenuBar:473
 clipboard-copy,Edit > Copy,Ctrl+C,,,(Clipboard),(none),clipboard,2,OK,Pure JS clipboard
 clipboard-cut,Edit > Cut,Ctrl+X,,,batchDelete,batch_delete,clipboard,2,OK,Copy then delete
 clipboard-paste,Edit > Paste,Ctrl+V,,MoveTool,arrayLinearFaces+MoveTool.startPlacement,arrayLinearFaces,clipboard,2,OK,Chains to MoveTool
@@ -106,7 +106,7 @@ tool-cone,Primitive > Cone,N,,ConeTool,create_cone,create_cone,draw,2,OK,
 tool-cylinder,Primitive > Cylinder,Y,,CylinderTool,create_cylinder,create_cylinder,draw,2,OK,
 tool-erase,Modeling > Modify > Erase,E,,EraseTool,batchEraseEdgesWithMerge+batchDelete,batchEraseEdgesWithMerge,topology,2,OK,
 tool-explode,Modeling > Group > Explode,,,,(SelectionManager),(none),group,1,OK,Local cache only
-tool-extend,Modeling > Edge Tools > Extend,,,,(unknown),(unknown),topology,1,UNCLEAR,Stub or partial?
+tool-extend,Modeling > Edge Tools > Extend,,,,(none),(none),topology,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
 tool-freehand,Draw > Freehand,Shift+F,,DrawFreehandTool,(via tool),(none),draw,2,OK,
 tool-group,Modeling > Group > Group,,,GroupTool,createGroup,create_group,group,1,OK,Same as group action
 tool-line,Draw > Line,L,,DrawLineTool,drawLine,draw_line,draw,2,OK,
@@ -114,7 +114,7 @@ tool-make-component,Modeling > Group > Make Component,,,,makeComponent,make_comp
 tool-measure,Modeling > Measure > Measure Tool,U,,MeasureTool,(via tool),(none),measurement,2,OK,
 tool-move,Modeling > Modify > Move,M,,MoveTool,translateVerts+translate_faces,translateVerts,transform,2,OK,
 tool-offset,Modeling > Modify > Offset,O,,OffsetTool,offset_face+offset_edge,offset_face,transform,2,OK,
-tool-point,Draw > Point,,,(unknown),(unknown),(unknown),draw,1,UNCLEAR,
+tool-point,Draw > Point,,,(none),(none),(none),draw,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
 tool-polygon,Draw > Polygon,G,,DrawPolygonTool,(via tool),(none),draw,2,OK,
 tool-polyline,Draw > Polyline,Shift+L,,DrawLineTool (alias),drawPolyline,drawPolyline,draw,2,OK,
 tool-pushpull,Modeling > Deformation > Push/Pull,P,,PushPullTool,pushPull,push_pull,transform,2,OK,
@@ -123,8 +123,8 @@ tool-rotate,Modeling > Modify > Rotate,Q,,RotateTool,rotateVerts+rotate_faces,ro
 tool-scale,Modeling > Modify > Scale,S,,ScaleTool,scaleVerts+scale_faces,scaleVerts,transform,2,OK,
 tool-slice,Modeling > Boolean > Slice,,,SliceTool,sliceVolumeByPlane,sliceVolumeByPlane,topology,1,OK,
 tool-sphere,Primitive > Sphere,H,,SphereTool,create_sphere,create_sphere,draw,2,OK,
-tool-text3d,Draw > Text3D,,,(unknown),(unknown),(unknown),draw,1,UNCLEAR,
-tool-trim,Modeling > Edge Tools > Trim,,,,(unknown),(unknown),topology,1,UNCLEAR,
+tool-text3d,Draw > Text3D,,,(none),(none),(none),draw,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
+tool-trim,Modeling > Edge Tools > Trim,,,,(none),(none),topology,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
 tool-ungroup,Modeling > Group > Ungroup,,,,(SelectionManager),(none),group,1,OK,Local cache
 twist-selection,Modeling > Deformation > Twist,,,,twistVertsDeform,twistVerts,transform,1,OK,
 undo,Edit > Undo,Ctrl+Z,Undo,,undo,undo,undo-redo,3,OK,Special busy handling

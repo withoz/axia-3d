@@ -154,6 +154,19 @@ export function initMenuBar(deps: MenuBarDeps): void {
 
   // ── 헬퍼 ──
   const setActiveTool = (tool: string) => {
+    // Integrity guard (audit 2026-05-02 Section A Finding 3) — refuse
+    // to switch to an unregistered tool. Otherwise the click silently
+    // succeeds but no actual tool handles mouse events. Surface the
+    // gap as a "준비 중" Toast so the user understands the menu item
+    // is a placeholder rather than a broken click.
+    if (!toolManager.hasTool(tool)) {
+      Toast.warning(
+        `"${toolNames[tool] || tool}" 도구는 아직 준비 중입니다. ` +
+          `(menu surfaces tool-id but tool unregistered)`,
+        4000,
+      );
+      return;
+    }
     toolManager.setTool(tool);
     const tb = document.getElementById('toolbar')!;
     tb.querySelectorAll('.tool-btn').forEach(b => {

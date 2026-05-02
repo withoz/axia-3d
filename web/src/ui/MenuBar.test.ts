@@ -86,6 +86,7 @@ function mockDeps(): MenuBarDeps {
     bridge: {} as any,
     toolManager: {
       setTool: vi.fn(),
+      hasTool: vi.fn().mockReturnValue(true),
       executeAction: vi.fn(),
       selection: { clearSelection: vi.fn() },
     } as any,
@@ -339,6 +340,37 @@ describe('MenuBar', () => {
     it('export-iges shows Toast info', () => {
       const btn = document.querySelector('[data-action="export-iges"]') as HTMLElement;
       expect(() => btn.click()).not.toThrow();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // Integrity audit (2026-05-02 Section A Finding 3) — unregistered
+  // tool guard. setActiveTool must not silently no-op when the
+  // requested tool is missing from the ToolManager registry.
+  // ─────────────────────────────────────────────────────────────────
+  describe('unregistered tool guard (audit Finding 3)', () => {
+    it('setActiveTool refuses unregistered tool — setTool NOT called', () => {
+      // Make hasTool report 'line' (the wired action's target) as
+      // unregistered. The click should bail out at the guard.
+      (deps.toolManager.hasTool as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      // Re-clear setTool spy so the beforeEach init doesn't pollute it
+      (deps.toolManager.setTool as ReturnType<typeof vi.fn>).mockClear();
+      const lineBtn = document.querySelector(
+        '[data-action="tool-line"]',
+      ) as HTMLElement;
+      expect(() => lineBtn.click()).not.toThrow();
+      expect(deps.toolManager.setTool).not.toHaveBeenCalled();
+      expect(deps.toolManager.hasTool).toHaveBeenCalledWith('line');
+    });
+
+    it('setActiveTool proceeds when tool IS registered', () => {
+      (deps.toolManager.hasTool as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      (deps.toolManager.setTool as ReturnType<typeof vi.fn>).mockClear();
+      const lineBtn = document.querySelector(
+        '[data-action="tool-line"]',
+      ) as HTMLElement;
+      lineBtn.click();
+      expect(deps.toolManager.setTool).toHaveBeenCalledWith('line');
     });
   });
 });

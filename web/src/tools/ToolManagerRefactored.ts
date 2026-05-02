@@ -270,6 +270,16 @@ export class ToolManager {
     return this._currentTool;
   }
 
+  /**
+   * Whether `name` is registered as a tool. Used by UI (e.g. MenuBar
+   * setActiveTool) to detect "stub" tool names that would silently
+   * no-op — see integrity audit `2026-05-02-integrity-analysis.md`
+   * Section A Finding 3.
+   */
+  hasTool(name: string): boolean {
+    return this.tools.has(name);
+  }
+
   isToolBusy(): boolean {
     const tool = this.tools.get(this._currentTool);
     return tool ? tool.isBusy() : false;
