@@ -2382,13 +2382,24 @@ export class WasmBridge {
     catch (e) { console.error('[WasmBridge] removeConstraint failed:', e); return false; }
   }
 
+  /** Once-flag for listConstraints failures — avoid console flood when
+   *  RAF tick repeatedly hits the same wasm-bindgen reentrancy guard. */
+  private _listConstraintsFailedOnce = false;
+
   listConstraints(): Array<{ id: number; kind: string; active: boolean; value?: number; refs: unknown[] }> {
     if (!this.engine?.listConstraints) return [];
     try {
       const json = this.engine.listConstraints();
-      return JSON.parse(json);
+      const result = JSON.parse(json);
+      this._listConstraintsFailedOnce = false; // reset on success
+      return result;
     } catch (e) {
-      console.error('[WasmBridge] listConstraints failed:', e);
+      // Spam guard — log first failure only, suppress identical follow-ups.
+      // Each animation frame can re-fail, producing 60+ identical errors/sec.
+      if (!this._listConstraintsFailedOnce) {
+        console.error('[WasmBridge] listConstraints failed (suppressing repeats):', e);
+        this._listConstraintsFailedOnce = true;
+      }
       return [];
     }
   }

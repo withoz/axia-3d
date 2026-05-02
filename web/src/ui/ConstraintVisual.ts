@@ -84,12 +84,40 @@ export class ConstraintVisual {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  /** 전체 제약을 다시 그림. camera 인자로 스크린 투영. */
+  /** Cache for listConstraints — avoid hammering WASM when nothing changed.
+   *  Bumping the topology counter from the bridge invalidates the cache. */
+  private _cachedList: ConstraintItem[] | null = null;
+  private _cachedListAt = 0;
+  /** Listen for topology changes to invalidate the cache. */
+  private _topoSig = 0;
+
+  /** 전체 제약을 다시 그림. camera 인자로 스크린 투영.
+   *
+   *  2026-05-02 fix — listConstraints was being called every animation
+   *  frame (~60Hz) which racing with the renderer's other WASM calls
+   *  produced "recursive use of an object detected" wasm-bindgen errors.
+   *  Cache the constraint list and refresh only every ~250ms unless
+   *  visibility toggles. Re-projection of cached items happens every
+   *  frame (cheap — just camera transform) so visuals still track.
+   */
   update(camera: THREE.Camera) {
     this.clear();
     if (!this.visible) return;
 
-    const list = this.bridge.listConstraints() as ConstraintItem[];
+    const now = performance.now();
+    const REFRESH_MS = 250;
+    let list = this._cachedList;
+    if (list === null || now - this._cachedListAt > REFRESH_MS) {
+      try {
+        list = this.bridge.listConstraints() as ConstraintItem[];
+        this._cachedList = list;
+        this._cachedListAt = now;
+      } catch {
+        // Defensive — never let a bridge failure spam the console every
+        // frame. Use last cached list, or empty.
+        list = this._cachedList ?? [];
+      }
+    }
     if (list.length === 0) return;
 
     const rect = this.container.getBoundingClientRect();

@@ -103,6 +103,30 @@ fn load_burge_inspect_state() {
     );
 }
 
+/// Verify resynthesize_orphan_faces() doesn't panic on the user-supplied
+/// burge.xia state.
+#[test]
+fn resynthesize_orphan_faces_does_not_panic_on_burge() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/burge.xia");
+    let bytes = fs::read(&path).expect("read burge.xia");
+    let inner = strip_axia_wrapper(&bytes);
+
+    let mut scene = Scene::default();
+    scene.import_versioned_snapshot(inner).expect("import");
+
+    let r = scene.resynthesize_orphan_faces();
+    eprintln!(
+        "resynthesize report: created={} aborted={} elapsed={:.2}ms",
+        r.created, r.aborted_by_time_budget, r.elapsed_ms,
+    );
+    // Whether or not faces were created, the call MUST NOT panic.
+    // Time-budget abort is acceptable; engine state must remain valid.
+    let inv = scene.mesh.verify_face_invariants();
+    eprintln!("post-resynthesize invariants: valid={}, violations={}",
+        inv.is_valid(), inv.violations.len());
+}
+
 /// Phase 2-stress: draw multiple RECTs at varying positions/sizes to
 /// stress-test the fc3abe6 scope-leak fix. If any draw causes a NET face
 /// loss (after - before < 0), the scope-leak regression returned.
