@@ -209,6 +209,10 @@ pub fn promote_step_surface(
         ForeignSurfaceKind::Sphere => promote_step_sphere(file, entity_id, entity, cache),
         ForeignSurfaceKind::Cone => promote_step_cone(file, entity_id, entity, cache),
         ForeignSurfaceKind::Torus => promote_step_torus(file, entity_id, entity, cache),
+        ForeignSurfaceKind::SurfaceOfLinearExtrusion =>
+            promote_step_surface_of_linear_extrusion(file, entity_id, entity, cache),
+        ForeignSurfaceKind::SurfaceOfRevolution =>
+            promote_step_surface_of_revolution(file, entity_id, entity, cache),
         other => Err(ResolveError::at(
             format!("promote_step_surface_{:?} not yet wired (A-4 follow-up)", other),
             entity_id,
@@ -415,6 +419,200 @@ fn promote_step_torus(
     })
 }
 
+/// Extract NURBS-form (control_pts, weights, knots, degree) from a basis
+/// curve referenced by a STEP sweep entity.
+///
+/// Supports: Line, Circle, BSpline (non-rational), Nurbs (rational).
+/// Other curve kinds → ResolveError ("unsupported sweep profile").
+fn extract_profile_nurbs_form(
+    file: &StepFile,
+    curve_ref: u32,
+    cache: &mut ResolveCache,
+) -> Result<(Vec<[f64; 3]>, Vec<f64>, Vec<f64>, usize), ResolveError> {
+    use crate::promote_curve::{promote_step_curve, CurvePromotion};
+
+    let promo = promote_step_curve(file, curve_ref, cache);
+    let promotion = promo.promotion.ok_or_else(|| ResolveError::at(
+        "sweep profile curve promote returned None", curve_ref,
+    ))?;
+
+    match promotion {
+        CurvePromotion::Line { start, end, .. } => {
+            // Line: 2 CPs, knots [0, 0, 1, 1], degree 1, weights [1, 1]
+            Ok((
+                vec![start, end],
+                vec![1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                1,
+            ))
+        }
+        CurvePromotion::Circle { center, normal, radius, .. } => {
+            // Circle → Piegl A7.1 9-CP rational quadratic NURBS.
+            // 본 함수는 surface_of_revolution / extrusion 의 profile 로
+            // 사용. axis frame 은 normal (z) 와 임의 perpendicular 로 구성.
+            let s = std::f64::consts::FRAC_1_SQRT_2;
+            // 임의 perpendicular: normal 과 가장 다른 cardinal axis 로 cross.
+            let arb = if normal[0].abs() < 0.9 { [1.0, 0.0, 0.0] }
+                      else { [0.0, 1.0, 0.0] };
+            let x_axis_unscaled = [
+                normal[1] * arb[2] - normal[2] * arb[1],
+                normal[2] * arb[0] - normal[0] * arb[2],
+                normal[0] * arb[1] - normal[1] * arb[0],
+            ];
+            let len = (x_axis_unscaled[0].powi(2) + x_axis_unscaled[1].powi(2)
+                    + x_axis_unscaled[2].powi(2)).sqrt();
+            if len < 1e-12 {
+                return Err(ResolveError::at(
+                    "Circle profile normal degenerate", curve_ref,
+                ));
+            }
+            let x_axis = [
+                radius * x_axis_unscaled[0] / len,
+                radius * x_axis_unscaled[1] / len,
+                radius * x_axis_unscaled[2] / len,
+            ];
+            // y_axis = normal × x_axis_unit, scaled by radius
+            let xu = [x_axis[0] / radius, x_axis[1] / radius, x_axis[2] / radius];
+            let y_axis = [
+                radius * (normal[1] * xu[2] - normal[2] * xu[1]),
+                radius * (normal[2] * xu[0] - normal[0] * xu[2]),
+                radius * (normal[0] * xu[1] - normal[1] * xu[0]),
+            ];
+            let nurbs = crate::conic_converter::full_ellipse_to_nurbs(
+                center, x_axis, y_axis,
+            );
+            Ok((nurbs.control_pts, nurbs.weights, nurbs.knots, nurbs.degree))
+        }
+        CurvePromotion::BSpline { control_pts, knots, degree, .. } => {
+            let n = control_pts.len();
+            let weights = vec![1.0; n];
+            Ok((control_pts, weights, knots, degree))
+        }
+        CurvePromotion::Nurbs { control_pts, weights, knots, degree, .. } => {
+            Ok((control_pts, weights, knots, degree))
+        }
+        other => Err(ResolveError::at(
+            format!("sweep profile curve unsupported variant: {:?}", other),
+            curve_ref,
+        )),
+    }
+}
+
+/// `SURFACE_OF_LINEAR_EXTRUSION('', basis_curve_ref, vector_ref)`
+/// → tensor-product NURBS surface (Piegl A8.2).
+///
+/// AP203:
+/// - arg[1] = basis_curve_ref (LINE / CIRCLE / B_SPLINE_CURVE_WITH_KNOTS)
+/// - arg[2] = VECTOR ref (direction × magnitude)
+fn promote_step_surface_of_linear_extrusion(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    use crate::sweep_converter::linear_extrusion_to_nurbs;
+
+    let basis_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "SURFACE_OF_LINEAR_EXTRUSION arg[1] (basis_curve) not a ref", entity_id,
+        ))?;
+    let vector_ref = entity.args.get(2)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "SURFACE_OF_LINEAR_EXTRUSION arg[2] (vector) not a ref", entity_id,
+        ))?;
+
+    let (profile_pts, profile_weights, profile_knots, profile_degree) =
+        extract_profile_nurbs_form(file, basis_ref, cache)?;
+
+    let (direction, magnitude) =
+        crate::step_resolver::resolve_vector(file, vector_ref)?;
+
+    let sweep = linear_extrusion_to_nurbs(
+        &profile_pts, &profile_weights, &profile_knots, profile_degree,
+        direction, magnitude,
+    );
+
+    Ok(SurfacePromotion::NurbsSurface {
+        ctrl_grid: sweep.ctrl_grid,
+        weights_grid: sweep.weights_grid,
+        knots_u: sweep.knots_u,
+        knots_v: sweep.knots_v,
+        deg_u: sweep.deg_u,
+        deg_v: sweep.deg_v,
+        uv_bounds: None,
+    })
+}
+
+/// `SURFACE_OF_REVOLUTION('', basis_curve_ref, axis1_placement_ref)`
+/// → tensor-product NURBS surface (Piegl A8.1, full 360°).
+///
+/// AP203:
+/// - arg[1] = basis_curve_ref
+/// - arg[2] = AXIS1_PLACEMENT ref (origin + direction — 회전 축)
+///
+/// Note: STEP 의 SURFACE_OF_REVOLUTION 은 항상 360° (no angle parameter
+/// in entity). Partial revolution 은 RECTANGULAR_TRIMMED_SURFACE wrapper
+/// 가 처리.
+fn promote_step_surface_of_revolution(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    use crate::sweep_converter::full_revolution_to_nurbs;
+
+    let basis_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "SURFACE_OF_REVOLUTION arg[1] (basis_curve) not a ref", entity_id,
+        ))?;
+    let axis1_ref = entity.args.get(2)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "SURFACE_OF_REVOLUTION arg[2] (axis1_placement) not a ref", entity_id,
+        ))?;
+
+    let (profile_pts, profile_weights, profile_knots, profile_degree) =
+        extract_profile_nurbs_form(file, basis_ref, cache)?;
+
+    // AXIS1_PLACEMENT('', loc_ref, dir_ref?) — arg[1] = location, arg[2] = direction (optional, default Z)
+    let axis_entity = file.entity(axis1_ref).ok_or_else(|| ResolveError::at(
+        format!("AXIS1_PLACEMENT #{} not found", axis1_ref), entity_id,
+    ))?;
+    let loc_ref = axis_entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "AXIS1_PLACEMENT arg[1] (location) not a ref", axis1_ref,
+        ))?;
+    let axis_origin = cache.cartesian_point(file, loc_ref)?;
+
+    let axis_dir = match axis_entity.args.get(2) {
+        Some(Value::Ref(r)) => crate::step_resolver::resolve_direction(file, *r)?,
+        Some(Value::Null) | None => [0.0, 0.0, 1.0],  // spec default
+        Some(other) => return Err(ResolveError::at(
+            format!("AXIS1_PLACEMENT arg[2] (direction) unexpected: {:?}", other),
+            axis1_ref,
+        )),
+    };
+
+    let sweep = full_revolution_to_nurbs(
+        &profile_pts, &profile_weights, &profile_knots, profile_degree,
+        axis_origin, axis_dir,
+    );
+
+    Ok(SurfacePromotion::NurbsSurface {
+        ctrl_grid: sweep.ctrl_grid,
+        weights_grid: sweep.weights_grid,
+        knots_u: sweep.knots_u,
+        knots_v: sweep.knots_v,
+        deg_u: sweep.deg_u,
+        deg_v: sweep.deg_v,
+        uv_bounds: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,19 +775,127 @@ mod tests {
 
     #[test]
     fn promote_step_surface_unsupported_kind() {
-        // B1 (2026-05-01): SPHERICAL_SURFACE / CONICAL_SURFACE / TOROIDAL_SURFACE
-        // 모두 wired. 이제 SURFACE_OF_REVOLUTION 가 unsupported (B6 후속).
+        // B6 (2026-05-01): SURFACE_OF_REVOLUTION / SURFACE_OF_LINEAR_EXTRUSION
+        // 모두 wired. 이제 OFFSET_SURFACE / RECTANGULAR_TRIMMED_SURFACE 가 unsupported.
         let src = minimal(concat!(
             "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
             "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
-            "#3 = LINE('', #1, #1);\n",
-            "#4 = SURFACE_OF_REVOLUTION('', #3, #2);"
+            "#3 = PLANE('', #2);\n",
+            "#4 = OFFSET_SURFACE('', #3, 1.0, .T.);"
         ));
         let f = parse(&src).unwrap();
         let mut cache = ResolveCache::new();
         let result = promote_step_surface(&f, 4, &mut cache);
         assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
         assert!(result.warnings.iter().any(|w| w.contains("not yet wired")));
+    }
+
+    // ─── B6: Sweep variants (Piegl A8.1, A8.2) ───────────────────────
+
+    #[test]
+    fn promote_step_linear_extrusion_of_line_creates_quad() {
+        // Profile = LINE from (0,0,0) → (1,0,0), extrude +Z by 5
+        // → 2 × 2 control grid (bilinear surface)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (1., 0., 0.));\n",
+            "#3 = VECTOR('', #2, 1.0);\n",
+            "#4 = LINE('', #1, #3);\n",
+            "#5 = DIRECTION('', (0., 0., 1.));\n",
+            "#6 = VECTOR('', #5, 5.0);\n",
+            "#7 = SURFACE_OF_LINEAR_EXTRUSION('', #4, #6);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 7, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::NurbsSurface {
+                ctrl_grid, knots_u, knots_v, deg_u, deg_v, ..
+            } => {
+                assert_eq!(ctrl_grid.len(), 2);  // 2 v-rows (extrusion direction)
+                assert_eq!(ctrl_grid[0].len(), 2);  // 2 profile CPs (line)
+                // Row 0 = profile
+                assert!(approx_eq3(ctrl_grid[0][0], [0., 0., 0.], 1e-12));
+                assert!(approx_eq3(ctrl_grid[0][1], [1., 0., 0.], 1e-12));
+                // Row 1 = profile + 5*Z
+                assert!(approx_eq3(ctrl_grid[1][0], [0., 0., 5.], 1e-12));
+                assert!(approx_eq3(ctrl_grid[1][1], [1., 0., 5.], 1e-12));
+                assert_eq!(knots_v, vec![0.0, 0.0, 1.0, 1.0]);
+                assert_eq!(deg_u, 1);
+                assert_eq!(deg_v, 1);
+            }
+            other => panic!("expected NurbsSurface, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_revolution_of_offset_point_creates_torus_like_ring() {
+        // Profile = LINE from (3, 0, 0) (length 0 actually, just a point-line)
+        // axis = Z axis at origin → revolution creates a circle of radius 3
+        //
+        // 단순화: profile 이 너무 작아서 line 으로 한다.
+        // Line from (3,0,0) to (3,0,1), revolve around +Z → cylinder
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (3., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = VECTOR('', #2, 1.0);\n",
+            "#4 = LINE('', #1, #3);\n",
+            "#5 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#6 = AXIS1_PLACEMENT('', #5, #2);\n",  // origin + Z dir
+            "#7 = SURFACE_OF_REVOLUTION('', #4, #6);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 7, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::NurbsSurface {
+                ctrl_grid, knots_v, deg_v, ..
+            } => {
+                // 2 profile CPs (line endpoints) × 9 v-CPs (full circle) = 2x9 grid
+                assert_eq!(ctrl_grid.len(), 2);
+                assert_eq!(ctrl_grid[0].len(), 9);
+                assert_eq!(deg_v, 2);
+                assert_eq!(knots_v.len(), 12);
+
+                // Bottom ring: at z=0, radius 3
+                assert!(approx_eq3(ctrl_grid[0][0], [3., 0., 0.], 1e-12));
+                assert!(approx_eq3(ctrl_grid[0][2], [0., 3., 0.], 1e-12));
+                assert!(approx_eq3(ctrl_grid[0][4], [-3., 0., 0.], 1e-12));
+
+                // Top ring: at z=1, radius 3 (line endpoints both at radius 3)
+                assert!(approx_eq3(ctrl_grid[1][0], [3., 0., 1.], 1e-12));
+                assert!(approx_eq3(ctrl_grid[1][2], [0., 3., 1.], 1e-12));
+            }
+            other => panic!("expected NurbsSurface, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_revolution_default_axis_dir() {
+        // AXIS1_PLACEMENT 의 dir 가 $ → spec default +Z 사용
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (2., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = VECTOR('', #2, 1.0);\n",
+            "#4 = LINE('', #1, #3);\n",
+            "#5 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#6 = AXIS1_PLACEMENT('', #5, $);\n",  // default direction
+            "#7 = SURFACE_OF_REVOLUTION('', #4, #6);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 7, &mut cache);
+        assert!(result.warnings.is_empty());
+        match result.promotion.unwrap() {
+            SurfacePromotion::NurbsSurface { ctrl_grid, .. } => {
+                // Default Z axis revolution → bottom ring at z=0, top at z=1
+                assert!(approx_eq3(ctrl_grid[0][0], [2., 0., 0.], 1e-12));
+                assert!(approx_eq3(ctrl_grid[1][0], [2., 0., 1.], 1e-12));
+            }
+            _ => panic!("expected NurbsSurface"),
+        }
     }
 
     // ─── B1 신규 — Sphere / Cone / Torus 매핑 ─────────────────────────────

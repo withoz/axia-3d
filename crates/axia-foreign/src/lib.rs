@@ -31,6 +31,7 @@ pub mod step_lexer;
 pub mod step_parser;
 pub mod step_resolver;
 pub mod conic_converter;
+pub mod sweep_converter;
 pub mod iges;
 pub mod promote_curve;
 pub mod promote_surface;
