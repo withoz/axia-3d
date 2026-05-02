@@ -245,10 +245,11 @@ ADR-018~044 의 22 LOCKED 정책으로 엔진 / MCP / scaffold / release
 
 ## Success Criteria
 
-- ✅ ADR-045 P30 결정 commit (이 PR)
-- ✅ **PR-1 완료** (이 세션): MaterialPropertiesPanel 삭제 + regression
-  guard
-- ⏳ PR-2 완료 (별도 세션): ActionCatalog workspace package
+- ✅ ADR-045 P30 결정 commit
+- ✅ **PR-1 완료**: MaterialPropertiesPanel 삭제 + regression guard
+- ✅ **PR-2 완료** (이 세션): `packages/axia-action-catalog/` workspace
+  package + 82 ActionDef seeded + 4 D1 invariants (23 tests passing).
+  ToolManager / axia-mcp-server 마이그레이션은 별도 follow-up PR.
 - ⏳ PR-3 완료: Capability Explorer (Tier 0 form + Tier 1/2 launcher)
 - ⏳ PR-4 완료: Debug Panel
 - ⏳ 5 카테고리 회귀 invariants 모두 통과

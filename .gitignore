@@ -16,6 +16,10 @@ packages/axia-mcp-server/node_modules/
 packages/create-axia-mcp/dist/
 packages/create-axia-mcp/node_modules/
 
+# action catalog build artifacts (ADR-045 D1)
+packages/axia-action-catalog/dist/
+packages/axia-action-catalog/node_modules/
+
 # Node
 web/node_modules/
 
