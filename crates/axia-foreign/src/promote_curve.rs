@@ -201,6 +201,7 @@ pub fn promote_step_curve(
         ForeignCurveKind::Line => promote_step_line(file, entity_id, entity, cache),
         ForeignCurveKind::Circle => promote_step_circle(file, entity_id, entity, cache),
         ForeignCurveKind::BSpline => promote_step_bspline_curve(file, entity_id, entity, cache),
+        ForeignCurveKind::TrimmedCurve => promote_step_trimmed_curve(file, entity_id, entity, cache),
         // Other kinds defer to follow-up PR.
         other => Err(ResolveError::at(
             format!("promote_step_{:?} not yet wired (A-4 follow-up)", other),
@@ -401,6 +402,124 @@ fn promote_step_bspline_curve(
         degree,
         parameter_range,
     })
+}
+
+/// `TRIMMED_CURVE('', basis_curve_ref, trim_1, trim_2, sense, master_representation)`
+///
+/// AP203 인자:
+/// - arg[0] = name
+/// - arg[1] = basis_curve_ref (LINE / CIRCLE / B_SPLINE_CURVE_WITH_KNOTS / ...)
+/// - arg[2] = trim_1 — list 형식, 보통 PARAMETER_VALUE(t) 또는
+///            CARTESIAN_POINT ref 포함 (TYPED VALUE)
+/// - arg[3] = trim_2 — 동일
+/// - arg[4] = sense (.T. / .F.)
+/// - arg[5] = master_representation (.PARAMETER. / .CARTESIAN. /
+///            .UNSPECIFIED.)
+///
+/// **현재 처리** (Stage 4-B MVP):
+/// - basis_curve 의 promote 결과를 받음
+/// - trim_1 / trim_2 에서 `PARAMETER_VALUE(t)` 추출 시도
+/// - 추출 성공 시 결과의 `parameter_range` 갱신
+/// - `master_representation` 가 `.CARTESIAN.` 일 때는 (현재 미지원)
+///   parameter_range 그대로 → caller 가 fallback
+///
+/// **Circle + trim → Arc 변환**: basis 가 Circle 이고 trim 이 모두
+/// PARAMETER 면 ForeignCurveKind 의 Arc 와 동치. 하지만 본 MVP 에서는
+/// CurvePromotion::Circle 의 parameter_range 만 갱신 (사용자 측에서
+/// Arc 로 자동 변환 가능).
+fn promote_step_trimmed_curve(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<CurvePromotion, ResolveError> {
+    let basis_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "TRIMMED_CURVE arg[1] (basis_curve) not a ref", entity_id,
+        ))?;
+
+    // Recurse into basis curve. Note: P21.5 — sub-range 의 부모는 promote 시
+    // parameter_range 가 None 또는 full range 로 설정되어야 함. trim_1/2
+    // 가 그 위를 덮어씀.
+    let mut promoted = match crate::promote_curve::promote_step_curve(file, basis_ref, cache) {
+        CurvePromotionResult { promotion: Some(p), warnings } if warnings.is_empty() => p,
+        CurvePromotionResult { promotion: Some(p), warnings: _ } => {
+            // basis 가 Tessellate fallback 이어도 trim 적용은 시도 — caller
+            // 의 follow-up 에 맡김. 본 commit 은 parameter_range 만 보존.
+            p
+        }
+        _ => return Err(ResolveError::at(
+            format!("TRIMMED_CURVE basis_curve #{} promotion failed", basis_ref),
+            entity_id,
+        )),
+    };
+
+    // Trim parameter 추출. AP203 의 trim_1 / trim_2 는 SET[1:2] OF
+    // (PARAMETER_VALUE | CARTESIAN_POINT) 형태 — 즉 list of typed values.
+    let t1 = extract_trim_parameter(entity.args.get(2));
+    let t2 = extract_trim_parameter(entity.args.get(3));
+
+    if let (Some(t1), Some(t2)) = (t1, t2) {
+        // Sense flag 확인 (.T. = same direction, .F. = reversed)
+        let sense = entity.args.get(4)
+            .and_then(Value::as_enum)
+            .map(|e| e == "T")
+            .unwrap_or(true);
+        let (low, high) = if sense { (t1, t2) } else { (t2, t1) };
+
+        // CurvePromotion variant 별로 parameter_range 갱신.
+        promoted = apply_parameter_range(promoted, [low, high]);
+    }
+    Ok(promoted)
+}
+
+/// trim_N argument (Vec<Value> as List) 에서 PARAMETER_VALUE(t) 의 t 추출.
+///
+/// AP203 trim 의 form: `(PARAMETER_VALUE(0.0), CARTESIAN_POINT('', (...)))`
+/// 또는 `(PARAMETER_VALUE(0.0))`. CARTESIAN 만 있으면 None (현재 unsupported).
+fn extract_trim_parameter(arg: Option<&Value>) -> Option<f64> {
+    let list = arg?.as_list()?;
+    for item in list {
+        if let Value::Typed { tag, args } = item {
+            if tag == "PARAMETER_VALUE" {
+                if let Some(v) = args.first() {
+                    return v.as_f64();
+                }
+            }
+        }
+    }
+    None
+}
+
+/// CurvePromotion 의 parameter_range 필드만 교체. 다른 필드는 보존.
+fn apply_parameter_range(p: CurvePromotion, range: [f64; 2]) -> CurvePromotion {
+    match p {
+        CurvePromotion::Line { start, end, .. } =>
+            CurvePromotion::Line { start, end, parameter_range: Some(range) },
+        CurvePromotion::Circle { center, normal, radius, .. } =>
+            CurvePromotion::Circle { center, normal, radius, parameter_range: Some(range) },
+        CurvePromotion::Arc { center, axis, ref_dir, radius, start_angle, end_angle, .. } =>
+            CurvePromotion::Arc {
+                center, axis, ref_dir, radius,
+                start_angle, end_angle,
+                parameter_range: Some(range),
+            },
+        CurvePromotion::Bezier { control_pts, .. } =>
+            CurvePromotion::Bezier { control_pts, parameter_range: Some(range) },
+        CurvePromotion::BSpline { control_pts, knots, degree, .. } =>
+            CurvePromotion::BSpline {
+                control_pts, knots, degree,
+                parameter_range: Some(range),
+            },
+        CurvePromotion::Nurbs { control_pts, weights, knots, degree, .. } =>
+            CurvePromotion::Nurbs {
+                control_pts, weights, knots, degree,
+                parameter_range: Some(range),
+            },
+        CurvePromotion::Tessellate { reason, .. } =>
+            CurvePromotion::Tessellate { reason, parameter_range: Some(range) },
+    }
 }
 
 /// AP203 의 (unique_knots, multiplicities) 형식 → expanded knot vector.
@@ -672,5 +791,129 @@ mod tests {
     fn expand_knots_basic() {
         let knots = expand_knots(&[0.0, 0.5, 1.0], &[3, 2, 3]);
         assert_eq!(knots, vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0]);
+    }
+
+    // ─── B2 신규 — TRIMMED_CURVE ────────────────────────────────────
+
+    #[test]
+    fn promote_step_trimmed_circle_to_arc_quarter() {
+        // Circle radius 5 at origin, trimmed [0, π/2] = quarter arc.
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = CIRCLE('', #4, 5.0);\n",
+            "#6 = TRIMMED_CURVE('', #5, (PARAMETER_VALUE(0.0)), \
+                  (PARAMETER_VALUE(1.5707963267948966)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 6, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            CurvePromotion::Circle { radius, parameter_range, .. } => {
+                assert_eq!(radius, 5.0);
+                assert_eq!(
+                    parameter_range,
+                    Some([0.0, std::f64::consts::FRAC_PI_2]),
+                );
+            }
+            other => panic!("expected Circle with trim range, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_trimmed_line_with_subrange() {
+        // Line trimmed to [2, 7] sub-range
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (1., 0., 0.));\n",
+            "#3 = VECTOR('', #2, 10.0);\n",
+            "#4 = LINE('', #1, #3);\n",
+            "#5 = TRIMMED_CURVE('', #4, (PARAMETER_VALUE(2.0)), \
+                  (PARAMETER_VALUE(7.0)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            CurvePromotion::Line { parameter_range, .. } => {
+                assert_eq!(parameter_range, Some([2.0, 7.0]));
+            }
+            other => panic!("expected Line with trim range, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_trimmed_curve_sense_false_swaps() {
+        // Sense .F. → trim_2 / trim_1 swapped (start = trim_2, end = trim_1)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = CIRCLE('', #2, 5.0);\n",
+            "#4 = TRIMMED_CURVE('', #3, (PARAMETER_VALUE(0.5)), \
+                  (PARAMETER_VALUE(1.5)), .F., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 4, &mut cache);
+        match result.promotion.unwrap() {
+            CurvePromotion::Circle { parameter_range, .. } => {
+                // Sense F → swapped: low=1.5, high=0.5 (which is the
+                // backward direction). 본 MVP 는 raw (low, high) 순서대로
+                // 저장 — sense interpretation 은 caller 책임.
+                assert_eq!(parameter_range, Some([1.5, 0.5]));
+            }
+            _ => panic!("expected Circle"),
+        }
+    }
+
+    #[test]
+    fn promote_step_trimmed_curve_no_parameter_value_keeps_original_range() {
+        // trim 이 PARAMETER_VALUE 없이 CARTESIAN_POINT 만 → MVP 미지원,
+        // basis 의 parameter_range 그대로 유지 (Circle 의 default [0, 2π]).
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = CIRCLE('', #2, 5.0);\n",
+            "#4 = CARTESIAN_POINT('', (5., 0., 0.));\n",
+            "#5 = CARTESIAN_POINT('', (0., 5., 0.));\n",
+            "#6 = TRIMMED_CURVE('', #3, (#4), (#5), .T., .CARTESIAN.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 6, &mut cache);
+        match result.promotion.unwrap() {
+            CurvePromotion::Circle { parameter_range, .. } => {
+                // CARTESIAN-only trim → MVP 미지원 → basis 의 [0, 2π] 유지
+                assert_eq!(parameter_range, Some([0.0, std::f64::consts::TAU]));
+            }
+            _ => panic!("expected Circle"),
+        }
+    }
+
+    #[test]
+    fn promote_step_trimmed_curve_basis_unsupported_propagates() {
+        // basis 가 ELLIPSE (unsupported) 일 때 trim 이 적용되어도
+        // Tessellate fallback 그대로.
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = ELLIPSE('', #2, 5.0, 3.0);\n",
+            "#4 = TRIMMED_CURVE('', #3, (PARAMETER_VALUE(0.0)), \
+                  (PARAMETER_VALUE(3.14)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 4, &mut cache);
+        // basis 가 Tessellate 라도 trim 의 parameter_range 는 보존
+        match result.promotion.unwrap() {
+            CurvePromotion::Tessellate { parameter_range, .. } => {
+                assert_eq!(parameter_range, Some([0.0, 3.14]));
+            }
+            _ => panic!("expected Tessellate (basis ELLIPSE unsupported)"),
+        }
     }
 }

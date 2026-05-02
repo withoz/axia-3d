@@ -206,6 +206,9 @@ pub fn promote_step_surface(
     let result = match kind {
         ForeignSurfaceKind::Plane => promote_step_plane(file, entity_id, entity, cache),
         ForeignSurfaceKind::Cylinder => promote_step_cylinder(file, entity_id, entity, cache),
+        ForeignSurfaceKind::Sphere => promote_step_sphere(file, entity_id, entity, cache),
+        ForeignSurfaceKind::Cone => promote_step_cone(file, entity_id, entity, cache),
+        ForeignSurfaceKind::Torus => promote_step_torus(file, entity_id, entity, cache),
         other => Err(ResolveError::at(
             format!("promote_step_surface_{:?} not yet wired (A-4 follow-up)", other),
             entity_id,
@@ -276,6 +279,138 @@ fn promote_step_cylinder(
         axis_dir: placement.axis,
         ref_dir: placement.ref_direction,
         radius,
+        uv_bounds: None,
+    })
+}
+
+/// `SPHERICAL_SURFACE('', placement_ref, radius)` → `SurfacePromotion::Sphere`.
+///
+/// AP203: arg[1] = AXIS2_PLACEMENT_3D, arg[2] = radius.
+/// Sphere 의 center 는 placement.location.
+fn promote_step_sphere(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    let placement_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at("SPHERICAL_SURFACE arg[1] (placement) not a ref", entity_id))?;
+    let radius = entity.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("SPHERICAL_SURFACE arg[2] (radius) not a real", entity_id))?;
+    if radius <= 0.0 {
+        return Err(ResolveError::at(
+            format!("SPHERICAL_SURFACE radius must be positive, got {}", radius),
+            entity_id,
+        ));
+    }
+    let placement: Axis2Placement3D = cache.placement(file, placement_ref)?;
+
+    Ok(SurfacePromotion::Sphere {
+        center: placement.location,
+        radius,
+        uv_bounds: None,
+    })
+}
+
+/// `CONICAL_SURFACE('', placement_ref, radius, semi_angle)` → `SurfacePromotion::Cone`.
+///
+/// AP203: arg[1] = AXIS2_PLACEMENT_3D, arg[2] = radius (placement 의 평면
+/// 에서의 ref radius), arg[3] = semi_angle (radian, half-angle).
+///
+/// Apex 계산: STEP 의 ConicalSurface 는 base radius 를 placement plane 에서
+/// 가지므로, apex = location - axis × (radius / tan(semi_angle)).
+/// (radius=0 인 cone 은 apex 가 location 자체.)
+fn promote_step_cone(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    let placement_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at("CONICAL_SURFACE arg[1] (placement) not a ref", entity_id))?;
+    let radius = entity.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("CONICAL_SURFACE arg[2] (radius) not a real", entity_id))?;
+    let semi_angle = entity.args.get(3)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("CONICAL_SURFACE arg[3] (semi_angle) not a real", entity_id))?;
+    if radius < 0.0 {
+        return Err(ResolveError::at(
+            format!("CONICAL_SURFACE radius must be ≥ 0, got {}", radius),
+            entity_id,
+        ));
+    }
+    if !(semi_angle > 0.0 && semi_angle < std::f64::consts::FRAC_PI_2) {
+        return Err(ResolveError::at(
+            format!("CONICAL_SURFACE semi_angle must be in (0, π/2), got {}", semi_angle),
+            entity_id,
+        ));
+    }
+    let placement: Axis2Placement3D = cache.placement(file, placement_ref)?;
+
+    // Apex = location - axis × (radius / tan(semi_angle))
+    // (axis 는 단위 벡터, radius/tan 은 placement plane 에서 apex 까지 거리)
+    let dist = if radius > 0.0 { radius / semi_angle.tan() } else { 0.0 };
+    let apex = [
+        placement.location[0] - placement.axis[0] * dist,
+        placement.location[1] - placement.axis[1] * dist,
+        placement.location[2] - placement.axis[2] * dist,
+    ];
+
+    Ok(SurfacePromotion::Cone {
+        apex,
+        axis_dir: placement.axis,
+        half_angle: semi_angle,
+        uv_bounds: None,
+    })
+}
+
+/// `TOROIDAL_SURFACE('', placement_ref, major_radius, minor_radius)`
+/// → `SurfacePromotion::Torus`.
+///
+/// AP203: arg[1] = AXIS2_PLACEMENT_3D, arg[2] = major_radius (center →
+/// tube center), arg[3] = minor_radius (tube radius).
+///
+/// Spec: `major_radius > minor_radius > 0` (proper torus).
+/// Degenerate (major ≤ minor) 는 self-intersection — Tessellate fallback.
+fn promote_step_torus(
+    file: &StepFile,
+    entity_id: u32,
+    entity: &Entity,
+    cache: &mut ResolveCache,
+) -> Result<SurfacePromotion, ResolveError> {
+    let placement_ref = entity.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at("TOROIDAL_SURFACE arg[1] (placement) not a ref", entity_id))?;
+    let major_radius = entity.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("TOROIDAL_SURFACE arg[2] (major_radius) not a real", entity_id))?;
+    let minor_radius = entity.args.get(3)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at("TOROIDAL_SURFACE arg[3] (minor_radius) not a real", entity_id))?;
+    if minor_radius <= 0.0 {
+        return Err(ResolveError::at(
+            format!("TOROIDAL_SURFACE minor_radius must be positive, got {}", minor_radius),
+            entity_id,
+        ));
+    }
+    if major_radius <= minor_radius {
+        return Err(ResolveError::at(
+            format!("TOROIDAL_SURFACE expects major_radius ({}) > minor_radius ({}) — degenerate (self-intersection)",
+                major_radius, minor_radius),
+            entity_id,
+        ));
+    }
+    let placement: Axis2Placement3D = cache.placement(file, placement_ref)?;
+
+    Ok(SurfacePromotion::Torus {
+        center: placement.location,
+        axis: placement.axis,
+        major_radius,
+        minor_radius,
         uv_bounds: None,
     })
 }
@@ -442,16 +577,135 @@ mod tests {
 
     #[test]
     fn promote_step_surface_unsupported_kind() {
-        // SPHERICAL_SURFACE not yet wired in A-4 (next sub-PR).
+        // B1 (2026-05-01): SPHERICAL_SURFACE / CONICAL_SURFACE / TOROIDAL_SURFACE
+        // 모두 wired. 이제 SURFACE_OF_REVOLUTION 가 unsupported (B6 후속).
         let src = minimal(concat!(
             "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = LINE('', #1, #1);\n",
+            "#4 = SURFACE_OF_REVOLUTION('', #3, #2);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 4, &mut cache);
+        assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("not yet wired")));
+    }
+
+    // ─── B1 신규 — Sphere / Cone / Torus 매핑 ─────────────────────────────
+
+    #[test]
+    fn promote_step_sphere_basic() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (10., 20., 30.));\n",
             "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
             "#3 = SPHERICAL_SURFACE('', #2, 5.0);"
         ));
         let f = parse(&src).unwrap();
         let mut cache = ResolveCache::new();
         let result = promote_step_surface(&f, 3, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::Sphere { center, radius, uv_bounds } => {
+                assert!(approx_eq3(center, [10., 20., 30.], 1e-12));
+                assert_eq!(radius, 5.0);
+                assert_eq!(uv_bounds, None);
+            }
+            other => panic!("expected Sphere, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_sphere_negative_radius_errors() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = SPHERICAL_SURFACE('', #2, -1.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 3, &mut cache);
         assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
-        assert!(result.warnings.iter().any(|w| w.contains("not yet wired")));
+        assert!(result.warnings.iter().any(|w| w.contains("must be positive")));
+    }
+
+    #[test]
+    fn promote_step_cone_apex_calculated() {
+        // Cone: placement at origin, axis = +Z, ref radius = 5, semi_angle = 45°.
+        // Apex 거리 = radius / tan(45°) = 5
+        // Apex = location - axis × 5 = (0, 0, 0) - (0, 0, 1) × 5 = (0, 0, -5)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = CONICAL_SURFACE('', #4, 5.0, 0.7853981633974483);"  // π/4
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::Cone { apex, axis_dir, half_angle, .. } => {
+                assert!(approx_eq3(apex, [0., 0., -5.], 1e-9), "apex: {:?}", apex);
+                assert!(approx_eq3(axis_dir, [0., 0., 1.], 1e-12));
+                assert!((half_angle - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+            }
+            other => panic!("expected Cone, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_cone_invalid_semi_angle_errors() {
+        // semi_angle = 0 → degenerate (line)
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = CONICAL_SURFACE('', #2, 5.0, 0.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 3, &mut cache);
+        assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("semi_angle")));
+    }
+
+    #[test]
+    fn promote_step_torus_basic() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (1., 2., 3.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = TOROIDAL_SURFACE('', #4, 10.0, 2.0);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 5, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            SurfacePromotion::Torus { center, axis, major_radius, minor_radius, .. } => {
+                assert!(approx_eq3(center, [1., 2., 3.], 1e-12));
+                assert!(approx_eq3(axis, [0., 0., 1.], 1e-12));
+                assert_eq!(major_radius, 10.0);
+                assert_eq!(minor_radius, 2.0);
+            }
+            other => panic!("expected Torus, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_torus_degenerate_self_intersection_errors() {
+        // major <= minor → torus self-intersection
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = TOROIDAL_SURFACE('', #2, 2.0, 5.0);"  // major < minor
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_surface(&f, 3, &mut cache);
+        assert!(matches!(result.promotion, Some(SurfacePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("self-intersection")));
     }
 }

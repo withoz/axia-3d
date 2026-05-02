@@ -1,0 +1,60 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('AxiA 3D unit cube fixture'),'2;1');
+FILE_NAME('cube.stp','2026-05-01T00:00:00',('AxiA'),('AxiA'),'AxiA','test','');
+FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));
+ENDSEC;
+DATA;
+/* 8 vertices of a unit cube [0,1]^3 */
+#1 = CARTESIAN_POINT('p0', (0., 0., 0.));
+#2 = CARTESIAN_POINT('p1', (1., 0., 0.));
+#3 = CARTESIAN_POINT('p2', (1., 1., 0.));
+#4 = CARTESIAN_POINT('p3', (0., 1., 0.));
+#5 = CARTESIAN_POINT('p4', (0., 0., 1.));
+#6 = CARTESIAN_POINT('p5', (1., 0., 1.));
+#7 = CARTESIAN_POINT('p6', (1., 1., 1.));
+#8 = CARTESIAN_POINT('p7', (0., 1., 1.));
+
+/* 6 unit directions */
+#10 = DIRECTION('+x', (1., 0., 0.));
+#11 = DIRECTION('+y', (0., 1., 0.));
+#12 = DIRECTION('+z', (0., 0., 1.));
+#13 = DIRECTION('-x', (-1., 0., 0.));
+#14 = DIRECTION('-y', (0., -1., 0.));
+#15 = DIRECTION('-z', (0., 0., -1.));
+
+/* Vectors with magnitude 1.0 — basis edges */
+#20 = VECTOR('+x*1', #10, 1.0);
+#21 = VECTOR('+y*1', #11, 1.0);
+#22 = VECTOR('+z*1', #12, 1.0);
+
+/* 12 LINE entities — bottom 4, top 4, vertical 4 */
+#30 = LINE('e_bottom_0', #1, #20);  /* p0 → p1 (start at p0, +x*1) */
+#31 = LINE('e_bottom_1', #2, #21);  /* p1 → p2 (start at p1, +y*1) */
+#32 = LINE('e_bottom_2', #4, #20);  /* p3 → p2 (start at p3=#4, +x*1) */
+#33 = LINE('e_bottom_3', #1, #21);  /* p0 → p3 */
+#34 = LINE('e_top_0',    #5, #20);
+#35 = LINE('e_top_1',    #6, #21);
+#36 = LINE('e_top_2',    #8, #20);  /* p7 → p6 (start at p7=#8, +x*1) */
+#37 = LINE('e_top_3',    #5, #21);
+#38 = LINE('e_vert_0',   #1, #22);
+#39 = LINE('e_vert_1',   #2, #22);
+#40 = LINE('e_vert_2',   #3, #22);
+#41 = LINE('e_vert_3',   #4, #22);
+
+/* 6 PLANE entities — placements at face centers, normals outward */
+#50 = AXIS2_PLACEMENT_3D('plane_bottom',  #1, #15, #10);  /* z=0, normal -z */
+#51 = AXIS2_PLACEMENT_3D('plane_top',     #5, #12, #10);  /* z=1, normal +z */
+#52 = AXIS2_PLACEMENT_3D('plane_front',   #1, #14, #10);  /* y=0, normal -y */
+#53 = AXIS2_PLACEMENT_3D('plane_back',    #4, #11, #10);  /* y=1, normal +y */
+#54 = AXIS2_PLACEMENT_3D('plane_left',    #1, #13, #11);  /* x=0, normal -x */
+#55 = AXIS2_PLACEMENT_3D('plane_right',   #2, #10, #11);  /* x=1, normal +x */
+
+#60 = PLANE('f_bottom', #50);
+#61 = PLANE('f_top',    #51);
+#62 = PLANE('f_front',  #52);
+#63 = PLANE('f_back',   #53);
+#64 = PLANE('f_left',   #54);
+#65 = PLANE('f_right',  #55);
+ENDSEC;
+END-ISO-10303-21;
