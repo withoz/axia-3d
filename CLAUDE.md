@@ -508,6 +508,57 @@
   * 실제 npm publish 미실행 — admin 권한 + NPM_TOKEN secret 필요.
   * `@axia` org 등록 미완 시 ADR-044.1 amendment (재명명).
 
+### 23. ADR-045 — UI Surface Consolidation + ActionCatalog SSOT (P30, 2026-05-02)
+- **출처**: `docs/audits/2026-05-02-ui-surface.md` (Phase 1 read-only
+  audit, 4 parallel surveys). 6 finding 노출 (action ID kebab/snake
+  drift, ToolManager-as-implicit-SSOT, MaterialPropertiesPanel dead
+  code, Tier 0 UI 미노출, 등).
+- **5 D 결정** (각 독립 PR 가능):
+  - **D1 ActionCatalog SSOT**: `packages/axia-action-catalog/`
+    workspace package. ActionDef = { id (kebab canonical), aliases.mcp
+    (snake), aliases.legacy[], tier, label, description, surfaces[],
+    handler }. UI ↔ MCP 양방향 lookup. 회귀 4개
+    (alias_bidirectional / no_collision / drift_with_mcp_tiers /
+    handler_invocable_from_both).
+  - **D2 Panel taxonomy 4 categories**: Inspect (XiaInspector,
+    Component, Constraint, History, Scenes) / Tools (Osnap, Style, Sun,
+    Settings, ShortcutHelp) / **Explorer (NEW)** / **Debug (NEW)** /
+    Special (StatusBar, DimensionLabel, TextureUploadDialog,
+    ReferenceImage, DraggablePanelManager). Panel 추가 시 category 명시
+    필수. **MaterialPropertiesPanel 삭제** ("Dead panel removed,
+    re-introduction requires a new ADR.").
+  - **D3 Capability Explorer = discoverability SSOT**: Hybrid 노출
+    정책 — Tier 0 (schema-driven form) / Tier 1 (launcher only) /
+    Tier 2 (launcher + audit preview) / Tier 3 (기본 비노출, Debug
+    Danger Zone 토글). 회귀 3개.
+  - **D4 Schema-driven form scope = Tier 0 only**: Tier 1/2 ergonomic
+    유지 (DrawRectTool 등 unchanged). Tier 3 form + confirm() 필수.
+    회귀 3개.
+  - **D5 Debug Panel** = audit log viewer + invariant verifier +
+    analytic hover overlay + Tier 3 Danger Zone. 기본 hidden, dev
+    /power-user 용. 회귀 4개 (audit_pagination /
+    invariants_lists_violations / danger_zone_default_off /
+    analytic_overlay_toggleable).
+- **5 핵심 문장** (ADR 톤 정의):
+  1. "ActionCatalog is the single source of truth for action identity
+     across UI and MCP."
+  2. "MaterialPropertiesPanel is removed as dead code; re-introduction
+     requires a new ADR."
+  3. "Capability Explorer is the discoverability SSOT; execution
+     ergonomics remain tool-based."
+  4. "Tier 3 capabilities are Debug-only and require explicit Danger
+     Zone enablement."
+  5. "Legacy aliases are soft-deprecated and centrally tracked in the
+     catalog."
+- **Phase 2 4-PR 로드맵**:
+  - PR-1 (이 세션): MaterialPropertiesPanel 삭제 + regression guard
+  - PR-2 (별도 세션): packages/axia-action-catalog scaffold + 53
+    action 등록
+  - PR-3: Capability Explorer panel (Tier 0 form + Tier 1/2 launcher)
+  - PR-4: Debug Panel
+- **회귀 14 invariant 총합** (5 D 분산). 모두 절대 #[ignore] 금지.
+- **본 PR scope**: ADR draft + PR-1 (PR-2~4 별도 세션).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

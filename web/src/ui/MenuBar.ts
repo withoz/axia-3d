@@ -452,10 +452,16 @@ export function initMenuBar(deps: MenuBarDeps): void {
         break;
       }
       case 'view-materials': {
-        // MaterialPropertiesPanel — XiaInspector 의 재질 탭 또는 별도 panel
-        const mp = (window as unknown as { __axia_materialPanel?: { toggle(): void } }).__axia_materialPanel;
-        if (mp?.toggle) mp.toggle();
-        else Toast.warning('재질 패널을 사용할 수 없습니다. XIA 인스펙터에서 재질 속성을 편집하세요.');
+        // ADR-045 D2 — the legacy material panel was removed as dead
+        // code. Material editing canonical surface is XiaInspector
+        // (재질 탭). Re-introducing a separate panel requires a new ADR.
+        const xi = (window as unknown as { __axia_xiaInspector?: { toggle(): void } }).__axia_xiaInspector;
+        if (xi?.toggle) {
+          xi.toggle();
+          Toast.info('재질 편집은 XIA 인스펙터에서 수행하세요.', 3000);
+        } else {
+          Toast.warning('XIA 인스펙터를 사용할 수 없습니다.');
+        }
         break;
       }
       case 'view-xia-inspector': {
