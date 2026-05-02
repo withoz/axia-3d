@@ -1025,13 +1025,19 @@ export class WasmBridge {
   undo(): boolean {
     if (!this.engine) return false;
     this.markDirty();
-    return this.engine.undo();
+    const ok = this.engine.undo();
+    // Constraints are part of the scene snapshot — undo may have rolled
+    // back constraint additions/removals. Refresh subscribers.
+    if (ok) this._emitConstraintsChanged();
+    return ok;
   }
 
   redo(): boolean {
     if (!this.engine) return false;
     this.markDirty();
-    return this.engine.redo();
+    const ok = this.engine.redo();
+    if (ok) this._emitConstraintsChanged();
+    return ok;
   }
 
   /**
@@ -2357,7 +2363,9 @@ export class WasmBridge {
     if (!this.engine?.addEdgeConstraint) return 0;
     this.markDirty();
     try {
-      return this.engine.addEdgeConstraint(kind, edgeAVa, edgeAVb, edgeBVa, edgeBVb);
+      const id = this.engine.addEdgeConstraint(kind, edgeAVa, edgeAVb, edgeBVa, edgeBVb);
+      this._emitConstraintsChanged();
+      return id;
     } catch (e) {
       console.error('[WasmBridge] addEdgeConstraint failed:', e);
       return 0;
@@ -2368,7 +2376,9 @@ export class WasmBridge {
     if (!this.engine?.addDistanceConstraint) return 0;
     this.markDirty();
     try {
-      return this.engine.addDistanceConstraint(vA, vB, distance);
+      const id = this.engine.addDistanceConstraint(vA, vB, distance);
+      this._emitConstraintsChanged();
+      return id;
     } catch (e) {
       console.error('[WasmBridge] addDistanceConstraint failed:', e);
       return 0;
@@ -2378,13 +2388,40 @@ export class WasmBridge {
   removeConstraint(id: number): boolean {
     if (!this.engine?.removeConstraint) return false;
     this.markDirty();
-    try { return this.engine.removeConstraint(id); }
+    try {
+      const ok = this.engine.removeConstraint(id);
+      if (ok) this._emitConstraintsChanged();
+      return ok;
+    }
     catch (e) { console.error('[WasmBridge] removeConstraint failed:', e); return false; }
   }
 
   /** Once-flag for listConstraints failures — avoid console flood when
    *  RAF tick repeatedly hits the same wasm-bindgen reentrancy guard. */
   private _listConstraintsFailedOnce = false;
+
+  /**
+   * Event-driven constraint cache invalidation.
+   *
+   * Subscribers (ConstraintVisual / ConstraintPanel) get notified when
+   * the constraint set may have changed (add/remove/toggle/resolve/undo).
+   * The frame loop NEVER calls listConstraints directly; it consumes the
+   * cached snapshot. This eliminates the per-frame WASM borrow that was
+   * racing with mutating calls and causing wasm-bindgen reentrancy panics
+   * ("recursive use of an object detected").
+   *
+   * Pattern: "Snapshot once, render forever until invalidated".
+   */
+  private _constraintsChangedListeners = new Set<() => void>();
+  onConstraintsChanged(cb: () => void): () => void {
+    this._constraintsChangedListeners.add(cb);
+    return () => { this._constraintsChangedListeners.delete(cb); };
+  }
+  private _emitConstraintsChanged(): void {
+    for (const cb of this._constraintsChangedListeners) {
+      try { cb(); } catch (e) { console.error('[WasmBridge] constraint listener error:', e); }
+    }
+  }
 
   listConstraints(): Array<{ id: number; kind: string; active: boolean; value?: number; refs: unknown[] }> {
     if (!this.engine?.listConstraints) return [];
@@ -2407,13 +2444,21 @@ export class WasmBridge {
   resolveAllConstraints(): number {
     if (!this.engine?.resolveAllConstraints) return 0;
     this.markDirty();
-    try { return this.engine.resolveAllConstraints(); }
+    try {
+      const n = this.engine.resolveAllConstraints();
+      if (n > 0) this._emitConstraintsChanged();
+      return n;
+    }
     catch (e) { console.error('[WasmBridge] resolveAllConstraints failed:', e); return 0; }
   }
 
   setConstraintActive(id: number, active: boolean): boolean {
     if (!this.engine?.setConstraintActive) return false;
-    try { return this.engine.setConstraintActive(id, active); }
+    try {
+      const ok = this.engine.setConstraintActive(id, active);
+      if (ok) this._emitConstraintsChanged();
+      return ok;
+    }
     catch (e) { console.error('[WasmBridge] setConstraintActive failed:', e); return false; }
   }
 
@@ -2514,7 +2559,11 @@ export class WasmBridge {
     this.markDirty();
     try {
       const result = this.engine.import_snapshot?.(data) ?? false;
-      if (result) Toast.success('프로젝트 불러오기 성공');
+      if (result) {
+        Toast.success('프로젝트 불러오기 성공');
+        // Imported snapshot has its own constraint set — invalidate cache.
+        this._emitConstraintsChanged();
+      }
       return result;
     } catch (e) {
       console.error('[WasmBridge] importSnapshot failed:', e);

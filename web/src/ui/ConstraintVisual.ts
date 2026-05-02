@@ -84,40 +84,55 @@ export class ConstraintVisual {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  /** Cache for listConstraints — avoid hammering WASM when nothing changed.
-   *  Bumping the topology counter from the bridge invalidates the cache. */
-  private _cachedList: ConstraintItem[] | null = null;
-  private _cachedListAt = 0;
-  /** Listen for topology changes to invalidate the cache. */
-  private _topoSig = 0;
-
-  /** 전체 제약을 다시 그림. camera 인자로 스크린 투영.
+  /**
+   * Snapshot-once cache (2026-05-02 architectural fix).
    *
-   *  2026-05-02 fix — listConstraints was being called every animation
-   *  frame (~60Hz) which racing with the renderer's other WASM calls
-   *  produced "recursive use of an object detected" wasm-bindgen errors.
-   *  Cache the constraint list and refresh only every ~250ms unless
-   *  visibility toggles. Re-projection of cached items happens every
-   *  frame (cheap — just camera transform) so visuals still track.
+   * Pattern: "Snapshot once, render forever until invalidated".
+   *
+   * Per-frame `update()` NEVER calls into WASM for the constraint list —
+   * it only re-projects the cached snapshot via the camera transform. The
+   * snapshot is refreshed exclusively in response to events fired by the
+   * bridge (add/remove/toggle/resolve/undo/redo/import). This eliminates
+   * the per-frame WASM borrow that was racing with mutating calls and
+   * triggering wasm-bindgen "recursive use of an object detected" panics.
+   *
+   * Initial population happens lazily (on first update where visible=true)
+   * to avoid bridge calls before the engine finishes WASM bootstrapping.
+   */
+  private _cachedList: ConstraintItem[] | null = null;
+  private _unsubscribeFromBridge: (() => void) | null = null;
+
+  /** Refresh the cache from WASM. Called on bridge events, NOT every frame. */
+  refreshCache(): void {
+    try {
+      this._cachedList = this.bridge.listConstraints() as ConstraintItem[];
+    } catch {
+      // Defensive — never let a bridge failure clear an existing cache.
+      // Worst case: we render last-known constraints until next event.
+      if (this._cachedList === null) this._cachedList = [];
+    }
+  }
+
+  /**
+   * 전체 제약을 다시 그림. camera 인자로 스크린 투영.
+   *
+   * Pure projection from cached snapshot — NO WASM call here. Cache is
+   * populated once on first call and refreshed only on bridge events
+   * (subscription installed lazily on first update).
    */
   update(camera: THREE.Camera) {
     this.clear();
     if (!this.visible) return;
 
-    const now = performance.now();
-    const REFRESH_MS = 250;
-    let list = this._cachedList;
-    if (list === null || now - this._cachedListAt > REFRESH_MS) {
-      try {
-        list = this.bridge.listConstraints() as ConstraintItem[];
-        this._cachedList = list;
-        this._cachedListAt = now;
-      } catch {
-        // Defensive — never let a bridge failure spam the console every
-        // frame. Use last cached list, or empty.
-        list = this._cachedList ?? [];
-      }
+    // Lazy subscribe + first snapshot. Only happens once.
+    if (this._unsubscribeFromBridge === null) {
+      this._unsubscribeFromBridge = this.bridge.onConstraintsChanged(
+        () => this.refreshCache(),
+      );
+      this.refreshCache();
     }
+
+    const list = this._cachedList ?? [];
     if (list.length === 0) return;
 
     const rect = this.container.getBoundingClientRect();
@@ -205,6 +220,10 @@ export class ConstraintVisual {
   }
 
   dispose() {
+    if (this._unsubscribeFromBridge) {
+      this._unsubscribeFromBridge();
+      this._unsubscribeFromBridge = null;
+    }
     this.canvas.remove();
   }
 }
