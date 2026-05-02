@@ -508,6 +508,32 @@ fn promote_step_trimmed_curve(
             "TRIMMED_CURVE arg[1] (basis_curve) not a ref", entity_id,
         ))?;
 
+    // Trim parameter 추출. AP203 의 trim_1 / trim_2 는 SET[1:2] OF
+    // (PARAMETER_VALUE | CARTESIAN_POINT) 형태 — 즉 list of typed values.
+    let t1 = extract_trim_parameter(entity.args.get(2));
+    let t2 = extract_trim_parameter(entity.args.get(3));
+
+    // B5 follow-up — Parabola / Hyperbola 는 무한 curve 이므로 trim 파라미터
+    // 가 있을 때만 변환 가능 (Piegl A7.4 / A7.5). 이 case 는 기본 dispatch
+    // 보다 먼저 분기하여 specialized converter 호출.
+    let basis_entity = file.entity(basis_ref);
+    if let (Some(basis), Some(u1), Some(u2)) = (basis_entity, t1, t2) {
+        let basis_kind = crate::step::classify_curve_entity(&basis.tag);
+        match basis_kind {
+            ForeignCurveKind::Parabola => {
+                return promote_step_trimmed_parabola(
+                    file, basis_ref, basis, u1, u2, cache,
+                );
+            }
+            ForeignCurveKind::Hyperbola => {
+                return promote_step_trimmed_hyperbola(
+                    file, basis_ref, basis, u1, u2, cache,
+                );
+            }
+            _ => {}
+        }
+    }
+
     // Recurse into basis curve. Note: P21.5 — sub-range 의 부모는 promote 시
     // parameter_range 가 None 또는 full range 로 설정되어야 함. trim_1/2
     // 가 그 위를 덮어씀.
@@ -523,11 +549,6 @@ fn promote_step_trimmed_curve(
             entity_id,
         )),
     };
-
-    // Trim parameter 추출. AP203 의 trim_1 / trim_2 는 SET[1:2] OF
-    // (PARAMETER_VALUE | CARTESIAN_POINT) 형태 — 즉 list of typed values.
-    let t1 = extract_trim_parameter(entity.args.get(2));
-    let t2 = extract_trim_parameter(entity.args.get(3));
 
     if let (Some(t1), Some(t2)) = (t1, t2) {
         // Sense flag 확인 (.T. = same direction, .F. = reversed)
@@ -589,6 +610,114 @@ fn apply_parameter_range(p: CurvePromotion, range: [f64; 2]) -> CurvePromotion {
         CurvePromotion::Tessellate { reason, .. } =>
             CurvePromotion::Tessellate { reason, parameter_range: Some(range) },
     }
+}
+
+/// `TRIMMED_CURVE(PARABOLA, ...)` → `Bezier` (Piegl A7.4).
+///
+/// Parabola 는 무한 curve 라 PARABOLA 단독 promote 는 Tessellate.
+/// TRIMMED_CURVE wrapper 가 trim 범위를 제공하면 quadratic Bezier 변환.
+///
+/// STEP form: `PARABOLA('', placement_ref, focal_dist)`
+/// - placement.location = vertex (apex)
+/// - placement.ref_direction = axis of symmetry (opening direction = +X local)
+/// - placement.axis = z (perpendicular to parabola plane)
+fn promote_step_trimmed_parabola(
+    file: &StepFile,
+    basis_ref: u32,
+    basis: &Entity,
+    u1: f64,
+    u2: f64,
+    cache: &mut ResolveCache,
+) -> Result<CurvePromotion, ResolveError> {
+    use crate::conic_converter::trimmed_parabola_to_bezier;
+
+    let placement_ref = basis.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "PARABOLA arg[1] (placement) not a ref", basis_ref,
+        ))?;
+    let focal_dist = basis.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at(
+            "PARABOLA arg[2] (focal_dist) not a real", basis_ref,
+        ))?;
+    if focal_dist <= 0.0 {
+        return Err(ResolveError::at(
+            format!("PARABOLA focal_dist must be positive, got {}", focal_dist),
+            basis_ref,
+        ));
+    }
+
+    let placement = cache.placement(file, placement_ref)?;
+    // x_axis (local) = ref_direction (unit), y_axis = axis × ref_direction
+    let bezier = trimmed_parabola_to_bezier(
+        focal_dist, u1, u2,
+        placement.location,
+        placement.ref_direction,
+        placement.y_axis(),
+    );
+
+    Ok(CurvePromotion::Bezier {
+        control_pts: bezier.control_pts,
+        parameter_range: Some([0.0, 1.0]),  // Bezier param [0, 1]
+    })
+}
+
+/// `TRIMMED_CURVE(HYPERBOLA, ...)` → `Nurbs` rational quadratic (Piegl A7.5).
+///
+/// Hyperbola 단일 branch (right branch x ≥ a) 의 trim 변환.
+///
+/// STEP form: `HYPERBOLA('', placement_ref, semi_axis, semi_imag_axis)`
+/// - semi_axis = a (real semi-axis, positive)
+/// - semi_imag_axis = b (imaginary semi-axis, positive)
+fn promote_step_trimmed_hyperbola(
+    file: &StepFile,
+    basis_ref: u32,
+    basis: &Entity,
+    u1: f64,
+    u2: f64,
+    cache: &mut ResolveCache,
+) -> Result<CurvePromotion, ResolveError> {
+    use crate::conic_converter::trimmed_hyperbola_to_nurbs;
+
+    let placement_ref = basis.args.get(1)
+        .and_then(Value::as_ref)
+        .ok_or_else(|| ResolveError::at(
+            "HYPERBOLA arg[1] (placement) not a ref", basis_ref,
+        ))?;
+    let semi_axis = basis.args.get(2)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at(
+            "HYPERBOLA arg[2] (semi_axis) not a real", basis_ref,
+        ))?;
+    let semi_imag = basis.args.get(3)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| ResolveError::at(
+            "HYPERBOLA arg[3] (semi_imag_axis) not a real", basis_ref,
+        ))?;
+    if semi_axis <= 0.0 || semi_imag <= 0.0 {
+        return Err(ResolveError::at(
+            format!("HYPERBOLA semi_axes must be positive, got ({}, {})",
+                semi_axis, semi_imag),
+            basis_ref,
+        ));
+    }
+
+    let placement = cache.placement(file, placement_ref)?;
+    let nurbs = trimmed_hyperbola_to_nurbs(
+        semi_axis, semi_imag, u1, u2,
+        placement.location,
+        placement.ref_direction,
+        placement.y_axis(),
+    );
+
+    Ok(CurvePromotion::Nurbs {
+        control_pts: nurbs.control_pts,
+        weights: nurbs.weights,
+        knots: nurbs.knots,
+        degree: nurbs.degree,
+        parameter_range: Some([0.0, 1.0]),  // NURBS param [0, 1]
+    })
 }
 
 /// AP203 의 (unique_knots, multiplicities) 형식 → expanded knot vector.
@@ -843,8 +972,94 @@ mod tests {
 
     #[test]
     fn promote_step_curve_unsupported_kind() {
-        // B5 (2026-05-01): ELLIPSE wired (Piegl A7.1).
-        // 이제 PARABOLA / HYPERBOLA / OffsetCurve 가 unsupported.
+        // B5 follow-up (2026-05-01): PARABOLA / HYPERBOLA 는 TRIMMED_CURVE
+        // wrapper 가 있을 때만 변환 가능. 단독 PARABOLA / HYPERBOLA / Bezier
+        // / OffsetCurve 는 여전히 unsupported.
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (1., 0., 0.));\n",
+            "#3 = OFFSET_CURVE_3D('', #2, 1.0, .T., #2);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 3, &mut cache);
+        assert!(matches!(result.promotion, Some(CurvePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("not yet wired")));
+    }
+
+    // ─── B5 follow-up — TRIMMED parabola / hyperbola ─────────────────
+
+    #[test]
+    fn promote_step_trimmed_parabola_to_bezier() {
+        // y² = 4x (focal_dist 1), trim [-2, 2]
+        // P0 = (1, -2), P1 = (-1, 0), P2 = (1, 2) [in placement frame]
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = PARABOLA('', #4, 1.0);\n",
+            "#6 = TRIMMED_CURVE('', #5, (PARAMETER_VALUE(-2.0)), \
+                  (PARAMETER_VALUE(2.0)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 6, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            CurvePromotion::Bezier { control_pts, parameter_range } => {
+                assert_eq!(control_pts.len(), 3);
+                // x_axis = ref_dir = +X, y_axis = axis × ref = +Z × +X = +Y
+                assert!(approx_eq3(control_pts[0], [1.0, -2.0, 0.0], 1e-12));
+                assert!(approx_eq3(control_pts[1], [-1.0, 0.0, 0.0], 1e-12));
+                assert!(approx_eq3(control_pts[2], [1.0, 2.0, 0.0], 1e-12));
+                assert_eq!(parameter_range, Some([0.0, 1.0]));
+            }
+            other => panic!("expected Bezier, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_trimmed_hyperbola_to_nurbs() {
+        // x² - y² = 1, trim [-1, 1]
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = DIRECTION('', (0., 0., 1.));\n",
+            "#3 = DIRECTION('', (1., 0., 0.));\n",
+            "#4 = AXIS2_PLACEMENT_3D('', #1, #2, #3);\n",
+            "#5 = HYPERBOLA('', #4, 1.0, 1.0);\n",
+            "#6 = TRIMMED_CURVE('', #5, (PARAMETER_VALUE(-1.0)), \
+                  (PARAMETER_VALUE(1.0)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 6, &mut cache);
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        match result.promotion.unwrap() {
+            CurvePromotion::Nurbs {
+                control_pts, weights, knots, degree, parameter_range,
+            } => {
+                assert_eq!(control_pts.len(), 3);
+                assert_eq!(weights.len(), 3);
+                assert_eq!(degree, 2);
+                let cosh1 = 1.0_f64.cosh();
+                let sinh1 = 1.0_f64.sinh();
+                assert!(approx_eq3(control_pts[0], [cosh1, -sinh1, 0.0], 1e-12));
+                assert!(approx_eq3(control_pts[1], [1.0 / cosh1, 0.0, 0.0], 1e-12));
+                assert!(approx_eq3(control_pts[2], [cosh1, sinh1, 0.0], 1e-12));
+                assert_eq!(weights[0], 1.0);
+                assert_eq!(weights[2], 1.0);
+                assert!((weights[1] - cosh1).abs() < 1e-12);
+                assert_eq!(knots, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+                assert_eq!(parameter_range, Some([0.0, 1.0]));
+            }
+            other => panic!("expected Nurbs, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_step_parabola_without_trim_returns_tessellate() {
+        // 단독 PARABOLA → "not yet wired" Tessellate
         let src = minimal(concat!(
             "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
             "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
@@ -854,7 +1069,22 @@ mod tests {
         let mut cache = ResolveCache::new();
         let result = promote_step_curve(&f, 3, &mut cache);
         assert!(matches!(result.promotion, Some(CurvePromotion::Tessellate { .. })));
-        assert!(result.warnings.iter().any(|w| w.contains("not yet wired")));
+    }
+
+    #[test]
+    fn promote_step_hyperbola_negative_axis_errors() {
+        let src = minimal(concat!(
+            "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
+            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
+            "#3 = HYPERBOLA('', #2, -1.0, 1.0);\n",
+            "#4 = TRIMMED_CURVE('', #3, (PARAMETER_VALUE(0.0)), \
+                  (PARAMETER_VALUE(1.0)), .T., .PARAMETER.);"
+        ));
+        let f = parse(&src).unwrap();
+        let mut cache = ResolveCache::new();
+        let result = promote_step_curve(&f, 4, &mut cache);
+        assert!(matches!(result.promotion, Some(CurvePromotion::Tessellate { .. })));
+        assert!(result.warnings.iter().any(|w| w.contains("must be positive")));
     }
 
     #[test]
@@ -966,13 +1196,12 @@ mod tests {
 
     #[test]
     fn promote_step_trimmed_curve_basis_unsupported_propagates() {
-        // B5 (2026-05-01): basis ELLIPSE 는 이제 supported (NURBS).
-        // PARABOLA 가 unsupported — basis 가 Tessellate 라도 trim
-        // parameter_range 는 보존됨.
+        // B5 follow-up (2026-05-01): basis ELLIPSE / PARABOLA / HYPERBOLA
+        // 모두 supported. OFFSET_CURVE_3D 는 여전히 unsupported.
         let src = minimal(concat!(
             "#1 = CARTESIAN_POINT('', (0., 0., 0.));\n",
-            "#2 = AXIS2_PLACEMENT_3D('', #1, $, $);\n",
-            "#3 = PARABOLA('', #2, 5.0);\n",
+            "#2 = DIRECTION('', (1., 0., 0.));\n",
+            "#3 = OFFSET_CURVE_3D('', #2, 1.0, .T., #2);\n",
             "#4 = TRIMMED_CURVE('', #3, (PARAMETER_VALUE(0.0)), \
                   (PARAMETER_VALUE(3.14)), .T., .PARAMETER.);"
         ));
@@ -984,7 +1213,7 @@ mod tests {
             CurvePromotion::Tessellate { parameter_range, .. } => {
                 assert_eq!(parameter_range, Some([0.0, 3.14]));
             }
-            _ => panic!("expected Tessellate (basis PARABOLA unsupported)"),
+            _ => panic!("expected Tessellate (basis OFFSET_CURVE_3D unsupported)"),
         }
     }
 

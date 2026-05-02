@@ -20,6 +20,27 @@
 //! - ⏳ Parabola (A7.4) — 무한 curve, trim 필수
 //! - ⏳ Hyperbola (A7.5) — 무한 curve, trim 필수
 
+/// Output of parabola-to-Bezier conversion (Piegl A7.4).
+///
+/// Trimmed parabola arc → 3 control point quadratic Bezier (non-rational).
+#[derive(Clone, Debug)]
+pub struct ParabolaBezierData {
+    pub control_pts: Vec<[f64; 3]>,  // 3 points
+    pub knots: Vec<f64>,             // 6 knots [0, 0, 0, 1, 1, 1]
+    pub degree: usize,               // 2
+}
+
+/// Output of hyperbola-to-NURBS conversion (Piegl A7.5).
+///
+/// Trimmed hyperbola arc → 3 control point rational quadratic NURBS.
+#[derive(Clone, Debug)]
+pub struct HyperbolaNurbsData {
+    pub control_pts: Vec<[f64; 3]>,  // 3 points
+    pub weights: Vec<f64>,           // 3 weights [1, cosh(h), 1]
+    pub knots: Vec<f64>,             // 6 knots [0, 0, 0, 1, 1, 1]
+    pub degree: usize,               // 2
+}
+
 /// Output of ellipse-to-NURBS conversion (Piegl A7.1).
 ///
 /// 9 control points + 9 weights + 12 knots, degree 2. 단위 원의 경우 정확.
@@ -92,6 +113,111 @@ pub fn full_ellipse_to_nurbs(
 
     EllipseNurbsData {
         control_pts, weights, knots, degree: 2,
+    }
+}
+
+/// Trimmed parabola arc → quadratic Bezier (Piegl & Tiller A7.4).
+///
+/// Parabola in placement coords: `y² = 4 * focal_dist * x`, with vertex at
+/// `center`, axis of symmetry along `x_axis`, perpendicular along `y_axis`.
+/// Natural parameter u where `P(u) = (u²/(4f), u, 0)` in local coords.
+///
+/// 입력:
+/// - `focal_dist`: f (positive Real, distance from vertex to focus)
+/// - `u1, u2`: trim 범위의 자연 파라미터 (u 좌표 = y in local frame)
+/// - `center, x_axis, y_axis`: placement frame (x_axis = ref_dir unit,
+///   y_axis = (axis × ref_dir) unit)
+///
+/// 출력 (control points in world frame):
+/// - P0 = center + (u1²/(4f)) * x_axis + u1 * y_axis
+/// - P1 = center + (u1*u2/(4f)) * x_axis + (u1+u2)/2 * y_axis
+/// - P2 = center + (u2²/(4f)) * x_axis + u2 * y_axis
+/// - Knots [0, 0, 0, 1, 1, 1], degree 2
+///
+/// **Derivation**: Tangent at u = (u/(2f), 1, 0). Solving tangent
+/// intersection at u=u1 and u=u2 gives α = (u2-u1)/2, β = -α, leading
+/// to P1 above (Piegl & Tiller §7.5.4).
+pub fn trimmed_parabola_to_bezier(
+    focal_dist: f64,
+    u1: f64,
+    u2: f64,
+    center: [f64; 3],
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+) -> ParabolaBezierData {
+    let inv_4f = 1.0 / (4.0 * focal_dist);
+
+    let local_to_world = |x: f64, y: f64| -> [f64; 3] {
+        [
+            center[0] + x * x_axis[0] + y * y_axis[0],
+            center[1] + x * x_axis[1] + y * y_axis[1],
+            center[2] + x * x_axis[2] + y * y_axis[2],
+        ]
+    };
+
+    let p0 = local_to_world(u1 * u1 * inv_4f, u1);
+    let p1 = local_to_world(u1 * u2 * inv_4f, 0.5 * (u1 + u2));
+    let p2 = local_to_world(u2 * u2 * inv_4f, u2);
+
+    ParabolaBezierData {
+        control_pts: vec![p0, p1, p2],
+        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        degree: 2,
+    }
+}
+
+/// Trimmed hyperbola arc (single branch) → rational quadratic NURBS
+/// (Piegl & Tiller A7.5).
+///
+/// Hyperbola in placement coords: `(x/a)² - (y/b)² = 1` (right branch),
+/// parameterization `P(u) = (a*cosh(u), b*sinh(u), 0)` in local frame.
+///
+/// 입력:
+/// - `a, b`: semi_axis, semi_imag_axis (positive Real)
+/// - `u1, u2`: trim 범위의 자연 파라미터 (hyperbolic angle)
+/// - `center, x_axis, y_axis`: placement frame
+///
+/// 출력 (3 control points + 3 weights):
+/// - P0 = (a*cosh(u1), b*sinh(u1)) — local → world via x_axis/y_axis
+/// - P1 = (a*cosh(m)/cosh(h), b*sinh(m)/cosh(h)) where m=(u1+u2)/2, h=(u2-u1)/2
+/// - P2 = (a*cosh(u2), b*sinh(u2))
+/// - Weights = `[1, cosh(h), 1]`
+/// - Knots [0, 0, 0, 1, 1, 1], degree 2
+///
+/// **Derivation** (Piegl & Tiller §7.5.5): Tangent at u = (a*sinh(u),
+/// b*cosh(u)). Tangent intersection at u=u1, u=u2 yields
+/// α = tanh(h), giving P1 = M_curve / cosh(h). Setting w_1 = cosh(h)
+/// makes B(0.5) = M_curve (parametric center on the curve).
+pub fn trimmed_hyperbola_to_nurbs(
+    a: f64,
+    b: f64,
+    u1: f64,
+    u2: f64,
+    center: [f64; 3],
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+) -> HyperbolaNurbsData {
+    let m = 0.5 * (u1 + u2);
+    let h = 0.5 * (u2 - u1);
+    let cosh_h = h.cosh();
+
+    let local_to_world = |x: f64, y: f64| -> [f64; 3] {
+        [
+            center[0] + x * x_axis[0] + y * y_axis[0],
+            center[1] + x * x_axis[1] + y * y_axis[1],
+            center[2] + x * x_axis[2] + y * y_axis[2],
+        ]
+    };
+
+    let p0 = local_to_world(a * u1.cosh(), b * u1.sinh());
+    let p1 = local_to_world(a * m.cosh() / cosh_h, b * m.sinh() / cosh_h);
+    let p2 = local_to_world(a * u2.cosh(), b * u2.sinh());
+
+    HyperbolaNurbsData {
+        control_pts: vec![p0, p1, p2],
+        weights: vec![1.0, cosh_h, 1.0],
+        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        degree: 2,
     }
 }
 
@@ -236,5 +362,131 @@ mod tests {
                 "P{} should have weight √2/2 (corner)", i,
             );
         }
+    }
+
+    // ─── Parabola (Piegl A7.4) ────────────────────────────────────────
+
+    #[test]
+    fn parabola_symmetric_trim_y2_eq_4fx() {
+        // Parabola y² = 4*1*x = 4x, trimmed [-2, 2]
+        // P0 = (4/4, -2) = (1, -2)
+        // P1 = (-4/4, 0) = (-1, 0)  [u1*u2/(4f) = -4/4 = -1]
+        // P2 = (1, 2)
+        let data = trimmed_parabola_to_bezier(
+            1.0, -2.0, 2.0,
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],  // x_axis = ref (axis of symmetry)
+            [0.0, 1.0, 0.0],  // y_axis
+        );
+        assert!(approx_eq3(data.control_pts[0], [1.0, -2.0, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[1], [-1.0, 0.0, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[2], [1.0, 2.0, 0.0], 1e-12));
+        assert_eq!(data.knots, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(data.degree, 2);
+    }
+
+    #[test]
+    fn parabola_asymmetric_trim() {
+        // y² = 4*2*x = 8x, trim [1, 4]
+        // f = 2, 1/(4f) = 1/8
+        // P0 = (1/8, 1)
+        // P1 = (4/8, 2.5) = (0.5, 2.5)  [u1*u2/(4f) = 4/8 = 0.5]
+        // P2 = (16/8, 4) = (2.0, 4)
+        let data = trimmed_parabola_to_bezier(
+            2.0, 1.0, 4.0,
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        assert!(approx_eq3(data.control_pts[0], [0.125, 1.0, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[1], [0.5, 2.5, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[2], [2.0, 4.0, 0.0], 1e-12));
+    }
+
+    #[test]
+    fn parabola_offset_center_3d() {
+        // Trim [-1, 1] of y² = 4x, center at (10, 20, 30), Y-Z plane
+        let data = trimmed_parabola_to_bezier(
+            1.0, -1.0, 1.0,
+            [10.0, 20.0, 30.0],
+            [0.0, 1.0, 0.0],  // x_axis = +Y in world
+            [0.0, 0.0, 1.0],  // y_axis = +Z in world
+        );
+        // Local P0 = (1/4, -1) → world = (10, 20+0.25, 30-1) = (10, 20.25, 29)
+        assert!(approx_eq3(data.control_pts[0], [10.0, 20.25, 29.0], 1e-12));
+        // Local P2 = (0.25, 1) → (10, 20.25, 31)
+        assert!(approx_eq3(data.control_pts[2], [10.0, 20.25, 31.0], 1e-12));
+        // Local P1 = (-0.25, 0) → (10, 19.75, 30)
+        assert!(approx_eq3(data.control_pts[1], [10.0, 19.75, 30.0], 1e-12));
+    }
+
+    // ─── Hyperbola (Piegl A7.5) ───────────────────────────────────────
+
+    #[test]
+    fn hyperbola_symmetric_trim_zero_axis() {
+        // x²/1 - y²/1 = 1 (rectangular hyperbola), trim [-1, 1]
+        // m = 0, h = 1
+        // P0 = (cosh(-1), sinh(-1)) ≈ (1.5430806, -1.1752012)
+        // P2 = (cosh(1), sinh(1)) ≈ (1.5430806, 1.1752012)  (symmetric)
+        // P1 = (cosh(0)/cosh(1), sinh(0)/cosh(1)) = (1/cosh(1), 0) ≈ (0.6480543, 0)
+        // weight w_1 = cosh(1) ≈ 1.5430806
+        let data = trimmed_hyperbola_to_nurbs(
+            1.0, 1.0, -1.0, 1.0,
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        let cosh1 = 1.0_f64.cosh();
+        let sinh1 = 1.0_f64.sinh();
+        assert!(approx_eq3(data.control_pts[0], [cosh1, -sinh1, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[2], [cosh1, sinh1, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[1], [1.0 / cosh1, 0.0, 0.0], 1e-12));
+        assert_eq!(data.weights[0], 1.0);
+        assert_eq!(data.weights[2], 1.0);
+        assert!((data.weights[1] - cosh1).abs() < 1e-12);
+        assert_eq!(data.knots, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(data.degree, 2);
+    }
+
+    #[test]
+    fn hyperbola_with_a_2_b_3() {
+        // x²/4 - y²/9 = 1, trim [0, 2]
+        // m = 1, h = 1
+        // P0 = (2*cosh(0), 3*sinh(0)) = (2, 0)
+        // P2 = (2*cosh(2), 3*sinh(2))
+        // P1 = (2*cosh(1)/cosh(1), 3*sinh(1)/cosh(1)) = (2, 3*tanh(1))
+        // w_1 = cosh(1)
+        let data = trimmed_hyperbola_to_nurbs(
+            2.0, 3.0, 0.0, 2.0,
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        );
+        let cosh2 = 2.0_f64.cosh();
+        let sinh2 = 2.0_f64.sinh();
+        let tanh1 = 1.0_f64.tanh();
+        assert!(approx_eq3(data.control_pts[0], [2.0, 0.0, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[2], [2.0 * cosh2, 3.0 * sinh2, 0.0], 1e-12));
+        assert!(approx_eq3(data.control_pts[1], [2.0, 3.0 * tanh1, 0.0], 1e-12));
+    }
+
+    #[test]
+    fn hyperbola_3d_orientation() {
+        // Trim [-0.5, 0.5] in Y-Z plane (placement.x = +Y, .y = +Z)
+        let data = trimmed_hyperbola_to_nurbs(
+            1.0, 1.0, -0.5, 0.5,
+            [10.0, 20.0, 30.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        );
+        let cosh_half = 0.5_f64.cosh();
+        let sinh_half = 0.5_f64.sinh();
+        // P0 = (cosh(-0.5), sinh(-0.5)) local = (cosh(0.5), -sinh(0.5)) world
+        // → (10, 20 + cosh(0.5), 30 - sinh(0.5))
+        assert!(approx_eq3(
+            data.control_pts[0],
+            [10.0, 20.0 + cosh_half, 30.0 - sinh_half],
+            1e-12,
+        ));
     }
 }
