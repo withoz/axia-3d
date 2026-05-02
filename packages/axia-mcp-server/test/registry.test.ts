@@ -19,16 +19,22 @@ describe('capability handler registry', () => {
     }
   });
 
-  it('current registry surface (Stage 3 + #2 follow-up)', () => {
+  it('current registry surface (Stage 3 + #2 + Tier 2 expansion)', () => {
     // Adding/removing handlers requires updating this list AND the
     // tier declarations in tiers.ts. Drift between the two = bug.
     expect(listRegisteredCapabilities().sort()).toEqual([
+      'boolean_subtract',
       'draw_circle',
       'draw_line',
       'draw_rect',
       'export_axia',
+      'fillet_edge',
+      'get_edge_info',
+      'get_face_info',
       'get_scene_summary',
+      'list_groups',
       'list_xias',
+      'move_xia',
       'push_pull',
     ]);
   });
