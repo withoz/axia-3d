@@ -15,9 +15,14 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { performHandshake, type EngineHandle } from './handshake.js';
-import { tierConfigFromEnv, type TierConfig } from './tiers.js';
 import { FileAuditSink, NullAuditSink, type AuditSink } from './audit.js';
 import { wireTools } from './tools.js';
+import {
+  policyFromEnv,
+  DEFAULT_POLICY,
+  UnknownCapabilityInPolicyError,
+  type CapabilityPolicy,
+} from './policy.js';
 import type { EngineInstance, EngineModule } from './capabilities/types.js';
 
 export interface AxiaMcpServerOptions {
@@ -25,7 +30,11 @@ export interface AxiaMcpServerOptions {
   engineModule: EngineHandle;
   /** Engine instance used by capability handlers. */
   engineInstance: EngineInstance;
-  tierConfig?: TierConfig;
+  /**
+   * ADR-042 P27 — full capability policy. Defaults to `policyFromEnv()`
+   * which reads AXIA_MCP_TIERS / ALLOW_CAPS / DENY_CAPS.
+   */
+  policy?: CapabilityPolicy;
   auditSink?: AuditSink;
   client?: string;
 }
@@ -33,14 +42,17 @@ export interface AxiaMcpServerOptions {
 /**
  * Build an MCP server instance — pure function, no I/O until `connect()`.
  * Easy to test by passing a mock engine module + instance.
+ *
+ * Throws `UnknownCapabilityInPolicyError` (P27.3) if env-derived policy
+ * contains a typo'd capability name. Caller may catch + emit fatal.
  */
 export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
   server: Server;
   handshake: ReturnType<typeof performHandshake>;
-  config: TierConfig;
+  policy: CapabilityPolicy;
 } {
   const handshake = performHandshake(opts.engineModule);
-  const config = opts.tierConfig ?? tierConfigFromEnv();
+  const policy = opts.policy ?? policyFromEnv();
   const auditSink = opts.auditSink ?? new NullAuditSink();
   const client = opts.client ?? 'unknown';
 
@@ -58,7 +70,7 @@ export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
 
   wireTools(server, {
     engine: opts.engineInstance,
-    config,
+    policy,
     auditSink,
     client,
     versions: {
@@ -67,8 +79,11 @@ export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
     },
   });
 
-  return { server, handshake, config };
+  return { server, handshake, policy };
 }
+
+// Re-export DEFAULT_POLICY for tests that need it.
+export { DEFAULT_POLICY };
 
 async function main(): Promise<void> {
   // Dynamic import so test runners can stub axia-wasm-node without forcing
@@ -103,6 +118,17 @@ const isDirectInvocation =
 
 if (isDirectInvocation) {
   main().catch((err: unknown) => {
+    if (err instanceof UnknownCapabilityInPolicyError) {
+      // P27.3 — clearer wording for env config errors.
+      process.stderr.write(
+        `[axia-mcp-server] FATAL: ${err.message}\n` +
+          `\n` +
+          `  Check your AXIA_MCP_ALLOW_CAPS / AXIA_MCP_DENY_CAPS env vars.\n` +
+          `  Source: ${err.source}, bad name: "${err.bad_name}"\n` +
+          (err.suggestion ? `  Did you mean: "${err.suggestion}"?\n` : ''),
+      );
+      process.exit(2);
+    }
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[axia-mcp-server] FATAL: ${msg}\n`);
     process.exit(1);

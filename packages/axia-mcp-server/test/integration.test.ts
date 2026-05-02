@@ -26,7 +26,7 @@ describe.skipIf(!wasmBuilt)('ADR-041 — real WASM integration', () => {
         exportSnapshotStrict(): Uint8Array;
       };
     };
-    const { handshake, config } = buildAxiaMcpServer({
+    const { handshake, policy } = buildAxiaMcpServer({
       engineModule: mod,
       engineInstance: new mod.AxiaEngine(),
       auditSink: new MemoryAuditSink(),
@@ -35,6 +35,6 @@ describe.skipIf(!wasmBuilt)('ADR-041 — real WASM integration', () => {
     expect(handshake.compatible).toBe(true);
     expect(handshake.engine_schema).toMatch(/^\d+\.\d+\.\d+$/);
     expect(handshake.engine_version).toMatch(/^\d+\.\d+\.\d+/);
-    expect(config.enabled_tiers).toEqual([0, 1]);
+    expect(policy.enabled_tiers).toEqual([0, 1]);
   });
 });

@@ -397,6 +397,45 @@
 - **Onboarding guard**: `npm install` 시 `scripts/check-wasm.mjs` 가
   WASM artifact 검증. 누락 시 친절한 경고 + exit 0 (fail-soft).
 
+### 20. ADR-042 — MCP Capability Policy (P27 ALLOW/DENY, 2026-05-02)
+- **새 원칙 P27**: ADR-041 P26.1 의 4-tier whitelist 위에 capability
+  단위 ALLOW/DENY 정책 layer. **Additive semantics** + fail-closed.
+- **P27.1 Composition rule**:
+  ```
+  enabled(cap) = (cap ∉ DENY) AND (tier ∈ TIERS  OR  cap ∈ ALLOW)
+  ```
+  - ALLOW 는 *additive* (tier 가 막아도 통과 가능)
+  - DENY 는 *subtractive* (tier 가 통과시켜도 차단)
+  - DENY 항상 우선 (fail-closed)
+  - Exhaustive whitelist 필요 시 `TIERS=""` (empty) + `ALLOW=cap1,...`
+- **P27.2 Env vars**: `AXIA_MCP_ALLOW_CAPS=draw_rect,push_pull` +
+  `AXIA_MCP_DENY_CAPS=boolean_subtract`. 기존 `AXIA_MCP_TIERS` 유지.
+- **P27.3 Unknown = fatal**: env / config 의 typo 는 startup 에서 즉시
+  process 종료 (exit 2) + Levenshtein distance ≤ 2 의 "Did you mean"
+  힌트. `UnknownCapabilityInPolicyError` 클래스.
+- **P27.4 tools/list invariant**: `isVisibleInToolsList(cap, policy) =
+  evaluatePolicy(cap, policy).allowed`. ALLOW promote 한 cap 도 list 에
+  표시. defense-in-depth — dispatch 시 재검사.
+- **P27.5 Audit reason layered** (P26.7 확장): 3 distinguishable kinds:
+  * `unknown` — capability 자체가 surface 외
+  * `denied_by_DENY` — DENY 명시
+  * `tier_disabled_no_allow` — tier 비활성 AND ALLOW 미포함
+- **P27.6 8 회귀 테스트** (절대 #[ignore] 금지):
+  * policy_default_tier_only_unchanged (ADR-041 회귀 0)
+  * policy_deny_overrides_tier
+  * policy_allow_promotes_capability_above_tier
+  * policy_exhaustive_whitelist_via_empty_tiers (revised)
+  * policy_deny_wins_over_allow
+  * policy_unknown_capability_fatal_with_hint
+  * policy_audit_reason_distinguishes_layer
+  * policy_tools_list_reflects_actual_enablement
+- **구현**: `packages/axia-mcp-server/src/policy.ts`. ADR-041 의 자연
+  확장. DEFAULT_POLICY = ADR-041 default → 회귀 0. 103 / 103 tests
+  passing.
+- **변경 이력 주의**: 초안은 AWS-style implicit-deny semantics 였으나
+  UX 발견 후 additive 로 revise (use case 2 가 모든 Tier 1 enumerate
+  필요해서). 변경 commit 단계에서 ADR + 구현 + 테스트 동시 변경.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

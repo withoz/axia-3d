@@ -10,13 +10,17 @@
 
 import type { z } from 'zod';
 import {
-  authorizeCapability,
   UnknownCapabilityError,
   CapabilityBlockedError,
   type TierConfig,
-  DEFAULT_TIER_CONFIG,
   tierOf,
 } from './tiers.js';
+import {
+  evaluatePolicy,
+  formatDenialReason,
+  DEFAULT_POLICY,
+  type CapabilityPolicy,
+} from './policy.js';
 import {
   type AuditSink,
   NullAuditSink,
@@ -37,13 +41,32 @@ export interface VersionInfo {
 
 export interface DispatcherOptions {
   engine: EngineInstance;
+  /**
+   * @deprecated Use `policy` instead. Retained for backward compat in tests
+   * (ADR-042 migration). When both `policy` and `config` are absent,
+   * `DEFAULT_POLICY` is used.
+   */
   config?: TierConfig;
+  /** ADR-042 P27 — full capability policy (tiers + ALLOW + DENY). */
+  policy?: CapabilityPolicy;
   auditSink?: AuditSink;
   client?: string;
   /** From handshake. Stamped onto every audit entry for drift correlation. */
   versions: VersionInfo;
   /** Override request id for client correlation; auto-generated otherwise. */
   request_id?: string;
+}
+
+function resolvePolicy(opts: DispatcherOptions): CapabilityPolicy {
+  if (opts.policy) return opts.policy;
+  if (opts.config) {
+    return {
+      enabled_tiers: opts.config.enabled_tiers,
+      allow_caps: new Set(),
+      deny_caps: new Set(),
+    };
+  }
+  return DEFAULT_POLICY;
 }
 
 export class CapabilityInputError extends Error {
@@ -81,52 +104,66 @@ export async function dispatch(
   rawInput: unknown,
   opts: DispatcherOptions,
 ): Promise<DispatchResult> {
-  const config = opts.config ?? DEFAULT_TIER_CONFIG;
+  const policy = resolvePolicy(opts);
   const auditSink = opts.auditSink ?? new NullAuditSink();
   const client = opts.client ?? 'unknown';
   const request_id = opts.request_id ?? newRequestId();
   const versions = opts.versions;
   const start = performance.now();
 
-  // 1. Look up handler — unknown is a denial.
-  const handler: CapabilityHandler<unknown, unknown> | undefined =
-    getCapabilityHandler(capability);
-  if (!handler) {
-    const reason = `Unknown capability "${capability}" — not in ADR-041 P26.1 surface`;
+  // 1+2. Policy evaluation (ADR-042 P27): tier + ALLOW + DENY in one place.
+  const decision = evaluatePolicy(capability, policy);
+  if (!decision.allowed) {
+    const reasonText = decision.reason
+      ? formatDenialReason(decision.reason)
+      : 'Denied by policy';
+    const tierForAudit =
+      decision.reason?.kind === 'tier_disabled_no_allow'
+        ? decision.reason.tier
+        : tierOf(capability) ?? null;
+
     recordAudit(auditSink, {
       request_id,
       client,
-      tier: null,
+      tier: tierForAudit,
       capability,
       args: rawInput,
       duration_ms: performance.now() - start,
       result: 'denied',
-      reason,
+      reason: reasonText,
       engine_version: versions.engine_version,
       schema_version: versions.schema_version,
     });
-    throw new UnknownCapabilityError(capability);
-  }
 
-  // 2. Tier authorization.
-  try {
-    authorizeCapability(capability, config);
-  } catch (e) {
-    if (e instanceof CapabilityBlockedError) {
-      recordAudit(auditSink, {
-        request_id,
-        client,
-        tier: e.tier,
+    // Throw the most specific error for backward compat with existing
+    // callers that pattern-match on these classes.
+    if (decision.reason?.kind === 'unknown') {
+      throw new UnknownCapabilityError(capability);
+    }
+    if (decision.reason?.kind === 'tier_disabled_no_allow') {
+      throw new CapabilityBlockedError({
         capability,
-        args: rawInput,
-        duration_ms: performance.now() - start,
-        result: 'denied',
-        reason: `Tier ${e.tier} not enabled (config: [${e.enabled_tiers.join(', ')}])`,
-        engine_version: versions.engine_version,
-        schema_version: versions.schema_version,
+        tier: decision.reason.tier,
+        enabled_tiers: decision.reason.enabled_tiers,
       });
     }
-    throw e;
+    // DENY layer — surfaced as CapabilityBlockedError so MCP tool callers
+    // see a consistent error type.
+    const t = tierOf(capability);
+    throw new CapabilityBlockedError({
+      capability,
+      tier: t !== undefined ? t : (0 as 0),
+      enabled_tiers: policy.enabled_tiers,
+    });
+  }
+
+  // Lookup handler now that policy passed.
+  const handler: CapabilityHandler<unknown, unknown> | undefined =
+    getCapabilityHandler(capability);
+  if (!handler) {
+    // Should be unreachable: evaluatePolicy returns unknown=false above
+    // when capability is not in tiers.ts. Belt-and-braces: still guard.
+    throw new UnknownCapabilityError(capability);
   }
 
   // 3. Input validation.

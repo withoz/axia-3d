@@ -16,30 +16,31 @@ import {
   ALL_CAPABILITY_HANDLERS,
   type EngineInstance,
 } from './capabilities/index.js';
-import type { TierConfig } from './tiers.js';
+import { isVisibleInToolsList, type CapabilityPolicy } from './policy.js';
 import type { AuditSink } from './audit.js';
 
 export interface ToolsWiringOptions {
   engine: EngineInstance;
-  config: TierConfig;
+  /** ADR-042 P27 — full capability policy (replaces tier-only config). */
+  policy: CapabilityPolicy;
   auditSink: AuditSink;
   client: string;
   versions: { schema_version: string; engine_version: string };
 }
 
 /**
- * Filter handlers by config — capabilities whose tier is not enabled are
- * excluded from `tools/list` so AI agents do not even see them.
- * Enforcement is still done at dispatch time (defense in depth).
+ * P27.4 — `tools/list` filter: a capability appears iff `evaluatePolicy()`
+ * would allow it. ALLOW promotes capabilities above their tier; DENY
+ * removes them. Defense in depth: dispatcher re-checks at call time.
  */
-function visibleCapabilities(config: TierConfig) {
-  return ALL_CAPABILITY_HANDLERS.filter((h) => config.enabled_tiers.includes(h.tier));
+function visibleCapabilities(policy: CapabilityPolicy) {
+  return ALL_CAPABILITY_HANDLERS.filter((h) => isVisibleInToolsList(h.name, policy));
 }
 
 export function wireTools(server: Server, opts: ToolsWiringOptions): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
-      tools: visibleCapabilities(opts.config).map((h) => ({
+      tools: visibleCapabilities(opts.policy).map((h) => ({
         name: h.name,
         description: h.description,
         inputSchema: zodToJsonSchema(h.inputSchema),
@@ -52,7 +53,7 @@ export function wireTools(server: Server, opts: ToolsWiringOptions): void {
     try {
       const result = await dispatch(name, rawArgs ?? {}, {
         engine: opts.engine,
-        config: opts.config,
+        policy: opts.policy,
         auditSink: opts.auditSink,
         client: opts.client,
         versions: opts.versions,

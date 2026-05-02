@@ -24,31 +24,33 @@ function mockModule(): EngineModule {
 }
 
 describe('ADR-041 — tools/list + tools/call protocol surface', () => {
-  it('default config exposes only Tier 0 + 1 tools', () => {
+  it('default policy exposes Tier 0 + 1 tools', () => {
     const mod = mockModule();
-    const { config } = buildAxiaMcpServer({
+    const { policy } = buildAxiaMcpServer({
       engineModule: mod,
       engineInstance: new mod.AxiaEngine(),
       auditSink: new MemoryAuditSink(),
       client: 'test',
     });
-    expect(config.enabled_tiers).toEqual([0, 1]);
-    // Internally `wireTools` filtered to tier 0/1. We can't easily probe
-    // the Server's internal handler map without a transport, but the
-    // filter logic is unit-tested via `tools.ts` import shape and
-    // `dispatcher.test.ts` covers per-call enforcement.
+    expect(policy.enabled_tiers).toEqual([0, 1]);
+    expect(policy.allow_caps.size).toBe(0);
+    expect(policy.deny_caps.size).toBe(0);
   });
 
-  it('Tier 2 visible only when explicitly enabled', () => {
+  it('Tier 2 enabled when explicit policy passed', () => {
     const mod = mockModule();
-    const { config } = buildAxiaMcpServer({
+    const { policy } = buildAxiaMcpServer({
       engineModule: mod,
       engineInstance: new mod.AxiaEngine(),
-      tierConfig: { enabled_tiers: [0, 1, 2] },
+      policy: {
+        enabled_tiers: [0, 1, 2],
+        allow_caps: new Set(),
+        deny_caps: new Set(),
+      },
       auditSink: new MemoryAuditSink(),
       client: 'test',
     });
-    expect(config.enabled_tiers).toContain(2);
+    expect(policy.enabled_tiers).toContain(2);
   });
 
   it('handshake error short-circuits server build', () => {

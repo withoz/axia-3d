@@ -1,6 +1,6 @@
 # ADR-042: MCP Capability Policy — ALLOW / DENY Refinement
 
-**Status**: **Proposed** (2026-05-02)
+**Status**: **Accepted** (2026-05-02) — LOCKED 정책 #20
 **Initiative**: AxiA MCP Surface 운영 정밀도 (ADR-041 follow-up)
 **Builds on**: ADR-041 P26.1 (4-tier Capability Surface), P26.7 (Audit Trail)
 
@@ -50,31 +50,35 @@ POSIX `capabilities(7)` / AWS IAM 의 정책 모델:
 
 ### P27 세부 규칙 (6 항목)
 
-**P27.1 — Composition rule (fail-closed)**
+**P27.1 — Composition rule (additive ALLOW, subtractive DENY, fail-closed)**
 
 ```
 final_enabled(cap) =
-    (tier_of(cap) ∈ enabled_tiers)
-    AND (cap ∉ deny_caps)
-    AND (allow_caps = ∅ OR cap ∈ allow_caps)
+    (cap ∉ deny_caps)                                      ← fail-closed
+    AND (tier_of(cap) ∈ enabled_tiers  OR  cap ∈ allow_caps)
 ```
 
 진리표:
 
-| Tier 활성 | DENY | ALLOW (∅=비어있음) | 결과 |
-|---|---|---|---|
-| ✓ | — | ∅ | **활성** (default 경로) |
-| ✓ | ✓ | — | **비활성** (deny wins) |
-| ✓ | — | 포함 | **활성** |
-| ✓ | — | 비포함 (allow ≠ ∅) | **비활성** (implicit deny) |
-| — | — | 포함 | **활성** (allow 가 tier 보다 ↑) |
-| — | ✓ | 포함 | **비활성** (deny wins) |
+| Tier 활성 | DENY | ALLOW | 결과 | 의미 |
+|---|---|---|---|---|
+| ✓ | — | ∅ | **활성** | default 경로 (P26.1 그대로) |
+| ✓ | — | 포함 | **활성** | redundant 하지만 OK |
+| ✓ | — | 비포함 (allow ≠ ∅) | **활성** | ALLOW 는 tier 의 surface 를 줄이지 않음 |
+| ✓ | ✓ | — | **비활성** | DENY 가 tier 차감 |
+| — | — | 포함 | **활성** | ALLOW promotes — Tier 외 cap 추가 |
+| — | — | 비포함 | **비활성** | tier 도 ALLOW 도 없음 |
+| — | ✓ | 포함 | **비활성** | DENY wins (fail-closed) |
 
-**핵심**:
-- ALLOW 가 비어있으면 (default), tier 만으로 결정
-- ALLOW 가 비어있지 않으면, tier 가 꺼져있어도 ALLOW 가 활성화 가능
-  (단, DENY 면 즉시 deny)
-- **DENY 는 무조건 우선** — fail-closed
+**핵심 (additive)**:
+- ALLOW = "tier 이 막아도 이 cap 은 통과시켜라" (선택적 추가)
+- DENY = "tier 이 통과시켜도 이 cap 은 거부해라" (선택적 제거)
+- DENY 가 항상 우선 (fail-closed)
+- "exhaustive whitelist" 가 필요하면 `TIERS=""` (빈) + `ALLOW=cap1,cap2,...`
+
+**Why additive?** "Tier 0+1 + push_pull" 만 원할 때 사용자가 Tier 1 의
+모든 capability 를 ALLOW 에 enumerate 하지 않아도 됨. UX 친화적. AWS IAM
+의 정책 evaluation 과 동일 (Allow 는 추가, Deny 는 항상 우선).
 
 **P27.2 — 환경변수 / config 표면**
 
@@ -141,7 +145,7 @@ P27 정책으로 거부된 호출은 ADR-041 P26.7 의 `denied` audit 에 기록
 | 1 | `policy_default_tier_only_unchanged` | ALLOW=∅, DENY=∅ → ADR-041 동작과 동일 (회귀 없음) |
 | 2 | `policy_deny_overrides_tier` | Tier 2 enabled + DENY=[boolean_subtract] → boolean_subtract 만 거부 |
 | 3 | `policy_allow_promotes_capability_above_tier` | Tiers=[0,1] + ALLOW=[push_pull] → push_pull 활성 |
-| 4 | `policy_allow_implicit_deny_excludes_others` | ALLOW=[draw_rect] → draw_circle 거부 (tier 1 인데도) |
+| 4 | `policy_exhaustive_whitelist_via_empty_tiers` | TIERS=∅ + ALLOW=[draw_rect] → draw_rect 만 활성, draw_circle 거부 |
 | 5 | `policy_deny_wins_over_allow` | ALLOW=[push_pull] + DENY=[push_pull] → 거부 |
 | 6 | `policy_unknown_capability_fatal_with_hint` | env 에 typo → fatal + "Did you mean" 힌트 |
 | 7 | `policy_audit_reason_distinguishes_layer` | 3 reason 분리 검증 |
@@ -193,11 +197,13 @@ ADR-041 P26.8 의 7 회귀 테스트 모두 그대로 유지 (P27 default 가 P2
 
 ## Success Criteria
 
-- ✅ ADR-042 P27 결정이 commit 으로 고정 (이 PR)
-- ⏳ `src/policy.ts` 구현
-- ⏳ 8 회귀 테스트 (P27.6)
-- ⏳ ADR-041 P26.1 7 회귀 모두 unchanged (P27 default = ADR-041 default)
-- ⏳ docs/integrations/ 가이드 업데이트 (ALLOW/DENY 사용 예제)
+- ✅ ADR-042 P27 결정 commit 고정
+- ✅ `src/policy.ts` 구현 (additive composition, suggestCapability +
+  validatePolicy)
+- ✅ 8 회귀 테스트 통과 (P27.6) — policy.test.ts 23 tests
+- ✅ ADR-041 P26.1 7 회귀 모두 unchanged (DEFAULT_POLICY ↔ ADR-041 default)
+- ✅ 103 / 103 tests passing
+- ⏳ docs/integrations/ 가이드 업데이트 (별도 commit, optional)
 
 ## References
 
@@ -207,6 +213,11 @@ ADR-041 P26.8 의 7 회귀 테스트 모두 그대로 유지 (P27 default 가 P2
 
 ## 변경 이력
 
-- **2026-05-02 (initial)**: P27 신규. 6 세부 규칙 + 8 회귀 테스트.
-  ADR-041 의 자연 확장으로 fail-closed composition + unknown=fatal +
-  audit reason 분리. 단일 PR 구현 가능 (분리 마이그레이션 불필요).
+- **2026-05-02 (initial draft)**: P27 신규. 6 세부 규칙 + 8 회귀 테스트.
+  Composition: AWS-style implicit-deny (ALLOW non-empty 시 그 외 거부).
+- **2026-05-02 (revised + accepted)**: 구현 중 UX 발견 — implicit-deny
+  semantics 는 "Tier 0+1 + push_pull 만 추가" 케이스에서 사용자가 모든
+  Tier 1 cap 을 enumerate 해야 함 (악몽). **Additive semantics 로 변경**:
+  ALLOW = 추가, DENY = 제거. Exhaustive whitelist 필요 시 `TIERS=∅` +
+  `ALLOW=...`. AWS IAM 의 evaluation 과 정합적이며 사용자 직관 ↑.
+  Status: Proposed → Accepted, LOCKED #20.
