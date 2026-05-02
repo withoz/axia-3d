@@ -885,12 +885,13 @@ export class AxiaEngine {
      *
      * Sweeps free orphan edges for closed simple cycles and synthesizes a
      * face for each. Returns JSON `{"created":N,"abortedByTimeBudget":bool,
-     * "elapsedMs":N}` so the UI can distinguish "completed" vs "partial,
-     * re-run for the rest" outcomes.
+     * "elapsedMs":N}` so the UI can distinguish completion outcomes.
      *
-     * Soft 100ms budget — for pathological scenes (10k+ orphan edges) the
-     * sweep aborts cleanly between rounds; already-found faces stay
-     * committed. Call again to continue.
+     * Bounded by `MAX_ROUNDS = 8` inside the engine — caps work regardless
+     * of scene size. Time tracking happens via `performance.now()` here
+     * (NOT inside Rust, where `Instant::now()` panics on the wasm32-unknown
+     * -unknown target and the resulting trap leaks the wasm-bindgen
+     * RefCell guard, breaking all subsequent engine calls).
      *
      * Call site triggers a topology-change so the next syncMesh rebuilds
      * everything (face buffers, edge wireframe, snap cache).
