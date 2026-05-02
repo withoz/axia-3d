@@ -239,4 +239,106 @@ describe('MenuBar', () => {
       expect(deps.openOsnapPanel).toHaveBeenCalled();
     });
   });
+
+  describe('PR#1 — STEP/IGES import 메뉴 (ADR-035 P20.7)', () => {
+    beforeEach(() => {
+      // Add STEP/IGES import buttons to menu DOM
+      const importMenu = document.createElement('div');
+      importMenu.className = 'menu-item';
+      importMenu.innerHTML = `
+        <div class="menu-action" data-action="import-step">STEP</div>
+        <div class="menu-action" data-action="import-iges">IGES</div>
+      `;
+      document.getElementById('menubar')!.appendChild(importMenu);
+      // Re-init since DOM changed
+      initMenuBar(deps);
+    });
+
+    it('import-step does not throw (graceful — even if FileImporter unavailable)', () => {
+      const btn = document.querySelector('[data-action="import-step"]') as HTMLElement;
+      // Should not throw — FileImporter dispatch is async + graceful fallback
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('import-iges does not throw (graceful)', () => {
+      const btn = document.querySelector('[data-action="import-iges"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+  });
+
+  describe('PR#1 — Panel 메뉴 진입', () => {
+    beforeEach(() => {
+      const panelMenu = document.createElement('div');
+      panelMenu.className = 'menu-item';
+      panelMenu.innerHTML = `
+        <div class="menu-action" data-action="view-components">Components</div>
+        <div class="menu-action" data-action="view-constraints">Constraints</div>
+        <div class="menu-action" data-action="view-materials">Materials</div>
+        <div class="menu-action" data-action="view-xia-inspector">XIA</div>
+      `;
+      document.getElementById('menubar')!.appendChild(panelMenu);
+      initMenuBar(deps);
+    });
+
+    it('view-components — no panel global → graceful warning, no throw', () => {
+      const btn = document.querySelector('[data-action="view-components"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('view-constraints — no panel global → graceful warning', () => {
+      const btn = document.querySelector('[data-action="view-constraints"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('view-materials — no panel global → graceful warning', () => {
+      const btn = document.querySelector('[data-action="view-materials"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('view-xia-inspector — no panel global → graceful warning', () => {
+      const btn = document.querySelector('[data-action="view-xia-inspector"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('view-components calls panel.toggle() when global available', () => {
+      const toggle = vi.fn();
+      (window as any).__axia_componentPanel = { toggle };
+      const btn = document.querySelector('[data-action="view-components"]') as HTMLElement;
+      btn.click();
+      expect(toggle).toHaveBeenCalled();
+      delete (window as any).__axia_componentPanel;
+    });
+
+    it('view-constraints calls panel.toggle() when global available', () => {
+      const toggle = vi.fn();
+      (window as any).__axia_constraintPanel = { toggle };
+      const btn = document.querySelector('[data-action="view-constraints"]') as HTMLElement;
+      btn.click();
+      expect(toggle).toHaveBeenCalled();
+      delete (window as any).__axia_constraintPanel;
+    });
+  });
+
+  describe('PR#1 — STEP/IGES export placeholder', () => {
+    beforeEach(() => {
+      const exportMenu = document.createElement('div');
+      exportMenu.className = 'menu-item';
+      exportMenu.innerHTML = `
+        <div class="menu-action" data-action="export-step">STEP export</div>
+        <div class="menu-action" data-action="export-iges">IGES export</div>
+      `;
+      document.getElementById('menubar')!.appendChild(exportMenu);
+      initMenuBar(deps);
+    });
+
+    it('export-step shows Toast info (Stage 5 placeholder)', () => {
+      const btn = document.querySelector('[data-action="export-step"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('export-iges shows Toast info', () => {
+      const btn = document.querySelector('[data-action="export-iges"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+  });
 });

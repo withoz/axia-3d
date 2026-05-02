@@ -210,11 +210,27 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'import-dxf':
       case 'import-dwg':
       case 'import-skp':
-      case 'import-3dm': {
+      case 'import-3dm':
+      case 'import-step':
+      case 'import-iges': {
         const format = act === 'import-all' ? undefined : act.replace('import-', '');
+        // ADR-035 P20.7 — STEP/IGES 는 OCCT.js dynamic load (FileImporter 가
+        // ImportFormat 타입에 'step'/'iges' 포함하므로 자동 dispatch).
         getFileImporter().then(fi => fi.openFileDialog(format as ImportFormat | undefined)).catch((err: Error) => {
           console.error(`[MenuBar] Import ${format || 'all'} 실패:`, err);
         });
+        break;
+      }
+
+      // ── 내보내기 STEP/IGES (Stage 5 placeholder) ──
+      case 'export-step':
+      case 'export-iges': {
+        const fmt = act === 'export-step' ? 'STEP' : 'IGES';
+        Toast.info(
+          `${fmt} 내보내기는 준비중입니다 (ADR-035 Stage 5).\n` +
+          `현재 가능: OBJ / DXF / glTF / STL.\n` +
+          `대안: FreeCAD / Fusion 360 / Rhino 의 STEP→OBJ/STL 변환.`
+        );
         break;
       }
 
@@ -419,6 +435,33 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'view-scenes': {
         const sm = (window as unknown as { __axia_scenes?: { toggle(): void } }).__axia_scenes;
         sm?.toggle();
+        break;
+      }
+      case 'view-components': {
+        // ComponentPanel — `Shift+G` 단축키와 동일 (KeyboardShortcuts 와 정합)
+        const cp = (window as unknown as { __axia_componentPanel?: { toggle(): void } }).__axia_componentPanel;
+        if (cp?.toggle) cp.toggle();
+        else Toast.warning('컴포넌트 패널을 사용할 수 없습니다.');
+        break;
+      }
+      case 'view-constraints': {
+        // ConstraintPanel — `J` 단축키와 동일
+        const cp = (window as unknown as { __axia_constraintPanel?: { toggle(): void } }).__axia_constraintPanel;
+        if (cp?.toggle) cp.toggle();
+        else Toast.warning('구속 조건 패널을 사용할 수 없습니다.');
+        break;
+      }
+      case 'view-materials': {
+        // MaterialPropertiesPanel — XiaInspector 의 재질 탭 또는 별도 panel
+        const mp = (window as unknown as { __axia_materialPanel?: { toggle(): void } }).__axia_materialPanel;
+        if (mp?.toggle) mp.toggle();
+        else Toast.warning('재질 패널을 사용할 수 없습니다. XIA 인스펙터에서 재질 속성을 편집하세요.');
+        break;
+      }
+      case 'view-xia-inspector': {
+        const xi = (window as unknown as { __axia_xiaInspector?: { toggle(): void } }).__axia_xiaInspector;
+        if (xi?.toggle) xi.toggle();
+        else Toast.warning('XIA 인스펙터를 사용할 수 없습니다.');
         break;
       }
       case 'clash-detect': {
