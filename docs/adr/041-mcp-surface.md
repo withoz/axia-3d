@@ -1,6 +1,6 @@
 # ADR-041: AxiA MCP Surface (Capability-Sandboxed)
 
-**Status**: **Proposed** (2026-05-02) — Will become LOCKED 정책 #19 on accept
+**Status**: **Accepted** (2026-05-02) — LOCKED 정책 #19
 **Initiative**: AxiA 3D AI 자동화 도약 (MCP / Claude Desktop / Cursor 통합)
 **Builds on**: ADR-014 메타-원칙 #4 (SSOT), #5 (사용자 편의), #11 (Latency
 Budget), #13 (One Source, Two Views), ADR-037 (Pick→Promote)
@@ -251,13 +251,28 @@ packages/axia-mcp-server/
 
 ## Success Criteria
 
-- ✅ ADR-041 P26 결정이 commit 으로 고정 (이 PR)
-- ⏳ Stage 1 완료: axia-wasm-node 빌드 + schema_version export
-- ⏳ Stage 2 완료: @axia/mcp-server scaffolding + handshake 구현
-- ⏳ Stage 3 완료: draw_rect / push_pull / export_axia e2e 통과
-- ⏳ Stage 4 완료: Claude Desktop 에서 실제 호출 성공 (스크린샷)
-- ⏳ 7 회귀 테스트 통과
-- ⏳ Tier 2/3 audit log 검증
+- ✅ ADR-041 P26 결정이 commit 으로 고정
+- ✅ **Stage 1 완료**: axia-wasm-node 빌드 + schema_version / engine_version
+  WASM exports (commit 28be6ff)
+- ✅ **Stage 2 완료**: @axia/mcp-server scaffolding + handshake +
+  tier-authorize + audit + Zod schemas (commit d9deb6d)
+- ✅ **Stage 3 완료**: draw_rect / push_pull / export_axia e2e —
+  실제 axia-wasm-node 호출까지 검증 (commit 8bf0a44)
+  - Tier 1 draw_rect e2e median latency: **8 ms** (P26.5 budget 33ms 의 24%)
+  - 64 / 64 tests passing
+  - node dist/index.js 부팅: "Handshake OK — engine schema=1.0.0"
+- ✅ **Stage 4 완료**: Claude Desktop / Cursor 통합 가이드 +
+  docs/integrations/ 문서화 (이 commit)
+- ✅ **7 / 7 회귀 테스트 통과** (P26.8):
+  - mcp_handshake_rejects_schema_mismatch
+  - mcp_tier3_blocked_when_not_enabled
+  - mcp_owner_ids_only_no_raw_indices
+  - mcp_session_isolation_user_unaffected
+  - mcp_audit_log_records_tier2_calls
+  - mcp_latency_budget_tier1_under_33ms
+  - mcp_capability_surface_matches_adr_041_p26_1
+- ✅ Tier 2/3 audit log 검증 (MemoryAuditSink + e2e push_pull 항상
+  audit 기록 — 성공 / 실패 무관)
 
 ## References
 
@@ -272,5 +287,7 @@ packages/axia-mcp-server/
 - **2026-05-02 (initial draft)**: P26 신규. 8 세부 규칙 (4-tier capability /
   3중 schema versioning / owner-ID only / headless / latency / session
   isolation / audit / 7 회귀 테스트). Migration 4-stage 분할 (Node WASM →
-  MCP server scaffold → 첫 3 capability → integration guide). 본 commit 은
-  결정 draft. Acceptance 후 LOCKED #19 으로 격상 + CLAUDE.md 갱신.
+  MCP server scaffold → 첫 3 capability → integration guide).
+- **2026-05-02 (accepted)**: Stage 1~4 4-PR 모두 완료. 회귀 테스트 7/7
+  통과, e2e latency 8ms median (budget 24%). Status: **Proposed →
+  Accepted**, LOCKED 정책 #19 으로 격상. CLAUDE.md 갱신.

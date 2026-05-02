@@ -337,6 +337,56 @@
   (`pickEdgeAnalytic`) → Tool integration → 회귀 테스트. 본 ADR 은
   결정 고정만 — 실제 코드는 별도 PR.
 
+### 19. ADR-041 — AxiA MCP Surface (Capability-Sandboxed) (P26, 2026-05-02)
+- **새 원칙 P26**: MCP 가 노출하는 엔진 API 는 명시적 whitelist
+  (CapabilitySurface) 로만 한정. 새 capability 추가 = 새 ADR. schema_version
+  검사로 engine/server mismatch 즉시 거부.
+- **P26.1 4-tier Capability Surface** (32 capabilities total):
+  - Tier 0 (read, always-on, 7) — get_scene_summary / list_xias /
+    get_face_info / ...
+  - Tier 1 (constructive, default-on, 10) — draw_rect / draw_circle /
+    create_xia / export_axia / export_obj / ...
+  - Tier 2 (modificative, opt-in, 10) — push_pull / boolean_* /
+    fillet_edge / move_xia / ...
+  - Tier 3 (destructive, explicit consent, 5) — erase_face / delete_xia /
+    import_step / ...
+  - 기본값 `enabled_tiers: [0, 1]`. `AXIA_MCP_TIERS` env 또는
+    `axia.config.json` 으로 override.
+- **P26.2 3-layer Schema Versioning**:
+  - WASM exports `schema_version()` / `engine_version()`
+  - MCP server semver `^MAJOR.MINOR` satisfies 검사 (handshake)
+  - per-call schema_version field (optional, future-proof)
+  - MCP_SERVER_SCHEMA_VERSION 과 axia-wasm SCHEMA_VERSION 은 **lockstep**
+- **P26.3 Owner ID only**: ADR-037 P22 (Pick→Promote) 의 cross-boundary
+  확장. raw triangle/segment index 절대 노출 금지. Zod `OwnerId` schema
+  + `OWNER_ID_SENTINEL` ("Owner ID") 로 surface drift 차단.
+- **P26.4 Headless WasmBridge**: `crates/axia-wasm` 의 `--target nodejs`
+  빌드. viewport / Toast / Three.js / SnapManager 의존성 0. 산출물:
+  `packages/axia-wasm-node/dist/`.
+- **P26.5 Latency Budget** (메타-원칙 #11 적용):
+  - Tier 0: <16ms / Tier 1: <33ms / Tier 2,3: <100ms / Heavy: <500ms
+  - **실측**: e2e draw_rect (Tier 1) median **8ms** (budget 의 24%)
+- **P26.6 Session Isolation**: AI agent 와 사용자 viewport 별개 mesh
+  state. 두 AxiaEngine instance 가 독립적으로 동작 — 회귀 테스트
+  `mcp_session_isolation_user_unaffected` 로 강제.
+- **P26.7 Audit Trail**: Tier 2/3 호출은 `~/.axia/mcp-audit.log` JSONL
+  append. Tier 0/1 은 미기록 (flooding 방지). engine 실패 시에도
+  audit 기록 (result='error', error_message 포함).
+- **P26.8 7 회귀 테스트** (절대 #[ignore] 금지):
+  - mcp_handshake_rejects_schema_mismatch
+  - mcp_tier3_blocked_when_not_enabled
+  - mcp_owner_ids_only_no_raw_indices
+  - mcp_session_isolation_user_unaffected
+  - mcp_audit_log_records_tier2_calls
+  - mcp_latency_budget_tier1_under_33ms
+  - mcp_capability_surface_matches_adr_041_p26_1
+- **구현**: `packages/axia-mcp-server` (Node + TS, ESM, strict).
+  `@modelcontextprotocol/sdk` ^1.0.4, zod ^3.23.8, semver ^7.6.3,
+  zod-to-json-schema ^3.25.2. Stage 1~4 모두 commit 완료
+  (28be6ff / d9deb6d / 8bf0a44 / 본 commit).
+- **통합 가이드**: `docs/integrations/mcp-claude-desktop.md`,
+  `docs/integrations/mcp-cursor.md`.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
