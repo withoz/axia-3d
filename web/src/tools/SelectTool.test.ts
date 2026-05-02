@@ -357,4 +357,101 @@ describe('SelectTool', () => {
       expect(ctx.selection.clearSelection).not.toHaveBeenCalled();
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // ADR-040 plumbing — analytic hover refine integration
+  // ─────────────────────────────────────────────────────────────────
+  describe('ADR-040 — analytic hover refine plumbing', () => {
+    it('drops hover when refine reports within=false (BVH false-positive)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'edge',
+        hit: { index: 4 }, // segment 2 → edgeMap[2]=30
+      });
+      ctx.viewport.refineEdgeHoverWithAnalytic = vi.fn().mockReturnValue({
+        within: false,
+        distance: 5.0,
+        point: { x: 0, y: 0, z: 0 },
+      });
+
+      // mousemove path: should NOT promote hover for the edge.
+      tool.onMouseMove(
+        { clientX: 100, clientY: 200, buttons: 0 } as MouseEvent,
+        null,
+      );
+      // refineEdgeHoverWithAnalytic 가 false 반환 → hover 미생성
+      expect(ctx.viewport.refineEdgeHoverWithAnalytic).toHaveBeenCalledWith(
+        ctx.bridge,
+        30,
+        100,
+        200,
+      );
+    });
+
+    it('keeps hover when refine reports within=true', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'edge',
+        hit: { index: 4 },
+      });
+      ctx.viewport.refineEdgeHoverWithAnalytic = vi.fn().mockReturnValue({
+        within: true,
+        distance: 0.5,
+        point: { x: 0, y: 0, z: 0 },
+      });
+
+      tool.onMouseMove(
+        { clientX: 100, clientY: 200, buttons: 0 } as MouseEvent,
+        null,
+      );
+      expect(ctx.viewport.refineEdgeHoverWithAnalytic).toHaveBeenCalled();
+    });
+
+    it('falls back silently when refine returns null (Newton diverged)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'edge',
+        hit: { index: 4 },
+      });
+      ctx.viewport.refineEdgeHoverWithAnalytic = vi.fn().mockReturnValue(null);
+
+      // Should NOT throw — null = "no analytic curve / Newton diverged"
+      expect(() =>
+        tool.onMouseMove(
+          { clientX: 100, clientY: 200, buttons: 0 } as MouseEvent,
+          null,
+        ),
+      ).not.toThrow();
+      expect(ctx.viewport.refineEdgeHoverWithAnalytic).toHaveBeenCalled();
+    });
+
+    it('skips refine when viewport lacks the method (older runtime)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'edge',
+        hit: { index: 4 },
+      });
+      // refineEdgeHoverWithAnalytic intentionally absent
+
+      expect(() =>
+        tool.onMouseMove(
+          { clientX: 100, clientY: 200, buttons: 0 } as MouseEvent,
+          null,
+        ),
+      ).not.toThrow();
+    });
+
+    it('refine throwing internally → silent fallback (no exception leaks)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'edge',
+        hit: { index: 4 },
+      });
+      ctx.viewport.refineEdgeHoverWithAnalytic = vi.fn(() => {
+        throw new Error('engine offline');
+      });
+
+      expect(() =>
+        tool.onMouseMove(
+          { clientX: 100, clientY: 200, buttons: 0 } as MouseEvent,
+          null,
+        ),
+      ).not.toThrow();
+    });
+  });
 });

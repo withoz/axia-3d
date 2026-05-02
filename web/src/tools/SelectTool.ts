@@ -325,6 +325,30 @@ export class SelectTool implements ITool {
       const segIdx = Math.floor(rawIdx / 2);
       if (segIdx < 0 || segIdx >= this.ctx.edgeMap.length) return null;
       const edgeId = this.ctx.edgeMap[segIdx];
+
+      // ADR-040 P25 plumbing — refine hover with analytic distance for
+      // edges that carry an AnalyticCurve. If the cursor is OUTSIDE the
+      // 12px screen-space threshold of the *true* curve, drop the hit
+      // (BVH false-positive on the polyline). On Newton failure or
+      // missing curve, fall back silently to the polyline result (P25.4).
+      const refineFn = this.ctx.viewport.refineEdgeHoverWithAnalytic;
+      if (typeof refineFn === 'function' && this.ctx.bridge) {
+        try {
+          const refined = refineFn.call(
+            this.ctx.viewport,
+            this.ctx.bridge,
+            edgeId,
+            e.clientX,
+            e.clientY,
+          );
+          if (refined && !refined.within) {
+            return null;
+          }
+        } catch {
+          // engine may not support edgeRayDistance — fall through
+        }
+      }
+
       return { kind: 'edge', id: edgeId };
     }
 
