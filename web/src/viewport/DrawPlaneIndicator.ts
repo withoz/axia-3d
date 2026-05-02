@@ -66,7 +66,15 @@ export class DrawPlaneIndicator {
         new THREE.Vector3(AXIS_LEN, 0, 0),
       ]);
       const mat = new THREE.LineBasicMaterial({
-        color, depthTest: false, transparent: true, opacity: 0.9,
+        color,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.9,
+        // ADR/H4 fix (2026-05-02): transparent + depthWrite:true 는 THREE.js
+        // anti-pattern. Overlay 가 자기 depth 를 buffer 에 써서 SSAO post-pass
+        // 와 다음 frame 에서 다른 객체를 의도치 않게 가림. 사용자 보고
+        // "rect 활성 시 라인 사라짐" 의 후보 원인.
+        depthWrite: false,
       });
       const line = new THREE.Line(geo, mat);
       line.renderOrder = 2001;
@@ -86,6 +94,11 @@ export class DrawPlaneIndicator {
       opacity: 0.12,
       side: THREE.DoubleSide,
       depthTest: false,
+      // H4 fix (2026-05-02): same as axes — depthWrite:false 강제. 36×36mm
+      // 의 큰 plane 패치가 자기 depth 를 buffer 에 쓰면 SSAO post-pass
+      // 가 그 영역의 ambient occlusion 을 잘못 계산해서 라인 contrast 가
+      // 떨어지거나 다음 frame 에서 의도치 않게 occluder 역할.
+      depthWrite: false,
     });
     this.quad = new THREE.Mesh(quadGeo, this.quadMat);
     this.quad.renderOrder = 2000;

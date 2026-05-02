@@ -146,17 +146,29 @@ export class MeshStandardMaterial extends Material {
 export class MeshBasicMaterial extends Material {
   color = new Color();
   side: any; transparent = false; opacity = 1;
+  depthTest = true; depthWrite = true;
   constructor(opts: any = {}) {
     super();
     if (opts.color !== undefined) this.color.set(opts.color);
     if (opts.side !== undefined) this.side = opts.side;
     if (opts.transparent !== undefined) this.transparent = opts.transparent;
     if (opts.opacity !== undefined) this.opacity = opts.opacity;
+    if (opts.depthTest !== undefined) this.depthTest = opts.depthTest;
+    if (opts.depthWrite !== undefined) this.depthWrite = opts.depthWrite;
   }
 }
 export class LineBasicMaterial extends Material {
   color = new Color();
-  constructor(opts: any = {}) { super(); if (opts.color !== undefined) this.color.set(opts.color); }
+  transparent = false; opacity = 1;
+  depthTest = true; depthWrite = true;
+  constructor(opts: any = {}) {
+    super();
+    if (opts.color !== undefined) this.color.set(opts.color);
+    if (opts.transparent !== undefined) this.transparent = opts.transparent;
+    if (opts.opacity !== undefined) this.opacity = opts.opacity;
+    if (opts.depthTest !== undefined) this.depthTest = opts.depthTest;
+    if (opts.depthWrite !== undefined) this.depthWrite = opts.depthWrite;
+  }
 }
 export class PointsMaterial extends Material { color = new Color(); size = 1; }
 
@@ -170,7 +182,12 @@ export class Object3D {
   scale = new Vector3(1, 1, 1);
   quaternion = new Quaternion();
   renderOrder = 0;
-  add(child: Object3D) { this.children.push(child); child.parent = this; }
+  add(...children: Object3D[]) {
+    for (const child of children) {
+      this.children.push(child);
+      child.parent = this;
+    }
+  }
   remove(child: Object3D) {
     const i = this.children.indexOf(child);
     if (i >= 0) { this.children.splice(i, 1); child.parent = null; }
