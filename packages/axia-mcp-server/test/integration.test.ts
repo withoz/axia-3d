@@ -17,12 +17,18 @@ const wasmBuilt = existsSync(wasmPath);
 
 describe.skipIf(!wasmBuilt)('ADR-041 — real WASM integration', () => {
   it('handshake passes against actual axia-wasm Node build', async () => {
-    const wasm = (await import(wasmPath)) as {
+    const mod = (await import(wasmPath)) as {
       schema_version(): string;
       engine_version(): string;
+      AxiaEngine: new () => {
+        draw_rect(...args: number[]): number;
+        push_pull(face_id: number, dist: number): boolean;
+        exportSnapshotStrict(): Uint8Array;
+      };
     };
     const { handshake, config } = buildAxiaMcpServer({
-      engine: wasm,
+      engineModule: mod,
+      engineInstance: new mod.AxiaEngine(),
       auditSink: new MemoryAuditSink(),
       client: 'integration-test',
     });

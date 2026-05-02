@@ -15,27 +15,34 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { performHandshake, type EngineHandle } from './handshake.js';
-import { tierConfigFromEnv, ALL_CAPABILITIES, type TierConfig } from './tiers.js';
-import { FileAuditSink, type AuditSink } from './audit.js';
+import { tierConfigFromEnv, type TierConfig } from './tiers.js';
+import { FileAuditSink, NullAuditSink, type AuditSink } from './audit.js';
+import { wireTools } from './tools.js';
+import type { EngineInstance, EngineModule } from './capabilities/types.js';
 
 export interface AxiaMcpServerOptions {
-  engine: EngineHandle;
+  /** Module exports — used for handshake (schema_version / engine_version). */
+  engineModule: EngineHandle;
+  /** Engine instance used by capability handlers. */
+  engineInstance: EngineInstance;
   tierConfig?: TierConfig;
   auditSink?: AuditSink;
   client?: string;
 }
 
 /**
- * Build an MCP server instance — pure function, no I/O.
- * Easy to test by passing a mock engine.
+ * Build an MCP server instance — pure function, no I/O until `connect()`.
+ * Easy to test by passing a mock engine module + instance.
  */
 export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
   server: Server;
   handshake: ReturnType<typeof performHandshake>;
   config: TierConfig;
 } {
-  const handshake = performHandshake(opts.engine);
+  const handshake = performHandshake(opts.engineModule);
   const config = opts.tierConfig ?? tierConfigFromEnv();
+  const auditSink = opts.auditSink ?? new NullAuditSink();
+  const client = opts.client ?? 'unknown';
 
   const server = new Server(
     {
@@ -49,12 +56,12 @@ export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
     },
   );
 
-  // Capability registration is added in Stage 3. For Stage 2, the server
-  // boots, completes handshake, exposes ALL_CAPABILITIES list as a sanity
-  // check, but does not yet wire individual handlers.
-  void ALL_CAPABILITIES;
-  void opts.auditSink;
-  void opts.client;
+  wireTools(server, {
+    engine: opts.engineInstance,
+    config,
+    auditSink,
+    client,
+  });
 
   return { server, handshake, config };
 }
@@ -62,12 +69,12 @@ export function buildAxiaMcpServer(opts: AxiaMcpServerOptions): {
 async function main(): Promise<void> {
   // Dynamic import so test runners can stub axia-wasm-node without forcing
   // a real WASM load.
-  const wasm = (await import('../../axia-wasm-node/dist/axia_wasm.js')) as unknown as EngineHandle & {
-    AxiaEngine: new () => unknown;
-  };
+  const mod = (await import('../../axia-wasm-node/dist/axia_wasm.js')) as unknown as EngineModule;
+  const engineInstance = new mod.AxiaEngine();
 
   const { server, handshake } = buildAxiaMcpServer({
-    engine: wasm,
+    engineModule: mod,
+    engineInstance,
     auditSink: new FileAuditSink(FileAuditSink.defaultPath()),
     client: process.env.AXIA_MCP_CLIENT ?? 'unknown',
   });
