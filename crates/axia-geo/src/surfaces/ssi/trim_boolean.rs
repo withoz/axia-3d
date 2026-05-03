@@ -952,7 +952,11 @@ fn greiner_hormann(
 
             // Critical-fix #2: terminate when same intersection on A side
             // is reached AND it was previously visited (full circuit done).
-            if on_a && idx == start && already_visited {
+            // User-recommended hardening (A): require poly.len() > 2 so
+            // we never break on a degenerate 1-2 vertex result. Even if
+            // we did, the bottom `if poly.len() >= 3` filter would drop
+            // it — but the explicit guard makes diagnostics cleaner.
+            if on_a && idx == start && already_visited && poly.len() > 2 {
                 break;
             }
 
@@ -981,7 +985,8 @@ fn greiner_hormann(
                         // BACK to A's start node, the loop is complete.
                         // Without this we'd keep stepping past start
                         // and accumulate the wrong-side region.
-                        if on_a && idx == start { break; }
+                        // User-recommended hardening (A): poly.len() > 2.
+                        if on_a && idx == start && poly.len() > 2 { break; }
                     }
                 }
                 // If already visited (we've revisited this intersection
