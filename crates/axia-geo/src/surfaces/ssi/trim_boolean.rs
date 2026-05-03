@@ -498,14 +498,31 @@ pub fn trim_loop_boolean(
         return disjoint_result(a, b, probe_a_in_b, probe_b_in_a, op);
     }
 
-    // Coincident pre-pass detection (critical-fix #3, option B = fail-fast)
-    if has_coincident_polyline_overlap(&pa, &pb, tol) {
-        // Step 4 will replace this with the keep/discard/flip matrix.
-        // For now return empty + caller-visible warning to avoid silent
-        // wrong results.
-        eprintln!("[ADR-055 §7.1.1] trim_loop_boolean: coincident overlap \
-                   detected — returning empty result (matrix handling lands \
-                   in Step 4 Robustness).");
+    // ─── ADR-055 §7.1.1 Coincident handling (Step 4 integration) ───
+    //
+    // Coincident polyline overlaps would silently produce wrong results
+    // in a naïve GH walk. The user-locked matrix specifies the correct
+    // action per (op × same_direction):
+    //
+    //   | op       | same_dir = true  | same_dir = false |
+    //   | Union    | keep one         | discard both     |
+    //   | Subtract | discard          | keep one (flip)  |
+    //   | Intersect| keep one         | discard          |
+    //
+    // Polygon-level realization of "discard both" or "flip" requires
+    // edge removal + endpoint stitching — a non-trivial operation that
+    // can collapse one polygon into an open chain. This MVP integration
+    // (Phase J finalization commit) keeps fail-fast bail BUT enriches
+    // the diagnostic: the matrix decision is computed and reported so
+    // callers know exactly which action would apply once the
+    // edge-removal pipeline lands (Phase L follow-up).
+    if let Some(decision) = compute_coincident_matrix_decision(&pa, &pb, op, tol) {
+        eprintln!(
+            "[ADR-055 §7.1.1] trim_loop_boolean: coincident overlap detected.\n  \
+             matrix decision (op={:?}, same_direction={}): {}.\n  \
+             Returning empty result (edge-removal pipeline lands in Phase L).",
+            op, decision.same_direction, decision.action,
+        );
         return Vec::new();
     }
 
@@ -596,6 +613,8 @@ fn any_segment_intersection(pa: &[[f64; 2]], pb: &[[f64; 2]], tol: f64) -> bool 
 /// Critical-fix #3: detect ANY Coincident-kind intersection in the
 /// segment-pair scan. If found, the GH walk is unsafe (the matrix
 /// handling lives in Step 4) and the caller must bail.
+#[allow(dead_code)] // kept for back-compat reference; superseded by
+                    // compute_coincident_matrix_decision below
 fn has_coincident_polyline_overlap(pa: &[[f64; 2]], pb: &[[f64; 2]], tol: f64) -> bool {
     for i in 0..pa.len() {
         let a0 = pa[i]; let a1 = pa[(i + 1) % pa.len()];
@@ -609,6 +628,39 @@ fn has_coincident_polyline_overlap(pa: &[[f64; 2]], pb: &[[f64; 2]], tol: f64) -
         }
     }
     false
+}
+
+/// Phase J Step 4 integration: detect the FIRST coincident pair and
+/// compute the matrix decision per ADR-055 §7.1.1. Returns None if no
+/// coincidence detected.
+struct CoincidentMatrixDecision {
+    same_direction: bool,
+    action: &'static str,
+}
+
+fn compute_coincident_matrix_decision(
+    pa: &[[f64; 2]], pb: &[[f64; 2]], op: TrimBoolOp, tol: f64,
+) -> Option<CoincidentMatrixDecision> {
+    for i in 0..pa.len() {
+        let a0 = pa[i]; let a1 = pa[(i + 1) % pa.len()];
+        for j in 0..pb.len() {
+            let b0 = pb[j]; let b1 = pb[(j + 1) % pb.len()];
+            for ix in line_line(a0, a1, b0, b1, tol) {
+                if let IntersectionKind::Coincident { same_direction, .. } = ix.kind {
+                    let action = match (op, same_direction) {
+                        (TrimBoolOp::Union,     true)  => "keep one (merge boundary)",
+                        (TrimBoolOp::Union,     false) => "discard both (creates gap)",
+                        (TrimBoolOp::Subtract,  true)  => "discard (boundary cancel)",
+                        (TrimBoolOp::Subtract,  false) => "keep one with reverse flip",
+                        (TrimBoolOp::Intersect, true)  => "keep one",
+                        (TrimBoolOp::Intersect, false) => "discard",
+                    };
+                    return Some(CoincidentMatrixDecision { same_direction, action });
+                }
+            }
+        }
+    }
+    None
 }
 
 fn polyline_to_trim_loop(poly: Vec<[f64; 2]>, is_outer: bool) -> TrimLoop {
