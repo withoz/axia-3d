@@ -679,21 +679,34 @@
   `ee066e3` Phase 7 cleanup 등) 은 v3.2 명제 7 의 사후 구현이 아니라
   **형태 계층 자체의 위상 invariant 강화**. 0 차원은 허용하되 위상이
   깨지는 결과 (NaN normal / HE chain stale) 는 차단.
-- **새 단계적 로드맵** (ADR-048 의 Phase 1 가드는 폐지, ADR-049 §2.3 의
-  좁아진 scope 으로 대체):
-  - **Phase 0** (현재): 본 LOCKED + ADR-048 amendment + ADR-049
-  - **Phase 1** (ADR-050 예정): 형태 → 특성 XIA 승격 API + 4조건 검증.
-    **모든 도구 입력 단계 가드 NO** — 승격 시점에만 검증
-  - **Phase 2** (ADR-051 예정): 특성 → 형태 가역 강등 API (재질 제거)
-  - **Phase 3** (ADR-052 예정): Reference 시민권 분리 (Construction Line /
-    Imported Mesh / Point Cloud). 명명 혼동 ("Line XIA") 도 해결
-  - **Phase 4** (ADR-053 예정): 특성 XIA 자동 차원-붕괴 강등 + 알림. 형태
-    계층 dimension 자체는 건드리지 않음
-  - **Phase 5** (ADR-054+): 자산 라이브러리 3계층 + 자동 복구 (v3.2 §12.3 §13)
-- **잠재 충돌 — 별도 검토 필요** (Phase 1~4 시 재논의):
-  - LOCKED #1 (ADR-021 P7 stacked-inner) ↔ v3.2 명제 4 manifold (특성 승격 거부 가능)
+- **단계적 로드맵** (ADR-049 §4 의 Q1~Q5 모두 확정 후 — 2026-05-03 사용자 세션):
+  - **Phase 0** (완료): 본 LOCKED + ADR-048 amendment + ADR-049 + Q1~Q5 final
+  - **Phase 1** (ADR-050 + ADR-051 예정, 함께 가야 정합):
+    * **ADR-050** — Shape/Xia type split + 형태 → 특성 승격 API + face-level
+      material 정책 (Q1 + Q3 + Q4 통합 구현)
+    * **ADR-051** — ADR-021 P7 supersede (Q2 — ring-with-hole + 별개 inner,
+      ADR-006 multi-loop face 정책 복원). LOCKED #1 변경
+  - **Phase 2** (ADR-052 예정): 재질 제거 → Shape 가역 강등 + 5초 알림 +
+    재질 임시 보존 (Q5 사건 1)
+  - **Phase 3** (ADR-053 예정): Reference 시민권 분리 (Construction Line /
+    Imported Mesh / Point Cloud)
+  - **Phase 4** (ADR-054 예정): 위상 손상 자동 복구 + 실패 시 사용자 다이얼로그
+    (Q5 사건 2-4, v3.2 §12.3 §12.5)
+  - **Phase 5** (ADR-055+): 자산 라이브러리 3계층 + Layered material (§13)
+- **Q1~Q5 final 결정 요약** (자세히는 ADR-049 §4 참조):
+  - **Q1**: 승격 = 재질 + 부피/단면 > 0 (strict, ε 없음) + watertight + manifold
+  - **Q2**: P7 재설계 — 큰 RECT + 작은 RECT = ring-with-hole + 별개 inner
+  - **Q3**: 명명 분리 — `Shape` (형태) / `Xia` (특성). 사용자 facing 에서
+    재질 없는 단계엔 "XIA" 안 노출. Phase 1 와 함께 마이그레이션
+  - **Q4**: default_material 폐지. Shape = material 없음 / Xia = primary +
+    face-level override
+  - **Q5**: v3.2 §12 strict — 재질 제거 = 5초 알림, 위상 손상 = 자동 복구
+    시도 → 실패 시 사용자 다이얼로그 ([Undo] [강등] [수동수정])
+- **LOCKED 변경 예정** (ADR-051 commit 시):
+  - LOCKED #1 (ADR-021 P7 stacked-inner) → ADR-051 supersede, ring-with-hole
+    + 별개 inner 로 재정의
   - LOCKED #3 (Sub-face XIA inheritance) — Phase 3 시민권 분리 후 재정의
-  - LOCKED #12 (ADR-025 P11 strict) — Phase 4 자동 강등과 정합 확인
+  - LOCKED #12 (ADR-025 P11 strict) — Phase 4 자동 강등과 정합 재확인
 - **변하지 않는 것 — 형태 계층의 자체 invariant** (어제 fix 들이 만든 자리):
   - 0-area face / NaN normal / 자기 교차 → 형태 계층에서도 무효, 자동 차단
   - Manifold 위반 → 형태에서도 HE chain 불안정, 시각 hint (R1) + 자동 정리

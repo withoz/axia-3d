@@ -203,48 +203,136 @@ ADR-048 의 격차 진단도 amendment 로 보존됨. 미래 reader 가:
 
 ---
 
-## 4. Open Questions (ADR-048 §3 재정의)
+## 4. Open Questions — **모두 결정 완료 (2026-05-03 사용자 세션)**
 
-### Q1. 차원 임계값 — **새 Q1: "특성 승격 시점에만 임계?"** (대폭 좁아짐)
+본 §4 의 Q1~Q5 는 작성 직후 사용자 인터뷰 세션을 통해 모두 답변됨.
+아래는 final lock — 향후 Phase 1~5 ADR 의 spec 기반.
 
-이전 Q1 (모든 도구 입력 단계) → 새 Q1 ("형태 → 특성 승격" 호출 시):
-- 부피 임계: 1mm³? (Volumetric XIA 승격 검증)
-- 단면 임계: 1mm²? (Linear XIA 승격 검증)
-- 사용자 override: Settings 에서 조정 가능?
+### Q1. 차원 임계값 — ✅ **확정**
 
-**Phase 1 (ADR-050 예정) 시 결정**.
+```
+특성 XIA 승격 조건 (v3.2 명제 4 strict):
+  ✓ 재질 부여 (유일한 트리거)
+  ✓ 부피 > 0 (Volumetric, strict — ε 없음)
+  ✓ 단면 > 0 (Linear, strict)
+  ✓ Watertight 닫힘
+  ✓ Manifold 무결성
 
-### Q2. ADR-021 P7 stacked-inner 정책 재검토 — (여전히 open)
+형태 (Shape): 일반 기하 형상 — 0 차원 자유 (Face 두께 0 자연)
 
-형태 계층에서도 manifold 무결성은 의미 있음 (HE chain 안정성). 그러나
-v3.2 명제 4 의 manifold 조건은 **특성 계층** 에 더 엄격 적용. P7 stacked-
-inner 가 형태 계층에서 허용되더라도 특성 승격은 거부될 수 있음.
+수치 안정 floor: 없음. 사용자 의도 (`> 0` mathematical) 존중.
+v3.2 §4.3 의 "1mm 경고" 는 별개 UX feature (Phase 4 자동 강등 시).
+```
 
-→ Phase 1 (ADR-050) 에서 함께 검토.
+**근거**: 사용자 명시 — "재질이 부여되어야만 승격합니다", "0 보다 크면 됩니다", "재질과 부피가 있어야만 특성 XIA 로 승격되며, 그 이전의 형태는 일반적인 형상과 동일합니다".
 
-### Q3. "Line XIA" 명명 혼동
+### Q2. ADR-021 P7 stacked-inner 재설계 — ✅ **확정 (옵션 B 채택)**
 
-- 현재: 내부 코드도 "XIA" 단일 명명, "Line XIA" 가 형태 계층 부재인지
-  특성 Linear XIA 인지 모호
-- 대안: 코드/UI 에서 "Form" prefix 또는 "Property" prefix 명시
-- 부담: 광범위 rename, 큰 PR
+```
+새 정의 (canonical, ADR-006 multi-loop face 정책 복원):
 
-→ Phase 3 (ADR-052 예정) 시 결정.
+  큰 RECT 안 작은 RECT
+  → 큰 면 (Face A): outer loop + inner loop (작은 RECT 4 line) = ring-with-hole
+  → 작은 면 (Face B): 작은 RECT 4 line 의 반대 방향 HE = simple face
+  → 모든 edge = 2-face share = manifold ✓
+  → 두 면 모두 특성 XIA 승격 가능 (manifold OK)
 
-### Q4. default_material 의 운명
+영향:
+  - LOCKED #1 (ADR-021 P7) 변경 — 새 ADR (P7 supersede) 필요
+  - 어제 R1 highlight (`0c04ae1`) 가 stacked-inner 영역에선 발동 안 함
+  - non-manifold edge 0 → wireframe 시각 문제 사라짐
+  - 회귀 테스트 (test_two_stacked_inner_rects_both_faced 등) 의미 재정의
+```
 
-- 현재: 모든 형태 XIA 가 default_material 자동 부여 — 형태 계층 의미상 잘못
-- 대안: default_material → `Option<Material>` 로 변경, None = 형태, Some = 특성
-- 부담: 모든 XIA 처리 코드가 None 케이스 처리 필요, 큰 refactor
+**근거**: 사용자 명시 — "큰 RECT 의 면은 작은 RECT 로 구멍이 난 면이 생성되어야 합니다" (Copilot 분석 인용 포함).
 
-→ Phase 1/2 (ADR-050/051) 시 함께 결정.
+### Q3. 명명 분리 — ✅ **확정 (옵션 A 채택)**
 
-### Q5. 자동 강등 vs 사용자 결정 — 특성 → 형태 transition (이전 Q4)
+```
+영문/코드:
+  Shape (형태)  — 일반 기하 (재질 없음)
+  Xia (특성)    — v3.2 strict (재질 + 부피 + 닫힘 + manifold)
 
-v3.2 §12.3: "자동 복구 시도 → 실패 시 사용자 결정". 형태 계층에선 어제
-fix 들 (자동 deactivate) 가 합리적. 특성 계층에선 알림 + 사용자 결정 필요.
+한국어 UI:
+  형태 — 재질 없음
+  XIA — 재질 + 부피 (= v3.2 정식)
 
-→ Phase 4 (ADR-053 예정) 시 결정.
+코드 type:
+  pub struct ShapeId(u32);  pub struct Shape { ... }   // 형태 계층
+  pub struct XiaId(u32);    pub struct Xia { ... }     // 특성 계층
+
+마이그레이션: Phase 1 작업과 함께 단일 PR (회귀 테스트로 보장)
+
+사용자 facing: 재질 없는 단계엔 "XIA" 단어 노출 안 함
+```
+
+**근거**: 사용자 명시 — "형태 XIA 는 이제 일반 형태로 명명되어야 혼선이 없을것 같습니다".
+
+### Q4. default_material 폐지 — ✅ **확정 (Q1 + Q3 자동 귀결)**
+
+```
+default_material 자동 부여: 폐지
+
+Shape:
+  - material 필드 없음 (개념 부재)
+  - 순수 기하
+
+Xia (v3.2 strict):
+  - primary_material: Material  (정의상 필수, Option 아님)
+  - face_materials: HashMap<FaceId, Material>  (override, 다중 마감 지원)
+```
+
+**근거**: Q1 (재질 트리거) + Q3 (Shape vs Xia type split) 의 자연 귀결 +
+사용자 Q4.5 답변 — face-level material 호환성 유지 + Xia 의 primary_material.
+
+### Q5. 강등 정책 — ✅ **확정 (옵션 A — v3.2 §12 strict)**
+
+```
+사건 1 (재질 제거 — 가역 강등):
+  → Shape 로 즉시 강등 (geometry 보존)
+  → 5초 알림 Toast: "재질 제거됨 — Shape 로 강등 [되돌리기]"
+  → 재질 자동 임시 보존 (세션 스코프, v3.2 §12.6.1)
+  → Undo 가능
+
+사건 2-4 (위상 손상 — 비가역 강등):
+  → 자동 복구 시도 (v3.2 §12.3.1):
+      ✓ 한 Edge 누락 → 인접 vertex 직선 연결
+      ✓ 한 Face 누락 → 평면 자동 생성
+      ✓ 작은 hole (≤ 4 edges) → 자동 닫음
+      ✓ Vertex 미세 어긋남 → LOCKED #5 1.5μm dedup
+  → 자동 복구 NO (v3.2 §12.3.2):
+      ✗ 다중 Face 누락
+      ✗ 큰 hole (≥ 5 edges)
+      ✗ 자기 교차
+      ✗ Manifold 위반
+      ✗ Linear XIA 중심선 끊김
+  → 자동 복구 성공: 5초 알림 + 노란 점선 highlight 30초 (v3.2 §12.4.2)
+  → 자동 복구 실패: 작업 중단 + 다이얼로그 (v3.2 §12.5):
+      [작업 취소 (Undo)]
+      [강등 수락 (Accept Demotion)] — 재질 라이브러리 저장 여부 확인
+      [수동 수정 (Manual Repair)] — 편집 모드 진입
+
+비활성화 옵션 (v3.2 §12.4.5):
+  Settings 에서 "자동 복구 시도 안 함" → 모든 손상이 사용자 결정으로
+```
+
+**근거**: 사용자 명시 — "(A) 권장 그대로 — v3.2 §12 strict 따름".
+
+### 결정 종합
+
+5개 Q 모두 확정되어 Phase 1 (ADR-050) 의 spec 이 구체화됨. 다음 세션의
+구현 작업은 다음 단위로 분리 권장:
+
+1. **ADR-050** — Form/Property type split + Phase 1 promote API + face-
+   level material policy (Q3 + Q4 + Q1 의 일부)
+2. **ADR-051** — ADR-021 P7 supersede (Q2)
+3. **ADR-052** — Phase 2 demote API (Q5 의 사건 1)
+4. **ADR-053** — Phase 3 Reference 시민권
+5. **ADR-054** — Phase 4 자동 강등 + 알림 + 복구 (Q5 의 사건 2-4)
+6. **ADR-055+** — Phase 5 자산 라이브러리 등
+
+**ADR-050 + ADR-051 이 함께 가야 정합** — Phase 1 promote 가 P7 재설계
+이후의 manifold 검증을 가정하기 때문. 단일 PR 또는 sequential PR 권장.
 
 ---
 
