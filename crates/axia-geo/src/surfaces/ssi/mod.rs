@@ -17,6 +17,7 @@ pub mod trim_geom;
 pub mod trim_classify;
 pub mod tolerance;
 pub mod trim_boolean;
+pub mod robustness;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
