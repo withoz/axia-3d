@@ -653,42 +653,56 @@
   SketchSession multi-line tool 들도 `getExcludedSnapPoints` 채택 가능.
   SnapManager 는 policy-agnostic.
 
-### 26. ADR-048 — AixxiA Design Spec v3.2 Foundation + Conceptual Gap (2026-05-03)
+### 26. ADR-048 + ADR-049 — Two-Layer Citizenship Model (2026-05-03)
 - **AixxiA Design Specification v3.2** (2026-05-03, Author: WYKO) 를
-  엔진의 **개념적 anchor 문서** 로 인정. 향후 모든 ADR (#49+) 는 v3.2 의
-  3계급 시민권 모델 (XIA / Boundary / Reference) 과 7대 명제와 정합해야 함.
-- **현재 엔진 ↔ v3.2 conceptual gap 인지 + 동결**:
-  현재 엔진은 모든 도구의 결과물이 즉시 XIA (재질 default 자동, 차원 가드
-  없음). v3.2 strict 모델은 XIA 가 (i) 부피/단면 > 0, (ii) 재질 부여,
-  (iii) Watertight 닫힘, (iv) 매니폴드 무결성 4 조건 모두 충족할 때만 자격.
-  본 LOCKED 는 격차 자체를 동결하고 단계적 마이그레이션을 강제.
-- **사용자 식별 핵심 예시**: "원을 그려서 반지름이 0이 되면 v3.2 정의상
-  Point/Vertex 로 강등되어야 하나, 현재 엔진은 자동 처리 없음 — 이게
-  어제 세션 (2026-05-02) 의 다수 self-healing 작업 (`1cb1827` earcut empty
-  자동 deactivate, `fc3abe6` degenerate scan, etc.) 의 공통 origin".
-- **단계적 마이그레이션 로드맵** (각 Phase 별도 ADR + PR):
-  - **Phase 0** (이 LOCKED): 문서화 + 로드맵 동결, 코드 변경 0
-  - **Phase 1** (ADR-049 예정): 차원 붕괴 즉시 가드 (radius/length/area/
-    volume < ε 시 도구 단계 reject + Toast). 가장 시급, 2-3h, 회귀 낮음
-  - **Phase 2** (ADR-050 예정): XIA → Boundary 가역 강등 API. 4-6h, 회귀 중
-  - **Phase 3** (ADR-051 예정): Reference 시민권 분리 (Construction Line /
-    Imported Mesh). 1-2주, 회귀 큼
-  - **Phase 4** (ADR-052 예정): XIA 자동 차원-붕괴 강등 + 임계값 경고. 1주
-  - **Phase 5** (ADR-053+): 전면 정합 + 자산 라이브러리 3계층 (§13). 수주
-- **잠재 충돌 — 별도 검토 필요** (v3.2 strict 적용 시 재논의):
-  - LOCKED #1 (ADR-021 P7 stacked-inner) ↔ v3.2 명제 4 manifold 무결성
+  엔진의 **개념적 anchor 문서** 로 인정. 향후 모든 ADR (#50+) 는 v3.2 의
+  명제 + 본 LOCKED 의 두 계층 모델과 정합해야 함.
+- **canonical 운영 anchor: ADR-049 — Two-Layer Citizenship Model**.
+  ADR-048 (격차 진단) 은 작성 직후 사용자 통찰로 supersede 됨, 결정 이력
+  보존용으로 유지. 새 작업은 **ADR-049 부터 읽을 것**.
+- **두 계층 정의 (canonical)**:
+  - **형태 XIA (Form XIA)** — 현재 엔진의 모든 "XIA". 기하학적 추상.
+    Face 두께 0, Line 두께·너비 0, Point 모두 0 — **0 차원이 자연스럽다**.
+    ADR-019 "Line is Truth, Face is Byproduct" 가 운영 정책.
+  - **특성 XIA (Property XIA)** — v3.2 spec 의 정식 XIA. 부재 정체성.
+    부피·단면 > 0 + 재질 + 닫힘 + manifold 4조건 동시 충족.
+  - 두 계층은 **coexist**. 진짜 정합 대상은 **두 계층 간 승격/강등
+    transition**. 형태 계층에 차원 가드를 강요하면 Face/Line 의 본질을
+    부정하는 카테고리 오류.
+- **사용자 통찰 (canonical breakthrough)**:
+  > "FACE 는 두께가 0. LINE 도 두께·너비 0. POINT/VERTEX 도 0. 형태에서는
+  > 0이 허용되어야 한다. 현재 엔진의 XIA 는 형태 XIA 이고, 부피·재질이
+  > 있는 (문서의 정식) XIA 는 특성 XIA 다. 부피가 있는 것과 한 부분이 0이
+  > 되는 것은 (다른 계층의) 별개 사건이다."
+- **어제 fix 들의 재해석** — 어제 (2026-05-02) 의 다수 self-healing 작업
+  (`1cb1827` earcut empty auto-deactivate, `fc3abe6` degenerate scan,
+  `ee066e3` Phase 7 cleanup 등) 은 v3.2 명제 7 의 사후 구현이 아니라
+  **형태 계층 자체의 위상 invariant 강화**. 0 차원은 허용하되 위상이
+  깨지는 결과 (NaN normal / HE chain stale) 는 차단.
+- **새 단계적 로드맵** (ADR-048 의 Phase 1 가드는 폐지, ADR-049 §2.3 의
+  좁아진 scope 으로 대체):
+  - **Phase 0** (현재): 본 LOCKED + ADR-048 amendment + ADR-049
+  - **Phase 1** (ADR-050 예정): 형태 → 특성 XIA 승격 API + 4조건 검증.
+    **모든 도구 입력 단계 가드 NO** — 승격 시점에만 검증
+  - **Phase 2** (ADR-051 예정): 특성 → 형태 가역 강등 API (재질 제거)
+  - **Phase 3** (ADR-052 예정): Reference 시민권 분리 (Construction Line /
+    Imported Mesh / Point Cloud). 명명 혼동 ("Line XIA") 도 해결
+  - **Phase 4** (ADR-053 예정): 특성 XIA 자동 차원-붕괴 강등 + 알림. 형태
+    계층 dimension 자체는 건드리지 않음
+  - **Phase 5** (ADR-054+): 자산 라이브러리 3계층 + 자동 복구 (v3.2 §12.3 §13)
+- **잠재 충돌 — 별도 검토 필요** (Phase 1~4 시 재논의):
+  - LOCKED #1 (ADR-021 P7 stacked-inner) ↔ v3.2 명제 4 manifold (특성 승격 거부 가능)
   - LOCKED #3 (Sub-face XIA inheritance) — Phase 3 시민권 분리 후 재정의
   - LOCKED #12 (ADR-025 P11 strict) — Phase 4 자동 강등과 정합 확인
-- **재정의 NOT — 현재까지 식별된 직접 충돌 없음** (conceptual gap 만):
-  대부분의 LOCKED #2-#25 는 v3.2 명제 1, 2, 3, 5 와 일치. 명제 4 (XIA 4대
-  조건), 명제 6 (Reference), 명제 7 (위상 무결성), §12 강등, §13 자산
-  라이브러리만 격차.
-- **제약**: 본 ADR 은 코드 변경 0. Phase 1~5 는 각각 사용자 명시 동의 +
-  별도 ADR + 별도 PR. 본 LOCKED 의 격차 인지를 **모든 후속 결정의
-  pre-condition** 으로 강제.
-- **Cross-link**: ADR-021 P7 / ADR-019 (명제 1 anchor) / ADR-007 (명제 7
-  invariant 의 부분) / 어제 세션 (`52c42a0` 등) 이 명제 7 의 사후 self-
-  healing 부분 구현임을 본 ADR §4.1 에 명시.
+- **변하지 않는 것 — 형태 계층의 자체 invariant** (어제 fix 들이 만든 자리):
+  - 0-area face / NaN normal / 자기 교차 → 형태 계층에서도 무효, 자동 차단
+  - Manifold 위반 → 형태에서도 HE chain 불안정, 시각 hint (R1) + 자동 정리
+  - Snap chain self-touch → ADR-047 P32, 형태 계층에서 작동
+- **제약**: 본 LOCKED + ADR-048 + ADR-049 은 코드 변경 0. Phase 1~5 는
+  각각 사용자 명시 동의 + 별도 ADR + 별도 PR. **본 LOCKED 의 두 계층
+  모델을 모든 후속 결정의 pre-condition** 으로 강제.
+- **Cross-link**: ADR-019 (형태 계층 anchor) / ADR-021 P7 / ADR-007
+  invariant / 어제 세션 12 commits / v3.2 spec.
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:

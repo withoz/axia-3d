@@ -1,11 +1,19 @@
 # ADR-048 — Citizenship Model Conceptual Gap (v3.2 Foundation Lock + Migration Roadmap)
 
-**Status**: Accepted (Phase 0 — documentation only, no code change)
+**Status**: Accepted (Phase 0 — documentation only, no code change) — **§1.2-1.3, §2.3, §3, §4 분석 부분은 ADR-049 의 Two-Layer Citizenship Model 로 supersede 됨 (2026-05-03 amendment)**
 **Date**: 2026-05-03
 **Anchor**: AixxiA Design Specification v3.2 (May 3, 2026, Author: WYKO)
 **Related**: ADR-007 (Face Orientation), ADR-019 (Line is Truth), ADR-021
 (Closed Edge Loop), ADR-025 (P11 face synthesis), ADR-046 (P31 Product
-Identity), ADR-047 (P32 Snap Chain)
+Identity), ADR-047 (P32 Snap Chain), **ADR-049 (Two-Layer Citizenship Model
+— canonical successor)**
+
+> ⚠️ **READ FIRST**: 본 ADR 은 작성 직후 사용자 통찰로 진단이 재정의됐다.
+> "엔진의 XIA 가 v3.2 와 안 맞음 (격차)" 가 아니라 "엔진 XIA 는 형태 계층,
+> v3.2 XIA 는 특성 계층 — 두 계층의 coexistence" 가 정답. **운영 anchor 는
+> [ADR-049](./049-two-layer-citizenship-model.md)** 이며, 본 문서는 결정
+> 이력 (왜 처음에 격차로 봤다가 두 계층 모델로 옮겼는지) 보존용으로 유지.
+> 새 작업은 ADR-049 부터 읽을 것. 자세한 amendment 는 본 문서 §6 참조.
 
 ---
 
@@ -284,19 +292,97 @@ healing (earcut empty 자동 deactivate) 은 "사용자 결정 없이 자동 제
 
 ---
 
-## 6. References
+## 6. Amendment 2026-05-03 — Two-Layer Reframe (Supersedes §1.2-1.3, §2.3, §3, §4)
+
+### 6.1 사용자 통찰 (원문)
+
+> "FACE 는 두께가 0입니다. LINE 도 두께와 너비가 0이고 길이만 있습니다.
+> POINT, VERTEX 도 0입니다. 형태에서는 0이 허용되어야 합니다."
+>
+> "현재 우리 엔진의 XIA 는 **형태 XIA** 이고, 차원이 다른 특성 XIA
+> (문서에서 말한 정식 XIA) 는 부피와 재질이 있습니다. 부피가 있는 것과
+> 한 부분이 0이 되는 것은 문제가 없습니다."
+
+### 6.2 본 ADR 의 진단 오류
+
+§1.2-1.3 은 "엔진의 XIA 가 v3.2 의 XIA 와 안 맞음 — conceptual gap" 으로
+진단했음. 이 진단은 **잘못됐다**. 두 XIA 가 실제로는 **다른 추상 계층**:
+
+```
+형태 계층 (Form Layer) — 현재 엔진의 "XIA"
+  - 기하학적 추상 (Face / Line / Point / Vertex)
+  - 0 dimension 이 자연스러움 (Face 두께 0, Line 두께·너비 0)
+  - ADR-019 "Line is Truth, Face is Byproduct" 영역
+
+특성 계층 (Property Layer) — v3.2 spec 의 "XIA"
+  - 부재 정체성 (Volumetric / Linear)
+  - 부피·단면 > 0 + 재질 + 닫힘 + manifold 4조건
+  - 형태 → 특성 승격은 transition 이벤트
+```
+
+두 계층은 **coexist** 하며, 진짜 격차는 **"두 계층 간 승격/강등 메커니즘
+부재"** 임. 형태 자체에 0 차원 가드를 넣으면 안 됨 (Face 의 본질을 부정).
+
+### 6.3 본 amendment 의 결과
+
+- **§1.2-1.3 (격차 진단)** — supersede. 두 계층 coexistence 관점으로
+  ADR-049 §1 에서 재기술.
+- **§2.3 (v3.2 명제 ↔ 엔진 매핑 표)** — supersede. 명제 4 의 "현재 엔진은
+  XIA 를 default_material 로 자동 부여" 비판은 **형태 계층에선 정상 동작**.
+  특성 계층 승격에서만 재질 명시 필요.
+- **§3 Q1 (차원 임계값)** — supersede. 형태 단계엔 임계 불필요. 특성
+  XIA 승격 / 부피 가진 XIA 의 붕괴 시점에만 임계 필요. 훨씬 좁아짐.
+- **§4 Phase 1~5 로드맵** — supersede. ADR-049 의 새 로드맵으로 대체:
+  - Phase 1 (이전: 차원 가드, 가장 시급) → **Phase 1 (새): 승격/강등 API**.
+    가드는 부수적.
+  - Phase 2~5 도 두 계층 모델로 재정의.
+
+### 6.4 변하지 않는 것 (여전히 valid)
+
+- §4.1 "어제 세션 작업과의 관계" — 어제 fix 들이 **여전히 valid**.
+  earcut Ok([]) 의 0-area face 는 형태 계층에서도 무의미 (rendering 무효),
+  자동 deactivate 정당. NaN normal 도 어느 계층에서도 무효.
+- §3 Q2 (ADR-021 P7 stacked-inner 재검토) — 여전히 open. 형태 계층에서도
+  manifold 무결성은 의미 있음 (HE chain stale 위험).
+- §3 Q3 (Reference 시민권 분리) — 여전히 open. v3.2 §6 의 Reference
+  카테고리는 형태/특성 어느 쪽도 아닌 별개 시민권.
+- §3 Q4 (자동 강등 vs 사용자 결정) — 여전히 open. 특성 → 형태 강등
+  시점에 적용.
+
+### 6.5 결정 이력으로서의 가치
+
+본 ADR 은 **잘못된 진단도 결정 이력으로 보존** 한다는 ADR 문화 원칙에
+따라 supersede 표시 + amendment 형태로 유지. 미래 reader 는 다음을 학습:
+
+1. v3.2 spec 을 처음 받았을 때 strict 격차 모델이 자연스러운 첫인상이었음
+2. 사용자 (도메인 전문가) 의 "형태 vs 특성" 통찰로 모델이 한 단계 추상화됨
+3. 격차 모델 → 두 계층 coexistence 모델로의 전환은 **migration cost 를
+   대폭 줄이는 결정** (Phase 1 가드 작업 → 좁은 scope 의 promote API)
+
+### 6.6 Cross-link
+
+- **운영 anchor** (canonical): [ADR-049 — Two-Layer Citizenship Model](./049-two-layer-citizenship-model.md)
+- **CLAUDE.md LOCKED #26**: ADR-048 + ADR-049 둘 다 참조, 운영 anchor 는
+  ADR-049 임을 명시.
+
+---
+
+## 7. References
 
 - AixxiA Design Specification v3.2 (`D:\1. 도구의시작\AixxiA_Design_Specification_v3.2.docx`)
 - ADR-007 (Face Orientation Policy)
-- ADR-019 (Line is Truth, Face is Byproduct — 명제 1 의 코드 anchor)
+- ADR-019 (Line is Truth, Face is Byproduct — 형태 계층의 anchor)
 - ADR-021 (Closed Edge Loop Divides Face)
 - ADR-025 (P11 Closed Edge Cycle MUST Synthesize Face)
 - ADR-047 (P32 Snap Chain Self-Touch Prevention)
+- **ADR-049 (Two-Layer Citizenship Model — canonical successor)**
 - 어제 세션 commit log: `52c42a0`, `1cb1827`, `fc3abe6`, `0c04ae1`, `8f0fe38`,
   `6f6cd3e` (대표)
 
 ---
 
-*Author*: AXiA team (사용자 v3.2 spec 기반 + Claude conceptual mapping) |
-*Status*: Phase 0 — accepted, no code change |
+*Author*: AXiA team (사용자 v3.2 spec 기반 + Claude conceptual mapping +
+사용자 형태/특성 reframe) |
+*Status*: Phase 0 — accepted with amendment, no code change. **운영 anchor
+는 ADR-049** |
 *Next*: Phase 1 (ADR-049) decision pending — Open Questions §3 답변 후 진행
