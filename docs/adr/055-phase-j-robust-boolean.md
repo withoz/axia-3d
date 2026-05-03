@@ -481,6 +481,38 @@ LOCKED #5 와 정합.
 
 - **2026-05-04 (본 amendment)**: Steps 1+3+5 commit 후 사용자 가이드
   반영. Step 2/4 설계 lock-in. 회귀 spec 미세 조정.
+- **2026-05-04 (Step 2 commits 397a6f7 → 35fe799 → a7afe62)**:
+  Step 2 Skeleton + Boolean Traversal 구현. 3 critical fixes 적용.
+  16 회귀 통과.
+- **2026-05-04 (Lock-in confirmation)**: 사용자 review 결과 post-jump
+  termination guard 가 핵심 안정화 코드로 lock-in 확정. §7.5 추가.
+
+### 7.5 Post-Jump Termination Guard — 영구 Lock-in (사용자 결정)
+
+`crates/axia-geo/src/surfaces/ssi/trim_boolean.rs::greiner_hormann()`
+의 다음 코드 블록은 **영구 lock-in** 으로 보호된다:
+
+```rust
+if should_jump && !already_visited {
+    if let Some(other) = other_idx_opt {
+        on_a = !on_a;
+        idx = other;
+        // Post-jump termination guard — ADR-055 §7.5 lock-in
+        if on_a && idx == start && poly.len() > 2 { break; }
+    }
+}
+```
+
+**제거 시 회귀**: `intersect_overlapping_squares` 가 12.5 (잘못된 삼각형
+영역) 를 반환. 정상은 25 (직사각형 overlap 영역).
+
+**lock-in 근거** (사용자 review 2026-05-04):
+- ADR-055 Amendment §7.1.2 (op-conditional jump rule) 와 정확히 일치
+- 실제 GH 구현에서 흔히 발생하는 "start 통과 오염" 차단
+- Step 4 (Coincident matrix) 로 교체돼도 유효한 방어선
+
+**변경 절차**: 본 guard 의 제거 / 수정 시 새 amendment 작성 + 사용자
+명시 동의 + 회귀 16개 모두 통과 검증 필수.
 
 ---
 

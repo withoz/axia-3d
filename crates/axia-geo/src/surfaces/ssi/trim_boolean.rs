@@ -981,11 +981,23 @@ fn greiner_hormann(
                     if let Some(other) = other_idx_opt {
                         on_a = !on_a;
                         idx = other;
-                        // Post-jump termination check: if we've jumped
-                        // BACK to A's start node, the loop is complete.
-                        // Without this we'd keep stepping past start
-                        // and accumulate the wrong-side region.
-                        // User-recommended hardening (A): poly.len() > 2.
+                        // ─── LOCK-IN: post-jump termination guard ───
+                        // This post-jump termination is REQUIRED to
+                        // prevent stepping past the start intersection
+                        // when a jump immediately closes the loop. It
+                        // complements the visited-based full-circuit
+                        // termination above.
+                        //
+                        // ADR-055 Amendment lock-in (사용자 결정,
+                        // 2026-05-04 review): this guard is verified
+                        // correct against:
+                        //   ✅ §7.1.2 jump rule (op-conditional)
+                        //   ✅ "start 통과 오염" 차단
+                        //   ✅ Step 4 Coincident matrix 교체 후에도 유효
+                        //
+                        // Removing this triggers wrong-area regression
+                        // in intersect_overlapping_squares (12.5 vs 25)
+                        // — see commit 35fe799 history.
                         if on_a && idx == start && poly.len() > 2 { break; }
                     }
                 }
