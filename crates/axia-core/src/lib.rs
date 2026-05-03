@@ -17,8 +17,10 @@ pub mod group;
 pub mod material;
 pub mod constraint;
 pub mod orphan_recovery;
+pub mod promote;
 
 pub use xia::{Xia, XiaState};
+pub use promote::{PromoteError, PromoteOk, XiaKind};
 pub use commands::{Command, CommandResult};
 pub use scene::Scene;
 pub use group::{GroupManager, GroupId, ComponentDefId, ComponentInstanceId, Transform3D};

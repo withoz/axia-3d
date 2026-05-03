@@ -220,6 +220,100 @@ impl Scene {
         xia_id
     }
 
+    /// ADR-050 Phase 1.A — Promote a Shape-stage XIA to a Property-stage
+    /// XIA via 4-condition validation (재질 / 부피 / 닫힘 / manifold).
+    ///
+    /// On success: the XIA's `material` is updated to `material` and the
+    /// XIA is considered "promoted" (full Phase 1.B will add a `promoted`
+    /// flag + Shape-side companion; Phase 1.A surface is the validated
+    /// state transition itself).
+    ///
+    /// On failure: returns a `PromoteError` describing the first failed
+    /// condition. The XIA's stored state is unchanged.
+    ///
+    /// Validation order matches ADR-050 §2.2:
+    ///   1. Material non-default (caller-supplied id != 0)
+    ///   2. Volume / Length > 0 (kind-dependent)
+    ///   3. Watertight (closed solid for Volumetric)
+    ///   4. Manifold invariants OK (ADR-007 / ADR-051 P7 prerequisite)
+    pub fn promote_xia_with_validation(
+        &mut self,
+        xia_id: XiaId,
+        material: axia_geo::MaterialId,
+    ) -> Result<crate::promote::PromoteOk, crate::promote::PromoteError> {
+        use crate::promote::{PromoteError, PromoteOk, XiaKind, face_set_volume, material_is_assigned};
+
+        // Lookup
+        let xia = self.xias.get(&xia_id).ok_or(PromoteError::XiaNotFound)?;
+        let face_ids = xia.face_ids.clone();
+        let standalone = xia.standalone_edge_id;
+
+        // Condition 0 (precondition): geometry must exist
+        if face_ids.is_empty() && standalone.is_none() {
+            return Err(PromoteError::NoGeometry);
+        }
+
+        // Condition 1: material non-default (ADR-050 §2.1.2 Q4)
+        if !material_is_assigned(material) {
+            return Err(PromoteError::InvalidMaterial);
+        }
+
+        // Branch: Linear (standalone edge, no faces) vs Volumetric (faces).
+        let kind = if face_ids.is_empty() {
+            // Linear path
+            let eid = standalone.expect("checked above");
+            let edge = self.mesh.edges.get(eid)
+                .ok_or(PromoteError::ZeroDimension)?;
+            if !edge.is_active() { return Err(PromoteError::ZeroDimension); }
+            let pa = self.mesh.vertex_pos(edge.v_small())
+                .map_err(|_| PromoteError::ZeroDimension)?;
+            let pb = self.mesh.vertex_pos(edge.v_large())
+                .map_err(|_| PromoteError::ZeroDimension)?;
+            let length = (pb - pa).length();
+            // Phase 2 will derive cross_section from material profile;
+            // current MVP uses 1.0 as a sentinel — only `length > 0` is
+            // strictly enforced here.
+            let cross_section_area = 1.0;
+            if length <= 0.0 {
+                return Err(PromoteError::ZeroDimension);
+            }
+            XiaKind::Linear { length, cross_section_area }
+        } else {
+            // Volumetric path: requires watertight closed solid
+            let info = self.mesh.face_set_manifold_info(&face_ids);
+            if !info.is_closed_solid {
+                return Err(PromoteError::NotWatertight {
+                    boundary_edges: info.boundary_edge_count,
+                    face_count: info.face_count,
+                });
+            }
+            // Condition 2: enclosed volume > 0
+            let volume = face_set_volume(&self.mesh, &face_ids);
+            if volume <= 0.0 {
+                return Err(PromoteError::ZeroVolume);
+            }
+            XiaKind::Volumetric { volume }
+        };
+
+        // Condition 4: ADR-007 / ADR-051 manifold invariants on the mesh.
+        // We check globally — a XIA cannot be "manifold" while the mesh
+        // it lives in is broken. Tighter per-XIA scoping is a Phase 2
+        // optimization.
+        let report = self.mesh.verify_face_invariants();
+        if !report.is_valid() {
+            return Err(PromoteError::NotManifold {
+                violations: report.violations.len(),
+            });
+        }
+
+        // All 4 conditions OK → assign material in-place.
+        if let Some(xia_mut) = self.xias.get_mut(&xia_id) {
+            xia_mut.material = material;
+        }
+
+        Ok(PromoteOk { xia_id, kind })
+    }
+
     /// Register face→XIA mapping in the reverse index
     fn register_faces_to_xia(&mut self, xia_id: XiaId, face_ids: &[FaceId]) {
         for &fid in face_ids {
@@ -8265,6 +8359,118 @@ mod tests {
             report.is_valid(),
             "ADR-051 P7 invariants violated: {:?}", report.violations,
         );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-050 Phase 1.A — Promote API regression tests
+    // ────────────────────────────────────────────────────────────────────
+    //
+    // Per ADR-050 §2.2, `promote_xia_with_validation` enforces 4 conditions
+    // (재질 / 부피 / 닫힘 / manifold). These tests cover each failure
+    // branch + the happy path for both Volumetric and Linear XIAs.
+
+    /// ADR-050 §2.2 Cond 1 — default material (id=0) is rejected.
+    #[test]
+    fn test_adr050_promote_rejects_default_material() {
+        let mut scene = Scene::new();
+        let r = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 3.0,
+        });
+        let xid = match r { CommandResult::EntityCreated(id) => id, _ => panic!() };
+        let err = scene.promote_xia_with_validation(xid, axia_geo::MaterialId::new(0))
+            .expect_err("default material must be rejected");
+        assert_eq!(err, crate::promote::PromoteError::InvalidMaterial);
+    }
+
+    /// ADR-050 §2.2 Cond 3 — open shell (single face) is not watertight.
+    #[test]
+    fn test_adr050_promote_rejects_non_watertight() {
+        let mut scene = Scene::new();
+        let r = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 3.0,
+        });
+        let xid = match r { CommandResult::EntityCreated(id) => id, _ => panic!() };
+        let err = scene.promote_xia_with_validation(xid, axia_geo::MaterialId::new(7))
+            .expect_err("single-face XIA cannot be watertight");
+        assert!(matches!(err, crate::promote::PromoteError::NotWatertight { .. }),
+            "expected NotWatertight, got {:?}", err);
+    }
+
+    /// ADR-050 §0 — XIA not present.
+    #[test]
+    fn test_adr050_promote_rejects_unknown_xia() {
+        let mut scene = Scene::new();
+        let err = scene.promote_xia_with_validation(99999, axia_geo::MaterialId::new(7))
+            .expect_err("unknown XIA must be rejected");
+        assert_eq!(err, crate::promote::PromoteError::XiaNotFound);
+    }
+
+    /// ADR-050 §2.2 — happy path Volumetric: closed solid (push-pull) +
+    /// real material → success with positive volume.
+    #[test]
+    fn test_adr050_promote_volumetric_happy_path() {
+        use axia_geo::FaceId;
+        let mut scene = Scene::new();
+        let r = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 3.0,
+        });
+        let xid = match r { CommandResult::EntityCreated(id) => id, _ => panic!() };
+        let face_id: FaceId = scene.xias.get(&xid).and_then(|x| x.face_ids.first().copied())
+            .expect("rect should have a face");
+        // Push-pull to extrude into closed solid
+        let pp = scene.execute(Command::PushPull { face_id, dist: 2.0 });
+        // Push-pull may return PushPullDone or MeshUpdated; both are OK.
+        if matches!(pp, CommandResult::Error(_)) {
+            panic!("push-pull failed: {:?}", pp);
+        }
+
+        // After push-pull the rect XIA's face_ids should now include
+        // the side walls + cap (closed solid). Promote.
+        let ok = scene.promote_xia_with_validation(xid, axia_geo::MaterialId::new(7));
+        match ok {
+            Ok(crate::promote::PromoteOk { kind: crate::promote::XiaKind::Volumetric { volume }, .. }) => {
+                assert!(volume > 0.0, "extruded box should have positive volume, got {}", volume);
+            }
+            Ok(other) => panic!("expected Volumetric, got {:?}", other),
+            Err(e) => {
+                // P7 not strictly required to be 0 for unrelated stress; if
+                // NotManifold fires this is the prerequisite ADR-051 issue.
+                // Still, a clean push-pull box shouldn't trigger it.
+                panic!("happy path failed: {}", e);
+            }
+        }
+        // Material is now assigned
+        assert_eq!(scene.xias.get(&xid).unwrap().material.raw(), 7);
+    }
+
+    /// ADR-050 §2.2 — happy path Linear: standalone edge with positive
+    /// length + real material → success with positive length.
+    #[test]
+    fn test_adr050_promote_linear_happy_path() {
+        let mut scene = Scene::new();
+        let r = scene.execute(Command::DrawLine {
+            start: DVec3::ZERO,
+            end: DVec3::new(5.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        let xid = match r { CommandResult::EntityCreated(id) => id, _ => panic!() };
+        // Sanity: the Line XIA owns no face but has a standalone edge.
+        let xia = scene.xias.get(&xid).expect("xia exists");
+        assert!(xia.face_ids.is_empty(), "Line XIA should own no face");
+        assert!(xia.standalone_edge_id.is_some(), "Line XIA must have standalone edge");
+
+        let ok = scene.promote_xia_with_validation(xid, axia_geo::MaterialId::new(7))
+            .expect("linear happy path");
+        match ok.kind {
+            crate::promote::XiaKind::Linear { length, cross_section_area } => {
+                assert!((length - 5.0).abs() < 1e-6, "length should be 5, got {}", length);
+                assert_eq!(cross_section_area, 1.0, "MVP sentinel cross-section");
+            }
+            other => panic!("expected Linear, got {:?}", other),
+        }
     }
 
     /// ADR-051 P7-M3 acceptance — burge.xia user scenario must show 0
