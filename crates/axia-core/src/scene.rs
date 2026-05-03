@@ -977,6 +977,14 @@ impl Scene {
                 continue;
             }
 
+            // ADR-051 instrumentation note (2026-05-04, C2 chunk):
+            // ⚠ KNOWN ISSUE: nested ring case in burge.xia stress produces
+            // non-manifold (3-face share) at Step 4.95. Initial fix attempt
+            // (skip if inner_pts inside outer's existing hole) did NOT
+            // resolve — root cause is elsewhere. Fix requires deeper trace
+            // into find_inner_components + ring rebuild HE allocation.
+            // Tracked by P7-trace eprintln output (set AXIA_TRACE_P7_MANIFOLD=1).
+
             match best {
                 None => best = Some((outer_fid, outer_area)),
                 Some((_, a)) if outer_area < a => best = Some((outer_fid, outer_area)),
@@ -1241,6 +1249,30 @@ impl Scene {
         all_created_faces: &mut Vec<FaceId>,
     ) {
         use std::collections::HashSet;
+
+        // ADR-051 P7 instrumentation (2026-05-04): trace non-manifold edge
+        // count at each step boundary. Only emits if env var
+        // AXIA_TRACE_P7_MANIFOLD=1 set OR if non-manifold count INCREASES
+        // between steps (regression signal). Helps localize where non-
+        // manifold is introduced for follow-up fix.
+        let trace_p7 = std::env::var("AXIA_TRACE_P7_MANIFOLD")
+            .map(|v| v == "1").unwrap_or(false);
+        let count_nm = |mesh: &axia_geo::Mesh| -> usize {
+            mesh.collect_non_manifold_edges().len()
+        };
+        let mut last_nm = count_nm(&self.mesh);
+        let mut trace_step = |name: &str, mesh: &axia_geo::Mesh, last: &mut usize| {
+            let now = count_nm(mesh);
+            let delta = now as i64 - *last as i64;
+            if trace_p7 || delta > 0 {
+                eprintln!(
+                    "[P7-trace] {}: nm_edges {} → {} (Δ{:+})",
+                    name, last, now, delta,
+                );
+            }
+            *last = now;
+        };
+        trace_step("ENTRY", &self.mesh, &mut last_nm);
         // Step 4.5 — fan-tessellation, scoped to faces whose AABB contains
         //   at least one touched vertex (Perf cut from earlier session).
         // ⚡ 2026-04-27 — empty-space draw 시 N face × collect_loop_verts
@@ -1337,6 +1369,8 @@ impl Scene {
         }
 
 
+        trace_step("after Step 4.5 (fan-tessellation)", &self.mesh, &mut last_nm);
+
         // Step 4.55 — nested face dissolve
         {
             let dissolved = self.mesh.dissolve_containing_faces();
@@ -1347,6 +1381,7 @@ impl Scene {
                 all_created_faces.retain(|&f| f != fid);
             }
         }
+        trace_step("after Step 4.55 (nested dissolve)", &self.mesh, &mut last_nm);
 
         // Step 4.6 — D resolver
         {
@@ -1359,6 +1394,7 @@ impl Scene {
                 if !all_created_faces.contains(&f) { all_created_faces.push(f); }
             }
         }
+        trace_step("after Step 4.6 (D resolver)", &self.mesh, &mut last_nm);
 
         // Step 4.65 — Dissolve faces fully surrounded by newly-created ones.
         //
@@ -1407,6 +1443,8 @@ impl Scene {
             }
         }
 
+        trace_step("after Step 4.65 (dissolve surrounded)", &self.mesh, &mut last_nm);
+
         // Step 4.7 — dedup
         {
             let removed = self.mesh.deduplicate_overlapping_faces();
@@ -1417,6 +1455,7 @@ impl Scene {
                 all_created_faces.retain(|&f| f != fid);
             }
         }
+        trace_step("after Step 4.7 (dedup)", &self.mesh, &mut last_nm);
 
         // Step 4.8 — B1 enclosed-face hole promotion (DISABLED per ADR-015).
         //
@@ -1441,6 +1480,7 @@ impl Scene {
         {
             self.run_mixed_cycle_splits(touched_verts, new_edges, all_created_faces);
         }
+        trace_step("after Step 4.9 (M1 mixed-cycle splits)", &self.mesh, &mut last_nm);
 
         // 알려진 제약 (2026-04-28, ADR-008 Axiom 7 vs Phase E B1 hole-promote 충돌):
         //   B1 hole-promote 된 ring face 의 hole boundary 에 인접하게 새 RECT
@@ -1454,6 +1494,8 @@ impl Scene {
         //
         // 임시 우회: 사용자는 인접 inner RECT 를 그릴 때 약간의 gap 을 두거나
         //   4 LINE 으로 직접 그리기. 자동 free-cycle 합성은 정상 작동.
+
+        trace_step("before Step 4.95 (P7 ring rebuild)", &self.mesh, &mut last_nm);
 
         // Step 4.95 — ADR-021 P7 (Closed Edge Loop Divides Face).
         //
@@ -1609,6 +1651,29 @@ impl Scene {
                 }
             }
         }
+        trace_step("after Step 4.95 (P7 ring rebuild)", &self.mesh, &mut last_nm);
+        // Detailed inspection: print which 3 faces share each non-manifold edge.
+        if trace_p7 || self.mesh.collect_non_manifold_edges().len() > 0 {
+            for eid in self.mesh.collect_non_manifold_edges() {
+                let (faces, hes) = self.mesh.get_faces_sharing_edge(eid);
+                if faces.len() >= 3 {
+                    eprintln!(
+                        "[P7-trace] non-manifold edge {:?} shared by {} faces:",
+                        eid, faces.len(),
+                    );
+                    for (i, &f) in faces.iter().enumerate() {
+                        let face = &self.mesh.faces[f];
+                        let outer_n = self.mesh.collect_loop_verts(face.outer().start)
+                            .map(|v| v.len()).unwrap_or(0);
+                        let inners_n = face.inners().len();
+                        eprintln!(
+                            "  face[{}] = {:?}: outer={}vert, inners={}, he={:?}",
+                            i, f, outer_n, inners_n, hes[i],
+                        );
+                    }
+                }
+            }
+        }
 
         // Step 4.99 — ADR-025 P11 Final Sweep: Closed Edge Cycle MUST Face.
         //
@@ -1654,8 +1719,11 @@ impl Scene {
                 }
             }
 
+            trace_step("after Step 4.99 resolve_planar_free_faces", &self.mesh, &mut last_nm);
+
             // ADR-025 P11 Phase 5 — Brute-force cycle mop-up.
             self.mop_up_orphan_cycles_via_dfs(all_created_faces);
+            trace_step("after Phase 5 (DFS mop-up)", &self.mesh, &mut last_nm);
 
             // ADR-025 P11 Phase 6 — Strand absorption.
             //
@@ -1663,6 +1731,7 @@ impl Scene {
             // boundary 에 흡수. 양 endpoint 가 같은 face 의 outer loop 위에 있으면
             // split_face_by_chain 으로 face 를 둘로 분할 → strand 가 boundary 가 됨.
             self.absorb_orphan_strands_into_faces(all_created_faces);
+            trace_step("after Phase 6 (strand absorb)", &self.mesh, &mut last_nm);
 
             // Phase 7 (final cleanup of remaining strands) 은 의도적 사용자
             // 와이어 (DrawLine intermediate) 와 구별 불가 — closed-shape 명령
