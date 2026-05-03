@@ -325,3 +325,163 @@ pub struct NurbsBooleanResultV2 {
 
 *Author*: AXiA team (사용자 결정 + Claude spec)
 *Status*: Phase J spec accepted — Step 1 부터 incremental 구현
+
+---
+
+## 7. Amendment 1 — Step 2 / Step 4 설계 Lock-in (2026-05-04)
+
+**컨텍스트**: Steps 1+3+5 commit (65e77d1) 후 사용자 가이드 받음.
+다음 세션이 흔들림 없이 진입할 수 있도록 핵심 설계 결정을 본 amendment 로
+영구 lock.
+
+### 7.1 Step 2 — 3가지 핵심 결정 (변경 시 새 amendment 필요)
+
+#### 7.1.1 Intersection Registry 계약
+
+`IntersectionKind::Coincident` 는 **단일 점이 아니라 overlap 구간**
+`(t0_a, t1_a, t0_b, t1_b)` 을 명시적으로 보존한다.
+
+```rust
+pub struct Intersection2D {
+    pub point: [f64; 2],          // crossing/tangent: 단일 점
+                                  // coincident: 구간 시작점
+    pub t_a: f64,                 // crossing/tangent: 단일 parameter
+                                  // coincident: 구간 t0_a
+    pub t_b: f64,
+    pub kind: IntersectionKind,
+}
+
+pub enum IntersectionKind {
+    Crossing,
+    Tangent,
+    Coincident {
+        t1_a: f64,                // 구간 끝 parameter on a
+        t1_b: f64,                // 구간 끝 parameter on b
+        same_direction: bool,     // 두 segment 의 진행 방향 일치 여부
+    },
+}
+```
+
+**분절/유지/폐기 규칙 표** (Step 2 구현 시 코드화 필수):
+
+| op       | Coincident.same_direction = true | same_direction = false |
+|----------|----------------------------------|------------------------|
+| Union    | 한쪽만 유지 (중복 제거)              | 둘 다 폐기 (구멍 생성)  |
+| Subtract | 폐기 (boundary cancel)            | 한쪽 유지 (orientation flip) |
+| Intersect| 한쪽만 유지                         | 폐기                    |
+
+#### 7.1.2 Entry/Exit 판정 — Offset 점 inside 테스트
+
+곡선 일반화에서 "교차 시 미분 부호" 는 **불안정** (cusp / inflection
+근처에서 fail). 대신 **양 끝 미소 오프셋 점의 inside 테스트** 를
+truth 로 사용:
+
+```rust
+// pseudo
+fn classify_entry_exit(intersection: &Intersection2D, curve_a: &TrimCurve2D,
+                        loop_b: &TrimLoop, tol: f64) -> EntryExit {
+    let eps = tol.parameter * 10.0;
+    let p_before = curve_a.evaluate((intersection.t_a - eps).max(0.0));
+    let p_after  = curve_a.evaluate((intersection.t_a + eps).min(1.0));
+    let in_before = point_in_trim_loop(p_before, loop_b, tol.geometric);
+    let in_after  = point_in_trim_loop(p_after,  loop_b, tol.geometric);
+    match (in_before, in_after) {
+        (false, true) => EntryExit::Entry,
+        (true, false) => EntryExit::Exit,
+        (false, false) => EntryExit::Bouncing,    // tangent-like
+        (true, true)   => EntryExit::Skimming,    // coincident-like
+    }
+}
+```
+
+`point_in_trim_loop` (Step 1 구현 완료) 와 boundary-vertex probe
+(Step 3 구현 완료) 가 이미 안정적으로 작동 → 그대로 활용.
+
+#### 7.1.3 처리 순서 — Coincident → Tangent → Crossing
+
+```
+Step 2 의 trim_loop_boolean(a, b, op) 진입 시:
+  1. 모든 segment 쌍의 intersection 계산 (kind 분류)
+  2. Coincident 먼저 처리 (overlap 구간 분절 + 위 표 적용)
+  3. Tangent 처리 (Bouncing 분류 → 곡선 분절 안 함, op-별 유지/폐기)
+  4. Crossing 처리 (일반 케이스, Entry/Exit traversal)
+  5. Result loop 조립
+```
+
+**근거**: Crossing 을 일반 케이스로 두면 Coincident/Tangent 가 nested
+edge case 로 묻힘. 위 순서로 진입하면 일반 케이스 코드가 단순해짐.
+
+### 7.2 Step 4 — 2가지 핵심 결정
+
+#### 7.2.1 Detect 와 Repair 분리
+
+```rust
+// 감지 단계 — 순수 분석, 부작용 없음
+pub fn detect_ssi_pathologies(...) -> SsiRobustnessReport;
+
+// 복구 단계 — 사용자 / 호출자 동의 후 명시 호출
+pub fn repair_pcurve_missing(...) -> Result<...>;
+pub fn repair_self_intersection(...) -> Result<...>;
+```
+
+이유: Steps 1+3+5 에서 검증된 패턴 (foundational primitives 와 정책
+분리). Boolean 결과를 **사용자가 받아본 후** 복구 여부 결정 가능.
+NIST 코퍼스 검증 시 detect-only 모드로 정확도 측정.
+
+#### 7.2.2 `reconstruct_pcurve` UV 투영 오차 정책
+
+```
+3D chain point P 의 UV 투영:
+  (u, v) = surface.invert_to_uv(P)            // Newton iteration
+  if newton_residual > tol.geometric:
+      return Err(PcurveReconstructionFailed)
+  if (u, v) outside surface.uv_range:
+      // Clamp by tol.parameter (boundary tolerance)
+      u = clamp(u, u_min - tol.parameter, u_max + tol.parameter)
+      v = clamp(v, v_min - tol.parameter, v_max + tol.parameter)
+      // 만약 clamp 거리 > tol.parameter * 10 이면 reject
+```
+
+`tol.parameter` (1e-6 default) 가 명시적 boundary slack — Step 1 +
+LOCKED #5 와 정합.
+
+### 7.3 다음 세션 실행 순서 (확정)
+
+```
+1. Step 2 Skeleton commit:
+   - Intersection2D struct + IntersectionKind enum (Coincident 구간 포함)
+   - intersect_trim_curves() — Line∩Line / Line∩Arc / Arc∩Arc
+     (Bezier 는 sampling fallback)
+   - 회귀: 각 kind 별 1개씩 (3개)
+
+2. Step 2 Boolean Traversal commit:
+   - trim_loop_intersect() 부터 (가장 단순 — boundary 보존만)
+   - trim_loop_union() (Coincident 표 #1 행)
+   - trim_loop_subtract() (Coincident 표 #2 행)
+   - 회귀: 각 op 별 disjoint/overlap/nested 3개씩 (9개)
+
+3. Step 4 Detection commit:
+   - SsiRobustnessReport struct
+   - detect_*() 6개 함수
+   - 회귀 6개
+
+4. Step 4 Repair commit:
+   - reconstruct_pcurve()
+   - 회귀 1개 (UV clamp 정책 검증)
+
+5. Final integration:
+   - nurbs_boolean_v2() — Steps 1-4 통합
+   - 기존 nurbs_boolean MVP 는 #[deprecated] 표시 보존
+```
+
+**Acceptance 변동**: 30 회귀 → 28 회귀 (Step 4 detection 6 + repair 1
+= 7, spec 의 6개 보다 1개 추가; UV reconstruction 검증 명시 회귀).
+
+### 7.4 변경 이력
+
+- **2026-05-04 (본 amendment)**: Steps 1+3+5 commit 후 사용자 가이드
+  반영. Step 2/4 설계 lock-in. 회귀 spec 미세 조정.
+
+---
+
+*Amendment Author*: AXiA team (사용자 가이드 + Claude lock-in)
