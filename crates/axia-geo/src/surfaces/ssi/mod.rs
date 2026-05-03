@@ -13,6 +13,9 @@ pub mod topology;
 pub mod nurbs_wrapper;
 pub mod trim_gen;
 pub mod boolean;
+pub mod trim_geom;
+pub mod trim_classify;
+pub mod tolerance;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
