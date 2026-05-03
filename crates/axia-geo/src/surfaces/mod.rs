@@ -50,6 +50,8 @@ pub mod bspline_surface;
 pub mod nurbs_surface;
 pub mod trim;
 pub mod ssi;
+pub mod transform;
+pub mod curvature;
 
 pub use trim::{TrimCurve2D, TrimLoop};
 pub use ssi::SurfaceIntersection;

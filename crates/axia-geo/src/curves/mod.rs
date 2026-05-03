@@ -34,6 +34,10 @@ pub mod nurbs;
 pub mod intersect;
 pub mod conic;
 pub mod distance;
+pub mod transform;
+pub mod curvature;
+
+pub use transform::{TransformKind, classify_transform, uniform_scale_factor, TRANSFORM_EPSILON};
 
 use anyhow::Result;
 use glam::DVec3;
