@@ -113,10 +113,113 @@ impl Mesh {
             self.recompute_face_normals(&faces_vec)?;
         }
 
+        // ─── ADR-060 Phase O Step 1 — Curve / Surface transform ───
+        //
+        // Per ADR-060 §E lock-in (Partial-move → drop to Line):
+        //   Both endpoints moved → curve.transform(translation)
+        //   Neither moved        → no-op
+        //   Partial moved        → set_curve(None) — safe Line fallback
+        //
+        // Same logic for face surfaces (all-or-none rule).
+        //
+        // **Drop-in alongside per §B**: existing code path UNCHANGED above;
+        // this block runs AFTER and only touches curves/surfaces.
+        self.adr_060_step1_translate_curves(vert_ids, delta);
+
         Ok(TransformResult {
             verts_moved: vert_ids.len(),
             faces_affected: faces_vec.len(),
         })
+    }
+
+    /// ADR-060 Phase O Step 1 — Apply translation to attached curves/surfaces.
+    ///
+    /// Per §E lock-in: partial-move drops curve/surface to None (safe Line/
+    /// Plane fallback via Phase N synthesizer).
+    fn adr_060_step1_translate_curves(
+        &mut self,
+        vert_ids: &[VertId],
+        delta: DVec3,
+    ) {
+        use std::collections::HashSet;
+        use crate::curves::{AnalyticCurve, CurveOps};
+        use glam::DMat4;
+
+        let moved_set: HashSet<VertId> = vert_ids.iter().copied().collect();
+
+        // ── Edges ──────────────────────────────────────────────
+        let mut to_drop: Vec<crate::entities::id::EdgeId> = Vec::new();
+        let mut to_translate: Vec<crate::entities::id::EdgeId> = Vec::new();
+
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            if edge.curve().is_none() { continue; }
+
+            let v_small_moved = moved_set.contains(&edge.v_small());
+            let v_large_moved = moved_set.contains(&edge.v_large());
+
+            match (v_small_moved, v_large_moved) {
+                (true, true)   => to_translate.push(eid),
+                (false, false) => { /* unaffected */ }
+                _              => to_drop.push(eid),  // partial → safe fallback
+            }
+        }
+
+        let m = DMat4::from_translation(delta);
+        for eid in to_translate {
+            let curve = self.edges[eid].curve().cloned();
+            if let Some(c) = curve {
+                if matches!(c, AnalyticCurve::Line { .. }) {
+                    // Line is mesh-relative — already updated by vertex moves
+                    continue;
+                }
+                if let Ok(new_curve) = c.transform(&m, self) {
+                    self.edges[eid].set_curve(Some(new_curve));
+                }
+                // Transform failure: silent skip (drift sanity catches later)
+            }
+        }
+        for eid in to_drop {
+            self.edges[eid].set_curve(None);
+        }
+
+        // ── Faces ──────────────────────────────────────────────
+        let mut face_to_drop: Vec<FaceId> = Vec::new();
+        let mut face_to_translate: Vec<FaceId> = Vec::new();
+
+        for (fid, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            if face.surface().is_none() { continue; }
+
+            let outer_verts = match self.collect_loop_verts(face.outer().start) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let n_moved = outer_verts.iter()
+                .filter(|v| moved_set.contains(v))
+                .count();
+
+            if n_moved == 0 {
+                /* unaffected */
+            } else if n_moved == outer_verts.len() {
+                face_to_translate.push(fid);
+            } else {
+                face_to_drop.push(fid);  // partial → safe Plane fallback
+            }
+        }
+
+        for fid in face_to_translate {
+            let surface = self.faces[fid].surface().cloned();
+            if let Some(s) = surface {
+                if let Ok(new_surface) = s.transform(&m) {
+                    self.faces[fid].set_surface(Some(new_surface));
+                }
+            }
+        }
+        for fid in face_to_drop {
+            self.faces[fid].set_surface(None);
+        }
     }
 
     /// **Constraint Solver Level 1**: 지정 정점을 center/axis 기준으로 회전.
@@ -677,5 +780,139 @@ mod tests {
         let faces = make_test_quad(&mut mesh);
         let r = mesh.rotate_faces(&faces, DVec3::ZERO, DVec3::ZERO, 1.0);
         assert!(r.is_err());
+    }
+
+    // ── ADR-060 Phase O Step 1 — translate_verts curve transform ──
+
+    use crate::curves::AnalyticCurve;
+
+    /// ADR-060 §E #1 — Both endpoints moved → Circle curve translates.
+    /// (Circle is non-Line variant — actually transformed via Phase H.)
+    #[test]
+    fn adr_060_step1_both_endpoints_moved_translates_circle() {
+        let mut m = Mesh::new();
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let (eid, _) = m.add_edge(v0, v1).unwrap();
+        m.edges[eid].set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::new(5.0, 0.0, 0.0), radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        }));
+
+        // Both endpoints in moved set
+        m.translate_verts(&[v0, v1], DVec3::new(0.0, 100.0, 0.0)).unwrap();
+
+        // Circle should have been translated — center moved by +Y100
+        match m.edges[eid].curve() {
+            Some(AnalyticCurve::Circle { center, radius, .. }) => {
+                assert!((*center - DVec3::new(5.0, 100.0, 0.0)).length() < 1e-9,
+                    "expected center at (5, 100, 0), got {:?}", center);
+                assert!((radius - 5.0).abs() < 1e-9);
+            }
+            other => panic!("Circle should be translated, got {:?}", other),
+        }
+    }
+
+    /// ADR-060 §E #2 — Partial move → curve drops to None (safe Line fallback).
+    /// CRITICAL lock-in: 곡선 보존 시도 절대 금지.
+    #[test]
+    fn adr_060_step1_partial_move_drops_curve_to_none() {
+        let mut m = Mesh::new();
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let (eid, _) = m.add_edge(v0, v1).unwrap();
+        m.edges[eid].set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::new(5.0, 0.0, 0.0), radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        }));
+
+        // Only v0 in moved set — partial move
+        m.translate_verts(&[v0], DVec3::new(0.0, 1.0, 0.0)).unwrap();
+
+        // Curve must have been dropped to None
+        assert!(m.edges[eid].curve().is_none(),
+            "partial move must drop curve to None per §E lock-in");
+    }
+
+    /// ADR-060 §E #3 — Neither endpoint moved → curve unchanged.
+    #[test]
+    fn adr_060_step1_unrelated_edge_unchanged() {
+        let mut m = Mesh::new();
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(20.0, 0.0, 0.0));
+        let v3 = m.add_vertex(DVec3::new(30.0, 0.0, 0.0));
+        let (eid_a, _) = m.add_edge(v0, v1).unwrap();
+        let (eid_b, _) = m.add_edge(v2, v3).unwrap();
+
+        let circle_b = AnalyticCurve::Circle {
+            center: DVec3::new(25.0, 0.0, 0.0), radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        m.edges[eid_b].set_curve(Some(circle_b.clone()));
+
+        // Move only v0 / v1 (edge A) — edge B should be untouched
+        m.translate_verts(&[v0, v1], DVec3::new(0.0, 100.0, 0.0)).unwrap();
+
+        // edge B's circle preserved
+        assert_eq!(m.edges[eid_b].curve(), Some(&circle_b),
+            "unrelated edge curve must remain unchanged");
+        let _ = eid_a;
+    }
+
+    /// ADR-060 §E #4 — Line variant (mesh-relative) doesn't get
+    /// transform call — vertex move auto-propagates via VertId reference.
+    #[test]
+    fn adr_060_step1_line_variant_mesh_relative() {
+        use crate::curves::synthesize::synthesize_line_curve;
+        let mut m = Mesh::new();
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let (eid, _) = m.add_edge(v0, v1).unwrap();
+        m.edges[eid].set_curve(Some(synthesize_line_curve(v0, v1)));
+
+        // Move both endpoints
+        m.translate_verts(&[v0, v1], DVec3::new(0.0, 5.0, 0.0)).unwrap();
+
+        // Line still references v0/v1 — same VertIds, just new positions
+        match m.edges[eid].curve() {
+            Some(AnalyticCurve::Line { start, end }) => {
+                assert_eq!(*start, v0);
+                assert_eq!(*end, v1);
+            }
+            other => panic!("Line should be preserved, got {:?}", other),
+        }
+        // Verify positions actually moved
+        assert!((m.vertex_pos(v0).unwrap() - DVec3::new(0.0, 5.0, 0.0)).length() < 1e-9);
+        assert!((m.vertex_pos(v1).unwrap() - DVec3::new(10.0, 5.0, 0.0)).length() < 1e-9);
+    }
+
+    /// ADR-060 §E #5 — Existing 851-test corpus regression: edges with
+    /// no curve attached behave EXACTLY as before (no spurious effects).
+    #[test]
+    fn adr_060_step1_no_curve_no_spurious_change() {
+        let mut m = Mesh::new();
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let (eid, _) = m.add_edge(v0, v1).unwrap();
+        // Note: no set_curve — edge starts without curve
+        assert!(m.edges[eid].curve().is_none());
+
+        m.translate_verts(&[v0, v1], DVec3::new(0.0, 5.0, 0.0)).unwrap();
+
+        // Still no curve, vertices moved
+        assert!(m.edges[eid].curve().is_none(),
+            "edges without curves should remain curveless");
+        assert!((m.vertex_pos(v0).unwrap() - DVec3::new(0.0, 5.0, 0.0)).length() < 1e-9);
+    }
+
+    /// ADR-060 §E #6 — Empty vert list is no-op (no infinite loop, no panic).
+    #[test]
+    fn adr_060_step1_empty_vert_list_noop() {
+        let mut m = Mesh::new();
+        let _v0 = m.add_vertex(DVec3::ZERO);
+        let result = m.translate_verts(&[], DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        assert_eq!(result.verts_moved, 0);
+        assert_eq!(result.faces_affected, 0);
     }
 }
