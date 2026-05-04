@@ -1193,4 +1193,186 @@ describe('WasmBridge', () => {
       expect(undoMock).toHaveBeenCalledTimes(1);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-066 Y-3 (Path Y) — booleanDispatchDcelMulti typed wrapper
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-066 Y-3 booleanDispatchDcelMulti', () => {
+    it('returns null when engine.booleanDispatchDcelMultiJson is missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};  // no booleanDispatchDcelMultiJson
+      const out = bridge.booleanDispatchDcelMulti([1, 2], [3, 4], 'subtract');
+      expect(out).toBeNull();
+    });
+
+    it('parses ok result with full per-pair array (Y-2-c)', () => {
+      const fakeJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 1, faceB: 3,
+            outcome: { kind: 'ok',
+              dcel: {
+                newFacesA: [100], newFacesB: [],
+                removedFaces: [1, 3], preservedFaces: [],
+                disjoint: false, robustnessClean: true,
+              } } },
+          { faceA: 1, faceB: 4,
+            outcome: { kind: 'ok',
+              dcel: {
+                newFacesA: [], newFacesB: [],
+                removedFaces: [], preservedFaces: [1, 4],
+                disjoint: true, robustnessClean: true,
+              } } },
+        ],
+        allNewFaces: [100],
+        allRemovedFaces: [1, 3],
+        warnings: [],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: () => fakeJson,
+      };
+      const out = bridge.booleanDispatchDcelMulti([1], [3, 4], 'subtract');
+      expect(out).not.toBeNull();
+      expect(out!.kind).toBe('ok');
+      if (out!.kind === 'ok') {
+        expect(out!.pathUsed).toBe('Nurbs');
+        expect(out!.fallbackReason).toBeNull();
+        expect(out!.perPair).toHaveLength(2);
+        // First pair — ok outcome with dcel.
+        const p0 = out!.perPair[0];
+        expect(p0.faceA).toBe(1);
+        expect(p0.faceB).toBe(3);
+        expect(p0.outcome.kind).toBe('ok');
+        if (p0.outcome.kind === 'ok') {
+          expect(p0.outcome.dcel.newFacesA).toEqual([100]);
+          expect(p0.outcome.dcel.disjoint).toBe(false);
+        }
+        // Second pair — disjoint dcel.
+        if (out!.perPair[1].outcome.kind === 'ok') {
+          expect(out!.perPair[1].outcome.dcel.disjoint).toBe(true);
+        }
+        expect(out!.allNewFaces).toEqual([100]);
+        expect(out!.allRemovedFaces).toEqual([1, 3]);
+      }
+    });
+
+    it('parses ok result with err per-pair entry (Y-2-j discriminator)', () => {
+      const fakeJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 1, faceB: 3,
+            outcome: { kind: 'ok',
+              dcel: {
+                newFacesA: [100], newFacesB: [],
+                removedFaces: [1], preservedFaces: [],
+                disjoint: false, robustnessClean: true,
+              } } },
+          { faceA: 1, faceB: 4,
+            outcome: { kind: 'err',
+              detail: "InactiveFace: face_a FaceId(1) is inactive (cascade removed by earlier pair)" } },
+        ],
+        allNewFaces: [100],
+        allRemovedFaces: [1],
+        warnings: [
+          'pair (FaceId(1), FaceId(4)): InactiveFace: face_a FaceId(1) is inactive',
+        ],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: () => fakeJson,
+      };
+      const out = bridge.booleanDispatchDcelMulti([1], [3, 4], 'subtract');
+      expect(out!.kind).toBe('ok');
+      if (out!.kind === 'ok') {
+        expect(out!.perPair).toHaveLength(2);
+        // First pair succeeded.
+        expect(out!.perPair[0].outcome.kind).toBe('ok');
+        // Second pair = err (cascade removal).
+        const p1 = out!.perPair[1];
+        expect(p1.outcome.kind).toBe('err');
+        if (p1.outcome.kind === 'err') {
+          expect(p1.outcome.detail).toContain('InactiveFace');
+        }
+        // Warnings recorded.
+        expect(out!.warnings).toHaveLength(1);
+        expect(out!.warnings[0]).toContain('InactiveFace');
+      }
+    });
+
+    it('parses ok result with empty arrays for Mesh path (Y-E ineligibility)', () => {
+      const fakeJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Mesh',
+        fallbackReason: { kind: 'SurfaceMissing', label: 'surface_missing' },
+        perPair: [],
+        allNewFaces: [],
+        allRemovedFaces: [],
+        warnings: ['Y-E strict: 1 face(s) on side A and 0 on side B lack analytic surface'],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: () => fakeJson,
+      };
+      const out = bridge.booleanDispatchDcelMulti([1, 2], [3], 'union');
+      expect(out!.kind).toBe('ok');
+      if (out!.kind === 'ok') {
+        expect(out!.pathUsed).toBe('Mesh');
+        expect(out!.perPair).toHaveLength(0);
+        expect(out!.allNewFaces).toEqual([]);
+        expect(out!.allRemovedFaces).toEqual([]);
+        expect(out!.fallbackReason).not.toBeNull();
+        expect(out!.fallbackReason!.kind).toBe('SurfaceMissing');
+        expect(out!.warnings.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('parses error envelope on invalid op string', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: () => JSON.stringify({
+          schemaVersion: 1, ok: false,
+          error: 'invalid op string (expected: union | subtract | intersect)',
+        }),
+      };
+      // TS type forbids invalid op at compile time, so cast for the test.
+      const out = bridge.booleanDispatchDcelMulti(
+        [1], [2], 'union' as 'union',
+      );
+      expect(out!.kind).toBe('error');
+      if (out!.kind === 'error') {
+        expect(out!.reason).toBe('invalidOp');
+        expect(out!.detail).toContain('invalid op');
+      }
+
+      // Generic engine error on a different mock.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: () => JSON.stringify({
+          schemaVersion: 1, ok: false,
+          error: 'face_a 999 not found',
+        }),
+      };
+      const out2 = bridge.booleanDispatchDcelMulti([999], [1], 'subtract');
+      expect(out2!.kind).toBe('error');
+      if (out2!.kind === 'error') {
+        expect(out2!.reason).toBe('engineErr');
+      }
+
+      // Non-JSON response.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: () => 'not valid json{',
+      };
+      const out3 = bridge.booleanDispatchDcelMulti([1], [2], 'subtract');
+      expect(out3!.kind).toBe('error');
+      if (out3!.kind === 'error') {
+        expect(out3!.reason).toBe('parse');
+      }
+    });
+  });
 });

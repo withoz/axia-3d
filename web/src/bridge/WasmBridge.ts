@@ -397,6 +397,10 @@ type AxiaEngineExtended = AxiaEngine & {
   booleanDispatchDcelJson?(
     faceA: number, faceB: number, op: string, tolGeometric: number,
   ): string;
+  // ADR-066 Y-2 — Multi-face DCEL Boolean dispatch (Path Y)
+  booleanDispatchDcelMultiJson?(
+    facesA: Uint32Array, facesB: Uint32Array, op: string, tolGeometric: number,
+  ): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -734,6 +738,84 @@ export class WasmBridge {
         nurbsAttempted: env.nurbsAttempted ?? false,
         nurbsClean: env.nurbsClean ?? false,
         intersectionChainCount: env.intersectionChainCount ?? 0,
+      };
+    }
+    return {
+      kind: 'error', reason: 'parse',
+      detail: 'engine response missing required fields',
+    };
+  }
+
+  /**
+   * ADR-066 Y-3 (Path Y) — Multi-face DCEL Boolean dispatch wrapper.
+   *
+   * Routes through `Mesh::boolean_dispatch_dcel_multi` (Y-1) which
+   * iterates the cartesian product `facesA × facesB` and accumulates
+   * per-pair outcomes plus aggregate `allNewFaces` / `allRemovedFaces`.
+   *
+   * Per Y-E strict: ANY face missing surface or unsupported kind →
+   * `pathUsed: 'Mesh'` upfront with `perPair`/aggregates empty +
+   * `fallbackReason` populated. Caller decides next step (no auto
+   * mesh fallback).
+   *
+   * @param facesA, facesB — face IDs (multi-face per Y-1; 1×1 delegates
+   *   to Path Z `boolean_dispatch_dcel` internally)
+   * @param op — Boolean operation
+   * @param tolGeometric — geometric tolerance in mm (default 1e-3 per
+   *   ADR-064 D-AD / Y-3-i)
+   *
+   * @returns
+   * - `null` — WASM not loaded or `booleanDispatchDcelMultiJson` not exposed
+   * - `{ kind: 'ok', pathUsed, perPair, allNewFaces, allRemovedFaces,
+   *      warnings, ... }` — engine succeeded
+   * - `{ kind: 'error', reason, detail }` — invalidOp / engineErr / parse
+   */
+  booleanDispatchDcelMulti(
+    facesA: number[],
+    facesB: number[],
+    op: 'union' | 'subtract' | 'intersect',
+    tolGeometric: number = 1e-3,
+  ): BooleanDispatchDcelMultiResult | null {
+    if (!this.engine || !this.engine.booleanDispatchDcelMultiJson) return null;
+    // Y-3-f markDirty — topology will change on Nurbs path success.
+    this.markDirty();
+    // Y-3-j: number[] in / Uint32Array out (wasm-bindgen marshalling).
+    const json = this.engine.booleanDispatchDcelMultiJson(
+      Uint32Array.from(facesA),
+      Uint32Array.from(facesB),
+      op,
+      tolGeometric,
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return { kind: 'error', reason: 'parse', detail: 'engine returned non-JSON' };
+    }
+    const env = parsed as {
+      ok?: boolean; error?: string;
+      pathUsed?: string;
+      fallbackReason?: BooleanDispatchFallbackReason | null;
+      perPair?: PerPairDcelEntry[];
+      allNewFaces?: number[];
+      allRemovedFaces?: number[];
+      warnings?: string[];
+    };
+    if (env.ok === false) {
+      const detail = env.error ?? 'unknown engine error';
+      const reason: BooleanDispatchDcelErrorReason =
+        detail.includes('invalid op') ? 'invalidOp' : 'engineErr';
+      return { kind: 'error', reason, detail };
+    }
+    if (env.ok === true && typeof env.pathUsed === 'string') {
+      return {
+        kind: 'ok',
+        pathUsed: env.pathUsed as BooleanDispatchPath,
+        fallbackReason: env.fallbackReason ?? null,
+        perPair: env.perPair ?? [],
+        allNewFaces: env.allNewFaces ?? [],
+        allRemovedFaces: env.allRemovedFaces ?? [],
+        warnings: env.warnings ?? [],
       };
     }
     return {
@@ -3364,6 +3446,54 @@ export type BooleanDispatchDcelResult =
       nurbsAttempted: boolean;
       nurbsClean: boolean;
       intersectionChainCount: number;
+    }
+  | {
+      kind: 'error';
+      reason: BooleanDispatchDcelErrorReason;
+      detail: string;
+    };
+
+/**
+ * ADR-066 Y-3 (Path Y) — Multi-face DCEL dispatch result types.
+ *
+ * Mirrors the JSON envelope produced by Y-2 `booleanDispatchDcelMultiJson`
+ * WASM export. Per Y-2-c full per-pair serialization + Y-2-j discriminated
+ * outcome `kind`, every (a, b) pair is captured as `ok` (with embedded
+ * dcel object) or `err` (with detail string).
+ */
+export type PerPairDcelOutcome =
+  | { kind: 'ok'; dcel: BooleanDispatchDcel }
+  | { kind: 'err'; detail: string };
+
+export interface PerPairDcelEntry {
+  faceA: number;
+  faceB: number;
+  outcome: PerPairDcelOutcome;
+}
+
+/**
+ * Top-level multi-face dispatch result envelope.
+ *
+ * - `pathUsed: 'Nurbs'` — Y-E eligibility passed; `perPair` has N×M
+ *   outcomes; `allNewFaces` / `allRemovedFaces` are sorted-unique
+ *   aggregates across successful pairs.
+ * - `pathUsed: 'Mesh'` — Y-E rejected upfront (any face missing surface
+ *   or unsupported kind); `perPair`/aggregates all empty;
+ *   `fallbackReason` populated. Caller decides next step (no auto
+ *   mesh fallback per Y-D / Y-3 design).
+ *
+ * `warnings: string[]` records Y-H=(c) skip-and-warn entries (per-pair
+ * Err details, surface conversion warnings, etc.).
+ */
+export type BooleanDispatchDcelMultiResult =
+  | {
+      kind: 'ok';
+      pathUsed: BooleanDispatchPath;
+      fallbackReason: BooleanDispatchFallbackReason | null;
+      perPair: PerPairDcelEntry[];
+      allNewFaces: number[];
+      allRemovedFaces: number[];
+      warnings: string[];
     }
   | {
       kind: 'error';
