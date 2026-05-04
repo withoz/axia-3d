@@ -834,6 +834,71 @@ impl Mesh {
         }
     }
 
+    /// ADR-064 Step 2 (sub-step 2.A) — TrimLoop polyline → DCEL Face.
+    ///
+    /// Converts a sequence of VertId polylines (output of Step 1's
+    /// `trim_loops_to_dcel_polyline`) into a single DCEL face with
+    /// outer + N inner hole loops.
+    ///
+    /// **Per ADR-064 §C lock-ins**:
+    /// - §A: Boolean op semantics handled by Phase J `nurbs_boolean_v2`
+    ///   (this function is op-agnostic — assumes loops already represent
+    ///   the desired output).
+    /// - §C #1 lock-in: pure DCEL face creation; no surface attach
+    ///   (caller responsibility — D-D=(a)).
+    /// - §C #2 drop-in alongside: existing `add_face_with_holes`
+    ///   delegated; new function only routes input format.
+    ///
+    /// **D-C lock-in**: Input format = `Vec<Vec<VertId>>` (Step 1 output).
+    /// `loop_polylines[0]` is treated as outer, `[1..]` as inner holes.
+    /// Caller must order loops appropriately (Phase J ContainmentTree
+    /// flattening responsibility).
+    ///
+    /// **D-G lock-in**: ADR-007 Invariant 2 winding validation:
+    /// `add_face_with_holes` already computes face normal from outer
+    /// loop; if normal is degenerate (zero/NaN), it bails. CCW outer
+    /// is caller responsibility (Phase J trim loops are CCW per §B).
+    ///
+    /// Returns the new FaceId. Errors:
+    ///   - empty `loop_polylines`
+    ///   - outer polyline < 3 vertices
+    ///   - any hole polyline < 3 vertices
+    ///   - degenerate normal (delegated to `add_face_with_holes`)
+    ///
+    /// Per ADR-067 §A drop-in alongside lock-in: existing
+    /// boolean.rs (mesh path) and boolean_dispatch (Phase O Step 4)
+    /// UNCHANGED. This is a separate API for NURBS Boolean DCEL
+    /// integration (Step 5 will wire it into boolean_dispatch).
+    pub fn trim_loops_to_face(
+        &mut self,
+        loop_polylines: &[Vec<VertId>],
+        material: MaterialId,
+    ) -> Result<FaceId> {
+        if loop_polylines.is_empty() {
+            bail!("trim_loops_to_face: empty loop_polylines");
+        }
+        let outer = &loop_polylines[0];
+        if outer.len() < 3 {
+            bail!("trim_loops_to_face: outer loop has {} verts, need ≥3", outer.len());
+        }
+        // D-F lock-in — multi-inner-hole supported.
+        let holes_storage: Vec<&[VertId]> = loop_polylines[1..]
+            .iter()
+            .map(|v| v.as_slice())
+            .collect();
+        // Validate hole minimum vertex count.
+        for (i, hole) in holes_storage.iter().enumerate() {
+            if hole.len() < 3 {
+                bail!("trim_loops_to_face: inner loop {} has {} verts, need ≥3",
+                      i, hole.len());
+            }
+        }
+        // Delegate to existing API (D-B=(a) drop-in alongside).
+        // add_face_with_holes computes normal + builds HE chains +
+        // performs ADR-007 Invariant 2 (winding) validation per §D-G.
+        self.add_face_with_holes(outer, &holes_storage, material)
+    }
+
     /// ADR-064 Step 1 — Convert NURBS Boolean trim loops (UV) to DCEL
     /// vertex IDs (world-space, deduped via spatial-hash).
     ///
@@ -8490,5 +8555,190 @@ mod tests {
         // Loop 2 polyline: (0,0), (5,0), (5,-3).
         assert_eq!(l1[1], l2[1],
             "shared corner (5,0,0) must produce same VertId across loops");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-064 Step 2 (Path Z, 2.A) — TrimLoop polyline → DCEL Face
+    //
+    // 6 regression invariants (none #[ignore], §X.5 #6 strict):
+    //   1. trim_loops_to_face_creates_simple_outer_only
+    //   2. trim_loops_to_face_with_inner_hole
+    //   3. trim_loops_to_face_multi_inner_holes
+    //   4. trim_loops_to_face_rejects_degenerate_outer
+    //   5. trim_loops_to_face_invariants_pass
+    //   6. trim_loops_to_face_dropin_alongside_no_regression
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-064 Step 2 #1 — Simple outer-only loop produces a valid
+    /// face with no inner holes.
+    #[test]
+    fn trim_loops_to_face_creates_simple_outer_only() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = m.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        let polylines = vec![vec![v0, v1, v2, v3]];
+        let fid = m.trim_loops_to_face(&polylines, mat)
+            .expect("simple outer should succeed");
+        assert!(m.faces[fid].is_active());
+        assert_eq!(m.faces[fid].inners().len(), 0,
+            "outer-only input must produce 0 inner holes");
+    }
+
+    /// ADR-064 Step 2 #2 — outer + 1 inner hole produces multi-loop face.
+    #[test]
+    fn trim_loops_to_face_with_inner_hole() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Outer 10x10 square (CCW).
+        let o0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let o1 = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let o2 = m.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let o3 = m.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        // Inner 2x2 hole at center (CW per ADR-006/021/022 hole convention).
+        let i0 = m.add_vertex(DVec3::new(4.0, 4.0, 0.0));
+        let i1 = m.add_vertex(DVec3::new(4.0, 6.0, 0.0));
+        let i2 = m.add_vertex(DVec3::new(6.0, 6.0, 0.0));
+        let i3 = m.add_vertex(DVec3::new(6.0, 4.0, 0.0));
+        let polylines = vec![
+            vec![o0, o1, o2, o3],   // outer CCW
+            vec![i0, i1, i2, i3],   // inner CW (hole)
+        ];
+        let fid = m.trim_loops_to_face(&polylines, mat)
+            .expect("outer + 1 inner hole should succeed");
+        assert!(m.faces[fid].is_active());
+        assert_eq!(m.faces[fid].inners().len(), 1,
+            "1 inner hole must produce 1 LoopRef inner");
+    }
+
+    /// ADR-064 Step 2 #3 §D-F — multi-inner-hole support
+    /// (Phase J ContainmentTree may produce N inner holes).
+    #[test]
+    fn trim_loops_to_face_multi_inner_holes() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Outer 20x20 square.
+        let o0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let o1 = m.add_vertex(DVec3::new(20.0, 0.0, 0.0));
+        let o2 = m.add_vertex(DVec3::new(20.0, 20.0, 0.0));
+        let o3 = m.add_vertex(DVec3::new(0.0, 20.0, 0.0));
+        // 3 separate inner holes (CW, non-intersecting).
+        let make_hole = |m: &mut Mesh, cx: f64, cy: f64| -> Vec<VertId> {
+            vec![
+                m.add_vertex(DVec3::new(cx,         cy,         0.0)),
+                m.add_vertex(DVec3::new(cx,         cy + 1.0,   0.0)),
+                m.add_vertex(DVec3::new(cx + 1.0,   cy + 1.0,   0.0)),
+                m.add_vertex(DVec3::new(cx + 1.0,   cy,         0.0)),
+            ]
+        };
+        let h_a = make_hole(&mut m, 3.0, 3.0);
+        let h_b = make_hole(&mut m, 10.0, 5.0);
+        let h_c = make_hole(&mut m, 14.0, 14.0);
+        let polylines = vec![
+            vec![o0, o1, o2, o3],
+            h_a.clone(), h_b.clone(), h_c.clone(),
+        ];
+        let fid = m.trim_loops_to_face(&polylines, mat)
+            .expect("outer + 3 inner holes should succeed");
+        assert!(m.faces[fid].is_active());
+        assert_eq!(m.faces[fid].inners().len(), 3,
+            "3 inner holes must produce 3 LoopRef inners");
+    }
+
+    /// ADR-064 Step 2 #4 — Degenerate outer (< 3 verts) is rejected.
+    #[test]
+    fn trim_loops_to_face_rejects_degenerate_outer() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = m.add_vertex(DVec3::ZERO);
+        let v1 = m.add_vertex(DVec3::X);
+
+        // Empty input.
+        assert!(m.trim_loops_to_face(&[], mat).is_err(),
+            "empty input must err");
+        // 0-vert outer.
+        assert!(m.trim_loops_to_face(&[vec![]], mat).is_err());
+        // 2-vert outer (line, not face).
+        assert!(m.trim_loops_to_face(&[vec![v0, v1]], mat).is_err(),
+            "<3 outer verts must err");
+    }
+
+    /// ADR-064 Step 2 #5 §D-G — ADR-007 Invariant 2 (winding)
+    /// validation. add_face_with_holes computes normal from outer loop
+    /// via Newell's method; result is a valid unit normal for proper
+    /// CCW input.
+    ///
+    /// Note: degenerate (collinear) handling is delegated to existing
+    /// `compute_normal` engine behavior (NORMAL_EPSILON = 0.0); strict
+    /// degenerate-rejection is outside Step 2 scope (Step 5 cutover or
+    /// future ADR-007 strengthening).
+    #[test]
+    fn trim_loops_to_face_invariants_pass() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Valid CCW triangle in XY plane → normal +Z.
+        let v0 = m.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = m.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let polylines = vec![vec![v0, v1, v2]];
+        let fid = m.trim_loops_to_face(&polylines, mat).unwrap();
+        let normal = m.faces[fid].normal();
+        assert!((normal.length() - 1.0).abs() < 1e-6,
+            "Face normal must be unit (ADR-007 Invariant 2), got len {}",
+            normal.length());
+        // CCW outer in XY → +Z normal.
+        assert!(normal.z > 0.9,
+            "CCW outer in XY must have +Z normal, got {:?}", normal);
+
+        // Same shape with reversed (CW) winding → −Z normal (still
+        // unit, but opposite). This validates that Newell's method
+        // correctly captures winding direction.
+        let mut m2 = Mesh::new();
+        let w0 = m2.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let w1 = m2.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let w2 = m2.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let cw_polylines = vec![vec![w0, w2, w1]];  // reversed
+        let fid2 = m2.trim_loops_to_face(&cw_polylines, mat).unwrap();
+        let normal2 = m2.faces[fid2].normal();
+        assert!((normal2.length() - 1.0).abs() < 1e-6,
+            "CW face normal must also be unit length");
+        assert!(normal2.z < -0.9,
+            "CW outer in XY must have −Z normal, got {:?}", normal2);
+    }
+
+    /// ADR-064 Step 2 #6 — drop-in alongside: existing
+    /// `add_face_with_holes` callers / `add_face` callers unchanged.
+    /// Verify by calling both with same input and comparing topology.
+    #[test]
+    fn trim_loops_to_face_dropin_alongside_no_regression() {
+        // Same input via add_face vs trim_loops_to_face.
+        let mat = MaterialId::new(0);
+        let mut m1 = Mesh::new();
+        let v0 = m1.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = m1.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = m1.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = m1.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let direct = m1.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let direct_inners = m1.faces[direct].inners().len();
+
+        let mut m2 = Mesh::new();
+        let w0 = m2.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let w1 = m2.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let w2 = m2.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let w3 = m2.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let via_trim = m2.trim_loops_to_face(&[vec![w0, w1, w2, w3]], mat).unwrap();
+        let trim_inners = m2.faces[via_trim].inners().len();
+
+        // Topology identical: same inner count (0).
+        assert_eq!(direct_inners, trim_inners, "inner count must match");
+        // Both faces active.
+        assert!(m1.faces[direct].is_active() && m2.faces[via_trim].is_active());
+        // Normals identical (both +Z for CCW square).
+        let n1 = m1.faces[direct].normal();
+        let n2 = m2.faces[via_trim].normal();
+        assert!((n1 - n2).length() < 1e-9,
+            "drop-in alongside must produce identical normals");
     }
 }
