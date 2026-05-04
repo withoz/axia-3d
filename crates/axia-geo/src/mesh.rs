@@ -8233,6 +8233,114 @@ mod tests {
             "zero axis_dir must also be degenerate, got {:?}", outcome2);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ADR-062 Phase L₂ Path Z Step 4 — Phase O 비-충돌 + previous_kind
+    //
+    // 1 regression invariant (none #[ignore]):
+    //   1. attach_validated_replace_existing_records_previous_kind
+    //      Verifies Plane → Cylinder attach records previous_kind="Plane",
+    //      and that re-attaching the same surface kind works (no special-case).
+    //
+    // Phase O 비-충돌 검증: 본 ADR 의 attach_surface_validated 와 raw
+    // set_face_surface (Phase O Step 3 push_pull / Step 5 fillet_brep
+    // 가 사용) 의 분리 보장. raw 경로는 검증 0 (내부 도구 — 기하
+    // 보장됨), validated 경로는 외부 caller 용. 두 path 가 같은
+    // set_face_surface mutator 를 공유하지만 cache invalidation 은
+    // 양쪽 모두 자동.
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-062 Step 4 invariant — `previous_kind` 추적.
+    ///
+    /// Sequence:
+    ///   1. Polygon face (no surface) → attach Plane → previous_kind=None
+    ///   2. Plane attached → attach Cylinder (boundary fits) →
+    ///      previous_kind=Some("Plane")
+    ///   3. Cylinder attached → attach Cylinder (same kind) →
+    ///      previous_kind=Some("Cylinder") (re-attach OK)
+    ///
+    /// Also exercises Phase O 비-충돌: raw set_face_surface (used
+    /// internally by fillet_brep / push_pull) still works in parallel
+    /// with attach_surface_validated — both go through Face::set_surface
+    /// hook, so cache invalidation is consistent.
+    #[test]
+    fn attach_validated_replace_existing_records_previous_kind() {
+        // Build a flat 4-vert face on Z=0 plane.
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+
+        // Step A — polygon face (no surface) → attach Plane.
+        let plane = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-10.0, 10.0), v_range: (-10.0, 10.0),
+        };
+        let outcome_a = mesh.attach_surface_validated(
+            fid, plane, crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        match outcome_a {
+            SurfaceAttachOutcome::Attached { previous_kind: None } => {}
+            other => panic!("step A: expected Attached(None), got {:?}", other),
+        }
+        assert_eq!(mesh.faces[fid].surface().map(|s| s.kind_label()), Some("Plane"));
+
+        // Step B — Plane attached → attach Cylinder.
+        // Boundary verts are at z=0, all on the +X side of axis (axis +Z
+        // through origin). For cylinder radius 1.0, vertex at (1,0,0)
+        // and (1,1,0) sit exactly on cylinder surface (radial=1) but
+        // (0,0,0) and (0,1,0) sit on the axis itself (radial=0). Drift = 1.
+        // → BoundaryDriftExceedsTol (NOT Attached). Use a face fully on
+        // a known cylinder instead.
+        let mut mesh2 = Mesh::default();
+        let mat2 = MaterialId::new(0);
+        // 4 verts on cylinder of radius 5, axis +Z, between z=0..2.
+        let w0 = mesh2.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let w1 = mesh2.add_vertex(DVec3::new(0.0, 5.0, 0.0));
+        let w2 = mesh2.add_vertex(DVec3::new(0.0, 5.0, 2.0));
+        let w3 = mesh2.add_vertex(DVec3::new(5.0, 0.0, 2.0));
+        let fid2 = mesh2.add_face(&[w0, w1, w2, w3], mat2).unwrap();
+
+        // First attach via raw set_face_surface (Phase O internal pattern):
+        let plane_raw = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::new(2.5, 2.5, 1.0),
+            // Average plane through verts — for our ring of 4 cylinder verts
+            // a "best-fit Plane" wouldn't really fit, but we don't need fit
+            // here — raw set_face_surface skips validation by design.
+            normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-10.0, 10.0), v_range: (-10.0, 10.0),
+        };
+        // Phase O 비-충돌 — raw API still works without validation.
+        assert!(mesh2.set_face_surface(fid2, Some(plane_raw)));
+        assert_eq!(mesh2.faces[fid2].surface().map(|s| s.kind_label()), Some("Plane"));
+
+        // Now attach Cylinder via VALIDATED path — should record previous Plane.
+        let cyl = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z, radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 2.0),
+        };
+        let outcome_b = mesh2.attach_surface_validated(
+            fid2, cyl.clone(), crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        match outcome_b {
+            SurfaceAttachOutcome::Attached { previous_kind: Some("Plane") } => {}
+            other => panic!("step B: expected Attached(Some(\"Plane\")), got {:?}", other),
+        }
+        assert_eq!(mesh2.faces[fid2].surface().map(|s| s.kind_label()), Some("Cylinder"));
+
+        // Step C — re-attach same kind (Cylinder → Cylinder) → previous_kind="Cylinder".
+        let outcome_c = mesh2.attach_surface_validated(
+            fid2, cyl, crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        match outcome_c {
+            SurfaceAttachOutcome::Attached { previous_kind: Some("Cylinder") } => {}
+            other => panic!("step C: expected Attached(Some(\"Cylinder\")), got {:?}", other),
+        }
+    }
+
     /// ADR-061 §A + §B — `Mesh::move_vertex` bumps incident edges'
     /// curve_version AND incident faces' boundary_version. Caches on
     /// both are invalidated.
