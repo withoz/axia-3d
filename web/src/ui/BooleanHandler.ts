@@ -44,10 +44,13 @@ const OP_NAME_KO: Record<'union' | 'subtract' | 'intersect', string> = {
 
 /**
  * ADR-066 Y-4 — Handle the multi-face DCEL dispatch result.
+ * This is the canonical BooleanHandler entry — supersedes the
+ * legacy single-face DCEL fast-path (ADR-064 Step 6-γ) and the
+ * NURBS probe (ADR-027 Phase G3) per ADR-076 Step 1 cleanup.
  *
  * @returns `true` if the result was fully handled. `false` if the
- *   caller should fall through to legacy paths (null bridge /
- *   pathUsed='Mesh' Y-E ineligible).
+ *   caller should fall through to the Sheet / Mesh boolean path
+ *   (null bridge / pathUsed='Mesh' Y-E ineligible).
  */
 function handleMultiDcelResult(
   deps: BooleanHandlerDeps,
