@@ -121,4 +121,151 @@ describe('BooleanHandler', () => {
       expect(deps.bridge.booleanOp).toHaveBeenCalledWith([1, 2], [3], 'union');
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-064 Step 6-γ (Path Z) — DCEL Boolean dispatch UI integration
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-064 Step 6-γ DCEL fast-path', () => {
+    function setup2FaceSelection(): void {
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20]);
+    }
+
+    it('Nurbs path with new faces calls syncMesh and shows success toast', () => {
+      setup2FaceSelection();
+      (deps.bridge as any).booleanDispatchDcel = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        dcel: {
+          newFacesA: [100, 101],
+          newFacesB: [102],
+          removedFaces: [10, 20],
+          preservedFaces: [],
+          disjoint: false,
+          robustnessClean: true,
+        },
+        nurbsAttempted: true,
+        nurbsClean: true,
+        intersectionChainCount: 1,
+      });
+
+      startBooleanOp(deps, 'subtract');
+
+      expect((deps.bridge as any).booleanDispatchDcel)
+        .toHaveBeenCalledWith(10, 20, 'subtract');
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect(toastInfo).toHaveBeenCalled();
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('차집합');
+      expect(msg).toContain('새 면 3');
+      expect(msg).toContain('제거 면 2');
+      // Legacy mesh path must NOT be invoked (DCEL handled it).
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('Nurbs path with disjoint shows disjoint toast and skips syncMesh', () => {
+      setup2FaceSelection();
+      (deps.bridge as any).booleanDispatchDcel = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        dcel: {
+          newFacesA: [], newFacesB: [],
+          removedFaces: [], preservedFaces: [10, 20],
+          disjoint: true, robustnessClean: true,
+        },
+        nurbsAttempted: true, nurbsClean: true,
+        intersectionChainCount: 0,
+      });
+
+      startBooleanOp(deps, 'union');
+
+      expect(toastInfo).toHaveBeenCalled();
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('교차하지 않습니다');
+      expect(msg).toContain('합집합');
+      // Disjoint = no mesh change → no syncMesh, no legacy fallback.
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('Nurbs path with no closed loops shows D-H safe-only warning toast', () => {
+      setup2FaceSelection();
+      (deps.bridge as any).booleanDispatchDcel = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        dcel: {
+          newFacesA: [], newFacesB: [],
+          removedFaces: [], preservedFaces: [10, 20],
+          disjoint: false,  // SSI ran but produced no closed loops
+          robustnessClean: true,
+        },
+        nurbsAttempted: true, nurbsClean: true,
+        intersectionChainCount: 1,
+      });
+
+      startBooleanOp(deps, 'intersect');
+
+      expect(toastWarn).toHaveBeenCalled();
+      const msg = toastWarn.mock.calls[0][0] as string;
+      expect(msg).toContain('교차선만 검출');
+      expect(msg).toContain('면 분할 미생성');
+      // No syncMesh (no new faces), no legacy fallback (handled).
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('Mesh path (ineligible) falls through to legacy mesh boolean', () => {
+      setup2FaceSelection();
+      (deps.bridge as any).booleanDispatchDcel = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Mesh',
+        fallbackReason: { kind: 'SurfaceMissing', label: 'surface_missing' },
+        dcel: null,
+        nurbsAttempted: false, nurbsClean: false,
+        intersectionChainCount: 0,
+      });
+
+      startBooleanOp(deps, 'union');
+
+      // DCEL was called but declined; legacy mesh boolean must run.
+      expect((deps.bridge as any).booleanDispatchDcel).toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).toHaveBeenCalled();
+      // Legacy success → syncMesh + info toast (from existing path).
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+    });
+
+    it('null bridge.booleanDispatchDcel falls through to legacy logic (graceful)', () => {
+      setup2FaceSelection();
+      // booleanDispatchDcel undefined → handler must fall through.
+      expect((deps.bridge as any).booleanDispatchDcel).toBeUndefined();
+
+      startBooleanOp(deps, 'subtract');
+
+      // No DCEL toast / call. Legacy path executed.
+      expect(deps.bridge.booleanOp).toHaveBeenCalled();
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+    });
+
+    it('engine error envelope shows error toast and stops (no fallback)', () => {
+      setup2FaceSelection();
+      (deps.bridge as any).booleanDispatchDcel = vi.fn().mockReturnValue({
+        kind: 'error',
+        reason: 'engineErr',
+        detail: 'face_a 999 not found',
+      });
+
+      startBooleanOp(deps, 'subtract');
+
+      expect(toastError).toHaveBeenCalled();
+      const msg = toastError.mock.calls[0][0] as string;
+      expect(msg).toContain('engineErr');
+      expect(msg).toContain('not found');
+      // Error case → no syncMesh, no legacy fallback (explicit failure).
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+  });
 });
