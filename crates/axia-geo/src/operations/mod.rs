@@ -7,6 +7,7 @@ pub mod orient;
 pub mod push_pull;
 pub mod boolean_geo;
 pub mod boolean;
+pub mod boolean_dispatch;
 pub mod transform;
 pub mod offset;
 pub mod primitives;
