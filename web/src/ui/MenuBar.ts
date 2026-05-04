@@ -117,6 +117,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       'view-history': isPanelOpen('__axia_historyPanel'),
       'view-capability-explorer': isPanelOpen('__axia_capabilityExplorer'),
       'view-invariant-verifier': isPanelOpen('__axia_invariantVerifier'),
+      'view-audit-log': isPanelOpen('__axia_auditLogViewer'),
     };
     for (const [action, on] of Object.entries(state)) {
       const el = menubar.querySelector(`.menu-action[data-action="${action}"]`);
@@ -461,6 +462,14 @@ export function initMenuBar(deps: MenuBarDeps): void {
         const ivp = (window as unknown as { __axia_invariantVerifier?: { toggle(): void } }).__axia_invariantVerifier;
         if (ivp?.toggle) ivp.toggle();
         else Toast.warning('Invariant Verifier 를 사용할 수 없습니다.');
+        break;
+      }
+      case 'view-audit-log': {
+        // ADR-069 Phase 1 Path Y A sub-feature — Audit Log Viewer
+        // (web-side action audit, P26.7 subset).
+        const alp = (window as unknown as { __axia_auditLogViewer?: { toggle(): void } }).__axia_auditLogViewer;
+        if (alp?.toggle) alp.toggle();
+        else Toast.warning('Audit Log Viewer 를 사용할 수 없습니다.');
         break;
       }
       case 'view-scenes': {

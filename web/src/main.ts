@@ -18,6 +18,8 @@ import { ConstraintPanel } from './ui/ConstraintPanel';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { CapabilityExplorerPanel } from './ui/CapabilityExplorerPanel';
 import { InvariantVerifierPanel } from './ui/InvariantVerifierPanel';
+import { AuditLogViewerPanel } from './ui/AuditLogViewerPanel';
+import { getAuditLog } from './core/AuditLog';
 import { SunPanel } from './ui/SunPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
@@ -599,6 +601,11 @@ async function main() {
       // Tier 0 read 는 직접 WASM 호출, Tier 1/2 launcher 는 ToolManager
       // executeAction 경유. 알 수 없는 액션은 명시 거부.
       onActionInvoke: async (actionId, args) => {
+        // ADR-069 Step 2 — audit capture wrap. Tier 정보 catalog 에서 조회.
+        const allActions = CapabilityExplorerPanel.getAllActions();
+        const def = allActions.find((a) => a.id === actionId);
+        const tier = (def?.tier ?? 0) as 0 | 1 | 2 | 3;
+        const audit = getAuditLog();
         try {
           // 1. Tier 0 read + Phase O Step 6 / P-narrow / Path Z direct dispatch.
           const eng = bridge.engine as unknown as Record<string, (...a: unknown[]) => unknown> | null;
@@ -622,6 +629,7 @@ async function main() {
             if (direct) {
               const result = direct();
               const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              audit.record({ actionId, tier, result: 'ok', args });
               return { ok: true, result: text ?? '(empty)' };
             }
           }
@@ -629,9 +637,12 @@ async function main() {
           // executeAction is void — best-effort delegation. Unknown actions
           // surface via Toast (ToolManager internal warning).
           toolManager.executeAction(actionId);
+          audit.record({ actionId, tier, result: 'ok', args });
           return { ok: true, result: 'Launched (existing tool dispatch).' };
         } catch (e) {
-          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          const errMsg = e instanceof Error ? e.message : String(e);
+          audit.record({ actionId, tier, result: 'error', error: errMsg, args });
+          return { ok: false, error: errMsg };
         }
       },
     });
@@ -655,6 +666,15 @@ async function main() {
     });
     (window as unknown as { __axia_invariantVerifier?: InvariantVerifierPanel })
       .__axia_invariantVerifier = invariantVerifierPanel;
+  }
+
+  // ═══ 15d. Audit Log Viewer Panel (ADR-069 Phase 1 Path Y A pilot) ═══
+  // §D #1 lock-in: web-side audit (localStorage 'axia.auditLog').
+  // §D #2 lock-in: P26.7 capture policy (Tier 0/1 success skip).
+  {
+    const auditLogViewerPanel = new AuditLogViewerPanel(viewportEl);
+    (window as unknown as { __axia_auditLogViewer?: AuditLogViewerPanel })
+      .__axia_auditLogViewer = auditLogViewerPanel;
   }
 
   // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══
