@@ -127,3 +127,77 @@ export async function invokeBooleanDispatchDcel(
     return bridge.booleanDispatchDcel(faceA, faceB, op, tolGeometric ?? 1e-3);
   }, args);
 }
+
+/**
+ * ADR-075 E4-3 — N parallel plane faces at evenly-spaced z heights.
+ *
+ * Each face is a 10×10 mm horizontal rect centered at origin (in x/y).
+ * z[i] = i * zStep (default 5.0 mm) — guarantees pairwise disjoint
+ * (no intersection) for any cartesian product (a, b) where a ≠ b.
+ *
+ * Returns the resolved FaceIds (XIA→FaceId conversion already applied).
+ */
+export interface NPlaneFaces {
+  faces: number[];
+}
+
+export async function setupNPlaneFaces(
+  page: Page,
+  opts: { count: number; withSurfaces: boolean; zStep?: number },
+): Promise<NPlaneFaces> {
+  const count = opts.count;
+  const withSurfaces = opts.withSurfaces;
+  const zStep = opts.zStep ?? 5.0;
+  return await page.evaluate(
+    ({ count, withSurfaces, zStep }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const bridge = w.__axia.get('bridge');
+      const faces: number[] = [];
+      for (let i = 0; i < count; i++) {
+        const z = i * zStep;
+        const xia = bridge.drawRect(0, 0, z, 0, 0, 1, 1, 0, 0, 10, 10);
+        const ids = bridge.getXiaFaceIds(xia);
+        if (ids.length === 0) {
+          throw new Error(`drawRect XIA ${xia} produced no faces (i=${i})`);
+        }
+        const faceId = ids[0];
+        if (withSurfaces) {
+          bridge.engine.setFaceSurfacePlane(
+            faceId,
+            0, 0, z,        // origin
+            0, 0, 1,        // normal +Z
+            1, 0, 0,        // basis_u +X
+            -5, 5,          // u_range
+            -5, 5,          // v_range
+          );
+        }
+        faces.push(faceId);
+      }
+      return { faces };
+    },
+    { count, withSurfaces, zStep },
+  );
+}
+
+/**
+ * Invoke `bridge.booleanDispatchDcelMulti(facesA, facesB, op)` in
+ * browser context and return the parsed BooleanDispatchDcelMultiResult.
+ */
+export async function invokeBooleanDispatchDcelMulti(
+  page: Page,
+  args: {
+    facesA: number[];
+    facesB: number[];
+    op: 'union' | 'subtract' | 'intersect';
+    tolGeometric?: number;
+  },
+): Promise<unknown> {
+  return await page.evaluate(({ facesA, facesB, op, tolGeometric }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bridge = (window as any).__axia.get('bridge');
+    return bridge.booleanDispatchDcelMulti(
+      facesA, facesB, op, tolGeometric ?? 1e-3,
+    );
+  }, args);
+}
