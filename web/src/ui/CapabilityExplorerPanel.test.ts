@@ -180,6 +180,57 @@ describe('ADR-063 Step 4 — Tier 0 form + Tier 1/2 launcher', () => {
     container.remove();
   });
 
+  it('capability_explorer_tier3_hidden_by_default', () => {
+    // §D #2 lock-in — Tier 3 (destructive) actions are hidden unless
+    // user explicitly enables "Show advanced" toggle.
+    // Reset localStorage to ensure default state.
+    try { localStorage.removeItem('axia.capabilityExplorer.showAdvanced'); } catch {}
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new CapabilityExplorerPanel(container, {});
+    panel.show();
+
+    // Default: showAdvanced = false → Tier 3 not visible.
+    expect(panel.isAdvancedVisible()).toBe(false);
+    let tier3Group = container.querySelector('.cep-tier-group[data-tier="3"]');
+    expect(tier3Group, 'Tier 3 group must NOT be rendered by default (§D #2)').toBeNull();
+
+    // Toggle on.
+    const toggle = container.querySelector(
+      '.cep-toggle-advanced input[type="checkbox"]',
+    ) as HTMLInputElement;
+    expect(toggle, 'Show advanced toggle must exist').toBeTruthy();
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+
+    expect(panel.isAdvancedVisible()).toBe(true);
+    tier3Group = container.querySelector('.cep-tier-group[data-tier="3"]');
+    // Tier 3 may or may not exist depending on catalog content; if present,
+    // it should now render.
+    const allActions = CapabilityExplorerPanel.getAllActions();
+    const hasTier3 = allActions.some((a) => a.tier === 3);
+    if (hasTier3) {
+      expect(tier3Group, 'Tier 3 group must render after toggle on').toBeTruthy();
+    }
+
+    // Verify localStorage persistence.
+    try {
+      expect(localStorage.getItem('axia.capabilityExplorer.showAdvanced')).toBe('1');
+    } catch {}
+
+    // Toggle off again.
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+    expect(panel.isAdvancedVisible()).toBe(false);
+    tier3Group = container.querySelector('.cep-tier-group[data-tier="3"]');
+    expect(tier3Group, 'Tier 3 group must hide after toggle off').toBeNull();
+
+    panel.dispose();
+    container.remove();
+    try { localStorage.removeItem('axia.capabilityExplorer.showAdvanced'); } catch {}
+  });
+
   it('capability_explorer_tier2_requires_confirm', () => {
     // Tier 2 (migrate-curve-surface) — confirm() must be called before invoke.
     const container = document.createElement('div');

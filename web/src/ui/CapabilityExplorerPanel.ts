@@ -92,10 +92,27 @@ export class CapabilityExplorerPanel {
   private query = '';
   /** ID of the currently expanded action (for inline details). */
   private expandedId: string | null = null;
+  /** ADR-063 §D #2 lock-in — Tier 3 hidden by default. Toggle persisted
+   *  in localStorage. */
+  private showAdvanced = false;
+
+  /** localStorage key for the Tier 3 (advanced) visibility toggle.
+   *  Persisted across sessions per §D #2. */
+  private static readonly LS_KEY_SHOW_ADVANCED = 'axia.capabilityExplorer.showAdvanced';
 
   constructor(container: HTMLElement, callbacks: CapabilityExplorerPanelCallbacks = {}) {
     this.container = container;
     this.callbacks = callbacks;
+
+    // ADR-063 §D #2 — Read persisted "Show advanced" state.
+    try {
+      this.showAdvanced = localStorage.getItem(
+        CapabilityExplorerPanel.LS_KEY_SHOW_ADVANCED,
+      ) === '1';
+    } catch {
+      // localStorage 접근 실패 (private mode 등) — default false.
+      this.showAdvanced = false;
+    }
 
     this.panelEl = document.createElement('div');
     this.panelEl.id = 'capability-explorer';
@@ -108,6 +125,12 @@ export class CapabilityExplorerPanel {
       <div class="cep-search">
         <input class="cep-search-input" type="text" placeholder="검색 (id / label / description)" data-role="search" />
       </div>
+      <div class="cep-toolbar">
+        <label class="cep-toggle-advanced">
+          <input type="checkbox" data-role="toggle-advanced" ${this.showAdvanced ? 'checked' : ''} />
+          <span>Show advanced (Tier 3 destructive)</span>
+        </label>
+      </div>
       <div class="cep-body" data-role="body"></div>
     `;
     this.panelEl.style.display = 'none';
@@ -118,6 +141,20 @@ export class CapabilityExplorerPanel {
 
     this.searchEl.addEventListener('input', () => {
       this.query = this.searchEl.value.trim().toLowerCase();
+      this.renderTree();
+    });
+
+    const toggleEl = this.panelEl.querySelector('[data-role="toggle-advanced"]') as HTMLInputElement;
+    toggleEl.addEventListener('change', () => {
+      this.showAdvanced = toggleEl.checked;
+      try {
+        localStorage.setItem(
+          CapabilityExplorerPanel.LS_KEY_SHOW_ADVANCED,
+          this.showAdvanced ? '1' : '0',
+        );
+      } catch {
+        // localStorage write 실패 — silent.
+      }
       this.renderTree();
     });
 
@@ -197,11 +234,19 @@ export class CapabilityExplorerPanel {
     }
 
     // Render tiers in order 0 → 3.
+    // ADR-063 §D #2 lock-in — Tier 3 (destructive) hidden unless
+    // `showAdvanced` toggle is on.
     for (const tier of [0, 1, 2, 3] as Tier[]) {
+      if (tier === 3 && !this.showAdvanced) continue;
       const acts = byTier.get(tier);
       if (!acts || acts.length === 0) continue;
       this.bodyEl.appendChild(this.buildTierGroup(tier, acts));
     }
+  }
+
+  /** ADR-063 §D #2 — Test/telemetry accessor for Tier 3 visibility state. */
+  isAdvancedVisible(): boolean {
+    return this.showAdvanced;
   }
 
   private buildTierGroup(tier: Tier, actions: ActionDef[]): HTMLElement {
@@ -493,6 +538,24 @@ export class CapabilityExplorerPanel {
       .capability-explorer .cep-search-input:focus {
         border-color: #7ec8e3;
       }
+      .capability-explorer .cep-toolbar {
+        padding: 4px 12px;
+        border-bottom: 1px solid #333;
+      }
+      .capability-explorer .cep-toggle-advanced {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: #aaa;
+        cursor: pointer;
+        user-select: none;
+      }
+      .capability-explorer .cep-toggle-advanced input[type="checkbox"] {
+        accent-color: #e07878;
+        cursor: pointer;
+      }
+      .capability-explorer .cep-toggle-advanced:hover { color: #ccc; }
       .capability-explorer .cep-body {
         flex: 1;
         overflow-y: auto;
