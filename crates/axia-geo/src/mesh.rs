@@ -2443,6 +2443,53 @@ impl Mesh {
             }
         }
 
+        // ─── 6.5 ADR-059 Phase N Step 2 — Curve inheritance ────────
+        //
+        // If the parent edge has an attached AnalyticCurve, attempt to
+        // split it at parameter `t = parent.parameter_at_3d_point(pos)`
+        // and assign the resulting two curves to the new child edges.
+        //
+        // Per ADR-059 §A1.3 lock-in:
+        //   Line / Arc / Circle: closed-form parameter inversion (always succeeds
+        //                        when point is on curve within LOCKED #5 tol).
+        //   Bezier / BSpline / NURBS: parameter_at_3d_point returns
+        //                             SplitParameterError::DeferredToPhaseI.
+        //                             We silently fall back to "no curve on
+        //                             children" (synthesize_line_curve takes
+        //                             over per Phase N Step 4 migration).
+        //
+        // **silent wrong-result 차단**: If parameter inversion succeeds but
+        // split_at fails (drift detected after split), curves are NOT assigned
+        // and a debug-only diagnostic is emitted. Production code path
+        // continues unchanged — children just lack curves.
+        if let Some(parent_curve) = self.edges[edge_id].curve().cloned() {
+            // Attempt parameter inversion (immutable borrow ok — pos was passed in)
+            match parent_curve.parameter_at_3d_point(pos, self) {
+                Ok(t) => {
+                    // Try split_at with the new midpoint vertex
+                    if let Ok((left_curve, right_curve)) = parent_curve.split_at(t, vp) {
+                        // Assign matching child edge per direction.
+                        // e1 covers (va, vp) — should get left_curve.
+                        // e2 covers (vp, vb) — should get right_curve.
+                        self.edges[e1].set_curve(Some(left_curve));
+                        self.edges[e2].set_curve(Some(right_curve));
+                    }
+                    // split_at failure (e.g., Bezier deferred): skip — children
+                    // remain curveless (Phase N migration synthesizes Line later).
+                }
+                Err(_) => {
+                    // Parameter inversion failed (deferred / drift / off-curve).
+                    // Children remain curveless — production behavior unchanged.
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[ADR-059 Phase N] split_edge: parameter inversion deferred for \
+                         curve variant — child edges left without curve. {:?} → e1, e2",
+                        std::mem::discriminant(&parent_curve),
+                    );
+                }
+            }
+        }
+
         // ─── 7. Deactivate old edge ────────────────────────────────
         self.edges[edge_id].set_active(false);
         self.vert_to_edge.remove(&VertPairKey::new(va, vb));

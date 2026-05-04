@@ -2045,6 +2045,89 @@ mod tests {
         // (they were quads with 4 verts, now pentagons with 5)
     }
 
+    // ── ADR-059 Phase N Step 2 — split_edge curve inheritance ───────────
+
+    /// ADR-059 Phase N Step 2 follow-up — split_edge inherits Line curve
+    /// (Line is mesh-relative; child edges should both have Line curves
+    /// referencing the new midpoint vertex).
+    #[test]
+    fn adr_059_split_edge_inherits_line_curve() {
+        use crate::curves::{AnalyticCurve, synthesize::synthesize_line_curve};
+        let mut m = Mesh::new();
+        let (_fid, [v0, v1, _v2, _v3]) = make_square(&mut m);
+
+        // Attach a Line curve to v0–v1 edge
+        let eid = m.find_edge(v0, v1).expect("edge should exist");
+        m.edges[eid].set_curve(Some(synthesize_line_curve(v0, v1)));
+
+        // Split the edge at midpoint
+        let (vp, e1, e2) = m.split_edge(eid, DVec3::new(2.0, 0.0, 0.0)).unwrap();
+
+        // Both new edges should have Line curves referencing the new vertex
+        match m.edges[e1].curve() {
+            Some(AnalyticCurve::Line { start, end }) => {
+                assert!(*start == v0 || *end == v0, "e1 line should reference v0");
+                assert!(*start == vp || *end == vp, "e1 line should reference midpoint");
+            }
+            other => panic!("e1 should inherit Line curve, got {:?}", other),
+        }
+        match m.edges[e2].curve() {
+            Some(AnalyticCurve::Line { start, end }) => {
+                assert!(*start == vp || *end == vp, "e2 line should reference midpoint");
+                assert!(*start == v1 || *end == v1, "e2 line should reference v1");
+            }
+            other => panic!("e2 should inherit Line curve, got {:?}", other),
+        }
+    }
+
+    /// ADR-059 Phase N Step 2 follow-up — Bezier parent leaves children
+    /// curveless (DeferredToPhaseI per §A1.3 lock-in — silent fallback,
+    /// children keep curve = None).
+    #[test]
+    fn adr_059_split_edge_bezier_defers_silently() {
+        use crate::curves::AnalyticCurve;
+        let mut m = Mesh::new();
+        let (_fid, [v0, v1, _v2, _v3]) = make_square(&mut m);
+
+        // Attach a Bezier curve (DeferredToPhaseI in current MVP)
+        let eid = m.find_edge(v0, v1).expect("edge should exist");
+        m.edges[eid].set_curve(Some(AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(2.0, 1.0, 0.0),
+                DVec3::new(4.0, 0.0, 0.0),
+            ],
+        }));
+
+        // Split should still succeed (topology unchanged)
+        let (_vp, e1, e2) = m.split_edge(eid, DVec3::new(2.0, 0.0, 0.0)).unwrap();
+
+        // Children should have NO curve (DeferredToPhaseI fallback per §A1.3)
+        assert!(m.edges[e1].curve().is_none(),
+            "Bezier defer should leave e1 curveless");
+        assert!(m.edges[e2].curve().is_none(),
+            "Bezier defer should leave e2 curveless");
+    }
+
+    /// ADR-059 Phase N Step 2 follow-up — Edge without parent curve
+    /// produces children without curves (no spurious synthesis).
+    #[test]
+    fn adr_059_split_edge_no_curve_stays_no_curve() {
+        let mut m = Mesh::new();
+        let (_fid, [v0, v1, _v2, _v3]) = make_square(&mut m);
+
+        // Edge has no curve attached
+        let eid = m.find_edge(v0, v1).expect("edge should exist");
+        assert!(m.edges[eid].curve().is_none(), "parent should be curveless");
+
+        let (_vp, e1, e2) = m.split_edge(eid, DVec3::new(2.0, 0.0, 0.0)).unwrap();
+
+        // Children should also be curveless (Phase N doesn't auto-synthesize
+        // here — that's Step 4's migration job).
+        assert!(m.edges[e1].curve().is_none());
+        assert!(m.edges[e2].curve().is_none());
+    }
+
     // ── split_face tests ─────────────────────────────────────────────
 
     #[test]
