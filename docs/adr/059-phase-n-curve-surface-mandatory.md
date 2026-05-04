@@ -251,3 +251,123 @@ impl Mesh {
 
 *Author*: AXiA team (사용자 review 2026-05-04 + Claude spec)
 *Status*: Phase N spec accepted — Step 1 부터 incremental 구현
+
+---
+
+## Amendment 1 — Step 1.5 / Step 2 진입 lock-in (2026-05-04)
+
+**컨텍스트**: Step 1 완료 (commits ca069ac, f2ffc28) 후 사용자 사전 검토 결과,
+§C target (100/96 bytes) 가 비현실적임이 측정으로 확인됨. 다음 5개 추가
+lock-in 적용.
+
+### A1.1 §C 수정 — Size budget 현실화
+
+**원본 §C**:
+- AnalyticSurface ≤ 100 bytes
+- AnalyticCurve ≤ 96 bytes
+
+**수정 §C**:
+- AnalyticSurface ≤ **132 bytes** (Plane variant 자연 한계: 3 DVec3 + 2 (f64,f64) + tag + padding)
+- AnalyticCurve ≤ **112 bytes**
+
+**근거**: Plane primitive 단독으로 104 bytes (104 bytes data + 16 alignment padding + 8 tag). Plane 을 box 하면 hot path heap deref → 성능 저하. 자연 한계 수용.
+
+### A1.2 Box 대상 명시 (사용자 review §1)
+
+```
+✅ Box 대상 (rare access, large data):
+   AnalyticSurface::BezierPatch(Box<BezierPatchData>)
+   AnalyticSurface::BSplineSurface(Box<BSplineSurfaceData>)
+   AnalyticSurface::NURBSSurface(Box<NURBSSurfaceData>)
+   AnalyticCurve::Bezier (변경 없음 — 이미 작음)
+   AnalyticCurve::BSpline (변경 없음)
+   AnalyticCurve::NURBS (변경 없음 — Vec 들이 이미 indirect)
+
+❌ Inline 유지 (frequent access):
+   Plane / Cylinder / Sphere / Cone / Torus / Line / Circle / Arc
+```
+
+기대 효과:
+- 10K faces × 128 bytes (현재) = 1.28 MB
+- 10K faces × 132 bytes (post-boxing) = 1.32 MB
+- 메모리 변화 ~0% (실제 NURBS 사용 시에만 heap allocation)
+
+### A1.3 split_edge parameter inversion 정책 (사용자 review §3)
+
+```rust
+pub enum SplitParameterError {
+    NewtonDiverged { iterations: usize },
+    MultipleRoots { count: usize },
+    PointOffCurve { distance: f64 },
+}
+
+impl AnalyticCurve {
+    pub fn parameter_at_3d_point(&self, p: DVec3, mesh: &Mesh)
+        -> Result<f64, SplitParameterError>;
+}
+```
+
+Step 2 MVP scope:
+- Line / Arc → closed-form (정확)
+- Bezier / BSpline / NURBS → 명시적 Err (Step 2 follow-up)
+
+### A1.4 Surface merge silent reject 금지 (사용자 review §6)
+
+```rust
+pub enum SurfaceMergeOutcome {
+    Merged(AnalyticSurface),
+    Rejected(SurfaceMergeRejection),
+}
+
+pub enum SurfaceMergeRejection {
+    KindMismatch { left: &'static str, right: &'static str },
+    OriginDriftExceedsTol { drift: f64, tol: f64 },
+    NormalAngleExceedsTol { angle_deg: f64, tol_deg: f64 },
+    BSplineKnotsIncompatible,
+}
+```
+
+Phase J §7.5 패턴 — silent merge 절대 금지.
+
+### A1.5 Migration = post-deserialize pass (옵션 A, 사용자 review §7)
+
+```rust
+impl Mesh {
+    pub fn migrate_v3_to_v4_with_sanity(&mut self) -> MigrationReport {
+        // Post-deserialize pass:
+        //   1. Optional curve = None → synthesize Line
+        //   2. Optional curve = Some → drift sanity check
+        //   3. Drift > LOCKED #5 → 강등 to Line + report
+    }
+}
+```
+
+Serde from/into wrapper 옵션 B / custom Deserialize 옵션 C 거부 (복잡도 ↑).
+
+### A1.6 Phase L hotspot 통합 = drop-in alongside
+
+Phase M 의 검증된 패턴 그대로:
+- production code path UNCHANGED
+- `debug_assert!` 또는 별도 통합 test 만 추가
+- Phase O 진입 시 production path 변경
+
+→ 기존 회귀 0건 보호.
+
+### A1.7 영구 lock-in 5개 추가 (§X.5)
+
+```
+6. Box 대상 = NURBS/BSpline/Bezier patches only (Plane primitives inline)
+7. split_edge parameter inversion = Line/Arc closed-form, others Err
+8. Surface merge silent reject 금지 (4 reason enum)
+9. Migration = post-deserialize pass (옵션 A)
+10. Phase L hotspot 통합 = drop-in alongside (Phase M 패턴)
+```
+
+각 항목 변경 시 새 amendment + 사용자 동의 + 회귀 검증.
+
+### A1.8 변경 이력
+
+- **2026-05-04 (본 amendment)**: Step 1+2prep 완료 후 사용자 사전 검토 반영.
+  Size budget 현실화 (100→132) + 5 추가 lock-in.
+
+*Amendment Author*: AXiA team (사용자 review 2026-05-04 + Claude lock-in)
