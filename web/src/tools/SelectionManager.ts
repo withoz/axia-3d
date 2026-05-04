@@ -574,12 +574,23 @@ export class SelectionManager {
     this.notifyChange();
   }
 
-  /** 선택 전체 해제 */
+  /**
+   * 선택 전체 해제.
+   *
+   * ADR-074 U-E — group tags 도 함께 clear (consistency: group tags ⊆
+   * selected). 사용자가 selection 을 비우면 의도된 grouping 도 비워짐.
+   */
   clearSelection() {
     this.clearXiaDots(); // XIA 도트 모드 해제
-    if (this.selected.size === 0 && this.selectedEdges.size === 0) return;
+    const hadGroupTags = this.groupTags.size > 0;
+    if (
+      this.selected.size === 0 &&
+      this.selectedEdges.size === 0 &&
+      !hadGroupTags
+    ) return;
     this.selected.clear();
     this.selectedEdges.clear();
+    this.groupTags.clear();
     this.rebuildSelectionMesh();
     this.rebuildEdgeSelectionLine();
     this.notifyChange();
@@ -610,6 +621,118 @@ export class SelectionManager {
   /** 선택된 face 수 */
   get selectionCount(): number {
     return this.selected.size;
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-074 U-1 — Boolean Group Selection (A / B) model layer.
+  //
+  // Per ADR-074 §C lock-ins:
+  // - Drop-in alongside (UNCHANGED `selected` / `getSelectedFaces` /
+  //   all existing API). groupTags is additive storage.
+  // - Group tags ⊆ selected (constraint). setGroupTag silently skips
+  //   faces not in the active selection — the caller invariant is
+  //   "tag visible faces only".
+  // - One face = one group (Map<faceId, 'A'|'B'> ensures via
+  //   key uniqueness — assigning B over A simply overwrites).
+  // - clearSelection() also clears groupTags (see overridden method
+  //   above) for consistency.
+  //
+  // Consumer (U-3 future): BooleanHandler.startBooleanOp checks
+  // hasGroupSelection() and uses getGroupA/B if true; otherwise
+  // falls back to the existing 반/반 split (Y-4-b=(a)) preserved.
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * face → 'A' | 'B' tag map. Backing storage for Boolean group
+   * selection (ADR-074 §B U-C=(b)).
+   */
+  private groupTags = new Map<number, 'A' | 'B'>();
+
+  /**
+   * Tag a list of face IDs as Boolean Group A or Group B.
+   *
+   * Constraint: only faces currently in the active selection may be
+   * tagged. Faces not in `selected` are silently skipped (with a
+   * debug log) — the caller invariant is "tag visible selection only".
+   * If a face is already tagged with the OTHER group, the new tag
+   * overwrites (Map key uniqueness).
+   *
+   * Emits `notifyChange` if any tag was applied.
+   */
+  setGroupTag(faceIds: number[], group: 'A' | 'B'): void {
+    let mutated = false;
+    let skipped = 0;
+    for (const fid of faceIds) {
+      if (!this.selected.has(fid)) {
+        skipped++;
+        continue;
+      }
+      const prev = this.groupTags.get(fid);
+      if (prev !== group) {
+        this.groupTags.set(fid, group);
+        mutated = true;
+      }
+    }
+    if (skipped > 0) {
+      debugLog(
+        `[SelectionManager] setGroupTag: ${skipped} face(s) skipped — ` +
+          `not in active selection (group=${group})`,
+      );
+    }
+    if (mutated) this.notifyChange();
+  }
+
+  /**
+   * Returns the face IDs tagged as Group A (sorted ascending).
+   * Empty if no faces tagged A.
+   */
+  getGroupA(): number[] {
+    const out: number[] = [];
+    for (const [fid, g] of this.groupTags) {
+      if (g === 'A') out.push(fid);
+    }
+    out.sort((a, b) => a - b);
+    return out;
+  }
+
+  /**
+   * Returns the face IDs tagged as Group B (sorted ascending).
+   * Empty if no faces tagged B.
+   */
+  getGroupB(): number[] {
+    const out: number[] = [];
+    for (const [fid, g] of this.groupTags) {
+      if (g === 'B') out.push(fid);
+    }
+    out.sort((a, b) => a - b);
+    return out;
+  }
+
+  /**
+   * Clear all Boolean group tags. Selection itself is preserved.
+   * Useful when the user wants to reset grouping and re-tag.
+   * Emits `notifyChange` if any tag was cleared.
+   */
+  clearGroupTags(): void {
+    if (this.groupTags.size === 0) return;
+    this.groupTags.clear();
+    this.notifyChange();
+  }
+
+  /**
+   * True iff BOTH Group A and Group B have at least one tagged face.
+   * Used by U-3 BooleanHandler routing — if false, falls back to the
+   * existing 반/반 split (Y-4-b=(a) preserved).
+   */
+  hasGroupSelection(): boolean {
+    let hasA = false;
+    let hasB = false;
+    for (const g of this.groupTags.values()) {
+      if (g === 'A') hasA = true;
+      else if (g === 'B') hasB = true;
+      if (hasA && hasB) return true;
+    }
+    return false;
   }
 
   /** 특정 face가 선택되었는지 */

@@ -464,4 +464,123 @@ describe('SelectionManager', () => {
     sm.handleClick(7, false, false);
     expect(sm.getSelectedFaces()).toContain(7);
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-074 U-1 — Boolean Group Selection (A / B) model layer.
+  // Per ADR-074 §C lock-ins:
+  // - Drop-in alongside (`selected` / `getSelectedFaces` UNCHANGED)
+  // - Group tags ⊆ selected (constraint: setGroupTag skips faces not selected)
+  // - One face = one group (Map invariant; B overwrites A on same key)
+  // - clearSelection() also clears groupTags (consistency)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-074 U-1 Boolean Group Selection', () => {
+    /**
+     * Helper — populate `selected` with arbitrary face IDs without
+     * going through the full Three.js click pipeline. Uses the
+     * existing programmatic `selectFaces` API.
+     */
+    function selectFaces(faceIds: number[]): void {
+      sm.selectFaces(faceIds);
+    }
+
+    it('setGroupTag tags faces in Group A correctly', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20], 'A');
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([]);
+    });
+
+    it('setGroupTag tags faces in Group B correctly', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([20, 30], 'B');
+      expect(sm.getGroupB()).toEqual([20, 30]);
+      expect(sm.getGroupA()).toEqual([]);
+    });
+
+    it('face cannot be in both A and B simultaneously (B overwrites A)', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20, 30], 'A');
+      expect(sm.getGroupA()).toEqual([10, 20, 30]);
+
+      // Re-tag face 20 as B — must move from A to B exclusively.
+      sm.setGroupTag([20], 'B');
+      expect(sm.getGroupA()).toEqual([10, 30]);
+      expect(sm.getGroupB()).toEqual([20]);
+      // Invariant: A ∩ B = ∅
+      const a = new Set(sm.getGroupA());
+      for (const fid of sm.getGroupB()) {
+        expect(a.has(fid)).toBe(false);
+      }
+    });
+
+    it('getGroupA / getGroupB return sorted-unique subsets', () => {
+      selectFaces([5, 1, 9, 3, 7]);
+      // Tag in arbitrary order.
+      sm.setGroupTag([9, 1, 5], 'A');
+      sm.setGroupTag([7, 3], 'B');
+      // Sorted ascending output.
+      expect(sm.getGroupA()).toEqual([1, 5, 9]);
+      expect(sm.getGroupB()).toEqual([3, 7]);
+    });
+
+    it('clearGroupTags removes all tags but keeps selected', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20], 'A');
+      sm.setGroupTag([30], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      sm.clearGroupTags();
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+      expect(sm.hasGroupSelection()).toBe(false);
+      // Selection itself preserved.
+      expect(sm.getSelectedFaces().sort((a, b) => a - b)).toEqual([10, 20, 30]);
+    });
+
+    it('clearSelection removes both selected and group tags (U-E consistency)', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10], 'A');
+      sm.setGroupTag([20, 30], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+      expect(sm.getSelectedFaces().length).toBe(3);
+
+      sm.clearSelection();
+
+      // Both gone.
+      expect(sm.getSelectedFaces()).toEqual([]);
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+      expect(sm.hasGroupSelection()).toBe(false);
+    });
+
+    it('hasGroupSelection returns true iff both groups non-empty', () => {
+      selectFaces([10, 20, 30]);
+
+      // Empty initially.
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Only A → false.
+      sm.setGroupTag([10], 'A');
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // A + B → true.
+      sm.setGroupTag([20], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      // Move face 10 from A to B → only B → false.
+      sm.setGroupTag([10], 'B');
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB().sort((a, b) => a - b)).toEqual([10, 20]);
+      expect(sm.hasGroupSelection()).toBe(false);
+    });
+
+    it('setGroupTag rejects faces not in selected (constraint enforcement)', () => {
+      selectFaces([10, 20]);  // 30 is NOT selected
+      sm.setGroupTag([10, 30], 'A');
+      // Only 10 tagged — 30 silently skipped per constraint.
+      expect(sm.getGroupA()).toEqual([10]);
+      // 30 remains untagged in either group.
+      expect(sm.getGroupB()).toEqual([]);
+    });
+  });
 });
