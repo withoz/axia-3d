@@ -1683,6 +1683,46 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   - 기존 NURBS probe (kind===7) deprecation
 - **상세**: `docs/adr/064-nurbs-boolean-to-dcel.md` §D Acceptance Log
 
+### ADR-066 — Multi-face NURBS Boolean Dispatch (Path Y 전 stack 완료, 2026-05-04)
+- **상태**: Path Y 모든 sub-step (Y-1 / Y-2 / Y-3 / Y-4 / Y-5 / Y-6)
+  완료. ADR-064 Path Z 의 자연 연장. Last commit: 본 회고 commit.
+- **의의**: ADR-064 의 single-face × single-face mesh-level Boolean
+  의미론 closure 위에 multi-face × multi-face cartesian dispatch 를
+  올림. 의미론적 결정은 Path Z 에서 모두 닫혀 있어 Path Y 는 **확장
+  + 새 결정 매트릭스 (Y-G cartesian / Y-H skip-and-warn / Y-I per-pair
+  safe-only)** 수준.
+- **stack** (Path Z 답습):
+  ```
+  BooleanHandler.startBooleanOp                      ← Y-4
+    → WasmBridge.booleanDispatchDcelMulti (TS)        ← Y-3
+      → booleanDispatchDcelMultiJson (WASM)           ← Y-2
+        → Mesh::boolean_dispatch_dcel_multi           ← Y-1 (cartesian)
+          → Mesh::boolean_dispatch_dcel               ← (Path Z Step 5)
+            → Mesh::nurbs_boolean_to_dcel             ← (Path Z Step 4)
+  ```
+- **결정 매트릭스**: Y-E=(a) strict eligibility (모든 face NURBS) /
+  Y-F=(a) caller-named operands / Y-G=(a) cartesian (N×M pairs) /
+  Y-H=(c) per-pair Err → warning + skip / Y-I=(b) per-pair safe-only
+  removal / Y-4-b=(a) 반/반 selection split (UI).
+- **Lock-in**: 1×1 degenerate → Path Z method 직접 위임 (이중 진입점
+  회피). Cascade 시맨틱 (Subtract(a, b1) 후 (a, b2) → InactiveFace
+  Err) 은 Y-H 로 capture.
+- **회귀 누적**: axia-geo +5 (Y-1), axia-wasm +4 (Y-2), web TS +15
+  (Y-3 + Y-4 + Y-5). Path Y 합계 **+24**, 절대 #[ignore] 금지
+  24/24 준수.
+- **Path Z + Path Y 합산**: axia-geo 940 → **964** (+24), axia-wasm
+  8 → **16** (+8), web TS 1395 → **1425** (+30). 합계 2343 →
+  **2405** (+62), 절대 #[ignore] 금지 62/62 준수.
+- **남은 미착수 (모두 별도 ADR)**:
+  - E.1 Cascade-aware ordering 정책 (Subtract 시 face_a 의 모든 b
+    합산 SSI 등)
+  - E.2 Multi-face Sheet Boolean (Sheet face 의 multi 2D)
+  - E.3 사용자 명시 Group A/B 선택 UX
+  - E.4 Real browser-runtime E2E (ADR-064 §E.4 와 인프라 공유)
+  - E.5 기존 single-face DCEL fast-path / NURBS probe deprecation
+    (별도 cleanup ADR)
+- **상세**: `docs/adr/066-multi-face-nurbs-boolean-dispatch.md` §D Acceptance Log
+
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Electron/Tauri 데스크톱 앱
