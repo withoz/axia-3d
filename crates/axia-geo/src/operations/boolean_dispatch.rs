@@ -138,18 +138,21 @@ pub struct BooleanDispatchResult {
 
 /// Non-rational tensor B-spline parameters needed by
 /// `nurbs_wrapper::intersect_bspline_pair`.
-struct BSplineParams {
-    ctrl_grid: Vec<Vec<DVec3>>,
-    knots_u: Vec<f64>,
-    knots_v: Vec<f64>,
-    deg_u: usize,
-    deg_v: usize,
+///
+/// **ADR-064 Step 2.B**: pub(crate) to allow `Mesh::nurbs_boolean_to_dcel`
+/// reuse via `surface_to_bspline_pub` thin wrapper. drop-in alongside.
+pub(crate) struct BSplineParams {
+    pub(crate) ctrl_grid: Vec<Vec<DVec3>>,
+    pub(crate) knots_u: Vec<f64>,
+    pub(crate) knots_v: Vec<f64>,
+    pub(crate) deg_u: usize,
+    pub(crate) deg_v: usize,
 }
 
 /// Attempt to express an `AnalyticSurface` as a non-rational tensor
 /// B-spline. Returns `Ok(params)` for supported kinds, otherwise an
 /// explicit reason.
-fn surface_to_bspline(
+pub(crate) fn surface_to_bspline(
     surface: &AnalyticSurface,
     side: SideTag,
 ) -> Result<BSplineParams, NurbsBooleanFailReason> {

@@ -112,6 +112,12 @@ pub struct NurbsBooleanResultV2 {
     pub intersection: Vec<SurfaceIntersection>,
     pub trim_a: ContainmentTree,
     pub trim_b: ContainmentTree,
+    /// ADR-064 Step 2.B addition — flat trim loop slice indexed by
+    /// `ContainmentNode::loop_index` on `trim_a`. Required for
+    /// downstream DCEL face reconstruction (`trim_loops_to_face`).
+    pub trim_a_loops: Vec<TrimLoop>,
+    /// Same as `trim_a_loops`, for surface B.
+    pub trim_b_loops: Vec<TrimLoop>,
     pub robustness: SsiRobustnessReport,
     /// Convenience: equals `robustness.is_clean()`.
     pub is_clean: bool,
@@ -123,6 +129,8 @@ impl NurbsBooleanResultV2 {
             intersection: Vec::new(),
             trim_a: ContainmentTree::empty(),
             trim_b: ContainmentTree::empty(),
+            trim_a_loops: Vec::new(),
+            trim_b_loops: Vec::new(),
             robustness: SsiRobustnessReport::default(),
             is_clean: true,
         }
@@ -187,6 +195,7 @@ pub fn nurbs_boolean_v2(
     Ok(NurbsBooleanResultV2 {
         intersection,
         trim_a, trim_b,
+        trim_a_loops, trim_b_loops,
         robustness,
         is_clean,
     })

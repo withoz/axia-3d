@@ -8,6 +8,7 @@ pub mod push_pull;
 pub mod boolean_geo;
 pub mod boolean;
 pub mod boolean_dispatch;
+pub mod boolean_nurbs_dcel;
 pub mod transform;
 pub mod offset;
 pub mod primitives;
