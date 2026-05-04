@@ -5,16 +5,23 @@
 //! (`trim_loops_to_dcel_polyline`) → Step 2.A (`trim_loops_to_face`)
 //! into a single end-to-end Boolean DCEL output operation.
 //!
-//! ## Path Z scope (Subtract only, additive)
+//! ## Path Z scope (Step 3-α: Subtract + Union + Intersect, additive)
 //!
 //! Per ADR-064 §C lock-ins:
-//! - **D-A=(c)**: Path Z (Subtract op only).
-//! - **D-B=(b)**: Subtract only (Union/Intersect deferred to Path Y/X).
+//! - **D-A=(c)**: Path Z (narrow pilot).
+//! - **D-B=(a)**: Subtract + Union + Intersect (Step 3-α expansion).
+//!   Phase J `nurbs_boolean_v2` already supports all 3 ops; we forward
+//!   directly. trim_b loops are populated for Union/Intersect (per Phase
+//!   J semantics) and produce new_faces_b accordingly.
 //! - **D-C=(b)**: Additive — input faces preserved, no removal.
 //! - **D-D=(a)**: Full surface clone (uv range preserved).
 //! - **D-E=(a)**: Material inherited from input face_a (A side) /
 //!   face_b (B side).
 //! - **D-F=(b)**: Disjoint case → empty result + `disjoint=true` flag.
+//!   Caller fallback per op semantics:
+//!     * Subtract disjoint → A unchanged.
+//!     * Union disjoint → both A and B kept (additive default already).
+//!     * Intersect disjoint → empty result (correct semantics).
 //! - **D-G=(b)**: Separate function (drop-in alongside, no
 //!   `boolean_dispatch` wiring yet — Step 5 cutover).
 //!
@@ -60,11 +67,13 @@ impl Mesh {
     /// trim curve loops into actual DCEL faces via Step 1+2.A pipeline.
     /// Surface clones are attached to new faces.
     ///
-    /// **Path Z scope (D-B=(b)) — Subtract only**:
-    /// - `op = BoolOp::Subtract` accepted; Union/Intersect → `Err`.
+    /// **Path Z scope (D-B=(a)) — Subtract + Union + Intersect**:
+    /// - All 3 `BoolOp` variants accepted; forwarded to Phase J
+    ///   `nurbs_boolean_v2` which already supports them.
     /// - Disjoint case (no SSI intersection): returns `disjoint=true`
     ///   with empty `new_faces_a` / `new_faces_b`. Caller decides fallback
-    ///   per op semantics (e.g., Subtract disjoint → keep A unchanged).
+    ///   per op semantics (Subtract → keep A; Union → keep both;
+    ///   Intersect → empty result is correct).
     ///
     /// **Path Z scope (D-C=(b)) — Additive**:
     /// - Input `face_a` and `face_b` are NOT removed. They remain in
@@ -86,14 +95,8 @@ impl Mesh {
         op: BoolOp,
         tol: BooleanTolerance,
     ) -> Result<NurbsBooleanDcelResult> {
-        // ── Path Z scope: Subtract only (D-B=(b)) ──────────────────
-        if !matches!(op, BoolOp::Subtract) {
-            bail!(
-                "nurbs_boolean_to_dcel: Path Z scope is Subtract only; \
-                 Union/Intersect deferred to Step 3 (별도 ADR). got {:?}",
-                op
-            );
-        }
+        // ── Path Z Step 3-α scope: Subtract + Union + Intersect ────
+        // (D-B=(a)) — all 3 ops supported via direct Phase J forwarding.
 
         // ── Validate input faces + extract surfaces ─────────────────
         let (surface_a, mat_a) = {
@@ -125,10 +128,11 @@ impl Mesh {
             .map_err(|e| anyhow::anyhow!("surface B bspline conversion failed: {:?}", e))?;
 
         // ── Phase J nurbs_boolean_v2 — SSI + trim generation ────────
+        // D-B=(a) — direct forwarding for all 3 ops.
         let bool_op = match op {
             BoolOp::Subtract => BooleanOp::Subtract,
-            // unreachable — guard above
-            _ => unreachable!("Subtract only per Path Z (D-B)"),
+            BoolOp::Union => BooleanOp::Union,
+            BoolOp::Intersect => BooleanOp::Intersect,
         };
         let phase_j = nurbs_boolean_v2(
             &pa.ctrl_grid, &pa.knots_u, &pa.knots_v, pa.deg_u, pa.deg_v,
@@ -309,23 +313,80 @@ mod tests {
             "drop-in alongside: disjoint case must not change active face count");
     }
 
-    /// ADR-064 Step 2.B Path Z (D-B) — Union and Intersect rejected.
+    /// ADR-064 Step 3-α Path Z (D-B=(a)) — `BoolOp::Union` accepted.
+    /// Guard removed; Phase J forwarding works.
     #[test]
-    fn nurbs_boolean_to_dcel_rejects_non_subtract() {
+    fn nurbs_boolean_to_dcel_union_accepted() {
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let face_a = make_plane_quad(&mut mesh, mat, 0.0);
         let face_b = make_plane_quad(&mut mesh, mat, 5.0);
 
-        let union_err = mesh.nurbs_boolean_to_dcel(
+        let result = mesh.nurbs_boolean_to_dcel(
             face_a, face_b, BoolOp::Union, BooleanTolerance::default(),
         );
-        assert!(union_err.is_err(), "Union must err per Path Z scope");
+        assert!(result.is_ok(),
+            "Union must be accepted post-Step 3-α (D-B=(a)); got {:?}",
+            result.err());
+    }
 
-        let intersect_err = mesh.nurbs_boolean_to_dcel(
+    /// ADR-064 Step 3-α Path Z (D-B=(a)) — `BoolOp::Intersect` accepted.
+    #[test]
+    fn nurbs_boolean_to_dcel_intersect_accepted() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let face_a = make_plane_quad(&mut mesh, mat, 0.0);
+        let face_b = make_plane_quad(&mut mesh, mat, 5.0);
+
+        let result = mesh.nurbs_boolean_to_dcel(
             face_a, face_b, BoolOp::Intersect, BooleanTolerance::default(),
         );
-        assert!(intersect_err.is_err(), "Intersect must err per Path Z scope");
+        assert!(result.is_ok(),
+            "Intersect must be accepted post-Step 3-α (D-B=(a)); got {:?}",
+            result.err());
+    }
+
+    /// ADR-064 Step 3-α Path Z — Union of disjoint planes → empty result
+    /// + `disjoint=true`. Caller fallback: keep both originals (additive
+    /// default already satisfies this).
+    #[test]
+    fn nurbs_boolean_to_dcel_union_disjoint_returns_no_new_faces() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let face_a = make_plane_quad(&mut mesh, mat, 0.0);
+        let face_b = make_plane_quad(&mut mesh, mat, 5.0);
+
+        let result = mesh.nurbs_boolean_to_dcel(
+            face_a, face_b, BoolOp::Union, BooleanTolerance::default(),
+        ).expect("Union disjoint must succeed");
+
+        assert!(result.disjoint, "parallel planes must be disjoint");
+        assert!(result.new_faces_a.is_empty(),
+            "Union disjoint produces no new face_a");
+        assert!(result.new_faces_b.is_empty(),
+            "Union disjoint produces no new face_b");
+        assert_eq!(result.preserved_faces.len(), 2);
+    }
+
+    /// ADR-064 Step 3-α Path Z — Intersect of disjoint planes → empty
+    /// result + `disjoint=true`. Caller fallback: empty result is the
+    /// CORRECT semantics for Intersect of disjoint inputs.
+    #[test]
+    fn nurbs_boolean_to_dcel_intersect_disjoint_returns_no_new_faces() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let face_a = make_plane_quad(&mut mesh, mat, 0.0);
+        let face_b = make_plane_quad(&mut mesh, mat, 5.0);
+
+        let result = mesh.nurbs_boolean_to_dcel(
+            face_a, face_b, BoolOp::Intersect, BooleanTolerance::default(),
+        ).expect("Intersect disjoint must succeed");
+
+        assert!(result.disjoint, "parallel planes must be disjoint");
+        assert!(result.new_faces_a.is_empty(),
+            "Intersect disjoint produces no new face_a (correct semantics)");
+        assert!(result.new_faces_b.is_empty(),
+            "Intersect disjoint produces no new face_b");
     }
 
     /// ADR-064 Step 2.B Path Z — Inactive / missing-surface face rejected.
