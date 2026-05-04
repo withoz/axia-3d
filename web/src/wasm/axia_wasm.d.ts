@@ -133,6 +133,19 @@ export class AxiaEngine {
      */
     bendVerts(vert_ids: Uint32Array, ax_x: number, ax_y: number, ax_z: number, dir_x: number, dir_y: number, dir_z: number, ox: number, oy: number, oz: number, angle_deg: number, length_limit: number): boolean;
     /**
+     * ADR-060 Phase O Step 6 — Step 4 Boolean dispatch result as JSON.
+     *
+     * Routes through `Mesh::boolean_dispatch` (§F lock-in: silent
+     * fallback prohibited). Result includes path tag + skip reason.
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"Nurbs"|
+     *      "NurbsWithMeshFallback", "fallbackReason": { "kind": "...",
+     *      "label": "..." } | null, "nurbsAttempted": bool,
+     *      "nurbsClean": bool, "faceCount": N }`
+     */
+    booleanDispatchJson(faces_a: Uint32Array, faces_b: Uint32Array, op: number, material_id: number): string;
+    /**
      * Boolean 연산 수행
      * faces_a, faces_b: face ID 배열 (u32)
      * op: "union" | "subtract" | "intersect"
@@ -386,6 +399,18 @@ export class AxiaEngine {
      */
     filletEdge(edge_id_raw: number, radius: number, segments: number): number;
     /**
+     * ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
+     *
+     * Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"BRep"|
+     *      "BRepWithMeshFallback", "skipReason": { "kind": "...",
+     *      "label": "..." } | null, "createdSurfaceKind": "Cylinder"|
+     *      null, "filletStripFaceCount": N }`
+     */
+    filletEdgeDispatchJson(edge_id_raw: number, radius: number, segments: number): string;
+    /**
      * Diagnose non-manifold edges (ADR-007 I5) without modifying the
      * scene. Returns JSON: `{count, edges:[{edge, faceCount}, …]}`.
      * Useful for the UI's "씬 무결성 검사" command.
@@ -443,6 +468,21 @@ export class AxiaEngine {
      */
     getDirtyFaceCount(): number;
     /**
+     * ADR-060 Phase O Step 6 — Edge analytic curve as JSON.
+     *
+     * Returns the edge's `AnalyticCurve` (Phase A/B/C) as a JSON object
+     * with `schemaVersion: 1`. `Line` variant emits world coordinates
+     * (resolves VertId via mesh) — raw VertId never exposed (R7 / ADR-037).
+     *
+     * Returns `null` (string) when:
+     *   - edge missing / inactive
+     *   - edge has no curve attached (`Edge.curve = None`)
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "kind": "Line"|"Circle"|..., ... }`
+     */
+    getEdgeCurveJson(edge_id_raw: number): string;
+    /**
      * Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
      * 실패 시 빈 벡터.
      */
@@ -458,6 +498,22 @@ export class AxiaEngine {
     getEdgeVisibilityAngleDeg(): number;
     getFaceMapLen(): number;
     getFaceMapPtr(): number;
+    /**
+     * ADR-060 Phase O Step 6 — Face analytic surface as JSON.
+     *
+     * Returns the face's `AnalyticSurface` (Phase D/E) as a JSON
+     * object with `schemaVersion: 1`. Returns `null` when face missing,
+     * inactive, or has no surface attached.
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "kind": "Plane"|"Cylinder"|..., ... }`
+     *
+     * MVP scope: emits primitive surfaces (Plane/Cylinder/Sphere/Cone/
+     * Torus) in full; tensor variants (BezierPatch / BSplineSurface /
+     * NURBSSurface) emit only metadata (kind + degree counts) per
+     * Phase L deferral.
+     */
+    getFaceSurfaceJson(face_id_raw: number): string;
     /**
      * Return the outer-loop vertex IDs of a face in walk order.
      * Empty vec on error (face missing, degenerate, etc.).
@@ -741,6 +797,20 @@ export class AxiaEngine {
      * Exact for closed solids; indicative only for open shells.
      */
     meshVolume(): number;
+    /**
+     * ADR-060 Phase O Step 6 — Phase N migration (curve_mandatory +
+     * surface_mandatory) callable from JS.
+     *
+     * Idempotent (R5): repeated calls are safe; second call no-ops on
+     * already-migrated entities. Single transaction (Ctrl+Z restores
+     * pre-migration state).
+     *
+     * Returns JSON migration report:
+     *   `{ "schemaVersion": 1, "edgesUpgraded": N, "facesUpgraded": M,
+     *      "edgesDroppedToLine": K, "facesDroppedToPlane": J,
+     *      "driftMaxMm": F, "ok": true }`
+     */
+    migrateCurveSurfaceMandatory(): string;
     /**
      * Mirror the given faces across a plane. Returns the new FaceIds
      * in the same order as the input (empty vec on failure, with
@@ -1272,6 +1342,7 @@ export interface InitOutput {
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+    readonly axiaengine_booleanDispatchJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
@@ -1315,6 +1386,7 @@ export interface InitOutput {
     readonly axiaengine_face_count: (a: number) => number;
     readonly axiaengine_faces_centroid: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_filletEdge: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_filletEdgeDispatchJson: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_findNonManifoldEdges: (a: number, b: number) => void;
     readonly axiaengine_findVertexIdAt: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
@@ -1323,10 +1395,12 @@ export interface InitOutput {
     readonly axiaengine_getCenterlineLines: (a: number, b: number) => void;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
+    readonly axiaengine_getEdgeCurveJson: (a: number, b: number, c: number) => void;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
     readonly axiaengine_getEdgeVisibilityAngleDeg: (a: number) => number;
     readonly axiaengine_getFaceMapLen: (a: number) => number;
     readonly axiaengine_getFaceMapPtr: (a: number) => number;
+    readonly axiaengine_getFaceSurfaceJson: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
     readonly axiaengine_getFreeEdgeSegments: (a: number, b: number) => void;
@@ -1381,6 +1455,7 @@ export interface InitOutput {
     readonly axiaengine_mergeFacesByEdgeTol: (a: number, b: number, c: number) => number;
     readonly axiaengine_meshManifoldInfo: (a: number, b: number) => void;
     readonly axiaengine_meshVolume: (a: number) => number;
+    readonly axiaengine_migrateCurveSurfaceMandatory: (a: number, b: number) => void;
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;

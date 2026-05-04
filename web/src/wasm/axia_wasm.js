@@ -360,6 +360,43 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-060 Phase O Step 6 — Step 4 Boolean dispatch result as JSON.
+     *
+     * Routes through `Mesh::boolean_dispatch` (§F lock-in: silent
+     * fallback prohibited). Result includes path tag + skip reason.
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"Nurbs"|
+     *      "NurbsWithMeshFallback", "fallbackReason": { "kind": "...",
+     *      "label": "..." } | null, "nurbsAttempted": bool,
+     *      "nurbsClean": bool, "faceCount": N }`
+     * @param {Uint32Array} faces_a
+     * @param {Uint32Array} faces_b
+     * @param {number} op
+     * @param {number} material_id
+     * @returns {string}
+     */
+    booleanDispatchJson(faces_a, faces_b, op, material_id) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(faces_a, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(faces_b, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_booleanDispatchJson(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, op, material_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred3_0 = r0;
+            deferred3_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
      * Boolean 연산 수행
      * faces_a, faces_b: face ID 배열 (u32)
      * op: "union" | "subtract" | "intersect"
@@ -1020,6 +1057,37 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
+     *
+     * Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"BRep"|
+     *      "BRepWithMeshFallback", "skipReason": { "kind": "...",
+     *      "label": "..." } | null, "createdSurfaceKind": "Cylinder"|
+     *      null, "filletStripFaceCount": N }`
+     * @param {number} edge_id_raw
+     * @param {number} radius
+     * @param {number} segments
+     * @returns {string}
+     */
+    filletEdgeDispatchJson(edge_id_raw, radius, segments) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_filletEdgeDispatchJson(retptr, this.__wbg_ptr, edge_id_raw, radius, segments);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Diagnose non-manifold edges (ADR-007 I5) without modifying the
      * scene. Returns JSON: `{count, edges:[{edge, faceCount}, …]}`.
      * Useful for the UI's "씬 무결성 검사" command.
@@ -1139,6 +1207,38 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * ADR-060 Phase O Step 6 — Edge analytic curve as JSON.
+     *
+     * Returns the edge's `AnalyticCurve` (Phase A/B/C) as a JSON object
+     * with `schemaVersion: 1`. `Line` variant emits world coordinates
+     * (resolves VertId via mesh) — raw VertId never exposed (R7 / ADR-037).
+     *
+     * Returns `null` (string) when:
+     *   - edge missing / inactive
+     *   - edge has no curve attached (`Edge.curve = None`)
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "kind": "Line"|"Circle"|..., ... }`
+     * @param {number} edge_id_raw
+     * @returns {string}
+     */
+    getEdgeCurveJson(edge_id_raw) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getEdgeCurveJson(retptr, this.__wbg_ptr, edge_id_raw);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
      * 실패 시 빈 벡터.
      * @param {number} edge_id_raw
@@ -1183,6 +1283,39 @@ export class AxiaEngine {
     getFaceMapPtr() {
         const ret = wasm.axiaengine_getFaceMapPtr(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * ADR-060 Phase O Step 6 — Face analytic surface as JSON.
+     *
+     * Returns the face's `AnalyticSurface` (Phase D/E) as a JSON
+     * object with `schemaVersion: 1`. Returns `null` when face missing,
+     * inactive, or has no surface attached.
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "kind": "Plane"|"Cylinder"|..., ... }`
+     *
+     * MVP scope: emits primitive surfaces (Plane/Cylinder/Sphere/Cone/
+     * Torus) in full; tensor variants (BezierPatch / BSplineSurface /
+     * NURBSSurface) emit only metadata (kind + degree counts) per
+     * Phase L deferral.
+     * @param {number} face_id_raw
+     * @returns {string}
+     */
+    getFaceSurfaceJson(face_id_raw) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getFaceSurfaceJson(retptr, this.__wbg_ptr, face_id_raw);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Return the outer-loop vertex IDs of a face in walk order.
@@ -2085,6 +2218,36 @@ export class AxiaEngine {
     meshVolume() {
         const ret = wasm.axiaengine_meshVolume(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * ADR-060 Phase O Step 6 — Phase N migration (curve_mandatory +
+     * surface_mandatory) callable from JS.
+     *
+     * Idempotent (R5): repeated calls are safe; second call no-ops on
+     * already-migrated entities. Single transaction (Ctrl+Z restores
+     * pre-migration state).
+     *
+     * Returns JSON migration report:
+     *   `{ "schemaVersion": 1, "edgesUpgraded": N, "facesUpgraded": M,
+     *      "edgesDroppedToLine": K, "facesDroppedToPlane": J,
+     *      "driftMaxMm": F, "ok": true }`
+     * @returns {string}
+     */
+    migrateCurveSurfaceMandatory() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_migrateCurveSurfaceMandatory(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Mirror the given faces across a plane. Returns the new FaceIds

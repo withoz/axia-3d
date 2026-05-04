@@ -14,6 +14,8 @@ use axia_geo::operations::boolean::BoolOp;
 use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all, resolve_iterative, max_residual};
 use axia_core::orphan_recovery::RecoveryPlan;
 
+mod step6_json;
+
 // Console logging from Rust WASM — debug only (stripped in release builds)
 macro_rules! debug_log {
     ($($arg:tt)*) => {
@@ -5762,5 +5764,164 @@ impl AxiaEngine {
             })
             .collect();
         format!("[{}]", entries.join(","))
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-060 Phase O Step 6 — WASM additive-only API
+    //
+    // §D lock-in (강제):
+    //   ✅ 신규 endpoint 추가만
+    //   ❌ 기존 export 시그니처 / 출력 변경 금지
+    //
+    // 모든 새 endpoint:
+    //   - JSON 반환 → schemaVersion 필드 포함
+    //   - VertId raw 절대 노출 금지 (ADR-037 P22)
+    //   - sync (Promise 미사용)
+    //   - error 시 { ok: false, error: "...", schemaVersion: 1 }
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-060 Phase O Step 6 — Edge analytic curve as JSON.
+    ///
+    /// Returns the edge's `AnalyticCurve` (Phase A/B/C) as a JSON object
+    /// with `schemaVersion: 1`. `Line` variant emits world coordinates
+    /// (resolves VertId via mesh) — raw VertId never exposed (R7 / ADR-037).
+    ///
+    /// Returns `null` (string) when:
+    ///   - edge missing / inactive
+    ///   - edge has no curve attached (`Edge.curve = None`)
+    ///
+    /// Schema:
+    ///   `{ "schemaVersion": 1, "kind": "Line"|"Circle"|..., ... }`
+    #[wasm_bindgen(js_name = "getEdgeCurveJson")]
+    pub fn get_edge_curve_json(&self, edge_id_raw: u32) -> String {
+        step6_json::edge_curve_json(&self.scene.mesh, EdgeId::new(edge_id_raw))
+    }
+
+    /// ADR-060 Phase O Step 6 — Face analytic surface as JSON.
+    ///
+    /// Returns the face's `AnalyticSurface` (Phase D/E) as a JSON
+    /// object with `schemaVersion: 1`. Returns `null` when face missing,
+    /// inactive, or has no surface attached.
+    ///
+    /// Schema:
+    ///   `{ "schemaVersion": 1, "kind": "Plane"|"Cylinder"|..., ... }`
+    ///
+    /// MVP scope: emits primitive surfaces (Plane/Cylinder/Sphere/Cone/
+    /// Torus) in full; tensor variants (BezierPatch / BSplineSurface /
+    /// NURBSSurface) emit only metadata (kind + degree counts) per
+    /// Phase L deferral.
+    #[wasm_bindgen(js_name = "getFaceSurfaceJson")]
+    pub fn get_face_surface_json(&self, face_id_raw: u32) -> String {
+        step6_json::face_surface_json(&self.scene.mesh, FaceId::new(face_id_raw))
+    }
+
+    /// ADR-060 Phase O Step 6 — Phase N migration (curve_mandatory +
+    /// surface_mandatory) callable from JS.
+    ///
+    /// Idempotent (R5): repeated calls are safe; second call no-ops on
+    /// already-migrated entities. Single transaction (Ctrl+Z restores
+    /// pre-migration state).
+    ///
+    /// Returns JSON migration report:
+    ///   `{ "schemaVersion": 1, "edgesUpgraded": N, "facesUpgraded": M,
+    ///      "edgesDroppedToLine": K, "facesDroppedToPlane": J,
+    ///      "driftMaxMm": F, "ok": true }`
+    #[wasm_bindgen(js_name = "migrateCurveSurfaceMandatory")]
+    pub fn migrate_curve_surface_mandatory(&mut self) -> String {
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let report = self.scene.mesh.migrate_v3_to_v4_with_sanity();
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        step6_json::migration_report_json(&report)
+    }
+
+    /// ADR-060 Phase O Step 6 — Step 4 Boolean dispatch result as JSON.
+    ///
+    /// Routes through `Mesh::boolean_dispatch` (§F lock-in: silent
+    /// fallback prohibited). Result includes path tag + skip reason.
+    ///
+    /// Schema:
+    ///   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"Nurbs"|
+    ///      "NurbsWithMeshFallback", "fallbackReason": { "kind": "...",
+    ///      "label": "..." } | null, "nurbsAttempted": bool,
+    ///      "nurbsClean": bool, "faceCount": N }`
+    #[wasm_bindgen(js_name = "booleanDispatchJson")]
+    pub fn boolean_dispatch_json(
+        &mut self,
+        faces_a: &[u32],
+        faces_b: &[u32],
+        op: u32,
+        material_id: u32,
+    ) -> String {
+        let op = match op {
+            0 => BoolOp::Union,
+            1 => BoolOp::Subtract,
+            2 => BoolOp::Intersect,
+            _ => return r#"{"schemaVersion":1,"ok":false,"error":"invalid op"}"#.to_string(),
+        };
+        let fa: Vec<FaceId> = faces_a.iter().map(|&i| FaceId::new(i)).collect();
+        let fb: Vec<FaceId> = faces_b.iter().map(|&i| FaceId::new(i)).collect();
+        let mat = axia_geo::MaterialId::new(material_id);
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let result = self.scene.mesh.boolean_dispatch(&fa, &fb, op, mat);
+        let dispatch_result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                self.scene.transactions.cancel();
+                return format!(
+                    r#"{{"schemaVersion":1,"ok":false,"error":"{}"}}"#,
+                    e.to_string().replace('"', "'"),
+                );
+            }
+        };
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        step6_json::boolean_dispatch_result_json(&dispatch_result)
+    }
+
+    /// ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
+    ///
+    /// Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).
+    ///
+    /// Schema:
+    ///   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"BRep"|
+    ///      "BRepWithMeshFallback", "skipReason": { "kind": "...",
+    ///      "label": "..." } | null, "createdSurfaceKind": "Cylinder"|
+    ///      null, "filletStripFaceCount": N }`
+    #[wasm_bindgen(js_name = "filletEdgeDispatchJson")]
+    pub fn fillet_edge_dispatch_json(
+        &mut self,
+        edge_id_raw: u32,
+        radius: f64,
+        segments: u32,
+    ) -> String {
+        let eid = EdgeId::new(edge_id_raw);
+        if !self.scene.mesh.edges.contains(eid) {
+            return r#"{"schemaVersion":1,"ok":false,"error":"edge not found"}"#.to_string();
+        }
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let result = self.scene.mesh.fillet_edge_dispatch(eid, radius, segments);
+        let dispatch_result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                self.scene.transactions.cancel();
+                return format!(
+                    r#"{{"schemaVersion":1,"ok":false,"error":"{}"}}"#,
+                    e.to_string().replace('"', "'"),
+                );
+            }
+        };
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        step6_json::fillet_dispatch_result_json(&dispatch_result)
     }
 }
