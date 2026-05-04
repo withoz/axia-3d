@@ -148,6 +148,52 @@ enum EvictKind {
     Edge(EdgeId),
 }
 
+/// ADR-062 Phase L₂ Path Z §B — Outcome of `attach_surface_validated`.
+///
+/// Six variants — see ADR-062 §B + Amendment 1 for full semantics.
+/// All variants are `&'static str` for stability; consumers can pattern
+/// match without lifetime complications.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SurfaceAttachOutcome {
+    /// Surface attached successfully. `previous_kind` is the label of
+    /// the previously-attached surface, or `None` if face was polygon.
+    Attached { previous_kind: Option<&'static str> },
+    /// Some boundary vertex's distance to the new surface exceeds tol.
+    BoundaryDriftExceedsTol {
+        max_drift_mm: f64,
+        tol_mm: f64,
+        worst_vertex_idx: usize,
+    },
+    /// Tensor variant (Bezier/BSpline/NURBS) — Path Z pilot does not
+    /// support uv inversion. Path Y full will lift this restriction.
+    UnsupportedSurfaceKind { kind: &'static str },
+    /// Face has no outer loop (degenerate topology).
+    NoOuterLoop,
+    /// Face is inactive (soft-deleted) or missing.
+    InactiveFace,
+    /// Surface input has degenerate parameters (radius ≤ 0,
+    /// axis_dir ≈ ZERO, half_angle out of (0, π/2), etc.).
+    DegenerateSurfaceInput { reason: &'static str },
+}
+
+impl SurfaceAttachOutcome {
+    /// Stable label for telemetry / JSON serialization.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Attached { .. } => "Attached",
+            Self::BoundaryDriftExceedsTol { .. } => "BoundaryDriftExceedsTol",
+            Self::UnsupportedSurfaceKind { .. } => "UnsupportedSurfaceKind",
+            Self::NoOuterLoop => "NoOuterLoop",
+            Self::InactiveFace => "InactiveFace",
+            Self::DegenerateSurfaceInput { .. } => "DegenerateSurfaceInput",
+        }
+    }
+    /// True if attach succeeded.
+    pub fn is_attached(&self) -> bool {
+        matches!(self, Self::Attached { .. })
+    }
+}
+
 /// Result of [`Mesh::face_set_manifold_info`] — 면 집합이 닫힌 2-manifold 솔리드를
 /// 이루는지, 혹은 경계(open)나 non-manifold 결함이 있는지 분석 결과.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -599,6 +645,99 @@ impl Mesh {
     /// ADR-031 Phase D — Get the analytic surface attached to a face, if any.
     pub fn face_surface(&self, face_id: FaceId) -> Option<&crate::surfaces::AnalyticSurface> {
         self.faces.get(face_id).and_then(|f| f.surface())
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-062 Phase L₂ Path Z Step 2 — Validated surface attach
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-062 Phase L₂ Path Z — Validated surface attach.
+    ///
+    /// Pre-checks the input surface and validates that every face
+    /// outer-loop vertex lies within `tol_mm` of the surface. On
+    /// success, attaches via `set_face_surface` (raw API) — which
+    /// auto-bumps Phase P-narrow `surface_version` and invalidates
+    /// `normal_cache` (Step 1a hook). On failure, leaves mesh state
+    /// unchanged and returns the explicit reason.
+    ///
+    /// Outcome priority (early-exit order):
+    ///   1. `InactiveFace` — face missing or `is_active() == false`
+    ///   2. `UnsupportedSurfaceKind` — tensor variant
+    ///   3. `DegenerateSurfaceInput` — bad params (radius ≤ 0, etc.)
+    ///   4. `NoOuterLoop` — outer loop walk produced 0 vertices
+    ///   5. `BoundaryDriftExceedsTol` — max vertex distance > tol_mm
+    ///   6. `Attached { previous_kind }` — success
+    ///
+    /// **Phase P-narrow integration**: cache invalidation is automatic
+    /// via the existing `set_face_surface` hook (see `Face::set_surface`
+    /// in entities/face.rs). No additional plumbing needed.
+    pub fn attach_surface_validated(
+        &mut self,
+        face_id: FaceId,
+        surface: crate::surfaces::AnalyticSurface,
+        tol_mm: f64,
+    ) -> SurfaceAttachOutcome {
+        use crate::surfaces::AnalyticSurface;
+
+        // 1. Face existence + activity.
+        let (outer_start, previous_kind) = match self.faces.get(face_id) {
+            Some(f) if f.is_active() => {
+                (f.outer().start, f.surface().map(|s| s.kind_label()))
+            }
+            _ => return SurfaceAttachOutcome::InactiveFace,
+        };
+
+        // 2. Tensor → UnsupportedSurfaceKind (early exit before degeneracy).
+        match &surface {
+            AnalyticSurface::BezierPatch { .. }
+            | AnalyticSurface::BSplineSurface { .. }
+            | AnalyticSurface::NURBSSurface { .. } => {
+                return SurfaceAttachOutcome::UnsupportedSurfaceKind {
+                    kind: surface.kind_label(),
+                };
+            }
+            _ => {}
+        }
+
+        // 3. Degenerate parameter check.
+        if let Some(reason) = surface.degeneracy_reason() {
+            return SurfaceAttachOutcome::DegenerateSurfaceInput { reason };
+        }
+
+        // 4. Outer loop vertices.
+        let outer_verts = match self.collect_loop_verts(outer_start) {
+            Ok(v) if !v.is_empty() => v,
+            _ => return SurfaceAttachOutcome::NoOuterLoop,
+        };
+
+        // 5. Boundary drift check — max distance across all outer verts.
+        let mut max_drift = 0.0_f64;
+        let mut worst_idx = 0usize;
+        for (i, &vid) in outer_verts.iter().enumerate() {
+            let pos = match self.verts.get(vid) {
+                Some(v) => v.pos(),
+                None => continue,
+            };
+            // unsigned_distance_to returns Some for primitives (we
+            // already screened tensor above), but defensive None handling.
+            let dist = surface.unsigned_distance_to(pos)
+                .unwrap_or(f64::INFINITY);
+            if dist > max_drift {
+                max_drift = dist;
+                worst_idx = i;
+            }
+        }
+        if max_drift > tol_mm {
+            return SurfaceAttachOutcome::BoundaryDriftExceedsTol {
+                max_drift_mm: max_drift,
+                tol_mm,
+                worst_vertex_idx: worst_idx,
+            };
+        }
+
+        // 6. Attach — set_face_surface auto-bumps Phase P-narrow cache.
+        self.set_face_surface(face_id, Some(surface));
+        SurfaceAttachOutcome::Attached { previous_kind }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -7982,6 +8121,116 @@ mod tests {
         // The huge entry (oldest tick=1) was dropped.
         assert!(mesh.faces[fid].normal_cache().is_none(),
             "oldest entry (tick=1) must be evicted first");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-062 Phase L₂ Path Z Step 2 — attach_surface_validated tests
+    //
+    // 3 regression invariants (none #[ignore]):
+    //   1. attach_validated_succeeds_when_boundary_fits
+    //   2. attach_validated_rejects_drift
+    //   3. attach_validated_rejects_degenerate_input
+    // ════════════════════════════════════════════════════════════════
+
+    fn step2_l2_quad_on_cylinder() -> (Mesh, FaceId) {
+        // 4 verts on cylinder (axis +Z, radius 5, between z=0 and z=2).
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, 5.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 5.0, 2.0));
+        let v3 = mesh.add_vertex(DVec3::new(5.0, 0.0, 2.0));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        (mesh, fid)
+    }
+
+    /// ADR-062 Step 2 invariant #1 — Boundary verts on cylinder →
+    /// Attached, no previous surface, default tol passes.
+    #[test]
+    fn attach_validated_succeeds_when_boundary_fits() {
+        let (mut mesh, fid) = step2_l2_quad_on_cylinder();
+        let cyl = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z, radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 2.0),
+        };
+        let outcome = mesh.attach_surface_validated(
+            fid, cyl, crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        match outcome {
+            SurfaceAttachOutcome::Attached { previous_kind: None } => {}
+            other => panic!("expected Attached(None), got {:?}", other),
+        }
+        // Mesh state changed: face now has surface.
+        assert!(mesh.faces[fid].surface().is_some(),
+            "face must have surface attached after Attached outcome");
+    }
+
+    /// ADR-062 Step 2 invariant #2 — Wrong radius → BoundaryDriftExceedsTol.
+    #[test]
+    fn attach_validated_rejects_drift() {
+        let (mut mesh, fid) = step2_l2_quad_on_cylinder();
+        // Boundary is at radius 5, but we attach radius 10 cylinder.
+        let cyl_wrong = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z, radius: 10.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 2.0),
+        };
+        let outcome = mesh.attach_surface_validated(
+            fid, cyl_wrong, crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        match outcome {
+            SurfaceAttachOutcome::BoundaryDriftExceedsTol {
+                max_drift_mm, tol_mm, worst_vertex_idx,
+            } => {
+                // Drift = |5 - 10| = 5mm.
+                assert!((max_drift_mm - 5.0).abs() < 1e-9,
+                    "expected drift ~5mm, got {}", max_drift_mm);
+                assert_eq!(tol_mm, crate::tolerances::ATTACH_VALIDATE_TOL);
+                assert!(worst_vertex_idx < 4, "worst_vertex_idx in 0..4");
+            }
+            other => panic!("expected BoundaryDriftExceedsTol, got {:?}", other),
+        }
+        // Critical: surface NOT attached (mesh state unchanged on reject).
+        assert!(mesh.faces[fid].surface().is_none(),
+            "face must NOT have surface after rejected attach");
+    }
+
+    /// ADR-062 Step 2 invariant #3 — Degenerate input (radius=0) →
+    /// DegenerateSurfaceInput. Pre-distance check catches before
+    /// boundary loop walk to avoid NaN cascade.
+    #[test]
+    fn attach_validated_rejects_degenerate_input() {
+        let (mut mesh, fid) = step2_l2_quad_on_cylinder();
+        let cyl_deg = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z, radius: 0.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 2.0),
+        };
+        let outcome = mesh.attach_surface_validated(
+            fid, cyl_deg, crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        match outcome {
+            SurfaceAttachOutcome::DegenerateSurfaceInput { reason } => {
+                assert!(reason.contains("non-positive") || reason.contains("zero"),
+                    "reason should describe the degeneracy, got: {}", reason);
+            }
+            other => panic!("expected DegenerateSurfaceInput, got {:?}", other),
+        }
+        // Critical: surface NOT attached.
+        assert!(mesh.faces[fid].surface().is_none());
+
+        // Bonus: zero axis_dir variant.
+        let cyl_zero_axis = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::ZERO, radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 2.0),
+        };
+        let outcome2 = mesh.attach_surface_validated(
+            fid, cyl_zero_axis, crate::tolerances::ATTACH_VALIDATE_TOL,
+        );
+        assert!(matches!(outcome2, SurfaceAttachOutcome::DegenerateSurfaceInput { .. }),
+            "zero axis_dir must also be degenerate, got {:?}", outcome2);
     }
 
     /// ADR-061 §A + §B — `Mesh::move_vertex` bumps incident edges'

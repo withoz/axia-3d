@@ -388,6 +388,64 @@ impl AnalyticSurface {
         }
     }
 
+    /// ADR-062 Phase L₂ Path Z — Stable label per surface variant.
+    /// Used by SurfaceAttachOutcome (UnsupportedSurfaceKind, previous_kind)
+    /// and JSON telemetry. SSOT — change here propagates everywhere.
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Plane { .. } => "Plane",
+            Self::Cylinder { .. } => "Cylinder",
+            Self::Sphere { .. } => "Sphere",
+            Self::Cone { .. } => "Cone",
+            Self::Torus { .. } => "Torus",
+            Self::BezierPatch { .. } => "BezierPatch",
+            Self::BSplineSurface { .. } => "BSplineSurface",
+            Self::NURBSSurface { .. } => "NURBSSurface",
+        }
+    }
+
+    /// ADR-062 Phase L₂ Path Z §C — Detect degenerate parameter inputs
+    /// before boundary distance evaluation. Returns `None` if the
+    /// surface is well-formed; otherwise a short reason string suitable
+    /// for `SurfaceAttachOutcome::DegenerateSurfaceInput { reason }`.
+    ///
+    /// Tensor variants always return `None` here — they are screened
+    /// by the `UnsupportedSurfaceKind` outcome path before this check.
+    pub fn degeneracy_reason(&self) -> Option<&'static str> {
+        const EPS_DIR: f64 = 1e-12;
+        match self {
+            Self::Plane { normal, basis_u, .. } => {
+                if normal.length_squared() < EPS_DIR { Some("plane normal is zero") }
+                else if basis_u.length_squared() < EPS_DIR { Some("plane basis_u is zero") }
+                else { None }
+            }
+            Self::Cylinder { axis_dir, radius, .. } => {
+                if axis_dir.length_squared() < EPS_DIR { Some("cylinder axis_dir is zero") }
+                else if *radius <= 0.0 { Some("cylinder radius is non-positive") }
+                else { None }
+            }
+            Self::Sphere { radius, .. } => {
+                if *radius <= 0.0 { Some("sphere radius is non-positive") }
+                else { None }
+            }
+            Self::Cone { axis_dir, half_angle, .. } => {
+                if axis_dir.length_squared() < EPS_DIR { Some("cone axis_dir is zero") }
+                else if *half_angle <= 0.0 || *half_angle >= std::f64::consts::FRAC_PI_2 {
+                    Some("cone half_angle out of (0, pi/2)")
+                } else { None }
+            }
+            Self::Torus { axis_dir, major_radius, minor_radius, .. } => {
+                if axis_dir.length_squared() < EPS_DIR { Some("torus axis_dir is zero") }
+                else if *major_radius <= 0.0 { Some("torus major_radius is non-positive") }
+                else if *minor_radius <= 0.0 { Some("torus minor_radius is non-positive") }
+                else { None }
+            }
+            // Tensor variants: degeneracy not checked here — caller
+            // routes them to UnsupportedSurfaceKind separately.
+            Self::BezierPatch { .. } | Self::BSplineSurface { .. } | Self::NURBSSurface { .. } => None,
+        }
+    }
+
     /// ADR-062 Phase L₂ Path Z §C — Closed-form unsigned distance from
     /// world-space point to the surface.
     ///
