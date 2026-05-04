@@ -132,6 +132,48 @@ pub struct BooleanDispatchResult {
     pub nurbs_diagnostic: NurbsDiagnostic,
 }
 
+/// ADR-066 Y-1 — Per-pair outcome inside a multi-face dispatch.
+///
+/// `result.Ok(...)` carries the Path Z `nurbs_boolean_to_dcel` result.
+/// `result.Err(message)` is a Y-H=(c) skip-and-warn record for that
+/// specific pair (e.g., InactiveFace from cascade removal in earlier
+/// pairs, ContainmentDepth ≥ 2, etc.).
+#[derive(Debug)]
+pub struct PerPairDcelOutcome {
+    pub face_a: FaceId,
+    pub face_b: FaceId,
+    pub result: Result<super::boolean_nurbs_dcel::NurbsBooleanDcelResult, String>,
+}
+
+/// ADR-066 Y-1 — Multi-face Boolean dispatch result (Path Y).
+///
+/// Drop-in alongside `BooleanDispatchDcelResult` (Y-D / D-G consistency).
+/// Used by `boolean_dispatch_dcel_multi` which iterates the cartesian
+/// product of `facesA × facesB` and accumulates per-pair outcomes.
+///
+/// **Path semantics**:
+/// - `BooleanPath::Nurbs` — eligibility passed; per_pair contains
+///   N×M outcomes (Ok or Err per Y-H=(c)). `all_new_faces` /
+///   `all_removed_faces` aggregate across successful pairs (deduped).
+/// - `BooleanPath::Mesh` — eligibility rejected upfront (Y-E=(a) strict;
+///   any face missing surface or unsupported kind). `per_pair` is empty,
+///   `fallback_reason` populated. Caller decides next step (Y-D=(a)
+///   no auto fallback).
+///
+/// **Aggregate dedup**: `all_new_faces` / `all_removed_faces` collect
+/// IDs from all successful pairs in sorted-unique order so callers can
+/// directly use them for selection updates / undo tracking without
+/// further dedup.
+#[derive(Debug)]
+pub struct BooleanDispatchDcelMultiResult {
+    pub path_used: BooleanPath,
+    pub fallback_reason: Option<NurbsBooleanFailReason>,
+    pub per_pair: Vec<PerPairDcelOutcome>,
+    pub all_new_faces: Vec<FaceId>,
+    pub all_removed_faces: Vec<FaceId>,
+    pub warnings: Vec<String>,
+}
+
 /// ADR-064 Step 5 — DCEL-producing dispatch result (Path Z opt-in).
 ///
 /// Drop-in alongside `BooleanDispatchResult` (D-G / D-P consistency).
@@ -547,6 +589,220 @@ impl Mesh {
                 robustness_clean,
                 notes,
             },
+        })
+    }
+
+    /// ADR-066 Y-1 (Path Y) — Multi-face NURBS Boolean dispatch.
+    ///
+    /// Drop-in alongside `boolean_dispatch_dcel` (single-face × single-face,
+    /// ADR-064 Step 5). Iterates the cartesian product `facesA × facesB`
+    /// and calls `nurbs_boolean_to_dcel` per pair. Per-pair outcomes are
+    /// collected as `Ok` / `Err` records (Y-H=(c) skip-and-warn).
+    ///
+    /// ## Decision matrix (Path Y Y-1)
+    /// - **Y-C=(a)** new method (UNCHANGED `boolean_dispatch_dcel`)
+    /// - **Y-D** Path Z method UNCHANGED — drop-in alongside
+    /// - **Y-E=(a)** strict eligibility — every face must have analytic
+    ///   surface AND `surface_to_bspline` must succeed. ANY violation →
+    ///   `BooleanPath::Mesh` + fallback_reason (no per-pair attempt).
+    /// - **Y-F=(a)** caller-named operands (`facesA` / `facesB`)
+    /// - **Y-G=(a)** Cartesian iteration (N×M pairs)
+    /// - **Y-H=(c)** per-pair Err → warning + skip (no abort)
+    /// - **Y-I=(b)** per-pair safe-only removal — succeeded pair's
+    ///   inputs removed by `nurbs_boolean_to_dcel` per its own D-C=(a)
+    ///   semantics. Cascade: if Subtract on (a, b1) removes a, then
+    ///   (a, b2) returns InactiveFace Err → captured as warning.
+    ///
+    /// ## Single-face × single-face degenerate
+    /// When `facesA.len() == 1 && facesB.len() == 1`, delegates to
+    /// `boolean_dispatch_dcel` (Path Z) and adapts the result. Avoids
+    /// dual code paths for the 1×1 case.
+    pub fn boolean_dispatch_dcel_multi(
+        &mut self,
+        faces_a: &[FaceId],
+        faces_b: &[FaceId],
+        op: BoolOp,
+        tol: crate::surfaces::ssi::tolerance::BooleanTolerance,
+    ) -> Result<BooleanDispatchDcelMultiResult> {
+        // ── Empty operand guard ─────────────────────────────────────
+        if faces_a.is_empty() || faces_b.is_empty() {
+            return Ok(BooleanDispatchDcelMultiResult {
+                path_used: BooleanPath::Mesh,
+                fallback_reason: Some(NurbsBooleanFailReason::MultipleFacesNotSupported {
+                    count_a: faces_a.len(),
+                    count_b: faces_b.len(),
+                }),
+                per_pair: Vec::new(),
+                all_new_faces: Vec::new(),
+                all_removed_faces: Vec::new(),
+                warnings: vec![format!(
+                    "empty operand: |A|={}, |B|={}", faces_a.len(), faces_b.len(),
+                )],
+            });
+        }
+
+        // ── Y-1 Lock-in #4: 1×1 degenerate → Path Z delegation ──────
+        if faces_a.len() == 1 && faces_b.len() == 1 {
+            let face_a = faces_a[0];
+            let face_b = faces_b[0];
+            let z_result = self.boolean_dispatch_dcel(face_a, face_b, op, tol)?;
+            // Adapt single result to multi shape.
+            let (per_pair, all_new, all_removed, path_used, fallback_reason)
+                = match z_result.dcel {
+                Some(dcel) => {
+                    let new_a = dcel.new_faces_a.clone();
+                    let new_b = dcel.new_faces_b.clone();
+                    let removed = dcel.removed_faces.clone();
+                    let mut all_new = new_a; all_new.extend(new_b);
+                    (
+                        vec![PerPairDcelOutcome {
+                            face_a, face_b,
+                            result: Ok(dcel),
+                        }],
+                        all_new, removed,
+                        z_result.path_used,
+                        z_result.fallback_reason,
+                    )
+                }
+                None => (
+                    Vec::new(), Vec::new(), Vec::new(),
+                    z_result.path_used,
+                    z_result.fallback_reason,
+                ),
+            };
+            return Ok(BooleanDispatchDcelMultiResult {
+                path_used, fallback_reason,
+                per_pair, all_new_faces: all_new, all_removed_faces: all_removed,
+                warnings: Vec::new(),
+            });
+        }
+
+        // ── Y-E=(a) Strict eligibility — every face on both sides ───
+        // Check ANY face missing surface → upfront Mesh path.
+        let missing_a = faces_a.iter()
+            .filter(|f| self.face_surface(**f).is_none())
+            .count();
+        let missing_b = faces_b.iter()
+            .filter(|f| self.face_surface(**f).is_none())
+            .count();
+        if missing_a + missing_b > 0 {
+            return Ok(BooleanDispatchDcelMultiResult {
+                path_used: BooleanPath::Mesh,
+                fallback_reason: Some(NurbsBooleanFailReason::SurfaceMissing {
+                    side_a_missing_count: missing_a,
+                    side_b_missing_count: missing_b,
+                }),
+                per_pair: Vec::new(),
+                all_new_faces: Vec::new(),
+                all_removed_faces: Vec::new(),
+                warnings: vec![format!(
+                    "Y-E strict: {} face(s) on side A and {} on side B \
+                     lack analytic surface attachment",
+                    missing_a, missing_b,
+                )],
+            });
+        }
+        // Probe every face's surface via surface_to_bspline (early Err).
+        for &fid in faces_a {
+            let s = self.face_surface(fid).expect("checked above");
+            if let Err(reason) = surface_to_bspline(s, SideTag::A) {
+                return Ok(BooleanDispatchDcelMultiResult {
+                    path_used: BooleanPath::Mesh,
+                    fallback_reason: Some(reason),
+                    per_pair: Vec::new(),
+                    all_new_faces: Vec::new(),
+                    all_removed_faces: Vec::new(),
+                    warnings: vec![format!(
+                        "Y-E strict: face_a {:?} surface conversion failed", fid,
+                    )],
+                });
+            }
+        }
+        for &fid in faces_b {
+            let s = self.face_surface(fid).expect("checked above");
+            if let Err(reason) = surface_to_bspline(s, SideTag::B) {
+                return Ok(BooleanDispatchDcelMultiResult {
+                    path_used: BooleanPath::Mesh,
+                    fallback_reason: Some(reason),
+                    per_pair: Vec::new(),
+                    all_new_faces: Vec::new(),
+                    all_removed_faces: Vec::new(),
+                    warnings: vec![format!(
+                        "Y-E strict: face_b {:?} surface conversion failed", fid,
+                    )],
+                });
+            }
+        }
+
+        // ── Y-G=(a) Cartesian dispatch + Y-H=(c) skip-and-warn ──────
+        let mut per_pair: Vec<PerPairDcelOutcome> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut all_new: Vec<FaceId> = Vec::new();
+        let mut all_removed: Vec<FaceId> = Vec::new();
+
+        for &face_a in faces_a {
+            for &face_b in faces_b {
+                let pair_outcome = self.boolean_dispatch_dcel(face_a, face_b, op, tol);
+                match pair_outcome {
+                    Ok(ok) if ok.path_used == BooleanPath::Nurbs => {
+                        if let Some(dcel) = ok.dcel {
+                            all_new.extend(dcel.new_faces_a.iter().copied());
+                            all_new.extend(dcel.new_faces_b.iter().copied());
+                            all_removed.extend(dcel.removed_faces.iter().copied());
+                            per_pair.push(PerPairDcelOutcome {
+                                face_a, face_b, result: Ok(dcel),
+                            });
+                        } else {
+                            // Nurbs path with null dcel — defensive
+                            warnings.push(format!(
+                                "pair ({:?}, {:?}): Nurbs path with null dcel — skipped",
+                                face_a, face_b,
+                            ));
+                        }
+                    }
+                    Ok(ok) => {
+                        // Mesh path on a sub-pair (rare — usually multi-pair
+                        // succeed/fail uniformly per Y-E strict). Treat as
+                        // skip-and-warn to keep Path Y atomic.
+                        let label = ok.fallback_reason.as_ref()
+                            .map(|r| r.short_label())
+                            .unwrap_or("unknown");
+                        warnings.push(format!(
+                            "pair ({:?}, {:?}): Mesh path (reason={}) — skipped",
+                            face_a, face_b, label,
+                        ));
+                        per_pair.push(PerPairDcelOutcome {
+                            face_a, face_b,
+                            result: Err(format!("Mesh path: {}", label)),
+                        });
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        warnings.push(format!(
+                            "pair ({:?}, {:?}): {}",
+                            face_a, face_b, msg,
+                        ));
+                        per_pair.push(PerPairDcelOutcome {
+                            face_a, face_b, result: Err(msg),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Dedup aggregates (sorted-unique).
+        all_new.sort_unstable_by_key(|f| f.raw());
+        all_new.dedup();
+        all_removed.sort_unstable_by_key(|f| f.raw());
+        all_removed.dedup();
+
+        Ok(BooleanDispatchDcelMultiResult {
+            path_used: BooleanPath::Nurbs,
+            fallback_reason: None,
+            per_pair,
+            all_new_faces: all_new,
+            all_removed_faces: all_removed,
+            warnings,
         })
     }
 }
@@ -1088,5 +1344,151 @@ mod tests {
             assert!(result.fallback_reason.is_none(),
                 "{:?} success → no fallback_reason", op);
         }
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // ADR-066 Y-1 (Path Y) — Multi-face dispatch regression tests
+    // ───────────────────────────────────────────────────────────────
+
+    /// Y-1 #1 — 2×2 cartesian: every face has analytic surface →
+    /// BooleanPath::Nurbs, per_pair has 4 outcomes, aggregates produced.
+    #[test]
+    fn multi_face_dispatch_eligible_2x2_subtract_succeeds() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a1 = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        let a2 = make_plane_quad_with_surface(&mut mesh, mat, 1.0);
+        let b1 = make_plane_quad_with_surface(&mut mesh, mat, 5.0);
+        let b2 = make_plane_quad_with_surface(&mut mesh, mat, 6.0);
+
+        let result = mesh.boolean_dispatch_dcel_multi(
+            &[a1, a2], &[b1, b2], BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("eligible 2x2 must succeed");
+
+        assert_eq!(result.path_used, BooleanPath::Nurbs);
+        assert!(result.fallback_reason.is_none());
+        assert_eq!(result.per_pair.len(), 4, "2×2 cartesian must produce 4 outcomes");
+        // All disjoint pairs → no new/removed faces, but path is Nurbs.
+        assert!(result.all_new_faces.is_empty(),
+            "all-disjoint 2×2 must produce no new faces");
+        assert!(result.all_removed_faces.is_empty(),
+            "all-disjoint 2×2 must remove nothing (Y-I per-pair safe-only)");
+    }
+
+    /// Y-1 #2 — Y-E strict: any face missing surface → BooleanPath::Mesh
+    /// upfront, per_pair empty, fallback_reason populated.
+    #[test]
+    fn multi_face_dispatch_one_missing_surface_routes_mesh_path() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a1 = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        // a2 without surface attach.
+        let v0 = mesh.add_vertex(DVec3::new(20.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(30.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(30.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(20.0, 10.0, 0.0));
+        let a2 = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let b1 = make_plane_quad_with_surface(&mut mesh, mat, 5.0);
+
+        let result = mesh.boolean_dispatch_dcel_multi(
+            &[a1, a2], &[b1], BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("ineligibility is informational, not Err");
+
+        assert_eq!(result.path_used, BooleanPath::Mesh);
+        assert!(result.per_pair.is_empty(),
+            "Y-E strict must reject upfront — no per_pair attempts");
+        let reason = result.fallback_reason.expect("must record reason");
+        assert!(matches!(reason, NurbsBooleanFailReason::SurfaceMissing { .. }));
+        assert!(!result.warnings.is_empty(),
+            "missing-surface case must record at least one warning");
+    }
+
+    /// Y-1 #3 — 1×1 degenerate: delegates to Path Z `boolean_dispatch_dcel`.
+    /// per_pair has exactly 1 outcome populated from the Path Z result.
+    #[test]
+    fn multi_face_dispatch_single_face_fallback_to_path_z() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        let b = make_plane_quad_with_surface(&mut mesh, mat, 5.0);
+
+        let result = mesh.boolean_dispatch_dcel_multi(
+            &[a], &[b], BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("1×1 degenerate must succeed via Path Z delegation");
+
+        assert_eq!(result.path_used, BooleanPath::Nurbs);
+        assert_eq!(result.per_pair.len(), 1, "1×1 must produce exactly 1 per_pair");
+        let outcome = &result.per_pair[0];
+        assert_eq!(outcome.face_a, a);
+        assert_eq!(outcome.face_b, b);
+        assert!(outcome.result.is_ok());
+        if let Ok(dcel) = &outcome.result {
+            assert!(dcel.disjoint, "z=0 vs z=5 must be disjoint");
+        }
+    }
+
+    /// Y-1 #4 — Y-H/Y-I per-pair safe-only: all pairs disjoint →
+    /// no new faces, no removal across the multi result.
+    #[test]
+    fn multi_face_dispatch_per_pair_safe_only_preserves_when_all_disjoint() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a1 = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        let a2 = make_plane_quad_with_surface(&mut mesh, mat, 1.0);
+        let b1 = make_plane_quad_with_surface(&mut mesh, mat, 50.0);  // far
+        let b2 = make_plane_quad_with_surface(&mut mesh, mat, 100.0);
+
+        let result = mesh.boolean_dispatch_dcel_multi(
+            &[a1, a2], &[b1, b2], BoolOp::Union, BooleanTolerance::default(),
+        ).unwrap();
+
+        assert_eq!(result.path_used, BooleanPath::Nurbs);
+        assert!(result.all_removed_faces.is_empty(),
+            "all-disjoint pairs must not remove anything (Y-H/Y-I safe-only)");
+        assert!(result.all_new_faces.is_empty(),
+            "all-disjoint pairs must produce no new faces");
+        // All inputs must remain active (defense-in-depth).
+        for fid in [a1, a2, b1, b2] {
+            assert!(mesh.faces[fid].is_active(),
+                "input {:?} must remain active when all pairs are disjoint", fid);
+        }
+    }
+
+    /// Y-1 #5 — Y-D drop-in alongside: existing `boolean_dispatch_dcel`
+    /// (Path Z, single-face) must work identically alongside the new
+    /// multi method on the same mesh fixture.
+    #[test]
+    fn multi_face_dispatch_drop_in_alongside_path_z_unchanged() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        let b = make_plane_quad_with_surface(&mut mesh, mat, 5.0);
+
+        // Path Z still callable + identical result shape.
+        let z_result = mesh.boolean_dispatch_dcel(
+            a, b, BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("Path Z method must still work");
+        assert_eq!(z_result.path_used, BooleanPath::Nurbs);
+        assert!(z_result.dcel.is_some());
+        let z_disjoint = z_result.dcel.unwrap().disjoint;
+
+        // Now invoke multi on the same fixture (1×1 → Path Z delegation).
+        let multi_result = mesh.boolean_dispatch_dcel_multi(
+            &[a], &[b], BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("multi 1×1 delegation must work");
+
+        assert_eq!(multi_result.path_used, BooleanPath::Nurbs);
+        assert_eq!(multi_result.per_pair.len(), 1);
+        let m_disjoint = match &multi_result.per_pair[0].result {
+            Ok(d) => d.disjoint,
+            Err(e) => panic!("delegation result must be Ok: {}", e),
+        };
+        assert_eq!(z_disjoint, m_disjoint,
+            "Path Z and multi 1×1 delegation must produce identical disjoint flag");
     }
 }
