@@ -6032,6 +6032,72 @@ impl AxiaEngine {
         step6_json::boolean_dispatch_result_json(&dispatch_result)
     }
 
+    /// ADR-064 Step 6-α (Path Z) — DCEL Boolean dispatch result as JSON.
+    ///
+    /// Routes through `Mesh::boolean_dispatch_dcel` (Step 5). On
+    /// eligible single-face × single-face NURBS pairs, produces actual
+    /// DCEL faces with op-specific input removal. On ineligibility
+    /// (multi-face, surface missing, unsupported kind), returns
+    /// `pathUsed=Mesh` + `dcel=null` + `fallbackReason` populated;
+    /// caller decides whether to invoke `booleanDispatchJson` for the
+    /// mesh-path semantics (D-K=(a) — no auto fallback).
+    ///
+    /// Schema (per ADR-064 §C D-U=(c)):
+    /// ```json
+    /// { "schemaVersion": 1, "ok": true,
+    ///   "pathUsed": "Nurbs"|"Mesh",
+    ///   "fallbackReason": { "kind": "...", "label": "..." } | null,
+    ///   "dcel": { "newFacesA": [...], "newFacesB": [...],
+    ///             "removedFaces": [...], "preservedFaces": [...],
+    ///             "disjoint": bool, "robustnessClean": bool } | null,
+    ///   "nurbsAttempted": bool, "nurbsClean": bool,
+    ///   "intersectionChainCount": N }
+    /// ```
+    ///
+    /// On invalid op string or core Err: returns
+    /// `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
+    /// the transaction (D-H safe-only consistency).
+    #[wasm_bindgen(js_name = "booleanDispatchDcelJson")]
+    pub fn boolean_dispatch_dcel_json(
+        &mut self,
+        face_a_raw: u32,
+        face_b_raw: u32,
+        op_str: &str,
+        tol_geometric: f64,
+    ) -> String {
+        let op = match op_str {
+            "union"     => BoolOp::Union,
+            "subtract"  => BoolOp::Subtract,
+            "intersect" => BoolOp::Intersect,
+            _ => return r#"{"schemaVersion":1,"ok":false,"error":"invalid op string (expected: union | subtract | intersect)"}"#.to_string(),
+        };
+        let face_a = FaceId::new(face_a_raw);
+        let face_b = FaceId::new(face_b_raw);
+        // D-T=(c) — geometric tol from caller; topological default.
+        let mut tol = axia_geo::surfaces::ssi::tolerance::BooleanTolerance::default();
+        if tol_geometric > 0.0 {
+            tol.geometric = tol_geometric;
+        }
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let result = self.scene.mesh.boolean_dispatch_dcel(face_a, face_b, op, tol);
+        let dispatch_result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                self.scene.transactions.cancel();
+                return format!(
+                    r#"{{"schemaVersion":1,"ok":false,"error":"{}"}}"#,
+                    e.to_string().replace('"', "'"),
+                );
+            }
+        };
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        step6_json::boolean_dispatch_dcel_result_json(&dispatch_result)
+    }
+
     /// ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
     ///
     /// Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).
