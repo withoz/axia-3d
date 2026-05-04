@@ -8,6 +8,7 @@
 import {
   WasmBridge, NurbsBooleanResult,
   BooleanDispatchDcelResult,
+  BooleanDispatchDcelMultiResult,
 } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { Toast } from './Toast';
@@ -177,6 +178,93 @@ function handleDcelResult(
   return true;
 }
 
+/**
+ * ADR-066 Y-4 — Handle the multi-face DCEL dispatch result.
+ *
+ * @returns `true` if the result was fully handled. `false` if the
+ *   caller should fall through to legacy paths (null bridge /
+ *   pathUsed='Mesh' Y-E ineligible).
+ */
+function handleMultiDcelResult(
+  deps: BooleanHandlerDeps,
+  result: BooleanDispatchDcelMultiResult | null,
+  op: 'union' | 'subtract' | 'intersect',
+): boolean {
+  // bridge missing / WASM not exposed → fall through (graceful).
+  if (!result) return false;
+
+  // §F lock-in — engine error envelope shown explicitly.
+  if (result.kind === 'error') {
+    Toast.error(
+      `NURBS ${OP_NAME_KO[op]} (multi) — 엔진 오류 (${result.reason}):\n${result.detail}`,
+      8000,
+    );
+    debugLog(`[Multi DCEL Bool] ${op} error: ${result.reason} — ${result.detail}`);
+    return true;
+  }
+
+  // pathUsed === 'Mesh' → Y-E ineligible, fall through to legacy paths.
+  if (result.pathUsed !== 'Nurbs') {
+    debugLog(
+      `[Multi DCEL Bool] ${op} ineligible (pathUsed=${result.pathUsed}, ` +
+        `reason=${result.fallbackReason?.label ?? 'unknown'}); falling through.`,
+    );
+    return false;
+  }
+
+  // pathUsed === 'Nurbs' from here on. Analyze per-pair outcomes.
+  const totalPairs = result.perPair.length;
+  const successPairs = result.perPair.filter(p => p.outcome.kind === 'ok').length;
+  const errPairs = totalPairs - successPairs;
+  const newCount = result.allNewFaces.length;
+  const removedCount = result.allRemovedFaces.length;
+
+  // All-disjoint / no-closed-loops case — no actual mesh change.
+  // (Per-pair Ok with disjoint=true OR new_faces empty due to D-H safe-only.)
+  if (newCount === 0 && removedCount === 0) {
+    Toast.info(
+      `NURBS ${OP_NAME_KO[op]} (multi): 모든 ${totalPairs}개 pair 가 ` +
+        `교차하지 않거나 면 분할 미생성 (변경 없음).`,
+      4500,
+    );
+    debugLog(`[Multi DCEL Bool] ${op} all-disjoint/no-loops: ${totalPairs} pairs`);
+    return true;
+  }
+
+  // Partial failure — some pairs succeeded, some err'd.
+  // Per Y-4-d=(a) — Toast.warning with first warning hint, syncMesh
+  // since at least one pair mutated state.
+  if (errPairs > 0) {
+    deps.toolManager.syncMesh();
+    const firstWarning = result.warnings[0] ?? '(상세 없음)';
+    Toast.warning(
+      `NURBS ${OP_NAME_KO[op]} (multi) 부분 성공 — ` +
+        `${successPairs}/${totalPairs} pair 성공, 새 면 ${newCount}개, ` +
+        `제거 ${removedCount}개.\n첫 경고: ${firstWarning}`,
+      6000,
+    );
+    debugLog(
+      `[Multi DCEL Bool] ${op} partial: ${successPairs}/${totalPairs} ok, ` +
+        `new=${newCount}, removed=${removedCount}, warnings=${result.warnings.length}`,
+    );
+    return true;
+  }
+
+  // Full success — Y-4-c gives per-pair count visibility.
+  deps.toolManager.syncMesh();
+  Toast.info(
+    `NURBS ${OP_NAME_KO[op]} (multi) 완료 — 새 면 ${newCount}개, ` +
+      `제거 면 ${removedCount}개 (${successPairs}/${totalPairs} pair 성공).`,
+    3000,
+  );
+  debugLog(
+    `[Multi DCEL Bool] ${op} ok: ${successPairs}/${totalPairs} pairs, ` +
+      `allNew=${newCount}, allRemoved=${removedCount}, ` +
+      `warnings=${result.warnings.length}`,
+  );
+  return true;
+}
+
 export function startBooleanOp(
   deps: BooleanHandlerDeps,
   op: 'union' | 'subtract' | 'intersect',
@@ -193,6 +281,39 @@ export function startBooleanOp(
       6000,
     );
     return;
+  }
+
+  // ADR-066 Y-4 (Path Y) — Multi-face DCEL Boolean dispatch fast-path.
+  //
+  // For ≥2 selected faces, attempt the multi-face DCEL dispatcher
+  // (`booleanDispatchDcelMulti`) which routes eligible NURBS-aware
+  // selections through `nurbs_boolean_to_dcel` per cartesian pair.
+  // Selection split (Y-4-b=(a)) — half/half (matches existing mesh
+  // path policy below for fall-through compatibility).
+  //
+  // Y-1 1×1 degenerate handles the 2-face case via Path Z internally
+  // (single fast-path becomes special case of multi). Per Y-4-g=(b),
+  // the legacy single-face DCEL fast-path below is kept for back-compat.
+  //
+  // Result handling matrix (per handleMultiDcelResult):
+  // | Case                        | Toast    | syncMesh | Fall-through |
+  // |-----------------------------|----------|----------|--------------|
+  // | null bridge                 | none     | no       | yes          |
+  // | kind: 'error'               | error    | no       | no           |
+  // | pathUsed: 'Mesh' (Y-E)      | none     | no       | yes          |
+  // | all-disjoint / no-loops     | info     | no       | no           |
+  // | partial (some err'd)        | warning  | yes      | no           |
+  // | full success                | info     | yes      | no           |
+  if (selection.length >= 2 &&
+      typeof bridge.booleanDispatchDcelMulti === 'function') {
+    const mid = Math.ceil(selection.length / 2);
+    const facesA = selection.slice(0, mid);
+    const facesB = selection.slice(mid);
+    const multiResult = bridge.booleanDispatchDcelMulti(facesA, facesB, op);
+    const handled = handleMultiDcelResult(deps, multiResult, op);
+    if (handled) return;
+    // fall-through: null bridge OR pathUsed === 'Mesh'.
+    // Legacy single fast-path / NURBS probe / Sheet / Mesh paths take over.
   }
 
   // ADR-064 Step 6-γ (Path Z) — DCEL Boolean dispatch fast-path.

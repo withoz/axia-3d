@@ -268,4 +268,184 @@ describe('BooleanHandler', () => {
       expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-066 Y-4 (Path Y) — Multi DCEL Boolean dispatch UI integration
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-066 Y-4 multi DCEL fast-path', () => {
+    function setupMultiSelection(faces: number[] = [10, 20, 30, 40]): void {
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue(faces);
+    }
+
+    it('Nurbs path with new faces calls syncMesh and shows success toast', () => {
+      setupMultiSelection([10, 20, 30, 40]);  // half/half: A=[10,20], B=[30,40]
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 10, faceB: 30, outcome: { kind: 'ok', dcel: {
+            newFacesA: [100], newFacesB: [],
+            removedFaces: [10], preservedFaces: [],
+            disjoint: false, robustnessClean: true,
+          } } },
+          { faceA: 10, faceB: 40, outcome: { kind: 'ok', dcel: {
+            newFacesA: [], newFacesB: [],
+            removedFaces: [], preservedFaces: [10, 40],
+            disjoint: true, robustnessClean: true,
+          } } },
+          { faceA: 20, faceB: 30, outcome: { kind: 'ok', dcel: {
+            newFacesA: [101], newFacesB: [],
+            removedFaces: [20], preservedFaces: [],
+            disjoint: false, robustnessClean: true,
+          } } },
+          { faceA: 20, faceB: 40, outcome: { kind: 'ok', dcel: {
+            newFacesA: [], newFacesB: [],
+            removedFaces: [], preservedFaces: [20, 40],
+            disjoint: true, robustnessClean: true,
+          } } },
+        ],
+        allNewFaces: [100, 101],
+        allRemovedFaces: [10, 20],
+        warnings: [],
+      });
+
+      startBooleanOp(deps, 'subtract');
+
+      expect((deps.bridge as any).booleanDispatchDcelMulti)
+        .toHaveBeenCalledWith([10, 20], [30, 40], 'subtract');
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect(toastInfo).toHaveBeenCalled();
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('차집합');
+      expect(msg).toContain('multi');
+      expect(msg).toContain('새 면 2');
+      expect(msg).toContain('제거 면 2');
+      expect(msg).toContain('4/4');  // all 4 pairs succeeded
+      // Legacy mesh path must NOT be invoked.
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('Nurbs path with all-disjoint pairs shows info toast and skips syncMesh', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 10, faceB: 30, outcome: { kind: 'ok', dcel: {
+            newFacesA: [], newFacesB: [],
+            removedFaces: [], preservedFaces: [10, 30],
+            disjoint: true, robustnessClean: true,
+          } } },
+          { faceA: 10, faceB: 40, outcome: { kind: 'ok', dcel: {
+            newFacesA: [], newFacesB: [],
+            removedFaces: [], preservedFaces: [10, 40],
+            disjoint: true, robustnessClean: true,
+          } } },
+        ],
+        allNewFaces: [],
+        allRemovedFaces: [],
+        warnings: [],
+      });
+
+      startBooleanOp(deps, 'union');
+
+      expect(toastInfo).toHaveBeenCalled();
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('교차하지 않거나');
+      expect(msg).toContain('multi');
+      expect(msg).toContain('합집합');
+      // No syncMesh (no actual mesh change), no legacy fallback.
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('Nurbs path with partial failures shows warning toast and syncs mesh', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 10, faceB: 30, outcome: { kind: 'ok', dcel: {
+            newFacesA: [100], newFacesB: [],
+            removedFaces: [10], preservedFaces: [],
+            disjoint: false, robustnessClean: true,
+          } } },
+          { faceA: 10, faceB: 40, outcome: {
+            kind: 'err',
+            detail: 'InactiveFace: face_a FaceId(10) is inactive',
+          } },
+        ],
+        allNewFaces: [100],
+        allRemovedFaces: [10],
+        warnings: ['pair (FaceId(10), FaceId(40)): InactiveFace cascade'],
+      });
+
+      startBooleanOp(deps, 'subtract');
+
+      // Partial success → warning + syncMesh (per Y-4-d=(a)).
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect(toastWarn).toHaveBeenCalled();
+      const msg = toastWarn.mock.calls[0][0] as string;
+      expect(msg).toContain('부분 성공');
+      expect(msg).toContain('1/2');  // 1 success of 2 pairs
+      expect(msg).toContain('InactiveFace');
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('Mesh path (Y-E ineligible) falls through to legacy mesh boolean', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Mesh',
+        fallbackReason: { kind: 'SurfaceMissing', label: 'surface_missing' },
+        perPair: [],
+        allNewFaces: [],
+        allRemovedFaces: [],
+        warnings: ['Y-E strict: face missing surface'],
+      });
+
+      startBooleanOp(deps, 'union');
+
+      // Multi declined; legacy mesh boolean must run.
+      expect((deps.bridge as any).booleanDispatchDcelMulti).toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).toHaveBeenCalled();
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+    });
+
+    it('null bridge.booleanDispatchDcelMulti falls through (graceful)', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      // booleanDispatchDcelMulti undefined.
+      expect((deps.bridge as any).booleanDispatchDcelMulti).toBeUndefined();
+
+      startBooleanOp(deps, 'subtract');
+
+      // No DCEL toast/call. Legacy path executed.
+      expect(deps.bridge.booleanOp).toHaveBeenCalled();
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+    });
+
+    it('engine error envelope shows error toast and stops (no fallback)', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'error',
+        reason: 'engineErr',
+        detail: 'face_a 999 not found',
+      });
+
+      startBooleanOp(deps, 'subtract');
+
+      expect(toastError).toHaveBeenCalled();
+      const msg = toastError.mock.calls[0][0] as string;
+      expect(msg).toContain('multi');
+      expect(msg).toContain('engineErr');
+      expect(msg).toContain('not found');
+      // Error → no syncMesh, no legacy fallback.
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+  });
 });
