@@ -125,6 +125,73 @@ fn orthogonal_basis(normal: DVec3) -> DVec3 {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Step 2 prep — split_at curve inheritance (Line + Arc MVP)
+// ────────────────────────────────────────────────────────────────────
+
+use anyhow::{bail, Result};
+
+impl AnalyticCurve {
+    /// Split this curve at parameter `t ∈ parameter_range`, returning
+    /// two curves `(left, right)` such that `left` covers `[t_min, t]`
+    /// and `right` covers `[t, t_max]`.
+    ///
+    /// **Phase N Step 2 MVP scope**:
+    ///   - Line:   trivial — endpoint refers to caller-provided new vert
+    ///   - Arc:    parameter clamping (start_angle/end_angle adjusted)
+    ///   - Circle: Err — caller should split into two Arcs explicitly
+    ///   - Bezier / BSpline / NURBS: defers to Phase I knot insertion
+    ///     (TODO Step 2 follow-up — currently Err)
+    ///
+    /// The `mid_vert` parameter is the new VertId at the split point
+    /// (created by `Mesh::split_edge`). Used only by `Line` variant
+    /// to populate the new endpoint reference; ignored by other variants.
+    pub fn split_at(&self, t: f64, mid_vert: VertId) -> Result<(Self, Self)> {
+        match self {
+            AnalyticCurve::Line { start, end } => {
+                // Line is mesh-relative — split into two Lines sharing mid_vert
+                Ok((
+                    AnalyticCurve::Line { start: *start, end: mid_vert },
+                    AnalyticCurve::Line { start: mid_vert, end: *end },
+                ))
+            }
+            AnalyticCurve::Arc {
+                center, radius, normal, basis_u, start_angle, end_angle,
+            } => {
+                // Arc parameter t is the angle in [start_angle, end_angle]
+                if t < *start_angle - 1e-12 || t > *end_angle + 1e-12 {
+                    bail!("split_at: t={} outside arc range [{}, {}]",
+                        t, start_angle, end_angle);
+                }
+                Ok((
+                    AnalyticCurve::Arc {
+                        center: *center, radius: *radius,
+                        normal: *normal, basis_u: *basis_u,
+                        start_angle: *start_angle,
+                        end_angle: t,
+                    },
+                    AnalyticCurve::Arc {
+                        center: *center, radius: *radius,
+                        normal: *normal, basis_u: *basis_u,
+                        start_angle: t,
+                        end_angle: *end_angle,
+                    },
+                ))
+            }
+            AnalyticCurve::Circle { .. } => {
+                bail!("split_at: Circle must be promoted to Arc before splitting \
+                       (Phase N Step 2: caller responsibility)");
+            }
+            AnalyticCurve::Bezier { .. }
+            | AnalyticCurve::BSpline { .. }
+            | AnalyticCurve::NURBS { .. } => {
+                bail!("split_at: Bezier/BSpline/NURBS split via Phase I knot \
+                       insertion — Step 2 follow-up implementation pending");
+            }
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Tests — ADR-059 §3 Step 1 (4 회귀)
 // ────────────────────────────────────────────────────────────────────
 
@@ -225,6 +292,72 @@ mod tests {
             }
             other => panic!("expected Plane, got {:?}", other),
         }
+    }
+
+    /// Step 2 prep #5 — split_at on Line produces two Lines sharing mid_vert.
+    #[test]
+    fn split_at_line_produces_two_lines() {
+        let v0 = VertId::new(1);
+        let v1 = VertId::new(2);
+        let mid = VertId::new(99);
+        let line = synthesize_line_curve(v0, v1);
+        let (left, right) = line.split_at(0.5, mid).unwrap();
+        match (left, right) {
+            (AnalyticCurve::Line { start: s1, end: e1 },
+             AnalyticCurve::Line { start: s2, end: e2 }) => {
+                assert_eq!(s1, v0);
+                assert_eq!(e1, mid);
+                assert_eq!(s2, mid);
+                assert_eq!(e2, v1);
+            }
+            other => panic!("expected (Line, Line), got {:?}", other),
+        }
+    }
+
+    /// Step 2 prep #6 — split_at on Arc produces two Arcs with adjusted
+    /// angle ranges.
+    #[test]
+    fn split_at_arc_produces_two_arcs() {
+        let arc = AnalyticCurve::Arc {
+            center: DVec3::ZERO, radius: 1.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::PI,  // half circle
+        };
+        let mid = VertId::new(99);
+        let split_t = std::f64::consts::FRAC_PI_2;  // quarter point
+        let (left, right) = arc.split_at(split_t, mid).unwrap();
+        match (left, right) {
+            (AnalyticCurve::Arc { start_angle: s1, end_angle: e1, .. },
+             AnalyticCurve::Arc { start_angle: s2, end_angle: e2, .. }) => {
+                assert!((s1 - 0.0).abs() < 1e-12);
+                assert!((e1 - split_t).abs() < 1e-12);
+                assert!((s2 - split_t).abs() < 1e-12);
+                assert!((e2 - std::f64::consts::PI).abs() < 1e-12);
+            }
+            other => panic!("expected (Arc, Arc), got {:?}", other),
+        }
+    }
+
+    /// Step 2 prep #7 — split_at on Circle returns Err (caller must
+    /// promote to Arc first).
+    #[test]
+    fn split_at_circle_returns_err() {
+        let circle = AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 1.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        assert!(circle.split_at(1.0, VertId::new(99)).is_err());
+    }
+
+    /// Step 2 prep #8 — split_at on Bezier defers to Phase I (currently Err).
+    #[test]
+    fn split_at_bezier_returns_err_pending_phase_i() {
+        let bezier = AnalyticCurve::Bezier {
+            control_pts: vec![DVec3::ZERO, DVec3::X, DVec3::new(2.0, 0.0, 0.0)],
+        };
+        let r = bezier.split_at(0.5, VertId::new(99));
+        assert!(r.is_err(), "Bezier split should defer to Phase I knot insert");
     }
 
     /// Bonus: degenerate (collinear) loop falls back to default +Z plane
