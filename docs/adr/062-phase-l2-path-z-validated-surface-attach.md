@@ -1,6 +1,6 @@
 # ADR-062 — Phase L₂ Path Z: Validated Surface Attach (Pilot)
 
-**Status**: Draft (Path Z 사용자 결정 2026-05-04, Step 1 sign-off 대기)
+**Status**: Draft + Amendment 1 (refinements 적용 2026-05-04, Step 1 진입 승인)
 **Date**: 2026-05-04
 **Anchor**: ADR-052 master roadmap (Phase L₂, Path Z 좁은 pilot)
 **Parent**: ADR-052 §2.x Phase L₂
@@ -71,7 +71,7 @@ attach 경로 존재 (Phase O 도구):
 ### 2.2 §B — API 형태 (Rust)
 
 ```rust
-/// ADR-062 §B — Outcome of validated surface attach.
+/// ADR-062 §B — Outcome of validated surface attach (Amendment 1: 6 variants).
 #[derive(Clone, Debug, PartialEq)]
 pub enum SurfaceAttachOutcome {
     /// Successfully attached. `previous_kind` records what was there
@@ -89,6 +89,10 @@ pub enum SurfaceAttachOutcome {
     NoOuterLoop,
     /// Face is inactive (soft-deleted).
     InactiveFace,
+    /// **Amendment 1** — Surface input has degenerate parameters
+    /// (radius ≤ 0, axis_dir ≈ ZERO, half_angle ≤ 0 or ≥ π/2, etc.).
+    /// Detected pre-distance to avoid NaN/Inf cascade.
+    DegenerateSurfaceInput { reason: &'static str },
 }
 
 impl Mesh {
@@ -118,16 +122,30 @@ impl AnalyticSurface {
 }
 ```
 
-5종 closed-form:
+5종 closed-form (Amendment 1: degeneracy 명시):
 - **Plane**: `|(pos - origin) · normal|`
-- **Cylinder**: `|radial_distance - radius|` where radial = pos projected ⊥ to axis
-- **Sphere**: `|distance(pos, center) - radius|`
-- **Cone**: distance to nearest cone surface ray (geometric construction)
-- **Torus**: distance to torus = `|(pos - ring_center) - minor_radius|`
-  where ring_center = (in-plane projection) × major_radius from center
+- **Cylinder**: `|radial_distance - radius|` where radial = pos projected ⊥ to axis.
+  - **D-C lock-in**: u_range/v_range trim 무시 — primitive 위면 OK.
+- **Sphere**: `|distance(pos, center) - radius|`. u_range/v_range 무시 (D-C).
+- **Cone**: distance to nearest cone surface ray.
+  - **D-A lock-in**: behind-apex (along -axis_dir) 점은 apex 거리로 취급
+    (option a). Cone 은 +axis_dir 단방향 — behind 는 자연 거부됨.
+- **Torus**: distance to torus = `|(pos - ring_center).length() - minor_radius|`
+  where ring_center = (in-plane projection) × major_radius from center.
+  - **D-B lock-in**: pos 가 torus axis 위 (in_plane = ZERO) → `Some(f64::INFINITY)`
+    반환 (option c — 강제 거부). Validated attach 가 자동으로 BoundaryDrift
+    로 거부.
 
 Tensor (BezierPatch / BSplineSurface / NURBSSurface): `None` — 사용자가
 attach_surface_validated 시 `UnsupportedSurfaceKind` 반환.
+
+**ATTACH_VALIDATE_TOL 상수** (tolerances.rs 신규):
+```rust
+/// ADR-062 Path Z — Default tolerance for attach_surface_validated
+/// boundary-fit check. 1μm absolute (mm). Above LOCKED #5 1.5μm dedup
+/// floor. Caller can override per-call.
+pub const ATTACH_VALIDATE_TOL: f64 = 1e-3;
+```
 
 ### 2.4 §D — 7개 D 결정 (확정)
 
@@ -139,7 +157,11 @@ attach_surface_validated 시 `UnsupportedSurfaceKind` 반환.
 | **D4** | Boundary regen 미포함 | Path Y full 별도 |
 | **D5** | 기존 set_face_surface (raw, 검증 없음) 유지 | naming 구분: raw vs validated |
 | **D6** | UI 도구 추가 별도 ADR | 본 ADR backend 만 |
-| **D7** | 회귀 6개 (절대 #[ignore] 금지) | §X.5 lock-in #6 strict |
+| **D7** | 회귀 7개 (절대 #[ignore] 금지) | §X.5 lock-in #6 strict (Amendment 1: 6→7) |
+| **D-A** | Cone behind-apex → apex 거리 | option (a) — tol 로 사용자 결정 |
+| **D-B** | Torus axis-on-pos → `+∞` | option (c) — 강제 거부 |
+| **D-C** | u/v range trim 검증 | option (a) 무시 — pilot 외 |
+| **D-D** | WASM 5개 per-kind endpoint | W2 — 기존 setFaceSurface* 패턴 일관 |
 
 ### 2.5 §E — 6 영구 Lock-in
 
@@ -162,7 +184,8 @@ attach_surface_validated 시 `UnsupportedSurfaceKind` 반환.
    invalidate (Step 1a 의 set_surface 자동 hook 활용).
 
 6. WASM additive-only (ADR-060 §D 정합).
-   기존 export 변경 0. baseline 회귀가 강제.
+   기존 export 변경 0. baseline 회귀가 강제. W2 패턴: 5개 per-kind
+   endpoint 신규 (Plane/Cylinder/Sphere/Cone/Torus 각각 attach 검증판).
 ```
 
 ---
@@ -173,14 +196,14 @@ attach_surface_validated 시 `UnsupportedSurfaceKind` 반환.
 
 | Step | 영역 | 회귀 | 위험 |
 |------|------|------|------|
-| 1 | `AnalyticSurface::unsigned_distance_to` per-kind 헬퍼 (5 primitives) | 2 | 저 |
-| 2 | `SurfaceAttachOutcome` enum + `Mesh::attach_surface_validated` API | 2 | 저 |
-| 3 | WASM `attachFaceSurfaceValidatedJson` endpoint (additive) | 1 | 저 |
-| 4 | 기존 attach 경로 (Phase O Step 3/5) 와의 비-충돌 회귀 | 1 | 저 |
-| 5 | 종합 회귀 + 문서화 + WASM 재빌드 | 0 | 저 |
-| **합계** | — | **6** | — |
+| 1 | `unsigned_distance_to` per-kind (5 primitives + degenerate detection) + `ATTACH_VALIDATE_TOL` 상수 | 2 | 저 |
+| 2 | `SurfaceAttachOutcome` (6 variants) + `Mesh::attach_surface_validated` | 3 | 저 |
+| 3 | WASM 5개 per-kind endpoint (Plane/Cylinder/Sphere/Cone/Torus) + JSON outcome | 1 | 저 |
+| 4 | Phase O Step 3/5 비-충돌 + previous_kind 회귀 | 1 | 저 |
+| 5 | 종합 + WASM 재빌드 + baseline 갱신 | 0 | 저 |
+| **합계** | — | **7** | — |
 
-### 3.2 6 회귀 invariants (절대 #[ignore] 금지)
+### 3.2 7 회귀 invariants (Amendment 1: 6→7, 절대 #[ignore] 금지)
 
 1. **`attach_validated_succeeds_when_boundary_fits`** — Cylinder 위 4 verts → `Attached { previous_kind: None }`
 2. **`attach_validated_rejects_drift`** — 잘못된 radius → `BoundaryDriftExceedsTol { max_drift_mm > tol_mm }`
@@ -188,6 +211,28 @@ attach_surface_validated 시 `UnsupportedSurfaceKind` 반환.
 4. **`attach_validated_invalidates_normal_cache`** — Phase P-narrow §D #3 정합 (set_surface auto-bump 활용)
 5. **`attach_validated_replace_existing_records_previous_kind`** — Plane → Cylinder → `previous_kind = Some("Plane")`
 6. **`attach_validated_json_includes_schema_version`** — WASM JSON `{schemaVersion: 1, ok, outcome, ...}`
+7. **`attach_validated_rejects_degenerate_input`** (Amendment 1) — Cylinder
+   { radius: 0 } 또는 axis_dir = ZERO → `DegenerateSurfaceInput { reason }`
+
+### 3.3 JSON outcome shape (Amendment 1 — WASM W2 패턴)
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "outcome": "Attached" | "BoundaryDriftExceedsTol" | "UnsupportedSurfaceKind"
+           | "NoOuterLoop" | "InactiveFace" | "DegenerateSurfaceInput",
+  "previousKind": "Plane" | null,
+  "maxDriftMm": 0.0042,
+  "tolMm": 0.001,
+  "worstVertexIdx": 2,
+  "unsupportedKind": "BezierPatch",
+  "reason": "axis_dir is zero vector"
+}
+```
+
+Discriminated union via `outcome` 키 — 각 outcome 마다 사용 필드 부분집합.
+Consumer (TS) 는 `outcome` 분기 후 변종별 필드 access.
 
 ### 3.3 위험 매트릭스
 
