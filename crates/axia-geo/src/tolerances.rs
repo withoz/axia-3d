@@ -118,6 +118,17 @@ pub const SMOOTH_GROUP_ANGLE_DEG: f64 = 30.1;
 /// 오해하지 않기 위함 — 2026-04-17 분할 face push/pull 버그 수정).
 pub const EXACT_COPLANAR_ANGLE_DEG: f64 = 0.1;
 
+/// ADR-061 Phase P-narrow §B — Z.2 Curve Hover Cache chord tolerance.
+///
+/// Default chord-tol used by `Mesh::edge_cached_polyline_or_compute`.
+/// 0.01mm = 10μm — fine enough that hover Newton seed (closest polyline
+/// point → curve.evaluate refinement) converges in ≤2 iterations for
+/// typical edge curves (arcs / Bezier / B-spline).
+///
+/// LOCKED #5 정합: 1.5μm spatial-hash dedup 보다 큼 → polyline 점 사이
+/// vertex collapse 위험 없음.
+pub const HOVER_CHORD_TOL: f64 = 0.01;
+
 /// 도 → 라디안 변환 (런타임, `f64::cos`는 const가 아님)
 #[inline]
 pub fn deg_to_rad(deg: f64) -> f64 {

@@ -624,6 +624,58 @@ impl Mesh {
         Some(normals)
     }
 
+    /// ADR-061 Phase P-narrow Step 4 — Z.2 Curve Hover Cache hot-path.
+    ///
+    /// Returns the polyline tessellation of `edge_id`'s analytic curve
+    /// at the supplied `chord_tol`. Used as Newton initial-seed grid by
+    /// `ray_to_curve_distance` (ADR-040 P25).
+    ///
+    /// 1. If `edge.curve` is `None` → returns `None` (straight edge,
+    ///    closed-form distance handled elsewhere).
+    /// 2. If `!edge.should_cache_polyline()` (Line variant per §D #2)
+    ///    → tessellates fresh each call without caching. Returns `Some(...)`.
+    /// 3. If cache `curve_version` matches current → **HIT**: returns
+    ///    cloned polyline.
+    /// 4. Otherwise → **MISS**: tessellates via `AnalyticCurve::tessellate`,
+    ///    populates cache, returns.
+    ///
+    /// **§D #5 lock-in**: cache state is volatile (RefCell interior
+    /// mutability via `&self` — does not require `&mut`).
+    pub fn edge_cached_polyline_or_compute(
+        &self,
+        edge_id: EdgeId,
+        chord_tol: f64,
+    ) -> Option<Vec<DVec3>> {
+        use crate::curves::CurveOps;
+        let edge = self.edges.get(edge_id)?;
+        if !edge.is_active() { return None; }
+        let curve = edge.curve()?;
+
+        // Cache-eligibility short-circuit (Line / no curve).
+        if !edge.should_cache_polyline() {
+            return curve.tessellate(chord_tol, self).ok();
+        }
+
+        // Cache-hit check.
+        let cv = edge.curve_version();
+        {
+            let cache = edge.polyline_cache();
+            if let Some(entry) = cache.as_ref() {
+                if entry.curve_version == cv {
+                    return Some(entry.points.clone());
+                }
+            }
+        }
+
+        // Miss — compute + populate.
+        let points = curve.tessellate(chord_tol, self).ok()?;
+        edge.cache_polyline(crate::entities::PolylineCacheEntry {
+            curve_version: cv,
+            points: points.clone(),
+        });
+        Some(points)
+    }
+
     /// ADR-031 Phase D — Tessellate a face's analytic surface for rendering.
     ///
     /// - If the face has no surface (default polygon), returns None.
@@ -7601,6 +7653,104 @@ mod tests {
         // First normal should now be (0, 1, 0).
         assert!((normals2[0] - DVec3::Y).length() < 1e-9,
             "after move_vertex to (0,1,0), normal must be +Y, got {:?}", normals2[0]);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-061 Phase P-narrow Step 4 — Z.2 Curve Hover Cache hot-path tests
+    //
+    // 3 regression invariants (none #[ignore]):
+    //   8. polyline_cache_hit_returns_identical_data
+    //   9. polyline_cache_skips_line_curve (§D #2 lock-in)
+    //  10. polyline_cache_invalidates_on_endpoint_move (Step 2 hook
+    //      integration — move_vertex bumps curve_version)
+    // ════════════════════════════════════════════════════════════════
+
+    fn step4_circle_edge() -> (Mesh, EdgeId) {
+        let mut mesh = Mesh::default();
+        let v0 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(-1.0, 0.0, 0.0));
+        let (eid, _) = mesh.add_edge(v0, v1).unwrap();
+        // Attach a Circle curve (cacheable per §D #2).
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        mesh.edges[eid].set_curve(Some(circle));
+        (mesh, eid)
+    }
+
+    /// ADR-061 §B invariant #8 — Two consecutive calls return identical
+    /// polyline data (second served by cache).
+    #[test]
+    fn polyline_cache_hit_returns_identical_data() {
+        let (mesh, eid) = step4_circle_edge();
+        let first = mesh.edge_cached_polyline_or_compute(
+            eid, crate::tolerances::HOVER_CHORD_TOL,
+        ).expect("circle edge has curve");
+        assert!(mesh.edges[eid].polyline_cache().is_some(),
+            "first call must populate cache (Circle is cacheable per §D #2)");
+        let second = mesh.edge_cached_polyline_or_compute(
+            eid, crate::tolerances::HOVER_CHORD_TOL,
+        ).expect("hit");
+        assert_eq!(first.len(), second.len(),
+            "cached call must return same point count");
+        for (i, (a, b)) in first.iter().zip(second.iter()).enumerate() {
+            assert!((*a - *b).length() < 1e-15,
+                "polyline point {} mismatch: hit vs first ({:?} vs {:?})",
+                i, a, b);
+        }
+    }
+
+    /// ADR-061 §D #2 invariant #9 — Line edges are NEVER cached.
+    /// `edge_cached_polyline_or_compute` returns Some(...) (computed
+    /// fresh each call) but no entry stored.
+    #[test]
+    fn polyline_cache_skips_line_curve() {
+        let mut mesh = Mesh::default();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let (eid, _) = mesh.add_edge(v0, v1).unwrap();
+        // Attach explicit Line variant.
+        mesh.edges[eid].set_curve(Some(crate::curves::AnalyticCurve::Line {
+            start: v0, end: v1,
+        }));
+        assert!(!mesh.edges[eid].should_cache_polyline(),
+            "Line variant must not be cacheable per §D #2");
+
+        let polyline = mesh.edge_cached_polyline_or_compute(
+            eid, crate::tolerances::HOVER_CHORD_TOL,
+        ).expect("Line edge returns Some");
+        assert!(!polyline.is_empty(),
+            "Line tessellation must produce >=2 points");
+        // Critical: NO cache entry stored.
+        assert!(mesh.edges[eid].polyline_cache().is_none(),
+            "Line curve MUST NOT populate polyline_cache (§D #2 lock-in)");
+    }
+
+    /// ADR-061 §B invariant #10 — `Mesh::move_vertex` on an endpoint
+    /// vertex bumps the edge's curve_version, invalidating any cached
+    /// polyline. Next read recomputes.
+    #[test]
+    fn polyline_cache_invalidates_on_endpoint_move() {
+        let (mut mesh, eid) = step4_circle_edge();
+        // Populate cache.
+        let _ = mesh.edge_cached_polyline_or_compute(
+            eid, crate::tolerances::HOVER_CHORD_TOL,
+        );
+        assert!(mesh.edges[eid].polyline_cache().is_some());
+        let v_before = mesh.edges[eid].curve_version();
+
+        // Move v_small (an endpoint of this edge).
+        let v_small = mesh.edges[eid].v_small();
+        mesh.move_vertex(v_small, DVec3::new(2.0, 0.0, 0.0)).unwrap();
+
+        // curve_version bumped + cache cleared.
+        assert!(mesh.edges[eid].curve_version() > v_before,
+            "move_vertex on endpoint must bump edge curve_version");
+        assert!(mesh.edges[eid].polyline_cache().is_none(),
+            "move_vertex must invalidate polyline_cache");
     }
 
     /// ADR-061 §A + §B — `Mesh::move_vertex` bumps incident edges'

@@ -5909,6 +5909,47 @@ impl AxiaEngine {
     ///
     /// **§D additive-only** (ADR-060 lock-in #2): does not modify any
     /// existing endpoint.
+    /// ADR-061 Phase P-narrow Step 4 — Z.2 Curve Hover Cache hot-path.
+    ///
+    /// Returns the polyline tessellation of `edge_id_raw` as a flat
+    /// `Float64Array`:
+    ///   `[count, p0x, p0y, p0z, p1x, p1y, p1z, ...]`
+    ///
+    /// Use the returned polyline as Newton initial-seed grid for
+    /// `ray_to_curve_distance` (ADR-040 P25). For Line edges (or edges
+    /// with no curve attached) returns empty array — closed-form
+    /// distance applies, no polyline needed.
+    ///
+    /// First call on cacheable edge: MISS → compute + populate.
+    /// Subsequent calls (until curve_version changes): HIT.
+    ///
+    /// `chord_tol` defaults to `tolerances::HOVER_CHORD_TOL` (0.01mm)
+    /// when `≤ 0`.
+    ///
+    /// **§D additive-only** (ADR-060 lock-in #2): does not modify any
+    /// existing endpoint.
+    #[wasm_bindgen(js_name = "getEdgePolylineCached")]
+    pub fn get_edge_polyline_cached(&self, edge_id_raw: u32, chord_tol: f64) -> Vec<f64> {
+        let eid = EdgeId::new(edge_id_raw);
+        let tol = if chord_tol > 0.0 {
+            chord_tol
+        } else {
+            axia_geo::tolerances::HOVER_CHORD_TOL
+        };
+        let points = match self.scene.mesh.edge_cached_polyline_or_compute(eid, tol) {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let mut flat = Vec::with_capacity(1 + points.len() * 3);
+        flat.push(points.len() as f64);
+        for p in points {
+            flat.push(p.x);
+            flat.push(p.y);
+            flat.push(p.z);
+        }
+        flat
+    }
+
     #[wasm_bindgen(js_name = "getFaceNormalsCached")]
     pub fn get_face_normals_cached(&self, face_id_raw: u32) -> Vec<f64> {
         let fid = FaceId::new(face_id_raw);
