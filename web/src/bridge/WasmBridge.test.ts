@@ -939,4 +939,122 @@ describe('WasmBridge', () => {
       expect(out).toBeNull();
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-064 Step 6-β (Path Z) — booleanDispatchDcel typed wrapper
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-064 Step 6-β booleanDispatchDcel', () => {
+    it('returns null when engine.booleanDispatchDcelJson is missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};  // no booleanDispatchDcelJson
+      const out = bridge.booleanDispatchDcel(1, 2, 'subtract');
+      expect(out).toBeNull();
+    });
+
+    it('parses ok result with non-null dcel sub-object (Nurbs path)', () => {
+      const fakeJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        dcel: {
+          newFacesA: [12, 13],
+          newFacesB: [14],
+          removedFaces: [3, 7],
+          preservedFaces: [],
+          disjoint: false,
+          robustnessClean: true,
+        },
+        nurbsAttempted: true,
+        nurbsClean: true,
+        intersectionChainCount: 1,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: () => fakeJson,
+      };
+      const out = bridge.booleanDispatchDcel(3, 7, 'subtract');
+      expect(out).not.toBeNull();
+      expect(out!.kind).toBe('ok');
+      if (out!.kind === 'ok') {
+        expect(out!.pathUsed).toBe('Nurbs');
+        expect(out!.fallbackReason).toBeNull();
+        expect(out!.dcel).not.toBeNull();
+        expect(out!.dcel!.newFacesA).toEqual([12, 13]);
+        expect(out!.dcel!.removedFaces).toEqual([3, 7]);
+        expect(out!.dcel!.disjoint).toBe(false);
+        expect(out!.dcel!.robustnessClean).toBe(true);
+        expect(out!.intersectionChainCount).toBe(1);
+      }
+    });
+
+    it('parses ok result with null dcel for Mesh path (ineligible)', () => {
+      const fakeJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Mesh',
+        fallbackReason: { kind: 'SurfaceMissing', label: 'surface_missing' },
+        dcel: null,
+        nurbsAttempted: false,
+        nurbsClean: false,
+        intersectionChainCount: 0,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: () => fakeJson,
+      };
+      const out = bridge.booleanDispatchDcel(1, 2, 'union');
+      expect(out!.kind).toBe('ok');
+      if (out!.kind === 'ok') {
+        expect(out!.pathUsed).toBe('Mesh');
+        expect(out!.dcel).toBeNull();
+        expect(out!.fallbackReason).not.toBeNull();
+        expect(out!.fallbackReason!.kind).toBe('SurfaceMissing');
+        expect(out!.nurbsAttempted).toBe(false);
+      }
+    });
+
+    it('parses error result on engine error envelope (invalidOp / engineErr)', () => {
+      // Invalid op string → engine returns ok:false with "invalid op..." detail.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: () => JSON.stringify({
+          schemaVersion: 1, ok: false,
+          error: 'invalid op string (expected: union | subtract | intersect)',
+        }),
+      };
+      const out = bridge.booleanDispatchDcel(1, 2, 'union');
+      expect(out!.kind).toBe('error');
+      if (out!.kind === 'error') {
+        expect(out!.reason).toBe('invalidOp');
+        expect(out!.detail).toContain('invalid op');
+      }
+
+      // Generic engine error (different detail).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: () => JSON.stringify({
+          schemaVersion: 1, ok: false,
+          error: 'face_a 999 not found',
+        }),
+      };
+      const out2 = bridge.booleanDispatchDcel(999, 1, 'subtract');
+      expect(out2!.kind).toBe('error');
+      if (out2!.kind === 'error') {
+        expect(out2!.reason).toBe('engineErr');
+        expect(out2!.detail).toContain('not found');
+      }
+    });
+
+    it('returns parse error envelope on non-JSON response (defensive)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: () => 'not valid json{',
+      };
+      const out = bridge.booleanDispatchDcel(1, 2, 'subtract');
+      expect(out!.kind).toBe('error');
+      if (out!.kind === 'error') {
+        expect(out!.reason).toBe('parse');
+        expect(out!.detail).toContain('non-JSON');
+      }
+    });
+  });
 });

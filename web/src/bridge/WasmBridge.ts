@@ -393,6 +393,10 @@ type AxiaEngineExtended = AxiaEngine & {
   ): Float64Array;
   // ADR-027 Phase G3 — NURBS Boolean (UI integration)
   nurbsBoolean?(faceA: number, faceB: number, op: string): string;
+  // ADR-064 Step 6-α — DCEL-producing Boolean dispatch (Path Z)
+  booleanDispatchDcelJson?(
+    faceA: number, faceB: number, op: string, tolGeometric: number,
+  ): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -663,6 +667,79 @@ export class WasmBridge {
     } catch {
       return { kind: 'error', reason: 'parse', detail: 'engine returned non-JSON' };
     }
+  }
+
+  /**
+   * ADR-064 Step 6-β (Path Z) — DCEL-producing Boolean dispatch wrapper.
+   *
+   * Routes single-face × single-face NURBS pairs through
+   * `Mesh::boolean_dispatch_dcel` (Step 5) for actual DCEL face
+   * production with op-specific input removal. On ineligibility
+   * (multi-face / surface missing / unsupported kind), the result
+   * carries `pathUsed: 'Mesh'` + `dcel: null` + `fallbackReason`
+   * populated. Per D-K=(a), this method does NOT auto-invoke the
+   * mesh path — caller decides.
+   *
+   * @param faceA, faceB — face IDs (single faces only per Path Z)
+   * @param op — Boolean operation
+   * @param tolGeometric — geometric tolerance in mm (default 1e-3 per
+   *   ADR-064 D-AD; must be > 0 to override engine default)
+   *
+   * @returns
+   * - `null` — WASM not loaded or `booleanDispatchDcelJson` not exposed
+   * - `{ kind: 'ok', ... }` — engine succeeded; check `pathUsed` /
+   *   `dcel` to decide UI behavior
+   * - `{ kind: 'error', reason, detail }` — invalidOp / engineErr / parse
+   */
+  booleanDispatchDcel(
+    faceA: number,
+    faceB: number,
+    op: 'union' | 'subtract' | 'intersect',
+    tolGeometric: number = 1e-3,
+  ): BooleanDispatchDcelResult | null {
+    if (!this.engine || !this.engine.booleanDispatchDcelJson) return null;
+    // D-AA=(a) — topology will change on Nurbs path success.
+    this.markDirty();
+    const json = this.engine.booleanDispatchDcelJson(
+      faceA, faceB, op, tolGeometric,
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return { kind: 'error', reason: 'parse', detail: 'engine returned non-JSON' };
+    }
+    // §F lock-in (silent fallback prohibited) — explicit ok / error envelope.
+    const env = parsed as {
+      ok?: boolean; error?: string;
+      pathUsed?: string;
+      fallbackReason?: BooleanDispatchFallbackReason | null;
+      dcel?: BooleanDispatchDcel | null;
+      nurbsAttempted?: boolean;
+      nurbsClean?: boolean;
+      intersectionChainCount?: number;
+    };
+    if (env.ok === false) {
+      const detail = env.error ?? 'unknown engine error';
+      const reason: BooleanDispatchDcelErrorReason =
+        detail.includes('invalid op') ? 'invalidOp' : 'engineErr';
+      return { kind: 'error', reason, detail };
+    }
+    if (env.ok === true && typeof env.pathUsed === 'string') {
+      return {
+        kind: 'ok',
+        pathUsed: env.pathUsed as BooleanDispatchPath,
+        fallbackReason: env.fallbackReason ?? null,
+        dcel: env.dcel ?? null,
+        nurbsAttempted: env.nurbsAttempted ?? false,
+        nurbsClean: env.nurbsClean ?? false,
+        intersectionChainCount: env.intersectionChainCount ?? 0,
+      };
+    }
+    return {
+      kind: 'error', reason: 'parse',
+      detail: 'engine response missing required fields',
+    };
   }
 
 
@@ -3230,6 +3307,67 @@ export type NurbsBooleanResult =
         | 'bad_op'
         | 'engine'
         | 'parse';
+      detail: string;
+    };
+
+/**
+ * ADR-064 Step 6-β (Path Z) — DCEL Boolean dispatch result types.
+ *
+ * Mirrors the JSON envelope produced by Step 6-α
+ * `booleanDispatchDcelJson` WASM export. See ADR-064 §C D-U=(c) for
+ * the face-IDs-included schema rationale.
+ */
+export type BooleanDispatchPath = 'Mesh' | 'Nurbs' | 'NurbsWithMeshFallback';
+
+export type BooleanDispatchFallbackKind =
+  | 'SurfaceMissing'
+  | 'MultipleFacesNotSupported'
+  | 'UnsupportedSurfaceKind'
+  | 'TrimLoopsNotSupported'
+  | 'NurbsCoreError'
+  | 'SsiNotClean';
+
+export interface BooleanDispatchFallbackReason {
+  kind: BooleanDispatchFallbackKind;
+  label: string;
+}
+
+/**
+ * Sub-object describing the actual DCEL face deltas. Present when
+ * `pathUsed === 'Nurbs'`; null when `pathUsed === 'Mesh'` (eligibility
+ * was rejected — caller decides whether to invoke the mesh path).
+ *
+ * Even when present, all four arrays may be empty:
+ *   - `disjoint: true` → no intersection, all empty (D-F=(c))
+ *   - SSI non-empty but no closed loops → all empty (D-H safe-only)
+ */
+export interface BooleanDispatchDcel {
+  newFacesA: number[];
+  newFacesB: number[];
+  removedFaces: number[];
+  preservedFaces: number[];
+  disjoint: boolean;
+  robustnessClean: boolean;
+}
+
+export type BooleanDispatchDcelErrorReason =
+  | 'invalidOp'
+  | 'engineErr'
+  | 'parse';
+
+export type BooleanDispatchDcelResult =
+  | {
+      kind: 'ok';
+      pathUsed: BooleanDispatchPath;
+      fallbackReason: BooleanDispatchFallbackReason | null;
+      dcel: BooleanDispatchDcel | null;
+      nurbsAttempted: boolean;
+      nurbsClean: boolean;
+      intersectionChainCount: number;
+    }
+  | {
+      kind: 'error';
+      reason: BooleanDispatchDcelErrorReason;
       detail: string;
     };
 
