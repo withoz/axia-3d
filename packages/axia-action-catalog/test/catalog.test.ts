@@ -266,3 +266,46 @@ describe('Audit Finding 3 follow-through — stub status visible in catalog', ()
     }
   });
 });
+
+describe('ADR-063 Step 1 — Phase O+P+L₂ endpoints synchronized', () => {
+  it('catalog_includes_phase_o_p_l2_endpoints', () => {
+    // 13 endpoints registered per ADR-063 Step 1 §5 matrix.
+    // Phase O Step 6 (5) + Phase P-narrow (3) + Phase L₂ Path Z (5) = 13.
+    const required: ReadonlyArray<{ id: string; tier: 0 | 1 | 2 | 3; wasm: string }> = [
+      // Phase O Step 6
+      { id: 'edge-curve-info',                  tier: 0, wasm: 'getEdgeCurveJson' },
+      { id: 'face-surface-info',                tier: 0, wasm: 'getFaceSurfaceJson' },
+      { id: 'migrate-curve-surface',            tier: 2, wasm: 'migrateCurveSurfaceMandatory' },
+      { id: 'bool-dispatch',                    tier: 2, wasm: 'booleanDispatchJson' },
+      { id: 'fillet-dispatch',                  tier: 2, wasm: 'filletEdgeDispatchJson' },
+      // Phase P-narrow
+      { id: 'face-normals-cached',              tier: 0, wasm: 'getFaceNormalsCached' },
+      { id: 'edge-polyline-cached',             tier: 0, wasm: 'getEdgePolylineCached' },
+      { id: 'cache-stats',                      tier: 0, wasm: 'getCacheStats' },
+      // Phase L₂ Path Z (W2 per-kind)
+      { id: 'attach-surface-plane-validated',   tier: 1, wasm: 'attachFaceSurfacePlaneValidated' },
+      { id: 'attach-surface-cylinder-validated', tier: 1, wasm: 'attachFaceSurfaceCylinderValidated' },
+      { id: 'attach-surface-sphere-validated',  tier: 1, wasm: 'attachFaceSurfaceSphereValidated' },
+      { id: 'attach-surface-cone-validated',    tier: 1, wasm: 'attachFaceSurfaceConeValidated' },
+      { id: 'attach-surface-torus-validated',   tier: 1, wasm: 'attachFaceSurfaceTorusValidated' },
+    ];
+    for (const r of required) {
+      const def = getActionById(r.id);
+      expect(def, `${r.id} missing from catalog`).toBeDefined();
+      expect(def!.tier, `${r.id} tier mismatch`).toBe(r.tier);
+      expect(def!.aliases.wasm, `${r.id} wasm alias mismatch`).toBe(r.wasm);
+      // §D-B: surfaces should include 'mcp' AND 'palette' (Capability Explorer).
+      expect(def!.surfaces).toContain('mcp');
+      expect(def!.surfaces).toContain('palette');
+      // §D-E: status='ok' (wasm endpoint operational).
+      expect(def!.status, `${r.id} status should be 'ok'`).toBe('ok');
+      // §D-F: bridge alias intentionally absent (direct wasm call).
+      expect(def!.aliases.bridge, `${r.id} should NOT have bridge alias`).toBeUndefined();
+      // §D-G: mcp alias is snake_case auto-derived from id.
+      expect(def!.aliases.mcp, `${r.id} mcp alias missing`).toBeDefined();
+      expect(def!.aliases.mcp).toMatch(/^[a-z][a-z_]*$/);
+    }
+    // CATALOG_SIZE invariant: 82 (pre-Step-1) + 13 (Step 1) = 95.
+    expect(CATALOG_SIZE).toBe(95);
+  });
+});

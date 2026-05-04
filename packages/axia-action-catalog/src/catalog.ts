@@ -768,6 +768,148 @@ export const ALL_ACTIONS: readonly ActionDef[] = [
     aliases: {},
     status: 'delegated',
   },
+
+  // ─── ADR-063 Step 1 — Phase O+P+L₂ WASM endpoints synchronization ──
+  // These are programmatic endpoints (MCP / AI agent / Capability
+  // Explorer), NOT user UI tools. surfaces=['mcp','palette'] per D-B.
+  // No bridge alias (D-F) — direct WASM call. ID = kebab semantic
+  // (D-C). Tier per ADR-041 P26.1: read=0, attach=1, modify=2.
+
+  // Phase O Step 6 — diagnostic / migration / dispatch (5 endpoints)
+  {
+    id: 'edge-curve-info',
+    label: '엣지 곡선 정보',
+    description: 'Read AnalyticCurve attached to an edge as JSON (Line/Circle/Arc/Bezier/BSpline/NURBS). Read-only diagnostic.',
+    tier: 0,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'getEdgeCurveJson', mcp: 'edge_curve_info' },
+    status: 'ok',
+    adrs: ['ADR-060'],
+  },
+  {
+    id: 'face-surface-info',
+    label: '면 표면 정보',
+    description: 'Read AnalyticSurface attached to a face as JSON (Plane/Cylinder/Sphere/Cone/Torus/tensor). Read-only diagnostic.',
+    tier: 0,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'getFaceSurfaceJson', mcp: 'face_surface_info' },
+    status: 'ok',
+    adrs: ['ADR-060'],
+  },
+  {
+    id: 'migrate-curve-surface',
+    label: '곡선·표면 마이그레이션',
+    description: 'Phase N migration: drift sanity check with auto-demote. Mutates state, single transaction.',
+    tier: 2,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'migrateCurveSurfaceMandatory', mcp: 'migrate_curve_surface' },
+    status: 'ok',
+    adrs: ['ADR-059', 'ADR-060'],
+  },
+  {
+    id: 'bool-dispatch',
+    label: '불리언 디스패치 (NURBS-aware)',
+    description: 'WASM-level Boolean dispatch with §F lock-in (silent fallback prohibited). Returns BooleanPath + reason. Distinct from UI tools bool-union/-subtract/-intersect.',
+    tier: 2,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'booleanDispatchJson', mcp: 'bool_dispatch' },
+    status: 'ok',
+    adrs: ['ADR-060'],
+  },
+  {
+    id: 'fillet-dispatch',
+    label: '필렛 디스패치 (NURBS-aware)',
+    description: 'WASM-level Fillet dispatch with FilletPath + skip reason. Distinct from UI tool fillet-edge.',
+    tier: 2,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'filletEdgeDispatchJson', mcp: 'fillet_dispatch' },
+    status: 'ok',
+    adrs: ['ADR-060'],
+  },
+
+  // Phase P-narrow — cache hot-path + stats (3 endpoints)
+  {
+    id: 'face-normals-cached',
+    label: '면 법선 캐시 조회',
+    description: 'Z.1 Normal Cache hot-path: per-vertex analytic normals for ADR-038 surface-aware rendering.',
+    tier: 0,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'getFaceNormalsCached', mcp: 'face_normals_cached' },
+    status: 'ok',
+    adrs: ['ADR-038', 'ADR-061'],
+  },
+  {
+    id: 'edge-polyline-cached',
+    label: '엣지 폴리라인 캐시 조회',
+    description: 'Z.2 Curve Hover Cache hot-path: tessellated polyline for ADR-040 hover Newton seed.',
+    tier: 0,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'getEdgePolylineCached', mcp: 'edge_polyline_cached' },
+    status: 'ok',
+    adrs: ['ADR-040', 'ADR-061'],
+  },
+  {
+    id: 'cache-stats',
+    label: '캐시 통계',
+    description: 'Aggregate Z.1 + Z.2 cache state (entry count, byte usage, eviction count, 100MB cap).',
+    tier: 0,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'getCacheStats', mcp: 'cache_stats' },
+    status: 'ok',
+    adrs: ['ADR-061'],
+  },
+
+  // Phase L₂ Path Z — validated surface attach (5 endpoints, W2 pattern)
+  {
+    id: 'attach-surface-plane-validated',
+    label: '평면 표면 부착 (검증)',
+    description: 'Validated Plane surface attach with boundary drift check. §F lock-in: explicit outcome (Attached / BoundaryDriftExceedsTol / DegenerateSurfaceInput / etc).',
+    tier: 1,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'attachFaceSurfacePlaneValidated', mcp: 'attach_surface_plane_validated' },
+    status: 'ok',
+    adrs: ['ADR-062'],
+  },
+  {
+    id: 'attach-surface-cylinder-validated',
+    label: '원통 표면 부착 (검증)',
+    description: 'Validated Cylinder surface attach with boundary drift check.',
+    tier: 1,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'attachFaceSurfaceCylinderValidated', mcp: 'attach_surface_cylinder_validated' },
+    status: 'ok',
+    adrs: ['ADR-062'],
+  },
+  {
+    id: 'attach-surface-sphere-validated',
+    label: '구 표면 부착 (검증)',
+    description: 'Validated Sphere surface attach with boundary drift check.',
+    tier: 1,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'attachFaceSurfaceSphereValidated', mcp: 'attach_surface_sphere_validated' },
+    status: 'ok',
+    adrs: ['ADR-062'],
+  },
+  {
+    id: 'attach-surface-cone-validated',
+    label: '원뿔 표면 부착 (검증)',
+    description: 'Validated Cone surface attach with boundary drift check. D-A lock-in: behind-apex points use apex distance.',
+    tier: 1,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'attachFaceSurfaceConeValidated', mcp: 'attach_surface_cone_validated' },
+    status: 'ok',
+    adrs: ['ADR-062'],
+  },
+  {
+    id: 'attach-surface-torus-validated',
+    label: '토러스 표면 부착 (검증)',
+    description: 'Validated Torus surface attach with boundary drift check. D-B lock-in: axis-on-pos returns +Inf (force reject).',
+    tier: 1,
+    surfaces: ['mcp', 'palette'],
+    aliases: { wasm: 'attachFaceSurfaceTorusValidated', mcp: 'attach_surface_torus_validated' },
+    status: 'ok',
+    adrs: ['ADR-062'],
+  },
 ] as const;
 
 // ─── Lookup indices (built once at module load) ────────────────────
