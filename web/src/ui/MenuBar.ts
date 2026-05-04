@@ -116,6 +116,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       'view-sun-panel': isPanelOpen('__axia_sunPanel'),
       'view-history': isPanelOpen('__axia_historyPanel'),
       'view-capability-explorer': isPanelOpen('__axia_capabilityExplorer'),
+      'view-invariant-verifier': isPanelOpen('__axia_invariantVerifier'),
     };
     for (const [action, on] of Object.entries(state)) {
       const el = menubar.querySelector(`.menu-action[data-action="${action}"]`);
@@ -452,6 +453,14 @@ export function initMenuBar(deps: MenuBarDeps): void {
         const cep = (window as unknown as { __axia_capabilityExplorer?: { toggle(): void } }).__axia_capabilityExplorer;
         if (cep?.toggle) cep.toggle();
         else Toast.warning('Capability Explorer 를 사용할 수 없습니다.');
+        break;
+      }
+      case 'view-invariant-verifier': {
+        // ADR-068 Phase 1 Path Y B sub-feature — Invariant Verifier
+        // (ADR-007 검증 surface). 단축키 보류, 메뉴만.
+        const ivp = (window as unknown as { __axia_invariantVerifier?: { toggle(): void } }).__axia_invariantVerifier;
+        if (ivp?.toggle) ivp.toggle();
+        else Toast.warning('Invariant Verifier 를 사용할 수 없습니다.');
         break;
       }
       case 'view-scenes': {

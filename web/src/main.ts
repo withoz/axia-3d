@@ -17,6 +17,7 @@ import { ComponentPanel } from './ui/ComponentPanel';
 import { ConstraintPanel } from './ui/ConstraintPanel';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { CapabilityExplorerPanel } from './ui/CapabilityExplorerPanel';
+import { InvariantVerifierPanel } from './ui/InvariantVerifierPanel';
 import { SunPanel } from './ui/SunPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
@@ -637,6 +638,23 @@ async function main() {
     (window as unknown as { __axia_capabilityExplorer?: CapabilityExplorerPanel })
       .__axia_capabilityExplorer = capabilityExplorerPanel;
     // 단축키 보류 (D-C=(b) 메뉴만). Step 5 종합에서 단축키 결정.
+  }
+
+  // ═══ 15c. Invariant Verifier Panel (ADR-068 Phase 1 Path Y B pilot) ═══
+  // §D #1 lock-in: WASM verifyInvariants 재사용 (ADR-007), 백엔드 신규 0.
+  // §D #2 lock-in: Path Z scope — A/C/D sub-features 별도 ADR.
+  {
+    const invariantVerifierPanel = new InvariantVerifierPanel(viewportEl, {
+      runVerify: () => bridge.verifyInvariants(),
+      jumpToFace: (faceId: number) => {
+        // ADR-068 §D #4 lock-in: jump = SelectionManager.selectFaces only.
+        // Camera 이동은 Phase 2 enhancement.
+        toolManager.selection.clearSelection?.();
+        toolManager.selection.selectFaces([faceId]);
+      },
+    });
+    (window as unknown as { __axia_invariantVerifier?: InvariantVerifierPanel })
+      .__axia_invariantVerifier = invariantVerifierPanel;
   }
 
   // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══
