@@ -38,11 +38,45 @@ const TIER_COLORS: Record<Tier, string> = {
   3: '#e07878', // red (destructive)
 };
 
-export interface CapabilityExplorerPanelCallbacks {
-  /** Future: dispatch a Tier 0/1/2 action (Step 4). Step 3 only renders
-   *  details; clicking an action does not invoke it yet. */
-  onActionInvoke?: (actionId: string) => void;
+/** ADR-063 Step 4 — Result of an action invocation. */
+export interface ActionInvokeResult {
+  ok: boolean;
+  /** Stringified result (JSON / Float64Array summary / etc.). */
+  result?: string;
+  /** Human-readable error if `ok=false`. */
+  error?: string;
 }
+
+export interface CapabilityExplorerPanelCallbacks {
+  /** ADR-063 Step 4 — Dispatch an action by id with optional args.
+   *  Returns the result string for inline display.
+   *
+   *  Consumer (main.ts) is responsible for:
+   *    - Tier 0: invoke read-only WASM endpoint directly
+   *    - Tier 1/2: launch existing UI tool OR call WASM with args
+   *    - Tier 2/3: confirm dialog already happened in panel
+   *    - Argument validation, parsing, error handling
+   *  */
+  onActionInvoke?: (actionId: string, args: Record<string, unknown>) => Promise<ActionInvokeResult> | ActionInvokeResult;
+}
+
+/** ADR-063 Step 4 — Argument schema hint per action.
+ *  Maps action id → expected args. Used for inline form prompts.
+ *  Best-effort heuristic; complex multi-arg endpoints (e.g., Tier 1
+ *  attach-surface-*) display a "args required" hint rather than form. */
+const ACTION_ARG_HINTS: Record<string, ReadonlyArray<{ name: string; kind: 'u32' | 'f64' | 'none' }>> = {
+  // Tier 0 read endpoints — single ID arg.
+  'edge-curve-info':       [{ name: 'edgeId', kind: 'u32' }],
+  'face-surface-info':     [{ name: 'faceId', kind: 'u32' }],
+  'face-normals-cached':   [{ name: 'faceId', kind: 'u32' }],
+  'edge-polyline-cached':  [{ name: 'edgeId', kind: 'u32' }, { name: 'chordTol', kind: 'f64' }],
+  // Tier 0 — no args.
+  'cache-stats':           [],
+  // Tier 2 — no args (state mutation, simple).
+  'migrate-curve-surface': [],
+  // Tier 2 fillet-dispatch — 3 args.
+  'fillet-dispatch':       [{ name: 'edgeId', kind: 'u32' }, { name: 'radius', kind: 'f64' }, { name: 'segments', kind: 'u32' }],
+};
 
 export class CapabilityExplorerPanel {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -245,11 +279,155 @@ export class CapabilityExplorerPanel {
       <div class="cep-details-row"><b>Surfaces:</b> ${this.escape(surfacesText)}</div>
       ${aliasParts.length > 0 ? `<div class="cep-details-row">${aliasParts.join(' · ')}</div>` : ''}
       ${adrsText ? `<div class="cep-details-row"><b>ADRs:</b> ${this.escape(adrsText)}</div>` : ''}
-      <div class="cep-details-hint">
-        Step 4 에서 Tier ${action.tier === 0 ? '0 인라인 form' : '1/2 launcher'}로 호출 가능 예정.
-      </div>
     `;
+
+    // ADR-063 Step 4 — invocation form (Tier 0) or launcher (Tier 1/2/3).
+    details.appendChild(this.buildActionForm(action));
     return details;
+  }
+
+  /** ADR-063 Step 4 — Build inline argument form + Run / Launch button.
+   *
+   *  Behavior matrix:
+   *    - Tier 0, args known: argument inputs + "Run" button (read-only, no confirm)
+   *    - Tier 0, args unknown / multi-arg: "args required" hint
+   *    - Tier 1/2: "Launch" button. Tier 2 prompts confirm() before invoking.
+   *    - Tier 3: "Launch (advanced)" button + confirm. Step 5 will gate
+   *      this behind a global "Show advanced" toggle.
+   */
+  private buildActionForm(action: ActionDef): HTMLElement {
+    const form = document.createElement('div');
+    form.className = 'cep-action-form';
+
+    const hint = ACTION_ARG_HINTS[action.id];
+    const knownArgs = hint !== undefined;
+
+    // Argument inputs.
+    const inputs: HTMLInputElement[] = [];
+    if (knownArgs && hint!.length > 0) {
+      const argsRow = document.createElement('div');
+      argsRow.className = 'cep-form-args';
+      for (const arg of hint!) {
+        const wrap = document.createElement('label');
+        wrap.className = 'cep-form-arg';
+        wrap.innerHTML = `<span class="cep-form-arg-label">${arg.name} <em>(${arg.kind})</em></span>`;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'cep-form-arg-input';
+        input.dataset.argName = arg.name;
+        input.dataset.argKind = arg.kind;
+        input.placeholder = arg.kind === 'u32' ? '0' : '0.0';
+        wrap.appendChild(input);
+        argsRow.appendChild(wrap);
+        inputs.push(input);
+      }
+      form.appendChild(argsRow);
+    } else if (!knownArgs) {
+      // Complex multi-arg endpoint (Tier 1 attach-surface-*-validated).
+      const note = document.createElement('div');
+      note.className = 'cep-form-note';
+      note.textContent =
+        action.tier >= 1 && action.aliases.bridge
+          ? '기존 UI 도구로 실행 (Launch 버튼 사용).'
+          : '복합 인자가 필요합니다. 코드 / MCP 호출 권장. (Capability Explorer pilot 외)';
+      form.appendChild(note);
+    }
+
+    // Action button.
+    const btn = document.createElement('button');
+    btn.className = 'cep-form-btn';
+    btn.dataset.tier = String(action.tier);
+    btn.textContent = action.tier === 0 ? 'Run' : 'Launch';
+    if (action.tier >= 2) btn.textContent += ' (변경)';
+    if (action.tier === 3) btn.textContent = 'Launch (advanced)';
+    btn.addEventListener('click', () => this.handleInvoke(action, inputs));
+    form.appendChild(btn);
+
+    // Result display area.
+    const resultEl = document.createElement('pre');
+    resultEl.className = 'cep-form-result';
+    resultEl.style.display = 'none';
+    form.appendChild(resultEl);
+
+    return form;
+  }
+
+  /** ADR-063 Step 4 — Parse args + invoke action via callback.
+   *  Tier ≥ 2 triggers a `confirm()` dialog (lock-in §D #3). */
+  private async handleInvoke(action: ActionDef, inputs: HTMLInputElement[]): Promise<void> {
+    // Tier 2/3 confirmation (lock-in §D #3 — explicit user consent).
+    if (action.tier >= 2) {
+      const tierName = action.tier === 3 ? 'Tier 3 (DESTRUCTIVE)' : 'Tier 2 (modificative)';
+      const ok = window.confirm(
+        `${tierName} 작업: ${action.label}\n\n${action.description}\n\n실행하시겠습니까?`,
+      );
+      if (!ok) return;
+    }
+
+    // Parse args from inputs.
+    const args: Record<string, unknown> = {};
+    for (const input of inputs) {
+      const name = input.dataset.argName!;
+      const kind = input.dataset.argKind!;
+      const raw = input.value.trim();
+      if (raw === '') {
+        // Default zero.
+        args[name] = kind === 'u32' ? 0 : 0.0;
+        continue;
+      }
+      if (kind === 'u32') {
+        const n = parseInt(raw, 10);
+        if (Number.isNaN(n) || n < 0) {
+          this.showResult(action.id, { ok: false, error: `${name}: invalid u32 "${raw}"` });
+          return;
+        }
+        args[name] = n;
+      } else {
+        const n = parseFloat(raw);
+        if (Number.isNaN(n)) {
+          this.showResult(action.id, { ok: false, error: `${name}: invalid f64 "${raw}"` });
+          return;
+        }
+        args[name] = n;
+      }
+    }
+
+    // Dispatch via callback.
+    if (!this.callbacks.onActionInvoke) {
+      this.showResult(action.id, {
+        ok: false,
+        error: 'onActionInvoke 콜백이 등록되지 않았습니다 (main.ts wire 필요).',
+      });
+      return;
+    }
+    try {
+      const result = await this.callbacks.onActionInvoke(action.id, args);
+      this.showResult(action.id, result);
+    } catch (e) {
+      this.showResult(action.id, {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /** Show result/error in the inline result element of the expanded
+   *  action's form. */
+  private showResult(actionId: string, result: ActionInvokeResult): void {
+    const row = this.panelEl.querySelector(`.cep-action-row[data-action-id="${actionId}"]`);
+    if (!row) return;
+    const resultEl = row.querySelector('.cep-form-result') as HTMLElement | null;
+    if (!resultEl) return;
+    resultEl.style.display = 'block';
+    if (result.ok) {
+      resultEl.classList.remove('cep-result-err');
+      resultEl.classList.add('cep-result-ok');
+      resultEl.textContent = result.result ?? '(no result)';
+    } else {
+      resultEl.classList.remove('cep-result-ok');
+      resultEl.classList.add('cep-result-err');
+      resultEl.textContent = `Error: ${result.error ?? 'unknown'}`;
+    }
   }
 
   private escape(s: string): string {
@@ -404,6 +582,96 @@ export class CapabilityExplorerPanel {
         color: #888;
         font-style: italic;
         font-size: 10px;
+      }
+      .capability-explorer .cep-action-form {
+        margin-top: 8px;
+        padding: 8px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 4px;
+      }
+      .capability-explorer .cep-form-args {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .capability-explorer .cep-form-arg {
+        display: flex;
+        flex-direction: column;
+        font-size: 10px;
+        color: #aaa;
+      }
+      .capability-explorer .cep-form-arg-label em {
+        color: #7ec8e3;
+        font-style: normal;
+        font-size: 9px;
+      }
+      .capability-explorer .cep-form-arg-input {
+        width: 100px;
+        background: rgba(0, 0, 0, 0.4);
+        color: #e8e8e8;
+        border: 1px solid #555;
+        border-radius: 3px;
+        padding: 3px 6px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        outline: none;
+      }
+      .capability-explorer .cep-form-arg-input:focus {
+        border-color: #7ec8e3;
+      }
+      .capability-explorer .cep-form-note {
+        font-size: 10px;
+        color: #aaa;
+        font-style: italic;
+        margin-bottom: 6px;
+      }
+      .capability-explorer .cep-form-btn {
+        background: #2a5870;
+        color: #e8e8e8;
+        border: 1px solid #4080a0;
+        border-radius: 3px;
+        padding: 4px 12px;
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .capability-explorer .cep-form-btn:hover {
+        background: #3070a0;
+      }
+      .capability-explorer .cep-form-btn[data-tier="2"] {
+        background: #785038;
+        border-color: #a06848;
+      }
+      .capability-explorer .cep-form-btn[data-tier="2"]:hover {
+        background: #905848;
+      }
+      .capability-explorer .cep-form-btn[data-tier="3"] {
+        background: #783030;
+        border-color: #a04848;
+      }
+      .capability-explorer .cep-form-btn[data-tier="3"]:hover {
+        background: #904040;
+      }
+      .capability-explorer .cep-form-result {
+        margin-top: 6px;
+        padding: 6px 8px;
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: 3px;
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        line-height: 1.4;
+        max-height: 180px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .capability-explorer .cep-form-result.cep-result-ok {
+        color: #a8d890;
+        border-left: 3px solid #6a9858;
+      }
+      .capability-explorer .cep-form-result.cep-result-err {
+        color: #e0a8a8;
+        border-left: 3px solid #985858;
       }
     `;
     document.head.appendChild(style);

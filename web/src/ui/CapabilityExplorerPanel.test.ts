@@ -135,3 +135,80 @@ describe('ADR-063 Step 3 — actions tree + Tier groups + search', () => {
     container.remove();
   });
 });
+
+describe('ADR-063 Step 4 — Tier 0 form + Tier 1/2 launcher', () => {
+  it('capability_explorer_tier0_form_executes_action', async () => {
+    // Tier 0 (no-args) action: cache-stats. Click expand → Run → callback fires.
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const calls: { id: string; args: Record<string, unknown> }[] = [];
+    const panel = new CapabilityExplorerPanel(container, {
+      onActionInvoke: (actionId, args) => {
+        calls.push({ id: actionId, args });
+        return { ok: true, result: '{"schemaVersion":1,"totalBytes":0}' };
+      },
+    });
+    panel.show();
+
+    // Find the cache-stats row + click to expand.
+    const row = container.querySelector('.cep-action-row[data-action-id="cache-stats"]') as HTMLElement;
+    expect(row, 'cache-stats row must render').toBeTruthy();
+    (row.querySelector('.cep-action-head') as HTMLElement).click();
+
+    // Click the Run button.
+    const btn = container.querySelector('.cep-action-row[data-action-id="cache-stats"] .cep-form-btn') as HTMLElement;
+    expect(btn, 'Run button must render after expand').toBeTruthy();
+    expect(btn.textContent).toContain('Run');
+    btn.click();
+
+    // Allow async callback resolution.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(calls.length, 'callback must fire on Run').toBe(1);
+    expect(calls[0].id).toBe('cache-stats');
+
+    // Result element shows ok class.
+    const result = container.querySelector(
+      '.cep-action-row[data-action-id="cache-stats"] .cep-form-result',
+    ) as HTMLElement;
+    expect(result).toBeTruthy();
+    expect(result.style.display).not.toBe('none');
+    expect(result.classList.contains('cep-result-ok')).toBe(true);
+
+    panel.dispose();
+    container.remove();
+  });
+
+  it('capability_explorer_tier2_requires_confirm', () => {
+    // Tier 2 (migrate-curve-surface) — confirm() must be called before invoke.
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    let confirmCalled = 0;
+    let callbackCalled = 0;
+    const origConfirm = window.confirm;
+    window.confirm = () => { confirmCalled++; return false; }; // user cancels
+
+    const panel = new CapabilityExplorerPanel(container, {
+      onActionInvoke: () => { callbackCalled++; return { ok: true }; },
+    });
+    panel.show();
+
+    const row = container.querySelector('.cep-action-row[data-action-id="migrate-curve-surface"]') as HTMLElement;
+    expect(row).toBeTruthy();
+    (row.querySelector('.cep-action-head') as HTMLElement).click();
+
+    const btn = container.querySelector(
+      '.cep-action-row[data-action-id="migrate-curve-surface"] .cep-form-btn',
+    ) as HTMLElement;
+    expect(btn.textContent).toContain('변경');
+    btn.click();
+
+    expect(confirmCalled, 'confirm dialog must trigger for Tier 2').toBe(1);
+    expect(callbackCalled, 'cancelled confirm must skip callback').toBe(0);
+
+    window.confirm = origConfirm;
+    panel.dispose();
+    container.remove();
+  });
+});

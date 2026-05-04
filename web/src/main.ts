@@ -589,15 +589,54 @@ async function main() {
     });
   }
 
-  // ═══ 15b. Capability Explorer Panel (ADR-063 Phase 1 Path Z Step 2) ═══
+  // ═══ 15b. Capability Explorer Panel (ADR-063 Phase 1 Path Z) ═══
   // §D #1 lock-in: 단일 ActionCatalog 사용 사이트.
-  // Step 2 = 빈 scaffold, Step 3+ 에서 actions tree 표시.
+  // Step 2 scaffold + Step 3 tree/search + Step 4 invocation form.
   {
-    const capabilityExplorerPanel = new CapabilityExplorerPanel(viewportEl, {});
+    const capabilityExplorerPanel = new CapabilityExplorerPanel(viewportEl, {
+      // ADR-063 Step 4 — Action invocation dispatcher.
+      // Tier 0 read 는 직접 WASM 호출, Tier 1/2 launcher 는 ToolManager
+      // executeAction 경유. 알 수 없는 액션은 명시 거부.
+      onActionInvoke: async (actionId, args) => {
+        try {
+          // 1. Tier 0 read + Phase O Step 6 / P-narrow / Path Z direct dispatch.
+          const eng = bridge.engine as unknown as Record<string, (...a: unknown[]) => unknown> | null;
+          if (eng) {
+            const directDispatch: Record<string, () => unknown> = {
+              'edge-curve-info':       () => eng.getEdgeCurveJson?.(Number(args.edgeId)),
+              'face-surface-info':     () => eng.getFaceSurfaceJson?.(Number(args.faceId)),
+              'face-normals-cached':   () => {
+                const arr = eng.getFaceNormalsCached?.(Number(args.faceId)) as Float64Array | undefined;
+                return arr ? `Float64Array(len=${arr.length}): [${Array.from(arr.slice(0, 12)).join(', ')}${arr.length > 12 ? ', ...' : ''}]` : null;
+              },
+              'edge-polyline-cached':  () => {
+                const arr = eng.getEdgePolylineCached?.(Number(args.edgeId), Number(args.chordTol ?? 0)) as Float64Array | undefined;
+                return arr ? `Float64Array(len=${arr.length})` : null;
+              },
+              'cache-stats':           () => eng.getCacheStats?.(),
+              'migrate-curve-surface': () => eng.migrateCurveSurfaceMandatory?.(),
+              'fillet-dispatch':       () => eng.filletEdgeDispatchJson?.(Number(args.edgeId), Number(args.radius), Number(args.segments)),
+            };
+            const direct = directDispatch[actionId];
+            if (direct) {
+              const result = direct();
+              const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              return { ok: true, result: text ?? '(empty)' };
+            }
+          }
+          // 2. Tier 1/2 launcher — ToolManager executeAction (existing tool dispatch).
+          // executeAction is void — best-effort delegation. Unknown actions
+          // surface via Toast (ToolManager internal warning).
+          toolManager.executeAction(actionId);
+          return { ok: true, result: 'Launched (existing tool dispatch).' };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+    });
     (window as unknown as { __axia_capabilityExplorer?: CapabilityExplorerPanel })
       .__axia_capabilityExplorer = capabilityExplorerPanel;
-    // 단축키 보류 (D-C=(b) 메뉴만). 메뉴 항목은 MenuBar 의 보기 메뉴에 추가.
-    // Step 5 종합에서 단축키 결정.
+    // 단축키 보류 (D-C=(b) 메뉴만). Step 5 종합에서 단축키 결정.
   }
 
   // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══
