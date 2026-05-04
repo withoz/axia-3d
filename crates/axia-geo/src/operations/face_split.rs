@@ -428,6 +428,8 @@ pub fn split_face_by_line(
     // in the mesh — we re-attach after the split below.
     if !saved_holes.is_empty() {
         mesh.faces[face_id].inners_mut().clear();
+        // ADR-061 Step 2 — escape-hatch bump for inners_mut.
+        mesh.faces[face_id].bump_boundary_version_after_inners_mut();
     }
 
     // ─── Step 3: Split the face ─────────────────────────────────────────

@@ -372,6 +372,81 @@ impl Mesh {
             .ok_or_else(|| anyhow::anyhow!("Vertex {:?} not found", id))
     }
 
+    /// ADR-061 Phase P-narrow Step 2 — Cache-coherent vertex move.
+    ///
+    /// Sets `vid`'s position to `new_pos` and invalidates downstream
+    /// caches:
+    ///   - All incident edges → `bump_curve_version` + invalidate
+    ///     `polyline_cache` (Z.2 Curve Hover Cache).
+    ///   - All incident faces → `bump_boundary_version` + invalidate
+    ///     `normal_cache` (Z.1 Normal Cache — analytic surface evaluate
+    ///     depends on vertex world position).
+    ///
+    /// **§F lock-in (silent fallback prohibited)**: existing direct
+    /// `mesh.verts[vid].set_pos(...)` mutations BYPASS this helper and
+    /// will leave caches stale. Migration of those call sites to this
+    /// helper is incremental (Step 3+ will exercise the read path that
+    /// surfaces stale state).
+    ///
+    /// Returns `Err` if `vid` is invalid or inactive.
+    pub fn move_vertex(&mut self, vid: VertId, new_pos: DVec3) -> Result<()> {
+        // 1. Set position.
+        let v = self.verts.get_mut(vid)
+            .ok_or_else(|| anyhow::anyhow!("move_vertex: vertex {:?} not found", vid))?;
+        if !v.is_active() {
+            anyhow::bail!("move_vertex: vertex {:?} is inactive", vid);
+        }
+        v.set_pos(new_pos);
+
+        // 2. Collect incident edges + faces (radial v_next walk).
+        let mut edges: Vec<EdgeId> = Vec::new();
+        let mut faces: Vec<FaceId> = Vec::new();
+        if let Some(v) = self.verts.get(vid) {
+            if let Some(start) = v.outgoing().filter(|he| !he.is_null()) {
+                let mut he_id = start;
+                for _ in 0..256 {
+                    let he = match self.hes.get(he_id) {
+                        Some(h) if h.is_active() => h,
+                        _ => break,
+                    };
+                    edges.push(he.edge());
+                    if !he.face().is_null() {
+                        faces.push(he.face());
+                    }
+                    let next = he.v_next();
+                    if next == start || next.is_null() { break; }
+                    he_id = next;
+                }
+            }
+        }
+        edges.sort_by_key(|e| e.raw());
+        edges.dedup();
+        faces.sort_by_key(|f| f.raw());
+        faces.dedup();
+
+        // 3. Bump curve_version on incident edges + invalidate polyline cache.
+        for eid in edges {
+            if let Some(e) = self.edges.get_mut(eid) {
+                if e.is_active() {
+                    e.bump_curve_version();
+                    e.invalidate_polyline_cache();
+                }
+            }
+        }
+
+        // 4. Bump boundary_version on incident faces + invalidate normal cache.
+        for fid in faces {
+            if let Some(f) = self.faces.get_mut(fid) {
+                if f.is_active() {
+                    f.bump_boundary_version();
+                    f.invalidate_normal_cache();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     // ========================================================================
     // Edge operations
     // ========================================================================
@@ -2333,10 +2408,16 @@ impl Mesh {
                         if face.outer().start == info.id {
                             face.set_outer(LoopRef::new(he_ap, face.outer().is_outer));
                         }
+                        let mut inner_changed = false;
                         for inner in face.inners_mut().iter_mut() {
                             if inner.start == info.id {
                                 inner.start = he_ap;
+                                inner_changed = true;
                             }
+                        }
+                        if inner_changed {
+                            // ADR-061 Step 2 — escape-hatch bump for inners_mut.
+                            face.bump_boundary_version_after_inners_mut();
                         }
                     }
                 }
@@ -2377,10 +2458,16 @@ impl Mesh {
                         if face.outer().start == info.id {
                             face.set_outer(LoopRef::new(he_bp, face.outer().is_outer));
                         }
+                        let mut inner_changed = false;
                         for inner in face.inners_mut().iter_mut() {
                             if inner.start == info.id {
                                 inner.start = he_bp;
+                                inner_changed = true;
                             }
+                        }
+                        if inner_changed {
+                            // ADR-061 Step 2 — escape-hatch bump for inners_mut.
+                            face.bump_boundary_version_after_inners_mut();
                         }
                     }
                 }
@@ -7259,5 +7346,119 @@ mod tests {
         let unique: std::collections::HashSet<u32> = face_map.iter().copied().collect();
         assert_eq!(unique.len(), 1, "cylinder face emits 1 unique FaceId");
         assert!(unique.contains(&fid.raw()), "FaceId matches the face");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-061 Phase P-narrow Step 2 — Mutator hook coverage tests
+    //
+    // 4 regression invariants (none #[ignore]):
+    //   1. set_outer_bumps_face_boundary_version
+    //   2. add_inner_and_clear_bump_face_boundary_version
+    //   3. inners_mut_explicit_bump_helper
+    //   4. move_vertex_propagates_bumps_to_incident_edges_and_faces
+    // ════════════════════════════════════════════════════════════════
+
+    fn step2_make_quad_mesh() -> (Mesh, FaceId, [VertId; 4], EdgeId) {
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let eid = mesh.find_edge(v0, v1).unwrap();
+        (mesh, fid, [v0, v1, v2, v3], eid)
+    }
+
+    /// ADR-061 §A — `Face::set_outer` bumps boundary_version.
+    #[test]
+    fn set_outer_bumps_face_boundary_version() {
+        let (mut mesh, fid, _, _) = step2_make_quad_mesh();
+        let v0 = mesh.faces[fid].boundary_version();
+        let outer = mesh.faces[fid].outer();
+        // Re-set to same outer — still bumps (mutation invariant).
+        mesh.faces[fid].set_outer(outer);
+        assert_eq!(mesh.faces[fid].boundary_version(), v0 + 1,
+            "set_outer must bump boundary_version exactly once per call");
+    }
+
+    /// ADR-061 §A — `add_inner` and `clear_inners` both bump.
+    #[test]
+    fn add_inner_and_clear_bump_face_boundary_version() {
+        let (mut mesh, fid, _, _) = step2_make_quad_mesh();
+        let v0 = mesh.faces[fid].boundary_version();
+
+        let dummy = LoopRef { start: HeId::default(), is_outer: false };
+        mesh.faces[fid].add_inner(dummy);
+        let v1 = mesh.faces[fid].boundary_version();
+        assert_eq!(v1, v0 + 1, "add_inner must bump");
+
+        mesh.faces[fid].clear_inners();
+        let v2 = mesh.faces[fid].boundary_version();
+        assert_eq!(v2, v1 + 1, "clear_inners must bump");
+
+        // No-op clear (already empty) does NOT bump.
+        mesh.faces[fid].clear_inners();
+        assert_eq!(mesh.faces[fid].boundary_version(), v2,
+            "clear_inners on empty inners must NOT bump (idempotent)");
+    }
+
+    /// ADR-061 §A — `inners_mut` is an escape hatch; explicit
+    /// `bump_boundary_version_after_inners_mut` is the contract.
+    #[test]
+    fn inners_mut_explicit_bump_helper() {
+        let (mut mesh, fid, _, _) = step2_make_quad_mesh();
+        let v0 = mesh.faces[fid].boundary_version();
+
+        // Direct inners_mut mutation does NOT auto-bump.
+        let dummy = LoopRef { start: HeId::default(), is_outer: false };
+        mesh.faces[fid].inners_mut().push(dummy);
+        assert_eq!(mesh.faces[fid].boundary_version(), v0,
+            "inners_mut alone must NOT auto-bump (escape hatch behavior)");
+
+        // Caller invokes the bump helper.
+        mesh.faces[fid].bump_boundary_version_after_inners_mut();
+        assert_eq!(mesh.faces[fid].boundary_version(), v0 + 1,
+            "explicit helper must bump exactly once");
+    }
+
+    /// ADR-061 §A + §B — `Mesh::move_vertex` bumps incident edges'
+    /// curve_version AND incident faces' boundary_version. Caches on
+    /// both are invalidated.
+    #[test]
+    fn move_vertex_propagates_bumps_to_incident_edges_and_faces() {
+        let (mut mesh, fid, verts, eid) = step2_make_quad_mesh();
+        let v0 = verts[0];
+
+        let face_v0 = mesh.faces[fid].boundary_version();
+        let edge_v0 = mesh.edges[eid].curve_version();
+
+        // Pre-populate caches with stale data to verify invalidation.
+        mesh.faces[fid].cache_normals(crate::entities::NormalCacheEntry {
+            surface_version: mesh.faces[fid].surface_version(),
+            boundary_version: face_v0,
+            per_vertex_normals: vec![DVec3::Z; 4],
+        });
+        mesh.edges[eid].cache_polyline(crate::entities::PolylineCacheEntry {
+            curve_version: edge_v0,
+            points: vec![DVec3::ZERO, DVec3::X],
+        });
+        assert!(mesh.faces[fid].normal_cache().is_some());
+        assert!(mesh.edges[eid].polyline_cache().is_some());
+
+        // Move v0.
+        mesh.move_vertex(v0, DVec3::new(-0.5, 0.0, 0.0)).unwrap();
+
+        // Face boundary_version bumped + cache cleared.
+        assert!(mesh.faces[fid].boundary_version() > face_v0,
+            "move_vertex must bump incident face boundary_version");
+        assert!(mesh.faces[fid].normal_cache().is_none(),
+            "move_vertex must invalidate incident face normal_cache");
+
+        // Edge curve_version bumped + cache cleared (v0-v1 edge).
+        assert!(mesh.edges[eid].curve_version() > edge_v0,
+            "move_vertex must bump incident edge curve_version");
+        assert!(mesh.edges[eid].polyline_cache().is_none(),
+            "move_vertex must invalidate incident edge polyline_cache");
     }
 }

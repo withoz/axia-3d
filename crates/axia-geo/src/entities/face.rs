@@ -264,23 +264,58 @@ impl Face {
     #[inline] pub fn flags(&self) -> SharedFlags { self.flags }
 
     // --- Setters ---
-    #[inline] pub fn set_outer(&mut self, l: LoopRef) { self.outer = l; }
+    /// ADR-061 Step 2 — bumps boundary_version + invalidates normal_cache.
+    #[inline]
+    pub fn set_outer(&mut self, l: LoopRef) {
+        self.outer = l;
+        self.bump_boundary_version();
+        self.invalidate_normal_cache();
+    }
     #[inline] pub fn set_normal(&mut self, n: DVec3) { self.normal = n; }
     #[inline] pub fn set_parent(&mut self, p: Option<FaceId>) { self.parent = p; }
     #[inline] pub fn set_material(&mut self, m: MaterialId) { self.material = m; }
     #[inline] pub fn set_double_sided(&mut self, ds: bool) { self.double_sided = ds; }
-    #[inline] pub fn set_active(&mut self, a: bool) { self.active = a; }
+    #[inline] pub fn set_active(&mut self, a: bool) {
+        self.active = a;
+        // Inactive faces cannot serve cached data; drop on deactivation.
+        if !a { self.invalidate_normal_cache(); }
+    }
     #[inline] pub fn set_visible(&mut self, v: bool) { self.visible = v; }
     #[inline] pub fn flags_mut(&mut self) -> &mut SharedFlags { &mut self.flags }
 
-    /// Add an inner loop (hole) to this face
+    /// Add an inner loop (hole) to this face.
+    /// ADR-061 Step 2 — bumps boundary_version + invalidates normal_cache.
     pub fn add_inner(&mut self, inner: LoopRef) {
         self.inners.push(inner);
+        self.bump_boundary_version();
+        self.invalidate_normal_cache();
     }
 
-    /// Get mutable reference to inner loops
+    /// Get mutable reference to inner loops.
+    ///
+    /// **ADR-061 Step 2 caveat**: this is an unguarded escape hatch —
+    /// callers MUST invoke `bump_boundary_version_after_inners_mut()`
+    /// after any modification (push/remove/clear). Prefer `add_inner` /
+    /// `clear_inners` which auto-bump.
     pub fn inners_mut(&mut self) -> &mut SmallVec<[LoopRef; 1]> {
         &mut self.inners
+    }
+
+    /// ADR-061 Step 2 — caller-driven bump for `inners_mut` mutations.
+    /// Idempotent at the cache level — the version monotonically advances.
+    #[inline]
+    pub fn bump_boundary_version_after_inners_mut(&mut self) {
+        self.bump_boundary_version();
+        self.invalidate_normal_cache();
+    }
+
+    /// ADR-061 Step 2 — clear all inner loops (auto-bumps).
+    pub fn clear_inners(&mut self) {
+        if !self.inners.is_empty() {
+            self.inners.clear();
+            self.bump_boundary_version();
+            self.invalidate_normal_cache();
+        }
     }
 }
 
