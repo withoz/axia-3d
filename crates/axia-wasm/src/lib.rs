@@ -5909,6 +5909,41 @@ impl AxiaEngine {
     ///
     /// **§D additive-only** (ADR-060 lock-in #2): does not modify any
     /// existing endpoint.
+    /// ADR-061 Phase P-narrow Step 5 — Cache stats endpoint.
+    ///
+    /// Returns aggregate Z.1 + Z.2 cache state as JSON with
+    /// `schemaVersion: 1`. Used by UI / telemetry for memory monitoring.
+    ///
+    /// Schema:
+    /// ```json
+    /// {
+    ///   "schemaVersion": 1,
+    ///   "faceEntryCount": N,
+    ///   "edgeEntryCount": M,
+    ///   "faceCacheBytes": X,
+    ///   "edgeCacheBytes": Y,
+    ///   "totalBytes": Z,
+    ///   "capBytes": 104857600,
+    ///   "evictionCount": K
+    /// }
+    /// ```
+    ///
+    /// **§D additive-only** (ADR-060 lock-in #2).
+    #[wasm_bindgen(js_name = "getCacheStats")]
+    pub fn get_cache_stats(&self) -> String {
+        let s = self.scene.mesh.cache_stats();
+        format!(
+            r#"{{"schemaVersion":1,"faceEntryCount":{},"edgeEntryCount":{},"faceCacheBytes":{},"edgeCacheBytes":{},"totalBytes":{},"capBytes":{},"evictionCount":{}}}"#,
+            s.face_entry_count,
+            s.edge_entry_count,
+            s.face_cache_bytes,
+            s.edge_cache_bytes,
+            s.total_bytes,
+            s.cap_bytes,
+            s.eviction_count,
+        )
+    }
+
     /// ADR-061 Phase P-narrow Step 4 — Z.2 Curve Hover Cache hot-path.
     ///
     /// Returns the polyline tessellation of `edge_id_raw` as a flat

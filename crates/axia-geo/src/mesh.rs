@@ -103,9 +103,50 @@ pub struct Mesh {
     /// to restore the invariant "every active face has ≥1 emitted triangle".
     #[serde(skip, default)]
     last_export_empty_faces: std::cell::RefCell<Vec<FaceId>>,
+
+    /// ADR-061 Phase P-narrow Step 5 — Monotonic tick counter for LRU
+    /// eviction. Incremented on every cache populate AND cache hit
+    /// (touch-on-access). RefCell because populate path runs through
+    /// `&self` (matches Z.1/Z.2 hot-path borrow policy).
+    #[serde(skip, default)]
+    cache_clock: std::cell::RefCell<u64>,
+
+    /// ADR-061 Phase P-narrow Step 5 — Cumulative LRU eviction count
+    /// (telemetry). Exposed via `cache_stats()` / WASM `getCacheStats`.
+    #[serde(skip, default)]
+    cache_eviction_count: std::cell::RefCell<u64>,
 }
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
+
+/// ADR-061 §D #4 lock-in — Aggregate cache byte cap (Z.1 + Z.2).
+///
+/// 100 MiB. When `Mesh::evict_lru_if_over_cap()` finds the total
+/// estimated cache bytes above this, it drops oldest entries
+/// (lowest `last_access_tick`) until back under cap.
+pub const CACHE_CAP_BYTES: usize = 100 * 1024 * 1024;
+
+/// ADR-061 Phase P-narrow Step 5 — Cache state report.
+///
+/// Snapshot of the Z.1 (Face normal) + Z.2 (Edge polyline) caches.
+/// Exposed via `Mesh::cache_stats()` and serialized (with
+/// `schemaVersion: 1`) by the WASM `getCacheStats` endpoint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    pub face_entry_count: usize,
+    pub edge_entry_count: usize,
+    pub face_cache_bytes: usize,
+    pub edge_cache_bytes: usize,
+    pub total_bytes: usize,
+    pub cap_bytes: usize,
+    pub eviction_count: u64,
+}
+
+/// Internal — selector used by `evict_lru_if_over_cap`.
+enum EvictKind {
+    Face(FaceId),
+    Edge(EdgeId),
+}
 
 /// Result of [`Mesh::face_set_manifold_info`] — 면 집합이 닫힌 2-manifold 솔리드를
 /// 이루는지, 혹은 경계(open)나 non-manifold 결함이 있는지 분석 결과.
@@ -263,6 +304,8 @@ impl Mesh {
             spatial_hash: FxHashMap::default(),
             last_export_stats: std::cell::Cell::new(ExportSkipStats::default()),
             last_export_empty_faces: std::cell::RefCell::new(Vec::new()),
+            cache_clock: std::cell::RefCell::new(0),
+            cache_eviction_count: std::cell::RefCell::new(0),
         }
     }
 
@@ -558,6 +601,100 @@ impl Mesh {
         self.faces.get(face_id).and_then(|f| f.surface())
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ADR-061 Phase P-narrow Step 5 — Cache stats + byte-cap LRU
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-061 §D #4 — Aggregate cache state across all faces + edges.
+    pub fn cache_stats(&self) -> CacheStats {
+        let mut face_count = 0usize;
+        let mut face_bytes = 0usize;
+        for (_, face) in self.faces.iter() {
+            if let Some(entry) = face.normal_cache().as_ref() {
+                face_count += 1;
+                face_bytes += entry.estimated_bytes();
+            }
+        }
+        let mut edge_count = 0usize;
+        let mut edge_bytes = 0usize;
+        for (_, edge) in self.edges.iter() {
+            if let Some(entry) = edge.polyline_cache().as_ref() {
+                edge_count += 1;
+                edge_bytes += entry.estimated_bytes();
+            }
+        }
+        CacheStats {
+            face_entry_count: face_count,
+            edge_entry_count: edge_count,
+            face_cache_bytes: face_bytes,
+            edge_cache_bytes: edge_bytes,
+            total_bytes: face_bytes + edge_bytes,
+            cap_bytes: CACHE_CAP_BYTES,
+            eviction_count: *self.cache_eviction_count.borrow(),
+        }
+    }
+
+    /// ADR-061 Step 5 — Monotonic tick generator (interior mutability,
+    /// works through `&self`). Used by populate AND hit paths to keep
+    /// LRU ordering current.
+    pub(crate) fn next_cache_tick(&self) -> u64 {
+        let mut clock = self.cache_clock.borrow_mut();
+        *clock = clock.wrapping_add(1);
+        *clock
+    }
+
+    /// ADR-061 §D #4 lock-in — If aggregate cache bytes exceed
+    /// `CACHE_CAP_BYTES`, drop oldest entries (lowest `last_access_tick`)
+    /// until back under cap. Touches `cache_eviction_count`.
+    ///
+    /// Cheap path: under cap → returns immediately after one stats pass.
+    /// Eviction path: O(N log N) sort of cached entries.
+    pub fn evict_lru_if_over_cap(&self) {
+        let stats = self.cache_stats();
+        if stats.total_bytes <= CACHE_CAP_BYTES {
+            return;
+        }
+        // Collect all cached entries with (kind, tick, bytes).
+        let mut entries: Vec<(EvictKind, u64, usize)> = Vec::new();
+        for (fid, face) in self.faces.iter() {
+            if let Some(entry) = face.normal_cache().as_ref() {
+                entries.push((EvictKind::Face(fid), entry.last_access_tick,
+                              entry.estimated_bytes()));
+            }
+        }
+        for (eid, edge) in self.edges.iter() {
+            if let Some(entry) = edge.polyline_cache().as_ref() {
+                entries.push((EvictKind::Edge(eid), entry.last_access_tick,
+                              entry.estimated_bytes()));
+            }
+        }
+        // Oldest first.
+        entries.sort_by_key(|&(_, tick, _)| tick);
+
+        let mut current_bytes = stats.total_bytes;
+        let mut evicted = 0u64;
+        for (kind, _, bytes) in entries {
+            if current_bytes <= CACHE_CAP_BYTES { break; }
+            match kind {
+                EvictKind::Face(fid) => {
+                    if let Some(face) = self.faces.get(fid) {
+                        face.invalidate_normal_cache();
+                    }
+                }
+                EvictKind::Edge(eid) => {
+                    if let Some(edge) = self.edges.get(eid) {
+                        edge.invalidate_polyline_cache();
+                    }
+                }
+            }
+            current_bytes = current_bytes.saturating_sub(bytes);
+            evicted += 1;
+        }
+        if evicted > 0 {
+            *self.cache_eviction_count.borrow_mut() += evicted;
+        }
+    }
+
     /// ADR-061 Phase P-narrow Step 3 — Z.1 Normal Cache hot-path.
     ///
     /// Returns per-vertex (outer-loop order) world-space analytic
@@ -600,27 +737,36 @@ impl Mesh {
         // Cache-hit check.
         let sv = face.surface_version();
         let bv = face.boundary_version();
-        {
+        let cloned_data: Option<Vec<DVec3>> = {
             let cache = face.normal_cache();
-            if let Some(entry) = cache.as_ref() {
-                if entry.surface_version == sv && entry.boundary_version == bv
+            cache.as_ref().and_then(|entry| {
+                if entry.surface_version == sv
+                    && entry.boundary_version == bv
                     && entry.per_vertex_normals.len() == positions.len()
                 {
-                    // Hit — clone out (RefCell borrow drops at scope end).
-                    return Some(entry.per_vertex_normals.clone());
-                }
-            }
+                    Some(entry.per_vertex_normals.clone())
+                } else { None }
+            })
+        };
+        if let Some(data) = cloned_data {
+            // ADR-061 Step 5 — touch-on-access (LRU ordering).
+            face.touch_normal_cache(self.next_cache_tick());
+            return Some(data);
         }
 
         // Miss — compute + populate.
         let normals: Vec<DVec3> = positions.iter()
             .map(|&p| surface.normal_at_world_pos(p))
             .collect();
+        let tick = self.next_cache_tick();
         face.cache_normals(crate::entities::NormalCacheEntry {
             surface_version: sv,
             boundary_version: bv,
             per_vertex_normals: normals.clone(),
+            last_access_tick: tick,
         });
+        // ADR-061 §D #4 — Enforce byte cap (cheap when under cap).
+        self.evict_lru_if_over_cap();
         Some(normals)
     }
 
@@ -658,21 +804,29 @@ impl Mesh {
 
         // Cache-hit check.
         let cv = edge.curve_version();
-        {
+        let cloned_data: Option<Vec<DVec3>> = {
             let cache = edge.polyline_cache();
-            if let Some(entry) = cache.as_ref() {
-                if entry.curve_version == cv {
-                    return Some(entry.points.clone());
-                }
-            }
+            cache.as_ref().and_then(|entry| {
+                if entry.curve_version == cv { Some(entry.points.clone()) }
+                else { None }
+            })
+        };
+        if let Some(data) = cloned_data {
+            // ADR-061 Step 5 — touch-on-access (LRU ordering).
+            edge.touch_polyline_cache(self.next_cache_tick());
+            return Some(data);
         }
 
         // Miss — compute + populate.
         let points = curve.tessellate(chord_tol, self).ok()?;
+        let tick = self.next_cache_tick();
         edge.cache_polyline(crate::entities::PolylineCacheEntry {
             curve_version: cv,
             points: points.clone(),
+            last_access_tick: tick,
         });
+        // ADR-061 §D #4 — Enforce byte cap.
+        self.evict_lru_if_over_cap();
         Some(points)
     }
 
@@ -7753,6 +7907,83 @@ mod tests {
             "move_vertex must invalidate polyline_cache");
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ADR-061 Phase P-narrow Step 5 — Byte-cap LRU + cache_stats tests
+    //
+    // 2 regression invariants (none #[ignore]):
+    //  11. cache_stats_reflects_populated_state — hit/miss → stats track
+    //  12. cache_byte_cap_evicts_oldest — synthetic over-cap forces
+    //      eviction, oldest entries dropped first
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-061 §D #4 invariant #11 — Cache stats accurately reflect
+    /// populated state across face + edge caches.
+    #[test]
+    fn cache_stats_reflects_populated_state() {
+        let (mesh, fid) = step3_quad_with_sphere_surface();
+
+        // Empty initial state.
+        let stats0 = mesh.cache_stats();
+        assert_eq!(stats0.face_entry_count, 0);
+        assert_eq!(stats0.edge_entry_count, 0);
+        assert_eq!(stats0.total_bytes, 0);
+        assert_eq!(stats0.cap_bytes, super::CACHE_CAP_BYTES);
+
+        // Populate face cache via hot-path.
+        let _ = mesh.face_cached_normals_or_compute(fid).unwrap();
+        let stats1 = mesh.cache_stats();
+        assert_eq!(stats1.face_entry_count, 1, "face populate must register");
+        assert!(stats1.face_cache_bytes > 0);
+        assert_eq!(stats1.total_bytes, stats1.face_cache_bytes + stats1.edge_cache_bytes);
+
+        // Now populate an edge cache.
+        let (mesh2, eid) = step4_circle_edge();
+        let _ = mesh2.edge_cached_polyline_or_compute(eid, 0.01).unwrap();
+        let stats2 = mesh2.cache_stats();
+        assert_eq!(stats2.edge_entry_count, 1);
+        assert!(stats2.edge_cache_bytes > 0);
+    }
+
+    /// ADR-061 §D #4 invariant #12 — Byte-cap LRU eviction. Synthetic
+    /// over-cap state (manually inflated entry) forces evict on next
+    /// populate. Oldest-tick entry is dropped first.
+    #[test]
+    fn cache_byte_cap_evicts_oldest() {
+        let (mesh, fid) = step3_quad_with_sphere_surface();
+
+        // Populate normally to get a small cache.
+        let _ = mesh.face_cached_normals_or_compute(fid).unwrap();
+        assert!(mesh.faces[fid].normal_cache().is_some());
+
+        // Manually replace with a huge entry that exceeds cap.
+        let huge = crate::entities::NormalCacheEntry {
+            surface_version: mesh.faces[fid].surface_version(),
+            boundary_version: mesh.faces[fid].boundary_version(),
+            // Roughly 200MB worth of vec3 (over 100MB cap).
+            per_vertex_normals: vec![DVec3::Z; (200 * 1024 * 1024) / 24],
+            last_access_tick: 1, // very old tick
+        };
+        mesh.faces[fid].cache_normals(huge);
+
+        let stats_before = mesh.cache_stats();
+        assert!(stats_before.total_bytes > super::CACHE_CAP_BYTES,
+            "synthetic state must exceed cap to test eviction");
+        let evict_before = stats_before.eviction_count;
+
+        // Trigger eviction directly.
+        mesh.evict_lru_if_over_cap();
+
+        let stats_after = mesh.cache_stats();
+        assert!(stats_after.total_bytes <= super::CACHE_CAP_BYTES,
+            "after evict, total bytes must be ≤ cap (got {} vs cap {})",
+            stats_after.total_bytes, super::CACHE_CAP_BYTES);
+        assert!(stats_after.eviction_count > evict_before,
+            "eviction_count must increment");
+        // The huge entry (oldest tick=1) was dropped.
+        assert!(mesh.faces[fid].normal_cache().is_none(),
+            "oldest entry (tick=1) must be evicted first");
+    }
+
     /// ADR-061 §A + §B — `Mesh::move_vertex` bumps incident edges'
     /// curve_version AND incident faces' boundary_version. Caches on
     /// both are invalidated.
@@ -7769,10 +8000,12 @@ mod tests {
             surface_version: mesh.faces[fid].surface_version(),
             boundary_version: face_v0,
             per_vertex_normals: vec![DVec3::Z; 4],
+            last_access_tick: 0,
         });
         mesh.edges[eid].cache_polyline(crate::entities::PolylineCacheEntry {
             curve_version: edge_v0,
             points: vec![DVec3::ZERO, DVec3::X],
+            last_access_tick: 0,
         });
         assert!(mesh.faces[fid].normal_cache().is_some());
         assert!(mesh.edges[eid].polyline_cache().is_some());

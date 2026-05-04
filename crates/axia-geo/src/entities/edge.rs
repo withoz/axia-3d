@@ -33,10 +33,20 @@ use crate::curves::AnalyticCurve;
 pub struct PolylineCacheEntry {
     /// Edge curve_version observed when this entry was computed.
     pub curve_version: u64,
-    /// Polyline sampled at HOVER_CHORD_TOL (Step 4 will define the
-    /// constant). Line variant is excluded per §D #2 — `should_cache_polyline`
-    /// helper enforces this.
+    /// Polyline sampled at HOVER_CHORD_TOL. Line variant is excluded
+    /// per §D #2 — `should_cache_polyline` helper enforces this.
     pub points: Vec<DVec3>,
+    /// ADR-061 Step 5 — Monotonic last-access tick (Mesh `cache_clock`).
+    /// Updated on populate AND on cache hit. Used by
+    /// `Mesh::evict_lru_if_over_cap`.
+    pub last_access_tick: u64,
+}
+
+impl PolylineCacheEntry {
+    /// ADR-061 §D #4 — Estimated heap bytes for byte-cap accounting.
+    pub fn estimated_bytes(&self) -> usize {
+        48 + self.points.len() * 24
+    }
 }
 
 /// Edge semantic class — distinguishes real geometry (participates in face
@@ -180,6 +190,14 @@ impl Edge {
     #[inline]
     pub(crate) fn invalidate_polyline_cache(&self) {
         *self.polyline_cache.borrow_mut() = None;
+    }
+
+    /// ADR-061 Step 5 — Touch-on-access for HIT path.
+    #[inline]
+    pub(crate) fn touch_polyline_cache(&self, tick: u64) {
+        if let Some(entry) = self.polyline_cache.borrow_mut().as_mut() {
+            entry.last_access_tick = tick;
+        }
     }
 
     /// ADR-061 §D #2 — Lock-in: Line edges are excluded from caching
@@ -476,6 +494,7 @@ mod tests {
         e.cache_polyline(PolylineCacheEntry {
             curve_version: v0,
             points: vec![DVec3::ZERO, DVec3::X],
+            last_access_tick: 0,
         });
         assert!(e.polyline_cache().is_some());
 
@@ -521,6 +540,7 @@ mod tests {
         e.cache_polyline(PolylineCacheEntry {
             curve_version: e.curve_version(),
             points: vec![DVec3::X, DVec3::new(0.707, 0.707, 0.0), DVec3::Y],
+            last_access_tick: 0,
         });
         assert!(e.polyline_cache().is_some());
         assert_eq!(e.curve_version(), 1);
@@ -560,6 +580,7 @@ mod tests {
         let stale = PolylineCacheEntry {
             curve_version: pre_save_v,
             points: vec![DVec3::X],
+            last_access_tick: 0,
         };
         let hit = stale.curve_version == restored.curve_version();
         assert!(!hit,

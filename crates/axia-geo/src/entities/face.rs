@@ -41,6 +41,18 @@ pub struct NormalCacheEntry {
     /// Per-vertex normals in outer-loop order (Plane is excluded per
     /// ADR-061 §D #2 — `should_cache` helper enforces this).
     pub per_vertex_normals: Vec<DVec3>,
+    /// ADR-061 Step 5 — Monotonic last-access tick (Mesh `cache_clock`).
+    /// Updated on populate AND on cache hit (touch-on-access). Used by
+    /// `Mesh::evict_lru_if_over_cap` to drop oldest entries first.
+    pub last_access_tick: u64,
+}
+
+impl NormalCacheEntry {
+    /// ADR-061 §D #4 — Estimated heap bytes for byte-cap accounting.
+    /// `Vec<DVec3>` = `24 bytes/vec3`; struct overhead conservatively 48.
+    pub fn estimated_bytes(&self) -> usize {
+        48 + self.per_vertex_normals.len() * 24
+    }
 }
 
 /// Reference to a half-edge loop (outer boundary or hole).
@@ -186,6 +198,16 @@ impl Face {
     #[inline]
     pub(crate) fn invalidate_normal_cache(&self) {
         *self.normal_cache.borrow_mut() = None;
+    }
+
+    /// ADR-061 Step 5 — Touch-on-access: update `last_access_tick` if a
+    /// cache entry exists. No-op if cache is empty. Used by hot-path
+    /// HIT to keep LRU ordering accurate.
+    #[inline]
+    pub(crate) fn touch_normal_cache(&self, tick: u64) {
+        if let Some(entry) = self.normal_cache.borrow_mut().as_mut() {
+            entry.last_access_tick = tick;
+        }
     }
 
     /// ADR-061 §D #2 — Lock-in: Plane surfaces are excluded from caching
@@ -411,6 +433,7 @@ mod tests {
             surface_version: v0,
             boundary_version: 0,
             per_vertex_normals: vec![DVec3::Z, DVec3::Z],
+            last_access_tick: 0,
         });
         assert!(f.normal_cache().is_some());
 
@@ -449,6 +472,7 @@ mod tests {
             surface_version: f.surface_version(),
             boundary_version: f.boundary_version(),
             per_vertex_normals: vec![DVec3::X, DVec3::Y, DVec3::Z],
+            last_access_tick: 0,
         });
         assert!(f.normal_cache().is_some());
         assert_eq!(f.surface_version(), 1);
@@ -508,6 +532,7 @@ mod tests {
             surface_version: pre_save_surface_v,
             boundary_version: pre_save_boundary_v,
             per_vertex_normals: vec![DVec3::Z],
+            last_access_tick: 0,
         };
 
         // The cache hit predicate (Step 3 hot-path will use this exact

@@ -1057,15 +1057,6 @@ export class AxiaEngine {
         return ret;
     }
     /**
-     * ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
-     *
-     * Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).
-     *
-     * Schema:
-     *   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"BRep"|
-     *      "BRepWithMeshFallback", "skipReason": { "kind": "...",
-     *      "label": "..." } | null, "createdSurfaceKind": "Cylinder"|
-     *      null, "filletStripFaceCount": N }`
      * @param {number} edge_id_raw
      * @param {number} radius
      * @param {number} segments
@@ -1148,6 +1139,69 @@ export class AxiaEngine {
     getAutoIntersectOnDraw() {
         const ret = wasm.axiaengine_getAutoIntersectOnDraw(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
+     *
+     * Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).
+     *
+     * Schema:
+     *   `{ "schemaVersion": 1, "ok": bool, "pathUsed": "Mesh"|"BRep"|
+     *      "BRepWithMeshFallback", "skipReason": { "kind": "...",
+     *      "label": "..." } | null, "createdSurfaceKind": "Cylinder"|
+     *      null, "filletStripFaceCount": N }`
+     * ADR-061 Phase P-narrow Step 3 — Z.1 Normal Cache hot-path.
+     *
+     * Returns per-vertex (outer-loop order) world-space analytic
+     * normals for `face_id_raw` as a flat `Float64Array`:
+     *   `[count, n0x, n0y, n0z, n1x, n1y, n1z, ...]`
+     *
+     * First call on a cacheable face: MISS → compute + populate cache.
+     * Subsequent calls (until surface_version / boundary_version
+     * changes): HIT → returns cached data without recompute.
+     *
+     * Plane / no-surface faces: returns empty array (no per-vertex
+     * analytic normals to provide; Three.js falls back to face.normal).
+     *
+     * **§D additive-only** (ADR-060 lock-in #2): does not modify any
+     * existing endpoint.
+     * ADR-061 Phase P-narrow Step 5 — Cache stats endpoint.
+     *
+     * Returns aggregate Z.1 + Z.2 cache state as JSON with
+     * `schemaVersion: 1`. Used by UI / telemetry for memory monitoring.
+     *
+     * Schema:
+     * ```json
+     * {
+     *   "schemaVersion": 1,
+     *   "faceEntryCount": N,
+     *   "edgeEntryCount": M,
+     *   "faceCacheBytes": X,
+     *   "edgeCacheBytes": Y,
+     *   "totalBytes": Z,
+     *   "capBytes": 104857600,
+     *   "evictionCount": K
+     * }
+     * ```
+     *
+     * **§D additive-only** (ADR-060 lock-in #2).
+     * @returns {string}
+     */
+    getCacheStats() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getCacheStats(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Get the current cache version (monotonic counter).
@@ -1258,6 +1312,43 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-061 Phase P-narrow Step 4 — Z.2 Curve Hover Cache hot-path.
+     *
+     * Returns the polyline tessellation of `edge_id_raw` as a flat
+     * `Float64Array`:
+     *   `[count, p0x, p0y, p0z, p1x, p1y, p1z, ...]`
+     *
+     * Use the returned polyline as Newton initial-seed grid for
+     * `ray_to_curve_distance` (ADR-040 P25). For Line edges (or edges
+     * with no curve attached) returns empty array — closed-form
+     * distance applies, no polyline needed.
+     *
+     * First call on cacheable edge: MISS → compute + populate.
+     * Subsequent calls (until curve_version changes): HIT.
+     *
+     * `chord_tol` defaults to `tolerances::HOVER_CHORD_TOL` (0.01mm)
+     * when `≤ 0`.
+     *
+     * **§D additive-only** (ADR-060 lock-in #2): does not modify any
+     * existing endpoint.
+     * @param {number} edge_id_raw
+     * @param {number} chord_tol
+     * @returns {Float64Array}
+     */
+    getEdgePolylineCached(edge_id_raw, chord_tol) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getEdgePolylineCached(retptr, this.__wbg_ptr, edge_id_raw, chord_tol);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Edge visibility angle threshold (도) — Rust 의 SSOT.
      *
      * ADR-038 P23.3 — Three.js Viewport.smoothNormals 가 hardcode 30° 대신
@@ -1283,6 +1374,23 @@ export class AxiaEngine {
     getFaceMapPtr() {
         const ret = wasm.axiaengine_getFaceMapPtr(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * @param {number} face_id_raw
+     * @returns {Float64Array}
+     */
+    getFaceNormalsCached(face_id_raw) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getFaceNormalsCached(retptr, this.__wbg_ptr, face_id_raw);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * ADR-060 Phase O Step 6 — Face analytic surface as JSON.

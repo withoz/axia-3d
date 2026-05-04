@@ -177,6 +177,29 @@ fn boolean_dispatch_json_includes_path_and_reason() {
     }
 }
 
+// ── Test 7 (ADR-061 Step 5) — Cache stats JSON schema contract ───────
+#[test]
+fn cache_stats_json_includes_schema_version() {
+    let s = lib_src();
+    // Endpoint is wired.
+    assert!(s.contains(r#"js_name = "getCacheStats""#),
+        "getCacheStats endpoint must be wired in lib.rs");
+    // schemaVersion + required fields present.
+    for key in [
+        r#""schemaVersion":1"#,
+        r#""faceEntryCount":"#,
+        r#""edgeEntryCount":"#,
+        r#""faceCacheBytes":"#,
+        r#""edgeCacheBytes":"#,
+        r#""totalBytes":"#,
+        r#""capBytes":"#,
+        r#""evictionCount":"#,
+    ] {
+        assert!(s.contains(key),
+            "getCacheStats JSON missing key fragment: {}", key);
+    }
+}
+
 // ── Test 6 — Fillet dispatch JSON includes path + skip reason (R10) ──
 #[test]
 fn fillet_edge_dispatch_json_includes_path_and_skip_reason() {
