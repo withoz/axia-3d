@@ -6,6 +6,7 @@
 //!
 //! All public items here are `pub(crate)` and consumed by `lib.rs`.
 
+use axia_geo::mesh::SurfaceAttachOutcome;
 use axia_geo::operations::boolean_dispatch::{
     BooleanDispatchResult, BooleanPath, NurbsBooleanFailReason,
 };
@@ -228,5 +229,46 @@ pub(crate) fn fillet_dispatch_result_json(result: &FilletDispatchResult) -> Stri
     format!(
         r#"{{"schemaVersion":1,"ok":true,"pathUsed":"{}","skipReason":{},"createdSurfaceKind":{},"filletStripFaceCount":{}}}"#,
         path_str, skip_json, surface_kind, strip_count,
+    )
+}
+
+/// ADR-062 Phase L₂ Path Z Step 3 — Serialize SurfaceAttachOutcome
+/// to JSON per Amendment 1 schema (discriminated via `outcome` key).
+///
+/// All variants share `schemaVersion: 1` + `ok: true` + `outcome: "..."`.
+/// Variant-specific fields are emitted only for relevant outcomes:
+///   - Attached: `previousKind` (string | null)
+///   - BoundaryDriftExceedsTol: `maxDriftMm`, `tolMm`, `worstVertexIdx`
+///   - UnsupportedSurfaceKind: `unsupportedKind`
+///   - DegenerateSurfaceInput: `reason`
+///   - NoOuterLoop / InactiveFace: outcome key alone
+pub(crate) fn surface_attach_outcome_json(outcome: &SurfaceAttachOutcome) -> String {
+    let label = outcome.label();
+    let extras: String = match outcome {
+        SurfaceAttachOutcome::Attached { previous_kind } => {
+            let prev = match previous_kind {
+                Some(k) => format!(r#""{}""#, k),
+                None => "null".to_string(),
+            };
+            format!(r#","previousKind":{}"#, prev)
+        }
+        SurfaceAttachOutcome::BoundaryDriftExceedsTol {
+            max_drift_mm, tol_mm, worst_vertex_idx,
+        } => format!(
+            r#","maxDriftMm":{},"tolMm":{},"worstVertexIdx":{}"#,
+            max_drift_mm, tol_mm, worst_vertex_idx,
+        ),
+        SurfaceAttachOutcome::UnsupportedSurfaceKind { kind } => {
+            format!(r#","unsupportedKind":"{}""#, kind)
+        }
+        SurfaceAttachOutcome::DegenerateSurfaceInput { reason } => {
+            // reason is a static string from degeneracy_reason() — no JSON-unsafe chars expected.
+            format!(r#","reason":"{}""#, reason)
+        }
+        SurfaceAttachOutcome::NoOuterLoop | SurfaceAttachOutcome::InactiveFace => String::new(),
+    };
+    format!(
+        r#"{{"schemaVersion":1,"ok":true,"outcome":"{}"{}}}"#,
+        label, extras,
     )
 }

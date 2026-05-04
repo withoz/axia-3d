@@ -456,6 +456,29 @@ impl AxiaEngine {
         self.cache_version = self.cache_version.wrapping_add(1);
     }
 
+    /// ADR-062 Step 3 — Internal: shared validated-attach dispatcher.
+    /// Used by all 5 attachFaceSurface*Validated WASM endpoints.
+    /// Maps tol_mm ≤ 0 to ATTACH_VALIDATE_TOL default.
+    fn attach_validated_inner(
+        &mut self,
+        face_id_raw: u32,
+        surface: axia_geo::surfaces::AnalyticSurface,
+        tol_mm: f64,
+    ) -> String {
+        let tol = if tol_mm > 0.0 {
+            tol_mm
+        } else {
+            axia_geo::tolerances::ATTACH_VALIDATE_TOL
+        };
+        let outcome = self.scene.mesh.attach_surface_validated(
+            FaceId::new(face_id_raw), surface, tol,
+        );
+        if outcome.is_attached() {
+            self.mark_topology_changed();
+        }
+        step6_json::surface_attach_outcome_json(&outcome)
+    }
+
     /// Check if all faces in the group share the same normal (coplanar).
     ///
     /// Returns true if every pair of faces has |dot(n_i, n_j)| ≥ cos(EXACT_COPLANAR_ANGLE_DEG).
@@ -1360,6 +1383,130 @@ impl AxiaEngine {
         let result = self.scene.mesh.set_face_surface(fid, Some(surface));
         if result { self.mark_topology_changed(); }
         result
+    }
+
+// ════════════════════════════════════════════════════════════════
+    // ADR-062 Phase L₂ Path Z Step 3 — Validated attach (W2 per-kind)
+    //
+    // 5 new endpoints, additive-only (ADR-060 §D). Each mirrors the
+    // matching setFaceSurface* signature + adds `tol_mm` parameter.
+    // Returns JSON outcome per Amendment 1 schema (schemaVersion: 1).
+    //
+    // tol_mm ≤ 0 → ATTACH_VALIDATE_TOL default (1μm).
+    // ════════════════════════════════════════════════════════════════
+
+    #[wasm_bindgen(js_name = "attachFaceSurfacePlaneValidated")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_face_surface_plane_validated(
+        &mut self, face_id: u32,
+        ox: f64, oy: f64, oz: f64,
+        nx: f64, ny: f64, nz: f64,
+        ux: f64, uy: f64, uz: f64,
+        u_min: f64, u_max: f64,
+        v_min: f64, v_max: f64,
+        tol_mm: f64,
+    ) -> String {
+        use axia_geo::surfaces::AnalyticSurface;
+        let surface = AnalyticSurface::Plane {
+            origin: DVec3::new(ox, oy, oz),
+            normal: DVec3::new(nx, ny, nz),
+            basis_u: DVec3::new(ux, uy, uz),
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        self.attach_validated_inner(face_id, surface, tol_mm)
+    }
+
+    #[wasm_bindgen(js_name = "attachFaceSurfaceCylinderValidated")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_face_surface_cylinder_validated(
+        &mut self, face_id: u32,
+        ox: f64, oy: f64, oz: f64,
+        ax: f64, ay: f64, az: f64,
+        radius: f64,
+        rx: f64, ry: f64, rz: f64,
+        u_min: f64, u_max: f64,
+        v_min: f64, v_max: f64,
+        tol_mm: f64,
+    ) -> String {
+        use axia_geo::surfaces::AnalyticSurface;
+        let surface = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::new(ox, oy, oz),
+            axis_dir: DVec3::new(ax, ay, az),
+            radius,
+            ref_dir: DVec3::new(rx, ry, rz),
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        self.attach_validated_inner(face_id, surface, tol_mm)
+    }
+
+    #[wasm_bindgen(js_name = "attachFaceSurfaceSphereValidated")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_face_surface_sphere_validated(
+        &mut self, face_id: u32,
+        cx: f64, cy: f64, cz: f64,
+        radius: f64,
+        u_min: f64, u_max: f64,
+        v_min: f64, v_max: f64,
+        tol_mm: f64,
+    ) -> String {
+        use axia_geo::surfaces::AnalyticSurface;
+        let surface = AnalyticSurface::Sphere {
+            center: DVec3::new(cx, cy, cz),
+            radius,
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        self.attach_validated_inner(face_id, surface, tol_mm)
+    }
+
+    #[wasm_bindgen(js_name = "attachFaceSurfaceConeValidated")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_face_surface_cone_validated(
+        &mut self, face_id: u32,
+        ax: f64, ay: f64, az: f64,
+        dx: f64, dy: f64, dz: f64,
+        half_angle: f64,
+        rx: f64, ry: f64, rz: f64,
+        u_min: f64, u_max: f64,
+        v_min: f64, v_max: f64,
+        tol_mm: f64,
+    ) -> String {
+        use axia_geo::surfaces::AnalyticSurface;
+        let surface = AnalyticSurface::Cone {
+            apex: DVec3::new(ax, ay, az),
+            axis_dir: DVec3::new(dx, dy, dz),
+            half_angle,
+            ref_dir: DVec3::new(rx, ry, rz),
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        self.attach_validated_inner(face_id, surface, tol_mm)
+    }
+
+    #[wasm_bindgen(js_name = "attachFaceSurfaceTorusValidated")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_face_surface_torus_validated(
+        &mut self, face_id: u32,
+        cx: f64, cy: f64, cz: f64,
+        ax: f64, ay: f64, az: f64,
+        rx: f64, ry: f64, rz: f64,
+        major_radius: f64, minor_radius: f64,
+        u_min: f64, u_max: f64, v_min: f64, v_max: f64,
+        tol_mm: f64,
+    ) -> String {
+        use axia_geo::surfaces::AnalyticSurface;
+        let surface = AnalyticSurface::Torus {
+            center: DVec3::new(cx, cy, cz),
+            axis_dir: DVec3::new(ax, ay, az),
+            ref_dir: DVec3::new(rx, ry, rz),
+            major_radius,
+            minor_radius,
+            u_range: (u_min, u_max),
+            v_range: (v_min, v_max),
+        };
+        self.attach_validated_inner(face_id, surface, tol_mm)
     }
 
     /// Clear any analytic surface from a face (revert to polygon).
