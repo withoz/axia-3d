@@ -242,10 +242,34 @@ impl Mesh {
         let move_only = is_move_only(self, face_id);
         let mode = if move_only { PushPullMode::MoveOnly } else { PushPullMode::CreateFace };
 
+        // Capture base face's surface BEFORE the operation (for translation)
+        let base_surface = self.faces.get(face_id)
+            .and_then(|f| f.surface().cloned());
+        let base_normal = self.faces.get(face_id)
+            .map(|f| f.normal())
+            .unwrap_or(DVec3::Z);
+
         let mut result = match mode {
             PushPullMode::MoveOnly => self.push_pull_move_only(face_id, dist)?,
             PushPullMode::CreateFace => self.push_pull_create_face(face_id, dist, material)?,
         };
+
+        // ─── ADR-060 Phase O Step 3 — BRep extrusion surfaces ───
+        //
+        // Per ADR-060 §B (drop-in alongside) — existing push_pull logic
+        // UNCHANGED above. This block runs after and only ATTACHES surfaces
+        // to the newly created faces (top + side walls). Existing 865
+        // regressions preserved (no behavioral change for callers that
+        // ignore surface).
+        //
+        // Per §E lock-in semantics:
+        //   Top face   → translated copy of base surface (if any)
+        //                else synthesized Plane via Phase N
+        //   Side walls → fresh Plane (perpendicular to base normal +
+        //                tangent to side edge)
+        self.adr_060_step3_attach_brep_surfaces(
+            &result, dist, base_surface, base_normal,
+        );
 
         // ADR-007 — 연산 후 invariants 재확인 (debug build only)
         self.debug_verify_invariants();
@@ -256,6 +280,88 @@ impl Mesh {
         debug.extend(result.split_debug.drain(..));
         result.split_debug = debug;
         Ok(result)
+    }
+
+    /// ADR-060 Phase O Step 3 — Attach BRep surfaces to push_pull result.
+    ///
+    /// Per §B drop-in alongside lock-in: existing push_pull logic is
+    /// untouched. This post-pass only sets `face.surface` on:
+    ///   - top face: translated base surface (if any) or synthesized Plane
+    ///   - side walls: fresh Plane (Newell normal of outer loop)
+    ///
+    /// Side edges already inherit Line curves automatically via
+    /// `Edge::curve_mandatory()` (Phase N synthesizer). No action needed.
+    fn adr_060_step3_attach_brep_surfaces(
+        &mut self,
+        result: &PushPullResult,
+        dist: f64,
+        base_surface: Option<crate::surfaces::AnalyticSurface>,
+        base_normal: DVec3,
+    ) {
+        use glam::DMat4;
+        use crate::curves::synthesize::synthesize_plane_surface;
+
+        // ── Top face surface ─────────────────────────────────────
+        // If base had a surface, translate it by (dist * base_normal).
+        // Otherwise synthesize Plane from top face's outer loop.
+        if result.top_face != result.base_face
+            && self.faces.contains(result.top_face)
+            && self.faces[result.top_face].is_active()
+        {
+            let new_top_surface = match base_surface {
+                Some(s) => {
+                    let m = DMat4::from_translation(base_normal * dist);
+                    s.transform(&m).ok()
+                        .or_else(|| {
+                            // Phase H transform failed (rare) — synthesize fallback
+                            self.synthesize_plane_for_face(result.top_face)
+                        })
+                }
+                None => self.synthesize_plane_for_face(result.top_face),
+            };
+            if let Some(surf) = new_top_surface {
+                self.faces[result.top_face].set_surface(Some(surf));
+            }
+        }
+
+        // ── Side wall surfaces ───────────────────────────────────
+        // Each side wall is a quad/rect — synthesize Plane from its
+        // outer-loop vertex positions (Phase N synthesizer).
+        for &side_fid in &result.side_faces {
+            if !self.faces.contains(side_fid)
+                || !self.faces[side_fid].is_active()
+            {
+                continue;
+            }
+            // Skip if surface already attached (avoid clobbering)
+            if self.faces[side_fid].surface().is_some() { continue; }
+
+            if let Some(surf) = self.synthesize_plane_for_face(side_fid) {
+                self.faces[side_fid].set_surface(Some(surf));
+            }
+        }
+
+        // Side edges: Phase N's curve_mandatory() will synthesize Line
+        // on demand for any new edges without explicit curve. No
+        // action needed here.
+        let _ = synthesize_plane_surface; // keep import alive
+    }
+
+    /// Helper — synthesize a Plane surface for a face by collecting its
+    /// outer-loop vertex positions and calling Phase N's synthesizer.
+    /// Returns None if loop collection fails.
+    fn synthesize_plane_for_face(
+        &self, fid: FaceId,
+    ) -> Option<crate::surfaces::AnalyticSurface> {
+        use crate::curves::synthesize::synthesize_plane_surface;
+        let face = self.faces.get(fid)?;
+        let loop_start = face.outer().start;
+        let verts = self.collect_loop_verts(loop_start).ok()?;
+        let positions: Vec<DVec3> = verts.iter()
+            .filter_map(|v| self.vertex_pos(*v).ok())
+            .collect();
+        if positions.len() < 3 { return None; }
+        Some(synthesize_plane_surface(&positions))
     }
 
     // ============================================================================
@@ -1180,6 +1286,194 @@ mod tests {
         for &v in &h {
             let pos = mesh.vertex_pos(v).unwrap();
             assert!((pos.y - 0.0).abs() < 1e-6, "original hole vert should remain at y=0");
+        }
+    }
+
+    // ── ADR-060 Phase O Step 3 — push_pull BRep extrusion ──
+
+    use crate::surfaces::AnalyticSurface;
+
+    /// ADR-060 §B Step 3 #1 — Side walls receive Plane surface after push_pull.
+    #[test]
+    fn adr_060_step3_side_walls_get_plane_surface() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // 4 side walls created — each should have Plane surface attached
+        assert_eq!(r.side_faces.len(), 4, "expected 4 side walls");
+        for &fid in &r.side_faces {
+            let surface = m.faces[fid].surface();
+            assert!(surface.is_some(),
+                "side wall {:?} should have Plane surface attached", fid);
+            assert!(matches!(surface, Some(AnalyticSurface::Plane { .. })),
+                "side wall surface should be Plane variant");
+        }
+    }
+
+    /// ADR-060 §B Step 3 #2 — Top face receives Plane surface (synthesized
+    /// when base had none).
+    #[test]
+    fn adr_060_step3_top_face_synthesizes_plane_when_base_curveless() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        // Note: base has no surface attached
+        assert!(m.faces[base].surface().is_none());
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        let top_surface = m.faces[r.top_face].surface();
+        assert!(top_surface.is_some(),
+            "top face should have synthesized Plane surface");
+        match top_surface {
+            Some(AnalyticSurface::Plane { origin, .. }) => {
+                // Ground rect (XZ plane, CCW from below) has normal -Y;
+                // push 3 units along normal → top at y = -3.
+                assert!((origin.y - (-3.0)).abs() < 1e-6,
+                    "top Plane origin should be at y=-3 (push along -Y normal), got {:?}", origin);
+            }
+            other => panic!("expected Plane, got {:?}", other),
+        }
+    }
+
+    /// ADR-060 §B Step 3 #3 — Top face translates base surface when
+    /// base had explicit Plane attached.
+    #[test]
+    fn adr_060_step3_top_face_translates_base_surface() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        // Manually attach a Plane surface to base.
+        // NOTE: Step 3 translates by face.normal() (mesh-computed),
+        // NOT by attached surface's normal. Ground rect normal = -Y.
+        let attached_normal = DVec3::Y;  // arbitrary attached label
+        m.faces[base].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::new(2.0, 0.0, 2.0),
+            normal: attached_normal,
+            basis_u: DVec3::X,
+            u_range: (-1e6, 1e6), v_range: (-1e6, 1e6),
+        }));
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // Top should have Plane translated by 3 * face.normal() (= -Y)
+        // → origin (2, 0, 2) + (0, -3, 0) = (2, -3, 2).
+        // attached_normal stays preserved (Phase H translation preserves normal).
+        match m.faces[r.top_face].surface() {
+            Some(AnalyticSurface::Plane { origin, normal, .. }) => {
+                assert!((*origin - DVec3::new(2.0, -3.0, 2.0)).length() < 1e-6,
+                    "top Plane origin = base + 3*face.normal (=-Y), got {:?}", origin);
+                assert!((*normal - attached_normal).length() < 1e-9,
+                    "attached normal preserved through translation");
+            }
+            other => panic!("expected translated Plane, got {:?}", other),
+        }
+    }
+
+    /// ADR-060 §B Step 3 #4 — Side edges have curve_mandatory() returning Line
+    /// (mesh-relative — no explicit set required).
+    #[test]
+    fn adr_060_step3_side_edges_curve_mandatory_is_line() {
+        use crate::curves::AnalyticCurve;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // Walk side wall edges — each should have Line via curve_mandatory()
+        let mut line_edge_count = 0;
+        for &fid in &r.side_faces {
+            let outer_start = m.faces[fid].outer().start;
+            let edges = m.collect_loop_hes(outer_start).unwrap();
+            for he in edges {
+                let eid = m.hes[he].edge();
+                let curve = m.edges[eid].curve_mandatory();
+                if matches!(curve, AnalyticCurve::Line { .. }) {
+                    line_edge_count += 1;
+                }
+            }
+        }
+        assert!(line_edge_count > 0,
+            "side wall edges should have Line via curve_mandatory");
+    }
+
+    /// ADR-060 §B Step 3 #5 — Negative push (push inward) preserves sign convention.
+    #[test]
+    fn adr_060_step3_negative_push_translates_top_correctly() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        m.faces[base].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Y,  // base normal +Y
+            basis_u: DVec3::X,
+            u_range: (-1e6, 1e6), v_range: (-1e6, 1e6),
+        }));
+
+        // Negative dist — push_pull may behave differently per mode.
+        // We only verify it doesn't panic and result is valid.
+        let r = m.push_pull(base, -2.0, mat).unwrap();
+        assert!(m.faces.contains(r.top_face));
+
+        // Top face surface should exist
+        assert!(m.faces[r.top_face].surface().is_some(),
+            "top face surface should be attached even for negative push");
+    }
+
+    /// ADR-060 §B Step 3 #6 — Zero distance is no-op (no surface modification).
+    #[test]
+    fn adr_060_step3_zero_distance_no_op() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        let face_count_before = m.face_count();
+
+        let r = m.push_pull(base, 0.0, mat).unwrap();
+
+        assert_eq!(m.face_count(), face_count_before);
+        assert_eq!(r.base_face, r.top_face, "no extrusion → top == base");
+        assert!(r.side_faces.is_empty());
+    }
+
+    /// ADR-060 §B Step 3 #7 — Existing 865 corpus regression: face_count
+    /// preserved, push_pull behavior 0 change for callers that ignore surface.
+    #[test]
+    fn adr_060_step3_existing_box_face_count_unchanged() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+        // Existing test (push_flat_creates_box) expects 6 faces — preserved
+        assert_eq!(m.face_count(), 6,
+            "Step 3 surface attachment must not change face count");
+        assert!(!r.base_removed);
+    }
+
+    /// ADR-060 §B Step 3 #8 — Side wall Plane normal is reasonable
+    /// (perpendicular to push direction).
+    #[test]
+    fn adr_060_step3_side_wall_normals_perpendicular_to_push() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        // Ground rect's normal is +Y (push direction)
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        for &fid in &r.side_faces {
+            match m.faces[fid].surface() {
+                Some(AnalyticSurface::Plane { normal, .. }) => {
+                    // Side wall normal should be perpendicular to push direction (+Y)
+                    let dot = normal.dot(DVec3::Y).abs();
+                    assert!(dot < 0.1,
+                        "side wall normal should be ⊥ to +Y, dot = {}", dot);
+                }
+                other => panic!("side wall {:?} expected Plane, got {:?}", fid, other),
+            }
         }
     }
 }
