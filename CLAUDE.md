@@ -1774,6 +1774,57 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   - E.8 Visual regression / screenshot diff — 별도 ADR
 - **상세**: `docs/adr/075-nurbs-boolean-browser-e2e.md` §D Acceptance Log
 
+### ADR-074 — Boolean Group Selection UX (E.3 트랙 핵심 완료, 2026-05-05)
+- **상태**: E.3 트랙 핵심 sub-step (U-1 / U-2 / U-3 / U-4 / U-6)
+  완료. ADR-066 §E.3 (사용자 명시 Group A/B 선택 UX 미해결) 본 ADR
+  으로 닫음. Last commit: 본 회고 commit.
+- **의의**: ADR-066 Y-4 의 반/반 split 한계 해소. 사용자가 우클릭
+  메뉴로 면을 Boolean Group A/B 로 명시 → multi DCEL dispatch 가
+  반/반 split 대신 explicit grouping 으로 라우팅. ADR-064/066/075/076
+  이 engine / 검증 / cleanup 이라면, ADR-074 는 **UX-driven semantic
+  clarity** — engine 외부 (model + UI + routing + real-runtime) 의
+  4-layer atomic stack 을 처음으로 닫음.
+- **stack** (사용자 의도 → real engine 라운드트립):
+  ```
+  ContextMenu 우클릭 (U-2)                        ← UI 진입점
+    → SelectionManager.setGroupTag (U-1)          ← Model layer
+      → BooleanHandler.startBooleanOp             ← Routing (U-3)
+        → hasGroupSelection() ? getGroupA/B
+                              : 반/반 split (fallback)
+          → bridge.booleanDispatchDcelMulti       ← Path Y dispatch
+            → ... (ADR-066 multi-face stack)
+  ```
+- **결정 매트릭스**: U-B=(b) SelectionManager 내 storage /
+  U-C=(b) `Map<faceId, 'A'|'B'>` (한 face = 한 group invariant) /
+  U-D=(a) 미설정 시 반/반 fallback (drop-in alongside) / U-E
+  `clearSelection` 시 group tags 도 clear / U-F=(a) A/B 만 /
+  U-G=(a) session 만 / U-H 기존 API UNCHANGED / U-I `notifyChange`
+  통합. Constraint: Group tags ⊆ selected (`setGroupTag` silently
+  skips faces not in selection).
+- **U-3-k 추가** (사용자 의견 반영): Toast wording cleanup —
+  "NURBS" prefix 4 paths 모두 제거 + group source indicator
+  ("(multi, 명시 그룹)" / "(multi, 자동 분할)"). ADR-076 Step 1
+  의 "canonical path" 정신과 일관.
+- **회귀 누적 (E.3 트랙)**: vitest 1410 → **1428** (+18, U-1 8 +
+  U-2 5 + U-3 5), Playwright E2E 11 → **13** (+2, U-4). 합계
+  **+20**, 절대 #[ignore] 금지 20/20 준수.
+- **5 ADR 합산** (Path Z + Path Y + E.4 + E.5 + E.3): axia-geo
+  940 → **964** (+24), axia-wasm 8 → **16** (+8), web TS vitest
+  1395 → **1428** (+33), Playwright E2E 0 → **13** (+13). 합계
+  2343 → **2421** (+78), 절대 #[ignore] 금지 78/78 준수. CI 자동
+  검증 (ADR-075 E4-6).
+- **결정적 진척**: ADR-066 §E.3 의 미해결 항목 (사용자 명시 Group
+  A/B 선택 UX) real-runtime 까지 닫힘. 4-layer 패턴 (Model + UI
+  + Routing + Real-runtime E2E) 은 향후 selection-driven UX ADR
+  의 모범.
+- **남은 미착수 (모두 선택적 또는 별도 트랙)**:
+  - E.5-1 Visual feedback (group A/B outline 색상) — ADR-075 §E.8
+    visual regression 인프라와 함께 권장
+  - E.5-2 Multi-group (>2) — 현재 A/B 만, N-group 별도 ADR
+  - E.5-3 Persistence — session 만 (project 저장 별도 ADR)
+  - E.5-4 단축키 미배정 (atomic; 충돌 검토 별도 sub-step)
+- **상세**: `docs/adr/074-boolean-group-selection-ux.md` §D Acceptance Log
+
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Electron/Tauri 데스크톱 앱
