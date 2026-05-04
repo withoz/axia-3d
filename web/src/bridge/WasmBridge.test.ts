@@ -1375,4 +1375,164 @@ describe('WasmBridge', () => {
       }
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-066 Y-5 (Path Y) — Undo cross-method contract (multi)
+  //
+  // Real runtime E2E (multi → undo on a live WASM engine) is browser-only.
+  // At the TS bridge layer we verify the CONTRACT between
+  // booleanDispatchDcelMulti and undo via mocks: markDirty signaling,
+  // cross-method sequencing, and transaction safety on Err / partial.
+  // Transaction-wrapping itself is verified at WASM source-inspection
+  // level by Y-2 (boolean_dispatch_dcel_multi_json_uses_transactions).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-066 Y-5 booleanDispatchDcelMulti + undo contract', () => {
+    it('booleanDispatchDcelMulti calls markDirty before delegating to engine', () => {
+      const successJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 1, faceB: 3, outcome: { kind: 'ok',
+            dcel: {
+              newFacesA: [100], newFacesB: [],
+              removedFaces: [1], preservedFaces: [],
+              disjoint: false, robustnessClean: true,
+            } } },
+        ],
+        allNewFaces: [100],
+        allRemovedFaces: [1],
+        warnings: [],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: vi.fn(() => successJson),
+        undo: vi.fn(() => true),
+      };
+      const markDirtySpy = vi.spyOn(bridge, 'markDirty');
+
+      const result = bridge.booleanDispatchDcelMulti([1], [3], 'subtract');
+
+      expect(markDirtySpy).toHaveBeenCalled();
+      expect(result?.kind).toBe('ok');
+      // markDirty must fire BEFORE the engine call (Y-3-f invariant).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engineFn = (bridge as any).engine.booleanDispatchDcelMultiJson as ReturnType<typeof vi.fn>;
+      const dirtyCallOrder = markDirtySpy.mock.invocationCallOrder[0];
+      const engineCallOrder = engineFn.mock.invocationCallOrder[0];
+      expect(dirtyCallOrder).toBeLessThan(engineCallOrder);
+    });
+
+    it('booleanDispatchDcelMulti followed by undo forwards both calls correctly', () => {
+      const successJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 1, faceB: 3, outcome: { kind: 'ok',
+            dcel: {
+              newFacesA: [100, 101], newFacesB: [],
+              removedFaces: [1], preservedFaces: [3],
+              disjoint: false, robustnessClean: true,
+            } } },
+          { faceA: 2, faceB: 4, outcome: { kind: 'ok',
+            dcel: {
+              newFacesA: [102], newFacesB: [],
+              removedFaces: [2], preservedFaces: [4],
+              disjoint: false, robustnessClean: true,
+            } } },
+        ],
+        allNewFaces: [100, 101, 102],
+        allRemovedFaces: [1, 2],
+        warnings: [],
+      });
+      const undoFn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: vi.fn(() => successJson),
+        undo: undoFn,
+      };
+
+      // Sequence: multi → undo (cross-method).
+      const multi = bridge.booleanDispatchDcelMulti([1, 2], [3, 4], 'subtract');
+      const undoOk = bridge.undo();
+
+      expect(multi?.kind).toBe('ok');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engineFn = (bridge as any).engine.booleanDispatchDcelMultiJson as ReturnType<typeof vi.fn>;
+      expect(engineFn).toHaveBeenCalledTimes(1);
+      expect(undoFn).toHaveBeenCalledTimes(1);
+      expect(undoOk).toBe(true);
+    });
+
+    it('engine.undo after multi Nurbs success (incl. partial) returns true', () => {
+      // Y-5-f — partial-success case: 1 ok + 1 err in per_pair. The
+      // WASM transaction is committed atomically (Y-2 verified), so
+      // undo reverses the entire batch (the 1 ok pair) in one call.
+      const partialJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 1, faceB: 3, outcome: { kind: 'ok',
+            dcel: {
+              newFacesA: [100], newFacesB: [],
+              removedFaces: [1], preservedFaces: [3],
+              disjoint: false, robustnessClean: true,
+            } } },
+          { faceA: 1, faceB: 4, outcome: {
+            kind: 'err',
+            detail: 'InactiveFace cascade',
+          } },
+        ],
+        allNewFaces: [100],
+        allRemovedFaces: [1],
+        warnings: ['pair (FaceId(1), FaceId(4)): InactiveFace'],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: vi.fn(() => partialJson),
+        // Single undo undoes the entire batch (atomicity invariant).
+        undo: vi.fn(() => true),
+      };
+
+      const multi = bridge.booleanDispatchDcelMulti([1], [3, 4], 'subtract');
+      const undoOk = bridge.undo();
+
+      expect(multi?.kind).toBe('ok');
+      if (multi?.kind === 'ok') {
+        // Sanity: partial result has 1 ok + 1 err pair.
+        expect(multi.perPair).toHaveLength(2);
+        expect(multi.perPair.filter(p => p.outcome.kind === 'ok')).toHaveLength(1);
+        expect(multi.perPair.filter(p => p.outcome.kind === 'err')).toHaveLength(1);
+      }
+      // Single undo must succeed for the partial-commit batch.
+      expect(undoOk).toBe(true);
+    });
+
+    it('engine.undo after multi error envelope still works (no transaction leak)', () => {
+      // After bridge returns kind:'error', the WASM side has called
+      // transactions.cancel() (verified by Y-2). The TS bridge must
+      // not have left any state that prevents subsequent undo from
+      // operating on PRIOR committed transactions.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelMultiJson: vi.fn(() => JSON.stringify({
+          schemaVersion: 1, ok: false,
+          error: 'face_a 999 not found',
+        })),
+        // Undo of a PRIOR transaction (mocked as available).
+        undo: vi.fn(() => true),
+      };
+
+      const errResult = bridge.booleanDispatchDcelMulti([999], [1], 'subtract');
+      const undoOk = bridge.undo();
+
+      expect(errResult?.kind).toBe('error');
+      expect(undoOk).toBe(true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const undoMock = (bridge as any).engine.undo as ReturnType<typeof vi.fn>;
+      expect(undoMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });
