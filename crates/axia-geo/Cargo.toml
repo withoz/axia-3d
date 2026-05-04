@@ -17,6 +17,9 @@ serde = { workspace = true }
 bincode = { workspace = true }
 bytemuck = { workspace = true }
 axia-transaction = { workspace = true }
+# ADR-058 Phase M §A lock-in — Shewchuk robust predicates (BSD3).
+# 자체 구현 금지 (변경 시 새 ADR). FMA 비활성 prerequisite (§B).
+robust = "1.1"
 
 [dev-dependencies]
 serde_json = { workspace = true }
