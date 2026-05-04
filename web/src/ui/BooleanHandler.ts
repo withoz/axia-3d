@@ -56,14 +56,19 @@ function handleMultiDcelResult(
   deps: BooleanHandlerDeps,
   result: BooleanDispatchDcelMultiResult | null,
   op: 'union' | 'subtract' | 'intersect',
+  groupSource: 'explicit' | 'split' = 'split',
 ): boolean {
   // bridge missing / WASM not exposed → fall through (graceful).
   if (!result) return false;
 
   // §F lock-in — engine error envelope shown explicitly.
+  // ADR-074 U-3-k — Toast wording cleanup: "NURBS" prefix removed
+  // from all multi DCEL Toasts. The dispatcher path is canonical
+  // (per ADR-076 Step 1), not "NURBS-only". User-facing wording is
+  // Korean op name + (multi) suffix only — engine-agnostic.
   if (result.kind === 'error') {
     Toast.error(
-      `NURBS ${OP_NAME_KO[op]} (multi) — 엔진 오류 (${result.reason}):\n${result.detail}`,
+      `${OP_NAME_KO[op]} (multi) — 엔진 오류 (${result.reason}):\n${result.detail}`,
       8000,
     );
     debugLog(`[Multi DCEL Bool] ${op} error: ${result.reason} — ${result.detail}`);
@@ -90,11 +95,14 @@ function handleMultiDcelResult(
   // (Per-pair Ok with disjoint=true OR new_faces empty due to D-H safe-only.)
   if (newCount === 0 && removedCount === 0) {
     Toast.info(
-      `NURBS ${OP_NAME_KO[op]} (multi): 모든 ${totalPairs}개 pair 가 ` +
+      `${OP_NAME_KO[op]} (multi): 모든 ${totalPairs}개 pair 가 ` +
         `교차하지 않거나 면 분할 미생성 (변경 없음).`,
       4500,
     );
-    debugLog(`[Multi DCEL Bool] ${op} all-disjoint/no-loops: ${totalPairs} pairs`);
+    debugLog(
+      `[Multi DCEL Bool] ${op} all-disjoint/no-loops: ${totalPairs} pairs ` +
+        `(source=${groupSource})`,
+    );
     return true;
   }
 
@@ -105,29 +113,42 @@ function handleMultiDcelResult(
     deps.toolManager.syncMesh();
     const firstWarning = result.warnings[0] ?? '(상세 없음)';
     Toast.warning(
-      `NURBS ${OP_NAME_KO[op]} (multi) 부분 성공 — ` +
+      `${OP_NAME_KO[op]} (multi) 부분 성공 — ` +
         `${successPairs}/${totalPairs} pair 성공, 새 면 ${newCount}개, ` +
         `제거 ${removedCount}개.\n첫 경고: ${firstWarning}`,
       6000,
     );
     debugLog(
       `[Multi DCEL Bool] ${op} partial: ${successPairs}/${totalPairs} ok, ` +
-        `new=${newCount}, removed=${removedCount}, warnings=${result.warnings.length}`,
+        `new=${newCount}, removed=${removedCount}, ` +
+        `warnings=${result.warnings.length} (source=${groupSource})`,
     );
     return true;
   }
 
-  // Full success — Y-4-c gives per-pair count visibility.
+  // Full success — Y-4-c per-pair count visibility + ADR-074 U-3-k
+  // group source indicator (explicit vs split). User행위 표시.
   deps.toolManager.syncMesh();
+  // groupSource 별 추가 정보 — explicit 일 때 A↔B 면 수 표시.
+  let sourceLabel: string;
+  if (groupSource === 'explicit') {
+    // facesA / facesB 의 정확한 수는 caller 만 알지만, perPair 의
+    // 고유 face 수로 근사 (cartesian 의 row × col = total pairs).
+    // 단순히 "명시 그룹" 만 표시 — 정확한 N↔M 은 debug log 에.
+    sourceLabel = '명시 그룹';
+  } else {
+    sourceLabel = '자동 분할';
+  }
   Toast.info(
-    `NURBS ${OP_NAME_KO[op]} (multi) 완료 — 새 면 ${newCount}개, ` +
-      `제거 면 ${removedCount}개 (${successPairs}/${totalPairs} pair 성공).`,
+    `${OP_NAME_KO[op]} (multi, ${sourceLabel}) 완료 — ` +
+      `새 면 ${newCount}개, 제거 면 ${removedCount}개 ` +
+      `(${successPairs}/${totalPairs} pair 성공).`,
     3000,
   );
   debugLog(
     `[Multi DCEL Bool] ${op} ok: ${successPairs}/${totalPairs} pairs, ` +
       `allNew=${newCount}, allRemoved=${removedCount}, ` +
-      `warnings=${result.warnings.length}`,
+      `warnings=${result.warnings.length} (source=${groupSource})`,
   );
   return true;
 }
@@ -173,11 +194,36 @@ export function startBooleanOp(
   // | full success                | info     | yes      | no           |
   if (selection.length >= 2 &&
       typeof bridge.booleanDispatchDcelMulti === 'function') {
-    const mid = Math.ceil(selection.length / 2);
-    const facesA = selection.slice(0, mid);
-    const facesB = selection.slice(mid);
+    // ADR-074 U-3 — 사용자 명시 grouping 우선.
+    // hasGroupSelection() === true (BOTH A and B non-empty) → 명시 사용.
+    // false → 기존 반/반 split fallback (Y-4-b=(a) 보존, drop-in alongside).
+    let facesA: number[];
+    let facesB: number[];
+    let groupSource: 'explicit' | 'split';
+    const sm = toolManager.selection as {
+      hasGroupSelection?: () => boolean;
+      getGroupA?: () => number[];
+      getGroupB?: () => number[];
+    };
+    if (typeof sm.hasGroupSelection === 'function' &&
+        sm.hasGroupSelection() &&
+        typeof sm.getGroupA === 'function' &&
+        typeof sm.getGroupB === 'function') {
+      facesA = sm.getGroupA();
+      facesB = sm.getGroupB();
+      groupSource = 'explicit';
+    } else {
+      const mid = Math.ceil(selection.length / 2);
+      facesA = selection.slice(0, mid);
+      facesB = selection.slice(mid);
+      groupSource = 'split';
+    }
+    debugLog(
+      `[Multi DCEL Bool] ${op}: source=${groupSource}, ` +
+        `A=${facesA.length}, B=${facesB.length}`,
+    );
     const multiResult = bridge.booleanDispatchDcelMulti(facesA, facesB, op);
-    const handled = handleMultiDcelResult(deps, multiResult, op);
+    const handled = handleMultiDcelResult(deps, multiResult, op, groupSource);
     if (handled) return;
     // fall-through: null bridge OR pathUsed === 'Mesh'.
     // ADR-076 Step 1 — Legacy paths sunset:

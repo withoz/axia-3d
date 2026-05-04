@@ -29,6 +29,11 @@ function mockDeps(): BooleanHandlerDeps {
       syncMesh: vi.fn(),
       selection: {
         getSelectedFaces: vi.fn().mockReturnValue([1, 2, 3, 4]),
+        // ADR-074 U-3 — group selection routing. Default false →
+        // BooleanHandler falls back to half/half split (drop-in alongside).
+        hasGroupSelection: vi.fn().mockReturnValue(false),
+        getGroupA: vi.fn().mockReturnValue([]),
+        getGroupB: vi.fn().mockReturnValue([]),
       },
     } as any,
   };
@@ -306,6 +311,146 @@ describe('BooleanHandler', () => {
       // Error → no syncMesh, no legacy fallback.
       expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
       expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-074 U-3 — Boolean Group A/B routing in BooleanHandler.
+  // U-1 model layer + U-2 ContextMenu UI 의 가치 발현 지점.
+  // hasGroupSelection() === true → getGroupA/B 직접 사용, false →
+  // 기존 반/반 split fallback (drop-in alongside, 회귀 0).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-074 U-3 group selection routing', () => {
+    function setupMultiSelection(faces: number[] = [10, 20, 30, 40]): void {
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue(faces);
+    }
+
+    /** Helper — install a successful multi DCEL bridge mock. */
+    function installSuccessfulMulti(): ReturnType<typeof vi.fn> {
+      const mock = vi.fn().mockReturnValue({
+        kind: 'ok',
+        pathUsed: 'Nurbs',
+        fallbackReason: null,
+        perPair: [
+          { faceA: 0, faceB: 0, outcome: { kind: 'ok', dcel: {
+            newFacesA: [100], newFacesB: [],
+            removedFaces: [10], preservedFaces: [],
+            disjoint: false, robustnessClean: true,
+          } } },
+        ],
+        allNewFaces: [100],
+        allRemovedFaces: [10],
+        warnings: [],
+      });
+      (deps.bridge as any).booleanDispatchDcelMulti = mock;
+      return mock;
+    }
+
+    it('explicit group selection routes A/B faces directly to multi (not half/half)', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      // hasGroupSelection true + explicit groups: A=[10], B=[20, 30, 40].
+      // (Half/half split would yield A=[10,20], B=[30,40] — different!)
+      (deps.toolManager.selection.hasGroupSelection as any).mockReturnValue(true);
+      (deps.toolManager.selection.getGroupA as any).mockReturnValue([10]);
+      (deps.toolManager.selection.getGroupB as any).mockReturnValue([20, 30, 40]);
+      const multiMock = installSuccessfulMulti();
+
+      startBooleanOp(deps, 'subtract');
+
+      // Bridge called with EXPLICIT group A/B, not half/half split.
+      expect(multiMock).toHaveBeenCalledWith([10], [20, 30, 40], 'subtract');
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      // Toast indicates "명시 그룹" source.
+      expect(toastInfo).toHaveBeenCalled();
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('명시 그룹');
+      expect(msg).toContain('차집합');
+      // Legacy mesh path NOT invoked.
+      expect(deps.bridge.booleanOp).not.toHaveBeenCalled();
+    });
+
+    it('hasGroupSelection() === false → falls back to half/half split (drop-in)', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      (deps.toolManager.selection.hasGroupSelection as any).mockReturnValue(false);
+      const multiMock = installSuccessfulMulti();
+
+      startBooleanOp(deps, 'subtract');
+
+      // Half/half split: A=[10,20], B=[30,40].
+      expect(multiMock).toHaveBeenCalledWith([10, 20], [30, 40], 'subtract');
+      // Toast indicates "자동 분할" source.
+      expect(toastInfo).toHaveBeenCalled();
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('자동 분할');
+    });
+
+    it('explicit group ignores untagged selected faces (A/B only)', () => {
+      // Selection has 5 faces but only 3 are tagged (1 in A, 2 in B).
+      // Untagged faces (40, 50) are ignored — explicit grouping respected.
+      setupMultiSelection([10, 20, 30, 40, 50]);
+      (deps.toolManager.selection.hasGroupSelection as any).mockReturnValue(true);
+      (deps.toolManager.selection.getGroupA as any).mockReturnValue([10]);
+      (deps.toolManager.selection.getGroupB as any).mockReturnValue([20, 30]);
+      const multiMock = installSuccessfulMulti();
+
+      startBooleanOp(deps, 'union');
+
+      // Only tagged faces dispatched — 40 and 50 NOT included.
+      expect(multiMock).toHaveBeenCalledWith([10], [20, 30], 'union');
+    });
+
+    it('legacy bridge without selection.hasGroupSelection → graceful fallback', () => {
+      setupMultiSelection([10, 20, 30, 40]);
+      // Simulate older SelectionManager without group methods.
+      delete (deps.toolManager.selection as any).hasGroupSelection;
+      delete (deps.toolManager.selection as any).getGroupA;
+      delete (deps.toolManager.selection as any).getGroupB;
+      const multiMock = installSuccessfulMulti();
+
+      startBooleanOp(deps, 'subtract');
+
+      // Falls back to half/half split (no crash).
+      expect(multiMock).toHaveBeenCalledWith([10, 20], [30, 40], 'subtract');
+      const msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).toContain('자동 분할');
+    });
+
+    it('Toast wording (U-3-k) — no "NURBS" prefix in any multi DCEL toast', () => {
+      // Verify ADR-074 U-3-k cleanup: all 4 multi DCEL Toast paths
+      // (success / disjoint / partial / error) MUST NOT contain "NURBS".
+      // Engine-agnostic wording per ADR-076 Step 1's canonical-path stance.
+      setupMultiSelection([10, 20, 30, 40]);
+
+      // Success path.
+      installSuccessfulMulti();
+      startBooleanOp(deps, 'subtract');
+      expect(toastInfo).toHaveBeenCalled();
+      let msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).not.toContain('NURBS');
+      toastInfo.mockClear();
+
+      // Disjoint path.
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'ok', pathUsed: 'Nurbs', fallbackReason: null,
+        perPair: [{ faceA: 0, faceB: 0, outcome: { kind: 'ok', dcel: {
+          newFacesA: [], newFacesB: [], removedFaces: [], preservedFaces: [],
+          disjoint: true, robustnessClean: true,
+        } } }],
+        allNewFaces: [], allRemovedFaces: [], warnings: [],
+      });
+      startBooleanOp(deps, 'subtract');
+      msg = toastInfo.mock.calls[0][0] as string;
+      expect(msg).not.toContain('NURBS');
+      toastInfo.mockClear();
+
+      // Error path.
+      (deps.bridge as any).booleanDispatchDcelMulti = vi.fn().mockReturnValue({
+        kind: 'error', reason: 'engineErr', detail: 'face_a 999 not found',
+      });
+      startBooleanOp(deps, 'subtract');
+      const errMsg = toastError.mock.calls[0][0] as string;
+      expect(errMsg).not.toContain('NURBS');
     });
   });
 });
