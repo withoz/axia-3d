@@ -1650,6 +1650,39 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   Surface primitives ✅ → NURBS surfaces ✅ → SSI ✅ → Boolean ✅ → STEP/IGES 🔄
 - 기존 LOCKED 정책 / ADR invariants (007/019/021/025/026/035/036) 모두 보존
 
+### ADR-064 — NURBS Boolean → DCEL (Path Z 전 stack 완료, 2026-05-04)
+- **상태**: Path Z 모든 sub-step (Steps 1 / 2.A / 2.B+2.C / 3-α / 4 / 5
+  / 6-α/β/γ/δ) 완료. Last commit `946e247`.
+- **의의**: Phase J `nurbs_boolean_v2` (probe-only) → 실제 mesh-level
+  Boolean 결과 (op-specific 입력 제거 + 새 DCEL face 생성). 사용자
+  메뉴 클릭부터 undo 까지 전 stack 연결.
+- **stack**:
+  ```
+  BooleanHandler.startBooleanOp                 ← Step 6-γ
+    → WasmBridge.booleanDispatchDcel (TS typed) ← Step 6-β
+      → booleanDispatchDcelJson (WASM)          ← Step 6-α
+        → Mesh::boolean_dispatch_dcel           ← Step 5
+          → Mesh::nurbs_boolean_to_dcel         ← Step 4 (op-specific removal)
+            → Phase J nurbs_boolean_v2          ← (기존)
+  ```
+- **안전 자산**: D-H safe-only (new_faces 0개 → 입력 보존) + D-F=(c)
+  disjoint 입력 보존 + D-G drop-in (기존 `boolean.rs` /
+  `boolean_dispatch` / `booleanDispatchJson` UNCHANGED) + §F 명시 실패
+  (silent fallback 0건).
+- **회귀 누적**: axia-geo 940 → **959** (+19), axia-wasm 8 → **12** (+4),
+  web TS 1395 → **1410** (+15). 합계 **+38**, 절대 #[ignore] 금지 정책
+  38/38 준수.
+- **남은 미착수 (모두 별도 ADR, 결정적 의사결정 0)**:
+  - Step 3-β (containment depth ≥ 2 nested outer)
+  - Path Y (multi-face × multi-face dispatch)
+  - 진짜 cutover (`boolean_dispatch` mesh fallback 폐지 — 사용자
+    텔레메트리 후)
+  - Path X (Tensor surface uv inversion — Bezier/B-spline 정확도 +
+    Rational NURBS surface SSI)
+  - Real browser-runtime E2E (Playwright/Cypress)
+  - 기존 NURBS probe (kind===7) deprecation
+- **상세**: `docs/adr/064-nurbs-boolean-to-dcel.md` §D Acceptance Log
+
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Electron/Tauri 데스크톱 앱
