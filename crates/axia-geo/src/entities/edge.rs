@@ -1,9 +1,43 @@
 //! Edge entity — connects two vertices, owns a pair of half-edges.
 
+use std::cell::RefCell;
+
+use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use super::id::*;
 use super::flags::SharedFlags;
 use crate::curves::AnalyticCurve;
+
+// ════════════════════════════════════════════════════════════════════
+// ADR-061 Phase P-narrow Step 1b — Edge cache slots (Z.2 Curve Hover).
+//
+// Mirrors Step 1a (Face) — same decisions:
+//   D-A=RefCell  → interior mutability (consistent with Face).
+//   D-B=추가     → edge_cache_invalidates_after_load regression.
+//   D-C=작성     → Edge does NOT derive PartialEq either; defer.
+//   D-D=세분화   → Step 1b is Edge only; mirrors 1a.
+//
+// Lock-ins (ADR-061 §D):
+//   #1 Cache field on Edge (Phase L compatible).
+//   #2 Line excluded from caching (closed-form distance).
+//   #5 Cache excluded from serialization.
+// ════════════════════════════════════════════════════════════════════
+
+/// ADR-061 §B — One cache entry attached to an Edge. Holds the
+/// tessellated polyline used as Newton initial-seed for
+/// `ray_to_curve_distance` (ADR-040 P25).
+///
+/// Versioned against the owning Edge's `curve_version` — mismatch
+/// invalidates this entry on next read.
+#[derive(Clone, Debug)]
+pub struct PolylineCacheEntry {
+    /// Edge curve_version observed when this entry was computed.
+    pub curve_version: u64,
+    /// Polyline sampled at HOVER_CHORD_TOL (Step 4 will define the
+    /// constant). Line variant is excluded per §D #2 — `should_cache_polyline`
+    /// helper enforces this.
+    pub points: Vec<DVec3>,
+}
 
 /// Edge semantic class — distinguishes real geometry (participates in face
 /// synthesis, intersection-splitting, boolean) from reference lines that
@@ -84,6 +118,19 @@ pub struct Edge {
     /// `#[serde(default)]` ensures old AXIA files load with `curve = None`.
     #[serde(default)]
     curve: Option<AnalyticCurve>,
+
+    /// ADR-061 Phase P-narrow §B — incremented on every mutation of
+    /// `curve` (or, in Step 2, of endpoint vertices). Cache entries
+    /// observe this; mismatch = MISS = recompute via Step 4 hot-path.
+    /// Excluded from serialization (volatile cache state, §D #5).
+    #[serde(skip)]
+    curve_version: u64,
+
+    /// ADR-061 Phase P-narrow Z.2 — Per-edge cached tessellation
+    /// polyline for hover Newton seed. `RefCell` (D-A) enables lazy
+    /// fill from `&Edge` read paths.
+    #[serde(skip)]
+    polyline_cache: RefCell<Option<PolylineCacheEntry>>,
 }
 
 impl Edge {
@@ -97,6 +144,52 @@ impl Edge {
             flags: SharedFlags::empty(),
             class: EdgeClass::default(),
             curve: None,
+            // ADR-061 Step 1b — cache slots start at version 0 + empty.
+            curve_version: 0,
+            polyline_cache: RefCell::new(None),
+        }
+    }
+
+    // ── ADR-061 Phase P-narrow Step 1b — Cache accessors ─────────────
+
+    /// ADR-061 §B — Current curve_version counter. Read-only; increment
+    /// is reserved for `set_curve` and Step 2 endpoint-mutator hooks.
+    #[inline]
+    pub fn curve_version(&self) -> u64 { self.curve_version }
+
+    /// ADR-061 §B — Borrow the polyline cache slot.
+    #[inline]
+    pub fn polyline_cache(&self) -> std::cell::Ref<'_, Option<PolylineCacheEntry>> {
+        self.polyline_cache.borrow()
+    }
+
+    /// ADR-061 §B — Mutator-internal helper (Step 2/4). Increments
+    /// curve_version after any mutation of `self.curve` or endpoints.
+    #[inline]
+    pub(crate) fn bump_curve_version(&mut self) {
+        self.curve_version = self.curve_version.wrapping_add(1);
+    }
+
+    /// ADR-061 §B — Internal cache populate (Step 4 will use).
+    #[inline]
+    pub(crate) fn cache_polyline(&self, entry: PolylineCacheEntry) {
+        *self.polyline_cache.borrow_mut() = Some(entry);
+    }
+
+    /// ADR-061 §B — Drop cached polyline (Step 5 LRU eviction).
+    #[inline]
+    pub(crate) fn invalidate_polyline_cache(&self) {
+        *self.polyline_cache.borrow_mut() = None;
+    }
+
+    /// ADR-061 §D #2 — Lock-in: Line edges are excluded from caching
+    /// (closed-form distance — cache wastes memory). Single source of
+    /// truth for the inclusion policy (mirrors Face::should_cache_normals).
+    pub fn should_cache_polyline(&self) -> bool {
+        match &self.curve {
+            None => false,                                       // straight edge (default)
+            Some(AnalyticCurve::Line { .. }) => false,           // §D #2 lock-in
+            Some(_) => true,                                     // Circle/Arc/Bezier/BSpline/NURBS
         }
     }
 
@@ -108,9 +201,15 @@ impl Edge {
 
     /// ADR-028 Phase A — set or clear the analytic curve.
     /// `None` reverts to a straight-line edge.
+    ///
+    /// ADR-061 Step 1b — bumps `curve_version` and invalidates cached
+    /// polyline (any cached entry's curve_version will mismatch on the
+    /// next read → MISS → recompute via Step 4 hot-path).
     #[inline]
     pub fn set_curve(&mut self, curve: Option<AnalyticCurve>) {
         self.curve = curve;
+        self.bump_curve_version();
+        self.invalidate_polyline_cache();
     }
 
     /// ADR-059 Phase N Step 3 — Mandatory curve accessor (drop-in alongside).
@@ -338,5 +437,134 @@ mod tests {
             degree: 2,
         }));
         assert!(e.is_curved());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-061 Phase P-narrow Step 1b — Cache slot regression tests
+    //
+    // Mirrors Step 1a (Face) — 4 invariants, none #[ignore]:
+    //   1. edge_default_cache_state         — version=0, cache=None
+    //   2. edge_set_curve_bumps_version     — set_curve bumps + clears
+    //   3. edge_serde_skips_cache           — roundtrip drops cache
+    //   4. edge_cache_invalidates_after_load (D-B) — version reset on load
+    // ════════════════════════════════════════════════════════════════
+
+    fn make_test_edge() -> Edge {
+        Edge::new(VertId::new(0), VertId::new(1), 1e-6)
+    }
+
+    /// ADR-061 §B — Fresh edge starts at version 0 + empty cache. Line
+    /// curve (default, no curve attached) is NOT cacheable per §D #2.
+    #[test]
+    fn edge_default_cache_state() {
+        let e = make_test_edge();
+        assert_eq!(e.curve_version(), 0,
+            "new edge must start at curve_version=0");
+        assert!(e.polyline_cache().is_none(),
+            "new edge must have empty polyline_cache");
+        assert!(!e.should_cache_polyline(),
+            "edge with no curve attached must not be marked cacheable");
+    }
+
+    /// ADR-061 §B — `set_curve` bumps curve_version and clears any
+    /// cached entry. Mirrors Face::set_surface invariant.
+    #[test]
+    fn edge_set_curve_bumps_version() {
+        let mut e = make_test_edge();
+        let v0 = e.curve_version();
+        // Pre-populate cache with stale data.
+        e.cache_polyline(PolylineCacheEntry {
+            curve_version: v0,
+            points: vec![DVec3::ZERO, DVec3::X],
+        });
+        assert!(e.polyline_cache().is_some());
+
+        let circle = AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        e.set_curve(Some(circle));
+
+        assert_eq!(e.curve_version(), v0 + 1,
+            "set_curve must bump curve_version by 1");
+        assert!(e.polyline_cache().is_none(),
+            "set_curve must invalidate polyline_cache");
+        // §D #2 — Circle is cacheable.
+        assert!(e.should_cache_polyline(),
+            "Circle edge must be marked cacheable");
+
+        // §D #2 — explicit Line curve is NOT cacheable (closed-form).
+        e.set_curve(Some(AnalyticCurve::Line {
+            start: VertId::new(0),
+            end: VertId::new(1),
+        }));
+        assert!(!e.should_cache_polyline(),
+            "Line curve must not be marked cacheable per §D #2");
+    }
+
+    /// ADR-061 §D #5 — Cache state MUST NOT survive serialization
+    /// roundtrip (cache is volatile derived data).
+    #[test]
+    fn edge_serde_skips_cache() {
+        let mut e = make_test_edge();
+        let arc = AnalyticCurve::Arc {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        };
+        e.set_curve(Some(arc));
+        e.cache_polyline(PolylineCacheEntry {
+            curve_version: e.curve_version(),
+            points: vec![DVec3::X, DVec3::new(0.707, 0.707, 0.0), DVec3::Y],
+        });
+        assert!(e.polyline_cache().is_some());
+        assert_eq!(e.curve_version(), 1);
+
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(!json.contains("polyline_cache"),
+            "polyline_cache leaked into serialization: {}", json);
+        assert!(!json.contains("curve_version"),
+            "curve_version leaked into serialization: {}", json);
+
+        let restored: Edge = serde_json::from_str(&json).unwrap();
+        assert!(restored.polyline_cache().is_none(),
+            "deserialized edge must have empty cache");
+        assert_eq!(restored.curve_version(), 0,
+            "deserialized edge curve_version must reset to 0");
+    }
+
+    /// ADR-061 D-B — After load, pre-save version numbers MUST NOT
+    /// register as a cache hit (versions reset to 0 on deserialize).
+    #[test]
+    fn edge_cache_invalidates_after_load() {
+        let mut original = make_test_edge();
+        original.set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 1.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        }));
+        original.bump_curve_version();
+        original.bump_curve_version();
+        let pre_save_v = original.curve_version();   // = 3
+        let json = serde_json::to_string(&original).unwrap();
+
+        let restored: Edge = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.curve_version(), 0);
+
+        // Synthetic stale cache entry with pre-save version — would be
+        // a bug to use; version comparator MUST detect mismatch.
+        let stale = PolylineCacheEntry {
+            curve_version: pre_save_v,
+            points: vec![DVec3::X],
+        };
+        let hit = stale.curve_version == restored.curve_version();
+        assert!(!hit,
+            "stale cache from pre-save state MUST NOT register as cache hit \
+             after load (pre={} vs post={})",
+            pre_save_v, restored.curve_version());
     }
 }
