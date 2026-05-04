@@ -95,6 +95,25 @@ impl Face {
         self.surface = surface;
     }
 
+    /// ADR-059 Phase N Step 3 — Mandatory surface accessor (drop-in alongside).
+    ///
+    /// Per ADR-059 §A1.6 lock-in (Phase M pattern): existing `surface()`
+    /// returning `Option` is preserved unchanged. `surface_mandatory()` is
+    /// the NEW Path D API that always returns an `AnalyticSurface` —
+    /// synthesizing a best-fit `Plane` from the supplied outer-loop
+    /// vertex positions if no explicit surface is attached.
+    ///
+    /// Caller passes `outer_verts` (resolved DVec3 positions of the
+    /// face's outer loop) since `Face` itself is decoupled from `Mesh`.
+    /// Phase O integration will provide `Mesh::face_surface_mandatory(fid)`
+    /// that handles the lookup.
+    #[inline]
+    pub fn surface_mandatory(&self, outer_verts: &[DVec3]) -> AnalyticSurface {
+        self.surface.clone().unwrap_or_else(||
+            crate::curves::synthesize::synthesize_plane_surface(outer_verts)
+        )
+    }
+
     /// ADR-031 Phase D — true if a non-Plane analytic surface is attached.
     #[inline]
     pub fn has_curved_surface(&self) -> bool {
@@ -139,5 +158,61 @@ impl Face {
     /// Get mutable reference to inner loops
     pub fn inners_mut(&mut self) -> &mut SmallVec<[LoopRef; 1]> {
         &mut self.inners
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entities::id::{HeId, VertId};
+    use crate::entities::{LoopRef, MaterialId};
+
+    fn make_test_face() -> Face {
+        Face::new(
+            LoopRef { start: HeId::default(), is_outer: true },
+            DVec3::Z,
+            1e-7,
+            MaterialId::new(0),
+        )
+    }
+
+    /// ADR-059 Phase N Step 3 — surface_mandatory() synthesizes Plane
+    /// from outer-loop vertex positions when no explicit surface attached.
+    #[test]
+    fn adr_059_face_surface_mandatory_synthesizes_plane_when_none() {
+        let f = make_test_face();
+        assert!(f.surface().is_none(), "no explicit surface attached");
+        // CCW XY square (outer loop verts)
+        let outer = vec![
+            DVec3::new(0.0, 0.0, 5.0),
+            DVec3::new(1.0, 0.0, 5.0),
+            DVec3::new(1.0, 1.0, 5.0),
+            DVec3::new(0.0, 1.0, 5.0),
+        ];
+        let mandatory = f.surface_mandatory(&outer);
+        match mandatory {
+            AnalyticSurface::Plane { origin, normal, .. } => {
+                // Centroid = (0.5, 0.5, 5.0), Newell normal = +Z
+                assert!((origin - DVec3::new(0.5, 0.5, 5.0)).length() < 1e-9);
+                assert!((normal - DVec3::Z).length() < 1e-9);
+            }
+            other => panic!("expected synthesized Plane, got {:?}", other),
+        }
+    }
+
+    /// ADR-059 Phase N Step 3 — surface_mandatory() returns attached
+    /// surface when one is set (no synthesis override).
+    #[test]
+    fn adr_059_face_surface_mandatory_returns_attached_surface() {
+        let mut f = make_test_face();
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z, radius: 3.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 5.0),
+        };
+        f.set_surface(Some(cyl.clone()));
+        let mandatory = f.surface_mandatory(&[]);
+        assert_eq!(mandatory, cyl, "attached surface must NOT be synthesized over");
     }
 }

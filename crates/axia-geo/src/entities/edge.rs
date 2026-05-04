@@ -113,6 +113,26 @@ impl Edge {
         self.curve = curve;
     }
 
+    /// ADR-059 Phase N Step 3 — Mandatory curve accessor (drop-in alongside).
+    ///
+    /// Per ADR-059 §A1.6 lock-in (Phase M pattern): existing `curve()`
+    /// returning `Option` is preserved unchanged. `curve_mandatory()` is
+    /// the NEW Path D API that always returns an `AnalyticCurve` —
+    /// synthesizing a `Line { start: v_small, end: v_large }` if no
+    /// explicit curve is attached.
+    ///
+    /// Phase N Step 4 (Migration) will make this the authoritative
+    /// access path; Phase O Tools NURBS-aware will route all consumers
+    /// through this accessor.
+    #[inline]
+    pub fn curve_mandatory(&self) -> AnalyticCurve {
+        self.curve.clone().unwrap_or_else(||
+            crate::curves::synthesize::synthesize_line_curve(
+                self.v_small, self.v_large,
+            )
+        )
+    }
+
     /// ADR-028 Phase A / ADR-029 Phase B — convenience: true if this edge
     /// has an analytic curve other than a Line variant.
     #[inline]
@@ -228,6 +248,38 @@ mod tests {
         e.set_curve(None);
         assert!(!e.is_curved());
         assert!(e.curve().is_none());
+    }
+
+    /// ADR-059 Phase N Step 3 — curve_mandatory() synthesizes Line when
+    /// no explicit curve is attached (drop-in alongside accessor).
+    #[test]
+    fn adr_059_edge_curve_mandatory_synthesizes_line_when_none() {
+        let v0 = VertId::new(7);
+        let v1 = VertId::new(13);
+        let e = Edge::new(v0, v1, 1e-7);
+        assert!(e.curve().is_none(), "no explicit curve attached");
+        let mandatory = e.curve_mandatory();
+        match mandatory {
+            AnalyticCurve::Line { start, end } => {
+                assert_eq!(start, v0);
+                assert_eq!(end, v1);
+            }
+            other => panic!("expected synthesized Line, got {:?}", other),
+        }
+    }
+
+    /// ADR-059 Phase N Step 3 — curve_mandatory() returns explicit curve
+    /// when one is attached (no synthesis override).
+    #[test]
+    fn adr_059_edge_curve_mandatory_returns_attached_curve() {
+        let mut e = Edge::new(VertId::default(), VertId::default(), 1e-7);
+        let circle = AnalyticCurve::Circle {
+            center: glam::DVec3::ZERO, radius: 5.0,
+            normal: glam::DVec3::Z, basis_u: glam::DVec3::X,
+        };
+        e.set_curve(Some(circle.clone()));
+        let mandatory = e.curve_mandatory();
+        assert_eq!(mandatory, circle, "attached curve must NOT be synthesized over");
     }
 
     #[test]

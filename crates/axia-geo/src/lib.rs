@@ -19,6 +19,7 @@ pub mod tolerances;
 pub mod curves;
 pub mod surfaces;
 pub mod predicates;
+pub mod mesh_migration;
 
 // Re-export main types
 pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, InvariantReport, ManifoldInfo};

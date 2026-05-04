@@ -56,6 +56,7 @@ pub mod knot;
 pub mod loft;
 pub mod sweep;
 pub mod fitting;
+pub mod merge;
 
 pub use trim::{TrimCurve2D, TrimLoop};
 pub use ssi::SurfaceIntersection;
