@@ -338,6 +338,56 @@ impl SurfaceOps for AnalyticSurface {
 }
 
 impl AnalyticSurface {
+    /// ADR-061 Phase P-narrow Step 3 — Closed-form surface normal at a
+    /// world-space point ON or NEAR the surface.
+    ///
+    /// For primitives (Plane/Cylinder/Sphere/Cone/Torus), this avoids
+    /// `(u, v)` parameter inversion by exploiting geometric construction
+    /// from the surface's defining axes/centers. For tensor variants
+    /// (BezierPatch/BSplineSurface/NURBSSurface) Step 3 returns a
+    /// placeholder `normal(0.5, 0.5)` — proper inversion is deferred.
+    ///
+    /// **Caller contract**: `pos` should be on or near the surface
+    /// (e.g., a face's outer-loop vertex). For points far from the
+    /// surface the result is unspecified.
+    ///
+    /// Used by `Mesh::face_cached_normals_or_compute` to populate the
+    /// Z.1 NormalCacheEntry.
+    pub fn normal_at_world_pos(&self, pos: DVec3) -> DVec3 {
+        use AnalyticSurface as S;
+        match self {
+            S::Plane { normal, .. } => normal.normalize_or_zero(),
+            S::Cylinder { axis_origin, axis_dir, .. } => {
+                let axis = axis_dir.normalize_or_zero();
+                let v = pos - *axis_origin;
+                let along = v.dot(axis);
+                (v - axis * along).normalize_or_zero()
+            }
+            S::Sphere { center, .. } => (pos - *center).normalize_or_zero(),
+            S::Cone { apex, axis_dir, half_angle, .. } => {
+                let axis = axis_dir.normalize_or_zero();
+                let v = pos - *apex;
+                let along = v.dot(axis);
+                let radial = (v - axis * along).normalize_or_zero();
+                // Normal rotated half_angle from radial toward -axis.
+                (radial * half_angle.cos() - axis * half_angle.sin()).normalize_or_zero()
+            }
+            S::Torus { center, axis_dir, major_radius, .. } => {
+                let axis = axis_dir.normalize_or_zero();
+                let v = pos - *center;
+                let along = v.dot(axis);
+                let in_plane = (v - axis * along).normalize_or_zero();
+                let ring_center = *center + in_plane * *major_radius;
+                (pos - ring_center).normalize_or_zero()
+            }
+            // Tensor variants — placeholder. Step 4+ will add uv inversion.
+            S::BezierPatch { .. } | S::BSplineSurface { .. } | S::NURBSSurface { .. } => {
+                use crate::surfaces::SurfaceOps;
+                self.normal(0.5, 0.5)
+            }
+        }
+    }
+
     /// Surface-specific tessellation resolution heuristic.
     fn tessellation_resolution(&self, chord_tol: f64) -> (usize, usize) {
         let ((u0, u1), (v0, v1)) = self.parameter_range();

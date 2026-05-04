@@ -5894,6 +5894,38 @@ impl AxiaEngine {
     ///      "BRepWithMeshFallback", "skipReason": { "kind": "...",
     ///      "label": "..." } | null, "createdSurfaceKind": "Cylinder"|
     ///      null, "filletStripFaceCount": N }`
+    /// ADR-061 Phase P-narrow Step 3 — Z.1 Normal Cache hot-path.
+    ///
+    /// Returns per-vertex (outer-loop order) world-space analytic
+    /// normals for `face_id_raw` as a flat `Float64Array`:
+    ///   `[count, n0x, n0y, n0z, n1x, n1y, n1z, ...]`
+    ///
+    /// First call on a cacheable face: MISS → compute + populate cache.
+    /// Subsequent calls (until surface_version / boundary_version
+    /// changes): HIT → returns cached data without recompute.
+    ///
+    /// Plane / no-surface faces: returns empty array (no per-vertex
+    /// analytic normals to provide; Three.js falls back to face.normal).
+    ///
+    /// **§D additive-only** (ADR-060 lock-in #2): does not modify any
+    /// existing endpoint.
+    #[wasm_bindgen(js_name = "getFaceNormalsCached")]
+    pub fn get_face_normals_cached(&self, face_id_raw: u32) -> Vec<f64> {
+        let fid = FaceId::new(face_id_raw);
+        let normals = match self.scene.mesh.face_cached_normals_or_compute(fid) {
+            Some(n) => n,
+            None => return Vec::new(),
+        };
+        let mut flat = Vec::with_capacity(1 + normals.len() * 3);
+        flat.push(normals.len() as f64);
+        for n in normals {
+            flat.push(n.x);
+            flat.push(n.y);
+            flat.push(n.z);
+        }
+        flat
+    }
+
     #[wasm_bindgen(js_name = "filletEdgeDispatchJson")]
     pub fn fillet_edge_dispatch_json(
         &mut self,

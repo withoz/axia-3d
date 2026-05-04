@@ -558,6 +558,72 @@ impl Mesh {
         self.faces.get(face_id).and_then(|f| f.surface())
     }
 
+    /// ADR-061 Phase P-narrow Step 3 — Z.1 Normal Cache hot-path.
+    ///
+    /// Returns per-vertex (outer-loop order) world-space analytic
+    /// normals for `face_id`. Cache hit / miss logic:
+    ///
+    /// 1. If `face.surface` is `None` → returns `None` (polygon face).
+    /// 2. If `!face.should_cache_normals()` (Plane per §D #2) → computes
+    ///    fresh each call without caching. Returns `Some(...)`.
+    /// 3. If cache entry's `(surface_version, boundary_version)` matches
+    ///    current → **HIT**: returns cloned cached data.
+    /// 4. Otherwise → **MISS**: computes, populates cache, returns.
+    ///
+    /// Uses `AnalyticSurface::normal_at_world_pos(vertex_pos)` to derive
+    /// per-vertex normals via closed-form geometric construction (no uv
+    /// parameter inversion needed for primitives).
+    ///
+    /// **§D #5 lock-in**: cache state is volatile (RefCell interior
+    /// mutability via `&self` — does not require `&mut`).
+    pub fn face_cached_normals_or_compute(&self, face_id: FaceId) -> Option<Vec<DVec3>> {
+        let face = self.faces.get(face_id)?;
+        if !face.is_active() { return None; }
+        let surface = face.surface()?;
+
+        // Resolve outer-loop vertex positions (read-only).
+        let outer_verts = self.collect_loop_verts(face.outer().start).ok()?;
+        let positions: Vec<DVec3> = outer_verts.iter()
+            .filter_map(|&vid| self.verts.get(vid).map(|v| v.pos()))
+            .collect();
+        if positions.is_empty() { return None; }
+
+        // Cache-eligibility short-circuit (Plane / no-surface).
+        if !face.should_cache_normals() {
+            // Fresh compute, no store.
+            let normals: Vec<DVec3> = positions.iter()
+                .map(|&p| surface.normal_at_world_pos(p))
+                .collect();
+            return Some(normals);
+        }
+
+        // Cache-hit check.
+        let sv = face.surface_version();
+        let bv = face.boundary_version();
+        {
+            let cache = face.normal_cache();
+            if let Some(entry) = cache.as_ref() {
+                if entry.surface_version == sv && entry.boundary_version == bv
+                    && entry.per_vertex_normals.len() == positions.len()
+                {
+                    // Hit — clone out (RefCell borrow drops at scope end).
+                    return Some(entry.per_vertex_normals.clone());
+                }
+            }
+        }
+
+        // Miss — compute + populate.
+        let normals: Vec<DVec3> = positions.iter()
+            .map(|&p| surface.normal_at_world_pos(p))
+            .collect();
+        face.cache_normals(crate::entities::NormalCacheEntry {
+            surface_version: sv,
+            boundary_version: bv,
+            per_vertex_normals: normals.clone(),
+        });
+        Some(normals)
+    }
+
     /// ADR-031 Phase D — Tessellate a face's analytic surface for rendering.
     ///
     /// - If the face has no surface (default polygon), returns None.
@@ -7420,6 +7486,121 @@ mod tests {
         mesh.faces[fid].bump_boundary_version_after_inners_mut();
         assert_eq!(mesh.faces[fid].boundary_version(), v0 + 1,
             "explicit helper must bump exactly once");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-061 Phase P-narrow Step 3 — Z.1 Normal Cache hot-path tests
+    //
+    // 3 regression invariants (none #[ignore]):
+    //   5. cache_hit_returns_identical_data — call twice, identical results
+    //   6. cache_skips_plane_surface — Plane never populates cache entry
+    //   7. cache_normal_matches_analytic_evaluate — sphere normals match
+    //      closed-form (vertex - center).normalize()
+    // ════════════════════════════════════════════════════════════════
+
+    fn step3_quad_with_sphere_surface() -> (Mesh, FaceId) {
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+        // Quad on the +X side of unit sphere — vertices on sphere surface.
+        let r = 1.0;
+        let v0 = mesh.add_vertex(DVec3::new(r, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.7071, 0.7071, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.7071, 0.0, 0.7071));
+        let v3 = mesh.add_vertex(DVec3::new(0.5774, 0.5774, 0.5774));
+        let fid = mesh.add_face(&[v0, v1, v3, v2], mat).unwrap();
+        let sph = crate::surfaces::AnalyticSurface::Sphere {
+            center: DVec3::ZERO, radius: r,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        mesh.set_face_surface(fid, Some(sph));
+        (mesh, fid)
+    }
+
+    /// ADR-061 §A invariant #5 — Two consecutive calls return identical
+    /// data (the second call is served by cache).
+    #[test]
+    fn cache_hit_returns_identical_data() {
+        let (mesh, fid) = step3_quad_with_sphere_surface();
+        let first = mesh.face_cached_normals_or_compute(fid).expect("sphere face has surface");
+        // Verify cache populated.
+        assert!(mesh.faces[fid].normal_cache().is_some(),
+            "first call must populate cache (Cylinder/Sphere are cacheable per §D #2)");
+        let second = mesh.face_cached_normals_or_compute(fid).expect("hit");
+        assert_eq!(first.len(), second.len(),
+            "cached call must return same vertex count");
+        for (i, (a, b)) in first.iter().zip(second.iter()).enumerate() {
+            assert!((*a - *b).length() < 1e-15,
+                "vertex {} normal mismatch: cache hit vs first compute differ \
+                 ({:?} vs {:?})", i, a, b);
+        }
+    }
+
+    /// ADR-061 §D #2 invariant #6 — Plane surfaces are NEVER cached.
+    /// `face_cached_normals_or_compute` still returns Some(...) (computed
+    /// fresh each call) but no entry is stored.
+    #[test]
+    fn cache_skips_plane_surface() {
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let plane = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-100.0, 100.0), v_range: (-100.0, 100.0),
+        };
+        mesh.set_face_surface(fid, Some(plane));
+        assert!(!mesh.faces[fid].should_cache_normals(),
+            "Plane must not be cacheable per §D #2");
+
+        let normals = mesh.face_cached_normals_or_compute(fid).expect("plane returns Some");
+        assert_eq!(normals.len(), 4);
+        // All normals = +Z (constant for Plane).
+        for n in &normals {
+            assert!((*n - DVec3::Z).length() < 1e-9,
+                "Plane vertex normal must be +Z, got {:?}", n);
+        }
+        // Critical: NO cache entry stored for Plane.
+        assert!(mesh.faces[fid].normal_cache().is_none(),
+            "Plane surface MUST NOT populate normal_cache (§D #2 lock-in)");
+    }
+
+    /// ADR-061 §A invariant #7 (semantic correctness) — Sphere face
+    /// normals match the closed-form `(vertex - center).normalize()`.
+    /// Validates that cache stores correct values, not garbage.
+    #[test]
+    fn cache_normal_matches_analytic_evaluate() {
+        let (mesh, fid) = step3_quad_with_sphere_surface();
+        let normals = mesh.face_cached_normals_or_compute(fid).expect("sphere face");
+        let outer = mesh.collect_loop_verts(mesh.faces[fid].outer().start).unwrap();
+        let positions: Vec<DVec3> = outer.iter()
+            .map(|&vid| mesh.verts[vid].pos())
+            .collect();
+
+        assert_eq!(normals.len(), positions.len());
+        for (i, (n, p)) in normals.iter().zip(positions.iter()).enumerate() {
+            // Sphere centered at origin, radius=1: normal = pos.normalize().
+            let expected = p.normalize_or_zero();
+            assert!((*n - expected).length() < 1e-9,
+                "vertex {} cached normal {:?} != closed-form {:?}",
+                i, n, expected);
+        }
+
+        // After move_vertex, cache invalidates and next call recomputes.
+        let v0_new = DVec3::new(0.0, 1.0, 0.0);  // top of sphere
+        let v0 = outer[0];
+        // Need &mut for move_vertex — drop the immutable borrow first.
+        let mut mesh_mut = mesh;
+        mesh_mut.move_vertex(v0, v0_new).unwrap();
+        assert!(mesh_mut.faces[fid].normal_cache().is_none(),
+            "move_vertex must invalidate normal_cache");
+        let normals2 = mesh_mut.face_cached_normals_or_compute(fid).expect("sphere face");
+        // First normal should now be (0, 1, 0).
+        assert!((normals2[0] - DVec3::Y).length() < 1e-9,
+            "after move_vertex to (0,1,0), normal must be +Y, got {:?}", normals2[0]);
     }
 
     /// ADR-061 §A + §B — `Mesh::move_vertex` bumps incident edges'
