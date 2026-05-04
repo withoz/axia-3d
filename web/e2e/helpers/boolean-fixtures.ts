@@ -201,3 +201,46 @@ export async function invokeBooleanDispatchDcelMulti(
     );
   }, args);
 }
+
+/**
+ * ADR-075 E4-4 — Mesh state snapshot for undo round-trip verification.
+ *
+ * `faceCount` / `vertCount` from `bridge.getStats()` plus undo/redo
+ * availability. Per E4-4-b, this is the contract verified across an
+ * op + undo cycle. Deep mesh diff (face IDs, edge topology) is
+ * deferred to E4-5 / future ADR.
+ */
+export interface MeshSnapshot {
+  faceCount: number;
+  vertCount: number;
+  edgeCount: number;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export async function captureMeshSnapshot(page: Page): Promise<MeshSnapshot> {
+  return await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bridge = (window as any).__axia.get('bridge');
+    const s = bridge.getStats();
+    return {
+      faceCount: s.faces,
+      vertCount: s.verts,
+      edgeCount: s.edges,
+      canUndo: s.canUndo,
+      canRedo: s.canRedo,
+    };
+  });
+}
+
+/**
+ * Invoke `bridge.undo()` in browser context. Returns the engine's
+ * boolean response (true = undo applied, false = nothing to undo).
+ */
+export async function invokeUndo(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bridge = (window as any).__axia.get('bridge');
+    return bridge.undo();
+  });
+}
