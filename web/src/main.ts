@@ -16,6 +16,7 @@ import { SettingsPanel } from './units/SettingsPanel';
 import { ComponentPanel } from './ui/ComponentPanel';
 import { ConstraintPanel } from './ui/ConstraintPanel';
 import { HistoryPanel } from './ui/HistoryPanel';
+import { CapabilityExplorerPanel } from './ui/CapabilityExplorerPanel';
 import { SunPanel } from './ui/SunPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
@@ -586,6 +587,17 @@ async function main() {
         historyPanel.toggle();
       }
     });
+  }
+
+  // ═══ 15b. Capability Explorer Panel (ADR-063 Phase 1 Path Z Step 2) ═══
+  // §D #1 lock-in: 단일 ActionCatalog 사용 사이트.
+  // Step 2 = 빈 scaffold, Step 3+ 에서 actions tree 표시.
+  {
+    const capabilityExplorerPanel = new CapabilityExplorerPanel(viewportEl, {});
+    (window as unknown as { __axia_capabilityExplorer?: CapabilityExplorerPanel })
+      .__axia_capabilityExplorer = capabilityExplorerPanel;
+    // 단축키 보류 (D-C=(b) 메뉴만). 메뉴 항목은 MenuBar 의 보기 메뉴에 추가.
+    // Step 5 종합에서 단축키 결정.
   }
 
   // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══

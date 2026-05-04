@@ -115,6 +115,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       'view-fur': viewport.isFurEnabled?.() ?? false,
       'view-sun-panel': isPanelOpen('__axia_sunPanel'),
       'view-history': isPanelOpen('__axia_historyPanel'),
+      'view-capability-explorer': isPanelOpen('__axia_capabilityExplorer'),
     };
     for (const [action, on] of Object.entries(state)) {
       const el = menubar.querySelector(`.menu-action[data-action="${action}"]`);
@@ -443,6 +444,14 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'view-history': {
         const hp = (window as unknown as { __axia_historyPanel?: { toggle(): void } }).__axia_historyPanel;
         hp?.toggle();
+        break;
+      }
+      case 'view-capability-explorer': {
+        // ADR-063 Phase 1 Path Z — Capability Explorer (ActionCatalog
+        // discoverability surface). 단축키 보류, 메뉴만 (D-C=(b)).
+        const cep = (window as unknown as { __axia_capabilityExplorer?: { toggle(): void } }).__axia_capabilityExplorer;
+        if (cep?.toggle) cep.toggle();
+        else Toast.warning('Capability Explorer 를 사용할 수 없습니다.');
         break;
       }
       case 'view-scenes': {
