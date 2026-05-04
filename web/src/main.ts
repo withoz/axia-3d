@@ -20,6 +20,7 @@ import { CapabilityExplorerPanel } from './ui/CapabilityExplorerPanel';
 import { InvariantVerifierPanel } from './ui/InvariantVerifierPanel';
 import { AuditLogViewerPanel } from './ui/AuditLogViewerPanel';
 import { getAuditLog } from './core/AuditLog';
+import { AnalyticHoverOverlay } from './core/AnalyticHoverOverlay';
 import { SunPanel } from './ui/SunPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
@@ -675,6 +676,57 @@ async function main() {
     const auditLogViewerPanel = new AuditLogViewerPanel(viewportEl);
     (window as unknown as { __axia_auditLogViewer?: AuditLogViewerPanel })
       .__axia_auditLogViewer = auditLogViewerPanel;
+  }
+
+  // ═══ 15e. Analytic Hover Overlay (ADR-070 Phase 1 Path Y C pilot) ═══
+  // §C #1 lock-in: DOM overlay only (Three.js 통합 별도 ADR).
+  // §C #3 lock-in: hover read-only — selection / preselect 무관.
+  {
+    const analyticHoverOverlay = new AnalyticHoverOverlay(document.body, {
+      getFaceSurfaceJson: (faceId: number) => {
+        const eng = bridge.engine as unknown as { getFaceSurfaceJson?: (id: number) => string };
+        return eng?.getFaceSurfaceJson?.(faceId) ?? null;
+      },
+      getEdgeCurveJson: (edgeId: number) => {
+        const eng = bridge.engine as unknown as { getEdgeCurveJson?: (id: number) => string };
+        return eng?.getEdgeCurveJson?.(edgeId) ?? null;
+      },
+    });
+    (window as unknown as { __axia_analyticHoverOverlay?: AnalyticHoverOverlay })
+      .__axia_analyticHoverOverlay = analyticHoverOverlay;
+
+    // Mousemove → raf-throttled overlay update.
+    // Uses faceMap (triangle → FaceId) and edgeMap (segment → EdgeId)
+    // from the WasmBridge per ADR-037 Pick→Promote.
+    viewportEl.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!analyticHoverOverlay.isEnabled()) return;
+      const picked = viewport.pickEdgeOrFace(e.clientX, e.clientY, 5);
+      let target: { kind: 'face' | 'edge'; id: number } | null = null;
+      const tm = toolManager as unknown as {
+        faceMap?: Uint32Array | null;
+        edgeMap?: Uint32Array | null;
+      };
+      if (picked && picked.hit.faceIndex != null) {
+        const idx = picked.hit.faceIndex;
+        if (picked.type === 'face') {
+          const fm = tm.faceMap;
+          const fid = fm && idx >= 0 && idx < fm.length ? fm[idx] : -1;
+          if (fid >= 0) target = { kind: 'face', id: fid };
+        } else if (picked.type === 'edge') {
+          const em = tm.edgeMap;
+          const eid = em && idx >= 0 && idx < em.length ? em[idx] : -1;
+          if (eid >= 0) target = { kind: 'edge', id: eid };
+        }
+      }
+      analyticHoverOverlay.update({
+        target,
+        screenX: e.clientX,
+        screenY: e.clientY,
+      });
+    });
+    viewportEl.addEventListener('mouseleave', () => {
+      analyticHoverOverlay.update({ target: null, screenX: 0, screenY: 0 });
+    });
   }
 
   // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══

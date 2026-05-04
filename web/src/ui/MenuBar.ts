@@ -118,6 +118,11 @@ export function initMenuBar(deps: MenuBarDeps): void {
       'view-capability-explorer': isPanelOpen('__axia_capabilityExplorer'),
       'view-invariant-verifier': isPanelOpen('__axia_invariantVerifier'),
       'view-audit-log': isPanelOpen('__axia_auditLogViewer'),
+      'view-analytic-hover-overlay': (() => {
+        const aho = (window as unknown as { __axia_analyticHoverOverlay?: { isEnabled(): boolean } })
+          .__axia_analyticHoverOverlay;
+        return aho?.isEnabled() ?? false;
+      })(),
     };
     for (const [action, on] of Object.entries(state)) {
       const el = menubar.querySelector(`.menu-action[data-action="${action}"]`);
@@ -470,6 +475,19 @@ export function initMenuBar(deps: MenuBarDeps): void {
         const alp = (window as unknown as { __axia_auditLogViewer?: { toggle(): void } }).__axia_auditLogViewer;
         if (alp?.toggle) alp.toggle();
         else Toast.warning('Audit Log Viewer 를 사용할 수 없습니다.');
+        break;
+      }
+      case 'view-analytic-hover-overlay': {
+        // ADR-070 Phase 1 Path Y C sub-feature — Analytic Hover Overlay
+        // (DOM tooltip on face/edge hover, default off).
+        const aho = (window as unknown as {
+          __axia_analyticHoverOverlay?: { isEnabled(): boolean; setEnabled(on: boolean): void };
+        }).__axia_analyticHoverOverlay;
+        if (aho) {
+          aho.setEnabled(!aho.isEnabled());
+        } else {
+          Toast.warning('Analytic Hover Overlay 를 사용할 수 없습니다.');
+        }
         break;
       }
       case 'view-scenes': {
