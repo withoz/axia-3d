@@ -3,21 +3,22 @@
 **세션 기간**: 2026-05-04 (단일 long-running 세션)
 **브랜치**: `claude/zealous-boyd`
 **시작 commit**: pre-ADR-060 Phase O Step 3
-**종료 commit**: `738eb02` (ADR-064 Step 1 COMPLETE)
-**Addendum**: 세션 종료 시점 직후 ADR-064 Step 1 추가 진입 (Path Y deep work 의 첫 step)
+**종료 commit**: `700cfe8` (ADR-064 Step 2 sub-step 2.A COMPLETE)
+**Addendum 1**: ADR-064 Step 1 추가 진입 (Path Y deep work 의 첫 step, commit 738eb02)
+**Addendum 2**: ADR-064 Step 2 sub-step 2.A 진입 (Path Z 9번째 — TrimLoop→Face 변환 함수)
 
 ---
 
 ## 0. Executive Summary
 
-이 세션에서 **10개 ADR 영역 전부 완료** + **사용자 perceived 가치 측면에서 4개 신규 panel/overlay UI** 도입. 모든 작업이 사용자 명시 사인-오프 + Path Z 일관 패턴으로 진행되었으며 회귀 0 유지.
+이 세션에서 **10개 ADR 영역 + ADR-064 Step 2 sub-step 2.A** 완료 + **사용자 perceived 가치 측면에서 4개 신규 panel/overlay UI** 도입. 모든 작업이 사용자 명시 사인-오프 + Path Z 일관 패턴으로 진행되었으며 회귀 0 유지.
 
-- **ADR-052 마스터 로드맵 진행률**: ~88% → **94.5%** (+6.5 percentage points)
-- **Total commits**: 본 세션 14 new (Path Y deep work 1개 추가 포함)
-- **Total tests**: axia-geo 873 → **934** (+61), axia-wasm 0 → **8**, web TS 1156 → **1395** (+239)
-- **총 회귀 추가**: ~308 strict (절대 #[ignore] 금지)
+- **ADR-052 마스터 로드맵 진행률**: ~88% → **95%** (+7 percentage points)
+- **Total commits**: 본 세션 16 new (ADR-064 Step 1 + Step 2 sub-step 2.A 포함)
+- **Total tests**: axia-geo 873 → **940** (+67), axia-wasm 0 → **8**, web TS 1156 → **1395** (+239)
+- **총 회귀 추가**: ~314 strict (절대 #[ignore] 금지)
 - **WASM bundle**: 2,018,910 → 2,124,779 bytes (+5.25% cumulative, per-phase R8 budget 모두 honored)
-- **사용자 패턴**: **8번 연속 Path Z** 채택 (좁은 pilot 일관 선호)
+- **사용자 패턴**: **9번 연속 Path Z** 채택 (좁은 pilot 일관 선호)
 
 ---
 
@@ -34,6 +35,7 @@
 | 7 | **ADR-069 Path Y A** | Audit Log Viewer (web-side P26.7 subset) | 5 | 11 | **사용자 가시 #3** — AI agent debug |
 | 8 | **ADR-070 Path Y C** | Analytic Hover Overlay (DOM tooltip) | 5 | 7 | **사용자 가시 #4** — surface 즉시 확인 |
 | 9 | **ADR-064 Step 1** (Path Y deep entry) | NURBS Boolean → DCEL trim curve polyline 인프라 | 1 | 7 | ADR-067 Step 4 prerequisite (backend) |
+| 10 | **ADR-064 Step 2 (2.A)** (Path Z 9번째) | TrimLoop polyline → DCEL Face 변환 함수 | 1 (sub) | 6 | Multi-inner hole 지원, drop-in alongside |
 
 ---
 
@@ -56,6 +58,7 @@
 | **069 Audit Log Viewer** | **ADR-069** | ✓ |
 | **070 Analytic Hover Overlay** | **ADR-070** | ✓ |
 | **064 Step 1 trim→polyline 인프라** | **ADR-064** | ✓ (Path Y deep work 진입) |
+| **064 Step 2 (2.A) trim→Face 변환** | **ADR-064** | ✓ (Path Z 9번째) |
 
 ### 후속 영역 (별도 사인-오프 강제)
 - **ADR-067 Steps 2-5** (Collision Detection / State Machine / Add-Subtract Commit / UI)
@@ -69,11 +72,11 @@
 - **i18n 별도 ADR** (한국어 + 영어 Phase 2)
 - **Schema-driven Tier 0 form** (별도 ADR)
 
-**전체 진행률**: 88% → **94.5%**
+**전체 진행률**: 88% → **95%**
 
 ---
 
-## 3. 사용자 패턴 발견 — Path Z 일관 (8번 연속)
+## 3. 사용자 패턴 발견 — Path Z 일관 (9번 연속)
 
 본 세션에서 **모든 새 ADR 이 Path Z 좁은 pilot 채택** — 사용자가 명시한 design philosophy.
 
@@ -86,9 +89,10 @@
 | ADR-068 | Path Z (Invariant Verifier 만) |
 | ADR-069 | Path Z (web-side audit, viewer 만) |
 | ADR-070 | Path Z (DOM overlay, Three.js 미통합) |
-| **ADR-064** | **Path Z (Step 1 trim→polyline 인프라 only)** |
+| ADR-064 Step 1 | Path Z (Step 1 trim→polyline 인프라 only) |
+| **ADR-064 Step 2 (2.A)** | **Path Z (sub-step 2.A only — TrimLoop→Face 변환)** |
 
-**관찰**: 8번 연속 Path Z = 사용자의 명확한 선호. 큰 ADR 진입 시 항상 Z 분할 + 다른 영역 별도 ADR 강제. "Path Y deep work 진행" 지시조차 ADR-064 Step 1 만 atomic 진입.
+**관찰**: 9번 연속 Path Z = 사용자의 명확한 선호. 큰 ADR 진입 시 항상 Z 분할 + 다른 영역 별도 ADR 강제. "Path Y deep work 진행" 지시조차 ADR-064 Step 1 만 atomic 진입. Step 2 도 sub-step 2.A 만 atomic.
 
 ---
 
@@ -114,7 +118,7 @@
 ### Rust crates
 | crate | tests | 변화 |
 |-------|-------|------|
-| **axia-geo** | 873 → **934** | +61 (Phase O/P/L₂/067/064) |
+| **axia-geo** | 873 → **940** | +67 (Phase O/P/L₂/067/064 Steps 1+2.A) |
 | **axia-wasm** (integration) | 0 → **8** | +8 (Phase O Step 6 + ADR-061/062/063 W2) |
 
 ### Web TypeScript
@@ -160,7 +164,7 @@
 
 ---
 
-## 7. 본 세션 commit 이력 (14 new)
+## 7. 본 세션 commit 이력 (16 new)
 
 ```
 c8f7781 ADR-063 draft (Phase 1 Path Z)
@@ -177,6 +181,8 @@ fe8809d ADR-068 Steps 1-5 (Invariant Verifier) — COMPLETE
 a2e7a5d ADR-070 (Analytic Hover Overlay) — COMPLETE
 7583b62 세션 종합 보고서
 738eb02 ADR-064 Step 1 (NURBS Boolean → DCEL trim curve polyline 인프라) ← Path Y deep entry
+9bc0745 세션 종합 보고서 갱신 (ADR-064 Step 1 반영)
+700cfe8 ADR-064 Step 2 (Path Z 9번째, sub-step 2.A) ← TrimLoop → Face 변환 함수
 ```
 
 ---
@@ -184,13 +190,13 @@ a2e7a5d ADR-070 (Analytic Hover Overlay) — COMPLETE
 ## 8. 다음 세션 진입 신호
 
 ### 큐 commitment 0 (모든 약속 완료)
-이전 세션에서 큐로 등록된 ADR-067 Step 1 도 본 세션에서 완료. ADR-064 Step 1 Path Y deep entry 도 추가 완료. 큐 약속 잔여 0.
+이전 세션에서 큐로 등록된 ADR-067 Step 1 도 본 세션에서 완료. ADR-064 Step 1 + Step 2 (2.A) Path Y deep entry 도 추가 완료. 큐 약속 잔여 0.
 
 ### 권장 후속 주제 (사용자 결정 영역)
 
 | 후보 | 사용자 가치 | 위험 | 기간 | 비고 |
 |------|----------|------|------|------|
-| **ADR-064 Step 2** (1×1 face Boolean DCEL 생성) | 중-고 (Step 1 자연 연장) | 중-고 | 3-4주 | Step 1 prereq 완료 |
+| **ADR-064 Step 2 (2.B + 2.C)** | 중-고 (2.A 완료, B/C 자연 연장) | 중-고 | 2-3주 | sub-step 2.A 완료 (700cfe8) |
 | **ADR-067 Step 2 Collision Detection** | 중 | 중 | 1-2개월 | Press-Pull engine 진척 |
 | **Path Y mutation pilot** (ADR-063 surface modify) | 중 (UI 미존재) | 고 | 4-6주 | L₂ Path Y |
 | **Phase Q STEP/IGES export** | 중 (P3) | 중 | 4-8주 | export 정확도, ADR-064 Step 1 활용 |
@@ -202,7 +208,7 @@ a2e7a5d ADR-070 (Analytic Hover Overlay) — COMPLETE
 ### 다음 세션 진입 권장 신호 (사용자 입력 예시)
 
 ```
-"ADR-064 Step 2 사전 검토"   ← 1×1 face Boolean DCEL 생성 (Step 1 자연 연장)
+"ADR-064 Step 2 (2.B/2.C) 사전 검토"  ← face dispatcher + Boolean op 적용 (2.A 완료)
 "ADR-067 Step 2 사전 검토"    ← Collision Detection
 "ADR-071 Three.js helper 검토" ← visualization 후속
 "Path Y mutation 사전 검토"   ← surface modify pilot
@@ -226,10 +232,10 @@ a2e7a5d ADR-070 (Analytic Hover Overlay) — COMPLETE
 
 ## 10. 한 줄 결론
 
-> **"본 세션은 'Path Z 패턴' 의 정점 — 8개 ADR (063/067/068/069/070/064 + 062/061 본 세션 마무리) 가 모두 좁은 pilot 으로 완료. 사용자 perceived 가치 측면에서 4개 신규 UI panel/overlay + 1 backend 인프라 (ADR-064 Step 1 trim→polyline). 회귀 0, lock-in 9개 추가, 마스터 로드맵 88% → 94.5%. ADR-064 Step 1 = NURBS Boolean → DCEL 의 첫 stepping stone. 다음 세션은 ADR-064 Step 2 (1×1 face Boolean DCEL 생성) 또는 다른 깊은 작업으로 진입할 적기."**
+> **"본 세션은 'Path Z 패턴' 의 정점 — 9번 연속 Path Z 채택. 10개 ADR 영역 + ADR-064 Step 2 sub-step 2.A 가 모두 좁은 pilot 으로 완료. 사용자 perceived 가치 측면에서 4개 신규 UI panel/overlay + 2 backend 인프라 (ADR-064 Step 1 trim→polyline + Step 2.A trim→Face). 회귀 0, lock-in 9개 추가, 마스터 로드맵 88% → 95%. ADR-064 progression: Step 1 (trim→VertId) → Step 2.A (TrimLoop→Face). 다음 세션은 Step 2.B/2.C (face dispatcher + Boolean op 적용) 자연 연장 또는 다른 깊은 작업."**
 
 ---
 
 *Session Report by AXiA team (Claude Opus 4.7, 1M context)*
-*Generated 2026-05-04 (updated 2026-05-04 with ADR-064 Step 1 addendum)*
-*Branch: claude/zealous-boyd · End commit: 738eb02*
+*Generated 2026-05-04 (updated 2 times: ADR-064 Step 1 addendum, Step 2 sub-step 2.A addendum)*
+*Branch: claude/zealous-boyd · End commit: 700cfe8*
