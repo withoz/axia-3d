@@ -22,6 +22,8 @@ export const axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: n
 export const axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
 export const axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+export const axiaengine_booleanDispatchDcelJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const axiaengine_booleanDispatchDcelMultiJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const axiaengine_booleanDispatchJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_can_redo: (a: number) => number;

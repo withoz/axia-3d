@@ -138,6 +138,65 @@ export class AxiaEngine {
      */
     bendVerts(vert_ids: Uint32Array, ax_x: number, ax_y: number, ax_z: number, dir_x: number, dir_y: number, dir_z: number, ox: number, oy: number, oz: number, angle_deg: number, length_limit: number): boolean;
     /**
+     * ADR-064 Step 6-α (Path Z) — DCEL Boolean dispatch result as JSON.
+     *
+     * Routes through `Mesh::boolean_dispatch_dcel` (Step 5). On
+     * eligible single-face × single-face NURBS pairs, produces actual
+     * DCEL faces with op-specific input removal. On ineligibility
+     * (multi-face, surface missing, unsupported kind), returns
+     * `pathUsed=Mesh` + `dcel=null` + `fallbackReason` populated;
+     * caller decides whether to invoke `booleanDispatchJson` for the
+     * mesh-path semantics (D-K=(a) — no auto fallback).
+     *
+     * Schema (per ADR-064 §C D-U=(c)):
+     * ```json
+     * { "schemaVersion": 1, "ok": true,
+     *   "pathUsed": "Nurbs"|"Mesh",
+     *   "fallbackReason": { "kind": "...", "label": "..." } | null,
+     *   "dcel": { "newFacesA": [...], "newFacesB": [...],
+     *             "removedFaces": [...], "preservedFaces": [...],
+     *             "disjoint": bool, "robustnessClean": bool } | null,
+     *   "nurbsAttempted": bool, "nurbsClean": bool,
+     *   "intersectionChainCount": N }
+     * ```
+     *
+     * On invalid op string or core Err: returns
+     * `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
+     * the transaction (D-H safe-only consistency).
+     */
+    booleanDispatchDcelJson(face_a_raw: number, face_b_raw: number, op_str: string, tol_geometric: number): string;
+    /**
+     * ADR-066 Y-2 (Path Y) — Multi-face DCEL Boolean dispatch as JSON.
+     *
+     * Routes through `Mesh::boolean_dispatch_dcel_multi` (Y-1) which
+     * iterates the cartesian product `facesA × facesB` and accumulates
+     * per-pair outcomes plus aggregate `allNewFaces` / `allRemovedFaces`.
+     *
+     * On Y-E strict eligibility violation (any face missing surface
+     * or unsupported kind), returns `pathUsed="Mesh"` upfront with
+     * `perPair` / aggregates empty + `fallbackReason` populated.
+     *
+     * Schema (per ADR-066 Y-2-c full per-pair, Y-2-j discriminated kind):
+     * ```json
+     * { "schemaVersion": 1, "ok": true,
+     *   "pathUsed": "Nurbs"|"Mesh",
+     *   "fallbackReason": {...} | null,
+     *   "perPair": [
+     *     { "faceA": u32, "faceB": u32,
+     *       "outcome": { "kind": "ok", "dcel": {...} }
+     *                 | { "kind": "err", "detail": "..." } },
+     *     ...
+     *   ],
+     *   "allNewFaces": [u32, ...], "allRemovedFaces": [u32, ...],
+     *   "warnings": [string, ...] }
+     * ```
+     *
+     * On invalid op string or core Err: returns
+     * `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
+     * the transaction (Y-H safe-only consistency).
+     */
+    booleanDispatchDcelMultiJson(faces_a: Uint32Array, faces_b: Uint32Array, op_str: string, tol_geometric: number): string;
+    /**
      * ADR-060 Phase O Step 6 — Step 4 Boolean dispatch result as JSON.
      *
      * Routes through `Mesh::boolean_dispatch` (§F lock-in: silent
@@ -1411,6 +1470,8 @@ export interface InitOutput {
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+    readonly axiaengine_booleanDispatchDcelJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly axiaengine_booleanDispatchDcelMultiJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_booleanDispatchJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_can_redo: (a: number) => number;

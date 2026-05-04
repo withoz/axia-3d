@@ -529,6 +529,113 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-064 Step 6-α (Path Z) — DCEL Boolean dispatch result as JSON.
+     *
+     * Routes through `Mesh::boolean_dispatch_dcel` (Step 5). On
+     * eligible single-face × single-face NURBS pairs, produces actual
+     * DCEL faces with op-specific input removal. On ineligibility
+     * (multi-face, surface missing, unsupported kind), returns
+     * `pathUsed=Mesh` + `dcel=null` + `fallbackReason` populated;
+     * caller decides whether to invoke `booleanDispatchJson` for the
+     * mesh-path semantics (D-K=(a) — no auto fallback).
+     *
+     * Schema (per ADR-064 §C D-U=(c)):
+     * ```json
+     * { "schemaVersion": 1, "ok": true,
+     *   "pathUsed": "Nurbs"|"Mesh",
+     *   "fallbackReason": { "kind": "...", "label": "..." } | null,
+     *   "dcel": { "newFacesA": [...], "newFacesB": [...],
+     *             "removedFaces": [...], "preservedFaces": [...],
+     *             "disjoint": bool, "robustnessClean": bool } | null,
+     *   "nurbsAttempted": bool, "nurbsClean": bool,
+     *   "intersectionChainCount": N }
+     * ```
+     *
+     * On invalid op string or core Err: returns
+     * `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
+     * the transaction (D-H safe-only consistency).
+     * @param {number} face_a_raw
+     * @param {number} face_b_raw
+     * @param {string} op_str
+     * @param {number} tol_geometric
+     * @returns {string}
+     */
+    booleanDispatchDcelJson(face_a_raw, face_b_raw, op_str, tol_geometric) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(op_str, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.axiaengine_booleanDispatchDcelJson(retptr, this.__wbg_ptr, face_a_raw, face_b_raw, ptr0, len0, tol_geometric);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * ADR-066 Y-2 (Path Y) — Multi-face DCEL Boolean dispatch as JSON.
+     *
+     * Routes through `Mesh::boolean_dispatch_dcel_multi` (Y-1) which
+     * iterates the cartesian product `facesA × facesB` and accumulates
+     * per-pair outcomes plus aggregate `allNewFaces` / `allRemovedFaces`.
+     *
+     * On Y-E strict eligibility violation (any face missing surface
+     * or unsupported kind), returns `pathUsed="Mesh"` upfront with
+     * `perPair` / aggregates empty + `fallbackReason` populated.
+     *
+     * Schema (per ADR-066 Y-2-c full per-pair, Y-2-j discriminated kind):
+     * ```json
+     * { "schemaVersion": 1, "ok": true,
+     *   "pathUsed": "Nurbs"|"Mesh",
+     *   "fallbackReason": {...} | null,
+     *   "perPair": [
+     *     { "faceA": u32, "faceB": u32,
+     *       "outcome": { "kind": "ok", "dcel": {...} }
+     *                 | { "kind": "err", "detail": "..." } },
+     *     ...
+     *   ],
+     *   "allNewFaces": [u32, ...], "allRemovedFaces": [u32, ...],
+     *   "warnings": [string, ...] }
+     * ```
+     *
+     * On invalid op string or core Err: returns
+     * `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
+     * the transaction (Y-H safe-only consistency).
+     * @param {Uint32Array} faces_a
+     * @param {Uint32Array} faces_b
+     * @param {string} op_str
+     * @param {number} tol_geometric
+     * @returns {string}
+     */
+    booleanDispatchDcelMultiJson(faces_a, faces_b, op_str, tol_geometric) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(faces_a, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(faces_b, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(op_str, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.axiaengine_booleanDispatchDcelMultiJson(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, tol_geometric);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred4_0 = r0;
+            deferred4_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * ADR-060 Phase O Step 6 — Step 4 Boolean dispatch result as JSON.
      *
      * Routes through `Mesh::boolean_dispatch` (§F lock-in: silent
