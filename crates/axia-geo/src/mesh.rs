@@ -834,6 +834,45 @@ impl Mesh {
         }
     }
 
+    /// ADR-064 Step 1 — Convert NURBS Boolean trim loops (UV) to DCEL
+    /// vertex IDs (world-space, deduped via spatial-hash).
+    ///
+    /// Per ADR-064 §C #1 lock-in: this method produces VertId sequences
+    /// only — actual face boundary loops (HE chains, LoopRefs, Face)
+    /// are Step 2's responsibility (별도 ADR).
+    ///
+    /// Per §C #3 lock-in: vertex dedup via existing `add_vertex`
+    /// spatial-hash (LOCKED #5 1.5μm). Coincident polyline points
+    /// across loops merge into a single VertId automatically.
+    ///
+    /// Per §C #4 lock-in: chord_tol = `HOVER_CHORD_TOL` (0.01mm) by
+    /// default if `chord_tol ≤ 0`.
+    ///
+    /// Returns `Vec<Vec<VertId>>` — one VertId sequence per trim loop.
+    /// Empty trim loops (disjoint case from `nurbs_boolean_v2`) produce
+    /// an empty outer Vec.
+    pub fn trim_loops_to_dcel_polyline(
+        &mut self,
+        loops: &[crate::surfaces::TrimLoop],
+        surface: &crate::surfaces::AnalyticSurface,
+        chord_tol: f64,
+    ) -> Vec<Vec<VertId>> {
+        use crate::surfaces::ssi::trim_to_polyline::trim_loop_to_world_polyline;
+        let tol = if chord_tol > 0.0 {
+            chord_tol
+        } else {
+            crate::tolerances::HOVER_CHORD_TOL
+        };
+        loops.iter()
+            .map(|l| {
+                let polyline = trim_loop_to_world_polyline(l, surface, tol);
+                polyline.into_iter()
+                    .map(|p| self.add_vertex(p))  // §C #3 dedup via spatial-hash
+                    .collect::<Vec<VertId>>()
+            })
+            .collect()
+    }
+
     /// ADR-061 Phase P-narrow Step 3 — Z.1 Normal Cache hot-path.
     ///
     /// Returns per-vertex (outer-loop order) world-space analytic
@@ -8381,5 +8420,75 @@ mod tests {
             "move_vertex must bump incident edge curve_version");
         assert!(mesh.edges[eid].polyline_cache().is_none(),
             "move_vertex must invalidate incident edge polyline_cache");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-064 Step 1 — Trim loops → DCEL polyline integration
+    //
+    // 1 regression at Mesh integration level (5 unit tests in
+    // surfaces/ssi/trim_to_polyline.rs cover the trim sampling per
+    // variant + uv→world evaluation + multi-loop hole + disjoint case):
+    //   #4 mesh_trim_loops_to_dcel_polyline_dedups_at_locked_5
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-064 Step 1 §C #3 — Mesh-level integration: trim_loops_to_dcel_polyline
+    /// dedups coincident vertices via LOCKED #5 1.5μm spatial-hash.
+    ///
+    /// Two trim loops sharing a corner point in UV space (after
+    /// surface evaluate to 3D) should produce VertIds where the shared
+    /// corner vertex is the SAME — not two distinct VertIds.
+    #[test]
+    fn mesh_trim_loops_to_dcel_polyline_dedups_at_locked_5() {
+        use crate::surfaces::{trim::TrimCurve2D, trim::TrimLoop, AnalyticSurface};
+
+        let mut mesh = Mesh::new();
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-100.0, 100.0),
+            v_range: (-100.0, 100.0),
+        };
+
+        // Two adjacent triangle loops sharing the edge (5,0)-(0,0).
+        // VertId for (5,0) and (0,0) MUST be reused across loops.
+        let loops = vec![
+            TrimLoop {
+                is_outer: true,
+                curves: vec![
+                    TrimCurve2D::Line { a: [0.0, 0.0], b: [5.0, 0.0] },
+                    TrimCurve2D::Line { a: [5.0, 0.0], b: [3.0, 4.0] },
+                    TrimCurve2D::Line { a: [3.0, 4.0], b: [0.0, 0.0] },
+                ],
+            },
+            TrimLoop {
+                is_outer: true,
+                curves: vec![
+                    TrimCurve2D::Line { a: [0.0, 0.0], b: [5.0, 0.0] },  // shared edge
+                    TrimCurve2D::Line { a: [5.0, 0.0], b: [5.0, -3.0] },
+                    TrimCurve2D::Line { a: [5.0, -3.0], b: [0.0, 0.0] },
+                ],
+            },
+        ];
+
+        let vert_id_polylines = mesh.trim_loops_to_dcel_polyline(&loops, &plane, 0.01);
+        assert_eq!(vert_id_polylines.len(), 2);
+
+        let l1 = &vert_id_polylines[0];
+        let l2 = &vert_id_polylines[1];
+        assert!(!l1.is_empty() && !l2.is_empty());
+
+        // First vert in each loop = evaluate(0, 0). Spatial-hash dedup
+        // produces SAME VertId across both loops.
+        assert_eq!(l1[0], l2[0],
+            "shared corner (0,0,0) must produce same VertId across loops");
+
+        // (5,0) corner is also shared — appears as second point in
+        // loop 1 (after seam-dedup of first curve), and second point
+        // in loop 2. Look it up.
+        // Loop 1 polyline: (0,0), (5,0), (3,4) [no seam dup at end].
+        // Loop 2 polyline: (0,0), (5,0), (5,-3).
+        assert_eq!(l1[1], l2[1],
+            "shared corner (5,0,0) must produce same VertId across loops");
     }
 }

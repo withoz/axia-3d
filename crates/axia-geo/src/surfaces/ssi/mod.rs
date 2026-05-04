@@ -18,6 +18,7 @@ pub mod trim_classify;
 pub mod tolerance;
 pub mod trim_boolean;
 pub mod robustness;
+pub mod trim_to_polyline;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
