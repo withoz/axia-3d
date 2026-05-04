@@ -13,6 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium",
+    "e2e:ui": "playwright test --ui",
     "wasm:build": "cd ../crates/axia-wasm && wasm-pack build --target web --out-dir ../../web/src/wasm",
     "wasm:build:nodejs": "cd ../crates/axia-wasm && wasm-pack build --target nodejs --out-dir ../../packages/axia-wasm-node/dist",
     "wasm:verify": "node scripts/verify-wasm.mjs"
@@ -28,6 +31,7 @@
     "three-mesh-bvh": "^0.9.9"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/three": "^0.170.0",
     "@vitest/coverage-v8": "^4.1.4",
     "jsdom": "^25.0.0",
