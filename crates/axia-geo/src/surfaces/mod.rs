@@ -388,6 +388,90 @@ impl AnalyticSurface {
         }
     }
 
+    /// ADR-062 Phase L₂ Path Z §C — Closed-form unsigned distance from
+    /// world-space point to the surface.
+    ///
+    /// Returns `None` for tensor variants (BezierPatch / BSplineSurface
+    /// / NURBSSurface) — uv parameter inversion deferred to Path Y.
+    /// Caller of `attach_surface_validated` translates `None` to
+    /// `UnsupportedSurfaceKind` outcome.
+    ///
+    /// Returns `Some(f64::INFINITY)` for degenerate evaluation points
+    /// (per-kind documented):
+    /// - **Torus** (D-B lock-in): `pos` exactly on torus axis (in_plane
+    ///   ≈ ZERO) — ring_center undefined → `+∞` forces validated attach
+    ///   to reject as `BoundaryDriftExceedsTol`.
+    ///
+    /// **D-A lock-in (Cone)**: behind-apex points (along `-axis_dir`
+    /// from apex) return `|pos - apex|` — apex distance treated as
+    /// nearest-surface. Cone's single-direction nature naturally pushes
+    /// such points to apex.
+    ///
+    /// **D-C lock-in**: u_range/v_range trim is IGNORED. Distance is to
+    /// the underlying primitive (infinite plane / full cylinder / etc.).
+    /// Trim semantics deferred to Path Y full.
+    ///
+    /// Surface kinds with degenerate parameter inputs (radius ≤ 0,
+    /// half_angle out of (0, π/2), axis_dir ≈ ZERO) are NOT detected
+    /// here — they should be screened by `attach_surface_validated`'s
+    /// pre-check returning `DegenerateSurfaceInput { reason }`.
+    pub fn unsigned_distance_to(&self, pos: DVec3) -> Option<f64> {
+        use AnalyticSurface as S;
+        match self {
+            S::Plane { origin, normal, .. } => {
+                let n = normal.normalize_or_zero();
+                Some(((pos - *origin).dot(n)).abs())
+            }
+            S::Cylinder { axis_origin, axis_dir, radius, .. } => {
+                let axis = axis_dir.normalize_or_zero();
+                let v = pos - *axis_origin;
+                let along = v.dot(axis);
+                let radial = (v - axis * along).length();
+                Some((radial - *radius).abs())
+            }
+            S::Sphere { center, radius, .. } => {
+                Some(((pos - *center).length() - *radius).abs())
+            }
+            S::Cone { apex, axis_dir, half_angle, .. } => {
+                // Cone surface: ray from apex along +axis_dir, opening
+                // at half_angle. Nearest-point distance for an arbitrary
+                // pos.
+                let axis = axis_dir.normalize_or_zero();
+                let v = pos - *apex;
+                let along = v.dot(axis);
+                if along < 0.0 {
+                    // D-A lock-in — behind-apex: nearest is apex.
+                    return Some(v.length());
+                }
+                // In-plane projection magnitude (radial from axis).
+                let radial = (v - axis * along).length();
+                // Distance to cone surface = perpendicular distance from
+                // pos to the cone slant line in the (axis, radial) plane.
+                // Slant line passes through apex with direction
+                // (sin(α), cos(α)) in (radial, axial) coords.
+                let s = half_angle.sin();
+                let c = half_angle.cos();
+                Some((radial * c - along * s).abs())
+            }
+            S::Torus { center, axis_dir, major_radius, minor_radius, .. } => {
+                let axis = axis_dir.normalize_or_zero();
+                let v = pos - *center;
+                let along = v.dot(axis);
+                let in_plane_vec = v - axis * along;
+                let in_plane_len = in_plane_vec.length();
+                if in_plane_len < 1e-12 {
+                    // D-B lock-in — degenerate (pos on axis): force reject.
+                    return Some(f64::INFINITY);
+                }
+                let in_plane_dir = in_plane_vec / in_plane_len;
+                let ring_center = *center + in_plane_dir * *major_radius;
+                Some(((pos - ring_center).length() - *minor_radius).abs())
+            }
+            // Tensor variants — uv inversion deferred (Path Y).
+            S::BezierPatch { .. } | S::BSplineSurface { .. } | S::NURBSSurface { .. } => None,
+        }
+    }
+
     /// Surface-specific tessellation resolution heuristic.
     fn tessellation_resolution(&self, chord_tol: f64) -> (usize, usize) {
         let ((u0, u1), (v0, v1)) = self.parameter_range();
@@ -555,5 +639,144 @@ mod tests {
         let mesh = p.tessellate(1.0);
         assert_eq!(mesh.vertices.len(), 9);  // (n_u+1)*(n_v+1) with n_u=n_v=2
         assert_eq!(mesh.triangles.len(), 8);  // n_u*n_v*2
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-062 Phase L₂ Path Z Step 1 — unsigned_distance_to tests
+    //
+    // 2 regression invariants (none #[ignore]):
+    //   1. unsigned_distance_to_known_points_correctness
+    //      Per-kind sub-asserts: on-surface = ~0, off-surface = exact.
+    //      Includes D-A (Cone behind-apex) + D-B (Torus axis) lock-ins.
+    //   2. unsigned_distance_to_tensor_returns_none
+    //      Bezier/BSpline/NURBS all return None per pilot scope.
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-062 Step 1 invariant #1 — Closed-form distance correctness
+    /// for all 5 primitive surface kinds, including D-A (Cone behind-apex)
+    /// and D-B (Torus axis-on-pos) edge cases.
+    #[test]
+    fn unsigned_distance_to_known_points_correctness() {
+        const EPS: f64 = 1e-9;
+
+        // ── Plane ─────────────────────────────────────────────────
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-10.0, 10.0), v_range: (-10.0, 10.0),
+        };
+        // On surface (z=0): distance ~ 0
+        assert!(plane.unsigned_distance_to(DVec3::new(3.0, 4.0, 0.0)).unwrap().abs() < EPS);
+        // 5mm above surface: distance = 5
+        assert!((plane.unsigned_distance_to(DVec3::new(1.0, 2.0, 5.0)).unwrap() - 5.0).abs() < EPS);
+        // 2mm below: distance = 2 (unsigned)
+        assert!((plane.unsigned_distance_to(DVec3::new(0.0, 0.0, -2.0)).unwrap() - 2.0).abs() < EPS);
+
+        // ── Cylinder ──────────────────────────────────────────────
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z, radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 10.0),
+        };
+        // On surface (radius 5, any z, any angle): distance ~ 0
+        assert!(cyl.unsigned_distance_to(DVec3::new(5.0, 0.0, 3.0)).unwrap().abs() < EPS);
+        assert!(cyl.unsigned_distance_to(DVec3::new(0.0, 5.0, -2.0)).unwrap().abs() < EPS);
+        // Inside (radius 3): distance = |3 - 5| = 2
+        assert!((cyl.unsigned_distance_to(DVec3::new(3.0, 0.0, 0.0)).unwrap() - 2.0).abs() < EPS);
+        // Outside (radius 8): distance = 3
+        assert!((cyl.unsigned_distance_to(DVec3::new(8.0, 0.0, 0.0)).unwrap() - 3.0).abs() < EPS);
+
+        // ── Sphere ────────────────────────────────────────────────
+        let sph = AnalyticSurface::Sphere {
+            center: DVec3::ZERO, radius: 2.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        // On surface (length=2): distance ~ 0
+        assert!(sph.unsigned_distance_to(DVec3::new(2.0, 0.0, 0.0)).unwrap().abs() < EPS);
+        assert!(sph.unsigned_distance_to(DVec3::new(0.0, 0.0, 2.0)).unwrap().abs() < EPS);
+        // Inside (length=1): distance = 1
+        assert!((sph.unsigned_distance_to(DVec3::new(1.0, 0.0, 0.0)).unwrap() - 1.0).abs() < EPS);
+        // Outside (length=5): distance = 3
+        assert!((sph.unsigned_distance_to(DVec3::new(5.0, 0.0, 0.0)).unwrap() - 3.0).abs() < EPS);
+
+        // ── Cone ──────────────────────────────────────────────────
+        // 45° half-angle cone, apex at origin, axis +Z.
+        let cone = AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            half_angle: std::f64::consts::FRAC_PI_4,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 10.0),
+        };
+        // On cone surface at z=2 (45°): radial = 2. distance ~ 0
+        assert!(cone.unsigned_distance_to(DVec3::new(2.0, 0.0, 2.0)).unwrap().abs() < EPS);
+        // D-A lock-in: behind-apex (z=-3): nearest = apex, distance = 3
+        let behind = cone.unsigned_distance_to(DVec3::new(0.0, 0.0, -3.0)).unwrap();
+        assert!((behind - 3.0).abs() < EPS,
+            "D-A: behind-apex must use apex distance, got {}", behind);
+        // Inside cone at z=2 (radial=1, expected 2): perpendicular distance.
+        // d = |1·cos(45°) - 2·sin(45°)| = |√2/2 - √2| = √2/2 ≈ 0.707
+        let inside = cone.unsigned_distance_to(DVec3::new(1.0, 0.0, 2.0)).unwrap();
+        assert!((inside - std::f64::consts::FRAC_1_SQRT_2).abs() < EPS);
+
+        // ── Torus ─────────────────────────────────────────────────
+        // Major=3, minor=1, axis +Z, center origin.
+        let torus = AnalyticSurface::Torus {
+            center: DVec3::ZERO, axis_dir: DVec3::Z, ref_dir: DVec3::X,
+            major_radius: 3.0, minor_radius: 1.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, std::f64::consts::TAU),
+        };
+        // On surface (major+minor)=4 along +X: distance ~ 0
+        assert!(torus.unsigned_distance_to(DVec3::new(4.0, 0.0, 0.0)).unwrap().abs() < EPS);
+        // On inner ring (major-minor)=2: distance ~ 0
+        assert!(torus.unsigned_distance_to(DVec3::new(2.0, 0.0, 0.0)).unwrap().abs() < EPS);
+        // On top of ring (3, 0, 1): distance ~ 0
+        assert!(torus.unsigned_distance_to(DVec3::new(3.0, 0.0, 1.0)).unwrap().abs() < EPS);
+        // D-B lock-in: pos on axis (origin) → +∞
+        let on_axis = torus.unsigned_distance_to(DVec3::new(0.0, 0.0, 0.5)).unwrap();
+        assert!(on_axis.is_infinite(),
+            "D-B: pos on torus axis must return +∞, got {}", on_axis);
+    }
+
+    /// ADR-062 Step 1 invariant #2 — Tensor variants (Bezier/BSpline/
+    /// NURBS) all return None per Path Z pilot scope. Caller of
+    /// `attach_surface_validated` translates to UnsupportedSurfaceKind.
+    #[test]
+    fn unsigned_distance_to_tensor_returns_none() {
+        let bez = AnalyticSurface::BezierPatch {
+            ctrl_grid: vec![
+                vec![DVec3::ZERO, DVec3::new(0.0, 1.0, 0.0)],
+                vec![DVec3::new(1.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
+        };
+        assert!(bez.unsigned_distance_to(DVec3::ZERO).is_none(),
+            "BezierPatch must return None per Path Z pilot");
+
+        let bsp = AnalyticSurface::BSplineSurface {
+            ctrl_grid: vec![
+                vec![DVec3::ZERO, DVec3::new(0.0, 1.0, 0.0)],
+                vec![DVec3::new(1.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
+            knots_u: vec![0.0, 0.0, 1.0, 1.0],
+            knots_v: vec![0.0, 0.0, 1.0, 1.0],
+            deg_u: 1, deg_v: 1,
+        };
+        assert!(bsp.unsigned_distance_to(DVec3::ZERO).is_none(),
+            "BSplineSurface must return None per Path Z pilot");
+
+        let nrb = AnalyticSurface::NURBSSurface {
+            ctrl_grid: vec![
+                vec![DVec3::ZERO, DVec3::new(0.0, 1.0, 0.0)],
+                vec![DVec3::new(1.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
+            weights: vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+            knots_u: vec![0.0, 0.0, 1.0, 1.0],
+            knots_v: vec![0.0, 0.0, 1.0, 1.0],
+            deg_u: 1, deg_v: 1,
+            trim_loops: vec![],
+        };
+        assert!(nrb.unsigned_distance_to(DVec3::ZERO).is_none(),
+            "NURBSSurface must return None per Path Z pilot");
     }
 }

@@ -129,6 +129,15 @@ pub const EXACT_COPLANAR_ANGLE_DEG: f64 = 0.1;
 /// vertex collapse 위험 없음.
 pub const HOVER_CHORD_TOL: f64 = 0.01;
 
+/// ADR-062 Phase L₂ Path Z — Default tolerance for
+/// `Mesh::attach_surface_validated` boundary-fit check.
+///
+/// 1μm absolute (mm). Above LOCKED #5 1.5μm dedup floor — drift below
+/// this threshold is geometrically indistinguishable from numerical
+/// noise. Caller can override per-call (positive value); WASM endpoints
+/// treat `tol ≤ 0` as "use this default".
+pub const ATTACH_VALIDATE_TOL: f64 = 1e-3;
+
 /// 도 → 라디안 변환 (런타임, `f64::cos`는 const가 아님)
 #[inline]
 pub fn deg_to_rad(deg: f64) -> f64 {
