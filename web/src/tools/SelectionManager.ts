@@ -720,6 +720,19 @@ export class SelectionManager {
   }
 
   /**
+   * True iff at least one face has a Boolean group tag (A or B).
+   * Used by U-2 ContextMenu visibility for the "Clear groups" item —
+   * the entry should appear when there is something to clear, even
+   * if only one of the two groups has been tagged so far.
+   *
+   * Distinct from `hasGroupSelection()` which requires BOTH A and B
+   * (used by U-3 BooleanHandler to decide if grouping is "complete").
+   */
+  hasAnyGroupTag(): boolean {
+    return this.groupTags.size > 0;
+  }
+
+  /**
    * True iff BOTH Group A and Group B have at least one tagged face.
    * Used by U-3 BooleanHandler routing — if false, falls back to the
    * existing 반/반 split (Y-4-b=(a) preserved).

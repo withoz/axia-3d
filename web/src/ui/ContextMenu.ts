@@ -78,6 +78,22 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = hasSelection ? '' : 'none';
     });
 
+    // ── ADR-074 U-2 — Boolean Group A/B 항목 가시성 ──
+    // Set A / Set B: 선택된 face 가 1개 이상일 때 표시 (사용자가
+    //   현재 selection 을 group 으로 지정 가능).
+    // Clear groups: 어떤 group tag 라도 있을 때 표시 (지울 게 있어야
+    //   메뉴 항목이 의미 있음).
+    const boolGroupItems = ctxMenu.querySelectorAll('.ctx-bool-group-item');
+    boolGroupItems.forEach(item => {
+      (item as HTMLElement).style.display = hasSelection ? '' : 'none';
+    });
+    const boolGroupClearItems = ctxMenu.querySelectorAll('.ctx-bool-group-clear');
+    const sm = toolManager.selection as { hasAnyGroupTag?: () => boolean };
+    const showClear = typeof sm.hasAnyGroupTag === 'function' && sm.hasAnyGroupTag();
+    boolGroupClearItems.forEach(item => {
+      (item as HTMLElement).style.display = showClear ? '' : 'none';
+    });
+
     // ── Edge constraint (2엣지) 항목 ──
     const edgeItems = ctxMenu.querySelectorAll('.ctx-edge-item');
     const selectedEdges = toolManager.selection.getSelectedEdges().length;
@@ -155,6 +171,42 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'constrain-endpoint-distance':
         toolManager.executeAction(action);
         break;
+      // ── ADR-074 U-2 — Boolean Group A/B selection actions ──
+      // Direct SelectionManager calls (U-2-e=(b)) — bypasses
+      // ToolManager.executeAction since this is pure selection-state
+      // mutation, not an action that needs scene transaction wrapping.
+      case 'set-group-a': {
+        const faces = toolManager.selection.getSelectedFaces();
+        const sm = toolManager.selection as {
+          setGroupTag?: (faceIds: number[], group: 'A' | 'B') => void;
+        };
+        if (faces.length > 0 && typeof sm.setGroupTag === 'function') {
+          sm.setGroupTag(faces, 'A');
+          debugLog(`[BoolGroup] set Group A on ${faces.length} face(s)`);
+        }
+        break;
+      }
+      case 'set-group-b': {
+        const faces = toolManager.selection.getSelectedFaces();
+        const sm = toolManager.selection as {
+          setGroupTag?: (faceIds: number[], group: 'A' | 'B') => void;
+        };
+        if (faces.length > 0 && typeof sm.setGroupTag === 'function') {
+          sm.setGroupTag(faces, 'B');
+          debugLog(`[BoolGroup] set Group B on ${faces.length} face(s)`);
+        }
+        break;
+      }
+      case 'clear-group-tags': {
+        const sm = toolManager.selection as {
+          clearGroupTags?: () => void;
+        };
+        if (typeof sm.clearGroupTags === 'function') {
+          sm.clearGroupTags();
+          debugLog('[BoolGroup] cleared all group tags');
+        }
+        break;
+      }
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;

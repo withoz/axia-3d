@@ -582,5 +582,34 @@ describe('SelectionManager', () => {
       // 30 remains untagged in either group.
       expect(sm.getGroupB()).toEqual([]);
     });
+
+    it('hasAnyGroupTag returns true iff any group tag exists (U-2-i)', () => {
+      selectFaces([10, 20]);
+
+      // Empty initially.
+      expect(sm.hasAnyGroupTag()).toBe(false);
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Only A — hasAnyGroupTag true (vs hasGroupSelection still false).
+      sm.setGroupTag([10], 'A');
+      expect(sm.hasAnyGroupTag()).toBe(true);
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Only B — same: hasAnyGroupTag true (boundary case).
+      sm.clearGroupTags();
+      sm.setGroupTag([20], 'B');
+      expect(sm.hasAnyGroupTag()).toBe(true);
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Both — both true.
+      sm.setGroupTag([10], 'A');
+      expect(sm.hasAnyGroupTag()).toBe(true);
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      // Cleared — both false.
+      sm.clearGroupTags();
+      expect(sm.hasAnyGroupTag()).toBe(false);
+      expect(sm.hasGroupSelection()).toBe(false);
+    });
   });
 });
