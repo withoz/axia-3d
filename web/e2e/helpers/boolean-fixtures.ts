@@ -244,3 +244,149 @@ export async function invokeUndo(page: Page): Promise<boolean> {
     return bridge.undo();
   });
 }
+
+/**
+ * ADR-074 U-4 — Setup faces + selection + Boolean Group A/B tags.
+ *
+ * Routes through `toolManager.selection` (NOT a separately-registered
+ * 'selection' service — verified against main.ts container.register
+ * calls: only 'bridge', 'viewport', 'toolManager' etc. registered).
+ *
+ * Defensive throws expose ADR-074 build drift early — distinguish
+ * between bridge boot failure vs container shape change vs missing
+ * U-1 method 배포.
+ *
+ * @param faces — face IDs to add to selection (must already exist
+ *   in the mesh; caller is responsible for setupNPlaneFaces)
+ * @param groupA — face IDs to tag as Group A (subset of `faces`)
+ * @param groupB — face IDs to tag as Group B (subset of `faces`)
+ */
+export async function setupGroupedSelection(
+  page: Page,
+  args: { faces: number[]; groupA: number[]; groupB: number[] },
+): Promise<void> {
+  await page.evaluate(({ faces, groupA, groupB }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    if (!w.__axia) {
+      throw new Error(
+        'setupGroupedSelection: window.__axia missing — bridge boot incomplete',
+      );
+    }
+    const tm = w.__axia.get('toolManager');
+    if (!tm) {
+      throw new Error(
+        'setupGroupedSelection: toolManager not registered in container',
+      );
+    }
+    const sm = tm.selection;
+    if (!sm) {
+      throw new Error(
+        'setupGroupedSelection: toolManager.selection missing — ' +
+          'SelectionManager wiring drift',
+      );
+    }
+    if (
+      typeof sm.selectFaces !== 'function' ||
+      typeof sm.setGroupTag !== 'function' ||
+      typeof sm.hasGroupSelection !== 'function' ||
+      typeof sm.clearSelection !== 'function'
+    ) {
+      throw new Error(
+        'setupGroupedSelection: SelectionManager group methods missing — ' +
+          'ADR-074 U-1 build state out of date (missing ' +
+          'selectFaces / setGroupTag / hasGroupSelection / clearSelection)',
+      );
+    }
+    sm.clearSelection();  // clean baseline
+    sm.selectFaces(faces);
+    if (groupA.length > 0) sm.setGroupTag(groupA, 'A');
+    if (groupB.length > 0) sm.setGroupTag(groupB, 'B');
+  }, args);
+}
+
+/**
+ * ADR-074 U-4 — Install a spy on `bridge.booleanDispatchDcelMulti`
+ * that captures the dispatched (facesA, facesB, op) args while
+ * still calling the real engine method. Capture is stored on
+ * `window.__capturedMultiArgs` so the test can read it back.
+ *
+ * Also installs a `__multiCallCount` so tests can assert "exactly N
+ * calls happened" (e.g., 0 calls when group routing decided to use
+ * non-multi path).
+ */
+export async function installMultiDispatchSpy(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const bridge = w.__axia.get('bridge');
+    if (typeof bridge.booleanDispatchDcelMulti !== 'function') {
+      throw new Error(
+        'installMultiDispatchSpy: bridge.booleanDispatchDcelMulti missing — ' +
+          'ADR-066 Y-3 wrapper not deployed',
+      );
+    }
+    const orig = bridge.booleanDispatchDcelMulti.bind(bridge);
+    w.__capturedMultiArgs = null;
+    w.__multiCallCount = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    bridge.booleanDispatchDcelMulti = (...callArgs: any[]) => {
+      w.__capturedMultiArgs = {
+        facesA: callArgs[0],
+        facesB: callArgs[1],
+        op: callArgs[2],
+        tolGeometric: callArgs[3],
+      };
+      w.__multiCallCount++;
+      return orig(...callArgs);
+    };
+  });
+}
+
+/**
+ * Read back the latest capture from `installMultiDispatchSpy`.
+ */
+export async function readCapturedMultiDispatch(
+  page: Page,
+): Promise<{
+  args: {
+    facesA: number[];
+    facesB: number[];
+    op: string;
+    tolGeometric: number;
+  } | null;
+  callCount: number;
+}> {
+  return await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    return {
+      args: w.__capturedMultiArgs,
+      callCount: w.__multiCallCount ?? 0,
+    };
+  });
+}
+
+/**
+ * ADR-074 U-4 — Click a `[data-action="..."]` element to invoke the
+ * application's main toolbar/menu dispatcher (which calls
+ * `dispatchToolbarAction` → `startBooleanOp` for bool-* actions).
+ *
+ * Uses `page.evaluate(btn.click())` rather than Playwright's
+ * `.click()` to bypass dropdown visibility issues — main.ts uses
+ * event delegation on data-action so any element with that attribute
+ * triggers the handler regardless of CSS visibility.
+ */
+export async function clickToolbarAction(
+  page: Page,
+  action: string,
+): Promise<void> {
+  await page.evaluate((act) => {
+    const sel = `[data-action="${act}"]`;
+    const btn = document.querySelector(sel) as HTMLElement | null;
+    if (!btn) {
+      throw new Error(`clickToolbarAction: no element matches ${sel}`);
+    }
+    btn.click();
+  }, action);
+}
