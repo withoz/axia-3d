@@ -1723,6 +1723,57 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
     (별도 cleanup ADR)
 - **상세**: `docs/adr/066-multi-face-nurbs-boolean-dispatch.md` §D Acceptance Log
 
+### ADR-075 — NURBS Boolean Browser E2E (Playwright) (E.4 트랙 핵심 완료, 2026-05-04)
+- **상태**: E.4 트랙의 핵심 sub-step (E4-1 / E4-2 / E4-3 / E4-4 /
+  E4-6 / E4-7) 완료. ADR-064 §E.4 + ADR-066 §E.4 두 미해결 항목을
+  본 ADR 으로 동시 닫음. Last commit: 본 회고 commit.
+- **의의**: ADR-064/066 의 mock-level 회귀 +62 위에 **real Chromium
+  round-trip 검증** 11 E2E + **CI 자동화**. ADR-064/066 가 의미론
+  closure / 확장 이라면, ADR-075 는 **검증 자산 + 자동화** 의 첫
+  인프라성 ADR. 향후 모든 ADR (Press-Pull / STEP-IGES / Path X /
+  etc.) 의 round-trip 검증에 그대로 활용 가능.
+- **stack**:
+  ```
+  Real Chromium (Playwright)
+    ↓ Vite preview (production-like build)
+      ↓ window.__axia ServiceContainer
+        ↓ WasmBridge.{booleanDispatchDcel|booleanDispatchDcelMulti|undo}
+          ↓ booleanDispatchDcel{Json|MultiJson} (WASM exports)
+            ↓ Mesh::boolean_dispatch_dcel{|_multi}
+              ↓ Mesh::nurbs_boolean_to_dcel
+                ↓ Phase J nurbs_boolean_v2
+  ```
+- **인프라 자산** (모든 향후 ADR 활용 가능):
+  - `web/playwright.config.ts` (Chromium / Vite preview port 4179
+    / 30s timeout)
+  - `web/e2e/helpers/boolean-fixtures.ts` (`setupTwoPlaneFaces` /
+    `setupNPlaneFaces` / `captureMeshSnapshot` / `invokeUndo` /
+    `invokeBooleanDispatchDcel{|Multi}` / `waitForBridgeReady`)
+  - `.github/workflows/ci.yml` (`rust-test` + `web-e2e` jobs,
+    parallel, with caching + failure artifact upload)
+- **결정 매트릭스**: E4-B=Playwright / E4-C=Vite preview /
+  E4-G=Chromium only / E4-H=`*.spec.ts` / E4-J=`web/e2e/` /
+  E4-6-h=매 run WASM 재빌드 / E4-6-j=parallel rust-test ⊥ web-e2e.
+- **회귀 누적 (E.4 트랙만)**: web TS Playwright E2E 0 → **11**
+  (real Chromium round-trip). Rust/vitest 모두 unchanged
+  (drop-in alongside). 절대 #[ignore] 금지 11/11 준수.
+- **Path Z + Path Y + E.4 합산**: axia-geo 940 → **964** (+24),
+  axia-wasm 8 → **16** (+8), web TS vitest 1395 → **1425** (+30),
+  Playwright E2E 0 → **11** (+11). 합계 2343 → **2416** (+73),
+  절대 #[ignore] 금지 73/73 준수.
+- **CI 자동화**: PR 마다 build.yml `test` (vitest 1425) +
+  ci.yml `rust-test` (cargo 980) + ci.yml `web-e2e` (playwright 11)
+  자동 실행. 합계 **2416 모두 PR 자동 검증**.
+- **결정적 진척**: ADR-064 §E.4 + ADR-066 §E.4 의 모든 미해결 항목
+  (single + multi + undo) 이 단일 commit 시리즈로 닫힘.
+- **남은 미착수 (모두 선택적 확장 또는 별도 트랙)**:
+  - E.5 Edge cases (intersecting fixtures / multi-step undo / redo /
+    error envelope round-trip) — 별도 sub-step 또는 ADR
+  - E.6 Multi-OS / Multi-browser matrix — 별도 sub-step
+  - E.7 Nightly cron / scheduled run — 별도 sub-step
+  - E.8 Visual regression / screenshot diff — 별도 ADR
+- **상세**: `docs/adr/075-nurbs-boolean-browser-e2e.md` §D Acceptance Log
+
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Electron/Tauri 데스크톱 앱
