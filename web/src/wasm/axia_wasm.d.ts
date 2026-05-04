@@ -76,6 +76,11 @@ export class AxiaEngine {
      * 면에 재질 부여 (material_id_raw = MaterialId의 raw u32 값)
      */
     assign_material(face_ids_raw: Uint32Array, material_id_raw: number): boolean;
+    attachFaceSurfaceConeValidated(face_id: number, ax: number, ay: number, az: number, dx: number, dy: number, dz: number, half_angle: number, rx: number, ry: number, rz: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
+    attachFaceSurfaceCylinderValidated(face_id: number, ox: number, oy: number, oz: number, ax: number, ay: number, az: number, radius: number, rx: number, ry: number, rz: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
+    attachFaceSurfacePlaneValidated(face_id: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
+    attachFaceSurfaceSphereValidated(face_id: number, cx: number, cy: number, cz: number, radius: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
+    attachFaceSurfaceTorusValidated(face_id: number, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, rx: number, ry: number, rz: number, major_radius: number, minor_radius: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
     /**
      * New variant: merge failure falls back to SOFT edge (hidden, topology
      * preserved) instead of destroying the adjacent faces. Recommended
@@ -1397,6 +1402,11 @@ export interface InitOutput {
     readonly axiaengine_arrayLinearFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_arrayRadialFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly axiaengine_assign_material: (a: number, b: number, c: number, d: number) => number;
+    readonly axiaengine_attachFaceSurfaceConeValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => void;
+    readonly axiaengine_attachFaceSurfaceCylinderValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => void;
+    readonly axiaengine_attachFaceSurfacePlaneValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => void;
+    readonly axiaengine_attachFaceSurfaceSphereValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
+    readonly axiaengine_attachFaceSurfaceTorusValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
     readonly axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;

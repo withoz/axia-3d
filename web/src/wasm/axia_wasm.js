@@ -234,6 +234,175 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * @param {number} face_id
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} dx
+     * @param {number} dy
+     * @param {number} dz
+     * @param {number} half_angle
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} rz
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @param {number} tol_mm
+     * @returns {string}
+     */
+    attachFaceSurfaceConeValidated(face_id, ax, ay, az, dx, dy, dz, half_angle, rx, ry, rz, u_min, u_max, v_min, v_max, tol_mm) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attachFaceSurfaceConeValidated(retptr, this.__wbg_ptr, face_id, ax, ay, az, dx, dy, dz, half_angle, rx, ry, rz, u_min, u_max, v_min, v_max, tol_mm);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} face_id
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} radius
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} rz
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @param {number} tol_mm
+     * @returns {string}
+     */
+    attachFaceSurfaceCylinderValidated(face_id, ox, oy, oz, ax, ay, az, radius, rx, ry, rz, u_min, u_max, v_min, v_max, tol_mm) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attachFaceSurfaceCylinderValidated(retptr, this.__wbg_ptr, face_id, ox, oy, oz, ax, ay, az, radius, rx, ry, rz, u_min, u_max, v_min, v_max, tol_mm);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} face_id
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} ux
+     * @param {number} uy
+     * @param {number} uz
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @param {number} tol_mm
+     * @returns {string}
+     */
+    attachFaceSurfacePlaneValidated(face_id, ox, oy, oz, nx, ny, nz, ux, uy, uz, u_min, u_max, v_min, v_max, tol_mm) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attachFaceSurfacePlaneValidated(retptr, this.__wbg_ptr, face_id, ox, oy, oz, nx, ny, nz, ux, uy, uz, u_min, u_max, v_min, v_max, tol_mm);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} face_id
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} radius
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @param {number} tol_mm
+     * @returns {string}
+     */
+    attachFaceSurfaceSphereValidated(face_id, cx, cy, cz, radius, u_min, u_max, v_min, v_max, tol_mm) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attachFaceSurfaceSphereValidated(retptr, this.__wbg_ptr, face_id, cx, cy, cz, radius, u_min, u_max, v_min, v_max, tol_mm);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} face_id
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} ax
+     * @param {number} ay
+     * @param {number} az
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} rz
+     * @param {number} major_radius
+     * @param {number} minor_radius
+     * @param {number} u_min
+     * @param {number} u_max
+     * @param {number} v_min
+     * @param {number} v_max
+     * @param {number} tol_mm
+     * @returns {string}
+     */
+    attachFaceSurfaceTorusValidated(face_id, cx, cy, cz, ax, ay, az, rx, ry, rz, major_radius, minor_radius, u_min, u_max, v_min, v_max, tol_mm) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attachFaceSurfaceTorusValidated(retptr, this.__wbg_ptr, face_id, cx, cy, cz, ax, ay, az, rx, ry, rz, major_radius, minor_radius, u_min, u_max, v_min, v_max, tol_mm);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * New variant: merge failure falls back to SOFT edge (hidden, topology
      * preserved) instead of destroying the adjacent faces. Recommended
      * default for interactive Erase tool.
