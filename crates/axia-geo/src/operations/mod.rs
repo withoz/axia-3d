@@ -18,6 +18,7 @@ pub mod loft;
 pub mod sweep;
 pub mod subdivide;
 pub mod fillet;
+pub mod fillet_dispatch;
 pub mod fillet_brep;
 pub mod chamfer_brep;
 pub mod shell;
