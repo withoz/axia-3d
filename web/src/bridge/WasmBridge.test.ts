@@ -1057,4 +1057,140 @@ describe('WasmBridge', () => {
       }
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-064 Step 6-δ (Path Z) — Undo cross-method contract
+  //
+  // Real runtime E2E (boolean → undo on a live WASM engine) is a
+  // browser-only concern. At the TS bridge layer we verify the
+  // CONTRACT between booleanDispatchDcel and undo via mocks:
+  // markDirty signaling, cross-method sequencing, and transaction
+  // safety on Err. Transaction-wrapping itself is verified at WASM
+  // source-inspection level by Step 6-α.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-064 Step 6-δ booleanDispatchDcel + undo contract', () => {
+    it('booleanDispatchDcel calls markDirty before delegating to engine', () => {
+      // Mock engine produces a Nurbs-path success.
+      const successJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs', fallbackReason: null,
+        dcel: {
+          newFacesA: [100], newFacesB: [],
+          removedFaces: [10, 20], preservedFaces: [],
+          disjoint: false, robustnessClean: true,
+        },
+        nurbsAttempted: true, nurbsClean: true, intersectionChainCount: 1,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: vi.fn(() => successJson),
+        undo: vi.fn(() => true),
+      };
+      // Spy on markDirty (D-AA=(a) invariant from Step 6-β).
+      const markDirtySpy = vi.spyOn(bridge, 'markDirty');
+
+      const result = bridge.booleanDispatchDcel(10, 20, 'subtract');
+
+      expect(markDirtySpy).toHaveBeenCalled();
+      expect(result?.kind).toBe('ok');
+      // markDirty must fire BEFORE the engine call so the post-Boolean
+      // mesh-buffer fetch returns fresh state.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engineFn = (bridge as any).engine.booleanDispatchDcelJson as ReturnType<typeof vi.fn>;
+      const dirtyCallOrder = markDirtySpy.mock.invocationCallOrder[0];
+      const engineCallOrder = engineFn.mock.invocationCallOrder[0];
+      expect(dirtyCallOrder).toBeLessThan(engineCallOrder);
+    });
+
+    it('booleanDispatchDcel followed by undo forwards both calls correctly', () => {
+      // Step 1 — boolean produces a result.
+      const successJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs', fallbackReason: null,
+        dcel: {
+          newFacesA: [100, 101], newFacesB: [],
+          removedFaces: [10], preservedFaces: [20],
+          disjoint: false, robustnessClean: true,
+        },
+        nurbsAttempted: true, nurbsClean: true, intersectionChainCount: 1,
+      });
+      const undoFn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: vi.fn(() => successJson),
+        undo: undoFn,
+      };
+
+      // Sequence: boolean → undo (cross-method).
+      const dcel = bridge.booleanDispatchDcel(10, 20, 'subtract');
+      const undoOk = bridge.undo();
+
+      expect(dcel?.kind).toBe('ok');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engineFn = (bridge as any).engine.booleanDispatchDcelJson as ReturnType<typeof vi.fn>;
+      expect(engineFn).toHaveBeenCalledTimes(1);
+      expect(undoFn).toHaveBeenCalledTimes(1);
+      expect(undoOk).toBe(true);
+    });
+
+    it('engine.undo after Nurbs success returns true (mock transaction commit)', () => {
+      // The WASM transaction commit is verified at source-inspection
+      // level by Step 6-α; here we verify the bridge's undo() correctly
+      // forwards the engine's commit-recognized state.
+      const successJson = JSON.stringify({
+        schemaVersion: 1, ok: true,
+        pathUsed: 'Nurbs', fallbackReason: null,
+        dcel: {
+          newFacesA: [], newFacesB: [],
+          removedFaces: [], preservedFaces: [10, 20],
+          disjoint: true,  // disjoint case — no actual mesh change
+          robustnessClean: true,
+        },
+        nurbsAttempted: true, nurbsClean: true, intersectionChainCount: 0,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: vi.fn(() => successJson),
+        // Simulates WASM-side transactions.commit() acknowledgement —
+        // even on a disjoint no-op, undo returns true (transaction
+        // committed an empty diff but still represents a unit).
+        undo: vi.fn(() => true),
+      };
+
+      bridge.booleanDispatchDcel(10, 20, 'union');
+      const undoOk = bridge.undo();
+
+      expect(undoOk).toBe(true);
+    });
+
+    it('engine.undo after error envelope still works (no transaction leak)', () => {
+      // After bridge returns kind:'error', the WASM side has called
+      // transactions.cancel() (verified by Step 6-α). The TS bridge
+      // must NOT have left any state that prevents subsequent undo
+      // from operating on PRIOR committed transactions.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        booleanDispatchDcelJson: vi.fn(() => JSON.stringify({
+          schemaVersion: 1, ok: false,
+          error: 'face_a 999 not found',
+        })),
+        // undo of a PRIOR transaction (mocked as available).
+        undo: vi.fn(() => true),
+      };
+
+      const errResult = bridge.booleanDispatchDcel(999, 1, 'subtract');
+      const undoOk = bridge.undo();
+
+      expect(errResult?.kind).toBe('error');
+      expect(undoOk).toBe(true);
+      // The error path still incremented markDirty (cache must refresh
+      // since some engines may have partial state mutation observable
+      // through other channels). This is defense-in-depth.
+      // The key invariant: undo() is safely invocable and returns
+      // engine's response without bridge interference.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const undoMock = (bridge as any).engine.undo as ReturnType<typeof vi.fn>;
+      expect(undoMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });
