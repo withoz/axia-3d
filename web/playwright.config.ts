@@ -27,11 +27,25 @@ export default defineConfig({
   workers: 1,  // E4-G atomic — one browser, one worker
   reporter: process.env.CI ? 'github' : 'list',
   timeout: 30_000,  // 30s per test (WASM init can take a moment)
+  // ADR-077 V-1 — Visual regression infrastructure.
+  // V-D: 1% pixel ratio threshold absorbs anti-aliasing / sub-pixel
+  //      rendering differences across runs.
+  // V-E: animations disabled for deterministic capture.
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.01,
+      animations: 'disabled',
+    },
+  },
   use: {
     baseURL: E2E_BASE_URL,
     trace: 'on-first-retry',
     actionTimeout: 10_000,
     navigationTimeout: 15_000,
+    // V-1 — fixed viewport ensures baseline consistency across runs.
+    // 1280×720 = standard 16:9, large enough for axes + viewport UI
+    // but stable across DPR variations.
+    viewport: { width: 1280, height: 720 },
   },
   projects: [
     {
