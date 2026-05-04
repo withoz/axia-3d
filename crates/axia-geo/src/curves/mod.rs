@@ -37,6 +37,7 @@ pub mod distance;
 pub mod transform;
 pub mod curvature;
 pub mod knot;
+pub mod fitting;
 
 pub use transform::{TransformKind, classify_transform, uniform_scale_factor, TRANSFORM_EPSILON};
 

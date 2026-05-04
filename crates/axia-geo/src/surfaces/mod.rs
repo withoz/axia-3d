@@ -53,6 +53,8 @@ pub mod ssi;
 pub mod transform;
 pub mod curvature;
 pub mod knot;
+pub mod loft;
+pub mod sweep;
 
 pub use trim::{TrimCurve2D, TrimLoop};
 pub use ssi::SurfaceIntersection;
