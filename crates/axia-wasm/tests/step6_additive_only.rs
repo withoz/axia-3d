@@ -397,3 +397,141 @@ fn boolean_dispatch_dcel_json_uses_transactions_for_safe_rollback() {
     assert!(body.contains("mark_topology_changed"),
         "method must mark topology changed on commit");
 }
+
+// ────────────────────────────────────────────────────────────────────
+// ADR-066 Y-2 (Path Y) — booleanDispatchDcelMultiJson regression tests
+// ────────────────────────────────────────────────────────────────────
+
+/// Y-2 #1 — JSON helper emits per-pair, aggregates, warnings, kind
+/// discriminator (Y-2-c full per-pair, Y-2-j discriminated outcome).
+#[test]
+fn boolean_dispatch_dcel_multi_json_includes_per_pair_and_aggregates() {
+    let s = json_helpers_src();
+    // Top-level required keys.
+    for key in [
+        r#""schemaVersion":1"#,
+        r#""ok":true"#,
+        r#""pathUsed":""#,
+        r#""fallbackReason":"#,
+        r#""perPair":"#,
+        r#""allNewFaces":"#,
+        r#""allRemovedFaces":"#,
+        r#""warnings":"#,
+    ] {
+        assert!(s.contains(key),
+            "boolean_dispatch_dcel_multi_result_json missing key fragment: {}", key);
+    }
+    // Per-pair entry shape.
+    for key in [
+        r#""faceA":"#,
+        r#""faceB":"#,
+        r#""outcome":"#,
+    ] {
+        assert!(s.contains(key),
+            "per-pair entry missing field: {}", key);
+    }
+    // Y-2-j discriminated outcome — both kinds present.
+    for key in [
+        r#""kind":"ok""#,
+        r#""kind":"err""#,
+        r#""detail":""#,
+    ] {
+        assert!(s.contains(key),
+            "outcome discriminator missing fragment: {}", key);
+    }
+    // Embedded dcel sub-object on ok outcome (D-U=(c) face IDs).
+    for key in [
+        r#""newFacesA":"#,
+        r#""newFacesB":"#,
+        r#""removedFaces":"#,
+        r#""preservedFaces":"#,
+        r#""disjoint":"#,
+        r#""robustnessClean":"#,
+    ] {
+        assert!(s.contains(key),
+            "embedded dcel object missing field: {}", key);
+    }
+}
+
+/// Y-2 #2 — Endpoint wired in lib.rs (Y-2-a/b/g/h: name, slice in,
+/// op string parse, invalid op error envelope).
+#[test]
+fn boolean_dispatch_dcel_multi_json_endpoint_wired() {
+    let l = lib_src();
+    // R1 baseline test will also catch missing — explicit check here.
+    assert!(l.contains(r#"js_name = "booleanDispatchDcelMultiJson""#),
+        "booleanDispatchDcelMultiJson endpoint must be registered");
+    assert!(l.contains("pub fn boolean_dispatch_dcel_multi_json"),
+        "Rust method name must be boolean_dispatch_dcel_multi_json");
+    // Y-2-b — &[u32] slice operands.
+    assert!(l.contains("faces_a: &[u32]") && l.contains("faces_b: &[u32]"),
+        "Endpoint must accept faces_a / faces_b as &[u32] slices");
+    // Y-2-g — op string parsing (3 ops).
+    for op_str in ["\"union\"", "\"subtract\"", "\"intersect\""] {
+        assert!(l.contains(op_str),
+            "Endpoint must handle op string: {}", op_str);
+    }
+    // Y-2-h — invalid op returns explicit error JSON.
+    assert!(l.contains("invalid op string"),
+        "Invalid op must return explicit error JSON, not panic");
+    // Delegation to JSON helper.
+    assert!(l.contains("step6_json::boolean_dispatch_dcel_multi_result_json"),
+        "Endpoint must delegate to step6_json helper");
+}
+
+/// Y-2 #3 — Y-2-f Transaction safety: begin / before-snapshot /
+/// (cancel|commit) wrapping for safe rollback on Err.
+#[test]
+fn boolean_dispatch_dcel_multi_json_uses_transactions() {
+    let l = lib_src();
+    let needle = "pub fn boolean_dispatch_dcel_multi_json";
+    let idx = l.find(needle).expect("method must exist");
+    let window_end = (idx + 3500).min(l.len());
+    let body = &l[idx..window_end];
+    assert!(body.contains("self.scene.transactions.begin()"),
+        "method must call transactions.begin() before dispatch");
+    assert!(body.contains("set_before_snapshot"),
+        "method must capture before snapshot for undo");
+    assert!(body.contains("transactions.cancel()"),
+        "method must cancel transaction on Err (Y-H safe-only)");
+    assert!(body.contains("transactions.commit()"),
+        "method must commit transaction on Ok");
+    assert!(body.contains("mark_topology_changed"),
+        "method must mark topology changed on commit");
+}
+
+/// Y-2 #4 — Y-E ineligibility (path_used == "Mesh") branch: per_pair /
+/// aggregates emitted as empty JSON arrays. Defense-in-depth that the
+/// helper format string handles the ineligible code path.
+#[test]
+fn boolean_dispatch_dcel_multi_json_handles_mesh_path_branch() {
+    let s = json_helpers_src();
+    // The helper unconditionally emits perPair / allNewFaces /
+    // allRemovedFaces (with empty Vecs producing empty arrays "[]").
+    // Verify via the format string structure.
+    let needle = "fn boolean_dispatch_dcel_multi_result_json";
+    let idx = s.find(needle).expect("helper must exist");
+    let window_end = (idx + 4000).min(s.len());
+    let body = &s[idx..window_end];
+    // Format string emits all 3 collection fields unconditionally
+    // (no Option branching — empty Vec → "[]" naturally).
+    assert!(body.contains(r#""perPair":{}"#),
+        "format string must emit perPair unconditionally");
+    assert!(body.contains(r#""allNewFaces":[{}]"#),
+        "format string must emit allNewFaces unconditionally");
+    assert!(body.contains(r#""allRemovedFaces":[{}]"#),
+        "format string must emit allRemovedFaces unconditionally");
+    assert!(body.contains(r#""warnings":{}"#),
+        "format string must emit warnings unconditionally");
+    // BooleanPath::Mesh literal is in the path_str match.
+    assert!(body.contains("BooleanPath::Mesh => \"Mesh\""),
+        "Mesh path label must be emitted");
+    // All 6 fallback reason kinds (drift defense).
+    for kind in [
+        "SurfaceMissing", "MultipleFacesNotSupported", "UnsupportedSurfaceKind",
+        "TrimLoopsNotSupported", "NurbsCoreError", "SsiNotClean",
+    ] {
+        assert!(body.contains(&format!("=> \"{}\"", kind)),
+            "fallback reason kind missing: {}", kind);
+    }
+}

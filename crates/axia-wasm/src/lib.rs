@@ -6098,6 +6098,74 @@ impl AxiaEngine {
         step6_json::boolean_dispatch_dcel_result_json(&dispatch_result)
     }
 
+    /// ADR-066 Y-2 (Path Y) — Multi-face DCEL Boolean dispatch as JSON.
+    ///
+    /// Routes through `Mesh::boolean_dispatch_dcel_multi` (Y-1) which
+    /// iterates the cartesian product `facesA × facesB` and accumulates
+    /// per-pair outcomes plus aggregate `allNewFaces` / `allRemovedFaces`.
+    ///
+    /// On Y-E strict eligibility violation (any face missing surface
+    /// or unsupported kind), returns `pathUsed="Mesh"` upfront with
+    /// `perPair` / aggregates empty + `fallbackReason` populated.
+    ///
+    /// Schema (per ADR-066 Y-2-c full per-pair, Y-2-j discriminated kind):
+    /// ```json
+    /// { "schemaVersion": 1, "ok": true,
+    ///   "pathUsed": "Nurbs"|"Mesh",
+    ///   "fallbackReason": {...} | null,
+    ///   "perPair": [
+    ///     { "faceA": u32, "faceB": u32,
+    ///       "outcome": { "kind": "ok", "dcel": {...} }
+    ///                 | { "kind": "err", "detail": "..." } },
+    ///     ...
+    ///   ],
+    ///   "allNewFaces": [u32, ...], "allRemovedFaces": [u32, ...],
+    ///   "warnings": [string, ...] }
+    /// ```
+    ///
+    /// On invalid op string or core Err: returns
+    /// `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
+    /// the transaction (Y-H safe-only consistency).
+    #[wasm_bindgen(js_name = "booleanDispatchDcelMultiJson")]
+    pub fn boolean_dispatch_dcel_multi_json(
+        &mut self,
+        faces_a: &[u32],
+        faces_b: &[u32],
+        op_str: &str,
+        tol_geometric: f64,
+    ) -> String {
+        let op = match op_str {
+            "union"     => BoolOp::Union,
+            "subtract"  => BoolOp::Subtract,
+            "intersect" => BoolOp::Intersect,
+            _ => return r#"{"schemaVersion":1,"ok":false,"error":"invalid op string (expected: union | subtract | intersect)"}"#.to_string(),
+        };
+        let fa: Vec<FaceId> = faces_a.iter().map(|&i| FaceId::new(i)).collect();
+        let fb: Vec<FaceId> = faces_b.iter().map(|&i| FaceId::new(i)).collect();
+        let mut tol = axia_geo::surfaces::ssi::tolerance::BooleanTolerance::default();
+        if tol_geometric > 0.0 {
+            tol.geometric = tol_geometric;
+        }
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        let result = self.scene.mesh.boolean_dispatch_dcel_multi(&fa, &fb, op, tol);
+        let dispatch_result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                self.scene.transactions.cancel();
+                return format!(
+                    r#"{{"schemaVersion":1,"ok":false,"error":"{}"}}"#,
+                    e.to_string().replace('"', "'"),
+                );
+            }
+        };
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        self.mark_topology_changed();
+        self.invalidate_cache();
+        step6_json::boolean_dispatch_dcel_multi_result_json(&dispatch_result)
+    }
+
     /// ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
     ///
     /// Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).

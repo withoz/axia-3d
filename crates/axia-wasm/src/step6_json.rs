@@ -8,8 +8,8 @@
 
 use axia_geo::mesh::SurfaceAttachOutcome;
 use axia_geo::operations::boolean_dispatch::{
-    BooleanDispatchDcelResult, BooleanDispatchResult, BooleanPath,
-    NurbsBooleanFailReason,
+    BooleanDispatchDcelMultiResult, BooleanDispatchDcelResult,
+    BooleanDispatchResult, BooleanPath, NurbsBooleanFailReason,
 };
 use axia_geo::operations::fillet_dispatch::{
     FilletDispatchResult, FilletDispatchSkipReason, FilletPath,
@@ -273,6 +273,115 @@ pub(crate) fn boolean_dispatch_dcel_result_json(
         result.nurbs_diagnostic.attempted,
         result.nurbs_diagnostic.robustness_clean,
         result.nurbs_diagnostic.intersection_chain_count,
+    )
+}
+
+/// ADR-066 Y-2 — Serialize `BooleanDispatchDcelMultiResult` to JSON.
+///
+/// Schema (Y-2-c full per-pair, Y-2-j discriminated `kind`):
+/// ```json
+/// {
+///   "schemaVersion": 1, "ok": true,
+///   "pathUsed": "Nurbs"|"Mesh",
+///   "fallbackReason": { "kind": "...", "label": "..." } | null,
+///   "perPair": [
+///     { "faceA": u32, "faceB": u32,
+///       "outcome": { "kind": "ok", "dcel": {...} }
+///                 | { "kind": "err", "detail": "..." } },
+///     ...
+///   ],
+///   "allNewFaces": [u32, ...],
+///   "allRemovedFaces": [u32, ...],
+///   "warnings": [string, ...]
+/// }
+/// ```
+///
+/// `pathUsed === "Mesh"` ⇒ `perPair` / `allNewFaces` / `allRemovedFaces`
+/// all empty arrays (Y-E strict eligibility rejected upfront).
+pub(crate) fn boolean_dispatch_dcel_multi_result_json(
+    result: &BooleanDispatchDcelMultiResult,
+) -> String {
+    let path_str = match result.path_used {
+        BooleanPath::Mesh => "Mesh",
+        BooleanPath::Nurbs => "Nurbs",
+        BooleanPath::NurbsWithMeshFallback => "NurbsWithMeshFallback",
+    };
+    let fallback_json = match &result.fallback_reason {
+        None => "null".to_string(),
+        Some(r) => {
+            let kind = match r {
+                NurbsBooleanFailReason::SurfaceMissing { .. } => "SurfaceMissing",
+                NurbsBooleanFailReason::MultipleFacesNotSupported { .. } => "MultipleFacesNotSupported",
+                NurbsBooleanFailReason::UnsupportedSurfaceKind { .. } => "UnsupportedSurfaceKind",
+                NurbsBooleanFailReason::TrimLoopsNotSupported { .. } => "TrimLoopsNotSupported",
+                NurbsBooleanFailReason::NurbsCoreError(_) => "NurbsCoreError",
+                NurbsBooleanFailReason::SsiNotClean { .. } => "SsiNotClean",
+            };
+            format!(r#"{{"kind":"{}","label":"{}"}}"#, kind, r.short_label())
+        }
+    };
+
+    let join_ids = |ids: &[FaceId]| -> String {
+        ids.iter()
+            .map(|f| f.raw().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let escape = |s: &str| -> String {
+        // Minimal JSON string escape (quotes + backslash + control).
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '"'  => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    };
+
+    // Build perPair array.
+    let per_pair_items: Vec<String> = result.per_pair.iter().map(|p| {
+        let outcome = match &p.result {
+            Ok(d) => format!(
+                r#"{{"kind":"ok","dcel":{{"newFacesA":[{}],"newFacesB":[{}],"removedFaces":[{}],"preservedFaces":[{}],"disjoint":{},"robustnessClean":{}}}}}"#,
+                join_ids(&d.new_faces_a),
+                join_ids(&d.new_faces_b),
+                join_ids(&d.removed_faces),
+                join_ids(&d.preserved_faces),
+                d.disjoint,
+                d.robustness.is_clean(),
+            ),
+            Err(detail) => format!(
+                r#"{{"kind":"err","detail":"{}"}}"#,
+                escape(detail),
+            ),
+        };
+        format!(
+            r#"{{"faceA":{},"faceB":{},"outcome":{}}}"#,
+            p.face_a.raw(), p.face_b.raw(), outcome,
+        )
+    }).collect();
+    let per_pair_json = format!("[{}]", per_pair_items.join(","));
+
+    // Build warnings array.
+    let warning_items: Vec<String> = result.warnings.iter()
+        .map(|w| format!(r#""{}""#, escape(w)))
+        .collect();
+    let warnings_json = format!("[{}]", warning_items.join(","));
+
+    format!(
+        r#"{{"schemaVersion":1,"ok":true,"pathUsed":"{}","fallbackReason":{},"perPair":{},"allNewFaces":[{}],"allRemovedFaces":[{}],"warnings":{}}}"#,
+        path_str,
+        fallback_json,
+        per_pair_json,
+        join_ids(&result.all_new_faces),
+        join_ids(&result.all_removed_faces),
+        warnings_json,
     )
 }
 
