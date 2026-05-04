@@ -391,12 +391,12 @@ type AxiaEngineExtended = AxiaEngine & {
     ox: number, oy: number, oz: number,
     dx: number, dy: number, dz: number,
   ): Float64Array;
-  // ADR-027 Phase G3 — NURBS Boolean (UI integration)
-  nurbsBoolean?(faceA: number, faceB: number, op: string): string;
-  // ADR-064 Step 6-α — DCEL-producing Boolean dispatch (Path Z)
-  booleanDispatchDcelJson?(
-    faceA: number, faceB: number, op: string, tolGeometric: number,
-  ): string;
+  // ADR-076 Step 2 — Removed `nurbsBoolean?` (ADR-027 Phase G3, legacy
+  // probe) and `booleanDispatchDcelJson?` (ADR-064 Step 6-α, single).
+  // Both became unreachable after ADR-076 Step 1 removed BooleanHandler
+  // call sites. Multi (`booleanDispatchDcelMultiJson?`) handles all
+  // production cases — Y-1 1×1 degenerate delegates to the Rust
+  // `Mesh::boolean_dispatch_dcel` impl internally (Rust impl preserved).
   // ADR-066 Y-2 — Multi-face DCEL Boolean dispatch (Path Y)
   booleanDispatchDcelMultiJson?(
     facesA: Uint32Array, facesB: Uint32Array, op: string, tolGeometric: number,
@@ -643,108 +643,15 @@ export class WasmBridge {
     };
   }
 
-  /**
-   * ADR-027 Phase G3 — NURBS Boolean on two BSplineSurface faces.
-   *
-   * Both faces must carry an attached `Edge.surface = Some(BSplineSurface)`
-   * (kind = 7). Returns the parsed JSON envelope, or `null` if the engine
-   * is missing.
-   *
-   * Result shape:
-   *   - `{ kind: 'ok', op, intersection_chains, trim_a_count, trim_b_count,
-   *      warning_open_chains_skipped, tangent_contact, is_disjoint }`
-   *   - `{ kind: 'error', reason, detail }`
-   *
-   * MVP — returns trim metadata for UI Toast feedback. Mesh-level trim
-   * application is deferred (would require BSplineSurface trim_loops
-   * storage; currently lives on NURBSSurface only).
-   */
-  nurbsBoolean(
-    faceA: number,
-    faceB: number,
-    op: 'union' | 'subtract' | 'intersect',
-  ): NurbsBooleanResult | null {
-    if (!this.engine || !this.engine.nurbsBoolean) return null;
-    const json = this.engine.nurbsBoolean(faceA, faceB, op);
-    try {
-      return JSON.parse(json) as NurbsBooleanResult;
-    } catch {
-      return { kind: 'error', reason: 'parse', detail: 'engine returned non-JSON' };
-    }
-  }
-
-  /**
-   * ADR-064 Step 6-β (Path Z) — DCEL-producing Boolean dispatch wrapper.
-   *
-   * Routes single-face × single-face NURBS pairs through
-   * `Mesh::boolean_dispatch_dcel` (Step 5) for actual DCEL face
-   * production with op-specific input removal. On ineligibility
-   * (multi-face / surface missing / unsupported kind), the result
-   * carries `pathUsed: 'Mesh'` + `dcel: null` + `fallbackReason`
-   * populated. Per D-K=(a), this method does NOT auto-invoke the
-   * mesh path — caller decides.
-   *
-   * @param faceA, faceB — face IDs (single faces only per Path Z)
-   * @param op — Boolean operation
-   * @param tolGeometric — geometric tolerance in mm (default 1e-3 per
-   *   ADR-064 D-AD; must be > 0 to override engine default)
-   *
-   * @returns
-   * - `null` — WASM not loaded or `booleanDispatchDcelJson` not exposed
-   * - `{ kind: 'ok', ... }` — engine succeeded; check `pathUsed` /
-   *   `dcel` to decide UI behavior
-   * - `{ kind: 'error', reason, detail }` — invalidOp / engineErr / parse
-   */
-  booleanDispatchDcel(
-    faceA: number,
-    faceB: number,
-    op: 'union' | 'subtract' | 'intersect',
-    tolGeometric: number = 1e-3,
-  ): BooleanDispatchDcelResult | null {
-    if (!this.engine || !this.engine.booleanDispatchDcelJson) return null;
-    // D-AA=(a) — topology will change on Nurbs path success.
-    this.markDirty();
-    const json = this.engine.booleanDispatchDcelJson(
-      faceA, faceB, op, tolGeometric,
-    );
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(json);
-    } catch {
-      return { kind: 'error', reason: 'parse', detail: 'engine returned non-JSON' };
-    }
-    // §F lock-in (silent fallback prohibited) — explicit ok / error envelope.
-    const env = parsed as {
-      ok?: boolean; error?: string;
-      pathUsed?: string;
-      fallbackReason?: BooleanDispatchFallbackReason | null;
-      dcel?: BooleanDispatchDcel | null;
-      nurbsAttempted?: boolean;
-      nurbsClean?: boolean;
-      intersectionChainCount?: number;
-    };
-    if (env.ok === false) {
-      const detail = env.error ?? 'unknown engine error';
-      const reason: BooleanDispatchDcelErrorReason =
-        detail.includes('invalid op') ? 'invalidOp' : 'engineErr';
-      return { kind: 'error', reason, detail };
-    }
-    if (env.ok === true && typeof env.pathUsed === 'string') {
-      return {
-        kind: 'ok',
-        pathUsed: env.pathUsed as BooleanDispatchPath,
-        fallbackReason: env.fallbackReason ?? null,
-        dcel: env.dcel ?? null,
-        nurbsAttempted: env.nurbsAttempted ?? false,
-        nurbsClean: env.nurbsClean ?? false,
-        intersectionChainCount: env.intersectionChainCount ?? 0,
-      };
-    }
-    return {
-      kind: 'error', reason: 'parse',
-      detail: 'engine response missing required fields',
-    };
-  }
+  // ADR-076 Step 2 — Removed:
+  // - WasmBridge.nurbsBoolean() (legacy ADR-027 Phase G3 probe)
+  // - WasmBridge.booleanDispatchDcel() (single-face Path Z, ADR-064 Step 6-β)
+  // Both wrappers became unreachable when ADR-076 Step 1 deleted the
+  // BooleanHandler call sites. Y-1 1×1 degenerate handles the same case
+  // via Path Z internally (multi delegates to Mesh::boolean_dispatch_dcel
+  // in Rust — preserved). The corresponding WASM exports
+  // (booleanDispatchDcelJson / nurbsBoolean) and TS types
+  // (NurbsBooleanResult, BooleanDispatchDcelResult) also removed.
 
   /**
    * ADR-066 Y-3 (Path Y) — Multi-face DCEL Boolean dispatch wrapper.
@@ -3360,44 +3267,19 @@ export interface BooleanResult {
   totalFaces?: number;
 }
 
-/**
- * ADR-027 Phase G3 — NURBS Boolean (UI integration) result envelope.
- *
- * Returned by `WasmBridge.nurbsBoolean(...)`. Two shapes:
- *
- * - `kind: 'ok'`  — operation completed; metadata describes the trim
- *   loops that the result *would* receive when mesh-level trim
- *   application lands (deferred MVP).
- * - `kind: 'error'` — engine refused; UI translates `reason` to
- *   user-friendly Korean Toast.
- */
-export type NurbsBooleanResult =
-  | {
-      kind: 'ok';
-      op: 'union' | 'subtract' | 'intersect';
-      intersection_chains: number;
-      trim_a_count: number;
-      trim_b_count: number;
-      warning_open_chains_skipped: boolean;
-      tangent_contact: boolean;
-      is_disjoint: boolean;
-    }
-  | {
-      kind: 'error';
-      reason:
-        | 'unsupported_surface'
-        | 'bad_op'
-        | 'engine'
-        | 'parse';
-      detail: string;
-    };
+// ADR-076 Step 2 — Removed `NurbsBooleanResult` (ADR-027 Phase G3
+// legacy probe envelope) and `BooleanDispatchDcelResult` (ADR-064
+// Step 6-β single-face envelope). Both became unused after the
+// corresponding wrappers were removed. Shared types
+// (BooleanDispatchPath / BooleanDispatchFallbackKind /
+// BooleanDispatchFallbackReason / BooleanDispatchDcel /
+// BooleanDispatchDcelErrorReason) are PRESERVED — multi
+// (BooleanDispatchDcelMultiResult) reuses them via PerPairDcelOutcome.
 
 /**
- * ADR-064 Step 6-β (Path Z) — DCEL Boolean dispatch result types.
- *
- * Mirrors the JSON envelope produced by Step 6-α
- * `booleanDispatchDcelJson` WASM export. See ADR-064 §C D-U=(c) for
- * the face-IDs-included schema rationale.
+ * Path used by the Boolean dispatcher (single OR multi face). Shared
+ * between ADR-064 Path Z (Rust impl preserved, internal-only after
+ * ADR-076 Step 2) and ADR-066 Path Y (multi-face dispatch wrapper).
  */
 export type BooleanDispatchPath = 'Mesh' | 'Nurbs' | 'NurbsWithMeshFallback';
 
@@ -3436,22 +3318,6 @@ export type BooleanDispatchDcelErrorReason =
   | 'invalidOp'
   | 'engineErr'
   | 'parse';
-
-export type BooleanDispatchDcelResult =
-  | {
-      kind: 'ok';
-      pathUsed: BooleanDispatchPath;
-      fallbackReason: BooleanDispatchFallbackReason | null;
-      dcel: BooleanDispatchDcel | null;
-      nurbsAttempted: boolean;
-      nurbsClean: boolean;
-      intersectionChainCount: number;
-    }
-  | {
-      kind: 'error';
-      reason: BooleanDispatchDcelErrorReason;
-      detail: string;
-    };
 
 /**
  * ADR-066 Y-3 (Path Y) — Multi-face DCEL dispatch result types.

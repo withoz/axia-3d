@@ -8,8 +8,8 @@
 
 use axia_geo::mesh::SurfaceAttachOutcome;
 use axia_geo::operations::boolean_dispatch::{
-    BooleanDispatchDcelMultiResult, BooleanDispatchDcelResult,
-    BooleanDispatchResult, BooleanPath, NurbsBooleanFailReason,
+    BooleanDispatchDcelMultiResult, BooleanDispatchResult,
+    BooleanPath, NurbsBooleanFailReason,
 };
 use axia_geo::operations::fillet_dispatch::{
     FilletDispatchResult, FilletDispatchSkipReason, FilletPath,
@@ -199,82 +199,12 @@ pub(crate) fn boolean_dispatch_result_json(result: &BooleanDispatchResult) -> St
     )
 }
 
-/// ADR-064 Step 6-α — Serialize `BooleanDispatchDcelResult` to JSON.
-///
-/// Schema (D-U=(c) — face IDs included for selection / undo tracking):
-/// ```json
-/// {
-///   "schemaVersion": 1, "ok": true,
-///   "pathUsed": "Mesh"|"Nurbs"|"NurbsWithMeshFallback",
-///   "fallbackReason": { "kind": "...", "label": "..." } | null,
-///   "dcel": {
-///     "newFacesA": [u32, ...],
-///     "newFacesB": [u32, ...],
-///     "removedFaces": [u32, ...],
-///     "preservedFaces": [u32, ...],
-///     "disjoint": bool,
-///     "robustnessClean": bool
-///   } | null,
-///   "nurbsAttempted": bool,
-///   "nurbsClean": bool,
-///   "intersectionChainCount": u32
-/// }
-/// ```
-///
-/// `dcel` is null when `pathUsed == "Mesh"` (eligibility rejected,
-/// no DCEL produced — caller responsibility per D-K).
-pub(crate) fn boolean_dispatch_dcel_result_json(
-    result: &BooleanDispatchDcelResult,
-) -> String {
-    let path_str = match result.path_used {
-        BooleanPath::Mesh => "Mesh",
-        BooleanPath::Nurbs => "Nurbs",
-        BooleanPath::NurbsWithMeshFallback => "NurbsWithMeshFallback",
-    };
-    let fallback_json = match &result.fallback_reason {
-        None => "null".to_string(),
-        Some(r) => {
-            let kind = match r {
-                NurbsBooleanFailReason::SurfaceMissing { .. } => "SurfaceMissing",
-                NurbsBooleanFailReason::MultipleFacesNotSupported { .. } => "MultipleFacesNotSupported",
-                NurbsBooleanFailReason::UnsupportedSurfaceKind { .. } => "UnsupportedSurfaceKind",
-                NurbsBooleanFailReason::TrimLoopsNotSupported { .. } => "TrimLoopsNotSupported",
-                NurbsBooleanFailReason::NurbsCoreError(_) => "NurbsCoreError",
-                NurbsBooleanFailReason::SsiNotClean { .. } => "SsiNotClean",
-            };
-            format!(r#"{{"kind":"{}","label":"{}"}}"#, kind, r.short_label())
-        }
-    };
-    let dcel_json = match &result.dcel {
-        None => "null".to_string(),
-        Some(d) => {
-            let join_ids = |ids: &[FaceId]| -> String {
-                ids.iter()
-                    .map(|f| f.raw().to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            };
-            format!(
-                r#"{{"newFacesA":[{}],"newFacesB":[{}],"removedFaces":[{}],"preservedFaces":[{}],"disjoint":{},"robustnessClean":{}}}"#,
-                join_ids(&d.new_faces_a),
-                join_ids(&d.new_faces_b),
-                join_ids(&d.removed_faces),
-                join_ids(&d.preserved_faces),
-                d.disjoint,
-                d.robustness.is_clean(),
-            )
-        }
-    };
-    format!(
-        r#"{{"schemaVersion":1,"ok":true,"pathUsed":"{}","fallbackReason":{},"dcel":{},"nurbsAttempted":{},"nurbsClean":{},"intersectionChainCount":{}}}"#,
-        path_str,
-        fallback_json,
-        dcel_json,
-        result.nurbs_diagnostic.attempted,
-        result.nurbs_diagnostic.robustness_clean,
-        result.nurbs_diagnostic.intersection_chain_count,
-    )
-}
+// ADR-076 Step 2 — Removed: boolean_dispatch_dcel_result_json
+// (single-face JSON helper). Caller (boolean_dispatch_dcel_json
+// WASM export) was removed in same commit. Multi
+// (boolean_dispatch_dcel_multi_result_json below) is the canonical
+// JSON serializer.
+
 
 /// ADR-066 Y-2 — Serialize `BooleanDispatchDcelMultiResult` to JSON.
 ///

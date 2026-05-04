@@ -108,25 +108,10 @@ export async function waitForBridgeReady(page: Page): Promise<void> {
   );
 }
 
-/**
- * Invoke `bridge.booleanDispatchDcel(faceA, faceB, op)` in browser
- * context and return the parsed BooleanDispatchDcelResult.
- */
-export async function invokeBooleanDispatchDcel(
-  page: Page,
-  args: {
-    faceA: number;
-    faceB: number;
-    op: 'union' | 'subtract' | 'intersect';
-    tolGeometric?: number;
-  },
-): Promise<unknown> {
-  return await page.evaluate(({ faceA, faceB, op, tolGeometric }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bridge = (window as any).__axia.get('bridge');
-    return bridge.booleanDispatchDcel(faceA, faceB, op, tolGeometric ?? 1e-3);
-  }, args);
-}
+// ADR-076 Step 2 — Removed: invokeBooleanDispatchDcel (single-face
+// helper). Bridge.booleanDispatchDcel and the underlying WASM export
+// were sunset in ADR-076 Step 2. Multi (invokeBooleanDispatchDcelMulti
+// below) covers the same case via Y-1 1×1 degenerate.
 
 /**
  * ADR-075 E4-3 — N parallel plane faces at evenly-spaced z heights.

@@ -138,34 +138,6 @@ export class AxiaEngine {
      */
     bendVerts(vert_ids: Uint32Array, ax_x: number, ax_y: number, ax_z: number, dir_x: number, dir_y: number, dir_z: number, ox: number, oy: number, oz: number, angle_deg: number, length_limit: number): boolean;
     /**
-     * ADR-064 Step 6-α (Path Z) — DCEL Boolean dispatch result as JSON.
-     *
-     * Routes through `Mesh::boolean_dispatch_dcel` (Step 5). On
-     * eligible single-face × single-face NURBS pairs, produces actual
-     * DCEL faces with op-specific input removal. On ineligibility
-     * (multi-face, surface missing, unsupported kind), returns
-     * `pathUsed=Mesh` + `dcel=null` + `fallbackReason` populated;
-     * caller decides whether to invoke `booleanDispatchJson` for the
-     * mesh-path semantics (D-K=(a) — no auto fallback).
-     *
-     * Schema (per ADR-064 §C D-U=(c)):
-     * ```json
-     * { "schemaVersion": 1, "ok": true,
-     *   "pathUsed": "Nurbs"|"Mesh",
-     *   "fallbackReason": { "kind": "...", "label": "..." } | null,
-     *   "dcel": { "newFacesA": [...], "newFacesB": [...],
-     *             "removedFaces": [...], "preservedFaces": [...],
-     *             "disjoint": bool, "robustnessClean": bool } | null,
-     *   "nurbsAttempted": bool, "nurbsClean": bool,
-     *   "intersectionChainCount": N }
-     * ```
-     *
-     * On invalid op string or core Err: returns
-     * `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
-     * the transaction (D-H safe-only consistency).
-     */
-    booleanDispatchDcelJson(face_a_raw: number, face_b_raw: number, op_str: string, tol_geometric: number): string;
-    /**
      * ADR-066 Y-2 (Path Y) — Multi-face DCEL Boolean dispatch as JSON.
      *
      * Routes through `Mesh::boolean_dispatch_dcel_multi` (Y-1) which
@@ -954,35 +926,6 @@ export class AxiaEngine {
      */
     normalizeForImport(options_json: string): string;
     /**
-     * ADR-027 Phase G3 — NURBS Boolean (UI integration, 2026-05-XX).
-     *
-     * Performs a parameter-space Boolean operation between two
-     * `BSplineSurface` faces. Both faces must carry an attached
-     * `Edge.surface = Some(BSplineSurface)` (kind = 7) — fails with
-     * `kind:"unsupported_surface"` otherwise.
-     *
-     * Returns JSON describing the resulting trim loops:
-     * ```json
-     * {
-     *   "kind": "ok",
-     *   "op": "union" | "subtract" | "intersect",
-     *   "intersection_chains": <int>,
-     *   "trim_a_count": <int>,
-     *   "trim_b_count": <int>,
-     *   "warning_open_chains_skipped": <bool>,
-     *   "tangent_contact": <bool>,
-     *   "is_disjoint": <bool>
-     * }
-     * ```
-     * On failure: `{"kind":"error","reason":"<short_id>","detail":"..."}`.
-     *
-     * MVP — caller (TS) consumes the JSON for Toast feedback. Mesh-level
-     * trim application is deferred to follow-up (would require per-face
-     * trim_loops storage on `AnalyticSurface::BSplineSurface`, which
-     * currently lives only on `NURBSSurface`).
-     */
-    nurbsBoolean(face_a: number, face_b: number, op: string): string;
-    /**
      * Edge(line)를 평행하게 offset하여 새 edge 생성 (선만 복사, 면은 만들지 않음)
      * plane_normal: 참조 평면 법선 (Y-up = 0,1,0)
      */
@@ -1470,7 +1413,6 @@ export interface InitOutput {
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_bendVerts: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
-    readonly axiaengine_booleanDispatchDcelJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_booleanDispatchDcelMultiJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly axiaengine_booleanDispatchJson: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_boolean_op: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
@@ -1592,7 +1534,6 @@ export interface InitOutput {
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
-    readonly axiaengine_nurbsBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;

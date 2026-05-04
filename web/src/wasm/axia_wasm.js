@@ -529,56 +529,6 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
-     * ADR-064 Step 6-α (Path Z) — DCEL Boolean dispatch result as JSON.
-     *
-     * Routes through `Mesh::boolean_dispatch_dcel` (Step 5). On
-     * eligible single-face × single-face NURBS pairs, produces actual
-     * DCEL faces with op-specific input removal. On ineligibility
-     * (multi-face, surface missing, unsupported kind), returns
-     * `pathUsed=Mesh` + `dcel=null` + `fallbackReason` populated;
-     * caller decides whether to invoke `booleanDispatchJson` for the
-     * mesh-path semantics (D-K=(a) — no auto fallback).
-     *
-     * Schema (per ADR-064 §C D-U=(c)):
-     * ```json
-     * { "schemaVersion": 1, "ok": true,
-     *   "pathUsed": "Nurbs"|"Mesh",
-     *   "fallbackReason": { "kind": "...", "label": "..." } | null,
-     *   "dcel": { "newFacesA": [...], "newFacesB": [...],
-     *             "removedFaces": [...], "preservedFaces": [...],
-     *             "disjoint": bool, "robustnessClean": bool } | null,
-     *   "nurbsAttempted": bool, "nurbsClean": bool,
-     *   "intersectionChainCount": N }
-     * ```
-     *
-     * On invalid op string or core Err: returns
-     * `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
-     * the transaction (D-H safe-only consistency).
-     * @param {number} face_a_raw
-     * @param {number} face_b_raw
-     * @param {string} op_str
-     * @param {number} tol_geometric
-     * @returns {string}
-     */
-    booleanDispatchDcelJson(face_a_raw, face_b_raw, op_str, tol_geometric) {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(op_str, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.axiaengine_booleanDispatchDcelJson(retptr, this.__wbg_ptr, face_a_raw, face_b_raw, ptr0, len0, tol_geometric);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred2_0 = r0;
-            deferred2_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
      * ADR-066 Y-2 (Path Y) — Multi-face DCEL Boolean dispatch as JSON.
      *
      * Routes through `Mesh::boolean_dispatch_dcel_multi` (Y-1) which
@@ -2688,56 +2638,6 @@ export class AxiaEngine {
             const ptr0 = passStringToWasm0(options_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
             const len0 = WASM_VECTOR_LEN;
             wasm.axiaengine_normalizeForImport(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred2_0 = r0;
-            deferred2_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
-     * ADR-027 Phase G3 — NURBS Boolean (UI integration, 2026-05-XX).
-     *
-     * Performs a parameter-space Boolean operation between two
-     * `BSplineSurface` faces. Both faces must carry an attached
-     * `Edge.surface = Some(BSplineSurface)` (kind = 7) — fails with
-     * `kind:"unsupported_surface"` otherwise.
-     *
-     * Returns JSON describing the resulting trim loops:
-     * ```json
-     * {
-     *   "kind": "ok",
-     *   "op": "union" | "subtract" | "intersect",
-     *   "intersection_chains": <int>,
-     *   "trim_a_count": <int>,
-     *   "trim_b_count": <int>,
-     *   "warning_open_chains_skipped": <bool>,
-     *   "tangent_contact": <bool>,
-     *   "is_disjoint": <bool>
-     * }
-     * ```
-     * On failure: `{"kind":"error","reason":"<short_id>","detail":"..."}`.
-     *
-     * MVP — caller (TS) consumes the JSON for Toast feedback. Mesh-level
-     * trim application is deferred to follow-up (would require per-face
-     * trim_loops storage on `AnalyticSurface::BSplineSurface`, which
-     * currently lives only on `NURBSSurface`).
-     * @param {number} face_a
-     * @param {number} face_b
-     * @param {string} op
-     * @returns {string}
-     */
-    nurbsBoolean(face_a, face_b, op) {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(op, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.axiaengine_nurbsBoolean(retptr, this.__wbg_ptr, face_a, face_b, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             deferred2_0 = r0;

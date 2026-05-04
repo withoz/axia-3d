@@ -1519,94 +1519,12 @@ impl AxiaEngine {
         ok
     }
 
-    /// ADR-027 Phase G3 — NURBS Boolean (UI integration, 2026-05-XX).
-    ///
-    /// Performs a parameter-space Boolean operation between two
-    /// `BSplineSurface` faces. Both faces must carry an attached
-    /// `Edge.surface = Some(BSplineSurface)` (kind = 7) — fails with
-    /// `kind:"unsupported_surface"` otherwise.
-    ///
-    /// Returns JSON describing the resulting trim loops:
-    /// ```json
-    /// {
-    ///   "kind": "ok",
-    ///   "op": "union" | "subtract" | "intersect",
-    ///   "intersection_chains": <int>,
-    ///   "trim_a_count": <int>,
-    ///   "trim_b_count": <int>,
-    ///   "warning_open_chains_skipped": <bool>,
-    ///   "tangent_contact": <bool>,
-    ///   "is_disjoint": <bool>
-    /// }
-    /// ```
-    /// On failure: `{"kind":"error","reason":"<short_id>","detail":"..."}`.
-    ///
-    /// MVP — caller (TS) consumes the JSON for Toast feedback. Mesh-level
-    /// trim application is deferred to follow-up (would require per-face
-    /// trim_loops storage on `AnalyticSurface::BSplineSurface`, which
-    /// currently lives only on `NURBSSurface`).
-    #[wasm_bindgen(js_name = "nurbsBoolean")]
-    pub fn nurbs_boolean(&self, face_a: u32, face_b: u32, op: &str) -> String {
-        use axia_geo::{AnalyticSurface, FaceId};
-        use axia_geo::surfaces::ssi::boolean::{nurbs_boolean, BooleanOp};
+    // ADR-076 Step 2 — Removed: nurbs_boolean (ADR-027 Phase G3 legacy
+    // probe export). Reachable only from removed BooleanHandler legacy
+    // probe path (sunset by ADR-076 Step 1) and removed
+    // WasmBridge.nurbsBoolean wrapper (sunset by ADR-076 Step 2).
+    // No external consumers remain (verified via repo-wide grep).
 
-        let fa = FaceId::new(face_a);
-        let fb = FaceId::new(face_b);
-
-        let parsed_op = match op {
-            "union" => BooleanOp::Union,
-            "subtract" => BooleanOp::Subtract,
-            "intersect" => BooleanOp::Intersect,
-            other => {
-                return format!(
-                    r#"{{"kind":"error","reason":"bad_op","detail":"unknown op '{}'"}}"#,
-                    other,
-                );
-            }
-        };
-
-        // Extract the two BSpline surface descriptions.
-        let surf_a = self.scene.mesh.face_surface(fa);
-        let surf_b = self.scene.mesh.face_surface(fb);
-        let (a_grid, a_ku, a_kv, a_du, a_dv) = match surf_a {
-            Some(AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v }) => {
-                (ctrl_grid, knots_u, knots_v, *deg_u as usize, *deg_v as usize)
-            }
-            _ => {
-                return r#"{"kind":"error","reason":"unsupported_surface","detail":"face A is not a BSplineSurface"}"#.to_string();
-            }
-        };
-        let (b_grid, b_ku, b_kv, b_du, b_dv) = match surf_b {
-            Some(AnalyticSurface::BSplineSurface { ctrl_grid, knots_u, knots_v, deg_u, deg_v }) => {
-                (ctrl_grid, knots_u, knots_v, *deg_u as usize, *deg_v as usize)
-            }
-            _ => {
-                return r#"{"kind":"error","reason":"unsupported_surface","detail":"face B is not a BSplineSurface"}"#.to_string();
-            }
-        };
-
-        let tol = 1e-3_f64; // ADR-035 P20.E #2 1e-3 mm
-        match nurbs_boolean(
-            a_grid, a_ku, a_kv, a_du, a_dv,
-            b_grid, b_ku, b_kv, b_du, b_dv,
-            parsed_op, tol,
-        ) {
-            Ok(r) => format!(
-                r#"{{"kind":"ok","op":"{}","intersection_chains":{},"trim_a_count":{},"trim_b_count":{},"warning_open_chains_skipped":{},"tangent_contact":{},"is_disjoint":{}}}"#,
-                op,
-                r.intersection.len(),
-                r.trim_a.len(),
-                r.trim_b.len(),
-                r.warning_open_chains_skipped,
-                r.tangent_contact,
-                r.is_disjoint(),
-            ),
-            Err(e) => {
-                let safe = e.to_string().replace('"', "'");
-                format!(r#"{{"kind":"error","reason":"engine","detail":"{}"}}"#, safe)
-            }
-        }
-    }
 
     /// Surface kind: 0 = none, 1 = Plane, 2 = Cylinder, 3 = Sphere,
     /// 4 = Cone, 5 = Torus, 6 = BezierPatch, 7 = BSplineSurface,
@@ -6032,71 +5950,14 @@ impl AxiaEngine {
         step6_json::boolean_dispatch_result_json(&dispatch_result)
     }
 
-    /// ADR-064 Step 6-α (Path Z) — DCEL Boolean dispatch result as JSON.
-    ///
-    /// Routes through `Mesh::boolean_dispatch_dcel` (Step 5). On
-    /// eligible single-face × single-face NURBS pairs, produces actual
-    /// DCEL faces with op-specific input removal. On ineligibility
-    /// (multi-face, surface missing, unsupported kind), returns
-    /// `pathUsed=Mesh` + `dcel=null` + `fallbackReason` populated;
-    /// caller decides whether to invoke `booleanDispatchJson` for the
-    /// mesh-path semantics (D-K=(a) — no auto fallback).
-    ///
-    /// Schema (per ADR-064 §C D-U=(c)):
-    /// ```json
-    /// { "schemaVersion": 1, "ok": true,
-    ///   "pathUsed": "Nurbs"|"Mesh",
-    ///   "fallbackReason": { "kind": "...", "label": "..." } | null,
-    ///   "dcel": { "newFacesA": [...], "newFacesB": [...],
-    ///             "removedFaces": [...], "preservedFaces": [...],
-    ///             "disjoint": bool, "robustnessClean": bool } | null,
-    ///   "nurbsAttempted": bool, "nurbsClean": bool,
-    ///   "intersectionChainCount": N }
-    /// ```
-    ///
-    /// On invalid op string or core Err: returns
-    /// `{"schemaVersion":1,"ok":false,"error":"..."}` and rolls back
-    /// the transaction (D-H safe-only consistency).
-    #[wasm_bindgen(js_name = "booleanDispatchDcelJson")]
-    pub fn boolean_dispatch_dcel_json(
-        &mut self,
-        face_a_raw: u32,
-        face_b_raw: u32,
-        op_str: &str,
-        tol_geometric: f64,
-    ) -> String {
-        let op = match op_str {
-            "union"     => BoolOp::Union,
-            "subtract"  => BoolOp::Subtract,
-            "intersect" => BoolOp::Intersect,
-            _ => return r#"{"schemaVersion":1,"ok":false,"error":"invalid op string (expected: union | subtract | intersect)"}"#.to_string(),
-        };
-        let face_a = FaceId::new(face_a_raw);
-        let face_b = FaceId::new(face_b_raw);
-        // D-T=(c) — geometric tol from caller; topological default.
-        let mut tol = axia_geo::surfaces::ssi::tolerance::BooleanTolerance::default();
-        if tol_geometric > 0.0 {
-            tol.geometric = tol_geometric;
-        }
-        self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
-        let result = self.scene.mesh.boolean_dispatch_dcel(face_a, face_b, op, tol);
-        let dispatch_result = match result {
-            Ok(r) => r,
-            Err(e) => {
-                self.scene.transactions.cancel();
-                return format!(
-                    r#"{{"schemaVersion":1,"ok":false,"error":"{}"}}"#,
-                    e.to_string().replace('"', "'"),
-                );
-            }
-        };
-        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
-        self.scene.transactions.commit();
-        self.mark_topology_changed();
-        self.invalidate_cache();
-        step6_json::boolean_dispatch_dcel_result_json(&dispatch_result)
-    }
+    // ADR-076 Step 2 — Removed: boolean_dispatch_dcel_json (ADR-064 Step
+    // 6-α single-face DCEL export). Reachable only from removed
+    // BooleanHandler single fast-path (sunset by ADR-076 Step 1) and
+    // removed WasmBridge.booleanDispatchDcel wrapper (sunset by ADR-076
+    // Step 2). Rust impl Mesh::boolean_dispatch_dcel preserved — multi
+    // (booleanDispatchDcelMultiJson) delegates to it on 1×1 degenerate
+    // and per-pair cartesian (Y-1 lock-in #4).
+
 
     /// ADR-066 Y-2 (Path Y) — Multi-face DCEL Boolean dispatch as JSON.
     ///

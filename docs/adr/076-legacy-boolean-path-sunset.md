@@ -1,9 +1,9 @@
 # ADR-076 — Legacy Boolean Path Sunset
 
-**Status**: Step 1 진입 (Path Z atomic, 사용자 결정 2026-05-04)
-**Date**: 2026-05-04
+**Status**: Step 1 + Step 1.1 + **Step 2 완료** (Path Z atomic, 2026-05-04 ~ 2026-05-05)
+**Last commits**: Step 1 (`06e73a8`) + Step 1.1 (`580a64a`) + **Step 2 (본 commit)**
 **Anchor**: ADR-064 §E.5 + ADR-066 §E.5 (legacy single-face DCEL fast-path
-+ NURBS probe deprecation)
++ NURBS probe deprecation) — **본 ADR Step 2 으로 surface 전체 닫음**
 **Parent**: ADR-064 Path Z 완료 (`03fb6e8`) + ADR-066 Path Y 완료
 (`eb71e7e`) + ADR-075 E.4 트랙 완료 (`92056f6`)
 **Prerequisites**: ADR-066 Y-4 multi DCEL fast-path 가 single-face
@@ -137,11 +137,109 @@ case 을 superset 으로 흡수 (Y-1 1×1 degenerate → Path Z 위임).
 
 ## 4. Future Steps (별도 sub-step)
 
-| Sub-step | 영역 | 예상 변경 |
-|----------|------|----------|
-| Step 1 | UI cleanup (BooleanHandler.ts + test 삭제) | -11 vitest |
-| Step 2 | Bridge wrapper / WASM export 제거 | Rust 변경 + WASM rebuild + export_baseline change + WasmBridge.test.ts 정리 |
-| Step 3 | Type deprecation (NurbsBooleanResult / BooleanDispatchDcelResult) | API 영향 검토 후 |
+| Sub-step | 영역 | 변경 | 상태 |
+|----------|------|------|------|
+| Step 1 | UI cleanup (BooleanHandler.ts + test 삭제) | -15 vitest | **✅ commit `06e73a8`** |
+| Step 1.1 | handleMultiDcelResult JSDoc cross-link | docs only | **✅ commit `580a64a`** |
+| Step 2 | Bridge wrapper + WASM export + types + tests + baseline | -9 vitest, -4 axia-wasm, -4 Playwright | **✅ 본 commit** |
+| Step 3 | (없음 — Step 2 가 type deprecation 까지 포함) | — | N/A |
+
+## §C-amendment-1 (cleanup deletion)
+
+ADR-064/066/075 의 R1 §D "additive-only baseline" 정책은
+**deprecation-driven cleanup ADR** 의 명시적 deletion 을 예외로 허용.
+본 ADR-076 Step 2 가 첫 사례 — 2 WASM exports + 2 baseline entries
+삭제. 향후 cleanup ADR 도 동일 정책. 단, deletion 은 별도 ADR 명시
++ Path Y / E.4 / E.3 회귀 surface 보존 검증 후만 허용 (본 commit
+은 axia-geo 964 / Playwright multi 9 / vitest multi 회귀 모두 그린
+검증 후 진행).
+
+## §D Step 2 Acceptance Log (commit 본 commit)
+
+### 산출물 (변경 layer)
+
+**TS bridge** (`web/src/bridge/WasmBridge.ts`):
+- `nurbsBoolean()` wrapper 제거 (ADR-027 Phase G3 legacy probe)
+- `booleanDispatchDcel()` wrapper 제거 (ADR-064 Step 6-β single)
+- `AxiaEngineExtended.nurbsBoolean?` interface entry 제거
+- `AxiaEngineExtended.booleanDispatchDcelJson?` interface entry 제거
+- `NurbsBooleanResult` type export 제거
+- `BooleanDispatchDcelResult` type export 제거
+- 보존: `BooleanDispatchPath` / `BooleanDispatchFallbackKind` /
+  `BooleanDispatchFallbackReason` / `BooleanDispatchDcel` /
+  `BooleanDispatchDcelErrorReason` (multi 가 재사용)
+
+**WASM exports** (`crates/axia-wasm/src/lib.rs`):
+- `nurbsBoolean` (`pub fn nurbs_boolean`) 제거 (~88 lines)
+- `booleanDispatchDcelJson` (`pub fn boolean_dispatch_dcel_json`)
+  제거 (~65 lines)
+
+**WASM helpers** (`crates/axia-wasm/src/step6_json.rs`):
+- `boolean_dispatch_dcel_result_json` 제거 (~75 lines)
+- `BooleanDispatchDcelResult` import 제거
+
+**Rust impl preserved**:
+- `Mesh::boolean_dispatch_dcel` (single-face Path Z)
+  — multi internal caller (Y-1 1×1 degenerate + cartesian per-pair)
+- `Mesh::nurbs_boolean_to_dcel` (Step 4 op-specific removal)
+- 모든 internal types (BooleanDispatchDcelResult struct, etc.)
+
+**Tests removed**:
+- `WasmBridge.test.ts`: ADR-064 Step 6-β describe (5 tests) +
+  ADR-064 Step 6-δ describe (4 tests) — total -9
+- `step6_additive_only.rs`: 4 single-DCEL JSON tests (-4)
+- `web/e2e/dcel-single.spec.ts`: 전체 파일 삭제 (3 tests)
+- `web/e2e/undo-roundtrip.spec.ts`: single-face describe 제거 (-1)
+- `web/e2e/helpers/boolean-fixtures.ts`: `invokeBooleanDispatchDcel`
+  helper 제거
+
+**export_baseline.txt**:
+- `js_name = "booleanDispatchDcelJson"` 제거
+- `js_name = "nurbsBoolean"` 제거
+
+### 회귀 변화 (Step 2 commit 시점)
+
+| Suite | Before Step 2 | After Step 2 | Δ |
+|-------|---------------|--------------|---|
+| axia-geo lib | 964 | **964** | 0 (Rust impl 보존) |
+| axia-wasm tests | 16 | **12** | -4 (single JSON tests) |
+| web TS vitest | 1428 | **1419** | -9 (bridge tests) |
+| web TS Playwright E2E | 13 | **9** | -4 (single E4-2 + single undo) |
+| **합계** | 2421 | **2404** | **-17** |
+
+**모든 layer green**. 0 regression in functional behavior — multi
+(Y-3) tests cover identical canonical surface via Y-1 1×1 degenerate.
+
+### Verification (executed in this commit's dev environment)
+
+```
+cargo test -p axia-geo --lib       → 964 passed
+cargo test -p axia-wasm --tests    → 12 passed
+npm run wasm:build                 → success (artifacts updated)
+npm run build (dist)               → success
+npx tsc --noEmit                   → clean
+npx vitest run                     → 1419 passed (1 skipped pre-existing)
+npx playwright test                → 9 passed (real Chromium browser
+                                     verification — drop-in alongside
+                                     U-4 group routing tests still green)
+```
+
+### ADR-064/066/075 §E lock-ins 영향
+
+- ADR-064 §E.5 (NURBS probe deprecation) — 본 commit 으로 닫음
+- ADR-066 §E.5 (single-face DCEL fast-path cleanup) — 본 commit 으로 닫음
+- ADR-075 §E.6 (browser E2E real-runtime) — Playwright 9 unchanged
+- ADR-064/066 R1 §D additive-only — §C-amendment-1 으로 cleanup 예외 허용
+
+---
+
+## 5. References (Step 2)
+
+- ADR-076 Step 1 / Step 1.1 commits (`06e73a8` / `580a64a`)
+- ADR-064 §E.5 / ADR-066 §E.5 (closure target)
+- ADR-066 Y-1 lock-in #4 (1×1 degenerate → boolean_dispatch_dcel
+  internal preservation)
+- `Mesh::boolean_dispatch_dcel` (Rust impl, preserved internal API)
 
 ---
 
@@ -156,4 +254,8 @@ case 을 superset 으로 흡수 (Y-1 1×1 degenerate → Path Z 위임).
 ---
 
 *Author*: AXiA team (E.5 Cleanup 트랙 사용자 결정 2026-05-04)
-*Status*: Step 1 implementation 진행 중
+*Status*: **Step 1 + Step 1.1 + Step 2 완료 2026-05-05** —
+ADR-064 §E.5 + ADR-066 §E.5 surface 전체 sunset. Rust impl
+(`Mesh::boolean_dispatch_dcel` + `nurbs_boolean_to_dcel`) 보존 —
+multi 가 1×1 degenerate 로 위임. §C-amendment-1 (cleanup deletion
+예외) 명시.

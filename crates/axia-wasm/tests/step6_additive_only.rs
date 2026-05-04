@@ -292,111 +292,11 @@ fn fillet_edge_dispatch_json_includes_path_and_skip_reason() {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// ADR-064 Step 6-α (Path Z) — booleanDispatchDcelJson regression tests
-// (R10 §F lock-in: silent fallback prohibited; D-K=(a) no auto fallback)
+// ADR-076 Step 2 — Removed: Step 6-α single-face DCEL JSON regression
+// tests (4 tests). Single-face WASM export, helper, and TS wrapper
+// were removed; canonical surface is multi (Y-2 tests below).
 // ────────────────────────────────────────────────────────────────────
 
-/// Step 6-α #1 — JSON helper emits the documented schema fragments
-/// (`schemaVersion`, `pathUsed`, `dcel`, face-id arrays, robustness).
-#[test]
-fn boolean_dispatch_dcel_json_includes_path_and_dcel_fields() {
-    let s = json_helpers_src();
-    // Top-level required keys.
-    for key in [
-        r#""schemaVersion":1"#,
-        r#""ok":true"#,
-        r#""pathUsed":""#,
-        r#""fallbackReason":"#,
-        r#""dcel":"#,
-        r#""nurbsAttempted":"#,
-        r#""nurbsClean":"#,
-        r#""intersectionChainCount":"#,
-    ] {
-        assert!(s.contains(key),
-            "boolean_dispatch_dcel_result_json missing key fragment: {}", key);
-    }
-    // dcel sub-object fields (D-U=(c) face IDs).
-    for key in [
-        r#""newFacesA":"#,
-        r#""newFacesB":"#,
-        r#""removedFaces":"#,
-        r#""preservedFaces":"#,
-        r#""disjoint":"#,
-        r#""robustnessClean":"#,
-    ] {
-        assert!(s.contains(key),
-            "boolean_dispatch_dcel_result_json missing dcel field: {}", key);
-    }
-}
-
-/// Step 6-α #2 — Helper handles disjoint case (dcel non-null with
-/// `disjoint:true`) and ineligible case (dcel null).
-#[test]
-fn boolean_dispatch_dcel_json_disjoint_and_ineligible_branches() {
-    let s = json_helpers_src();
-    // dcel=null branch (ineligible / Mesh path) is emitted explicitly.
-    assert!(s.contains(r#""null".to_string()"#) || s.contains(r#"\"null\""#)
-            || s.contains("None => \"null\""),
-        "helper must emit dcel=null branch for Mesh-path / ineligible");
-    // Both disjoint=true and disjoint=false formats appear via {} formatting
-    // — verified by presence of {d.disjoint} in the format!() macro args.
-    assert!(s.contains("d.disjoint,"),
-        "helper must serialize d.disjoint field in dcel sub-object");
-    assert!(s.contains("d.robustness.is_clean()"),
-        "helper must serialize robustness.is_clean() in dcel sub-object");
-}
-
-/// Step 6-α #3 — Endpoint wired in lib.rs with op-string parameter
-/// (D-T=(c) single tol parameter) and fallback_reason on Err.
-#[test]
-fn boolean_dispatch_dcel_json_endpoint_wired_with_op_string() {
-    let l = lib_src();
-    // Endpoint registered (R1 baseline test will also catch missing).
-    assert!(l.contains(r#"js_name = "booleanDispatchDcelJson""#),
-        "booleanDispatchDcelJson endpoint must be registered");
-    // D-S naming.
-    assert!(l.contains("pub fn boolean_dispatch_dcel_json"),
-        "Rust method name must be boolean_dispatch_dcel_json");
-    // D-T=(c) — single f64 geometric tol parameter.
-    assert!(l.contains("tol_geometric: f64"),
-        "Endpoint must accept tol_geometric: f64 parameter (D-T=(c))");
-    // Op string parsing handles all 3 ops + invalid.
-    for op_str in ["\"union\"", "\"subtract\"", "\"intersect\""] {
-        assert!(l.contains(op_str),
-            "Endpoint must handle op string: {}", op_str);
-    }
-    // Invalid op returns error JSON, not panic (silent fallback prohibited).
-    assert!(l.contains("invalid op string"),
-        "Invalid op must return explicit error JSON, not panic");
-    // Delegation to JSON helper (additive-only consistency).
-    assert!(l.contains("step6_json::boolean_dispatch_dcel_result_json"),
-        "booleanDispatchDcelJson must delegate to step6_json helper");
-}
-
-/// Step 6-α #4 — Transaction safety: the endpoint wraps the dcel
-/// dispatch in begin/before-snapshot/(commit|cancel) so undo can
-/// restore on Err per D-H safe-only.
-#[test]
-fn boolean_dispatch_dcel_json_uses_transactions_for_safe_rollback() {
-    let l = lib_src();
-    // Locate the boolean_dispatch_dcel_json method body.
-    let needle = "pub fn boolean_dispatch_dcel_json";
-    let idx = l.find(needle).expect("method must exist");
-    // Take a window of ~3000 bytes after the method start to inspect
-    // the body.
-    let window_end = (idx + 3000).min(l.len());
-    let body = &l[idx..window_end];
-    assert!(body.contains("self.scene.transactions.begin()"),
-        "method must call transactions.begin() before dispatch");
-    assert!(body.contains("set_before_snapshot"),
-        "method must capture before snapshot for undo");
-    assert!(body.contains("transactions.cancel()"),
-        "method must cancel transaction on Err (D-H safe-only)");
-    assert!(body.contains("transactions.commit()"),
-        "method must commit transaction on Ok");
-    assert!(body.contains("mark_topology_changed"),
-        "method must mark topology changed on commit");
-}
 
 // ────────────────────────────────────────────────────────────────────
 // ADR-066 Y-2 (Path Y) — booleanDispatchDcelMultiJson regression tests

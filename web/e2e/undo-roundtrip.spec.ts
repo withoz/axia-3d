@@ -33,10 +33,8 @@
  */
 import { test, expect } from '@playwright/test';
 import {
-  setupTwoPlaneFaces,
   setupNPlaneFaces,
   waitForBridgeReady,
-  invokeBooleanDispatchDcel,
   invokeBooleanDispatchDcelMulti,
   captureMeshSnapshot,
   invokeUndo,
@@ -48,43 +46,13 @@ test.describe('ADR-075 E4-4 — Boolean → Undo round-trip', () => {
     await waitForBridgeReady(page);
   });
 
-  test('single-face dispatch → undo restores mesh state (Path Z)', async ({ page }) => {
-    const { faceA, faceB } = await setupTwoPlaneFaces(page, {
-      withSurfaces: true,
-      zA: 0.0,
-      zB: 5.0,
-    });
-
-    const before = await captureMeshSnapshot(page);
-    expect(before.canUndo).toBe(true);  // setup itself made changes
-
-    const result = await invokeBooleanDispatchDcel(page, {
-      faceA, faceB, op: 'subtract',
-    }) as { kind: string; pathUsed?: string;
-            dcel?: { disjoint: boolean; removedFaces: number[] } };
-
-    expect(result.kind).toBe('ok');
-    expect(result.pathUsed).toBe('Nurbs');
-    expect(result.dcel!.disjoint).toBe(true);
-    expect(result.dcel!.removedFaces).toEqual([]);  // D-F=(c) preserve
-
-    const after_op = await captureMeshSnapshot(page);
-    // Disjoint Subtract — no mesh mutation expected (D-F=(c)).
-    // Both face/vert counts unchanged from before-dispatch.
-    expect(after_op.faceCount).toBe(before.faceCount);
-    expect(after_op.vertCount).toBe(before.vertCount);
-    // canUndo still true (the dispatch transaction was committed).
-    expect(after_op.canUndo).toBe(true);
-
-    const undoOk = await invokeUndo(page);
-    expect(undoOk).toBe(true);  // Y-2 transaction.commit → undo applies
-
-    const after_undo = await captureMeshSnapshot(page);
-    // Undo must restore to before state (or equivalent — disjoint
-    // commit was a no-op transaction, so before === after_op === after_undo).
-    expect(after_undo.faceCount).toBe(before.faceCount);
-    expect(after_undo.vertCount).toBe(before.vertCount);
-  });
+  // ADR-076 Step 2 — Removed: single-face dispatch undo round-trip
+  // (was: 'single-face dispatch → undo restores mesh state (Path Z)').
+  // Both bridge.booleanDispatchDcel and the WASM
+  // booleanDispatchDcelJson export were removed in ADR-076 Step 2.
+  // The multi-face round-trip test below covers the same case via
+  // Y-1 1×1 degenerate (Rust Mesh::boolean_dispatch_dcel preserved
+  // and exercised internally by multi).
 
   test('multi-face dispatch → undo restores mesh state (Path Y)', async ({ page }) => {
     const { faces } = await setupNPlaneFaces(page, {
