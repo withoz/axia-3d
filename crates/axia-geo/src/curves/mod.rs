@@ -38,6 +38,7 @@ pub mod transform;
 pub mod curvature;
 pub mod knot;
 pub mod fitting;
+pub mod synthesize;
 
 pub use transform::{TransformKind, classify_transform, uniform_scale_factor, TRANSFORM_EPSILON};
 
