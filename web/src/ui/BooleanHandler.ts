@@ -6,61 +6,12 @@
  */
 
 import {
-  WasmBridge, NurbsBooleanResult,
-  BooleanDispatchDcelResult,
+  WasmBridge,
   BooleanDispatchDcelMultiResult,
 } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { Toast } from './Toast';
 import { debugLog } from '../utils/debug';
-
-/** ADR-027 Phase G3 — `faceSurfaceKind` codes that pick the NURBS path. */
-const SURFACE_KIND_BSPLINE = 7;
-
-/** Format a successful NURBS Boolean result for the Toast. */
-function formatNurbsBooleanOk(
-  r: Extract<NurbsBooleanResult, { kind: 'ok' }>,
-): string {
-  const opNameKo =
-    r.op === 'union' ? '합집합' : r.op === 'subtract' ? '차집합' : '교집합';
-  if (r.is_disjoint) {
-    return `NURBS ${opNameKo}: 두 곡면이 교차하지 않습니다 (변경 없음).`;
-  }
-  const lines = [
-    `NURBS ${opNameKo} (Phase G3 MVP) — 분석 완료`,
-    `  • 교차 체인: ${r.intersection_chains}`,
-    `  • Trim 루프 A: ${r.trim_a_count}, B: ${r.trim_b_count}`,
-  ];
-  if (r.warning_open_chains_skipped) {
-    lines.push('  ⚠ 열린 체인 일부 생략 (closed chain만 MVP 지원)');
-  }
-  if (r.tangent_contact) {
-    lines.push('  ⚠ 접선 접촉 감지');
-  }
-  lines.push(
-    '  ℹ 메시 적용은 후속 PR — BSplineSurface trim_loops 저장소 추가 후 활성화',
-  );
-  return lines.join('\n');
-}
-
-function formatNurbsBooleanError(
-  r: Extract<NurbsBooleanResult, { kind: 'error' }>,
-): string {
-  switch (r.reason) {
-    case 'unsupported_surface':
-      return (
-        `NURBS Boolean — 선택한 면이 BSplineSurface가 아닙니다.\n` +
-        `(Phase G3 MVP는 NURBS surface 부착 face만 지원)\n\n` +
-        `Detail: ${r.detail}`
-      );
-    case 'bad_op':
-      return `NURBS Boolean — 잘못된 연산 이름. ${r.detail}`;
-    case 'engine':
-      return `NURBS Boolean 엔진 오류:\n${r.detail}`;
-    case 'parse':
-      return `NURBS Boolean — 엔진 응답 파싱 실패. WASM 빌드를 재확인하세요.`;
-  }
-}
 
 /** Rust 엔진 에러 메시지를 한국어 사용자 안내로 변환.
  *  - "hole" 포함 → Phase G 구멍 있는 면 거부 케이스
@@ -90,93 +41,6 @@ const OP_NAME_KO: Record<'union' | 'subtract' | 'intersect', string> = {
   subtract: '차집합',
   intersect: '교집합',
 };
-
-/**
- * ADR-064 Step 6-γ — Handle the DCEL dispatch result.
- *
- * @returns `true` if the result was fully handled (success / disjoint /
- *   error / D-H safe-only no-closed-loops). `false` if the caller
- *   should fall through to legacy paths (null bridge / pathUsed='Mesh').
- */
-function handleDcelResult(
-  deps: BooleanHandlerDeps,
-  result: BooleanDispatchDcelResult | null,
-  op: 'union' | 'subtract' | 'intersect',
-): boolean {
-  // bridge missing / WASM not exposed → fall through (D-AG graceful).
-  if (!result) return false;
-
-  // §F lock-in — engine error envelope shown explicitly.
-  if (result.kind === 'error') {
-    Toast.error(
-      `NURBS ${OP_NAME_KO[op]} — 엔진 오류 (${result.reason}):\n${result.detail}`,
-      8000,
-    );
-    debugLog(`[DCEL Bool] ${op} error: ${result.reason} — ${result.detail}`);
-    return true;
-  }
-
-  // pathUsed === 'Mesh' → ineligible, fall through to legacy mesh path.
-  // (D-AG=(a) — caller fallback semantics realized as fall-through here.)
-  if (result.pathUsed !== 'Nurbs') {
-    debugLog(
-      `[DCEL Bool] ${op} ineligible (pathUsed=${result.pathUsed}, ` +
-        `reason=${result.fallbackReason?.label ?? 'unknown'}); falling through.`,
-    );
-    return false;
-  }
-
-  // pathUsed === 'Nurbs' from here on — dcel must be populated.
-  if (!result.dcel) {
-    Toast.error(
-      `NURBS ${OP_NAME_KO[op]} — 엔진 응답 불일치 (Nurbs path with null dcel)`,
-      6000,
-    );
-    return true;
-  }
-
-  // Disjoint case — D-F=(c) — both inputs preserved unchanged.
-  if (result.dcel.disjoint) {
-    Toast.info(
-      `NURBS ${OP_NAME_KO[op]}: 두 곡면이 교차하지 않습니다 (변경 없음).`,
-      4000,
-    );
-    debugLog(`[DCEL Bool] ${op} disjoint — no mesh change`);
-    return true;
-  }
-
-  // D-H safe-only — SSI ran but produced no closed trim loops.
-  // Inputs preserved; no new faces; user gets a hint about the
-  // legacy mesh path which may handle the open-chain case.
-  const newCount = result.dcel.newFacesA.length + result.dcel.newFacesB.length;
-  if (newCount === 0) {
-    Toast.warning(
-      `NURBS ${OP_NAME_KO[op]} — 교차선만 검출, 면 분할 미생성.\n` +
-        '닫힌 trim 루프가 없는 경우 (예: 평면이 교차선으로만 만남).\n' +
-        '일반 Boolean 경로로 시도하려면 선택을 다시 확인하세요.',
-      7000,
-    );
-    debugLog(`[DCEL Bool] ${op} no-closed-loops (D-H safe-only)`);
-    return true;
-  }
-
-  // Success — D-AK=(a) syncMesh + Toast.info with face deltas.
-  deps.toolManager.syncMesh();
-  const removedCount = result.dcel.removedFaces.length;
-  Toast.info(
-    `NURBS ${OP_NAME_KO[op]} 완료 — 새 면 ${newCount}개, ` +
-      `제거 면 ${removedCount}개 (DCEL).`,
-    3000,
-  );
-  debugLog(
-    `[DCEL Bool] ${op} ok: newFacesA=${result.dcel.newFacesA.length}, ` +
-      `newFacesB=${result.dcel.newFacesB.length}, ` +
-      `removed=${removedCount}, ` +
-      `chainCount=${result.intersectionChainCount}, ` +
-      `clean=${result.dcel.robustnessClean}`,
-  );
-  return true;
-}
 
 /**
  * ADR-066 Y-4 — Handle the multi-face DCEL dispatch result.
@@ -313,71 +177,13 @@ export function startBooleanOp(
     const handled = handleMultiDcelResult(deps, multiResult, op);
     if (handled) return;
     // fall-through: null bridge OR pathUsed === 'Mesh'.
-    // Legacy single fast-path / NURBS probe / Sheet / Mesh paths take over.
-  }
-
-  // ADR-064 Step 6-γ (Path Z) — DCEL Boolean dispatch fast-path.
-  //
-  // For exactly 2 selected faces, attempt the DCEL-producing dispatcher
-  // (`booleanDispatchDcel`) which routes eligible analytic-surface pairs
-  // through `nurbs_boolean_to_dcel` (Step 5). Per D-AG=(a), ineligible
-  // / unsupported / parse-error / null-bridge cases fall through to the
-  // legacy NURBS probe / Sheet / Mesh paths below — graceful degradation.
-  //
-  // Per D-AF=(b), the legacy NURBS probe (kind===7 fast-path) is
-  // preserved for back-compat. DCEL handles the same kinds as a superset
-  // (Plane / BezierPatch / BSplineSurface), so the legacy branch is
-  // reachable only when DCEL declines (`pathUsed: 'Mesh'`) or returns
-  // null (engine missing) — those cases naturally fall through.
-  if (selection.length === 2 && typeof bridge.booleanDispatchDcel === 'function') {
-    const dcelResult = bridge.booleanDispatchDcel(selection[0], selection[1], op);
-    const handled = handleDcelResult(deps, dcelResult, op);
-    if (handled) return;
-    // fall-through: dcelResult was null OR pathUsed === 'Mesh' OR error
-    //   handled-as-fallback. legacy paths take over below.
-  }
-
-  // ADR-027 Phase G3 — NURBS Boolean fast-path.
-  // If exactly two faces selected AND both carry BSplineSurface, dispatch
-  // to the analytic NURBS path (parameter-space CSG via SSI + trim loops).
-  if (selection.length === 2 && bridge.faceSurfaceKind) {
-    const kindA = bridge.faceSurfaceKind(selection[0]);
-    const kindB = bridge.faceSurfaceKind(selection[1]);
-    if (kindA === SURFACE_KIND_BSPLINE && kindB === SURFACE_KIND_BSPLINE) {
-      debugLog(`[NURBS Bool] ${op}: face A=${selection[0]} B=${selection[1]}`);
-      const result =
-        typeof bridge.nurbsBoolean === 'function'
-          ? bridge.nurbsBoolean(selection[0], selection[1], op)
-          : null;
-      if (!result) {
-        Toast.error(
-          'NURBS Boolean 실패: WASM 엔진이 준비되지 않았습니다',
-          4000,
-        );
-        return;
-      }
-      if (result.kind === 'error') {
-        Toast.error(formatNurbsBooleanError(result), 8000);
-        debugLog(`[NURBS Bool] ${op} error: ${result.reason} — ${result.detail}`);
-        return;
-      }
-      Toast.info(formatNurbsBooleanOk(result), 6000);
-      debugLog(
-        `[NURBS Bool] ${op} ok: chains=${result.intersection_chains}, ` +
-          `trim_a=${result.trim_a_count}, trim_b=${result.trim_b_count}`,
-      );
-      // No syncMesh() — MVP does not mutate mesh state yet.
-      return;
-    }
-    // Mixed: one BSpline + one regular → not supported in this pass.
-    if (kindA === SURFACE_KIND_BSPLINE || kindB === SURFACE_KIND_BSPLINE) {
-      Toast.warning(
-        `NURBS Boolean: 두 면이 모두 BSplineSurface여야 합니다 ` +
-          `(현재 kindA=${kindA}, kindB=${kindB}). 일반 Mesh boolean으로 진행합니다.`,
-        5000,
-      );
-      // fall through to regular path
-    }
+    // ADR-076 Step 1 — Legacy paths sunset:
+    // Previously this fall-through reached (a) single DCEL fast-path
+    // (ADR-064 Step 6-γ, superseded by Y-1 1×1 degenerate) and
+    // (b) legacy NURBS probe (ADR-027 Phase G3 kind===7, superseded by
+    // Y-1 surface_to_bspline accepting BSpline). Both became
+    // unreachable when ADR-066 Y-4 multi DCEL fast-path entered the
+    // chain. Removed per ADR-076 §A.
   }
 
   // ADR-007 Rev 2 — Sheet 면은 Wall과 다른 경로 (Sheet 2D Boolean).
