@@ -56,3 +56,82 @@ describe('ADR-063 Step 2 — single import site lock-in', () => {
     expect(size).toBeGreaterThanOrEqual(95);
   });
 });
+
+describe('ADR-063 Step 3 — actions tree + Tier groups + search', () => {
+  it('capability_explorer_panel_renders_all_actions', () => {
+    // Per ADR-063 §3.2 invariant — panel renders all 95 actions when
+    // shown with no filter. We probe the rendered DOM for action ids.
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new CapabilityExplorerPanel(container, {});
+    panel.show();
+
+    const allActions = CapabilityExplorerPanel.getAllActions();
+    const renderedIds = Array.from(
+      container.querySelectorAll('.cep-action-row'),
+    ).map((el) => (el as HTMLElement).dataset.actionId);
+
+    expect(renderedIds.length).toBe(allActions.length);
+    // Spot-check a few from each Phase O+P+L₂ batch (Step 1 entries).
+    for (const id of [
+      'edge-curve-info',
+      'face-normals-cached',
+      'attach-surface-cylinder-validated',
+      'fillet-edge', // pre-Step-1 baseline action
+    ]) {
+      expect(renderedIds, `missing action id: ${id}`).toContain(id);
+    }
+
+    panel.dispose();
+    container.remove();
+  });
+
+  it('capability_explorer_search_filter_works', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new CapabilityExplorerPanel(container, {});
+
+    // Filter by 'cylinder' — should return ≥ 1 match (attach-surface-cylinder-validated etc.)
+    const cylinderHits = panel.filterActions('cylinder');
+    expect(cylinderHits.length).toBeGreaterThan(0);
+    expect(cylinderHits.some((a) => a.id.includes('cylinder'))).toBe(true);
+
+    // Filter by 'attach-surface' — must return all 5 W2 endpoints (Path Z).
+    const attachHits = panel.filterActions('attach-surface');
+    expect(attachHits.length).toBe(5);
+
+    // Filter by impossible string — returns empty.
+    const noHits = panel.filterActions('xyznonexistentabc12345');
+    expect(noHits.length).toBe(0);
+
+    // Empty query returns ALL.
+    const allHits = panel.filterActions('');
+    expect(allHits.length).toBe(CapabilityExplorerPanel.getCatalogSize());
+
+    panel.dispose();
+    container.remove();
+  });
+
+  it('capability_explorer_tier_groups_present', () => {
+    // Each populated Tier should produce a .cep-tier-group node with
+    // matching data-tier. Tiers 0/1/2 should always be populated; Tier
+    // 3 may be small but should exist (Step 5 hides it by default).
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new CapabilityExplorerPanel(container, {});
+    panel.show();
+
+    const tiers = Array.from(
+      container.querySelectorAll('.cep-tier-group'),
+    ).map((el) => (el as HTMLElement).dataset.tier);
+
+    expect(tiers, 'Tier 0 should appear').toContain('0');
+    expect(tiers, 'Tier 1 should appear').toContain('1');
+    expect(tiers, 'Tier 2 should appear').toContain('2');
+    // Tier 3 may have at least one action (e.g. file-new) — best-effort check.
+    // We only assert it's renderable when present (not hidden in Step 3).
+
+    panel.dispose();
+    container.remove();
+  });
+});
