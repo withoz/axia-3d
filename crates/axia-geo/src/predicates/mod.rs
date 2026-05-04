@@ -31,6 +31,7 @@
 
 pub mod adapter;
 pub mod filter;
+pub mod hotspots;
 
 pub use adapter::{
     orient2d_robust, orient3d_robust,
