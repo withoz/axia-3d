@@ -55,6 +55,7 @@ pub mod curvature;
 pub mod knot;
 pub mod loft;
 pub mod sweep;
+pub mod fitting;
 
 pub use trim::{TrimCurve2D, TrimLoop};
 pub use ssi::SurfaceIntersection;
