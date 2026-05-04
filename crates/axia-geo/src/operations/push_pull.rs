@@ -271,6 +271,23 @@ impl Mesh {
             &result, dist, base_surface, base_normal,
         );
 
+        // ─── ADR-067 Step 1 — Auto-merge after push_pull commit ────
+        //
+        // §A drop-in alongside lock-in: existing push_pull behavior
+        // unchanged (above). This pass collapses adjacent coplanar
+        // faces in the result (top + sides) using the same merge
+        // routine boolean operations use, so users see clean topology
+        // without manual merge.
+        //
+        // §D #2 lock-in: only CreateFace mode (MoveOnly creates 0 new
+        // faces — auto-merge is a no-op there).
+        //
+        // §D #5 lock-in: PushPullResult.top_face / side_faces are
+        // updated to reflect merged ids so callers always see valid ids.
+        if mode == PushPullMode::CreateFace {
+            self.adr_067_step1_auto_merge_result(&mut result);
+        }
+
         // ADR-007 — 연산 후 invariants 재확인 (debug build only)
         self.debug_verify_invariants();
 
@@ -280,6 +297,56 @@ impl Mesh {
         debug.extend(result.split_debug.drain(..));
         result.split_debug = debug;
         Ok(result)
+    }
+
+    /// ADR-067 Step 1 — Auto-merge result faces after push_pull commit.
+    ///
+    /// Reuses `Mesh::merge_coplanar_result_faces` (boolean.rs, pub(crate)
+    /// per ADR-067 §D #4 lock-in). After the merge, walks the result
+    /// list to identify which faces still exist and updates
+    /// `PushPullResult.top_face` / `side_faces` accordingly.
+    ///
+    /// If a face was merged AWAY (its id is no longer active), it's
+    /// removed from `side_faces`. If `top_face` itself was merged, the
+    /// new top face id (the surviving merge target) replaces it.
+    fn adr_067_step1_auto_merge_result(&mut self, result: &mut PushPullResult) {
+        // Collect input ids in a stable order — top first, then sides.
+        let mut input_ids: Vec<FaceId> = Vec::with_capacity(1 + result.side_faces.len());
+        input_ids.push(result.top_face);
+        input_ids.extend(result.side_faces.iter().copied());
+
+        // Run the shared merge routine. Returns the surviving face ids
+        // post-merge (may be a strict subset of inputs).
+        let surviving = self.merge_coplanar_result_faces(&input_ids);
+
+        // Map back: the first surviving face that contains/replaces
+        // top_face is the new top. The rest become side_faces.
+        // Since merge_coplanar_result_faces dedups + filters inactive,
+        // we can simply scan the survivors.
+        if surviving.is_empty() {
+            // Pathological — nothing survived. Leave result unchanged
+            // (debug invariants will catch this in tests).
+            return;
+        }
+
+        // Heuristic: the top face's id is preserved if active; else
+        // pick the first surviving id as the new top.
+        let new_top = if self.faces.get(result.top_face).map(|f| f.is_active()).unwrap_or(false) {
+            result.top_face
+        } else {
+            surviving[0]
+        };
+        result.top_face = new_top;
+
+        // Side faces = surviving minus new_top, in original order
+        // (preserved by merge_coplanar_result_faces' iteration order).
+        let mut new_sides = Vec::with_capacity(surviving.len().saturating_sub(1));
+        for fid in surviving {
+            if fid != new_top {
+                new_sides.push(fid);
+            }
+        }
+        result.side_faces = new_sides;
     }
 
     /// ADR-060 Phase O Step 3 — Attach BRep surfaces to push_pull result.
@@ -1475,5 +1542,106 @@ mod tests {
                 other => panic!("side wall {:?} expected Plane, got {:?}", fid, other),
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-067 Step 1 — Auto-merge after push_pull commit
+    //
+    // 4 regression invariants (none #[ignore], §X.5 #6 strict):
+    //   1. auto_merge_preserves_non_coplanar_geometry
+    //   2. auto_merge_disabled_for_move_only_mode
+    //   3. auto_merge_returns_updated_face_ids_in_result
+    //   4. auto_merge_drop_in_alongside_no_regression_existing_box
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-067 Step 1 invariant — Box push_pull (no coplanar neighbor)
+    /// produces correct geometry (top + 4 sides). Auto-merge of an
+    /// isolated box should be a NO-OP (no adjacent coplanar faces to
+    /// collapse) — face count and IDs remain.
+    #[test]
+    fn auto_merge_preserves_non_coplanar_geometry() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // Top + 4 sides (no merge candidates — base is isolated).
+        assert_eq!(r.side_faces.len(), 4,
+            "isolated box push_pull should produce 4 sides (no merge)");
+        assert!(m.faces[r.top_face].is_active(),
+            "top face must remain active");
+        for &sid in &r.side_faces {
+            assert!(m.faces[sid].is_active(),
+                "side face {:?} must remain active", sid);
+        }
+    }
+
+    /// ADR-067 §D #2 lock-in — MoveOnly mode does NOT trigger auto-merge.
+    ///
+    /// After creating a box, push_pull on the top face uses MoveOnly mode
+    /// (no new face creation). Auto-merge gate must short-circuit and
+    /// preserve the existing 6-face box.
+    #[test]
+    fn auto_merge_disabled_for_move_only_mode() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        let r1 = m.push_pull(base, 3.0, mat).unwrap();
+
+        let face_count_before = m.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(face_count_before, 6, "box should have 6 faces");
+
+        // Push top up — MoveOnly path.
+        let r2 = m.push_pull(r1.top_face, 2.0, mat).unwrap();
+
+        let face_count_after = m.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(face_count_after, 6,
+            "MoveOnly mode must preserve face count (auto-merge skipped)");
+        // Top + 0 new sides (MoveOnly doesn't create sides).
+        assert!(r2.side_faces.is_empty(),
+            "MoveOnly mode must not produce new side faces");
+        assert!(m.faces[r2.top_face].is_active());
+    }
+
+    /// ADR-067 §D #5 lock-in — `PushPullResult.top_face` and `side_faces`
+    /// always contain ACTIVE face IDs after auto-merge. No stale IDs.
+    #[test]
+    fn auto_merge_returns_updated_face_ids_in_result() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 2.5, mat).unwrap();
+
+        // Every id in the result must be an active face.
+        assert!(m.faces.get(r.top_face).map(|f| f.is_active()).unwrap_or(false),
+            "PushPullResult.top_face {:?} must be active post auto-merge", r.top_face);
+        for &sid in &r.side_faces {
+            assert!(m.faces.get(sid).map(|f| f.is_active()).unwrap_or(false),
+                "PushPullResult.side_faces[{:?}] must be active post auto-merge", sid);
+        }
+    }
+
+    /// ADR-067 §D #4 — drop-in alongside: existing box push_pull
+    /// behavior unchanged. This test mirrors the pre-Step-1 expectation
+    /// from `push_flat_creates_box` and ensures auto-merge integration
+    /// did NOT alter the canonical box construction.
+    #[test]
+    fn auto_merge_drop_in_alongside_no_regression_existing_box() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(f, 3.0, mat).unwrap();
+
+        // Canonical box: 6 faces (top + 4 sides + base preserved).
+        let active_face_count = m.faces.iter().filter(|(_, fc)| fc.is_active()).count();
+        assert_eq!(active_face_count, 6,
+            "canonical push_pull box must have 6 active faces (auto-merge no-op)");
+        // PushPullResult invariants intact.
+        assert_ne!(r.top_face, f, "top face is a new id, distinct from base");
+        assert_eq!(r.side_faces.len(), 4);
+        assert!(!r.base_removed, "base face is preserved (closed solid)");
     }
 }

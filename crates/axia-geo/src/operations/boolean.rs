@@ -636,8 +636,11 @@ impl Mesh {
     }
 
     /// ── Stage 6: 공면 face 병합 ───────────────────
-    /// Boolean 결과에서 인접한 공면 face들을 병합하여 unnecessary edge 제거
-    fn merge_coplanar_result_faces(&mut self, result_faces: &[FaceId]) -> Vec<FaceId> {
+    /// Boolean 결과에서 인접한 공면 face들을 병합하여 unnecessary edge 제거.
+    ///
+    /// **ADR-067 Step 1**: pub(crate) 승격 — push_pull 의 auto-merge
+    /// 단계에서 동일 코드 재사용 (드롭-in alongside, 재구현 금지).
+    pub(crate) fn merge_coplanar_result_faces(&mut self, result_faces: &[FaceId]) -> Vec<FaceId> {
         // mesh의 기존 merge_faces_by_edge 활용
         // 결과 face들에 대해 merge pass 실행
         let mut current_faces = result_faces.to_vec();
