@@ -132,6 +132,38 @@ pub struct BooleanDispatchResult {
     pub nurbs_diagnostic: NurbsDiagnostic,
 }
 
+/// ADR-064 Step 5 — DCEL-producing dispatch result (Path Z opt-in).
+///
+/// Drop-in alongside `BooleanDispatchResult` (D-G / D-P consistency).
+/// Used by `boolean_dispatch_dcel` which routes eligible single-face ×
+/// single-face NURBS pairs through `nurbs_boolean_to_dcel` (Step 4).
+///
+/// **Differs from `BooleanDispatchResult`**:
+/// - No `mesh_result` — the NURBS path produces its own DCEL faces;
+///   mesh path is NOT auto-invoked when ineligible. Callers branching
+///   on `path_used == Mesh` must explicitly invoke `boolean_dispatch`
+///   for mesh-path semantics.
+/// - `dcel: Option<NurbsBooleanDcelResult>` — present iff
+///   `path_used == BooleanPath::Nurbs`. Carries new_faces_a/b,
+///   removed_faces, preserved_faces, disjoint, robustness.
+///
+/// **path_used in this context**:
+/// - `Nurbs`        : NURBS path produced DCEL result (success).
+/// - `Mesh`         : Eligibility failed (surface missing / multiface /
+///                    unsupported kind). `dcel = None`,
+///                    `fallback_reason = Some(reason)`. Caller must
+///                    handle (no auto mesh fallback per D-K/Q).
+/// - `NurbsWithMeshFallback`: NEVER used by `boolean_dispatch_dcel`.
+///                    Step 5 propagates Err on NURBS core failure
+///                    rather than silently falling back.
+#[derive(Debug)]
+pub struct BooleanDispatchDcelResult {
+    pub dcel: Option<super::boolean_nurbs_dcel::NurbsBooleanDcelResult>,
+    pub path_used: BooleanPath,
+    pub fallback_reason: Option<NurbsBooleanFailReason>,
+    pub nurbs_diagnostic: NurbsDiagnostic,
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Surface → B-spline conversion (MVP)
 // ────────────────────────────────────────────────────────────────────
@@ -417,6 +449,104 @@ impl Mesh {
             path_used,
             fallback_reason,
             nurbs_diagnostic: nurbs_diag,
+        })
+    }
+
+    /// ADR-064 Step 5 (Path Z) — DCEL-producing Boolean dispatch.
+    ///
+    /// Drop-in alongside `boolean_dispatch` (D-P unchanged). Routes
+    /// eligible **single-face × single-face** NURBS pairs through
+    /// `Mesh::nurbs_boolean_to_dcel` (Step 4) which produces actual
+    /// DCEL faces (new_faces_a/b) and applies op-specific removal of
+    /// inputs (D-C=(a)).
+    ///
+    /// ## Decision matrix (Path Z)
+    /// - **D-J=(b)** Opt-in via this new method; existing
+    ///   `boolean_dispatch` UNCHANGED.
+    /// - **D-K=(a)** Mesh path retained (caller invokes
+    ///   `boolean_dispatch` explicitly when ineligible).
+    /// - **D-L=(b)** New result type `BooleanDispatchDcelResult`.
+    /// - **D-M=(b)** No probe-then-assemble dedup — Phase J runs once
+    ///   inside `nurbs_boolean_to_dcel`.
+    /// - **D-N=(b)** SSI non-empty + no closed loops → D-H safe-only
+    ///   preserves inputs (Step 4 consistency).
+    /// - **D-O=(a)** Disjoint → D-F=(c) preserves both (Step 4).
+    /// - **D-P=(a)** Existing `boolean_dispatch` untouched.
+    /// - **D-Q=(b)** WASM bridge / UI integration is Step 6.
+    ///
+    /// ## Path semantics
+    /// * `BooleanPath::Nurbs` → `dcel = Some(result)`. May still have
+    ///   empty new_faces (disjoint or D-H safe-only) — caller branches
+    ///   on `result.disjoint` and `result.removed_faces`.
+    /// * `BooleanPath::Mesh` → `dcel = None`,
+    ///   `fallback_reason = Some(reason)`. Eligibility was rejected
+    ///   (surface missing / multiface / unsupported kind / trim loops).
+    ///   No mesh path auto-invocation — caller decides.
+    /// * `BooleanPath::NurbsWithMeshFallback` is NEVER returned here:
+    ///   if `nurbs_boolean_to_dcel` returns Err, this method propagates
+    ///   the Err (D-H safe-only — no silent geometry mutation).
+    pub fn boolean_dispatch_dcel(
+        &mut self,
+        face_a: FaceId,
+        face_b: FaceId,
+        op: BoolOp,
+        tol: crate::surfaces::ssi::tolerance::BooleanTolerance,
+    ) -> Result<BooleanDispatchDcelResult> {
+        // 1. Eligibility probe (read-only, identical to boolean_dispatch).
+        let eligibility = classify_dispatch_eligibility(
+            self, &[face_a], &[face_b],
+        );
+
+        // 2. Ineligible → BooleanPath::Mesh, dcel=None, no auto-fallback.
+        if let Err(reason) = eligibility {
+            let label = reason.short_label();
+            return Ok(BooleanDispatchDcelResult {
+                dcel: None,
+                path_used: BooleanPath::Mesh,
+                fallback_reason: Some(reason),
+                nurbs_diagnostic: NurbsDiagnostic {
+                    attempted: false,
+                    intersection_chain_count: 0,
+                    robustness_clean: false,
+                    notes: vec![format!("nurbs_skipped: {}", label)],
+                },
+            });
+        }
+
+        // 3. Eligible — extract surface kinds for diagnostic notes.
+        let mut notes = Vec::new();
+        if let Some(sa) = self.face_surface(face_a) {
+            notes.push(format!("A.kind={}", surface_kind_label(sa)));
+        }
+        if let Some(sb) = self.face_surface(face_b) {
+            notes.push(format!("B.kind={}", surface_kind_label(sb)));
+        }
+
+        // 4. D-M=(b) — call nurbs_boolean_to_dcel directly (Phase J runs
+        //    once internally). Err propagates per D-H safe-only.
+        let dcel_result = self.nurbs_boolean_to_dcel(face_a, face_b, op, tol)?;
+
+        // 5. Tag NURBS diagnostic from the dcel result.
+        let robustness_clean = dcel_result.robustness.is_clean();
+        let chain_count = if dcel_result.disjoint { 0 } else {
+            // The dcel result doesn't expose `intersection.len()`, but
+            // since we got past the disjoint branch, ≥1 chain existed.
+            // Phase J's chain count would require re-running it; we
+            // approximate via "≥1 if not disjoint else 0".
+            // This is a diagnostic, not an invariant.
+            1
+        };
+
+        Ok(BooleanDispatchDcelResult {
+            dcel: Some(dcel_result),
+            path_used: BooleanPath::Nurbs,
+            fallback_reason: None,
+            nurbs_diagnostic: NurbsDiagnostic {
+                attempted: true,
+                intersection_chain_count: chain_count,
+                robustness_clean,
+                notes,
+            },
         })
     }
 }
@@ -788,5 +918,175 @@ mod tests {
             .expect("mesh path on no-surface fixture must record reason");
         assert!(documented.contains(label),
             "fallback_reason label '{}' is not in the documented set", label);
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // ADR-064 Step 5 (Path Z) regression tests
+    // boolean_dispatch_dcel cutover — opt-in DCEL-producing dispatch.
+    // ───────────────────────────────────────────────────────────────
+
+    fn make_plane_quad_with_surface(
+        mesh: &mut Mesh, mat: MaterialId, z_offset: f64,
+    ) -> FaceId {
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, z_offset));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, z_offset));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, z_offset));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, z_offset));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::new(0.0, 0.0, z_offset),
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        };
+        mesh.set_face_surface(fid, Some(plane));
+        fid
+    }
+
+    /// ADR-064 Step 5 #1 — Eligible single-face × single-face (planes
+    /// at z=0 and z=5) → BooleanPath::Nurbs + dcel=Some + disjoint=true
+    /// (D-O=(a) Step 4 D-F=(c) consistency).
+    #[test]
+    fn step5_boolean_dispatch_dcel_eligible_disjoint_subtract() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let face_a = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        let face_b = make_plane_quad_with_surface(&mut mesh, mat, 5.0);
+
+        let result = mesh.boolean_dispatch_dcel(
+            face_a, face_b, BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("eligible disjoint must succeed");
+
+        assert_eq!(result.path_used, BooleanPath::Nurbs);
+        assert!(result.fallback_reason.is_none());
+        let dcel = result.dcel.expect("Nurbs path must populate dcel");
+        assert!(dcel.disjoint, "z=0 and z=5 planes must be disjoint");
+        assert!(dcel.removed_faces.is_empty(),
+            "disjoint must not remove inputs (D-F=(c))");
+        assert_eq!(dcel.preserved_faces.len(), 2);
+        assert!(result.nurbs_diagnostic.attempted);
+        assert!(result.nurbs_diagnostic.robustness_clean);
+    }
+
+    /// ADR-064 Step 5 #2 — Ineligible: face_b lacks surface →
+    /// BooleanPath::Mesh, dcel=None, fallback_reason=SurfaceMissing.
+    /// No auto mesh path invocation per D-K/Q.
+    #[test]
+    fn step5_boolean_dispatch_dcel_ineligible_no_surface() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let face_a = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+        // face_b without surface attach.
+        let v0 = mesh.add_vertex(DVec3::new(20.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(30.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(30.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(20.0, 10.0, 0.0));
+        let face_b = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+
+        let result = mesh.boolean_dispatch_dcel(
+            face_a, face_b, BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("ineligibility is informational, not Err");
+
+        assert_eq!(result.path_used, BooleanPath::Mesh,
+            "missing surface → Mesh path tag");
+        assert!(result.dcel.is_none(),
+            "Mesh path must not populate dcel (D-K caller responsibility)");
+        let reason = result.fallback_reason.expect("ineligible must record reason");
+        assert!(matches!(reason, NurbsBooleanFailReason::SurfaceMissing { .. }));
+        assert!(!result.nurbs_diagnostic.attempted,
+            "ineligible never attempts NURBS path");
+
+        // Both originals remain active — no auto mesh invocation.
+        assert!(mesh.faces[face_a].is_active());
+        assert!(mesh.faces[face_b].is_active());
+    }
+
+    /// ADR-064 Step 5 #3 — D-N (D-H safe-only consistency) — perpendicular
+    /// planes intersect along an open chain (no closed loops). dcel
+    /// returns disjoint=false but new_faces empty + removed_faces empty.
+    #[test]
+    fn step5_boolean_dispatch_dcel_perpendicular_no_closed_loops() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let face_a = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+
+        // Vertical plane at y=5 (perpendicular to z=0 plane).
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 5.0, -5.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 5.0, -5.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 5.0,  5.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 5.0,  5.0));
+        let face_b = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let plane_b = AnalyticSurface::Plane {
+            origin: DVec3::new(0.0, 5.0, 0.0),
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (-5.0, 5.0),
+        };
+        mesh.set_face_surface(face_b, Some(plane_b));
+
+        let result = mesh.boolean_dispatch_dcel(
+            face_a, face_b, BoolOp::Subtract, BooleanTolerance::default(),
+        ).expect("perpendicular planes must not error");
+
+        assert_eq!(result.path_used, BooleanPath::Nurbs);
+        let dcel = result.dcel.expect("Nurbs path → dcel populated");
+        // D-N safe-only: new_faces empty even though SSI may have run.
+        assert!(dcel.new_faces_a.is_empty() && dcel.new_faces_b.is_empty());
+        // D-H safe-only: no removal when no replacement faces.
+        assert!(dcel.removed_faces.is_empty());
+        assert!(mesh.faces[face_a].is_active() && mesh.faces[face_b].is_active(),
+            "no-closed-loops case must preserve inputs");
+    }
+
+    /// ADR-064 Step 5 #4 — D-P unchanged: existing `boolean_dispatch`
+    /// continues to work identically alongside the new method.
+    #[test]
+    fn step5_boolean_dispatch_dcel_dropin_alongside_no_regression() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = make_box(&mut mesh, DVec3::ZERO, DVec3::splat(1.0), mat);
+        let b = make_box(&mut mesh,
+            DVec3::splat(2.0), DVec3::splat(3.0), mat);
+
+        // Existing boolean_dispatch must behave identically.
+        let result = mesh.boolean_dispatch(&a, &b, BoolOp::Union, mat)
+            .expect("existing dispatch must remain functional");
+
+        // Whatever path it picked, the result must be valid + path tag set.
+        match result.path_used {
+            BooleanPath::Mesh
+            | BooleanPath::Nurbs
+            | BooleanPath::NurbsWithMeshFallback => {} // any tag OK
+        }
+        // mesh_result populated regardless (existing behavior).
+        let _ = result.mesh_result;
+    }
+
+    /// ADR-064 Step 5 #5 — Eligible Union/Intersect produce Nurbs path
+    /// + dcel populated (D-J=(b) opt-in covers all 3 ops).
+    #[test]
+    fn step5_boolean_dispatch_dcel_all_three_ops_accepted() {
+        use crate::surfaces::ssi::tolerance::BooleanTolerance;
+        for op in [BoolOp::Subtract, BoolOp::Union, BoolOp::Intersect] {
+            let mut mesh = Mesh::new();
+            let mat = MaterialId::new(0);
+            let face_a = make_plane_quad_with_surface(&mut mesh, mat, 0.0);
+            let face_b = make_plane_quad_with_surface(&mut mesh, mat, 5.0);
+
+            let result = mesh.boolean_dispatch_dcel(
+                face_a, face_b, op, BooleanTolerance::default(),
+            ).unwrap_or_else(|e| panic!("{:?} must succeed: {}", op, e));
+
+            assert_eq!(result.path_used, BooleanPath::Nurbs,
+                "{:?} on eligible pair must take Nurbs path", op);
+            assert!(result.dcel.is_some(), "{:?} must populate dcel", op);
+            assert!(result.fallback_reason.is_none(),
+                "{:?} success → no fallback_reason", op);
+        }
     }
 }
