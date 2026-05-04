@@ -17,6 +17,7 @@ pub mod loft;
 pub mod sweep;
 pub mod subdivide;
 pub mod fillet;
+pub mod fillet_brep;
 pub mod deform;
 pub mod array_op;
 pub mod projected_shadow;
