@@ -20,6 +20,7 @@ pub mod curves;
 pub mod surfaces;
 pub mod predicates;
 pub mod mesh_migration;
+pub mod p7_manifold;
 
 // Re-export main types
 pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, InvariantReport, ManifoldInfo};
@@ -28,3 +29,4 @@ pub use entities::{Vertex, Edge, EdgeClass, HalfEdge, Face, LoopRef};
 pub use tolerances::*;
 pub use curves::{AnalyticCurve, CurveOps};
 pub use surfaces::{AnalyticSurface, SurfaceOps, SurfaceTessellation};
+pub use p7_manifold::{verify_p7_manifold, P7ManifoldReport, P7Violation};
