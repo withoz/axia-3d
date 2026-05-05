@@ -52,7 +52,7 @@ impl Scene {
         let mut cursor = Cursor::new(data);
         let drawing = dxf::Drawing::load(&mut cursor)?;
         let mut stats = DxfImportStats::default();
-        let mat = self.default_material;
+        let mat = crate::FORM_MATERIAL;
 
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());

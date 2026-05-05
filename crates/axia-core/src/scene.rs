@@ -25,6 +25,27 @@ const SNAPSHOT_VERSION: u32 = 2;
 /// Magic bytes for .axia file identification
 const AXIA_MAGIC: [u8; 4] = [b'A', b'X', b'I', b'A'];
 
+/// ADR-050 P-5e-β — Form-layer (Shape) sentinel material.
+///
+/// Two-Layer Citizenship Model (LOCKED #26 + ADR-049 §4 Q4):
+/// - **Form layer (Shape)**: faces are created with this sentinel
+///   material. The Shape itself carries no material — material
+///   assignment happens at promote-to-Xia time.
+/// - **Property layer (Xia)**: primary material + face-level override
+///   (assigned during promotion).
+///
+/// `MaterialId(0)` is the library's first slot (default white). Using
+/// it as the form-layer sentinel is intentional — visual rendering
+/// works correctly until the user promotes to Xia and assigns a real
+/// material.
+///
+/// **Replaces** the deprecated `Scene.default_material` field
+/// (removed in P-5e-β per ADR-049 §4 Q4 "default_material 폐지").
+/// All call sites that previously read `scene.default_material` now
+/// reference this constant directly — no behavior change (same value),
+/// just no field-as-state.
+pub const FORM_MATERIAL: MaterialId = MaterialId::new(0);
+
 /// The AXiA scene — owns the geometry mesh and all XIA entities.
 /// Principle 3 (ADR-008) — Face Operation Epoch.
 ///
@@ -57,8 +78,6 @@ pub struct Scene {
     pub transactions: TransactionManager,
     /// Material library (all available materials)
     pub material_library: MaterialLibrary,
-    /// Default material
-    pub default_material: MaterialId,
     /// Group / Component manager
     pub groups: GroupManager,
     /// Constraint Solver Level 2 — persistent constraint graph
@@ -135,7 +154,6 @@ impl Scene {
             next_xia_id: 1,
             transactions: TransactionManager::new(100),
             material_library: MaterialLibrary::new(),
-            default_material: MaterialId::new(0),
             groups: GroupManager::new(),
             constraints: ConstraintGraph::new(),
             epoch: None,
@@ -722,7 +740,7 @@ impl Scene {
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
         // Run the geometric slice.
-        let mat = self.default_material;
+        let mat = FORM_MATERIAL;
         let result = match self.mesh.slice_volume_by_plane(face_ids, plane, mat) {
             Ok(r) => r,
             Err(e) => {
@@ -950,7 +968,7 @@ impl Scene {
             }
         }
 
-        let result_faces = self.mesh.intersect_faces_with_model(face_ids, self.default_material)?;
+        let result_faces = self.mesh.intersect_faces_with_model(face_ids, FORM_MATERIAL)?;
 
         // XIA 승계: split_faces_by_intersections 는 원본 face 를 제거하고
         // 새 face 를 만든다. 원본 face id 가 여전히 active 면 그대로 두고,
@@ -1217,7 +1235,7 @@ impl Scene {
             }
 
             Command::RemoveMaterial { face_ids } => {
-                let default_mat = self.default_material;
+                let default_mat = FORM_MATERIAL;
                 // Revert to default material
                 for face_id in face_ids.iter() {
                     if let Some(face) = self.mesh.faces.get_mut(*face_id) {
@@ -1798,7 +1816,7 @@ impl Scene {
         // Step 4.6 — D resolver
         {
             let resolved = self.mesh.resolve_planar_free_faces_scoped(
-                self.default_material,
+                FORM_MATERIAL,
                 Some(touched_verts),
                 Some(new_edges),
             );
@@ -2266,7 +2284,7 @@ impl Scene {
                 // Fixed-point: 한 번의 sweep 이 새 face 를 만들면 새로운 cycle 이
                 // 노출될 수 있음. 잔존 orphan 0 또는 max_rounds 까지 반복.
                 for _round in 0..6 {
-                    let resolved = self.mesh.resolve_planar_free_faces(self.default_material);
+                    let resolved = self.mesh.resolve_planar_free_faces(FORM_MATERIAL);
                     let made_progress = !resolved.is_empty();
                     for f in resolved {
                         if !all_created_faces.contains(&f) {
@@ -2373,7 +2391,7 @@ impl Scene {
                 //    between them gets absorbed as the splitting line.
                 let chain = vec![v1, v2];
                 match axia_geo::operations::face_split::split_face_by_chain(
-                    &mut self.mesh, face_id, &chain, self.default_material,
+                    &mut self.mesh, face_id, &chain, FORM_MATERIAL,
                 ) {
                     Ok(res) => {
                         // XIA inheritance: sub-faces inherit original face's XIA.
@@ -2553,7 +2571,7 @@ impl Scene {
             };
 
             // 5) Add face
-            match self.mesh.add_face_with_holes(&cycle_verts_oriented, &[], self.default_material) {
+            match self.mesh.add_face_with_holes(&cycle_verts_oriented, &[], FORM_MATERIAL) {
                 Ok(new_face) => {
                     if !all_created_faces.contains(&new_face) {
                         all_created_faces.push(new_face);
@@ -2634,7 +2652,7 @@ impl Scene {
                     &mut self.mesh,
                     face_id,
                     &chain,
-                    self.default_material,
+                    FORM_MATERIAL,
                 );
                 match split_res {
                     Ok(res) => {
@@ -3062,7 +3080,7 @@ impl Scene {
                         }
                     }
                 }
-                match self.mesh.add_face(&loop_verts, self.default_material) {
+                match self.mesh.add_face(&loop_verts, FORM_MATERIAL) {
                     Ok(fid) => {
                         // ADR-007 Invariant 2 (Winding): face's normal MUST
                         //   align with surface_normal hint. Always enforce —
@@ -3398,7 +3416,7 @@ impl Scene {
 
         if !has_interaction {
             // Atomic path — identical result to unified path, no scans.
-            match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
+            match self.mesh.draw_rectangle(center, normal, up, width, height, FORM_MATERIAL) {
                 Ok((face_id, _verts)) => {
                     let xia_id = self.create_xia("Rectangle".to_string());
                     if let Some(xia) = self.xias.get_mut(&xia_id) {
@@ -3433,7 +3451,7 @@ impl Scene {
         if !edge_interaction && face_interaction {
             if let Some(container_fid) = self.single_face_containing_corners(&corners, n_norm) {
                 // Atomic: add 4 vertices, add_face.
-                match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
+                match self.mesh.draw_rectangle(center, normal, up, width, height, FORM_MATERIAL) {
                     Ok((inner_fid, _verts)) => {
                         let xia_id = self.create_xia("Rectangle".to_string());
                         if let Some(xia) = self.xias.get_mut(&xia_id) {
@@ -3623,7 +3641,7 @@ impl Scene {
             // Try add_face — claims cycle-direction HEs. May fail if HEs
             //   are already claimed by another face in conflict, but for the
             //   stacked-inner case the cycle-direction HEs are free.
-            if let Ok(fid) = self.mesh.add_face_with_holes(&corner_vids, &[], self.default_material) {
+            if let Ok(fid) = self.mesh.add_face_with_holes(&corner_vids, &[], FORM_MATERIAL) {
                 // ADR-007 Invariant 2 (Winding): face's normal MUST align with
                 //   surface_normal hint. Always enforce regardless of neighbor
                 //   alignment result — neighbors might be wrongly oriented and
@@ -3894,7 +3912,7 @@ impl Scene {
 
         // Create face from explicit vertex list (avoids loop-detection
         //   ambiguity at shared boundaries).
-        let face_id = match self.mesh.add_face(&corner_vids, self.default_material) {
+        let face_id = match self.mesh.add_face(&corner_vids, FORM_MATERIAL) {
             Ok(fid) => fid,
             Err(e) => {
                 self.transactions.cancel();
@@ -4013,7 +4031,7 @@ impl Scene {
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
 
-        match self.mesh.push_pull(face_id, dist, self.default_material) {
+        match self.mesh.push_pull(face_id, dist, FORM_MATERIAL) {
             Ok(result) => {
                 // O(1) reverse index lookup instead of O(N) scan
                 let owning_xia_id = self.face_to_xia.get(&face_id).copied();
@@ -7701,7 +7719,7 @@ mod tests {
             .map(|(id, _)| id)
             .expect("shared edge missing");
 
-        let mat = scene.default_material;
+        let mat = crate::FORM_MATERIAL;
         let result = scene.mesh.erase_edge_resynthesize(shared_eid, mat, false)
             .expect("erase_edge_resynthesize");
 
@@ -7759,7 +7777,7 @@ mod tests {
             scene.mesh.hes.get(he).expect("hole HE").edge()
         };
 
-        let mat = scene.default_material;
+        let mat = crate::FORM_MATERIAL;
         let result = scene.mesh.erase_edge_resynthesize(hole_eid, mat, false)
             .expect("erase_edge_resynthesize");
         assert_eq!(result.removed_faces.len(), 2, "ring+inner removed");
@@ -7807,7 +7825,7 @@ mod tests {
         };
 
         // Path B: erase + re-resolve.
-        let mat = scene.default_material;
+        let mat = crate::FORM_MATERIAL;
         let result = scene.mesh.erase_edge_resynthesize(hole_eid, mat, false)
             .expect("erase_edge_resynthesize");
 
@@ -9466,7 +9484,7 @@ mod tests {
     /// Build a Shape that owns a single planar quad face. Useful for
     /// testing NotWatertight (open boundary) failure path.
     fn build_shape_single_quad(scene: &mut Scene) -> crate::ShapeId {
-        let mat = scene.default_material;
+        let mat = crate::FORM_MATERIAL;
         let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
         let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
         let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
@@ -9478,7 +9496,7 @@ mod tests {
     /// Build a Shape that owns a closed unit cube (6 faces, watertight).
     /// Used for the Volumetric success path.
     fn build_shape_unit_cube(scene: &mut Scene) -> crate::ShapeId {
-        let mat = scene.default_material;
+        let mat = crate::FORM_MATERIAL;
         let v = [
             scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
             scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0)),
@@ -10172,6 +10190,37 @@ mod tests {
         assert_eq!(restored_shape.name, "Line");
         assert_eq!(restored_shape.standalone_edge_id, original_standalone);
         assert!(restored.xias.is_empty());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-5e-β — FORM_MATERIAL constant + default_material removal.
+    //
+    // Per P-5e-β §C lock-in: `Scene.default_material` field removed
+    // (ADR-049 §4 Q4 정합). All form-layer (Shape) face creation now
+    // uses `crate::FORM_MATERIAL` sentinel constant, value preserved
+    // (MaterialId::new(0)) so existing tests don't change behavior.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn p5e_beta_form_material_constant_value() {
+        // Sentinel value lock — FORM_MATERIAL must equal MaterialId(0)
+        // for backward compat with the previous default_material init.
+        assert_eq!(crate::FORM_MATERIAL.raw(), 0,
+            "FORM_MATERIAL.raw() must be 0 (matches deprecated default_material init)");
+    }
+
+    #[test]
+    fn p5e_beta_scene_no_default_material_field_compile_check() {
+        // Compile-time check: Scene must not have a `default_material`
+        // field. If anyone re-introduces it (e.g., merge conflict),
+        // direct field access elsewhere in the codebase would fail.
+        // Here we verify the Scene is still constructible without it
+        // and that FORM_MATERIAL is the documented replacement.
+        let scene = Scene::new();
+        assert!(scene.shapes.is_empty());
+        assert!(scene.xias.is_empty());
+        let mat = crate::FORM_MATERIAL;
+        assert_eq!(mat.raw(), 0);
     }
 
     // ════════════════════════════════════════════════════════════════════

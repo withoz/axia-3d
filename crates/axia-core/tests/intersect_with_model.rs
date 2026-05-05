@@ -31,7 +31,7 @@ fn total_face_area(scene: &Scene) -> f64 {
 #[test]
 fn two_rects_cross_in_3d_split_both() {
     let mut scene = Scene::default();
-    let m = scene.default_material;
+    let m = axia_core::FORM_MATERIAL;
 
     // A: XY 평면 (Z=0) 1000×1000 centered (0,0,0)
     let a = [

@@ -5,7 +5,7 @@ use axia_core::scene::Scene;
 use glam::DVec3;
 
 fn build_two_touching_cubes(scene: &mut Scene) -> (axia_core::xia::XiaId, axia_core::xia::XiaId) {
-    let mat = scene.default_material;
+    let mat = axia_core::FORM_MATERIAL;
     // Cube A: x ∈ [0, 1000]
     let a000 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
     let a100 = scene.mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
@@ -92,7 +92,7 @@ fn strict_export_auto_repairs_then_succeeds() {
 #[test]
 fn repair_is_noop_on_clean_scene() {
     let mut scene = Scene::default();
-    let mat = scene.default_material;
+    let mat = axia_core::FORM_MATERIAL;
     // Single cube — no non-manifold edges.
     let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
     let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));

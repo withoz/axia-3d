@@ -16,7 +16,7 @@ macro_rules! define_id {
             pub const NULL: Self = Self(u32::MAX);
 
             #[inline]
-            pub fn new(raw: u32) -> Self {
+            pub const fn new(raw: u32) -> Self {
                 Self(raw)
             }
 

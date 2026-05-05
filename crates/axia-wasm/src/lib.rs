@@ -283,7 +283,7 @@ impl AxiaEngine {
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
-        let mat = self.scene.default_material;
+        let mat = axia_core::FORM_MATERIAL;
         let result = match self.scene.mesh.erase_edge_resynthesize(eid, mat, cleanup_dangling) {
             Ok(r) => r,
             Err(e) => {
@@ -1703,7 +1703,7 @@ impl AxiaEngine {
             radius,
             height,
             segments,
-            self.scene.default_material,
+            axia_core::FORM_MATERIAL,
         ) {
             Ok(faces) => {
                 self.mark_topology_changed();
@@ -1753,7 +1753,7 @@ impl AxiaEngine {
             radius,
             height,
             segments,
-            self.scene.default_material,
+            axia_core::FORM_MATERIAL,
         ) {
             Ok(faces) => {
                 self.mark_topology_changed();
@@ -1796,7 +1796,7 @@ impl AxiaEngine {
         let before = self.scene.scene_snapshot();
         self.scene.transactions.set_before_snapshot(before);
         match self.scene.mesh.create_box(
-            position, width, height, depth, self.scene.default_material,
+            position, width, height, depth, axia_core::FORM_MATERIAL,
         ) {
             Ok(faces) => {
                 self.mark_topology_changed();
@@ -1842,7 +1842,7 @@ impl AxiaEngine {
             radius,
             u_segments,
             v_segments,
-            self.scene.default_material,
+            axia_core::FORM_MATERIAL,
         ) {
             Ok(faces) => {
                 self.mark_topology_changed();
@@ -3082,7 +3082,7 @@ impl AxiaEngine {
             .map(|c| DVec3::new(c[0], c[1], c[2])).collect();
         let path: Vec<DVec3> = path_flat.chunks_exact(3)
             .map(|c| DVec3::new(c[0], c[1], c[2])).collect();
-        let material = self.scene.default_material;
+        let material = axia_core::FORM_MATERIAL;
 
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
@@ -3148,7 +3148,7 @@ impl AxiaEngine {
             }
             sections.push(sec);
         }
-        let material = self.scene.default_material;
+        let material = axia_core::FORM_MATERIAL;
 
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
@@ -3197,7 +3197,7 @@ impl AxiaEngine {
             .collect();
         let origin = DVec3::new(ox, oy, oz);
         let dir = DVec3::new(dx, dy, dz);
-        let material = self.scene.default_material;
+        let material = axia_core::FORM_MATERIAL;
 
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
@@ -3601,7 +3601,7 @@ impl AxiaEngine {
             .copied()
             .collect();
         if !live_seeds.is_empty() && !newly_freed.is_empty() {
-            let material = self.scene.default_material;
+            let material = axia_core::FORM_MATERIAL;
             let new_faces = self.scene.mesh.resolve_planar_free_faces_scoped(
                 material,
                 Some(&live_seeds),
@@ -4119,7 +4119,7 @@ impl AxiaEngine {
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
-        let material = self.scene.default_material;
+        let material = axia_core::FORM_MATERIAL;
         let created = self.scene.mesh.resolve_planar_free_faces(material);
 
         if !created.is_empty() {
@@ -4982,7 +4982,7 @@ impl AxiaEngine {
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
 
-        let mat = self.scene.default_material;
+        let mat = axia_core::FORM_MATERIAL;
         let result = self.scene.mesh.boolean(&fids_a, &fids_b, bool_op, mat);
 
         match result {
@@ -5112,7 +5112,7 @@ impl AxiaEngine {
     pub fn sheet_boolean(&mut self, a: u32, b: u32, op: &str) -> String {
         let fa = FaceId::new(a);
         let fb = FaceId::new(b);
-        let mat = self.scene.default_material;
+        let mat = axia_core::FORM_MATERIAL;
 
         self.scene.transactions.begin();
         self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());

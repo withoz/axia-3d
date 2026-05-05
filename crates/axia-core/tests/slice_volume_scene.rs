@@ -8,7 +8,7 @@ use glam::DVec3;
 
 fn build_cube_scene() -> (Scene, axia_core::xia::XiaId) {
     let mut scene = Scene::default();
-    let mat = scene.default_material;
+    let mat = axia_core::FORM_MATERIAL;
     let h = 500.0;
     let v000 = scene.mesh.add_vertex(DVec3::new(-h, -h, -h));
     let v100 = scene.mesh.add_vertex(DVec3::new( h, -h, -h));
@@ -88,7 +88,7 @@ fn scene_slice_supports_undo() {
 fn scene_slice_rejects_multi_xia_input() {
     let (mut scene, _xia_a) = build_cube_scene();
     // Add a second cube as a separate XIA.
-    let mat = scene.default_material;
+    let mat = axia_core::FORM_MATERIAL;
     let cy = 2000.0;
     let v0 = scene.mesh.add_vertex(DVec3::new(0.0, cy, 0.0));
     let v1 = scene.mesh.add_vertex(DVec3::new(100.0, cy, 0.0));

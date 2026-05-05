@@ -30,7 +30,7 @@ fn primitive_cylinder_intersects_existing_rect() {
         300.0,                          // radius
         2000.0,                         // height — top sticks well above floor
         16,                             // segments
-        scene.default_material,
+        axia_core::FORM_MATERIAL,
     ).expect("cylinder creates");
     assert!(!cylinder_faces.is_empty());
 
@@ -56,7 +56,7 @@ fn primitive_box_is_closed_volume() {
     let faces = scene.mesh.create_box(
         DVec3::new(0.0, 500.0, 0.0),  // center
         1000.0, 1000.0, 1000.0,        // 1m cube
-        scene.default_material,
+        axia_core::FORM_MATERIAL,
     ).expect("box creates");
     assert_eq!(faces.len(), 6, "box has exactly 6 faces");
     for &fid in &faces {
@@ -77,7 +77,7 @@ fn primitive_no_intersection_when_disjoint() {
     let before = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
     // Sphere far away — no intersection.
     let sphere_faces = scene.mesh.create_sphere(
-        DVec3::new(50000.0, 50000.0, 50000.0), 200.0, 8, 6, scene.default_material,
+        DVec3::new(50000.0, 50000.0, 50000.0), 200.0, 8, 6, axia_core::FORM_MATERIAL,
     ).expect("sphere creates");
     let _ = scene.intersect_faces_inner(&sphere_faces);
     let after = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();

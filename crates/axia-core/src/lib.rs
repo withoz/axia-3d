@@ -26,7 +26,7 @@ pub use shape::{Shape, ShapeId};
 pub use boolean_group::BooleanGroupTag;
 pub use promote::{PromoteError, PromoteOk, XiaKind};
 pub use commands::{Command, CommandResult};
-pub use scene::Scene;
+pub use scene::{Scene, FORM_MATERIAL};
 pub use group::{GroupManager, GroupId, ComponentDefId, ComponentInstanceId, Transform3D};
 pub use material::{Material, MaterialLibrary, MaterialCategory, PhysicalProperties, VisualProperties, FireRating};
 pub use constraint::{Constraint, ConstraintGraph, ConstraintId, ConstraintKind, ConstraintRef, SolverResult};
