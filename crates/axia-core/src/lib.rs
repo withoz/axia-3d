@@ -18,8 +18,10 @@ pub mod material;
 pub mod constraint;
 pub mod orphan_recovery;
 pub mod promote;
+pub mod boolean_group;
 
 pub use xia::{Xia, XiaState};
+pub use boolean_group::BooleanGroupTag;
 pub use promote::{PromoteError, PromoteOk, XiaKind};
 pub use commands::{Command, CommandResult};
 pub use scene::Scene;

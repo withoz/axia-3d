@@ -73,6 +73,19 @@ pub struct Scene {
     /// the scene (still inside the outer transaction, so Ctrl+Z undoes both
     /// the draw and the intersect in one step). User-toggleable.
     pub auto_intersect_on_draw: bool,
+    /// ADR-078 P-1 — Boolean Group A/B persistence (Rust mirror of TS U-1).
+    ///
+    /// `FaceId → BooleanGroupTag` map. Mirrors the runtime
+    /// `SelectionManager.groupTags` (TS) but owns the persistent storage
+    /// — survives `scene_snapshot()` / `restore_scene_snapshot()` round-trip
+    /// (project save/load). P-2/P-3 sync TS↔Rust.
+    ///
+    /// Invariants (mirror TS U-1):
+    /// - One face = one tag (HashMap key uniqueness)
+    /// - `set` overwrites on conflict
+    /// - `clear_selection` of the TS layer also clears these tags (synced
+    ///   via P-3 bridge round-trip)
+    pub boolean_group_tags: HashMap<FaceId, crate::BooleanGroupTag>,
 }
 
 impl Scene {
@@ -89,6 +102,7 @@ impl Scene {
             constraints: ConstraintGraph::new(),
             epoch: None,
             auto_intersect_on_draw: true,
+            boolean_group_tags: HashMap::new(),
         }
     }
 
@@ -112,12 +126,21 @@ impl Scene {
             eprintln!("[Scene] Constraint serialize failed: {}", e);
             Vec::new()
         });
+        // ADR-078 P-1 — Boolean group tags appended after constraints
+        // (additive — legacy snapshots without this section restore as empty).
+        let boolean_group_data = bincode::serialize(&self.boolean_group_tags).unwrap_or_else(|e| {
+            eprintln!("[Scene] BooleanGroupTags serialize failed: {}", e);
+            Vec::new()
+        });
         let next_xia = self.next_xia_id;
 
-        // [mesh_len:u64][mesh_data][xia_len:u64][xia_data][group_len:u64][group_data][next_xia_id:u64][constraints_len:u64][constraints_data]
+        // [mesh_len:u64][mesh_data][xia_len:u64][xia_data]
+        // [group_len:u64][group_data][next_xia_id:u64]
+        // [constraints_len:u64][constraints_data]
+        // [boolean_group_len:u64][boolean_group_data]   ← ADR-078 P-1 (additive)
         let mut buf = Vec::with_capacity(
             8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8
-                + 8 + constraints_data.len(),
+                + 8 + constraints_data.len() + 8 + boolean_group_data.len(),
         );
         buf.extend_from_slice(&(mesh_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&mesh_data);
@@ -128,6 +151,10 @@ impl Scene {
         buf.extend_from_slice(&(next_xia as u64).to_le_bytes()); // u64 for snapshot backward compat
         buf.extend_from_slice(&(constraints_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&constraints_data);
+        // ADR-078 P-1 — section 6 (additive). EOF before this section in legacy snapshots
+        // is handled by the matching `if offset + 8 <= data.len()` guard in restore.
+        buf.extend_from_slice(&(boolean_group_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&boolean_group_data);
         buf
     }
 
@@ -192,7 +219,25 @@ impl Scene {
             self.constraints = ConstraintGraph::new();
         }
 
-        // 6. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
+        // 6. ADR-078 P-1 — Boolean group tags (additive, backward-compat).
+        //    Legacy snapshots predating ADR-078 don't have this section
+        //    → reset to empty (no group state in old projects, expected).
+        if offset + 8 <= data.len() {
+            let blen = read_len(data, &mut offset);
+            if blen > 0 && offset + blen <= data.len() {
+                if let Ok(restored) = bincode::deserialize::<HashMap<FaceId, crate::BooleanGroupTag>>(
+                    &data[offset..offset + blen],
+                ) {
+                    self.boolean_group_tags = restored;
+                }
+                offset += blen;
+            }
+        } else {
+            // Legacy snapshot (pre-ADR-078) — reset boolean group tags.
+            self.boolean_group_tags.clear();
+        }
+
+        // 7. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
         self.rebuild_face_to_xia_index();
     }
 
@@ -203,6 +248,79 @@ impl Scene {
         let xia = Xia::new(id, name);
         self.xias.insert(id, xia);
         id
+    }
+
+    // ════════════════════════════════════════════════
+    // ADR-078 P-1 — Boolean Group Persistence helpers
+    // (Rust mirror of TS-side SelectionManager U-1 API)
+    // ════════════════════════════════════════════════
+
+    /// ADR-078 P-1 — Tag a list of face IDs as Boolean Group A or Group B.
+    ///
+    /// Mirror of TS `SelectionManager.setGroupTag` (ADR-074 U-1). Same
+    /// face = same key in HashMap → re-tagging overwrites (one face = one
+    /// group invariant).
+    ///
+    /// Note: unlike the TS layer, this Rust API does NOT enforce
+    /// "tags ⊆ selected" — Scene has no concept of "active selection"
+    /// (UI-only). Tags can outlive the runtime selection (project save).
+    /// Caller (P-3 bridge) is responsible for the selection ⊃ tags
+    /// invariant if needed.
+    pub fn set_boolean_group_tag(
+        &mut self,
+        face_ids: &[FaceId],
+        group: crate::BooleanGroupTag,
+    ) {
+        for &fid in face_ids {
+            self.boolean_group_tags.insert(fid, group);
+        }
+    }
+
+    /// ADR-078 P-1 — Returns face IDs tagged as Group A (sorted ascending).
+    pub fn get_boolean_group_a(&self) -> Vec<FaceId> {
+        let mut out: Vec<FaceId> = self.boolean_group_tags.iter()
+            .filter_map(|(fid, g)| if *g == crate::BooleanGroupTag::A { Some(*fid) } else { None })
+            .collect();
+        out.sort_by_key(|f| f.raw());
+        out
+    }
+
+    /// ADR-078 P-1 — Returns face IDs tagged as Group B (sorted ascending).
+    pub fn get_boolean_group_b(&self) -> Vec<FaceId> {
+        let mut out: Vec<FaceId> = self.boolean_group_tags.iter()
+            .filter_map(|(fid, g)| if *g == crate::BooleanGroupTag::B { Some(*fid) } else { None })
+            .collect();
+        out.sort_by_key(|f| f.raw());
+        out
+    }
+
+    /// ADR-078 P-1 — Clear all Boolean group tags. Mirror of TS
+    /// `SelectionManager.clearGroupTags`.
+    pub fn clear_boolean_group_tags(&mut self) {
+        self.boolean_group_tags.clear();
+    }
+
+    /// ADR-078 P-1 — True iff at least one face has a Boolean group tag.
+    /// Mirror of TS `SelectionManager.hasAnyGroupTag` (used by Clear
+    /// menu visibility).
+    pub fn has_any_boolean_group_tag(&self) -> bool {
+        !self.boolean_group_tags.is_empty()
+    }
+
+    /// ADR-078 P-1 — True iff BOTH Group A and Group B have ≥1 tagged face.
+    /// Mirror of TS `SelectionManager.hasGroupSelection` (used by U-3
+    /// BooleanHandler routing — explicit grouping vs half/half fallback).
+    pub fn has_boolean_group_selection(&self) -> bool {
+        let mut has_a = false;
+        let mut has_b = false;
+        for g in self.boolean_group_tags.values() {
+            match g {
+                crate::BooleanGroupTag::A => has_a = true,
+                crate::BooleanGroupTag::B => has_b = true,
+            }
+            if has_a && has_b { return true; }
+        }
+        false
     }
 
     /// Create a XIA and assign face IDs (public — for primitives/import).
@@ -8528,5 +8646,157 @@ mod tests {
                 label, nm.len(), nm,
             );
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ADR-078 P-1 — Boolean Group Persistence (Rust schema)
+    // Mirror of TS-side SelectionManager.groupTags (ADR-074 U-1).
+    // 회귀 6 (절대 #[ignore] 금지).
+    // ════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn boolean_group_set_basic_a_and_b() {
+        let mut scene = Scene::new();
+        let f1 = FaceId::new(1);
+        let f2 = FaceId::new(2);
+        let f3 = FaceId::new(3);
+
+        scene.set_boolean_group_tag(&[f1, f2], crate::BooleanGroupTag::A);
+        scene.set_boolean_group_tag(&[f3], crate::BooleanGroupTag::B);
+
+        let a = scene.get_boolean_group_a();
+        let b = scene.get_boolean_group_b();
+        assert_eq!(a, vec![f1, f2]);  // sorted by raw()
+        assert_eq!(b, vec![f3]);
+    }
+
+    #[test]
+    fn boolean_group_set_overwrites_on_conflict() {
+        let mut scene = Scene::new();
+        let f1 = FaceId::new(1);
+        let f2 = FaceId::new(2);
+
+        scene.set_boolean_group_tag(&[f1, f2], crate::BooleanGroupTag::A);
+        // Re-tag f2 as B — invariant: one face = one group.
+        scene.set_boolean_group_tag(&[f2], crate::BooleanGroupTag::B);
+
+        assert_eq!(scene.get_boolean_group_a(), vec![f1]);
+        assert_eq!(scene.get_boolean_group_b(), vec![f2]);
+
+        // A ∩ B = ∅
+        let a_set: std::collections::HashSet<FaceId> =
+            scene.get_boolean_group_a().into_iter().collect();
+        for fid in scene.get_boolean_group_b() {
+            assert!(!a_set.contains(&fid),
+                "face {:?} appears in both A and B", fid);
+        }
+    }
+
+    #[test]
+    fn boolean_group_clear_resets_state() {
+        let mut scene = Scene::new();
+        let f1 = FaceId::new(1);
+        let f2 = FaceId::new(2);
+        scene.set_boolean_group_tag(&[f1], crate::BooleanGroupTag::A);
+        scene.set_boolean_group_tag(&[f2], crate::BooleanGroupTag::B);
+        assert!(scene.has_any_boolean_group_tag());
+        assert!(scene.has_boolean_group_selection());
+
+        scene.clear_boolean_group_tags();
+        assert!(!scene.has_any_boolean_group_tag());
+        assert!(!scene.has_boolean_group_selection());
+        assert!(scene.get_boolean_group_a().is_empty());
+        assert!(scene.get_boolean_group_b().is_empty());
+    }
+
+    #[test]
+    fn boolean_group_has_selection_requires_both() {
+        let mut scene = Scene::new();
+        let f1 = FaceId::new(1);
+        let f2 = FaceId::new(2);
+
+        // Empty initially.
+        assert!(!scene.has_boolean_group_selection());
+        assert!(!scene.has_any_boolean_group_tag());
+
+        // Only A — has_any true, has_selection false.
+        scene.set_boolean_group_tag(&[f1], crate::BooleanGroupTag::A);
+        assert!(scene.has_any_boolean_group_tag());
+        assert!(!scene.has_boolean_group_selection());
+
+        // Only B — same boundary.
+        scene.clear_boolean_group_tags();
+        scene.set_boolean_group_tag(&[f2], crate::BooleanGroupTag::B);
+        assert!(scene.has_any_boolean_group_tag());
+        assert!(!scene.has_boolean_group_selection());
+
+        // Both — both true.
+        scene.set_boolean_group_tag(&[f1], crate::BooleanGroupTag::A);
+        assert!(scene.has_any_boolean_group_tag());
+        assert!(scene.has_boolean_group_selection());
+    }
+
+    #[test]
+    fn boolean_group_snapshot_round_trip_preserves_tags() {
+        let mut scene = Scene::new();
+        let f1 = FaceId::new(1);
+        let f2 = FaceId::new(2);
+        let f3 = FaceId::new(7);
+
+        scene.set_boolean_group_tag(&[f1, f3], crate::BooleanGroupTag::A);
+        scene.set_boolean_group_tag(&[f2], crate::BooleanGroupTag::B);
+
+        let snap = scene.scene_snapshot();
+
+        // Restore into a fresh Scene.
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        assert_eq!(restored.get_boolean_group_a(), vec![f1, f3]);
+        assert_eq!(restored.get_boolean_group_b(), vec![f2]);
+        assert!(restored.has_boolean_group_selection());
+    }
+
+    #[test]
+    fn boolean_group_legacy_snapshot_loads_empty() {
+        // A pre-ADR-078 snapshot has 5 sections (mesh / xias / groups /
+        // next_xia / constraints) but NO section 6. Simulate by
+        // building a snapshot, then truncating section 6.
+        let mut scene = Scene::new();
+        // Force at least one group tag to make sure the snapshot
+        // includes section 6 — then truncate it.
+        scene.set_boolean_group_tag(&[FaceId::new(99)], crate::BooleanGroupTag::A);
+        let mut snap = scene.scene_snapshot();
+
+        // Walk through section length prefixes and truncate at the
+        // start of section 6 (boolean_group_tags).
+        // [mesh_len:8][mesh][xia_len:8][xia][group_len:8][group]
+        // [next_xia:8][constraints_len:8][constraints][bg_len:8][bg]
+        let mut offset = 0usize;
+        // mesh
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // xias
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // groups
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // next_xia (8 bytes, no length prefix)
+        offset += 8;
+        // constraints
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // Now offset points at boolean_group section start. Truncate.
+        snap.truncate(offset);
+
+        // Restore — should load empty boolean_group_tags.
+        let mut restored = Scene::new();
+        // Pre-fill with stale tag to verify restore clears it.
+        restored.set_boolean_group_tag(&[FaceId::new(123)], crate::BooleanGroupTag::B);
+        restored.restore_scene_snapshot(&snap);
+
+        assert!(!restored.has_any_boolean_group_tag(),
+            "Legacy snapshot must reset boolean_group_tags to empty");
     }
 }
