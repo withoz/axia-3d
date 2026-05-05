@@ -1075,6 +1075,12 @@ impl Scene {
             Command::DrawRectAsShape { center, normal, up, width, height } => {
                 self.exec_draw_rect_as_shape(center, normal, up, width, height)
             }
+            Command::DrawLineAsShape { start, end, surface_normal } => {
+                self.exec_draw_line_as_shape(start, end, surface_normal)
+            }
+            Command::DrawCircleAsShape { center, normal, radius, segments } => {
+                self.exec_draw_circle_as_shape(center, normal, radius, segments)
+            }
             Command::DrawCircle { center, normal, radius, segments } => {
                 self.exec_draw_circle(center, normal, radius, segments)
             }
@@ -3750,6 +3756,68 @@ impl Scene {
         CommandResult::ShapeCreated(shape_id.raw())
     }
 
+    /// ADR-050 P-5b — Draw a line as a form-layer Shape (no Xia, no
+    /// material).
+    ///
+    /// Implementation pattern follows P-5a (`exec_draw_rect_as_shape`):
+    /// delegate full geometry pipeline to `exec_draw_line` then convert
+    /// the resulting Xia to a Shape. The DrawLine pipeline can produce
+    /// either a Face Xia (loop-closing case) OR a Line Xia (free-edge
+    /// case) — both are handled identically by reading `face_ids` +
+    /// `standalone_edge_id` and assigning to the new Shape.
+    ///
+    /// 2-undo behavior is the same trade-off as P-5a (deferred to
+    /// P-5d/e cleanup). UI not connected at this stage.
+    fn exec_draw_line_as_shape(
+        &mut self,
+        start: DVec3,
+        end: DVec3,
+        surface_normal: Option<DVec3>,
+    ) -> CommandResult {
+        // Phase 1 — delegate to exec_draw_line.
+        let xia_result = self.exec_draw_line(start, end, surface_normal);
+        let xia_id = match xia_result {
+            CommandResult::EntityCreated(id) => id,
+            other => return other, // pass through error / sentinel
+        };
+
+        // Phase 2 — convert Xia → Shape.
+        let (name, face_ids, position, surface_normal_inherited, standalone) =
+            if let Some(xia) = self.xias.get(&xia_id) {
+                (
+                    xia.name.clone(),
+                    xia.face_ids.clone(),
+                    xia.position,
+                    xia.surface_normal,
+                    xia.standalone_edge_id,
+                )
+            } else {
+                return CommandResult::Error(
+                    "draw_line_as_shape: xia missing post-pipeline".to_string(),
+                );
+            };
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        self.xias.remove(&xia_id);
+        for fid in &face_ids {
+            self.face_to_xia.remove(fid);
+        }
+
+        let shape_id = self.create_shape(name, face_ids);
+        if let Some(shape) = self.shapes.get_mut(&shape_id) {
+            shape.position = position;
+            shape.surface_normal = surface_normal_inherited;
+            shape.standalone_edge_id = standalone;
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        CommandResult::ShapeCreated(shape_id.raw())
+    }
+
     fn exec_draw_circle(
         &mut self,
         center: DVec3,
@@ -3875,6 +3943,64 @@ impl Scene {
         self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();
         CommandResult::EntityCreated(xia_id)
+    }
+
+    /// ADR-050 P-5b — Draw a circle as a form-layer Shape (no Xia,
+    /// no material).
+    ///
+    /// Same conversion pattern as `exec_draw_rect_as_shape` /
+    /// `exec_draw_line_as_shape`: delegate to `exec_draw_circle`,
+    /// then convert the resulting Xia ("Circle" with single face +
+    /// arc-curved edges) into a Shape. The arc curve attachments on
+    /// the edges (ADR-028) are part of mesh state and survive the
+    /// conversion automatically.
+    fn exec_draw_circle_as_shape(
+        &mut self,
+        center: DVec3,
+        normal: DVec3,
+        radius: f64,
+        segments: u32,
+    ) -> CommandResult {
+        // Phase 1 — delegate to exec_draw_circle.
+        let xia_result = self.exec_draw_circle(center, normal, radius, segments);
+        let xia_id = match xia_result {
+            CommandResult::EntityCreated(id) => id,
+            other => return other,
+        };
+
+        // Phase 2 — convert Xia → Shape.
+        let (name, face_ids, position, surface_normal) =
+            if let Some(xia) = self.xias.get(&xia_id) {
+                (
+                    xia.name.clone(),
+                    xia.face_ids.clone(),
+                    xia.position,
+                    xia.surface_normal,
+                )
+            } else {
+                return CommandResult::Error(
+                    "draw_circle_as_shape: xia missing post-pipeline".to_string(),
+                );
+            };
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        self.xias.remove(&xia_id);
+        for fid in &face_ids {
+            self.face_to_xia.remove(fid);
+        }
+
+        let shape_id = self.create_shape(name, face_ids);
+        if let Some(shape) = self.shapes.get_mut(&shape_id) {
+            shape.position = position;
+            shape.surface_normal = surface_normal;
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        CommandResult::ShapeCreated(shape_id.raw())
     }
 
     fn exec_push_pull(
@@ -9847,6 +9973,238 @@ mod tests {
              produced {} nm edges (expected ≤ 1): {:?}",
             nm.len(), nm,
         );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-5b — DrawLineAsShape / DrawCircleAsShape regression tests.
+    //
+    // Per P-5b §C lock-ins (mirroring P-5a):
+    // - Additive only — Command::DrawLine / DrawCircle UNCHANGED.
+    // - exec_draw_line_as_shape handles BOTH Face path (face_ids set)
+    //   and Line path (standalone_edge_id set, face_ids empty).
+    // - exec_draw_circle_as_shape produces Shape with single circle face.
+    // - Arc curve attachments (ADR-028) survive conversion.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn draw_line_as_shape_creates_line_shape_with_standalone_edge() {
+        // Free-edge line (no closing) — Shape should have face_ids empty
+        // and standalone_edge_id set.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end: DVec3::new(2.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+
+        let shape_id_raw = match result {
+            CommandResult::ShapeCreated(raw) => raw,
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene
+            .get_shape(crate::ShapeId::new(shape_id_raw))
+            .expect("shape must exist");
+        assert!(shape.face_ids.is_empty(),
+            "Free-edge line must produce Shape with no faces");
+        assert!(shape.standalone_edge_id.is_some(),
+            "Free-edge line must populate standalone_edge_id");
+
+        // No Xia exists.
+        assert!(scene.xias.is_empty());
+    }
+
+    #[test]
+    fn draw_line_as_shape_face_path_when_loop_closes() {
+        // Build a closed triangle via 3 DrawLineAsShape commands.
+        // The last one closes the loop → face synthesized.
+        let mut scene = Scene::new();
+        let r1 = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end: DVec3::new(2.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        let r2 = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(2.0, 0.0, 0.0),
+            end: DVec3::new(1.0, 1.5, 0.0),
+            surface_normal: None,
+        });
+        let r3 = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(1.0, 1.5, 0.0),
+            end: DVec3::new(0.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+
+        // First two must be Line shapes (no face yet).
+        let _shape1 = match r1 { CommandResult::ShapeCreated(id) => id, _ => panic!() };
+        let _shape2 = match r2 { CommandResult::ShapeCreated(id) => id, _ => panic!() };
+        let shape3_id = match r3 { CommandResult::ShapeCreated(id) => id, _ => panic!() };
+
+        // Third one closes the loop — face should be synthesized.
+        // The Shape (returned by r3) carries the face_ids for the synthesized face.
+        let shape3 = scene.get_shape(crate::ShapeId::new(shape3_id))
+            .expect("third shape exists");
+        assert!(!shape3.face_ids.is_empty(),
+            "Closing line must produce a Shape with synthesized face_ids");
+        // No Xia anywhere.
+        assert!(scene.xias.is_empty(),
+            "Loop-closing DrawLineAsShape must NOT create a Xia");
+        assert!(scene.face_to_xia.is_empty(),
+            "Loop-closing DrawLineAsShape must NOT update face_to_xia");
+    }
+
+    #[test]
+    fn draw_circle_as_shape_creates_shape_not_xia() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 1.5,
+            segments: 16,
+        });
+
+        let shape_id_raw = match result {
+            CommandResult::ShapeCreated(raw) => raw,
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene
+            .get_shape(crate::ShapeId::new(shape_id_raw))
+            .expect("circle shape exists");
+        assert_eq!(shape.name, "Circle");
+        assert!(!shape.face_ids.is_empty(),
+            "Circle must produce face_ids (single face)");
+        assert_eq!(shape.surface_normal, Some(DVec3::Z));
+
+        // No Xia.
+        assert!(scene.xias.is_empty());
+        assert!(scene.face_to_xia.is_empty());
+    }
+
+    #[test]
+    fn draw_line_circle_unchanged_after_p5b_addition() {
+        // P-5b §C lock-in #1 — legacy Command::DrawLine / DrawCircle
+        // paths UNCHANGED. Verify they still produce EntityCreated(XiaId)
+        // with proper xias / face_to_xia population.
+        let mut scene = Scene::new();
+        let r_line = scene.execute(Command::DrawLine {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end: DVec3::new(1.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        match r_line {
+            CommandResult::EntityCreated(_) => {
+                assert!(!scene.xias.is_empty(), "DrawLine must create Xia");
+                assert!(scene.shapes.is_empty(),
+                    "DrawLine (legacy) must NOT create Shape");
+            }
+            other => panic!("DrawLine returned unexpected {:?}", other),
+        }
+
+        let mut scene2 = Scene::new();
+        let r_circle = scene2.execute(Command::DrawCircle {
+            center: DVec3::ZERO, normal: DVec3::Z,
+            radius: 1.0, segments: 12,
+        });
+        match r_circle {
+            CommandResult::EntityCreated(_) => {
+                assert!(!scene2.xias.is_empty(), "DrawCircle must create Xia");
+                assert!(scene2.shapes.is_empty(),
+                    "DrawCircle (legacy) must NOT create Shape");
+            }
+            other => panic!("DrawCircle returned unexpected {:?}", other),
+        }
+    }
+
+    #[test]
+    fn draw_circle_as_shape_then_promote_succeeds_when_volumetric_base_exists() {
+        // The flat circle Shape itself isn't volumetric — promote should
+        // fail NotWatertight (mirror of draw_rect_as_shape_then_promote).
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 1.0,
+            segments: 8,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("got {:?}", other),
+        };
+
+        let mat = MaterialId::new(11);
+        let err = scene
+            .promote_shape_to_xia(shape_id, mat)
+            .expect_err("flat circle must fail watertight");
+        assert!(matches!(err, crate::promote::PromoteError::NotWatertight { .. }));
+        assert!(scene.xias.is_empty(),
+            "Failed promote must not create Xia");
+        assert!(scene.get_shape(shape_id).is_some(),
+            "Shape preserved after failed promote");
+    }
+
+    #[test]
+    fn draw_line_as_shape_persists_through_snapshot() {
+        // ADR-050 P-3 (section 7) lockstep — DrawLineAsShape result
+        // (free-edge case) must round-trip through scene snapshot.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end: DVec3::new(3.0, 4.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("got {:?}", other),
+        };
+        let original_standalone = scene
+            .get_shape(shape_id)
+            .and_then(|s| s.standalone_edge_id);
+        assert!(original_standalone.is_some());
+
+        let snap = scene.scene_snapshot();
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        let restored_shape = restored
+            .get_shape(shape_id)
+            .expect("Line Shape must round-trip");
+        assert_eq!(restored_shape.name, "Line");
+        assert_eq!(restored_shape.standalone_edge_id, original_standalone);
+        assert!(restored.xias.is_empty());
+    }
+
+    #[test]
+    fn cross_tool_sanity_rect_line_circle_as_shape_coexist() {
+        // Mixed-tool scenario: DrawRectAsShape + DrawLineAsShape +
+        // DrawCircleAsShape in disjoint regions all produce Shapes,
+        // no Xias, no face_to_xia entries. Validates cross-tool
+        // interaction doesn't accidentally bleed Xia creation.
+        let mut scene = Scene::new();
+
+        let r_rect = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(-5.0, 0.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 1.0, height: 1.0,
+        });
+        let r_line = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end: DVec3::new(1.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        let r_circle = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::new(5.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 0.5, segments: 8,
+        });
+
+        for r in [&r_rect, &r_line, &r_circle] {
+            assert!(matches!(r, CommandResult::ShapeCreated(_)),
+                "All three As-Shape commands must return ShapeCreated");
+        }
+
+        assert_eq!(scene.shapes.len(), 3, "Three shapes coexist");
+        assert!(scene.xias.is_empty(), "No Xia from any As-Shape draw");
+        assert!(scene.face_to_xia.is_empty(),
+            "face_to_xia stays empty across all three shape types");
     }
 
     #[test]

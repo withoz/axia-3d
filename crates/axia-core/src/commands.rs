@@ -102,6 +102,37 @@ pub enum Command {
         height: f64,
     },
 
+    /// ADR-050 P-5b — Draw a line and produce a form-layer Shape (no Xia).
+    ///
+    /// Geometry is identical to `DrawLine` (intersect-split + face
+    /// synthesis pipeline). The result is registered as a Shape with
+    /// either:
+    /// - `face_ids` populated (closing-loop case, face synthesized)
+    /// - OR `standalone_edge_id` set (free-edge case, no face)
+    ///
+    /// Same lock-ins as `DrawRectAsShape` — face_to_xia not updated,
+    /// existing `DrawLine` path UNCHANGED.
+    DrawLineAsShape {
+        start: DVec3,
+        end: DVec3,
+        surface_normal: Option<DVec3>,
+    },
+
+    /// ADR-050 P-5b — Draw a circle and produce a form-layer Shape (no Xia).
+    ///
+    /// Geometry is identical to `DrawCircle` (N segments approximation
+    /// + face synthesis + Arc curve attachment per ADR-028).
+    /// The resulting Shape owns the single circle face.
+    ///
+    /// Same lock-ins as `DrawRectAsShape` — face_to_xia not updated,
+    /// existing `DrawCircle` path UNCHANGED.
+    DrawCircleAsShape {
+        center: DVec3,
+        normal: DVec3,
+        radius: f64,
+        segments: u32,
+    },
+
     /// Draw a circle (regular polygon approximation)
     DrawCircle {
         center: DVec3,
