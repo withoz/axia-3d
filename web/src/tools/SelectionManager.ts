@@ -730,6 +730,54 @@ export class SelectionManager {
   }
 
   /**
+   * ADR-078 P-3 — Restore Boolean group tags from project file.
+   *
+   * Used by ProjectSerializer.openProject after `importSnapshot` +
+   * `syncMesh` to pull persisted group tags from the WASM bridge.
+   * Bypasses the selection-bound constraint of `setGroupTag` (load-time
+   * selection is empty), since persistence layer is the truth source.
+   *
+   * Policy (ADR-078 P-3 L3 — locked):
+   * - groupTags: completely replaced (existing tags cleared first).
+   * - selection: extended via union — `selected ∪ (a ∪ b)`. Existing
+   *   selection is preserved. Most loads start with empty selection,
+   *   so effectively selection becomes `a ∪ b`.
+   * - notifyChange: emitted exactly once at the end (V-2 outline
+   *   rebuild fires once).
+   *
+   * No-op if there are no existing tags AND both `a` and `b` are
+   * empty AND nothing changes in selection.
+   */
+  restoreGroupTags(a: number[], b: number[]): void {
+    const hadGroupTags = this.groupTags.size > 0;
+    this.groupTags.clear();
+    for (const fid of a) this.groupTags.set(fid, 'A');
+    for (const fid of b) this.groupTags.set(fid, 'B');
+
+    let selectionExpanded = false;
+    for (const fid of a) {
+      if (!this.selected.has(fid)) {
+        this.selected.add(fid);
+        selectionExpanded = true;
+      }
+    }
+    for (const fid of b) {
+      if (!this.selected.has(fid)) {
+        this.selected.add(fid);
+        selectionExpanded = true;
+      }
+    }
+
+    const tagsChanged = hadGroupTags || a.length > 0 || b.length > 0;
+    if (!tagsChanged && !selectionExpanded) return;
+
+    if (selectionExpanded) {
+      this.rebuildSelectionMesh();
+    }
+    this.notifyChange();
+  }
+
+  /**
    * True iff at least one face has a Boolean group tag (A or B).
    * Used by U-2 ContextMenu visibility for the "Clear groups" item —
    * the entry should appear when there is something to clear, even

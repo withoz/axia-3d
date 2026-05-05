@@ -663,4 +663,99 @@ describe('SelectionManager', () => {
       expect(countChildrenByName(sm, 'group-b-outline')).toBe(0);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-078 P-3 — restoreGroupTags (Load sync from project file).
+  // Per P-3 L3 lock-in:
+  // - groupTags fully replaced (existing tags cleared first).
+  // - selection extended via union: selected ∪ (a ∪ b).
+  // - notifyChange emitted exactly once at the end.
+  // - Bypasses selection-bound constraint of setGroupTag.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-078 P-3 restoreGroupTags', () => {
+    it('restores Group A and Group B from input arrays (basic)', () => {
+      // Empty starting state — typical post-load condition.
+      sm.restoreGroupTags([10, 20], [30]);
+
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([30]);
+      expect(sm.hasGroupSelection()).toBe(true);
+    });
+
+    it('expands selection via union — selected ∪ (A ∪ B)', () => {
+      // Pre-existing selection that overlaps partially with restore input.
+      sm.selectFaces([5, 10, 99]);
+      expect(sm.getSelectedFaces().sort((a, b) => a - b)).toEqual([5, 10, 99]);
+
+      sm.restoreGroupTags([10, 20], [30]);
+
+      // Selection = pre-existing ∪ A ∪ B = {5, 10, 99} ∪ {10, 20, 30}
+      const selected = sm.getSelectedFaces().sort((a, b) => a - b);
+      expect(selected).toEqual([5, 10, 20, 30, 99]);
+
+      // groupTags replaced with the restore input.
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([30]);
+    });
+
+    it('overwrites prior groupTags entirely (no accumulation)', () => {
+      // Set up prior tags via setGroupTag (selection-bound path).
+      sm.selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20], 'A');
+      sm.setGroupTag([30], 'B');
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([30]);
+
+      // Restore with disjoint set — prior tags must be dropped.
+      sm.restoreGroupTags([100], [200, 300]);
+
+      expect(sm.getGroupA()).toEqual([100]);
+      expect(sm.getGroupB()).toEqual([200, 300]);
+
+      // Selection grew by union (existing 10, 20, 30 preserved + new 100, 200, 300).
+      const selected = sm.getSelectedFaces().sort((a, b) => a - b);
+      expect(selected).toEqual([10, 20, 30, 100, 200, 300]);
+    });
+
+    it('emits exactly one notifyChange (V-2 outline rebuild fires once)', () => {
+      const cb = vi.fn();
+      sm.onChange(cb);
+
+      sm.restoreGroupTags([10, 20], [30]);
+
+      // Exactly one notifyChange emit, regardless of A+B sizes.
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('no-op when both inputs empty AND no prior tags AND no selection change', () => {
+      const cb = vi.fn();
+      sm.onChange(cb);
+
+      // Empty restore on empty state — must NOT emit notifyChange.
+      sm.restoreGroupTags([], []);
+
+      expect(cb).not.toHaveBeenCalled();
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+    });
+
+    it('empty input clears prior tags (notifyChange fires)', () => {
+      // Prior tags exist — empty restore must clear them.
+      sm.selectFaces([10, 20]);
+      sm.setGroupTag([10], 'A');
+      sm.setGroupTag([20], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      const cb = vi.fn();
+      sm.onChange(cb);
+
+      sm.restoreGroupTags([], []);
+
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+      expect(sm.hasAnyGroupTag()).toBe(false);
+      // notifyChange MUST fire to clear stale outlines.
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+  });
 });
