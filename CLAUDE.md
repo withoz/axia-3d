@@ -1822,7 +1822,8 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
     visual regression 인프라와 함께 권장
   - E.5-2 Multi-group (>2) — 현재 A/B 만, N-group 별도 ADR
   - E.5-3 Persistence — session 만 (project 저장 별도 ADR)
-  - E.5-4 단축키 미배정 (atomic; 충돌 검토 별도 sub-step)
+  - ~~E.5-4 단축키 미배정~~ → ✅ closure (atomic sub-step,
+    Alt+A/B/0 binding + ContextMenu hint, +5 회귀)
 - **상세**: `docs/adr/074-boolean-group-selection-ux.md` §D Acceptance Log
 
 ### ADR-076 — Legacy Boolean Path Sunset (E.5 Cleanup 트랙 완료, 2026-05-05)

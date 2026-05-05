@@ -222,6 +222,41 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // ADR-074 §E.5-4 — Boolean Group A/B 단축키 (Alt+A / Alt+B / Alt+0).
+    // Alt 조합으로 기존 단축키 충돌 회피 (Ctrl+A=Select All / 'b'=bottom-view 와 분리).
+    // 우클릭 메뉴 (ADR-074 U-2) 의 단축 진입점 — 파워유저 효율 향상.
+    // Per ADR-074 §E.5-4 closure:
+    //   Alt+A → Set Group A on current selection
+    //   Alt+B → Set Group B on current selection
+    //   Alt+0 → Clear all group tags
+    // 의존: toolManager.selection 의 setGroupTag / clearGroupTags
+    //   (legacy bridge 호환을 위한 typeof 가드).
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+      const sm = toolManager.selection as {
+        getSelectedFaces?: () => number[];
+        setGroupTag?: (faceIds: number[], group: 'A' | 'B') => void;
+        clearGroupTags?: () => void;
+      };
+      const lower = e.key.toLowerCase();
+      if (lower === 'a' || lower === 'b') {
+        if (typeof sm.setGroupTag === 'function' &&
+            typeof sm.getSelectedFaces === 'function') {
+          const faces = sm.getSelectedFaces();
+          if (faces.length > 0) {
+            e.preventDefault();
+            sm.setGroupTag(faces, lower === 'a' ? 'A' : 'B');
+            return;
+          }
+        }
+      } else if (lower === '0') {
+        if (typeof sm.clearGroupTags === 'function') {
+          e.preventDefault();
+          sm.clearGroupTags();
+          return;
+        }
+      }
+    }
+
     // A5: Snap 타입별 단축 토글 (Alt + E/M/I/C/P/L/F/G)
     // Alt 조합으로 기존 단축키(X, Y, Z, H, V 등)와 충돌 방지
     if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {

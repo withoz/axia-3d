@@ -336,13 +336,19 @@ U-G=(a) 결정으로 group tags 는 session 만 유지. project 저장
 invariant 검증 + AXIA 매직 바이트 호환 (legacy file 은 빈 group
 으로 로드). 별도 ADR 또는 file format ADR 와 함께.
 
-### E.5-4 단축키 미배정
+### E.5-4 단축키 (✅ atomic sub-step closure 2026-05-05)
 
-U-2-f=(c) 결정으로 단축키 미배정. 우클릭 메뉴만 진입점.
-파워유저 효율 제한.
+~~U-2-f=(c) 결정으로 단축키 미배정. 우클릭 메뉴만 진입점.
+파워유저 효율 제한.~~
 
-**해결 방향**: KeyboardShortcuts.ts 통합. 단축키 충돌 검토 (Ctrl+1/2
-는 toolbar tab 에 사용 중일 수 있음). 별도 sub-step.
+→ **본 commit (atomic sub-step) 으로 closure**:
+- `KeyboardShortcuts.ts` 에 Alt+A / Alt+B / Alt+0 핸들러 추가
+- ContextMenu HTML 항목에 단축키 hint (`Alt+A` / `Alt+B` / `Alt+0`)
+- 충돌 검토 완료 — Alt+A/B/0 는 기존 단축키 (Ctrl+A=Select All / 'b'=
+  bottom-view / Alt+E/M/I/C/P/L/F/G/X/N=snap toggle) 와 무충돌
+- 회귀 +5 (KeyboardShortcuts.test.ts) — 절대 #[ignore] 금지
+- 단축키 정책: Alt 조합 + letter mnemonic (A=GroupA / B=GroupB /
+  0=clear) — Snap 토글 (Alt+E/M/...) 와 일관 패턴
 
 ---
 

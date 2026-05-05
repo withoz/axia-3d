@@ -38,6 +38,10 @@ function mockDeps(): KeyboardShortcutsDeps {
         isInGroupEditMode: vi.fn().mockReturnValue(false),
         exitGroupEdit: vi.fn(),
         clearSelection: vi.fn(),
+        // ADR-074 §E.5-4 — Boolean Group shortcut targets
+        getSelectedFaces: vi.fn().mockReturnValue([10, 20, 30]),
+        setGroupTag: vi.fn(),
+        clearGroupTags: vi.fn(),
       },
     } as any,
     viewport: {
@@ -292,6 +296,48 @@ describe('KeyboardShortcuts', () => {
     it('clicking home button resets camera', () => {
       document.getElementById('home-btn')!.click();
       expect(deps.viewport.resetCamera).toHaveBeenCalled();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-074 §E.5-4 — Boolean Group A/B 단축키 (Alt+A / Alt+B / Alt+0).
+  // ContextMenu (U-2) 의 단축 진입점. 우클릭 우회로 파워유저 효율 향상.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-074 §E.5-4 Boolean Group shortcuts', () => {
+    it('Alt+A calls selection.setGroupTag with selected faces and "A"', () => {
+      // selection.getSelectedFaces returns [10, 20, 30] (mockDeps default).
+      fireKey('a', { altKey: true });
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .toHaveBeenCalledWith([10, 20, 30], 'A');
+    });
+
+    it('Alt+B calls selection.setGroupTag with selected faces and "B"', () => {
+      fireKey('b', { altKey: true });
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .toHaveBeenCalledWith([10, 20, 30], 'B');
+    });
+
+    it('Alt+0 calls selection.clearGroupTags', () => {
+      fireKey('0', { altKey: true });
+      expect((deps.toolManager.selection as any).clearGroupTags)
+        .toHaveBeenCalled();
+    });
+
+    it('Alt+A is no-op when selection is empty', () => {
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([]);
+      fireKey('a', { altKey: true });
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .not.toHaveBeenCalled();
+    });
+
+    it('plain "a" (no Alt) does not trigger setGroupTag', () => {
+      // Ensures Alt+A is not swallowed by a plain-key handler.
+      // Conflict guard: Ctrl+A is select-all (separate); plain `a` has
+      // no group binding.
+      fireKey('a');
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .not.toHaveBeenCalled();
     });
   });
 });
