@@ -1072,6 +1072,9 @@ impl Scene {
             Command::DrawRect { center, normal, up, width, height } => {
                 self.exec_draw_rect(center, normal, up, width, height)
             }
+            Command::DrawRectAsShape { center, normal, up, width, height } => {
+                self.exec_draw_rect_as_shape(center, normal, up, width, height)
+            }
             Command::DrawCircle { center, normal, radius, segments } => {
                 self.exec_draw_circle(center, normal, radius, segments)
             }
@@ -3670,6 +3673,81 @@ impl Scene {
         self.transactions.set_after_snapshot(self.scene_snapshot());
         self.transactions.commit();
         CommandResult::EntityCreated(xia_id)
+    }
+
+    /// ADR-050 P-5a — Draw a rectangle as a form-layer Shape (no Xia,
+    /// no material).
+    ///
+    /// Implementation strategy (per P-5a-c=(a) lock-in): re-use the
+    /// existing `exec_draw_rect` geometry pipeline (4 lines + face
+    /// synthesis + auto_intersect + post_process) in full, then
+    /// **convert the resulting Xia into a Shape** by:
+    ///   1. Reading the Xia's metadata (name / face_ids / position /
+    ///      surface_normal)
+    ///   2. Removing the Xia from `xias` and its `face_to_xia` entries
+    ///   3. Creating a new Shape with the same metadata
+    ///
+    /// This avoids ~350 LoC of mesh-pipeline duplication while keeping
+    /// `exec_draw_rect` strictly UNCHANGED. The conversion uses a
+    /// second transaction, so Undo from a Shape-mode draw requires
+    /// 2 presses (Shape → Xia → pre-rect). This is a transitional
+    /// artifact of P-5a (deferred); P-5d/e will collapse the two
+    /// transactions when DrawRectAsShape becomes the default and the
+    /// dual-Xia/Shape path no longer needs to coexist.
+    ///
+    /// `face_to_xia` is NOT updated for Shape — Shape is a form-layer
+    /// reference, not the face owner (per ADR-049 §4 Q3).
+    fn exec_draw_rect_as_shape(
+        &mut self,
+        center: DVec3,
+        normal: DVec3,
+        up: DVec3,
+        width: f64,
+        height: f64,
+    ) -> CommandResult {
+        // Phase 1 — delegate full geometry pipeline to exec_draw_rect.
+        let xia_result = self.exec_draw_rect(center, normal, up, width, height);
+        let xia_id = match xia_result {
+            CommandResult::EntityCreated(id) => id,
+            other => return other, // pass through error / sentinel
+        };
+
+        // Phase 2 — convert Xia → Shape in a second transaction.
+        // Read metadata first (clone before mutation).
+        let (name, face_ids, position, surface_normal) =
+            if let Some(xia) = self.xias.get(&xia_id) {
+                (
+                    xia.name.clone(),
+                    xia.face_ids.clone(),
+                    xia.position,
+                    xia.surface_normal,
+                )
+            } else {
+                return CommandResult::Error(
+                    "draw_rect_as_shape: xia missing post-pipeline".to_string(),
+                );
+            };
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        // Drop the Xia + face_to_xia entries (Shape is form-only).
+        self.xias.remove(&xia_id);
+        for fid in &face_ids {
+            self.face_to_xia.remove(fid);
+        }
+
+        // Create the form-layer Shape with the inherited metadata.
+        let shape_id = self.create_shape(name, face_ids);
+        if let Some(shape) = self.shapes.get_mut(&shape_id) {
+            shape.position = position;
+            shape.surface_normal = surface_normal;
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        CommandResult::ShapeCreated(shape_id.raw())
     }
 
     fn exec_draw_circle(
@@ -9574,6 +9652,201 @@ mod tests {
 
         // Section 1-2 (Xia) round-trip
         assert!(!restored.xias.is_empty());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-5a — Command::DrawRectAsShape regression tests.
+    //
+    // Per P-5a §C lock-ins:
+    // - Additive only — Command::DrawRect / exec_draw_rect /
+    //   CommandResult::EntityCreated all UNCHANGED. No LOCKED #1
+    //   stacked-inner regression.
+    // - exec_draw_rect_as_shape produces Shape (NOT Xia). face_to_xia
+    //   not updated for Shape (form-layer reference only).
+    // - The pipeline reuses the same mesh synthesis as DrawRect, so
+    //   geometric correctness inherits the existing exec_draw_rect
+    //   regression coverage.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn draw_rect_as_shape_creates_shape_not_xia() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+
+        // P-5a-b — new variant ShapeCreated returned.
+        let shape_id_raw = match result {
+            CommandResult::ShapeCreated(raw) => raw,
+            other => panic!(
+                "expected CommandResult::ShapeCreated, got {:?}",
+                other,
+            ),
+        };
+        assert!(shape_id_raw > 0, "ShapeId.raw() must be non-zero");
+
+        // The Shape exists with the rect's face owners.
+        let shape = scene
+            .get_shape(crate::ShapeId::new(shape_id_raw))
+            .expect("shape must exist");
+        assert_eq!(shape.name, "Rectangle");
+        assert!(!shape.face_ids.is_empty(), "shape must own at least 1 face");
+        assert_eq!(shape.surface_normal, Some(DVec3::Z));
+
+        // No Xia exists — form-layer only (Q4 default_material 폐지 정합).
+        assert!(scene.xias.is_empty(), "DrawRectAsShape must NOT create a Xia");
+    }
+
+    #[test]
+    fn draw_rect_as_shape_does_not_populate_face_to_xia() {
+        // Shape is a form-layer reference, not a face owner.
+        // face_to_xia (Xia layer) must remain empty after DrawRectAsShape.
+        let mut scene = Scene::new();
+        let _ = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 1.0,
+            height: 1.0,
+        });
+        assert!(
+            scene.face_to_xia.is_empty(),
+            "face_to_xia must remain empty for Shape-only draws"
+        );
+    }
+
+    #[test]
+    fn draw_rect_unchanged_after_p5a_addition() {
+        // P-5a §C lock-in #1 — Command::DrawRect path UNCHANGED.
+        // Existing tests rely on EntityCreated(XiaId); verify the
+        // contract is preserved when DrawRect is invoked normally.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 2.0,
+            height: 2.0,
+        });
+        match result {
+            CommandResult::EntityCreated(_xia_id) => {
+                // Xia must exist (legacy path).
+                assert!(!scene.xias.is_empty());
+                // Shape map untouched.
+                assert!(scene.shapes.is_empty(),
+                    "DrawRect (legacy) must NOT create a Shape");
+            }
+            other => panic!("DrawRect must return EntityCreated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn draw_rect_as_shape_then_promote_round_trip() {
+        // End-to-end: DrawRectAsShape → promote_shape_to_xia → Xia exists.
+        // Validates that the Shape produced by P-5a is suitable input
+        // for the Phase 1 promote API (P-2).
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 3.0,
+            height: 3.0,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("got {:?}", other),
+        };
+
+        // The flat rect is NOT volumetric — promote should fail
+        // NotWatertight (single open face). This validates the
+        // condition wiring rather than success path.
+        let mat = MaterialId::new(7);
+        let err = scene
+            .promote_shape_to_xia(shape_id, mat)
+            .expect_err("flat rect must fail watertight check");
+        match err {
+            crate::promote::PromoteError::NotWatertight { face_count, .. } => {
+                assert!(face_count >= 1);
+            }
+            other => panic!("expected NotWatertight, got {:?}", other),
+        }
+
+        // Failed promote MUST NOT create a Xia.
+        assert!(scene.xias.is_empty());
+        // Shape preserved (form-layer independence).
+        assert!(scene.get_shape(shape_id).is_some());
+    }
+
+    #[test]
+    fn draw_rect_as_shape_persists_through_snapshot() {
+        // ADR-050 P-3 (section 7) lockstep — DrawRectAsShape result
+        // must round-trip through scene_snapshot/restore_scene_snapshot.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 1.5,
+            height: 2.5,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("got {:?}", other),
+        };
+        let original_face_ids = scene
+            .get_shape(shape_id)
+            .map(|s| s.face_ids.clone())
+            .unwrap();
+
+        let snap = scene.scene_snapshot();
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        let restored_shape = restored
+            .get_shape(shape_id)
+            .expect("Shape must round-trip");
+        assert_eq!(restored_shape.face_ids, original_face_ids);
+        assert_eq!(restored_shape.name, "Rectangle");
+        assert_eq!(restored_shape.surface_normal, Some(DVec3::Z));
+        assert!(restored.xias.is_empty(), "no Xia in snapshot");
+    }
+
+    #[test]
+    fn draw_rect_as_shape_does_not_regress_locked_p7_canonical() {
+        // P-5a §C lock-in #1 — invoking DrawRectAsShape MUST NOT
+        // regress LOCKED #1 P7 canonical invariants on the underlying
+        // mesh (since the geometry pipeline is the same as DrawRect).
+        // Test: build a stacked-inner via DrawRect (legacy) THEN
+        // DrawRectAsShape — non-manifold count must remain ≤ 1
+        // (deferred boundary).
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+            width: 10.0, height: 6.0,
+        });
+        let _ = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(0.0, -1.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+        let _ = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(0.0, 1.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 4.0, height: 2.0,
+        });
+
+        let nm = scene.mesh.collect_non_manifold_edges();
+        assert!(
+            nm.len() <= 1,
+            "ADR-051 deferred boundary regression — DrawRectAsShape \
+             produced {} nm edges (expected ≤ 1): {:?}",
+            nm.len(), nm,
+        );
     }
 
     #[test]

@@ -28,6 +28,12 @@ pub enum CommandResult {
     },
     /// A new XIA entity was created
     EntityCreated(XiaId),
+    /// ADR-050 P-5a — A new form-layer Shape was created (no material).
+    /// Two-Layer Citizenship: Shape is the form citizen; promotion to
+    /// property-layer Xia happens later via `Scene::promote_shape_to_xia`
+    /// when material is explicitly assigned (4-condition validation).
+    /// Carries `ShapeId.raw()` as `u32` for bridge-friendly transport.
+    ShapeCreated(u32),
     /// A group was created/modified
     GroupUpdated(GroupId),
     /// Material assigned to faces
@@ -69,6 +75,26 @@ pub enum Command {
 
     /// Draw a rectangle
     DrawRect {
+        center: DVec3,
+        normal: DVec3,
+        up: DVec3,
+        width: f64,
+        height: f64,
+    },
+
+    /// ADR-050 P-5a — Draw a rectangle and produce a form-layer Shape
+    /// (NOT a property-layer Xia). Two-Layer Citizenship:
+    /// - Geometry is the same as `DrawRect` (4 lines + face synthesis +
+    ///   auto-intersect + post-process).
+    /// - The result is registered as a `Shape` (no material, no member
+    ///   identity). Promotion to Xia is user-driven via
+    ///   `Scene::promote_shape_to_xia` when material is assigned.
+    /// - `face_to_xia` is NOT updated (Shape is form reference only).
+    ///
+    /// Drop-in alongside `DrawRect` — existing tools / tests using
+    /// `DrawRect` are unaffected. P-5a is the foundation for the
+    /// progressive default flip (P-5e).
+    DrawRectAsShape {
         center: DVec3,
         normal: DVec3,
         up: DVec3,
