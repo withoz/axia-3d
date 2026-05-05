@@ -375,3 +375,142 @@ export async function clickToolbarAction(
     btn.click();
   }, action);
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-078 P-4 — Project Save/Load Round-trip Real Chromium E2E.
+//
+// Per P-4 lock-ins:
+// - P-4-a (b): bridge call sequence simulation (no DOM file dialog).
+// - P-4-c (a): page reload between save and load — true fresh state.
+// - P-4-h: fixture replays the same logical push/pull flow that
+//   ProjectSerializer.saveProject/openProject performs.
+//
+// The simulate* helpers below are the persistence-layer equivalent of
+// ProjectSerializer.pushGroupTagsToBridge / pullGroupTagsFromBridge.
+// They exercise the same WasmBridge surface; only the trigger point
+// (test code vs UI button) differs.
+// ════════════════════════════════════════════════════════════════════════
+
+/**
+ * ADR-078 P-3 L1 — Save sync push (clear → set(A) → set(B)).
+ *
+ * Mirrors `ProjectSerializer.pushGroupTagsToBridge`. Reads UI runtime
+ * state from `toolManager.selection.getGroupA / getGroupB`, then pushes
+ * to WasmBridge via clear + set(A) + set(B). Idempotent: if both
+ * groups empty, only clear is invoked.
+ */
+export async function simulateProjectSavePush(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const bridge = w.__axia.get('bridge');
+    const sm = w.__axia.get('toolManager').selection;
+    bridge.clearBooleanGroupTags();
+    const a: number[] = sm.getGroupA?.() ?? [];
+    const b: number[] = sm.getGroupB?.() ?? [];
+    if (a.length > 0) bridge.setBooleanGroupTag(a, 'A');
+    if (b.length > 0) bridge.setBooleanGroupTag(b, 'B');
+  });
+}
+
+/**
+ * Export the current scene snapshot as a portable number[] (Playwright
+ * cannot serialize Uint8Array directly across page.evaluate boundary
+ * → convert via Array.from at the source).
+ *
+ * Mirrors `bridge.exportSnapshot()` in ProjectSerializer.saveProject.
+ */
+export async function exportSnapshotBytes(page: Page): Promise<number[]> {
+  return await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bridge = (window as any).__axia.get('bridge');
+    const bytes: Uint8Array = bridge.exportSnapshot();
+    if (!bytes) {
+      throw new Error('exportSnapshotBytes: bridge.exportSnapshot returned null');
+    }
+    return Array.from(bytes);
+  });
+}
+
+/**
+ * Import a previously-exported snapshot byte array. Mirrors
+ * `bridge.importSnapshot(data)` + `toolManager.syncMesh()` in
+ * ProjectSerializer.openProject (load path).
+ *
+ * Returns true on successful import (P-1 SNAPSHOT_VERSION = 2 check
+ * passed + bincode deserialization OK).
+ */
+export async function importSnapshotBytes(
+  page: Page,
+  bytes: number[],
+): Promise<boolean> {
+  return await page.evaluate((bytesArr) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const bridge = w.__axia.get('bridge');
+    const tm = w.__axia.get('toolManager');
+    const ok = bridge.importSnapshot(new Uint8Array(bytesArr));
+    if (ok) {
+      tm.syncMesh();
+    }
+    return ok;
+  }, bytes);
+}
+
+/**
+ * ADR-078 P-3 L2 — Load sync pull (getA + getB + restoreGroupTags).
+ *
+ * Mirrors `ProjectSerializer.pullGroupTagsFromBridge`. Reads persistent
+ * group_tags from Scene via WasmBridge.getBooleanGroup{A,B}Faces, then
+ * applies via SelectionManager.restoreGroupTags (P-3 L3 policy:
+ * groupTags fully replaced + selection ∪ (A ∪ B) + 1 notifyChange).
+ *
+ * Must be invoked AFTER importSnapshotBytes + syncMesh (P-3 L2 lock-in
+ * — face IDs must be stable before pull).
+ */
+export async function simulateProjectLoadPull(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const bridge = w.__axia.get('bridge');
+    const sm = w.__axia.get('toolManager').selection;
+    if (typeof sm.restoreGroupTags !== 'function') {
+      throw new Error(
+        'simulateProjectLoadPull: SelectionManager.restoreGroupTags missing — ' +
+          'ADR-078 P-3 build state out of date',
+      );
+    }
+    const a: number[] = bridge.getBooleanGroupAFaces();
+    const b: number[] = bridge.getBooleanGroupBFaces();
+    sm.restoreGroupTags(a, b);
+  });
+}
+
+/**
+ * Read SelectionManager.getGroupA / getGroupB / hasGroupSelection +
+ * selection size for round-trip verification. Sorted ascending so
+ * tests can use deep-equality without ordering concerns.
+ */
+export async function readSelectionGroups(
+  page: Page,
+): Promise<{
+  groupA: number[];
+  groupB: number[];
+  hasSelection: boolean;
+  selectionSize: number;
+}> {
+  return await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const sm = w.__axia.get('toolManager').selection;
+    const a: number[] = sm.getGroupA();
+    const b: number[] = sm.getGroupB();
+    const sel: number[] = sm.getSelectedFaces();
+    return {
+      groupA: a.slice().sort((x: number, y: number) => x - y),
+      groupB: b.slice().sort((x: number, y: number) => x - y),
+      hasSelection: sm.hasGroupSelection(),
+      selectionSize: sel.length,
+    };
+  });
+}
