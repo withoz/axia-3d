@@ -408,6 +408,13 @@ type AxiaEngineExtended = AxiaEngine & {
   clearBooleanGroupTags?(): void;
   hasAnyBooleanGroupTag?(): boolean;
   hasBooleanGroupSelection?(): boolean;
+  // ADR-050 P-4 — Shape (form-layer citizenship) typed methods
+  createShape?(name: string, faceIds: Uint32Array): number;
+  getShapeIds?(): Uint32Array;
+  getShapeFaceIds?(shapeId: number): Uint32Array;
+  deleteShape?(shapeId: number): boolean;
+  clearShapes?(): void;
+  promoteShapeToXia?(shapeId: number, materialId: number): number;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -804,6 +811,90 @@ export class WasmBridge {
   hasBooleanGroupSelection(): boolean {
     if (!this.engine || !this.engine.hasBooleanGroupSelection) return false;
     return this.engine.hasBooleanGroupSelection();
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-050 P-4 — Shape (form-layer citizenship) typed wrappers.
+  //
+  // Per ADR-050 §B P-4 lock-ins (mirroring ADR-078 P-2):
+  //   - number[] in / out (TS-side ergonomic — Uint32Array conversion
+  //     happens at the bridge boundary)
+  //   - Graceful no-op when WASM doesn't expose the endpoint (legacy
+  //     build / older snapshot)
+  //   - markDirty() invalidates buffer cache on all mutators
+  //   - promoteShapeToXia THROWS on validation failure (strict — silent
+  //     skip 차단). Caller should surround with try/catch and surface
+  //     PromoteError text to UI Toast.
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-050 P-4 — Create a new form-layer Shape. Returns the new
+   * ShapeId, or 0 if the bridge endpoint is missing (legacy build).
+   *
+   * The Shape has no material (form layer) — `promoteShapeToXia` is
+   * the gateway to property layer (Xia) once material is assigned and
+   * 4-condition check passes (재질 / 부피 / 닫힘 / manifold).
+   */
+  createShape(name: string, faceIds: number[]): number {
+    if (!this.engine || !this.engine.createShape) return 0;
+    this.markDirty();
+    return this.engine.createShape(name, Uint32Array.from(faceIds));
+  }
+
+  /**
+   * ADR-050 P-4 — All currently stored Shape IDs (sorted ascending).
+   * Returns empty array on missing endpoint.
+   */
+  getShapeIds(): number[] {
+    if (!this.engine || !this.engine.getShapeIds) return [];
+    return Array.from(this.engine.getShapeIds());
+  }
+
+  /**
+   * ADR-050 P-4 — Face IDs owned by a given Shape. Empty if the
+   * Shape doesn't exist (graceful — caller may have stale ID).
+   */
+  getShapeFaceIds(shapeId: number): number[] {
+    if (!this.engine || !this.engine.getShapeFaceIds) return [];
+    return Array.from(this.engine.getShapeFaceIds(shapeId));
+  }
+
+  /**
+   * ADR-050 P-4 — Delete a Shape. Returns true if deleted, false if
+   * the Shape didn't exist or the endpoint is missing.
+   */
+  deleteShape(shapeId: number): boolean {
+    if (!this.engine || !this.engine.deleteShape) return false;
+    this.markDirty();
+    return this.engine.deleteShape(shapeId);
+  }
+
+  /**
+   * ADR-050 P-4 — Clear all Shapes. No-op on missing endpoint.
+   */
+  clearShapes(): void {
+    if (!this.engine || !this.engine.clearShapes) return;
+    this.markDirty();
+    this.engine.clearShapes();
+  }
+
+  /**
+   * ADR-050 P-4 — Promote a Shape to a Xia via 4-condition validation.
+   *
+   * On success: returns the new XiaId.
+   * On failure: throws (strict — silent skip 차단, P-2-c lock-in 답습).
+   *   Caller wraps in try/catch and surfaces error text to Toast.
+   *
+   * Throws if the WASM endpoint is missing (legacy build) — this is
+   * a feature gate, not graceful no-op, since the caller is asking
+   * for a state transition that requires the endpoint.
+   */
+  promoteShapeToXia(shapeId: number, materialId: number): number {
+    if (!this.engine || !this.engine.promoteShapeToXia) {
+      throw new Error('promoteShapeToXia: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    return this.engine.promoteShapeToXia(shapeId, materialId);
   }
 
 

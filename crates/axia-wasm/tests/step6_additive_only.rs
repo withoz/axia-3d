@@ -532,7 +532,7 @@ fn boolean_group_p2_output_signature_vec_u32() {
         "pub fn get_boolean_group_b_faces",
     ] {
         let idx = l.find(method).expect(method);
-        let body = &l[idx..(idx + 400).min(l.len())];
+        let body = char_safe_slice(&l, idx, 400);
         assert!(body.contains("-> Vec<u32>"),
             "P-2-e: {} must return Vec<u32>", method);
         assert!(body.contains(".raw()"),
@@ -541,8 +541,123 @@ fn boolean_group_p2_output_signature_vec_u32() {
 
     for method in ["pub fn has_any_boolean_group_tag", "pub fn has_boolean_group_selection"] {
         let idx = l.find(method).expect(method);
-        let body = &l[idx..(idx + 200).min(l.len())];
+        let body = char_safe_slice(&l, idx, 200);
         assert!(body.contains("-> bool"),
             "P-2: {} must return bool", method);
     }
+}
+
+/// ADR-050 P-4 — Char-boundary-safe slice helper.
+///
+/// `&str[a..b]` panics when `b` falls inside a multi-byte UTF-8 char.
+/// The lib.rs source contains Korean characters (`═`, `↔`, `—` em-dash,
+/// 한글) in comments which are 3 bytes per char in UTF-8. A naïve byte
+/// slice can land mid-char and crash.
+///
+/// This helper rounds `start + max_bytes` down to the nearest valid
+/// char boundary, guaranteeing `&s[start..end]` never panics.
+fn char_safe_slice(s: &str, start: usize, max_bytes: usize) -> &str {
+    let mut end = (start + max_bytes).min(s.len());
+    while end > start && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[start..end]
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-050 P-4 — Shape WASM bridge source-inspection invariants.
+//
+// Mirrors ADR-078 P-2 pattern. Source-inspection tests because cargo
+// test cannot drive js-sys marshalling — exercise the lib.rs source
+// to verify wiring contracts.
+// ════════════════════════════════════════════════════════════════════════
+
+/// P-4 #1 — All 6 endpoints wired with correct js_name camelCase mapping.
+#[test]
+fn shape_p4_endpoints_wired() {
+    let l = lib_src();
+    for (rust_name, js_name) in [
+        ("pub fn create_shape",          "createShape"),
+        ("pub fn get_shape_ids",         "getShapeIds"),
+        ("pub fn get_shape_face_ids",    "getShapeFaceIds"),
+        ("pub fn delete_shape",          "deleteShape"),
+        ("pub fn clear_shapes",          "clearShapes"),
+        ("pub fn promote_shape_to_xia",  "promoteShapeToXia"),
+    ] {
+        // Each Rust function must exist
+        assert!(l.contains(rust_name),
+            "ADR-050 P-4: missing Rust function {}", rust_name);
+        // and have the matching js_name attribute somewhere nearby
+        let attr = format!("js_name = \"{}\"", js_name);
+        assert!(l.contains(&attr),
+            "ADR-050 P-4: missing js_name attr {}", attr);
+    }
+}
+
+/// P-4 #2 — `promoteShapeToXia` uses strict Result<u32, JsValue>
+/// (failure throws — silent skip 차단, P-2-c lock-in 답습).
+#[test]
+fn shape_p4_promote_returns_strict_result() {
+    let l = lib_src();
+    let idx = l.find("pub fn promote_shape_to_xia").expect("promote_shape_to_xia");
+    let body = char_safe_slice(&l, idx, 1200);
+    assert!(body.contains("-> Result<u32, JsValue>"),
+        "ADR-050 P-4-c: promoteShapeToXia must return Result<u32, JsValue> for strict throw");
+    // Failure path must call transactions.cancel() — not commit + dummy.
+    assert!(body.contains("transactions.cancel"),
+        "ADR-050 P-4: promote failure path must cancel transaction");
+}
+
+/// P-4 #3 — Mutator endpoints (create / delete / clear / promote) all
+/// wrap the operation in a transaction so Undo/Redo restores prior
+/// state. `getShapeIds` / `getShapeFaceIds` are read-only and must NOT
+/// begin transactions.
+#[test]
+fn shape_p4_mutators_use_transactions_readonly_skip() {
+    let l = lib_src();
+    for method in [
+        "pub fn create_shape",
+        "pub fn delete_shape",
+        "pub fn clear_shapes",
+        "pub fn promote_shape_to_xia",
+    ] {
+        let idx = l.find(method).expect(method);
+        let body = char_safe_slice(&l, idx, 1200);
+        assert!(body.contains("transactions.begin"),
+            "P-4: mutator {} must begin transactions", method);
+        assert!(
+            body.contains("transactions.commit") || body.contains("transactions.cancel"),
+            "P-4: mutator {} must commit OR cancel the transaction", method,
+        );
+    }
+    for method in ["pub fn get_shape_ids", "pub fn get_shape_face_ids"] {
+        let idx = l.find(method).expect(method);
+        let body = char_safe_slice(&l, idx, 400);
+        assert!(!body.contains("transactions.begin"),
+            "P-4: read-only {} must NOT begin transactions", method);
+    }
+}
+
+/// P-4 #4 — Input methods accept `Vec<u32>` (P-2-d ownership lock-in
+/// answer) for face_ids; ID inputs accept bare `u32` (no JsValue, no
+/// String) for ShapeId / MaterialId.
+#[test]
+fn shape_p4_input_signatures_match_lockin() {
+    let l = lib_src();
+
+    // create_shape signature
+    let idx = l.find("pub fn create_shape").expect("create_shape");
+    let body = char_safe_slice(&l, idx, 400);
+    assert!(body.contains("face_ids: Vec<u32>"),
+        "P-4-d: create_shape must take face_ids: Vec<u32>");
+    assert!(body.contains("name: String"),
+        "P-4: create_shape must take name: String");
+
+    // promote_shape_to_xia signature
+    let idx = l.find("pub fn promote_shape_to_xia").expect("promote_shape_to_xia");
+    let body = char_safe_slice(&l, idx, 400);
+    assert!(body.contains("shape_id: u32"),
+        "P-4: promote_shape_to_xia must take shape_id: u32");
+    assert!(body.contains("material_id: u32"),
+        "P-4: promote_shape_to_xia must take material_id: u32");
 }

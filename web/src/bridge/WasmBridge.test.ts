@@ -1367,4 +1367,93 @@ describe('WasmBridge', () => {
       ).toThrow(/invalid tag/);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-4 — Shape (form-layer citizenship) typed wrappers
+  // (mirrors ADR-078 P-2 pattern; TS surface for Two-Layer Citizenship)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-050 P-4 Shape WASM bridge wrappers', () => {
+    it('createShape forwards name + Uint32Array(faceIds), returns id', () => {
+      const fn = vi.fn(() => 42);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { createShape: fn };
+      const id = bridge.createShape('Rect', [10, 20, 30]);
+      expect(id).toBe(42);
+      const [name, faces] = fn.mock.calls[0];
+      expect(name).toBe('Rect');
+      expect(faces).toBeInstanceOf(Uint32Array);
+      expect(Array.from(faces)).toEqual([10, 20, 30]);
+    });
+
+    it('createShape returns 0 when engine method missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.createShape('x', [1])).toBe(0);
+    });
+
+    it('getShapeIds / getShapeFaceIds convert Uint32Array → number[]', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        getShapeIds: () => Uint32Array.from([1, 3, 7]),
+        getShapeFaceIds: (id: number) => Uint32Array.from([id * 10, id * 10 + 1]),
+      };
+      expect(bridge.getShapeIds()).toEqual([1, 3, 7]);
+      expect(bridge.getShapeFaceIds(2)).toEqual([20, 21]);
+    });
+
+    it('getShapeIds / getShapeFaceIds return [] when missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getShapeIds()).toEqual([]);
+      expect(bridge.getShapeFaceIds(99)).toEqual([]);
+    });
+
+    it('deleteShape forwards id and returns boolean, default false when missing', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { deleteShape: fn };
+      expect(bridge.deleteShape(7)).toBe(true);
+      expect(fn).toHaveBeenCalledWith(7);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.deleteShape(7)).toBe(false);
+    });
+
+    it('clearShapes forwards to engine and is graceful when missing', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { clearShapes: fn };
+      bridge.clearShapes();
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.clearShapes()).not.toThrow();
+    });
+
+    it('promoteShapeToXia forwards args, returns new XiaId', () => {
+      const fn = vi.fn(() => 5);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { promoteShapeToXia: fn };
+      expect(bridge.promoteShapeToXia(2, 7)).toBe(5);
+      expect(fn).toHaveBeenCalledWith(2, 7);
+    });
+
+    it('promoteShapeToXia propagates engine throw (P-2-c strict — silent skip 차단)', () => {
+      const errFn = vi.fn(() => {
+        throw new Error('promoteShapeToXia: Material is default (id=0)');
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { promoteShapeToXia: errFn };
+      expect(() => bridge.promoteShapeToXia(1, 0)).toThrow(/Material is default/);
+    });
+
+    it('promoteShapeToXia throws when WASM endpoint missing (feature gate)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.promoteShapeToXia(1, 1))
+        .toThrow(/WASM endpoint missing/);
+    });
+  });
 });

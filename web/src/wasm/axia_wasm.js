@@ -715,6 +715,12 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-050 P-4 — Clear all Shapes. Transaction-wrapped.
+     */
+    clearShapes() {
+        wasm.axiaengine_clearShapes(this.__wbg_ptr);
+    }
+    /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
      * Empty Vec on invalid / inactive edge.
@@ -780,6 +786,24 @@ export class AxiaEngine {
      */
     countFreeEdges() {
         const ret = wasm.axiaengine_countFreeEdges(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * ADR-050 P-4 — Create a new Shape (form-layer citizen).
+     *
+     * Returns the new ShapeId as `u32`. Mirror of TS-side eventual
+     * `bridge.createShape(name, faceIds)`. Transaction-wrapped so
+     * Undo restores the prior shape map.
+     * @param {string} name
+     * @param {Uint32Array} face_ids
+     * @returns {number}
+     */
+    createShape(name, face_ids) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_createShape(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         return ret >>> 0;
     }
     /**
@@ -867,6 +891,16 @@ export class AxiaEngine {
     deleteEdgeCascade(edge_id_raw) {
         const ret = wasm.axiaengine_deleteEdgeCascade(this.__wbg_ptr, edge_id_raw);
         return ret;
+    }
+    /**
+     * ADR-050 P-4 — Delete a Shape by id. Returns true if deleted.
+     * Transaction-wrapped.
+     * @param {number} shape_id
+     * @returns {boolean}
+     */
+    deleteShape(shape_id) {
+        const ret = wasm.axiaengine_deleteShape(this.__wbg_ptr, shape_id);
+        return ret !== 0;
     }
     /**
      * Delete an edge (and its half-edges) from the mesh.
@@ -1872,6 +1906,44 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * ADR-050 P-4 — Returns the face IDs owned by a Shape, or empty
+     * vec if the shape doesn't exist (no error — graceful for callers
+     * that may have stale IDs).
+     * @param {number} shape_id
+     * @returns {Uint32Array}
+     */
+    getShapeFaceIds(shape_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getShapeFaceIds(retptr, this.__wbg_ptr, shape_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ADR-050 P-4 — Returns all current ShapeIds (sorted ascending).
+     * Used by future Inspector enumeration.
+     * @returns {Uint32Array}
+     */
+    getShapeIds() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getShapeIds(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Get unique vertex positions in f64 precision for snap system.
      * Returns flat [x0,y0,z0, x1,y1,z1, ...] as Float64Array.
      * Snap system should use these instead of the f32 render buffers.
@@ -2818,6 +2890,39 @@ export class AxiaEngine {
             var v1 = getArrayU32FromWasm0(r0, r1).slice();
             wasm.__wbindgen_export4(r0, r1 * 4, 4);
             return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ADR-050 P-4 — Promote a Shape to a Xia via 4-condition validation.
+     *
+     * On success: returns the new XiaId as `u32`.
+     * On failure: throws JS `Error` with the PromoteError message
+     * (strict — silent skip 차단, P-2-c lock-in 답습).
+     *
+     * Errors (matching `Scene::promote_shape_to_xia`):
+     * - Shape not found
+     * - No geometry / Invalid material / Zero volume / Zero dimension
+     * - Not watertight / Not manifold (ADR-051 P7 prerequisite)
+     *
+     * Transaction-wrapped — Undo restores the pre-promote state
+     * (no Xia created, no shape_to_xia linkage).
+     * @param {number} shape_id
+     * @param {number} material_id
+     * @returns {number}
+     */
+    promoteShapeToXia(shape_id, material_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_promoteShapeToXia(retptr, this.__wbg_ptr, shape_id, material_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }

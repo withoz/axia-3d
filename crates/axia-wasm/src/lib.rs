@@ -6114,6 +6114,138 @@ impl AxiaEngine {
         self.scene.has_boolean_group_selection()
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-4 — Shape (form-layer citizenship) WASM bridge.
+    //
+    // Per ADR-050 §B P-4 lock-ins (mirroring ADR-078 P-2):
+    // - camelCase via `js_name` (P-2-b)
+    // - Vec<u32> ownership for face_ids (P-2-d, wasm-bindgen 명확)
+    // - strict Result<u32, JsValue> for promote (P-2-c, invalid input
+    //   throws — silent skip 차단)
+    // - Transaction wrapping on all mutators (P-2-f, Undo/Redo 통합)
+    //
+    // Mirrors `Scene::create_shape` / `get_shape` / `list_shape_ids` /
+    // `delete_shape` / `clear_shapes` / `promote_shape_to_xia` exactly —
+    // bridge layer is a thin pass-through.
+    // ════════════════════════════════════════════════════════════════════
+
+    /// ADR-050 P-4 — Create a new Shape (form-layer citizen).
+    ///
+    /// Returns the new ShapeId as `u32`. Mirror of TS-side eventual
+    /// `bridge.createShape(name, faceIds)`. Transaction-wrapped so
+    /// Undo restores the prior shape map.
+    #[wasm_bindgen(js_name = "createShape")]
+    pub fn create_shape(&mut self, name: String, face_ids: Vec<u32>) -> u32 {
+        let fids: Vec<FaceId> = face_ids.iter().map(|&i| FaceId::new(i)).collect();
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+        let shape_id = self.scene.create_shape(name, fids);
+        self.scene
+            .transactions
+            .set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        shape_id.raw()
+    }
+
+    /// ADR-050 P-4 — Returns all current ShapeIds (sorted ascending).
+    /// Used by future Inspector enumeration.
+    #[wasm_bindgen(js_name = "getShapeIds")]
+    pub fn get_shape_ids(&self) -> Vec<u32> {
+        self.scene
+            .list_shape_ids()
+            .iter()
+            .map(|s| s.raw())
+            .collect()
+    }
+
+    /// ADR-050 P-4 — Returns the face IDs owned by a Shape, or empty
+    /// vec if the shape doesn't exist (no error — graceful for callers
+    /// that may have stale IDs).
+    #[wasm_bindgen(js_name = "getShapeFaceIds")]
+    pub fn get_shape_face_ids(&self, shape_id: u32) -> Vec<u32> {
+        let sid = axia_core::ShapeId::new(shape_id);
+        self.scene
+            .get_shape(sid)
+            .map(|s| s.face_ids.iter().map(|f| f.raw()).collect())
+            .unwrap_or_default()
+    }
+
+    /// ADR-050 P-4 — Delete a Shape by id. Returns true if deleted.
+    /// Transaction-wrapped.
+    #[wasm_bindgen(js_name = "deleteShape")]
+    pub fn delete_shape(&mut self, shape_id: u32) -> bool {
+        let sid = axia_core::ShapeId::new(shape_id);
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+        let removed = self.scene.delete_shape(sid);
+        self.scene
+            .transactions
+            .set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        removed
+    }
+
+    /// ADR-050 P-4 — Clear all Shapes. Transaction-wrapped.
+    #[wasm_bindgen(js_name = "clearShapes")]
+    pub fn clear_shapes(&mut self) {
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+        self.scene.clear_shapes();
+        self.scene
+            .transactions
+            .set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+    }
+
+    /// ADR-050 P-4 — Promote a Shape to a Xia via 4-condition validation.
+    ///
+    /// On success: returns the new XiaId as `u32`.
+    /// On failure: throws JS `Error` with the PromoteError message
+    /// (strict — silent skip 차단, P-2-c lock-in 답습).
+    ///
+    /// Errors (matching `Scene::promote_shape_to_xia`):
+    /// - Shape not found
+    /// - No geometry / Invalid material / Zero volume / Zero dimension
+    /// - Not watertight / Not manifold (ADR-051 P7 prerequisite)
+    ///
+    /// Transaction-wrapped — Undo restores the pre-promote state
+    /// (no Xia created, no shape_to_xia linkage).
+    #[wasm_bindgen(js_name = "promoteShapeToXia")]
+    pub fn promote_shape_to_xia(
+        &mut self,
+        shape_id: u32,
+        material_id: u32,
+    ) -> Result<u32, JsValue> {
+        let sid = axia_core::ShapeId::new(shape_id);
+        let mat = axia_geo::MaterialId::new(material_id);
+
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.promote_shape_to_xia(sid, mat) {
+            Ok(promote_ok) => {
+                self.scene
+                    .transactions
+                    .set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                Ok(promote_ok.xia_id)
+            }
+            Err(err) => {
+                // Failure rolls back the transaction (no state change).
+                self.scene.transactions.cancel();
+                Err(JsValue::from_str(&format!("promoteShapeToXia: {}", err)))
+            }
+        }
+    }
+
     /// ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
     ///
     /// Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).

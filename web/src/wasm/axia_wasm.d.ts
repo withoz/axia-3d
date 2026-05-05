@@ -209,6 +209,10 @@ export class AxiaEngine {
      */
     clearFaceSurface(face_id: number): boolean;
     /**
+     * ADR-050 P-4 — Clear all Shapes. Transaction-wrapped.
+     */
+    clearShapes(): void;
+    /**
      * Collect all edges in the polyline chain containing `edge_id`.
      * Walks through degree-2 vertices and stops at junctions/dead-ends.
      * Empty Vec on invalid / inactive edge.
@@ -238,6 +242,14 @@ export class AxiaEngine {
      * Finish→Extrude 트리거에 영향 주지 않아야 함.
      */
     countFreeEdges(): number;
+    /**
+     * ADR-050 P-4 — Create a new Shape (form-layer citizen).
+     *
+     * Returns the new ShapeId as `u32`. Mirror of TS-side eventual
+     * `bridge.createShape(name, faceIds)`. Transaction-wrapped so
+     * Undo restores the prior shape map.
+     */
+    createShape(name: string, face_ids: Uint32Array): number;
     /**
      * Create an axis-aligned box primitive (6-face closed solid).
      * Returns the bottom face ID for Push/Pull operations.
@@ -269,6 +281,11 @@ export class AxiaEngine {
      * many faces were removed as a side effect.
      */
     deleteEdgeCascade(edge_id_raw: number): number;
+    /**
+     * ADR-050 P-4 — Delete a Shape by id. Returns true if deleted.
+     * Transaction-wrapped.
+     */
+    deleteShape(shape_id: number): boolean;
     /**
      * Delete an edge (and its half-edges) from the mesh.
      * Also removes any faces that reference this edge (SketchUp-style cascade).
@@ -686,6 +703,17 @@ export class AxiaEngine {
      */
     getPositionsPtr(): number;
     /**
+     * ADR-050 P-4 — Returns the face IDs owned by a Shape, or empty
+     * vec if the shape doesn't exist (no error — graceful for callers
+     * that may have stale IDs).
+     */
+    getShapeFaceIds(shape_id: number): Uint32Array;
+    /**
+     * ADR-050 P-4 — Returns all current ShapeIds (sorted ascending).
+     * Used by future Inspector enumeration.
+     */
+    getShapeIds(): Uint32Array;
+    /**
      * Get unique vertex positions in f64 precision for snap system.
      * Returns flat [x0,y0,z0, x1,y1,z1, ...] as Float64Array.
      * Snap system should use these instead of the f32 render buffers.
@@ -997,6 +1025,22 @@ export class AxiaEngine {
      * Pure inspection — no state mutation, safe to call on every mousemove.
      */
     previewEdgeEraseMerge(edge_id_raw: number, angle_tol_deg: number): Uint32Array;
+    /**
+     * ADR-050 P-4 — Promote a Shape to a Xia via 4-condition validation.
+     *
+     * On success: returns the new XiaId as `u32`.
+     * On failure: throws JS `Error` with the PromoteError message
+     * (strict — silent skip 차단, P-2-c lock-in 답습).
+     *
+     * Errors (matching `Scene::promote_shape_to_xia`):
+     * - Shape not found
+     * - No geometry / Invalid material / Zero volume / Zero dimension
+     * - Not watertight / Not manifold (ADR-051 P7 prerequisite)
+     *
+     * Transaction-wrapped — Undo restores the pre-promote state
+     * (no Xia created, no shape_to_xia linkage).
+     */
+    promoteShapeToXia(shape_id: number, material_id: number): number;
     /**
      * Push/Pull a face along its normal.
      * dist > 0 = extrude outward (face kept)
@@ -1461,16 +1505,19 @@ export interface InitOutput {
     readonly axiaengine_clearBooleanGroupTags: (a: number) => void;
     readonly axiaengine_clearEdgeCurve: (a: number, b: number) => number;
     readonly axiaengine_clearFaceSurface: (a: number, b: number) => number;
+    readonly axiaengine_clearShapes: (a: number) => void;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
     readonly axiaengine_countFreeEdges: (a: number) => number;
+    readonly axiaengine_createShape: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_create_box: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_create_sphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_deleteEdgeCascade: (a: number, b: number) => number;
+    readonly axiaengine_deleteShape: (a: number, b: number) => number;
     readonly axiaengine_delete_edge: (a: number, b: number) => number;
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
@@ -1530,6 +1577,8 @@ export interface InitOutput {
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getPositionsLen: (a: number) => number;
     readonly axiaengine_getPositionsPtr: (a: number) => number;
+    readonly axiaengine_getShapeFaceIds: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getShapeIds: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
     readonly axiaengine_getVertexPos: (a: number, b: number, c: number) => void;
     readonly axiaengine_getXiaFaceIds: (a: number, b: number, c: number) => void;
@@ -1583,6 +1632,7 @@ export interface InitOutput {
     readonly axiaengine_orient_faces: (a: number) => number;
     readonly axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_previewEdgeEraseMerge: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_promoteShapeToXia: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_push_pull: (a: number, b: number, c: number) => number;
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;
