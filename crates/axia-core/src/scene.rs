@@ -3694,12 +3694,14 @@ impl Scene {
     ///   3. Creating a new Shape with the same metadata
     ///
     /// This avoids ~350 LoC of mesh-pipeline duplication while keeping
-    /// `exec_draw_rect` strictly UNCHANGED. The conversion uses a
-    /// second transaction, so Undo from a Shape-mode draw requires
-    /// 2 presses (Shape → Xia → pre-rect). This is a transitional
-    /// artifact of P-5a (deferred); P-5d/e will collapse the two
-    /// transactions when DrawRectAsShape becomes the default and the
-    /// dual-Xia/Shape path no longer needs to coexist.
+    /// `exec_draw_rect` strictly UNCHANGED.
+    ///
+    /// **ADR-050 P-5e-γ collapse (2026-05-05)**: previously used a
+    /// second transaction so Undo required 2 presses
+    /// (Shape → Xia → pre-rect). Now uses
+    /// `transactions.replace_last_after_snapshot` to overwrite T1's
+    /// (legacy DrawRect) after_snapshot with the post-conversion
+    /// Shape state — single Undo restores pre-rect directly.
     ///
     /// `face_to_xia` is NOT updated for Shape — Shape is a form-layer
     /// reference, not the face owner (per ADR-049 §4 Q3).
@@ -3711,15 +3713,15 @@ impl Scene {
         width: f64,
         height: f64,
     ) -> CommandResult {
-        // Phase 1 — delegate full geometry pipeline to exec_draw_rect.
+        // Phase 1 — delegate full geometry pipeline to exec_draw_rect
+        // (commits T1 with after = Xia state).
         let xia_result = self.exec_draw_rect(center, normal, up, width, height);
         let xia_id = match xia_result {
             CommandResult::EntityCreated(id) => id,
             other => return other, // pass through error / sentinel
         };
 
-        // Phase 2 — convert Xia → Shape in a second transaction.
-        // Read metadata first (clone before mutation).
+        // Phase 2 — convert Xia → Shape (no transaction — direct mutation).
         let (name, face_ids, position, surface_normal) =
             if let Some(xia) = self.xias.get(&xia_id) {
                 (
@@ -3734,9 +3736,6 @@ impl Scene {
                 );
             };
 
-        self.transactions.begin();
-        self.transactions.set_before_snapshot(self.scene_snapshot());
-
         // Drop the Xia + face_to_xia entries (Shape is form-only).
         self.xias.remove(&xia_id);
         for fid in &face_ids {
@@ -3750,8 +3749,12 @@ impl Scene {
             shape.surface_normal = surface_normal;
         }
 
-        self.transactions.set_after_snapshot(self.scene_snapshot());
-        self.transactions.commit();
+        // ADR-050 P-5e-γ — collapse two transactions into one frame.
+        // T1 (committed by exec_draw_rect) had after = Xia state.
+        // We replace it with after = Shape state so a single Undo
+        // restores pre-rect directly (T1.before_snapshot).
+        self.transactions
+            .replace_last_after_snapshot(self.scene_snapshot());
 
         CommandResult::ShapeCreated(shape_id.raw())
     }
@@ -3766,8 +3769,8 @@ impl Scene {
     /// case) — both are handled identically by reading `face_ids` +
     /// `standalone_edge_id` and assigning to the new Shape.
     ///
-    /// 2-undo behavior is the same trade-off as P-5a (deferred to
-    /// P-5d/e cleanup). UI not connected at this stage.
+    /// **ADR-050 P-5e-γ collapse**: single transaction via
+    /// `replace_last_after_snapshot` — Undo 1회로 pre-line 복원.
     fn exec_draw_line_as_shape(
         &mut self,
         start: DVec3,
@@ -3781,7 +3784,7 @@ impl Scene {
             other => return other, // pass through error / sentinel
         };
 
-        // Phase 2 — convert Xia → Shape.
+        // Phase 2 — convert Xia → Shape (no transaction — direct mutation).
         let (name, face_ids, position, surface_normal_inherited, standalone) =
             if let Some(xia) = self.xias.get(&xia_id) {
                 (
@@ -3797,9 +3800,6 @@ impl Scene {
                 );
             };
 
-        self.transactions.begin();
-        self.transactions.set_before_snapshot(self.scene_snapshot());
-
         self.xias.remove(&xia_id);
         for fid in &face_ids {
             self.face_to_xia.remove(fid);
@@ -3812,8 +3812,9 @@ impl Scene {
             shape.standalone_edge_id = standalone;
         }
 
-        self.transactions.set_after_snapshot(self.scene_snapshot());
-        self.transactions.commit();
+        // ADR-050 P-5e-γ — collapse to single transaction.
+        self.transactions
+            .replace_last_after_snapshot(self.scene_snapshot());
 
         CommandResult::ShapeCreated(shape_id.raw())
     }
@@ -3954,6 +3955,9 @@ impl Scene {
     /// arc-curved edges) into a Shape. The arc curve attachments on
     /// the edges (ADR-028) are part of mesh state and survive the
     /// conversion automatically.
+    ///
+    /// **ADR-050 P-5e-γ collapse**: single transaction via
+    /// `replace_last_after_snapshot` — Undo 1회로 pre-circle 복원.
     fn exec_draw_circle_as_shape(
         &mut self,
         center: DVec3,
@@ -3968,7 +3972,7 @@ impl Scene {
             other => return other,
         };
 
-        // Phase 2 — convert Xia → Shape.
+        // Phase 2 — convert Xia → Shape (no transaction — direct mutation).
         let (name, face_ids, position, surface_normal) =
             if let Some(xia) = self.xias.get(&xia_id) {
                 (
@@ -3983,9 +3987,6 @@ impl Scene {
                 );
             };
 
-        self.transactions.begin();
-        self.transactions.set_before_snapshot(self.scene_snapshot());
-
         self.xias.remove(&xia_id);
         for fid in &face_ids {
             self.face_to_xia.remove(fid);
@@ -3997,8 +3998,9 @@ impl Scene {
             shape.surface_normal = surface_normal;
         }
 
-        self.transactions.set_after_snapshot(self.scene_snapshot());
-        self.transactions.commit();
+        // ADR-050 P-5e-γ — collapse to single transaction.
+        self.transactions
+            .replace_last_after_snapshot(self.scene_snapshot());
 
         CommandResult::ShapeCreated(shape_id.raw())
     }
@@ -10170,6 +10172,88 @@ mod tests {
         assert_eq!(restored_shape.name, "Line");
         assert_eq!(restored_shape.standalone_edge_id, original_standalone);
         assert!(restored.xias.is_empty());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-5e-γ — Single-Undo regression for As-Shape draws.
+    //
+    // Per P-5e-γ §C lock-in: replace_last_after_snapshot collapses the
+    // legacy DrawRect transaction (T1) and the Xia → Shape conversion
+    // (previously T2) into one undo frame. A single Undo press now
+    // restores pre-rect / pre-line / pre-circle state directly.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn p5e_gamma_draw_rect_as_shape_single_undo_restores_pre_rect() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z, up: DVec3::Y,
+            width: 2.0, height: 2.0,
+        });
+        assert!(matches!(result, CommandResult::ShapeCreated(_)));
+        assert_eq!(scene.shapes.len(), 1);
+        let face_count_after = scene.mesh.face_count();
+        assert!(face_count_after > 0, "rect must create faces");
+
+        // P-5e-γ: single Undo restores pre-rect state.
+        let undo_result = scene.execute(Command::Undo);
+        assert!(matches!(undo_result, CommandResult::MeshUpdated));
+        assert_eq!(scene.shapes.len(), 0,
+            "single Undo must remove the Shape (not just convert back to Xia)");
+        assert_eq!(scene.xias.len(), 0,
+            "no transient Xia state should remain");
+        assert_eq!(scene.mesh.face_count(), 0,
+            "mesh must be back to pre-rect (face count 0)");
+    }
+
+    #[test]
+    fn p5e_gamma_draw_line_as_shape_single_undo_restores_pre_line() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end: DVec3::new(2.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        assert!(matches!(result, CommandResult::ShapeCreated(_)));
+        assert_eq!(scene.shapes.len(), 1);
+        let edge_count_after = scene.mesh.edge_count();
+        assert!(edge_count_after > 0, "line must create at least one edge");
+
+        // P-5e-γ: single Undo restores pre-line state.
+        let undo_result = scene.execute(Command::Undo);
+        assert!(matches!(undo_result, CommandResult::MeshUpdated));
+        assert_eq!(scene.shapes.len(), 0,
+            "single Undo must remove the Shape");
+        assert_eq!(scene.xias.len(), 0,
+            "no transient Xia state should remain");
+        assert_eq!(scene.mesh.edge_count(), 0,
+            "mesh must be back to pre-line (edge count 0)");
+    }
+
+    #[test]
+    fn p5e_gamma_draw_circle_as_shape_single_undo_restores_pre_circle() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 1.0,
+            segments: 8,
+        });
+        assert!(matches!(result, CommandResult::ShapeCreated(_)));
+        assert_eq!(scene.shapes.len(), 1);
+        let face_count_after = scene.mesh.face_count();
+        assert!(face_count_after > 0, "circle must create face");
+
+        // P-5e-γ: single Undo restores pre-circle state.
+        let undo_result = scene.execute(Command::Undo);
+        assert!(matches!(undo_result, CommandResult::MeshUpdated));
+        assert_eq!(scene.shapes.len(), 0,
+            "single Undo must remove the Shape");
+        assert_eq!(scene.xias.len(), 0,
+            "no transient Xia state should remain");
+        assert_eq!(scene.mesh.face_count(), 0,
+            "mesh must be back to pre-circle (face count 0)");
     }
 
     #[test]

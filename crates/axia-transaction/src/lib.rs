@@ -177,6 +177,30 @@ impl TransactionManager {
     pub fn redo_count(&self) -> usize {
         self.redo_stack.len()
     }
+
+    /// ADR-050 P-5e-γ — Replace the `after_snapshot` of the most recent
+    /// committed transaction frame in `undo_stack`.
+    ///
+    /// Used by the `exec_draw_*_as_shape` family to collapse two
+    /// transactions (T1: legacy Xia creation, T2: Xia → Shape
+    /// conversion) into a single Undo frame. Without this API, users
+    /// would need 2 Undo presses to revert one DrawRectAsShape
+    /// (Shape → Xia → pre-rect); with this API, one Undo restores the
+    /// pre-rect state directly.
+    ///
+    /// The `before_snapshot` and `created/modified/deleted` metadata
+    /// of the frame are preserved — only `after_snapshot` (the bytes
+    /// applied on Redo) is overwritten. `restore_scene_snapshot` reads
+    /// raw bytes only, so the metadata mismatch (lists describing the
+    /// pre-conversion state) has no functional effect.
+    ///
+    /// No-op when `undo_stack` is empty (e.g., caller invoked outside
+    /// a committed transaction context).
+    pub fn replace_last_after_snapshot(&mut self, data: Vec<u8>) {
+        if let Some(frame) = self.undo_stack.last_mut() {
+            frame.after_snapshot = data;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +253,45 @@ mod tests {
         tm.commit();
 
         assert!(!tm.can_redo());
+    }
+
+    /// ADR-050 P-5e-γ — replace_last_after_snapshot updates the most
+    /// recently committed frame's after_snapshot in place.
+    #[test]
+    fn test_replace_last_after_snapshot_replaces_top() {
+        let mut tm = TransactionManager::new(100);
+
+        // Commit T1 with after = [1].
+        tm.begin();
+        tm.set_before_snapshot(vec![0]);
+        tm.set_after_snapshot(vec![1]);
+        tm.commit();
+
+        // Replace T1's after with [2].
+        tm.replace_last_after_snapshot(vec![2]);
+
+        // Undo pops T1 onto redo stack — verify the modified
+        // after_snapshot is now [2] when redo is consulted.
+        let frame = tm.undo().expect("undo present");
+        assert_eq!(frame.before_snapshot, vec![0],
+            "before_snapshot must be preserved");
+        // After undo, frame is on the redo stack — check it.
+        // Re-redo to verify:
+        let frame = tm.redo().expect("redo present");
+        assert_eq!(frame.after_snapshot, vec![2],
+            "after_snapshot must be the replacement");
+    }
+
+    /// ADR-050 P-5e-γ — replace_last_after_snapshot is a no-op when
+    /// the undo_stack is empty.
+    #[test]
+    fn test_replace_last_after_snapshot_noop_when_empty() {
+        let mut tm = TransactionManager::new(100);
+
+        // Should not panic and should not introduce any frame.
+        tm.replace_last_after_snapshot(vec![99]);
+
+        assert_eq!(tm.undo_count(), 0);
+        assert!(!tm.can_undo());
     }
 }
