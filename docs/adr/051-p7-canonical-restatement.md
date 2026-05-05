@@ -1,7 +1,7 @@
 # ADR-051 — ADR-021 P7 Canonical Restatement (Multi-Loop Face Strict Enforcement)
 
-**Status**: Accepted (Phase 1 spec — implementation pending)
-**Date**: 2026-05-03
+**Status**: **Accepted (Phase 1 P-1 + P-2 closed, deferred boundary noted)**
+**Date**: 2026-05-03 (P-2 closure: 2026-05-05)
 **Anchor**: ADR-049 §4 Q2 final lock (사용자 결정), v3.2 명제 4 manifold 무결성
 **Supersedes**: LOCKED #1 의 amendment 부분 (Phase 5/6/7 self-healing 정책).
 ADR-021 P7 v1.0 본문 자체는 보존 — 본 ADR 은 strict 재선언 + 구현 정정.
@@ -228,8 +228,97 @@ fn enforce_p7_canonical(
 - [x] 구현 정정 spec (§2.3)
 - [x] 영향받는 기존 테스트 식별 + 새 테스트 spec (§2.4)
 - [x] 어제 작업과의 관계 명시 (§2.5)
-- [ ] **구현 (C2 chunk)** — 별도 commit. 본 PR 은 spec 만
-- [ ] LOCKED #1 update — ADR-051 변경 사항 반영 (구현 commit 와 함께)
+- [x] **구현** — Phase 5/6/7 호출 순서 정정 (prior commits 자연 완료) +
+  P-1 측정 도구 (e1f54f1) + P-2 회귀 봉인 (본 commit)
+- [x] LOCKED #1 update — amendment 단락 추가 (CLAUDE.md, 2026-05-05)
+
+---
+
+## D. Acceptance Log
+
+### D-1 — Phase 5/6/7 정정 (prior session, 2026-05-04 자연 완료)
+
+ADR-051 §2.3 의 구현 정정 spec 은 **별도 명시 commit 없이 prior session
+들의 누적 작업** 으로 자연 완료됨:
+- `run_face_synthesis_postprocess` 가 ring rebuild (Step 4.95) → mop-up
+  (Step 4.99 + Phase 5) → absorb (Phase 6) 순서로 정합
+- Phase 7 (cleanup_dangling_topological_edges) 는 closed-shape finalizer
+  에서만 호출 (DrawRect/DrawCircle), 사용자 wire 보존 (ee066e3)
+- 사후 degenerate scan scope-limited (fc3abe6)
+- R1 manifold highlight (0c04ae1) — 사용자 인지용
+
+**증거**: burge.xia fixture 가 0 non-manifold edges 로 import + draw
+완료 (`test_p7_canonical_burge_centered_scenario_no_violations` 통과).
+ADR-051 §1.2 의 2026-05-02 drift evidence 가 더 이상 재현되지 않음.
+
+### D-2 — P-1 측정 도구 (commit `e1f54f1`)
+
+**산출물**:
+- `crates/axia-geo/src/p7_manifold.rs` (NEW, ~370 LoC)
+  - `verify_p7_manifold(mesh, container, inners) -> P7ManifoldReport`
+    free function (side-effect free)
+  - `P7Violation` enum 3 variants (M1/M2/M3 정확 일치)
+  - `P7ManifoldReport.is_valid()` / `summary()` helpers
+  - `collect_active_radial` 내부 헬퍼 (radial chain walker, cap=64,
+    inactive HE skip)
+- `crates/axia-geo/src/lib.rs` — module + re-export
+- 모듈 unit tests 5 (절대 #[ignore] 금지):
+  * `verify_p7_manifold_passes_on_simple_ring_with_hole`
+  * `verify_p7_manifold_passes_on_disjoint_inner_multi_hole`
+  * `verify_p7_manifold_handles_empty_inners`
+  * `verify_p7_manifold_inactive_container_yields_empty_report`
+  * `verify_p7_manifold_report_summary_formats_violations`
+
+**P-1 lock-ins** (모두 회귀로 봉인):
+1. axia-geo 신규 모듈 (mesh.rs 분리)
+2. free function (impl Mesh 메서드 아님, side-effect free)
+3. P7Violation 3 variants — M1/M2/M3 일치
+4. promote API 미통합 (별도 sub-step)
+5. burge.xia 회귀는 P-1 scope 외 — synthetic fixture 5
+6. Drop-in alongside (verify_face_invariants UNCHANGED)
+7. WASM/TS/UI 미개입
+
+**회귀**: axia-geo 964 → 969 (+5).
+
+### D-3 — P-2 회귀 봉인 + LOCKED #1 amendment (본 commit)
+
+**산출물**:
+- `crates/axia-core/src/scene.rs`:
+  * `test_p7_canonical_stacked_inner_manifold` — `verify_p7_manifold`
+    호출 + `violations.len() <= 1` (deferred boundary 일관)
+  * `test_p7_canonical_disjoint_inner_multi_hole` — strict
+    `is_valid()` assertion
+  * 신규 `test_p7_canonical_sweep_locked_scenarios` — 3 시나리오
+    (disjoint / single inner / outer-after-inners 그리기 순서 무관성)
+    일괄 봉인
+- `CLAUDE.md` — LOCKED #1 amendment (2026-05-05) 단락 추가:
+  * ADR-051 P-1 측정 도구 명시
+  * Phase 5/6/7 호출 순서 정정 자연 완료 명시
+  * P-2 회귀 강화 + sweep test 매핑
+  * Deferred boundary 명시 (component-merge resolver = future ADR)
+
+**P-2 lock-ins (revised scope)**:
+1. Phase 5/6/7 source 코드 UNCHANGED (이미 정합)
+2. 기존 11 stacked-inner 회귀 + 3 P7 canonical 회귀 + 6 boolean group
+   회귀 모두 PASS 유지 (회귀 0)
+3. verify_p7_manifold 강화 = 측정 도구 추가만 (assertion 추가)
+4. LOCKED #1 amendment = 본문 보존 + 단락 추가 (변경 0)
+5. WASM/TS/UI 미개입 (axia-core only + CLAUDE.md docs)
+
+**회귀**: axia-core 149 → 150 (+1, sweep test). 기존 2 강화는 새
+test 가 아닌 assertion 추가.
+
+### D-4 — Deferred Future Work
+
+ADR-051 §2.5 의 deferred boundary (connected stacked-inner 의 1
+non-manifold edge on shared y=0) 는 component-merge resolver 작업으로
+**별도 ADR** 진행. 본 ADR 의 scope 외:
+- ADR-015 fallback 의 single-promote heuristic 가 connected case 에
+  서 작동하여 face existence 보존하지만 1 nm edge 잔존
+- 진정한 ring-with-hole rebuild 가 connected case 에서도 발동하려면
+  combined-perimeter 계산 + multi-loop face 재구축 경로 강화 필요
+- `test_p7_canonical_stacked_inner_manifold` 가 `<=1` 로 deferred
+  boundary 명시 — 0 으로 strict 봉인 시점이 future ADR 진입점
 
 ---
 

@@ -8523,7 +8523,7 @@ mod tests {
     #[test]
     fn test_p7_canonical_stacked_inner_manifold() {
         let mut scene = Scene::new();
-        scene.execute(Command::DrawRect {
+        let r0 = scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
             width: 10.0, height: 6.0,
         });
@@ -8535,6 +8535,7 @@ mod tests {
             center: DVec3::new(0.0, 1.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
             width: 4.0, height: 2.0,
         });
+        let xid_outer = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!("outer failed") };
         let xid1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!("inner1 failed") };
         let xid2 = match r2 { CommandResult::EntityCreated(id) => id, _ => panic!("inner2 failed") };
         let f1 = scene.xias.get(&xid1).map(|x| x.face_ids.len()).unwrap_or(0);
@@ -8556,6 +8557,27 @@ mod tests {
             "ADR-051 P7-M1 regression — exceeds documented deferred limit \
              (>1 nm edge on shared y=0): {} edges {:?}", nm.len(), nm,
         );
+
+        // ADR-051 P-2 — strict named invariant lock-in via P-1 verify_p7_manifold.
+        // Outer XIA may have been rebuilt during postprocess; pick the first
+        // active container face from xid_outer's current face_ids. Inners
+        // come from xid1 + xid2.
+        let container = scene.xias.get(&xid_outer)
+            .and_then(|x| x.face_ids.first().copied())
+            .expect("xid_outer must own at least one face");
+        let mut inners: Vec<FaceId> = Vec::new();
+        if let Some(x) = scene.xias.get(&xid1) { inners.extend(&x.face_ids); }
+        if let Some(x) = scene.xias.get(&xid2) { inners.extend(&x.face_ids); }
+        let report = axia_geo::verify_p7_manifold(&scene.mesh, container, &inners);
+        // Deferred boundary: at most 1 violation matching the shared y=0 nm
+        // edge. Crossing this signals regression in P7 self-healing pipeline.
+        assert!(
+            report.violations.len() <= 1,
+            "ADR-051 P7-M (named) regression — verify_p7_manifold reports {} \
+             violations exceeding deferred boundary:\n{}",
+            report.violations.len(),
+            report.summary(),
+        );
     }
 
     /// ADR-051 P7-M2 — disjoint inner components form distinct holes (multi-hole
@@ -8564,19 +8586,22 @@ mod tests {
     fn test_p7_canonical_disjoint_inner_multi_hole() {
         let mut scene = Scene::new();
         // Container 12×6
-        scene.execute(Command::DrawRect {
+        let r0 = scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
             width: 12.0, height: 6.0,
         });
         // Two disjoint inners (left half / right half)
-        scene.execute(Command::DrawRect {
+        let r1 = scene.execute(Command::DrawRect {
             center: DVec3::new(-3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
             width: 2.0, height: 2.0,
         });
-        scene.execute(Command::DrawRect {
+        let r2 = scene.execute(Command::DrawRect {
             center: DVec3::new(3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
             width: 2.0, height: 2.0,
         });
+        let xid_outer = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!("outer failed") };
+        let xid1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!("inner1 failed") };
+        let xid2 = match r2 { CommandResult::EntityCreated(id) => id, _ => panic!("inner2 failed") };
 
         let nm = scene.mesh.collect_non_manifold_edges();
         assert!(
@@ -8589,6 +8614,106 @@ mod tests {
             report.is_valid(),
             "ADR-051 P7 invariants violated: {:?}", report.violations,
         );
+
+        // ADR-051 P-2 — strict named invariant lock-in (disjoint case = 0 violations).
+        let container = scene.xias.get(&xid_outer)
+            .and_then(|x| x.face_ids.first().copied())
+            .expect("xid_outer must own at least one face");
+        let mut inners: Vec<FaceId> = Vec::new();
+        if let Some(x) = scene.xias.get(&xid1) { inners.extend(&x.face_ids); }
+        if let Some(x) = scene.xias.get(&xid2) { inners.extend(&x.face_ids); }
+        let p7 = axia_geo::verify_p7_manifold(&scene.mesh, container, &inners);
+        assert!(
+            p7.is_valid(),
+            "ADR-051 P7-M (named) violated on disjoint multi-hole:\n{}",
+            p7.summary(),
+        );
+    }
+
+    /// ADR-051 P-2 — sweep test exercising verify_p7_manifold against a
+    /// representative subset of LOCKED #1 stacked-inner scenarios. Acts as a
+    /// "regression net" — if any of these scenarios drift back into producing
+    /// 3-face shares (P7-M1) or hole-loop misalignment (P7-M2), this single
+    /// test catches it via named invariants rather than only the global
+    /// `collect_non_manifold_edges` heuristic.
+    #[test]
+    fn test_p7_canonical_sweep_locked_scenarios() {
+        // Scenario A — disjoint multi-hole (must be 0 violations)
+        {
+            let mut scene = Scene::new();
+            let r0 = scene.execute(Command::DrawRect {
+                center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+                width: 12.0, height: 6.0,
+            });
+            let r1 = scene.execute(Command::DrawRect {
+                center: DVec3::new(-3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            let r2 = scene.execute(Command::DrawRect {
+                center: DVec3::new(3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            let xid_o = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let xid1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let xid2 = match r2 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let container = scene.xias.get(&xid_o).and_then(|x| x.face_ids.first().copied()).expect("c");
+            let mut inners = Vec::new();
+            if let Some(x) = scene.xias.get(&xid1) { inners.extend(&x.face_ids); }
+            if let Some(x) = scene.xias.get(&xid2) { inners.extend(&x.face_ids); }
+            let p7 = axia_geo::verify_p7_manifold(&scene.mesh, container, &inners);
+            assert!(p7.is_valid(),
+                "Scenario A (disjoint) — verify_p7_manifold violated:\n{}", p7.summary());
+        }
+
+        // Scenario B — single inner (canonical ring + 1 sub-face)
+        {
+            let mut scene = Scene::new();
+            let r0 = scene.execute(Command::DrawRect {
+                center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+                width: 8.0, height: 8.0,
+            });
+            let r1 = scene.execute(Command::DrawRect {
+                center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            let xid_o = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let xid1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let container = scene.xias.get(&xid_o).and_then(|x| x.face_ids.first().copied()).expect("c");
+            let mut inners = Vec::new();
+            if let Some(x) = scene.xias.get(&xid1) { inners.extend(&x.face_ids); }
+            let p7 = axia_geo::verify_p7_manifold(&scene.mesh, container, &inners);
+            assert!(p7.is_valid(),
+                "Scenario B (single inner) — verify_p7_manifold violated:\n{}", p7.summary());
+        }
+
+        // Scenario C — outer drawn AFTER inners (LOCKED #1 회귀 방지: order
+        // independence). verify_p7_manifold must still report 0 violations
+        // because the resulting topology is the same canonical ring-with-holes.
+        {
+            let mut scene = Scene::new();
+            let r1 = scene.execute(Command::DrawRect {
+                center: DVec3::new(-3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            let r2 = scene.execute(Command::DrawRect {
+                center: DVec3::new(3.0, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
+                width: 2.0, height: 2.0,
+            });
+            let r0 = scene.execute(Command::DrawRect {
+                center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
+                width: 12.0, height: 6.0,
+            });
+            let xid_o = match r0 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let xid1 = match r1 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let xid2 = match r2 { CommandResult::EntityCreated(id) => id, _ => panic!() };
+            let container = scene.xias.get(&xid_o).and_then(|x| x.face_ids.first().copied()).expect("c");
+            let mut inners = Vec::new();
+            if let Some(x) = scene.xias.get(&xid1) { inners.extend(&x.face_ids); }
+            if let Some(x) = scene.xias.get(&xid2) { inners.extend(&x.face_ids); }
+            let p7 = axia_geo::verify_p7_manifold(&scene.mesh, container, &inners);
+            assert!(p7.is_valid(),
+                "Scenario C (outer after inners) — verify_p7_manifold violated:\n{}", p7.summary());
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────

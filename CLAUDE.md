@@ -22,6 +22,37 @@
 - ADR-015 는 `Superseded by ADR-016`. ADR-016 single-promote 부분은
   `Superseded by ADR-021` (component-based promote).
 
+#### 1-amendment (2026-05-05) — ADR-051 Strict Reaffirmation
+- **ADR-021 P7 v1.0 의 canonical statement 보존**. 본 amendment 는
+  policy 변경이 아닌 **측정 도구 추가 + 회귀 봉인** 명시.
+- **ADR-051 P-1** (commit `e1f54f1`) — `verify_p7_manifold(mesh, container,
+  inners) -> P7ManifoldReport` 함수 추가 (axia-geo). P7-M1 / P7-M2 /
+  P7-M3 named invariants 명시 검증:
+  * P7-M1: shared edge 의 active face-bearing HE 수 = 2 (3+ → violation)
+  * P7-M2: hole loop edge 가 container 를 incident face 로 포함
+  * P7-M3: non-shared boundary edge HE 분포 canonical
+- **Phase 5/6/7 호출 순서 정정** (prior commits 누적, 2026-05-04 자연
+  완료) — `run_face_synthesis_postprocess` 의 ring rebuild → mop-up →
+  absorb 순서 정합. burge.xia drift evidence (2026-05-02) 자연 정정.
+- **ADR-051 P-2** (commit 본 commit) — 기존 P7 canonical 회귀
+  (`test_p7_canonical_stacked_inner_manifold` /
+  `test_p7_canonical_disjoint_inner_multi_hole`) 에 verify_p7_manifold
+  명시 검증 추가 + 신규 sweep test (`test_p7_canonical_sweep_locked_
+  scenarios`) 로 LOCKED #1 시나리오 3건 (disjoint / single inner /
+  outer-after-inners 그리기 순서 무관성) 일괄 봉인.
+- **Deferred boundary**: connected stacked-inner 의 1 non-manifold
+  edge (shared y=0 boundary) 는 ADR-051 §2.5 의 component-merge
+  resolver 작업으로 별도 ADR 진행 — 본 LOCKED 영역 외 future work.
+- **회귀 방지 테스트 강화** (절대 #[ignore] 금지):
+  * `test_p7_canonical_stacked_inner_manifold` — verify_p7_manifold
+    violations ≤ 1 (deferred boundary)
+  * `test_p7_canonical_disjoint_inner_multi_hole` — strict 0
+  * `test_p7_canonical_sweep_locked_scenarios` — 3 시나리오 모두
+    is_valid()
+  * `test_p7_canonical_burge_centered_scenario_no_violations` — fixture
+    + 3 centered cases 0 nm
+  * 기존 LOCKED #1 회귀 11건 모두 PASS 유지
+
 ### 2. ADR-007 Invariant 2 — Winding 일괄 강제
 - 모든 face 의 `normal.dot(surface_normal_hint) >= 0` 보장.
 - `align_face_with_neighbors` 결과와 **무관하게** 항상 hint 기준 검사.
