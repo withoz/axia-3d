@@ -168,4 +168,28 @@ describe('SettingsPanel', () => {
       expect(info.textContent).toContain('in');
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-5d — Draw Shape Mode toggle UI
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-050 P-5d — Draw Shape Mode toggle', () => {
+    it('renders draw-shape-mode checkbox and toggling it updates the setting', async () => {
+      const { getDrawShapeMode, setDrawShapeMode } = await import(
+        '../tools/DrawShapeModeSettings'
+      );
+      setDrawShapeMode(false);
+      panel.open();
+
+      const checkbox = document.getElementById('sp-draw-shape-mode') as HTMLInputElement;
+      expect(checkbox).not.toBeNull();
+      expect(checkbox.type).toBe('checkbox');
+      expect(checkbox.checked).toBe(false);
+
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event('change'));
+      expect(getDrawShapeMode()).toBe(true);
+
+      setDrawShapeMode(false); // teardown
+    });
+  });
 });

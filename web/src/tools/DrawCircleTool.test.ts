@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       drawCircle: vi.fn().mockReturnValue(0),
+      drawCircleAsShape: vi.fn().mockReturnValue(0),
     },
     viewport: {
       scene: { add: vi.fn(), remove: vi.fn() },
@@ -94,6 +95,37 @@ describe('DrawCircleTool', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
       tool.cleanup();
       expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-5d — Draw Shape Mode dispatch
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-050 P-5d Draw Shape Mode dispatch', () => {
+    it('VCB path with flag OFF (default) calls bridge.drawCircle (legacy Xia)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(false);
+
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.drawCircle).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawCircleAsShape).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
+    });
+
+    it('VCB path with flag ON calls bridge.drawCircleAsShape (form Shape)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(true);
+
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.drawCircleAsShape).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawCircle).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
     });
   });
 });

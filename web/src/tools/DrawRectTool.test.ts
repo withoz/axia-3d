@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       drawRect: vi.fn().mockReturnValue(0),
+      drawRectAsShape: vi.fn().mockReturnValue(0),
     },
     viewport: {
       scene: { add: vi.fn(), remove: vi.fn() },
@@ -95,6 +96,38 @@ describe('DrawRectTool', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
       tool.cleanup();
       expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-5d — Draw Shape Mode dispatch (form vs property layer)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-050 P-5d Draw Shape Mode dispatch', () => {
+    it('VCB path with flag OFF (default) calls bridge.drawRect (legacy Xia)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(false);
+
+      // Skip onMouseDown so this.plane stays null → applyVCBValue uses
+      // its inline default plane (normal/up/right/onFace), avoiding the
+      // mock's getDrawPlane which lacks `right`.
+      tool.applyVCBValue(100, 200);
+
+      expect(ctx.bridge.drawRect).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawRectAsShape).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
+    });
+
+    it('VCB path with flag ON calls bridge.drawRectAsShape (form Shape)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(true);
+
+      tool.applyVCBValue(100, 200);
+
+      expect(ctx.bridge.drawRectAsShape).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawRect).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
     });
   });
 });

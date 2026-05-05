@@ -11,6 +11,7 @@ function mockToolContext() {
   return {
     bridge: {
       drawLine: vi.fn().mockReturnValue(0),
+      drawLineAsShape: vi.fn().mockReturnValue(0),
       faceCount: vi.fn().mockReturnValue(0),
       splitFaceByLine: vi.fn().mockReturnValue('{"faces":[10,11],"verts":[5],"edges":1}'),
       pointInFace: vi.fn().mockReturnValue(false),
@@ -309,6 +310,39 @@ describe('DrawLineTool', () => {
       if (excluded2.length > 0) {
         expect(excluded2[0].x).not.toBe(9999);
       }
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-5d — Draw Shape Mode dispatch
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-050 P-5d Draw Shape Mode dispatch', () => {
+    it('flag OFF (default) → bridge.drawLine called (legacy Xia)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(false);
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
+
+      expect(ctx.bridge.drawLine).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawLineAsShape).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
+    });
+
+    it('flag ON → bridge.drawLineAsShape called (form Shape)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(true);
+
+      tool.onActivate();
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
+
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
     });
   });
 });
