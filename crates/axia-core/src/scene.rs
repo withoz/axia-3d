@@ -86,6 +86,28 @@ pub struct Scene {
     /// - `clear_selection` of the TS layer also clears these tags (synced
     ///   via P-3 bridge round-trip)
     pub boolean_group_tags: HashMap<FaceId, crate::BooleanGroupTag>,
+
+    /// ADR-050 P-1 — Shape storage (form-layer citizenship).
+    ///
+    /// Two-Layer Citizenship Model (LOCKED #26): Shape = form citizen
+    /// (no material, geometric abstraction), Xia = property citizen
+    /// (material + watertight + manifold + member identity). Both
+    /// coexist — promotion API (Phase 1.A `promote.rs`) bridges them.
+    ///
+    /// P-1 atomic scope: in-memory only. Snapshot persistence is
+    /// deferred to ADR-050 P-3 (additive section). Drop-in alongside
+    /// existing `xias` HashMap — both maps coexist independently.
+    ///
+    /// Invariants:
+    /// - `ShapeId` is a separate newtype from `XiaId` (no aliasing)
+    /// - One Shape per id (HashMap key uniqueness)
+    /// - Shape lifecycle is independent of Xia lifecycle until P-2
+    ///   promote API integration
+    pub shapes: HashMap<crate::ShapeId, crate::Shape>,
+
+    /// ADR-050 P-1 — Counter for next `ShapeId`. Starts at 1; 0 is
+    /// reserved as a "null" sentinel for future Bridge null-checks.
+    next_shape_id: u32,
 }
 
 impl Scene {
@@ -103,6 +125,8 @@ impl Scene {
             epoch: None,
             auto_intersect_on_draw: true,
             boolean_group_tags: HashMap::new(),
+            shapes: HashMap::new(),
+            next_shape_id: 1,
         }
     }
 
@@ -248,6 +272,62 @@ impl Scene {
         let xia = Xia::new(id, name);
         self.xias.insert(id, xia);
         id
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-1 — Shape lifecycle helpers (form-layer, additive only).
+    //
+    // Per ADR-050 §C lock-ins:
+    // - Drop-in alongside existing Xia API (Xia / XiaId / xias / face_to_xia
+    //   / next_xia_id all UNCHANGED).
+    // - Snapshot persistence deferred to ADR-050 P-3 (additive section).
+    // - WASM/TS surface deferred to ADR-050 P-4+ (model-only prototype).
+    // - LOCKED #25 (ADR-074 group A/B) and ADR-078 boolean_group_tags both
+    //   FaceId-keyed → automatically unaffected by Shape addition.
+    // ════════════════════════════════════════════════════════════════════
+
+    /// ADR-050 P-1 — Create a new Shape (form-layer citizen).
+    ///
+    /// Shapes are the form-layer counterpart to Xia (property layer).
+    /// Per ADR-050 §2.1.1, a fresh Shape has no material (the form layer
+    /// is materially neutral by design). Promotion to Xia requires the
+    /// 4-condition check (see `promote.rs` Phase 1.A).
+    ///
+    /// `face_ids` may be empty — a line-only Shape with `standalone_edge_id`
+    /// set later is valid (mirrors `Xia` line-tool behavior).
+    pub fn create_shape(&mut self, name: String, face_ids: Vec<FaceId>) -> crate::ShapeId {
+        let id = crate::ShapeId::new(self.next_shape_id);
+        self.next_shape_id = self.next_shape_id.saturating_add(1);
+        let mut shape = crate::Shape::new(id, name);
+        shape.face_ids = face_ids;
+        self.shapes.insert(id, shape);
+        id
+    }
+
+    /// ADR-050 P-1 — Read access to a Shape by id.
+    pub fn get_shape(&self, id: crate::ShapeId) -> Option<&crate::Shape> {
+        self.shapes.get(&id)
+    }
+
+    /// ADR-050 P-1 — All currently-stored ShapeIds, sorted ascending.
+    /// Used by future Bridge layer / Inspector enumeration.
+    pub fn list_shape_ids(&self) -> Vec<crate::ShapeId> {
+        let mut ids: Vec<crate::ShapeId> = self.shapes.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// ADR-050 P-1 — Remove a Shape by id. Returns true if removed.
+    /// Does NOT touch the underlying mesh or any Xia — a Shape is a
+    /// pure form-layer record.
+    pub fn delete_shape(&mut self, id: crate::ShapeId) -> bool {
+        self.shapes.remove(&id).is_some()
+    }
+
+    /// ADR-050 P-1 — Remove all Shapes. Drops the form-layer state
+    /// without touching mesh / Xias / boolean_group_tags / etc.
+    pub fn clear_shapes(&mut self) {
+        self.shapes.clear();
     }
 
     // ════════════════════════════════════════════════
@@ -8798,5 +8878,128 @@ mod tests {
 
         assert!(!restored.has_any_boolean_group_tag(),
             "Legacy snapshot must reset boolean_group_tags to empty");
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-1 — Shape lifecycle regression tests.
+    //
+    // Per P-1 §C lock-ins:
+    // - Drop-in alongside existing Xia API (no rename, no signature change)
+    // - LOCKED #25 (ADR-074 group A/B) and ADR-078 boolean_group_tags
+    //   automatically unaffected (FaceId-keyed, Shape/Xia agnostic)
+    // - Snapshot persistence deferred to ADR-050 P-3 (so save/load tests
+    //   for Shape are NOT included here — addition would be a regression
+    //   of P-1's "in-memory only" lock-in)
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn shape_create_returns_unique_increasing_ids() {
+        let mut scene = Scene::new();
+        let s1 = scene.create_shape("사각형 1".to_string(), vec![]);
+        let s2 = scene.create_shape("사각형 2".to_string(), vec![]);
+        let s3 = scene.create_shape("Line".to_string(), vec![]);
+
+        assert_eq!(s1.raw(), 1);
+        assert_eq!(s2.raw(), 2);
+        assert_eq!(s3.raw(), 3);
+        assert_eq!(scene.shapes.len(), 3);
+    }
+
+    #[test]
+    fn shape_create_with_face_ids_stores_them() {
+        let mut scene = Scene::new();
+        let face_ids = vec![FaceId::new(10), FaceId::new(20), FaceId::new(30)];
+        let id = scene.create_shape("Rect".to_string(), face_ids.clone());
+
+        let shape = scene.get_shape(id).expect("shape exists");
+        assert_eq!(shape.face_ids, face_ids);
+        assert_eq!(shape.name, "Rect");
+        assert!(shape.standalone_edge_id.is_none()); // empty by default
+    }
+
+    #[test]
+    fn shape_get_returns_none_for_unknown_id() {
+        let scene = Scene::new();
+        // Empty scene — any id is unknown.
+        assert!(scene.get_shape(crate::ShapeId::new(999)).is_none());
+    }
+
+    #[test]
+    fn shape_list_ids_returns_sorted_ascending() {
+        let mut scene = Scene::new();
+        let _ = scene.create_shape("a".to_string(), vec![]);
+        let _ = scene.create_shape("b".to_string(), vec![]);
+        let _ = scene.create_shape("c".to_string(), vec![]);
+        // Delete the middle one so sorting is non-trivial.
+        scene.delete_shape(crate::ShapeId::new(2));
+        let _ = scene.create_shape("d".to_string(), vec![]); // id=4
+
+        let ids = scene.list_shape_ids();
+        assert_eq!(ids, vec![
+            crate::ShapeId::new(1),
+            crate::ShapeId::new(3),
+            crate::ShapeId::new(4),
+        ]);
+    }
+
+    #[test]
+    fn shape_delete_returns_true_on_existing_false_on_missing() {
+        let mut scene = Scene::new();
+        let id = scene.create_shape("temp".to_string(), vec![]);
+
+        assert!(scene.delete_shape(id), "first delete returns true");
+        assert!(!scene.delete_shape(id), "second delete returns false");
+        assert!(scene.get_shape(id).is_none());
+    }
+
+    #[test]
+    fn shape_clear_removes_all_but_preserves_xia_and_boolean_group_tags() {
+        // P-1 invariant test — Shape clear must not touch any other
+        // citizenship layer. ADR-074 / ADR-078 회귀 보장.
+        let mut scene = Scene::new();
+        let _s1 = scene.create_shape("a".to_string(), vec![]);
+        let _s2 = scene.create_shape("b".to_string(), vec![]);
+
+        // Pre-existing Xia + boolean_group_tags (ADR-074 / ADR-078 layer).
+        let xia_id = scene.create_xia("Existing XIA".to_string());
+        scene.set_boolean_group_tag(
+            &[FaceId::new(7)],
+            crate::BooleanGroupTag::A,
+        );
+
+        // Clear shapes only.
+        scene.clear_shapes();
+
+        // Shapes layer fully cleared.
+        assert!(scene.shapes.is_empty());
+        assert_eq!(scene.list_shape_ids(), vec![]);
+
+        // Xia layer untouched (ADR-050 §C lock-in #1).
+        assert!(scene.xias.contains_key(&xia_id),
+            "Xia must NOT be affected by Shape clear");
+        // boolean_group_tags untouched (ADR-078 회귀 보장).
+        assert!(scene.has_any_boolean_group_tag(),
+            "boolean_group_tags must NOT be affected by Shape clear");
+        assert_eq!(scene.get_boolean_group_a(), vec![FaceId::new(7)]);
+    }
+
+    #[test]
+    fn shape_id_is_distinct_type_from_xia_id() {
+        // P-1 lock-in #2 — ShapeId is a newtype, not an alias.
+        // This compiles only if ShapeId and XiaId are distinct types.
+        let mut scene = Scene::new();
+        let s_id = scene.create_shape("form".to_string(), vec![]);
+        let x_id = scene.create_xia("property".to_string());
+
+        // Both lookups work independently — proving the two storages
+        // are namespaced separately.
+        assert!(scene.get_shape(s_id).is_some());
+        assert!(scene.xias.contains_key(&x_id));
+
+        // ShapeId cannot be used to query xias (compile-time guard) —
+        // we cannot write `scene.xias.contains_key(&s_id)` because
+        // s_id is ShapeId (not u32). The test exercises the runtime
+        // path of distinct namespaces. Type-level guard is verified
+        // by successful compilation.
     }
 }

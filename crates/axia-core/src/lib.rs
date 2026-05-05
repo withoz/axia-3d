@@ -9,6 +9,7 @@
 //! - Scene Graph: Collection of XIA entities with relations
 
 pub mod xia;
+pub mod shape;
 pub mod lifecycle;
 pub mod commands;
 pub mod scene;
@@ -21,6 +22,7 @@ pub mod promote;
 pub mod boolean_group;
 
 pub use xia::{Xia, XiaState};
+pub use shape::{Shape, ShapeId};
 pub use boolean_group::BooleanGroupTag;
 pub use promote::{PromoteError, PromoteOk, XiaKind};
 pub use commands::{Command, CommandResult};
