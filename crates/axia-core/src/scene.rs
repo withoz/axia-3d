@@ -173,15 +173,33 @@ impl Scene {
             eprintln!("[Scene] BooleanGroupTags serialize failed: {}", e);
             Vec::new()
         });
+        // ADR-050 P-3 — Section 7: Shape (form-layer) persistence.
+        // Three sub-sections (shapes / next_shape_id / shape_to_xia) keep the
+        // form-layer state independent of section 1-2 (mesh + xias) so that
+        // legacy v2 snapshots (predating P-3) restore Shape state to default
+        // empty without breaking bincode round-trip on any other field.
+        let shapes_data = bincode::serialize(&self.shapes).unwrap_or_else(|e| {
+            eprintln!("[Scene] Shapes serialize failed: {}", e);
+            Vec::new()
+        });
+        let shape_to_xia_data = bincode::serialize(&self.shape_to_xia).unwrap_or_else(|e| {
+            eprintln!("[Scene] ShapeToXia serialize failed: {}", e);
+            Vec::new()
+        });
         let next_xia = self.next_xia_id;
+        let next_shape = self.next_shape_id;
 
         // [mesh_len:u64][mesh_data][xia_len:u64][xia_data]
         // [group_len:u64][group_data][next_xia_id:u64]
         // [constraints_len:u64][constraints_data]
         // [boolean_group_len:u64][boolean_group_data]   ← ADR-078 P-1 (additive)
+        // [shapes_len:u64][shapes_data]                 ← ADR-050 P-3 (additive)
+        // [next_shape_id:u64]                           ← ADR-050 P-3 (additive)
+        // [shape_to_xia_len:u64][shape_to_xia_data]     ← ADR-050 P-3 (additive)
         let mut buf = Vec::with_capacity(
             8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8
-                + 8 + constraints_data.len() + 8 + boolean_group_data.len(),
+                + 8 + constraints_data.len() + 8 + boolean_group_data.len()
+                + 8 + shapes_data.len() + 8 + 8 + shape_to_xia_data.len(),
         );
         buf.extend_from_slice(&(mesh_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&mesh_data);
@@ -196,6 +214,12 @@ impl Scene {
         // is handled by the matching `if offset + 8 <= data.len()` guard in restore.
         buf.extend_from_slice(&(boolean_group_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&boolean_group_data);
+        // ADR-050 P-3 — section 7 (additive). 3 sub-sections.
+        buf.extend_from_slice(&(shapes_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&shapes_data);
+        buf.extend_from_slice(&(next_shape as u64).to_le_bytes());
+        buf.extend_from_slice(&(shape_to_xia_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&shape_to_xia_data);
         buf
     }
 
@@ -278,7 +302,62 @@ impl Scene {
             self.boolean_group_tags.clear();
         }
 
-        // 7. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
+        // 7. ADR-050 P-3 — Shape persistence (additive, backward-compat).
+        //    Three sub-sections (shapes / next_shape_id / shape_to_xia).
+        //    Legacy snapshots predating ADR-050 P-3 don't have these
+        //    → reset to default empty (1 for next_shape_id, empty maps).
+        let mut shapes_section_present = false;
+
+        // 7a. shapes
+        if offset + 8 <= data.len() {
+            let slen = read_len(data, &mut offset);
+            if slen > 0 && offset + slen <= data.len() {
+                if let Ok(restored) = bincode::deserialize::<HashMap<crate::ShapeId, crate::Shape>>(
+                    &data[offset..offset + slen],
+                ) {
+                    self.shapes = restored;
+                    shapes_section_present = true;
+                }
+                offset += slen;
+            } else if slen == 0 {
+                // Section header present but body empty (no shapes) —
+                // valid case after `clear_shapes()` then snapshot.
+                self.shapes.clear();
+                shapes_section_present = true;
+            }
+        }
+
+        // 7b. next_shape_id (only if section 7 detected)
+        if shapes_section_present && offset + 8 <= data.len() {
+            self.next_shape_id = u64::from_le_bytes(
+                data[offset..offset + 8].try_into().unwrap_or([0; 8]),
+            ) as u32;
+            offset += 8;
+        }
+
+        // 7c. shape_to_xia
+        if shapes_section_present && offset + 8 <= data.len() {
+            let xlen = read_len(data, &mut offset);
+            if xlen > 0 && offset + xlen <= data.len() {
+                if let Ok(restored) = bincode::deserialize::<HashMap<crate::ShapeId, XiaId>>(
+                    &data[offset..offset + xlen],
+                ) {
+                    self.shape_to_xia = restored;
+                }
+                offset += xlen;
+            } else if xlen == 0 {
+                self.shape_to_xia.clear();
+            }
+        }
+
+        if !shapes_section_present {
+            // Legacy snapshot (pre-ADR-050 P-3) — reset Shape state.
+            self.shapes.clear();
+            self.next_shape_id = 1;
+            self.shape_to_xia.clear();
+        }
+
+        // 8. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
         self.rebuild_face_to_xia_index();
     }
 
@@ -9328,6 +9407,173 @@ mod tests {
         assert!(!scene.shape_to_xia.contains_key(&shape_id));
         // No Xia created.
         assert!(scene.xias.is_empty());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-3 — Shape snapshot persistence (section 7) regression tests.
+    //
+    // Per P-3 §C lock-ins:
+    // - Section 7 additive (legacy v2 snapshots restore Shape state to
+    //   default empty without breaking other fields)
+    // - 3 sub-sections: shapes / next_shape_id / shape_to_xia
+    // - LOCKED #25 (ADR-074) and ADR-078 P-1 section 6 round-trip 회귀 0
+    //   (additive layering preserves all existing sections)
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn shape_snapshot_round_trip_preserves_shapes() {
+        let mut scene = Scene::new();
+        let s1 = scene.create_shape(
+            "Rect".to_string(),
+            vec![FaceId::new(10), FaceId::new(20)],
+        );
+        let s2 = scene.create_shape("Line".to_string(), vec![]);
+        if let Some(shape) = scene.shapes.get_mut(&s2) {
+            shape.standalone_edge_id = Some(EdgeId::new(7));
+        }
+
+        let snap = scene.scene_snapshot();
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        assert_eq!(restored.shapes.len(), 2);
+        let r1 = restored.get_shape(s1).expect("s1 restored");
+        assert_eq!(r1.name, "Rect");
+        assert_eq!(r1.face_ids, vec![FaceId::new(10), FaceId::new(20)]);
+        let r2 = restored.get_shape(s2).expect("s2 restored");
+        assert_eq!(r2.standalone_edge_id, Some(EdgeId::new(7)));
+    }
+
+    #[test]
+    fn shape_snapshot_round_trip_preserves_next_shape_id() {
+        let mut scene = Scene::new();
+        let _s1 = scene.create_shape("a".to_string(), vec![]);
+        let _s2 = scene.create_shape("b".to_string(), vec![]);
+        let _s3 = scene.create_shape("c".to_string(), vec![]);
+        // next_shape_id should now be 4 (started at 1, incremented 3 times).
+
+        let snap = scene.scene_snapshot();
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        // Verify by creating one more shape — should get id=4.
+        let s4 = restored.create_shape("d".to_string(), vec![]);
+        assert_eq!(s4.raw(), 4, "next_shape_id must round-trip");
+    }
+
+    #[test]
+    fn shape_snapshot_round_trip_preserves_shape_to_xia_linkage() {
+        // Build a unit cube + promote, then snapshot/restore. The
+        // shape_to_xia map must contain the linkage post-restore.
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let mat = MaterialId::new(5);
+        let promote_ok = scene
+            .promote_shape_to_xia(shape_id, mat)
+            .expect("promote OK");
+        let xia_id = promote_ok.xia_id;
+
+        let snap = scene.scene_snapshot();
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        assert_eq!(
+            restored.shape_to_xia.get(&shape_id).copied(),
+            Some(xia_id),
+            "shape_to_xia linkage must round-trip",
+        );
+        // Shape itself preserved (form layer independence).
+        assert!(restored.get_shape(shape_id).is_some());
+    }
+
+    #[test]
+    fn shape_snapshot_legacy_pre_p3_loads_empty_shape_state() {
+        // Simulate a pre-P-3 snapshot by truncating section 7 from
+        // a freshly-built snapshot. The truncation pattern matches
+        // ADR-078 P-1's `boolean_group_legacy_snapshot_loads_empty`
+        // — walk section length prefixes and stop at section 7 start.
+        let mut scene = Scene::new();
+        // Force at least one shape to make sure section 7 is non-empty
+        // — then truncate it.
+        let _ = scene.create_shape("forced".to_string(), vec![FaceId::new(99)]);
+        let mut snap = scene.scene_snapshot();
+
+        let mut offset = 0usize;
+        // 1. mesh
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // 2. xias
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // 3. groups
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // 4. next_xia (8 bytes)
+        offset += 8;
+        // 5. constraints
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // 6. boolean_group_tags
+        let len = u64::from_le_bytes(snap[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8 + len;
+        // Now offset points at section 7 (Shape state) start.
+        snap.truncate(offset);
+
+        // Restore with pre-existing dirty state — must clear it.
+        let mut restored = Scene::new();
+        let _ = restored.create_shape("stale".to_string(), vec![]);
+        let _ = restored.create_shape("stale2".to_string(), vec![]);
+        restored.restore_scene_snapshot(&snap);
+
+        assert!(
+            restored.shapes.is_empty(),
+            "Legacy snapshot must reset shapes to empty (got {} shapes)",
+            restored.shapes.len(),
+        );
+        assert_eq!(restored.next_shape_id, 1, "Legacy snapshot must reset next_shape_id");
+        assert!(
+            restored.shape_to_xia.is_empty(),
+            "Legacy snapshot must reset shape_to_xia",
+        );
+    }
+
+    #[test]
+    fn shape_snapshot_round_trip_no_regression_to_locked_layers() {
+        // P-3 invariant test — adding section 7 must not regress
+        // existing section 1-6 round-trip behavior.
+        // ADR-074 / ADR-078 회귀 가드.
+        let mut scene = Scene::new();
+
+        // Section 1-2: Mesh + Xia (via XIA create with face_ids)
+        let _xia = scene.create_xia("Existing XIA".to_string());
+
+        // Section 6: boolean_group_tags
+        scene.set_boolean_group_tag(
+            &[FaceId::new(11), FaceId::new(22)],
+            crate::BooleanGroupTag::A,
+        );
+        scene.set_boolean_group_tag(
+            &[FaceId::new(33)],
+            crate::BooleanGroupTag::B,
+        );
+
+        // Section 7 (NEW): Shape + shape_to_xia
+        let _shape = scene.create_shape("Form".to_string(), vec![FaceId::new(99)]);
+
+        let snap = scene.scene_snapshot();
+        let mut restored = Scene::new();
+        restored.restore_scene_snapshot(&snap);
+
+        // Section 6 round-trip (ADR-078 P-1 lockstep)
+        assert_eq!(restored.get_boolean_group_a(), vec![FaceId::new(11), FaceId::new(22)]);
+        assert_eq!(restored.get_boolean_group_b(), vec![FaceId::new(33)]);
+        assert!(restored.has_boolean_group_selection());
+
+        // Section 7 round-trip (P-3)
+        assert_eq!(restored.shapes.len(), 1);
+
+        // Section 1-2 (Xia) round-trip
+        assert!(!restored.xias.is_empty());
     }
 
     #[test]
