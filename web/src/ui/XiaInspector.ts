@@ -119,10 +119,11 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     const assignBtn = document.getElementById('xi-assign-btn');
 
     if (!materialId || materialId === '') {
-      // Appearance 상태 (재질 없음)
+      // ADR-050 P-6 — 형태 (Shape) 상태: 재질 없음, form layer
+      // (ADR-049 §4 Q3 — 사용자 facing 에서 재질 없는 단계엔 'XIA' 안 노출)
       if (hintEl) hintEl.style.display = '';
       if (propsEl) propsEl.style.display = 'none';
-      if (badgeEl) { badgeEl.textContent = 'Appearance'; badgeEl.style.background = 'rgba(156, 39, 176, 0.15)'; badgeEl.style.color = '#ce93d8'; }
+      if (badgeEl) { badgeEl.textContent = '형태 (Shape)'; badgeEl.style.background = 'rgba(156, 39, 176, 0.15)'; badgeEl.style.color = '#ce93d8'; }
       assignBtn?.classList.remove('assigned');
       return;
     }
@@ -130,10 +131,11 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
     const mat = matLib.get(materialId);
     if (!mat) return;
 
-    // XIA 상태 (재질 있음)
+    // ADR-050 P-6 — XIA (특성) 상태: 재질 있음, property layer
+    // (ADR-049 §4 Q3 — 부재 정체성, primary material + face-level override)
     if (hintEl) hintEl.style.display = 'none';
     if (propsEl) propsEl.style.display = '';
-    if (badgeEl) { badgeEl.textContent = 'XIA (물체)'; badgeEl.style.background = 'rgba(76, 175, 80, 0.15)'; badgeEl.style.color = '#81c784'; }
+    if (badgeEl) { badgeEl.textContent = 'XIA (특성)'; badgeEl.style.background = 'rgba(76, 175, 80, 0.15)'; badgeEl.style.color = '#81c784'; }
     assignBtn?.classList.add('assigned');
 
     // 물리 속성 채우기
