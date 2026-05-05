@@ -40,7 +40,14 @@ describe('DrawCircleTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawCircleTool;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // ADR-050 P-5e-α — module-level default is `true`. Explicitly
+    // reset to `false` so legacy-path tests below exercise the
+    // bridge.drawCircle path. Form-mode tests call setDrawShapeMode(true)
+    // in their own scope.
+    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+    setDrawShapeMode(false);
+
     ctx = mockToolContext();
     tool = new DrawCircleTool(ctx);
   });

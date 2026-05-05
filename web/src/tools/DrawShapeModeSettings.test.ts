@@ -5,19 +5,35 @@ import {
   onDrawShapeModeChange,
 } from './DrawShapeModeSettings';
 
-describe('ADR-050 P-5d — DrawShapeModeSettings module', () => {
+describe('ADR-050 P-5d / P-5e-α — DrawShapeModeSettings module', () => {
+  // ADR-050 P-5e-α — default flipped to `true`. Tests now reset to
+  // `false` between cases for parity with the legacy-Xia tests that
+  // expect that default state. Module-level default is verified in
+  // its own dedicated test below.
   beforeEach(() => {
-    // Cross-test isolation — each test starts with default false.
     setDrawShapeMode(false);
   });
 
   afterEach(() => {
-    // Reset to default for the next file's tests.
+    // Reset across test files — keep `false` so legacy-path tests
+    // (DrawRectTool / DrawLineTool / DrawCircleTool) without explicit
+    // mode setup continue to exercise the legacy bridge.drawRect path.
     setDrawShapeMode(false);
   });
 
-  it('default value is false (legacy Xia path)', () => {
-    expect(getDrawShapeMode()).toBe(false);
+  it('module-level default is true (ADR-050 P-5e-α flip)', async () => {
+    // Re-import the module fresh to read the load-time default
+    // (the beforeEach has already mutated the singleton state).
+    // We use `vi.resetModules()` + dynamic import to bypass the
+    // cached singleton. localStorage is empty so the load-time
+    // path takes the `let current = true` branch.
+    const { vi } = await import('vitest');
+    vi.resetModules();
+    try {
+      localStorage.removeItem('axia:draw-shape-mode');
+    } catch { /* ignore */ }
+    const fresh = await import('./DrawShapeModeSettings');
+    expect(fresh.getDrawShapeMode()).toBe(true);
   });
 
   it('setDrawShapeMode(true) updates getDrawShapeMode (round-trip)', () => {

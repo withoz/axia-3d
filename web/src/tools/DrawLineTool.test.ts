@@ -61,7 +61,15 @@ describe('DrawLineTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawLineTool;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // ADR-050 P-5e-α — module-level default is `true`. Explicitly
+    // reset to `false` so legacy-path tests below exercise the
+    // bridge.drawLine path (they predate the form-mode flag).
+    // Tests that need form-mode call `setDrawShapeMode(true)` in their
+    // own scope.
+    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+    setDrawShapeMode(false);
+
     ctx = mockToolContext();
     tool = new DrawLineTool(ctx);
   });

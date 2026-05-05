@@ -1,29 +1,35 @@
 /**
- * ADR-050 P-5d — Draw Shape Mode (Two-Layer Citizenship opt-in).
+ * ADR-050 P-5d / P-5e-α — Draw Shape Mode (Two-Layer Citizenship).
  *
  * When enabled, the 3 core Draw tools (Rect / Line / Circle) call the
  * As-Shape WASM bridge variants (P-5c) to create form-layer Shapes
  * instead of property-layer Xias.
  *
- * Default: `false` — legacy Xia path stays the default. The user
- * opts in via the SettingsPanel checkbox. P-5e will flip the default
- * after the LOCKED #1 / #26 migration completes.
+ * **P-5e-α default flip (2026-05-05)**: default flipped from `false`
+ * to `true`. New users now default to form-layer Shape draws (ADR-049
+ * §4 Q3 — Two-Layer Citizenship as the engine's primary mental model).
+ * Existing users who explicitly toggled OFF have `localStorage
+ * 'axia:draw-shape-mode' = 'false'` and that preference is preserved
+ * (backward compat).
  *
  * Mirrors `AutoIntersectSettings.ts` — module-level state + getter /
  * setter / listener registration + localStorage persistence.
  *
  * Cross-references:
- * - ADR-050 §B P-5d lock-ins (default false, drop-in alongside)
+ * - ADR-050 §B P-5d lock-ins (default flip per P-5e-α)
  * - LOCKED #26 Phase 1 (Two-Layer Citizenship Model)
  */
 
 const STORAGE_KEY = 'axia:draw-shape-mode';
 
-let current = false;
+let current = true; // ADR-050 P-5e-α default flip (2026-05-05).
 try {
   const saved = localStorage.getItem(STORAGE_KEY);
   // Strict 'true' / 'false' — anything else (including null) keeps default.
-  if (saved === 'true') current = true;
+  // Existing users who explicitly opted OFF have 'false' stored and that
+  // preference is honored across the default flip.
+  if (saved === 'false') current = false;
+  else if (saved === 'true') current = true;
 } catch {
   /* private mode */
 }
