@@ -401,6 +401,13 @@ type AxiaEngineExtended = AxiaEngine & {
   booleanDispatchDcelMultiJson?(
     facesA: Uint32Array, facesB: Uint32Array, op: string, tolGeometric: number,
   ): string;
+  // ADR-078 P-2 — Boolean Group Persistence (typed methods, no JSON)
+  setBooleanGroupTag?(faceIds: Uint32Array, tag: string): void;
+  getBooleanGroupAFaces?(): Uint32Array;
+  getBooleanGroupBFaces?(): Uint32Array;
+  clearBooleanGroupTags?(): void;
+  hasAnyBooleanGroupTag?(): boolean;
+  hasBooleanGroupSelection?(): boolean;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -729,6 +736,74 @@ export class WasmBridge {
       kind: 'error', reason: 'parse',
       detail: 'engine response missing required fields',
     };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-078 P-2 — Boolean Group Persistence typed wrappers
+  //
+  // Rust `Scene::boolean_group_tags` (P-1) 의 typed surface. TS U-1
+  // SelectionManager (runtime UI state) 와 별도 — 본 wrappers 는
+  // *project-persistent* group state 를 다룸. P-3 (별도) 가 두 storage
+  // 동기화 (load 시 SelectionManager 갱신).
+  //
+  // Per ADR-078 §B P-2 lock-ins:
+  // - P-2-h tag: 'A' | 'B' literal (TS U-1 SelectionManager 와 일관)
+  // - P-2-d number[] → Uint32Array (wasm-bindgen marshalling)
+  // - P-2-c invalid tag → throws (Rust Err<JsValue> propagates)
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-078 P-2 — Tag faces as Boolean Group A or B (project-persistent).
+   * @throws if WASM exports the engine's Err (e.g., invalid tag).
+   */
+  setBooleanGroupTag(faceIds: number[], tag: 'A' | 'B'): void {
+    if (!this.engine || !this.engine.setBooleanGroupTag) return;
+    this.markDirty();
+    this.engine.setBooleanGroupTag(Uint32Array.from(faceIds), tag);
+  }
+
+  /**
+   * ADR-078 P-2 — Returns face IDs tagged Group A (sorted ascending).
+   * Empty array if engine unavailable.
+   */
+  getBooleanGroupAFaces(): number[] {
+    if (!this.engine || !this.engine.getBooleanGroupAFaces) return [];
+    return Array.from(this.engine.getBooleanGroupAFaces());
+  }
+
+  /**
+   * ADR-078 P-2 — Returns face IDs tagged Group B (sorted ascending).
+   */
+  getBooleanGroupBFaces(): number[] {
+    if (!this.engine || !this.engine.getBooleanGroupBFaces) return [];
+    return Array.from(this.engine.getBooleanGroupBFaces());
+  }
+
+  /**
+   * ADR-078 P-2 — Clear all Boolean group tags (project-persistent).
+   */
+  clearBooleanGroupTags(): void {
+    if (!this.engine || !this.engine.clearBooleanGroupTags) return;
+    this.markDirty();
+    this.engine.clearBooleanGroupTags();
+  }
+
+  /**
+   * ADR-078 P-2 — True iff at least one face has a Boolean group tag.
+   * Used by UI for Clear-menu visibility (mirror of TS U-2 `hasAnyGroupTag`).
+   */
+  hasAnyBooleanGroupTag(): boolean {
+    if (!this.engine || !this.engine.hasAnyBooleanGroupTag) return false;
+    return this.engine.hasAnyBooleanGroupTag();
+  }
+
+  /**
+   * ADR-078 P-2 — True iff BOTH Group A and Group B have ≥1 tagged face.
+   * Used by routing decisions (mirror of TS U-3 `hasGroupSelection`).
+   */
+  hasBooleanGroupSelection(): boolean {
+    if (!this.engine || !this.engine.hasBooleanGroupSelection) return false;
+    return this.engine.hasBooleanGroupSelection();
   }
 
 

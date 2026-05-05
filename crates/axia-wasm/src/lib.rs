@@ -6027,6 +6027,93 @@ impl AxiaEngine {
         step6_json::boolean_dispatch_dcel_multi_result_json(&dispatch_result)
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-078 P-2 — Boolean Group Persistence WASM bridge
+    //
+    // Per ADR-078 §B P-2 lock-ins:
+    // - P-2-a typed methods (6 — bool/array, no JSON envelope)
+    // - P-2-b camelCase via #[wasm_bindgen(js_name = ...)]
+    // - P-2-c String tag input + Result<(), JsValue> on invalid (strict)
+    // - P-2-d Vec<u32> face IDs (wasm-bindgen 표준, JS array → Rust Vec)
+    // - P-2-e Vec<u32> output (sorted, P-1 helpers 위임)
+    // - P-2-f set/clear methods 만 transaction wrapping (Undo/Redo 정합)
+    // - P-2-i AxiaEngineExtended optional methods 추가 (additive)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// ADR-078 P-2 — Tag a list of face IDs as Boolean Group A or B.
+    ///
+    /// `tag` accepts `"A"` or `"B"` (uppercase only — strict, no
+    /// lowercase fallback per P-2-c lock-in). Invalid tag → throws JS
+    /// `Error` (Result<(), JsValue>). Wrapped in transaction for
+    /// Undo/Redo (P-2-f).
+    ///
+    /// Mirrors TS `SelectionManager.setGroupTag` (ADR-074 U-1) at the
+    /// Scene-persistent layer.
+    #[wasm_bindgen(js_name = "setBooleanGroupTag")]
+    pub fn set_boolean_group_tag(
+        &mut self,
+        face_ids: Vec<u32>,
+        tag: String,
+    ) -> Result<(), JsValue> {
+        let group = match tag.as_str() {
+            "A" => axia_core::BooleanGroupTag::A,
+            "B" => axia_core::BooleanGroupTag::B,
+            other => return Err(JsValue::from_str(&format!(
+                "setBooleanGroupTag: invalid tag '{}' (expected 'A' or 'B')",
+                other,
+            ))),
+        };
+        let fids: Vec<FaceId> = face_ids.iter().map(|&i| FaceId::new(i)).collect();
+        // P-2-f — transaction wrap so Undo restores prior tag state.
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        self.scene.set_boolean_group_tag(&fids, group);
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+        Ok(())
+    }
+
+    /// ADR-078 P-2 — Returns face IDs tagged Group A (sorted ascending).
+    /// Mirrors TS `SelectionManager.getGroupA` (ADR-074 U-1).
+    #[wasm_bindgen(js_name = "getBooleanGroupAFaces")]
+    pub fn get_boolean_group_a_faces(&self) -> Vec<u32> {
+        self.scene.get_boolean_group_a().iter().map(|f| f.raw()).collect()
+    }
+
+    /// ADR-078 P-2 — Returns face IDs tagged Group B (sorted ascending).
+    /// Mirrors TS `SelectionManager.getGroupB` (ADR-074 U-1).
+    #[wasm_bindgen(js_name = "getBooleanGroupBFaces")]
+    pub fn get_boolean_group_b_faces(&self) -> Vec<u32> {
+        self.scene.get_boolean_group_b().iter().map(|f| f.raw()).collect()
+    }
+
+    /// ADR-078 P-2 — Clear all Boolean group tags (transaction wrapped).
+    /// Mirrors TS `SelectionManager.clearGroupTags` (ADR-074 U-1).
+    #[wasm_bindgen(js_name = "clearBooleanGroupTags")]
+    pub fn clear_boolean_group_tags(&mut self) {
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+        self.scene.clear_boolean_group_tags();
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+    }
+
+    /// ADR-078 P-2 — True iff at least one face has a Boolean group tag.
+    /// Mirrors TS `SelectionManager.hasAnyGroupTag` (ADR-074 U-2 Clear
+    /// 가시성 / ADR-076 §E.5-4 단축키 Alt+0 활성화).
+    #[wasm_bindgen(js_name = "hasAnyBooleanGroupTag")]
+    pub fn has_any_boolean_group_tag(&self) -> bool {
+        self.scene.has_any_boolean_group_tag()
+    }
+
+    /// ADR-078 P-2 — True iff BOTH Group A and Group B have ≥1 tagged face.
+    /// Mirrors TS `SelectionManager.hasGroupSelection` (ADR-074 U-3
+    /// BooleanHandler routing).
+    #[wasm_bindgen(js_name = "hasBooleanGroupSelection")]
+    pub fn has_boolean_group_selection(&self) -> bool {
+        self.scene.has_boolean_group_selection()
+    }
+
     /// ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
     ///
     /// Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).

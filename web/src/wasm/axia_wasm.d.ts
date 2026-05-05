@@ -196,6 +196,11 @@ export class AxiaEngine {
      */
     classifyOrphans(): string;
     /**
+     * ADR-078 P-2 — Clear all Boolean group tags (transaction wrapped).
+     * Mirrors TS `SelectionManager.clearGroupTags` (ADR-074 U-1).
+     */
+    clearBooleanGroupTags(): void;
+    /**
      * Clear any analytic curve from an edge (revert to straight line).
      */
     clearEdgeCurve(edge_id: number): boolean;
@@ -460,6 +465,16 @@ export class AxiaEngine {
      */
     flipFaces(face_ids: Uint32Array): number;
     getAutoIntersectOnDraw(): boolean;
+    /**
+     * ADR-078 P-2 — Returns face IDs tagged Group A (sorted ascending).
+     * Mirrors TS `SelectionManager.getGroupA` (ADR-074 U-1).
+     */
+    getBooleanGroupAFaces(): Uint32Array;
+    /**
+     * ADR-078 P-2 — Returns face IDs tagged Group B (sorted ascending).
+     * Mirrors TS `SelectionManager.getGroupB` (ADR-074 U-1).
+     */
+    getBooleanGroupBFaces(): Uint32Array;
     /**
      * ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
      *
@@ -777,6 +792,18 @@ export class AxiaEngine {
      */
     group_count(): number;
     /**
+     * ADR-078 P-2 — True iff at least one face has a Boolean group tag.
+     * Mirrors TS `SelectionManager.hasAnyGroupTag` (ADR-074 U-2 Clear
+     * 가시성 / ADR-076 §E.5-4 단축키 Alt+0 활성화).
+     */
+    hasAnyBooleanGroupTag(): boolean;
+    /**
+     * ADR-078 P-2 — True iff BOTH Group A and Group B have ≥1 tagged face.
+     * Mirrors TS `SelectionManager.hasGroupSelection` (ADR-074 U-3
+     * BooleanHandler routing).
+     */
+    hasBooleanGroupSelection(): boolean;
+    /**
      * DXF 파일 바이트를 파싱하여 DCEL 메시로 가져오기
      * 반환: JSON 문자열 (통계 정보)
      */
@@ -1086,6 +1113,18 @@ export class AxiaEngine {
      * Phase 2 — auto_intersect_on_draw 토글. 기본 true.
      */
     setAutoIntersectOnDraw(enabled: boolean): void;
+    /**
+     * ADR-078 P-2 — Tag a list of face IDs as Boolean Group A or B.
+     *
+     * `tag` accepts `"A"` or `"B"` (uppercase only — strict, no
+     * lowercase fallback per P-2-c lock-in). Invalid tag → throws JS
+     * `Error` (Result<(), JsValue>). Wrapped in transaction for
+     * Undo/Redo (P-2-f).
+     *
+     * Mirrors TS `SelectionManager.setGroupTag` (ADR-074 U-1) at the
+     * Scene-persistent layer.
+     */
+    setBooleanGroupTag(face_ids: Uint32Array, tag: string): void;
     /**
      * Toggle active flag of a constraint.
      */
@@ -1419,6 +1458,7 @@ export interface InitOutput {
     readonly axiaengine_can_redo: (a: number) => number;
     readonly axiaengine_can_undo: (a: number) => number;
     readonly axiaengine_classifyOrphans: (a: number, b: number) => void;
+    readonly axiaengine_clearBooleanGroupTags: (a: number) => void;
     readonly axiaengine_clearEdgeCurve: (a: number, b: number) => number;
     readonly axiaengine_clearFaceSurface: (a: number, b: number) => number;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
@@ -1463,6 +1503,8 @@ export interface InitOutput {
     readonly axiaengine_findVertexIdAt: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_flipFaces: (a: number, b: number, c: number) => number;
     readonly axiaengine_getAutoIntersectOnDraw: (a: number) => number;
+    readonly axiaengine_getBooleanGroupAFaces: (a: number, b: number) => void;
+    readonly axiaengine_getBooleanGroupBFaces: (a: number, b: number) => void;
     readonly axiaengine_getCacheStats: (a: number, b: number) => void;
     readonly axiaengine_getCacheVersion: (a: number) => number;
     readonly axiaengine_getCenterlineLines: (a: number, b: number) => void;
@@ -1512,6 +1554,8 @@ export interface InitOutput {
     readonly axiaengine_get_xia_for_face: (a: number, b: number) => number;
     readonly axiaengine_get_xia_info: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_group_count: (a: number) => number;
+    readonly axiaengine_hasAnyBooleanGroupTag: (a: number) => number;
+    readonly axiaengine_hasBooleanGroupSelection: (a: number) => number;
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
     readonly axiaengine_intersectEdges: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1557,6 +1601,7 @@ export interface InitOutput {
     readonly axiaengine_scale_faces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_sceneSummary: (a: number, b: number) => void;
     readonly axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
+    readonly axiaengine_setBooleanGroupTag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeArcCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;

@@ -690,6 +690,13 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-078 P-2 — Clear all Boolean group tags (transaction wrapped).
+     * Mirrors TS `SelectionManager.clearGroupTags` (ADR-074 U-1).
+     */
+    clearBooleanGroupTags() {
+        wasm.axiaengine_clearBooleanGroupTags(this.__wbg_ptr);
+    }
+    /**
      * Clear any analytic curve from an edge (revert to straight line).
      * @param {number} edge_id
      * @returns {boolean}
@@ -1365,6 +1372,42 @@ export class AxiaEngine {
     getAutoIntersectOnDraw() {
         const ret = wasm.axiaengine_getAutoIntersectOnDraw(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * ADR-078 P-2 — Returns face IDs tagged Group A (sorted ascending).
+     * Mirrors TS `SelectionManager.getGroupA` (ADR-074 U-1).
+     * @returns {Uint32Array}
+     */
+    getBooleanGroupAFaces() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getBooleanGroupAFaces(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ADR-078 P-2 — Returns face IDs tagged Group B (sorted ascending).
+     * Mirrors TS `SelectionManager.getGroupB` (ADR-074 U-1).
+     * @returns {Uint32Array}
+     */
+    getBooleanGroupBFaces() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getBooleanGroupBFaces(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
@@ -2244,6 +2287,26 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * ADR-078 P-2 — True iff at least one face has a Boolean group tag.
+     * Mirrors TS `SelectionManager.hasAnyGroupTag` (ADR-074 U-2 Clear
+     * 가시성 / ADR-076 §E.5-4 단축키 Alt+0 활성화).
+     * @returns {boolean}
+     */
+    hasAnyBooleanGroupTag() {
+        const ret = wasm.axiaengine_hasAnyBooleanGroupTag(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * ADR-078 P-2 — True iff BOTH Group A and Group B have ≥1 tagged face.
+     * Mirrors TS `SelectionManager.hasGroupSelection` (ADR-074 U-3
+     * BooleanHandler routing).
+     * @returns {boolean}
+     */
+    hasBooleanGroupSelection() {
+        const ret = wasm.axiaengine_hasBooleanGroupSelection(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * DXF 파일 바이트를 파싱하여 DCEL 메시로 가져오기
      * 반환: JSON 문자열 (통계 정보)
      * @param {Uint8Array} data
@@ -3072,6 +3135,36 @@ export class AxiaEngine {
      */
     setAutoIntersectOnDraw(enabled) {
         wasm.axiaengine_setAutoIntersectOnDraw(this.__wbg_ptr, enabled);
+    }
+    /**
+     * ADR-078 P-2 — Tag a list of face IDs as Boolean Group A or B.
+     *
+     * `tag` accepts `"A"` or `"B"` (uppercase only — strict, no
+     * lowercase fallback per P-2-c lock-in). Invalid tag → throws JS
+     * `Error` (Result<(), JsValue>). Wrapped in transaction for
+     * Undo/Redo (P-2-f).
+     *
+     * Mirrors TS `SelectionManager.setGroupTag` (ADR-074 U-1) at the
+     * Scene-persistent layer.
+     * @param {Uint32Array} face_ids
+     * @param {string} tag
+     */
+    setBooleanGroupTag(face_ids, tag) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(tag, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_setBooleanGroupTag(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Toggle active flag of a constraint.

@@ -435,3 +435,114 @@ fn boolean_dispatch_dcel_multi_json_handles_mesh_path_branch() {
             "fallback reason kind missing: {}", kind);
     }
 }
+
+// ────────────────────────────────────────────────────────────────────
+// ADR-078 P-2 — Boolean Group Persistence WASM bridge regression tests
+// (Path Z atomic — typed methods, no JSON envelope)
+// ────────────────────────────────────────────────────────────────────
+
+/// P-2 #1 — All 6 wasm_bindgen exports registered with documented js_name.
+#[test]
+fn boolean_group_p2_endpoints_wired() {
+    let l = lib_src();
+    for endpoint in [
+        "setBooleanGroupTag",
+        "getBooleanGroupAFaces",
+        "getBooleanGroupBFaces",
+        "clearBooleanGroupTags",
+        "hasAnyBooleanGroupTag",
+        "hasBooleanGroupSelection",
+    ] {
+        let needle = format!(r#"js_name = "{}""#, endpoint);
+        assert!(l.contains(&needle),
+            "P-2: {} endpoint must be registered", endpoint);
+    }
+}
+
+/// P-2 #2 — set_boolean_group_tag uses Result<(), JsValue> with strict
+/// "A"/"B" matching (P-2-c lock-in: no lowercase fallback, no silent
+/// no-op on invalid tag — explicit Err throw).
+#[test]
+fn boolean_group_p2_set_strict_invalid_tag_returns_err() {
+    let l = lib_src();
+    let needle = "pub fn set_boolean_group_tag";
+    let idx = l.find(needle).expect("set_boolean_group_tag must exist");
+    let window_end = (idx + 1500).min(l.len());
+    let body = &l[idx..window_end];
+
+    // Result<(), JsValue> 시그니처
+    assert!(body.contains("-> Result<(), JsValue>"),
+        "P-2-c: set must return Result<(), JsValue> (strict invalid handling)");
+    // 'A' / 'B' arms — uppercase only (P-2-c lock-in)
+    assert!(body.contains(r#""A" => axia_core::BooleanGroupTag::A"#),
+        "P-2-c: 'A' arm must map to BooleanGroupTag::A");
+    assert!(body.contains(r#""B" => axia_core::BooleanGroupTag::B"#),
+        "P-2-c: 'B' arm must map to BooleanGroupTag::B");
+    // Catch-all → Err with descriptive message (no silent skip)
+    assert!(body.contains("invalid tag"),
+        "P-2-c: invalid tag path must throw Err with diagnostic message");
+    // P-2-d — Vec<u32> (NOT &[u32]) per user-corrected lock-in
+    assert!(body.contains("face_ids: Vec<u32>"),
+        "P-2-d: face_ids must be Vec<u32> (wasm-bindgen ownership)");
+}
+
+/// P-2 #3 — set/clear methods are transaction-wrapped (P-2-f) for
+/// Undo/Redo. Read-only methods (get/has*) are NOT wrapped.
+#[test]
+fn boolean_group_p2_set_and_clear_use_transactions() {
+    let l = lib_src();
+    // set_boolean_group_tag wrapping
+    let set_idx = l.find("pub fn set_boolean_group_tag").expect("set must exist");
+    let set_body = &l[set_idx..(set_idx + 1500).min(l.len())];
+    assert!(set_body.contains("self.scene.transactions.begin()"),
+        "P-2-f: set must call transactions.begin()");
+    assert!(set_body.contains("transactions.commit()"),
+        "P-2-f: set must call transactions.commit()");
+    assert!(set_body.contains("set_before_snapshot"),
+        "P-2-f: set must capture before snapshot for undo");
+
+    // clear_boolean_group_tags wrapping
+    let clear_idx = l.find("pub fn clear_boolean_group_tags").expect("clear must exist");
+    let clear_body = &l[clear_idx..(clear_idx + 700).min(l.len())];
+    assert!(clear_body.contains("self.scene.transactions.begin()"),
+        "P-2-f: clear must call transactions.begin()");
+    assert!(clear_body.contains("transactions.commit()"),
+        "P-2-f: clear must call transactions.commit()");
+
+    // Read-only methods MUST NOT begin transactions
+    for method in [
+        "pub fn get_boolean_group_a_faces",
+        "pub fn get_boolean_group_b_faces",
+        "pub fn has_any_boolean_group_tag",
+        "pub fn has_boolean_group_selection",
+    ] {
+        let idx = l.find(method).expect(method);
+        let body = &l[idx..(idx + 400).min(l.len())];
+        assert!(!body.contains("transactions.begin"),
+            "P-2-f: read-only method {} must NOT begin transactions", method);
+    }
+}
+
+/// P-2 #4 — Output methods return Vec<u32> (sorted via P-1 helpers).
+#[test]
+fn boolean_group_p2_output_signature_vec_u32() {
+    let l = lib_src();
+    for method in [
+        "pub fn get_boolean_group_a_faces",
+        "pub fn get_boolean_group_b_faces",
+    ] {
+        let idx = l.find(method).expect(method);
+        let body = &l[idx..(idx + 400).min(l.len())];
+        assert!(body.contains("-> Vec<u32>"),
+            "P-2-e: {} must return Vec<u32>", method);
+        assert!(body.contains(".raw()"),
+            "P-2-e: {} must convert FaceId via .raw()", method);
+    }
+
+    for method in ["pub fn has_any_boolean_group_tag", "pub fn has_boolean_group_selection"] {
+        let idx = l.find(method).expect(method);
+        let body = &l[idx..(idx + 200).min(l.len())];
+        assert!(body.contains("-> bool"),
+            "P-2: {} must return bool", method);
+    }
+}

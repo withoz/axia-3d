@@ -1287,4 +1287,84 @@ describe('WasmBridge', () => {
       expect(undoMock).toHaveBeenCalledTimes(1);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-078 P-2 — Boolean Group Persistence typed wrappers
+  // (project-persistent layer; TS U-1 SelectionManager is runtime mirror)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-078 P-2 Boolean Group Persistence wrappers', () => {
+    it('setBooleanGroupTag forwards Uint32Array + tag to engine', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setBooleanGroupTag: fn };
+      bridge.setBooleanGroupTag([10, 20, 30], 'A');
+      expect(fn).toHaveBeenCalledTimes(1);
+      const [faces, tag] = fn.mock.calls[0];
+      expect(faces).toBeInstanceOf(Uint32Array);
+      expect(Array.from(faces)).toEqual([10, 20, 30]);
+      expect(tag).toBe('A');
+    });
+
+    it('setBooleanGroupTag is no-op when engine method missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.setBooleanGroupTag([1], 'A')).not.toThrow();
+    });
+
+    it('getBooleanGroupAFaces / getBooleanGroupBFaces convert Uint32Array → number[]', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        getBooleanGroupAFaces: () => Uint32Array.from([1, 5, 9]),
+        getBooleanGroupBFaces: () => Uint32Array.from([2, 7]),
+      };
+      expect(bridge.getBooleanGroupAFaces()).toEqual([1, 5, 9]);
+      expect(bridge.getBooleanGroupBFaces()).toEqual([2, 7]);
+    });
+
+    it('getBooleanGroupAFaces returns [] when engine method missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getBooleanGroupAFaces()).toEqual([]);
+      expect(bridge.getBooleanGroupBFaces()).toEqual([]);
+    });
+
+    it('clearBooleanGroupTags forwards to engine and is graceful when missing', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { clearBooleanGroupTags: fn };
+      bridge.clearBooleanGroupTags();
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.clearBooleanGroupTags()).not.toThrow();
+    });
+
+    it('hasAnyBooleanGroupTag / hasBooleanGroupSelection return engine bool, default false', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        hasAnyBooleanGroupTag: () => true,
+        hasBooleanGroupSelection: () => false,
+      };
+      expect(bridge.hasAnyBooleanGroupTag()).toBe(true);
+      expect(bridge.hasBooleanGroupSelection()).toBe(false);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.hasAnyBooleanGroupTag()).toBe(false);
+      expect(bridge.hasBooleanGroupSelection()).toBe(false);
+    });
+
+    it('setBooleanGroupTag propagates engine throw (invalid tag → P-2-c strict)', () => {
+      const errFn = vi.fn(() => {
+        throw new Error("setBooleanGroupTag: invalid tag 'X' (expected 'A' or 'B')");
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setBooleanGroupTag: errFn };
+      // TS type forbids 'X' at compile time — cast for runtime invariant test.
+      expect(() =>
+        bridge.setBooleanGroupTag([1], 'X' as 'A')
+      ).toThrow(/invalid tag/);
+    });
+  });
 });
