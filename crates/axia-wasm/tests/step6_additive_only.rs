@@ -638,6 +638,93 @@ fn shape_p4_mutators_use_transactions_readonly_skip() {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// ADR-050 P-5c — As-Shape Draw command WASM bridge invariants.
+//
+// Mirrors the source-inspection pattern of P-4. Tests verify wiring
+// contracts — function existence, signature shape, ShapeCreated match
+// (NOT EntityCreated), and consistency with existing draw_* family.
+// ════════════════════════════════════════════════════════════════════════
+
+/// P-5c #1 — All 3 As-Shape draw endpoints are wired.
+#[test]
+fn draw_as_shape_p5c_endpoints_wired() {
+    let l = lib_src();
+    for rust_name in [
+        "pub fn draw_rect_as_shape",
+        "pub fn draw_line_as_shape",
+        "pub fn draw_circle_as_shape",
+    ] {
+        assert!(l.contains(rust_name),
+            "ADR-050 P-5c: missing Rust function {}", rust_name);
+    }
+}
+
+/// P-5c #2 — Each As-Shape endpoint matches `CommandResult::ShapeCreated`
+/// (the new variant from P-5a) and NOT `EntityCreated`. This is the key
+/// distinction from the legacy draw_* family.
+#[test]
+fn draw_as_shape_p5c_matches_shape_created_variant() {
+    let l = lib_src();
+    for method in [
+        "pub fn draw_rect_as_shape",
+        "pub fn draw_line_as_shape",
+        "pub fn draw_circle_as_shape",
+    ] {
+        let idx = l.find(method).expect(method);
+        let body = char_safe_slice(&l, idx, 1200);
+        assert!(body.contains("CommandResult::ShapeCreated"),
+            "P-5c: {} must match CommandResult::ShapeCreated", method);
+        // Negative check — should NOT match EntityCreated (would silently
+        // return -1.0 when the shape variant is the actual result).
+        // Note: we look for the specific match arm pattern, not just
+        // the substring "EntityCreated" (which appears in comments).
+        assert!(!body.contains("EntityCreated(xia_id)"),
+            "P-5c: {} must NOT match EntityCreated (legacy variant)", method);
+    }
+}
+
+/// P-5c #3 — Signature consistency: f64 return, mirroring the legacy
+/// draw_* family. The TS layer treats -1.0 as the error sentinel.
+#[test]
+fn draw_as_shape_p5c_signature_matches_legacy_family() {
+    let l = lib_src();
+    for method in [
+        "pub fn draw_rect_as_shape",
+        "pub fn draw_line_as_shape",
+        "pub fn draw_circle_as_shape",
+    ] {
+        let idx = l.find(method).expect(method);
+        let body = char_safe_slice(&l, idx, 600);
+        assert!(body.contains("-> f64"),
+            "P-5c: {} must return f64 (matching legacy draw_* family)", method);
+        // Coordinate inputs are f64 (cx, cy, cz, nx, ny, nz, ...).
+        assert!(body.contains(": f64"),
+            "P-5c: {} must take f64 coordinate inputs", method);
+    }
+}
+
+/// P-5c #4 — Bridge layer is a thin pass-through; it does NOT begin
+/// its own transactions. Transactions are managed inside
+/// `Scene::exec_draw_*_as_shape` (Phase 1 delegated, Phase 2 inner
+/// wrap). Matches the legacy draw_rect / draw_line / draw_circle
+/// pattern.
+#[test]
+fn draw_as_shape_p5c_bridge_is_thin_pass_through() {
+    let l = lib_src();
+    for method in [
+        "pub fn draw_rect_as_shape",
+        "pub fn draw_line_as_shape",
+        "pub fn draw_circle_as_shape",
+    ] {
+        let idx = l.find(method).expect(method);
+        let body = char_safe_slice(&l, idx, 1000);
+        assert!(!body.contains("transactions.begin"),
+            "P-5c: {} must NOT manage its own transactions \
+             (delegated to Scene::exec_*_as_shape)", method);
+    }
+}
+
 /// P-4 #4 — Input methods accept `Vec<u32>` (P-2-d ownership lock-in
 /// answer) for face_ids; ID inputs accept bare `u32` (no JsValue, no
 /// String) for ShapeId / MaterialId.

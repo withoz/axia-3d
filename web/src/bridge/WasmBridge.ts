@@ -609,6 +609,87 @@ export class WasmBridge {
   }
 
   // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-5c — As-Shape Draw bridge wrappers.
+  //
+  // Form-layer (Shape) variants of the existing draw* family. Returned
+  // value is `ShapeId.raw()` on success or -1 on error. The TS layer
+  // can distinguish the two by which method was called — there is no
+  // ambient discriminator on the number itself.
+  //
+  // ADR-026 P12 (Cardinal Plane SSOT) snap is applied identically to
+  // the legacy variants, so geometric correctness is invariant across
+  // form/property paths.
+  //
+  // Returns -1 when:
+  // - WASM engine missing
+  // - WASM endpoint missing (legacy build, fail-soft)
+  // - underlying exec_draw_*_as_shape returned an error / wrong variant
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-050 P-5c — Draw a rectangle as a form-layer Shape.
+   *
+   * Returns ShapeId.raw() on success, -1 on error. Unlike `drawRect`
+   * (legacy), this does NOT create a Xia or populate `face_to_xia`;
+   * the result is a form citizen (no material). Promotion to Xia is
+   * user-driven via `promoteShapeToXia` (ADR-050 P-4).
+   */
+  drawRectAsShape(
+    cx: number, cy: number, cz: number,
+    nx: number, ny: number, nz: number,
+    ux: number, uy: number, uz: number,
+    width: number, height: number,
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).draw_rect_as_shape;
+    if (!fn) return -1;
+    this.markDirty();
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
+    return fn.call(this.engine, cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
+  }
+
+  /**
+   * ADR-050 P-5c — Draw a line as a form-layer Shape.
+   *
+   * Same dual-mode as `drawLine` (face-closing → face_ids set; free-edge
+   * → standalone_edge_id set). Pass `nx=ny=nz=0` for free-edge mode.
+   */
+  drawLineAsShape(
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+    nx = 0, ny = 0, nz = 0,
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).draw_line_as_shape;
+    if (!fn) return -1;
+    this.markDirty();
+    [x0, y0, z0, x1, y1, z1] = snapCoplanarCardinal6(x0, y0, z0, x1, y1, z1);
+    return fn.call(this.engine, x0, y0, z0, x1, y1, z1, nx, ny, nz);
+  }
+
+  /**
+   * ADR-050 P-5c — Draw a circle as a form-layer Shape.
+   *
+   * The Arc-curve attachments on the resulting edges (ADR-028) are
+   * preserved automatically since they're mesh-level state.
+   */
+  drawCircleAsShape(
+    cx: number, cy: number, cz: number,
+    nx: number, ny: number, nz: number,
+    radius: number, segments: number,
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).draw_circle_as_shape;
+    if (!fn) return -1;
+    this.markDirty();
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
+    return fn.call(this.engine, cx, cy, cz, nx, ny, nz, radius, segments);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
   // ADR-028 Phase A — Analytic Edge Curve API
   // ════════════════════════════════════════════════════════════════════════
 

@@ -693,6 +693,111 @@ impl AxiaEngine {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-5c — As-Shape Draw command bridge.
+    //
+    // Bridge surface for the form-layer Shape draw variants (P-5a/P-5b).
+    // Signature pattern matches existing `draw_rect` / `draw_line` /
+    // `draw_circle` — f64 return, -1.0 = error, else = ShapeId.raw() as
+    // f64. New endpoints are NOT under js_name attribute (Rust snake_case
+    // is exposed as-is, mirroring the existing draw_* family).
+    //
+    // All transactions are managed inside `Scene::exec_draw_*_as_shape`
+    // (Phase 1 delegates to legacy path, Phase 2 wraps conversion).
+    // The bridge layer is a thin pass-through.
+    // ════════════════════════════════════════════════════════════════════
+
+    /// ADR-050 P-5c — Draw a rectangle as a form-layer Shape (no Xia).
+    /// Returns ShapeId.raw() as f64 on success, -1.0 on error.
+    pub fn draw_rect_as_shape(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        nx: f64, ny: f64, nz: f64,
+        ux: f64, uy: f64, uz: f64,
+        width: f64, height: f64,
+    ) -> f64 {
+        let cmd = Command::DrawRectAsShape {
+            center: DVec3::new(cx, cy, cz),
+            normal: DVec3::new(nx, ny, nz),
+            up: DVec3::new(ux, uy, uz),
+            width,
+            height,
+        };
+        let result = self.scene.execute(cmd);
+        match result {
+            axia_core::commands::CommandResult::ShapeCreated(shape_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                shape_id as f64
+            }
+            _ => {
+                self.invalidate_cache();
+                -1.0
+            }
+        }
+    }
+
+    /// ADR-050 P-5c — Draw a line as a form-layer Shape (no Xia).
+    /// Returns ShapeId.raw() as f64 on success, -1.0 on error.
+    /// `nx/ny/nz = 0` means surface_normal is None (free-edge mode).
+    pub fn draw_line_as_shape(
+        &mut self,
+        x0: f64, y0: f64, z0: f64,
+        x1: f64, y1: f64, z1: f64,
+        nx: f64, ny: f64, nz: f64,
+    ) -> f64 {
+        let surface_normal = if nx == 0.0 && ny == 0.0 && nz == 0.0 {
+            None
+        } else {
+            Some(DVec3::new(nx, ny, nz))
+        };
+        let cmd = Command::DrawLineAsShape {
+            start: DVec3::new(x0, y0, z0),
+            end: DVec3::new(x1, y1, z1),
+            surface_normal,
+        };
+        let result = self.scene.execute(cmd);
+        match result {
+            axia_core::commands::CommandResult::ShapeCreated(shape_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                shape_id as f64
+            }
+            _ => {
+                self.invalidate_cache();
+                -1.0
+            }
+        }
+    }
+
+    /// ADR-050 P-5c — Draw a circle as a form-layer Shape (no Xia).
+    /// Returns ShapeId.raw() as f64 on success, -1.0 on error.
+    pub fn draw_circle_as_shape(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        nx: f64, ny: f64, nz: f64,
+        radius: f64, segments: u32,
+    ) -> f64 {
+        let cmd = Command::DrawCircleAsShape {
+            center: DVec3::new(cx, cy, cz),
+            normal: DVec3::new(nx, ny, nz),
+            radius,
+            segments,
+        };
+        let result = self.scene.execute(cmd);
+        match result {
+            axia_core::commands::CommandResult::ShapeCreated(shape_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                shape_id as f64
+            }
+            _ => {
+                self.invalidate_cache();
+                -1.0
+            }
+        }
+    }
+
     // ========================================================================
     // ADR-028 Phase A — Analytic Edge Curve API
     // ========================================================================

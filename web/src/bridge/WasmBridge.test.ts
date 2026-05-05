@@ -1456,4 +1456,77 @@ describe('WasmBridge', () => {
         .toThrow(/WASM endpoint missing/);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-050 P-5c — As-Shape Draw bridge wrappers
+  // (form-layer parallels of drawRect / drawLine / drawCircle)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-050 P-5c As-Shape Draw bridge wrappers', () => {
+    it('drawRectAsShape forwards to engine.draw_rect_as_shape and returns shape id', () => {
+      const fn = vi.fn(() => 7);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { draw_rect_as_shape: fn };
+      const id = bridge.drawRectAsShape(0, 0, 0, 0, 0, 1, 1, 0, 0, 2, 3);
+      expect(id).toBe(7);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('drawRectAsShape returns -1 when WASM endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.drawRectAsShape(0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1)).toBe(-1);
+    });
+
+    it('drawLineAsShape forwards to engine.draw_line_as_shape', () => {
+      const fn = vi.fn(() => 11);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { draw_line_as_shape: fn };
+      const id = bridge.drawLineAsShape(0, 0, 0, 1, 0, 0);
+      expect(id).toBe(11);
+      expect(fn).toHaveBeenCalledTimes(1);
+      // Verify nx=ny=nz=0 default propagated for free-edge mode.
+      const args = fn.mock.calls[0];
+      expect(args[6]).toBe(0); // nx
+      expect(args[7]).toBe(0); // ny
+      expect(args[8]).toBe(0); // nz
+    });
+
+    it('drawCircleAsShape forwards to engine.draw_circle_as_shape', () => {
+      const fn = vi.fn(() => 13);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { draw_circle_as_shape: fn };
+      const id = bridge.drawCircleAsShape(0, 0, 0, 0, 0, 1, 1.5, 16);
+      expect(id).toBe(13);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('all three As-Shape wrappers return -1 with no engine (defensive)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      expect(bridge.drawRectAsShape(0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1)).toBe(-1);
+      expect(bridge.drawLineAsShape(0, 0, 0, 1, 0, 0)).toBe(-1);
+      expect(bridge.drawCircleAsShape(0, 0, 0, 0, 0, 1, 1, 8)).toBe(-1);
+    });
+
+    it('legacy drawRect / drawLine / drawCircle UNCHANGED (P-5c §C lock-in)', () => {
+      // P-5c §C lock-in #1 — adding As-Shape wrappers must not affect
+      // the legacy draw* family. Verify they still hit draw_rect /
+      // draw_line / draw_circle (not draw_*_as_shape).
+      const drawRectFn = vi.fn(() => 1);
+      const drawLineFn = vi.fn(() => 2);
+      const drawCircleFn = vi.fn(() => 3);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        draw_rect: drawRectFn,
+        draw_line: drawLineFn,
+        draw_circle: drawCircleFn,
+      };
+      expect(bridge.drawRect(0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1)).toBe(1);
+      expect(bridge.drawLine(0, 0, 0, 1, 0, 0)).toBe(2);
+      expect(bridge.drawCircle(0, 0, 0, 0, 0, 1, 1, 8)).toBe(3);
+      expect(drawRectFn).toHaveBeenCalled();
+      expect(drawLineFn).toHaveBeenCalled();
+      expect(drawCircleFn).toHaveBeenCalled();
+    });
+  });
 });

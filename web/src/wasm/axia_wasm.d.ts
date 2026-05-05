@@ -349,8 +349,24 @@ export class AxiaEngine {
      */
     drawPolyline(points: Float64Array): number;
     draw_circle(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
+    /**
+     * ADR-050 P-5c — Draw a circle as a form-layer Shape (no Xia).
+     * Returns ShapeId.raw() as f64 on success, -1.0 on error.
+     */
+    draw_circle_as_shape(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
     draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
+    /**
+     * ADR-050 P-5c — Draw a line as a form-layer Shape (no Xia).
+     * Returns ShapeId.raw() as f64 on success, -1.0 on error.
+     * `nx/ny/nz = 0` means surface_normal is None (free-edge mode).
+     */
+    draw_line_as_shape(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
+    /**
+     * ADR-050 P-5c — Draw a rectangle as a form-layer Shape (no Xia).
+     * Returns ShapeId.raw() as f64 on success, -1.0 on error.
+     */
+    draw_rect_as_shape(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
     /**
      * 엣지 가시성 임계 각도(도) 조회. StylePanel 슬라이더 초기화에 사용.
      */
@@ -1527,8 +1543,11 @@ export interface InitOutput {
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+    readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+    readonly axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly axiaengine_draw_rect_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_edgeAngleThreshold: (a: number) => number;
     readonly axiaengine_edgeClass: (a: number, b: number) => number;
     readonly axiaengine_edgeCurveKind: (a: number, b: number) => number;

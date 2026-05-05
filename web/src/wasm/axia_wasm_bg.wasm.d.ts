@@ -53,8 +53,11 @@ export const axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d
 export const axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
 export const axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
 export const axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
+export const axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+export const axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+export const axiaengine_draw_rect_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
 export const axiaengine_edgeAngleThreshold: (a: number) => number;
 export const axiaengine_edgeClass: (a: number, b: number) => number;
 export const axiaengine_edgeCurveKind: (a: number, b: number) => number;

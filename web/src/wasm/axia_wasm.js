@@ -1048,6 +1048,23 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-050 P-5c — Draw a circle as a form-layer Shape (no Xia).
+     * Returns ShapeId.raw() as f64 on success, -1.0 on error.
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} radius
+     * @param {number} segments
+     * @returns {number}
+     */
+    draw_circle_as_shape(cx, cy, cz, nx, ny, nz, radius, segments) {
+        const ret = wasm.axiaengine_draw_circle_as_shape(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, radius, segments);
+        return ret;
+    }
+    /**
      * @param {number} x0
      * @param {number} y0
      * @param {number} z0
@@ -1061,6 +1078,25 @@ export class AxiaEngine {
      */
     draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz) {
         const ret = wasm.axiaengine_draw_line(this.__wbg_ptr, x0, y0, z0, x1, y1, z1, nx, ny, nz);
+        return ret;
+    }
+    /**
+     * ADR-050 P-5c — Draw a line as a form-layer Shape (no Xia).
+     * Returns ShapeId.raw() as f64 on success, -1.0 on error.
+     * `nx/ny/nz = 0` means surface_normal is None (free-edge mode).
+     * @param {number} x0
+     * @param {number} y0
+     * @param {number} z0
+     * @param {number} x1
+     * @param {number} y1
+     * @param {number} z1
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @returns {number}
+     */
+    draw_line_as_shape(x0, y0, z0, x1, y1, z1, nx, ny, nz) {
+        const ret = wasm.axiaengine_draw_line_as_shape(this.__wbg_ptr, x0, y0, z0, x1, y1, z1, nx, ny, nz);
         return ret;
     }
     /**
@@ -1079,6 +1115,26 @@ export class AxiaEngine {
      */
     draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height) {
         const ret = wasm.axiaengine_draw_rect(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
+        return ret;
+    }
+    /**
+     * ADR-050 P-5c — Draw a rectangle as a form-layer Shape (no Xia).
+     * Returns ShapeId.raw() as f64 on success, -1.0 on error.
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} ux
+     * @param {number} uy
+     * @param {number} uz
+     * @param {number} width
+     * @param {number} height
+     * @returns {number}
+     */
+    draw_rect_as_shape(cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height) {
+        const ret = wasm.axiaengine_draw_rect_as_shape(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
         return ret;
     }
     /**
