@@ -40,6 +40,16 @@ export class SelectionManager {
   private edgeSelectionLine: LineSegments2 | null = null;  // 선택된 edge 하이라이트 (Line2)
   private edgeHoverLine: LineSegments2 | null = null;  // hover edge 하이라이트 (Line2)
 
+  // ── ADR-077 V-2 — Boolean Group A/B color outlines ──
+  // ADR-074 §E.5-1 의 visual feedback. Group tag 가 설정된 면 위에
+  // 색상 outline 을 별도 layer 로 그림. selection outline (single
+  // color) 위에 group color 가 덮여 사용자가 명시 grouping 을 시각
+  // 인지. notifyChange 통합 (U-1 자연 동작).
+  private groupAOutline: THREE.LineSegments | null = null;
+  private groupBOutline: THREE.LineSegments | null = null;
+  private static readonly GROUP_A_COLOR = 0xff8800;  // 주황
+  private static readonly GROUP_B_COLOR = 0x00aaff;  // 청록
+
   // ── XIA 전체 선택 (트리플 클릭) 도트 표시 ──
   private isXiaSelected = false;
   private xiaDotPoints: THREE.Points | null = null;        // 정점 도트
@@ -1721,9 +1731,89 @@ export class SelectionManager {
   }
 
   private notifyChange() {
+    // ADR-077 V-2 — group outlines refresh on every selection change.
+    // groupTags ⊆ selected (U-1 constraint), so changes to selected
+    // may invalidate group highlights. Rebuild before listeners fire
+    // so any subscriber that reads group state sees consistent visuals.
+    this.rebuildGroupOutlines();
+
     const faces = this.getSelectedFaces();
     for (const cb of this.selectionChangeListeners) {
       cb(faces);
+    }
+  }
+
+  /**
+   * ADR-077 V-2 — Build/rebuild Group A/B outline layers.
+   *
+   * Uses the existing `buildBoundaryEdges` pipeline (same as
+   * selectionOutline) to extract face boundary segments, then renders
+   * them in group-specific colors:
+   *   - Group A → orange (#ff8800)
+   *   - Group B → cyan (#00aaff)
+   *
+   * Layered above selectionOutline (renderOrder 3 vs 2) so the
+   * group color visually overrides the single selection color when
+   * a face has both. Per V-2-e=(a) — explicit grouping intent
+   * dominates the selection-color signal.
+   *
+   * Disposes prior meshes before rebuilding (memory hygiene matches
+   * `rebuildSelectionMesh` pattern).
+   */
+  private rebuildGroupOutlines() {
+    const dispose = (line: THREE.LineSegments | null): null => {
+      if (line) {
+        this.highlightGroup.remove(line);
+        line.geometry.dispose();
+        (line.material as THREE.Material).dispose();
+      }
+      return null;
+    };
+    this.groupAOutline = dispose(this.groupAOutline);
+    this.groupBOutline = dispose(this.groupBOutline);
+
+    if (this.groupTags.size === 0) return;
+
+    // Build per-group face Sets from the unified groupTags Map.
+    const groupAFaces = new Set<number>();
+    const groupBFaces = new Set<number>();
+    for (const [fid, g] of this.groupTags) {
+      if (g === 'A') groupAFaces.add(fid);
+      else if (g === 'B') groupBFaces.add(fid);
+    }
+
+    const buildLine = (
+      faceSet: Set<number>,
+      color: number,
+    ): THREE.LineSegments | null => {
+      if (faceSet.size === 0) return null;
+      const geo = this.buildBoundaryEdges(faceSet);
+      if (!geo) return null;
+      // Per-instance material (V-2 risk mitigation — color sharing avoidance).
+      const mat = new THREE.LineBasicMaterial({
+        color,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95,
+      });
+      const line = new THREE.LineSegments(geo, mat);
+      // renderOrder 3 = above selectionOutline (2), below hover (4).
+      line.renderOrder = 3;
+      return line;
+    };
+
+    const aLine = buildLine(groupAFaces, SelectionManager.GROUP_A_COLOR);
+    if (aLine) {
+      aLine.name = 'group-a-outline';
+      this.groupAOutline = aLine;
+      this.highlightGroup.add(aLine);
+    }
+    const bLine = buildLine(groupBFaces, SelectionManager.GROUP_B_COLOR);
+    if (bLine) {
+      bLine.name = 'group-b-outline';
+      this.groupBOutline = bLine;
+      this.highlightGroup.add(bLine);
     }
   }
 
