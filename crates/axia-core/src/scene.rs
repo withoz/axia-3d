@@ -108,6 +108,22 @@ pub struct Scene {
     /// ADR-050 P-1 — Counter for next `ShapeId`. Starts at 1; 0 is
     /// reserved as a "null" sentinel for future Bridge null-checks.
     next_shape_id: u32,
+
+    /// ADR-050 P-2 — Shape → Xia linkage map (set on `promote_shape_to_xia`).
+    ///
+    /// Per P-2-d lock-in: tracking lives on Scene (not on Xia struct)
+    /// to keep `Xia` bincode-compatible with existing snapshots
+    /// (snapshot section 영향 0 until ADR-050 P-3). Used by future
+    /// demote API (ADR-052) to find the form anchor when a Xia is
+    /// demoted back to its Shape.
+    ///
+    /// Invariants:
+    /// - Set only by `promote_shape_to_xia` (P-2 entry point)
+    /// - One Shape can promote to at most one Xia at a time
+    ///   (overwrite if re-promoted — Phase 2 demote-then-promote
+    ///   semantics will refine this)
+    /// - In-memory only (P-2 atomic) — snapshot persistence in P-3
+    pub shape_to_xia: HashMap<crate::ShapeId, XiaId>,
 }
 
 impl Scene {
@@ -127,6 +143,7 @@ impl Scene {
             boolean_group_tags: HashMap::new(),
             shapes: HashMap::new(),
             next_shape_id: 1,
+            shape_to_xia: HashMap::new(),
         }
     }
 
@@ -439,75 +456,90 @@ impl Scene {
         xia_id: XiaId,
         material: axia_geo::MaterialId,
     ) -> Result<crate::promote::PromoteOk, crate::promote::PromoteError> {
-        use crate::promote::{PromoteError, PromoteOk, XiaKind, face_set_volume, material_is_assigned};
+        use crate::promote::{validate_promotion, PromoteError, PromoteOk};
 
         // Lookup
         let xia = self.xias.get(&xia_id).ok_or(PromoteError::XiaNotFound)?;
         let face_ids = xia.face_ids.clone();
         let standalone = xia.standalone_edge_id;
 
-        // Condition 0 (precondition): geometry must exist
-        if face_ids.is_empty() && standalone.is_none() {
-            return Err(PromoteError::NoGeometry);
-        }
-
-        // Condition 1: material non-default (ADR-050 §2.1.2 Q4)
-        if !material_is_assigned(material) {
-            return Err(PromoteError::InvalidMaterial);
-        }
-
-        // Branch: Linear (standalone edge, no faces) vs Volumetric (faces).
-        let kind = if face_ids.is_empty() {
-            // Linear path
-            let eid = standalone.expect("checked above");
-            let edge = self.mesh.edges.get(eid)
-                .ok_or(PromoteError::ZeroDimension)?;
-            if !edge.is_active() { return Err(PromoteError::ZeroDimension); }
-            let pa = self.mesh.vertex_pos(edge.v_small())
-                .map_err(|_| PromoteError::ZeroDimension)?;
-            let pb = self.mesh.vertex_pos(edge.v_large())
-                .map_err(|_| PromoteError::ZeroDimension)?;
-            let length = (pb - pa).length();
-            // Phase 2 will derive cross_section from material profile;
-            // current MVP uses 1.0 as a sentinel — only `length > 0` is
-            // strictly enforced here.
-            let cross_section_area = 1.0;
-            if length <= 0.0 {
-                return Err(PromoteError::ZeroDimension);
-            }
-            XiaKind::Linear { length, cross_section_area }
-        } else {
-            // Volumetric path: requires watertight closed solid
-            let info = self.mesh.face_set_manifold_info(&face_ids);
-            if !info.is_closed_solid {
-                return Err(PromoteError::NotWatertight {
-                    boundary_edges: info.boundary_edge_count,
-                    face_count: info.face_count,
-                });
-            }
-            // Condition 2: enclosed volume > 0
-            let volume = face_set_volume(&self.mesh, &face_ids);
-            if volume <= 0.0 {
-                return Err(PromoteError::ZeroVolume);
-            }
-            XiaKind::Volumetric { volume }
-        };
-
-        // Condition 4: ADR-007 / ADR-051 manifold invariants on the mesh.
-        // We check globally — a XIA cannot be "manifold" while the mesh
-        // it lives in is broken. Tighter per-XIA scoping is a Phase 2
-        // optimization.
-        let report = self.mesh.verify_face_invariants();
-        if !report.is_valid() {
-            return Err(PromoteError::NotManifold {
-                violations: report.violations.len(),
-            });
-        }
+        // ADR-050 P-2 — shared validation kernel (DRY with
+        // `promote_shape_to_xia`). Side-effect free.
+        let kind = validate_promotion(&self.mesh, &face_ids, standalone, material)?;
 
         // All 4 conditions OK → assign material in-place.
         if let Some(xia_mut) = self.xias.get_mut(&xia_id) {
             xia_mut.material = material;
         }
+
+        Ok(PromoteOk { xia_id, kind })
+    }
+
+    /// ADR-050 P-2 — Promote a `Shape` (form layer) to a new `Xia`
+    /// (property layer) via 4-condition validation.
+    ///
+    /// Two-Layer Citizenship Model (LOCKED #26): a Shape is the form
+    /// citizen — geometric abstraction with no material. Promotion to
+    /// Xia is the user-driven transition where a material is assigned
+    /// AND the geometry passes 4 invariants (재질 / 부피 / 닫힘 /
+    /// manifold). On success, a new Xia is created with the Shape's
+    /// face_ids + standalone_edge + name + spatial hint, and the
+    /// `shape_to_xia` linkage map is updated. The Shape itself is
+    /// preserved (form layer is independent — see ADR-050 §2.4).
+    ///
+    /// This is the ShapeId entry point; `promote_xia_with_validation`
+    /// (Phase 1.A) provides the parallel XiaId entry point. Both
+    /// share `validate_promotion` (P-2-a lock-in).
+    ///
+    /// Errors (in `validate_promotion` order):
+    /// - `ShapeNotFound` — shape_id missing
+    /// - `NoGeometry` — Shape has no faces and no standalone edge
+    /// - `InvalidMaterial` — material is the default sentinel
+    /// - `ZeroVolume` / `ZeroDimension` — degenerate metrics
+    /// - `NotWatertight` — Volumetric: open boundary
+    /// - `NotManifold` — mesh-wide ADR-007 violations
+    pub fn promote_shape_to_xia(
+        &mut self,
+        shape_id: crate::ShapeId,
+        material: axia_geo::MaterialId,
+    ) -> Result<crate::promote::PromoteOk, crate::promote::PromoteError> {
+        use crate::promote::{validate_promotion, PromoteError, PromoteOk};
+
+        // Lookup the Shape (clone fields so we can mutate self below).
+        let shape = self.shapes.get(&shape_id).ok_or(PromoteError::ShapeNotFound)?;
+        let face_ids = shape.face_ids.clone();
+        let standalone = shape.standalone_edge_id;
+        let name = shape.name.clone();
+        let position = shape.position;
+        let surface_normal = shape.surface_normal;
+
+        // Shared validation kernel — same 4 conditions as Phase 1.A.
+        let kind = validate_promotion(&self.mesh, &face_ids, standalone, material)?;
+
+        // All 4 conditions OK → create the Xia.
+        let xia_id = self.next_xia_id;
+        self.next_xia_id = self.next_xia_id.saturating_add(1);
+        let mut xia = Xia::new(xia_id, name);
+        xia.face_ids = face_ids.clone();
+        xia.standalone_edge_id = standalone;
+        xia.position = position;
+        xia.surface_normal = surface_normal;
+        xia.material = material;
+        self.xias.insert(xia_id, xia);
+
+        // Reverse index: face → Xia (overwrite policy per P-2-f).
+        for &fid in &face_ids {
+            self.face_to_xia.insert(fid, xia_id);
+        }
+
+        // ADR-050 P-2-d — Track Shape → Xia linkage in a separate map
+        // (Xia struct UNCHANGED, snapshot 영향 0). Used by future
+        // demote API (ADR-052) to find the form anchor.
+        self.shape_to_xia.insert(shape_id, xia_id);
+
+        // Note: Shape is preserved (P-2-c) — form layer is independent
+        // of property layer. Demote (ADR-052) will use shape_to_xia
+        // to find the anchor.
 
         Ok(PromoteOk { xia_id, kind })
     }
@@ -9001,5 +9033,210 @@ mod tests {
         // s_id is ShapeId (not u32). The test exercises the runtime
         // path of distinct namespaces. Type-level guard is verified
         // by successful compilation.
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-050 P-2 — Shape → Xia promote API regression tests.
+    //
+    // Per P-2 §C lock-ins:
+    // - L1: validate_promotion shared with Phase 1.A path (DRY)
+    // - L2: PromoteError::ShapeNotFound additive variant
+    // - L3: Shape preserved after promote (form layer independence)
+    // - L4: shape_to_xia linkage in separate map (Xia struct UNCHANGED,
+    //       snapshot 영향 0)
+    // - L5: Drop-in alongside (existing promote_xia_with_validation +
+    //       all P-1 helpers UNCHANGED)
+    //
+    // Helper builders below construct mesh state for each kind of test:
+    // - Single-face Shape (NotWatertight failure)
+    // - Closed-cube Shape (success Volumetric)
+    // - Standalone-edge Shape (success Linear)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Build a Shape that owns a single planar quad face. Useful for
+    /// testing NotWatertight (open boundary) failure path.
+    fn build_shape_single_quad(scene: &mut Scene) -> crate::ShapeId {
+        let mat = scene.default_material;
+        let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v0, v1, v2, v3], mat).expect("add_face");
+        scene.create_shape("Single Quad".to_string(), vec![face])
+    }
+
+    /// Build a Shape that owns a closed unit cube (6 faces, watertight).
+    /// Used for the Volumetric success path.
+    fn build_shape_unit_cube(scene: &mut Scene) -> crate::ShapeId {
+        let mat = scene.default_material;
+        let v = [
+            scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
+            scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0)),
+            scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0)),
+            scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0)),
+            scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0)),
+            scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 1.0)),
+            scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 1.0)),
+            scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 1.0)),
+        ];
+        // Outward normals (CCW winding when viewed from outside).
+        let bottom = scene.mesh.add_face(&[v[0], v[3], v[2], v[1]], mat).expect("bottom");
+        let top    = scene.mesh.add_face(&[v[4], v[5], v[6], v[7]], mat).expect("top");
+        let front  = scene.mesh.add_face(&[v[0], v[1], v[5], v[4]], mat).expect("front");
+        let right  = scene.mesh.add_face(&[v[1], v[2], v[6], v[5]], mat).expect("right");
+        let back   = scene.mesh.add_face(&[v[2], v[3], v[7], v[6]], mat).expect("back");
+        let left   = scene.mesh.add_face(&[v[3], v[0], v[4], v[7]], mat).expect("left");
+        scene.create_shape(
+            "Unit Cube".to_string(),
+            vec![bottom, top, front, right, back, left],
+        )
+    }
+
+    /// Build a Shape that owns a standalone edge (no faces). Used for
+    /// the Linear success path.
+    fn build_shape_standalone_edge(scene: &mut Scene) -> crate::ShapeId {
+        let va = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let vb = scene.mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let (edge, _new) = scene.mesh.add_edge(va, vb).expect("edge");
+        let id = scene.create_shape("Line".to_string(), vec![]);
+        if let Some(s) = scene.shapes.get_mut(&id) {
+            s.standalone_edge_id = Some(edge);
+        }
+        id
+    }
+
+    #[test]
+    fn promote_shape_success_volumetric() {
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let mat = MaterialId::new(7);
+
+        let result = scene.promote_shape_to_xia(shape_id, mat);
+        let ok = result.expect("Volumetric cube must promote");
+
+        // Kind classification
+        match ok.kind {
+            crate::promote::XiaKind::Volumetric { volume } => {
+                assert!((volume - 1.0).abs() < 1e-9, "unit cube volume = 1, got {volume}");
+            }
+            other => panic!("expected Volumetric, got {other:?}"),
+        }
+
+        // New Xia exists with the supplied material
+        let xia = scene.xias.get(&ok.xia_id).expect("Xia inserted");
+        assert_eq!(xia.material, mat);
+        assert_eq!(xia.face_ids.len(), 6);
+
+        // P-2-d linkage map populated
+        assert_eq!(scene.shape_to_xia.get(&shape_id).copied(), Some(ok.xia_id));
+    }
+
+    #[test]
+    fn promote_shape_success_linear() {
+        let mut scene = Scene::new();
+        let shape_id = build_shape_standalone_edge(&mut scene);
+        let mat = MaterialId::new(3);
+
+        let ok = scene
+            .promote_shape_to_xia(shape_id, mat)
+            .expect("standalone edge must promote as Linear");
+
+        match ok.kind {
+            crate::promote::XiaKind::Linear { length, cross_section_area } => {
+                assert!((length - 2.0).abs() < 1e-9, "edge length = 2, got {length}");
+                assert!(cross_section_area > 0.0);
+            }
+            other => panic!("expected Linear, got {other:?}"),
+        }
+
+        let xia = scene.xias.get(&ok.xia_id).expect("Xia inserted");
+        assert!(xia.face_ids.is_empty());
+        assert!(xia.standalone_edge_id.is_some());
+    }
+
+    #[test]
+    fn promote_shape_fails_shape_not_found() {
+        let mut scene = Scene::new();
+        let bogus = crate::ShapeId::new(9999);
+        let err = scene
+            .promote_shape_to_xia(bogus, MaterialId::new(1))
+            .expect_err("missing shape must fail");
+        assert_eq!(err, crate::promote::PromoteError::ShapeNotFound);
+    }
+
+    #[test]
+    fn promote_shape_fails_invalid_material() {
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let err = scene
+            .promote_shape_to_xia(shape_id, MaterialId::new(0))
+            .expect_err("default material must fail");
+        assert_eq!(err, crate::promote::PromoteError::InvalidMaterial);
+    }
+
+    #[test]
+    fn promote_shape_fails_no_geometry() {
+        let mut scene = Scene::new();
+        let shape_id = scene.create_shape("Empty".to_string(), vec![]);
+        // No standalone edge either.
+        let err = scene
+            .promote_shape_to_xia(shape_id, MaterialId::new(1))
+            .expect_err("empty shape must fail");
+        assert_eq!(err, crate::promote::PromoteError::NoGeometry);
+    }
+
+    #[test]
+    fn promote_shape_fails_not_watertight() {
+        let mut scene = Scene::new();
+        let shape_id = build_shape_single_quad(&mut scene);
+        let err = scene
+            .promote_shape_to_xia(shape_id, MaterialId::new(1))
+            .expect_err("open quad must fail");
+        match err {
+            crate::promote::PromoteError::NotWatertight { face_count, boundary_edges } => {
+                assert_eq!(face_count, 1);
+                assert!(boundary_edges >= 4, "single quad has 4 boundary edges, got {boundary_edges}");
+            }
+            other => panic!("expected NotWatertight, got {other:?}"),
+        }
+        // Linkage NOT established on failure.
+        assert!(!scene.shape_to_xia.contains_key(&shape_id));
+        // No Xia created.
+        assert!(scene.xias.is_empty());
+    }
+
+    #[test]
+    fn promote_shape_preserves_shape_and_face_to_xia_no_locked_regression() {
+        // P-2 invariant test — ADR-050 §2.4 form layer independence +
+        // ADR-074 / ADR-078 회귀 가드. After successful promote:
+        // (1) Shape is still in scene.shapes (NOT consumed)
+        // (2) face_to_xia reverse index updated for each face
+        // (3) boolean_group_tags untouched (LOCKED #25 / ADR-078)
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let mat = MaterialId::new(11);
+
+        // Pre-existing boolean group state (ADR-074 / ADR-078 layer).
+        let group_face = FaceId::new(0); // first cube face
+        scene.set_boolean_group_tag(&[group_face], crate::BooleanGroupTag::A);
+        let pre_tags = scene.boolean_group_tags.clone();
+
+        let ok = scene.promote_shape_to_xia(shape_id, mat).expect("promote OK");
+
+        // (1) Shape preserved (form layer independence per ADR-050 §2.4)
+        let preserved = scene.get_shape(shape_id).expect("Shape still exists");
+        assert_eq!(preserved.face_ids.len(), 6);
+        assert_eq!(preserved.name, "Unit Cube");
+
+        // (2) face_to_xia updated for every cube face
+        for &fid in &preserved.face_ids.clone() {
+            assert_eq!(scene.face_to_xia.get(&fid).copied(), Some(ok.xia_id),
+                "face {fid:?} should map to new Xia");
+        }
+
+        // (3) boolean_group_tags UNCHANGED — LOCKED #25 / ADR-078 회귀 가드
+        assert_eq!(scene.boolean_group_tags, pre_tags,
+            "boolean_group_tags must NOT be affected by promote");
+        assert_eq!(scene.get_boolean_group_a(), vec![group_face]);
     }
 }

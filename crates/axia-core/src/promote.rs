@@ -24,7 +24,7 @@
 //! call sites — this module is its prerequisite.
 
 use crate::xia::XiaId;
-use axia_geo::{Mesh, MaterialId};
+use axia_geo::{EdgeId, FaceId, Mesh, MaterialId};
 
 /// Promotion classification for a XIA candidate (ADR-050 §2.1.2 XiaKind).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,12 +37,15 @@ pub enum XiaKind {
     Linear { length: f64, cross_section_area: f64 },
 }
 
-/// Ordered failure modes for `promote_xia_with_validation`. Order
-/// matches §2.2 validation sequence (1→2→3→4).
+/// Ordered failure modes for promotion APIs. Order matches §2.2
+/// validation sequence (1→2→3→4).
 #[derive(Clone, Debug, PartialEq)]
 pub enum PromoteError {
     /// XIA id not present in the scene.
     XiaNotFound,
+    /// ADR-050 P-2 — Shape id not present in the scene.
+    /// (Used by `Scene::promote_shape_to_xia`.)
+    ShapeNotFound,
     /// XIA owns no geometry (face_ids empty AND no standalone edge).
     NoGeometry,
     /// Caller-supplied material is the default sentinel (id == 0).
@@ -64,6 +67,7 @@ impl std::fmt::Display for PromoteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::XiaNotFound => write!(f, "XIA not found"),
+            Self::ShapeNotFound => write!(f, "Shape not found"),
             Self::NoGeometry => write!(f, "XIA has no geometry"),
             Self::InvalidMaterial => write!(f, "Material is default (id=0); ADR-050 forbids default_material as a promotion trigger"),
             Self::ZeroVolume => write!(f, "Volumetric XIA has zero or negative enclosed volume"),
@@ -118,4 +122,92 @@ pub fn face_set_volume(mesh: &Mesh, face_ids: &[axia_geo::FaceId]) -> f64 {
 /// Helper: validate the supplied material id is non-default.
 pub fn material_is_assigned(material: MaterialId) -> bool {
     material.raw() != 0
+}
+
+/// ADR-050 P-2 — Shared 4-condition validation kernel.
+///
+/// Both `Scene::promote_xia_with_validation` (XiaId path, Phase 1.A)
+/// and `Scene::promote_shape_to_xia` (ShapeId path, P-2) reuse this
+/// helper. The validation order matches ADR-050 §2.2:
+///
+/// 1. Geometry exists (face_ids OR standalone_edge)
+/// 2. Material non-default (`material_is_assigned`)
+/// 3. Kind branch:
+///    - Linear (face_ids empty + standalone): length > 0
+///    - Volumetric (face_ids non-empty): watertight + volume > 0
+/// 4. Mesh-wide manifold invariants OK
+///
+/// The helper is **side-effect free** — it inspects mesh + face_ids +
+/// standalone but does NOT mutate scene / xias / face_to_xia. Callers
+/// own the storage mutation on success.
+///
+/// Returns `XiaKind` on success (Volumetric or Linear with metrics).
+pub fn validate_promotion(
+    mesh: &Mesh,
+    face_ids: &[FaceId],
+    standalone: Option<EdgeId>,
+    material: MaterialId,
+) -> Result<XiaKind, PromoteError> {
+    // Condition 0 (precondition): geometry must exist.
+    if face_ids.is_empty() && standalone.is_none() {
+        return Err(PromoteError::NoGeometry);
+    }
+
+    // Condition 1: material non-default (ADR-050 §2.1.2 Q4).
+    if !material_is_assigned(material) {
+        return Err(PromoteError::InvalidMaterial);
+    }
+
+    // Branch: Linear (standalone edge, no faces) vs Volumetric (faces).
+    let kind = if face_ids.is_empty() {
+        // Linear path
+        let eid = standalone.expect("checked above");
+        let edge = mesh.edges.get(eid).ok_or(PromoteError::ZeroDimension)?;
+        if !edge.is_active() {
+            return Err(PromoteError::ZeroDimension);
+        }
+        let pa = mesh
+            .vertex_pos(edge.v_small())
+            .map_err(|_| PromoteError::ZeroDimension)?;
+        let pb = mesh
+            .vertex_pos(edge.v_large())
+            .map_err(|_| PromoteError::ZeroDimension)?;
+        let length = (pb - pa).length();
+        // Phase 2 will derive cross_section from material profile;
+        // current MVP uses 1.0 as a sentinel — only `length > 0` is
+        // strictly enforced here.
+        let cross_section_area = 1.0;
+        if length <= 0.0 {
+            return Err(PromoteError::ZeroDimension);
+        }
+        XiaKind::Linear { length, cross_section_area }
+    } else {
+        // Volumetric path: requires watertight closed solid
+        let info = mesh.face_set_manifold_info(face_ids);
+        if !info.is_closed_solid {
+            return Err(PromoteError::NotWatertight {
+                boundary_edges: info.boundary_edge_count,
+                face_count: info.face_count,
+            });
+        }
+        // Condition 2: enclosed volume > 0
+        let volume = face_set_volume(mesh, face_ids);
+        if volume <= 0.0 {
+            return Err(PromoteError::ZeroVolume);
+        }
+        XiaKind::Volumetric { volume }
+    };
+
+    // Condition 4: ADR-007 / ADR-051 manifold invariants on the mesh.
+    // We check globally — a XIA cannot be "manifold" while the mesh
+    // it lives in is broken. Tighter per-XIA scoping is a Phase 2
+    // optimization.
+    let report = mesh.verify_face_invariants();
+    if !report.is_valid() {
+        return Err(PromoteError::NotManifold {
+            violations: report.violations.len(),
+        });
+    }
+
+    Ok(kind)
 }
