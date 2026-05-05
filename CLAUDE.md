@@ -1858,11 +1858,11 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 - **상세**: `docs/adr/076-legacy-boolean-path-sunset.md` §D
   Acceptance Log (Step 1 + Step 1.1 + Step 2 결산)
 
-### ADR-077 — Visual Regression Infrastructure (V 트랙 핵심 완료, 2026-05-05)
-- **상태**: V-1 + V-2 + V-5 완료. ADR-075 §E.8 (visual regression
-  별도 ADR) + ADR-074 §E.5-1 (visual feedback enabler 의존) 두
-  미해결 항목 동시 closure. V-3 / V-4 선택적. Last commit: 본
-  회고 commit.
+### ADR-077 — Visual Regression Infrastructure (V 트랙 인프라+검증+자동화 closure, 2026-05-05)
+- **상태**: V-1 + V-2 + V-4 + V-5 완료. ADR-075 §E.8 + ADR-074
+  §E.5-1 두 미해결 항목 동시 closure. V-4 commit 으로 CI 자동화
+  (functional + visual 통합 실행) 명시. V-3 multi-OS baseline matrix
+  만 선택적 확장. Last commit: V-4 commit (본 catchup 갱신 시).
 - **의의**: ADR-075 가 functional 검증 자산 + 자동화 의 첫 인프라성
   ADR 이라면, ADR-077 은 **visual 검증 자산** 의 첫 인프라성 ADR.
   두 ADR 모두 향후 모든 ADR 의 round-trip 검증 base layer.
@@ -1900,12 +1900,17 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   2343 → **2411** (+68), 절대 #[ignore] 금지 68/68 준수.
 - **남은 미착수 (모두 선택적 확장)**:
   - V-3 Multi-OS / multi-browser baseline matrix — Linux/macOS
-    baseline 추가, V-4 CI 의 dependency
-  - V-4 CI integration — playwright-report artifact upload, V-3 후
+    baseline 추가 (V-4 README.md 의 3 옵션 중 선택)
+  - V-4 fine-tuning — `workflow_dispatch` baseline 갱신 workflow
+    + PR 코멘트 visual diff 미리보기
   - Baseline 압축 정책 — 현재 4 PNG × 644KB = ~2.6MB, V-3 시 ×N
   - `page.screenshot({ clip })` 부분 capture — 변화가 큰 영역만
+- **V-4 CI integration**: ci.yml `web-e2e` job 의 `npx playwright
+  test` 가 functional + visual 통합 실행. 첫 Linux CI run 은
+  baseline missing 으로 fail 예상 (V-1 lock-in #4 의도된 동작) →
+  `web/e2e/visual/README.md` 의 procedure 로 처리.
 - **상세**: `docs/adr/077-visual-regression-infrastructure.md` §D
-  Acceptance Log
+  Acceptance Log + `web/e2e/visual/README.md` (baseline 갱신 가이드)
 
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)

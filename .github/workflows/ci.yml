@@ -1,11 +1,15 @@
-# ADR-075 E4-6 — CI for Rust tests + browser E2E.
+# ADR-075 E4-6 + ADR-077 V-4 — CI for Rust tests + browser E2E.
 #
 # Drop-in alongside `build.yml` (which covers Vite build + vitest +
 # tsc). Existing build.yml UNCHANGED per ADR-075 §C lock-in #2 (drop-in
 # alongside). This file adds two NEW jobs that build.yml doesn't cover:
 #
 #   - rust-test : cargo test for axia-geo + axia-wasm (was: not run)
-#   - web-e2e   : Playwright Chromium E2E (was: not run)
+#   - web-e2e   : Playwright Chromium E2E (functional + visual, was:
+#                 not run). Visual coverage added by ADR-077 V-4 —
+#                 `npx playwright test` 가 functional (e2e/*.spec.ts)
+#                 + visual (e2e/visual/*.visual.spec.ts) 모두 실행.
+#                 Linux baseline 생성 정책: web/e2e/visual/README.md.
 #
 # Per ADR-075 §B lock-ins (E4-6 atomic):
 # - E4-6-a GitHub Actions

@@ -1,8 +1,8 @@
 # ADR-077 — Visual Regression Infrastructure
 
-**Status**: **V-1 + V-2 + V-5 완료** (V 트랙 핵심 가치 발현, 2026-05-05)
-**Last commits**: V-1 (`dbfd65e`) + V-2 (`e9f7b30`) + **V-5 본 commit**
-**Date**: 2026-05-05 (V-1 진입 → V-5 회고, 같은 세션 / 다음 세션 묶음)
+**Status**: **V-1 + V-2 + V-4 + V-5 완료** (V 트랙 인프라 + 자동화 closure, 2026-05-05)
+**Last commits**: V-1 (`dbfd65e`) + V-2 (`e9f7b30`) + V-5 (`8547520`) + **V-4 본 commit**
+**Date**: 2026-05-05 (V-1 진입 → V-5 회고 → **V-4 CI integration**)
 **Anchor**: ADR-075 §E.8 (Visual regression / screenshot diff —
 별도 ADR) + ADR-074 §E.5-1 (Visual feedback — visual regression
 인프라 의존)
@@ -135,9 +135,9 @@ ADR-074 §E.5-1 등이 visual baseline 검증 가능.
 |----------|------|------|------|
 | V-1 | 인프라 + smoke baseline | 1 | **✅ 본 ADR §D-V1** |
 | V-2 | ADR-074 §E.5-1 group color visual baseline | 6 (3 unit + 3 visual) | **✅ 본 ADR §D-V2** |
-| V-3 | Multi-OS / multi-browser baseline matrix | (matrix) | 미착수 (V-4 dependency) |
-| V-4 | CI integration (artifact upload on diff) | 0 | 미착수 |
-| V-5 | 회고 / docs | 0 | **✅ 본 commit** |
+| V-3 | Multi-OS / multi-browser baseline matrix | (matrix) | 미착수 (선택적) |
+| V-4 | CI integration + Linux baseline procedure | 0 (docs/wiring) | **✅ 본 ADR §D-V4** |
+| V-5 | 회고 / docs | 0 | **✅ commit `8547520`** |
 | **합계 (완료)** | — | **7** (vitest 3 + Playwright 4) | — |
 
 ---
@@ -215,11 +215,60 @@ V-2-d notifyChange 통합 (U-1 자연), V-2-e=(a) group 색이 selection
   * clearGroupTags disposes any outline meshes
 - Playwright visual baseline (3): A only / B only / A+B
 
-### §D-V5 — V-5 회고 / docs (본 commit)
+### §D-V5 — V-5 회고 / docs (commit `8547520`)
 
-본 회고 commit. ADR-077 §D Acceptance Log 채움 + CLAUDE.md 의 신규
-"ADR-076" + "ADR-077" 섹션 (이전 회고 commit 들이 미흡하게 처리한
-catchup 포함). 코드 변경 0.
+ADR-077 §D Acceptance Log 채움 + CLAUDE.md 의 신규 "ADR-076" +
+"ADR-077" 섹션 (이전 회고 commit 들이 미흡하게 처리한 catchup
+포함). 코드 변경 0.
+
+### §D-V4 — V-4 CI integration (본 commit)
+
+**의의**: ADR-075 E4-6 ci.yml 의 `web-e2e` job 가 이미 `npx playwright
+test` 로 visual specs (V-1/V-2 의 `*.visual.spec.ts`) 도 실행 중.
+V-4 는 이 사실을 명시 + Linux baseline 첫 run 정책 docs + 갱신
+가이드 신설.
+
+**V-4-decisions**: V-4-a=(a) ci.yml 기존 web-e2e job 확장 (별도 job
+없이 같은 `npx playwright test` 가 functional + visual 모두 cover) /
+V-4-b=(a) fail + manual update (Playwright 기본 — 의도적 baseline
+갱신만, V-1 lock-in #4 일관) / V-4-c failure artifact upload (이미
+E4-6 으로 적용됨, playwright-report + test-results) / V-4-d Linux
+baseline 생성 정책 (README.md 의 3 옵션 — CI artifact 다운로드 / Docker
+local / V-3+ workflow_dispatch) / V-4-e macOS/Firefox/WebKit V-3 별도
+sub-step / V-4-f V-4 only.
+
+**Lock-ins**:
+- V-4 = ci.yml 의 visual coverage 명시 + Linux baseline procedure
+  docs only (코드 변경 최소). 별도 visual job 신설 안 함 — 같은
+  `npx playwright test` 명령이 testMatch `/.*\.spec\.ts$/` 로 모든
+  spec 실행.
+- 첫 CI run 의 의도된 fail — `chromium-win32` baseline 만 존재,
+  `chromium-linux` 부재. 이는 **expected 동작** (V-1 lock-in #4).
+  Developer 가 의도적 Linux baseline 추가 commit 으로 해소.
+- baseline 갱신은 명시적 `--update-snapshots` (Playwright 표준).
+  우연한 drift 차단 (V-1 lock-in #4 일관).
+
+**산출물**:
+- `.github/workflows/ci.yml` 주석 갱신 — V-4 visual coverage 명시
+  + README.md cross-link
+- `web/e2e/visual/README.md` 신설 — Linux baseline 생성 절차
+  (3 옵션: CI artifact 다운로드 / Docker local / future
+  workflow_dispatch) + intentional update 절차 + PR 리뷰 체크리스트
+  + git-tracked rationale + troubleshooting
+- ADR-077 §D-V4 acceptance (본 섹션)
+
+**회귀 변화**: 0 (코드 변경 최소 — ci.yml 주석 + README.md 신규).
+모든 layer green:
+- vitest 1422 / Rust axia-geo 964 / axia-wasm 12 unchanged
+- Playwright local: 13 unchanged (4 visual + 9 functional)
+- 첫 CI run: visual specs fail 예상 (Linux baseline missing) →
+  README.md 의 V-4-b=(a) 정책으로 처리
+
+**다음 단계 (선택적)**:
+- V-3 multi-OS baseline matrix — Linux baseline 생성 후 별도
+  sub-step (multi-OS pixel diff 정책 + macOS/Firefox/WebKit 확장)
+- V-4 fine-tuning — `workflow_dispatch` baseline 갱신 workflow
+  (별도 sub-step)
 
 ---
 
@@ -237,15 +286,18 @@ V-1/V-2 의 baseline 은 모두 `chromium-win32` suffix — host OS 한정.
 - baseline 파일 크기 ×N — 현재 4 PNG × ~644KB = 2.6MB → multi-OS 시
   ~7-10MB (git 부담은 있으나 manageable)
 
-### E.5-2 V-4: CI integration (별도 sub-step)
+### E.5-2 V-4: CI integration (✅ 본 ADR §D-V4 closure)
 
-현재 visual baselines 는 local 에서만 실행. PR 마다 자동 검증 안 됨.
+~~현재 visual baselines 는 local 에서만 실행. PR 마다 자동 검증
+안 됨.~~ → **본 ADR V-4 (commit 본 commit) 으로 closure**:
+- ci.yml `web-e2e` job 의 `npx playwright test` 가 functional +
+  visual 모두 실행 (testMatch 가 `*.visual.spec.ts` 도 cover)
+- Failure artifact upload 이미 E4-6 으로 적용됨
+- Linux baseline 첫 run 정책: web/e2e/visual/README.md 의 3 옵션
 
-**해결 방향**: ci.yml 의 `web-e2e` job 가 visual baseline 도 같이
-실행 (같은 `npx playwright test` 명령). 추가 작업:
-- Visual diff fail 시 `playwright-report/` artifact upload
-- Linux baseline 우선 생성 (V-3 dependency)
-- PR 코멘트에 visual diff 미리보기 (선택, github-actions 통합)
+남은 fine-tuning (선택적):
+- `workflow_dispatch` baseline 갱신 workflow (V-3+ sub-step)
+- PR 코멘트 visual diff 미리보기 (별도 GH actions 통합)
 
 ### E.5-3 V-2 의 unit test 한계
 
@@ -361,7 +413,9 @@ ADR-074 (Boolean Group Selection UX) 가 5-layer atomic stack 으로
 ---
 
 *Author*: AXiA team (사용자 결정 2026-05-05)
-*Status*: **V-1 + V-2 + V-5 완료 2026-05-05** — 3 commits, 7 회귀
-(vitest 3 + Playwright visual 4), 4 baseline PNG (host=Windows).
-ADR-074 §E.5-1 + ADR-075 §E.8 두 미해결 항목 동시 closure.
-V-3 (multi-OS) / V-4 (CI integration) 은 선택적 확장.
+*Status*: **V-1 + V-2 + V-4 + V-5 완료 2026-05-05** — 4 commits,
+7 회귀 (vitest 3 + Playwright visual 4), 4 baseline PNG (host=Windows),
+CI integration 명시 + Linux baseline procedure docs. ADR-074 §E.5-1
++ ADR-075 §E.8 두 미해결 항목 동시 closure. V-3 (multi-OS baseline
+matrix) 은 선택적 확장. V 트랙의 **인프라 + 검증 + 자동화** 사이클
+완성.
