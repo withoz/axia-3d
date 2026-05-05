@@ -1913,6 +1913,96 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 - **상세**: `docs/adr/077-visual-regression-infrastructure.md` §D
   Acceptance Log + `web/e2e/visual/README.md` (baseline 갱신 가이드)
 
+### ADR-078 — Boolean Group Persistence (P-1 ~ P-4 closure, 2026-05-05)
+- **상태**: P-1 + P-2 + P-3 + P-4 모두 완료. ADR-074 §E.5-3
+  (Persistence — session 만, project 저장 별도 ADR) 본 ADR 으로 닫음.
+  P-5 (회고/docs) 도 본 commit 으로 closure. Last commit: 본 P-5 commit.
+- **의의**: ADR-074 의 group A/B selection (session-only) 을 .axia
+  project 파일에 round-trip 보존. Path Z atomic 5-layer 패턴의 첫
+  persistence 변형 — Model + UI Runtime + Routing + Persistence +
+  Bridge + E2E 의 6-layer atomic stack 을 단일 ADR 으로 닫음.
+- **stack** (사용자 우클릭 → .axia 저장 → reopen → group 자동 복원):
+  ```
+  ContextMenu / Hotkey (ADR-074 U-2)
+    ↓
+  SelectionManager.setGroupTag (UI runtime, ADR-074 U-1)        ← UNCHANGED
+    ↓ saveProject push (P-3 L1: clear → set(A) → set(B))
+  WasmBridge.{clear|set}BooleanGroupTag (P-2)                    ← Vec<u32> + strict Result
+    ↓
+  Scene.boolean_group_tags (P-1)                                 ← additive section 6
+    ↓ scene_snapshot section 6 (bincode, length-prefixed)
+  .xia file
+    ↓
+  restore_scene_snapshot section 6 (legacy 호환)
+  Scene.boolean_group_tags
+    ↓
+  WasmBridge.getBooleanGroup{A,B}Faces (P-2)
+    ↓ openProject pull (P-3 L2: syncMesh 후 1회)
+  SelectionManager.restoreGroupTags (P-3 L3: union policy)       ← NEW
+    ↓ notifyChange (1회)
+  Three.js group A/B outline rebuild (ADR-077 V-2)
+  ```
+- **결정 매트릭스**:
+  - **P-1 §A** Rust schema only — `BooleanGroupTag { A, B }` enum +
+    `Scene.boolean_group_tags: HashMap<FaceId, BooleanGroupTag>` 필드
+    + 5 helpers + section 6 additive
+  - **P-2 §B** typed WASM (사용자 정정 2건):
+    * P-2-c (strict): `Result<(), JsValue>` + uppercase `'A'`/`'B'` only
+      → invalid tag 즉시 throw (silent skip 차단)
+    * P-2-d (ownership): `Vec<u32>` (NOT `&[u32]`) — wasm-bindgen
+      ownership semantics 명확
+  - **P-3 §B** ProjectSerializer push/pull + restoreGroupTags:
+    * L1: Save sync `clear → set(A) → set(B)` idempotent. 둘 다 empty
+      → clear-only.
+    * L2: Load sync = `importSnapshot → syncMesh → pull → restoreGroupTags`,
+      notifyChange 정확히 1회.
+    * L3: `restoreGroupTags` 정책 — groupTags 전부 재구성 + selection
+      `기존 ∪ (A∪B)` + notifyChange 1회. UI runtime 의 selection-bound
+      제약 (groupTags ⊆ selected) 우회 — persistence layer 의 truth
+      source = SelectionManager.
+  - **P-4 §B** real Chromium 2 spec:
+    * `page.reload()` 사이 진짜 fresh state 검증 (process boundary)
+    * basic round-trip + empty round-trip — corner cases 는 vitest L3
+      6 tests 가 cover
+    * DOM file dialog 회피 (future ADR territory) — bridge call sequence
+      가 ProjectSerializer.{push,pull} 의 logical equivalent
+- **회귀 누적 (P-1~P-4)**: axia-core 132 → 138 (+6, P-1), axia-wasm
+  12 → 16 (+4, P-2), vitest 1427 → 1443 (+16, P-2 7 + P-3 9), Playwright
+  13 → 15 (+2, P-4). 합계 **+21**, 절대 #[ignore] 금지 21/21 준수.
+- **8-ADR 합산** (Path Z + Path Y + E.4 + E.5 + E.3 + V + ADR-078):
+  axia-core 132 → 138 (+6), axia-geo 940 → 964 (+24), axia-wasm 8 →
+  16 (+8), vitest 1395 → 1443 (+48), Playwright 0 → 15 (+15). 합계
+  2275 → 2476 (+201) — 단일 트랙으로 200 회귀 돌파.
+- **사용자 정정 가치**: P-2 사전 검토에서 `&[u32]` + bool 제안 → 사용자
+  정정으로 `Vec<u32>` + `Result<(), JsValue>` strict. 결과: WASM 경계
+  ownership 명확 + invalid input → 즉시 CI 검출. **향후 ADR 가이드**:
+  WASM 경계 input validation 은 strict-throw default.
+- **ProjectSerializer 의 selection-bound 우회 결정**: ADR-074 U-1 의
+  `setGroupTag` 는 selection-bound. Save/Load 경계에서는 명시적 우회
+  (`bridge.setBooleanGroupTag` 직접 호출 + `restoreGroupTags` 신규 API).
+  **향후 ADR 가이드**: UI runtime invariant 와 persistence invariant 는
+  분리 가능 — layer 별 별도 API + 명시적 우회 (silent override 회피).
+- **Page reload 의 fresh state 보장**: P-4 의 `page.reload()` 가
+  ServiceContainer + WasmBridge 완전 재초기화 + WASM module 재로드 →
+  진짜 "save → close app → reopen app" 시뮬레이션. **향후 ADR
+  가이드**: persistence E2E 의 fresh-state 표준 = page reload (process
+  boundary 회귀 보장).
+- **Path Z 5-layer 패턴 일반화**: Model + UI Runtime + Routing +
+  Persistence + Bridge + E2E 의 6-layer atomic stack. 향후 persistence
+  -layer 가 추가되는 모든 ADR 은 이 패턴 답습 권장.
+- **남은 미착수 (모두 선택적 확장 또는 별도 트랙)**:
+  - DOM file dialog round-trip (download/upload 실제 이벤트) — future
+    ADR
+  - Multi-step undo/redo of group tag mutations — 별도 ADR (현재
+    transaction wrapping 은 P-2 에서 set/clear 양쪽 적용 완료, undo 회귀
+    1건은 미작성)
+  - Visual baseline of restored group outlines — V-2 baseline path 와
+    동일 코드 경로이므로 자동 호환 (별도 baseline 불필요)
+- **상세**: `docs/adr/078-boolean-group-persistence.md` §D Acceptance
+  Log (P-1 ~ P-4 commit hash + 산출물 + lock-ins) + §6 Lessons
+  (5-layer 패턴 일반화 + 사용자 정정 가치 + UI/persistence layer 분리
+  + page reload 표준)
+
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Electron/Tauri 데스크톱 앱
