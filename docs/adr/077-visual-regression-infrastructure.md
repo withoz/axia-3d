@@ -1,7 +1,8 @@
 # ADR-077 — Visual Regression Infrastructure
 
-**Status**: V-1 진입 (Path Z atomic, 사용자 결정 2026-05-05)
-**Date**: 2026-05-05
+**Status**: **V-1 + V-2 + V-5 완료** (V 트랙 핵심 가치 발현, 2026-05-05)
+**Last commits**: V-1 (`dbfd65e`) + V-2 (`e9f7b30`) + **V-5 본 commit**
+**Date**: 2026-05-05 (V-1 진입 → V-5 회고, 같은 세션 / 다음 세션 묶음)
 **Anchor**: ADR-075 §E.8 (Visual regression / screenshot diff —
 별도 ADR) + ADR-074 §E.5-1 (Visual feedback — visual regression
 인프라 의존)
@@ -130,14 +131,222 @@ ADR-074 §E.5-1 등이 visual baseline 검증 가능.
 
 ## 4. Future Steps (별도 sub-step)
 
-| Sub-step | 영역 | 회귀 (예상) |
-|----------|------|------------|
-| V-1 | 인프라 + smoke baseline | 1 |
-| V-2 | ADR-074 §E.5-1 group color visual baseline | 2-3 |
-| V-3 | Multi-OS / multi-browser baseline matrix | 0 (matrix) |
-| V-4 | CI integration (artifact upload on diff) | 0 |
-| V-5 | 회고 / docs | 0 |
-| **합계 (예상)** | — | **~3-4** |
+| Sub-step | 영역 | 회귀 | 상태 |
+|----------|------|------|------|
+| V-1 | 인프라 + smoke baseline | 1 | **✅ 본 ADR §D-V1** |
+| V-2 | ADR-074 §E.5-1 group color visual baseline | 6 (3 unit + 3 visual) | **✅ 본 ADR §D-V2** |
+| V-3 | Multi-OS / multi-browser baseline matrix | (matrix) | 미착수 (V-4 dependency) |
+| V-4 | CI integration (artifact upload on diff) | 0 | 미착수 |
+| V-5 | 회고 / docs | 0 | **✅ 본 commit** |
+| **합계 (완료)** | — | **7** (vitest 3 + Playwright 4) | — |
+
+---
+
+## D. Acceptance Log — V 트랙 핵심 (2026-05-05)
+
+본 세션 (그리고 직전 세션) 에서 ADR-077 의 핵심 sub-step (V-1 + V-2
++ V-5) 이 atomic 하게 닫혔다. ADR-075 §E.8 (visual regression 별도
+ADR) + ADR-074 §E.5-1 (visual feedback enabler 의존) 두 미해결 항목
+을 본 ADR 으로 동시 해소. V-3 (multi-OS) / V-4 (CI integration) 는
+선택적 확장.
+
+### §D-V1 — V-1 인프라 + smoke baseline (commit `dbfd65e`)
+
+**의의**: Playwright `toHaveScreenshot()` 인프라 신설 — 향후 모든
+visual UX ADR 의 enabler. ADR-075 §E.8 닫음. ADR-074 §E.5-1 의
+"인프라 의존" 미해결 항목 해소.
+
+**V-decisions**: V-A=ADR-077, V-B=Playwright (이미 설치),
+V-C=(a) git-tracked PNG, V-D=maxDiffPixelRatio 0.01 (1% 흡수),
+V-E=host OS only (atomic), V-F=`__screenshots__/`, V-G=`*.visual.spec.ts`,
+V-H=playwright.config 의 `expect.toHaveScreenshot`, V-I=CI V-4 별도,
+V-J=`--update-snapshots` flag, V-K=V-1 only.
+
+**Lock-ins**:
+- V-1 = 인프라 + smoke 1 baseline only
+- Drop-in alongside (기존 9 functional E2E UNCHANGED)
+- Cross-platform 정책 (V-1 host OS only — Windows baseline)
+- Baseline 갱신 명시적 의도 (`--update-snapshots` 호출 필요)
+
+**산출물**:
+- `playwright.config.ts`: `expect.toHaveScreenshot` 옵션 + viewport
+  1280×720 고정
+- `web/e2e/visual/smoke.visual.spec.ts`: empty viewport baseline
+- `web/e2e/visual/smoke.visual.spec.ts-snapshots/empty-viewport-chromium-win32.png`
+  (~654KB, host=Windows)
+
+**회귀 (1, 절대 #[ignore] 금지)**:
+- empty viewport baseline matches snapshot
+
+### §D-V2 — V-2 Group color visual feedback (commit `e9f7b30`)
+
+**의의**: ADR-074 §E.5-1 의 visual feedback 본질을 닫음. V-1 인프라
+위에 첫 실용 baseline. group A 면 orange (#ff8800), group B 면
+cyan (#00aaff) outline 으로 사용자가 명시 grouping 시각 인지.
+
+**V-2-decisions**: V-2-a=(a) outline (selection 패턴), V-2-b A=#ff8800
+B=#00aaff (보색 쌍), V-2-c=(b) 신규 mesh layer (`rebuildGroupOutlines`),
+V-2-d notifyChange 통합 (U-1 자연), V-2-e=(a) group 색이 selection
+색을 덮음, V-2-f visibility toggle 일관, V-2-g=(b) 3 시나리오
+(A only / B only / A+B), V-2-h V-1 helper 재사용, V-2-i
+`group-color.visual.spec.ts`, V-2-j Three.js mock 한계 인정 — 진짜
+검증은 visual baseline, V-2-k V-2 only.
+
+**Three.js material**:
+- Per-instance LineBasicMaterial (인스턴스 공유 회피, V-2 risk)
+- depthTest: false + transparent: 0.95 (항상 가시)
+- renderOrder 3 (selectionOutline 2 vs hover 4 사이)
+
+**산출물 코드**:
+- `SelectionManager.ts` 신규: `groupAOutline` / `groupBOutline` fields,
+  `GROUP_A_COLOR` / `GROUP_B_COLOR` 상수, `rebuildGroupOutlines()`
+  method, `notifyChange()` 통합 호출
+- 기존 51 SelectionManager.test.ts UNCHANGED
+
+**산출물 baselines** (각 644KB, host=Windows):
+- `group-a-only-chromium-win32.png`
+- `group-b-only-chromium-win32.png`
+- `group-a-and-b-chromium-win32.png`
+
+**회귀 (6, 절대 #[ignore] 금지)**:
+- vitest unit (3, Three.js mock 한계 내):
+  * no group tags → no group outline meshes added
+  * setGroupTag triggers outline rebuild via notifyChange (no-throw)
+  * clearGroupTags disposes any outline meshes
+- Playwright visual baseline (3): A only / B only / A+B
+
+### §D-V5 — V-5 회고 / docs (본 commit)
+
+본 회고 commit. ADR-077 §D Acceptance Log 채움 + CLAUDE.md 의 신규
+"ADR-076" + "ADR-077" 섹션 (이전 회고 commit 들이 미흡하게 처리한
+catchup 포함). 코드 변경 0.
+
+---
+
+## E. Known Limitations (V 트랙 미해결)
+
+### E.5-1 V-3: Multi-OS / multi-browser baseline matrix (별도 sub-step)
+
+V-1/V-2 의 baseline 은 모두 `chromium-win32` suffix — host OS 한정.
+실제 CI 는 ubuntu-latest 에서 실행되어 baseline 부재로 fail 예상.
+
+**해결 방향**: V-3 sub-step 진입.
+- Linux baseline 생성 (Docker 또는 CI 첫 run + `--update-snapshots`)
+- 향후 macOS / Firefox / WebKit baseline 확장 시 matrix
+- `__screenshots__/` 자동 OS-suffix 처리 (Playwright 표준)
+- baseline 파일 크기 ×N — 현재 4 PNG × ~644KB = 2.6MB → multi-OS 시
+  ~7-10MB (git 부담은 있으나 manageable)
+
+### E.5-2 V-4: CI integration (별도 sub-step)
+
+현재 visual baselines 는 local 에서만 실행. PR 마다 자동 검증 안 됨.
+
+**해결 방향**: ci.yml 의 `web-e2e` job 가 visual baseline 도 같이
+실행 (같은 `npx playwright test` 명령). 추가 작업:
+- Visual diff fail 시 `playwright-report/` artifact upload
+- Linux baseline 우선 생성 (V-3 dependency)
+- PR 코멘트에 visual diff 미리보기 (선택, github-actions 통합)
+
+### E.5-3 V-2 의 unit test 한계
+
+Three.js mock 의 `LineSegments` / `LineBasicMaterial` simplification
+때문에 unit test 가 "mesh 생성 + dispose" 만 검증. 실제 색상 / 위치
+/ visibility 는 visual baseline 에서만 검증 가능.
+
+**의도된 한계** — V-2-j lock-in 으로 명시. visual baseline 이
+canonical truth. 향후 mock 강화 시 unit coverage 확대 가능.
+
+### E.5-4 baseline 파일 크기 (git bloat 우려)
+
+현재 4 PNG × ~644KB = ~2.6MB. V-3 multi-OS 시 ×3 = ~8MB. 향후
+visual UX ADR 추가 시 ×N. **git 부담 vs reproducibility trade-off**.
+
+**완화 방향**:
+- Git LFS (별도 인프라 — 본 ADR scope 외)
+- baseline 압축 (PNG 최적화 — `optipng` 등, 30-50% 절감 가능)
+- baseline 영역 축소 (`page.screenshot({ clip: ... })`) — 변화가
+  큰 영역만 capture
+- 본 V-1/V-2 baselines 는 viewport 전체 — 향후 부분 capture 정책
+  별도 sub-step 권장
+
+---
+
+## F. 회귀 누적 (V 트랙)
+
+| 단계 | Pre-V baseline | After V | Δ |
+|------|---------------|---------|---|
+| axia-geo lib | 964 | 964 | 0 (V = TS / Three.js / Playwright only) |
+| axia-wasm tests | 12 | 12 | 0 |
+| **web TS vitest** | 1419 | **1422** | **+3** (V-2 unit) |
+| **web TS Playwright (functional)** | 9 | 9 | 0 (drop-in alongside) |
+| **web TS Playwright (visual)** | 0 | **4** | **+4** (V-1 1 + V-2 3) |
+| **합계** | 2404 | **2411** | **+7** |
+
+**7 / 7 모두 절대 #[ignore] 금지 정책 준수**.
+
+Sub-step 별 distribution:
+- V-1: 1 visual baseline
+- V-2: 3 vitest unit + 3 visual baseline
+- V-5: 0 (docs only)
+
+### 7-ADR 합산 (Path Z + Path Y + E.4 + E.5 + E.3 + V)
+
+| Suite | Original | After all | Δ |
+|-------|----------|-----------|---|
+| axia-geo lib | 940 | 964 | +24 |
+| axia-wasm tests | 8 | 12 | +4 |
+| web TS vitest | 1395 | 1422 | +27 |
+| Playwright E2E (functional + visual) | 0 | 13 | +13 |
+| **합계** | 2343 | **2411** | **+68** |
+
+**68 / 68 모두 절대 #[ignore] 금지 정책 준수**.
+
+CI 자동 검증 (ADR-075 E4-6 build.yml + ci.yml). V-3/V-4 통합 시
+visual baseline 도 PR 마다 자동 검증 가능.
+
+---
+
+## G. ADR-077 의 의미 (V 트랙 시점)
+
+ADR-075 가 **functional 검증 자산 + 자동화** 의 첫 인프라성 ADR
+이라면, ADR-077 은 **visual 검증 자산** 의 첫 인프라성 ADR. 두 ADR
+모두 향후 모든 ADR 의 round-trip 검증 base layer.
+
+| 측면 | ADR-064/066 | ADR-074 | ADR-075 | ADR-076 | **ADR-077** |
+|------|-------------|---------|---------|---------|------------|
+| **결정 성격** | engine | UX semantic | functional E2E infra | cleanup | **visual E2E infra** |
+| **위험** | 中-高 | 低-中 | 中 | 低 | **低-中** |
+| **commits** | 16 | 5 | 7 | 3 | **3** (V-1 + V-2 + V-5) |
+| **회귀** | +62 | +20 | +11 | -17 | **+7** |
+| **자산성** | mesh-level API | selection model + UI | functional baseline | code minimization | **visual baseline** |
+| **재사용성** | 본 ADR 한정 | 4-layer pattern | 모든 functional ADR | (cleanup 사례) | **모든 visual UX ADR** |
+
+### V 트랙의 자산성
+
+- `playwright.config.ts` 의 `expect.toHaveScreenshot` 정책 →
+  향후 모든 visual ADR 자동 활용
+- `web/e2e/visual/` 디렉토리 + `*.visual.spec.ts` 명명 →
+  functional E2E 와 분리, 명확한 표준
+- `__screenshots__/` git-tracked baseline → PR 리뷰 시 시각 변경
+  명시적 검토 (우연한 drift 차단)
+- `setupGroupedSelection` (V-2 가 사용한 helper) → 향후 다른 UX
+  visual ADR 의 fixture 패턴 모범
+
+### V-2 가 ADR-074 §E.5-1 을 닫은 의미
+
+ADR-074 (Boolean Group Selection UX) 가 5-layer atomic stack 으로
+완성:
+1. **Model** (U-1) — `groupTags: Map<faceId, 'A'|'B'>`
+2. **UI** (U-2) — ContextMenu 3 항목
+3. **Routing** (U-3) — BooleanHandler 분기
+4. **Real-runtime functional** (U-4) — Playwright 2 tests
+5. **Visual feedback** (V-2) — orange/cyan outline + 3 baselines
+
+**5-layer pattern** 은 향후 selection-driven UX ADR 의 모범. 1-4 layer
+는 ADR-074 가 정의, 5-layer (visual) 는 ADR-077 V-2 가 처음 추가.
+
+남은 V-3 (multi-OS) / V-4 (CI) 는 모두 **선택적 확장** — 본 ADR 의
+핵심 가치 (인프라 + visual UX baseline 첫 사례) 는 이미 완성.
 
 ---
 
@@ -152,4 +361,7 @@ ADR-074 §E.5-1 등이 visual baseline 검증 가능.
 ---
 
 *Author*: AXiA team (사용자 결정 2026-05-05)
-*Status*: V-1 implementation 진행 중
+*Status*: **V-1 + V-2 + V-5 완료 2026-05-05** — 3 commits, 7 회귀
+(vitest 3 + Playwright visual 4), 4 baseline PNG (host=Windows).
+ADR-074 §E.5-1 + ADR-075 §E.8 두 미해결 항목 동시 closure.
+V-3 (multi-OS) / V-4 (CI integration) 은 선택적 확장.

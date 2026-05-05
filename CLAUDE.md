@@ -1825,6 +1825,88 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   - E.5-4 단축키 미배정 (atomic; 충돌 검토 별도 sub-step)
 - **상세**: `docs/adr/074-boolean-group-selection-ux.md` §D Acceptance Log
 
+### ADR-076 — Legacy Boolean Path Sunset (E.5 Cleanup 트랙 완료, 2026-05-05)
+- **상태**: Step 1 + Step 1.1 + Step 2 완료. ADR-064 §E.5 +
+  ADR-066 §E.5 두 미해결 항목 본 ADR 으로 닫음. Last commit
+  `0c4e5ef`.
+- **의의**: ADR-066 Y-4 multi DCEL fast-path 가 BooleanHandler 의
+  canonical entry 가 된 후 unreachable 이 된 legacy paths 의 정상
+  sunset. 4-layer 동시 cleanup (UI / TS bridge / WASM export /
+  tests + baseline). Path Z atomic 패턴의 cleanup ADR 첫 사례.
+- **stack** (제거 대상):
+  ```
+  Step 1: BooleanHandler.ts UI 정리
+    - Single DCEL fast-path (ADR-064 Step 6-γ) — Y-1 1×1 degenerate 흡수
+    - Legacy NURBS probe (ADR-027 Phase G3) — surface_to_bspline 흡수
+    - handleDcelResult helper / formatNurbsBoolean* / SURFACE_KIND_BSPLINE
+  Step 2: Bridge wrapper + WASM export 정리
+    - WasmBridge.nurbsBoolean / WasmBridge.booleanDispatchDcel 제거
+    - WASM exports (booleanDispatchDcelJson / nurbsBoolean) 제거
+    - export_baseline 2 entries 제거
+    - TS types (NurbsBooleanResult / BooleanDispatchDcelResult) 제거
+  ```
+- **Rust impl preserved**: `Mesh::boolean_dispatch_dcel` +
+  `nurbs_boolean_to_dcel` — multi 가 1×1 degenerate / cartesian
+  per-pair 로 직접 위임. 절대 제거 불가.
+- **§C-amendment-1 (cleanup deletion)**: ADR-064/066/075 의 R1 §D
+  "additive-only baseline" 정책의 첫 deletion 예외 명시. 본 ADR
+  Step 2 가 첫 사례. 향후 cleanup ADR 동일 정책 적용.
+- **회귀 변화**: -17 (axia-wasm -4 single JSON / vitest -9 bridge
+  tests / Playwright -4 single E4-2 + undo). 코드 -924 lines net.
+  기능적 회귀 0 — multi (Y-3) tests 가 identical canonical surface
+  cover.
+- **상세**: `docs/adr/076-legacy-boolean-path-sunset.md` §D
+  Acceptance Log (Step 1 + Step 1.1 + Step 2 결산)
+
+### ADR-077 — Visual Regression Infrastructure (V 트랙 핵심 완료, 2026-05-05)
+- **상태**: V-1 + V-2 + V-5 완료. ADR-075 §E.8 (visual regression
+  별도 ADR) + ADR-074 §E.5-1 (visual feedback enabler 의존) 두
+  미해결 항목 동시 closure. V-3 / V-4 선택적. Last commit: 본
+  회고 commit.
+- **의의**: ADR-075 가 functional 검증 자산 + 자동화 의 첫 인프라성
+  ADR 이라면, ADR-077 은 **visual 검증 자산** 의 첫 인프라성 ADR.
+  두 ADR 모두 향후 모든 ADR 의 round-trip 검증 base layer.
+  V-2 가 ADR-074 §E.5-1 (group color visual feedback) 의 본질을
+  닫아 ADR-074 가 5-layer atomic stack (Model + UI + Routing +
+  Functional E2E + Visual) 으로 완성.
+- **stack**:
+  ```
+  Playwright `toHaveScreenshot()` (V-1 인프라)
+    ↓ playwright.config.ts: expect.maxDiffPixelRatio 0.01,
+                            viewport 1280×720
+      ↓ web/e2e/visual/*.visual.spec.ts (V-G naming)
+        ↓ web/e2e/visual/__screenshots__/
+            *-chromium-win32.png (V-E host OS only, V-1)
+  ```
+- **결정 매트릭스**: V-B Playwright (이미 설치) / V-C=(a) git-tracked
+  PNG / V-D maxDiffPixelRatio 0.01 / V-E host OS only (V-3 multi-OS
+  별도) / V-F `__screenshots__/` / V-G `*.visual.spec.ts` /
+  V-H playwright.config 의 `expect.toHaveScreenshot` /
+  V-J `--update-snapshots` flag.
+- **인프라 자산** (모든 향후 visual UX ADR 활용 가능):
+  - `playwright.config.ts` 의 `expect.toHaveScreenshot` + viewport
+  - `web/e2e/visual/` 디렉토리 + `*.visual.spec.ts` 명명 정책
+  - `__screenshots__/` git-tracked baseline 정책
+  - V-2 가 정의한 Three.js outline rebuild 패턴
+    (`SelectionManager.rebuildGroupOutlines` + `notifyChange` 통합)
+- **V-2 산출물**: ADR-074 group A/B outline 색상 (orange #ff8800 /
+  cyan #00aaff 보색 쌍) + 3 visual baseline (A only / B only / A+B).
+- **회귀 누적 (V 트랙)**: vitest 1419 → **1422** (+3 V-2 unit),
+  Playwright 9 → **13** (+1 V-1 smoke + 3 V-2 visual). 합계 **+7**,
+  절대 #[ignore] 금지 7/7 준수.
+- **7-ADR 합산** (Path Z + Path Y + E.4 + E.5 + E.3 + V): axia-geo
+  940 → **964** (+24), axia-wasm 8 → **12** (+4), web TS vitest
+  1395 → **1422** (+27), Playwright E2E 0 → **13** (+13). 합계
+  2343 → **2411** (+68), 절대 #[ignore] 금지 68/68 준수.
+- **남은 미착수 (모두 선택적 확장)**:
+  - V-3 Multi-OS / multi-browser baseline matrix — Linux/macOS
+    baseline 추가, V-4 CI 의 dependency
+  - V-4 CI integration — playwright-report artifact upload, V-3 후
+  - Baseline 압축 정책 — 현재 4 PNG × 644KB = ~2.6MB, V-3 시 ×N
+  - `page.screenshot({ clip })` 부분 capture — 변화가 큰 영역만
+- **상세**: `docs/adr/077-visual-regression-infrastructure.md` §D
+  Acceptance Log
+
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)
 - Electron/Tauri 데스크톱 앱
