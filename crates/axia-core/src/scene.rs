@@ -10472,9 +10472,9 @@ mod tests {
 
     #[test]
     fn exec_create_solid_falls_back_to_push_pull_when_not_yet_supported() {
-        // Q3 lock-in — non-Plane surface or unsupported curved profile → legacy
-        // push_pull fallback. We use a Sphere profile (still NotYetSupported
-        // in W-2-γ-i scope; Cylinder was activated by W-2-γ-i).
+        // Q3 lock-in — unsupported curved profile → legacy push_pull fallback.
+        // We use a Cone profile (still NotYetSupported in W-2-γ-ii scope;
+        // Cylinder/Sphere were activated by W-2-γ-i / W-2-γ-ii).
         let mut scene = Scene::new();
         let mat = MaterialId::new(0);
         let v00 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
@@ -10482,12 +10482,14 @@ mod tests {
         let v11 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
         let v01 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
         let profile_face = scene.mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
-        // Attach Sphere surface (W-2-γ-ii scope — still NotYetSupported).
-        let surface = axia_geo::AnalyticSurface::Sphere {
-            center: DVec3::ZERO,
-            radius: 1.0,
+        // Attach Cone surface (W-2-γ-iii scope — still NotYetSupported).
+        let surface = axia_geo::AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            half_angle: std::f64::consts::FRAC_PI_4,
+            ref_dir: DVec3::X,
             u_range: (0.0, std::f64::consts::TAU),
-            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+            v_range: (0.1, 1.0),
         };
         scene.mesh.faces[profile_face].set_surface(Some(surface));
 

@@ -170,13 +170,15 @@ impl Mesh {
                         // W-2-γ-i: Cylinder smooth-group radius offset.
                         self.offset_smooth_group_cylinder(profile_face, distance, &surface)
                     }
+                    (AnalyticSurface::Sphere { .. }, _) => {
+                        // W-2-γ-ii: Sphere smooth-group radius offset.
+                        self.offset_smooth_group_sphere(profile_face, distance, &surface)
+                    }
                     (
-                        AnalyticSurface::Sphere { .. }
-                        | AnalyticSurface::Cone { .. }
-                        | AnalyticSurface::Torus { .. },
+                        AnalyticSurface::Cone { .. } | AnalyticSurface::Torus { .. },
                         _,
                     ) => Err(SolidError::NotYetSupported {
-                        reason: "Curved profile → SmoothGroupOffset (W-2-γ-ii/iii/iv scope)"
+                        reason: "Curved profile → SmoothGroupOffset (W-2-γ-iii/iv scope)"
                             .to_string(),
                     }
                     .into()),
@@ -741,6 +743,210 @@ impl Mesh {
 
         // Result — top_face = profile_face (no new face created in offset),
         // side_faces = group members excluding profile.
+        let side_faces: Vec<FaceId> = group_faces
+            .iter()
+            .copied()
+            .filter(|&f| f != profile_face)
+            .collect();
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::SmoothGroupOffset,
+            top_face: profile_face,
+            side_faces,
+            all_solid_faces: group_faces,
+            adjacent_splits: 0,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-2-γ-ii — Sphere smooth-group radius offset.
+    ///
+    /// Profile face has `AnalyticSurface::Sphere`. Detects the smooth
+    /// group (active faces sharing the same Sphere instance within
+    /// `EPSILON_LENGTH`), then radially offsets all group vertices by
+    /// `dist`:
+    ///   - Each vertex `v`: scale `(v - center)` by `(r + dist) / r`
+    ///     about the sphere center. Equivalent to uniform radial scale
+    ///     in 3D about `center`.
+    ///   - All group face surfaces updated with `radius = current + dist`.
+    ///   - Boundary `Arc` / `Circle` curves are also uniformly scaled
+    ///     about the sphere center: new center = scale(C - sphere_center),
+    ///     new radius = old_radius * scale. normal/basis_u preserved
+    ///     under uniform scaling.
+    ///
+    /// **Auto-expand semantics** (§W2γ2-B-(a)): single profile_face →
+    /// full smooth group, idempotent across the group.
+    ///
+    /// Returns `NotYetSupported` if the new radius would collapse below
+    /// `EPSILON_LENGTH` (geometry inversion guard).
+    fn offset_smooth_group_sphere(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        let (center, current_radius, u_range, v_range) = match profile_surface {
+            AnalyticSurface::Sphere {
+                center,
+                radius,
+                u_range,
+                v_range,
+            } => (*center, *radius, *u_range, *v_range),
+            _ => bail!("offset_smooth_group_sphere: profile is not Sphere"),
+        };
+        if current_radius <= crate::tolerances::EPSILON_LENGTH {
+            bail!(
+                "offset_smooth_group_sphere: current radius {:.3e} below epsilon",
+                current_radius
+            );
+        }
+
+        let new_radius = current_radius + dist;
+        if new_radius <= crate::tolerances::EPSILON_LENGTH {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "offset would collapse sphere radius to {:.3e} (current {:.3e}, dist {:.3e})",
+                    new_radius, current_radius, dist
+                ),
+            }
+            .into());
+        }
+        let scale = new_radius / current_radius;
+        let tol = crate::tolerances::EPSILON_LENGTH;
+
+        // Detect smooth group: active faces whose surface is a Sphere
+        // matching center + current_radius within tol.
+        let group_faces: Vec<FaceId> = self
+            .faces
+            .iter()
+            .filter_map(|(fid, face)| {
+                if !face.is_active() {
+                    return None;
+                }
+                match face.surface() {
+                    Some(AnalyticSurface::Sphere {
+                        center: c,
+                        radius: r,
+                        ..
+                    }) => {
+                        let same = (*c - center).length() < tol
+                            && (*r - current_radius).abs() < tol;
+                        if same {
+                            Some(fid)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        if !group_faces.contains(&profile_face) {
+            bail!(
+                "offset_smooth_group_sphere: profile face {profile_face:?} \
+                 not in detected smooth group (size {})",
+                group_faces.len()
+            );
+        }
+
+        // Collect unique vertices across the group.
+        let mut group_verts: std::collections::HashSet<crate::entities::VertId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let start = self.faces[fid].outer().start;
+            if start.is_null() {
+                continue;
+            }
+            for v in self.collect_loop_verts(start)? {
+                group_verts.insert(v);
+            }
+        }
+
+        // Uniform radial scale each vertex about the sphere center.
+        // Vertices at center are degenerate (shouldn't occur on a sphere
+        // surface) — skip to avoid NaN.
+        for v in group_verts.iter().copied().collect::<Vec<_>>() {
+            let pos = self.vertex_pos(v)?;
+            let from_c = pos - center;
+            if from_c.length_squared() < tol * tol {
+                continue;
+            }
+            let new_pos = center + from_c * scale;
+            self.move_vertex(v, new_pos)?;
+        }
+
+        // Update each group face's Sphere surface with new radius.
+        let new_surface = AnalyticSurface::Sphere {
+            center,
+            radius: new_radius,
+            u_range,
+            v_range,
+        };
+        for &fid in &group_faces {
+            if let Some(face) = self.faces.get_mut(fid) {
+                if face.is_active() {
+                    face.set_surface(Some(new_surface.clone()));
+                }
+            }
+        }
+
+        // Update Arc / Circle curves on edges incident to group faces.
+        // Under uniform 3D scale about sphere center, an arc transforms:
+        //   - new center = sphere_center + (old_center - sphere_center) * scale
+        //   - new radius = old_radius * scale
+        //   - normal / basis_u preserved (uniform scale preserves orientation)
+        let mut updated_arcs: std::collections::HashSet<crate::entities::EdgeId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let edges = self.face_outer_edges(fid)?;
+            for eid in edges {
+                if updated_arcs.contains(&eid) {
+                    continue;
+                }
+                let new_curve = if let Some(edge) = self.edges.get(eid) {
+                    match edge.curve() {
+                        Some(AnalyticCurve::Arc {
+                            center: ac,
+                            radius: ar,
+                            normal,
+                            basis_u,
+                            start_angle,
+                            end_angle,
+                        }) => Some(AnalyticCurve::Arc {
+                            center: center + (*ac - center) * scale,
+                            radius: ar * scale,
+                            normal: *normal,
+                            basis_u: *basis_u,
+                            start_angle: *start_angle,
+                            end_angle: *end_angle,
+                        }),
+                        Some(AnalyticCurve::Circle {
+                            center: cc,
+                            radius: cr,
+                            normal,
+                            basis_u,
+                        }) => Some(AnalyticCurve::Circle {
+                            center: center + (*cc - center) * scale,
+                            radius: cr * scale,
+                            normal: *normal,
+                            basis_u: *basis_u,
+                        }),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(c) = new_curve {
+                    if let Some(edge) = self.edges.get_mut(eid) {
+                        edge.set_curve(Some(c));
+                    }
+                    updated_arcs.insert(eid);
+                }
+            }
+        }
+
         let side_faces: Vec<FaceId> = group_faces
             .iter()
             .copied()
@@ -1479,6 +1685,272 @@ mod tests {
                 "top z must remain 7, got {}",
                 pos.z
             );
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-2-γ-ii — Sphere smooth-group radius offset
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build 2 triangle faces on a sphere centered at origin.
+    /// Both faces share the same `AnalyticSurface::Sphere` instance, so
+    /// they form a smooth group.
+    ///
+    /// Triangles share an edge (north_pole — equator_y) so the test
+    /// exercises shared-vertex semantics.
+    fn build_sphere_two_faces(radius: f64) -> (Mesh, Vec<FaceId>) {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let center = DVec3::ZERO;
+
+        // 4 verts on the sphere surface:
+        //   v_x  = (R, 0, 0)        equator at θ=0
+        //   v_y  = (0, R, 0)        equator at θ=90°
+        //   v_nx = (-R, 0, 0)       equator at θ=180°
+        //   v_n  = (0, 0, R)        north pole
+        let v_x = mesh.add_vertex(DVec3::new(radius, 0.0, 0.0));
+        let v_y = mesh.add_vertex(DVec3::new(0.0, radius, 0.0));
+        let v_nx = mesh.add_vertex(DVec3::new(-radius, 0.0, 0.0));
+        let v_n = mesh.add_vertex(DVec3::new(0.0, 0.0, radius));
+
+        // f1: v_x → v_y → v_n (CCW from outside the sphere octant)
+        // f2: v_y → v_nx → v_n (adjacent triangle sharing edge v_y → v_n)
+        let f1 = mesh.add_face(&[v_x, v_y, v_n], mat).expect("f1");
+        let f2 = mesh.add_face(&[v_y, v_nx, v_n], mat).expect("f2");
+
+        let surface = AnalyticSurface::Sphere {
+            center,
+            radius,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        mesh.faces[f1].set_surface(Some(surface.clone()));
+        mesh.faces[f2].set_surface(Some(surface));
+
+        (mesh, vec![f1, f2])
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_outward_increases_radius() {
+        let (mut mesh, faces) = build_sphere_two_faces(2.0);
+
+        // Offset outward by +1.0 → new radius = 3.0.
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 1.0 },
+                MaterialId::new(0),
+            )
+            .expect("sphere offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        assert_eq!(result.all_solid_faces.len(), 2);
+
+        for &fid in &faces {
+            match mesh.faces[fid].surface() {
+                Some(AnalyticSurface::Sphere { radius, center, .. }) => {
+                    assert!(
+                        (radius - 3.0).abs() < 1e-9,
+                        "face {fid:?} radius != 3.0, got {radius}"
+                    );
+                    assert!(
+                        (center - DVec3::ZERO).length() < 1e-9,
+                        "center must remain at ZERO"
+                    );
+                }
+                other => panic!(
+                    "face {fid:?} must be Sphere, got {:?}",
+                    other.map(|s| s.kind_label())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_scales_vertices_radially_about_center() {
+        let (mut mesh, faces) = build_sphere_two_faces(2.0);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 3.0 }, // 2 → 5
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // After offset, every group vertex should be at distance 5 from origin.
+        let mut group_verts = std::collections::HashSet::new();
+        for &fid in &result.all_solid_faces {
+            let start = mesh.faces[fid].outer().start;
+            for v in mesh.collect_loop_verts(start).unwrap() {
+                group_verts.insert(v);
+            }
+        }
+        for v in &group_verts {
+            let pos = mesh.vertex_pos(*v).unwrap();
+            let r = pos.length();
+            assert!(
+                (r - 5.0).abs() < 1e-9,
+                "vertex distance from center != 5.0: got {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_inward_decreases_radius() {
+        let (mut mesh, faces) = build_sphere_two_faces(5.0);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: -2.0 }, // 5 → 3
+                MaterialId::new(0),
+            )
+            .expect("inward offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        for &fid in &faces {
+            if let Some(AnalyticSurface::Sphere { radius, .. }) = mesh.faces[fid].surface() {
+                assert!((radius - 3.0).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_collapse_falls_back() {
+        let (mut mesh, faces) = build_sphere_two_faces(2.0);
+        // -2.0 → new_radius = 0 → collapse.
+        let result = mesh.create_solid(
+            faces[0],
+            CreateSolidMode::Extrude { distance: -2.0 },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must fail (collapse)");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("collapse"),
+            "expected NotYetSupported with 'collapse' reason, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_returns_smooth_group_offset_kind() {
+        let (mut mesh, faces) = build_sphere_two_faces(1.5);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        assert_eq!(result.top_face, result.profile_face);
+        assert_eq!(result.side_faces.len(), 1); // 2 group faces - 1 profile
+        assert_eq!(result.all_solid_faces.len(), 2);
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_preserves_center() {
+        // Sphere centered at non-origin must keep its center after offset.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let center = DVec3::new(10.0, 20.0, 30.0);
+        let radius = 4.0;
+
+        let v_a = mesh.add_vertex(center + DVec3::new(radius, 0.0, 0.0));
+        let v_b = mesh.add_vertex(center + DVec3::new(0.0, radius, 0.0));
+        let v_c = mesh.add_vertex(center + DVec3::new(0.0, 0.0, radius));
+        let f1 = mesh.add_face(&[v_a, v_b, v_c], mat).expect("f1");
+
+        // Need a 2nd face for a non-trivial group.
+        let v_d = mesh.add_vertex(center + DVec3::new(-radius, 0.0, 0.0));
+        let f2 = mesh.add_face(&[v_b, v_d, v_c], mat).expect("f2");
+
+        let surface = AnalyticSurface::Sphere {
+            center,
+            radius,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        mesh.faces[f1].set_surface(Some(surface.clone()));
+        mesh.faces[f2].set_surface(Some(surface));
+
+        let _ = mesh
+            .create_solid(
+                f1,
+                CreateSolidMode::Extrude { distance: 2.0 },
+                mat,
+            )
+            .expect("offset OK");
+
+        // Center must remain (10, 20, 30); radius now 6.
+        if let Some(AnalyticSurface::Sphere { center: c, radius: r, .. }) =
+            mesh.faces[f1].surface()
+        {
+            assert!((*c - center).length() < 1e-9, "center must be preserved");
+            assert!((r - 6.0).abs() < 1e-9, "radius must be 6 (4 + 2)");
+        } else {
+            panic!("face surface must be Sphere");
+        }
+
+        // Verify each vertex distance from center = 6.
+        let start = mesh.faces[f1].outer().start;
+        for v in mesh.collect_loop_verts(start).unwrap() {
+            let pos = mesh.vertex_pos(v).unwrap();
+            let dist = (pos - center).length();
+            assert!(
+                (dist - 6.0).abs() < 1e-9,
+                "vertex distance from center != 6: got {dist}"
+            );
+        }
+    }
+
+    #[test]
+    fn sphere_smooth_group_offset_scales_boundary_arcs_about_center() {
+        // Attach an Arc curve to one boundary edge and verify it's scaled
+        // uniformly about the sphere center (not just radius scaled in
+        // place — center also moves under uniform scale).
+        use crate::curves::AnalyticCurve;
+        let (mut mesh, faces) = build_sphere_two_faces(2.0);
+        let edges = mesh.face_outer_edges(faces[0]).expect("edges");
+        let arc_eid = edges[0];
+
+        // Attach a small Arc with its own (off-center) parameters.
+        let arc_center = DVec3::new(1.0, 0.0, 0.0);
+        let arc_radius = 0.5;
+        let initial_arc = AnalyticCurve::Arc {
+            center: arc_center,
+            radius: arc_radius,
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        };
+        mesh.edges[arc_eid].set_curve(Some(initial_arc));
+
+        // Offset by +1 → scale = 3/2 = 1.5.
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 1.0 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // Expected:
+        //   new_center = ZERO + (arc_center - ZERO) * 1.5 = (1.5, 0, 0)
+        //   new_radius = 0.5 * 1.5 = 0.75
+        if let Some(AnalyticCurve::Arc {
+            center: nc,
+            radius: nr,
+            ..
+        }) = mesh.edges.get(arc_eid).and_then(|e| e.curve())
+        {
+            assert!((nc - DVec3::new(1.5, 0.0, 0.0)).length() < 1e-9,
+                "arc center expected (1.5, 0, 0), got {nc:?}");
+            assert!((nr - 0.75).abs() < 1e-9,
+                "arc radius expected 0.75, got {nr}");
+        } else {
+            panic!("arc curve must remain on edge after offset");
         }
     }
 }
