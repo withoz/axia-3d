@@ -284,7 +284,15 @@ impl Mesh {
                 );
             }
             AnalyticSurface::Sphere { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Sphere" });
+                // V-β-γ-2: dispatch to sphere-specific offset path.
+                return self.offset_edge_on_sphere(
+                    edge_id,
+                    v0,
+                    v1,
+                    edge_curve,
+                    &host_surface,
+                    dist,
+                );
             }
             AnalyticSurface::Cone { .. } => {
                 return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Cone" });
@@ -697,6 +705,217 @@ impl Mesh {
         )
     }
 
+    /// ADR-080 V-β-γ-2 — Edge offset on a Sphere host face.
+    ///
+    /// Only Arc/Circle curves are accepted (small circles on sphere,
+    /// great-circle as the special case d = 0). Line/None curves are
+    /// rejected — a 3D Line segment isn't naturally on a sphere
+    /// surface (chord interpretation is ambiguous).
+    ///
+    /// **Math**: Arc with center C_arc, radius r_arc, normal n_arc lies
+    /// on sphere (center C_s, radius R) iff (a) n_arc parallel to
+    /// d_vec = C_arc - C_s, AND (b) r² + d² = R² (where d = |d_vec|).
+    /// Co-latitude φ = atan2(r, d) ∈ [0, π/2] for arc above sphere
+    /// center along d_vec.
+    ///
+    /// Geodesic offset by `dist`: Δφ = sign·dist/R, where sign comes
+    /// from `(tangent × surface_normal · ∂P/∂φ)`.
+    ///   - new_d = R·cos(new_φ),  new_r = R·sin(new_φ)
+    ///   - new_center = C_s + new_d · polar_axis_unit
+    ///   - new_normal preserves arc orientation
+    fn offset_edge_on_sphere(
+        &mut self,
+        edge_id: EdgeId,
+        _v0: VertId,
+        _v1: VertId,
+        edge_curve: Option<AnalyticCurve>,
+        host_surface: &AnalyticSurface,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        let (sphere_center, sphere_radius) = match host_surface {
+            AnalyticSurface::Sphere { center, radius, .. } => (*center, *radius),
+            _ => unreachable!("offset_edge_on_sphere dispatched with non-Sphere host"),
+        };
+
+        // V-β-γ-2: Line/None curves rejected on Sphere — chord ambiguity.
+        let curve = match &edge_curve {
+            Some(AnalyticCurve::Arc { .. }) | Some(AnalyticCurve::Circle { .. }) => {
+                edge_curve.unwrap()
+            }
+            None | Some(AnalyticCurve::Line { .. }) => {
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Sphere",
+                    curve_kind: "Line",
+                });
+            }
+            Some(c) => {
+                let kind = match c {
+                    AnalyticCurve::Bezier { .. } => "Bezier",
+                    AnalyticCurve::BSpline { .. } => "BSpline",
+                    AnalyticCurve::NURBS { .. } => "NURBS",
+                    _ => unreachable!(),
+                };
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Sphere",
+                    curve_kind: kind,
+                });
+            }
+        };
+
+        let (arc_center, arc_radius, arc_normal, basis_u_arc, angles) = match &curve {
+            AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle,
+                end_angle,
+            } => (
+                *center,
+                *radius,
+                *normal,
+                *basis_u,
+                Some((*start_angle, *end_angle)),
+            ),
+            AnalyticCurve::Circle {
+                center,
+                radius,
+                normal,
+                basis_u,
+            } => (*center, *radius, *normal, *basis_u, None),
+            _ => unreachable!(),
+        };
+
+        // §V2-γ2-B Sanity:
+        //   1. arc center → sphere center direction (d_vec)
+        //   2. arc.normal parallel to d_vec (or arc is a great circle: d = 0,
+        //      then any normal in tangent plane is OK)
+        //   3. r² + d² ≈ R²  (arc lies on sphere)
+        let d_vec = arc_center - sphere_center;
+        let d = d_vec.length();
+        let polar_axis = if d > tol {
+            d_vec / d
+        } else {
+            // Great circle — use arc's own normal as polar axis.
+            arc_normal.normalize_or_zero()
+        };
+        let arc_n_unit = arc_normal.normalize_or_zero();
+        // For non-degenerate d, arc.normal must be ‖ d_vec.
+        if d > tol && arc_n_unit.dot(polar_axis).abs() < 0.999 {
+            return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Sphere",
+                curve_kind: if angles.is_some() {
+                    "Arc(off-sphere)"
+                } else {
+                    "Circle(off-sphere)"
+                },
+            });
+        }
+        // Sphere invariant: r² + d² ≈ R².
+        let invariant_lhs = arc_radius * arc_radius + d * d;
+        let invariant_rhs = sphere_radius * sphere_radius;
+        if (invariant_lhs - invariant_rhs).abs() > tol * sphere_radius.max(1.0) {
+            return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Sphere",
+                curve_kind: if angles.is_some() {
+                    "Arc(off-sphere)"
+                } else {
+                    "Circle(off-sphere)"
+                },
+            });
+        }
+
+        // Co-latitude φ ∈ [0, π].
+        // arc center axial component: d_along_polar = d_vec · polar_axis
+        // (signed; positive = above sphere center along polar_axis).
+        let d_signed = d_vec.dot(polar_axis); // = ±d
+        let phi = arc_radius.atan2(d_signed); // ∈ (0, π) for non-degenerate
+
+        // Sign of φ-change: tangent at θ_mid × surface_normal · ∂P/∂φ.
+        let theta_mid = match angles {
+            Some((s, e)) => (s + e) * 0.5,
+            None => 0.0,
+        };
+        let basis_u_unit = basis_u_arc.normalize_or_zero();
+        let basis_v_arc = polar_axis.cross(basis_u_unit);
+        let p_mid = arc_center
+            + arc_radius
+                * (theta_mid.cos() * basis_u_unit + theta_mid.sin() * basis_v_arc);
+        let tangent =
+            -theta_mid.sin() * basis_u_unit + theta_mid.cos() * basis_v_arc;
+        let surf_normal = (p_mid - sphere_center).normalize_or_zero();
+        let right_side = tangent.cross(surf_normal);
+        // ∂P/∂φ at midpoint:
+        //   dP/dφ = R·(-sin(φ)·polar_axis + cos(φ)·(cos(θ_mid)·u + sin(θ_mid)·v))
+        let dp_dphi = sphere_radius
+            * (-phi.sin() * polar_axis
+                + phi.cos() * (theta_mid.cos() * basis_u_unit + theta_mid.sin() * basis_v_arc));
+        let phi_sign = if right_side.dot(dp_dphi) > 0.0 { 1.0 } else { -1.0 };
+
+        if sphere_radius <= tol {
+            return Err(OffsetEdgeError::DegenerateDistance(sphere_radius));
+        }
+        let delta_phi = phi_sign * dist / sphere_radius;
+        let new_phi = phi + delta_phi;
+
+        // Collapse guard: new_phi must be in (0, π) — else arc passes
+        // through pole / wraps around. AxialOutOfRange semantics reused.
+        let pole_eps = 1e-6;
+        if new_phi < pole_eps || new_phi > std::f64::consts::PI - pole_eps {
+            return Err(OffsetEdgeError::AxialOutOfRange {
+                new_v: new_phi,
+                v_min: pole_eps,
+                v_max: std::f64::consts::PI - pole_eps,
+            });
+        }
+
+        let new_d = sphere_radius * new_phi.cos();
+        let new_r = sphere_radius * new_phi.sin();
+        let new_center = sphere_center + new_d * polar_axis;
+
+        // Build new endpoints.
+        let new_basis_v = polar_axis.cross(basis_u_unit);
+        let pt = |theta: f64| -> DVec3 {
+            new_center + new_r * (theta.cos() * basis_u_unit + theta.sin() * new_basis_v)
+        };
+        let (new_p0, new_p1) = match angles {
+            Some((s, e)) => (pt(s), pt(e)),
+            None => (pt(0.0), pt(std::f64::consts::TAU - 1e-6)),
+        };
+        let new_v0_id = self.add_vertex(new_p0);
+        let new_v1_id = self.add_vertex(new_p1);
+        let (new_edge, _) = self
+            .add_edge(new_v0_id, new_v1_id)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+        let new_curve = match angles {
+            Some((s, e)) => AnalyticCurve::Arc {
+                center: new_center,
+                radius: new_r,
+                normal: polar_axis,
+                basis_u: basis_u_arc,
+                start_angle: s,
+                end_angle: e,
+            },
+            None => AnalyticCurve::Circle {
+                center: new_center,
+                radius: new_r,
+                normal: polar_axis,
+                basis_u: basis_u_arc,
+            },
+        };
+        if let Some(e) = self.edges.get_mut(new_edge) {
+            e.set_curve(Some(new_curve));
+        }
+
+        Ok(OffsetEdgeResult {
+            new_v0: new_v0_id,
+            new_v1: new_v1_id,
+            new_edge,
+        })
+    }
+
     /// face_id의 경계를 dist만큼 오프셋.
     /// dist > 0: 안쪽 (inset), dist < 0: 바깥쪽 (outset)
     ///
@@ -948,6 +1167,20 @@ fn surfaces_equivalent(
                 // Coplanarity: project (ob - oa) onto na — should be ~0.
                 let off_plane = (*ob - *oa).dot(na.normalize_or_zero()).abs();
                 normal_match && off_plane < tol
+            }
+            (
+                AnalyticSurface::Sphere {
+                    center: ca,
+                    radius: ra,
+                    ..
+                },
+                AnalyticSurface::Sphere {
+                    center: cb,
+                    radius: rb,
+                    ..
+                },
+            ) => {
+                (*ca - *cb).length() < tol && (ra - rb).abs() < tol
             }
             (
                 AnalyticSurface::Cylinder {
@@ -1376,9 +1609,9 @@ mod tests {
     }
 
     #[test]
-    fn line_offset_on_sphere_host_returns_unsupported() {
-        // V-β-γ-1 activated Cylinder; Sphere/Cone/Torus still defer to
-        // V-β-γ-2/3/4. Re-target this regression to Sphere host.
+    fn line_offset_on_cone_host_returns_unsupported() {
+        // V-β-γ-1/2 activated Cylinder/Sphere; Cone/Torus still defer to
+        // V-β-γ-3/4. Re-target this regression to Cone host.
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let vs = [
@@ -1388,20 +1621,22 @@ mod tests {
             mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0)),
         ];
         let face = mesh.add_face(&vs, mat).unwrap();
-        mesh.faces[face].set_surface(Some(AnalyticSurface::Sphere {
-            center: DVec3::ZERO,
-            radius: 1.0,
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            half_angle: std::f64::consts::FRAC_PI_4,
+            ref_dir: DVec3::X,
             u_range: (0.0, std::f64::consts::TAU),
-            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+            v_range: (0.1, 1.0),
         }));
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
         let err = mesh
             .offset_edge_on_host_face(edge, 0.3)
             .err()
-            .expect("must defer sphere host");
+            .expect("must defer cone host");
         assert!(matches!(
             err,
-            OffsetEdgeError::UnsupportedHostSurface { kind: "Sphere" }
+            OffsetEdgeError::UnsupportedHostSurface { kind: "Cone" }
         ));
     }
 
@@ -1887,6 +2122,233 @@ mod tests {
             "one sign must trigger AxialOutOfRange, got {:?} / {:?}",
             err1, err2
         );
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-γ-2 — Edge offset on Sphere host
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper — build a triangular face with Sphere surface attached.
+    /// Vertices are placed on the sphere for radius_check sanity.
+    fn build_sphere_panel(mesh: &mut Mesh, radius: f64) -> (FaceId, [VertId; 3]) {
+        let mat = MaterialId::new(0);
+        // 3 verts on sphere of given radius.
+        let v0 = mesh.add_vertex(DVec3::new(radius, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, radius, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 0.0, radius));
+        let face = mesh.add_face(&[v0, v1, v2], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Sphere {
+            center: DVec3::ZERO,
+            radius,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        }));
+        (face, [v0, v1, v2])
+    }
+
+    #[test]
+    fn sphere_great_circle_arc_offset_changes_latitude() {
+        // Great circle: arc center == sphere center, radius = sphere radius.
+        // Offset should produce a small circle at new latitude.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_sphere_panel(&mut mesh, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Great circle in xy-plane: center=origin, radius=1, normal=+Z.
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .expect("great-circle offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { center, radius, .. } => {
+                // Sphere invariant: r² + d² ≈ R² = 1.
+                let d = center.length();
+                let invariant = radius * radius + d * d;
+                assert!(
+                    (invariant - 1.0).abs() < 1e-6,
+                    "sphere invariant r²+d² = {invariant}, expected 1.0 (r={radius}, d={d})"
+                );
+                // Offset moves arc off equator → d > 0, radius < 1.
+                assert!(d > 1e-6, "great circle should move off equator (d > 0)");
+                assert!(radius < 1.0 - 1e-6, "small circle radius < sphere radius");
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn sphere_small_circle_arc_offset_shifts_to_new_latitude() {
+        // Small circle at latitude φ=π/3 on unit sphere:
+        //   d = cos(π/3) = 0.5, r = sin(π/3) ≈ 0.866
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_sphere_panel(&mut mesh, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let phi = std::f64::consts::FRAC_PI_3;
+        let d = phi.cos();
+        let r = phi.sin();
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, d),
+            radius: r,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.05)
+            .expect("small circle offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { center, radius, .. } => {
+                // Sphere invariant.
+                let new_d = center.length();
+                let invariant = radius * radius + new_d * new_d;
+                assert!(
+                    (invariant - 1.0).abs() < 1e-6,
+                    "sphere invariant violated: r²+d² = {invariant}"
+                );
+                // φ shifted by ±0.05/1.0 = ±0.05 rad. New d = cos(φ ± 0.05).
+                let expected_d_plus = (phi + 0.05).cos();
+                let expected_d_minus = (phi - 0.05).cos();
+                assert!(
+                    (new_d - expected_d_plus).abs() < 1e-6
+                        || (new_d - expected_d_minus).abs() < 1e-6,
+                    "new d {new_d} should be one of {expected_d_plus} / {expected_d_minus}"
+                );
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn sphere_off_sphere_arc_rejected() {
+        // Arc with parameters that violate r² + d² = R²
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_sphere_panel(&mut mesh, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // r=0.3, d=0.3 → r²+d²=0.18, but R²=1. Way off sphere.
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, 0.3),
+            radius: 0.3,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject off-sphere arc");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Sphere",
+                curve_kind: "Arc(off-sphere)"
+            }
+        ));
+    }
+
+    #[test]
+    fn sphere_line_curve_rejected() {
+        // Line/None on sphere: 3D chord — rejected (chord ambiguity).
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_sphere_panel(&mut mesh, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // No curve attached → treated as Line/None.
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject line on sphere");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Sphere",
+                curve_kind: "Line"
+            }
+        ));
+    }
+
+    #[test]
+    fn sphere_arc_collapse_at_pole_rejected() {
+        // Small circle near pole, large offset that would push past pole.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_sphere_panel(&mut mesh, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Latitude φ=π/12 (close to pole), r = sin(π/12) ≈ 0.259.
+        let phi = std::f64::consts::PI / 12.0;
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, phi.cos()),
+            radius: phi.sin(),
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+        // dist large enough to push φ past 0 (pole) — try both signs.
+        let err1 = mesh.offset_edge_on_host_face(edge, 0.5).err();
+        let err2 = mesh.offset_edge_on_host_face(edge, -0.5).err();
+        let pole_seen = matches!(err1, Some(OffsetEdgeError::AxialOutOfRange { .. }))
+            || matches!(err2, Some(OffsetEdgeError::AxialOutOfRange { .. }));
+        assert!(
+            pole_seen,
+            "one sign must trigger pole collapse, got {:?} / {:?}",
+            err1, err2
+        );
+    }
+
+    #[test]
+    fn sphere_circle_curve_offset_changes_radius() {
+        // Full Circle on sphere — small circle at some latitude.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_sphere_panel(&mut mesh, 2.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // φ = π/4 → d = √2, r = √2.
+        let half_sqrt2 = std::f64::consts::SQRT_2;
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::new(0.0, 0.0, half_sqrt2),
+            radius: half_sqrt2,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        }));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.2)
+            .expect("circle offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Circle { center, radius, .. } => {
+                // Sphere invariant for R=2.
+                let d = center.length();
+                let invariant = radius * radius + d * d;
+                assert!(
+                    (invariant - 4.0).abs() < 1e-5,
+                    "sphere R=2 invariant: r²+d² = {invariant}, expected 4"
+                );
+            }
+            _ => panic!("must remain Circle"),
+        }
     }
 
     #[test]
