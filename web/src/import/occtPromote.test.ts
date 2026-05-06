@@ -458,3 +458,307 @@ describe('ADR-081 W-β — occtCurvePromote 11 본체', () => {
     expect(r.warnings.length).toBeGreaterThan(0);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// ADR-081 W-γ — occtSurfacePromote 12 본체 (mock-based unit tests)
+// ════════════════════════════════════════════════════════════════════
+
+/** Mock NCollection_Array2<Real> with Lower/Upper/Value(i,j) (1-based). */
+function mockReal2DArray(values: number[][]) {
+  const nU = values.length;
+  const nV = values[0]?.length ?? 0;
+  return {
+    LowerRow: () => 1,
+    UpperRow: () => nU,
+    LowerCol: () => 1,
+    UpperCol: () => nV,
+    Value: (i: number, j: number) => values[i - 1][j - 1],
+  };
+}
+
+/**
+ * Build a mock OCCT object that returns a given surface handle for any face.
+ * Surface type identified by `surfaceTypeName` (Geom_Plane / Geom_BSplineSurface / etc).
+ * `surfaceImpl` provides the surface-specific methods (Position, Pole(i,j), etc).
+ */
+function mockOcctWithSurface(
+  surfaceTypeName: string,
+  surfaceImpl: any,
+  uvBounds: [number, number, number, number] = [0, 1, 0, 1],
+) {
+  const innerSurface = {
+    DynamicType: () => ({ get_type_name: () => surfaceTypeName }),
+    ...surfaceImpl,
+  };
+  const surfaceHandle = {
+    IsNull: () => false,
+    get: () => innerSurface,
+  };
+  const downCastFactory = { DownCast: (_h: any) => surfaceHandle };
+  return {
+    BRep_Tool: {
+      Surface_2: (_face: any) => surfaceHandle,
+    },
+    BRepTools: {
+      UVBounds_1: (
+        _face: any,
+        u1: { current: number },
+        u2: { current: number },
+        v1: { current: number },
+        v2: { current: number },
+      ) => {
+        u1.current = uvBounds[0];
+        u2.current = uvBounds[1];
+        v1.current = uvBounds[2];
+        v2.current = uvBounds[3];
+        return true;
+      },
+    },
+    Handle_Geom_Plane_2: downCastFactory,
+    Handle_Geom_CylindricalSurface_2: downCastFactory,
+    Handle_Geom_SphericalSurface_2: downCastFactory,
+    Handle_Geom_ConicalSurface_2: downCastFactory,
+    Handle_Geom_ToroidalSurface_2: downCastFactory,
+    Handle_Geom_BezierSurface_2: downCastFactory,
+    Handle_Geom_BSplineSurface_2: downCastFactory,
+    Handle_Geom_SurfaceOfRevolution_2: downCastFactory,
+    Handle_Geom_SurfaceOfLinearExtrusion_2: downCastFactory,
+    Handle_Geom_OffsetSurface_2: downCastFactory,
+    Handle_Geom_RectangularTrimmedSurface_2: downCastFactory,
+  };
+}
+
+describe('ADR-081 W-γ — occtSurfacePromote 12 본체', () => {
+  it('promotePlane: 평면 → Plane { origin, normal, uvBounds }', () => {
+    const occt = mockOcctWithSurface(
+      'Geom_Plane',
+      {
+        Position: () => ({
+          Location: () => mockPnt(1, 2, 3),
+          Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+        }),
+      },
+      [0, 10, 0, 10],
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Plane');
+    if (r.promotion.kind === 'Plane') {
+      expect(r.promotion.origin).toEqual([1, 2, 3]);
+      expect(r.promotion.normal).toEqual([0, 0, 1]);
+      expect(r.promotion.uvBounds).toEqual([0, 10, 0, 10]);
+    }
+  });
+
+  it('promoteCylinder: 원통 → Cylinder { axisOrigin, axisDir, refDir, radius }', () => {
+    const occt = mockOcctWithSurface(
+      'Geom_CylindricalSurface',
+      {
+        Position: () => ({
+          Location: () => mockPnt(0, 0, 0),
+          Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+          XDirection: () => ({ X: () => 1, Y: () => 0, Z: () => 0 }),
+        }),
+        Radius: () => 5,
+      },
+      [0, 2 * Math.PI, 0, 10],
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Cylinder');
+    if (r.promotion.kind === 'Cylinder') {
+      expect(r.promotion.axisOrigin).toEqual([0, 0, 0]);
+      expect(r.promotion.axisDir).toEqual([0, 0, 1]);
+      expect(r.promotion.refDir).toEqual([1, 0, 0]);
+      expect(r.promotion.radius).toBe(5);
+    }
+  });
+
+  it('promoteSphere: 구 → Sphere { center, radius }', () => {
+    const occt = mockOcctWithSurface(
+      'Geom_SphericalSurface',
+      {
+        Position: () => ({
+          Location: () => mockPnt(0, 0, 0),
+        }),
+        Radius: () => 4,
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Sphere');
+    if (r.promotion.kind === 'Sphere') {
+      expect(r.promotion.center).toEqual([0, 0, 0]);
+      expect(r.promotion.radius).toBe(4);
+    }
+  });
+
+  it('promoteCone: 원뿔 → Cone { apex, axisDir, halfAngle } (apex = base - (R/tan α)·axis)', () => {
+    // RefRadius = 1, halfAngle = π/4 → apexOffset = 1/tan(π/4) = 1.
+    // base = (0, 0, 0), axis = (0, 0, 1) → apex = (0, 0, -1).
+    const occt = mockOcctWithSurface(
+      'Geom_ConicalSurface',
+      {
+        Position: () => ({
+          Location: () => mockPnt(0, 0, 0),
+          Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+        }),
+        RefRadius: () => 1,
+        SemiAngle: () => Math.PI / 4,
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Cone');
+    if (r.promotion.kind === 'Cone') {
+      expect(r.promotion.apex[0]).toBeCloseTo(0);
+      expect(r.promotion.apex[1]).toBeCloseTo(0);
+      expect(r.promotion.apex[2]).toBeCloseTo(-1);
+      expect(r.promotion.axisDir).toEqual([0, 0, 1]);
+      expect(r.promotion.halfAngle).toBeCloseTo(Math.PI / 4);
+    }
+  });
+
+  it('promoteTorus: 토러스 → Torus { center, axis, majorRadius, minorRadius }', () => {
+    const occt = mockOcctWithSurface(
+      'Geom_ToroidalSurface',
+      {
+        Position: () => ({
+          Location: () => mockPnt(1, 1, 1),
+          Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+        }),
+        MajorRadius: () => 5,
+        MinorRadius: () => 1,
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Torus');
+    if (r.promotion.kind === 'Torus') {
+      expect(r.promotion.center).toEqual([1, 1, 1]);
+      expect(r.promotion.axis).toEqual([0, 0, 1]);
+      expect(r.promotion.majorRadius).toBe(5);
+      expect(r.promotion.minorRadius).toBe(1);
+    }
+  });
+
+  it('promoteBezierSurface: 베지어 패치 → BezierPatch { ctrlGrid }', () => {
+    // 2×2 patch
+    const occt = mockOcctWithSurface(
+      'Geom_BezierSurface',
+      {
+        NbUPoles: () => 2,
+        NbVPoles: () => 2,
+        Pole: (i: number, j: number) => mockPnt(i - 1, j - 1, 0),
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('BezierPatch');
+    if (r.promotion.kind === 'BezierPatch') {
+      expect(r.promotion.ctrlGrid.length).toBe(2);
+      expect(r.promotion.ctrlGrid[0].length).toBe(2);
+      expect(r.promotion.ctrlGrid[0][0]).toEqual([0, 0, 0]);
+      expect(r.promotion.ctrlGrid[1][1]).toEqual([1, 1, 0]);
+    }
+  });
+
+  it('promoteBSplineSurface (non-rational): BSpline → { ctrlGrid, knotsU/V, degU/V }', () => {
+    const occt = mockOcctWithSurface(
+      'Geom_BSplineSurface',
+      {
+        IsURational: () => false,
+        IsVRational: () => false,
+        UDegree: () => 1,
+        VDegree: () => 1,
+        NbUPoles: () => 2,
+        NbVPoles: () => 2,
+        Pole: (i: number, j: number) => mockPnt(i - 1, j - 1, 0),
+        UKnotSequence: () => mockRealArray([0, 0, 1, 1]),
+        VKnotSequence: () => mockRealArray([0, 0, 1, 1]),
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('BSplineSurface');
+    if (r.promotion.kind === 'BSplineSurface') {
+      expect(r.promotion.degU).toBe(1);
+      expect(r.promotion.degV).toBe(1);
+      expect(r.promotion.ctrlGrid.length).toBe(2);
+      expect(r.promotion.knotsU).toEqual([0, 0, 1, 1]);
+      expect(r.promotion.knotsV).toEqual([0, 0, 1, 1]);
+    }
+  });
+
+  it('promoteNurbsSurface (rational BSpline): NURBS → { ctrlGrid, weightsGrid, knots, deg }', () => {
+    const occt = mockOcctWithSurface(
+      'Geom_BSplineSurface',
+      {
+        IsURational: () => true,
+        IsVRational: () => false,
+        UDegree: () => 1,
+        VDegree: () => 1,
+        NbUPoles: () => 2,
+        NbVPoles: () => 2,
+        Pole: (i: number, j: number) => mockPnt(i - 1, j - 1, 0),
+        Weight: (i: number, j: number) => (i === 1 && j === 1 ? 0.5 : 1),
+        UKnotSequence: () => mockRealArray([0, 0, 1, 1]),
+        VKnotSequence: () => mockRealArray([0, 0, 1, 1]),
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('NURBSSurface');
+    if (r.promotion.kind === 'NURBSSurface') {
+      expect(r.promotion.weightsGrid[0][0]).toBe(0.5);
+      expect(r.promotion.weightsGrid[1][1]).toBe(1);
+      expect(r.promotion.degU).toBe(1);
+    }
+  });
+
+  it('promoteSurfaceOfRevolution: W-3-ε deferred → Tessellate + warning', () => {
+    const occt = mockOcctWithSurface('Geom_SurfaceOfRevolution', {});
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.warnings.some(w => w.includes('Piegl A8.1'))).toBe(true);
+  });
+
+  it('promoteSurfaceOfLinearExtrusion: W-3-ε deferred → Tessellate + warning', () => {
+    const occt = mockOcctWithSurface('Geom_SurfaceOfLinearExtrusion', {});
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.warnings.some(w => w.includes('Piegl A8.2'))).toBe(true);
+  });
+
+  it('promoteOffsetSurface: W-3-ε deferred → Tessellate + warning', () => {
+    const occt = mockOcctWithSurface('Geom_OffsetSurface', {});
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.warnings.some(w => w.includes('OffsetSurface'))).toBe(true);
+  });
+
+  it('promoteRectangularTrimmedSurface (Plane basis): BasisSurface 매핑 + uvBounds clip', () => {
+    // Trim 의 U1/U2/V1/V2 를 trim 영역으로 사용. basis = Plane.
+    const planeBasis = {
+      DynamicType: () => ({ get_type_name: () => 'Geom_Plane' }),
+      Position: () => ({
+        Location: () => mockPnt(0, 0, 0),
+        Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+      }),
+    };
+    const occt = mockOcctWithSurface(
+      'Geom_RectangularTrimmedSurface',
+      {
+        BasisSurface: () => ({ IsNull: () => false, get: () => planeBasis }),
+        U1: () => 0.1,
+        U2: () => 0.9,
+        V1: () => 0.2,
+        V2: () => 0.8,
+      },
+    );
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Plane');
+    if (r.promotion.kind === 'Plane') {
+      expect(r.promotion.uvBounds).toEqual([0.1, 0.9, 0.2, 0.8]);
+    }
+  });
+
+  it('Unsupported surface type → Tessellate fallback + warning', () => {
+    const occt = mockOcctWithSurface('Geom_SomeFutureType', {});
+    const r = promoteSurface(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.warnings.length).toBeGreaterThan(0);
+  });
+});
