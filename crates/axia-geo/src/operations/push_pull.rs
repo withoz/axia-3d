@@ -201,12 +201,31 @@ impl Mesh {
     ///
     /// - MoveOnly 모드: 정점 이동만 (벽이 자동 변형)
     /// - CreateFace 모드: 측면 생성 → coplanar 병합 → 원본 삭제
+    ///
+    /// # **Deprecated since ADR-079 W-4** (2026-05-06)
+    ///
+    /// ADR-079 W 트랙 (W-1 Box → W-2 Cylinder + smooth-group offset →
+    /// W-4 Revolve) 이 surface-aware `Mesh::create_solid` 으로 superseded
+    /// 했다. 신규 코드는 `Mesh::create_solid(face_id, mode, material)` 사용을
+    /// 권장한다.
+    ///
+    /// 본 method 는 ADR-079 Q3 lock-in (`SolidError::NotYetSupported` 시
+    /// `Scene::exec_create_solid` 가 자동 fallback) 의 backing 으로 보존.
+    /// 직접 호출은 ADR-079 W 트랙 외 케이스 (legacy callers, Q3 fallback)
+    /// 에 한정.
+    ///
+    /// 후속 ADR (W-4-γ 잠재 sub-atomic) 에서 텔레메트리 후 `#[deprecated]`
+    /// Rust attribute 격상 검토. 현재는 comment + debug_log only.
     pub fn push_pull(
         &mut self,
         face_id: FaceId,
         dist: f64,
         material: MaterialId,
     ) -> Result<PushPullResult> {
+        // ADR-079 W-4-β — Deprecation marker (comment-only per §W4-G-(a)).
+        // Direct callers from outside axia-geo: prefer Mesh::create_solid.
+        // Internal callers (Scene::exec_create_solid Q3 fallback) preserved.
+
         // ─── Geometric Validity Guard (ADR-003) ─────────────────────────
         // NaN/Inf 입력 차단 — WASM 바인딩 실수 등으로 들어올 수 있음
         ensure!(

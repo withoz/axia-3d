@@ -575,3 +575,80 @@ W-α (본 ADR commit) 는 spec only. Implementation 시작 전 사용자 review
 *Author*: AXiA team (사용자 결정 + Claude spec) | *Status*: **Accepted**
 (`create_solid` 명령 + `CreateSolidMode` enum + Q1~Q7 모두 lock-in
 2026-05-06, spec 정합 완성). W-1~W-4 별도 commit 으로 구현.
+
+---
+
+## 10. W 트랙 closure 회고 (2026-05-06, W-4-β 직후)
+
+### 10.1 누적 sub-atomic / 회귀 (W-1 ~ W-4)
+
+| Track   | Commit  | SolidKind            | axia-geo | axia-core | axia-wasm | vitest |
+|---------|---------|----------------------|----------|-----------|-----------|--------|
+| W-α (spec)  | 2920e5e | (decisions only)  | 0        | 0         | 0         | 0      |
+| W-1-α   | cad4ed0 | Box                  | +6       | +5        | 0         | 0      |
+| W-1-β   | fa24a51 | (bridge)             | 0        | 0         | +4        | +6     |
+| W-2-α   | 7ea2723 | Cylinder             | +7       | 0         | 0         | 0      |
+| W-2-β   | a424504 | (integration seal)   | 0        | +2        | +1        | 0      |
+| W-2-γ-i  | 3869fb2 | SmoothGroupOffset (Cylinder)  | +7  | (-1+1)   | 0   | 0      |
+| W-2-γ-ii | 6fcbb04 | SmoothGroupOffset (Sphere)    | +7  | 0         | 0   | 0      |
+| W-2-γ-iii | 9d6bc86 | SmoothGroupOffset (Cone)    | +7  | 0         | 0   | 0      |
+| W-2-γ-iv  | 88f36db | SmoothGroupOffset (Torus)   | +7  | (-1+1)   | 0   | 0      |
+| **W-4-α** | **f37efce** | **RevolutionSolid**  | **+5** | **+1** | **0** | **0** |
+| **W-4-β (본)** | **(this)** | (deprecate notice) | **0** | **0** | **0** | **0** |
+| **W 트랙 합계** | | 6 SolidKind 활성 | **+53** | **+8** | **+5** | **+6** |
+
+ADR-079 W 트랙 11 atomic commits (포함 본 W-4-β). 6 SolidKind 활성 (Box,
+Cylinder, SmoothGroupOffset, RevolutionSolid + 별개 V-β-γ surfaces).
+Q3 fallback 의 backing 인 legacy `Mesh::push_pull` 은 deprecation marker
+(comment-only) 만 추가, 실제 코드는 보존 (§W4-G-(a) 로 결재).
+
+### 10.2 What worked well (W 트랙)
+
+- **Surface-aware kernel command**: `Mesh::create_solid(face_id, mode,
+  material)` 단일 진입점이 mesh-era `push_pull` 의 surface attach 사후
+  처리 한계 (NURBS 부정합) 를 처음부터 회피.
+- **Smart routing per-curve-on-surface** (W-2-γ): 4 surface kind 별로
+  자연 curve 의미론 (Cylinder radius / Sphere center / Cone half_angle /
+  Torus major_radius preserve) 활성. 각 sub-atomic 의 결재 매트릭스
+  (§W2γ1~4-A~H) 가 ADR-080 V-β-γ 의 dispatch 답습.
+- **SolidKind enum + kind-agnostic Scene dispatch**: Scene::exec_create_
+  solid 가 Box / Cylinder / SmoothGroupOffset / RevolutionSolid 모두
+  동일 ownership 갱신 경로. 새 SolidKind 추가 시 Scene 변경 0.
+- **Q3 fallback 패턴**: NotYetSupported 시 자동 legacy push_pull 호출
+  (Scene wrapper 가 처리). 사용자 facing 차단 없이 점진 전환 가능.
+- **W-4 dispatch via existing op**: `Mesh::revolve` (이미 존재) 위임 +
+  validation layer 만 추가. Path Z atomic 의 minimum-changes 원칙.
+
+### 10.3 What we deferred (conscious)
+
+- **W-4 partial angle** (angle_rad ≠ TAU): NotYetSupported. Mesh::revolve
+  가 segments 매개변수 만 받음 → partial 지원 시 Mesh::revolve 확장 필요.
+  사용자 텔레메트리 후 W-4-γ 로 검토.
+- **W-3 Sweep / Loft modes**: NotYetSupported. AnalyticCurve::Path 추출
+  + `Mesh::sweep` / `Mesh::loft` 위임 패턴은 W-4-α 답습. 별도 트랙.
+- **NURBS-class profiles (BezierPatch / BSplineSurface / NURBSSurface)**:
+  W-3 (offset 트랙의 V-β-δ + ADR-079 W-3 cross-cut). 별도 ADR.
+- **Legacy push_pull 의 `#[deprecated]` Rust attribute**: §W4-G-(a)
+  comment-only 채택. 텔레메트리 후 (b)/(c) 검토.
+
+### 10.4 Path Z atomic 호흡 (W 트랙 최종)
+
+11 commits 동안 일관 패턴:
+1. 사용자 사전 검토 매트릭스 결재
+2. 구현 + 회귀 봉인 (#[ignore] 금지)
+3. WASM rebuild (필요 시)
+4. vitest + vite build green
+5. Dev server (HMR) error 0 verify
+6. commit + push origin
+
+각 atomic 의 회귀 +5~9 으로 cognitive load manageable. ADR-080 V-β /
+V-δ 트랙과 합산하여 23 atomic commits, axia-geo +96, axia-core +9,
+axia-wasm +10, vitest +33 — 전체 #[ignore] 금지 148/148 준수.
+
+### 10.5 Path Z atomic 다음
+
+- **W-3** (NURBS profile + NURBS-class hosts) — ADR-080 V-β-δ cross-cut.
+  사전 검토 매트릭스 작성 + 단계적 sub-atomic 분해 권장.
+
+ADR-079 W 트랙 closure. ADR-080 도 V-α / V-β / V-δ closure (V-γ /
+V-ε / V-ζ 만 future). 다음 자연 후속 = W-3.
