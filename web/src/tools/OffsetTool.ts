@@ -1,18 +1,23 @@
 /**
- * Offset Tool — SketchUp-style face-boundary offset.
+ * Offset Tool — Dimension-aware offset (ADR-080).
  *
- * Principle 1 (2026-04-24): edge-only offset was removed from the UI to
- * eliminate the ambiguity between "offset this one edge" and "offset the
- * whole face boundary". Users always act on a face; every edge of that
- * face's outer loop is moved in parallel by the given distance. The
- * underlying Mesh::offset_edge API is retained internally for future
- * tooling (e.g. bounded offset may reuse it), but is not reachable from
- * the UI tool.
+ * Principle 1 (2026-04-24, face-only) was superseded by ADR-080 V-α:
+ * dimension-driven dispatch resolves the ambiguity between edge-offset
+ * and face-boundary-offset by routing on active selection's geometric
+ * dimension:
+ *  - Face selection (or no selection → click-to-pick) → existing
+ *    face-boundary offset (V-γ may switch to surface-normal in future).
+ *  - Edge selection → edge curve offset on host face's surface.
+ *    V-α placeholder: shows a Toast indicating V-β availability; the
+ *    Rust core (`Mesh::offset_edge` typed contract) lands in V-β.
+ *  - Mixed selection (edges + faces) → reject + Toast (force user to
+ *    pick one dimension).
  */
 
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
+import { Toast } from '../ui/Toast';
 
 export class OffsetTool implements ITool {
   readonly name = 'offset';
@@ -27,15 +32,60 @@ export class OffsetTool implements ITool {
   private lastOffsetDist: number = 0;
   private offsetHoverHighlight: THREE.Line | null = null;
   private offsetCurrentSign: number = 1;
+  // ADR-080 V-α — Dimension dispatch state. Set on onActivate based on
+  // active selection. 'edge' / 'face' / null (= will be set on first
+  // face-pick click).
+  private dimMode: 'edge' | 'face' | null = null;
 
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
   }
 
+  /** ADR-080 V-α — classify active selection's geometric dimension. */
+  private detectDimension(): 'edge' | 'face' | 'mixed' | 'none' {
+    const faces = this.ctx.getSelectedFaces();
+    const edges = this.ctx.selection.getSelectedEdges();
+    const hasFaces = faces.length > 0;
+    const hasEdges = edges.length > 0;
+    if (hasFaces && hasEdges) return 'mixed';
+    if (hasFaces) return 'face';
+    if (hasEdges) return 'edge';
+    return 'none';
+  }
+
   onActivate(): void {
     const canvas = this.ctx.viewport.renderer.domElement;
     canvas.style.cursor = 'none';
-    debugLog('[OffsetTool] Activated (face-only)');
+
+    // ADR-080 V-α — Dimension dispatch on activation.
+    const dim = this.detectDimension();
+    if (dim === 'mixed') {
+      // L5 — Mixed selection rejected, force user to disambiguate.
+      Toast.warning(
+        '선과 면을 동시에 선택했습니다. Offset 명령은 한 차원만 사용합니다 (선 또는 면).',
+        3500,
+      );
+      this.ctx.selection.clearSelection();
+      this.dimMode = null;
+      debugLog('[OffsetTool] Activated; mixed selection rejected (ADR-080 L5)');
+    } else if (dim === 'edge') {
+      // L3 — Edge dimension routes to in-plane curve offset (V-β).
+      this.dimMode = 'edge';
+      Toast.info(
+        '엣지 offset (curve offset, in-plane) — V-β 에서 활성됩니다 (ADR-080).',
+        3500,
+      );
+      debugLog('[OffsetTool] Activated; edge dimension (V-β placeholder)');
+    } else if (dim === 'face') {
+      // L4 — Face dimension. Existing behavior kept (V-γ may swap to
+      // surface-normal offset in a future ADR).
+      this.dimMode = 'face';
+      debugLog('[OffsetTool] Activated; face dimension');
+    } else {
+      // No selection — wait for click-to-pick (legacy Phase 0 path).
+      this.dimMode = null;
+      debugLog('[OffsetTool] Activated; awaiting face pick');
+    }
   }
 
   onDeactivate(): void {
@@ -45,10 +95,21 @@ export class OffsetTool implements ITool {
   }
 
   onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
+    // ADR-080 V-α — Edge dimension placeholder: don't pick faces, await
+    // VCB value. Click-to-confirm UX pending V-β implementation.
+    if (this.dimMode === 'edge') {
+      Toast.info(
+        '엣지 offset 은 V-β 에서 활성됩니다. VCB 또는 ESC.',
+        2500,
+      );
+      return;
+    }
+
     if (this.offsetPhase === 0) {
       // Phase 0 → 1: pick a face.
       if (this.pickFaceTarget(e)) {
         this.offsetPhase = 1;
+        this.dimMode = 'face';
         this.removeOffsetHover();
         debugLog('[Offset] Phase 1: faceId=', this.offsetFaceId);
       }
@@ -128,6 +189,18 @@ export class OffsetTool implements ITool {
   }
 
   applyVCBValue(value: number): void {
+    // ADR-080 V-α — Edge dimension placeholder: VCB value triggers a
+    // notice that V-β implementation is pending. No bridge call.
+    if (this.dimMode === 'edge') {
+      Toast.info(
+        `엣지 offset (${this.ctx.units.format(Math.abs(value))}) — V-β 에서 활성됩니다 (ADR-080).`,
+        3500,
+      );
+      this.ctx.dimLabel.clear();
+      this.resetOffsetState();
+      return;
+    }
+
     if (this.offsetPhase === 0) {
       this.lastOffsetDist = value;
       debugLog('[VCB/Offset] Distance set:', value);
@@ -156,6 +229,7 @@ export class OffsetTool implements ITool {
     this.offsetPhase = 0;
     this.offsetFaceId = -1;
     this.offsetCurrentSign = 1;
+    this.dimMode = null;
     this.removeOffsetGhost();
     this.removeOffsetHover();
     this.ctx.selection.clearSelection();
