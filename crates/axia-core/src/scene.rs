@@ -10517,6 +10517,122 @@ mod tests {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-2-β — Plane + AllCircular → Cylinder integration
+    //
+    // Per ADR-079 §W2-A-(a) / §W2-B-(a) / §W2-E-(a) lock-ins:
+    //   - Scene::exec_create_solid 가 SolidKind::Cylinder 도 Box 와 동일
+    //     ownership 갱신 경로로 처리
+    //   - Cylinder profile 의 N 측벽 + top + profile 모두 Shape/Xia 에 흡수
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build N-segment circle profile face with Plane surface +
+    /// Arc curves, registered under a Shape (form layer).
+    fn build_circle_shape_with_plane_surface(
+        scene: &mut Scene,
+        radius: f64,
+        segments: u32,
+    ) -> (crate::ShapeId, FaceId) {
+        use axia_geo::AnalyticCurve;
+        let mat = MaterialId::new(0);
+        let n = segments as usize;
+        let center = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let basis_u = DVec3::X;
+
+        let mut verts = Vec::with_capacity(n);
+        for i in 0..n {
+            let theta = (i as f64) * std::f64::consts::TAU / (n as f64);
+            verts.push(scene.mesh.add_vertex(DVec3::new(
+                radius * theta.cos(),
+                radius * theta.sin(),
+                0.0,
+            )));
+        }
+        let face = scene.mesh.add_face(&verts, mat).expect("add_face");
+        scene.mesh.faces[face].set_surface(Some(axia_geo::AnalyticSurface::Plane {
+            origin: center,
+            normal,
+            basis_u,
+            u_range: (-radius, radius),
+            v_range: (-radius, radius),
+        }));
+
+        let edges = scene.mesh.face_outer_edges(face).expect("edges");
+        let two_pi = std::f64::consts::TAU;
+        for (i, &eid) in edges.iter().enumerate() {
+            let theta_start = (i as f64) * two_pi / (n as f64);
+            let theta_end = ((i + 1) as f64) * two_pi / (n as f64);
+            let curve = AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle: theta_start,
+                end_angle: theta_end,
+            };
+            scene.mesh.edges[eid].set_curve(Some(curve));
+        }
+
+        let shape_id = scene.create_shape("Circle Shape".to_string(), vec![face]);
+        (shape_id, face)
+    }
+
+    #[test]
+    fn exec_create_solid_extrude_plane_circle_cylinder_via_shape_path() {
+        let mut scene = Scene::new();
+        let (shape_id, profile_face) =
+            build_circle_shape_with_plane_surface(&mut scene, 4.0, 16);
+
+        let result = scene.execute(Command::CreateSolid {
+            face_id: profile_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 5.0 },
+        });
+        match result {
+            CommandResult::SolidCreated { kind, face_count } => {
+                assert_eq!(
+                    kind,
+                    axia_geo::SolidKind::Cylinder,
+                    "Plane + AllCircular must route to Cylinder"
+                );
+                // profile + top + 16 sides = 18 faces
+                assert_eq!(face_count, 18, "Cylinder has 1 + 1 + 16 = 18 faces");
+            }
+            other => panic!("expected SolidCreated::Cylinder, got {:?}", other),
+        }
+
+        // Shape ownership: all 18 faces.
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        assert_eq!(
+            shape.face_ids.len(),
+            18,
+            "Shape.face_ids must include profile + top + 16 sides"
+        );
+    }
+
+    #[test]
+    fn exec_create_solid_cylinder_face_to_shape_updated_for_all_new_faces() {
+        let mut scene = Scene::new();
+        let (shape_id, profile_face) =
+            build_circle_shape_with_plane_surface(&mut scene, 2.5, 12);
+
+        let _ = scene.execute(Command::CreateSolid {
+            face_id: profile_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 3.0 },
+        });
+
+        // All 14 face IDs (1 profile + 1 top + 12 sides) must map to shape_id.
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        assert_eq!(shape.face_ids.len(), 14);
+        for &fid in &shape.face_ids {
+            assert_eq!(
+                scene.face_to_shape.get(&fid).copied(),
+                Some(shape_id),
+                "face_to_shape[{fid:?}] must = {shape_id:?}"
+            );
+        }
+    }
+
     #[test]
     fn create_shape_registers_face_to_shape_index() {
         // Q7 lock-in — face_to_shape map 도입.

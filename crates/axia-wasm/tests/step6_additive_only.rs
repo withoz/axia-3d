@@ -811,3 +811,29 @@ fn create_solid_extrude_handles_solid_created_and_fallback() {
     assert!(body.contains("CommandResult::Error"),
         "W-1-β: must match CommandResult::Error");
 }
+
+// ── ADR-079 W-2-β — `create_solid_extrude` is SolidKind-agnostic ─────
+//
+// W-2-α 가 SolidKind::Cylinder 를 새 SolidKind 로 도입했다. 본 endpoint
+// 의 SolidCreated arm 이 특정 kind 에 hardcoded 되지 않고 generic
+// `kind` 패턴으로 binding 되어 있어야 W-2 (Cylinder) / W-3 (GeneralSweep
+// / SweptSolid / LoftSolid) / W-4 (RevolutionSolid) 모두 추가 코드 없이
+// 흡수된다. 본 source-inspection 이 그 invariant 를 봉인.
+#[test]
+fn create_solid_extrude_handler_is_solidkind_agnostic() {
+    let l = lib_src();
+    let idx = l.find("pub fn create_solid_extrude").expect("create_solid_extrude");
+    let body = char_safe_slice(&l, idx, 3500);
+    // SolidCreated arm must bind generic `kind` (not match SolidKind::Box).
+    // Look for the pattern `SolidCreated { kind, ` (kind as field-name binding).
+    assert!(
+        body.contains("SolidCreated { kind"),
+        "W-2-β: SolidCreated arm must bind `kind` generically — \
+         hardcoded `SolidKind::Box` 거부 (Cylinder/SweptSolid/등 차단)"
+    );
+    // Negative — must NOT have a Box-only filter.
+    assert!(
+        !body.contains("SolidKind::Box =>") && !body.contains("SolidKind::Box{"),
+        "W-2-β: handler must not filter on SolidKind::Box specifically"
+    );
+}
