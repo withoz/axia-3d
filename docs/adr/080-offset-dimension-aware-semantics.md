@@ -230,15 +230,35 @@ V-β-γ-1~4 (curved hosts: Cylinder / Sphere / Cone / Torus) 7 sub-atomic.
 **NURBS-class hosts (BezierPatch / BSplineSurface / NURBSSurface) +
 NURBS-class curves (Bezier / BSpline / NURBS)** 만 W-3 forward-defer.
 
-### 3.3 V-γ — OffsetTool face semantic 결정
+### 3.3 V-γ — OffsetTool face semantic 결정 — ✅ Closed (2026-05-06, option (a))
 
-L6 lock-in 의 두 옵션:
-- (a) 기존 face-boundary expand/contract 유지, surface normal offset 은
-  PushPullTool 만 entry
-- (b) ADR-080 §2.3 strict: face dim → surface normal offset (push/pull
-  의미와 동일)
+**채택**: (a) **기존 face-boundary expand/contract 유지**.
+Surface-normal offset 은 PushPullTool 단독 entry (V-α §3.3 L6 lock-in
+유지).
 
-V-γ 는 별도 ADR 으로 결재. Backward compat 관점에서 (a) 가 안전.
+**결정 근거**:
+1. **ADR-046 P31 #4 (menu changes additive only)** — 기존 OffsetTool
+   사용자 muscle memory 보호. boundary expand 동작은 SketchUp Offset
+   tool 과 동일 mental model.
+2. **PushPullTool = surface-normal SSOT** — ADR-079 W-2-γ 의 Smooth-
+   GroupOffset 활성으로 5 surface kind (Plane / Cylinder / Sphere /
+   Cone / Torus) 모두 surface-normal offset 가능. 별도 entry 분리 유지.
+3. **ADR-080 §2.3 spec intent vs UX**: "face → surface normal" 는 spec
+   level 의 dimension dispatch 의미. 사용자 facing 에서 face dim 이
+   가지는 두 의미 (boundary expand / surface-normal) 는 두 진입점
+   (OffsetTool / PushPullTool) 으로 분리하여 명확.
+4. **회귀 0**: 코드 변경 없이 결재만으로 closure. 빠른 마무리.
+
+**ADR-080 §2.3 의미론 보강**: 본 결재로 ADR-080 의 "face → out-of-plane
+surface offset" 정의는 PushPullTool 의 의미를 가리키는 것으로 명확화.
+OffsetTool 의 face dim 은 in-plane boundary expand (legacy 보존). 두
+도구는 동일 underlying SSOT (`Mesh::create_solid` smooth-group +
+`Mesh::offset_face`) 를 호출하지만 사용자 facing entry 분리.
+
+**미해결 (deferred to future ADR)**:
+- 사용자 정책 변경 시 (e.g., "OffsetTool 통합" 결정) 별도 ADR-XXX 결재
+  + sub-atomic migration (OffsetTool face dispatch swap to createSolid
+  Extrude + migration Toast)
 
 ### 3.4 V-δ — Free wire handling (§2.2 후반부) — ✅ Closed (2026-05-06)
 
@@ -287,8 +307,9 @@ V-γ 는 별도 ADR 으로 결재. Backward compat 관점에서 (a) 가 안전.
 - [x] Lock-ins L1 ~ L9 명시
 - [x] Q1 ~ Q4 예상 결재 항목 명시
 - [x] V-α ~ V-ζ 후속 sub-step 로드맵 명시 (각각 별도 atomic commit)
-- [x] V-α / V-β / V-δ 트랙 closure (2026-05-06) — V-ε / V-ζ 만 future
-  ADR (Vertex / Volume dimension)
+- [x] V-α / V-β / V-γ / V-δ 트랙 closure (2026-05-06) — V-ε / V-ζ 만
+  future ADR (Vertex / Volume dimension)
+- [x] V-γ — option (a) boundary expand 유지 채택 (2026-05-06)
 
 본 ADR 은 코드 변경 0. 후속 sub-step 에서 의미론 구현 + 회귀 봉인.
 
@@ -504,11 +525,11 @@ V-δ-α 의 synthetic Plane host 도 W-3-γ NURBS-class curve 를 자연 흡수:
 | V-β-γ-1~4 (Cylinder/Sphere/Cone/Torus) | ✅ | 9cf2f97 ~ bc88129 |
 | V-β-δ (NURBS-class curves + hosts) | ✅ | a5aed1f / f9bd24d |
 | V-δ (Free wire) | ✅ | 8a68eab / 4dc64dc / 60c52fd |
-| **V-γ** (face semantic) | **⏳** | **별도 ADR (사용자 결재 대기)** |
+| **V-γ** (face semantic) | **✅** | **§3.3 — option (a) boundary expand 유지** |
 | **V-ε / V-ζ** (Vertex / Volume) | **⏳** | **future ADR** |
 
-ADR-080 의 코어 트랙 (V-α / V-β / V-δ) 모두 closure. 남은 V-γ / V-ε /
-V-ζ 는 별도 ADR 결재 필요.
+ADR-080 의 모든 V-α / V-β / V-γ / V-δ 트랙 closure. 남은 V-ε / V-ζ
+(Vertex / Volume) 만 future ADR.
 
 ### 9.5 Path Z atomic 호흡 (전체 ADR-080)
 

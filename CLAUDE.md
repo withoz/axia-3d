@@ -835,8 +835,18 @@
   Cone / Torus / BezierPatch / BSplineSurface / NURBSSurface).
   curve types 6개 모두 활성 on Plane (Line / Arc / Circle / Bezier /
   BSpline / NURBS).
-- **남은 V-γ / V-ε / V-ζ**: face semantic / Vertex / Volume dimension
-  — 별도 ADR (사용자 결재 대기)
+- **V-γ closure (2026-05-06)** — face semantic 결재:
+  - **채택: option (a)** — 기존 OffsetTool boundary expand/contract
+    유지. Surface-normal offset 은 PushPullTool 단독 entry.
+  - 결정 근거: ADR-046 P31 #4 (muscle memory 보호) + ADR-079 W-2-γ
+    SmoothGroupOffset 가 PushPullTool 의 surface-normal SSOT
+    + 두 진입점 (OffsetTool / PushPullTool) 분리로 두 의미 명확
+  - 회귀 0 (코드 변경 없이 결재만으로 closure)
+  - 의미: ADR-080 §2.3 의 "face → surface normal" 은 PushPullTool 의
+    semantic 을 가리키는 dimension dispatch. OffsetTool face dim 은
+    in-plane boundary expand (legacy 보존).
+- **남은 V-ε / V-ζ**: Vertex / Volume dimension — future ADR (현재
+  정의 미정)
 - **Cross-link**: ADR-079 (Create Solid — face dim 의 운영 의미
   source), ADR-049 (Two-Layer Citizenship — 직교, geometric dim 을
   dispatch key 로 사용), ADR-016 (multi-loop face Q2), ADR-027 (NURBS
