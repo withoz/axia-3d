@@ -5,6 +5,7 @@
 pub mod draw;
 pub mod orient;
 pub mod push_pull;
+pub mod create_solid;
 pub mod boolean_geo;
 pub mod boolean;
 pub mod boolean_dispatch;

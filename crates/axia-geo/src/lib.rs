@@ -30,3 +30,6 @@ pub use tolerances::*;
 pub use curves::{AnalyticCurve, CurveOps};
 pub use surfaces::{AnalyticSurface, SurfaceOps, SurfaceTessellation};
 pub use p7_manifold::{verify_p7_manifold, P7ManifoldReport, P7Violation};
+pub use operations::create_solid::{
+    classify_boundary, BoundaryKind, CreateSolidMode, CreateSolidResult, SolidError, SolidKind,
+};

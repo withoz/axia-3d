@@ -8,6 +8,7 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use axia_geo::{FaceId, MaterialId};
+use axia_geo::AnalyticCurve;
 use crate::xia::XiaId;
 use crate::group::{GroupId, ComponentDefId};
 use crate::material::{PhysicalProperties, VisualProperties, MaterialCategory};
@@ -34,6 +35,14 @@ pub enum CommandResult {
     /// when material is explicitly assigned (4-condition validation).
     /// Carries `ShapeId.raw()` as `u32` for bridge-friendly transport.
     ShapeCreated(u32),
+    /// ADR-079 W-1 — `create_solid` produced a NURBS-native solid from
+    /// a profile face + mode. Carries the result `SolidKind` (Box /
+    /// Cylinder / etc.) and the total face count of the solid (for
+    /// telemetry / undo summary).
+    SolidCreated {
+        kind: axia_geo::SolidKind,
+        face_count: usize,
+    },
     /// A group was created/modified
     GroupUpdated(GroupId),
     /// Material assigned to faces
@@ -147,6 +156,16 @@ pub enum Command {
     PushPull {
         face_id: FaceId,
         dist: f64,
+    },
+
+    /// ADR-079 W-1 — Surface-native solid creation from a profile face.
+    /// `create_solid` 의 architectural successor to mesh-era push_pull.
+    /// Smart routing within `Extrude` mode based on profile surface kind
+    /// + boundary curves; other modes (Revolve / Sweep / Loft) delegate
+    /// to existing `Mesh::revolve` / `sweep` / `loft` (W-3/W-4).
+    CreateSolid {
+        face_id: FaceId,
+        mode: axia_geo::CreateSolidMode,
     },
 
     /// Move entities by a delta
