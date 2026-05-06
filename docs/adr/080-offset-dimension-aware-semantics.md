@@ -457,3 +457,69 @@ V-δ-α (8a68eab) → V-δ-β (4dc64dc) → V-δ-γ (60c52fd) 3 atomic commit
 
 `getSketchInfo()` ToolContext field 가 ADR-019 SketchSession 의 active
 plane 을 OffsetTool 에 노출. ADR-046 P31 #4 (additive only menu) 정합.
+
+## 9. V-β-δ / W-3 cross-cut 회고 (2026-05-06, W-3-δ 직후)
+
+ADR-079 W-3 트랙 4 sub-atomic 으로 ADR-080 V-β-δ (NURBS-class curves
++ NURBS-class hosts) 동시 closure. ADR-079 ↔ ADR-080 의 자연 cross-cut
+이 두 ADR 모두 마무리.
+
+### 9.1 W-3 누적 sub-atomic / 회귀 (offset side)
+
+| Sub-atomic | Commit  | Scope                       | axia-geo |
+|------------|---------|------------------------------|----------|
+| W-3-γ      | a5aed1f | NURBS-class curves on Plane (V-β-δ) | +4 |
+| W-3-δ      | f9bd24d | NURBS-class hosts (V-β-γ-5/6/7)   | +4 (offset) |
+| **합계**   |         | **V-β-δ closure**           | **+8 offset** |
+
+ADR-079 side 추가: W-3-α/β/δ 의 SolidKind 활성 +18 (axia-geo).
+
+### 9.2 ADR-080 host kinds 8개 모두 활성
+
+| Host kind         | Sub-atomic       | Curve types 활성              |
+|-------------------|------------------|-------------------------------|
+| Plane             | V-β-α/β + W-3-γ  | Line / Arc / Circle / Bezier / BSpline / NURBS |
+| Cylinder          | V-β-γ-1          | axial Line / latitude Arc/Circle |
+| Sphere            | V-β-γ-2          | Arc/Circle (small/great)         |
+| Cone              | V-β-γ-3          | slant Line / latitude Arc/Circle |
+| Torus             | V-β-γ-4          | major/minor latitude Arc/Circle  |
+| **BezierPatch**   | **W-3-δ**        | All curves (chord-based)         |
+| **BSplineSurface**| **W-3-δ**        | All curves (chord-based)         |
+| **NURBSSurface**  | **W-3-δ**        | All curves (chord-based)         |
+
+### 9.3 Free wire (V-δ) + NURBS-class curves cross-cut
+
+V-δ-α 의 synthetic Plane host 도 W-3-γ NURBS-class curve 를 자연 흡수:
+- Free wire 의 polyline 이 NURBS curve 도 이론상 attached 가능 (실제로
+  드뭄)
+- 발생 시 finish_plane_offset 의 chord-based fallback 으로 처리
+
+### 9.4 ADR-080 누적 final 상태
+
+| 트랙 | Status | Sub-atomics |
+|------|--------|-------------|
+| V-α (TS dispatch placeholder) | ✅ | b276b3f |
+| V-β-α/β (Plane host Line/Arc/Circle) | ✅ | f126219 / dd31694 |
+| V-β-α-bridge | ✅ | 380dd06 |
+| V-β-γ-1~4 (Cylinder/Sphere/Cone/Torus) | ✅ | 9cf2f97 ~ bc88129 |
+| V-β-δ (NURBS-class curves + hosts) | ✅ | a5aed1f / f9bd24d |
+| V-δ (Free wire) | ✅ | 8a68eab / 4dc64dc / 60c52fd |
+| **V-γ** (face semantic) | **⏳** | **별도 ADR (사용자 결재 대기)** |
+| **V-ε / V-ζ** (Vertex / Volume) | **⏳** | **future ADR** |
+
+ADR-080 의 코어 트랙 (V-α / V-β / V-δ) 모두 closure. 남은 V-γ / V-ε /
+V-ζ 는 별도 ADR 결재 필요.
+
+### 9.5 Path Z atomic 호흡 (전체 ADR-080)
+
+V-α 부터 W-3-δ (V-β-δ) 까지 14 atomic commits. 사용자 결재 → 구현 →
+회귀 봉인 → push 패턴 일관. 누적 axia-geo +51, axia-wasm +5, vitest
++19. 절대 #[ignore] 금지 75/75 준수.
+
+### 9.6 다음 (post-V-β-δ)
+
+- **V-γ 결재** (별도 ADR): face dim 의 boundary expand (legacy) vs
+  surface normal (ADR-079 W-2-γ 답습) 결정. 사용자 결재 권고.
+- **V-ε / V-ζ** (Vertex / Volume): future ADR.
+- **W-3-ε** (ADR-079 NURBS Newton fit, surface metadata preserve): 사용자
+  텔레메트리 후 검토. 현재 chord-based approximation MVP 충분.

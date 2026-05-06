@@ -820,7 +820,23 @@
     ground). free-wire-specific failures 만 cascade.
   - V-δ 누적 회귀: axia-geo +10, axia-wasm +2, vitest +12 (절대
     #[ignore] 금지 12/12 준수)
-- **남은 V-ε / V-ζ**: Vertex / Volume dimension — future ADR
+- **V-β-δ 트랙 closure (2026-05-06)** — NURBS-class curves + hosts
+  (ADR-079 W-3 cross-cut):
+  - W-3-γ (NURBS curves on Plane, a5aed1f): Bezier / BSpline / NURBS
+    curve early reject 제거 → chord-based Line perpendicular offset
+    (V-β-α 답습). 새 edge.curve = None (curve metadata lost).
+  - W-3-δ (NURBS-class hosts, f9bd24d): BezierPatch / BSplineSurface /
+    NURBSSurface host 활성. Tessellation-based representative normal
+    (`AnalyticSurface::normal_at_world_pos` 재사용). 양쪽 ADR
+    (offset + create_solid Extrude → SolidKind::GeneralSweep) cross-cut.
+  - V-β-δ 누적 회귀: axia-geo +12 (offset +4 + extrude +8), axia-core
+    +1 (fallback test rewrite), 절대 #[ignore] 금지 12/12 준수
+- **ADR-080 host kinds 8개 모두 활성** (Plane / Cylinder / Sphere /
+  Cone / Torus / BezierPatch / BSplineSurface / NURBSSurface).
+  curve types 6개 모두 활성 on Plane (Line / Arc / Circle / Bezier /
+  BSpline / NURBS).
+- **남은 V-γ / V-ε / V-ζ**: face semantic / Vertex / Volume dimension
+  — 별도 ADR (사용자 결재 대기)
 - **Cross-link**: ADR-079 (Create Solid — face dim 의 운영 의미
   source), ADR-049 (Two-Layer Citizenship — 직교, geometric dim 을
   dispatch key 로 사용), ADR-016 (multi-loop face Q2), ADR-027 (NURBS

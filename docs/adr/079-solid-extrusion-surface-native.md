@@ -652,3 +652,81 @@ axia-wasm +10, vitest +33 — 전체 #[ignore] 금지 148/148 준수.
 
 ADR-079 W 트랙 closure. ADR-080 도 V-α / V-β / V-δ closure (V-γ /
 V-ε / V-ζ 만 future). 다음 자연 후속 = W-3.
+
+## 11. W-3 트랙 closure addendum (2026-05-06, W-3-δ 직후)
+
+§10 작성 시점 (W-4-β 직후, 2026-05-06) 에서 W-3 트랙은 아직 미해결 이었음.
+W-3 4 sub-atomic 추가 closure 후 본 §11 가 ADR-079 의 진짜 final
+회고. ADR-079 + ADR-080 cross-cut 마무리.
+
+### 11.1 W-3 누적 sub-atomic / 회귀
+
+| Track  | Commit  | SolidKind / Scope           | axia-geo |
+|--------|---------|-----------------------------|----------|
+| W-3-α  | 30148da | SweptSolid (Sweep mode)     | +5       |
+| W-3-β  | 7efc713 | LoftSolid (Loft mode)       | +5       |
+| W-3-γ  | a5aed1f | (ADR-080 V-β-δ NURBS curves on Plane) | +4 |
+| W-3-δ  | f9bd24d | GeneralSweep (NURBS-class hosts) | +8 |
+| **합계** | | **W-3 트랙 (4 sub-atomic)** | **+22**  |
+
+ADR-079 W 트랙 grand total (W-1~W-4): 15 commits (포함 §10 11 + W-3 4),
+axia-geo +75, axia-core +9, axia-wasm +5, vitest +6 (W-1-β 의 +6 외
+W-2~W-4 는 0).
+
+### 11.2 SolidKind 7개 모두 활성
+
+| SolidKind            | Activated by | Mode    |
+|----------------------|--------------|---------|
+| Box                  | W-1-α        | Extrude |
+| Cylinder             | W-2-α        | Extrude |
+| SmoothGroupOffset    | W-2-γ-i~iv   | Extrude |
+| RevolutionSolid      | W-4-α        | Revolve |
+| SweptSolid           | W-3-α        | Sweep   |
+| LoftSolid            | W-3-β        | Loft    |
+| **GeneralSweep**     | **W-3-δ**    | Extrude (NURBS-class profile) |
+
+### 11.3 Cross-cut with ADR-080
+
+- **W-3-γ ↔ ADR-080 V-β-δ**: NURBS-class curves on Plane host.
+  Tessellation-based chord offset. Plane host 의 모든 curve types
+  (Line / Arc / Circle / Bezier / BSpline / NURBS) 활성.
+- **W-3-δ ↔ ADR-080 V-β-γ-5/6/7**: NURBS-class hosts (BezierPatch /
+  BSplineSurface / NURBSSurface). Tessellation-based representative
+  normal offset. ADR-080 의 8 host kinds 모두 활성.
+
+### 11.4 What worked well (W-3 specific)
+
+- **Path Z 답습 효율**: W-3-α (Sweep) 가 W-4-α (Revolve) 의 패턴 답습 —
+  engine 위임 + multi-loop guard + 사용자 facing validation. W-3-β
+  (Loft) 도 동일.
+- **Tessellation-based approximation 정합성**: W-3-γ (curves) +
+  W-3-δ (hosts) 모두 §W3-B-(a) "tessellation 의미론" lock-in 일관 적용.
+  Newton fit 미사용 → MVP 단순성 + future enhancement 명확 (W-3-ε).
+- **`AnalyticSurface::normal_at_world_pos` 재사용**: 기존 함수 (V-β-γ /
+  ADR-038 P23 surface-aware normals) 가 NURBS-class 의 fallback 으로
+  자연스럽게 활용. 신규 코드 0.
+- **`finish_plane_offset` shared helper (V-β-α/β + V-δ-α + W-3-δ)**:
+  4 컨텍스트 (face host / 자유 wire / explicit plane / NURBS-class
+  host) 모두 동일 helper 호출 → SSOT.
+
+### 11.5 What we deferred (conscious)
+
+- **Newton-fit curve refit (W-3-ε scope)**: NURBS curve 의 offset 후
+  curve metadata 보존 위해 새 NURBS 로 refit 가능 (chord-only 은 lossy).
+  사용자 텔레메트리 후 검토.
+- **Per-vertex surface normal evaluate (W-3-ε scope)**: 큰 곡률 NURBS
+  host 에서 single representative normal 의 approximation error 큼.
+  per-vertex normal evaluate 시 결과 surface 가 새 NURBS 로 fit 필요.
+- **NURBS-class profile 의 surface metadata 보존**: 현재 GeneralSweep
+  의 top cap 은 Plane synthesized. NURBS profile 의 직접 translation
+  → 새 NURBS top cap 보존은 W-3-ε 검토.
+- **Sweep / Loft frame matching**: Mesh::sweep 의 internal frame
+  (world_up 기반) 이 face's basis_u 와 일치 안 할 수 있음. 결과 회전
+  가능 — frame matching enhancement 별도 atomic.
+
+### 11.6 Path Z atomic 다음 (ADR-079 + ADR-080 모두 closure)
+
+- ADR-080 V-γ (face semantic 결정) — 별도 ADR
+- ADR-080 V-ε / V-ζ (Vertex / Volume dimension) — future ADR
+- ADR-079 W-3-ε / W-4-γ (curve refit / partial revolve) — 텔레메트리 후
+- 새 ADR (e.g., ADR-081 STEP/IGES NURBS-class import 경로 활성)
