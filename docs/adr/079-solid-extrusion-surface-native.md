@@ -1,7 +1,7 @@
 # ADR-079 — Create Solid (Surface-Native Solid Generation)
 
-**Status**: Proposed (사용자 결정 anchor 2026-05-06, spec only — 4-step
-구현 별도 atomic)
+**Status**: **Accepted** (Q1~Q7 모두 lock-in 2026-05-06, spec 정합 완성 —
+W-1~W-4 별도 commit 으로 구현)
 **Date**: 2026-05-06
 **Author**: AXiA team (사용자 결정 + Claude spec)
 **Anchor**: 사용자 architectural 결정 (2026-05-06):
@@ -339,41 +339,74 @@ direct 는 기존 함수 그대로 + 별도 ADR (필요 시).
   향후 확장 용이.
 
 ### Q2. ADR-067 Step 2~5 와의 관계
-- (a) 흡수 — 본 ADR 이 Step 2~5 의 spec 을 통합 supersede
+- (a) **흡수** — 본 ADR 이 Step 2~5 의 spec 을 통합 supersede
 - (b) 별개 — ADR-067 은 UX layer, ADR-079 는 kernel layer
-- **Decision**: Q2 Open — (a) 권장 (단일 트랙)
+- **Decision (2026-05-06 lock-in)**: **(a) 흡수**. 단일 트랙 — kernel +
+  UX 모두 ADR-079 anchor. ADR-067 의 Step 1 (auto-merge after push_pull)
+  만 보존. Step 2~5 의 vision (smart push/pull, surface-aware
+  orchestration) 은 본 ADR 의 W-1~W-4 로 통합 구현.
 
 ### Q3. Legacy mesh-era push_pull deprecation timing
 - (a) W-1 직후 deprecate (강한 cutover) — backward compat 0
-- (b) W-4 deprecate (점진 — Plane → Cylinder → General 단계 별 fallback)
-- (c) 영구 보존 (legacy fallback) — 새 solid_extrude 가 default, push_pull 은 internal fallback
-- **Decision**: Q3 Open — (b) 또는 (c) 권장
+- (b) **W-4 deprecate** (점진 — Plane → Cylinder → General 단계 별 fallback)
+- (c) 영구 보존 (legacy fallback) — 새 create_solid 가 default,
+  push_pull 은 internal fallback
+- **Decision (2026-05-06 lock-in)**: **(b) W-4 점진 deprecate**. W-1~W-3
+  동안 각 step 이 처리 못하는 케이스 (예: W-1 시점의 Cylinder profile)
+  는 legacy `Mesh::push_pull` fallback. W-4 에서 fallback 폐기 + UX
+  migration. **L6 (Backward compat) 정합**.
 
-### Q4. P-5e-α default flip 의 영향
-- 사용자 review 결과: P-5e-α 는 **유지** 권장. Shape creation 자체는 정상,
-  push/pull 만 별도 트랙 — solid_extrude 가 W-1 까지 작동 안 하면 사용자
-  Push/Pull 시도 시 어떻게 처리?
-  - (a) Push/Pull tool 일시 비활성화 (W-1 까지)
-  - (b) Push/Pull 시 Shape 자동 promote → legacy push_pull 사용 (관대)
-  - (c) "지원 예정" Toast + no-op (사용자 명시 차단)
-- **Decision**: Q4 Open — (c) 권장 (명시 차단)
+### Q4. P-5e-α default flip 의 영향 (W-1 까지의 임시 처리)
+- (a) Push/Pull tool 일시 비활성화 (W-1 까지)
+- (b) Push/Pull 시 Shape 자동 promote → legacy push_pull 사용 (관대)
+- (c) **"지원 예정" Toast + no-op (사용자 명시 차단)**
+- **Decision (2026-05-06 lock-in)**: **(c) 명시 차단 + Toast**. 사용자가
+  form mode 에서 Shape 그린 후 Push/Pull 시도 시 Toast 표시:
+  > "create_solid W-1 까지 form-mode Push/Pull 지원 예정. 임시 우회 =
+  > Settings 패널 의 'form 모드 (실험)' OFF → legacy Xia mode 사용"
+- **임시 안내**는 W-1 commit 직후 자동 사라짐 (Push/Pull 정상 작동).
 
 ### Q5. 곡면 profile (Cylinder side panel) push 의 정확한 semantics
 - (a) Panel 만 평행 이동 (현 mesh-era 거동) — 절단 발생
-- **(b) Smooth group 전체 offset** — Cylinder 가 통째로 외부로 부풀어 오름
+- (b) **Smooth group 전체 offset** — Cylinder 가 통째로 외부로 부풀어 오름
 - (c) 사용자 명시 — UX 모달에서 "panel 만 / 그룹 전체" 선택
-- **Decision**: Q5 Open — (b) SketchUp 표준 거동 권장
+- **Decision (2026-05-06 lock-in)**: **(b) Smooth group 전체 offset**.
+  SketchUp 표준 거동 답습 — 사용자가 곡면 (Cylinder/Sphere/Cone/Torus)
+  의 한 panel 클릭 후 Push 시 그 곡면 전체가 일관 변형. W-2 scope
+  의 핵심 알고리즘.
 
 ### Q6. Sweep solid 의 surface representation
 - (a) BezierPatch (3차) — 직선 sweep 경로면 충분, 곡선 sweep 경로엔 부족
 - (b) BSplineSurface (가변 차수) — 일반적
-- **(c) NURBSSurface (rational)** — 정확한 cylinder/sphere boundary sweep 가능
-- **Decision**: Q6 Open — (c) 권장
+- (c) **NURBSSurface (rational)** — 정확한 cylinder/sphere boundary sweep 가능
+- **Decision (2026-05-06 lock-in)**: **(c) NURBSSurface (rational)**.
+  Rational NURBS 가 가장 일반적 + STEP/IGES export 호환성 ↑ + Phase L
+  (advanced surfaces) 의 fitting 결과 자연 매핑. W-3 scope 의 surface
+  type. Bezier/BSpline profile 도 NURBSSurface 로 통합 표현 (rational
+  weight 1.0 = 비-rational, 다른 값 = rational).
 
 ### Q7. Shape ownership face_to_shape map 도입 시점
-- (a) ADR-079 W-1 와 함께 (자연 통합)
+- (a) **ADR-079 W-1 와 함께 (자연 통합)**
 - (b) Phase 1 Gap 2 fix 로 별도 atomic (ADR-079 의 prerequisite)
-- **Decision**: Q7 Open — (a) 권장 (W-1 의 일부로)
+- **Decision (2026-05-06 lock-in)**: **(a) W-1 와 함께**. W-1 의 일부로
+  `face_to_shape: HashMap<FaceId, ShapeId>` reverse map 도입 +
+  `Scene::exec_create_solid` 가 양쪽 ownership (Xia + Shape) 분기 처리.
+  별도 atomic 분리 시 중간 상태 어색 (Shape ownership map 만 추가하고
+  사용처 부재). W-1 단일 atomic 으로 통합.
+
+### Q1~Q7 lock-in 요약 표 (2026-05-06)
+
+| Q | 결정 | 의미 |
+|---|------|------|
+| Q1 | (b) Extrude 내부만 smart routing | 다른 mode 는 direct dispatch |
+| Q2 | (a) ADR-067 Step 2~5 흡수 | 단일 트랙, Step 1 만 보존 |
+| Q3 | (b) W-4 점진 deprecate | 각 step 별 legacy fallback |
+| Q4 | (c) 명시 차단 + Toast | "지원 예정" 안내, 임시 우회 = legacy mode |
+| Q5 | (b) Smooth group 전체 offset | SketchUp 표준 거동 |
+| Q6 | (c) NURBSSurface (rational) | 일반적 + 호환성 |
+| Q7 | (a) W-1 와 함께 face_to_shape | 자연 통합 |
+
+**모든 Q lock-in 완료 → W-1 사전 검토 진입 가능**.
 
 ---
 
@@ -501,8 +534,8 @@ W-α (본 ADR commit) 는 spec only. Implementation 시작 전 사용자 review
 - [x] 4-step rollout plan (§4)
 - [x] 7 architectural lock-ins L1~L7 (§5)
 - [x] Out of scope 명시 (§6)
-- [ ] **사용자 review Q1~Q7 lock-in** (별도 commit 또는 본 ADR amendment)
-- [ ] **W-1 사전 검토 + 구현** (별도 commit, Q1~Q7 lock-in 후)
+- [x] **사용자 review Q1~Q7 lock-in** (2026-05-06, §3 amend 완료)
+- [ ] **W-1 사전 검토 + 구현** (별도 commit, lock-in 완료 후 진입 가능)
 
 ---
 
@@ -539,6 +572,6 @@ W-α (본 ADR commit) 는 spec only. Implementation 시작 전 사용자 review
 
 ---
 
-*Author*: AXiA team (사용자 결정 + Claude spec) | *Status*: Proposed
-(spec only — `create_solid` 명령 + `CreateSolidMode` enum lock-in,
-W-1~W-4 별도 commit). Q1~Q7 사용자 review 후 §3 amend.
+*Author*: AXiA team (사용자 결정 + Claude spec) | *Status*: **Accepted**
+(`create_solid` 명령 + `CreateSolidMode` enum + Q1~Q7 모두 lock-in
+2026-05-06, spec 정합 완성). W-1~W-4 별도 commit 으로 구현.
