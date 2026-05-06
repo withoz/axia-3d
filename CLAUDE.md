@@ -791,6 +791,24 @@
   동시 offset 도 reject 유지.
 - **본 LOCKED 의 코드 변경 0** — spec only commit. 후속 V-α ~ V-ζ
   sub-step 에서 점진 구현 (각각 별도 atomic + 별도 ADR 결재 필요).
+- **V-α / V-β 트랙 closure 진행 상황 (2026-05-06)**:
+  - V-α (TS dispatch placeholder): ✅ Closed — `b276b3f`
+  - V-β-α (Rust core, Line + Plane): ✅ — `f126219`
+  - V-β-α-bridge (WASM + TS + OffsetTool): ✅ — `380dd06`
+  - V-β-β (Plane Arc/Circle): ✅ — `dd31694`
+  - V-β-γ-1~4 (Cylinder / Sphere / Cone / Torus host): ✅ —
+    `9cf2f97` / `42a7a4a` / `7f553a4` / `bc88129`
+  - 누적 회귀: axia-geo +43, axia-wasm +3, vitest +11 (절대
+    #[ignore] 금지 57/57 준수)
+  - 5 analytic primitive surface × 자연 curve type 모두 활성:
+    Plane (Line+Arc+Circle) / Cylinder (axial Line+latitude
+    Arc/Circle) / Sphere (Arc/Circle 만) / Cone (slant Line+latitude
+    Arc/Circle) / Torus (major-direction+meridian Arc/Circle)
+  - **Forward-defer**: NURBS-class hosts (BezierPatch /
+    BSplineSurface / NURBSSurface) + NURBS-class curves (Bezier /
+    BSpline / NURBS) → W-3 트랙
+  - **남은 V-δ / V-ε / V-ζ**: Free wire reference plane / Vertex /
+    Volume dimension — 사용자 결재 후 별도 atomic
 - **Cross-link**: ADR-079 (Create Solid — face dim 의 운영 의미
   source), ADR-049 (Two-Layer Citizenship — 직교, geometric dim 을
   dispatch key 로 사용), ADR-016 (multi-loop face Q2), ADR-027 (NURBS

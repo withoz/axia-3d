@@ -193,23 +193,42 @@ Face `F` 선택 + dist `d` 입력:
 
 본 ADR commit 은 spec only. 코드 변경 없음. 후속 sub-step:
 
-### 3.1 V-α — OffsetTool dimension dispatch (TS layer)
+### 3.1 V-α — OffsetTool dimension dispatch (TS layer) — ✅ Closed (2026-05-06, b276b3f)
 
-- `OffsetTool.ts` 에 active selection 검사 추가
-- Edge selection → edge offset path (현재 비활성, 복원)
-- Face selection → 기존 face-boundary 동작 (또는 §3.3 결정에 따라
-  ADR-079 surface normal 으로 swap)
-- Mixed selection → Toast + reject
-- 회귀: vitest +5~7
+- `OffsetTool.ts` 에 `dimMode: 'edge' | 'face' | null` field + `detectDimension()`
+  helper 추가. onActivate 에서 active selection 의 geometric dimension 분류.
+- Edge selection → V-α 시점은 placeholder Toast, V-β-α-bridge 에서 실제 호출.
+- Face selection → 기존 face-boundary 동작 유지 (V-γ 별도 결재).
+- Mixed selection → Toast.warning + clearSelection (L5 강제).
+- 회귀: vitest +7 (4 dimension state × 1 test + 3 dispatch behavior).
 
-### 3.2 V-β — Edge offset Rust core 활성
+### 3.2 V-β — Edge offset Rust + Bridge + Tool stack — ✅ Closed (2026-05-06)
 
-- `Mesh::offset_edge` (legacy, 현재 internal) 의 contract 재정의:
-  - "edge 의 curve 를 host face 의 surface 위에서 in-plane offset"
-  - analytic curve 는 정확 (Line/Arc/Circle/Bezier 별 offset 공식)
-  - polyline (no curve attached) 은 fallback (basis vector 추출 후
-    perpendicular offset)
-- 회귀: axia-geo +5~10
+V-β-α (Rust core) → V-β-α-bridge (WASM/TS) → V-β-β (Plane Arc/Circle) →
+V-β-γ-1~4 (curved hosts: Cylinder / Sphere / Cone / Torus) 7 sub-atomic.
+
+| Sub-atomic | Commit | Surface | Curve types 활성 |
+|------------|--------|---------|----------------------------------|
+| V-β-α      | f126219 | Plane   | Line / None |
+| V-β-α-bridge | 380dd06 | (bridge) | + WASM/TS 통합, OffsetTool 활성 |
+| V-β-β      | dd31694 | Plane   | + Arc / Circle |
+| V-β-γ-1    | 9cf2f97 | Cylinder | axial Line / latitude Arc/Circle |
+| V-β-γ-2    | 42a7a4a | Sphere   | Arc/Circle (small/great circle) |
+| V-β-γ-3    | 7f553a4 | Cone     | slant Line / latitude Arc/Circle |
+| V-β-γ-4    | bc88129 | Torus    | major-direction / meridian Arc/Circle |
+
+**5 analytic primitive surfaces × 자연 curve types 모두 활성**:
+- analytic per-curve-on-surface 의미론 (Option 1)
+- typed `OffsetEdgeError` 14 variants
+- WASM JSON reason vocabulary 10 reasons
+- TS bridge tagged-union 13 variants
+- OffsetTool friendly forward-defer Toast (V-β-β / V-β-γ / V-δ scope 명시)
+
+**누적 회귀**: axia-geo +43, axia-wasm +3 source-inspection, vitest +11
+(Bridge wrapper + Tool dispatch). 모든 절대 #[ignore] 금지 준수 (57/57).
+
+**NURBS-class hosts (BezierPatch / BSplineSurface / NURBSSurface) +
+NURBS-class curves (Bezier / BSpline / NURBS)** 만 W-3 forward-defer.
 
 ### 3.3 V-γ — OffsetTool face semantic 결정
 
@@ -286,3 +305,82 @@ Reference plane 추론 알고리즘 + 회귀.
 - **Backward compat 우선**: 기존 OffsetTool 의 face-boundary 동작은
   "emergent behavior" 로 자연스럽게 보존. 사용자 muscle memory 파괴 없음
   (ADR-046 P31 #4 menu changes additive only 정합).
+
+## 7. V-α / V-β 트랙 회고 (2026-05-06, V-β-γ-4 closure 직후)
+
+ADR-080 spec → V-α (TS dispatch) → V-β-α (Rust core) → V-β-α-bridge
+(WASM/TS 통합) → V-β-β (Plane Arc/Circle) → V-β-γ-1~4 (4 curved hosts)
+순으로 8 atomic commit 으로 완료. 통합 +43 axia-geo + 3 axia-wasm +
+11 vitest 회귀 (절대 #[ignore] 금지 57/57 준수).
+
+### 7.1 What worked well
+
+- **Path Z atomic 분해 패턴**: V-β-γ 4 surfaces 를 sub-atomic 으로 분리
+  하여 각 surface 별 의미론을 사용자 결재 → 구현 → 봉인 → 다음으로 이동.
+  결재 cognitive load 감소 + 한 번에 한 개념만 검증.
+- **Typed error enum**: `OffsetEdgeError` 14 variants 가 Rust core 에서
+  WASM JSON reason vocabulary 10 + TS tagged-union 13 까지 stable
+  contract 으로 propagate. forward-defer cases (V-β-β / V-β-γ / V-δ /
+  W-3) 가 사용자에게 명확한 메시지로 전달.
+- **Per-curve-on-surface analytic 의미론** (옵션 1 채택, V-β-γ
+  사전 검토 §V2-γ-A):
+  - 각 surface kind × curve type 조합에 closed-form 공식 적용 — generic
+    geodesic approximation 보다 정밀하고 호환성 보장.
+  - 5 surface 모두 동일 패턴 (sanity check → sign convention → analytic
+    transform → AnalyticCurve attach) 으로 자연 답습.
+- **Sign convention SSOT** (V-β-α 부터): `tangent × surface_normal · 변화_방향`
+  으로 부호 결정. 5 surface 모두 일관 적용. 사용자 mental model =
+  "positive dist = right-side of curve traversal".
+- **surfaces_equivalent strict comparison**: discriminant fallback 폐기
+  하고 surface 매개변수 정확 비교로 ambiguous host 검출 정밀화.
+
+### 7.2 Pattern observations
+
+- **Cone slant v_max + Sphere Line reject**: 두 패턴이 V-β-γ-3 에서
+  결정된 후 V-β-γ-4 (Torus meridian @ outer equator + Torus Line reject)
+  에 자연 답습. 일관된 lock-in 이 후속 sub-step 의 결재 부담 감소.
+- **Forward-defer typed reason vocabulary**: 사용자 차단이 아닌 "곧 지원
+  됩니다" 메시지로 UX 친화. V-β-β / V-β-γ / V-δ scope 명시 → 사용자가
+  의도 인지 + 향후 이행성 신뢰.
+- **Curve attach 보존**: 새 edge 에 새 AnalyticCurve attach 하여
+  ADR-038 P23 surface-aware normals 정합. mesh-level offset 만으로
+  curve metadata 가 사라지는 전통적 한계 회피.
+
+### 7.3 What we deferred (conscious)
+
+- **NURBS-class hosts + curves** (BezierPatch / BSpline / NURBS surfaces
+  AND Bezier / BSpline / NURBS curve types) → W-3 트랙 (별도 ADR + 별도
+  ADR-079 cross-cut). offset semantics 는 free-form 의 경우 numeric (per-
+  point Newton iteration) 이 필요 — analytic 정확성 unsupported 으로 표시.
+- **Free wire (no incident face)** → V-δ 트랙 (active sketch / wire 평면 /
+  ground 우선순위 결재 필요).
+- **V-γ face semantic decision** (face dim 이 boundary expand 인지
+  surface normal 인지) → 별도 ADR. 현재는 §3.3 에서 backward-compat
+  옵션 (a) 가 안전으로 표시.
+- **Vertex / Volume dimension** → V-ε / V-ζ, future ADR.
+
+### 7.4 Path Z atomic 단위로 다시 보면
+
+V-α 에서 V-β-γ-4 까지 8 commits. 각 commit 은:
+- 사용자 사전 검토 매트릭스 결재
+- 구현 + 회귀 봉인 (#[ignore] 금지)
+- WASM rebuild (필요 시)
+- vitest + vite build green
+- Dev server (HMR) error 0 verify
+- commit + push origin
+
+이 단계가 V-α/β/γ 트랙 8 회 반복되면서 사용자 결재 → 구현 → 검증의 호흡
+이 안정. 각 atomic 의 회귀가 +6~8 으로 cognitive load manageable.
+
+### 7.5 Path Z atomic 다음 (V-δ 또는 W-3)
+
+본 트랙 closure 직후 두 자연 후속:
+- **V-δ** (Free wire reference plane 추론) — incident face 없는 edge offset
+  활성. ADR-019 Sketch session + wire planarity + ground 우선순위 결재.
+  ADR-080 §3.4 placeholder.
+- **W-3** (NURBS profile 트랙, ADR-079 cross-cut) — BezierPatch /
+  BSpline / NURBS surfaces 의 host 활성 + Bezier / BSpline / NURBS curve
+  type 활성. ADR-080 V-β-δ 와 ADR-079 W-3 cross-cut 가능.
+
+V-δ 가 ADR-080 자연 후속 (Offset 트랙 내부), W-3 는 ADR-079 NURBS 트랙
+및 ADR-080 NURBS-class 호스트 cross-cut. 둘 다 사용자 결정.
