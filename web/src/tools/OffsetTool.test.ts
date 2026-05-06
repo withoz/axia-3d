@@ -424,6 +424,40 @@ describe('OffsetTool', () => {
       expect(msg).toMatch(/축 방향|범위/);
     });
 
+    it('edge mode applyVCB with wire_not_planar (V-δ-α) → 평면 아님 Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'wire_not_planar', rmsError: 0.05,
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/평면이 아닙니다|V-δ-β/);
+    });
+
+    it('edge mode applyVCB with no_reference_plane (V-δ-α) → 기준 평면 Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_reference_plane',
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/기준 평면|단일 엣지|V-δ-β/);
+    });
+
     it('edge mode applyVCB partial success → success + warning Toasts', async () => {
       const { Toast } = await import('../ui/Toast');
       ctx.getSelectedFaces.mockReturnValue([]);

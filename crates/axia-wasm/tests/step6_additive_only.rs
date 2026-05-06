@@ -856,7 +856,7 @@ fn offset_edge_on_host_dispatches_via_offset_edge_on_host_face() {
 fn offset_edge_on_host_emits_typed_reason_vocabulary() {
     let l = lib_src();
     let idx = l.find("pub fn offset_edge_on_host").expect("endpoint");
-    let body = char_safe_slice(&l, idx, 3500);
+    let body = char_safe_slice(&l, idx, 5500);
     // §V-β-α-bridge reason vocabulary — every typed error must produce
     // a stable, parseable reason string for the TS layer.
     for reason in [
@@ -873,6 +873,9 @@ fn offset_edge_on_host_emits_typed_reason_vocabulary() {
         // V-β-γ-1 additions (2)
         "unsupported_curve_on_surface",
         "axial_out_of_range",
+        // V-δ-α additions (2)
+        "wire_not_planar",
+        "no_reference_plane",
     ] {
         assert!(
             body.contains(reason),

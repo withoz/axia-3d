@@ -91,6 +91,16 @@ pub enum OffsetEdgeError {
     /// New axial position falls outside the host surface's v_range.
     #[error("offset_edge: new axial position {new_v} outside host v_range [{v_min}, {v_max}]")]
     AxialOutOfRange { new_v: f64, v_min: f64, v_max: f64 },
+    /// Free wire's connected component is not planar within scale-aware
+    /// tolerance. V-δ-α path failed; caller may retry with explicit
+    /// reference plane via `offset_edge_with_reference_plane` (V-δ-β).
+    #[error("offset_edge: free wire RMS planarity error {rms_error:.3e} exceeds tolerance")]
+    WireNotPlanar { rms_error: f64 },
+    /// Free wire too small to define a plane (e.g., single edge with 2
+    /// vertices), AND no caller-supplied reference plane available.
+    /// Caller must use V-δ-β API or activate sketch session.
+    #[error("offset_edge: cannot determine reference plane (single-edge wire — V-δ-β scope)")]
+    NoReferencePlane,
 }
 
 impl Mesh {
@@ -226,8 +236,24 @@ impl Mesh {
 
         // §V2-B — Host face resolution.
         let (incident_faces, _hes) = self.get_faces_sharing_edge(edge_id);
+
+        // ── V-δ-α: free wire path ─────────────────────────────────────
+        // No incident face → derive synthetic Plane from connected free
+        // wire's planarity (BFS through free edges). On success, jump
+        // directly to Plane offset path with synthetic plane.
+        if incident_faces.is_empty() {
+            let synthetic_plane = derive_free_wire_plane(self, edge_id)?;
+            let host_normal = match &synthetic_plane {
+                AnalyticSurface::Plane { normal, .. } => normal.normalize_or_zero(),
+                _ => unreachable!("derive_free_wire_plane must return Plane variant"),
+            };
+            return self.finish_plane_offset(
+                edge_id, v0, v1, edge_curve, host_normal, dist,
+            );
+        }
+
         let host = match incident_faces.len() {
-            0 => return Err(OffsetEdgeError::NoIncidentFace),
+            0 => unreachable!("free wire handled above"),
             1 => incident_faces[0],
             _n => {
                 // Pick first; verify all share the same surface kind/instance
@@ -330,7 +356,27 @@ impl Mesh {
             return Err(OffsetEdgeError::NoHostSurface(host));
         }
 
-        // §V2-β — Arc / Circle dispatch (V-β-β: analytic radius offset).
+        // Plane host: dispatch to shared Plane offset helper (Arc/Circle
+        // analytic radius + Line perpendicular). Same helper is used by
+        // V-δ-α free-wire synthetic-plane path.
+        self.finish_plane_offset(edge_id, v0, v1, edge_curve, host_normal, dist)
+    }
+
+    /// ADR-080 V-β-α/β + V-δ-α — Shared Plane offset helper.
+    /// Performs Arc/Circle analytic radius offset OR Line perpendicular
+    /// offset, given a host plane normal. Used by both:
+    /// - 1-incident-face Plane host path (V-β-α/β)
+    /// - 0-incident-face synthetic plane path (V-δ-α free wire)
+    fn finish_plane_offset(
+        &mut self,
+        edge_id: EdgeId,
+        v0: VertId,
+        v1: VertId,
+        edge_curve: Option<AnalyticCurve>,
+        host_normal: DVec3,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        // §V2-β — Arc / Circle dispatch.
         match &edge_curve {
             Some(AnalyticCurve::Arc {
                 center,
@@ -1953,6 +1999,170 @@ fn surfaces_equivalent(
     }
 }
 
+/// ADR-080 V-δ-α — Derive a synthetic Plane surface from a free wire's
+/// connected component. BFS from the start edge through all free edges
+/// (no incident face), then best-fit plane the collected vertex positions.
+///
+/// Sanity gates:
+///   - Wire vertex count ≥ 3 (otherwise `NoReferencePlane` — single edge
+///     defines no unique plane)
+///   - Vertices not collinear (any 3rd point off the line through 2
+///     extremes by > scale-aware tolerance)
+///   - RMS planarity error ≤ scale-aware tolerance (`EPSILON_LENGTH ×
+///     max(1.0, wire_extent)`); else `WireNotPlanar { rms_error }`.
+fn derive_free_wire_plane(
+    mesh: &Mesh,
+    start_edge: EdgeId,
+) -> std::result::Result<AnalyticSurface, OffsetEdgeError> {
+    use std::collections::{HashSet, VecDeque};
+    let tol = crate::tolerances::EPSILON_LENGTH;
+
+    // BFS through free edges only. A "free edge" has no incident active face.
+    let mut visited_edges: HashSet<EdgeId> = HashSet::new();
+    let mut visited_verts: HashSet<crate::entities::VertId> = HashSet::new();
+    let mut queue: VecDeque<EdgeId> = VecDeque::new();
+    queue.push_back(start_edge);
+    visited_edges.insert(start_edge);
+
+    while let Some(eid) = queue.pop_front() {
+        let edge = match mesh.edges.get(eid) {
+            Some(e) if e.is_active() => e,
+            _ => continue,
+        };
+        let v_small = edge.v_small();
+        let v_large = edge.v_large();
+        for &vid in &[v_small, v_large] {
+            if !visited_verts.insert(vid) {
+                continue;
+            }
+            // Walk vertex's outgoing-HE chain to discover incident edges.
+            let vert = match mesh.verts.get(vid) {
+                Some(v) => v,
+                None => continue,
+            };
+            let start_he = match vert.outgoing().filter(|he| !he.is_null()) {
+                Some(s) => s,
+                None => continue,
+            };
+            let mut he_id = start_he;
+            for _ in 0..256 {
+                let he = match mesh.hes.get(he_id) {
+                    Some(h) if h.is_active() => h,
+                    _ => break,
+                };
+                let candidate = he.edge();
+                if !visited_edges.contains(&candidate) {
+                    let (faces_at, _) = mesh.get_faces_sharing_edge(candidate);
+                    if faces_at.is_empty() {
+                        // It's a free edge — extend wire.
+                        visited_edges.insert(candidate);
+                        queue.push_back(candidate);
+                    }
+                }
+                let next = he.v_next();
+                if next == start_he || next.is_null() {
+                    break;
+                }
+                he_id = next;
+            }
+        }
+    }
+
+    let positions: Vec<DVec3> = visited_verts
+        .iter()
+        .filter_map(|&v| mesh.vertex_pos(v).ok())
+        .collect();
+
+    if positions.len() < 3 {
+        return Err(OffsetEdgeError::NoReferencePlane);
+    }
+
+    // Find 2 most-distant points (A, B) — line of best fit.
+    let mut max_dist_sq = 0.0;
+    let mut a_idx = 0usize;
+    let mut b_idx = 1usize;
+    for i in 0..positions.len() {
+        for j in (i + 1)..positions.len() {
+            let d2 = (positions[j] - positions[i]).length_squared();
+            if d2 > max_dist_sq {
+                max_dist_sq = d2;
+                a_idx = i;
+                b_idx = j;
+            }
+        }
+    }
+    if max_dist_sq < tol * tol {
+        return Err(OffsetEdgeError::NoReferencePlane);
+    }
+    let extent = max_dist_sq.sqrt();
+    let scale_aware_tol = tol * extent.max(1.0);
+
+    let a = positions[a_idx];
+    let b = positions[b_idx];
+    let ab = (b - a).normalize();
+
+    // Find point most distant from line AB.
+    let mut max_perp_dist = 0.0;
+    let mut c_idx = 0usize;
+    for i in 0..positions.len() {
+        if i == a_idx || i == b_idx {
+            continue;
+        }
+        let ap = positions[i] - a;
+        let perp = ap - ap.dot(ab) * ab;
+        let perp_dist = perp.length();
+        if perp_dist > max_perp_dist {
+            max_perp_dist = perp_dist;
+            c_idx = i;
+        }
+    }
+    if max_perp_dist < scale_aware_tol {
+        // All vertices collinear — plane undefined.
+        return Err(OffsetEdgeError::NoReferencePlane);
+    }
+
+    let c = positions[c_idx];
+    let normal = (b - a).cross(c - a).normalize();
+    let origin = a;
+
+    // RMS planarity error across all wire vertices.
+    let rms = {
+        let n = positions.len() as f64;
+        let sum_sq: f64 = positions
+            .iter()
+            .map(|p| {
+                let d = (*p - origin).dot(normal);
+                d * d
+            })
+            .sum();
+        (sum_sq / n).sqrt()
+    };
+    if rms > scale_aware_tol {
+        return Err(OffsetEdgeError::WireNotPlanar { rms_error: rms });
+    }
+
+    // basis_u: any in-plane unit vector (use ab projected onto plane).
+    let basis_u = (ab - ab.dot(normal) * normal).normalize_or_zero();
+    let basis_u = if basis_u.length_squared() < 0.5 {
+        // Degenerate fallback — shouldn't happen since ab spans plane.
+        if normal.x.abs() < 0.9 {
+            DVec3::X
+        } else {
+            DVec3::Y
+        }
+    } else {
+        basis_u
+    };
+
+    Ok(AnalyticSurface::Plane {
+        origin,
+        normal,
+        basis_u,
+        u_range: (-1e6, 1e6),
+        v_range: (-1e6, 1e6),
+    })
+}
+
 /// 2D(평면 투영) 오프셋 폴리곤 계산.
 ///
 /// 각 변을 face 법선 기준으로 inward 방향으로 dist만큼 이동하고,
@@ -2378,7 +2588,10 @@ mod tests {
     }
 
     #[test]
-    fn line_offset_no_incident_face_returns_no_incident() {
+    fn line_offset_single_edge_free_wire_returns_no_reference_plane() {
+        // V-δ-α activated free-wire planarity. Single-edge wire (only 2
+        // vertices) cannot define a unique plane → NoReferencePlane.
+        // Caller must use V-δ-β explicit reference plane API instead.
         let mut mesh = Mesh::new();
         let (_v0, _v1, edge_id) = mesh
             .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
@@ -2386,8 +2599,8 @@ mod tests {
         let err = mesh
             .offset_edge_on_host_face(edge_id, 0.5)
             .err()
-            .expect("must reject free wire");
-        assert!(matches!(err, OffsetEdgeError::NoIncidentFace));
+            .expect("must reject single-edge wire");
+        assert!(matches!(err, OffsetEdgeError::NoReferencePlane));
     }
 
     #[test]
@@ -3750,6 +3963,147 @@ mod tests {
             );
         } else {
             panic!("must remain Arc");
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-δ-α — Free wire planarity-based reference plane
+    // ════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn free_wire_planar_xy_polyline_offset_succeeds() {
+        // Triangle wire on z=0 plane: (0,0,0) → (2,0,0) → (1,1,0) → (0,0,0).
+        // Pick the first edge for offset; planarity automatic.
+        let mut mesh = Mesh::new();
+        let (_v0_a, _v1_a, e1) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0))
+            .unwrap();
+        let (_v1_b, _v2_b, _e2) = mesh
+            .draw_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0))
+            .unwrap();
+        let (_v2_c, _v0_c, _e3) = mesh
+            .draw_line(DVec3::new(1.0, 1.0, 0.0), DVec3::ZERO)
+            .unwrap();
+
+        let result = mesh
+            .offset_edge_on_host_face(e1, 0.3)
+            .expect("planar wire offset OK");
+
+        // Verify new endpoints are on z=0 plane (synthetic plane).
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        assert!(p0.z.abs() < 1e-9, "new_v0 must be on z=0: got {}", p0.z);
+        assert!(p1.z.abs() < 1e-9, "new_v1 must be on z=0: got {}", p1.z);
+    }
+
+    #[test]
+    fn free_wire_planar_xz_polyline_offset_succeeds() {
+        // Triangle on y=0 plane (xz-plane): the synthetic plane normal
+        // should be ±Y.
+        let mut mesh = Mesh::new();
+        let (_a, _b, e1) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0))
+            .unwrap();
+        let (_b2, _c, _e2) = mesh
+            .draw_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 1.0))
+            .unwrap();
+        let (_c2, _a2, _e3) = mesh
+            .draw_line(DVec3::new(1.0, 0.0, 1.0), DVec3::ZERO)
+            .unwrap();
+
+        let result = mesh
+            .offset_edge_on_host_face(e1, 0.3)
+            .expect("xz-planar wire offset OK");
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        // y must remain 0 for both endpoints.
+        assert!(p0.y.abs() < 1e-9, "new_v0 must remain on y=0: got {}", p0.y);
+        assert!(p1.y.abs() < 1e-9, "new_v1 must remain on y=0: got {}", p1.y);
+    }
+
+    #[test]
+    fn free_wire_non_planar_returns_wire_not_planar() {
+        // 4 vertices NOT coplanar (tetrahedral arrangement).
+        let mut mesh = Mesh::new();
+        let (_a, _b, e1) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0))
+            .unwrap();
+        let (_b2, _c, _e2) = mesh
+            .draw_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0))
+            .unwrap();
+        let (_c2, _d, _e3) = mesh
+            .draw_line(DVec3::new(1.0, 1.0, 0.0), DVec3::new(1.0, 0.5, 1.0))
+            .unwrap();
+
+        let err = mesh
+            .offset_edge_on_host_face(e1, 0.3)
+            .err()
+            .expect("must reject non-planar wire");
+        assert!(matches!(err, OffsetEdgeError::WireNotPlanar { .. }));
+    }
+
+    #[test]
+    fn free_wire_collinear_polyline_returns_no_reference_plane() {
+        // 3 vertices all on the same line (no perpendicular extent).
+        let mut mesh = Mesh::new();
+        let (_a, _b, e1) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        let (_b2, _c, _e2) = mesh
+            .draw_line(DVec3::new(1.0, 0.0, 0.0), DVec3::new(2.0, 0.0, 0.0))
+            .unwrap();
+
+        let err = mesh
+            .offset_edge_on_host_face(e1, 0.3)
+            .err()
+            .expect("must reject collinear wire");
+        assert!(matches!(err, OffsetEdgeError::NoReferencePlane));
+    }
+
+    #[test]
+    fn free_wire_arc_curve_on_synthetic_plane_offset_succeeds() {
+        // Triangle wire defines a synthetic xy-plane; attach an Arc curve
+        // (in xy) to one edge — V-δ-α's synthetic plane should accept it.
+        let mut mesh = Mesh::new();
+        let (_a, _b, e1) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0))
+            .unwrap();
+        let (_b2, _c, _e2) = mesh
+            .draw_line(DVec3::new(2.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0))
+            .unwrap();
+        let (_c2, _a2, _e3) = mesh
+            .draw_line(DVec3::new(1.0, 1.0, 0.0), DVec3::ZERO)
+            .unwrap();
+
+        // Attach an Arc curve to e1 (must lie on z=0 plane).
+        mesh.edges[e1].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(1.0, 0.0, 0.0),
+            radius: 1.0,
+            normal: DVec3::Z, // ‖ synthetic plane normal
+            basis_u: DVec3::X,
+            start_angle: std::f64::consts::PI,
+            end_angle: std::f64::consts::TAU,
+        }));
+
+        let result = mesh
+            .offset_edge_on_host_face(e1, 0.2)
+            .expect("arc on synthetic plane OK");
+
+        // New edge curve should be Arc (radius shifted by ±0.2).
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { radius, .. } => {
+                assert!(
+                    (radius - 0.8).abs() < 1e-9 || (radius - 1.2).abs() < 1e-9,
+                    "arc radius must shift by ±0.2; got {radius}"
+                );
+            }
+            _ => panic!("must remain Arc"),
         }
     }
 

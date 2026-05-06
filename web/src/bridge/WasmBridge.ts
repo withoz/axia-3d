@@ -3143,6 +3143,14 @@ export class WasmBridge {
             vMin: Number(parsed.vMin ?? 0),
             vMax: Number(parsed.vMax ?? 0),
           };
+        case 'wire_not_planar':
+          return {
+            ok: false,
+            reason: 'wire_not_planar',
+            rmsError: Number(parsed.rmsError ?? 0),
+          };
+        case 'no_reference_plane':
+          return { ok: false, reason: 'no_reference_plane' };
         default:
           return { ok: false, reason: 'other', message: String(parsed.message ?? parsed.reason ?? 'unknown') };
       }
@@ -3616,6 +3624,8 @@ export type OffsetEdgeOnHostResult =
   | { ok: false; reason: 'radius_collapse'; currentRadius: number; newRadius: number }
   | { ok: false; reason: 'unsupported_curve_on_surface'; surfaceKind: string; curveKind: string }
   | { ok: false; reason: 'axial_out_of_range'; newV: number; vMin: number; vMax: number }
+  | { ok: false; reason: 'wire_not_planar'; rmsError: number }
+  | { ok: false; reason: 'no_reference_plane' }
   | { ok: false; reason: 'other'; message: string }
   | { ok: false; reason: 'bridge_unavailable' };
 

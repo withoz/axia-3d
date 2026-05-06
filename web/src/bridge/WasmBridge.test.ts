@@ -1699,6 +1699,26 @@ describe('WasmBridge', () => {
       });
     });
 
+    it('parses wire_not_planar with rmsError (V-δ-α)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: false, reason: 'wire_not_planar', rmsError: 0.0125 }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({ ok: false, reason: 'wire_not_planar', rmsError: 0.0125 });
+    });
+
+    it('parses no_reference_plane (V-δ-α)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: false, reason: 'no_reference_plane' }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({ ok: false, reason: 'no_reference_plane' });
+    });
+
     it('legacy offsetEdge UNCHANGED by V-β-α-bridge addition', () => {
       const oldFn = vi.fn(() =>
         JSON.stringify({ ok: true, newEdge: 5, newV0: 10, newV1: 11 }),

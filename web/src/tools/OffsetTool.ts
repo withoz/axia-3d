@@ -68,6 +68,14 @@ function formatEdgeOffsetFailureToast(
       case 'axial_out_of_range':
         parts.push(`${count}개: 축 방향 위치가 호스트 범위를 벗어납니다`);
         break;
+      case 'wire_not_planar':
+        parts.push(`${count}개: 자유 와이어가 평면이 아닙니다 (V-δ-β 명시 평면 필요)`);
+        break;
+      case 'no_reference_plane':
+        parts.push(
+          `${count}개: 기준 평면을 찾을 수 없습니다 (단일 엣지 또는 직선) — V-δ-β 활성 시 명시 평면 입력 가능`,
+        );
+        break;
       case 'bridge_unavailable':
         parts.push(`${count}개: WASM 미가용`);
         break;

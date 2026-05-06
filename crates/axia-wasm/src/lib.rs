@@ -5895,6 +5895,15 @@ impl AxiaEngine {
                             new_v, v_min, v_max
                         )
                     }
+                    OffsetEdgeError::WireNotPlanar { rms_error } => {
+                        format!(
+                            r#"{{"ok":false,"reason":"wire_not_planar","rmsError":{}}}"#,
+                            rms_error
+                        )
+                    }
+                    OffsetEdgeError::NoReferencePlane => {
+                        r#"{"ok":false,"reason":"no_reference_plane"}"#.to_string()
+                    }
                     other => {
                         let msg = other.to_string().replace('"', "'");
                         format!(r#"{{"ok":false,"reason":"other","message":"{}"}}"#, msg)
