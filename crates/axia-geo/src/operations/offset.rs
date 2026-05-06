@@ -295,7 +295,15 @@ impl Mesh {
                 );
             }
             AnalyticSurface::Cone { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Cone" });
+                // V-β-γ-3: dispatch to cone-specific offset path.
+                return self.offset_edge_on_cone(
+                    edge_id,
+                    v0,
+                    v1,
+                    edge_curve,
+                    &host_surface,
+                    dist,
+                );
             }
             AnalyticSurface::Torus { .. } => {
                 return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Torus" });
@@ -916,6 +924,218 @@ impl Mesh {
         })
     }
 
+    /// ADR-080 V-β-γ-3 — Edge offset on a Cone host face.
+    ///
+    /// Two analytic dispatch paths matching the cone's natural curve types:
+    ///
+    /// 1. **Slant Line** (constant u, varying v from apex toward base):
+    ///    Constant angular shift `Δu = sign·dist/(v_max·tan(half_angle))`
+    ///    where v_max is the larger axial endpoint. The new slant still
+    ///    passes through apex; bottom-end chord distance ≈ dist
+    ///    (SketchUp UX convention). §V2-γ3-A-(a)
+    ///
+    /// 2. **Latitude Arc/Circle** (constant v, varying u): center on axis,
+    ///    normal ‖ axis_dir, radius == v·tan(half_angle).
+    ///    Geodesic axial shift `Δv = sign·dist·cos(half_angle)`. §V2-γ3-B-(a)
+    ///    new_radius = new_v·tan(half_angle), normal/basis_u/angles preserved.
+    ///
+    /// Other curve kinds (axial line, off-cone arc, helical, NURBS) →
+    /// `UnsupportedCurveOnSurface`. New v outside cone v_range or ≤ 0
+    /// (apex collapse) → `AxialOutOfRange`.
+    fn offset_edge_on_cone(
+        &mut self,
+        edge_id: EdgeId,
+        v0: VertId,
+        v1: VertId,
+        edge_curve: Option<AnalyticCurve>,
+        host_surface: &AnalyticSurface,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        let (apex, axis_dir, half_angle, ref_dir, v_range) = match host_surface {
+            AnalyticSurface::Cone {
+                apex,
+                axis_dir,
+                half_angle,
+                ref_dir,
+                v_range,
+                ..
+            } => (
+                *apex,
+                axis_dir.normalize_or_zero(),
+                *half_angle,
+                ref_dir.normalize_or_zero(),
+                *v_range,
+            ),
+            _ => unreachable!("offset_edge_on_cone dispatched with non-Cone host"),
+        };
+        if axis_dir.length_squared() < 0.5 || ref_dir.length_squared() < 0.5 {
+            return Err(OffsetEdgeError::NoHostSurface(FaceId::new(0)));
+        }
+        let basis_v = axis_dir.cross(ref_dir);
+        let tan_a = half_angle.tan();
+        let cos_a = half_angle.cos();
+        let sin_a = half_angle.sin();
+
+        let p0 = self
+            .vertex_pos(v0)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+        let p1 = self
+            .vertex_pos(v1)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+        // ── Latitude Arc / Circle path ─────────────────────────────────
+        if let Some(curve) = &edge_curve {
+            let (arc_center, arc_radius, arc_normal, basis_u_arc, angles) = match curve {
+                AnalyticCurve::Arc {
+                    center,
+                    radius,
+                    normal,
+                    basis_u,
+                    start_angle,
+                    end_angle,
+                } => (
+                    *center,
+                    *radius,
+                    *normal,
+                    *basis_u,
+                    Some((*start_angle, *end_angle)),
+                ),
+                AnalyticCurve::Circle {
+                    center,
+                    radius,
+                    normal,
+                    basis_u,
+                } => (*center, *radius, *normal, *basis_u, None),
+                AnalyticCurve::Line { .. } => {
+                    // Fall through to slant line path.
+                    return offset_slant_line_on_cone(
+                        self, edge_id, p0, p1, apex, axis_dir, half_angle,
+                        ref_dir, basis_v, v_range, dist, tol,
+                    );
+                }
+                _ => {
+                    let kind = match curve {
+                        AnalyticCurve::Bezier { .. } => "Bezier",
+                        AnalyticCurve::BSpline { .. } => "BSpline",
+                        AnalyticCurve::NURBS { .. } => "NURBS",
+                        _ => unreachable!(),
+                    };
+                    return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                        surface_kind: "Cone",
+                        curve_kind: kind,
+                    });
+                }
+            };
+
+            // §V2-γ3-C Sanity (latitude ring on cone):
+            //   - center on axis (project (center - apex) ⊥ axis = 0)
+            //   - arc.normal ‖ axis_dir
+            //   - arc.radius == v·tan(half_angle), where v = (center - apex)·axis
+            let from_apex = arc_center - apex;
+            let v_arc = from_apex.dot(axis_dir);
+            let center_off_axis = (from_apex - v_arc * axis_dir).length();
+            let arc_n_unit = arc_normal.normalize_or_zero();
+            let normal_match = arc_n_unit.dot(axis_dir).abs() > 0.999;
+            let expected_radius = v_arc * tan_a;
+            let radius_match = (arc_radius - expected_radius).abs() < tol;
+            if center_off_axis > tol || !normal_match || !radius_match || v_arc <= tol {
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Cone",
+                    curve_kind: if angles.is_some() {
+                        "Arc(off-cone)"
+                    } else {
+                        "Circle(off-cone)"
+                    },
+                });
+            }
+
+            // §V2-γ3-E Sign — tangent × surface_normal projected onto axis.
+            let theta_mid = match angles {
+                Some((s, e)) => (s + e) * 0.5,
+                None => 0.0,
+            };
+            let basis_u_unit = basis_u_arc.normalize_or_zero();
+            let basis_v_arc = arc_n_unit.cross(basis_u_unit);
+            let tangent =
+                -theta_mid.sin() * basis_u_unit + theta_mid.cos() * basis_v_arc;
+            // Cone surface normal at P_mid (V-β-γ-iii formula):
+            //   n(u) = cos(α)·radial_dir(u) - sin(α)·axis_dir
+            let p_mid =
+                arc_center + arc_radius * (theta_mid.cos() * basis_u_unit + theta_mid.sin() * basis_v_arc);
+            let radial_at_p = (p_mid - apex) - ((p_mid - apex).dot(axis_dir)) * axis_dir;
+            if radial_at_p.length_squared() < tol * tol {
+                return Err(OffsetEdgeError::EdgeParallelToNormal);
+            }
+            let radial_dir_unit = radial_at_p.normalize();
+            let surf_normal = cos_a * radial_dir_unit - sin_a * axis_dir;
+            let right_side = tangent.cross(surf_normal);
+            let axial_sign = if right_side.dot(axis_dir) > 0.0 { 1.0 } else { -1.0 };
+
+            // §V2-γ3-B-(a) Geodesic Δv = sign·dist·cos(half_angle).
+            let delta_v = axial_sign * dist * cos_a;
+            let new_v_axial = v_arc + delta_v;
+
+            // §V2-γ3-D Range guard: new_v must be > 0 (above apex) and
+            // within cone v_range.
+            if new_v_axial < tol
+                || new_v_axial < v_range.0 - tol
+                || new_v_axial > v_range.1 + tol
+            {
+                return Err(OffsetEdgeError::AxialOutOfRange {
+                    new_v: new_v_axial,
+                    v_min: v_range.0.max(tol),
+                    v_max: v_range.1,
+                });
+            }
+
+            let new_radius = new_v_axial * tan_a;
+            let new_center = apex + new_v_axial * axis_dir;
+            let pt = |theta: f64| -> DVec3 {
+                new_center + new_radius * (theta.cos() * basis_u_unit + theta.sin() * basis_v_arc)
+            };
+            let (new_p0, new_p1) = match angles {
+                Some((s, e)) => (pt(s), pt(e)),
+                None => (pt(0.0), pt(std::f64::consts::TAU - 1e-6)),
+            };
+            let new_v0_id = self.add_vertex(new_p0);
+            let new_v1_id = self.add_vertex(new_p1);
+            let (new_edge, _) = self
+                .add_edge(new_v0_id, new_v1_id)
+                .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+            let new_curve = match angles {
+                Some((s, e)) => AnalyticCurve::Arc {
+                    center: new_center,
+                    radius: new_radius,
+                    normal: arc_normal,
+                    basis_u: basis_u_arc,
+                    start_angle: s,
+                    end_angle: e,
+                },
+                None => AnalyticCurve::Circle {
+                    center: new_center,
+                    radius: new_radius,
+                    normal: arc_normal,
+                    basis_u: basis_u_arc,
+                },
+            };
+            if let Some(e) = self.edges.get_mut(new_edge) {
+                e.set_curve(Some(new_curve));
+            }
+            return Ok(OffsetEdgeResult {
+                new_v0: new_v0_id,
+                new_v1: new_v1_id,
+                new_edge,
+            });
+        }
+
+        // ── Slant Line path (curve = None) ─────────────────────────────
+        offset_slant_line_on_cone(
+            self, edge_id, p0, p1, apex, axis_dir, half_angle,
+            ref_dir, basis_v, v_range, dist, tol,
+        )
+    }
+
     /// face_id의 경계를 dist만큼 오프셋.
     /// dist > 0: 안쪽 (inset), dist < 0: 바깥쪽 (outset)
     ///
@@ -1136,6 +1356,123 @@ fn offset_axial_line_on_cylinder(
     })
 }
 
+/// ADR-080 V-β-γ-3 — Slant line on cone offset (§V2-γ3-A-(a)).
+/// Constant angular shift evaluated at v_max (bottom-of-slant chord
+/// distance ≈ dist). New slant still passes through apex.
+///
+/// Verifies edge_dir ‖ slant direction at u₀, both endpoints lie on
+/// cone surface. Then computes:
+///   `Δu = sign · dist / (v_max · tan(half_angle))`
+/// where `sign = sign(edge_dir · slant_at_u₀)`. New endpoint positions
+/// preserve their v_axial; only u (angular position) changes.
+#[allow(clippy::too_many_arguments)]
+fn offset_slant_line_on_cone(
+    mesh: &mut Mesh,
+    edge_id: EdgeId,
+    p0: DVec3,
+    p1: DVec3,
+    apex: DVec3,
+    axis_dir: DVec3,
+    half_angle: f64,
+    ref_dir: DVec3,
+    basis_v: DVec3,
+    _v_range: (f64, f64),
+    dist: f64,
+    tol: f64,
+) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+    let edge_vec = p1 - p0;
+    if edge_vec.length_squared() < 1e-12 {
+        return Err(OffsetEdgeError::DegenerateDistance(0.0));
+    }
+    let edge_dir = edge_vec.normalize();
+    let tan_a = half_angle.tan();
+    if half_angle <= 1e-6 || half_angle >= std::f64::consts::FRAC_PI_2 - 1e-6 {
+        return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+            surface_kind: "Cone",
+            curve_kind: "Line(singular-cone)",
+        });
+    }
+
+    // Both endpoints must lie on cone surface.
+    //   v_axial = (P - apex) · axis_dir
+    //   r_actual = |radial component| should equal v_axial · tan(α)
+    let cone_check = |p: DVec3| -> Option<(f64, DVec3)> {
+        let from_apex = p - apex;
+        let v_axial = from_apex.dot(axis_dir);
+        if v_axial <= tol {
+            return None;
+        }
+        let radial_vec = from_apex - v_axial * axis_dir;
+        let r_actual = radial_vec.length();
+        let r_expected = v_axial * tan_a;
+        if (r_actual - r_expected).abs() > 1e-3 {
+            return None;
+        }
+        if r_actual < 1e-9 {
+            return None;
+        }
+        let radial_dir_unit = radial_vec / r_actual;
+        Some((v_axial, radial_dir_unit))
+    };
+    let (v0_axial, radial_p0) = cone_check(p0).ok_or(OffsetEdgeError::UnsupportedCurveOnSurface {
+        surface_kind: "Cone",
+        curve_kind: "Line(off-cone)",
+    })?;
+    let (v1_axial, radial_p1) = cone_check(p1).ok_or(OffsetEdgeError::UnsupportedCurveOnSurface {
+        surface_kind: "Cone",
+        curve_kind: "Line(off-cone)",
+    })?;
+
+    // Both endpoints must share the same u (slant line invariant).
+    if (radial_p0 - radial_p1).length() > 1e-6 {
+        return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+            surface_kind: "Cone",
+            curve_kind: "Line(non-slant)",
+        });
+    }
+
+    // Slant direction at u₀ (from apex toward base):
+    //   slant = axis_dir + tan(α)·radial_dir (unnormalized)
+    let slant_unnorm = axis_dir + tan_a * radial_p0;
+    let slant = slant_unnorm.normalize();
+    if edge_dir.dot(slant).abs() < 0.999 {
+        return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+            surface_kind: "Cone",
+            curve_kind: "Line(non-slant)",
+        });
+    }
+
+    // §V2-γ3-A-(a) Constant Δu evaluated at v_max.
+    let v_max = v0_axial.max(v1_axial);
+    let r_at_v_max = v_max * tan_a;
+    if r_at_v_max <= tol {
+        return Err(OffsetEdgeError::DegenerateDistance(r_at_v_max));
+    }
+    let dir_sign = edge_dir.dot(slant).signum();
+    let delta_u = dir_sign * dist / r_at_v_max;
+
+    // Current u₀ from radial_p0.
+    let u0 = radial_p0.dot(basis_v).atan2(radial_p0.dot(ref_dir));
+    let new_u = u0 + delta_u;
+    let new_radial = new_u.cos() * ref_dir + new_u.sin() * basis_v;
+
+    // New endpoint positions: same v_axial, new u (i.e., new radial direction).
+    let new_p0 = apex + v0_axial * axis_dir + (v0_axial * tan_a) * new_radial;
+    let new_p1 = apex + v1_axial * axis_dir + (v1_axial * tan_a) * new_radial;
+
+    let new_v0_id = mesh.add_vertex(new_p0);
+    let new_v1_id = mesh.add_vertex(new_p1);
+    let (new_edge, _) = mesh
+        .add_edge(new_v0_id, new_v1_id)
+        .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+    Ok(OffsetEdgeResult {
+        new_v0: new_v0_id,
+        new_v1: new_v1_id,
+        new_edge,
+    })
+}
+
 /// ADR-080 §V2-B helper — Are two surfaces "equivalent" for host
 /// resolution purposes? In V-β-α we only support Plane host, so
 /// equivalence = same Plane (origin + normal coplanar within
@@ -1181,6 +1518,30 @@ fn surfaces_equivalent(
                 },
             ) => {
                 (*ca - *cb).length() < tol && (ra - rb).abs() < tol
+            }
+            (
+                AnalyticSurface::Cone {
+                    apex: aa,
+                    axis_dir: ad_a,
+                    half_angle: ha_a,
+                    ref_dir: rd_a,
+                    ..
+                },
+                AnalyticSurface::Cone {
+                    apex: ab,
+                    axis_dir: ad_b,
+                    half_angle: ha_b,
+                    ref_dir: rd_b,
+                    ..
+                },
+            ) => {
+                let apex_match = (*aa - *ab).length() < tol;
+                let axis_match =
+                    ad_a.normalize_or_zero().dot(ad_b.normalize_or_zero()).abs() > 0.999;
+                let half_match = (ha_a - ha_b).abs() < 1e-9;
+                let ref_match =
+                    rd_a.normalize_or_zero().dot(rd_b.normalize_or_zero()).abs() > 0.999;
+                apex_match && axis_match && half_match && ref_match
             }
             (
                 AnalyticSurface::Cylinder {
@@ -1609,9 +1970,9 @@ mod tests {
     }
 
     #[test]
-    fn line_offset_on_cone_host_returns_unsupported() {
-        // V-β-γ-1/2 activated Cylinder/Sphere; Cone/Torus still defer to
-        // V-β-γ-3/4. Re-target this regression to Cone host.
+    fn line_offset_on_torus_host_returns_unsupported() {
+        // V-β-γ-1/2/3 activated Cylinder/Sphere/Cone; Torus still defers
+        // to V-β-γ-4. Re-target this regression to Torus host.
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let vs = [
@@ -1621,22 +1982,23 @@ mod tests {
             mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0)),
         ];
         let face = mesh.add_face(&vs, mat).unwrap();
-        mesh.faces[face].set_surface(Some(AnalyticSurface::Cone {
-            apex: DVec3::ZERO,
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Torus {
+            center: DVec3::ZERO,
             axis_dir: DVec3::Z,
-            half_angle: std::f64::consts::FRAC_PI_4,
             ref_dir: DVec3::X,
+            major_radius: 3.0,
+            minor_radius: 1.0,
             u_range: (0.0, std::f64::consts::TAU),
-            v_range: (0.1, 1.0),
+            v_range: (0.0, std::f64::consts::TAU),
         }));
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
         let err = mesh
             .offset_edge_on_host_face(edge, 0.3)
             .err()
-            .expect("must defer cone host");
+            .expect("must defer torus host");
         assert!(matches!(
             err,
-            OffsetEdgeError::UnsupportedHostSurface { kind: "Cone" }
+            OffsetEdgeError::UnsupportedHostSurface { kind: "Torus" }
         ));
     }
 
@@ -2348,6 +2710,355 @@ mod tests {
                 );
             }
             _ => panic!("must remain Circle"),
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-γ-3 — Edge offset on Cone host
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper — build a "cone panel" face (triangular slice). apex at
+    /// origin, axis = +Z, half_angle parameter, between v=v_min and v=v_max.
+    fn build_cone_panel(
+        mesh: &mut Mesh,
+        half_angle: f64,
+        v_min: f64,
+        v_max: f64,
+        u_min: f64,
+        u_max: f64,
+    ) -> (FaceId, [VertId; 4]) {
+        let mat = MaterialId::new(0);
+        let tan_a = half_angle.tan();
+        let on_cone = |u: f64, v: f64| {
+            DVec3::new(v * tan_a * u.cos(), v * tan_a * u.sin(), v)
+        };
+        let v00 = mesh.add_vertex(on_cone(u_min, v_min));
+        let v10 = mesh.add_vertex(on_cone(u_max, v_min));
+        let v11 = mesh.add_vertex(on_cone(u_max, v_max));
+        let v01 = mesh.add_vertex(on_cone(u_min, v_max));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            half_angle,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (v_min - 10.0, v_max + 10.0),
+        }));
+        (face, [v00, v10, v11, v01])
+    }
+
+    #[test]
+    fn cone_slant_line_offset_changes_angular_position() {
+        let mut mesh = Mesh::new();
+        // 45° cone, slant from v=1 to v=2 at u=0 (along +X-axis radial).
+        let (_face, vs) = build_cone_panel(
+            &mut mesh,
+            std::f64::consts::FRAC_PI_4,
+            1.0,
+            2.0,
+            0.0,
+            1.0,
+        );
+        // v00 (u=0, v=1) → v01 (u=0, v=2) is a slant line at u=0.
+        let edge = find_edge_between(&mesh, vs[0], vs[3]);
+
+        // Offset by dist = 0.5. v_max = 2, tan(45°) = 1, r_at_v_max = 2.
+        // Expected Δu = 0.5 / 2 = 0.25 rad (sign depends on edge direction).
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("slant offset OK");
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+
+        // Both endpoints must lie on cone (radius = v·tan(α) = v at v=1 and v=2).
+        let on_cone = |p: DVec3, expected_v: f64| {
+            let r_actual = (p.x * p.x + p.y * p.y).sqrt();
+            (p.z - expected_v).abs() < 1e-9 && (r_actual - expected_v).abs() < 1e-9
+        };
+        // p0 should be at v=1 (z=1, radius=1), p1 at v=2 (z=2, radius=2).
+        let z_set = [p0.z, p1.z];
+        assert!(
+            (on_cone(p0, 1.0) && on_cone(p1, 2.0)) || (on_cone(p1, 1.0) && on_cone(p0, 2.0)),
+            "endpoints must lie on cone: zs = {z_set:?}"
+        );
+
+        // New u (extracted from p1 at v=2) must be ±0.25 rad.
+        let p_at_v2 = if (p0.z - 2.0).abs() < 1e-9 { p0 } else { p1 };
+        let new_u = p_at_v2.y.atan2(p_at_v2.x);
+        assert!(
+            (new_u - 0.25).abs() < 1e-9 || (new_u - (-0.25)).abs() < 1e-9,
+            "new u must be ±0.25 rad, got {new_u}"
+        );
+    }
+
+    #[test]
+    fn cone_slant_line_preserves_apex_to_base_geometry() {
+        // After offset, slant should still be on the cone (apex preserved
+        // implicitly: both endpoints have radius = v·tan(α)).
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cone_panel(
+            &mut mesh,
+            std::f64::consts::FRAC_PI_3, // 60°
+            0.5,
+            2.0,
+            0.0,
+            0.5,
+        );
+        let edge = find_edge_between(&mesh, vs[0], vs[3]);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .expect("offset OK");
+        let tan_a = std::f64::consts::FRAC_PI_3.tan();
+        for v_id in [result.new_v0, result.new_v1] {
+            let p = mesh.vertex_pos(v_id).unwrap();
+            let r_actual = (p.x * p.x + p.y * p.y).sqrt();
+            let r_expected = p.z * tan_a;
+            assert!(
+                (r_actual - r_expected).abs() < 1e-9,
+                "endpoint must remain on cone: r={r_actual}, expected {r_expected} (z={})",
+                p.z
+            );
+        }
+    }
+
+    #[test]
+    fn cone_axial_line_rejected() {
+        // Edge along +Z (cone axis) but vertices on cone surface — axial
+        // direction not slant.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Two points on cone but at different u (not slant) — this needs
+        // a non-slant configuration. Using axis-parallel between two
+        // non-collinear-with-apex points: just two points stacked vertically
+        // at fixed u=0 — this IS slant. Use u=0 and u=π → two opposite
+        // sides.
+        let v0 = mesh.add_vertex(DVec3::new(1.0, 0.0, 1.0));   // u=0, v=1, on cone at α=45°
+        let v1 = mesh.add_vertex(DVec3::new(-2.0, 0.0, 2.0));  // u=π, v=2, on cone
+        let v2 = mesh.add_vertex(DVec3::new(-2.0, 1.0, 2.0));
+        let v3 = mesh.add_vertex(DVec3::new(1.0, 1.0, 1.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            half_angle: std::f64::consts::FRAC_PI_4,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-10.0, 10.0),
+        }));
+        let edge = find_edge_between(&mesh, v0, v1);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject non-slant");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Cone",
+                curve_kind: "Line(non-slant)"
+            }
+        ));
+    }
+
+    #[test]
+    fn cone_off_cone_line_rejected() {
+        // Edge between two points NOT on the cone surface.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.5, 0.0, 1.0)); // not on 45° cone (need r=1 at z=1)
+        let v1 = mesh.add_vertex(DVec3::new(0.5, 0.0, 2.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.5, 0.5, 2.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.5, 0.5, 1.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            half_angle: std::f64::consts::FRAC_PI_4,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-10.0, 10.0),
+        }));
+        let edge = find_edge_between(&mesh, v0, v1);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject off-cone");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Cone",
+                curve_kind: "Line(off-cone)"
+            }
+        ));
+    }
+
+    #[test]
+    fn cone_latitude_arc_offset_shifts_axial_with_cos_factor() {
+        // 45° cone, latitude ring at v=1 (radius=1).
+        // dist magnitude √2/2 → |Δv| = (√2/2) · cos(45°) = 0.5.
+        // Try both signs; whichever direction succeeds verifies Δv magnitude.
+        let attempt = |dist: f64| -> Option<(DVec3, f64)> {
+            let mut mesh = Mesh::new();
+            let (_face, vs) = build_cone_panel(
+                &mut mesh,
+                std::f64::consts::FRAC_PI_4,
+                1.0,
+                2.0,
+                0.0,
+                1.0,
+            );
+            let edge = find_edge_between(&mesh, vs[0], vs[1]);
+            mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+                center: DVec3::new(0.0, 0.0, 1.0),
+                radius: 1.0,
+                normal: DVec3::Z,
+                basis_u: DVec3::X,
+                start_angle: 0.0,
+                end_angle: 1.0,
+            }));
+            mesh.offset_edge_on_host_face(edge, dist)
+                .ok()
+                .and_then(|r| {
+                    mesh.edges
+                        .get(r.new_edge)
+                        .and_then(|e| e.curve())
+                        .and_then(|c| match c {
+                            AnalyticCurve::Arc { center, radius, .. } => {
+                                Some((*center, *radius))
+                            }
+                            _ => None,
+                        })
+                })
+        };
+
+        let dist = std::f64::consts::SQRT_2 / 2.0; // = 0.5/cos(45°)
+        let r_plus = attempt(dist);
+        let r_minus = attempt(-dist);
+
+        // |Δv| = 0.5 → new_v ∈ {0.5, 1.5}; cone identity r = v·tan(45°) = v.
+        let success_seen = match (r_plus, r_minus) {
+            (Some((c1, r1)), _) => {
+                let new_v = c1.z;
+                ((new_v - 0.5).abs() < 1e-9 || (new_v - 1.5).abs() < 1e-9)
+                    && (r1 - new_v).abs() < 1e-9
+            }
+            (None, Some((c2, r2))) => {
+                let new_v = c2.z;
+                ((new_v - 0.5).abs() < 1e-9 || (new_v - 1.5).abs() < 1e-9)
+                    && (r2 - new_v).abs() < 1e-9
+            }
+            _ => false,
+        };
+        assert!(
+            success_seen,
+            "one sign must produce |Δv|=0.5 with cone identity preserved; got {:?} / {:?}",
+            r_plus, r_minus
+        );
+    }
+
+    #[test]
+    fn cone_latitude_off_axis_arc_rejected() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cone_panel(
+            &mut mesh,
+            std::f64::consts::FRAC_PI_4,
+            1.0,
+            2.0,
+            0.0,
+            1.0,
+        );
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Arc with center NOT on cone axis.
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.5, 0.0, 1.0), // off-axis
+            radius: 0.5,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject off-axis arc");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Cone",
+                curve_kind: "Arc(off-cone)"
+            }
+        ));
+    }
+
+    #[test]
+    fn cone_latitude_arc_collapse_at_apex_rejected() {
+        // Latitude near apex; large dist would push past apex (new_v ≤ 0).
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cone_panel(
+            &mut mesh,
+            std::f64::consts::FRAC_PI_4,
+            0.5,
+            1.0,
+            0.0,
+            1.0,
+        );
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Arc at v=0.5 (near apex), radius=0.5.
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, 0.5),
+            radius: 0.5,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+        // dist = 1 → Δv = 1·cos(45°) ≈ 0.707. new_v = 0.5 ± 0.707.
+        // Negative direction → -0.207 (past apex).
+        let err1 = mesh.offset_edge_on_host_face(edge, 1.0).err();
+        let err2 = mesh.offset_edge_on_host_face(edge, -1.0).err();
+        let oor_seen = matches!(err1, Some(OffsetEdgeError::AxialOutOfRange { .. }))
+            || matches!(err2, Some(OffsetEdgeError::AxialOutOfRange { .. }));
+        assert!(
+            oor_seen,
+            "one sign must trigger apex collapse, got {:?} / {:?}",
+            err1, err2
+        );
+    }
+
+    #[test]
+    fn cone_offset_preserves_half_angle_identity() {
+        // Verify that after latitude offset, every point P satisfies
+        // r(P) = v(P) · tan(half_angle) — cone identity.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cone_panel(
+            &mut mesh,
+            std::f64::consts::FRAC_PI_6, // 30°
+            1.0,
+            3.0,
+            0.0,
+            1.0,
+        );
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let tan_a = std::f64::consts::FRAC_PI_6.tan();
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, 1.0),
+            radius: tan_a, // v · tan(α) at v=1
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 0.5,
+        }));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.2)
+            .expect("offset OK");
+        for v_id in [result.new_v0, result.new_v1] {
+            let p = mesh.vertex_pos(v_id).unwrap();
+            let r_actual = (p.x * p.x + p.y * p.y).sqrt();
+            let r_expected = p.z * tan_a;
+            assert!(
+                (r_actual - r_expected).abs() < 1e-9,
+                "cone identity r=v·tan(α) violated: r={r_actual}, expected {r_expected}"
+            );
         }
     }
 
