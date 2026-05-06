@@ -1529,4 +1529,36 @@ describe('WasmBridge', () => {
       expect(drawCircleFn).toHaveBeenCalled();
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-079 W-1-β — createSolidExtrude bridge wrapper
+  // (Push/Pull architectural successor — Plane Box via create_solid kernel)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-079 W-1-β createSolidExtrude wrapper', () => {
+    it('createSolidExtrude forwards to engine.create_solid_extrude with id + distance', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { create_solid_extrude: fn };
+      const ok = bridge.createSolidExtrude(7, 100);
+      expect(ok).toBe(true);
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(fn).toHaveBeenCalledWith(7, 100);
+    });
+
+    it('createSolidExtrude returns false when WASM endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.createSolidExtrude(1, 50)).toBe(false);
+    });
+
+    it('legacy pushPull UNCHANGED — not affected by createSolidExtrude addition', () => {
+      const ppFn = vi.fn(() => true);
+      const csFn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { push_pull: ppFn, create_solid_extrude: csFn };
+      bridge.pushPull(7, 100);
+      expect(ppFn).toHaveBeenCalledTimes(1);
+      expect(csFn).not.toHaveBeenCalled();
+    });
+  });
 });

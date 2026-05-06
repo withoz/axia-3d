@@ -867,6 +867,25 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-079 W-1-β — Surface-native solid extrusion bridge.
+     *
+     * Routes through `Command::CreateSolid` with `CreateSolidMode::Extrude`.
+     * On success, returns true. On `SolidError::NotYetSupported` (curved
+     * profile / NURBS / non-Plane), Scene auto-falls-back to legacy
+     * `Mesh::push_pull` per ADR-079 Q3 lock-in — caller still receives
+     * true on overall success.
+     *
+     * Per W-1-β scope: Extrude mode only. Other modes (Revolve / Sweep /
+     * Loft) get separate exports in W-3 / W-4.
+     * @param {number} face_id_raw
+     * @param {number} distance
+     * @returns {boolean}
+     */
+    create_solid_extrude(face_id_raw, distance) {
+        const ret = wasm.axiaengine_create_solid_extrude(this.__wbg_ptr, face_id_raw, distance);
+        return ret !== 0;
+    }
+    /**
      * Create a sphere primitive (UV sphere).
      * Returns a face ID from the sphere for Push/Pull operations.
      * @param {number} cx

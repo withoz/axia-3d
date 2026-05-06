@@ -271,6 +271,19 @@ export class AxiaEngine {
      */
     create_group(name: string, face_ids: Uint32Array): number;
     /**
+     * ADR-079 W-1-β — Surface-native solid extrusion bridge.
+     *
+     * Routes through `Command::CreateSolid` with `CreateSolidMode::Extrude`.
+     * On success, returns true. On `SolidError::NotYetSupported` (curved
+     * profile / NURBS / non-Plane), Scene auto-falls-back to legacy
+     * `Mesh::push_pull` per ADR-079 Q3 lock-in — caller still receives
+     * true on overall success.
+     *
+     * Per W-1-β scope: Extrude mode only. Other modes (Revolve / Sweep /
+     * Loft) get separate exports in W-3 / W-4.
+     */
+    create_solid_extrude(face_id_raw: number, distance: number): boolean;
+    /**
      * Create a sphere primitive (UV sphere).
      * Returns a face ID from the sphere for Push/Pull operations.
      */
@@ -1531,6 +1544,7 @@ export interface InitOutput {
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cylinder: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_group: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly axiaengine_create_solid_extrude: (a: number, b: number, c: number) => number;
     readonly axiaengine_create_sphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_deleteEdgeCascade: (a: number, b: number) => number;
     readonly axiaengine_deleteShape: (a: number, b: number) => number;

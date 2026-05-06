@@ -2047,6 +2047,86 @@ impl AxiaEngine {
         ok
     }
 
+    /// ADR-079 W-1-β — Surface-native solid extrusion bridge.
+    ///
+    /// Routes through `Command::CreateSolid` with `CreateSolidMode::Extrude`.
+    /// On success, returns true. On `SolidError::NotYetSupported` (curved
+    /// profile / NURBS / non-Plane), Scene auto-falls-back to legacy
+    /// `Mesh::push_pull` per ADR-079 Q3 lock-in — caller still receives
+    /// true on overall success.
+    ///
+    /// Per W-1-β scope: Extrude mode only. Other modes (Revolve / Sweep /
+    /// Loft) get separate exports in W-3 / W-4.
+    pub fn create_solid_extrude(
+        &mut self,
+        face_id_raw: u32,
+        distance: f64,
+    ) -> bool {
+        let fid = FaceId::new(face_id_raw);
+
+        // ADR-016 Q2 — multi-loop face (ring with holes) 거부 (push_pull 패턴 답습).
+        if let Some(face) = self.scene.mesh.faces.get(fid) {
+            if !face.inners().is_empty() {
+                debug_log!("[RUST] create_solid_extrude rejected: face {} has \
+                            {} hole(s) — multi-loop face unsupported (ADR-016 Q2)",
+                            face_id_raw, face.inners().len());
+                return false;
+            }
+        }
+
+        let faces_before = self.scene.mesh.face_count();
+        debug_log!("[RUST] create_solid_extrude faceId={} distance={:.3} faces_before={}",
+            face_id_raw, distance, faces_before);
+
+        let cmd = Command::CreateSolid {
+            face_id: fid,
+            mode: axia_geo::CreateSolidMode::Extrude { distance },
+        };
+        let result = self.scene.execute(cmd);
+
+        let faces_after = self.scene.mesh.face_count();
+
+        let ok = match &result {
+            axia_core::commands::CommandResult::SolidCreated { kind, face_count } => {
+                debug_log!(
+                    "[RUST] create_solid_extrude ok kind={:?} face_count={} (delta={:+})",
+                    kind, face_count, faces_after as i64 - faces_before as i64,
+                );
+                true
+            }
+            axia_core::commands::CommandResult::PushPullDone {
+                sides_created, adj_splits, base_removed, ref split_debug,
+            } => {
+                // Q3 fallback path — Scene auto-routed to legacy push_pull.
+                debug_log!(
+                    "[RUST] create_solid_extrude → Q3 fallback to push_pull: \
+                     faces={} (delta={:+}) sides={} adj_splits={} base_removed={}",
+                    faces_after, faces_after as i64 - faces_before as i64,
+                    sides_created, adj_splits, base_removed,
+                );
+                for msg in split_debug {
+                    debug_log!("[SPLIT] {}", msg);
+                }
+                true
+            }
+            axia_core::commands::CommandResult::Error(e) => {
+                console_error!("[RUST] create_solid_extrude ERROR: {}", e);
+                self.set_error(e.to_string());
+                false
+            }
+            _ => {
+                debug_log!("[RUST] create_solid_extrude unexpected result");
+                false
+            }
+        };
+
+        if ok {
+            self.mark_topology_changed();
+        }
+        self.invalidate_cache();
+        ok
+    }
+
     /// Push/Pull a smooth group seamlessly (no gaps, wall faces connect adjacent surfaces)
     ///
     /// # Parameters

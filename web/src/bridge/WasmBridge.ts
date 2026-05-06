@@ -1296,6 +1296,25 @@ export class WasmBridge {
   }
 
   /**
+   * ADR-079 W-1-β — Surface-native solid extrusion (Push/Pull successor).
+   *
+   * Routes through `Command::CreateSolid` with `CreateSolidMode::Extrude`.
+   * Plane all-Line profile → Box solid (W-1-α active). Other profiles
+   * (curved / NURBS / non-Plane) auto-fall-back to legacy `push_pull`
+   * per ADR-079 Q3 lock-in — caller still sees true on overall success.
+   *
+   * Drop-in replacement signature for `pushPull(faceId, dist)`.
+   */
+  createSolidExtrude(faceId: number, distance: number): boolean {
+    if (!this.engine) return false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).create_solid_extrude;
+    if (!fn) return false;
+    this.markDirty();
+    return fn.call(this.engine, faceId, distance);
+  }
+
+  /**
    * WASM 엔진의 마지막 실패 메시지 반환. 성공 이력만 있으면 빈 문자열.
    * 연산이 false를 반환했을 때 이 값으로 Toast/UI 피드백 표시 (ADR-003).
    */

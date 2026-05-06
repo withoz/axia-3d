@@ -748,3 +748,66 @@ fn shape_p4_input_signatures_match_lockin() {
     assert!(body.contains("material_id: u32"),
         "P-4: promote_shape_to_xia must take material_id: u32");
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-079 W-1-β — `create_solid_extrude` WASM bridge invariants.
+//
+// Mirrors push_pull pattern. Source-inspection — cargo test cannot drive
+// js-sys marshalling, so we exercise lib.rs source to verify wiring.
+// ════════════════════════════════════════════════════════════════════════
+
+/// W-1-β #1 — Endpoint wired with correct signature.
+#[test]
+fn create_solid_extrude_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn create_solid_extrude"),
+        "ADR-079 W-1-β: missing Rust function pub fn create_solid_extrude");
+}
+
+/// W-1-β #2 — Signature matches push_pull family (face_id_raw: u32,
+/// distance: f64, returns bool). Drop-in compatibility with bridge.pushPull.
+#[test]
+fn create_solid_extrude_signature_matches_push_pull_family() {
+    let l = lib_src();
+    let idx = l.find("pub fn create_solid_extrude").expect("create_solid_extrude");
+    let body = char_safe_slice(&l, idx, 400);
+    assert!(body.contains("face_id_raw: u32"),
+        "W-1-β: create_solid_extrude must take face_id_raw: u32");
+    assert!(body.contains("distance: f64"),
+        "W-1-β: create_solid_extrude must take distance: f64");
+    assert!(body.contains("-> bool"),
+        "W-1-β: create_solid_extrude must return bool");
+}
+
+/// W-1-β #3 — Dispatches via Command::CreateSolid with
+/// CreateSolidMode::Extrude. This is the integration with W-1-α.
+#[test]
+fn create_solid_extrude_dispatches_via_command() {
+    let l = lib_src();
+    let idx = l.find("pub fn create_solid_extrude").expect("create_solid_extrude");
+    let body = char_safe_slice(&l, idx, 1500);
+    assert!(body.contains("Command::CreateSolid"),
+        "W-1-β: must dispatch through Command::CreateSolid");
+    assert!(body.contains("CreateSolidMode::Extrude"),
+        "W-1-β: must use CreateSolidMode::Extrude");
+    assert!(body.contains("scene.execute(cmd)"),
+        "W-1-β: must call scene.execute");
+}
+
+/// W-1-β #4 — Handles both SolidCreated (W-1-α success) AND PushPullDone
+/// (Q3 fallback path) results. The fallback case is critical — when
+/// Scene::exec_create_solid auto-falls-back to legacy push_pull, the
+/// result variant changes from SolidCreated to PushPullDone, but caller
+/// should still see success.
+#[test]
+fn create_solid_extrude_handles_solid_created_and_fallback() {
+    let l = lib_src();
+    let idx = l.find("pub fn create_solid_extrude").expect("create_solid_extrude");
+    let body = char_safe_slice(&l, idx, 3500);
+    assert!(body.contains("SolidCreated"),
+        "W-1-β: must match CommandResult::SolidCreated (W-1-α success)");
+    assert!(body.contains("PushPullDone"),
+        "W-1-β: must match CommandResult::PushPullDone (Q3 fallback)");
+    assert!(body.contains("CommandResult::Error"),
+        "W-1-β: must match CommandResult::Error");
+}

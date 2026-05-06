@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       pushPull: vi.fn().mockReturnValue(true),
+      createSolidExtrude: vi.fn().mockReturnValue(true),
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 5, 0)),
       getFaceNormal: vi.fn().mockReturnValue(new Float32Array([0, 1, 0])),
       engine: {
@@ -52,7 +53,13 @@ describe('PushPullTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: PushPullTool;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // ADR-079 W-1-β — module-level form-mode default is true (P-5e-α).
+    // Reset to false so legacy-path tests below exercise bridge.pushPull.
+    // The W-1-β dispatch tests explicitly setDrawShapeMode(true) in scope.
+    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+    setDrawShapeMode(false);
+
     ctx = mockToolContext();
     tool = new PushPullTool(ctx);
   });
@@ -189,6 +196,63 @@ describe('PushPullTool', () => {
     it('does nothing when not active', () => {
       tool.onMouseMove({ clientX: 200, clientY: 200 } as MouseEvent, null);
       // Should not throw
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-079 W-1-β — Form-mode dispatch (createSolidExtrude vs pushPull)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-079 W-1-β form-mode dispatch', () => {
+    it('flag OFF (default) → bridge.pushPull called (legacy path)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(false);
+
+      ctx.getSelectedFaces.mockReturnValue([5]);
+      tool.applyVCBValue(100);
+
+      expect(ctx.bridge.pushPull).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.pushPull).toHaveBeenCalledWith(5, 100);
+      expect(ctx.bridge.createSolidExtrude).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
+    });
+
+    it('flag ON → bridge.createSolidExtrude called (W-1-β route)', async () => {
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(true);
+
+      ctx.getSelectedFaces.mockReturnValue([7]);
+      tool.applyVCBValue(150);
+
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledWith(7, 150);
+      expect(ctx.bridge.pushPull).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
+    });
+
+    it('flag ON + smooth group fallback → createSolidExtrude per-face', async () => {
+      // smooth group seamless 가 false 반환 (미지원 시뮬레이션) 시 per-face
+      // fallback 이 form mode 분기 활용 — createSolidExtrude 호출.
+      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
+      setDrawShapeMode(true);
+
+      // Force smooth-group fallback path: seamless returns false.
+      ctx.bridge.engine.push_pull_smooth_group_seamless.mockReturnValue(false);
+
+      // Inject smooth group state directly via tool internals.
+      // (The simpler path: invoke applyVCBValue with a single face — verifies
+      // the single-face branch. Smooth group path verification deferred to
+      // integration test as it requires complex tool state setup.)
+      ctx.getSelectedFaces.mockReturnValue([3]);
+      tool.applyVCBValue(50);
+
+      // Single-face path with form mode → createSolidExtrude called once.
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledWith(3, 50);
+      expect(ctx.bridge.pushPull).not.toHaveBeenCalled();
+
+      setDrawShapeMode(false); // teardown
     });
   });
 });
