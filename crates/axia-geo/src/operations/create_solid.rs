@@ -32,7 +32,7 @@ use anyhow::{bail, Result};
 use glam::{DMat4, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::curves::AnalyticCurve;
+use crate::curves::{AnalyticCurve, CurveOps};
 use crate::curves::synthesize::synthesize_plane_surface;
 use crate::entities::{FaceId, MaterialId};
 use crate::mesh::Mesh;
@@ -204,10 +204,9 @@ impl Mesh {
                 angle_rad,
                 material,
             ),
-            CreateSolidMode::Sweep { .. } => Err(SolidError::NotYetSupported {
-                reason: "Sweep mode (W-3 scope)".to_string(),
+            CreateSolidMode::Sweep { path } => {
+                self.sweep_profile_along_path(profile_face, &path, material)
             }
-            .into()),
             CreateSolidMode::Loft { .. } => Err(SolidError::NotYetSupported {
                 reason: "Loft mode (W-3 scope)".to_string(),
             }
@@ -634,6 +633,141 @@ impl Mesh {
             profile_face,
             solid_kind: SolidKind::RevolutionSolid,
             top_face: profile_face, // sentinel — no separate "top" in revolve
+            side_faces,
+            all_solid_faces,
+            adjacent_splits: 0,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-3-α — Sweep mode dispatch.
+    ///
+    /// Tessellates the path AnalyticCurve to a polyline, validates that the
+    /// profile face's plane normal is aligned with the path's start tangent,
+    /// projects profile vertices into the local (basis_u, basis_v) frame
+    /// (the path's start cross-section), and delegates to `Mesh::sweep`.
+    ///
+    /// W-3-α scope:
+    /// - Path tessellation via `AnalyticCurve::tessellate(chord_tol)`
+    ///   (chord_tol = `EPSILON_LENGTH × 1e3` ≈ 1.5 mm)
+    /// - Profile face plane normal must be ‖ path start tangent
+    /// - Multi-loop face → reject (ADR-016 Q2 / L8)
+    /// - Path tessellation < 2 points → reject (`SweepPathDegenerate`)
+    fn sweep_profile_along_path(
+        &mut self,
+        profile_face: FaceId,
+        path: &AnalyticCurve,
+        material: MaterialId,
+    ) -> Result<CreateSolidResult> {
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        let chord_tol = tol * 1000.0; // §W3-I-L2: 1.5 mm chord tolerance
+
+        // §W3-D-C — Multi-loop guard.
+        let face = self
+            .faces
+            .get(profile_face)
+            .ok_or(SolidError::FaceNotFound)?;
+        if !face.inners().is_empty() {
+            return Err(SolidError::NotYetSupported {
+                reason: "Sweep multi-loop face rejected (ADR-016 Q2)".to_string(),
+            }
+            .into());
+        }
+
+        // Profile face surface — must be Plane (W-3-α MVP).
+        let face_surface = face.surface().cloned();
+        let (face_origin, face_normal, face_basis_u) = match face_surface {
+            Some(AnalyticSurface::Plane { origin, normal, basis_u, .. }) => (
+                origin,
+                normal.normalize_or_zero(),
+                basis_u.normalize_or_zero(),
+            ),
+            _ => {
+                return Err(SolidError::NotYetSupported {
+                    reason: "Sweep MVP: profile face surface must be Plane (W-3-δ scope)"
+                        .to_string(),
+                }
+                .into());
+            }
+        };
+        if face_normal.length_squared() < 0.5 || face_basis_u.length_squared() < 0.5 {
+            bail!("sweep_profile_along_path: profile face plane vectors degenerate");
+        }
+        let face_basis_v = face_normal.cross(face_basis_u);
+
+        // §W3α-A — Tessellate path.
+        let path_polyline = path
+            .tessellate(chord_tol, self)
+            .map_err(|e| anyhow::anyhow!("Sweep path tessellation failed: {}", e))?;
+        if path_polyline.len() < 2 {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "Sweep path degenerate (tessellation produced {} points)",
+                    path_polyline.len()
+                ),
+            }
+            .into());
+        }
+
+        // §W3α-B — Profile plane normal ‖ path start tangent.
+        let path_tangent = (path_polyline[1] - path_polyline[0]).normalize_or_zero();
+        if path_tangent.length_squared() < 0.5 {
+            bail!("sweep_profile_along_path: path start tangent degenerate");
+        }
+        if face_normal.dot(path_tangent).abs() < 0.999 {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "Sweep: profile face normal not aligned with path start tangent \
+                     (|dot| = {:.4}, expected ≥ 0.999)",
+                    face_normal.dot(path_tangent).abs()
+                ),
+            }
+            .into());
+        }
+
+        // Extract profile polyline → project to local (u, v, 0) coords.
+        let outer_start = self.faces[profile_face].outer().start;
+        if outer_start.is_null() {
+            bail!("sweep_profile_along_path: profile face has null outer loop start");
+        }
+        let boundary_verts = self.collect_loop_verts(outer_start)?;
+        if boundary_verts.len() < 3 {
+            bail!(
+                "sweep_profile_along_path: profile boundary has only {} verts",
+                boundary_verts.len()
+            );
+        }
+        let mut profile_local: Vec<DVec3> = Vec::with_capacity(boundary_verts.len());
+        for &v in &boundary_verts {
+            let pos = self.vertex_pos(v)?;
+            let from_origin = pos - face_origin;
+            let x = from_origin.dot(face_basis_u);
+            let y = from_origin.dot(face_basis_v);
+            // z = 0 (profile is in plane); z is along path tangent direction.
+            profile_local.push(DVec3::new(x, y, 0.0));
+        }
+
+        // Mesh::sweep expects profile in local XY (z=0), path in 3D world.
+        // Translate path so path[0] aligns with face_origin (Mesh::sweep
+        // places sections AT each path point, so the first section is at
+        // path[0], not at face_origin). We adjust by translating path
+        // points to start from face_origin.
+        let path_offset = face_origin - path_polyline[0];
+        let path_world: Vec<DVec3> = path_polyline.iter().map(|p| *p + path_offset).collect();
+
+        // §W3α-D — Delegate to Mesh::sweep.
+        let side_faces = self
+            .sweep(&profile_local, &path_world, /* closed_profile */ true, material)
+            .map_err(|e| anyhow::anyhow!("Sweep operation failed: {}", e))?;
+
+        let mut all_solid_faces = Vec::with_capacity(1 + side_faces.len());
+        all_solid_faces.push(profile_face);
+        all_solid_faces.extend(side_faces.iter().copied());
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::SweptSolid,
+            top_face: profile_face, // sentinel — no separate "top"
             side_faces,
             all_solid_faces,
             adjacent_splits: 0,
@@ -3399,6 +3533,186 @@ mod tests {
         assert!(
             msg.contains("not yet supported") && msg.contains("multi-loop"),
             "expected multi-loop rejection, got: {msg}"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-3-α — Sweep mode dispatch
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build a unit-square profile face on z=0 with normal +Z,
+    /// suitable for sweep along a path along +Z.
+    fn build_z_normal_profile_face(mesh: &mut Mesh) -> FaceId {
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], mat).expect("add_face");
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+        face
+    }
+
+    #[test]
+    fn sweep_mode_along_straight_z_path_returns_swept_solid() {
+        // Profile on z=0 (normal +Z), path Line from (0,0,0) → (0,0,5)
+        // (along +Z, tangent matches profile normal).
+        let mut mesh = Mesh::new();
+        let profile = build_z_normal_profile_face(&mut mesh);
+        // Add path Line vertices.
+        let pa = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let pb = mesh.add_vertex(DVec3::new(0.0, 0.0, 5.0));
+        let path_curve = AnalyticCurve::Line { start: pa, end: pb };
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Sweep { path: path_curve },
+                MaterialId::new(0),
+            )
+            .expect("sweep along Z OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SweptSolid);
+        assert_eq!(result.profile_face, profile);
+        assert!(
+            result.side_faces.len() >= 4,
+            "swept tube must have ≥ 4 side faces (one per profile edge)"
+        );
+    }
+
+    #[test]
+    fn sweep_mode_path_tangent_misaligned_with_profile_normal_rejected() {
+        // Profile normal = +Z, path tangent = +X (perpendicular). Reject.
+        let mut mesh = Mesh::new();
+        let profile = build_z_normal_profile_face(&mut mesh);
+        let pa = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let pb = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let path_curve = AnalyticCurve::Line { start: pa, end: pb };
+
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Sweep { path: path_curve },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must reject misaligned path");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("tangent"),
+            "expected tangent misalignment rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn sweep_mode_multi_loop_face_rejected() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let outer = [
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0)),
+            mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0)),
+        ];
+        let inner = [
+            mesh.add_vertex(DVec3::new(3.0, 3.0, 0.0)),
+            mesh.add_vertex(DVec3::new(7.0, 3.0, 0.0)),
+            mesh.add_vertex(DVec3::new(7.0, 7.0, 0.0)),
+            mesh.add_vertex(DVec3::new(3.0, 7.0, 0.0)),
+        ];
+        let face = mesh
+            .add_face_with_holes(&outer, &[&inner], mat)
+            .expect("frame face");
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        }));
+        let pa = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let pb = mesh.add_vertex(DVec3::new(0.0, 0.0, 5.0));
+        let path_curve = AnalyticCurve::Line { start: pa, end: pb };
+
+        let result = mesh.create_solid(
+            face,
+            CreateSolidMode::Sweep { path: path_curve },
+            mat,
+        );
+        let err = result.err().expect("must reject multi-loop");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("multi-loop"),
+            "expected multi-loop rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn sweep_mode_circular_path_arc_succeeds() {
+        // Arc path on xy plane: small quarter-circle.
+        // Profile must align with path's start tangent.
+        let mut mesh = Mesh::new();
+        // Path arc center at origin, radius 5, in xy plane.
+        // At θ=0, point = (5, 0, 0), tangent = (0, 5, 0) normalized = +Y.
+        // Profile must have normal = +Y.
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 0.0, 1.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0));
+        let profile = mesh.add_face(&[v0, v1, v2, v3], mat).expect("profile");
+        mesh.faces[profile].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::new(5.0, 0.0, 0.0), // path start point
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+
+        let path_curve = AnalyticCurve::Arc {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        };
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Sweep { path: path_curve },
+                mat,
+            )
+            .expect("arc path sweep OK");
+        assert_eq!(result.solid_kind, SolidKind::SweptSolid);
+        assert!(
+            result.side_faces.len() >= 4,
+            "arc sweep must produce side faces"
+        );
+    }
+
+    #[test]
+    fn sweep_mode_invalid_face_id_rejected() {
+        let mut mesh = Mesh::new();
+        let pa = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let pb = mesh.add_vertex(DVec3::new(0.0, 0.0, 5.0));
+        let path_curve = AnalyticCurve::Line { start: pa, end: pb };
+
+        let result = mesh.create_solid(
+            FaceId::new(999),
+            CreateSolidMode::Sweep { path: path_curve },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must reject missing face");
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("FaceNotFound") || msg.contains("face not found"),
+            "expected FaceNotFound, got: {msg}"
         );
     }
 
