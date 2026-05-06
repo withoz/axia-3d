@@ -362,6 +362,74 @@ impl Mesh {
         self.finish_plane_offset(edge_id, v0, v1, edge_curve, host_normal, dist)
     }
 
+    /// ADR-080 V-δ-β — Edge offset with caller-supplied reference plane.
+    ///
+    /// Escape hatch for V-δ-α failures (single-edge wire / collinear /
+    /// non-planar) and TS sketch-session integration (V-δ-γ). Caller
+    /// provides explicit plane origin + normal; we trust them and skip
+    /// host face resolution + wire planarity inference.
+    ///
+    /// Used by:
+    /// - TS OffsetTool when active sketch plane is available (V-δ-γ).
+    /// - Tests / API consumers needing explicit plane control.
+    ///
+    /// Curve dispatch (Line/Arc/Circle) and Plane offset semantics same
+    /// as V-β-α/β via `finish_plane_offset` helper.
+    pub fn offset_edge_with_reference_plane(
+        &mut self,
+        edge_id: EdgeId,
+        dist: f64,
+        plane_origin: DVec3,
+        plane_normal: DVec3,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        if dist.abs() < 1e-6 {
+            return Err(OffsetEdgeError::DegenerateDistance(dist));
+        }
+
+        let edge = self
+            .edges
+            .get(edge_id)
+            .ok_or(OffsetEdgeError::EdgeNotFound(edge_id))?;
+        if !edge.is_active() {
+            return Err(OffsetEdgeError::EdgeInactive(edge_id));
+        }
+        let v0 = edge.v_small();
+        let v1 = edge.v_large();
+        let edge_curve = edge.curve().cloned();
+
+        // §V2-C — Curve kind dispatch.
+        match &edge_curve {
+            None
+            | Some(AnalyticCurve::Line { .. })
+            | Some(AnalyticCurve::Arc { .. })
+            | Some(AnalyticCurve::Circle { .. }) => {}
+            Some(c) => {
+                let kind = match c {
+                    AnalyticCurve::Bezier { .. } => "Bezier",
+                    AnalyticCurve::BSpline { .. } => "BSpline",
+                    AnalyticCurve::NURBS { .. } => "NURBS",
+                    _ => unreachable!(),
+                };
+                return Err(OffsetEdgeError::UnsupportedCurveKind { kind });
+            }
+        }
+
+        // Plane normal sanity — must be non-degenerate unit-able vector.
+        let normal_unit = plane_normal.normalize_or_zero();
+        if normal_unit.length_squared() < 0.5 {
+            return Err(OffsetEdgeError::EdgeParallelToNormal);
+        }
+
+        // §V2-δ-G — caller-supplied plane bypasses host face / wire
+        // planarity inference. Plane origin is honored by `offset_arc_on_plane`
+        // sanity (arc.center on plane), but for Line offset we only need
+        // the normal direction. We pass `_plane_origin` through for
+        // future expansion (e.g., off-plane wire endpoint sanity).
+        let _ = plane_origin; // explicit acknowledgement; reserved for future
+
+        self.finish_plane_offset(edge_id, v0, v1, edge_curve, normal_unit, dist)
+    }
+
     /// ADR-080 V-β-α/β + V-δ-α — Shared Plane offset helper.
     /// Performs Arc/Circle analytic radius offset OR Line perpendicular
     /// offset, given a host plane normal. Used by both:
@@ -4105,6 +4173,118 @@ mod tests {
             }
             _ => panic!("must remain Arc"),
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-δ-β — Caller-supplied reference plane API
+    // ════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn offset_edge_with_reference_plane_single_edge_wire_succeeds() {
+        // V-δ-α 가 reject 하는 single-edge wire (NoReferencePlane) 가
+        // V-δ-β 에서는 명시 평면으로 동작.
+        let mut mesh = Mesh::new();
+        let (_a, _b, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+
+        // Explicit plane: z=0 with normal +Z. Edge along +X.
+        // offset_dir = +X × +Z = -Y → new edge at y = -dist.
+        let result = mesh
+            .offset_edge_with_reference_plane(edge_id, 0.5, DVec3::ZERO, DVec3::Z)
+            .expect("V-δ-β explicit plane OK");
+
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        assert!((p0.y - (-0.5)).abs() < 1e-9);
+        assert!((p1.y - (-0.5)).abs() < 1e-9);
+        assert!(p0.z.abs() < 1e-9 && p1.z.abs() < 1e-9);
+    }
+
+    #[test]
+    fn offset_edge_with_reference_plane_zero_normal_rejected() {
+        let mut mesh = Mesh::new();
+        let (_a, _b, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        let err = mesh
+            .offset_edge_with_reference_plane(edge_id, 0.5, DVec3::ZERO, DVec3::ZERO)
+            .err()
+            .expect("must reject zero normal");
+        assert!(matches!(err, OffsetEdgeError::EdgeParallelToNormal));
+    }
+
+    #[test]
+    fn offset_edge_with_reference_plane_arc_curve_succeeds() {
+        // Arc on synthetic plane via V-δ-β explicit plane.
+        let mut mesh = Mesh::new();
+        let (_a, _b, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        mesh.edges[edge_id].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.5, 0.0, 0.0),
+            radius: 0.5,
+            normal: DVec3::Z, // parallel to caller-supplied plane normal
+            basis_u: DVec3::X,
+            start_angle: std::f64::consts::PI,
+            end_angle: std::f64::consts::TAU,
+        }));
+
+        let result = mesh
+            .offset_edge_with_reference_plane(edge_id, 0.2, DVec3::ZERO, DVec3::Z)
+            .expect("arc on explicit plane OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { radius, .. } => {
+                assert!(
+                    (radius - 0.7).abs() < 1e-9 || (radius - 0.3).abs() < 1e-9,
+                    "arc radius shifts ±0.2; got {radius}"
+                );
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn offset_edge_with_reference_plane_zero_distance_rejected() {
+        let mut mesh = Mesh::new();
+        let (_a, _b, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        let err = mesh
+            .offset_edge_with_reference_plane(edge_id, 1e-9, DVec3::ZERO, DVec3::Z)
+            .err()
+            .expect("must reject zero dist");
+        assert!(matches!(err, OffsetEdgeError::DegenerateDistance(_)));
+    }
+
+    #[test]
+    fn offset_edge_with_reference_plane_bezier_curve_unsupported() {
+        // Bezier curve still unsupported even with explicit plane.
+        let mut mesh = Mesh::new();
+        let (_a, _b, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        mesh.edges[edge_id].set_curve(Some(AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 0.5, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+        }));
+        let err = mesh
+            .offset_edge_with_reference_plane(edge_id, 0.1, DVec3::ZERO, DVec3::Z)
+            .err()
+            .expect("bezier still unsupported");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveKind { kind: "Bezier" }
+        ));
     }
 
     #[test]

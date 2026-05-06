@@ -1719,6 +1719,46 @@ describe('WasmBridge', () => {
       expect(r).toEqual({ ok: false, reason: 'no_reference_plane' });
     });
 
+    it('offsetEdgeWithReferencePlane forwards 8 args to engine (V-δ-β)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: true, newEdge: 50, newV0: 200, newV1: 201 }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_with_reference_plane: fn };
+      const r = bridge.offsetEdgeWithReferencePlane(
+        7, 0.5, [1, 2, 3], [0, 0, 1],
+      );
+      expect(fn).toHaveBeenCalledWith(7, 0.5, 1, 2, 3, 0, 0, 1);
+      expect(r).toEqual({ ok: true, newEdge: 50, newV0: 200, newV1: 201 });
+    });
+
+    it('offsetEdgeWithReferencePlane returns bridge_unavailable when missing (V-δ-β)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const r = bridge.offsetEdgeWithReferencePlane(1, 1, [0, 0, 0], [0, 0, 1]);
+      expect(r).toEqual({ ok: false, reason: 'bridge_unavailable' });
+    });
+
+    it('offsetEdgeWithReferencePlane parses radius_collapse reason (V-δ-β)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({
+          ok: false,
+          reason: 'radius_collapse',
+          currentRadius: 0.5,
+          newRadius: -0.1,
+        }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_with_reference_plane: fn };
+      const r = bridge.offsetEdgeWithReferencePlane(1, 1, [0, 0, 0], [0, 0, 1]);
+      expect(r).toEqual({
+        ok: false,
+        reason: 'radius_collapse',
+        currentRadius: 0.5,
+        newRadius: -0.1,
+      });
+    });
+
     it('legacy offsetEdge UNCHANGED by V-β-α-bridge addition', () => {
       const oldFn = vi.fn(() =>
         JSON.stringify({ ok: true, newEdge: 5, newV0: 10, newV1: 11 }),

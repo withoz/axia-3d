@@ -5913,6 +5913,74 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-080 V-δ-β — Edge offset with caller-supplied reference plane.
+    /// Escape hatch for V-δ-α failures (single-edge wire / collinear /
+    /// non-planar) and TS sketch-session integration (V-δ-γ).
+    ///
+    /// Same JSON return shape as `offset_edge_on_host`. Reasons:
+    /// `degenerate_distance`, `unsupported_curve`, `radius_collapse`,
+    /// `arc_plane_mismatch` — and any other Plane-host applicable
+    /// errors. Free-wire-specific reasons (no_reference_plane,
+    /// wire_not_planar) do NOT appear here since caller supplies plane.
+    pub fn offset_edge_with_reference_plane(
+        &mut self,
+        edge_id_raw: u32,
+        dist: f64,
+        ox: f64, oy: f64, oz: f64,
+        nx: f64, ny: f64, nz: f64,
+    ) -> String {
+        use axia_geo::operations::offset::OffsetEdgeError;
+        let eid = EdgeId::new(edge_id_raw);
+        let origin = glam::DVec3::new(ox, oy, oz);
+        let normal = glam::DVec3::new(nx, ny, nz);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.offset_edge_with_reference_plane(eid, dist, origin, normal) {
+            Ok(result) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                format!(
+                    r#"{{"ok":true,"newEdge":{},"newV0":{},"newV1":{}}}"#,
+                    result.new_edge.raw(),
+                    result.new_v0.raw(),
+                    result.new_v1.raw(),
+                )
+            }
+            Err(err) => {
+                self.scene.transactions.cancel();
+                debug_log!("[RUST] offset_edge_with_reference_plane failure: {}", err);
+                match err {
+                    OffsetEdgeError::UnsupportedCurveKind { kind } => {
+                        format!(r#"{{"ok":false,"reason":"unsupported_curve","kind":"{}"}}"#, kind)
+                    }
+                    OffsetEdgeError::DegenerateDistance(_) => {
+                        r#"{"ok":false,"reason":"degenerate_distance"}"#.to_string()
+                    }
+                    OffsetEdgeError::ArcPlaneMismatch => {
+                        r#"{"ok":false,"reason":"arc_plane_mismatch"}"#.to_string()
+                    }
+                    OffsetEdgeError::RadiusCollapse { current_r, new_r, .. } => {
+                        format!(
+                            r#"{{"ok":false,"reason":"radius_collapse","currentRadius":{},"newRadius":{}}}"#,
+                            current_r, new_r
+                        )
+                    }
+                    OffsetEdgeError::EdgeParallelToNormal => {
+                        r#"{"ok":false,"reason":"edge_parallel_to_normal"}"#.to_string()
+                    }
+                    other => {
+                        let msg = other.to_string().replace('"', "'");
+                        format!(r#"{{"ok":false,"reason":"other","message":"{}"}}"#, msg)
+                    }
+                }
+            }
+        }
+    }
+
     /// face 집합의 중심점 반환 [x, y, z]
     pub fn faces_centroid(&self, face_ids: &[u32]) -> Vec<f64> {
         let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();

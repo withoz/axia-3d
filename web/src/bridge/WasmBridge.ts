@@ -3087,6 +3087,71 @@ export class WasmBridge {
    * Caller (OffsetTool) is responsible for surfacing reason-specific
    * Toast messages.
    */
+  /**
+   * ADR-080 V-δ-β — Edge offset with caller-supplied reference plane.
+   * Escape hatch when V-δ-α (host face / wire planarity) fails:
+   * single-edge wire, collinear wire, or non-planar wire. Caller (e.g.,
+   * OffsetTool with active sketch session — V-δ-γ) supplies plane
+   * origin + normal explicitly.
+   *
+   * Reuses `OffsetEdgeOnHostResult` tagged-union; free-wire-specific
+   * reasons (no_reference_plane / wire_not_planar) do NOT appear here
+   * since caller provided plane.
+   */
+  offsetEdgeWithReferencePlane(
+    edgeId: number,
+    dist: number,
+    origin: [number, number, number],
+    normal: [number, number, number],
+  ): OffsetEdgeOnHostResult {
+    if (!this.engine) return { ok: false, reason: 'bridge_unavailable' };
+    this.markDirty();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fn = (this.engine as any).offset_edge_with_reference_plane;
+      if (!fn) return { ok: false, reason: 'bridge_unavailable' };
+      const json: string = fn.call(
+        this.engine,
+        edgeId,
+        dist,
+        origin[0], origin[1], origin[2],
+        normal[0], normal[1], normal[2],
+      );
+      const parsed = JSON.parse(json);
+      if (parsed.ok === true) {
+        return {
+          ok: true,
+          newEdge: parsed.newEdge,
+          newV0: parsed.newV0,
+          newV1: parsed.newV1,
+        };
+      }
+      switch (parsed.reason) {
+        case 'unsupported_curve':
+          return { ok: false, reason: 'unsupported_curve', kind: parsed.kind ?? 'Unknown' };
+        case 'degenerate_distance':
+          return { ok: false, reason: 'degenerate_distance' };
+        case 'arc_plane_mismatch':
+          return { ok: false, reason: 'arc_plane_mismatch' };
+        case 'radius_collapse':
+          return {
+            ok: false,
+            reason: 'radius_collapse',
+            currentRadius: Number(parsed.currentRadius ?? 0),
+            newRadius: Number(parsed.newRadius ?? 0),
+          };
+        case 'edge_parallel_to_normal':
+          // Map to existing tagged-union variant 'other' with stable message.
+          return { ok: false, reason: 'other', message: 'edge_parallel_to_normal' };
+        default:
+          return { ok: false, reason: 'other', message: String(parsed.message ?? parsed.reason ?? 'unknown') };
+      }
+    } catch (e) {
+      console.error('[WasmBridge] offsetEdgeWithReferencePlane failed:', e);
+      return { ok: false, reason: 'other', message: String(e) };
+    }
+  }
+
   offsetEdgeOnHost(edgeId: number, dist: number): OffsetEdgeOnHostResult {
     if (!this.engine) return { ok: false, reason: 'bridge_unavailable' };
     this.markDirty();

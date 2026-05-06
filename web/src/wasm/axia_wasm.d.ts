@@ -1034,6 +1034,18 @@ export class AxiaEngine {
      */
     offset_edge_on_host(edge_id_raw: number, dist: number): string;
     /**
+     * ADR-080 V-δ-β — Edge offset with caller-supplied reference plane.
+     * Escape hatch for V-δ-α failures (single-edge wire / collinear /
+     * non-planar) and TS sketch-session integration (V-δ-γ).
+     *
+     * Same JSON return shape as `offset_edge_on_host`. Reasons:
+     * `degenerate_distance`, `unsupported_curve`, `radius_collapse`,
+     * `arc_plane_mismatch` — and any other Plane-host applicable
+     * errors. Free-wire-specific reasons (no_reference_plane,
+     * wire_not_planar) do NOT appear here since caller supplies plane.
+     */
+    offset_edge_with_reference_plane(edge_id_raw: number, dist: number, ox: number, oy: number, oz: number, nx: number, ny: number, nz: number): string;
+    /**
      * Offset: face의 경계를 dist만큼 안쪽(+)/바깥쪽(-)으로 오프셋
      * 반환: JSON 결과 { ok, innerFace, stripFaces, ... }
      */
@@ -1681,6 +1693,7 @@ export interface InitOutput {
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly axiaengine_offset_edge_on_host: (a: number, b: number, c: number, d: number) => void;
+    readonly axiaengine_offset_edge_with_reference_plane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;
     readonly axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;

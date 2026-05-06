@@ -885,6 +885,41 @@ fn offset_edge_on_host_emits_typed_reason_vocabulary() {
     }
 }
 
+// ── ADR-080 V-δ-β — `offset_edge_with_reference_plane` JSON contract ─
+//
+// Escape hatch for V-δ-α failures: caller supplies explicit plane
+// (origin + normal) for free wire / sketch session integration.
+#[test]
+fn offset_edge_with_reference_plane_endpoint_wired() {
+    let l = lib_src();
+    assert!(
+        l.contains("pub fn offset_edge_with_reference_plane"),
+        "ADR-080 V-δ-β: missing pub fn offset_edge_with_reference_plane"
+    );
+    let idx = l
+        .find("pub fn offset_edge_with_reference_plane")
+        .expect("offset_edge_with_reference_plane");
+    let body = char_safe_slice(&l, idx, 3500);
+    assert!(body.contains("edge_id_raw: u32"));
+    assert!(body.contains("dist: f64"));
+    assert!(body.contains("ox: f64") && body.contains("oy: f64") && body.contains("oz: f64"));
+    assert!(body.contains("nx: f64") && body.contains("ny: f64") && body.contains("nz: f64"));
+    assert!(body.contains("-> String"));
+}
+
+#[test]
+fn offset_edge_with_reference_plane_dispatches_via_rust_core() {
+    let l = lib_src();
+    let idx = l
+        .find("pub fn offset_edge_with_reference_plane")
+        .expect("endpoint");
+    let body = char_safe_slice(&l, idx, 3500);
+    assert!(
+        body.contains("offset_edge_with_reference_plane(eid, dist, origin, normal)"),
+        "must call Mesh::offset_edge_with_reference_plane (V-δ-β Rust core)"
+    );
+}
+
 // ── ADR-079 W-2-β — `create_solid_extrude` is SolidKind-agnostic ─────
 //
 // W-2-α 가 SolidKind::Cylinder 를 새 SolidKind 로 도입했다. 본 endpoint

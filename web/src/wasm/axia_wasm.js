@@ -2922,6 +2922,42 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-080 V-δ-β — Edge offset with caller-supplied reference plane.
+     * Escape hatch for V-δ-α failures (single-edge wire / collinear /
+     * non-planar) and TS sketch-session integration (V-δ-γ).
+     *
+     * Same JSON return shape as `offset_edge_on_host`. Reasons:
+     * `degenerate_distance`, `unsupported_curve`, `radius_collapse`,
+     * `arc_plane_mismatch` — and any other Plane-host applicable
+     * errors. Free-wire-specific reasons (no_reference_plane,
+     * wire_not_planar) do NOT appear here since caller supplies plane.
+     * @param {number} edge_id_raw
+     * @param {number} dist
+     * @param {number} ox
+     * @param {number} oy
+     * @param {number} oz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @returns {string}
+     */
+    offset_edge_with_reference_plane(edge_id_raw, dist, ox, oy, oz, nx, ny, nz) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_offset_edge_with_reference_plane(retptr, this.__wbg_ptr, edge_id_raw, dist, ox, oy, oz, nx, ny, nz);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Offset: face의 경계를 dist만큼 안쪽(+)/바깥쪽(-)으로 오프셋
      * 반환: JSON 결과 { ok, innerFace, stripFaces, ... }
      * @param {number} face_id_raw
