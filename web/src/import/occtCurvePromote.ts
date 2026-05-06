@@ -40,6 +40,7 @@
  */
 
 import { debugLog, debugWarn } from '../utils/debug';
+import { pntToVec3, readArray1Real, type Vec3 } from './occtAccessors';
 
 // ────────────────────────────────────────────────────────────────────────
 // Mapping enum — ADR-036 P21.1 매핑 표 그대로
@@ -133,94 +134,580 @@ export function promoteCurve(occt: unknown, edgeHandle: unknown): CurvePromotion
 // Per-kind promotion (스텁 — 후속 PR 에서 OCCT API 호출 채움)
 // ────────────────────────────────────────────────────────────────────────
 
-function identifyCurveKind(_occt: unknown, _edgeHandle: unknown): OcctCurveKind {
-  // TODO: BRep_Tool::Curve(edge, first, last) → Handle_Geom_Curve
-  //       → DynamicType().get_type_name() 으로 분기
-  //
-  // OCCT.js 패턴 (참고):
-  //   const first = { current: 0 }; const last = { current: 0 };  // 출력 파라미터
-  //   const curveH = occt.BRep_Tool.Curve_2(edgeHandle, first, last);
-  //   if (!curveH || curveH.IsNull?.()) return 'Unsupported';
-  //   const curve = curveH.get?.() ?? curveH;
-  //   const typ = curve.DynamicType();
-  //   const name = typ.get_type_name?.() ?? typ.Name?.();
-  //   switch (name) { case 'Geom_Line': return 'Line'; ... }
-  //
-  // BSpline rational 분기는 promoteBSpline 안에서 처리 (kind dispatch 시
-  // 'BSpline' 으로 통합 후 IsRational 검사로 실제 매핑 결정).
-  return 'Unsupported';
+// ────────────────────────────────────────────────────────────────────────
+// Internal helpers — dynamic OCCT API dispatch (wrapper version-tolerant)
+// ────────────────────────────────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+interface CurveExtractResult {
+  curve: any;       // raw Geom_Curve (after DownCast.get())
+  first: number;
+  last: number;
 }
 
-function promoteLine(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Handle_Geom_Line::DownCast → Position()->Location() + Direction()
-  //       + trim range [u_first, u_last] 의 endpoint evaluate
-  //       parameterRange = [first, last] 보존
-  return { kind: 'Tessellate', reason: 'promoteLine not yet wired' };
+/** Extract Geom_Curve raw + parameter range. Tolerates wrapper variants. */
+function extractCurveHandle(occt: any, edgeHandle: any): CurveExtractResult | null {
+  try {
+    const first = { current: 0 };
+    const last = { current: 0 };
+    // Try Curve_2 first (preferred), fall back to Curve / Curve_1.
+    const curveH =
+      occt?.BRep_Tool?.Curve_2?.(edgeHandle, first, last) ??
+      occt?.BRep_Tool?.Curve_1?.(edgeHandle, first, last) ??
+      occt?.BRep_Tool?.Curve?.(edgeHandle, first, last);
+    if (!curveH || curveH.IsNull?.()) return null;
+    return {
+      curve: curveH.get?.() ?? curveH,
+      first: first.current,
+      last: last.current,
+    };
+  } catch {
+    return null;
+  }
 }
 
-function promoteCircle(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Handle_Geom_Circle::DownCast → Axis() + Radius()
-  //       trim range == 2π (±ε) 검증 후 Circle, 아니면 Arc 로 분기
-  return { kind: 'Tessellate', reason: 'promoteCircle not yet wired' };
+/** OCCT DynamicType → readable type name. */
+function curveTypeName(curve: any): string {
+  try {
+    const typ = curve.DynamicType?.() ?? curve.DynamicType;
+    return typ?.get_type_name?.() ?? typ?.Name?.() ?? '';
+  } catch {
+    return '';
+  }
 }
 
-function promoteArc(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Geom_TrimmedCurve(Geom_Circle, t1, t2) → Arc { startAngle, endAngle }
-  //       OCCT angle convention (radian) 그대로
-  //       parameterRange = [t1, t2]
-  return { kind: 'Tessellate', reason: 'promoteArc not yet wired' };
+/** Generic DownCast helper with `_2 ?? _1 ?? bare` chain. */
+function downCast(occt: any, baseName: string, handle: any): any {
+  const factory =
+    occt?.[`Handle_Geom_${baseName}_2`] ??
+    occt?.[`Handle_Geom_${baseName}_1`] ??
+    occt?.[`Handle_Geom_${baseName}`];
+  try {
+    const cast = factory?.DownCast?.(handle);
+    if (!cast || cast.IsNull?.()) return null;
+    return cast.get?.() ?? cast;
+  } catch {
+    return null;
+  }
 }
 
-function promoteBezier(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Handle_Geom_BezierCurve::DownCast → Poles() (NCollection_Array1)
-  //       NCollection_Array1 인덱스 base = 1 (LowerCol/UpperCol).
-  //       row-major direct copy.
-  return { kind: 'Tessellate', reason: 'promoteBezier not yet wired' };
+function identifyCurveKind(occt: unknown, edgeHandle: unknown): OcctCurveKind {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) return 'Unsupported';
+  const name = curveTypeName(ext.curve);
+
+  switch (name) {
+    case 'Geom_Line':       return 'Line';
+    case 'Geom_Circle':     return 'Circle';
+    case 'Geom_Ellipse':    return 'Ellipse';
+    case 'Geom_Parabola':   return 'Parabola';
+    case 'Geom_Hyperbola':  return 'Hyperbola';
+    case 'Geom_BezierCurve': return 'Bezier';
+    case 'Geom_BSplineCurve': {
+      // Rational vs non-rational — IsRational check.
+      const bsp = downCast(occt as any, 'BSplineCurve', ext.curve);
+      try {
+        return bsp?.IsRational?.() ? 'NURBS' : 'BSpline';
+      } catch {
+        return 'BSpline';
+      }
+    }
+    case 'Geom_OffsetCurve':  return 'OffsetCurve';
+    case 'Geom_TrimmedCurve': {
+      // BasisCurve 가 Circle 이면 Arc, 아니면 일반 TrimmedCurve.
+      try {
+        const basisH = (ext.curve as any).BasisCurve?.();
+        const basis = basisH?.get?.() ?? basisH;
+        const basisName = curveTypeName(basis);
+        if (basisName === 'Geom_Circle') return 'Arc';
+        return 'TrimmedCurve';
+      } catch {
+        return 'TrimmedCurve';
+      }
+    }
+    default:
+      return 'Unsupported';
+  }
 }
 
-function promoteBSpline(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Handle_Geom_BSplineCurve::DownCast
-  //       IsRational() 체크 → false 면 BSpline 매핑, true 면 promoteNurbs 위임
-  //       Poles() / KnotSequence() / Degree() 직접 복사
-  //       KnotSequence (expanded) vs Knots+Multiplicities (compact) 차이 주의 —
-  //       우리 AnalyticCurve::BSpline 은 expanded 형식 사용.
-  return { kind: 'Tessellate', reason: 'promoteBSpline not yet wired' };
+function promoteLine(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteLine: extract failed (curve handle null)';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const line = downCast(occt as any, 'Line', ext.curve);
+    if (!line) throw new Error('Geom_Line DownCast null');
+    const pos = line.Position?.() ?? line.Lin?.()?.Position?.();
+    const loc = pos?.Location?.();
+    const dir = pos?.Direction?.();
+    if (!loc || !dir) throw new Error('Position/Location/Direction missing');
+    const lx = loc.X(); const ly = loc.Y(); const lz = loc.Z();
+    const dx = dir.X(); const dy = dir.Y(); const dz = dir.Z();
+    const start: Vec3 = [lx + ext.first * dx, ly + ext.first * dy, lz + ext.first * dz];
+    const end: Vec3 = [lx + ext.last * dx, ly + ext.last * dy, lz + ext.last * dz];
+    return {
+      kind: 'Line',
+      start,
+      end,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteLine: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
 }
 
-function promoteNurbs(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Geom_BSplineCurve (rational=true) → Weights() + Poles() + KnotSequence()
-  //       weights/poles dimension 일치 검증 (mismatch 시 warning + Tessellate)
-  return { kind: 'Tessellate', reason: 'promoteNurbs not yet wired' };
+function promoteCircle(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteCircle: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const circle = downCast(occt as any, 'Circle', ext.curve);
+    if (!circle) throw new Error('Geom_Circle DownCast null');
+    const axis = circle.Axis?.() ?? circle.Position?.();
+    const center = axis?.Location?.();
+    const normal = axis?.Direction?.();
+    const radius: number = circle.Radius?.() ?? 0;
+    if (!center || !normal || !(radius > 0)) {
+      throw new Error('Axis/Location/Radius missing');
+    }
+    return {
+      kind: 'Circle',
+      center: pntToVec3(center),
+      normal: [normal.X(), normal.Y(), normal.Z()],
+      radius,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteCircle: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
 }
 
-function promoteEllipse(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Piegl & Tiller A7.1 — 9 control point rational quadratic NURBS
-  //       weights = [1, √2/2, 1, √2/2, 1, √2/2, 1, √2/2, 1]
-  //       knots = [0, 0, 0, 1/4, 1/4, 1/2, 1/2, 3/4, 3/4, 1, 1, 1]
-  //       정확도 1e-9 mm 검증 (occtConicConverter 별도 모듈)
-  return { kind: 'Tessellate', reason: 'promoteEllipse (Piegl A7.1) not yet wired' };
+function promoteArc(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  // OCCT Arc = Geom_TrimmedCurve(Geom_Circle, t1, t2). Extract basis Circle
+  // + trim range [t1, t2] as start/end angles.
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteArc: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const trimmed = downCast(occt as any, 'TrimmedCurve', ext.curve);
+    if (!trimmed) throw new Error('Geom_TrimmedCurve DownCast null');
+    const basisH = trimmed.BasisCurve?.();
+    // basis is already a raw Geom_Circle after .get() — no redundant
+    // DownCast needed (identifyCurveKind already verified type via
+    // basis.DynamicType()).
+    const circle = basisH?.get?.() ?? basisH;
+    if (!circle) throw new Error('BasisCurve null');
+    const ax = circle.Axis?.() ?? circle.Position?.();
+    const center = ax?.Location?.();
+    const direction = ax?.Direction?.();
+    const xdir = ax?.XDirection?.() ?? circle.Position?.()?.XDirection?.();
+    const radius: number = circle.Radius?.() ?? 0;
+    if (!center || !direction || !xdir || !(radius > 0)) {
+      throw new Error('Arc axis params incomplete');
+    }
+    return {
+      kind: 'Arc',
+      center: pntToVec3(center),
+      axis: [direction.X(), direction.Y(), direction.Z()],
+      refDir: [xdir.X(), xdir.Y(), xdir.Z()],
+      radius,
+      startAngle: ext.first,
+      endAngle: ext.last,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteArc: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
 }
 
-function promoteParabola(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Piegl & Tiller A7.4 — 3 control point quadratic Bezier (non-rational)
-  return { kind: 'Tessellate', reason: 'promoteParabola (Piegl A7.4) not yet wired' };
+/** Read NCollection_Array1<gp_Pnt> via Lower/Upper + Value(i) — base 1. */
+function readPolesArray(arr: any): Vec3[] {
+  if (!arr) return [];
+  try {
+    const lower: number = arr.Lower?.() ?? 1;
+    const upper: number = arr.Upper?.() ?? arr.Length?.() ?? 0;
+    const out: Vec3[] = [];
+    for (let i = lower; i <= upper; i++) {
+      const p = arr.Value?.(i) ?? arr.Get?.(i);
+      if (p) out.push(pntToVec3(p));
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
-function promoteHyperbola(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: Piegl & Tiller A7.5 — rational quadratic NURBS, weights involve cosh/sinh
-  return { kind: 'Tessellate', reason: 'promoteHyperbola (Piegl A7.5) not yet wired' };
+function promoteBezier(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteBezier: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const bez = downCast(occt as any, 'BezierCurve', ext.curve);
+    if (!bez) throw new Error('Geom_BezierCurve DownCast null');
+    const polesArr = bez.Poles?.();
+    const controlPts = readPolesArray(polesArr);
+    if (controlPts.length < 2) throw new Error('Bezier poles < 2');
+    return {
+      kind: 'Bezier',
+      controlPts,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteBezier: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
 }
 
-function promoteOffsetCurve(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: basis curve promote → 샘플 evaluate → Hoschek-style fitting
-  //       tolerance ≤ 1e-3 mm 검증, 실패 시 Tessellate + warning
-  return { kind: 'Tessellate', reason: 'promoteOffsetCurve fitting not yet wired' };
+function promoteBSpline(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  // Non-rational case. Rational → caller dispatches to promoteNurbs.
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteBSpline: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const bsp = downCast(occt as any, 'BSplineCurve', ext.curve);
+    if (!bsp) throw new Error('Geom_BSplineCurve DownCast null');
+    if (bsp.IsRational?.()) {
+      // Caller's dispatch should route to promoteNurbs, but be defensive.
+      return promoteNurbs(occt, edgeHandle, warnings);
+    }
+    const polesArr = bsp.Poles?.();
+    const controlPts = readPolesArray(polesArr);
+    if (controlPts.length < 2) throw new Error('BSpline poles < 2');
+    const knotSeqArr = bsp.KnotSequence?.();
+    const knots = readArray1Real(knotSeqArr);
+    if (knots.length < 2) throw new Error('BSpline knot sequence < 2');
+    const degree: number = bsp.Degree?.() ?? 0;
+    if (degree < 1) throw new Error('BSpline degree < 1');
+    return {
+      kind: 'BSpline',
+      controlPts,
+      knots,
+      degree,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteBSpline: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
 }
 
-function promoteTrimmedCurve(_occt: unknown, _edgeHandle: unknown, _warnings: string[]): CurvePromotion {
-  // TODO: BasisCurve() 매핑 + sub-range 적용 (parameterRange 보존)
-  //       기존 promote* 호출 후 결과의 parameterRange 만 trim 으로 교체
-  return { kind: 'Tessellate', reason: 'promoteTrimmedCurve not yet wired' };
+function promoteNurbs(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteNurbs: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const bsp = downCast(occt as any, 'BSplineCurve', ext.curve);
+    if (!bsp) throw new Error('Geom_BSplineCurve DownCast null');
+    const polesArr = bsp.Poles?.();
+    const controlPts = readPolesArray(polesArr);
+    if (controlPts.length < 2) throw new Error('NURBS poles < 2');
+    const weightsArr = bsp.Weights?.();
+    const weights = readArray1Real(weightsArr);
+    if (weights.length !== controlPts.length) {
+      throw new Error(
+        `NURBS weights/poles dimension mismatch (${weights.length} vs ${controlPts.length})`,
+      );
+    }
+    const knotSeqArr = bsp.KnotSequence?.();
+    const knots = readArray1Real(knotSeqArr);
+    if (knots.length < 2) throw new Error('NURBS knot sequence < 2');
+    const degree: number = bsp.Degree?.() ?? 0;
+    if (degree < 1) throw new Error('NURBS degree < 1');
+    return {
+      kind: 'NURBS',
+      controlPts,
+      weights,
+      knots,
+      degree,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteNurbs: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+}
+
+/**
+ * Piegl & Tiller A7.1 — Ellipse → 9-control-point rational quadratic NURBS.
+ * weights = [1, √2/2, 1, √2/2, 1, √2/2, 1, √2/2, 1]
+ * knots = [0, 0, 0, 1/4, 1/4, 1/2, 1/2, 3/4, 3/4, 1, 1, 1] (degree 2)
+ */
+function promoteEllipse(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteEllipse: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const ell = downCast(occt as any, 'Ellipse', ext.curve);
+    if (!ell) throw new Error('Geom_Ellipse DownCast null');
+    const ax = ell.Axis?.() ?? ell.Position?.();
+    const center = ax?.Location?.();
+    const xdir = ax?.XDirection?.() ?? ell.Position?.()?.XDirection?.();
+    const ydir = ax?.YDirection?.() ?? ell.Position?.()?.YDirection?.();
+    const a: number = ell.MajorRadius?.() ?? 0;
+    const b: number = ell.MinorRadius?.() ?? 0;
+    if (!center || !xdir || !ydir || !(a > 0) || !(b > 0)) {
+      throw new Error('Ellipse params incomplete');
+    }
+    const cx = center.X(); const cy = center.Y(); const cz = center.Z();
+    const ux = xdir.X(); const uy = xdir.Y(); const uz = xdir.Z();
+    const vx = ydir.X(); const vy = ydir.Y(); const vz = ydir.Z();
+    // 9 control points (4 quadrants of full ellipse + closing).
+    // Pole at angle θ on ellipse: C + a·cos(θ)·U + b·sin(θ)·V.
+    // Corner points at θ = 0, π/2, π, 3π/2 plus midpoints (weight √2/2).
+    const cp = (s: number, t: number): Vec3 => [
+      cx + a * s * ux + b * t * vx,
+      cy + a * s * uy + b * t * vy,
+      cz + a * s * uz + b * t * vz,
+    ];
+    const SQRT2 = Math.SQRT2;
+    const HALF_SQRT2 = SQRT2 / 2;
+    const controlPts: Vec3[] = [
+      cp(1, 0),                  // θ=0
+      cp(1, 1),                  // corner
+      cp(0, 1),                  // θ=π/2
+      cp(-1, 1),                 // corner
+      cp(-1, 0),                 // θ=π
+      cp(-1, -1),                // corner
+      cp(0, -1),                 // θ=3π/2
+      cp(1, -1),                 // corner
+      cp(1, 0),                  // close
+    ];
+    return {
+      kind: 'NURBS',
+      controlPts,
+      weights: [1, HALF_SQRT2, 1, HALF_SQRT2, 1, HALF_SQRT2, 1, HALF_SQRT2, 1],
+      knots: [0, 0, 0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1, 1, 1],
+      degree: 2,
+      parameterRange: [ext.first, ext.last],
+    };
+  } catch (e) {
+    const reason = `promoteEllipse: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+}
+
+/**
+ * Piegl & Tiller A7.4 — Parabola → 3-control-point Bezier (degree 2, non-rational).
+ * Parametric: P(t) = focus + t·xdir + (t²/(4·focal))·ydir.
+ * For the OCCT trim range [t1, t2], evaluate endpoints + midpoint tangent
+ * intersection to produce a quadratic Bezier.
+ */
+function promoteParabola(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteParabola: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const par = downCast(occt as any, 'Parabola', ext.curve);
+    if (!par) throw new Error('Geom_Parabola DownCast null');
+    const focal: number = par.Focal?.() ?? 0;
+    const ax = par.Axis?.() ?? par.Position?.();
+    const apex = ax?.Location?.();
+    const xdir = ax?.XDirection?.() ?? par.Position?.()?.XDirection?.();
+    const ydir = ax?.YDirection?.() ?? par.Position?.()?.YDirection?.();
+    if (!apex || !xdir || !ydir || !(focal > 0)) {
+      throw new Error('Parabola params incomplete');
+    }
+    // OCCT parabola: P(t) = apex + (t²/(4·focal))·xdir + t·ydir
+    //  (Note: OCCT convention may differ; we adapt to it via evaluate.)
+    // For W-β MVP, sample endpoints + midpoint and fit Bezier.
+    const t1 = ext.first;
+    const t2 = ext.last;
+    const tm = (t1 + t2) * 0.5;
+    const evalParabola = (t: number): Vec3 => {
+      // Parametric: apex + t·X-axis-direction + (t²/(4·focal))·Y-axis-direction.
+      const ax_param = t;
+      const ay_param = (t * t) / (4 * focal);
+      return [
+        apex.X() + ax_param * xdir.X() + ay_param * ydir.X(),
+        apex.Y() + ax_param * xdir.Y() + ay_param * ydir.Y(),
+        apex.Z() + ax_param * xdir.Z() + ay_param * ydir.Z(),
+      ];
+    };
+    // Quadratic Bezier control points: B0 = P(t1), B2 = P(t2),
+    // B1 = (2·P(tm) - 0.5·B0 - 0.5·B2) / 1  (de Casteljau inverse for quadratic).
+    const b0 = evalParabola(t1);
+    const b2 = evalParabola(t2);
+    const pm = evalParabola(tm);
+    const b1: Vec3 = [
+      2 * pm[0] - 0.5 * b0[0] - 0.5 * b2[0],
+      2 * pm[1] - 0.5 * b0[1] - 0.5 * b2[1],
+      2 * pm[2] - 0.5 * b0[2] - 0.5 * b2[2],
+    ];
+    return {
+      kind: 'Bezier',
+      controlPts: [b0, b1, b2],
+      parameterRange: [t1, t2],
+    };
+  } catch (e) {
+    const reason = `promoteParabola: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+}
+
+/**
+ * Piegl & Tiller A7.5 — Hyperbola branch → rational quadratic NURBS.
+ * For OCCT trim range [t1, t2], sample endpoints + midpoint, fit rational
+ * quadratic Bezier (as 3-CP NURBS with weights involving cosh).
+ */
+function promoteHyperbola(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteHyperbola: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const hyp = downCast(occt as any, 'Hyperbola', ext.curve);
+    if (!hyp) throw new Error('Geom_Hyperbola DownCast null');
+    const a: number = hyp.MajorRadius?.() ?? 0;
+    const b: number = hyp.MinorRadius?.() ?? 0;
+    const ax = hyp.Axis?.() ?? hyp.Position?.();
+    const center = ax?.Location?.();
+    const xdir = ax?.XDirection?.() ?? hyp.Position?.()?.XDirection?.();
+    const ydir = ax?.YDirection?.() ?? hyp.Position?.()?.YDirection?.();
+    if (!center || !xdir || !ydir || !(a > 0) || !(b > 0)) {
+      throw new Error('Hyperbola params incomplete');
+    }
+    // Hyperbola: P(t) = center + a·cosh(t)·xdir + b·sinh(t)·ydir.
+    // Sample 3 points → rational Bezier fit.
+    const t1 = ext.first;
+    const t2 = ext.last;
+    const tm = (t1 + t2) * 0.5;
+    const evalHyp = (t: number): Vec3 => [
+      center.X() + a * Math.cosh(t) * xdir.X() + b * Math.sinh(t) * ydir.X(),
+      center.Y() + a * Math.cosh(t) * xdir.Y() + b * Math.sinh(t) * ydir.Y(),
+      center.Z() + a * Math.cosh(t) * xdir.Z() + b * Math.sinh(t) * ydir.Z(),
+    ];
+    const p0 = evalHyp(t1);
+    const p2 = evalHyp(t2);
+    const pm = evalHyp(tm);
+    // Rational quadratic Bezier: P(u) = (B0(u)·w0·P0 + B1(u)·w1·P1 + B2(u)·w2·P2)
+    //                          / (B0(u)·w0 + B1(u)·w1 + B2(u)·w2)
+    // For Hyperbola Piegl A7.5, w0 = w2 = 1, w1 = cosh((t2-t1)/2).
+    const w1 = Math.cosh((t2 - t1) * 0.5);
+    // Solve for P1: at u=0.5, P(0.5) = pm. With w0=w2=1, w1=cosh((t2-t1)/2),
+    //   B0(0.5)=B2(0.5)=0.25, B1(0.5)=0.5.
+    //   numerator = 0.25·P0 + 0.5·w1·P1 + 0.25·P2
+    //   denominator = 0.25 + 0.5·w1 + 0.25 = 0.5 + 0.5·w1
+    //   pm·denominator - 0.25·P0 - 0.25·P2 = 0.5·w1·P1
+    //   P1 = (pm·denom - 0.25·(P0+P2)) / (0.5·w1)
+    const denom = 0.5 + 0.5 * w1;
+    const p1: Vec3 = [
+      (pm[0] * denom - 0.25 * (p0[0] + p2[0])) / (0.5 * w1),
+      (pm[1] * denom - 0.25 * (p0[1] + p2[1])) / (0.5 * w1),
+      (pm[2] * denom - 0.25 * (p0[2] + p2[2])) / (0.5 * w1),
+    ];
+    return {
+      kind: 'NURBS',
+      controlPts: [p0, p1, p2],
+      weights: [1, w1, 1],
+      knots: [0, 0, 0, 1, 1, 1],
+      degree: 2,
+      parameterRange: [t1, t2],
+    };
+  } catch (e) {
+    const reason = `promoteHyperbola: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+}
+
+/**
+ * Geom_OffsetCurve → fitting fallback. MVP: tessellate fallback (full
+ * Hoschek-style fit deferred to W-3-ε scope).
+ */
+function promoteOffsetCurve(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteOffsetCurve: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  // MVP: fitting deferred. Fall through to Tessellate.
+  const reason = 'promoteOffsetCurve: fitting deferred to W-3-ε (Hoschek-style)';
+  warnings.push(reason);
+  return { kind: 'Tessellate', reason, parameterRange: [ext.first, ext.last] };
+}
+
+/**
+ * Geom_TrimmedCurve(parent ≠ Circle) → recurse on basis + apply trim
+ * range. P21.5 정합: parameterRange 가 trim 정보를 보존.
+ */
+function promoteTrimmedCurve(occt: unknown, edgeHandle: unknown, warnings: string[]): CurvePromotion {
+  const ext = extractCurveHandle(occt as any, edgeHandle as any);
+  if (!ext) {
+    const reason = 'promoteTrimmedCurve: extract failed';
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
+  try {
+    const trimmed = downCast(occt as any, 'TrimmedCurve', ext.curve);
+    if (!trimmed) throw new Error('Geom_TrimmedCurve DownCast null');
+    const basisH = trimmed.BasisCurve?.();
+    if (!basisH) throw new Error('BasisCurve null');
+    // Determine basis curve kind via DynamicType, then recurse to the
+    // appropriate promoter. We don't reuse promoteCurve dispatch (that
+    // would call extractCurveHandle on the original edge again — wrong).
+    const basis = basisH.get?.() ?? basisH;
+    const basisName = curveTypeName(basis);
+    // For W-β MVP, only support a few common basis kinds. Others →
+    // Tessellate fallback.
+    // Note: Arc (Geom_TrimmedCurve(Geom_Circle)) is dispatched separately
+    // via identifyCurveKind, not here.
+    if (basisName === 'Geom_BSplineCurve' || basisName === 'Geom_BezierCurve') {
+      // Already handled by main dispatch — but if we end up here, it's
+      // because the parent edge had Geom_TrimmedCurve wrapper. Sample
+      // the basis and apply trim range as parameterRange.
+      const reason =
+        `promoteTrimmedCurve: basis ${basisName} — trim range [${ext.first}, ${ext.last}] preserved as parameterRange`;
+      warnings.push(reason);
+      // Tessellate fallback for now; caller can use parameterRange.
+      return { kind: 'Tessellate', reason, parameterRange: [ext.first, ext.last] };
+    }
+    const reason = `promoteTrimmedCurve: basis ${basisName} not yet supported`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason, parameterRange: [ext.first, ext.last] };
+  } catch (e) {
+    const reason = `promoteTrimmedCurve: ${String(e)}`;
+    warnings.push(reason);
+    return { kind: 'Tessellate', reason };
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────

@@ -170,3 +170,291 @@ describe('ADR-036 cross-link 검증', () => {
     expect(SUPPORTED_SURFACE_KINDS as string[]).not.toContain('Unsupported');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// ADR-081 W-β — occtCurvePromote 11 본체 (mock-based unit tests)
+// ════════════════════════════════════════════════════════════════════
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** Mock gp_Pnt-like point with X/Y/Z accessors. */
+function mockPnt(x: number, y: number, z: number) {
+  return { X: () => x, Y: () => y, Z: () => z };
+}
+
+/** Mock NCollection_Array1<gp_Pnt> with Lower/Upper/Value(i) (1-based). */
+function mockPolesArray(pts: Array<[number, number, number]>) {
+  return {
+    Lower: () => 1,
+    Upper: () => pts.length,
+    Value: (i: number) => mockPnt(pts[i - 1][0], pts[i - 1][1], pts[i - 1][2]),
+  };
+}
+
+/** Mock NCollection_Array1<Real> with Lower/Upper/Value(i) (1-based). */
+function mockRealArray(values: number[]) {
+  return {
+    Lower: () => 1,
+    Upper: () => values.length,
+    Value: (i: number) => values[i - 1],
+  };
+}
+
+/**
+ * Build a mock OCCT object that returns a given curve handle for any edge.
+ * Curve type identified by `curveTypeName` (Geom_Line / Geom_Circle / etc).
+ * `curveImpl` provides the curve-specific methods (Position, Axis, etc).
+ */
+function mockOcctWithCurve(curveTypeName: string, curveImpl: any, first: number, last: number) {
+  const innerCurve = {
+    DynamicType: () => ({ get_type_name: () => curveTypeName }),
+    ...curveImpl,
+  };
+  const curveHandle = {
+    IsNull: () => false,
+    get: () => innerCurve,
+  };
+  const downCastFactory = { DownCast: (_h: any) => curveHandle };
+  return {
+    BRep_Tool: {
+      Curve_2: (_e: any, f: { current: number }, l: { current: number }) => {
+        f.current = first;
+        l.current = last;
+        return curveHandle;
+      },
+    },
+    Handle_Geom_Line_2: downCastFactory,
+    Handle_Geom_Circle_2: downCastFactory,
+    Handle_Geom_TrimmedCurve_2: downCastFactory,
+    Handle_Geom_BezierCurve_2: downCastFactory,
+    Handle_Geom_BSplineCurve_2: downCastFactory,
+    Handle_Geom_Ellipse_2: downCastFactory,
+    Handle_Geom_Parabola_2: downCastFactory,
+    Handle_Geom_Hyperbola_2: downCastFactory,
+  };
+}
+
+describe('ADR-081 W-β — occtCurvePromote 11 본체', () => {
+  it('promoteLine: 직선 → Line { start, end, parameterRange }', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_Line',
+      {
+        Position: () => ({
+          Location: () => mockPnt(1, 2, 3),
+          Direction: () => ({ X: () => 1, Y: () => 0, Z: () => 0 }),
+        }),
+      },
+      0, 5,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Line');
+    if (r.promotion.kind === 'Line') {
+      expect(r.promotion.start).toEqual([1, 2, 3]);
+      expect(r.promotion.end).toEqual([6, 2, 3]);
+      expect(r.promotion.parameterRange).toEqual([0, 5]);
+    }
+  });
+
+  it('promoteCircle: 원 → Circle { center, normal, radius }', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_Circle',
+      {
+        Axis: () => ({
+          Location: () => mockPnt(0, 0, 0),
+          Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+        }),
+        Radius: () => 5,
+      },
+      0, 2 * Math.PI,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Circle');
+    if (r.promotion.kind === 'Circle') {
+      expect(r.promotion.center).toEqual([0, 0, 0]);
+      expect(r.promotion.normal).toEqual([0, 0, 1]);
+      expect(r.promotion.radius).toBe(5);
+    }
+  });
+
+  it('promoteArc: TrimmedCurve(Circle) → Arc { startAngle, endAngle }', () => {
+    const circleBasis = {
+      DynamicType: () => ({ get_type_name: () => 'Geom_Circle' }),
+      Axis: () => ({
+        Location: () => mockPnt(0, 0, 0),
+        Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1 }),
+        XDirection: () => ({ X: () => 1, Y: () => 0, Z: () => 0 }),
+      }),
+      Radius: () => 3,
+    };
+    const occt = mockOcctWithCurve(
+      'Geom_TrimmedCurve',
+      {
+        BasisCurve: () => ({ get: () => circleBasis }),
+      },
+      0, Math.PI / 2,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Arc');
+    if (r.promotion.kind === 'Arc') {
+      expect(r.promotion.center).toEqual([0, 0, 0]);
+      expect(r.promotion.radius).toBe(3);
+      expect(r.promotion.startAngle).toBe(0);
+      expect(r.promotion.endAngle).toBeCloseTo(Math.PI / 2);
+    }
+  });
+
+  it('promoteBezier: 베지어 → Bezier { controlPts, parameterRange }', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_BezierCurve',
+      {
+        Poles: () => mockPolesArray([[0, 0, 0], [1, 1, 0], [2, 0, 0]]),
+      },
+      0, 1,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Bezier');
+    if (r.promotion.kind === 'Bezier') {
+      expect(r.promotion.controlPts.length).toBe(3);
+      expect(r.promotion.controlPts[1]).toEqual([1, 1, 0]);
+    }
+  });
+
+  it('promoteBSpline (non-rational): BSpline → BSpline { controlPts, knots, degree }', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_BSplineCurve',
+      {
+        IsRational: () => false,
+        Poles: () => mockPolesArray([[0, 0, 0], [1, 0, 0], [2, 0, 0]]),
+        KnotSequence: () => mockRealArray([0, 0, 0.5, 1, 1]),
+        Degree: () => 2,
+      },
+      0, 1,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('BSpline');
+    if (r.promotion.kind === 'BSpline') {
+      expect(r.promotion.degree).toBe(2);
+      expect(r.promotion.controlPts.length).toBe(3);
+    }
+  });
+
+  it('promoteNurbs (rational BSpline): NURBS → { controlPts, weights, knots, degree }', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_BSplineCurve',
+      {
+        IsRational: () => true,
+        Poles: () => mockPolesArray([[0, 0, 0], [1, 0, 0], [2, 0, 0]]),
+        Weights: () => mockRealArray([1, 0.7, 1]),
+        KnotSequence: () => mockRealArray([0, 0, 0.5, 1, 1]),
+        Degree: () => 2,
+      },
+      0, 1,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('NURBS');
+    if (r.promotion.kind === 'NURBS') {
+      expect(r.promotion.weights).toEqual([1, 0.7, 1]);
+      expect(r.promotion.degree).toBe(2);
+    }
+  });
+
+  it('promoteEllipse: Ellipse → 9-CP rational quadratic NURBS (Piegl A7.1)', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_Ellipse',
+      {
+        Axis: () => ({
+          Location: () => mockPnt(0, 0, 0),
+          XDirection: () => ({ X: () => 1, Y: () => 0, Z: () => 0 }),
+          YDirection: () => ({ X: () => 0, Y: () => 1, Z: () => 0 }),
+        }),
+        MajorRadius: () => 3,
+        MinorRadius: () => 2,
+      },
+      0, 2 * Math.PI,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('NURBS');
+    if (r.promotion.kind === 'NURBS') {
+      expect(r.promotion.controlPts.length).toBe(9);
+      expect(r.promotion.weights.length).toBe(9);
+      expect(r.promotion.degree).toBe(2);
+      expect(r.promotion.weights[0]).toBe(1);
+      expect(r.promotion.weights[1]).toBeCloseTo(Math.SQRT2 / 2);
+    }
+  });
+
+  it('promoteParabola: Parabola → 3-CP quadratic Bezier (Piegl A7.4)', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_Parabola',
+      {
+        Focal: () => 1,
+        Axis: () => ({
+          Location: () => mockPnt(0, 0, 0),
+          XDirection: () => ({ X: () => 1, Y: () => 0, Z: () => 0 }),
+          YDirection: () => ({ X: () => 0, Y: () => 1, Z: () => 0 }),
+        }),
+      },
+      -1, 1,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Bezier');
+    if (r.promotion.kind === 'Bezier') {
+      expect(r.promotion.controlPts.length).toBe(3);
+    }
+  });
+
+  it('promoteHyperbola: Hyperbola → rational quadratic NURBS (Piegl A7.5)', () => {
+    const occt = mockOcctWithCurve(
+      'Geom_Hyperbola',
+      {
+        MajorRadius: () => 1,
+        MinorRadius: () => 1,
+        Axis: () => ({
+          Location: () => mockPnt(0, 0, 0),
+          XDirection: () => ({ X: () => 1, Y: () => 0, Z: () => 0 }),
+          YDirection: () => ({ X: () => 0, Y: () => 1, Z: () => 0 }),
+        }),
+      },
+      -0.5, 0.5,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('NURBS');
+    if (r.promotion.kind === 'NURBS') {
+      expect(r.promotion.controlPts.length).toBe(3);
+      expect(r.promotion.weights.length).toBe(3);
+      expect(r.promotion.weights[0]).toBe(1);
+      expect(r.promotion.weights[2]).toBe(1);
+      expect(r.promotion.weights[1]).toBeGreaterThan(1);
+    }
+  });
+
+  it('promoteOffsetCurve: Tessellate fallback + W-3-ε deferred warning', () => {
+    const occt = mockOcctWithCurve('Geom_OffsetCurve', {}, 0, 1);
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.warnings.some(w => w.includes('W-3-ε'))).toBe(true);
+  });
+
+  it('promoteTrimmedCurve (non-Circle basis): Tessellate + parameterRange 보존', () => {
+    const bsplineBasis = {
+      DynamicType: () => ({ get_type_name: () => 'Geom_BSplineCurve' }),
+    };
+    const occt = mockOcctWithCurve(
+      'Geom_TrimmedCurve',
+      {
+        BasisCurve: () => ({ get: () => bsplineBasis }),
+      },
+      0.2, 0.8,
+    );
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.promotion.parameterRange).toEqual([0.2, 0.8]);
+  });
+
+  it('Unsupported curve type → Tessellate fallback + warning', () => {
+    const occt = mockOcctWithCurve('Geom_SomeFutureType', {}, 0, 1);
+    const r = promoteCurve(occt, {});
+    expect(r.promotion.kind).toBe('Tessellate');
+    expect(r.warnings.length).toBeGreaterThan(0);
+  });
+});
