@@ -807,8 +807,20 @@
   - **Forward-defer**: NURBS-class hosts (BezierPatch /
     BSplineSurface / NURBSSurface) + NURBS-class curves (Bezier /
     BSpline / NURBS) → W-3 트랙
-  - **남은 V-δ / V-ε / V-ζ**: Free wire reference plane / Vertex /
-    Volume dimension — 사용자 결재 후 별도 atomic
+- **V-δ 트랙 closure (2026-05-06)** — Free wire reference plane:
+  - V-δ-α (Rust wire planarity, 8a68eab): connected component BFS +
+    3-point best-fit plane + RMS check. WireNotPlanar / NoReferencePlane
+    typed errors. finish_plane_offset shared helper 추출.
+  - V-δ-β (caller-supplied plane API, 4dc64dc): `Mesh::offset_edge_
+    with_reference_plane` + WASM JSON export + TS bridge wrapper.
+    Single-edge wire / collinear / non-planar 의 escape hatch.
+  - V-δ-γ (TS sketch cascade, 60c52fd): ITool ToolContext 에
+    getSketchInfo 추가. OffsetTool applyEdgeOffset 가 3-Layer cascade —
+    Layer 1 (V-δ-α) → Layer 2 (sketch via V-δ-β) → Layer 3 (deferred
+    ground). free-wire-specific failures 만 cascade.
+  - V-δ 누적 회귀: axia-geo +10, axia-wasm +2, vitest +12 (절대
+    #[ignore] 금지 12/12 준수)
+- **남은 V-ε / V-ζ**: Vertex / Volume dimension — future ADR
 - **Cross-link**: ADR-079 (Create Solid — face dim 의 운영 의미
   source), ADR-049 (Two-Layer Citizenship — 직교, geometric dim 을
   dispatch key 로 사용), ADR-016 (multi-loop face Q2), ADR-027 (NURBS

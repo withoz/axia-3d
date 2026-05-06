@@ -240,9 +240,30 @@ L6 lock-in 의 두 옵션:
 
 V-γ 는 별도 ADR 으로 결재. Backward compat 관점에서 (a) 가 안전.
 
-### 3.4 V-δ — Free wire handling (§2.2 후반부)
+### 3.4 V-δ — Free wire handling (§2.2 후반부) — ✅ Closed (2026-05-06)
 
-Reference plane 추론 알고리즘 + 회귀.
+3 sub-atomic 으로 완료:
+
+| Sub-atomic | Commit | Layer | Description |
+|------------|--------|-------|-------------|
+| V-δ-α      | 8a68eab | Rust core | Connected component BFS + best-fit plane + RMS check. Synthetic Plane → finish_plane_offset shared helper. WireNotPlanar / NoReferencePlane typed errors. |
+| V-δ-β      | 4dc64dc | Rust + WASM + TS bridge | `Mesh::offset_edge_with_reference_plane` + WASM JSON export + TS wrapper. Caller-supplied plane (single-edge wire / collinear / non-planar wire 의 escape hatch). |
+| V-δ-γ      | 60c52fd | TS OffsetTool | Cascade fallback: Layer 1 (V-δ-α) → Layer 2 (sketch session via V-δ-β) → Layer 3 (deferred). free-wire-specific 실패만 sketch fallback. |
+
+**§V2-δ-A 3-단계 cascade 정합**:
+- Layer 1: V-δ-α 의 wire planarity (`offsetEdgeOnHost`)
+- Layer 2: ADR-019 SketchSession active 시 V-δ-β (`offsetEdgeWith
+  ReferencePlane`)
+- Layer 3 (deferred): ground plane fallback 의도적 비활성 (ADR-046 P31
+  #4 muscle memory 보호)
+
+**누적 회귀**: axia-geo +10, axia-wasm +2, vitest +12.
+
+**Forward-defer**: 단일 edge / collinear wire 인 경우 sketch session 미활성
+시 NoReferencePlane Toast 안내. 사용자 mental model = "sketch 모드 진입
+후 free wire offset" 권장.
+
+### 3.5 V-ε — V (Vertex) dimension 결정 (future)
 
 ### 3.5 V-ε — V (Vertex) dimension 결정 (future)
 
@@ -266,6 +287,8 @@ Reference plane 추론 알고리즘 + 회귀.
 - [x] Lock-ins L1 ~ L9 명시
 - [x] Q1 ~ Q4 예상 결재 항목 명시
 - [x] V-α ~ V-ζ 후속 sub-step 로드맵 명시 (각각 별도 atomic commit)
+- [x] V-α / V-β / V-δ 트랙 closure (2026-05-06) — V-ε / V-ζ 만 future
+  ADR (Vertex / Volume dimension)
 
 본 ADR 은 코드 변경 0. 후속 sub-step 에서 의미론 구현 + 회귀 봉인.
 
@@ -384,3 +407,53 @@ V-α 에서 V-β-γ-4 까지 8 commits. 각 commit 은:
 
 V-δ 가 ADR-080 자연 후속 (Offset 트랙 내부), W-3 는 ADR-079 NURBS 트랙
 및 ADR-080 NURBS-class 호스트 cross-cut. 둘 다 사용자 결정.
+
+## 8. V-δ 트랙 회고 (2026-05-06, V-δ-γ closure 직후)
+
+V-δ-α (8a68eab) → V-δ-β (4dc64dc) → V-δ-γ (60c52fd) 3 atomic commit
+으로 완료. ADR-080 §3.4 closure. 누적 +10 axia-geo + 2 axia-wasm +
+12 vitest 회귀 (절대 #[ignore] 금지 12/12 준수).
+
+### 8.1 What worked well
+
+- **3-Layer cascade pattern**: `offsetEdgeOnHost` (Layer 1) →
+  `offsetEdgeWithReferencePlane` (Layer 2 via sketch) → deferred Layer 3
+  (ground). 명확한 fallback chain + free-wire-specific failure 만
+  cascade 진입 → 다른 실패 (multi_loop, ambiguous, etc) 와 분리.
+- **finish_plane_offset shared helper**: V-β-α/β 의 Plane host path 와
+  V-δ-α 의 synthetic plane path 가 동일 코드 사용. SSOT 유지 + curve
+  dispatch (Line/Arc/Circle) 일관성 보장.
+- **Best-fit plane via 3-point method**: 가장 먼 두 점 (A, B) → line AB
+  에서 가장 먼 점 (C) → normal = (B-A)×(C-A). 단순+robust. SVD/eigen
+  decomposition 회피.
+- **Scale-aware tolerance**: `EPSILON_LENGTH × max(1.0, wire_extent)`.
+  큰 wire 에서도 EPSILON_LENGTH 의 절대값 의미 보존.
+- **Cascade scope 제한**: free-wire-specific failures (no_reference_
+  plane, wire_not_planar) 만 sketch fallback. multi_loop / ambiguous_
+  host 등은 fallback 대상 아님 → 사용자 명확한 실패 원인 인지.
+
+### 8.2 What we deferred (conscious)
+
+- **Layer 3 (ground plane)** 의도적 비활성. 사용자 muscle memory 보호 +
+  명시적 sketch 입력 강제. 향후 V-δ-δ atomic 으로 활성화 가능.
+- **Off-plane wire endpoint sanity** in `offset_edge_with_reference_plane`.
+  현재는 plane normal 만 사용 (Line offset 은 normal 만 필요, Arc/Circle
+  은 arc 자체 sanity). plane_origin 은 reserved field.
+- **Multi-component wire**: BFS 가 connected component 만 처리. 분리된
+  wire 가 같은 평면에 있어도 따로 검출. 향후 cross-component planarity
+  검사 가능.
+
+### 8.3 Free wire UX summary (사용자 facing)
+
+| Wire 상태 | Sketch active | 결과 |
+|-----------|---------------|------|
+| Single edge | 미활성 | NoReferencePlane Toast — sketch 권장 |
+| Single edge | 활성 | sketch plane fallback 자동 |
+| Collinear polyline | 미활성 | NoReferencePlane Toast |
+| Collinear polyline | 활성 | sketch plane fallback 자동 |
+| Planar polyline (XY/XZ/etc) | 무관 | V-δ-α 자동 처리 (fallback 불필요) |
+| Non-planar polyline | 미활성 | WireNotPlanar Toast |
+| Non-planar polyline | 활성 | sketch plane fallback 자동 (사용자 명시 평면) |
+
+`getSketchInfo()` ToolContext field 가 ADR-019 SketchSession 의 active
+plane 을 OffsetTool 에 노출. ADR-046 P31 #4 (additive only menu) 정합.
