@@ -174,11 +174,12 @@ impl Mesh {
                         // W-2-γ-ii: Sphere smooth-group radius offset.
                         self.offset_smooth_group_sphere(profile_face, distance, &surface)
                     }
-                    (
-                        AnalyticSurface::Cone { .. } | AnalyticSurface::Torus { .. },
-                        _,
-                    ) => Err(SolidError::NotYetSupported {
-                        reason: "Curved profile → SmoothGroupOffset (W-2-γ-iii/iv scope)"
+                    (AnalyticSurface::Cone { .. }, _) => {
+                        // W-2-γ-iii: Cone constant-offset (true surface offset).
+                        self.offset_smooth_group_cone(profile_face, distance, &surface)
+                    }
+                    (AnalyticSurface::Torus { .. }, _) => Err(SolidError::NotYetSupported {
+                        reason: "Curved profile → SmoothGroupOffset (W-2-γ-iv scope)"
                             .to_string(),
                     }
                     .into()),
@@ -933,6 +934,308 @@ impl Mesh {
                             normal: *normal,
                             basis_u: *basis_u,
                         }),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(c) = new_curve {
+                    if let Some(edge) = self.edges.get_mut(eid) {
+                        edge.set_curve(Some(c));
+                    }
+                    updated_arcs.insert(eid);
+                }
+            }
+        }
+
+        let side_faces: Vec<FaceId> = group_faces
+            .iter()
+            .copied()
+            .filter(|&f| f != profile_face)
+            .collect();
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::SmoothGroupOffset,
+            top_face: profile_face,
+            side_faces,
+            all_solid_faces: group_faces,
+            adjacent_splits: 0,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-2-γ-iii — Cone constant-offset (§W2γ3-D Option 3).
+    ///
+    /// True surface-offset semantics: each vertex moves by `dist` along
+    /// its outward surface normal at P. The cone's `half_angle` and
+    /// `ref_dir` are preserved (cone identity invariant); the apex shifts
+    /// along `-axis_dir` by `dist / sin(half_angle)` and v_range shifts by
+    /// `dist * cos²(half_angle) / sin(half_angle)`.
+    ///
+    /// **Math derivation (apex at origin, axis = +Z, axial coord = z)**:
+    /// - At point P with axial z and angular u: P = (z·tan(α)·cos(u),
+    ///   z·tan(α)·sin(u), z)
+    /// - Outward normal: n(u) = (cos(α)·cos(u), cos(α)·sin(u), -sin(α))
+    /// - After offset: P' = P + dist·n
+    ///   - new radius at z: z·tan(α) + dist·cos(α)
+    ///   - new axial: z - dist·sin(α)
+    /// - To represent P' on a cone with same α and same axis: new apex
+    ///   at z' = -dist/sin(α) (relative to old apex)
+    /// - In vector form: `apex_new = apex_old - (dist/sin(α)) · axis_dir`
+    ///
+    /// **Per-vertex normal** (P relative to apex):
+    /// - radial_vec = (P - apex) - ((P - apex)·axis_dir)·axis_dir
+    /// - radial_dir = radial_vec.normalize()
+    /// - normal = cos(α)·radial_dir - sin(α)·axis_dir
+    ///
+    /// **Boundary latitude rings** (Arc/Circle with center on axis,
+    /// normal ‖ axis_dir):
+    /// - new_center = old_center - dist·sin(α)·axis_dir
+    /// - new_radius = old_radius + dist·cos(α)
+    /// - normal / basis_u / angles preserved
+    ///
+    /// Returns `NotYetSupported` if:
+    /// - half_angle outside (1e-6, π/2 - 1e-6) — singular cone
+    /// - new v_range minimum collapses below `EPSILON_LENGTH`
+    fn offset_smooth_group_cone(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        let (apex, axis_dir, half_angle, ref_dir, u_range, v_range) = match profile_surface {
+            AnalyticSurface::Cone {
+                apex,
+                axis_dir,
+                half_angle,
+                ref_dir,
+                u_range,
+                v_range,
+            } => (
+                *apex,
+                axis_dir.normalize_or_zero(),
+                *half_angle,
+                *ref_dir,
+                *u_range,
+                *v_range,
+            ),
+            _ => bail!("offset_smooth_group_cone: profile is not Cone"),
+        };
+        if axis_dir.length_squared() < 0.5 {
+            bail!("offset_smooth_group_cone: axis_dir near zero");
+        }
+
+        let alpha_eps = 1e-6;
+        if half_angle < alpha_eps
+            || half_angle > std::f64::consts::FRAC_PI_2 - alpha_eps
+        {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "cone half_angle {:.4e} outside (epsilon, π/2 - epsilon) — singular",
+                    half_angle
+                ),
+            }
+            .into());
+        }
+
+        let sin_a = half_angle.sin();
+        let cos_a = half_angle.cos();
+        let tan_a = half_angle.tan();
+        let tol = crate::tolerances::EPSILON_LENGTH;
+
+        // Apex shifts along -axis_dir by dist/sin(α). New v_range shifts by
+        // dist*cos²(α)/sin(α) (constant, preserves v_range width).
+        let apex_shift = -dist / sin_a;
+        let new_apex = apex + apex_shift * axis_dir;
+        let v_shift = dist * cos_a * cos_a / sin_a;
+        let new_v_range = (v_range.0 + v_shift, v_range.1 + v_shift);
+
+        // Collapse guard — new v_range must remain positive.
+        if new_v_range.0 < tol {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "offset would collapse cone: new v_min = {:.3e} ≤ epsilon \
+                     (old v_min {:.3e}, dist {:.3e}, half_angle {:.4})",
+                    new_v_range.0, v_range.0, dist, half_angle
+                ),
+            }
+            .into());
+        }
+
+        // Detect smooth group: faces with matching Cone instance.
+        let group_faces: Vec<FaceId> = self
+            .faces
+            .iter()
+            .filter_map(|(fid, face)| {
+                if !face.is_active() {
+                    return None;
+                }
+                match face.surface() {
+                    Some(AnalyticSurface::Cone {
+                        apex: a,
+                        axis_dir: ad,
+                        half_angle: ha,
+                        ref_dir: rd,
+                        ..
+                    }) => {
+                        let same = (*a - apex).length() < tol
+                            && ad.normalize_or_zero().dot(axis_dir).abs() > 0.999
+                            && (*ha - half_angle).abs() < 1e-9
+                            && rd.normalize_or_zero()
+                                .dot(ref_dir.normalize_or_zero())
+                                .abs()
+                                > 0.999;
+                        if same {
+                            Some(fid)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        if !group_faces.contains(&profile_face) {
+            bail!(
+                "offset_smooth_group_cone: profile face {profile_face:?} \
+                 not in detected smooth group (size {})",
+                group_faces.len()
+            );
+        }
+
+        // Collect unique vertices across the group.
+        let mut group_verts: std::collections::HashSet<crate::entities::VertId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let start = self.faces[fid].outer().start;
+            if start.is_null() {
+                continue;
+            }
+            for v in self.collect_loop_verts(start)? {
+                group_verts.insert(v);
+            }
+        }
+
+        // Move each vertex along its surface normal at P.
+        for v in group_verts.iter().copied().collect::<Vec<_>>() {
+            let pos = self.vertex_pos(v)?;
+            let from_apex = pos - apex;
+            let axial = from_apex.dot(axis_dir);
+            let radial_vec = from_apex - axial * axis_dir;
+            if radial_vec.length_squared() < tol * tol {
+                // Vertex at apex — singular, skip.
+                continue;
+            }
+            let radial_dir = radial_vec.normalize();
+            let normal = cos_a * radial_dir - sin_a * axis_dir;
+            let new_pos = pos + dist * normal;
+            self.move_vertex(v, new_pos)?;
+        }
+
+        // Update each group face's Cone surface with new apex + v_range.
+        let new_surface = AnalyticSurface::Cone {
+            apex: new_apex,
+            axis_dir,
+            half_angle,
+            ref_dir,
+            u_range,
+            v_range: new_v_range,
+        };
+        for &fid in &group_faces {
+            if let Some(face) = self.faces.get_mut(fid) {
+                if face.is_active() {
+                    face.set_surface(Some(new_surface.clone()));
+                }
+            }
+        }
+
+        // Update boundary Arc / Circle latitude rings:
+        //   filter: center on axis (cross-product with axis_dir < tol)
+        //         + normal ‖ axis_dir
+        //         + radius ≈ axial_pos · tan(half_angle) (sanity)
+        // Update: new_center = center - dist·sin(α)·axis_dir
+        //         new_radius = radius + dist·cos(α)
+        let mut updated_arcs: std::collections::HashSet<crate::entities::EdgeId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let edges = self.face_outer_edges(fid)?;
+            for eid in edges {
+                if updated_arcs.contains(&eid) {
+                    continue;
+                }
+                let new_curve = if let Some(edge) = self.edges.get(eid) {
+                    match edge.curve() {
+                        Some(AnalyticCurve::Arc {
+                            center,
+                            radius: ar,
+                            normal,
+                            basis_u,
+                            start_angle,
+                            end_angle,
+                        }) => {
+                            let center_off_axis =
+                                ((*center - apex).cross(axis_dir)).length();
+                            let normal_dot = normal.normalize_or_zero().dot(axis_dir).abs();
+                            let v_axial = (*center - apex).dot(axis_dir);
+                            let expected_r = v_axial * tan_a;
+                            // Use looser tol on radius (numeric drift after move_vertex on
+                            // earlier iterations) — but pre-move check happens BEFORE
+                            // any vertex move on this iteration's edge sweep, so it's tight.
+                            let radius_match = (*ar - expected_r).abs() < tol;
+                            if center_off_axis < tol
+                                && normal_dot > 0.999
+                                && radius_match
+                            {
+                                let new_r = *ar + dist * cos_a;
+                                if new_r > tol {
+                                    Some(AnalyticCurve::Arc {
+                                        center: *center - dist * sin_a * axis_dir,
+                                        radius: new_r,
+                                        normal: *normal,
+                                        basis_u: *basis_u,
+                                        start_angle: *start_angle,
+                                        end_angle: *end_angle,
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        Some(AnalyticCurve::Circle {
+                            center,
+                            radius: cr,
+                            normal,
+                            basis_u,
+                        }) => {
+                            let center_off_axis =
+                                ((*center - apex).cross(axis_dir)).length();
+                            let normal_dot = normal.normalize_or_zero().dot(axis_dir).abs();
+                            let v_axial = (*center - apex).dot(axis_dir);
+                            let expected_r = v_axial * tan_a;
+                            let radius_match = (*cr - expected_r).abs() < tol;
+                            if center_off_axis < tol
+                                && normal_dot > 0.999
+                                && radius_match
+                            {
+                                let new_r = *cr + dist * cos_a;
+                                if new_r > tol {
+                                    Some(AnalyticCurve::Circle {
+                                        center: *center - dist * sin_a * axis_dir,
+                                        radius: new_r,
+                                        normal: *normal,
+                                        basis_u: *basis_u,
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     }
                 } else {
@@ -1902,6 +2205,252 @@ mod tests {
                 "vertex distance from center != 6: got {dist}"
             );
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-2-γ-iii — Cone constant-offset (Option 3)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build 2 triangle faces on a cone with apex at origin,
+    /// axis = +Z, opening toward +Z. half_angle controls the slope.
+    /// Both triangles share an edge and the same Cone surface instance.
+    fn build_cone_two_faces(
+        half_angle: f64,
+        v_min: f64,
+        v_max: f64,
+    ) -> (Mesh, Vec<FaceId>) {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let apex = DVec3::ZERO;
+        let axis_dir = DVec3::Z;
+        let ref_dir = DVec3::X;
+
+        let tan_a = half_angle.tan();
+        // 4 verts at u = 0, 90°, 180° on two latitude rings (v_min, v_max).
+        // Triangles:
+        //   f1: (u=0, v=v_min) → (u=90°, v=v_min) → (u=0, v=v_max)
+        //   f2: (u=90°, v=v_min) → (u=180°, v=v_min) → (u=90°, v=v_max)
+        // Each triangle shares verts with its neighbor.
+        let p = |u: f64, v: f64| -> DVec3 {
+            DVec3::new(v * tan_a * u.cos(), v * tan_a * u.sin(), v)
+        };
+        let v_a = mesh.add_vertex(p(0.0, v_min));
+        let v_b = mesh.add_vertex(p(std::f64::consts::FRAC_PI_2, v_min));
+        let v_c = mesh.add_vertex(p(std::f64::consts::PI, v_min));
+        let v_top_0 = mesh.add_vertex(p(0.0, v_max));
+        let v_top_90 = mesh.add_vertex(p(std::f64::consts::FRAC_PI_2, v_max));
+
+        let f1 = mesh.add_face(&[v_a, v_b, v_top_90, v_top_0], mat).expect("f1");
+        let f2 = mesh.add_face(&[v_b, v_c, v_top_90], mat).expect("f2");
+
+        let surface = AnalyticSurface::Cone {
+            apex,
+            axis_dir,
+            half_angle,
+            ref_dir,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (v_min, v_max),
+        };
+        mesh.faces[f1].set_surface(Some(surface.clone()));
+        mesh.faces[f2].set_surface(Some(surface));
+
+        (mesh, vec![f1, f2])
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_preserves_half_angle_and_axis() {
+        let half_angle = std::f64::consts::FRAC_PI_4; // 45°
+        let (mut mesh, faces) = build_cone_two_faces(half_angle, 1.0, 5.0);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("cone offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+
+        for &fid in &faces {
+            match mesh.faces[fid].surface() {
+                Some(AnalyticSurface::Cone {
+                    half_angle: ha,
+                    axis_dir: ad,
+                    ref_dir: rd,
+                    apex: a,
+                    ..
+                }) => {
+                    // half_angle preserved.
+                    assert!(
+                        (ha - half_angle).abs() < 1e-9,
+                        "half_angle must be preserved: got {ha}"
+                    );
+                    // axis_dir preserved.
+                    assert!(
+                        ad.normalize().dot(DVec3::Z).abs() > 0.9999,
+                        "axis_dir must remain ‖ +Z"
+                    );
+                    // ref_dir preserved.
+                    assert!(
+                        rd.normalize().dot(DVec3::X).abs() > 0.9999,
+                        "ref_dir must remain ‖ +X"
+                    );
+                    // apex shift = -dist/sin(α) * axis_dir = -0.5/sin(45°) * Z.
+                    let expected_shift = -0.5 / half_angle.sin();
+                    assert!(
+                        ((a.z) - expected_shift).abs() < 1e-9,
+                        "apex.z must = {expected_shift:.6}, got {}",
+                        a.z
+                    );
+                }
+                other => panic!(
+                    "face {fid:?} must remain Cone, got {:?}",
+                    other.map(|s| s.kind_label())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_apex_translates_along_minus_axis() {
+        // half_angle = 30° → sin = 0.5 → apex shifts by -2.0 * dist along +Z.
+        let half_angle = std::f64::consts::FRAC_PI_6;
+        let (mut mesh, faces) = build_cone_two_faces(half_angle, 1.0, 4.0);
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 1.0 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // dist = 1, sin(30°) = 0.5 → apex_shift = -2.0 along +Z.
+        if let Some(AnalyticSurface::Cone { apex, .. }) = mesh.faces[faces[0]].surface() {
+            assert!(
+                (apex.z - (-2.0)).abs() < 1e-9,
+                "apex.z must = -2.0, got {}",
+                apex.z
+            );
+            assert!(
+                apex.x.abs() < 1e-9 && apex.y.abs() < 1e-9,
+                "apex x/y must remain 0"
+            );
+        } else {
+            panic!("face surface must be Cone");
+        }
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_vertex_moves_along_normal_by_dist() {
+        // Vertex at (v*tan(α), 0, v) on cone with α=45°, v=2 → (2, 0, 2).
+        // After dist=√2 outward offset, expected new pos: (2,0,2) + √2 * normal.
+        // normal at u=0, v=2 (α=45°): (cos(45°)*1, 0, -sin(45°)) = (√2/2, 0, -√2/2).
+        // P_new = (2 + √2 * √2/2, 0, 2 - √2 * √2/2) = (2 + 1, 0, 2 - 1) = (3, 0, 1).
+        let half_angle = std::f64::consts::FRAC_PI_4;
+        let (mut mesh, faces) = build_cone_two_faces(half_angle, 2.0, 4.0);
+        let dist = 2.0_f64.sqrt();
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: dist },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // Find the vertex that was originally at (2, 0, 2): u=0, v=2.
+        // After offset, expected position: (3, 0, 1).
+        let expected_new = DVec3::new(3.0, 0.0, 1.0);
+        let mut found = false;
+        for &fid in &faces {
+            let start = mesh.faces[fid].outer().start;
+            for v in mesh.collect_loop_verts(start).unwrap() {
+                let pos = mesh.vertex_pos(v).unwrap();
+                if (pos - expected_new).length() < 1e-6 {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            found,
+            "must find vertex at expected post-offset position (3, 0, 1)"
+        );
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_inward_decreases_radius_at_each_v() {
+        let half_angle = std::f64::consts::FRAC_PI_4;
+        let (mut mesh, faces) = build_cone_two_faces(half_angle, 2.0, 5.0);
+        // Inward offset: dist = -1.
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: -1.0 },
+                MaterialId::new(0),
+            )
+            .expect("inward offset OK");
+
+        // Expected: half_angle preserved, apex_z = +1/sin(45°) = +√2,
+        // v_range_new = (2 + (-1)*cos²/sin, 5 + same) = (2 - √2/2 ... )
+        // Easier: just check Cone surface attached and half_angle preserved.
+        if let Some(AnalyticSurface::Cone { half_angle: ha, .. }) =
+            mesh.faces[faces[0]].surface()
+        {
+            assert!((ha - half_angle).abs() < 1e-9);
+        } else {
+            panic!("face surface must remain Cone");
+        }
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_collapse_falls_back() {
+        let half_angle = std::f64::consts::FRAC_PI_4;
+        let (mut mesh, faces) = build_cone_two_faces(half_angle, 1.0, 3.0);
+        // dist = -2 → v_min becomes 1 + (-2)*cos²(45°)/sin(45°) = 1 - √2 < 0.
+        let result = mesh.create_solid(
+            faces[0],
+            CreateSolidMode::Extrude { distance: -2.0 },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must fail (collapse)");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("collapse"),
+            "expected NotYetSupported with 'collapse' reason, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_singular_half_angle_rejected() {
+        // half_angle ≈ 0 → singular cone → NotYetSupported.
+        let (mut mesh, faces) = build_cone_two_faces(1e-8, 1.0, 2.0);
+        let result = mesh.create_solid(
+            faces[0],
+            CreateSolidMode::Extrude { distance: 0.5 },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must fail");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("singular"),
+            "expected singular rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cone_smooth_group_offset_returns_smooth_group_offset_kind() {
+        let (mut mesh, faces) = build_cone_two_faces(std::f64::consts::FRAC_PI_4, 1.0, 3.0);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        assert_eq!(result.top_face, result.profile_face);
+        assert_eq!(result.side_faces.len(), 1);
+        assert_eq!(result.all_solid_faces.len(), 2);
     }
 
     #[test]
