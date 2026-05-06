@@ -383,6 +383,47 @@ describe('OffsetTool', () => {
       expect(msg).toMatch(/반지름|방향 반전/);
     });
 
+    it('edge mode applyVCB with unsupported_curve_on_surface (V-β-γ-1) → curve@surface Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false,
+        reason: 'unsupported_curve_on_surface',
+        surfaceKind: 'Cylinder',
+        curveKind: 'Line(non-axial)',
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/Cylinder|호스트 면|자연스럽게/);
+    });
+
+    it('edge mode applyVCB with axial_out_of_range (V-β-γ-1) → 축 범위 Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false,
+        reason: 'axial_out_of_range',
+        newV: 5.0,
+        vMin: 0.0,
+        vMax: 1.0,
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/축 방향|범위/);
+    });
+
     it('edge mode applyVCB partial success → success + warning Toasts', async () => {
       const { Toast } = await import('../ui/Toast');
       ctx.getSelectedFaces.mockReturnValue([]);

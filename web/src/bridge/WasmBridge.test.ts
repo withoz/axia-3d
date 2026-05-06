@@ -1657,6 +1657,48 @@ describe('WasmBridge', () => {
       });
     });
 
+    it('parses unsupported_curve_on_surface (V-β-γ-1)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({
+          ok: false,
+          reason: 'unsupported_curve_on_surface',
+          surfaceKind: 'Cylinder',
+          curveKind: 'Line(non-axial)',
+        }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({
+        ok: false,
+        reason: 'unsupported_curve_on_surface',
+        surfaceKind: 'Cylinder',
+        curveKind: 'Line(non-axial)',
+      });
+    });
+
+    it('parses axial_out_of_range with newV / vMin / vMax (V-β-γ-1)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({
+          ok: false,
+          reason: 'axial_out_of_range',
+          newV: 5.0,
+          vMin: 0.0,
+          vMax: 1.0,
+        }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 5);
+      expect(r).toEqual({
+        ok: false,
+        reason: 'axial_out_of_range',
+        newV: 5.0,
+        vMin: 0.0,
+        vMax: 1.0,
+      });
+    });
+
     it('legacy offsetEdge UNCHANGED by V-β-α-bridge addition', () => {
       const oldFn = vi.fn(() =>
         JSON.stringify({ ok: true, newEdge: 5, newV0: 10, newV1: 11 }),

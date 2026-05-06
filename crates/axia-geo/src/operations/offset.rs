@@ -80,6 +80,17 @@ pub enum OffsetEdgeError {
     /// Offset would collapse the arc/circle radius to ≤ 0.
     #[error("offset_edge: arc/circle radius would collapse to {new_r} (current {current_r}, dist {dist})")]
     RadiusCollapse { current_r: f64, new_r: f64, dist: f64 },
+    /// Curved host surface in V-β-γ scope, but the curve type doesn't
+    /// fit the surface's natural offset semantics (e.g., helical line on
+    /// cylinder, off-axis arc).
+    #[error("offset_edge: curve {curve_kind} cannot be offset on {surface_kind} host")]
+    UnsupportedCurveOnSurface {
+        surface_kind: &'static str,
+        curve_kind: &'static str,
+    },
+    /// New axial position falls outside the host surface's v_range.
+    #[error("offset_edge: new axial position {new_v} outside host v_range [{v_min}, {v_max}]")]
+    AxialOutOfRange { new_v: f64, v_min: f64, v_max: f64 },
 }
 
 impl Mesh {
@@ -252,7 +263,9 @@ impl Mesh {
             return Err(OffsetEdgeError::MultiLoopHostFace(host));
         }
 
-        // §V2-D — Host surface dispatch (V-β-α: Plane only).
+        // §V2-D — Host surface dispatch.
+        // V-β-α/β: Plane.   V-β-γ-1: Cylinder.
+        // Sphere/Cone/Torus → V-β-γ-2/3/4 (still UnsupportedHostSurface).
         let host_surface = host_face
             .surface()
             .cloned()
@@ -260,7 +273,15 @@ impl Mesh {
         let host_normal = match &host_surface {
             AnalyticSurface::Plane { normal, .. } => normal.normalize_or_zero(),
             AnalyticSurface::Cylinder { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Cylinder" });
+                // V-β-γ-1: dispatch to cylinder-specific offset path.
+                return self.offset_edge_on_cylinder(
+                    edge_id,
+                    v0,
+                    v1,
+                    edge_curve,
+                    &host_surface,
+                    dist,
+                );
             }
             AnalyticSurface::Sphere { .. } => {
                 return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Sphere" });
@@ -486,6 +507,196 @@ impl Mesh {
         })
     }
 
+    /// ADR-080 V-β-γ-1 — Edge offset on a Cylinder host face.
+    ///
+    /// Two analytic dispatch paths matching the cylinder's natural
+    /// curve types:
+    ///
+    /// 1. **Axial Line** (edge parallel to `cyl.axis_dir`, on cylinder
+    ///    surface): offset = angular shift around axis. `Δu = sign·dist /
+    ///    radius`, where sign comes from `(edge_dir · axis_dir).signum()`
+    ///    so positive `dist` consistently means right-side of edge.
+    ///
+    /// 2. **Latitude Arc/Circle** (center on axis, normal ‖ axis_dir,
+    ///    radius == cylinder.radius): offset = axial shift along
+    ///    cylinder axis. `Δv = sign·dist`, sign from
+    ///    `(tangent × surface_normal · axis_dir).signum()`.
+    ///
+    /// Other curve types (helical line, off-axis arc, NURBS, etc.)
+    /// return `UnsupportedCurveOnSurface`. Out-of-v_range result returns
+    /// `AxialOutOfRange`.
+    fn offset_edge_on_cylinder(
+        &mut self,
+        edge_id: EdgeId,
+        v0: VertId,
+        v1: VertId,
+        edge_curve: Option<AnalyticCurve>,
+        host_surface: &AnalyticSurface,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        let (axis_origin, axis_dir, radius, ref_dir, _u_range, v_range) = match host_surface {
+            AnalyticSurface::Cylinder {
+                axis_origin,
+                axis_dir,
+                radius,
+                ref_dir,
+                u_range,
+                v_range,
+            } => (
+                *axis_origin,
+                axis_dir.normalize_or_zero(),
+                *radius,
+                ref_dir.normalize_or_zero(),
+                *u_range,
+                *v_range,
+            ),
+            _ => unreachable!("offset_edge_on_cylinder dispatched with non-Cylinder host"),
+        };
+        if axis_dir.length_squared() < 0.5 || ref_dir.length_squared() < 0.5 {
+            return Err(OffsetEdgeError::NoHostSurface(FaceId::new(0)));
+        }
+        let basis_v = axis_dir.cross(ref_dir);
+
+        let p0 = self
+            .vertex_pos(v0)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+        let p1 = self
+            .vertex_pos(v1)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+        // ── Latitude Arc / Circle path ─────────────────────────────────
+        if let Some(curve) = &edge_curve {
+            let (arc_center, arc_radius, arc_normal, basis_u_arc, angles) = match curve {
+                AnalyticCurve::Arc {
+                    center,
+                    radius,
+                    normal,
+                    basis_u,
+                    start_angle,
+                    end_angle,
+                } => (*center, *radius, *normal, *basis_u, Some((*start_angle, *end_angle))),
+                AnalyticCurve::Circle {
+                    center,
+                    radius,
+                    normal,
+                    basis_u,
+                } => (*center, *radius, *normal, *basis_u, None),
+                AnalyticCurve::Line { .. } => {
+                    // fall through to line path below
+                    return offset_axial_line_on_cylinder(
+                        self, edge_id, p0, p1, axis_origin, axis_dir, radius,
+                        ref_dir, basis_v, v_range, dist, tol,
+                    );
+                }
+                _ => {
+                    let kind = match curve {
+                        AnalyticCurve::Bezier { .. } => "Bezier",
+                        AnalyticCurve::BSpline { .. } => "BSpline",
+                        AnalyticCurve::NURBS { .. } => "NURBS",
+                        _ => unreachable!(),
+                    };
+                    return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                        surface_kind: "Cylinder",
+                        curve_kind: kind,
+                    });
+                }
+            };
+
+            // Latitude ring sanity:
+            //   - arc center on axis
+            //   - arc.normal ‖ axis_dir
+            //   - arc.radius == cylinder.radius
+            let from_axis = arc_center - axis_origin;
+            let v_arc = from_axis.dot(axis_dir);
+            let center_off_axis = (from_axis - v_arc * axis_dir).length();
+            let arc_n_unit = arc_normal.normalize_or_zero();
+            let normal_match = arc_n_unit.dot(axis_dir).abs() > 0.999;
+            let radius_match = (arc_radius - radius).abs() < tol;
+            if center_off_axis > tol || !normal_match || !radius_match {
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Cylinder",
+                    curve_kind: if angles.is_some() { "Arc(off-cylinder)" } else { "Circle(off-cylinder)" },
+                });
+            }
+
+            // Sign of axial shift: tangent at midpoint × surface_normal
+            // projected onto axis_dir.
+            let theta_mid = match angles {
+                Some((s, e)) => (s + e) * 0.5,
+                None => 0.0,
+            };
+            let basis_u_unit = basis_u_arc.normalize_or_zero();
+            let basis_v_arc = arc_n_unit.cross(basis_u_unit);
+            let tangent =
+                -theta_mid.sin() * basis_u_unit + theta_mid.cos() * basis_v_arc;
+            // Surface normal at p_mid (radial outward on cylinder).
+            let p_mid = arc_center
+                + arc_radius * (theta_mid.cos() * basis_u_unit + theta_mid.sin() * basis_v_arc);
+            let radial_at_p = (p_mid - axis_origin) - ((p_mid - axis_origin).dot(axis_dir)) * axis_dir;
+            if radial_at_p.length_squared() < tol * tol {
+                return Err(OffsetEdgeError::EdgeParallelToNormal);
+            }
+            let n_at_p = radial_at_p.normalize();
+            let right_side = tangent.cross(n_at_p);
+            let axial_sign = if right_side.dot(axis_dir) > 0.0 { 1.0 } else { -1.0 };
+            let delta_v = axial_sign * dist;
+            let new_v_axial = v_arc + delta_v;
+            if new_v_axial < v_range.0 - tol || new_v_axial > v_range.1 + tol {
+                return Err(OffsetEdgeError::AxialOutOfRange {
+                    new_v: new_v_axial,
+                    v_min: v_range.0,
+                    v_max: v_range.1,
+                });
+            }
+
+            // New arc — center shifted along axis, radius preserved.
+            let new_center = arc_center + delta_v * axis_dir;
+            let pt = |theta: f64| -> DVec3 {
+                new_center + arc_radius * (theta.cos() * basis_u_unit + theta.sin() * basis_v_arc)
+            };
+            let (new_p0, new_p1) = match angles {
+                Some((s, e)) => (pt(s), pt(e)),
+                None => (pt(0.0), pt(std::f64::consts::TAU - 1e-6)),
+            };
+            let new_v0_id = self.add_vertex(new_p0);
+            let new_v1_id = self.add_vertex(new_p1);
+            let (new_edge, _) = self
+                .add_edge(new_v0_id, new_v1_id)
+                .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+            let new_curve = match angles {
+                Some((s, e)) => AnalyticCurve::Arc {
+                    center: new_center,
+                    radius: arc_radius,
+                    normal: arc_normal,
+                    basis_u: basis_u_arc,
+                    start_angle: s,
+                    end_angle: e,
+                },
+                None => AnalyticCurve::Circle {
+                    center: new_center,
+                    radius: arc_radius,
+                    normal: arc_normal,
+                    basis_u: basis_u_arc,
+                },
+            };
+            if let Some(e) = self.edges.get_mut(new_edge) {
+                e.set_curve(Some(new_curve));
+            }
+            return Ok(OffsetEdgeResult {
+                new_v0: new_v0_id,
+                new_v1: new_v1_id,
+                new_edge,
+            });
+        }
+
+        // ── Axial Line path (curve = None) ────────────────────────────
+        offset_axial_line_on_cylinder(
+            self, edge_id, p0, p1, axis_origin, axis_dir, radius,
+            ref_dir, basis_v, v_range, dist, tol,
+        )
+    }
+
     /// face_id의 경계를 dist만큼 오프셋.
     /// dist > 0: 안쪽 (inset), dist < 0: 바깥쪽 (outset)
     ///
@@ -623,6 +834,89 @@ impl Mesh {
     }
 }
 
+/// ADR-080 V-β-γ-1 — Axial line on cylinder offset (free helper to keep
+/// `offset_edge_on_cylinder` body manageable). Verifies that the line
+/// is axis-parallel and on the cylinder surface, then computes an
+/// angular offset Δu = sign·dist/radius.
+#[allow(clippy::too_many_arguments)]
+fn offset_axial_line_on_cylinder(
+    mesh: &mut Mesh,
+    edge_id: EdgeId,
+    p0: DVec3,
+    p1: DVec3,
+    axis_origin: DVec3,
+    axis_dir: DVec3,
+    radius: f64,
+    ref_dir: DVec3,
+    basis_v: DVec3,
+    _v_range: (f64, f64),
+    dist: f64,
+    tol: f64,
+) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+    let edge_vec = p1 - p0;
+    if edge_vec.length_squared() < 1e-12 {
+        return Err(OffsetEdgeError::DegenerateDistance(0.0));
+    }
+    let edge_dir = edge_vec.normalize();
+
+    // Must be parallel to cylinder axis.
+    let axis_alignment = edge_dir.dot(axis_dir);
+    if axis_alignment.abs() < 0.999 {
+        return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+            surface_kind: "Cylinder",
+            curve_kind: "Line(non-axial)",
+        });
+    }
+
+    // Both endpoints on the cylinder surface (radius check).
+    let radial_check = |p: DVec3| -> Option<(f64, f64)> {
+        let from_axis = p - axis_origin;
+        let v_axial = from_axis.dot(axis_dir);
+        let radial = from_axis - v_axial * axis_dir;
+        let r_actual = radial.length();
+        if (r_actual - radius).abs() > 1e-3 {
+            None
+        } else {
+            // u = atan2(radial · basis_v, radial · ref_dir)
+            let u = radial.dot(basis_v).atan2(radial.dot(ref_dir));
+            Some((u, v_axial))
+        }
+    };
+    let (u0, v0_axial) = radial_check(p0).ok_or(OffsetEdgeError::UnsupportedCurveOnSurface {
+        surface_kind: "Cylinder",
+        curve_kind: "Line(off-cylinder)",
+    })?;
+    let (_u1, v1_axial) = radial_check(p1).ok_or(OffsetEdgeError::UnsupportedCurveOnSurface {
+        surface_kind: "Cylinder",
+        curve_kind: "Line(off-cylinder)",
+    })?;
+
+    // Sign: edge_dir = ±axis_dir → +1 / -1.
+    let dir_sign = axis_alignment.signum();
+    if radius <= tol {
+        return Err(OffsetEdgeError::DegenerateDistance(radius));
+    }
+    let delta_u = dir_sign * dist / radius;
+    let new_u = u0 + delta_u;
+
+    // New endpoint positions: same v_axial, new u.
+    let radial_new = new_u.cos() * ref_dir + new_u.sin() * basis_v;
+    let new_p0 = axis_origin + v0_axial * axis_dir + radius * radial_new;
+    let new_p1 = axis_origin + v1_axial * axis_dir + radius * radial_new;
+
+    let new_v0_id = mesh.add_vertex(new_p0);
+    let new_v1_id = mesh.add_vertex(new_p1);
+    let (new_edge, _) = mesh
+        .add_edge(new_v0_id, new_v1_id)
+        .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+    Ok(OffsetEdgeResult {
+        new_v0: new_v0_id,
+        new_v1: new_v1_id,
+        new_edge,
+    })
+}
+
 /// ADR-080 §V2-B helper — Are two surfaces "equivalent" for host
 /// resolution purposes? In V-β-α we only support Plane host, so
 /// equivalence = same Plane (origin + normal coplanar within
@@ -633,6 +927,7 @@ fn surfaces_equivalent(
     a: &Option<AnalyticSurface>,
     b: &Option<AnalyticSurface>,
 ) -> bool {
+    let tol = crate::tolerances::EPSILON_LENGTH;
     match (a, b) {
         (None, None) => true,
         (Some(s_a), Some(s_b)) => match (s_a, s_b) {
@@ -652,7 +947,35 @@ fn surfaces_equivalent(
                     na.normalize_or_zero().dot(nb.normalize_or_zero()).abs() > 0.999;
                 // Coplanarity: project (ob - oa) onto na — should be ~0.
                 let off_plane = (*ob - *oa).dot(na.normalize_or_zero()).abs();
-                normal_match && off_plane < crate::tolerances::EPSILON_LENGTH
+                normal_match && off_plane < tol
+            }
+            (
+                AnalyticSurface::Cylinder {
+                    axis_origin: oa,
+                    axis_dir: aa,
+                    radius: ra,
+                    ref_dir: ua,
+                    ..
+                },
+                AnalyticSurface::Cylinder {
+                    axis_origin: ob,
+                    axis_dir: ab,
+                    radius: rb,
+                    ref_dir: ub,
+                    ..
+                },
+            ) => {
+                // Same axis line (origin difference parallel to axis) +
+                // same radius + ref_dir parallel.
+                let axis_match =
+                    aa.normalize_or_zero().dot(ab.normalize_or_zero()).abs() > 0.999;
+                let origin_off_axis = ((*ob - *oa)
+                    - (*ob - *oa).dot(aa.normalize_or_zero()) * aa.normalize_or_zero())
+                .length();
+                let radius_match = (ra - rb).abs() < tol;
+                let ref_match =
+                    ua.normalize_or_zero().dot(ub.normalize_or_zero()).abs() > 0.999;
+                axis_match && origin_off_axis < tol && radius_match && ref_match
             }
             _ => std::mem::discriminant(s_a) == std::mem::discriminant(s_b),
         },
@@ -1053,11 +1376,11 @@ mod tests {
     }
 
     #[test]
-    fn line_offset_on_cylinder_host_returns_unsupported() {
+    fn line_offset_on_sphere_host_returns_unsupported() {
+        // V-β-γ-1 activated Cylinder; Sphere/Cone/Torus still defer to
+        // V-β-γ-2/3/4. Re-target this regression to Sphere host.
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
-        // Build a tiny quad face but attach Cylinder surface (synthetic) to
-        // exercise the host-surface kind dispatch.
         let vs = [
             mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
             mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0)),
@@ -1065,22 +1388,20 @@ mod tests {
             mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0)),
         ];
         let face = mesh.add_face(&vs, mat).unwrap();
-        mesh.faces[face].set_surface(Some(AnalyticSurface::Cylinder {
-            axis_origin: DVec3::ZERO,
-            axis_dir: DVec3::Z,
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Sphere {
+            center: DVec3::ZERO,
             radius: 1.0,
-            ref_dir: DVec3::X,
             u_range: (0.0, std::f64::consts::TAU),
-            v_range: (0.0, 1.0),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
         }));
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
         let err = mesh
             .offset_edge_on_host_face(edge, 0.3)
             .err()
-            .expect("must defer cylinder host");
+            .expect("must defer sphere host");
         assert!(matches!(
             err,
-            OffsetEdgeError::UnsupportedHostSurface { kind: "Cylinder" }
+            OffsetEdgeError::UnsupportedHostSurface { kind: "Sphere" }
         ));
     }
 
@@ -1334,6 +1655,237 @@ mod tests {
             (p1.length() - new_r).abs() < 1e-9,
             "p1 distance from origin = {}, expected {new_r}",
             p1.length()
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-γ-1 — Edge offset on Cylinder host
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper — build a "cylinder panel" face. Just creates a single quad
+    /// face whose surface is the desired Cylinder; vertex positions are
+    /// placed on the cylinder for radius_check sanity.
+    fn build_cylinder_panel(
+        mesh: &mut Mesh,
+        radius: f64,
+        v_min: f64,
+        v_max: f64,
+        u_min: f64,
+        u_max: f64,
+    ) -> (FaceId, [VertId; 4]) {
+        let mat = MaterialId::new(0);
+        let on_cyl = |u: f64, v: f64| {
+            DVec3::new(radius * u.cos(), radius * u.sin(), v)
+        };
+        let v00 = mesh.add_vertex(on_cyl(u_min, v_min));
+        let v10 = mesh.add_vertex(on_cyl(u_max, v_min));
+        let v11 = mesh.add_vertex(on_cyl(u_max, v_max));
+        let v01 = mesh.add_vertex(on_cyl(u_min, v_max));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (v_min - 10.0, v_max + 10.0),
+        }));
+        (face, [v00, v10, v11, v01])
+    }
+
+    #[test]
+    fn cylinder_axial_line_offset_changes_angular_position() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cylinder_panel(&mut mesh, 1.0, 0.0, 2.0, 0.0, 1.0);
+        // Edge v00 → v01 (between u_min, v=0..2) is axial. Should offset
+        // angularly by Δu = dist / radius.
+        let edge = find_edge_between(&mesh, vs[0], vs[3]);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("axial offset OK");
+
+        // New endpoints at same z as originals (axial line — endpoints differ
+        // only in angle now).
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        // Both at radius 1.0 from axis (cylinder preserved).
+        assert!((p0.x * p0.x + p0.y * p0.y).sqrt() - 1.0 < 1e-9);
+        assert!((p1.x * p1.x + p1.y * p1.y).sqrt() - 1.0 < 1e-9);
+        // Original u was 0 (cos=1, sin=0). Δu = 0.5 / 1.0 = 0.5 rad.
+        // Expected angle: original ± 0.5 (sign depends on edge direction).
+        let u_new = p0.y.atan2(p0.x);
+        assert!(
+            (u_new - 0.5).abs() < 1e-9 || (u_new - (-0.5)).abs() < 1e-9,
+            "new u must be ±0.5 rad, got {u_new}"
+        );
+        // Same z values
+        let z_orig0 = mesh.vertex_pos(vs[0]).unwrap().z;
+        let z_orig1 = mesh.vertex_pos(vs[3]).unwrap().z;
+        let z_set: Vec<f64> = vec![z_orig0, z_orig1];
+        for new_z in [p0.z, p1.z] {
+            assert!(
+                z_set.iter().any(|z| (z - new_z).abs() < 1e-9),
+                "new z must match an original z, got {new_z}"
+            );
+        }
+    }
+
+    #[test]
+    fn cylinder_offset_preserves_cylinder_radius() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cylinder_panel(&mut mesh, 2.5, 0.0, 1.0, 0.0, 0.5);
+        let edge = find_edge_between(&mesh, vs[0], vs[3]);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .expect("offset OK");
+        // After axial-line offset, new endpoints should still be at radius 2.5.
+        for v_id in [result.new_v0, result.new_v1] {
+            let p = mesh.vertex_pos(v_id).unwrap();
+            let r = (p.x * p.x + p.y * p.y).sqrt();
+            assert!(
+                (r - 2.5).abs() < 1e-9,
+                "cylinder radius must be preserved; got {r} (expected 2.5)"
+            );
+        }
+    }
+
+    #[test]
+    fn cylinder_helical_line_rejected() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Build cylinder face but with a non-axial edge.
+        let v00 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0)); // u=0, v=0
+        let v10 = mesh.add_vertex(DVec3::new(0.0, 1.0, 1.0)); // u=π/2, v=1 — helical
+        let v11 = mesh.add_vertex(DVec3::new(-1.0, 0.0, 2.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, -1.0, 1.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius: 1.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-10.0, 10.0),
+        }));
+        let edge = find_edge_between(&mesh, v00, v10);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject helical");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Cylinder",
+                curve_kind: "Line(non-axial)"
+            }
+        ));
+    }
+
+    #[test]
+    fn cylinder_latitude_arc_offset_shifts_axial_position() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cylinder_panel(&mut mesh, 1.0, 0.0, 2.0, 0.0, 1.0);
+        // Bottom edge v00 → v10 is at v=0, varying u — this is a latitude
+        // ring segment. Attach the Arc curve.
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, 0.0), // on axis at v=0
+            radius: 1.0,
+            normal: DVec3::Z, // ‖ axis_dir
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("latitude arc offset OK");
+        // New arc center should be shifted along axis by ±0.5.
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { center, radius, .. } => {
+                assert!(
+                    (center.z - 0.5).abs() < 1e-9 || (center.z - (-0.5)).abs() < 1e-9,
+                    "axial shift must be ±0.5; got z = {}",
+                    center.z
+                );
+                // Radius preserved (cylinder doesn't change radius).
+                assert!((radius - 1.0).abs() < 1e-9);
+                // Center stays on axis (x = y = 0).
+                assert!(center.x.abs() < 1e-9 && center.y.abs() < 1e-9);
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn cylinder_off_axis_arc_rejected() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cylinder_panel(&mut mesh, 1.0, 0.0, 2.0, 0.0, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Arc with center NOT on cylinder axis.
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.5, 0.0, 0.0), // off-axis
+            radius: 0.5,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject off-axis arc");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Cylinder",
+                curve_kind: "Arc(off-cylinder)"
+            }
+        ));
+    }
+
+    #[test]
+    fn cylinder_axial_out_of_range_rejected() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Build a cylinder panel with tight v_range so the offset goes out.
+        let v00 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.5));
+        let v01 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.5));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius: 1.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 0.5), // tight range
+        }));
+        let edge = find_edge_between(&mesh, v00, v10);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+        // Try offsets in both signs — at least one must go out of [0, 0.5].
+        let err1 = mesh.offset_edge_on_host_face(edge, 1.0).err();
+        let err2 = mesh.offset_edge_on_host_face(edge, -1.0).err();
+        let oor_seen = matches!(err1, Some(OffsetEdgeError::AxialOutOfRange { .. }))
+            || matches!(err2, Some(OffsetEdgeError::AxialOutOfRange { .. }));
+        assert!(
+            oor_seen,
+            "one sign must trigger AxialOutOfRange, got {:?} / {:?}",
+            err1, err2
         );
     }
 

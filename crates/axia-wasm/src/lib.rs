@@ -5883,6 +5883,18 @@ impl AxiaEngine {
                             current_r, new_r
                         )
                     }
+                    OffsetEdgeError::UnsupportedCurveOnSurface { surface_kind, curve_kind } => {
+                        format!(
+                            r#"{{"ok":false,"reason":"unsupported_curve_on_surface","surfaceKind":"{}","curveKind":"{}"}}"#,
+                            surface_kind, curve_kind
+                        )
+                    }
+                    OffsetEdgeError::AxialOutOfRange { new_v, v_min, v_max } => {
+                        format!(
+                            r#"{{"ok":false,"reason":"axial_out_of_range","newV":{},"vMin":{},"vMax":{}}}"#,
+                            new_v, v_min, v_max
+                        )
+                    }
                     other => {
                         let msg = other.to_string().replace('"', "'");
                         format!(r#"{{"ok":false,"reason":"other","message":"{}"}}"#, msg)

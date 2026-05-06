@@ -3128,6 +3128,21 @@ export class WasmBridge {
             currentRadius: Number(parsed.currentRadius ?? 0),
             newRadius: Number(parsed.newRadius ?? 0),
           };
+        case 'unsupported_curve_on_surface':
+          return {
+            ok: false,
+            reason: 'unsupported_curve_on_surface',
+            surfaceKind: String(parsed.surfaceKind ?? 'Unknown'),
+            curveKind: String(parsed.curveKind ?? 'Unknown'),
+          };
+        case 'axial_out_of_range':
+          return {
+            ok: false,
+            reason: 'axial_out_of_range',
+            newV: Number(parsed.newV ?? 0),
+            vMin: Number(parsed.vMin ?? 0),
+            vMax: Number(parsed.vMax ?? 0),
+          };
         default:
           return { ok: false, reason: 'other', message: String(parsed.message ?? parsed.reason ?? 'unknown') };
       }
@@ -3599,6 +3614,8 @@ export type OffsetEdgeOnHostResult =
   | { ok: false; reason: 'degenerate_distance' }
   | { ok: false; reason: 'arc_plane_mismatch' }
   | { ok: false; reason: 'radius_collapse'; currentRadius: number; newRadius: number }
+  | { ok: false; reason: 'unsupported_curve_on_surface'; surfaceKind: string; curveKind: string }
+  | { ok: false; reason: 'axial_out_of_range'; newV: number; vMin: number; vMax: number }
   | { ok: false; reason: 'other'; message: string }
   | { ok: false; reason: 'bridge_unavailable' };
 

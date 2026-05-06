@@ -60,6 +60,14 @@ function formatEdgeOffsetFailureToast(
       case 'radius_collapse':
         parts.push(`${count}개: 반지름이 0 이하로 축소됩니다 (방향 반전 필요)`);
         break;
+      case 'unsupported_curve_on_surface':
+        parts.push(
+          `${count}개: 곡선이 호스트 면 (${[...unsupportedKinds].join(',')}) 위에 자연스럽게 놓이지 않습니다`,
+        );
+        break;
+      case 'axial_out_of_range':
+        parts.push(`${count}개: 축 방향 위치가 호스트 범위를 벗어납니다`);
+        break;
       case 'bridge_unavailable':
         parts.push(`${count}개: WASM 미가용`);
         break;
@@ -311,6 +319,8 @@ export class OffsetTool implements ITool {
       reasonCount.set(key, (reasonCount.get(key) ?? 0) + 1);
       if (r.reason === 'unsupported_surface' || r.reason === 'unsupported_curve') {
         unsupportedKinds.add(r.kind);
+      } else if (r.reason === 'unsupported_curve_on_surface') {
+        unsupportedKinds.add(`${r.curveKind}@${r.surfaceKind}`);
       }
       debugLog('[OffsetTool] edge offset failed', { edgeId, ...r });
     }

@@ -870,6 +870,9 @@ fn offset_edge_on_host_emits_typed_reason_vocabulary() {
         // V-β-β additions (2)
         "arc_plane_mismatch",
         "radius_collapse",
+        // V-β-γ-1 additions (2)
+        "unsupported_curve_on_surface",
+        "axial_out_of_range",
     ] {
         assert!(
             body.contains(reason),
