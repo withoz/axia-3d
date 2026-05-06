@@ -10472,10 +10472,11 @@ mod tests {
 
     #[test]
     fn exec_create_solid_falls_back_to_push_pull_when_not_yet_supported() {
-        // Q3 lock-in — unsupported NURBS/Bezier profile → legacy push_pull
-        // fallback. All analytic primitives (Plane / Cylinder / Sphere / Cone
-        // / Torus) are now activated through W-2; only NURBS-class surfaces
-        // (BezierPatch / BSplineSurface / NURBSSurface) remain in W-3 scope.
+        // Q3 lock-in — unsupported case → legacy push_pull fallback.
+        // After W-2 (analytic primitives) + W-3 (NURBS-class hosts +
+        // Sweep/Loft) + W-4-α (Revolve full 360°) all activated, the
+        // canonical remaining unsupported case is Revolve with partial
+        // angle (W-4-γ scope).
         let mut scene = Scene::new();
         let mat = MaterialId::new(0);
         let v00 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
@@ -10483,19 +10484,23 @@ mod tests {
         let v11 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
         let v01 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
         let profile_face = scene.mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
-        // Attach BezierPatch surface (W-3 scope — still NotYetSupported).
-        // Linear 2×2 control grid representing the unit square plane.
-        let surface = axia_geo::AnalyticSurface::BezierPatch {
-            ctrl_grid: vec![
-                vec![DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0)],
-                vec![DVec3::new(0.0, 1.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
-            ],
-        };
-        scene.mesh.faces[profile_face].set_surface(Some(surface));
+        // Plain Plane surface — supported, but Revolve partial angle
+        // triggers NotYetSupported regardless of profile validity.
+        scene.mesh.faces[profile_face].set_surface(Some(axia_geo::AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
 
         let result = scene.execute(Command::CreateSolid {
             face_id: profile_face,
-            mode: axia_geo::CreateSolidMode::Extrude { distance: 1.0 },
+            mode: axia_geo::CreateSolidMode::Revolve {
+                axis_origin: DVec3::ZERO,
+                axis_dir: DVec3::Y,
+                angle_rad: std::f64::consts::PI, // partial angle (180°)
+            },
         });
 
         // Fallback to legacy push_pull → returns PushPullDone (not SolidCreated).

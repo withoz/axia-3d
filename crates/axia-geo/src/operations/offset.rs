@@ -331,14 +331,34 @@ impl Mesh {
                     dist,
                 );
             }
-            AnalyticSurface::BezierPatch { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "BezierPatch" });
-            }
-            AnalyticSurface::BSplineSurface { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "BSplineSurface" });
-            }
-            AnalyticSurface::NURBSSurface { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "NURBSSurface" });
+            AnalyticSurface::BezierPatch { .. }
+            | AnalyticSurface::BSplineSurface { .. }
+            | AnalyticSurface::NURBSSurface { .. } => {
+                // W-3-δ — Tessellation-based per-vertex normal offset on
+                // NURBS-class host. Normal evaluated at edge midpoint via
+                // `normal_at_world_pos` (which falls back to surface
+                // parametric-center normal for tensor variants).
+                // Approximation: edge treated as quasi-planar with the
+                // representative normal. New edge.curve = None.
+                let p0 = self
+                    .vertex_pos(v0)
+                    .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+                let p1 = self
+                    .vertex_pos(v1)
+                    .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+                let midpoint = (p0 + p1) * 0.5;
+                let representative_normal = host_surface.normal_at_world_pos(midpoint);
+                if representative_normal.length_squared() < 0.5 {
+                    return Err(OffsetEdgeError::NoHostSurface(host));
+                }
+                return self.finish_plane_offset(
+                    edge_id,
+                    v0,
+                    v1,
+                    edge_curve,
+                    representative_normal,
+                    dist,
+                );
             }
         };
         if host_normal.length_squared() < 0.5 {
@@ -2600,10 +2620,11 @@ mod tests {
     }
 
     #[test]
-    fn line_offset_on_nurbs_class_host_returns_unsupported() {
-        // V-β-γ trail closed — all analytic primitives (Plane / Cylinder /
-        // Sphere / Cone / Torus) now active. Only NURBS-class hosts (Bezier
-        // patch, B-spline, NURBS surface) remain forward-defer (W-3 scope).
+    fn line_offset_on_nurbs_class_host_now_succeeds_via_w3_delta() {
+        // W-3-δ — All analytic + NURBS-class hosts now active. NURBS-class
+        // (BezierPatch / BSplineSurface / NURBSSurface) → tessellation-based
+        // representative-normal offset. This test (originally a defer
+        // marker) now verifies success.
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let vs = [
@@ -2614,6 +2635,10 @@ mod tests {
         ];
         let face = mesh.add_face(&vs, mat).unwrap();
         // Linear 2×2 control grid → flat Bezier patch.
+        // Vertices at y=0 plane → patch at xy plane shifted to xz layout.
+        // Patch's parametric center normal (via .normal(0.5,0.5)) for
+        // ctrl_grid above gives a +Z direction (since control points span
+        // (0,0,0) → (1,1,0)). For this test setup, just verify success.
         mesh.faces[face].set_surface(Some(AnalyticSurface::BezierPatch {
             ctrl_grid: vec![
                 vec![DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0)],
@@ -2621,14 +2646,10 @@ mod tests {
             ],
         }));
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
-        let err = mesh
+        let result = mesh
             .offset_edge_on_host_face(edge, 0.3)
-            .err()
-            .expect("must defer NURBS-class host");
-        assert!(matches!(
-            err,
-            OffsetEdgeError::UnsupportedHostSurface { kind: "BezierPatch" }
-        ));
+            .expect("BezierPatch host offset OK (W-3-δ)");
+        assert!(result.new_edge.raw() > 0, "new edge created");
     }
 
     #[test]
@@ -4385,6 +4406,185 @@ mod tests {
         let p1 = mesh.vertex_pos(result.new_v1).unwrap();
         assert!((p0.y - (-0.5)).abs() < 1e-9);
         assert!((p1.y - (-0.5)).abs() < 1e-9);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 W-3-δ — NURBS-class hosts on offset (tessellation-based)
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper — build a quad face with a flat BezierPatch surface (normal
+    /// at parametric center = +Z).
+    fn build_bezier_patch_face(mesh: &mut Mesh) -> (FaceId, [VertId; 4]) {
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::BezierPatch {
+            ctrl_grid: vec![
+                vec![DVec3::new(0.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 0.0)],
+                vec![DVec3::new(0.0, 1.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
+        }));
+        (face, [v00, v10, v11, v01])
+    }
+
+    #[test]
+    fn offset_edge_on_bezier_patch_host_succeeds() {
+        // W-3-δ — Bezier-patch host activated. Edge offset uses
+        // tessellation-based representative normal at edge midpoint.
+        // Normal direction depends on (ctrl_grid u-index, v-index)
+        // convention; verify endpoints are on the surface plane (z=0)
+        // and offset is in xy plane (perpendicular to +X edge).
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_bezier_patch_face(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .expect("BezierPatch host offset OK (W-3-δ)");
+
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        // Both endpoints in xy plane (z = 0), offset by ±0.3 in y direction.
+        assert!(p0.z.abs() < 1e-9 && p1.z.abs() < 1e-9);
+        assert!(
+            (p0.y.abs() - 0.3).abs() < 1e-9,
+            "p0.y must be ±0.3, got {}",
+            p0.y
+        );
+        assert!((p1.y.abs() - 0.3).abs() < 1e-9);
+        // Both endpoints same y (parallel offset).
+        assert!((p0.y - p1.y).abs() < 1e-9);
+        // x range still 0..1 (chord-perpendicular offset).
+        let xs = [p0.x, p1.x];
+        let mut sorted = xs;
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((sorted[0] - 0.0).abs() < 1e-9);
+        assert!((sorted[1] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn offset_edge_on_bspline_surface_host_succeeds() {
+        // W-3-δ — B-spline surface host. Use degree 2 with 3×3 control
+        // grid for non-degenerate derivatives at parametric center.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        // 3×3 control grid (degree 2), uniform clamped knots [0,0,0,1,1,1].
+        mesh.faces[face].set_surface(Some(AnalyticSurface::BSplineSurface {
+            ctrl_grid: vec![
+                vec![
+                    DVec3::new(0.0, 0.0, 0.0),
+                    DVec3::new(0.5, 0.0, 0.0),
+                    DVec3::new(1.0, 0.0, 0.0),
+                ],
+                vec![
+                    DVec3::new(0.0, 0.5, 0.0),
+                    DVec3::new(0.5, 0.5, 0.0),
+                    DVec3::new(1.0, 0.5, 0.0),
+                ],
+                vec![
+                    DVec3::new(0.0, 1.0, 0.0),
+                    DVec3::new(0.5, 1.0, 0.0),
+                    DVec3::new(1.0, 1.0, 0.0),
+                ],
+            ],
+            knots_u: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            knots_v: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            deg_u: 2,
+            deg_v: 2,
+        }));
+        let edge = find_edge_between(&mesh, v00, v10);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("BSplineSurface host offset OK (W-3-δ)");
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        // Both endpoints in xy plane (z=0).
+        assert!(p0.z.abs() < 1e-9 && p1.z.abs() < 1e-9);
+        // Offset in y direction (±0.5).
+        assert!((p0.y.abs() - 0.5).abs() < 1e-9);
+        assert!((p0.y - p1.y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn offset_edge_on_nurbs_surface_host_succeeds() {
+        // W-3-δ — NURBS surface host. Same 3×3 degree-2 setup as B-spline
+        // (rational with all weights = 1 = equivalent to non-rational).
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::NURBSSurface {
+            ctrl_grid: vec![
+                vec![
+                    DVec3::new(0.0, 0.0, 0.0),
+                    DVec3::new(0.5, 0.0, 0.0),
+                    DVec3::new(1.0, 0.0, 0.0),
+                ],
+                vec![
+                    DVec3::new(0.0, 0.5, 0.0),
+                    DVec3::new(0.5, 0.5, 0.0),
+                    DVec3::new(1.0, 0.5, 0.0),
+                ],
+                vec![
+                    DVec3::new(0.0, 1.0, 0.0),
+                    DVec3::new(0.5, 1.0, 0.0),
+                    DVec3::new(1.0, 1.0, 0.0),
+                ],
+            ],
+            weights: vec![
+                vec![1.0, 1.0, 1.0],
+                vec![1.0, 1.0, 1.0],
+                vec![1.0, 1.0, 1.0],
+            ],
+            knots_u: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            knots_v: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            deg_u: 2,
+            deg_v: 2,
+            trim_loops: vec![],
+        }));
+        let edge = find_edge_between(&mesh, v00, v10);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.2)
+            .expect("NURBSSurface host offset OK (W-3-δ)");
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        // Offset in xy plane (z=0).
+        assert!(p0.z.abs() < 1e-9);
+        assert!((p0.y.abs() - 0.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn offset_edge_on_bezier_patch_with_nurbs_curve_succeeds() {
+        // Cross-cut: NURBS-class curve on NURBS-class host. Both W-3-γ
+        // and W-3-δ active → both fall through to chord-based offset.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_bezier_patch_face(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 0.5, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+        }));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .expect("Bezier curve on BezierPatch host OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned();
+        assert!(new_curve.is_none(), "approximation: curve = None");
     }
 
     #[test]

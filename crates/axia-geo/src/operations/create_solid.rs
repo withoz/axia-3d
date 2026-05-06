@@ -187,10 +187,12 @@ impl Mesh {
                         | AnalyticSurface::BSplineSurface { .. }
                         | AnalyticSurface::NURBSSurface { .. },
                         _,
-                    ) => Err(SolidError::NotYetSupported {
-                        reason: "NURBS profile → GeneralSweep (W-3 scope)".to_string(),
-                    }
-                    .into()),
+                    ) => self.extrude_nurbs_class_profile(
+                        profile_face,
+                        distance,
+                        material,
+                        &surface,
+                    ),
                 }
             }
             CreateSolidMode::Revolve {
@@ -516,6 +518,149 @@ impl Mesh {
             side_faces,
             all_solid_faces,
             adjacent_splits,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-3-δ — Extrude on NURBS-class profile (tessellation-based).
+    ///
+    /// Profile face's surface is BezierPatch / BSplineSurface / NURBSSurface.
+    /// Tessellation-based approximation per §W3-B-(a):
+    /// - Profile boundary verts already on surface (no projection needed)
+    /// - Compute representative normal at face's parametric-center via
+    ///   `AnalyticSurface::normal_at_world_pos(centroid)`
+    /// - Translate boundary verts by `representative_normal · dist` to
+    ///   form top boundary
+    /// - Build top face (preserve profile as bottom) + N side quads
+    /// - Top + side surfaces synthesized as Plane (approximate; original
+    ///   NURBS surface metadata not propagated to new faces)
+    ///
+    /// SolidKind: `GeneralSweep` (per ADR-079 §2.2 W-3 scope).
+    ///
+    /// **Known limitation**: representative normal is uniform (face center).
+    /// True per-vertex offset (each vertex moved along its own surface normal)
+    /// would produce a non-Plane top — future enhancement (W-3-ε).
+    fn extrude_nurbs_class_profile(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        material: MaterialId,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        let outer_start = self.faces[profile_face].outer().start;
+        if outer_start.is_null() {
+            bail!(
+                "extrude_nurbs_class_profile: profile face {profile_face:?} \
+                 has null outer loop start"
+            );
+        }
+        let boundary_verts = self.collect_loop_verts(outer_start)?;
+        if boundary_verts.len() < 3 {
+            bail!(
+                "extrude_nurbs_class_profile: profile boundary has only {} verts",
+                boundary_verts.len()
+            );
+        }
+
+        // Compute centroid of boundary verts → representative normal.
+        let mut centroid = DVec3::ZERO;
+        let positions: Vec<DVec3> = boundary_verts
+            .iter()
+            .map(|&v| self.vertex_pos(v))
+            .collect::<Result<Vec<_>>>()?;
+        for p in &positions {
+            centroid += *p;
+        }
+        centroid /= positions.len() as f64;
+        let representative_normal = profile_surface.normal_at_world_pos(centroid);
+        if representative_normal.length_squared() < 0.5 {
+            bail!(
+                "extrude_nurbs_class_profile: NURBS surface representative \
+                 normal at centroid is degenerate"
+            );
+        }
+        let translation = representative_normal * dist;
+
+        // Translate boundary to form top loop.
+        let mut top_verts = Vec::with_capacity(boundary_verts.len());
+        for p in &positions {
+            top_verts.push(self.add_vertex(*p + translation));
+        }
+
+        // Top cap face.
+        let top_face = self.add_face(&top_verts, material)?;
+
+        // Side quads — same winding as extrude_planar_box.
+        let n = boundary_verts.len();
+        let mut side_faces = Vec::with_capacity(n);
+        for i in 0..n {
+            let next = (i + 1) % n;
+            let quad = if dist > 0.0 {
+                [
+                    boundary_verts[i],
+                    boundary_verts[next],
+                    top_verts[next],
+                    top_verts[i],
+                ]
+            } else {
+                [
+                    boundary_verts[next],
+                    boundary_verts[i],
+                    top_verts[i],
+                    top_verts[next],
+                ]
+            };
+            let side = self.add_face(&quad, material)?;
+            side_faces.push(side);
+        }
+
+        // Top cap surface — synthesized as Plane from top vertex positions.
+        // (Approximation: NURBS profile surface NOT carried to top — future
+        // enhancement W-3-ε would translate the NURBS surface.)
+        let top_positions: Vec<DVec3> = top_verts
+            .iter()
+            .filter_map(|v| self.vertex_pos(*v).ok())
+            .collect();
+        if top_positions.len() >= 3 {
+            let top_surface = synthesize_plane_surface(&top_positions);
+            if let Some(top_face_mut) = self.faces.get_mut(top_face) {
+                top_face_mut.set_surface(Some(top_surface));
+            }
+        }
+
+        // Side surfaces — synthesized Plane from each quad.
+        for &side_fid in &side_faces {
+            let face_ref = self.faces.get(side_fid);
+            if face_ref.is_none() || !face_ref.unwrap().is_active() {
+                continue;
+            }
+            let start = self.faces[side_fid].outer().start;
+            if start.is_null() {
+                continue;
+            }
+            let side_verts = self.collect_loop_verts(start)?;
+            let positions: Vec<DVec3> = side_verts
+                .iter()
+                .filter_map(|v| self.vertex_pos(*v).ok())
+                .collect();
+            if positions.len() >= 3 {
+                let side_surface = synthesize_plane_surface(&positions);
+                self.faces[side_fid].set_surface(Some(side_surface));
+            }
+        }
+
+        let mut all_solid_faces = Vec::with_capacity(2 + side_faces.len());
+        all_solid_faces.push(profile_face);
+        all_solid_faces.push(top_face);
+        all_solid_faces.extend(side_faces.iter().copied());
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::GeneralSweep,
+            top_face,
+            side_faces,
+            all_solid_faces,
+            adjacent_splits: 0,
             split_debug: Vec::new(),
         })
     }
@@ -3808,6 +3953,157 @@ mod tests {
         assert!(
             result.side_faces.len() >= 4,
             "arc sweep must produce side faces"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-3-δ — Extrude on NURBS-class profile (tessellation-based)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build a quad face whose surface is a synthetic flat
+    /// BezierPatch (linear 2×2 control grid) — equivalent to a plane in
+    /// shape, but classified as NURBS-class for dispatch purposes.
+    fn build_bezier_patch_quad_face(mesh: &mut Mesh) -> FaceId {
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).expect("add_face");
+        // Flat BezierPatch (2×2 = bilinear). Normal at (0.5, 0.5) = +Z.
+        mesh.faces[face].set_surface(Some(AnalyticSurface::BezierPatch {
+            ctrl_grid: vec![
+                vec![DVec3::new(0.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 0.0)],
+                vec![DVec3::new(0.0, 1.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
+        }));
+        face
+    }
+
+    #[test]
+    fn extrude_on_bezier_patch_returns_general_sweep() {
+        let mut mesh = Mesh::new();
+        let profile = build_bezier_patch_quad_face(&mut mesh);
+        let face_count_before = mesh.face_count();
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 1.0 },
+                MaterialId::new(0),
+            )
+            .expect("BezierPatch profile extrude OK (W-3-δ)");
+
+        assert_eq!(result.solid_kind, SolidKind::GeneralSweep);
+        assert_eq!(result.profile_face, profile);
+        assert_eq!(result.side_faces.len(), 4);
+        // profile + top + 4 sides = 6.
+        assert_eq!(result.all_solid_faces.len(), 6);
+        assert_eq!(mesh.face_count(), face_count_before + 5);
+    }
+
+    /// Helper — 3×3 degree-2 BSpline/NURBS control grid (linear-equivalent
+    /// surface in xy plane). Required because deg-1 bspline_surface gives
+    /// degenerate derivative at parametric center.
+    fn make_3x3_xy_grid() -> Vec<Vec<DVec3>> {
+        vec![
+            vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(0.5, 0.0, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+            vec![
+                DVec3::new(0.0, 0.5, 0.0),
+                DVec3::new(0.5, 0.5, 0.0),
+                DVec3::new(1.0, 0.5, 0.0),
+            ],
+            vec![
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(0.5, 1.0, 0.0),
+                DVec3::new(1.0, 1.0, 0.0),
+            ],
+        ]
+    }
+
+    #[test]
+    fn extrude_on_bspline_surface_returns_general_sweep() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
+        mesh.faces[face].set_surface(Some(AnalyticSurface::BSplineSurface {
+            ctrl_grid: make_3x3_xy_grid(),
+            knots_u: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            knots_v: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            deg_u: 2,
+            deg_v: 2,
+        }));
+
+        let result = mesh
+            .create_solid(
+                face,
+                CreateSolidMode::Extrude { distance: 1.0 },
+                mat,
+            )
+            .expect("BSplineSurface profile extrude OK");
+        assert_eq!(result.solid_kind, SolidKind::GeneralSweep);
+        assert_eq!(result.side_faces.len(), 4);
+    }
+
+    #[test]
+    fn extrude_on_nurbs_surface_returns_general_sweep() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
+        mesh.faces[face].set_surface(Some(AnalyticSurface::NURBSSurface {
+            ctrl_grid: make_3x3_xy_grid(),
+            weights: vec![
+                vec![1.0, 1.0, 1.0],
+                vec![1.0, 1.0, 1.0],
+                vec![1.0, 1.0, 1.0],
+            ],
+            knots_u: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            knots_v: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            deg_u: 2,
+            deg_v: 2,
+            trim_loops: vec![],
+        }));
+
+        let result = mesh
+            .create_solid(
+                face,
+                CreateSolidMode::Extrude { distance: 1.0 },
+                mat,
+            )
+            .expect("NURBSSurface profile extrude OK");
+        assert_eq!(result.solid_kind, SolidKind::GeneralSweep);
+        assert_eq!(result.side_faces.len(), 4);
+    }
+
+    #[test]
+    fn extrude_on_nurbs_class_top_face_synthesized_as_plane() {
+        // W-3-δ approximation: top face surface is Plane (synthesized
+        // from translated vertex positions), not the original NURBS surface.
+        let mut mesh = Mesh::new();
+        let profile = build_bezier_patch_quad_face(&mut mesh);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 2.0 },
+                MaterialId::new(0),
+            )
+            .expect("OK");
+        let top_surface = mesh.faces[result.top_face].surface();
+        assert!(
+            matches!(top_surface, Some(AnalyticSurface::Plane { .. })),
+            "W-3-δ approximation: top face synthesized as Plane, not NURBS"
         );
     }
 
