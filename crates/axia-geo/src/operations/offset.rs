@@ -215,24 +215,13 @@ impl Mesh {
 
         // §V2-C — Curve kind dispatch.
         // V-β-α: Line + None.    V-β-β: Arc + Circle.
-        // Bezier/B-spline/NURBS still defer (W-3 / V-β-δ scope).
-        match &edge_curve {
-            None
-            | Some(AnalyticCurve::Line { .. })
-            | Some(AnalyticCurve::Arc { .. })
-            | Some(AnalyticCurve::Circle { .. }) => {
-                // OK — fall through to dispatch by kind below.
-            }
-            Some(c) => {
-                let kind = match c {
-                    AnalyticCurve::Bezier { .. } => "Bezier",
-                    AnalyticCurve::BSpline { .. } => "BSpline",
-                    AnalyticCurve::NURBS { .. } => "NURBS",
-                    _ => unreachable!(),
-                };
-                return Err(OffsetEdgeError::UnsupportedCurveKind { kind });
-            }
-        }
+        // V-β-δ / W-3-γ: Bezier/B-spline/NURBS curves on Plane host fall
+        //   through to chord-based Line perpendicular offset (approximation
+        //   per §W3-B-(a) tessellation 의미론). Result edge.curve = None
+        //   (polyline lost). Curved hosts (Cylinder/Sphere/Cone/Torus)
+        //   still reject NURBS curves at their host-specific dispatch with
+        //   `UnsupportedCurveOnSurface`.
+        // (no early reject — all curve kinds reach host dispatch)
 
         // §V2-B — Host face resolution.
         let (incident_faces, _hes) = self.get_faces_sharing_edge(edge_id);
@@ -397,22 +386,9 @@ impl Mesh {
         let v1 = edge.v_large();
         let edge_curve = edge.curve().cloned();
 
-        // §V2-C — Curve kind dispatch.
-        match &edge_curve {
-            None
-            | Some(AnalyticCurve::Line { .. })
-            | Some(AnalyticCurve::Arc { .. })
-            | Some(AnalyticCurve::Circle { .. }) => {}
-            Some(c) => {
-                let kind = match c {
-                    AnalyticCurve::Bezier { .. } => "Bezier",
-                    AnalyticCurve::BSpline { .. } => "BSpline",
-                    AnalyticCurve::NURBS { .. } => "NURBS",
-                    _ => unreachable!(),
-                };
-                return Err(OffsetEdgeError::UnsupportedCurveKind { kind });
-            }
-        }
+        // §V2-C / §W3-γ — All curve kinds accepted on explicit-plane path.
+        // Bezier/B-spline/NURBS fall through to chord-based Line offset
+        // (approximation per §W3-B-(a) tessellation 의미론).
 
         // Plane normal sanity — must be non-degenerate unit-able vector.
         let normal_unit = plane_normal.normalize_or_zero();
@@ -4264,8 +4240,10 @@ mod tests {
     }
 
     #[test]
-    fn offset_edge_with_reference_plane_bezier_curve_unsupported() {
-        // Bezier curve still unsupported even with explicit plane.
+    fn offset_edge_with_reference_plane_bezier_curve_chord_offset_succeeds() {
+        // W-3-γ activated NURBS-class curves on Plane host (chord-based
+        // approximation). Bezier on V-δ-β explicit plane → succeeds with
+        // chord-offset (curve metadata lost on new edge).
         let mut mesh = Mesh::new();
         let (_a, _b, edge_id) = mesh
             .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
@@ -4277,19 +4255,32 @@ mod tests {
                 DVec3::new(1.0, 0.0, 0.0),
             ],
         }));
-        let err = mesh
-            .offset_edge_with_reference_plane(edge_id, 0.1, DVec3::ZERO, DVec3::Z)
-            .err()
-            .expect("bezier still unsupported");
-        assert!(matches!(
-            err,
-            OffsetEdgeError::UnsupportedCurveKind { kind: "Bezier" }
-        ));
+        let result = mesh
+            .offset_edge_with_reference_plane(edge_id, 0.5, DVec3::ZERO, DVec3::Z)
+            .expect("bezier chord offset OK (W-3-γ approximation)");
+
+        // New edge has curve = None (NURBS metadata not preserved).
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned();
+        assert!(
+            new_curve.is_none(),
+            "W-3-γ approximation: new edge curve must be None (polyline only)"
+        );
+        // Chord-based offset: edge_dir = +X, normal = +Z, offset_dir =
+        // +X × +Z = -Y → new endpoints at y=-0.5.
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        assert!((p0.y - (-0.5)).abs() < 1e-9);
+        assert!((p1.y - (-0.5)).abs() < 1e-9);
     }
 
     #[test]
-    fn bezier_curve_offset_still_unsupported() {
-        // V-β-β activated Arc/Circle, but Bezier remains W-3 scope.
+    fn bezier_curve_on_plane_host_chord_offset_succeeds() {
+        // W-3-γ — Bezier curve on Plane host: chord-based offset succeeds
+        // (approximation, new edge curve = None).
         let mut mesh = Mesh::new();
         let (_face, vs) = build_unit_square_plane(&mut mesh);
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
@@ -4301,13 +4292,125 @@ mod tests {
             ],
         };
         mesh.edges[edge].set_curve(Some(bez));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .expect("bezier chord offset OK (W-3-γ)");
+
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned();
+        assert!(
+            new_curve.is_none(),
+            "W-3-γ: new edge curve must be None (polyline only)"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-δ / ADR-079 W-3-γ — NURBS-class curves on Plane host
+    // (tessellation-based chord offset, curve metadata not preserved)
+    // ════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn bspline_curve_on_plane_host_chord_offset_succeeds() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Linear B-spline (degree 1, 3 control pts) — minimal valid input.
+        let bspline = AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 0.0, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+            knots: vec![0.0, 0.0, 0.5, 1.0, 1.0],
+            degree: 1,
+        };
+        mesh.edges[edge].set_curve(Some(bspline));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.2)
+            .expect("bspline chord offset OK (W-3-γ)");
+        // curve = None (lost in approximation).
+        assert!(mesh.edges.get(result.new_edge).and_then(|e| e.curve()).is_none());
+    }
+
+    #[test]
+    fn nurbs_curve_on_plane_host_chord_offset_succeeds() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Linear NURBS (degree 1, all weights = 1, equivalent to B-spline).
+        let nurbs = AnalyticCurve::NURBS {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 0.0, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+            weights: vec![1.0, 1.0, 1.0],
+            knots: vec![0.0, 0.0, 0.5, 1.0, 1.0],
+            degree: 1,
+        };
+        mesh.edges[edge].set_curve(Some(nurbs));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.2)
+            .expect("nurbs chord offset OK (W-3-γ)");
+        assert!(mesh.edges.get(result.new_edge).and_then(|e| e.curve()).is_none());
+    }
+
+    #[test]
+    fn nurbs_curve_chord_endpoints_use_edge_p0_p1() {
+        // Verify the chord-based offset uses edge.v_small/v_large positions
+        // (= polyline endpoints at parameter 0 and 1 of NURBS curve), NOT
+        // the curve's control points.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Edge endpoints are vs[0]=(0,0,0) and vs[1]=(1,0,0).
+        // Bezier with extreme control point (0.5, 5.0, 0) — chord still
+        // goes (0,0,0) → (1,0,0).
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 5.0, 0.0), // hugely off-chord
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+        }));
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("chord offset OK");
+        // Chord direction = +X, face normal = +Z, offset_dir = -Y.
+        // New endpoints at y=-0.5 (NOT influenced by control point at y=5).
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        assert!((p0.y - (-0.5)).abs() < 1e-9);
+        assert!((p1.y - (-0.5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nurbs_curve_on_cylinder_host_still_rejected() {
+        // W-3-γ is Plane host only. Cylinder/Sphere/Cone/Torus hosts still
+        // reject NURBS-class curves at their host-specific dispatch.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_cylinder_panel(&mut mesh, 1.0, 0.0, 2.0, 0.0, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 0.5, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+        }));
         let err = mesh
             .offset_edge_on_host_face(edge, 0.1)
             .err()
-            .expect("bezier deferred");
+            .expect("bezier on cylinder must still reject");
         assert!(matches!(
             err,
-            OffsetEdgeError::UnsupportedCurveKind { kind: "Bezier" }
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Cylinder",
+                curve_kind: "Bezier"
+            }
         ));
     }
 
