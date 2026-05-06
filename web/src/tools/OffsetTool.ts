@@ -317,11 +317,36 @@ export class OffsetTool implements ITool {
     const reasonCount = new Map<string, number>();
     const unsupportedKinds = new Set<string>();
 
+    // ADR-080 V-δ-γ — Cascade fallback for free wire failures:
+    //   Layer 1: bridge.offsetEdgeOnHost (host face / V-δ-α wire planarity)
+    //   Layer 2: if active sketch session, retry with V-δ-β explicit plane
+    //   Layer 3 (deferred): ground plane (intentionally NOT default-on —
+    //                        user must explicitly opt in via sketch)
+    const sketch = this.ctx.getSketchInfo();
+    let sketchFallbackCount = 0;
+
     for (const edgeId of edges) {
-      const r = this.ctx.bridge.offsetEdgeOnHost(edgeId, dist);
+      let r = this.ctx.bridge.offsetEdgeOnHost(edgeId, dist);
       if (r.ok) {
         successCount++;
         continue;
+      }
+      // V-δ-γ Layer 2: free-wire-specific failures + active sketch →
+      // retry with caller-supplied plane.
+      const isFreeWireFailure =
+        r.reason === 'no_reference_plane' || r.reason === 'wire_not_planar';
+      if (isFreeWireFailure && sketch) {
+        const sr = this.ctx.bridge.offsetEdgeWithReferencePlane(
+          edgeId, dist,
+          [sketch.origin.x, sketch.origin.y, sketch.origin.z],
+          [sketch.normal.x, sketch.normal.y, sketch.normal.z],
+        );
+        if (sr.ok) {
+          successCount++;
+          sketchFallbackCount++;
+          continue;
+        }
+        r = sr; // record sketch-fallback failure reason for Toast
       }
       const key = r.reason;
       reasonCount.set(key, (reasonCount.get(key) ?? 0) + 1);
@@ -331,6 +356,10 @@ export class OffsetTool implements ITool {
         unsupportedKinds.add(`${r.curveKind}@${r.surfaceKind}`);
       }
       debugLog('[OffsetTool] edge offset failed', { edgeId, ...r });
+    }
+
+    if (sketchFallbackCount > 0) {
+      debugLog('[OffsetTool] sketch fallback applied', { count: sketchFallbackCount });
     }
 
     if (successCount > 0) {

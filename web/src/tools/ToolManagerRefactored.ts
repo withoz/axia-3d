@@ -227,6 +227,11 @@ export class ToolManager {
       pickBox: this.pickBox,
       getDrawPlane: (e: MouseEvent) => this.getDrawPlane(e),
       getRay: (e: MouseEvent) => this.getRay(e),
+      getSketchInfo: () => {
+        // ADR-080 V-δ-γ — expose sketch session plane to OffsetTool.
+        const info = this.getSketchInfo();
+        return info ? { origin: info.origin, normal: info.normal } : null;
+      },
     };
 
     // Register all tools

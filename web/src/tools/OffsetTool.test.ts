@@ -20,6 +20,9 @@ function mockToolContext() {
       offsetEdgeOnHost: vi.fn().mockReturnValue({
         ok: true, newEdge: 30, newV0: 100, newV1: 101,
       }),
+      offsetEdgeWithReferencePlane: vi.fn().mockReturnValue({
+        ok: true, newEdge: 31, newV0: 102, newV1: 103,
+      }),
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
       getFaceNormal: vi.fn().mockReturnValue(new Float32Array([0, 1, 0])),
       getEdgeLines: vi.fn().mockReturnValue(null),
@@ -52,6 +55,7 @@ function mockToolContext() {
     extractFaceBoundary: vi.fn().mockReturnValue([]),
     pickBox: null,
     edgeMap: null,
+    getSketchInfo: vi.fn().mockReturnValue(null),
   } as any;
 }
 
@@ -456,6 +460,145 @@ describe('OffsetTool', () => {
       expect(Toast.warning).toHaveBeenCalledTimes(1);
       const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(msg).toMatch(/기준 평면|단일 엣지|V-δ-β/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-080 V-δ-γ — Sketch session cascade fallback
+    // ────────────────────────────────────────────────────────────────
+
+    it('V-δ-γ: sketch active + no_reference_plane → falls back to offsetEdgeWithReferencePlane', async () => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      // V-δ-α fails with no_reference_plane (single-edge wire).
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_reference_plane',
+      });
+      // Sketch session active → fallback succeeds.
+      ctx.getSketchInfo.mockReturnValue({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+      });
+      ctx.bridge.offsetEdgeWithReferencePlane.mockReturnValue({
+        ok: true, newEdge: 50, newV0: 200, newV1: 201,
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_reference_plane',
+      });
+      ctx.bridge.offsetEdgeWithReferencePlane.mockReturnValue({
+        ok: true, newEdge: 50, newV0: 200, newV1: 201,
+      });
+      ctx.getSketchInfo.mockReturnValue({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+      });
+
+      tool.applyVCBValue(50);
+
+      // V-δ-α called first.
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledTimes(1);
+      // V-δ-γ fallback called with sketch plane.
+      expect(ctx.bridge.offsetEdgeWithReferencePlane).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.offsetEdgeWithReferencePlane).toHaveBeenCalledWith(
+        10, 50, [0, 0, 0], [0, 0, 1],
+      );
+      expect(ctx.syncMesh).toHaveBeenCalled();
+    });
+
+    it('V-δ-γ: sketch inactive + no_reference_plane → no fallback, Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_reference_plane',
+      });
+      ctx.getSketchInfo.mockReturnValue(null);
+      tool.onActivate();
+      vi.clearAllMocks();
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_reference_plane',
+      });
+      ctx.getSketchInfo.mockReturnValue(null);
+
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.offsetEdgeWithReferencePlane).not.toHaveBeenCalled();
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+    });
+
+    it('V-δ-γ: sketch active + wire_not_planar → falls back to sketch plane', async () => {
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      tool.onActivate();
+      vi.clearAllMocks();
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'wire_not_planar', rmsError: 0.05,
+      });
+      ctx.bridge.offsetEdgeWithReferencePlane.mockReturnValue({
+        ok: true, newEdge: 60, newV0: 300, newV1: 301,
+      });
+      ctx.getSketchInfo.mockReturnValue({
+        origin: new THREE.Vector3(1, 2, 3),
+        normal: new THREE.Vector3(1, 0, 0),
+      });
+
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.offsetEdgeWithReferencePlane).toHaveBeenCalledWith(
+        10, 50, [1, 2, 3], [1, 0, 0],
+      );
+      expect(ctx.syncMesh).toHaveBeenCalled();
+    });
+
+    it('V-δ-γ: sketch active + non-free-wire failure → no fallback (e.g., multi_loop)', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      tool.onActivate();
+      vi.clearAllMocks();
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'multi_loop',
+      });
+      ctx.getSketchInfo.mockReturnValue({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+      });
+
+      tool.applyVCBValue(50);
+
+      // multi_loop is not free-wire-specific → no fallback.
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.offsetEdgeWithReferencePlane).not.toHaveBeenCalled();
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+    });
+
+    it('V-δ-γ: sketch fallback failure → final Toast warning', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      tool.onActivate();
+      vi.clearAllMocks();
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_reference_plane',
+      });
+      // Sketch fallback also fails (e.g., arc_plane_mismatch).
+      ctx.bridge.offsetEdgeWithReferencePlane.mockReturnValue({
+        ok: false, reason: 'arc_plane_mismatch',
+      });
+      ctx.getSketchInfo.mockReturnValue({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+      });
+
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.offsetEdgeWithReferencePlane).toHaveBeenCalledTimes(1);
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // Final reason should be the sketch-fallback's failure (arc_plane_mismatch).
+      expect(msg).toMatch(/arc 평면|평면이 호스트/);
     });
 
     it('edge mode applyVCB partial success → success + warning Toasts', async () => {

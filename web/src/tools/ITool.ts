@@ -63,6 +63,14 @@ export interface ToolContext {
    * Used by tools to intersect custom planes (e.g., drawing plane for Rect/Circle).
    */
   getRay: (e: MouseEvent) => THREE.Raycaster;
+
+  /**
+   * ADR-080 V-δ-γ — Active sketch session plane info, if any.
+   * Returns `null` when no sketch is active.
+   * Used by OffsetTool to provide a reference plane for free wire offset
+   * when V-δ-α (wire planarity) fails (single edge, collinear, non-planar).
+   */
+  getSketchInfo: () => { origin: THREE.Vector3; normal: THREE.Vector3 } | null;
 }
 
 /** Drawing plane information for Rect/Circle tools */
