@@ -712,11 +712,20 @@
   깨지는 결과 (NaN normal / HE chain stale) 는 차단.
 - **단계적 로드맵** (ADR-049 §4 의 Q1~Q5 모두 확정 후 — 2026-05-03 사용자 세션):
   - **Phase 0** (완료): 본 LOCKED + ADR-048 amendment + ADR-049 + Q1~Q5 final
-  - **Phase 1** (ADR-050 + ADR-051 예정, 함께 가야 정합):
+  - **Phase 1** ✅ **완료 (2026-05-06)** — ADR-050 + ADR-051 Path Z atomic
+    11+ sub-step closure (P-1 ~ P-7):
     * **ADR-050** — Shape/Xia type split + 형태 → 특성 승격 API + face-level
-      material 정책 (Q1 + Q3 + Q4 통합 구현)
-    * **ADR-051** — ADR-021 P7 supersede (Q2 — ring-with-hole + 별개 inner,
-      ADR-006 multi-loop face 정책 복원). LOCKED #1 변경
+      material 정책 (Q1 + Q3 + Q4 통합 구현). **§D Acceptance Log 참조**.
+    * **ADR-051** — ADR-021 P7 strict reaffirmation + verify_p7_manifold
+      named invariant. LOCKED #1 amendment landed.
+    * **회귀 누적**: axia-core +49, axia-geo +5, axia-wasm +12, axia-
+      transaction +2, vitest +77 (총 **+145**, 절대 #[ignore] 금지 145/145
+      준수)
+    * **사용자 facing 변화**: default Shape mode (P-5e-α) + Undo 1회
+      collapse (P-5e-γ) + Inspector "형태 (Shape)" / "XIA (특성)" 라벨 (P-6)
+    * **다음 ADR 가이드**: ADR-050 §E Lessons (Path Z 효율성 / FORM_MATERIAL
+      sentinel / replace_last_after_snapshot UX / 명명 정합 / 점진 마이그
+      레이션 / 3-layer 봉인) 참조
   - **Phase 2** (ADR-052 예정): 재질 제거 → Shape 가역 강등 + 5초 알림 +
     재질 임시 보존 (Q5 사건 1)
   - **Phase 3** (ADR-053 예정): Reference 시민권 분리 (Construction Line /
@@ -2033,6 +2042,108 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
   Log (P-1 ~ P-4 commit hash + 산출물 + lock-ins) + §6 Lessons
   (5-layer 패턴 일반화 + 사용자 정정 가치 + UI/persistence layer 분리
   + page reload 표준)
+
+### ADR-050 + ADR-051 — Two-Layer Citizenship Phase 1 (P-1 ~ P-7 closure, 2026-05-06)
+- **상태**: Phase 1 모든 sub-step (P-1 / P-2 / ADR-051 P-1 / ADR-051
+  P-2 / P-3 / P-4 / P-5a / P-5b / P-5c / P-5d / P-5e-α / P-5e-γ /
+  P-5e-β / P-6 / P-7) closure. ADR-049 §4 Q1+Q2+Q3+Q4 모든 lock-in
+  코드 정합. LOCKED #26 의 Phase 1 완료 표시 추가. Last commit: 본
+  P-7 commit.
+- **의의**: AxiA 의 핵심 시민권 모델 (Form citizen `Shape` / Property
+  citizen `Xia`) 이 model + WASM + TS bridge + Tools + UI + Snapshot
+  6 layer 모두 작동. 사용자가 새 도구로 그리면 default 로 form-layer
+  Shape 생성, 재질 부여 시 4-condition 통과 후 Xia 로 promote. ADR-074
+  / ADR-078 의 Path Z 11+ atomic 패턴 일반화 — Phase 1 은 동일 패턴의
+  최대 적용 사례 (15 commits, +145 회귀).
+- **stack** (사용자 클릭 → 재질 부여 → Xia 승격):
+  ```
+  사용자 클릭 (Default ON, P-5e-α)
+    ↓
+  DrawRect/Line/CircleTool (P-5d opt-in flag)
+    ↓ bridge.draw*AsShape
+  WasmBridge typed wrapper (P-5c)
+    ↓ draw_*_as_shape WASM exports (P-5c)
+  Command::DrawRect/Line/CircleAsShape (P-5a/b)
+    ↓ Scene::exec_draw_*_as_shape
+  Phase 1: 기존 exec_draw_* 위임 (mesh + face synthesis)
+  Phase 2: Xia → Shape 변환 + replace_last_after_snapshot (P-5e-γ)
+    ↓
+  Scene.shapes (P-1 storage) + Snapshot section 7 (P-3 persistence)
+    ↓
+  Inspector "형태 (Shape)" badge (P-6)
+    ↓ promote_shape_to_xia (P-2 4-condition validation)
+  Scene.xias + shape_to_xia linkage (P-2)
+    ↓
+  Inspector "XIA (특성)" badge (P-6)
+  ```
+- **결정 매트릭스 핵심** (각 sub-step §B lock-ins 참조):
+  - **P-1**: ShapeId newtype + Shape struct + scene.shapes storage
+    (additive only, 기존 Xia UNCHANGED)
+  - **P-2**: validate_promotion shared helper + ShapeNotFound additive
+    variant + shape_to_xia 별개 map (Xia struct UNCHANGED — bincode
+    호환)
+  - **ADR-051 P-1**: free function verify_p7_manifold + P7Violation
+    enum 3 variants (M1/M2/M3) — promote API 미통합 (별도 sub-step)
+  - **ADR-051 P-2**: Phase 5/6/7 정정은 prior commits 자연 완료 +
+    측정 도구 회귀 봉인 + LOCKED #1 amendment
+  - **P-3**: Section 7 additive (shapes + next_shape_id +
+    shape_to_xia) — legacy snapshot 호환
+  - **P-4**: 6 typed WASM methods (Vec<u32> + strict throw) + 6 TS
+    wrappers (number[] + graceful no-op + strict for promote)
+  - **P-5a/b**: 신규 Command variants + ShapeCreated CommandResult +
+    Conversion 패턴 (350 LoC 중복 회피)
+  - **P-5c**: As-Shape Draw bridge + TS wrappers (snake_case in JS,
+    f64 return, ADR-026 P12 snap 정합)
+  - **P-5d**: TS module-level flag (AutoIntersectSettings 패턴) +
+    SettingsPanel toggle ("그리기 모드: 형태 (실험)")
+  - **P-5e-α**: Default flip (false → true) + localStorage 'false'
+    명시 OFF preference 보존
+  - **P-5e-γ**: TransactionManager::replace_last_after_snapshot
+    additive API + 3 As-Shape methods refactor (Undo 1회 = 산업 표준)
+  - **P-5e-β**: FORM_MATERIAL named sentinel (MaterialId::new(0))
+    + Scene.default_material field 제거 (43 sites 일괄, sed + cargo
+    catch) + MaterialId::new const fn
+  - **P-6**: Inspector badge label rename ("Appearance" → "형태 (Shape)" /
+    "XIA (물체)" → "XIA (특성)") + drift guard 회귀
+  - **P-7**: 회고 + LOCKED #26 update + Phase 1 closure
+- **회귀 누적 (P-1 ~ P-7)**: axia-core 124 → 173 (+49), axia-geo 964
+  → 969 (+5), axia-wasm 12 → 24 (+12), axia-transaction 2 → 4 (+2),
+  vitest 1395 → 1472 (+77). 합계 **+145**, 절대 #[ignore] 금지
+  145/145 준수. CI 자동 검증 (ADR-075 E4-6 + ci.yml).
+- **사용자 facing 변화 요약**:
+  - 새 도구로 그리면 default 로 form-layer Shape 생성 (이전: legacy Xia)
+  - Undo 1회로 정확 pre-state 복원 (이전: As-Shape 시 2회 필요)
+  - SettingsPanel "그리기 모드: 형태 (실험)" 체크박스 default ON
+    (기존 OFF 사용자 preference 보존)
+  - Inspector badge: "형태 (Shape)" (재질 없음) / "XIA (특성)"
+    (재질 있음)
+  - 재질 부여 시 4-condition 통과 후 promote → 자동 Xia 승격
+- **5-Layer Path Z atomic 패턴 일반화** (ADR-074/078 답습 + 확장):
+  ADR-074 = 5-layer (Model + UI + Routing + Functional E2E + Visual).
+  ADR-078 = 5-layer persistence 변형. ADR-050+051 = **9-layer** Form
+  Citizenship 변형 (Schema + Promote + Manifold Verify + Persistence
+  + WASM Bridge + TS Wrapper + Tools Dispatch + Settings Flag + UI
+  Labels). 각 layer 가 독립 atomic. **향후 ADR 가이드**: 시민권 모델
+  변경은 9-layer 패턴 답습.
+- **사용자 결재 가치**: 모든 sub-step 사전 검토 → 사용자 명시 결재 →
+  구현 → 검증 → commit. P-5e 의 4 sub-task 통합 anchor 가 사전 검토
+  중 발견되어 (β/γ 분리 + δ 무효화) 위험 감소. **향후 ADR 가이드**:
+  복합 atomic 은 사전 검토 단계에서 분할 검토 필수.
+- **남은 미착수 (선택적 또는 future Phase)**:
+  - ID format 갱신 ("XIA-0001" → "Shape-0001" form layer 시) — Bridge
+    integration 필요, 별도 ADR
+  - 다른 Draw tools (DrawPolygonTool / DrawArcTool / DrawBezierTool /
+    DrawFreehandTool / DrawCenterlineTool) 마이그레이션 — P-5d 패턴
+    답습 가능
+  - Phase 2 (ADR-052) — 재질 제거 → Shape 가역 강등 (Q5 사건 1)
+  - Phase 3 (ADR-053) — Reference 시민권 분리
+  - Phase 4 (ADR-054) — 위상 손상 자동 복구
+- **상세**: `docs/adr/050-shape-xia-type-split.md` §D Acceptance Log
+  (15 sub-step commit hash + 회귀 + lock-ins) + §E Lessons (6 회고
+  항목 — Path Z 효율성 / FORM_MATERIAL sentinel / replace_last_after_
+  snapshot UX / 명명 정합 / 점진 마이그레이션 / 3-layer 봉인) +
+  `docs/adr/051-p7-canonical-restatement.md` §D (P-1/P-2 결산 +
+  Phase 5/6/7 자연 완료 + Deferred boundary)
 
 ### 기타
 - Material / Texture (텍스처 이미지 매핑 미구현)

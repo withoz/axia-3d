@@ -1,7 +1,7 @@
 # ADR-050 — Shape / Xia Type Split + Phase 1 Promote API
 
-**Status**: Accepted (Phase 1 spec — implementation pending)
-**Date**: 2026-05-03
+**Status**: **Accepted (Phase 1 P-1 ~ P-7 모두 closure, 2026-05-06)**
+**Date**: 2026-05-03 (P-7 closure: 2026-05-06)
 **Anchor**: ADR-049 §4 Q1+Q3+Q4 final lock (사용자 결정), v3.2 명제 4
 **Related**: ADR-049 (Two-Layer Citizenship Model), ADR-051 (P7 canonical
 — 함께 진행, manifold 검증의 prerequisite), ADR-019 (Line is Truth — Shape
@@ -338,20 +338,141 @@ bridge.setFaceMaterial(xiaId, faceId, materialName)
 - [x] Face-level material 정책 spec (§2.3)
 - [x] Migration strategy (§3) + 회귀 테스트 영향 식별
 - [x] 사용자 facing UI 명명 정책 (§2.6)
-- [ ] **구현 (C3 chunk)** — 별도 commit
-- [ ] LOCKED #26 update — Phase 1 완료 표시 (구현 commit 와 함께)
+- [x] **구현** — Path Z atomic 11+ sub-step (P-1 ~ P-7) closure
+- [x] LOCKED #26 update — Phase 1 완료 표시 (P-7 closure 시점)
+
+---
+
+## D. Acceptance Log
+
+Phase 1 = Path Z atomic 11+ sub-step. 각 sub-step 은 좁은 scope + 명시
+lock-in + browser-runtime / cargo / vitest 회귀 봉인 + 사용자 결재.
+
+| Sub-step | Commit | 영역 | 회귀 |
+|----------|--------|------|------|
+| **P-1** | `f399d67` | Shape skeleton (model-only prototype) | axia-core +10 |
+| **P-2** | `86b0c29` | Promote API 통합 (4-condition validation) | axia-core +7 |
+| **ADR-051 P-1** | `e1f54f1` | verify_p7_manifold 함수 (axia-geo) | axia-geo +5 |
+| **ADR-051 P-2** | `0d76083` | Strict lock-in + LOCKED #1 amendment | axia-core +1 |
+| **P-3** | `d6eac93` | Snapshot section 7 (Shape persistence) | axia-core +5 |
+| **P-4** | `1d32296` | WASM bridge + TS typed wrapper | axia-wasm +4, vitest +9 |
+| **P-5a** | `2bd129b` | DrawRectAsShape foundation | axia-core +6 |
+| **P-5b** | `980be69` | DrawLine/CircleAsShape | axia-core +7 |
+| **P-5c** | `90fba7d` | As-Shape Draw bridge + TS wrapper | axia-wasm +4, vitest +6 |
+| **P-5d** | `4850aff` | Tools opt-in flag (DrawRect/Line/CircleTool) | vitest +12 |
+| **P-5e-α** | `7703e86` | Default flip (false → true) | vitest 0 (의미 갱신) |
+| **P-5e-γ** | `ee0032a` | Undo transaction collapse | axia-transaction +2, axia-core +3 |
+| **P-5e-β** | `2a3d87f` | default_material 제거 (Q4 정합) | axia-core +2 |
+| **P-6** | `618cc6c` | XiaInspector UI badge label rename | vitest +2 |
+| **P-7** (본 commit) | — | 회고 + LOCKED #26 update + Phase 1 closure | 0 (docs only) |
+
+**Phase 1 누적 회귀**:
+- axia-core: 124 → 173 (+49) — Shape skeleton + promote + section 7 +
+  As-Shape variants + FORM_MATERIAL + UI labels
+- axia-geo: 964 → 969 (+5) — verify_p7_manifold module
+- axia-wasm: 12 → 24 (+12) — 6 Shape persistence exports + 6 Draw
+  As-Shape bridge methods + 4 source-inspection tests
+- axia-transaction: 2 → 4 (+2) — replace_last_after_snapshot
+- vitest: 1395 → 1472 (+77) — typed wrappers + Tool dispatch + Settings
+  flag + UI labels + drift guards
+- 합계: **+145 회귀 추가**, 절대 #[ignore] 금지 145/145 준수
+- LOCKED 변경: #1 amendment (ADR-051 P-2) 만, #26 본문 unchanged
+  (Phase 1 closure 표시 추가)
+
+**Phase 1 Stack 완성**:
+
+```
+사용자 클릭 (Default ON, P-5e-α)
+  ↓
+DrawRect/Line/CircleTool dispatch (P-5d opt-in flag)
+  ↓
+WasmBridge.drawRect/Line/CircleAsShape (P-5c TS wrapper)
+  ↓
+draw_rect/line/circle_as_shape (P-5c WASM exports)
+  ↓
+Command::DrawRect/Line/CircleAsShape (P-5a/b)
+  ↓
+Scene::exec_draw_*_as_shape (P-5a/b)
+  ↓
+Phase 1: 기존 exec_draw_* 위임 (mesh + face synthesis)
+Phase 2: Xia → Shape 변환 + replace_last_after_snapshot (P-5e-γ)
+  ↓
+Scene.shapes (P-1 storage) + Snapshot section 7 (P-3 persistence)
+  ↓
+Inspector "형태 (Shape)" badge (P-6)
+  ↓ promote_shape_to_xia (P-2 4-condition validation)
+Scene.xias (existing) + shape_to_xia linkage (P-2)
+  ↓
+Inspector "XIA (특성)" badge (P-6)
+```
+
+---
+
+## E. Lessons (회고)
+
+### E.1 Path Z atomic 11+ sub-step 의 효율성
+
+ADR-050 + ADR-051 합산으로 Phase 1 을 11+ atomic 으로 분할.
+각 atomic ~150 LoC + 회귀 ~5~10 + 사용자 결재 1회. 결과:
+- **회귀 0** — 회귀 +145 누적, 기존 LOCKED #1 / ADR-051 / ADR-074 /
+  ADR-078 모든 invariant PASS 유지
+- **사용자 통제** — 각 단계 명시 결재로 의도와 정렬
+- **Rollback 가능** — 단일 atomic 만 revert 하면 직전 안정점
+
+### E.2 FORM_MATERIAL sentinel 패턴
+
+`Scene.default_material: MaterialId` field-as-state 폐지 (Q4 정합) +
+`pub const FORM_MATERIAL: MaterialId = MaterialId::new(0)` 명시 sentinel.
+모든 form-layer face 생성 site 가 같은 상수 참조 → 의미 명확화 + 값
+변화 0 + 컴파일러가 누락 자동 catch. **향후 ADR 가이드**: field-as-state
+폐지 시 named const sentinel 패턴 권장.
+
+### E.3 replace_last_after_snapshot UX 개선 (P-5e-γ)
+
+P-5a 의 conversion 패턴 (Phase 1 + Phase 2 별도 transaction) 으로
+Undo 2회 필요. P-5e-γ 의 `TransactionManager::replace_last_after_snapshot`
+API 추가 (10 LoC) 로 단일 frame 화. 사용자 facing 영향 매우 큰 개선
+(Undo 1회 = 산업 표준). **향후 ADR 가이드**: conversion 패턴 사용 시
+trade-off (UX) 를 별도 atomic 으로 cleanup 권장.
+
+### E.4 form/property layer 명명 정합 (P-6)
+
+ADR-049 §4 Q3 ("재질 없는 단계엔 'XIA' 안 노출") 을 UI badge label 로
+정합. "Appearance" → "형태 (Shape)", "XIA (물체)" → "XIA (특성)".
+시각 (색상/위치) UNCHANGED, label only — 학습 비용 0. **향후 ADR
+가이드**: 사용자 facing 라벨 변경은 시각 invariant 보존 + 라벨만
+점진 마이그레이션 권장.
+
+### E.5 사용자 facing 라벨 점진 마이그레이션
+
+Phase 1 의 P-6 은 Inspector badge 만. ID format ("XIA-0001"), Menu
+labels, ShortcutHelp, Toast 메시지 등은 future ADR (Phase 2+ 또는
+별도). **향후 ADR 가이드**: UI 명명 마이그레이션은 한 번에 모두 하지
+말고 핵심 사이트 → 보조 사이트 순서로 분할. 사용자 학습 부담 분산.
+
+### E.6 Browser-runtime + vitest + cargo 3-layer 봉인
+
+각 sub-step 의 회귀가 적절한 layer 에서 검증:
+- Rust 의미론 변경 → cargo test (axia-core / axia-geo / axia-wasm /
+  axia-transaction)
+- TS 의미론 변경 → vitest
+- 사용자 facing UI → browser-runtime preview_eval + screenshot
+모든 layer 가 PASS 해야 commit. **향후 ADR 가이드**: 변경 영향이 multi
+-layer 에 걸치면 모든 layer 의 회귀 강제.
 
 ---
 
 ## 7. References
 
 - ADR-049 §4 Q1+Q3+Q4 — 사용자 결정 lock
-- ADR-051 — P7 canonical (manifold 검증의 prerequisite)
+- ADR-051 — P7 canonical (manifold 검증의 prerequisite, 본 ADR 과 함께
+  Phase 1 closure)
 - ADR-019 — Line is Truth (Shape 계층 anchor)
 - v3.2 spec §3 시민권 / §7 XIA / §12 강등
 - ADR-008 — 직렬화 (사용자 데이터 호환성, 별도 검토 필요)
+- ADR-074/078 — Path Z atomic 11+ sub-step 패턴 선례 (E.1 답습)
 
 ---
 
-*Author*: AXiA team (사용자 결정 + Claude spec) | *Status*: Phase 1 spec
-— ADR-051 와 함께 implementation, 본 PR 은 spec 만 (코드 변경 0)
+*Author*: AXiA team (사용자 결정 + Claude implementation) |
+*Status*: Phase 1 closure (P-1 ~ P-7 모두 완료, 2026-05-06)
