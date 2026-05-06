@@ -157,10 +157,8 @@ impl Mesh {
                         self.extrude_planar_box(profile_face, distance, material, &surface)
                     }
                     (AnalyticSurface::Plane { .. }, BoundaryKind::AllCircular) => {
-                        Err(SolidError::NotYetSupported {
-                            reason: "Plane circular boundary → Cylinder (W-2 scope)".to_string(),
-                        }
-                        .into())
+                        // W-2-α: Plane + AllCircular → Cylinder.
+                        self.extrude_planar_cylinder(profile_face, distance, material, &surface)
                     }
                     (AnalyticSurface::Plane { .. }, BoundaryKind::Mixed) => {
                         Err(SolidError::NotYetSupported {
@@ -355,6 +353,161 @@ impl Mesh {
             split_debug: Vec::new(),
         })
     }
+
+    /// ADR-079 W-2-α — `Plane circular boundary → Cylinder` extrusion.
+    ///
+    /// Profile face has `AnalyticSurface::Plane` and outer loop edges all
+    /// carry `AnalyticCurve::Arc` sharing identical (center, radius, normal).
+    /// Builds:
+    /// 1. Top cap = translated profile (Plane surface).
+    /// 2. N side faces (one quad per profile edge), all sharing the SAME
+    ///    `AnalyticSurface::Cylinder` instance — automatic smooth group.
+    ///
+    /// On boundary arc-parameter mismatch (different center/radius/normal
+    /// among the loop's arcs) returns `NotYetSupported` so Scene falls back
+    /// to legacy push_pull (Q3 lock-in).
+    fn extrude_planar_cylinder(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        material: MaterialId,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        let outer_start = self.faces[profile_face].outer().start;
+        if outer_start.is_null() {
+            bail!("extrude_planar_cylinder: profile face has null outer loop start");
+        }
+        let boundary_verts = self.collect_loop_verts(outer_start)?;
+        if boundary_verts.len() < 3 {
+            bail!(
+                "extrude_planar_cylinder: profile boundary has only {} verts (need ≥ 3)",
+                boundary_verts.len()
+            );
+        }
+
+        // Profile normal — Plane truth source.
+        let profile_normal = match profile_surface {
+            AnalyticSurface::Plane { normal, .. } => normal.normalize_or_zero(),
+            _ => bail!("extrude_planar_cylinder: profile surface is not Plane"),
+        };
+        if profile_normal.length_squared() < 0.5 {
+            bail!("extrude_planar_cylinder: profile normal is near-zero");
+        }
+        let translation = profile_normal * dist;
+
+        // Extract circle params from boundary arcs and verify consistency.
+        // §W2-B-(a) lock-in — all arcs must share (center, radius, normal).
+        let (circle_center, circle_radius, _circle_normal, circle_basis_u) =
+            extract_shared_circle_params(self, profile_face).map_err(|e| {
+                SolidError::NotYetSupported {
+                    reason: format!(
+                        "Plane circular boundary arc parameters mismatch — {} (Q3 fallback)",
+                        e
+                    ),
+                }
+            })?;
+
+        // Translate boundary verts to create top loop.
+        let mut top_verts = Vec::with_capacity(boundary_verts.len());
+        for &v in &boundary_verts {
+            let pos = self.vertex_pos(v)?;
+            top_verts.push(self.add_vertex(pos + translation));
+        }
+
+        // Top cap face (translated profile).
+        let top_face = self.add_face(&top_verts, material)?;
+
+        // Side faces — one quad per profile edge.
+        let n = boundary_verts.len();
+        let mut side_faces = Vec::with_capacity(n);
+        for i in 0..n {
+            let next = (i + 1) % n;
+            let quad = if dist > 0.0 {
+                [
+                    boundary_verts[i],
+                    boundary_verts[next],
+                    top_verts[next],
+                    top_verts[i],
+                ]
+            } else {
+                [
+                    boundary_verts[next],
+                    boundary_verts[i],
+                    top_verts[i],
+                    top_verts[next],
+                ]
+            };
+            let side = self.add_face(&quad, material)?;
+            side_faces.push(side);
+        }
+
+        // Surface attach — L3 lock-in.
+        // Top cap: translated profile Plane surface.
+        let top_surface = profile_surface
+            .transform(&DMat4::from_translation(translation))
+            .unwrap_or_else(|_| {
+                let top_positions: Vec<DVec3> = top_verts
+                    .iter()
+                    .filter_map(|v| self.vertex_pos(*v).ok())
+                    .collect();
+                synthesize_plane_surface(&top_positions)
+            });
+        if let Some(top_face_mut) = self.faces.get_mut(top_face) {
+            top_face_mut.set_surface(Some(top_surface));
+        }
+
+        // Side wall: SAME `AnalyticSurface::Cylinder` instance shared by all
+        // N quad faces. Smooth group emerges naturally from shared surface
+        // kind + parameters (ADR-038 P23 surface-aware normals).
+        // Cylinder axis_origin = circle_center on profile plane (preserved).
+        // The cylinder spans from profile plane to translated plane:
+        //   v ∈ [0, dist] along axis_dir = profile_normal (signed).
+        // u ∈ [0, 2π] full circumference.
+        let (axis_dir, v_lo, v_hi) = if dist > 0.0 {
+            (profile_normal, 0.0, dist)
+        } else {
+            // For dist < 0, axis still points along profile_normal so the
+            // cylinder's local v parameter increases away from profile —
+            // but extrusion goes in -profile_normal direction. We choose
+            // axis_dir = profile_normal and v_range = [dist, 0] so that
+            // (axis_origin + axis_dir * v) for v ∈ [dist, 0] sweeps the
+            // wall from translated plane back to profile.
+            (profile_normal, dist, 0.0)
+        };
+        let cylinder_surface = AnalyticSurface::Cylinder {
+            axis_origin: circle_center,
+            axis_dir,
+            radius: circle_radius,
+            ref_dir: circle_basis_u,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (v_lo, v_hi),
+        };
+        for &side_fid in &side_faces {
+            let face_ref = self.faces.get(side_fid);
+            if face_ref.is_none() || !face_ref.unwrap().is_active() {
+                continue;
+            }
+            self.faces[side_fid].set_surface(Some(cylinder_surface.clone()));
+        }
+
+        let adjacent_splits = 0;
+
+        // Aggregate — profile + top + N sides.
+        let mut all_solid_faces = Vec::with_capacity(2 + side_faces.len());
+        all_solid_faces.push(profile_face);
+        all_solid_faces.push(top_face);
+        all_solid_faces.extend(side_faces.iter().copied());
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::Cylinder,
+            top_face,
+            side_faces,
+            all_solid_faces,
+            adjacent_splits,
+            split_debug: Vec::new(),
+        })
+    }
 }
 
 /// ADR-079 §2.3 — Classify the boundary curves of a profile face.
@@ -404,6 +557,77 @@ pub fn classify_boundary(mesh: &Mesh, face: FaceId) -> Result<BoundaryKind> {
     } else {
         BoundaryKind::Mixed
     })
+}
+
+/// ADR-079 §W2-B-(a) — Extract shared circle parameters from a profile
+/// face whose outer boundary is `AllCircular`.
+///
+/// Returns `(center, radius, normal, basis_u)` of the underlying circle.
+/// All Arc/Circle edges in the loop must share these parameters within
+/// `EPSILON_LENGTH`. Edges with `Some(Line)` or `None` curve fail loudly
+/// — caller should have classified the boundary as `AllCircular` first.
+///
+/// On mismatch returns `Err`, allowing the caller to convert to
+/// `SolidError::NotYetSupported` and trigger Q3 fallback.
+fn extract_shared_circle_params(
+    mesh: &Mesh,
+    face: FaceId,
+) -> Result<(DVec3, f64, DVec3, DVec3)> {
+    let edges = mesh.face_outer_edges(face)?;
+    if edges.is_empty() {
+        bail!("extract_shared_circle_params: face {face:?} has no outer edges");
+    }
+
+    let mut shared: Option<(DVec3, f64, DVec3, DVec3)> = None;
+    let tol = crate::tolerances::EPSILON_LENGTH;
+
+    for &eid in &edges {
+        let edge = mesh.edges.get(eid).ok_or_else(|| {
+            anyhow::anyhow!("extract_shared_circle_params: edge {eid:?} not found")
+        })?;
+        let (c, r, n, bu) = match edge.curve() {
+            Some(AnalyticCurve::Circle { center, radius, normal, basis_u }) => {
+                (*center, *radius, *normal, *basis_u)
+            }
+            Some(AnalyticCurve::Arc { center, radius, normal, basis_u, .. }) => {
+                (*center, *radius, *normal, *basis_u)
+            }
+            _ => bail!(
+                "extract_shared_circle_params: edge {eid:?} is not Circle/Arc \
+                 (caller should classify as AllCircular first)"
+            ),
+        };
+        match shared {
+            None => shared = Some((c, r, n, bu)),
+            Some((cs, rs, ns, _)) => {
+                if (c - cs).length() > tol {
+                    bail!(
+                        "center mismatch (Δ = {:.2e} mm > tol {:.2e})",
+                        (c - cs).length(),
+                        tol
+                    );
+                }
+                if (r - rs).abs() > tol {
+                    bail!(
+                        "radius mismatch (Δ = {:.2e} mm > tol {:.2e})",
+                        (r - rs).abs(),
+                        tol
+                    );
+                }
+                // Normal may be flipped between sub-arcs of the same circle —
+                // accept either orientation as long as parallel.
+                let dot = n.normalize_or_zero().dot(ns.normalize_or_zero());
+                if dot.abs() < 0.999 {
+                    bail!(
+                        "normal mismatch (dot = {:.4}, expected |dot| ≥ 0.999)",
+                        dot
+                    );
+                }
+            }
+        }
+    }
+
+    shared.ok_or_else(|| anyhow::anyhow!("extract_shared_circle_params: empty boundary"))
 }
 
 #[cfg(test)]
@@ -552,5 +776,232 @@ mod tests {
         let face = build_unit_square_plane_face(&mut mesh);
         let kind = classify_boundary(&mesh, face).expect("classify OK");
         assert_eq!(kind, BoundaryKind::AllLinear);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-2-α — Plane + AllCircular → Cylinder regression
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build an N-segment circle face on z=0 with normal +Z.
+    /// Each segment edge gets `AnalyticCurve::Arc` attached, sharing
+    /// (center, radius, normal, basis_u). Face gets `AnalyticSurface::Plane`.
+    fn build_circle_face(mesh: &mut Mesh, radius: f64, segments: u32) -> FaceId {
+        use crate::curves::AnalyticCurve;
+        let mat = MaterialId::new(0);
+        let n = segments as usize;
+        let center = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let basis_u = DVec3::X;
+
+        let mut verts = Vec::with_capacity(n);
+        for i in 0..n {
+            let theta = (i as f64) * std::f64::consts::TAU / (n as f64);
+            verts.push(mesh.add_vertex(DVec3::new(
+                radius * theta.cos(),
+                radius * theta.sin(),
+                0.0,
+            )));
+        }
+        let face = mesh.add_face(&verts, mat).expect("add_face");
+
+        // Attach Plane surface.
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: center,
+            normal,
+            basis_u,
+            u_range: (-radius, radius),
+            v_range: (-radius, radius),
+        }));
+
+        // Attach Arc curve to each edge.
+        let edges = mesh.face_outer_edges(face).expect("face_outer_edges");
+        let two_pi = std::f64::consts::TAU;
+        for (i, &eid) in edges.iter().enumerate() {
+            let theta_start = (i as f64) * two_pi / (n as f64);
+            let theta_end = ((i + 1) as f64) * two_pi / (n as f64);
+            let curve = AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle: theta_start,
+                end_angle: theta_end,
+            };
+            mesh.edges[eid].set_curve(Some(curve));
+        }
+
+        face
+    }
+
+    #[test]
+    fn create_solid_extrude_plane_circle_returns_cylinder() {
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 16);
+        let face_count_before = mesh.face_count();
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 10.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        assert_eq!(result.profile_face, profile);
+        assert_eq!(result.side_faces.len(), 16);
+        // Profile + top + 16 sides = 18 faces.
+        assert_eq!(result.all_solid_faces.len(), 18);
+        assert_eq!(mesh.face_count(), face_count_before + 17);
+    }
+
+    #[test]
+    fn create_solid_cylinder_attaches_cylinder_surface_to_sides() {
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 3.0, 12);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 4.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        // Top face: Plane.
+        let top_surface = mesh.faces[result.top_face].surface();
+        assert!(
+            matches!(top_surface, Some(AnalyticSurface::Plane { .. })),
+            "top face must have Plane surface attached"
+        );
+
+        // ALL side faces: Cylinder, sharing (center, radius).
+        for &side_fid in &result.side_faces {
+            let side_surface = mesh.faces[side_fid].surface();
+            match side_surface {
+                Some(AnalyticSurface::Cylinder { radius, axis_origin, .. }) => {
+                    assert!((radius - 3.0).abs() < 1e-9, "radius != 3.0: got {radius}");
+                    assert!(
+                        (axis_origin - DVec3::ZERO).length() < 1e-9,
+                        "axis_origin != ZERO"
+                    );
+                }
+                other => panic!(
+                    "side face {side_fid:?} must have Cylinder surface, got {:?}",
+                    other.map(|s| s.kind_label())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn create_solid_cylinder_negative_distance_winding_correct() {
+        // Recess (dist < 0) — top is below profile, side winding reversed.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 2.0, 8);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: -3.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        assert_eq!(result.side_faces.len(), 8);
+        // All side faces must still have Cylinder surface attached.
+        for &side_fid in &result.side_faces {
+            assert!(
+                matches!(
+                    mesh.faces[side_fid].surface(),
+                    Some(AnalyticSurface::Cylinder { .. })
+                ),
+                "side face {side_fid:?} must have Cylinder (dist < 0)"
+            );
+        }
+    }
+
+    #[test]
+    fn create_solid_cylinder_arcs_share_circle_params_check() {
+        // Sanity: extract_shared_circle_params returns the exact center/radius.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 7.5, 24);
+        let (center, radius, _normal, _basis) =
+            extract_shared_circle_params(&mesh, profile).expect("extract OK");
+        assert!((center - DVec3::ZERO).length() < 1e-9);
+        assert!((radius - 7.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn create_solid_cylinder_arc_param_mismatch_falls_back() {
+        // Tamper one edge's Arc curve to have different center → mismatch.
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 8);
+        let edges = mesh.face_outer_edges(profile).expect("edges");
+        // Replace first edge's curve with a different center.
+        let bad = AnalyticCurve::Arc {
+            center: DVec3::new(100.0, 0.0, 0.0), // wrong center
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_4,
+        };
+        mesh.edges[edges[0]].set_curve(Some(bad));
+
+        // Confirm classify still returns AllCircular (kind-only check).
+        assert_eq!(
+            classify_boundary(&mesh, profile).expect("classify"),
+            BoundaryKind::AllCircular
+        );
+
+        // create_solid should now return NotYetSupported (Q3 fallback).
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 2.0 },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must fail with mismatched arc params");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("mismatch"),
+            "expected NotYetSupported with mismatch reason, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn classify_boundary_all_circular_for_circle_face() {
+        let mut mesh = Mesh::new();
+        let face = build_circle_face(&mut mesh, 1.0, 12);
+        let kind = classify_boundary(&mesh, face).expect("classify OK");
+        assert_eq!(kind, BoundaryKind::AllCircular);
+    }
+
+    #[test]
+    fn create_solid_cylinder_top_translated_by_profile_normal() {
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 4.0, 8);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 6.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        // Top face's outer loop should have z = 6.0 (translated by +Z * 6).
+        let top_start = mesh.faces[result.top_face].outer().start;
+        let top_verts = mesh.collect_loop_verts(top_start).expect("top verts");
+        for v in &top_verts {
+            let pos = mesh.vertex_pos(*v).expect("vertex_pos");
+            assert!(
+                (pos.z - 6.0).abs() < 1e-9,
+                "top vertex z must be 6.0, got {}",
+                pos.z
+            );
+            // Radial check: x² + y² = 16 (radius 4).
+            let r2 = pos.x * pos.x + pos.y * pos.y;
+            assert!((r2 - 16.0).abs() < 1e-6, "radius² != 16: got {r2}");
+        }
     }
 }
