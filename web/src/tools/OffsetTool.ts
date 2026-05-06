@@ -54,6 +54,12 @@ function formatEdgeOffsetFailureToast(
       case 'degenerate_distance':
         parts.push(`${count}개: 거리가 너무 작습니다`);
         break;
+      case 'arc_plane_mismatch':
+        parts.push(`${count}개: arc 평면이 호스트 면과 일치하지 않습니다`);
+        break;
+      case 'radius_collapse':
+        parts.push(`${count}개: 반지름이 0 이하로 축소됩니다 (방향 반전 필요)`);
+        break;
       case 'bridge_unavailable':
         parts.push(`${count}개: WASM 미가용`);
         break;

@@ -349,6 +349,40 @@ describe('OffsetTool', () => {
       expect(msg).toMatch(/multi-loop|hole|ADR-016/);
     });
 
+    it('edge mode applyVCB with arc_plane_mismatch (V-β-β) → arc 평면 Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'arc_plane_mismatch',
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/arc 평면|평면이 호스트/);
+    });
+
+    it('edge mode applyVCB with radius_collapse (V-β-β) → 반지름 축소 Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'radius_collapse', currentRadius: 0.5, newRadius: -0.1,
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/반지름|방향 반전/);
+    });
+
     it('edge mode applyVCB partial success → success + warning Toasts', async () => {
       const { Toast } = await import('../ui/Toast');
       ctx.getSelectedFaces.mockReturnValue([]);

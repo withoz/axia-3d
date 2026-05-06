@@ -1627,6 +1627,36 @@ describe('WasmBridge', () => {
       });
     });
 
+    it('parses arc_plane_mismatch reason (V-β-β)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: false, reason: 'arc_plane_mismatch' }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({ ok: false, reason: 'arc_plane_mismatch' });
+    });
+
+    it('parses radius_collapse with currentRadius / newRadius (V-β-β)', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({
+          ok: false,
+          reason: 'radius_collapse',
+          currentRadius: 0.5,
+          newRadius: -0.1,
+        }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 0.6);
+      expect(r).toEqual({
+        ok: false,
+        reason: 'radius_collapse',
+        currentRadius: 0.5,
+        newRadius: -0.1,
+      });
+    });
+
     it('legacy offsetEdge UNCHANGED by V-β-α-bridge addition', () => {
       const oldFn = vi.fn(() =>
         JSON.stringify({ ok: true, newEdge: 5, newV0: 10, newV1: 11 }),

@@ -3119,6 +3119,15 @@ export class WasmBridge {
           return { ok: false, reason: 'multi_loop' };
         case 'degenerate_distance':
           return { ok: false, reason: 'degenerate_distance' };
+        case 'arc_plane_mismatch':
+          return { ok: false, reason: 'arc_plane_mismatch' };
+        case 'radius_collapse':
+          return {
+            ok: false,
+            reason: 'radius_collapse',
+            currentRadius: Number(parsed.currentRadius ?? 0),
+            newRadius: Number(parsed.newRadius ?? 0),
+          };
         default:
           return { ok: false, reason: 'other', message: String(parsed.message ?? parsed.reason ?? 'unknown') };
       }
@@ -3588,6 +3597,8 @@ export type OffsetEdgeOnHostResult =
   | { ok: false; reason: 'ambiguous_host'; nFaces: number }
   | { ok: false; reason: 'multi_loop' }
   | { ok: false; reason: 'degenerate_distance' }
+  | { ok: false; reason: 'arc_plane_mismatch' }
+  | { ok: false; reason: 'radius_collapse'; currentRadius: number; newRadius: number }
   | { ok: false; reason: 'other'; message: string }
   | { ok: false; reason: 'bridge_unavailable' };
 

@@ -860,16 +860,20 @@ fn offset_edge_on_host_emits_typed_reason_vocabulary() {
     // §V-β-α-bridge reason vocabulary — every typed error must produce
     // a stable, parseable reason string for the TS layer.
     for reason in [
+        // V-β-α-bridge core (7)
         "unsupported_surface",
         "unsupported_curve",
         "no_incident_face",
         "ambiguous_host",
         "multi_loop",
         "degenerate_distance",
+        // V-β-β additions (2)
+        "arc_plane_mismatch",
+        "radius_collapse",
     ] {
         assert!(
             body.contains(reason),
-            "V-β-α-bridge: reason vocabulary missing '{}'",
+            "V-β reason vocabulary missing '{}'",
             reason
         );
     }

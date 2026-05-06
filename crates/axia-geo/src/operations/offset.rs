@@ -73,6 +73,13 @@ pub enum OffsetEdgeError {
     /// Host face has no analytic surface attached (W-2 / Phase N invariant violated).
     #[error("offset_edge: host face {0:?} has no analytic surface attached")]
     NoHostSurface(FaceId),
+    /// Arc/Circle plane is not coplanar with host face plane (V-β-β).
+    /// arc.normal ∦ face.normal, or arc.center off the host plane.
+    #[error("offset_edge: arc/circle plane mismatches host face plane (V-β-β)")]
+    ArcPlaneMismatch,
+    /// Offset would collapse the arc/circle radius to ≤ 0.
+    #[error("offset_edge: arc/circle radius would collapse to {new_r} (current {current_r}, dist {dist})")]
+    RadiusCollapse { current_r: f64, new_r: f64, dist: f64 },
 }
 
 impl Mesh {
@@ -185,19 +192,22 @@ impl Mesh {
         let v1 = edge.v_large();
         let edge_curve = edge.curve().cloned();
 
-        // §V2-C — Curve kind dispatch (V-β-α: Line + None only).
+        // §V2-C — Curve kind dispatch.
+        // V-β-α: Line + None.    V-β-β: Arc + Circle.
+        // Bezier/B-spline/NURBS still defer (W-3 / V-β-δ scope).
         match &edge_curve {
-            None | Some(AnalyticCurve::Line { .. }) => {
-                // OK — fall through to Line offset path.
+            None
+            | Some(AnalyticCurve::Line { .. })
+            | Some(AnalyticCurve::Arc { .. })
+            | Some(AnalyticCurve::Circle { .. }) => {
+                // OK — fall through to dispatch by kind below.
             }
             Some(c) => {
                 let kind = match c {
-                    AnalyticCurve::Arc { .. } => "Arc",
-                    AnalyticCurve::Circle { .. } => "Circle",
                     AnalyticCurve::Bezier { .. } => "Bezier",
                     AnalyticCurve::BSpline { .. } => "BSpline",
                     AnalyticCurve::NURBS { .. } => "NURBS",
-                    AnalyticCurve::Line { .. } => unreachable!(),
+                    _ => unreachable!(),
                 };
                 return Err(OffsetEdgeError::UnsupportedCurveKind { kind });
             }
@@ -275,6 +285,47 @@ impl Mesh {
             return Err(OffsetEdgeError::NoHostSurface(host));
         }
 
+        // §V2-β — Arc / Circle dispatch (V-β-β: analytic radius offset).
+        match &edge_curve {
+            Some(AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle,
+                end_angle,
+            }) => {
+                return self.offset_arc_on_plane(
+                    edge_id,
+                    *center,
+                    *radius,
+                    *normal,
+                    *basis_u,
+                    Some((*start_angle, *end_angle)),
+                    host_normal,
+                    dist,
+                );
+            }
+            Some(AnalyticCurve::Circle {
+                center,
+                radius,
+                normal,
+                basis_u,
+            }) => {
+                return self.offset_arc_on_plane(
+                    edge_id,
+                    *center,
+                    *radius,
+                    *normal,
+                    *basis_u,
+                    None,
+                    host_normal,
+                    dist,
+                );
+            }
+            _ => {} // Line / None — fall through.
+        }
+
         // §V2-C continued — Line perpendicular offset on Plane.
         let p0 = self
             .vertex_pos(v0)
@@ -300,6 +351,133 @@ impl Mesh {
         let (new_edge, _) = self
             .add_edge(new_v0, new_v1)
             .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+        Ok(OffsetEdgeResult {
+            new_v0,
+            new_v1,
+            new_edge,
+        })
+    }
+
+    /// ADR-080 V-β-β — Analytic in-plane offset for Arc / Circle on a
+    /// Plane host face.
+    ///
+    /// Math: every point on the curve P = C + r·(cos(θ)·u + sin(θ)·v)
+    /// (where v = normal × basis_u). Offset along the radial direction
+    /// in the plane ⇒ P' = C + (r ± dist)·(cos(θ)·u + sin(θ)·v). The
+    /// result is the same arc family with new radius `r ± dist`.
+    ///
+    /// Sign convention (§V2-β-A): positive `dist` always means the right
+    /// side of the curve's tangent direction (consistent with Line). At
+    /// θ_mid: tangent_dir × host_normal · radial_dir gives ±1; multiply
+    /// by `dist` to get signed Δr.
+    ///
+    /// Sanity (§V2-β-B): arc plane (`normal`) must be parallel to host
+    /// face normal AND arc center must lie on the host plane (within
+    /// EPSILON_LENGTH). Else `ArcPlaneMismatch`.
+    ///
+    /// Collapse guard (§V2-β-C): new radius ≤ EPSILON_LENGTH ⇒
+    /// `RadiusCollapse`.
+    #[allow(clippy::too_many_arguments)]
+    fn offset_arc_on_plane(
+        &mut self,
+        edge_id: EdgeId,
+        center: DVec3,
+        radius: f64,
+        arc_normal: DVec3,
+        basis_u: DVec3,
+        angles: Option<(f64, f64)>,
+        host_normal: DVec3,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        let arc_n_unit = arc_normal.normalize_or_zero();
+        let host_n_unit = host_normal.normalize_or_zero();
+
+        // §V2-β-B — sanity: arc plane ‖ host plane.
+        if arc_n_unit.dot(host_n_unit).abs() < 0.999 {
+            return Err(OffsetEdgeError::ArcPlaneMismatch);
+        }
+        // basis_u must be in-plane (perpendicular to arc normal).
+        let basis_u_unit = basis_u.normalize_or_zero();
+        if basis_u_unit.dot(arc_n_unit).abs() > 0.001 {
+            return Err(OffsetEdgeError::ArcPlaneMismatch);
+        }
+
+        // Sign of dist: positive = right-side of tangent (consistent with
+        // Line offset). At θ_mid:
+        //   tangent_dir = -sin(θ_mid)·u + cos(θ_mid)·v  (v = n × u)
+        //   right_side  = tangent_dir × host_normal
+        //   radial_dir  = cos(θ_mid)·u + sin(θ_mid)·v
+        //   sign = sign(right_side · radial_dir)
+        let basis_v = arc_n_unit.cross(basis_u_unit);
+        let theta_mid = match angles {
+            Some((s, e)) => (s + e) * 0.5,
+            None => 0.0, // Circle — pick θ=0, sign convention irrelevant by symmetry
+        };
+        let tangent =
+            -theta_mid.sin() * basis_u_unit + theta_mid.cos() * basis_v;
+        let right_side = tangent.cross(host_n_unit);
+        let radial =
+            theta_mid.cos() * basis_u_unit + theta_mid.sin() * basis_v;
+        let sign = if right_side.dot(radial) > 0.0 { 1.0 } else { -1.0 };
+
+        let new_radius = radius + sign * dist;
+        if new_radius <= tol {
+            return Err(OffsetEdgeError::RadiusCollapse {
+                current_r: radius,
+                new_r: new_radius,
+                dist,
+            });
+        }
+
+        // Compute new endpoint positions.
+        let (theta_start, theta_end) = match angles {
+            Some((s, e)) => (s, e),
+            None => (0.0, std::f64::consts::TAU),
+        };
+        let pt = |theta: f64| -> DVec3 {
+            center + new_radius * (theta.cos() * basis_u_unit + theta.sin() * basis_v)
+        };
+        let new_p0 = pt(theta_start);
+        // For Circle the new edge endpoints are both at θ=0 (degenerate);
+        // we still create two distinct verts at the same location to keep
+        // DCEL invariants. Practically circles are stored as N sub-arcs,
+        // so this branch is only exercised by synthetic single-Circle edges.
+        let new_p1 = if angles.is_some() {
+            pt(theta_end)
+        } else {
+            // Circle: use a slightly-different param to give DCEL a 2nd vert.
+            // Caller is expected to immediately treat this as a closed loop.
+            pt(theta_end - 1e-6)
+        };
+
+        let new_v0 = self.add_vertex(new_p0);
+        let new_v1 = self.add_vertex(new_p1);
+        let (new_edge, _) = self
+            .add_edge(new_v0, new_v1)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+
+        // Attach the new analytic curve to the new edge.
+        let new_curve = match angles {
+            Some(_) => AnalyticCurve::Arc {
+                center,
+                radius: new_radius,
+                normal: arc_normal,
+                basis_u,
+                start_angle: theta_start,
+                end_angle: theta_end,
+            },
+            None => AnalyticCurve::Circle {
+                center,
+                radius: new_radius,
+                normal: arc_normal,
+                basis_u,
+            },
+        };
+        if let Some(e) = self.edges.get_mut(new_edge) {
+            e.set_curve(Some(new_curve));
+        }
 
         Ok(OffsetEdgeResult {
             new_v0,
@@ -958,30 +1136,228 @@ mod tests {
         assert!(matches!(err, OffsetEdgeError::AmbiguousHostFace { .. }));
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-β — Arc / Circle on Plane host (analytic radius offset)
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper — attach an Arc curve to `edge` lying on a unit-square Plane
+    /// face, then return the radius+center for downstream sanity.
+    fn attach_arc_to_edge(
+        mesh: &mut Mesh,
+        edge: EdgeId,
+        center: DVec3,
+        radius: f64,
+        start: f64,
+        end: f64,
+    ) {
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center,
+            radius,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: start,
+            end_angle: end,
+        }));
+    }
+
     #[test]
-    fn arc_curve_offset_returns_unsupported_in_v_beta_alpha() {
-        // Build a quad face on Plane and attach an Arc curve to one edge.
-        // V-β-α only handles Line; Arc must defer to V-β-β.
+    fn arc_on_plane_host_offset_changes_radius_and_attaches_new_curve() {
         let mut mesh = Mesh::new();
         let (_face, vs) = build_unit_square_plane(&mut mesh);
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
-        let arc = AnalyticCurve::Arc {
+        // Arc with center (0.5, 0, 0) → radius 0.5 → endpoints at (0,0,0)
+        // and (1,0,0). Plane is z=0 with +Z normal.
+        attach_arc_to_edge(&mut mesh, edge, DVec3::new(0.5, 0.0, 0.0), 0.5,
+            std::f64::consts::PI, std::f64::consts::TAU);
+
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.2)
+            .expect("arc offset OK");
+
+        // New edge must have an Arc curve with new radius.
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge must have curve attached");
+        match new_curve {
+            AnalyticCurve::Arc { radius, center, .. } => {
+                // radius is 0.5 ± 0.2 — sign chosen by tangent × host_normal
+                // vs radial. Either ≈ 0.7 or ≈ 0.3, both > 0 (no collapse).
+                assert!(
+                    (radius - 0.7).abs() < 1e-9 || (radius - 0.3).abs() < 1e-9,
+                    "radius must be 0.7 or 0.3, got {radius}"
+                );
+                // Center preserved.
+                assert!((center - DVec3::new(0.5, 0.0, 0.0)).length() < 1e-9);
+            }
+            _ => panic!("new curve must be Arc"),
+        }
+    }
+
+    #[test]
+    fn arc_offset_inward_decreases_radius() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        attach_arc_to_edge(&mut mesh, edge, DVec3::new(0.5, 0.0, 0.0), 0.5,
+            std::f64::consts::PI, std::f64::consts::TAU);
+
+        // Pick a sign that brings the radius down.
+        let r_plus = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .ok()
+            .and_then(|r| mesh.edges.get(r.new_edge).and_then(|e| e.curve().cloned()))
+            .and_then(|c| match c {
+                AnalyticCurve::Arc { radius, .. } => Some(radius),
+                _ => None,
+            })
+            .expect("first offset OK");
+        let r_minus = mesh
+            .offset_edge_on_host_face(edge, -0.1)
+            .ok()
+            .and_then(|r| mesh.edges.get(r.new_edge).and_then(|e| e.curve().cloned()))
+            .and_then(|c| match c {
+                AnalyticCurve::Arc { radius, .. } => Some(radius),
+                _ => None,
+            })
+            .expect("second offset OK");
+        // The two signs must yield 0.6 and 0.4.
+        let mut both = [r_plus, r_minus];
+        both.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((both[0] - 0.4).abs() < 1e-9);
+        assert!((both[1] - 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn arc_offset_collapse_radius_rejected() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        attach_arc_to_edge(&mut mesh, edge, DVec3::new(0.5, 0.0, 0.0), 0.5,
+            std::f64::consts::PI, std::f64::consts::TAU);
+
+        // Try both signs with a magnitude > 0.5; one of them must collapse.
+        let err1 = mesh.offset_edge_on_host_face(edge, 0.6).err();
+        let err2 = mesh.offset_edge_on_host_face(edge, -0.6).err();
+        let collapse_seen = matches!(err1, Some(OffsetEdgeError::RadiusCollapse { .. }))
+            || matches!(err2, Some(OffsetEdgeError::RadiusCollapse { .. }));
+        assert!(
+            collapse_seen,
+            "one sign must trigger RadiusCollapse, got {:?} / {:?}",
+            err1, err2
+        );
+    }
+
+    #[test]
+    fn arc_in_orthogonal_plane_rejected() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Arc with normal +X — perpendicular to host face's +Z normal.
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
             center: DVec3::new(0.5, 0.0, 0.0),
             radius: 0.5,
-            normal: DVec3::Z,
-            basis_u: DVec3::X,
+            normal: DVec3::X, // wrong plane
+            basis_u: DVec3::Y,
             start_angle: 0.0,
             end_angle: std::f64::consts::PI,
-        };
-        mesh.edges[edge].set_curve(Some(arc));
+        }));
 
         let err = mesh
             .offset_edge_on_host_face(edge, 0.1)
             .err()
-            .expect("must defer arc");
+            .expect("must reject mismatched plane");
+        assert!(matches!(err, OffsetEdgeError::ArcPlaneMismatch));
+    }
+
+    #[test]
+    fn circle_on_plane_host_offset_changes_radius() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::new(0.5, 0.0, 0.0),
+            radius: 0.5,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        }));
+
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .expect("circle offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge must have curve");
+        match new_curve {
+            AnalyticCurve::Circle { radius, center, .. } => {
+                assert!(
+                    (radius - 0.6).abs() < 1e-9 || (radius - 0.4).abs() < 1e-9,
+                    "circle new radius must be 0.6 or 0.4, got {radius}"
+                );
+                assert!((center - DVec3::new(0.5, 0.0, 0.0)).length() < 1e-9);
+            }
+            _ => panic!("must remain Circle"),
+        }
+    }
+
+    #[test]
+    fn arc_endpoints_on_new_radius() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Quarter arc: center (0,0,0), radius 1, θ ∈ [0, π/2].
+        // endpoints: (1,0,0) at θ=0 and (0,1,0) at θ=π/2.
+        attach_arc_to_edge(&mut mesh, edge, DVec3::ZERO, 1.0,
+            0.0, std::f64::consts::FRAC_PI_2);
+
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("offset OK");
+        let new_r = match mesh.edges.get(result.new_edge).and_then(|e| e.curve()) {
+            Some(AnalyticCurve::Arc { radius, .. }) => *radius,
+            _ => panic!("new curve must be Arc"),
+        };
+        // Verify endpoints lie on circle of new_r about origin.
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        assert!(
+            (p0.length() - new_r).abs() < 1e-9,
+            "p0 distance from origin = {}, expected {new_r}",
+            p0.length()
+        );
+        assert!(
+            (p1.length() - new_r).abs() < 1e-9,
+            "p1 distance from origin = {}, expected {new_r}",
+            p1.length()
+        );
+    }
+
+    #[test]
+    fn bezier_curve_offset_still_unsupported() {
+        // V-β-β activated Arc/Circle, but Bezier remains W-3 scope.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let bez = AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::new(0.5, 0.5, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+            ],
+        };
+        mesh.edges[edge].set_curve(Some(bez));
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("bezier deferred");
         assert!(matches!(
             err,
-            OffsetEdgeError::UnsupportedCurveKind { kind: "Arc" }
+            OffsetEdgeError::UnsupportedCurveKind { kind: "Bezier" }
         ));
     }
 

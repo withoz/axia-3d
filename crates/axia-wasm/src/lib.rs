@@ -5874,6 +5874,15 @@ impl AxiaEngine {
                     OffsetEdgeError::DegenerateDistance(_) => {
                         r#"{"ok":false,"reason":"degenerate_distance"}"#.to_string()
                     }
+                    OffsetEdgeError::ArcPlaneMismatch => {
+                        r#"{"ok":false,"reason":"arc_plane_mismatch"}"#.to_string()
+                    }
+                    OffsetEdgeError::RadiusCollapse { current_r, new_r, .. } => {
+                        format!(
+                            r#"{{"ok":false,"reason":"radius_collapse","currentRadius":{},"newRadius":{}}}"#,
+                            current_r, new_r
+                        )
+                    }
                     other => {
                         let msg = other.to_string().replace('"', "'");
                         format!(r#"{{"ok":false,"reason":"other","message":"{}"}}"#, msg)
