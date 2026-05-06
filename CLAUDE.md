@@ -757,6 +757,45 @@
 - **Cross-link**: ADR-019 (형태 계층 anchor) / ADR-021 P7 / ADR-007
   invariant / 어제 세션 12 commits / v3.2 spec.
 
+### 27. ADR-080 — Offset Dimension-Aware Semantics (2026-05-06)
+- **사용자 정책 (canonical)**:
+  > "Offset 은 선택 대상의 차원에 따라 의미가 결정된다. 선을 선택하면
+  > 기준 평면/면에서의 곡선 offset 이 적용되고, 면을 선택하면 해당 면의
+  > 법선 방향으로 surface offset 이 적용된다. 이는 단일 명령이지만
+  > 서로 다른 기하 의미를 가진다."
+- **단일 진입점, dimension-driven dispatch** — UI / 메뉴 / 단축키 모두
+  단일 "Offset" 명령. 의미 결정은 active selection 의 geometric
+  dimension.
+- **Edge dimension** (1D) → host face 의 surface 위에서 in-plane curve
+  offset (analytic 정확). Free wire 는 reference plane 추론 (sketch /
+  wire 평면 / ground).
+- **Face dimension** (2D) → surface normal 방향 constant offset
+  (ADR-079 W-2-γ 의미론 답습). Plane / Cylinder / Sphere / Cone /
+  Torus 모두 활성. Push/Pull 과 의미 동일 — 두 entry 모두 SSOT.
+- **Mixed selection** (edge + face) → reject + Toast (사용자 명시
+  분리 강제).
+- **Vertex / Volume dimension** — 별도 ADR (현재 미정).
+- **OffsetTool "Principle 1" (2026-04-24, face-only) 폐기**: edge-offset
+  복원, 의미 모호성은 dimension dispatch 로 명확 해소. 기존
+  face-boundary expand/contract 동작은 "전체 edge selection 후 offset"
+  의 emergent behavior 로 자연 보존 — 사용자 muscle memory 파괴 없음
+  (ADR-046 P31 #4 menu changes additive only 정합).
+- **Push/Pull / Offset / Surface Offset 의 SSOT 통합**: face dimension
+  의 의미가 같으므로 내부 구현은 단일 (`Mesh::create_solid` /
+  `offset_smooth_group_*`). UI 진입점은 둘 다 유지 (관습 + 직관 모두
+  만족).
+- **Lock-ins (L1~L9)**: 단일 entry / dispatch SSOT / edge in-plane /
+  face out-of-plane / mixed reject / push-pull coexistence / backward
+  compat / multi-loop guard / free wire reference.
+- **Multi-loop guard (ADR-016 Q2 정합)**: hole 면의 boundary edges
+  동시 offset 도 reject 유지.
+- **본 LOCKED 의 코드 변경 0** — spec only commit. 후속 V-α ~ V-ζ
+  sub-step 에서 점진 구현 (각각 별도 atomic + 별도 ADR 결재 필요).
+- **Cross-link**: ADR-079 (Create Solid — face dim 의 운영 의미
+  source), ADR-049 (Two-Layer Citizenship — 직교, geometric dim 을
+  dispatch key 로 사용), ADR-016 (multi-loop face Q2), ADR-027 (NURBS
+  Kernel — curve offset 정확성), ADR-038 P23 (surface-aware normals).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
