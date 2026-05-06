@@ -14,6 +14,8 @@ use anyhow::{Result, bail};
 
 use crate::mesh::Mesh;
 use crate::{FaceId, EdgeId, VertId};
+use crate::curves::AnalyticCurve;
+use crate::surfaces::AnalyticSurface;
 
 /// Offset 결과
 #[derive(Debug)]
@@ -34,6 +36,43 @@ pub struct OffsetEdgeResult {
     pub new_v1: VertId,
     /// 새 edge ID
     pub new_edge: EdgeId,
+}
+
+/// ADR-080 V-β-α — Typed errors for `offset_edge_on_host_face`.
+///
+/// Categorized so that callers (Bridge / OffsetTool / future MCP surface)
+/// can dispatch on the failure mode without string parsing. Variants
+/// `UnsupportedHostSurface` and `UnsupportedCurveKind` are explicit
+/// "not yet" markers — they signal V-β-β / V-β-γ / W-3 work, not bugs.
+#[derive(Debug, thiserror::Error)]
+pub enum OffsetEdgeError {
+    #[error("offset_edge: edge {0:?} not found")]
+    EdgeNotFound(EdgeId),
+    #[error("offset_edge: edge {0:?} is inactive")]
+    EdgeInactive(EdgeId),
+    #[error("offset_edge: distance {0} below epsilon")]
+    DegenerateDistance(f64),
+    /// No active incident face — free wire. V-δ scope.
+    #[error("offset_edge: edge has no incident active face (free wire — V-δ scope)")]
+    NoIncidentFace,
+    /// 2+ incident faces with conflicting host surfaces.
+    #[error("offset_edge: ambiguous host face — {n_faces} candidates with conflicting surfaces")]
+    AmbiguousHostFace { n_faces: usize },
+    /// Host face has hole loops (ADR-016 Q2 / ADR-080 L8).
+    #[error("offset_edge: host face {0:?} has hole loops (multi-loop face rejected)")]
+    MultiLoopHostFace(FaceId),
+    /// Host surface is not yet supported (Cylinder/Sphere/Cone/Torus → V-β-γ scope).
+    #[error("offset_edge: host surface kind {kind} not yet supported (V-β-γ scope)")]
+    UnsupportedHostSurface { kind: &'static str },
+    /// Curve kind not yet supported in V-β-α (Arc/Circle → V-β-β; Bezier/etc → W-3).
+    #[error("offset_edge: curve kind {kind} not yet supported in V-β-α")]
+    UnsupportedCurveKind { kind: &'static str },
+    /// Edge direction parallel to host normal — perpendicular offset undefined.
+    #[error("offset_edge: edge direction parallel to host face normal")]
+    EdgeParallelToNormal,
+    /// Host face has no analytic surface attached (W-2 / Phase N invariant violated).
+    #[error("offset_edge: host face {0:?} has no analytic surface attached")]
+    NoHostSurface(FaceId),
 }
 
 impl Mesh {
@@ -89,6 +128,178 @@ impl Mesh {
 
         // 새 edge만 생성 (선의 평행 복사)
         let (new_edge, _) = self.add_edge(new_v0, new_v1)?;
+
+        Ok(OffsetEdgeResult {
+            new_v0,
+            new_v1,
+            new_edge,
+        })
+    }
+
+    /// ADR-080 V-β-α — Edge offset using host face's surface as reference.
+    ///
+    /// Replaces the legacy `offset_edge(edge, dist, plane_normal)` callers'
+    /// need to pass `plane_normal` themselves. The host face is auto-resolved
+    /// from the edge's incident faces:
+    ///   - 1 active incident face → that face is the host.
+    ///   - 2+ incident faces all sharing the same Plane (coplanar within
+    ///     EPSILON_LENGTH) → either plane is fine; pick first.
+    ///   - 0 → `NoIncidentFace` (V-δ scope).
+    ///   - 2+ with conflicting surfaces → `AmbiguousHostFace`.
+    ///
+    /// Curve kind dispatch (§V2-C):
+    ///   - `None` (synthesized line) or `AnalyticCurve::Line` → perpendicular
+    ///     offset using face normal × edge_dir (existing semantics, but
+    ///     normal source = face surface, not caller).
+    ///   - `Arc` / `Circle` / Bezier / B-spline / NURBS → `UnsupportedCurveKind`
+    ///     (V-β-β / W-3 scope).
+    ///
+    /// Host surface scope (§V2-D):
+    ///   - Plane → fully supported.
+    ///   - Cylinder / Sphere / Cone / Torus → `UnsupportedHostSurface`
+    ///     (V-β-γ scope).
+    ///   - NURBS-class → `UnsupportedHostSurface` (W-3 scope).
+    ///
+    /// Multi-loop guard (§V2-H, ADR-016 Q2 / ADR-080 L8):
+    ///   - Host face with hole loops → `MultiLoopHostFace`.
+    ///
+    /// Output (§V2-E): same `OffsetEdgeResult` as legacy `offset_edge`.
+    /// Returns the typed `OffsetEdgeError` on failure for caller dispatch.
+    pub fn offset_edge_on_host_face(
+        &mut self,
+        edge_id: EdgeId,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        if dist.abs() < 1e-6 {
+            return Err(OffsetEdgeError::DegenerateDistance(dist));
+        }
+
+        let edge = self
+            .edges
+            .get(edge_id)
+            .ok_or(OffsetEdgeError::EdgeNotFound(edge_id))?;
+        if !edge.is_active() {
+            return Err(OffsetEdgeError::EdgeInactive(edge_id));
+        }
+        let v0 = edge.v_small();
+        let v1 = edge.v_large();
+        let edge_curve = edge.curve().cloned();
+
+        // §V2-C — Curve kind dispatch (V-β-α: Line + None only).
+        match &edge_curve {
+            None | Some(AnalyticCurve::Line { .. }) => {
+                // OK — fall through to Line offset path.
+            }
+            Some(c) => {
+                let kind = match c {
+                    AnalyticCurve::Arc { .. } => "Arc",
+                    AnalyticCurve::Circle { .. } => "Circle",
+                    AnalyticCurve::Bezier { .. } => "Bezier",
+                    AnalyticCurve::BSpline { .. } => "BSpline",
+                    AnalyticCurve::NURBS { .. } => "NURBS",
+                    AnalyticCurve::Line { .. } => unreachable!(),
+                };
+                return Err(OffsetEdgeError::UnsupportedCurveKind { kind });
+            }
+        }
+
+        // §V2-B — Host face resolution.
+        let (incident_faces, _hes) = self.get_faces_sharing_edge(edge_id);
+        let host = match incident_faces.len() {
+            0 => return Err(OffsetEdgeError::NoIncidentFace),
+            1 => incident_faces[0],
+            _n => {
+                // Pick first; verify all share the same surface kind/instance
+                // (within EPSILON_LENGTH for Plane). Else AmbiguousHostFace.
+                let first = incident_faces[0];
+                let first_surface = self
+                    .faces
+                    .get(first)
+                    .and_then(|f| f.surface().cloned());
+                let mut all_match = true;
+                for &fid in &incident_faces[1..] {
+                    let other = self.faces.get(fid).and_then(|f| f.surface().cloned());
+                    if !surfaces_equivalent(&first_surface, &other) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if !all_match {
+                    return Err(OffsetEdgeError::AmbiguousHostFace {
+                        n_faces: incident_faces.len(),
+                    });
+                }
+                first
+            }
+        };
+
+        // §V2-H — Multi-loop guard.
+        let host_face = self
+            .faces
+            .get(host)
+            .ok_or(OffsetEdgeError::EdgeNotFound(edge_id))?;
+        if !host_face.inners().is_empty() {
+            return Err(OffsetEdgeError::MultiLoopHostFace(host));
+        }
+
+        // §V2-D — Host surface dispatch (V-β-α: Plane only).
+        let host_surface = host_face
+            .surface()
+            .cloned()
+            .ok_or(OffsetEdgeError::NoHostSurface(host))?;
+        let host_normal = match &host_surface {
+            AnalyticSurface::Plane { normal, .. } => normal.normalize_or_zero(),
+            AnalyticSurface::Cylinder { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Cylinder" });
+            }
+            AnalyticSurface::Sphere { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Sphere" });
+            }
+            AnalyticSurface::Cone { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Cone" });
+            }
+            AnalyticSurface::Torus { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Torus" });
+            }
+            AnalyticSurface::BezierPatch { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "BezierPatch" });
+            }
+            AnalyticSurface::BSplineSurface { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "BSplineSurface" });
+            }
+            AnalyticSurface::NURBSSurface { .. } => {
+                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "NURBSSurface" });
+            }
+        };
+        if host_normal.length_squared() < 0.5 {
+            return Err(OffsetEdgeError::NoHostSurface(host));
+        }
+
+        // §V2-C continued — Line perpendicular offset on Plane.
+        let p0 = self
+            .vertex_pos(v0)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+        let p1 = self
+            .vertex_pos(v1)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+        let edge_vec = p1 - p0;
+        if edge_vec.length_squared() < 1e-12 {
+            return Err(OffsetEdgeError::DegenerateDistance(0.0));
+        }
+        let edge_dir = edge_vec.normalize();
+        let offset_dir = edge_dir.cross(host_normal);
+        if offset_dir.length_squared() < 1e-12 {
+            return Err(OffsetEdgeError::EdgeParallelToNormal);
+        }
+        let offset_dir = offset_dir.normalize();
+
+        let new_p0 = p0 + offset_dir * dist;
+        let new_p1 = p1 + offset_dir * dist;
+        let new_v0 = self.add_vertex(new_p0);
+        let new_v1 = self.add_vertex(new_p1);
+        let (new_edge, _) = self
+            .add_edge(new_v0, new_v1)
+            .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
 
         Ok(OffsetEdgeResult {
             new_v0,
@@ -231,6 +442,43 @@ impl Mesh {
         // Face storage에서 제거
         self.faces.remove(face_id);
         Ok(())
+    }
+}
+
+/// ADR-080 §V2-B helper — Are two surfaces "equivalent" for host
+/// resolution purposes? In V-β-α we only support Plane host, so
+/// equivalence = same Plane (origin + normal coplanar within
+/// EPSILON_LENGTH). Other surface kinds are forwarded but only ever
+/// reach `UnsupportedHostSurface`, so equivalence for them is whether
+/// they're the same kind.
+fn surfaces_equivalent(
+    a: &Option<AnalyticSurface>,
+    b: &Option<AnalyticSurface>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(s_a), Some(s_b)) => match (s_a, s_b) {
+            (
+                AnalyticSurface::Plane {
+                    origin: oa,
+                    normal: na,
+                    ..
+                },
+                AnalyticSurface::Plane {
+                    origin: ob,
+                    normal: nb,
+                    ..
+                },
+            ) => {
+                let normal_match =
+                    na.normalize_or_zero().dot(nb.normalize_or_zero()).abs() > 0.999;
+                // Coplanarity: project (ob - oa) onto na — should be ~0.
+                let off_plane = (*ob - *oa).dot(na.normalize_or_zero()).abs();
+                normal_match && off_plane < crate::tolerances::EPSILON_LENGTH
+            }
+            _ => std::mem::discriminant(s_a) == std::mem::discriminant(s_b),
+        },
+        _ => false,
     }
 }
 
@@ -505,5 +753,263 @@ mod tests {
 
         // 거리 0 → 에러
         assert!(mesh.offset_edge(edge_id, 0.0, DVec3::Y).is_err());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-α — offset_edge_on_host_face (Line + Plane host)
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper: build a Plane-surfaced unit square face on z=0, normal +Z.
+    /// Returns (face_id, [v00, v10, v11, v01]) so callers can pick edges.
+    fn build_unit_square_plane(mesh: &mut Mesh) -> (FaceId, [VertId; 4]) {
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v00, v10, v11, v01], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+        (face, [v00, v10, v11, v01])
+    }
+
+    fn find_edge_between(mesh: &Mesh, a: VertId, b: VertId) -> EdgeId {
+        for (eid, e) in mesh.edges.iter() {
+            if !e.is_active() {
+                continue;
+            }
+            let pair = (e.v_small(), e.v_large());
+            if pair == (a, b) || pair == (b, a) {
+                return eid;
+            }
+        }
+        panic!("edge between {a:?} and {b:?} not found");
+    }
+
+    #[test]
+    fn line_on_plane_host_offset_creates_parallel_edge() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        // Bottom edge: v00 → v10 (along +X), face normal +Z.
+        // offset_dir = edge_dir × normal = +X × +Z = -Y.
+        // dist = 0.3 → new line at y = -0.3 (outside square).
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .expect("offset OK");
+
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        let p1 = mesh.vertex_pos(result.new_v1).unwrap();
+        // Both at y = -0.3, z = 0, with x = 0 and x = 1 (in some order).
+        assert!((p0.y - (-0.3)).abs() < 1e-9);
+        assert!((p1.y - (-0.3)).abs() < 1e-9);
+        assert!(p0.z.abs() < 1e-9 && p1.z.abs() < 1e-9);
+        let xs = [p0.x, p1.x];
+        let mut sorted = xs;
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((sorted[0] - 0.0).abs() < 1e-9);
+        assert!((sorted[1] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn line_on_plane_host_uses_face_normal_not_caller_arg() {
+        // Compare offset using V-β-α API vs legacy with explicit DVec3::Y
+        // (wrong normal). New API should follow face's +Z, not Y.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .expect("offset OK");
+
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        // With face normal = +Z and edge along +X, offset_dir = -Y.
+        // If the API mistakenly used +Y as normal, offset_dir would be +Z
+        // (out of plane) — the y-coord would be 0 instead of -0.5.
+        assert!(
+            (p0.y - (-0.5)).abs() < 1e-9,
+            "offset must use face's +Z normal, got y = {}",
+            p0.y
+        );
+        assert!(p0.z.abs() < 1e-9, "z must remain 0 (in-plane)");
+    }
+
+    #[test]
+    fn line_offset_on_hole_face_rejected() {
+        // Build a frame face (square with inner hole) — multi-loop face.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let outer = [
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 0.0, 10.0)),
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 10.0)),
+        ];
+        let inner = [
+            mesh.add_vertex(DVec3::new(3.0, 0.0, 3.0)),
+            mesh.add_vertex(DVec3::new(7.0, 0.0, 3.0)),
+            mesh.add_vertex(DVec3::new(7.0, 0.0, 7.0)),
+            mesh.add_vertex(DVec3::new(3.0, 0.0, 7.0)),
+        ];
+        let face = mesh
+            .add_face_with_holes(&outer, &[&inner], mat)
+            .expect("frame face");
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        }));
+        let edge = find_edge_between(&mesh, outer[0], outer[1]);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.5)
+            .err()
+            .expect("must reject multi-loop");
+        assert!(matches!(err, OffsetEdgeError::MultiLoopHostFace(_)));
+    }
+
+    #[test]
+    fn line_offset_on_cylinder_host_returns_unsupported() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Build a tiny quad face but attach Cylinder surface (synthetic) to
+        // exercise the host-surface kind dispatch.
+        let vs = [
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(1.0, 0.0, 1.0)),
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0)),
+        ];
+        let face = mesh.add_face(&vs, mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius: 1.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 1.0),
+        }));
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.3)
+            .err()
+            .expect("must defer cylinder host");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedHostSurface { kind: "Cylinder" }
+        ));
+    }
+
+    #[test]
+    fn line_offset_no_incident_face_returns_no_incident() {
+        let mut mesh = Mesh::new();
+        let (_v0, _v1, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        let err = mesh
+            .offset_edge_on_host_face(edge_id, 0.5)
+            .err()
+            .expect("must reject free wire");
+        assert!(matches!(err, OffsetEdgeError::NoIncidentFace));
+    }
+
+    #[test]
+    fn line_offset_ambiguous_host_face_rejected() {
+        // Two faces sharing an edge but with conflicting Plane normals.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let v4 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0));
+        let v5 = mesh.add_vertex(DVec3::new(1.0, 0.0, 1.0));
+
+        // f1 in z=0 plane, normal +Z.
+        let f1 = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        mesh.faces[f1].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+        // f2 in y=0 plane (sharing edge v0-v1), normal +Y. Conflicting.
+        let f2 = mesh.add_face(&[v0, v4, v5, v1], mat).unwrap();
+        mesh.faces[f2].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+
+        let shared = find_edge_between(&mesh, v0, v1);
+        let err = mesh
+            .offset_edge_on_host_face(shared, 0.3)
+            .err()
+            .expect("must reject ambiguous");
+        assert!(matches!(err, OffsetEdgeError::AmbiguousHostFace { .. }));
+    }
+
+    #[test]
+    fn arc_curve_offset_returns_unsupported_in_v_beta_alpha() {
+        // Build a quad face on Plane and attach an Arc curve to one edge.
+        // V-β-α only handles Line; Arc must defer to V-β-β.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let arc = AnalyticCurve::Arc {
+            center: DVec3::new(0.5, 0.0, 0.0),
+            radius: 0.5,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::PI,
+        };
+        mesh.edges[edge].set_curve(Some(arc));
+
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must defer arc");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveKind { kind: "Arc" }
+        ));
+    }
+
+    #[test]
+    fn legacy_offset_edge_signature_unchanged() {
+        // Regression — legacy `offset_edge(edge, dist, plane_normal)` still
+        // exists and works for Line edges (free wire here).
+        let mut mesh = Mesh::new();
+        let (_v0, _v1, edge_id) = mesh
+            .draw_line(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        let result = mesh
+            .offset_edge(edge_id, 0.5, DVec3::Y)
+            .expect("legacy API still works");
+        let p0 = mesh.vertex_pos(result.new_v0).unwrap();
+        // edge_dir +X × normal +Y = +Z, so new pos has z = 0.5.
+        assert!((p0.z - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn line_offset_degenerate_distance_rejected() {
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_unit_square_plane(&mut mesh);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 1e-9)
+            .err()
+            .expect("must reject zero dist");
+        assert!(matches!(err, OffsetEdgeError::DegenerateDistance(_)));
     }
 }
