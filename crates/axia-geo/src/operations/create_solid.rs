@@ -166,14 +166,18 @@ impl Mesh {
                         }
                         .into())
                     }
+                    (AnalyticSurface::Cylinder { .. }, _) => {
+                        // W-2-γ-i: Cylinder smooth-group radius offset.
+                        self.offset_smooth_group_cylinder(profile_face, distance, &surface)
+                    }
                     (
-                        AnalyticSurface::Cylinder { .. }
-                        | AnalyticSurface::Sphere { .. }
+                        AnalyticSurface::Sphere { .. }
                         | AnalyticSurface::Cone { .. }
                         | AnalyticSurface::Torus { .. },
                         _,
                     ) => Err(SolidError::NotYetSupported {
-                        reason: "Curved profile → SmoothGroupOffset (W-2 scope)".to_string(),
+                        reason: "Curved profile → SmoothGroupOffset (W-2-γ-ii/iii/iv scope)"
+                            .to_string(),
                     }
                     .into()),
                     (
@@ -505,6 +509,251 @@ impl Mesh {
             side_faces,
             all_solid_faces,
             adjacent_splits,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-2-γ-i — Cylinder smooth-group radius offset.
+    ///
+    /// Profile face has `AnalyticSurface::Cylinder`. Detects the smooth
+    /// group (all active faces sharing the same Cylinder instance within
+    /// `EPSILON_LENGTH`), then radially offsets all group vertices by
+    /// `dist`:
+    ///   - Each vertex `v`: split into axial + radial components relative
+    ///     to the cylinder axis. Scale radial by `(r + dist) / r`. Axial
+    ///     preserved.
+    ///   - All group face surfaces updated with `radius = current + dist`.
+    ///   - Boundary `Arc` curves on cap edges (whose normal ≈ axis_dir
+    ///     and center on axis) get their radius updated too.
+    ///
+    /// **Auto-expand semantics** (§W2γ1-B-(a)): the caller passes a single
+    /// `profile_face`; this method expands to the full smooth group.
+    /// Partial-panel rejection is not needed because the operation is
+    /// idempotent across the group.
+    ///
+    /// Returns `NotYetSupported` if the new radius would collapse below
+    /// `EPSILON_LENGTH` (geometry inversion guard).
+    fn offset_smooth_group_cylinder(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        let (axis_origin, axis_dir, current_radius, ref_dir, u_range, v_range) =
+            match profile_surface {
+                AnalyticSurface::Cylinder {
+                    axis_origin,
+                    axis_dir,
+                    radius,
+                    ref_dir,
+                    u_range,
+                    v_range,
+                } => (
+                    *axis_origin,
+                    axis_dir.normalize_or_zero(),
+                    *radius,
+                    *ref_dir,
+                    *u_range,
+                    *v_range,
+                ),
+                _ => bail!("offset_smooth_group_cylinder: profile is not Cylinder"),
+            };
+        if axis_dir.length_squared() < 0.5 {
+            bail!("offset_smooth_group_cylinder: axis_dir is near-zero");
+        }
+        if current_radius <= crate::tolerances::EPSILON_LENGTH {
+            bail!(
+                "offset_smooth_group_cylinder: current radius {:.3e} below epsilon",
+                current_radius
+            );
+        }
+
+        let new_radius = current_radius + dist;
+        if new_radius <= crate::tolerances::EPSILON_LENGTH {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "offset would collapse cylinder radius to {:.3e} (current {:.3e}, dist {:.3e})",
+                    new_radius, current_radius, dist
+                ),
+            }
+            .into());
+        }
+        let scale = new_radius / current_radius;
+        let tol = crate::tolerances::EPSILON_LENGTH;
+
+        // Detect smooth group: active faces whose surface is a Cylinder
+        // matching axis_origin, axis_dir, current_radius, ref_dir within tol.
+        let group_faces: Vec<FaceId> = self
+            .faces
+            .iter()
+            .filter_map(|(fid, face)| {
+                if !face.is_active() {
+                    return None;
+                }
+                match face.surface() {
+                    Some(AnalyticSurface::Cylinder {
+                        axis_origin: o,
+                        axis_dir: a,
+                        radius: r,
+                        ref_dir: rd,
+                        ..
+                    }) => {
+                        let a_n = a.normalize_or_zero();
+                        let rd_n = rd.normalize_or_zero();
+                        let ref_n = ref_dir.normalize_or_zero();
+                        let same_axis = (*o - axis_origin).length() < tol
+                            && a_n.dot(axis_dir).abs() > 0.999
+                            && rd_n.dot(ref_n).abs() > 0.999
+                            && (*r - current_radius).abs() < tol;
+                        if same_axis {
+                            Some(fid)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        if !group_faces.contains(&profile_face) {
+            bail!(
+                "offset_smooth_group_cylinder: profile face {profile_face:?} \
+                 not in detected smooth group (size {})",
+                group_faces.len()
+            );
+        }
+
+        // Collect unique vertices across the group.
+        let mut group_verts: std::collections::HashSet<crate::entities::VertId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let start = self.faces[fid].outer().start;
+            if start.is_null() {
+                continue;
+            }
+            for v in self.collect_loop_verts(start)? {
+                group_verts.insert(v);
+            }
+        }
+
+        // Radial scale each vertex relative to the cylinder axis.
+        for v in group_verts.iter().copied().collect::<Vec<_>>() {
+            let pos = self.vertex_pos(v)?;
+            let from_axis = pos - axis_origin;
+            let axial = from_axis.dot(axis_dir) * axis_dir;
+            let radial = from_axis - axial;
+            let new_pos = axis_origin + axial + radial * scale;
+            self.move_vertex(v, new_pos)?;
+        }
+
+        // Update each group face's Cylinder surface with new radius.
+        let new_surface = AnalyticSurface::Cylinder {
+            axis_origin,
+            axis_dir,
+            radius: new_radius,
+            ref_dir,
+            u_range,
+            v_range,
+        };
+        for &fid in &group_faces {
+            if let Some(face) = self.faces.get_mut(fid) {
+                if face.is_active() {
+                    face.set_surface(Some(new_surface.clone()));
+                }
+            }
+        }
+
+        // Update Arc curves on edges incident to group faces (cap rings).
+        // Filter: arc center on axis (cross product with axis_dir near zero)
+        // AND arc normal parallel to axis_dir.
+        let mut updated_arcs: std::collections::HashSet<crate::entities::EdgeId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let edges = self.face_outer_edges(fid)?;
+            for eid in edges {
+                if updated_arcs.contains(&eid) {
+                    continue;
+                }
+                let new_curve = if let Some(edge) = self.edges.get(eid) {
+                    match edge.curve() {
+                        Some(AnalyticCurve::Arc {
+                            center,
+                            radius: ar,
+                            normal,
+                            basis_u,
+                            start_angle,
+                            end_angle,
+                        }) => {
+                            let center_off_axis =
+                                ((*center - axis_origin).cross(axis_dir)).length();
+                            let normal_dot = normal.normalize_or_zero().dot(axis_dir).abs();
+                            // Match to current cylinder radius (avoids touching
+                            // unrelated arcs that happen to share axis).
+                            let radius_match = (*ar - current_radius).abs() < tol;
+                            if center_off_axis < tol && normal_dot > 0.999 && radius_match {
+                                Some(AnalyticCurve::Arc {
+                                    center: *center,
+                                    radius: new_radius,
+                                    normal: *normal,
+                                    basis_u: *basis_u,
+                                    start_angle: *start_angle,
+                                    end_angle: *end_angle,
+                                })
+                            } else {
+                                None
+                            }
+                        }
+                        Some(AnalyticCurve::Circle {
+                            center,
+                            radius: cr,
+                            normal,
+                            basis_u,
+                        }) => {
+                            let center_off_axis =
+                                ((*center - axis_origin).cross(axis_dir)).length();
+                            let normal_dot = normal.normalize_or_zero().dot(axis_dir).abs();
+                            let radius_match = (*cr - current_radius).abs() < tol;
+                            if center_off_axis < tol && normal_dot > 0.999 && radius_match {
+                                Some(AnalyticCurve::Circle {
+                                    center: *center,
+                                    radius: new_radius,
+                                    normal: *normal,
+                                    basis_u: *basis_u,
+                                })
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(c) = new_curve {
+                    if let Some(edge) = self.edges.get_mut(eid) {
+                        edge.set_curve(Some(c));
+                    }
+                    updated_arcs.insert(eid);
+                }
+            }
+        }
+
+        // Result — top_face = profile_face (no new face created in offset),
+        // side_faces = group members excluding profile.
+        let side_faces: Vec<FaceId> = group_faces
+            .iter()
+            .copied()
+            .filter(|&f| f != profile_face)
+            .collect();
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::SmoothGroupOffset,
+            top_face: profile_face,
+            side_faces,
+            all_solid_faces: group_faces,
+            adjacent_splits: 0,
             split_debug: Vec::new(),
         })
     }
@@ -1002,6 +1251,234 @@ mod tests {
             // Radial check: x² + y² = 16 (radius 4).
             let r2 = pos.x * pos.x + pos.y * pos.y;
             assert!((r2 - 16.0).abs() < 1e-6, "radius² != 16: got {r2}");
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-2-γ-i — Cylinder smooth-group radius offset
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build an existing cylinder solid via W-2-α and return
+    /// (mesh, profile, top_face, side_faces). The side faces share a
+    /// single Cylinder surface instance — the smooth group W-2-γ-i targets.
+    fn build_cylinder_solid(radius: f64, dist: f64, segments: u32) -> (Mesh, CreateSolidResult) {
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, radius, segments);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: dist },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        (mesh, result)
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_outward_increases_radius() {
+        let (mut mesh, cyl) = build_cylinder_solid(2.0, 5.0, 16);
+        // Pick any side face as profile for the offset operation.
+        let side_profile = cyl.side_faces[0];
+
+        // Offset outward by +1.0 → new radius = 3.0.
+        let result = mesh
+            .create_solid(
+                side_profile,
+                CreateSolidMode::Extrude { distance: 1.0 },
+                MaterialId::new(0),
+            )
+            .expect("smooth-group offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        // Group should contain all 16 side faces.
+        assert_eq!(
+            result.all_solid_faces.len(),
+            16,
+            "smooth group must include all 16 side faces"
+        );
+
+        // All side face surfaces must now have radius = 3.0.
+        for &fid in &cyl.side_faces {
+            match mesh.faces[fid].surface() {
+                Some(AnalyticSurface::Cylinder { radius, .. }) => {
+                    assert!(
+                        (radius - 3.0).abs() < 1e-9,
+                        "face {fid:?} radius != 3.0, got {radius}"
+                    );
+                }
+                other => panic!(
+                    "face {fid:?} must be Cylinder, got {:?}",
+                    other.map(|s| s.kind_label())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_scales_vertices_radially() {
+        let (mut mesh, _cyl) = build_cylinder_solid(2.0, 5.0, 8);
+        // Find one side face and use as profile.
+        let side_profile = mesh
+            .faces
+            .iter()
+            .find_map(|(fid, face)| {
+                matches!(face.surface(), Some(AnalyticSurface::Cylinder { .. }))
+                    .then_some(fid)
+            })
+            .expect("must find a side face");
+
+        let result = mesh
+            .create_solid(
+                side_profile,
+                CreateSolidMode::Extrude { distance: 3.0 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // After offset (2 → 5), every group vertex should have radius 5
+        // (in the xy plane, since axis = +Z).
+        let mut group_verts = std::collections::HashSet::new();
+        for &fid in &result.all_solid_faces {
+            let start = mesh.faces[fid].outer().start;
+            for v in mesh.collect_loop_verts(start).unwrap() {
+                group_verts.insert(v);
+            }
+        }
+        for v in &group_verts {
+            let pos = mesh.vertex_pos(*v).unwrap();
+            let r = (pos.x * pos.x + pos.y * pos.y).sqrt();
+            assert!((r - 5.0).abs() < 1e-6, "vertex r != 5.0: got {r}");
+        }
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_inward_decreases_radius() {
+        let (mut mesh, cyl) = build_cylinder_solid(5.0, 3.0, 12);
+        // Inward offset: -2.0 → new radius = 3.0.
+        let result = mesh
+            .create_solid(
+                cyl.side_faces[0],
+                CreateSolidMode::Extrude { distance: -2.0 },
+                MaterialId::new(0),
+            )
+            .expect("inward offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        for &fid in &cyl.side_faces {
+            if let Some(AnalyticSurface::Cylinder { radius, .. }) = mesh.faces[fid].surface() {
+                assert!((radius - 3.0).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_collapse_falls_back() {
+        // Inward offset that would collapse radius below epsilon → Q3 fallback.
+        let (mut mesh, cyl) = build_cylinder_solid(2.0, 4.0, 8);
+        let result = mesh.create_solid(
+            cyl.side_faces[0],
+            CreateSolidMode::Extrude { distance: -2.0 }, // exactly to zero
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must fail (collapse)");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("collapse"),
+            "expected NotYetSupported with 'collapse' reason, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_updates_cap_arc_radius() {
+        let (mut mesh, cyl) = build_cylinder_solid(3.0, 4.0, 8);
+        // Verify cap edges initially have Arc curves with radius=3.
+        // (build_circle_face attached Arc to profile edges; W-2-α didn't
+        // attach Arc to top cap edges — the top cap edges are NEW edges
+        // that connect newly-translated vertices, no curve set.)
+        // Profile (= original circle face) edges have Arc r=3.
+        let profile_edges = mesh.face_outer_edges(cyl.profile_face).unwrap();
+        let initial_arc_count = profile_edges
+            .iter()
+            .filter(|&&eid| {
+                matches!(
+                    mesh.edges.get(eid).and_then(|e| e.curve()),
+                    Some(AnalyticCurve::Arc { .. })
+                )
+            })
+            .count();
+        assert!(initial_arc_count > 0, "profile edges must have Arc curves");
+
+        let _ = mesh
+            .create_solid(
+                cyl.side_faces[0],
+                CreateSolidMode::Extrude { distance: 2.0 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // After offset, Arc curves on profile edges should now have radius=5.
+        for &eid in &profile_edges {
+            if let Some(AnalyticCurve::Arc { radius, .. }) =
+                mesh.edges.get(eid).and_then(|e| e.curve())
+            {
+                assert!(
+                    (radius - 5.0).abs() < 1e-9,
+                    "cap arc edge {eid:?} radius != 5.0: got {radius}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_returns_smooth_group_offset_kind() {
+        let (mut mesh, cyl) = build_cylinder_solid(1.5, 2.0, 6);
+        let result = mesh
+            .create_solid(
+                cyl.side_faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        // top_face = profile_face (no new face created).
+        assert_eq!(result.top_face, result.profile_face);
+        // side_faces = group members minus profile.
+        assert_eq!(result.side_faces.len(), 5);
+        // all_solid_faces = full group.
+        assert_eq!(result.all_solid_faces.len(), 6);
+    }
+
+    #[test]
+    fn cylinder_smooth_group_offset_preserves_axial_height() {
+        // Axial position (z, since axis = +Z) must be preserved by offset.
+        let (mut mesh, cyl) = build_cylinder_solid(2.0, 7.0, 8);
+        let _ = mesh
+            .create_solid(
+                cyl.side_faces[0],
+                CreateSolidMode::Extrude { distance: 1.5 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        // Profile (z=0) and top cap (z=7) z-coordinates must be unchanged.
+        let profile_start = mesh.faces[cyl.profile_face].outer().start;
+        for v in mesh.collect_loop_verts(profile_start).unwrap() {
+            let pos = mesh.vertex_pos(v).unwrap();
+            assert!(
+                pos.z.abs() < 1e-9,
+                "profile z must remain 0, got {}",
+                pos.z
+            );
+        }
+        let top_start = mesh.faces[cyl.top_face].outer().start;
+        for v in mesh.collect_loop_verts(top_start).unwrap() {
+            let pos = mesh.vertex_pos(v).unwrap();
+            assert!(
+                (pos.z - 7.0).abs() < 1e-9,
+                "top z must remain 7, got {}",
+                pos.z
+            );
         }
     }
 }

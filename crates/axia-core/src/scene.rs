@@ -10472,11 +10472,9 @@ mod tests {
 
     #[test]
     fn exec_create_solid_falls_back_to_push_pull_when_not_yet_supported() {
-        // Q3 lock-in — non-Plane surface or non-Linear boundary → legacy
-        // push_pull fallback. We force NotYetSupported by creating a
-        // profile with no surface attached (NoProfileSurface), but that
-        // returns NoProfileSurface (not NotYetSupported). To test the
-        // fallback path, we use a Cylinder profile (NotYetSupported).
+        // Q3 lock-in — non-Plane surface or unsupported curved profile → legacy
+        // push_pull fallback. We use a Sphere profile (still NotYetSupported
+        // in W-2-γ-i scope; Cylinder was activated by W-2-γ-i).
         let mut scene = Scene::new();
         let mat = MaterialId::new(0);
         let v00 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
@@ -10484,14 +10482,12 @@ mod tests {
         let v11 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
         let v01 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
         let profile_face = scene.mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
-        // Attach Cylinder surface (curved profile → NotYetSupported, W-2 scope).
-        let surface = axia_geo::AnalyticSurface::Cylinder {
-            axis_origin: DVec3::ZERO,
-            axis_dir: DVec3::Z,
+        // Attach Sphere surface (W-2-γ-ii scope — still NotYetSupported).
+        let surface = axia_geo::AnalyticSurface::Sphere {
+            center: DVec3::ZERO,
             radius: 1.0,
-            ref_dir: DVec3::X,
             u_range: (0.0, std::f64::consts::TAU),
-            v_range: (0.0, 1.0),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
         };
         scene.mesh.faces[profile_face].set_surface(Some(surface));
 
