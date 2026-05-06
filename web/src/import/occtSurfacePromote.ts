@@ -45,6 +45,11 @@
 
 import { debugLog, debugWarn } from '../utils/debug';
 import { pntToVec3, readArray1Real, type Vec3 } from './occtAccessors';
+import {
+  promoteTrimLoops,
+  rectangularTrimLoop,
+  type TrimLoop,
+} from './occtTrimPromote';
 
 // ────────────────────────────────────────────────────────────────────────
 // Mapping enum — ADR-036 P21.2 매핑 표 그대로
@@ -75,20 +80,25 @@ export type UvBounds = [number, number, number, number];
  * 모든 variant 는 optional `uvBounds` 를 가진다 (P21.2 RectangularTrimmedSurface
  * 정합 + Phase G2 trim_loops 동기화 강제). Trim 정보는 이 필드로 보존되어
  * round-trip export 시 유실되지 않는다.
+ *
+ * `trimLoops?` (W-ε, ADR-036 P21.3) — 모든 variant 에 optional. NURBS-class
+ * face 의 PCurve 기반 trim 또는 RectangularTrimmedSurface 의 uvBounds 합성
+ * trim. 비어 있으면 `uvBounds` 단독 (rectangular outer) 으로 해석.
  */
 export type SurfacePromotion =
-  | { kind: 'Plane'; origin: [number, number, number]; normal: [number, number, number]; uvBounds?: UvBounds }
-  | { kind: 'Cylinder'; axisOrigin: [number, number, number]; axisDir: [number, number, number]; refDir: [number, number, number]; radius: number; uvBounds?: UvBounds }
-  | { kind: 'Sphere'; center: [number, number, number]; radius: number; uvBounds?: UvBounds }
-  | { kind: 'Cone'; apex: [number, number, number]; axisDir: [number, number, number]; halfAngle: number; uvBounds?: UvBounds }
-  | { kind: 'Torus'; center: [number, number, number]; axis: [number, number, number]; majorRadius: number; minorRadius: number; uvBounds?: UvBounds }
-  | { kind: 'BezierPatch'; ctrlGrid: Array<Array<[number, number, number]>>; uvBounds?: UvBounds }
+  | { kind: 'Plane'; origin: [number, number, number]; normal: [number, number, number]; uvBounds?: UvBounds; trimLoops?: TrimLoop[] }
+  | { kind: 'Cylinder'; axisOrigin: [number, number, number]; axisDir: [number, number, number]; refDir: [number, number, number]; radius: number; uvBounds?: UvBounds; trimLoops?: TrimLoop[] }
+  | { kind: 'Sphere'; center: [number, number, number]; radius: number; uvBounds?: UvBounds; trimLoops?: TrimLoop[] }
+  | { kind: 'Cone'; apex: [number, number, number]; axisDir: [number, number, number]; halfAngle: number; uvBounds?: UvBounds; trimLoops?: TrimLoop[] }
+  | { kind: 'Torus'; center: [number, number, number]; axis: [number, number, number]; majorRadius: number; minorRadius: number; uvBounds?: UvBounds; trimLoops?: TrimLoop[] }
+  | { kind: 'BezierPatch'; ctrlGrid: Array<Array<[number, number, number]>>; uvBounds?: UvBounds; trimLoops?: TrimLoop[] }
   | {
       kind: 'BSplineSurface';
       ctrlGrid: Array<Array<[number, number, number]>>;
       knotsU: number[]; knotsV: number[];
       degU: number; degV: number;
       uvBounds?: UvBounds;
+      trimLoops?: TrimLoop[];
     }
   | {
       kind: 'NURBSSurface';
@@ -97,8 +107,9 @@ export type SurfacePromotion =
       knotsU: number[]; knotsV: number[];
       degU: number; degV: number;
       uvBounds?: UvBounds;
+      trimLoops?: TrimLoop[];
     }
-  | { kind: 'Tessellate'; reason: string; uvBounds?: UvBounds };
+  | { kind: 'Tessellate'; reason: string; uvBounds?: UvBounds; trimLoops?: TrimLoop[] };
 
 /**
  * Promotion 호출 결과 wrapper.
@@ -144,6 +155,17 @@ export function promoteSurface(occt: unknown, faceHandle: unknown): SurfacePromo
       warnings.push(reason);
       promotion = { kind: 'Tessellate', reason };
     }
+  }
+
+  // W-ε — trim loops attachment (ADR-036 P21.3).
+  // RectangularTrimmedSurface 는 uvBounds 기반 합성 loop 가 이미 attach됨
+  // (`promoteRectangularTrimmedSurface` 내부). 그 외 face 는 PCurve 추출 시도.
+  if (promotion.kind !== 'Tessellate' && !promotion.trimLoops) {
+    const trim = promoteTrimLoops(occt, faceHandle);
+    if (trim.loops.length > 0) {
+      promotion.trimLoops = trim.loops;
+    }
+    for (const w of trim.warnings) warnings.push(w);
   }
 
   return { promotion, warnings };
@@ -654,6 +676,12 @@ function promoteRectangularTrimmedSurface(occt: unknown, faceHandle: unknown, w:
     // methods 를 prototype 으로 노출하므로 별도 DownCast 없이 raw `basis` 사용.
     // (실제 OCCT C++ 에서는 DownCast 가 필요하지만, occt.js 1.x 의 JS 바인딩에서는
     // 모든 매서드가 노출됨. 만약 W-ζ 코퍼스 검증 시 실패 발견되면 DownCast 추가.)
+    //
+    // W-ε — RectangularTrimmedSurface 는 fast-path 로 uvBounds 기반 합성
+    // rectangular trim loop 사용 (PCurve 추출 회피). 상위 `promoteSurface`
+    // 의 generic trim attach 가 이 값을 보존 (이미 `trimLoops` 가 set 되어 있어
+    // overwrite 안 됨).
+    const synthLoop = trimUv ? [rectangularTrimLoop(trimUv)] : undefined;
     switch (basisName) {
       case 'Geom_Plane': {
         const ax = basis.Position?.();
@@ -665,6 +693,7 @@ function promoteRectangularTrimmedSurface(occt: unknown, faceHandle: unknown, w:
           origin: pntToVec3(loc),
           normal: [dir.X(), dir.Y(), dir.Z()],
           uvBounds: trimUv,
+          trimLoops: synthLoop,
         };
       }
       case 'Geom_CylindricalSurface': {
@@ -681,6 +710,7 @@ function promoteRectangularTrimmedSurface(occt: unknown, faceHandle: unknown, w:
           refDir: [xdir.X(), xdir.Y(), xdir.Z()],
           radius,
           uvBounds: trimUv,
+          trimLoops: synthLoop,
         };
       }
       // 그 외 basis type 은 trim 표현 의미가 약하거나 W-3-ε deferred 영역.
