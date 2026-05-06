@@ -32,6 +32,7 @@
 
 import * as THREE from 'three';
 import { debugLog, debugWarn } from '../utils/debug';
+import { traverseBrep, type BRepTraversalResult } from './occtBrepTraversal';
 
 /** OCCT.js 인스턴스 핸들 (opencascade.js v2 API). */
 type OcctInstance = unknown;
@@ -44,6 +45,14 @@ export interface StepIgesImportResult {
   edgeCount: number;
   /** OCCT 가 보고한 import warnings (있는 경우). */
   warnings: string[];
+  /**
+   * W-δ BRep traversal 결과 — face/edge 별 promoted analytic surface/curve
+   * + stable index. caller (W-η UI integration) 가 axia FaceId / EdgeId
+   * 로 매핑.
+   *
+   * Optional — OCCT.js 미설치 / shape 추출 실패 시 undefined.
+   */
+  traversal?: BRepTraversalResult;
 }
 
 /** OCCT.js 가 설치되지 않았을 때의 사용자 안내 메시지. */
@@ -146,17 +155,86 @@ export class StepIgesImporter {
     debugLog(`[StepIgesImporter] importing ${format.toUpperCase()}: ${file.name} (${bytes.length} bytes)`);
 
     // OCCT.js 의 STEP/IGES API 호출 — 실제 binding 은 opencascade.js v2 의
-    // ReadSTEP / ReadIGES wrapper 를 거친다. MVP 에서는 Mesher 가 산출하는
-    // BRep → THREE.Group 변환을 수행.
+    // STEPControl_Reader / IGESControl_Reader 를 거친다.
+    const shape = await this._readShape(occt, bytes, format);
+
+    // W-δ — BRep traversal + face/edge index promotion (ADR-081 §3.4).
+    // shape 가 추출되면 traverseBrep 으로 face/edge 별 AnalyticSurface /
+    // AnalyticCurve 활성화. shape === null 이면 traversal 미수행.
+    let traversal: BRepTraversalResult | undefined;
+    const warnings: string[] = [];
+    if (shape) {
+      traversal = traverseBrep(occt, shape);
+      warnings.push(...traversal.warnings);
+    } else {
+      warnings.push('STEP/IGES shape 추출 실패 — traversal 건너뜀');
+    }
+
+    // W-η 미구현 — Three.js Group 생성은 후속 commit. 현재는 빈 group.
     const group = await this._convertToThreeGroup(occt, bytes, format, file.name);
 
     return {
       group,
       format,
-      faceCount: this._countMeshes(group),
-      edgeCount: this._countLines(group),
-      warnings: [],
+      faceCount: traversal?.faces.length ?? this._countMeshes(group),
+      edgeCount: traversal?.edges.length ?? this._countLines(group),
+      warnings,
+      traversal,
     };
+  }
+
+  /**
+   * STEP / IGES bytes → TopoDS_Shape (graceful failure).
+   *
+   * **W-δ scope**: OCCT.js v2 의 `STEPControl_Reader_1` /
+   * `IGESControl_Reader_1` + Emscripten FS 사용. 실패 (reader API 미존재 /
+   * malformed file 등) 시 `null` 반환 — caller 는 traversal 생략 + warning
+   * 누적 (P21.7 정합).
+   */
+  private async _readShape(
+    occt: OcctInstance,
+    bytes: Uint8Array,
+    format: 'step' | 'iges',
+  ): Promise<unknown | null> {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const o = occt as any;
+    try {
+      const fs = o?.FS;
+      if (!fs) {
+        debugWarn('[StepIgesImporter] OCCT FS unavailable — cannot stage file');
+        return null;
+      }
+      const filename = format === 'step' ? '/input.step' : '/input.iges';
+      // writeFile / createDataFile wrapper version-tolerant
+      if (typeof fs.writeFile === 'function') {
+        fs.writeFile(filename, bytes);
+      } else if (typeof fs.createDataFile === 'function') {
+        fs.createDataFile('/', filename.slice(1), bytes, true, true, true);
+      } else {
+        debugWarn('[StepIgesImporter] OCCT FS write API unavailable');
+        return null;
+      }
+      const ReaderCtor = format === 'step'
+        ? (o.STEPControl_Reader_1 ?? o.STEPControl_Reader)
+        : (o.IGESControl_Reader_1 ?? o.IGESControl_Reader);
+      if (!ReaderCtor) {
+        debugWarn(`[StepIgesImporter] ${format} reader ctor missing`);
+        return null;
+      }
+      const reader = new ReaderCtor();
+      reader.ReadFile?.(filename);
+      reader.TransferRoots?.();
+      const shape = reader.OneShape?.();
+      if (!shape || shape.IsNull?.()) {
+        debugWarn('[StepIgesImporter] OneShape() returned null/empty');
+        return null;
+      }
+      return shape;
+    } catch (e) {
+      debugWarn('[StepIgesImporter] _readShape failed:', e);
+      return null;
+    }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   /**
