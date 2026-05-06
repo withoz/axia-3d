@@ -10472,9 +10472,10 @@ mod tests {
 
     #[test]
     fn exec_create_solid_falls_back_to_push_pull_when_not_yet_supported() {
-        // Q3 lock-in — unsupported curved profile → legacy push_pull fallback.
-        // We use a Torus profile (still NotYetSupported in W-2-γ-iii scope;
-        // Cylinder / Sphere / Cone were activated by W-2-γ-i / -ii / -iii).
+        // Q3 lock-in — unsupported NURBS/Bezier profile → legacy push_pull
+        // fallback. All analytic primitives (Plane / Cylinder / Sphere / Cone
+        // / Torus) are now activated through W-2; only NURBS-class surfaces
+        // (BezierPatch / BSplineSurface / NURBSSurface) remain in W-3 scope.
         let mut scene = Scene::new();
         let mat = MaterialId::new(0);
         let v00 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
@@ -10482,15 +10483,13 @@ mod tests {
         let v11 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
         let v01 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
         let profile_face = scene.mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
-        // Attach Torus surface (W-2-γ-iv scope — still NotYetSupported).
-        let surface = axia_geo::AnalyticSurface::Torus {
-            center: DVec3::ZERO,
-            axis_dir: DVec3::Z,
-            ref_dir: DVec3::X,
-            major_radius: 3.0,
-            minor_radius: 1.0,
-            u_range: (0.0, std::f64::consts::TAU),
-            v_range: (0.0, std::f64::consts::TAU),
+        // Attach BezierPatch surface (W-3 scope — still NotYetSupported).
+        // Linear 2×2 control grid representing the unit square plane.
+        let surface = axia_geo::AnalyticSurface::BezierPatch {
+            ctrl_grid: vec![
+                vec![DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0)],
+                vec![DVec3::new(0.0, 1.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
         };
         scene.mesh.faces[profile_face].set_surface(Some(surface));
 

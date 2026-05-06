@@ -178,11 +178,10 @@ impl Mesh {
                         // W-2-γ-iii: Cone constant-offset (true surface offset).
                         self.offset_smooth_group_cone(profile_face, distance, &surface)
                     }
-                    (AnalyticSurface::Torus { .. }, _) => Err(SolidError::NotYetSupported {
-                        reason: "Curved profile → SmoothGroupOffset (W-2-γ-iv scope)"
-                            .to_string(),
+                    (AnalyticSurface::Torus { .. }, _) => {
+                        // W-2-γ-iv: Torus constant-offset (= minor_radius offset).
+                        self.offset_smooth_group_torus(profile_face, distance, &surface)
                     }
-                    .into()),
                     (
                         AnalyticSurface::BezierPatch { .. }
                         | AnalyticSurface::BSplineSurface { .. }
@@ -1265,6 +1264,333 @@ impl Mesh {
             adjacent_splits: 0,
             split_debug: Vec::new(),
         })
+    }
+
+    /// ADR-079 W-2-γ-iv — Torus constant-offset (§W2γ4-D Option 2).
+    ///
+    /// Equivalent to `minor_radius += dist` because the torus surface
+    /// normal at any point is exactly the radial direction from the
+    /// minor circle's center (which sits on the major circle).
+    /// Center / axis_dir / ref_dir / major_radius UNCHANGED.
+    ///
+    /// **Math** (P on torus with center C, axis Z, ref X, R = major,
+    /// r = minor):
+    /// - radial_vec = (P - C) - ((P - C)·Z)·Z  (in major-plane component)
+    /// - radial_dir = radial_vec.normalize()
+    /// - major_circle_pt = C + R·radial_dir
+    /// - normal at P = (P - major_circle_pt).normalize()
+    ///   (this is exactly the unit vector from minor circle center to P,
+    ///    which equals cos(v)·radial_dir + sin(v)·axis_dir for some v)
+    /// - P' = P + dist·normal
+    /// - new minor circle has same center (major_circle_pt) but radius
+    ///   r + dist → P' lies on torus with same C/Z/X/R but minor = r + dist
+    ///
+    /// **Latitude circle update** (Arc/Circle with center on axis +
+    /// normal ‖ axis_dir) — center at C + r·sin(v)·Z, radius = R +
+    /// r·cos(v) for some v ∈ [0, 2π]:
+    /// - extract sin(v) = axial_offset / r, cos(v) = (radius - R) / r
+    /// - sanity: sin² + cos² ≈ 1
+    /// - new_center = C + (r+d)·sin(v)·Z = old_center + d·sin(v)·Z
+    /// - new_radius = R + (r+d)·cos(v) = old_radius + d·cos(v)
+    ///
+    /// Returns `NotYetSupported` if:
+    /// - new minor_radius ≤ EPSILON_LENGTH (collapse / inversion)
+    fn offset_smooth_group_torus(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        let (center, axis_dir, ref_dir, major_radius, minor_radius, u_range, v_range) =
+            match profile_surface {
+                AnalyticSurface::Torus {
+                    center,
+                    axis_dir,
+                    ref_dir,
+                    major_radius,
+                    minor_radius,
+                    u_range,
+                    v_range,
+                } => (
+                    *center,
+                    axis_dir.normalize_or_zero(),
+                    *ref_dir,
+                    *major_radius,
+                    *minor_radius,
+                    *u_range,
+                    *v_range,
+                ),
+                _ => bail!("offset_smooth_group_torus: profile is not Torus"),
+            };
+        if axis_dir.length_squared() < 0.5 {
+            bail!("offset_smooth_group_torus: axis_dir near zero");
+        }
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        if major_radius <= tol || minor_radius <= tol {
+            bail!(
+                "offset_smooth_group_torus: degenerate radii \
+                 (major {:.3e}, minor {:.3e})",
+                major_radius,
+                minor_radius
+            );
+        }
+
+        let new_minor = minor_radius + dist;
+        if new_minor <= tol {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "offset would collapse torus minor_radius to {:.3e} \
+                     (current {:.3e}, dist {:.3e})",
+                    new_minor, minor_radius, dist
+                ),
+            }
+            .into());
+        }
+
+        // Detect smooth group: faces with matching Torus instance.
+        let group_faces: Vec<FaceId> = self
+            .faces
+            .iter()
+            .filter_map(|(fid, face)| {
+                if !face.is_active() {
+                    return None;
+                }
+                match face.surface() {
+                    Some(AnalyticSurface::Torus {
+                        center: c,
+                        axis_dir: ad,
+                        ref_dir: rd,
+                        major_radius: mr,
+                        minor_radius: nr,
+                        ..
+                    }) => {
+                        let same = (*c - center).length() < tol
+                            && ad.normalize_or_zero().dot(axis_dir).abs() > 0.999
+                            && rd.normalize_or_zero()
+                                .dot(ref_dir.normalize_or_zero())
+                                .abs()
+                                > 0.999
+                            && (*mr - major_radius).abs() < tol
+                            && (*nr - minor_radius).abs() < tol;
+                        if same {
+                            Some(fid)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        if !group_faces.contains(&profile_face) {
+            bail!(
+                "offset_smooth_group_torus: profile face {profile_face:?} \
+                 not in detected smooth group (size {})",
+                group_faces.len()
+            );
+        }
+
+        // Collect group vertices.
+        let mut group_verts: std::collections::HashSet<crate::entities::VertId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let start = self.faces[fid].outer().start;
+            if start.is_null() {
+                continue;
+            }
+            for v in self.collect_loop_verts(start)? {
+                group_verts.insert(v);
+            }
+        }
+
+        // Move each vertex along surface normal at P.
+        // Surface normal = unit vector from major-circle point to P.
+        for v in group_verts.iter().copied().collect::<Vec<_>>() {
+            let pos = self.vertex_pos(v)?;
+            let from_c = pos - center;
+            let axial = from_c.dot(axis_dir);
+            let radial_vec = from_c - axial * axis_dir;
+            if radial_vec.length_squared() < tol * tol {
+                // Vertex on torus axis — degenerate (shouldn't happen on a
+                // valid torus surface). Skip.
+                continue;
+            }
+            let radial_dir = radial_vec.normalize();
+            let major_pt = center + major_radius * radial_dir;
+            let to_surface = pos - major_pt;
+            if to_surface.length_squared() < tol * tol {
+                // Vertex at major circle center — also degenerate.
+                continue;
+            }
+            let normal = to_surface.normalize();
+            let new_pos = pos + dist * normal;
+            self.move_vertex(v, new_pos)?;
+        }
+
+        // Update each group face's Torus surface with new minor_radius.
+        let new_surface = AnalyticSurface::Torus {
+            center,
+            axis_dir,
+            ref_dir,
+            major_radius,
+            minor_radius: new_minor,
+            u_range,
+            v_range,
+        };
+        for &fid in &group_faces {
+            if let Some(face) = self.faces.get_mut(fid) {
+                if face.is_active() {
+                    face.set_surface(Some(new_surface.clone()));
+                }
+            }
+        }
+
+        // Update latitude circles on group face boundaries:
+        //   filter: center on axis + normal ‖ axis_dir
+        //   sanity: extract sin(v) = axial_offset/minor, cos(v) = (r-R)/minor;
+        //           verify sin² + cos² ≈ 1
+        //   update: new_center = center + d·sin(v)·axis_dir,
+        //           new_radius = r + d·cos(v)
+        let mut updated_arcs: std::collections::HashSet<crate::entities::EdgeId> =
+            std::collections::HashSet::new();
+        for &fid in &group_faces {
+            let edges = self.face_outer_edges(fid)?;
+            for eid in edges {
+                if updated_arcs.contains(&eid) {
+                    continue;
+                }
+                let new_curve = if let Some(edge) = self.edges.get(eid) {
+                    match edge.curve() {
+                        Some(AnalyticCurve::Arc {
+                            center: ac,
+                            radius: ar,
+                            normal,
+                            basis_u,
+                            start_angle,
+                            end_angle,
+                        }) => Self::torus_latitude_arc_update(
+                            *ac,
+                            *ar,
+                            *normal,
+                            *basis_u,
+                            Some((*start_angle, *end_angle)),
+                            center,
+                            axis_dir,
+                            major_radius,
+                            minor_radius,
+                            dist,
+                            tol,
+                        ),
+                        Some(AnalyticCurve::Circle {
+                            center: cc,
+                            radius: cr,
+                            normal,
+                            basis_u,
+                        }) => Self::torus_latitude_arc_update(
+                            *cc,
+                            *cr,
+                            *normal,
+                            *basis_u,
+                            None,
+                            center,
+                            axis_dir,
+                            major_radius,
+                            minor_radius,
+                            dist,
+                            tol,
+                        ),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(c) = new_curve {
+                    if let Some(edge) = self.edges.get_mut(eid) {
+                        edge.set_curve(Some(c));
+                    }
+                    updated_arcs.insert(eid);
+                }
+            }
+        }
+
+        let side_faces: Vec<FaceId> = group_faces
+            .iter()
+            .copied()
+            .filter(|&f| f != profile_face)
+            .collect();
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::SmoothGroupOffset,
+            top_face: profile_face,
+            side_faces,
+            all_solid_faces: group_faces,
+            adjacent_splits: 0,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// Helper for `offset_smooth_group_torus` — update a latitude
+    /// Arc/Circle on a torus under minor_radius offset by `dist`.
+    /// Returns `Some(new_curve)` if the arc passes the latitude filter
+    /// (center on axis + normal ‖ axis_dir + sin²+cos²≈1 sanity), else `None`.
+    /// `angles = Some((start, end))` for Arc, `None` for Circle.
+    #[allow(clippy::too_many_arguments)]
+    fn torus_latitude_arc_update(
+        arc_center: DVec3,
+        arc_radius: f64,
+        arc_normal: DVec3,
+        arc_basis_u: DVec3,
+        angles: Option<(f64, f64)>,
+        torus_center: DVec3,
+        axis_dir: DVec3,
+        major_radius: f64,
+        minor_radius: f64,
+        dist: f64,
+        tol: f64,
+    ) -> Option<AnalyticCurve> {
+        // Filter: center on axis + normal parallel to axis.
+        let center_off_axis = ((arc_center - torus_center).cross(axis_dir)).length();
+        let normal_dot = arc_normal.normalize_or_zero().dot(axis_dir).abs();
+        if center_off_axis >= tol || normal_dot < 0.999 {
+            return None;
+        }
+
+        // Extract latitude angle v from arc params.
+        let axial_offset = (arc_center - torus_center).dot(axis_dir);
+        let sin_v = axial_offset / minor_radius;
+        let cos_v = (arc_radius - major_radius) / minor_radius;
+        // Sanity: must lie on unit circle (within reasonable numeric tol).
+        let unit_check = (sin_v * sin_v + cos_v * cos_v - 1.0).abs();
+        if unit_check > 1e-6 {
+            return None;
+        }
+
+        let new_axial = axial_offset + dist * sin_v;
+        let new_center = torus_center + new_axial * axis_dir
+            + (arc_center - torus_center - axial_offset * axis_dir);
+        let new_radius = arc_radius + dist * cos_v;
+        if new_radius <= tol {
+            return None;
+        }
+
+        match angles {
+            Some((s, e)) => Some(AnalyticCurve::Arc {
+                center: new_center,
+                radius: new_radius,
+                normal: arc_normal,
+                basis_u: arc_basis_u,
+                start_angle: s,
+                end_angle: e,
+            }),
+            None => Some(AnalyticCurve::Circle {
+                center: new_center,
+                radius: new_radius,
+                normal: arc_normal,
+                basis_u: arc_basis_u,
+            }),
+        }
     }
 }
 
@@ -2451,6 +2777,301 @@ mod tests {
         assert_eq!(result.top_face, result.profile_face);
         assert_eq!(result.side_faces.len(), 1);
         assert_eq!(result.all_solid_faces.len(), 2);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-2-γ-iv — Torus constant-offset (= minor_radius offset)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build 2 triangle faces on a torus with center origin,
+    /// axis = +Z, ref = +X. Both share the same Torus surface instance.
+    /// Vertices placed at known (u, v) parameter positions.
+    fn build_torus_two_faces(
+        major: f64,
+        minor: f64,
+    ) -> (Mesh, Vec<FaceId>) {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let center = DVec3::ZERO;
+        let axis_dir = DVec3::Z;
+        let ref_dir = DVec3::X;
+        let bi = axis_dir.cross(ref_dir); // Y
+
+        // Parametric position on torus.
+        let p = |u: f64, v: f64| -> DVec3 {
+            let radial = u.cos() * ref_dir + u.sin() * bi;
+            center + major * radial + minor * (v.cos() * radial + v.sin() * axis_dir)
+        };
+
+        // 5 verts at (u, v) ∈ {(0, 0), (90°, 0), (180°, 0), (0, 90°), (90°, 90°)}.
+        let v_a = mesh.add_vertex(p(0.0, 0.0));
+        let v_b = mesh.add_vertex(p(std::f64::consts::FRAC_PI_2, 0.0));
+        let v_c = mesh.add_vertex(p(std::f64::consts::PI, 0.0));
+        let v_top_a = mesh.add_vertex(p(0.0, std::f64::consts::FRAC_PI_2));
+        let v_top_b = mesh.add_vertex(p(std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2));
+
+        // Two faces sharing edge v_b → v_top_b:
+        //   f1: v_a → v_b → v_top_b → v_top_a
+        //   f2: v_b → v_c → v_top_b
+        let f1 = mesh
+            .add_face(&[v_a, v_b, v_top_b, v_top_a], mat)
+            .expect("f1");
+        let f2 = mesh.add_face(&[v_b, v_c, v_top_b], mat).expect("f2");
+
+        let surface = AnalyticSurface::Torus {
+            center,
+            axis_dir,
+            ref_dir,
+            major_radius: major,
+            minor_radius: minor,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, std::f64::consts::TAU),
+        };
+        mesh.faces[f1].set_surface(Some(surface.clone()));
+        mesh.faces[f2].set_surface(Some(surface));
+
+        (mesh, vec![f1, f2])
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_increases_minor_radius() {
+        let (mut mesh, faces) = build_torus_two_faces(5.0, 1.0);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("torus offset OK");
+
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        for &fid in &faces {
+            match mesh.faces[fid].surface() {
+                Some(AnalyticSurface::Torus {
+                    minor_radius,
+                    major_radius,
+                    center: c,
+                    ..
+                }) => {
+                    assert!(
+                        (minor_radius - 1.5).abs() < 1e-9,
+                        "minor radius != 1.5: got {minor_radius}"
+                    );
+                    // major / center UNCHANGED.
+                    assert!((major_radius - 5.0).abs() < 1e-9);
+                    assert!((c - DVec3::ZERO).length() < 1e-9);
+                }
+                other => panic!(
+                    "face {fid:?} must remain Torus, got {:?}",
+                    other.map(|s| s.kind_label())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_vertex_distance_to_major_circle_changes() {
+        // After offset, every vertex's distance to its major-circle point
+        // should equal new_minor (5 → 5 + dist).
+        let major = 4.0;
+        let minor_old = 1.0;
+        let dist = 0.5;
+        let (mut mesh, faces) = build_torus_two_faces(major, minor_old);
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: dist },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        let mut group_verts = std::collections::HashSet::new();
+        for &fid in &faces {
+            let start = mesh.faces[fid].outer().start;
+            for v in mesh.collect_loop_verts(start).unwrap() {
+                group_verts.insert(v);
+            }
+        }
+        let expected_minor = minor_old + dist;
+        for v in &group_verts {
+            let pos = mesh.vertex_pos(*v).unwrap();
+            // Compute major-circle point: project pos onto Z=0 plane,
+            // normalize, scale by major.
+            let pos_xy = DVec3::new(pos.x, pos.y, 0.0);
+            if pos_xy.length() < 1e-9 {
+                continue; // skip on-axis (shouldn't happen here)
+            }
+            let major_pt = pos_xy.normalize() * major;
+            let dist_to_major = (pos - major_pt).length();
+            assert!(
+                (dist_to_major - expected_minor).abs() < 1e-6,
+                "vertex distance to major circle != {expected_minor}: got {dist_to_major}"
+            );
+        }
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_preserves_major_radius_and_axis() {
+        let (mut mesh, faces) = build_torus_two_faces(7.0, 2.0);
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: -0.5 },
+                MaterialId::new(0),
+            )
+            .expect("inward OK");
+
+        if let Some(AnalyticSurface::Torus {
+            major_radius,
+            minor_radius,
+            axis_dir,
+            ref_dir,
+            center: c,
+            ..
+        }) = mesh.faces[faces[0]].surface()
+        {
+            assert!((major_radius - 7.0).abs() < 1e-9, "major must be preserved");
+            assert!((minor_radius - 1.5).abs() < 1e-9, "minor = 2 - 0.5 = 1.5");
+            assert!(axis_dir.normalize().dot(DVec3::Z).abs() > 0.9999);
+            assert!(ref_dir.normalize().dot(DVec3::X).abs() > 0.9999);
+            assert!((c - DVec3::ZERO).length() < 1e-9);
+        } else {
+            panic!("face surface must remain Torus");
+        }
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_collapse_falls_back() {
+        let (mut mesh, faces) = build_torus_two_faces(5.0, 1.0);
+        // -1.0 → minor_new = 0 → collapse.
+        let result = mesh.create_solid(
+            faces[0],
+            CreateSolidMode::Extrude { distance: -1.0 },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must fail (collapse)");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("collapse"),
+            "expected NotYetSupported with 'collapse' reason, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_returns_smooth_group_offset_kind() {
+        let (mut mesh, faces) = build_torus_two_faces(3.0, 0.5);
+        let result = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.2 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+        assert_eq!(result.solid_kind, SolidKind::SmoothGroupOffset);
+        assert_eq!(result.top_face, result.profile_face);
+        assert_eq!(result.side_faces.len(), 1);
+        assert_eq!(result.all_solid_faces.len(), 2);
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_updates_outer_latitude_circle() {
+        // Attach an outer-latitude full circle (v=0): center = torus_center,
+        // radius = major + minor, normal = axis_dir.
+        // After offset by d=0.5: new_radius = (major + minor) + 0.5*cos(0)
+        // = (major + minor) + 0.5. center unchanged (sin(0) = 0).
+        use crate::curves::AnalyticCurve;
+        let major = 5.0;
+        let minor = 1.0;
+        let (mut mesh, faces) = build_torus_two_faces(major, minor);
+        let edges = mesh.face_outer_edges(faces[0]).expect("edges");
+        let circ_eid = edges[0];
+
+        // Construct outer latitude circle (v=0).
+        let circ = AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: major + minor, // = 6
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        mesh.edges[circ_eid].set_curve(Some(circ));
+
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        if let Some(AnalyticCurve::Circle {
+            radius: nr,
+            center: nc,
+            ..
+        }) = mesh.edges.get(circ_eid).and_then(|e| e.curve())
+        {
+            // sin(v=0) = 0 → center axial unchanged
+            // cos(v=0) = 1 → new_radius = 6 + 0.5*1 = 6.5
+            assert!(
+                (nr - 6.5).abs() < 1e-9,
+                "outer latitude new radius != 6.5: got {nr}"
+            );
+            assert!(
+                (nc - DVec3::ZERO).length() < 1e-9,
+                "outer latitude center must remain at origin (sin(0) = 0)"
+            );
+        } else {
+            panic!("edge curve must remain Circle after offset");
+        }
+    }
+
+    #[test]
+    fn torus_smooth_group_offset_updates_top_latitude_circle() {
+        // Top latitude (v=π/2): center = torus_center + minor·axis,
+        // radius = major (since cos(π/2) = 0).
+        // After offset by d=0.5: new sin(v)=1, cos(v)=0
+        //   new_axial = old_axial + d*sin(v) = minor + 0.5
+        //   new_radius = old_radius + d*cos(v) = major (unchanged)
+        use crate::curves::AnalyticCurve;
+        let major = 4.0;
+        let minor = 1.0;
+        let (mut mesh, faces) = build_torus_two_faces(major, minor);
+        let edges = mesh.face_outer_edges(faces[0]).expect("edges");
+        let circ_eid = edges[0];
+
+        let circ = AnalyticCurve::Circle {
+            center: DVec3::new(0.0, 0.0, minor), // = (0, 0, 1)
+            radius: major,                       // = 4
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        mesh.edges[circ_eid].set_curve(Some(circ));
+
+        let _ = mesh
+            .create_solid(
+                faces[0],
+                CreateSolidMode::Extrude { distance: 0.5 },
+                MaterialId::new(0),
+            )
+            .expect("offset OK");
+
+        if let Some(AnalyticCurve::Circle {
+            radius: nr,
+            center: nc,
+            ..
+        }) = mesh.edges.get(circ_eid).and_then(|e| e.curve())
+        {
+            assert!(
+                (nr - 4.0).abs() < 1e-9,
+                "top latitude radius must remain 4.0 (cos(π/2)=0): got {nr}"
+            );
+            assert!(
+                (nc.z - 1.5).abs() < 1e-9,
+                "top latitude axial must be 1 + 0.5*1 = 1.5: got {}",
+                nc.z
+            );
+        } else {
+            panic!("edge curve must remain Circle");
+        }
     }
 
     #[test]
