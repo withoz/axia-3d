@@ -306,7 +306,15 @@ impl Mesh {
                 );
             }
             AnalyticSurface::Torus { .. } => {
-                return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "Torus" });
+                // V-β-γ-4: dispatch to torus-specific offset path.
+                return self.offset_edge_on_torus(
+                    edge_id,
+                    v0,
+                    v1,
+                    edge_curve,
+                    &host_surface,
+                    dist,
+                );
             }
             AnalyticSurface::BezierPatch { .. } => {
                 return Err(OffsetEdgeError::UnsupportedHostSurface { kind: "BezierPatch" });
@@ -1136,6 +1144,347 @@ impl Mesh {
         )
     }
 
+    /// ADR-080 V-β-γ-4 — Edge offset on a Torus host face.
+    ///
+    /// Two analytic dispatch paths, classified by arc orientation:
+    ///
+    /// 1. **Major-direction latitude** (constant θ_m, varying θ_M):
+    ///    arc.normal ‖ axis_dir, center on axis at axial r·sin(θ_m).
+    ///    Geodesic offset around tube: `Δθ_m = sign · dist / r`.
+    ///    new_axial = r·sin(new_θ_m), new_radius = R + r·cos(new_θ_m).
+    ///    §V2-γ4-A-(a)
+    ///
+    /// 2. **Meridian (minor-direction latitude)** (constant θ_M, varying θ_m):
+    ///    arc.center on major circle (distance R from C_s, axial = 0),
+    ///    radius = r, normal ⊥ axis_dir.
+    ///    Constant Δθ_M shift around major axis evaluated at outer equator:
+    ///    `Δθ_M = sign · dist / (R + r)`. §V2-γ4-B-(a)
+    ///    new_center = C_s + R · rotated_r_dir.
+    ///
+    /// Other curves (Line/None, Bezier/etc) → `UnsupportedCurveOnSurface`.
+    /// Self-intersecting torus (R ≤ r) → reject as degenerate.
+    fn offset_edge_on_torus(
+        &mut self,
+        edge_id: EdgeId,
+        _v0: VertId,
+        _v1: VertId,
+        edge_curve: Option<AnalyticCurve>,
+        host_surface: &AnalyticSurface,
+        dist: f64,
+    ) -> std::result::Result<OffsetEdgeResult, OffsetEdgeError> {
+        let tol = crate::tolerances::EPSILON_LENGTH;
+        let (torus_center, axis_dir, ref_dir, major_radius, minor_radius, u_range, v_range) =
+            match host_surface {
+                AnalyticSurface::Torus {
+                    center,
+                    axis_dir,
+                    ref_dir,
+                    major_radius,
+                    minor_radius,
+                    u_range,
+                    v_range,
+                } => (
+                    *center,
+                    axis_dir.normalize_or_zero(),
+                    ref_dir.normalize_or_zero(),
+                    *major_radius,
+                    *minor_radius,
+                    *u_range,
+                    *v_range,
+                ),
+                _ => unreachable!("offset_edge_on_torus dispatched with non-Torus host"),
+            };
+        if axis_dir.length_squared() < 0.5 || ref_dir.length_squared() < 0.5 {
+            return Err(OffsetEdgeError::NoHostSurface(FaceId::new(0)));
+        }
+        // Self-intersecting torus guard.
+        if minor_radius <= tol || major_radius <= minor_radius + tol {
+            return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Torus",
+                curve_kind: "DegenerateGeometry",
+            });
+        }
+        let basis_v = axis_dir.cross(ref_dir);
+
+        // §V2-γ4-F — Line / None on Torus is rejected (chord ambiguity,
+        // sphere/torus 답습).
+        let curve = match edge_curve {
+            Some(AnalyticCurve::Arc { .. }) | Some(AnalyticCurve::Circle { .. }) => {
+                edge_curve.unwrap()
+            }
+            None | Some(AnalyticCurve::Line { .. }) => {
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Torus",
+                    curve_kind: "Line",
+                });
+            }
+            Some(c) => {
+                let kind = match c {
+                    AnalyticCurve::Bezier { .. } => "Bezier",
+                    AnalyticCurve::BSpline { .. } => "BSpline",
+                    AnalyticCurve::NURBS { .. } => "NURBS",
+                    _ => unreachable!(),
+                };
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Torus",
+                    curve_kind: kind,
+                });
+            }
+        };
+
+        let (arc_center, arc_radius, arc_normal, basis_u_arc, angles) = match &curve {
+            AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle,
+                end_angle,
+            } => (
+                *center,
+                *radius,
+                *normal,
+                *basis_u,
+                Some((*start_angle, *end_angle)),
+            ),
+            AnalyticCurve::Circle {
+                center,
+                radius,
+                normal,
+                basis_u,
+            } => (*center, *radius, *normal, *basis_u, None),
+            _ => unreachable!(),
+        };
+        let arc_n_unit = arc_normal.normalize_or_zero();
+
+        // ── Major-direction latitude classification ────────────────────
+        // arc.normal ‖ axis_dir + arc.center on axis + radius/axial match
+        // the formula radius = R + r·cos(θ_m), axial = r·sin(θ_m).
+        let from_torus_center = arc_center - torus_center;
+        let axial_offset = from_torus_center.dot(axis_dir);
+        let center_off_axis = (from_torus_center - axial_offset * axis_dir).length();
+        let normal_parallel = arc_n_unit.dot(axis_dir).abs() > 0.999;
+
+        if normal_parallel && center_off_axis < tol {
+            // Major-direction latitude candidate.
+            // Solve sin(θ_m) = axial_offset / r,
+            //       cos(θ_m) = (arc.radius - R) / r.
+            let sin_tm = axial_offset / minor_radius;
+            let cos_tm = (arc_radius - major_radius) / minor_radius;
+            let unit_check = (sin_tm * sin_tm + cos_tm * cos_tm - 1.0).abs();
+            if unit_check > 1e-6 {
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Torus",
+                    curve_kind: if angles.is_some() {
+                        "Arc(off-torus)"
+                    } else {
+                        "Circle(off-torus)"
+                    },
+                });
+            }
+            let theta_m = sin_tm.atan2(cos_tm);
+
+            // Sign — tangent at θ_M_mid × surface_normal, projected onto
+            // ∂P/∂θ_m direction (= (-sin(θ_m)·r_dir + cos(θ_m)·A) at midpoint).
+            let theta_M_mid = match angles {
+                Some((s, e)) => (s + e) * 0.5,
+                None => 0.0,
+            };
+            let basis_u_unit = basis_u_arc.normalize_or_zero();
+            let basis_v_arc = arc_n_unit.cross(basis_u_unit);
+            let r_dir_mid =
+                theta_M_mid.cos() * basis_u_unit + theta_M_mid.sin() * basis_v_arc;
+            let tangent =
+                -theta_M_mid.sin() * basis_u_unit + theta_M_mid.cos() * basis_v_arc;
+            // Surface normal at P_mid: cos(θ_m)·r_dir + sin(θ_m)·axis.
+            let surf_normal = cos_tm * r_dir_mid + sin_tm * axis_dir;
+            let right_side = tangent.cross(surf_normal);
+            // ∂P/∂θ_m at midpoint: r·(-sin(θ_m)·r_dir + cos(θ_m)·axis).
+            let dp_dtm = minor_radius * (-sin_tm * r_dir_mid + cos_tm * axis_dir);
+            let tm_sign = if right_side.dot(dp_dtm) > 0.0 { 1.0 } else { -1.0 };
+
+            let delta_tm = tm_sign * dist / minor_radius;
+            let new_tm = theta_m + delta_tm;
+            // Range guard against v_range when non-trivial.
+            if (v_range.0 > 0.0 || v_range.1 < std::f64::consts::TAU - 1e-6)
+                && (new_tm < v_range.0 - tol || new_tm > v_range.1 + tol)
+            {
+                return Err(OffsetEdgeError::AxialOutOfRange {
+                    new_v: new_tm,
+                    v_min: v_range.0,
+                    v_max: v_range.1,
+                });
+            }
+
+            let new_axial = minor_radius * new_tm.sin();
+            let new_radius = major_radius + minor_radius * new_tm.cos();
+            let new_center = torus_center + new_axial * axis_dir;
+            let pt = |theta: f64| -> DVec3 {
+                new_center + new_radius * (theta.cos() * basis_u_unit + theta.sin() * basis_v_arc)
+            };
+            let (new_p0, new_p1) = match angles {
+                Some((s, e)) => (pt(s), pt(e)),
+                None => (pt(0.0), pt(std::f64::consts::TAU - 1e-6)),
+            };
+            let new_v0_id = self.add_vertex(new_p0);
+            let new_v1_id = self.add_vertex(new_p1);
+            let (new_edge, _) = self
+                .add_edge(new_v0_id, new_v1_id)
+                .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+            let new_curve = match angles {
+                Some((s, e)) => AnalyticCurve::Arc {
+                    center: new_center,
+                    radius: new_radius,
+                    normal: arc_normal,
+                    basis_u: basis_u_arc,
+                    start_angle: s,
+                    end_angle: e,
+                },
+                None => AnalyticCurve::Circle {
+                    center: new_center,
+                    radius: new_radius,
+                    normal: arc_normal,
+                    basis_u: basis_u_arc,
+                },
+            };
+            if let Some(e) = self.edges.get_mut(new_edge) {
+                e.set_curve(Some(new_curve));
+            }
+            return Ok(OffsetEdgeResult {
+                new_v0: new_v0_id,
+                new_v1: new_v1_id,
+                new_edge,
+            });
+        }
+
+        // ── Meridian classification ────────────────────────────────────
+        // arc.center on major circle (distance R, axial 0) +
+        // arc.radius == r + arc.normal ⊥ axis_dir.
+        let center_distance = from_torus_center.length();
+        let center_axial = from_torus_center.dot(axis_dir);
+        let normal_perp = arc_n_unit.dot(axis_dir).abs() < 0.001;
+        let radius_match = (arc_radius - minor_radius).abs() < tol;
+        let on_major_plane = center_axial.abs() < tol;
+        let on_major_circle = (center_distance - major_radius).abs() < tol;
+
+        if normal_perp && on_major_plane && on_major_circle && radius_match {
+            // Meridian. Compute θ_M from arc.center direction.
+            let r_dir_meridian = from_torus_center / center_distance;
+            // arc.normal must be ⊥ r_dir_meridian (it's the major orbital tangent).
+            if arc_n_unit.dot(r_dir_meridian).abs() > 0.001 {
+                return Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+                    surface_kind: "Torus",
+                    curve_kind: if angles.is_some() {
+                        "Arc(off-torus)"
+                    } else {
+                        "Circle(off-torus)"
+                    },
+                });
+            }
+            let theta_M = r_dir_meridian.dot(basis_v).atan2(r_dir_meridian.dot(ref_dir));
+
+            // Sign — tangent at θ_m_mid × surface_normal, projected onto
+            // ∂P/∂θ_M direction (around major axis).
+            let theta_m_mid = match angles {
+                Some((s, e)) => (s + e) * 0.5,
+                None => 0.0,
+            };
+            let basis_u_unit = basis_u_arc.normalize_or_zero();
+            let basis_v_arc = arc_n_unit.cross(basis_u_unit);
+            let tangent =
+                -theta_m_mid.sin() * basis_u_unit + theta_m_mid.cos() * basis_v_arc;
+            // Surface normal: cos(θ_m_mid)·r_dir_meridian + sin(θ_m_mid)·axis_dir.
+            let surf_normal =
+                theta_m_mid.cos() * r_dir_meridian + theta_m_mid.sin() * axis_dir;
+            let right_side = tangent.cross(surf_normal);
+            // ∂P/∂θ_M at midpoint:
+            //   = (R + r·cos(θ_m_mid)) · (orbital tangent at θ_M)
+            //   orbital tangent = -sin(θ_M)·U + cos(θ_M)·V
+            let orbital =
+                -theta_M.sin() * ref_dir + theta_M.cos() * basis_v;
+            let major_radius_at_mid = major_radius + minor_radius * theta_m_mid.cos();
+            let dp_dtM = major_radius_at_mid * orbital;
+            let tM_sign = if right_side.dot(dp_dtM) > 0.0 { 1.0 } else { -1.0 };
+
+            // §V2-γ4-B-(a) Constant Δθ_M @ outer equator (R+r).
+            let delta_tM = tM_sign * dist / (major_radius + minor_radius);
+            let new_tM = theta_M + delta_tM;
+            // Range guard against u_range if non-trivial.
+            if (u_range.0 > 0.0 || u_range.1 < std::f64::consts::TAU - 1e-6)
+                && (new_tM < u_range.0 - tol || new_tM > u_range.1 + tol)
+            {
+                return Err(OffsetEdgeError::AxialOutOfRange {
+                    new_v: new_tM,
+                    v_min: u_range.0,
+                    v_max: u_range.1,
+                });
+            }
+
+            let new_r_dir = new_tM.cos() * ref_dir + new_tM.sin() * basis_v;
+            let new_center = torus_center + major_radius * new_r_dir;
+            // Meridian's plane normal at new_tM (orbital tangent direction):
+            let new_orbital = -new_tM.sin() * ref_dir + new_tM.cos() * basis_v;
+
+            // basis_u for the new meridian — need a vector in the meridian
+            // plane (perpendicular to new_orbital). Choose new_r_dir as basis_u
+            // (radial outward), then basis_v_meridian = new_orbital × new_r_dir = axis_dir.
+            // Actually for the meridian Arc parametrization, we want
+            // basis_u such that θ_m=0 → outermost point (radius = R+r at
+            // outer equator).
+            let new_basis_u = new_r_dir;
+            let new_basis_v_meridian = new_orbital.cross(new_basis_u); // = axis_dir at this θ_M
+
+            let pt = |theta_m: f64| -> DVec3 {
+                new_center
+                    + minor_radius
+                        * (theta_m.cos() * new_basis_u + theta_m.sin() * new_basis_v_meridian)
+            };
+            let (new_p0, new_p1) = match angles {
+                Some((s, e)) => (pt(s), pt(e)),
+                None => (pt(0.0), pt(std::f64::consts::TAU - 1e-6)),
+            };
+            let new_v0_id = self.add_vertex(new_p0);
+            let new_v1_id = self.add_vertex(new_p1);
+            let (new_edge, _) = self
+                .add_edge(new_v0_id, new_v1_id)
+                .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+            let new_curve = match angles {
+                Some((s, e)) => AnalyticCurve::Arc {
+                    center: new_center,
+                    radius: minor_radius,
+                    normal: new_orbital,
+                    basis_u: new_basis_u,
+                    start_angle: s,
+                    end_angle: e,
+                },
+                None => AnalyticCurve::Circle {
+                    center: new_center,
+                    radius: minor_radius,
+                    normal: new_orbital,
+                    basis_u: new_basis_u,
+                },
+            };
+            if let Some(e) = self.edges.get_mut(new_edge) {
+                e.set_curve(Some(new_curve));
+            }
+            return Ok(OffsetEdgeResult {
+                new_v0: new_v0_id,
+                new_v1: new_v1_id,
+                new_edge,
+            });
+        }
+
+        // Neither classification matched — generic off-torus arc.
+        Err(OffsetEdgeError::UnsupportedCurveOnSurface {
+            surface_kind: "Torus",
+            curve_kind: if angles.is_some() {
+                "Arc(off-torus)"
+            } else {
+                "Circle(off-torus)"
+            },
+        })
+    }
+
     /// face_id의 경계를 dist만큼 오프셋.
     /// dist > 0: 안쪽 (inset), dist < 0: 바깥쪽 (outset)
     ///
@@ -1542,6 +1891,33 @@ fn surfaces_equivalent(
                 let ref_match =
                     rd_a.normalize_or_zero().dot(rd_b.normalize_or_zero()).abs() > 0.999;
                 apex_match && axis_match && half_match && ref_match
+            }
+            (
+                AnalyticSurface::Torus {
+                    center: ca,
+                    axis_dir: ad_a,
+                    ref_dir: rd_a,
+                    major_radius: Ra,
+                    minor_radius: ra,
+                    ..
+                },
+                AnalyticSurface::Torus {
+                    center: cb,
+                    axis_dir: ad_b,
+                    ref_dir: rd_b,
+                    major_radius: Rb,
+                    minor_radius: rb,
+                    ..
+                },
+            ) => {
+                let center_match = (*ca - *cb).length() < tol;
+                let axis_match =
+                    ad_a.normalize_or_zero().dot(ad_b.normalize_or_zero()).abs() > 0.999;
+                let ref_match =
+                    rd_a.normalize_or_zero().dot(rd_b.normalize_or_zero()).abs() > 0.999;
+                let major_match = (Ra - Rb).abs() < tol;
+                let minor_match = (ra - rb).abs() < tol;
+                center_match && axis_match && ref_match && major_match && minor_match
             }
             (
                 AnalyticSurface::Cylinder {
@@ -1970,9 +2346,10 @@ mod tests {
     }
 
     #[test]
-    fn line_offset_on_torus_host_returns_unsupported() {
-        // V-β-γ-1/2/3 activated Cylinder/Sphere/Cone; Torus still defers
-        // to V-β-γ-4. Re-target this regression to Torus host.
+    fn line_offset_on_nurbs_class_host_returns_unsupported() {
+        // V-β-γ trail closed — all analytic primitives (Plane / Cylinder /
+        // Sphere / Cone / Torus) now active. Only NURBS-class hosts (Bezier
+        // patch, B-spline, NURBS surface) remain forward-defer (W-3 scope).
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let vs = [
@@ -1982,23 +2359,21 @@ mod tests {
             mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0)),
         ];
         let face = mesh.add_face(&vs, mat).unwrap();
-        mesh.faces[face].set_surface(Some(AnalyticSurface::Torus {
-            center: DVec3::ZERO,
-            axis_dir: DVec3::Z,
-            ref_dir: DVec3::X,
-            major_radius: 3.0,
-            minor_radius: 1.0,
-            u_range: (0.0, std::f64::consts::TAU),
-            v_range: (0.0, std::f64::consts::TAU),
+        // Linear 2×2 control grid → flat Bezier patch.
+        mesh.faces[face].set_surface(Some(AnalyticSurface::BezierPatch {
+            ctrl_grid: vec![
+                vec![DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0)],
+                vec![DVec3::new(0.0, 1.0, 0.0), DVec3::new(1.0, 1.0, 0.0)],
+            ],
         }));
         let edge = find_edge_between(&mesh, vs[0], vs[1]);
         let err = mesh
             .offset_edge_on_host_face(edge, 0.3)
             .err()
-            .expect("must defer torus host");
+            .expect("must defer NURBS-class host");
         assert!(matches!(
             err,
-            OffsetEdgeError::UnsupportedHostSurface { kind: "Torus" }
+            OffsetEdgeError::UnsupportedHostSurface { kind: "BezierPatch" }
         ));
     }
 
@@ -3059,6 +3434,322 @@ mod tests {
                 (r_actual - r_expected).abs() < 1e-9,
                 "cone identity r=v·tan(α) violated: r={r_actual}, expected {r_expected}"
             );
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-080 V-β-γ-4 — Edge offset on Torus host (V-β 트랙 closure)
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper — build a single triangle face with Torus surface attached.
+    /// Used as a stand-in for a torus panel; tests attach Arc curves
+    /// directly that satisfy the major-direction or meridian invariants.
+    fn build_torus_panel(mesh: &mut Mesh, R: f64, r: f64) -> (FaceId, [VertId; 3]) {
+        let mat = MaterialId::new(0);
+        // 3 verts at outer equator: positions used for adding a face but
+        // overridden by Arc curves attached in tests.
+        let v0 = mesh.add_vertex(DVec3::new(R + r, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, R + r, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(R, 0.0, r));
+        let face = mesh.add_face(&[v0, v1, v2], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Torus {
+            center: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            ref_dir: DVec3::X,
+            major_radius: R,
+            minor_radius: r,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, std::f64::consts::TAU),
+        }));
+        (face, [v0, v1, v2])
+    }
+
+    #[test]
+    fn torus_outer_latitude_arc_offset_shifts_theta_m() {
+        // Outer latitude (θ_m=0): center on axis at z=0, radius = R+r.
+        // Geodesic |Δθ_m| = |dist|/r.
+        let R = 3.0;
+        let r = 1.0;
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, R, r);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::ZERO, // major axis, θ_m=0
+            radius: R + r,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+
+        // dist = r·π/6 → |Δθ_m| = π/6 → new_θ_m = ±π/6.
+        let dist = r * std::f64::consts::PI / 6.0;
+        let result = mesh
+            .offset_edge_on_host_face(edge, dist)
+            .expect("outer latitude offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { center, radius, .. } => {
+                // new_axial = r·sin(±π/6) = ±0.5
+                // new_radius = R + r·cos(±π/6) = 3 + 1·(√3/2) ≈ 3.866
+                let expected_axial = r * (std::f64::consts::PI / 6.0).sin();
+                let expected_radius = R + r * (std::f64::consts::PI / 6.0).cos();
+                assert!(
+                    (center.z - expected_axial).abs() < 1e-9
+                        || (center.z - (-expected_axial)).abs() < 1e-9,
+                    "axial shift expected ±{expected_axial}, got {}",
+                    center.z
+                );
+                assert!(
+                    (radius - expected_radius).abs() < 1e-9,
+                    "new radius expected {expected_radius}, got {radius}"
+                );
+                // Center stays on axis (x=y=0).
+                assert!(center.x.abs() < 1e-9 && center.y.abs() < 1e-9);
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn torus_top_latitude_arc_at_theta_m_pi_2_offset() {
+        // Top latitude (θ_m = π/2): center at z=r, radius = R.
+        let R = 4.0;
+        let r = 1.0;
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, R, r);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, r),
+            radius: R,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+
+        let result = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .expect("top latitude offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { center, radius, .. } => {
+                // Major-direction latitude invariant: r·sin(θ_m_new) =
+                // center.z, R + r·cos(θ_m_new) = radius. Verify.
+                let new_sin = center.z / r;
+                let new_cos = (radius - R) / r;
+                let unit_check = new_sin * new_sin + new_cos * new_cos;
+                assert!(
+                    (unit_check - 1.0).abs() < 1e-6,
+                    "torus invariant violated: sin² + cos² = {unit_check}"
+                );
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn torus_meridian_arc_offset_rotates_around_major_axis() {
+        // Meridian at θ_M=0: center at (R, 0, 0), radius = r, normal ⊥ axis.
+        let R = 3.0;
+        let r = 1.0;
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, R, r);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(R, 0.0, 0.0), // θ_M=0
+            radius: r,
+            normal: DVec3::Y, // orbital tangent at θ_M=0
+            basis_u: DVec3::X, // radial outward
+            start_angle: 0.0,
+            end_angle: std::f64::consts::FRAC_PI_2,
+        }));
+
+        // dist = (R+r)·π/4 → |Δθ_M| = π/4.
+        let dist = (R + r) * std::f64::consts::FRAC_PI_4;
+        let result = mesh
+            .offset_edge_on_host_face(edge, dist)
+            .expect("meridian offset OK");
+        let new_curve = mesh
+            .edges
+            .get(result.new_edge)
+            .and_then(|e| e.curve())
+            .cloned()
+            .expect("new edge has curve");
+        match new_curve {
+            AnalyticCurve::Arc { center, radius, .. } => {
+                // Center should be at distance R from torus center (still
+                // on major circle), radius unchanged.
+                assert!((center.length() - R).abs() < 1e-9);
+                assert!(center.z.abs() < 1e-9, "center stays on major plane");
+                assert!((radius - r).abs() < 1e-9, "minor radius preserved");
+                // θ_M_new = ±π/4 → center direction = (cos(π/4), ±sin(π/4), 0).
+                let new_x = center.x;
+                let new_y = center.y;
+                let expected_xy = std::f64::consts::FRAC_PI_4.cos() * R;
+                assert!(
+                    (new_x - expected_xy).abs() < 1e-9,
+                    "x = R·cos(π/4): got {new_x}"
+                );
+                assert!(
+                    (new_y - expected_xy).abs() < 1e-9
+                        || (new_y - (-expected_xy)).abs() < 1e-9,
+                    "y = ±R·sin(π/4): got {new_y}"
+                );
+            }
+            _ => panic!("must remain Arc"),
+        }
+    }
+
+    #[test]
+    fn torus_off_torus_arc_rejected() {
+        // Arc with parameters that violate sin²+cos² = 1 invariant.
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, 3.0, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // Arc on axis but radius is wrong (r·sin = 0 → θ_m=0 or π,
+        // but radius doesn't match either).
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::ZERO,
+            radius: 5.0, // R+r=4, R-r=2 → 5 invalid
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject off-torus");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Torus",
+                curve_kind: "Arc(off-torus)"
+            }
+        ));
+    }
+
+    #[test]
+    fn torus_line_curve_rejected() {
+        // Line/None on torus → reject (sphere 답습).
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, 3.0, 1.0);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // No curve attached.
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject Line on Torus");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Torus",
+                curve_kind: "Line"
+            }
+        ));
+    }
+
+    #[test]
+    fn torus_self_intersecting_geometry_rejected() {
+        // R ≤ r → torus self-intersects. Reject.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, 2.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1.0));
+        let face = mesh.add_face(&[v0, v1, v2], mat).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Torus {
+            center: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            ref_dir: DVec3::X,
+            major_radius: 1.0, // R < r → self-intersecting
+            minor_radius: 2.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, std::f64::consts::TAU),
+        }));
+        let edge = find_edge_between(&mesh, v0, v1);
+        let err = mesh
+            .offset_edge_on_host_face(edge, 0.1)
+            .err()
+            .expect("must reject degenerate torus");
+        assert!(matches!(
+            err,
+            OffsetEdgeError::UnsupportedCurveOnSurface {
+                surface_kind: "Torus",
+                curve_kind: "DegenerateGeometry"
+            }
+        ));
+    }
+
+    #[test]
+    fn torus_offset_preserves_minor_radius_for_meridian() {
+        let R = 5.0;
+        let r = 1.5;
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, R, r);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(R, 0.0, 0.0),
+            radius: r,
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+        let result = mesh.offset_edge_on_host_face(edge, 0.3).expect("OK");
+        if let Some(AnalyticCurve::Arc { radius, .. }) =
+            mesh.edges.get(result.new_edge).and_then(|e| e.curve())
+        {
+            assert!((radius - r).abs() < 1e-9, "minor radius must be preserved");
+        } else {
+            panic!("must remain Arc");
+        }
+    }
+
+    #[test]
+    fn torus_offset_preserves_major_radius_for_latitude() {
+        // After major-direction latitude offset, the new center axial +
+        // radius must satisfy torus invariant for the SAME R.
+        let R = 4.0;
+        let r = 0.5;
+        let mut mesh = Mesh::new();
+        let (_face, vs) = build_torus_panel(&mut mesh, R, r);
+        let edge = find_edge_between(&mesh, vs[0], vs[1]);
+        // θ_m = π/4: axial = r·sin(π/4) ≈ 0.354, radius = R + r·cos(π/4) ≈ 4.354.
+        let theta_m_orig = std::f64::consts::FRAC_PI_4;
+        mesh.edges[edge].set_curve(Some(AnalyticCurve::Arc {
+            center: DVec3::new(0.0, 0.0, r * theta_m_orig.sin()),
+            radius: R + r * theta_m_orig.cos(),
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            start_angle: 0.0,
+            end_angle: 1.0,
+        }));
+        let result = mesh.offset_edge_on_host_face(edge, 0.2).expect("OK");
+        if let Some(AnalyticCurve::Arc { center, radius, .. }) =
+            mesh.edges.get(result.new_edge).and_then(|e| e.curve())
+        {
+            // sin²+cos² = 1 invariant for the SAME (R, r).
+            let new_sin = center.z / r;
+            let new_cos = (radius - R) / r;
+            let unit = new_sin * new_sin + new_cos * new_cos;
+            assert!(
+                (unit - 1.0).abs() < 1e-6,
+                "major radius preservation: sin² + cos² = {unit} (expected 1)"
+            );
+        } else {
+            panic!("must remain Arc");
         }
     }
 
