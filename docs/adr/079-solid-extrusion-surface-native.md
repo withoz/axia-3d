@@ -1,4 +1,4 @@
-# ADR-079 — Solid Extrusion (Surface-Native Push/Pull Reformulation)
+# ADR-079 — Create Solid (Surface-Native Solid Generation)
 
 **Status**: Proposed (사용자 결정 anchor 2026-05-06, spec only — 4-step
 구현 별도 atomic)
@@ -19,14 +19,18 @@ ownership integration), ADR-053 (Phase H surface transform)
 
 ---
 
-## 0. Summary (5 lines)
+## 0. Summary (6 lines)
 
 > mesh-era `Mesh::push_pull` (polygonal extrusion + 사후 surface attach)
-> 을 surface-native `solid_extrude` 로 reformulate. Profile face 의
-> AnalyticSurface 종류에 따라 smart routing — Plane → Box, Plane(circle
-> boundary) → Cylinder, Cylinder/Sphere/Cone panel → smooth group offset,
-> Bezier/NURBS profile → general sweep. ADR-067 Step 2~5 vision 흡수,
-> Phase 1 Shape ownership Gap 2 자연 해소. 4-step Path Z atomic 롤아웃.
+> 을 surface-native **`Mesh::create_solid(profile, mode)`** 으로
+> reformulate. Single user-facing command + `CreateSolidMode` enum
+> (Extrude / Revolve / Sweep / Loft). Extrude mode 내부에서 surface
+> kind + boundary 별 smart routing (Plane → Box, Plane(circle) →
+> Cylinder, Cylinder/Sphere panel → smooth group offset, NURBS → general
+> sweep). 다른 mode 는 기존 `Mesh::revolve` / `sweep` / `loft` direct
+> dispatch. Primitive direct path (DrawBox/Cylinder/etc.) 와 별개 트랙.
+> ADR-067 Step 2~5 흡수, Phase 1 Shape ownership Gap 2 자연 해소.
+> 4-step Path Z atomic 롤아웃.
 
 ---
 
@@ -96,50 +100,49 @@ Two-Layer Citizenship (ADR-049 §3) 의 시민권 모델에서:
 
 ---
 
-## 2. Decision — Surface-Native Solid Extrusion (Option C: Smart Routing)
+## 2. Decision — `create_solid` Command (Surface-Native, Profile-Driven)
 
-### 2.1 Primary entry point
+### 2.1 Primary entry point — `Mesh::create_solid`
+
+**Single user-facing command** + `CreateSolidMode` enum. Profile face
+는 항상 입력 — "어떤 face 에서 시작" 이 의미 명확. Mode 가 "어떻게
+solid 를 만드느냐" 결정.
 
 ```rust
-// axia-geo/src/operations/solid_extrude.rs (NEW)
+// axia-geo/src/operations/create_solid.rs (NEW)
 impl Mesh {
-    /// ADR-079 — Surface-native solid extrusion.
+    /// ADR-079 — Surface-native solid creation from a profile face.
     ///
-    /// Profile face 의 AnalyticSurface 종류에 따라 smart routing.
-    /// 결과는 모든 face 가 analytic surface 로 정의된 solid.
-    pub fn solid_extrude(
+    /// Profile face 의 AnalyticSurface + boundary curve kinds + mode
+    /// → 해당 NURBS-native solid 생성. mesh-era push/pull 의
+    /// architectural successor.
+    ///
+    /// **Note**: profile-driven only. Direct primitive 생성 (DrawBox /
+    /// DrawCylinder / etc.) 은 별개 path 유지 — `Mesh::create_box` 등
+    /// 기존 함수 그대로 (§2.6 참조).
+    pub fn create_solid(
         &mut self,
         profile_face: FaceId,
-        dist: f64,
+        mode: CreateSolidMode,
         material: MaterialId,
-    ) -> Result<SolidExtrudeResult> {
-        let surface = self.faces[profile_face].surface()
-            .ok_or(SolidError::NoProfileSurface)?;
-        let direction = surface.normal_at(0.0, 0.0)?; // analytic normal
+    ) -> Result<CreateSolidResult>;
+}
 
-        match surface {
-            // Planar profiles
-            AnalyticSurface::Plane { .. } => {
-                let boundary_kind = self.classify_boundary_curves(profile_face)?;
-                match boundary_kind {
-                    BoundaryKind::AllLinear      => self.extrude_planar_box(profile_face, dist, material),
-                    BoundaryKind::CircularOnly   => self.extrude_planar_cylinder(profile_face, dist, material),
-                    BoundaryKind::Mixed          => self.extrude_planar_sweep(profile_face, dist, material),
-                }
-            }
-            // Curved profiles (smooth group)
-            AnalyticSurface::Cylinder { .. } => self.extrude_smooth_group(profile_face, dist, material),
-            AnalyticSurface::Sphere { .. }   => self.extrude_smooth_group(profile_face, dist, material),
-            AnalyticSurface::Cone { .. }     => self.extrude_smooth_group(profile_face, dist, material),
-            AnalyticSurface::Torus { .. }    => self.extrude_smooth_group(profile_face, dist, material),
-            // NURBS profile
-            AnalyticSurface::BezierPatch { .. }
-            | AnalyticSurface::BSplineSurface { .. }
-            | AnalyticSurface::NURBSSurface { .. } => {
-                self.extrude_general_sweep(profile_face, dist, material)
-            }
-        }
-    }
+/// ADR-079 §2.1 — Solid creation mode (profile + mode → solid).
+#[derive(Clone, Debug)]
+pub enum CreateSolidMode {
+    /// Linear extrusion. SketchUp Push/Pull 의 NURBS-native 등가물.
+    /// Smart routing (§2.3) 가 surface kind + boundary 별 분기.
+    Extrude { distance: f64 },
+
+    /// Rotation around an axis. 기존 `Mesh::revolve` 활용.
+    Revolve { axis_origin: DVec3, axis_dir: DVec3, angle_rad: f64 },
+
+    /// Sweep along a path curve. 기존 `Mesh::sweep` 활용.
+    Sweep { path: AnalyticCurve },
+
+    /// Loft to another profile face. 기존 `Mesh::loft` 활용.
+    Loft { other_profile: FaceId },
 }
 ```
 
@@ -147,62 +150,115 @@ impl Mesh {
 
 ```rust
 #[derive(Clone, Debug)]
-pub struct SolidExtrudeResult {
-    pub profile_face:   FaceId,         // 입력 (보존 OR 변형)
-    pub top_face:       FaceId,         // 상부면 (translated profile)
-    pub side_faces:     Vec<FaceId>,    // 측벽 (analytic surface 정의)
-    pub solid_kind:     SolidKind,      // smart routing 결과
-    pub mesh_view:      Option<MeshView>, // tessellation cache
+pub struct CreateSolidResult {
+    pub profile_face:    FaceId,         // 입력 (보존 OR 변형)
+    pub mode_used:       CreateSolidMode, // dispatch 기록
+    pub solid_kind:      SolidKind,      // routing 결과 분류
+    pub top_face:        FaceId,         // Extrude/Sweep 의 종단면
+                                         // (Revolve 360° 시 = profile_face,
+                                         //  partial revolve 시 = end cap)
+    pub side_faces:      Vec<FaceId>,    // 측벽 (analytic surface 정의)
+    pub all_solid_faces: Vec<FaceId>,    // form-layer Shape 등록용 종합
     pub adjacent_splits: usize,          // ADR-067 Step 1 auto-merge 결과
-    pub split_debug:    Vec<String>,
+    pub split_debug:     Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SolidKind {
-    Box,                  // 모든 boundary linear → 6 Plane surfaces
-    Cylinder,             // circular boundary → 1 Cylinder + 2 Plane caps
-    SmoothGroupOffset,    // curved profile → group 일관 변형
-    GeneralSweep,         // mixed/NURBS → NURBSSurface walls
+    /// Plane all-Line boundary → Box (6 Planes)
+    Box,
+    /// Plane circular/arc boundary → Cylinder (1 Cylinder + 2 Plane caps)
+    Cylinder,
+    /// Curved profile (Cylinder/Sphere/Cone/Torus panel) → smooth group
+    /// 전체 일관 변형
+    SmoothGroupOffset,
+    /// Mixed/NURBS profile → general sweep (NURBSSurface walls)
+    GeneralSweep,
+    /// Revolve mode 결과 (360° 또는 partial)
+    RevolutionSolid,
+    /// Sweep mode 결과 (path-driven)
+    SweptSolid,
+    /// Loft mode 결과 (profile-to-profile blend)
+    LoftSolid,
 }
 ```
 
-### 2.3 8 surface variants × extrusion behavior matrix
+### 2.3 `Extrude` mode 의 Smart Routing — surface variants × boundary matrix
 
-| Profile surface | Boundary 종류 | 결과 solid | Side walls | 비고 |
-|-----------------|--------------|-----------|-----------|------|
+**Smart routing 은 `Extrude` mode 내부에서만 작동**. 다른 mode 는
+direct dispatch (§2.5).
+
+| Profile surface | Boundary 종류 | 결과 SolidKind | Side walls | Step |
+|-----------------|--------------|---------------|-----------|------|
 | Plane | All Line | **Box** (existing `Mesh::create_box` 활용) | 4+ Planes | W-1 scope |
 | Plane | All Circle/Arc | **Cylinder** (existing `create_cylinder` 활용) | 1 Cylinder + 2 Plane caps | W-1 scope |
-| Plane | Mixed (Line + Curve) | **General Sweep** | NURBSSurface (extruded ribbons) | W-3 scope |
-| Cylinder (panel) | (smooth group context) | **Smooth Group Offset** | adjacent panels coordinated | W-2 scope |
-| Sphere (panel) | (smooth group) | **Smooth Group Offset** | sphere offset ≠ trivial — local approximation | W-2 scope |
-| Cone (panel) | (smooth group) | **Smooth Group Offset** | linear interpolation along axis | W-2 scope |
-| Torus (panel) | (smooth group) | **Smooth Group Offset** | minor radius offset | W-2 scope |
-| BezierPatch / BSplineSurface / NURBSSurface | (general) | **General Sweep** | NURBSSurface walls (Phase L 의 fitting) | W-3 scope |
+| Plane | Mixed (Line + Curve) | **GeneralSweep** | NURBSSurface (extruded ribbons) | W-3 scope |
+| Cylinder (panel) | (smooth group context) | **SmoothGroupOffset** | adjacent panels coordinated | W-2 scope |
+| Sphere (panel) | (smooth group) | **SmoothGroupOffset** | sphere offset ≠ trivial — local approximation | W-2 scope |
+| Cone (panel) | (smooth group) | **SmoothGroupOffset** | linear interpolation along axis | W-2 scope |
+| Torus (panel) | (smooth group) | **SmoothGroupOffset** | minor radius offset | W-2 scope |
+| BezierPatch / BSplineSurface / NURBSSurface | (general) | **GeneralSweep** | NURBSSurface walls (Phase L 의 fitting) | W-3 scope |
+
+```rust
+match mode {
+    CreateSolidMode::Extrude { distance } => {
+        // Smart routing — surface kind + boundary kinds 분기
+        let surface = self.faces[profile_face].surface()
+            .ok_or(SolidError::NoProfileSurface)?;
+        match (surface, self.classify_boundary(profile_face)?) {
+            (AnalyticSurface::Plane { .. }, BoundaryKind::AllLinear) =>
+                self.extrude_planar_box(profile_face, distance, material),
+            (AnalyticSurface::Plane { .. }, BoundaryKind::AllCircular) =>
+                self.extrude_planar_cylinder(profile_face, distance, material),
+            (AnalyticSurface::Plane { .. }, BoundaryKind::Mixed) =>
+                self.extrude_planar_sweep(profile_face, distance, material),
+            (AnalyticSurface::Cylinder { .. }, _)
+            | (AnalyticSurface::Sphere   { .. }, _)
+            | (AnalyticSurface::Cone     { .. }, _)
+            | (AnalyticSurface::Torus    { .. }, _) =>
+                self.extrude_smooth_group(profile_face, distance, material),
+            (AnalyticSurface::BezierPatch    { .. }, _)
+            | (AnalyticSurface::BSplineSurface { .. }, _)
+            | (AnalyticSurface::NURBSSurface   { .. }, _) =>
+                self.extrude_general_sweep(profile_face, distance, material),
+        }
+    }
+    CreateSolidMode::Revolve { .. } => self.create_solid_via_revolve(...),
+    CreateSolidMode::Sweep   { .. } => self.create_solid_via_sweep(...),
+    CreateSolidMode::Loft    { .. } => self.create_solid_via_loft(...),
+}
+```
 
 ### 2.4 Shape ownership integration (Gap 2 자연 해소)
 
-`Scene::exec_solid_extrude` (Scene wrapper):
+`Scene::exec_create_solid` (Scene wrapper):
 ```rust
-fn exec_solid_extrude(&mut self, face_id: FaceId, dist: f64) -> CommandResult {
+fn exec_create_solid(
+    &mut self, face_id: FaceId, mode: CreateSolidMode,
+) -> CommandResult {
     self.transactions.begin();
     self.transactions.set_before_snapshot(self.scene_snapshot());
     
-    match self.mesh.solid_extrude(face_id, dist, FORM_MATERIAL) {
+    match self.mesh.create_solid(face_id, mode, FORM_MATERIAL) {
         Ok(result) => {
             // ADR-050 P-5e dual ownership lookup
-            let owning_xia_id = self.face_to_xia.get(&face_id).copied();
+            let owning_xia_id   = self.face_to_xia.get(&face_id).copied();
             let owning_shape_id = self.face_to_shape.get(&face_id).copied();
             
             if let Some(xia_id) = owning_xia_id {
                 // Xia path (legacy + ADR-050 P-2 promote 후)
-                self.update_xia_face_ids_from_extrude(xia_id, &result);
+                self.update_xia_face_ids_from_solid(xia_id, &result);
             } else if let Some(shape_id) = owning_shape_id {
                 // Shape path (Phase 1 default ON)
-                self.update_shape_face_ids_from_extrude(shape_id, &result);
+                self.update_shape_face_ids_from_solid(shape_id, &result);
             }
             
             self.transactions.set_after_snapshot(self.scene_snapshot());
             self.transactions.commit();
-            CommandResult::SolidCreated { /* ... */ }
+            CommandResult::SolidCreated {
+                kind: result.solid_kind,
+                face_count: result.all_solid_faces.len(),
+            }
         }
         Err(e) => {
             self.transactions.cancel();
@@ -216,15 +272,71 @@ fn exec_solid_extrude(&mut self, face_id: FaceId, dist: f64) -> CommandResult {
 의 자연 확장 — Shape 도 face owner 추적). ADR-050 W-1 (Gap 2 fix) 의
 의도였던 face_to_shape 가 ADR-079 의 일부로 자연 통합.
 
+### 2.5 다른 mode (Revolve / Sweep / Loft) — direct dispatch
+
+`Extrude` 외 mode 는 smart routing 없이 단일 method 위임. 각 mode 의
+모든 분기는 그 method 내부에서 처리.
+
+```rust
+fn create_solid_via_revolve(
+    &mut self,
+    profile_face: FaceId,
+    axis_origin: DVec3, axis_dir: DVec3, angle_rad: f64,
+    material: MaterialId,
+) -> Result<CreateSolidResult> {
+    // 기존 Mesh::revolve (axia-geo/src/operations/revolve.rs:39)
+    // 활용. 결과를 CreateSolidResult 로 wrap.
+    let revolve_result = self.revolve(profile_face, axis_origin, axis_dir,
+                                       angle_rad, material)?;
+    // 360° → top_face = profile_face (closed solid)
+    // partial → top_face = end-cap face (둘다 Plane attach 가능)
+    Ok(CreateSolidResult {
+        profile_face,
+        mode_used: CreateSolidMode::Revolve { axis_origin, axis_dir, angle_rad },
+        solid_kind: SolidKind::RevolutionSolid,
+        top_face: revolve_result.end_cap_or_profile,
+        side_faces: revolve_result.swept_faces,
+        all_solid_faces: revolve_result.all_faces,
+        adjacent_splits: 0,
+        split_debug: Vec::new(),
+    })
+}
+
+// Sweep / Loft 동일 패턴 — Mesh::sweep / Mesh::loft 위임
+```
+
+기존 `Mesh::revolve` (axia-geo/src/operations/revolve.rs, 313 LoC) /
+`Mesh::sweep` (sweep.rs, 229 LoC) / `Mesh::loft` (loft.rs, 220 LoC) 는
+**그대로 보존** — `create_solid` 가 이들 위에 thin orchestration layer.
+
+### 2.6 Primitive direct path 와의 관계 (별개 트랙)
+
+`Mesh::create_box` / `create_cylinder` / `create_cone` / `create_sphere`
+(axia-geo/src/operations/primitives.rs) 는 **직접 primitive 생성 path**:
+- 사용자가 profile face 없이 "박스 그리기" → DrawBox tool → `create_box`
+- 분리 이유: profile-driven 과 primitive direct 는 다른 UX
+- 두 path 모두 결과는 NURBS-native solid (analytic surfaces)
+
+**평행 트랙**:
+- DrawBox / DrawCylinder / etc. tools → `Mesh::create_box` etc.
+  (primitive direct)
+- Push/Pull / Revolve / Sweep / Loft tools → `Mesh::create_solid`
+  (profile-driven)
+
+본 ADR 은 **profile-driven path (`create_solid`) 만 다룸**. Primitive
+direct 는 기존 함수 그대로 + 별도 ADR (필요 시).
+
 ---
 
 ## 3. Sub-Decisions (사용자 결재 항목)
 
-### Q1. Smart Routing (Option C) confirmed?
-- (a) Option A: solid_extrude 단일 함수 (smart routing 없음, profile 무조건 sweep)
-- (b) Option B: DrawBox / DrawCylinder / etc. 별도 함수만, push/pull 폐기
-- **(c) Option C: smart routing — profile surface kind 별 분기** ← 권장
-- **Decision**: Q1 Open — 사용자 review 필요
+### Q1. Smart Routing scope clarification
+- (a) 모든 mode 에서 smart routing (Revolve/Sweep/Loft 도 분기)
+- **(b) `Extrude` mode 내부에서만 smart routing — 다른 mode 는 direct
+  dispatch (single method per mode)** ← 권장 (§2.3 + §2.5)
+- (c) 분기 일체 없이 모든 case 를 GeneralSweep 로 처리 (단순화)
+- **Decision**: Q1 Open — (b) 권장. 추론 부담 ↓ + 구현 명확성 ↑ +
+  향후 확장 용이.
 
 ### Q2. ADR-067 Step 2~5 와의 관계
 - (a) 흡수 — 본 ADR 이 Step 2~5 의 spec 을 통합 supersede
@@ -270,10 +382,10 @@ fn exec_solid_extrude(&mut self, face_id: FaceId, dist: f64) -> CommandResult {
 | Step | Scope | 영역 | 영향 | 회귀 (예상) | 의존 |
 |------|-------|------|------|------------|------|
 | **W-α** (본 commit) | ADR-079 spec only | docs | 0 | 0 | — |
-| **W-1** | solid_extrude_planar_box (Plane all-Line boundary → Box) + face_to_shape map + Scene::exec_solid_extrude + 8 회귀 | axia-geo + axia-core + WASM | Plane Rect/Polygon profile push 정상화 | +20~25 | W-α |
-| **W-2** | solid_extrude_planar_cylinder (Plane circular boundary → Cylinder) + smooth group offset (Cylinder/Sphere/Cone/Torus panel) | axia-geo Phase H/I/J 활용 | 곡면 profile 전체 변형 | +30~40 | W-1, Phase N Step 3 |
-| **W-3** | solid_extrude_general_sweep (Bezier/BSpline/NURBS profile → NURBSSurface walls) + Phase L sweep generalization | axia-geo Phase L 활용 | 임의 NURBS profile | +25~35 | W-2, Phase L 완료 |
-| **W-4** | Legacy push_pull deprecation + UX migration (PushPullTool routing) + ADR-067 Step 1 보존 | TS Tools + WASM bridge | UX 통합 | +10~15 | W-3 |
+| **W-1** | `Mesh::create_solid` skeleton + `CreateSolidMode::Extrude` Plane-all-Line → Box + `face_to_shape` map + `Scene::exec_create_solid` + 8 회귀 | axia-geo + axia-core + WASM | Plane Rect/Polygon profile push 정상화 | +20~25 | W-α |
+| **W-2** | Plane-Circular → Cylinder (`extrude_planar_cylinder`) + smooth group offset (Cylinder/Sphere/Cone/Torus panel) | axia-geo Phase H/I/J 활용 | 곡면 profile 전체 변형 | +30~40 | W-1, Phase N Step 3 |
+| **W-3** | `extrude_general_sweep` (Bezier/BSpline/NURBS profile → NURBSSurface walls) + `CreateSolidMode::Sweep` / `Loft` direct dispatch (existing `Mesh::sweep` / `Mesh::loft` wrap) | axia-geo Phase L 활용 | 임의 NURBS profile + Sweep/Loft mode | +25~35 | W-2, Phase L 완료 |
+| **W-4** | `CreateSolidMode::Revolve` direct dispatch (existing `Mesh::revolve` wrap) + Legacy push_pull deprecation + UX migration (PushPullTool routing) + ADR-067 Step 1 보존 | axia-geo + TS Tools + WASM bridge | 모든 mode 정합 + UX 통합 | +15~20 | W-3 |
 
 **합계 예상**: 4-step 합산 **+85~115 회귀**, 절대 #[ignore] 금지 강제.
 LOCKED #1 / ADR-051 / ADR-050 / ADR-074 / ADR-078 모두 PASS 유지.
@@ -318,9 +430,28 @@ surface kinds. W-4 에서 legacy → solid_extrude internal routing 으로
 
 ### L7 — v3.2 시민권 모델 정합
 
-solid_extrude 결과 = form-layer Shape (재질 없음). 사용자 재질 부여 시
+`create_solid` 결과 = form-layer Shape (재질 없음). 사용자 재질 부여 시
 ADR-050 P-2 promote 4-condition 통과 → Xia 승격. v3.2 §7 의 Linear /
 Volumetric / Surface XIA 분류 자연 매핑.
+
+### L8 — `create_solid` profile-driven only — Primitive direct path 와 분리
+
+`Mesh::create_solid(profile, mode)` 는 **profile face 입력 필수**.
+Direct primitive 생성 (DrawBox / DrawCylinder / DrawCone / DrawSphere /
+DrawTorus) 은 **별개 path** — 기존 `Mesh::create_box` 등 함수 그대로
+유지 (§2.6 참조).
+
+**근거**: profile-driven (`create_solid`) 와 primitive direct (`create_box`)
+는 다른 UX:
+- profile-driven: "이 face 에서 시작해 솔리드 생성" — Push/Pull / Revolve /
+  Sweep / Loft 의 자연 의미
+- primitive direct: "처음부터 박스 그리기" — DrawBox tool 의 단순 의미
+
+두 path 모두 결과는 NURBS-native solid (analytic surfaces). 통합 시 API
+복잡도 ↑ + UX 모호 — 분리 유지.
+
+**Future amendment**: primitive direct 를 `create_solid_primitive` 같은
+별도 entry 로 통합할지는 별도 ADR 결정.
 
 ---
 
@@ -377,6 +508,8 @@ W-α (본 ADR commit) 는 spec only. Implementation 시작 전 사용자 review
 
 ## 9. References
 
+### ADR cross-links
+
 - ADR-027 — NURBS Kernel Initiative (Phases A~G master plan)
 - ADR-049 — Two-Layer Citizenship Model (form vs property layer)
 - ADR-052 — NURBS Kernel Completion Roadmap (§Phase R UX integration)
@@ -389,7 +522,23 @@ W-α (본 ADR commit) 는 spec only. Implementation 시작 전 사용자 review
   via face_to_shape map)
 - v3.2 spec §3 시민권 / §7 XIA / §12 강등
 
+### Existing kernel ops (W-1~W-4 활용)
+
+- `crates/axia-geo/src/operations/push_pull.rs` (1647 LoC) — legacy
+  mesh-era push/pull. W-4 까지 보존, W-4 에서 deprecate.
+- `crates/axia-geo/src/operations/revolve.rs` (313 LoC) —
+  `Mesh::revolve` (W-4 의 `CreateSolidMode::Revolve` direct dispatch
+  대상)
+- `crates/axia-geo/src/operations/sweep.rs` (229 LoC) —
+  `Mesh::sweep` (W-3 의 `CreateSolidMode::Sweep` direct dispatch 대상)
+- `crates/axia-geo/src/operations/loft.rs` (220 LoC) —
+  `Mesh::loft` (W-3 의 `CreateSolidMode::Loft` direct dispatch 대상)
+- `crates/axia-geo/src/operations/primitives.rs` —
+  `Mesh::create_box / create_cylinder / create_cone / create_sphere`
+  (§2.6 별개 트랙, `create_solid` 와 분리 유지)
+
 ---
 
 *Author*: AXiA team (사용자 결정 + Claude spec) | *Status*: Proposed
-(spec only, W-1~W-4 별도 commit). Q1~Q7 사용자 review 후 §3 amend.
+(spec only — `create_solid` 명령 + `CreateSolidMode` enum lock-in,
+W-1~W-4 별도 commit). Q1~Q7 사용자 review 후 §3 amend.
