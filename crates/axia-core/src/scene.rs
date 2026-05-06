@@ -10631,6 +10631,66 @@ mod tests {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-4-α — Scene::exec_create_solid Revolve mode integration
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn exec_create_solid_revolve_full_360_via_shape_path() {
+        // Profile triangle in xy plane, revolved around y-axis (full 360°).
+        // Validates that SolidKind::RevolutionSolid flows through Scene
+        // wrapper unchanged (kind-agnostic Shape ownership).
+        let mut scene = Scene::new();
+        let mat = MaterialId::new(0);
+        let v0 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let profile_face = scene
+            .mesh
+            .add_face(&[v0, v1, v2], mat)
+            .expect("profile face");
+        scene.mesh.faces[profile_face].set_surface(Some(axia_geo::AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 2.0),
+            v_range: (0.0, 1.0),
+        }));
+        let shape_id = scene.create_shape("Revolve Profile".to_string(), vec![profile_face]);
+
+        let result = scene.execute(Command::CreateSolid {
+            face_id: profile_face,
+            mode: axia_geo::CreateSolidMode::Revolve {
+                axis_origin: DVec3::ZERO,
+                axis_dir: DVec3::Y,
+                angle_rad: std::f64::consts::TAU,
+            },
+        });
+        match result {
+            CommandResult::SolidCreated { kind, face_count } => {
+                assert_eq!(
+                    kind,
+                    axia_geo::SolidKind::RevolutionSolid,
+                    "Revolve full 360° must route to RevolutionSolid"
+                );
+                // Profile (1) + side faces (≥ 1).
+                assert!(face_count >= 2, "RevolutionSolid must have ≥ 2 faces");
+            }
+            other => panic!("expected SolidCreated::RevolutionSolid, got {:?}", other),
+        }
+
+        // Shape ownership: face_to_shape must include profile + all sides.
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        assert!(shape.face_ids.len() >= 2);
+        for &fid in &shape.face_ids {
+            assert_eq!(
+                scene.face_to_shape.get(&fid).copied(),
+                Some(shape_id),
+                "face_to_shape[{fid:?}] must = {shape_id:?}"
+            );
+        }
+    }
+
     #[test]
     fn create_shape_registers_face_to_shape_index() {
         // Q7 lock-in — face_to_shape map 도입.

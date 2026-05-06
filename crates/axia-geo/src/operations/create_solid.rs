@@ -193,10 +193,17 @@ impl Mesh {
                     .into()),
                 }
             }
-            CreateSolidMode::Revolve { .. } => Err(SolidError::NotYetSupported {
-                reason: "Revolve mode (W-4 scope)".to_string(),
-            }
-            .into()),
+            CreateSolidMode::Revolve {
+                axis_origin,
+                axis_dir,
+                angle_rad,
+            } => self.revolve_profile_face(
+                profile_face,
+                axis_origin,
+                axis_dir,
+                angle_rad,
+                material,
+            ),
             CreateSolidMode::Sweep { .. } => Err(SolidError::NotYetSupported {
                 reason: "Sweep mode (W-3 scope)".to_string(),
             }
@@ -511,6 +518,125 @@ impl Mesh {
             side_faces,
             all_solid_faces,
             adjacent_splits,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-4-α — Revolve mode dispatch (full 360° only).
+    ///
+    /// Extracts profile face's outer-loop polyline, validates axis +
+    /// face plane perpendicularity, then delegates to `Mesh::revolve`
+    /// (existing operation). Profile face is preserved (Shape ownership
+    /// pattern); generated side faces are CreateSolidResult.side_faces.
+    ///
+    /// W-4-α scope:
+    /// - Full 360° only — `(angle_rad - TAU).abs() > 1e-3` → NotYetSupported
+    /// - Multi-loop face → reject (ADR-016 Q2 / ADR-080 L8 정합)
+    /// - Profile plane must contain axis (face_normal ⊥ axis_dir)
+    /// - Fixed default segments = 32 (chord-tolerance based future)
+    fn revolve_profile_face(
+        &mut self,
+        profile_face: FaceId,
+        axis_origin: DVec3,
+        axis_dir: DVec3,
+        angle_rad: f64,
+        material: MaterialId,
+    ) -> Result<CreateSolidResult> {
+        // §W4-A — Full 360° only in W-4-α.
+        let two_pi = std::f64::consts::TAU;
+        if (angle_rad - two_pi).abs() > 1e-3 {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "Revolve partial angle {:.4} rad (full 360° only in W-4-α)",
+                    angle_rad
+                ),
+            }
+            .into());
+        }
+
+        // §W4-C — Axis validation.
+        let axis_unit = axis_dir.normalize_or_zero();
+        if axis_unit.length_squared() < 0.5 {
+            return Err(SolidError::NotYetSupported {
+                reason: "Revolve axis_dir is near-zero".to_string(),
+            }
+            .into());
+        }
+
+        // §W4-B — Multi-loop guard.
+        let face = self
+            .faces
+            .get(profile_face)
+            .ok_or(SolidError::FaceNotFound)?;
+        if !face.inners().is_empty() {
+            return Err(SolidError::NotYetSupported {
+                reason: "Revolve multi-loop face rejected (ADR-016 Q2)".to_string(),
+            }
+            .into());
+        }
+
+        // Extract polyline from outer loop.
+        let outer_start = face.outer().start;
+        if outer_start.is_null() {
+            bail!("revolve_profile_face: profile face has null outer loop start");
+        }
+        let boundary_verts = self.collect_loop_verts(outer_start)?;
+        if boundary_verts.len() < 2 {
+            bail!(
+                "revolve_profile_face: profile boundary has only {} verts",
+                boundary_verts.len()
+            );
+        }
+        let profile_points: Vec<DVec3> = boundary_verts
+            .iter()
+            .map(|&v| self.vertex_pos(v))
+            .collect::<Result<Vec<_>>>()?;
+
+        // §W4-C — Profile face plane must contain axis (normal ⊥ axis).
+        let face_surface = self
+            .faces
+            .get(profile_face)
+            .and_then(|f| f.surface().cloned());
+        if let Some(AnalyticSurface::Plane { normal, .. }) = face_surface {
+            let face_normal = normal.normalize_or_zero();
+            let dot = face_normal.dot(axis_unit).abs();
+            if dot > 0.001 {
+                return Err(SolidError::NotYetSupported {
+                    reason: format!(
+                        "Revolve: profile face plane does not contain axis \
+                         (face_normal · axis_dir = {:.4}, expected ~0)",
+                        dot
+                    ),
+                }
+                .into());
+            }
+        }
+
+        // §W4-D — Fixed default segments.
+        const DEFAULT_REVOLVE_SEGMENTS: u32 = 32;
+
+        // Delegate to existing Mesh::revolve.
+        let side_faces = self
+            .revolve(
+                &profile_points,
+                axis_origin,
+                axis_unit,
+                DEFAULT_REVOLVE_SEGMENTS,
+                material,
+            )
+            .map_err(|e| anyhow::anyhow!("Revolve operation failed: {}", e))?;
+
+        let mut all_solid_faces = Vec::with_capacity(1 + side_faces.len());
+        all_solid_faces.push(profile_face);
+        all_solid_faces.extend(side_faces.iter().copied());
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::RevolutionSolid,
+            top_face: profile_face, // sentinel — no separate "top" in revolve
+            side_faces,
+            all_solid_faces,
+            adjacent_splits: 0,
             split_debug: Vec::new(),
         })
     }
@@ -1818,8 +1944,8 @@ mod tests {
     }
 
     #[test]
-    fn create_solid_extrude_revolve_mode_returns_not_yet_supported() {
-        // Even with a valid profile, non-Extrude modes return NotYetSupported.
+    fn revolve_partial_angle_returns_not_yet_supported() {
+        // W-4-α scope: full 360° only. Partial angle (angle_rad ≠ TAU) → NotYetSupported.
         let mut mesh = Mesh::new();
         let profile = build_unit_square_plane_face(&mut mesh);
         let result = mesh.create_solid(
@@ -1827,14 +1953,15 @@ mod tests {
             CreateSolidMode::Revolve {
                 axis_origin: DVec3::ZERO,
                 axis_dir: DVec3::Y,
-                angle_rad: std::f64::consts::PI,
+                angle_rad: std::f64::consts::PI, // 180° — partial
             },
             MaterialId::new(0),
         );
         let err_msg = format!("{}", result.err().unwrap());
         assert!(
-            err_msg.contains("not yet supported") && err_msg.contains("Revolve"),
-            "error must indicate Revolve not yet supported, got: {err_msg}"
+            err_msg.contains("not yet supported")
+                && (err_msg.contains("partial angle") || err_msg.contains("Revolve")),
+            "error must indicate partial-angle Revolve not yet supported, got: {err_msg}"
         );
     }
 
@@ -3122,5 +3249,178 @@ mod tests {
         } else {
             panic!("arc curve must remain on edge after offset");
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-4-α — Revolve mode dispatch (full 360° only)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build a triangular profile face in the xy plane (so its
+    /// face normal is +Z), with vertices that lie on the +X half-plane
+    /// (one vertex on +Y axis, one off). Suitable for revolve around the
+    /// y-axis to create a vase/cone-like solid.
+    fn build_revolve_profile_face(mesh: &mut Mesh) -> FaceId {
+        let mat = MaterialId::new(0);
+        // Triangle in xy plane: (1, 0, 0), (2, 0, 0), (1, 1, 0).
+        // Revolved around +Y axis would produce an annular cone.
+        let v0 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v0, v1, v2], mat).expect("add_face");
+        // Plane surface: xy plane (normal +Z).
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 2.0),
+            v_range: (0.0, 1.0),
+        }));
+        face
+    }
+
+    #[test]
+    fn revolve_mode_full_360_returns_revolution_solid() {
+        let mut mesh = Mesh::new();
+        let profile = build_revolve_profile_face(&mut mesh);
+        let face_count_before = mesh.face_count();
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Revolve {
+                    axis_origin: DVec3::ZERO,
+                    axis_dir: DVec3::Y, // y-axis (lies in xy plane)
+                    angle_rad: std::f64::consts::TAU,
+                },
+                MaterialId::new(0),
+            )
+            .expect("revolve full 360 OK");
+
+        assert_eq!(result.solid_kind, SolidKind::RevolutionSolid);
+        assert_eq!(result.profile_face, profile);
+        // top_face = profile_face sentinel.
+        assert_eq!(result.top_face, profile);
+        // Mesh::revolve generates 32 segments × (n_profile - 1) side faces
+        // for a triangle with no poles (3 verts, 2 edges → 2 strips).
+        // Profile (1,0,0), (2,0,0), (1,1,0): no point on +Y axis, so all
+        // edges produce ring-of-quads (32 quads each).
+        // Specifically: 3 edges × 32 segments = 96 side faces (closed loop).
+        assert!(
+            result.side_faces.len() > 0,
+            "revolve must produce side faces"
+        );
+        // mesh.face_count() should grow by at least the side face count.
+        assert!(mesh.face_count() > face_count_before);
+    }
+
+    #[test]
+    fn revolve_mode_axis_zero_rejected() {
+        let mut mesh = Mesh::new();
+        let profile = build_revolve_profile_face(&mut mesh);
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Revolve {
+                axis_origin: DVec3::ZERO,
+                axis_dir: DVec3::ZERO, // zero axis
+                angle_rad: std::f64::consts::TAU,
+            },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must reject zero axis");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("near-zero"),
+            "expected near-zero axis rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn revolve_mode_profile_face_not_in_plane_with_axis_rejected() {
+        // Profile face on z=0 (normal +Z), axis on +Z (parallel to normal).
+        // face_normal · axis_dir = +Z · +Z = 1 (not perpendicular).
+        let mut mesh = Mesh::new();
+        let profile = build_revolve_profile_face(&mut mesh);
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Revolve {
+                axis_origin: DVec3::ZERO,
+                axis_dir: DVec3::Z, // parallel to face normal — invalid
+                angle_rad: std::f64::consts::TAU,
+            },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must reject non-perpendicular axis");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("not contain axis"),
+            "expected plane-axis perpendicularity rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn revolve_mode_multi_loop_face_rejected() {
+        // Frame face with hole — multi-loop should reject.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let outer = [
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0)),
+            mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0)),
+        ];
+        let inner = [
+            mesh.add_vertex(DVec3::new(3.0, 3.0, 0.0)),
+            mesh.add_vertex(DVec3::new(7.0, 3.0, 0.0)),
+            mesh.add_vertex(DVec3::new(7.0, 7.0, 0.0)),
+            mesh.add_vertex(DVec3::new(3.0, 7.0, 0.0)),
+        ];
+        let face = mesh
+            .add_face_with_holes(&outer, &[&inner], mat)
+            .expect("frame face");
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        }));
+
+        let result = mesh.create_solid(
+            face,
+            CreateSolidMode::Revolve {
+                axis_origin: DVec3::ZERO,
+                axis_dir: DVec3::Y,
+                angle_rad: std::f64::consts::TAU,
+            },
+            mat,
+        );
+        let err = result.err().expect("must reject multi-loop");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("multi-loop"),
+            "expected multi-loop rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn revolve_mode_invalid_face_id_rejected() {
+        let mut mesh = Mesh::new();
+        // No face exists; arbitrary FaceId.
+        let result = mesh.create_solid(
+            FaceId::new(999),
+            CreateSolidMode::Revolve {
+                axis_origin: DVec3::ZERO,
+                axis_dir: DVec3::Y,
+                angle_rad: std::f64::consts::TAU,
+            },
+            MaterialId::new(0),
+        );
+        // create_solid 의 사전 검사 (faces.contains) 에서 FaceNotFound 발생.
+        let err = result.err().expect("must reject missing face");
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("FaceNotFound") || msg.contains("face not found"),
+            "expected FaceNotFound, got: {msg}"
+        );
     }
 }
