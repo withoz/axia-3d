@@ -20,6 +20,8 @@ import { TDSLoader } from 'three/examples/jsm/loaders/TDSLoader.js';
 import { parseString as parseDxf } from 'dxf';
 import { convertDwgToDxf, init as initDwgDxf } from 'dwgdxf';
 import { debugLog } from '../utils/debug';
+import { Toast } from '../ui/Toast';
+import type { BRepTraversalResult } from './occtBrepTraversal';
 
 export type ImportFormat = 'obj' | 'stl' | 'gltf' | 'dae' | 'ply' | '3ds' | 'dxf' | 'dwg' | 'skp' | '3dm' | 'step' | 'iges';
 
@@ -31,8 +33,14 @@ export interface ImportResult {
   vertexCount: number;
   faceCount: number;
   metadata?: DWGMetadata;
-  /** STEP/IGES import warnings (ADR-035 P20.7). */
+  /** STEP/IGES import warnings (ADR-035 P20.7, P21.7). */
   warnings?: string[];
+  /**
+   * STEP/IGES W-δ BRep traversal — face/edge 별 promoted analytic
+   * surface/curve + stable index. caller (W-η downstream) 가 axia
+   * FaceId / EdgeId 매핑에 사용 (ADR-037 P22.7).
+   */
+  traversal?: BRepTraversalResult;
 }
 
 export interface DWGMetadata {
@@ -187,9 +195,19 @@ export class FileImporter {
     // OCCT.js 가 설치되지 않은 환경에서는 StepIgesImporter 가 명확한
     // 안내 메시지로 throw → 사용자는 alternate format (OBJ/STL/DXF) 안내
     // 를 받게 된다. 메인 번들에는 영향 0 (dynamic import).
+    //
+    // W-η — UI integration:
+    //   * onLoadingStart → Toast.info (큰 OCCT.js fetch 진행 안내)
+    //   * onLoadingEnd → no-op (완료 Toast 는 결과 분기에서 처리)
+    //   * 결과 warnings → Toast.warning (사용자 surface)
+    //   * 성공 → Toast.success
+    //   * traversal field → ImportResult 통과 (ADR-037 P22.7 owner-ID 매핑용)
     if (ext === 'step' || ext === 'stp' || ext === 'iges' || ext === 'igs') {
       const { StepIgesImporter } = await import('./StepIgesImporter');
       const importer = StepIgesImporter.getInstance();
+      importer.onLoadingStart = (msg: string) => Toast.info(msg, 8000);
+      importer.onLoadingEnd = () => { /* completion Toast 는 결과 분기에서 */ };
+
       const result = await importer.importFile(file);
       // FileImporter 의 ImportResult schema 와 매핑
       const meshCount = result.faceCount;  // OCCT face count → mesh count proxy
@@ -204,6 +222,21 @@ export class FileImporter {
           faceCount += (idx ? idx.count / 3 : (pos?.count ?? 0) / 3);
         }
       });
+
+      // W-η — warnings / success surface
+      if (result.warnings && result.warnings.length > 0) {
+        Toast.warning(
+          `${result.format.toUpperCase()} import: ${result.warnings.length}개 경고 (콘솔 참조)`,
+          6000,
+        );
+        console.warn('[FileImporter] STEP/IGES warnings:', result.warnings);
+      } else {
+        Toast.success(
+          `${result.format.toUpperCase()} import 완료: ${result.faceCount}면 ${result.edgeCount}엣지`,
+          4000,
+        );
+      }
+
       return {
         group: result.group,
         format: result.format,
@@ -212,6 +245,7 @@ export class FileImporter {
         vertexCount,
         faceCount: Math.floor(faceCount),
         warnings: result.warnings,
+        traversal: result.traversal,
       };
     }
 

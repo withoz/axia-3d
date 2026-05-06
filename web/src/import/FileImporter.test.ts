@@ -16,6 +16,8 @@ vi.mock('jszip', () => {
 
 import * as THREE from 'three';
 import { FileImporter } from './FileImporter';
+import { StepIgesImporter } from './StepIgesImporter';
+import { Toast } from '../ui/Toast';
 
 // Patch missing methods on mock BufferGeometry
 if (!(THREE.BufferGeometry.prototype as any).getAttribute) {
@@ -103,6 +105,129 @@ describe('FileImporter', () => {
         expect((e as Error).message).toContain('FreeCAD');
         expect((e as Error).message).toContain('Fusion');
       }
+    });
+  });
+
+  // --- W-η — UI integration (Toast progress + traversal passthrough) ---
+
+  describe('W-η UI integration (ADR-081)', () => {
+    beforeEach(() => {
+      StepIgesImporter.resetInstance();
+    });
+
+    it('Toast.info fires on OCCT.js loading start (onLoadingStart wired)', async () => {
+      const infoSpy = vi.spyOn(Toast, 'info').mockImplementation(() => {});
+      const f = new File([''], 'model.step', { type: 'application/octet-stream' });
+
+      // OCCT.js not installed → ensureLoaded throws after onLoadingStart fires.
+      try {
+        await importer.importFile(f);
+      } catch (_e) {
+        // expected
+      }
+
+      expect(infoSpy).toHaveBeenCalled();
+      const firstCall = infoSpy.mock.calls[0];
+      expect(firstCall[0]).toContain('STEP/IGES');
+      infoSpy.mockRestore();
+    });
+
+    it('passes traversal field through ImportResult (W-δ → W-η)', async () => {
+      // Inject a fake StepIgesImporter that returns success with a synthetic traversal
+      const fakeTraversal = {
+        faces: [{ index: 0, surface: { kind: 'Plane' as const, origin: [0,0,0] as [number,number,number], normal: [0,0,1] as [number,number,number] } }],
+        edges: [],
+        warnings: [],
+      };
+      const fakeImporter = {
+        onLoadingStart: undefined as ((m: string) => void) | undefined,
+        onLoadingEnd: undefined as (() => void) | undefined,
+        dispose: () => { /* test stub */ },
+        importFile: async () => ({
+          group: new THREE.Group(),
+          format: 'step' as const,
+          faceCount: 1,
+          edgeCount: 0,
+          warnings: [],
+          traversal: fakeTraversal,
+        }),
+      };
+      (StepIgesImporter as any)._instance = fakeImporter;
+
+      const f = new File([''], 'sample.step', { type: 'application/octet-stream' });
+      const result = await importer.importFile(f);
+
+      expect(result.format).toBe('step');
+      expect(result.traversal).toBe(fakeTraversal);
+      expect(result.traversal?.faces).toHaveLength(1);
+      expect(result.traversal?.faces[0].index).toBe(0);
+    });
+
+    it('warnings → Toast.warning + console.warn (P21.7 surface)', async () => {
+      const warnSpy = vi.spyOn(Toast, 'warning').mockImplementation(() => {});
+      const successSpy = vi.spyOn(Toast, 'success').mockImplementation(() => {});
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const fakeImporter = {
+        onLoadingStart: undefined as ((m: string) => void) | undefined,
+        onLoadingEnd: undefined as (() => void) | undefined,
+        dispose: () => { /* test stub */ },
+        importFile: async () => ({
+          group: new THREE.Group(),
+          format: 'step' as const,
+          faceCount: 1,
+          edgeCount: 0,
+          warnings: ['face[0]: BSpline knot mismatch', 'face[1]: PCurve missing'],
+          traversal: undefined,
+        }),
+      };
+      (StepIgesImporter as any)._instance = fakeImporter;
+
+      const f = new File([''], 'warn.step', { type: 'application/octet-stream' });
+      const result = await importer.importFile(f);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(warnSpy.mock.calls[0][0]).toContain('2개 경고');
+      expect(successSpy).not.toHaveBeenCalled();
+      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(result.warnings).toHaveLength(2);
+
+      warnSpy.mockRestore();
+      successSpy.mockRestore();
+      consoleWarnSpy.mockRestore();
+    });
+
+    it('clean import → Toast.success with face/edge counts', async () => {
+      const successSpy = vi.spyOn(Toast, 'success').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(Toast, 'warning').mockImplementation(() => {});
+
+      const fakeImporter = {
+        onLoadingStart: undefined as ((m: string) => void) | undefined,
+        onLoadingEnd: undefined as (() => void) | undefined,
+        dispose: () => { /* test stub */ },
+        importFile: async () => ({
+          group: new THREE.Group(),
+          format: 'step' as const,
+          faceCount: 12,
+          edgeCount: 30,
+          warnings: [],
+          traversal: { faces: [], edges: [], warnings: [] },
+        }),
+      };
+      (StepIgesImporter as any)._instance = fakeImporter;
+
+      const f = new File([''], 'clean.step', { type: 'application/octet-stream' });
+      await importer.importFile(f);
+
+      expect(successSpy).toHaveBeenCalled();
+      const msg = successSpy.mock.calls[0][0];
+      expect(msg).toContain('STEP');
+      expect(msg).toContain('12');  // faceCount
+      expect(msg).toContain('30');  // edgeCount
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      successSpy.mockRestore();
+      warnSpy.mockRestore();
     });
   });
 
