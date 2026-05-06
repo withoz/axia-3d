@@ -207,10 +207,9 @@ impl Mesh {
             CreateSolidMode::Sweep { path } => {
                 self.sweep_profile_along_path(profile_face, &path, material)
             }
-            CreateSolidMode::Loft { .. } => Err(SolidError::NotYetSupported {
-                reason: "Loft mode (W-3 scope)".to_string(),
+            CreateSolidMode::Loft { other_profile } => {
+                self.loft_between_profiles(profile_face, other_profile, material)
             }
-            .into()),
         }
     }
 
@@ -633,6 +632,122 @@ impl Mesh {
             profile_face,
             solid_kind: SolidKind::RevolutionSolid,
             top_face: profile_face, // sentinel — no separate "top" in revolve
+            side_faces,
+            all_solid_faces,
+            adjacent_splits: 0,
+            split_debug: Vec::new(),
+        })
+    }
+
+    /// ADR-079 W-3-β — Loft mode dispatch (two profiles).
+    ///
+    /// Connects the boundary of `profile_face` to the boundary of
+    /// `other_profile` via ruled side faces. Delegates to `Mesh::loft`
+    /// with closed_sections=true (each profile is a closed loop).
+    ///
+    /// W-3-β scope (MVP, two-profile only):
+    /// - Both faces exist + active
+    /// - Both faces multi-loop guard (ADR-016 Q2 / L8)
+    /// - Outer-loop vertex counts match (no auto-resampling — future)
+    /// - Profiles must NOT be the same FaceId
+    fn loft_between_profiles(
+        &mut self,
+        profile_face: FaceId,
+        other_profile: FaceId,
+        material: MaterialId,
+    ) -> Result<CreateSolidResult> {
+        // §W3β-A — Both faces must be distinct.
+        if profile_face == other_profile {
+            return Err(SolidError::NotYetSupported {
+                reason: "Loft: both profiles are the same FaceId".to_string(),
+            }
+            .into());
+        }
+
+        // §W3β-A — Both faces must exist + active.
+        let f1 = self
+            .faces
+            .get(profile_face)
+            .ok_or(SolidError::FaceNotFound)?;
+        if !f1.is_active() {
+            return Err(SolidError::FaceNotFound.into());
+        }
+        if !f1.inners().is_empty() {
+            return Err(SolidError::NotYetSupported {
+                reason: "Loft profile (first) multi-loop face rejected (ADR-016 Q2)".to_string(),
+            }
+            .into());
+        }
+        let f1_outer_start = f1.outer().start;
+        if f1_outer_start.is_null() {
+            bail!("loft_between_profiles: profile_face has null outer loop start");
+        }
+
+        let f2 = self
+            .faces
+            .get(other_profile)
+            .ok_or(SolidError::FaceNotFound)?;
+        if !f2.is_active() {
+            return Err(SolidError::FaceNotFound.into());
+        }
+        if !f2.inners().is_empty() {
+            return Err(SolidError::NotYetSupported {
+                reason: "Loft profile (second) multi-loop face rejected (ADR-016 Q2)"
+                    .to_string(),
+            }
+            .into());
+        }
+        let f2_outer_start = f2.outer().start;
+        if f2_outer_start.is_null() {
+            bail!("loft_between_profiles: other_profile has null outer loop start");
+        }
+
+        // Extract two profiles' outer-loop vertex world positions.
+        let v1 = self.collect_loop_verts(f1_outer_start)?;
+        let v2 = self.collect_loop_verts(f2_outer_start)?;
+
+        // §W3β-B — Vertex counts must match (no auto-resampling in MVP).
+        if v1.len() != v2.len() {
+            return Err(SolidError::NotYetSupported {
+                reason: format!(
+                    "Loft: profile vertex count mismatch ({} vs {}, no auto-resampling in W-3-β MVP)",
+                    v1.len(),
+                    v2.len()
+                ),
+            }
+            .into());
+        }
+        if v1.len() < 3 {
+            bail!(
+                "loft_between_profiles: profile boundary has only {} verts (need ≥ 3)",
+                v1.len()
+            );
+        }
+
+        let section1: Vec<DVec3> = v1
+            .iter()
+            .map(|&v| self.vertex_pos(v))
+            .collect::<Result<Vec<_>>>()?;
+        let section2: Vec<DVec3> = v2
+            .iter()
+            .map(|&v| self.vertex_pos(v))
+            .collect::<Result<Vec<_>>>()?;
+
+        // §W3β-C — Delegate to Mesh::loft.
+        let sections = vec![section1, section2];
+        let side_faces = self
+            .loft(&sections, /* closed_sections */ true, material)
+            .map_err(|e| anyhow::anyhow!("Loft operation failed: {}", e))?;
+
+        let mut all_solid_faces = Vec::with_capacity(2 + side_faces.len());
+        all_solid_faces.push(profile_face);
+        all_solid_faces.push(other_profile);
+        all_solid_faces.extend(side_faces.iter().copied());
+
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::LoftSolid,
+            top_face: other_profile, // second profile = "top" cap
             side_faces,
             all_solid_faces,
             adjacent_splits: 0,
@@ -3693,6 +3808,205 @@ mod tests {
         assert!(
             result.side_faces.len() >= 4,
             "arc sweep must produce side faces"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-079 W-3-β — Loft mode dispatch (two profiles)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper — build two square profile faces stacked in z (z=0 and z=2),
+    /// suitable for loft.
+    fn build_two_square_profiles(mesh: &mut Mesh) -> (FaceId, FaceId) {
+        let mat = MaterialId::new(0);
+        // Bottom square at z=0 (4 verts CCW from above).
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let bottom = mesh.add_face(&[v00, v10, v11, v01], mat).expect("bottom");
+        mesh.faces[bottom].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+        // Top square at z=2 (slightly larger).
+        let w00 = mesh.add_vertex(DVec3::new(-0.5, -0.5, 2.0));
+        let w10 = mesh.add_vertex(DVec3::new(1.5, -0.5, 2.0));
+        let w11 = mesh.add_vertex(DVec3::new(1.5, 1.5, 2.0));
+        let w01 = mesh.add_vertex(DVec3::new(-0.5, 1.5, 2.0));
+        let top = mesh.add_face(&[w00, w10, w11, w01], mat).expect("top");
+        mesh.faces[top].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::new(0.0, 0.0, 2.0),
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-0.5, 1.5),
+            v_range: (-0.5, 1.5),
+        }));
+        (bottom, top)
+    }
+
+    #[test]
+    fn loft_mode_two_squares_returns_loft_solid() {
+        let mut mesh = Mesh::new();
+        let (bottom, top) = build_two_square_profiles(&mut mesh);
+
+        let result = mesh
+            .create_solid(
+                bottom,
+                CreateSolidMode::Loft { other_profile: top },
+                MaterialId::new(0),
+            )
+            .expect("loft 2 squares OK");
+
+        assert_eq!(result.solid_kind, SolidKind::LoftSolid);
+        assert_eq!(result.profile_face, bottom);
+        assert_eq!(result.top_face, top);
+        // Loft of two 4-vertex squares: 4 ruled bands.
+        assert_eq!(
+            result.side_faces.len(),
+            4,
+            "loft 4-square to 4-square must produce 4 ruled side faces"
+        );
+        // all_solid_faces = bottom + top + 4 sides = 6.
+        assert_eq!(result.all_solid_faces.len(), 6);
+    }
+
+    #[test]
+    fn loft_mode_same_profile_id_rejected() {
+        let mut mesh = Mesh::new();
+        let (bottom, _top) = build_two_square_profiles(&mut mesh);
+
+        let result = mesh.create_solid(
+            bottom,
+            CreateSolidMode::Loft {
+                other_profile: bottom, // same as profile_face
+            },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must reject same profile");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("same FaceId"),
+            "expected same-FaceId rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn loft_mode_vertex_count_mismatch_rejected() {
+        // Bottom: 4-vertex square. Top: 3-vertex triangle. Mismatch.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let bottom = mesh.add_face(&[v00, v10, v11, v01], mat).expect("bottom");
+        mesh.faces[bottom].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+        let w0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 2.0));
+        let w1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 2.0));
+        let w2 = mesh.add_vertex(DVec3::new(0.5, 1.0, 2.0));
+        let top = mesh.add_face(&[w0, w1, w2], mat).expect("top");
+        mesh.faces[top].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::new(0.0, 0.0, 2.0),
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 1.0),
+            v_range: (0.0, 1.0),
+        }));
+
+        let result = mesh.create_solid(
+            bottom,
+            CreateSolidMode::Loft { other_profile: top },
+            mat,
+        );
+        let err = result.err().expect("must reject vertex count mismatch");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("vertex count mismatch"),
+            "expected vertex-count-mismatch rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn loft_mode_first_profile_multi_loop_rejected() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Frame face (multi-loop) as first profile.
+        let outer = [
+            mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0)),
+            mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0)),
+            mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0)),
+        ];
+        let inner = [
+            mesh.add_vertex(DVec3::new(3.0, 3.0, 0.0)),
+            mesh.add_vertex(DVec3::new(7.0, 3.0, 0.0)),
+            mesh.add_vertex(DVec3::new(7.0, 7.0, 0.0)),
+            mesh.add_vertex(DVec3::new(3.0, 7.0, 0.0)),
+        ];
+        let frame = mesh
+            .add_face_with_holes(&outer, &[&inner], mat)
+            .expect("frame face");
+        mesh.faces[frame].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        }));
+        // Plain top square (4 verts).
+        let w00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 5.0));
+        let w10 = mesh.add_vertex(DVec3::new(10.0, 0.0, 5.0));
+        let w11 = mesh.add_vertex(DVec3::new(10.0, 10.0, 5.0));
+        let w01 = mesh.add_vertex(DVec3::new(0.0, 10.0, 5.0));
+        let top = mesh.add_face(&[w00, w10, w11, w01], mat).expect("top");
+        mesh.faces[top].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::new(0.0, 0.0, 5.0),
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        }));
+
+        let result = mesh.create_solid(
+            frame,
+            CreateSolidMode::Loft { other_profile: top },
+            mat,
+        );
+        let err = result.err().expect("must reject multi-loop");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("not yet supported") && msg.contains("multi-loop"),
+            "expected multi-loop rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn loft_mode_invalid_face_id_rejected() {
+        let mut mesh = Mesh::new();
+        let (bottom, _top) = build_two_square_profiles(&mut mesh);
+
+        let result = mesh.create_solid(
+            bottom,
+            CreateSolidMode::Loft {
+                other_profile: FaceId::new(999),
+            },
+            MaterialId::new(0),
+        );
+        let err = result.err().expect("must reject missing face");
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("FaceNotFound") || msg.contains("face not found"),
+            "expected FaceNotFound, got: {msg}"
         );
     }
 
