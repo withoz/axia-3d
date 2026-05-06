@@ -5816,6 +5816,73 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-080 V-β-α-bridge — Edge offset using host face's surface as the
+    /// reference (no caller-supplied plane_normal). Returns JSON whose
+    /// `reason` field on failure is one of:
+    ///   - `"unsupported_surface"` (with `kind`: "Cylinder" / "Sphere" /
+    ///     "Cone" / "Torus" / "BezierPatch" / "BSplineSurface" /
+    ///     "NURBSSurface") — V-β-γ / W-3 forward defer
+    ///   - `"unsupported_curve"` (with `kind`: "Arc" / "Circle" / "Bezier"
+    ///     / "BSpline" / "NURBS") — V-β-β / W-3 forward defer
+    ///   - `"no_incident_face"` — free wire (V-δ scope)
+    ///   - `"ambiguous_host"` — multiple incident faces with conflicting
+    ///     surfaces
+    ///   - `"multi_loop"` — host face has hole loops (ADR-016 Q2 / L8)
+    ///   - `"degenerate_distance"` — |dist| below epsilon
+    ///   - `"other"` (with `message`) — any other failure
+    ///
+    /// On success: `{"ok":true,"newEdge":<u32>,"newV0":<u32>,"newV1":<u32>}`.
+    pub fn offset_edge_on_host(&mut self, edge_id_raw: u32, dist: f64) -> String {
+        use axia_geo::operations::offset::OffsetEdgeError;
+        let eid = EdgeId::new(edge_id_raw);
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.mesh.offset_edge_on_host_face(eid, dist) {
+            Ok(result) => {
+                self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                format!(
+                    r#"{{"ok":true,"newEdge":{},"newV0":{},"newV1":{}}}"#,
+                    result.new_edge.raw(),
+                    result.new_v0.raw(),
+                    result.new_v1.raw(),
+                )
+            }
+            Err(err) => {
+                self.scene.transactions.cancel();
+                debug_log!("[RUST] offset_edge_on_host failure: {}", err);
+                match err {
+                    OffsetEdgeError::UnsupportedHostSurface { kind } => {
+                        format!(r#"{{"ok":false,"reason":"unsupported_surface","kind":"{}"}}"#, kind)
+                    }
+                    OffsetEdgeError::UnsupportedCurveKind { kind } => {
+                        format!(r#"{{"ok":false,"reason":"unsupported_curve","kind":"{}"}}"#, kind)
+                    }
+                    OffsetEdgeError::NoIncidentFace => {
+                        r#"{"ok":false,"reason":"no_incident_face"}"#.to_string()
+                    }
+                    OffsetEdgeError::AmbiguousHostFace { n_faces } => {
+                        format!(r#"{{"ok":false,"reason":"ambiguous_host","nFaces":{}}}"#, n_faces)
+                    }
+                    OffsetEdgeError::MultiLoopHostFace(_) => {
+                        r#"{"ok":false,"reason":"multi_loop"}"#.to_string()
+                    }
+                    OffsetEdgeError::DegenerateDistance(_) => {
+                        r#"{"ok":false,"reason":"degenerate_distance"}"#.to_string()
+                    }
+                    other => {
+                        let msg = other.to_string().replace('"', "'");
+                        format!(r#"{{"ok":false,"reason":"other","message":"{}"}}"#, msg)
+                    }
+                }
+            }
+        }
+    }
+
     /// face 집합의 중심점 반환 [x, y, z]
     pub fn faces_centroid(&self, face_ids: &[u32]) -> Vec<f64> {
         let fids: Vec<FaceId> = face_ids.iter().map(|&id| FaceId::new(id)).collect();

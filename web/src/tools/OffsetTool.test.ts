@@ -17,6 +17,9 @@ function mockToolContext() {
     bridge: {
       offsetFace: vi.fn().mockReturnValue({ ok: true, innerFace: 10 }),
       offsetEdge: vi.fn().mockReturnValue({ ok: true, newEdge: 20 }),
+      offsetEdgeOnHost: vi.fn().mockReturnValue({
+        ok: true, newEdge: 30, newV0: 100, newV1: 101,
+      }),
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0)),
       getFaceNormal: vi.fn().mockReturnValue(new Float32Array([0, 1, 0])),
       getEdgeLines: vi.fn().mockReturnValue(null),
@@ -207,18 +210,20 @@ describe('OffsetTool', () => {
       expect(ctx.selection.clearSelection).toHaveBeenCalledTimes(1);
     });
 
-    it('edge-only selection → V-β placeholder Toast (no Rust call)', async () => {
+    it('edge-only selection → enters edge dim mode (no Toast fires on activate after V-β-α-bridge)', async () => {
       const { Toast } = await import('../ui/Toast');
       ctx.getSelectedFaces.mockReturnValue([]);
       ctx.selection.getSelectedEdges.mockReturnValue([10, 11]);
 
       tool.onActivate();
 
-      expect(Toast.info).toHaveBeenCalledTimes(1);
-      const args = (Toast.info as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(args[0]).toMatch(/V-β|V-beta|엣지|edge/i);
+      // V-α showed an upfront placeholder Toast. V-β-α-bridge actually
+      // performs the offset on VCB-apply, so no upfront Toast.
+      expect(Toast.info).not.toHaveBeenCalled();
       expect(ctx.bridge.offsetFace).not.toHaveBeenCalled();
       expect(ctx.bridge.offsetEdge).not.toHaveBeenCalled();
+      // No Rust call yet — that happens at applyVCBValue.
+      expect(ctx.bridge.offsetEdgeOnHost).not.toHaveBeenCalled();
     });
 
     it('face-only selection → existing path (no Toast, no clearSelection)', async () => {
@@ -246,24 +251,26 @@ describe('OffsetTool', () => {
       expect(tool.isBusy()).toBe(false);
     });
 
-    it('edge mode applyVCBValue → placeholder Toast, no offsetFace call', async () => {
-      const { Toast } = await import('../ui/Toast');
+    it('edge mode applyVCBValue → calls offsetEdgeOnHost (V-β-α-bridge)', async () => {
       ctx.getSelectedFaces.mockReturnValue([]);
       ctx.selection.getSelectedEdges.mockReturnValue([10]);
       tool.onActivate();
       vi.clearAllMocks();
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: true, newEdge: 30, newV0: 100, newV1: 101,
+      });
 
       tool.applyVCBValue(50);
 
-      expect(Toast.info).toHaveBeenCalledTimes(1);
-      const args = (Toast.info as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(args[0]).toMatch(/V-β|V-beta|엣지|edge/i);
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledWith(10, 50);
       expect(ctx.bridge.offsetFace).not.toHaveBeenCalled();
       expect(ctx.bridge.offsetEdge).not.toHaveBeenCalled();
+      expect(ctx.syncMesh).toHaveBeenCalled();
       expect(tool.isBusy()).toBe(false);
     });
 
-    it('edge mode onMouseDown → blocked + Toast, no face pick', async () => {
+    it('edge mode onMouseDown → blocked + Toast hint, no face pick', async () => {
       const { Toast } = await import('../ui/Toast');
       ctx.getSelectedFaces.mockReturnValue([]);
       ctx.selection.getSelectedEdges.mockReturnValue([10]);
@@ -278,10 +285,90 @@ describe('OffsetTool', () => {
 
       tool.onMouseDown({ clientX: 100, clientY: 100 } as MouseEvent, null);
 
+      // V-β-α-bridge: edge mode click hints at VCB usage (no Rust call).
       expect(Toast.info).toHaveBeenCalledTimes(1);
       expect(ctx.bridge.offsetFace).not.toHaveBeenCalled();
-      // SelectionManager.handleClick not called (face pick path skipped).
+      expect(ctx.bridge.offsetEdgeOnHost).not.toHaveBeenCalled();
       expect(ctx.selection.handleClick).not.toHaveBeenCalled();
+    });
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-080 V-β-α-bridge — applyEdgeOffset reason dispatch
+    // ────────────────────────────────────────────────────────────────
+
+    it('edge mode applyVCB with unsupported_surface → forward-defer Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'unsupported_surface', kind: 'Cylinder',
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledWith(10, 50);
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/Cylinder|V-β-γ/);
+      expect(ctx.syncMesh).not.toHaveBeenCalled();
+    });
+
+    it('edge mode applyVCB with no_incident_face → V-δ Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'no_incident_face',
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/자유 와이어|V-δ|V-delta/);
+    });
+
+    it('edge mode applyVCB with multi_loop → ADR-016 Toast', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([10]);
+      ctx.bridge.offsetEdgeOnHost.mockReturnValue({
+        ok: false, reason: 'multi_loop',
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      const msg = (Toast.warning as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toMatch(/multi-loop|hole|ADR-016/);
+    });
+
+    it('edge mode applyVCB partial success → success + warning Toasts', async () => {
+      const { Toast } = await import('../ui/Toast');
+      ctx.getSelectedFaces.mockReturnValue([]);
+      ctx.selection.getSelectedEdges.mockReturnValue([1, 2, 3]);
+      ctx.bridge.offsetEdgeOnHost.mockImplementation((id: number) => {
+        if (id === 1) return { ok: true, newEdge: 100, newV0: 1, newV1: 2 };
+        if (id === 2) return { ok: false, reason: 'unsupported_curve', kind: 'Arc' };
+        return { ok: false, reason: 'no_incident_face' };
+      });
+      tool.onActivate();
+      vi.clearAllMocks();
+
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.offsetEdgeOnHost).toHaveBeenCalledTimes(3);
+      expect(Toast.success).toHaveBeenCalledTimes(1);
+      const successMsg = (Toast.success as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(successMsg).toMatch(/1개 성공.*2개 실패/);
+      expect(Toast.warning).toHaveBeenCalledTimes(1);
+      expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
     it('face mode applyVCBValue still routes to offsetFace (legacy path intact)', async () => {

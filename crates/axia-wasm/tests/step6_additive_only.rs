@@ -812,6 +812,69 @@ fn create_solid_extrude_handles_solid_created_and_fallback() {
         "W-1-β: must match CommandResult::Error");
 }
 
+// ── ADR-080 V-β-α-bridge — `offset_edge_on_host` JSON contract ──────
+//
+// New WASM endpoint exposes V-β-α Rust core (offset_edge_on_host_face)
+// via a JSON return that surfaces typed reasons for forward-defer cases.
+// These source-inspection tests pin the endpoint signature + reason
+// vocabulary so the TS bridge / OffsetTool can dispatch reliably.
+#[test]
+fn offset_edge_on_host_endpoint_wired() {
+    let l = lib_src();
+    assert!(
+        l.contains("pub fn offset_edge_on_host"),
+        "ADR-080 V-β-α-bridge: missing pub fn offset_edge_on_host"
+    );
+    let idx = l
+        .find("pub fn offset_edge_on_host")
+        .expect("offset_edge_on_host");
+    let body = char_safe_slice(&l, idx, 3500);
+    // Signature: (edge_id_raw: u32, dist: f64) -> String
+    assert!(
+        body.contains("edge_id_raw: u32"),
+        "must take edge_id_raw: u32"
+    );
+    assert!(body.contains("dist: f64"), "must take dist: f64");
+    assert!(
+        body.contains("-> String"),
+        "must return JSON-encoded String"
+    );
+}
+
+#[test]
+fn offset_edge_on_host_dispatches_via_offset_edge_on_host_face() {
+    let l = lib_src();
+    let idx = l.find("pub fn offset_edge_on_host").expect("endpoint");
+    let body = char_safe_slice(&l, idx, 3500);
+    assert!(
+        body.contains("offset_edge_on_host_face"),
+        "must call Mesh::offset_edge_on_host_face (V-β-α Rust core)"
+    );
+}
+
+#[test]
+fn offset_edge_on_host_emits_typed_reason_vocabulary() {
+    let l = lib_src();
+    let idx = l.find("pub fn offset_edge_on_host").expect("endpoint");
+    let body = char_safe_slice(&l, idx, 3500);
+    // §V-β-α-bridge reason vocabulary — every typed error must produce
+    // a stable, parseable reason string for the TS layer.
+    for reason in [
+        "unsupported_surface",
+        "unsupported_curve",
+        "no_incident_face",
+        "ambiguous_host",
+        "multi_loop",
+        "degenerate_distance",
+    ] {
+        assert!(
+            body.contains(reason),
+            "V-β-α-bridge: reason vocabulary missing '{}'",
+            reason
+        );
+    }
+}
+
 // ── ADR-079 W-2-β — `create_solid_extrude` is SolidKind-agnostic ─────
 //
 // W-2-α 가 SolidKind::Cylinder 를 새 SolidKind 로 도입했다. 본 endpoint

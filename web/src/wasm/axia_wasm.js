@@ -2885,6 +2885,43 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-080 V-β-α-bridge — Edge offset using host face's surface as the
+     * reference (no caller-supplied plane_normal). Returns JSON whose
+     * `reason` field on failure is one of:
+     *   - `"unsupported_surface"` (with `kind`: "Cylinder" / "Sphere" /
+     *     "Cone" / "Torus" / "BezierPatch" / "BSplineSurface" /
+     *     "NURBSSurface") — V-β-γ / W-3 forward defer
+     *   - `"unsupported_curve"` (with `kind`: "Arc" / "Circle" / "Bezier"
+     *     / "BSpline" / "NURBS") — V-β-β / W-3 forward defer
+     *   - `"no_incident_face"` — free wire (V-δ scope)
+     *   - `"ambiguous_host"` — multiple incident faces with conflicting
+     *     surfaces
+     *   - `"multi_loop"` — host face has hole loops (ADR-016 Q2 / L8)
+     *   - `"degenerate_distance"` — |dist| below epsilon
+     *   - `"other"` (with `message`) — any other failure
+     *
+     * On success: `{"ok":true,"newEdge":<u32>,"newV0":<u32>,"newV1":<u32>}`.
+     * @param {number} edge_id_raw
+     * @param {number} dist
+     * @returns {string}
+     */
+    offset_edge_on_host(edge_id_raw, dist) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_offset_edge_on_host(retptr, this.__wbg_ptr, edge_id_raw, dist);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Offset: face의 경계를 dist만큼 안쪽(+)/바깥쪽(-)으로 오프셋
      * 반환: JSON 결과 { ok, innerFace, stripFaces, ... }
      * @param {number} face_id_raw

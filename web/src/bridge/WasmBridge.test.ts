@@ -1561,4 +1561,84 @@ describe('WasmBridge', () => {
       expect(csFn).not.toHaveBeenCalled();
     });
   });
+
+  describe('ADR-080 V-β-α-bridge offsetEdgeOnHost wrapper', () => {
+    it('returns success result on Rust success JSON', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: true, newEdge: 42, newV0: 100, newV1: 101 }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(7, 0.5);
+      expect(fn).toHaveBeenCalledWith(7, 0.5);
+      expect(r).toEqual({ ok: true, newEdge: 42, newV0: 100, newV1: 101 });
+    });
+
+    it('parses unsupported_surface reason with kind', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: false, reason: 'unsupported_surface', kind: 'Cylinder' }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({ ok: false, reason: 'unsupported_surface', kind: 'Cylinder' });
+    });
+
+    it('parses unsupported_curve reason with kind', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: false, reason: 'unsupported_curve', kind: 'Arc' }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({ ok: false, reason: 'unsupported_curve', kind: 'Arc' });
+    });
+
+    it('parses no_incident_face / multi_loop / degenerate_distance reasons', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        offset_edge_on_host: vi.fn((id: number) => {
+          if (id === 1) return JSON.stringify({ ok: false, reason: 'no_incident_face' });
+          if (id === 2) return JSON.stringify({ ok: false, reason: 'multi_loop' });
+          return JSON.stringify({ ok: false, reason: 'degenerate_distance' });
+        }),
+      };
+      expect(bridge.offsetEdgeOnHost(1, 1)).toEqual({ ok: false, reason: 'no_incident_face' });
+      expect(bridge.offsetEdgeOnHost(2, 1)).toEqual({ ok: false, reason: 'multi_loop' });
+      expect(bridge.offsetEdgeOnHost(3, 1)).toEqual({ ok: false, reason: 'degenerate_distance' });
+    });
+
+    it('parses ambiguous_host with nFaces', () => {
+      const fn = vi.fn(() =>
+        JSON.stringify({ ok: false, reason: 'ambiguous_host', nFaces: 3 }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge_on_host: fn };
+      const r = bridge.offsetEdgeOnHost(1, 1);
+      expect(r).toEqual({ ok: false, reason: 'ambiguous_host', nFaces: 3 });
+    });
+
+    it('returns bridge_unavailable when engine method is missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.offsetEdgeOnHost(1, 1)).toEqual({
+        ok: false,
+        reason: 'bridge_unavailable',
+      });
+    });
+
+    it('legacy offsetEdge UNCHANGED by V-β-α-bridge addition', () => {
+      const oldFn = vi.fn(() =>
+        JSON.stringify({ ok: true, newEdge: 5, newV0: 10, newV1: 11 }),
+      );
+      const newFn = vi.fn(() =>
+        JSON.stringify({ ok: true, newEdge: 6, newV0: 12, newV1: 13 }),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { offset_edge: oldFn, offset_edge_on_host: newFn };
+      bridge.offsetEdge(99, 0.3, [0, 1, 0]);
+      expect(oldFn).toHaveBeenCalledTimes(1);
+      expect(newFn).not.toHaveBeenCalled();
+    });
+  });
 });

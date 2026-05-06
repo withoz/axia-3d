@@ -3077,6 +3077,57 @@ export class WasmBridge {
     }
   }
 
+  /**
+   * ADR-080 V-β-α-bridge — Edge offset using the host face's surface as
+   * reference (no caller-supplied plane normal). Wraps `Mesh::offset_edge_
+   * on_host_face` (V-β-α). Returns a tagged-union result so callers
+   * dispatch on `reason` for forward-defer cases (Cylinder/Sphere/Cone
+   * /Torus host, Arc/Circle/NURBS curve, free wire, multi-loop, etc.).
+   *
+   * Caller (OffsetTool) is responsible for surfacing reason-specific
+   * Toast messages.
+   */
+  offsetEdgeOnHost(edgeId: number, dist: number): OffsetEdgeOnHostResult {
+    if (!this.engine) return { ok: false, reason: 'bridge_unavailable' };
+    this.markDirty();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fn = (this.engine as any).offset_edge_on_host;
+      if (!fn) return { ok: false, reason: 'bridge_unavailable' };
+      const json: string = fn.call(this.engine, edgeId, dist);
+      const parsed = JSON.parse(json);
+      // Trust the WASM-side reason vocabulary. Any unknown reason is
+      // mapped to 'other' so the type stays well-formed.
+      if (parsed.ok === true) {
+        return {
+          ok: true,
+          newEdge: parsed.newEdge,
+          newV0: parsed.newV0,
+          newV1: parsed.newV1,
+        };
+      }
+      switch (parsed.reason) {
+        case 'unsupported_surface':
+          return { ok: false, reason: 'unsupported_surface', kind: parsed.kind ?? 'Unknown' };
+        case 'unsupported_curve':
+          return { ok: false, reason: 'unsupported_curve', kind: parsed.kind ?? 'Unknown' };
+        case 'no_incident_face':
+          return { ok: false, reason: 'no_incident_face' };
+        case 'ambiguous_host':
+          return { ok: false, reason: 'ambiguous_host', nFaces: parsed.nFaces ?? 0 };
+        case 'multi_loop':
+          return { ok: false, reason: 'multi_loop' };
+        case 'degenerate_distance':
+          return { ok: false, reason: 'degenerate_distance' };
+        default:
+          return { ok: false, reason: 'other', message: String(parsed.message ?? parsed.reason ?? 'unknown') };
+      }
+    } catch (e) {
+      console.error('[WasmBridge] offsetEdgeOnHost failed:', e);
+      return { ok: false, reason: 'other', message: String(e) };
+    }
+  }
+
   /** Edge line segment index → EdgeId map (edge picking용) */
   getEdgeMap(): Uint32Array | null {
     if (!this.engine) return null;
@@ -3522,6 +3573,23 @@ export interface OffsetEdgeResult {
   newV0?: number;
   newV1?: number;
 }
+
+/**
+ * ADR-080 V-β-α-bridge — Result of `WasmBridge.offsetEdgeOnHost`.
+ *
+ * Tagged-union shape that lets OffsetTool dispatch on `reason` for
+ * friendly Toast messages without parsing free-form strings.
+ */
+export type OffsetEdgeOnHostResult =
+  | { ok: true; newEdge: number; newV0: number; newV1: number }
+  | { ok: false; reason: 'unsupported_surface'; kind: string }
+  | { ok: false; reason: 'unsupported_curve'; kind: string }
+  | { ok: false; reason: 'no_incident_face' }
+  | { ok: false; reason: 'ambiguous_host'; nFaces: number }
+  | { ok: false; reason: 'multi_loop' }
+  | { ok: false; reason: 'degenerate_distance' }
+  | { ok: false; reason: 'other'; message: string }
+  | { ok: false; reason: 'bridge_unavailable' };
 
 export interface BooleanResult {
   ok: boolean;

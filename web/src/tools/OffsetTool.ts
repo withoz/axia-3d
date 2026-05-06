@@ -19,6 +19,51 @@ import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
 
+/**
+ * ADR-080 V-β-α-bridge — Aggregate per-reason failure counts into a
+ * single user-facing message. Forward-defer cases name the V-β-β /
+ * V-β-γ / V-δ scope explicitly so users know it's coming, not broken.
+ */
+function formatEdgeOffsetFailureToast(
+  reasonCount: Map<string, number>,
+  unsupportedKinds: Set<string>,
+): string | null {
+  if (reasonCount.size === 0) return null;
+  const parts: string[] = [];
+  for (const [reason, count] of reasonCount) {
+    switch (reason) {
+      case 'unsupported_surface':
+        parts.push(
+          `${count}개: 호스트 면 (${[...unsupportedKinds].join(',')}) — V-β-γ 에서 활성됩니다`,
+        );
+        break;
+      case 'unsupported_curve':
+        parts.push(
+          `${count}개: 곡선 종류 (${[...unsupportedKinds].join(',')}) — V-β-β 에서 활성됩니다`,
+        );
+        break;
+      case 'no_incident_face':
+        parts.push(`${count}개: 자유 와이어 — V-δ 에서 활성됩니다`);
+        break;
+      case 'ambiguous_host':
+        parts.push(`${count}개: 호스트 면이 모호합니다`);
+        break;
+      case 'multi_loop':
+        parts.push(`${count}개: hole 면 (multi-loop) 거부 (ADR-016)`);
+        break;
+      case 'degenerate_distance':
+        parts.push(`${count}개: 거리가 너무 작습니다`);
+        break;
+      case 'bridge_unavailable':
+        parts.push(`${count}개: WASM 미가용`);
+        break;
+      default:
+        parts.push(`${count}개: 기타 오류 (${reason})`);
+    }
+  }
+  return `엣지 offset 실패 — ${parts.join(' · ')}`;
+}
+
 export class OffsetTool implements ITool {
   readonly name = 'offset';
 
@@ -69,13 +114,13 @@ export class OffsetTool implements ITool {
       this.dimMode = null;
       debugLog('[OffsetTool] Activated; mixed selection rejected (ADR-080 L5)');
     } else if (dim === 'edge') {
-      // L3 — Edge dimension routes to in-plane curve offset (V-β).
+      // L3 — Edge dimension routes to in-plane curve offset (V-β-α).
+      // V-β-α-bridge: actually performs Line-on-Plane offsets via
+      // `bridge.offsetEdgeOnHost`. Forward-defer reasons (Cylinder host,
+      // Arc curve, free wire, etc.) surface as reason-specific Toasts at
+      // VCB-apply time. No upfront placeholder Toast.
       this.dimMode = 'edge';
-      Toast.info(
-        '엣지 offset (curve offset, in-plane) — V-β 에서 활성됩니다 (ADR-080).',
-        3500,
-      );
-      debugLog('[OffsetTool] Activated; edge dimension (V-β placeholder)');
+      debugLog('[OffsetTool] Activated; edge dimension (V-β-α)');
     } else if (dim === 'face') {
       // L4 — Face dimension. Existing behavior kept (V-γ may swap to
       // surface-normal offset in a future ADR).
@@ -95,13 +140,11 @@ export class OffsetTool implements ITool {
   }
 
   onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
-    // ADR-080 V-α — Edge dimension placeholder: don't pick faces, await
-    // VCB value. Click-to-confirm UX pending V-β implementation.
+    // ADR-080 V-β-α-bridge — Edge dimension waits for VCB input (no face
+    // pick). Click on canvas does nothing in edge mode; user enters
+    // distance via VCB to apply, ESC to cancel.
     if (this.dimMode === 'edge') {
-      Toast.info(
-        '엣지 offset 은 V-β 에서 활성됩니다. VCB 또는 ESC.',
-        2500,
-      );
+      Toast.info('엣지 offset: 거리(VCB)를 입력하세요. ESC 로 취소.', 2000);
       return;
     }
 
@@ -189,13 +232,11 @@ export class OffsetTool implements ITool {
   }
 
   applyVCBValue(value: number): void {
-    // ADR-080 V-α — Edge dimension placeholder: VCB value triggers a
-    // notice that V-β implementation is pending. No bridge call.
+    // ADR-080 V-β-α-bridge — Edge dimension dispatch via Mesh::offset_edge_
+    // on_host_face. Forward-defer cases (Cylinder host, Arc curve, free wire,
+    // multi-loop, etc.) surface as reason-specific Toasts.
     if (this.dimMode === 'edge') {
-      Toast.info(
-        `엣지 offset (${this.ctx.units.format(Math.abs(value))}) — V-β 에서 활성됩니다 (ADR-080).`,
-        3500,
-      );
+      this.applyEdgeOffset(value);
       this.ctx.dimLabel.clear();
       this.resetOffsetState();
       return;
@@ -233,6 +274,56 @@ export class OffsetTool implements ITool {
     this.removeOffsetGhost();
     this.removeOffsetHover();
     this.ctx.selection.clearSelection();
+  }
+
+  /**
+   * ADR-080 V-β-α-bridge — Edge mode VCB handler.
+   *
+   * Iterates over each selected edge, invokes `bridge.offsetEdgeOnHost`,
+   * and surfaces a reason-specific Toast for failed edges. On any
+   * success, syncs the mesh and reports the count.
+   */
+  private applyEdgeOffset(dist: number): void {
+    const edges = this.ctx.selection.getSelectedEdges();
+    if (edges.length === 0) {
+      Toast.info('Offset 적용할 엣지가 없습니다.', 2500);
+      return;
+    }
+
+    const distFmt = this.ctx.units.format(Math.abs(dist));
+    let successCount = 0;
+    const reasonCount = new Map<string, number>();
+    const unsupportedKinds = new Set<string>();
+
+    for (const edgeId of edges) {
+      const r = this.ctx.bridge.offsetEdgeOnHost(edgeId, dist);
+      if (r.ok) {
+        successCount++;
+        continue;
+      }
+      const key = r.reason;
+      reasonCount.set(key, (reasonCount.get(key) ?? 0) + 1);
+      if (r.reason === 'unsupported_surface' || r.reason === 'unsupported_curve') {
+        unsupportedKinds.add(r.kind);
+      }
+      debugLog('[OffsetTool] edge offset failed', { edgeId, ...r });
+    }
+
+    if (successCount > 0) {
+      this.ctx.syncMesh();
+      Toast.success(
+        `엣지 offset (${distFmt}) — ${successCount}개 성공${
+          edges.length > successCount ? ` / ${edges.length - successCount}개 실패` : ''
+        }`,
+        2500,
+      );
+    }
+
+    // Surface a single reason-aggregated Toast for failed edges.
+    if (successCount < edges.length) {
+      const msg = formatEdgeOffsetFailureToast(reasonCount, unsupportedKinds);
+      if (msg) Toast.warning(msg, 4000);
+    }
   }
 
   private pickFaceTarget(e: MouseEvent): boolean {

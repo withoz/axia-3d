@@ -1015,6 +1015,25 @@ export class AxiaEngine {
      */
     offset_edge(edge_id_raw: number, dist: number, pnx: number, pny: number, pnz: number): string;
     /**
+     * ADR-080 V-β-α-bridge — Edge offset using host face's surface as the
+     * reference (no caller-supplied plane_normal). Returns JSON whose
+     * `reason` field on failure is one of:
+     *   - `"unsupported_surface"` (with `kind`: "Cylinder" / "Sphere" /
+     *     "Cone" / "Torus" / "BezierPatch" / "BSplineSurface" /
+     *     "NURBSSurface") — V-β-γ / W-3 forward defer
+     *   - `"unsupported_curve"` (with `kind`: "Arc" / "Circle" / "Bezier"
+     *     / "BSpline" / "NURBS") — V-β-β / W-3 forward defer
+     *   - `"no_incident_face"` — free wire (V-δ scope)
+     *   - `"ambiguous_host"` — multiple incident faces with conflicting
+     *     surfaces
+     *   - `"multi_loop"` — host face has hole loops (ADR-016 Q2 / L8)
+     *   - `"degenerate_distance"` — |dist| below epsilon
+     *   - `"other"` (with `message`) — any other failure
+     *
+     * On success: `{"ok":true,"newEdge":<u32>,"newV0":<u32>,"newV1":<u32>}`.
+     */
+    offset_edge_on_host(edge_id_raw: number, dist: number): string;
+    /**
      * Offset: face의 경계를 dist만큼 안쪽(+)/바깥쪽(-)으로 오프셋
      * 반환: JSON 결과 { ok, innerFace, stripFaces, ... }
      */
@@ -1661,6 +1680,7 @@ export interface InitOutput {
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_offset_edge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly axiaengine_offset_edge_on_host: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_offset_face: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_orient_faces: (a: number) => number;
     readonly axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;
