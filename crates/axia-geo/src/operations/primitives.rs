@@ -234,13 +234,29 @@ impl Mesh {
         let top_face = self.add_face(&top_verts, material)?;
         faces.push(top_face);
 
-        // ADR-032 P17 — compute extrapolated full cone parameters from the
-        // (possibly truncated) frustum. Apex sits below the base when the
-        // taper opens upward (radius > top_radius).
-        // Slope tan(half_angle) = (radius - top_radius) / height.
+        // ADR-032 P17 + ADR-087 K-η fix — compute extrapolated full cone
+        // parameters from the (possibly truncated) frustum.
+        //
+        // Cone formula: P(u, v) = apex + v·axis + v·tan(α)·(cos(u)·ref + sin(u)·perp)
+        // - v = signed axial distance from apex along axis_dir
+        // - radius at v = v·tan(α)
+        //
+        // For a truncated cone tapering UP (base radius > top radius), the
+        // full-cone apex sits ABOVE the top (the cone narrows to a point as
+        // we go up). We orient the Cone surface with apex above and axis_dir
+        // pointing DOWN (from apex toward base) so that:
+        //   v_base = (base - apex)·axis_dir  > 0, radius v_base·tan(α) = base_radius
+        //   v_top  = (top  - apex)·axis_dir  > 0, radius v_top·tan(α)  = top_radius
+        //
+        // 사용자 시연 (2026-05-08): apex 가 base 아래 (+axis_dir=up) 였던
+        // 이전 코드는 cone surface 를 widens-going-up 으로 구성 → 사용자
+        // mesh top verts (radius 5 at y=h) 와 surface 의 v_top=h+offset
+        // 위 radius (= base_r*(h+offset)/offset >> top_r) 이 불일치 →
+        // 측면 흰색이 base 너머로 퍼져 보임.
         let radius_diff = radius - top_radius;
         let cone_half_angle = (radius_diff / height).atan().abs();
-        // Apex offset from base along axis (negative direction since cone narrows up).
+        // Full-cone height from apex = radius / tan(α). apex 가 base 위
+        // (apex_offset 만큼 떨어진 위치).
         let apex_offset = if radius_diff.abs() > 1e-9 {
             radius * height / radius_diff
         } else {
@@ -248,10 +264,12 @@ impl Mesh {
             f64::INFINITY
         };
         let apex_pt = if apex_offset.is_finite() {
-            base_center - up * apex_offset.abs() * radius_diff.signum()
+            base_center + up * apex_offset.abs()
         } else {
             base_center
         };
+        // axis_dir: apex 에서 base 쪽 (-up).
+        let cone_axis_dir = -up;
 
         // Side quads
         for i in 0..segments {
@@ -270,13 +288,13 @@ impl Mesh {
             let theta_start = two_pi * (i as f64) / (segments as f64);
             let theta_end = two_pi * ((i + 1) as f64) / (segments as f64);
             if apex_offset.is_finite() && cone_half_angle > 1e-9 {
-                let v_base = (base_center - apex_pt).dot(up);
-                let v_top = (top_center - apex_pt).dot(up);
+                let v_base = (base_center - apex_pt).dot(cone_axis_dir);
+                let v_top = (top_center - apex_pt).dot(cone_axis_dir);
                 let v_min = v_base.min(v_top);
                 let v_max = v_base.max(v_top);
                 let surface = AnalyticSurface::Cone {
                     apex: apex_pt,
-                    axis_dir: up,
+                    axis_dir: cone_axis_dir,
                     half_angle: cone_half_angle,
                     ref_dir: radial,
                     u_range: (theta_start, theta_end),
@@ -694,6 +712,47 @@ mod tests {
             result.is_ok(),
             "ADR-087 K-δ: cone cap Extrude should succeed, got {:?}",
             result.err(),
+        );
+    }
+
+    /// ADR-087 K-η hotfix regression — Cone surface evaluated at (v_base, 0)
+    /// must equal base radius, and (v_top, 0) must equal top radius. Prior
+    /// to fix, apex was below base + axis_dir up → surface widened going up,
+    /// 사용자 시연 (2026-05-08) 에서 흰색 cone side 가 base 너머로 퍼지는
+    /// 회귀로 노출.
+    #[test]
+    fn k_eta_cone_surface_evaluates_to_correct_radii() {
+        use crate::surfaces::SurfaceOps;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let radius = 50.0;
+        let height = 100.0;
+        let segments = 16u32;
+        let faces = mesh.create_cone(DVec3::ZERO, radius, height, segments, mat).unwrap();
+        let top_radius = radius * 0.1; // K-δ default
+        // Side faces start at index 2 (after base, top caps).
+        let side_face = faces[2];
+        let surf = mesh.face_surface(side_face).expect("Cone surface attached");
+        let (v_min, v_max) = match surf {
+            AnalyticSurface::Cone { v_range, .. } => *v_range,
+            _ => panic!("expected Cone surface"),
+        };
+        // Evaluate at u=0 (ref_dir direction), v=v_min (top, smaller v from
+        // apex) and v=v_max (base).
+        let p_at_v_min = surf.evaluate(0.0, v_min);
+        let p_at_v_max = surf.evaluate(0.0, v_max);
+        // Distance from axis (radius) at each v.
+        let r_at_min = ((p_at_v_min.x).powi(2) + (p_at_v_min.z).powi(2)).sqrt();
+        let r_at_max = ((p_at_v_max.x).powi(2) + (p_at_v_max.z).powi(2)).sqrt();
+        // v_min corresponds to TOP (closer to apex, smaller radius).
+        // v_max corresponds to BASE (farther from apex, larger radius).
+        assert!(
+            (r_at_min - top_radius).abs() < 1e-3,
+            "ADR-087 K-η: Cone surface at v_min={v_min} should yield radius {top_radius}, got {r_at_min}",
+        );
+        assert!(
+            (r_at_max - radius).abs() < 1e-3,
+            "ADR-087 K-η: Cone surface at v_max={v_max} should yield radius {radius}, got {r_at_max}",
         );
     }
 
