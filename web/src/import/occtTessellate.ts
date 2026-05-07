@@ -33,6 +33,7 @@
  */
 
 import { promoteSurface, type SurfacePromotion } from './occtSurfacePromote';
+import { extractFaceBoundary } from './occtBoundaryPolygon';
 import { debugLog, debugWarn } from '../utils/debug';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -85,6 +86,12 @@ export interface FaceTessellation {
   indices: Uint32Array;
   /** Optional analytic surface promotion (W-γ 답습) — caller 가 setFaceSurface* 으로 attach. */
   surface?: SurfacePromotion;
+  /**
+   * ADR-086 O-δ — Outer boundary polygon for axia DCEL injection
+   * (`bridge.injectExternalFace*`). Empty (length 0) if extraction
+   * failed (graceful, P21.7).
+   */
+  boundaryPolygon?: Float32Array;
 }
 
 /** Tessellation 호출 결과. */
@@ -341,12 +348,28 @@ export function tessellateShape(
               // surface promotion 실패는 fatal 아님 — tessellation 만 보존
             }
 
+            // Step 6 — ADR-086 O-δ — extract outer boundary polygon for
+            // axia DCEL injection. Failure 는 graceful (warnings 누적).
+            let boundaryPolygon: Float32Array | undefined;
+            try {
+              const boundary = extractFaceBoundary(o, face);
+              if (boundary.positions.length > 0) {
+                boundaryPolygon = boundary.positions;
+              }
+              for (const w of boundary.warnings) {
+                result.warnings.push(`face[${faceIdx}].boundary: ${w}`);
+              }
+            } catch (e) {
+              result.warnings.push(`face[${faceIdx}] boundary extract: ${String(e)}`);
+            }
+
             result.faces.push({
               index: faceIdx,
               positions: buffers.positions,
               normals: buffers.normals,
               indices: buffers.indices,
               surface,
+              boundaryPolygon,
             });
           } catch (e) {
             result.warnings.push(`face[${faceIdx}] convert: ${String(e)}`);

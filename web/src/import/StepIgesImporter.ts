@@ -61,6 +61,33 @@ export interface StepIgesImportResult {
   traversal?: BRepTraversalResult;
 }
 
+/**
+ * ADR-086 O-δ — `StepIgesImporter.injectIntoAxia` result.
+ *
+ * Map of `traversalIndex` (W-δ stable) → axia `FaceId.raw()`. Caller
+ * (FileImporter) 가 사용자 facing pick / engine ops 시 활용.
+ */
+export interface InjectIntoAxiaResult {
+  /** Map of W-δ traversal stable index → axia FaceId.raw(). */
+  faceIndexToAxiaId: Map<number, number>;
+  /** Per-face inject warnings (P21.7 답습). */
+  warnings: string[];
+}
+
+/**
+ * Minimal bridge interface for ADR-086 O-δ inject dispatch — duck-typed
+ * subset of `WasmBridge`. Caller 가 의존성 주입.
+ */
+export interface InjectBridge {
+  injectExternalFaceNoSurface?(positionsXyz: Float64Array): number;
+  injectExternalFacePlane?(
+    positionsXyz: Float64Array,
+    origin: [number, number, number],
+    normal: [number, number, number],
+    basisU: [number, number, number],
+  ): number;
+}
+
 /** OCCT.js 가 설치되지 않았을 때의 사용자 안내 메시지. */
 const NOT_INSTALLED_MESSAGE =
   'STEP/IGES 엔진(OCCT.js)이 설치되지 않았습니다.\n\n' +
@@ -490,7 +517,128 @@ export class StepIgesImporter {
       faceGroup.userData.surface = face.surface;
     }
     faceGroup.userData.faceIndex = face.index;
+    // ADR-086 O-δ — boundary polygon 보존 (axia DCEL inject 입력).
+    if (face.boundaryPolygon && face.boundaryPolygon.length > 0) {
+      faceGroup.userData.boundaryPolygon = face.boundaryPolygon;
+    }
     return faceGroup;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // ADR-086 O-δ — Axia DCEL Injection
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Inject all face boundaries from imported group into axia DCEL.
+   *
+   * Walks `group.children` for `face-N` Group children, reads
+   * `userData.boundaryPolygon` + `userData.surface`, dispatches to
+   * appropriate `bridge.injectExternalFace*` based on surface kind.
+   * Stores returned axia `FaceId.raw()` in `userData.axiaFaceId`.
+   *
+   * **Surface kind dispatch**:
+   * - `Plane` → `injectExternalFacePlane(positions, origin, normal, basisU)`
+   * - 그 외 (Tessellate / Cylinder / Sphere / 기타) → `injectExternalFaceNoSurface(positions)`
+   *   (다른 surface kinds 는 후속 sub-step 에서 활성)
+   *
+   * **Failure modes** (P21.7 답습):
+   * - bridge inject 메서드 미존재 → graceful skip + warning
+   * - boundaryPolygon 부재 (length 0) → skip face + warning
+   * - inject 반환값 -1 → skip face + warning (axia DCEL 거부)
+   *
+   * @param bridge - WasmBridge 또는 minimal subset (InjectBridge)
+   * @param group - importFile 결과의 Three.js Group
+   * @returns `{ faceIndexToAxiaId, warnings }` — caller 가 사용자 facing
+   *   pick UX / engine ops 시 활용
+   */
+  injectIntoAxia(
+    bridge: InjectBridge,
+    group: THREE.Group,
+  ): InjectIntoAxiaResult {
+    const result: InjectIntoAxiaResult = {
+      faceIndexToAxiaId: new Map(),
+      warnings: [],
+    };
+
+    for (const child of group.children) {
+      if (!child.name.startsWith('face-')) continue;
+      const faceGroup = child as THREE.Group;
+      const faceIndex = faceGroup.userData.faceIndex as number | undefined;
+      const boundaryPolygon = faceGroup.userData.boundaryPolygon as Float32Array | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const surface = faceGroup.userData.surface as any;
+
+      if (typeof faceIndex !== 'number') continue;
+      if (!boundaryPolygon || boundaryPolygon.length < 9) {
+        result.warnings.push(
+          `face[${faceIndex}]: missing/insufficient boundaryPolygon — inject skipped`,
+        );
+        continue;
+      }
+
+      // Convert Float32Array to Float64Array for WASM (Rust expects f64).
+      const positions64 = new Float64Array(boundaryPolygon);
+
+      let axiaFaceId = -1;
+      try {
+        if (surface && surface.kind === 'Plane' && bridge.injectExternalFacePlane) {
+          // Compute basis_u from normal (any perpendicular direction works).
+          // For simplicity: pick world X if normal isn't parallel, else Y.
+          const normal: [number, number, number] = surface.normal;
+          let basisU: [number, number, number] = [1, 0, 0];
+          // |normal · X| > 0.9 면 X 와 거의 평행 → Y 사용
+          if (Math.abs(normal[0]) > 0.9) basisU = [0, 1, 0];
+          // Project basis_u onto plane (Gram-Schmidt 단순화)
+          const dot = basisU[0] * normal[0] + basisU[1] * normal[1] + basisU[2] * normal[2];
+          basisU = [
+            basisU[0] - dot * normal[0],
+            basisU[1] - dot * normal[1],
+            basisU[2] - dot * normal[2],
+          ];
+          const len = Math.sqrt(basisU[0] ** 2 + basisU[1] ** 2 + basisU[2] ** 2);
+          if (len > 1e-9) {
+            basisU = [basisU[0] / len, basisU[1] / len, basisU[2] / len];
+          }
+          axiaFaceId = bridge.injectExternalFacePlane(
+            positions64,
+            surface.origin as [number, number, number],
+            normal,
+            basisU,
+          );
+        } else if (bridge.injectExternalFaceNoSurface) {
+          // Fallback: no analytic surface (Tessellate / unsupported variant)
+          axiaFaceId = bridge.injectExternalFaceNoSurface(positions64);
+        } else {
+          result.warnings.push(
+            `face[${faceIndex}]: bridge inject methods unavailable`,
+          );
+          continue;
+        }
+      } catch (e) {
+        result.warnings.push(`face[${faceIndex}] inject: ${String(e)}`);
+        continue;
+      }
+
+      if (axiaFaceId < 0) {
+        result.warnings.push(
+          `face[${faceIndex}]: bridge inject returned -1 (DCEL rejected)`,
+        );
+        continue;
+      }
+
+      faceGroup.userData.axiaFaceId = axiaFaceId;
+      result.faceIndexToAxiaId.set(faceIndex, axiaFaceId);
+    }
+
+    debugLog(
+      `[StepIgesImporter] injectIntoAxia: ${result.faceIndexToAxiaId.size} faces injected, ` +
+      `${result.warnings.length} warning(s)`,
+    );
+    if (result.warnings.length > 0) {
+      debugWarn('[StepIgesImporter] inject warnings:', result.warnings.slice(0, 3));
+    }
+
+    return result;
   }
 
   private _countMeshes(group: THREE.Group): number {

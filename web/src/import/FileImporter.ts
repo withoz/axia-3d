@@ -232,13 +232,36 @@ export class FileImporter {
         }
       });
 
+      // ADR-086 O-δ — axia DCEL injection (optional, bridge 가용 시).
+      // 사용자 가 import 후 face 선택 / engine ops (offset / extrude /
+      // push-pull / Boolean) 사용 가능. bridge 미가용 시 graceful skip.
+      const injectWarnings: string[] = [];
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const container = (window as any).__axia;
+        const bridge = container?.tryGet?.('bridge');
+        if (bridge && typeof bridge.injectExternalFaceNoSurface === 'function') {
+          const injectResult = importer.injectIntoAxia(bridge, result.group);
+          injectWarnings.push(...injectResult.warnings);
+          if (injectResult.faceIndexToAxiaId.size > 0) {
+            // eslint-disable-next-line no-console
+            console.info(
+              `[FileImporter] ADR-086 O-δ — ${injectResult.faceIndexToAxiaId.size} faces injected to axia DCEL`,
+            );
+          }
+        }
+      } catch (e) {
+        injectWarnings.push(`axia inject 실패 (graceful): ${String(e)}`);
+      }
+
       // W-η — warnings / success surface
-      if (result.warnings && result.warnings.length > 0) {
+      const allWarnings = [...(result.warnings ?? []), ...injectWarnings];
+      if (allWarnings.length > 0) {
         Toast.warning(
-          `${result.format.toUpperCase()} import: ${result.warnings.length}개 경고 (콘솔 참조)`,
+          `${result.format.toUpperCase()} import: ${allWarnings.length}개 경고 (콘솔 참조)`,
           6000,
         );
-        console.warn('[FileImporter] STEP/IGES warnings:', result.warnings);
+        console.warn('[FileImporter] STEP/IGES warnings:', allWarnings);
       } else {
         Toast.success(
           `${result.format.toUpperCase()} import 완료: ${result.faceCount}면 ${result.edgeCount}엣지`,
@@ -253,7 +276,7 @@ export class FileImporter {
         meshCount,
         vertexCount,
         faceCount: Math.floor(faceCount),
-        warnings: result.warnings,
+        warnings: allWarnings,
         traversal: result.traversal,
       };
     }

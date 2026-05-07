@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as THREE from 'three';
 import { StepIgesImporter } from './StepIgesImporter';
 
 describe('StepIgesImporter (ADR-035 P20.7)', () => {
@@ -424,5 +425,181 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
     // ext gate accepted them.
     await expect(importer.importFile(stepFile)).rejects.toThrow(/opencascade\.js|설치/);
     await expect(importer.importFile(igesFile)).rejects.toThrow(/opencascade\.js|설치/);
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // ADR-086 O-δ — injectIntoAxia method (axia DCEL injection)
+  // ────────────────────────────────────────────────────────────────────
+
+  describe('ADR-086 O-δ — injectIntoAxia', () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+
+    function makeFaceGroup(
+      faceIndex: number,
+      boundaryPolygon: Float32Array,
+      surface?: any,
+    ): THREE.Group {
+      const g = new THREE.Group();
+      g.name = `face-${faceIndex}`;
+      g.userData.faceIndex = faceIndex;
+      g.userData.boundaryPolygon = boundaryPolygon;
+      if (surface) g.userData.surface = surface;
+      return g;
+    }
+
+    it('NoSurface dispatch — face without surface metadata calls injectExternalFaceNoSurface', () => {
+      const importer = StepIgesImporter.getInstance();
+      const calledWith: { positions: Float64Array | null }[] = [];
+      const bridge = {
+        injectExternalFaceNoSurface: (pts: Float64Array) => {
+          calledWith.push({ positions: pts });
+          return 42;  // synthetic FaceId
+        },
+      };
+
+      const group = new THREE.Group();
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      group.add(makeFaceGroup(0, positions /* no surface */));
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(1);
+      expect(result.faceIndexToAxiaId.get(0)).toBe(42);
+      expect(calledWith.length).toBe(1);
+      // Float32Array → Float64Array conversion
+      expect(calledWith[0].positions?.length).toBe(9);
+    });
+
+    it('Plane dispatch — face with Plane surface calls injectExternalFacePlane', () => {
+      const importer = StepIgesImporter.getInstance();
+      const calledArgs: any = {};
+      const bridge = {
+        injectExternalFaceNoSurface: () => -1,
+        injectExternalFacePlane: (
+          pts: Float64Array,
+          origin: [number, number, number],
+          normal: [number, number, number],
+          basisU: [number, number, number],
+        ) => {
+          calledArgs.pts = pts;
+          calledArgs.origin = origin;
+          calledArgs.normal = normal;
+          calledArgs.basisU = basisU;
+          return 99;
+        },
+      };
+
+      const positions = new Float32Array([0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0]);
+      const surface = {
+        kind: 'Plane',
+        origin: [5, 5, 0],
+        normal: [0, 0, 1],
+      };
+      const group = new THREE.Group();
+      group.add(makeFaceGroup(0, positions, surface));
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(1);
+      expect(result.faceIndexToAxiaId.get(0)).toBe(99);
+      expect(calledArgs.origin).toEqual([5, 5, 0]);
+      expect(calledArgs.normal).toEqual([0, 0, 1]);
+      // basis_u perpendicular to normal +Z → should be [1, 0, 0] (X axis)
+      expect(calledArgs.basisU[0]).toBeCloseTo(1);
+      expect(calledArgs.basisU[1]).toBeCloseTo(0);
+      expect(calledArgs.basisU[2]).toBeCloseTo(0);
+    });
+
+    it('axiaFaceId stored in userData on success', () => {
+      const importer = StepIgesImporter.getInstance();
+      const bridge = { injectExternalFaceNoSurface: () => 7 };
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const faceGroup = makeFaceGroup(3, positions);
+      const group = new THREE.Group();
+      group.add(faceGroup);
+
+      importer.injectIntoAxia(bridge, group);
+      expect(faceGroup.userData.axiaFaceId).toBe(7);
+    });
+
+    it('graceful — missing boundaryPolygon → skip face + warning', () => {
+      const importer = StepIgesImporter.getInstance();
+      const bridge = { injectExternalFaceNoSurface: () => 0 };
+      const group = new THREE.Group();
+      const faceGroup = new THREE.Group();
+      faceGroup.name = 'face-0';
+      faceGroup.userData.faceIndex = 0;
+      // no boundaryPolygon
+      group.add(faceGroup);
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(0);
+      expect(result.warnings.some((w) => w.includes('boundaryPolygon'))).toBe(true);
+    });
+
+    it('graceful — bridge inject returns -1 → skip + warning', () => {
+      const importer = StepIgesImporter.getInstance();
+      const bridge = { injectExternalFaceNoSurface: () => -1 };
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const group = new THREE.Group();
+      group.add(makeFaceGroup(0, positions));
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(0);
+      expect(result.warnings.some((w) => w.includes('returned -1'))).toBe(true);
+    });
+
+    it('graceful — bridge inject methods missing → skip + warning', () => {
+      const importer = StepIgesImporter.getInstance();
+      const bridge = {};  // no inject methods
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const group = new THREE.Group();
+      group.add(makeFaceGroup(0, positions));
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(0);
+      expect(result.warnings.some((w) => w.includes('unavailable'))).toBe(true);
+    });
+
+    it('multi-face — all faces processed independently with stable index map', () => {
+      const importer = StepIgesImporter.getInstance();
+      const counter = { id: 100 };
+      const bridge = {
+        injectExternalFaceNoSurface: () => counter.id++,
+      };
+
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const group = new THREE.Group();
+      group.add(makeFaceGroup(0, positions));
+      group.add(makeFaceGroup(1, positions));
+      group.add(makeFaceGroup(2, positions));
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(3);
+      expect(result.faceIndexToAxiaId.get(0)).toBe(100);
+      expect(result.faceIndexToAxiaId.get(1)).toBe(101);
+      expect(result.faceIndexToAxiaId.get(2)).toBe(102);
+    });
+
+    it('non-face children skipped (e.g., edges sub-group)', () => {
+      const importer = StepIgesImporter.getInstance();
+      let callCount = 0;
+      const bridge = {
+        injectExternalFaceNoSurface: () => {
+          callCount++;
+          return 1;
+        },
+      };
+
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const group = new THREE.Group();
+      group.add(makeFaceGroup(0, positions));
+      const edgesGroup = new THREE.Group();
+      edgesGroup.name = 'edges';  // E-γ edges sub-group
+      group.add(edgesGroup);
+
+      importer.injectIntoAxia(bridge, group);
+      expect(callCount).toBe(1);  // Only face-0 processed, edges skipped
+    });
+
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   });
 });
