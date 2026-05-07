@@ -938,6 +938,73 @@
   (MCP capability tier 1 자연 확장), ADR-046 (P31 두 페르소나 가치
   anchor).
 
+### 29. ADR-082 — OCCT.js 실설치 + Real Runtime Activation (C-α ~ C-ε, 2026-05-07~08)
+- **사용자 결재 anchor (canonical)**:
+  > "ADR-081 53 mock 회귀의 실파일 round-trip 검증 0건 — demo 시 risk.
+  > OCCT.js 실설치 + NIST 1 corpus 실검증이 가장 큰 demo unlock 이자
+  > mock-only confidence 의 첫 truth 검증."
+- **Path Z atomic 5-단계 closure** (C-α ~ C-ε, 2026-05-07 ~ 2026-05-08):
+  - C-α (spec only): ✅ — `fb11a8d`
+  - C-β (devDep + bundle 0MB + reachability tests): ✅ — `0d68460`
+    (vitest +5)
+  - C-γ (Drift #1 fix `mod.default` → `initOpenCascade` + Drift #2 봉인
+    Node ESM 한계): ✅ — `e022f03` (vitest +3)
+  - C-δ (Drift #3 architectural discovery — `@vite-ignore` ↔ Vite
+    bundling impedance): ✅ — `b08990c` (Playwright +2)
+  - **C-ε amendment** (Drift #3 architectural fix + Drift #4 libs
+    fix): ✅ — `5cbf137`
+    * `@vite-ignore` 제거 + literal `'opencascade.js'` import
+    * L1 amendment: `optionalDep + devDep` → `dependencies` 승격
+    * `opencascadeWasmAsUrl` Vite plugin (Emscripten WASM `env` 우회)
+    * `loadOcct` container entry (Vite static analysis 활용)
+    * `initOpenCascade({libs: [ocCore, ocModelingAlgorithms,
+      ocDataExchangeBase, ocDataExchangeExtra]})` 명시 (Drift #4)
+- **Wrapper drift 누적 (5건)**:
+  - Drift #1 (해결): entry `mod.default` → `initOpenCascade`
+  - Drift #2 (봉인): Node ESM `import('opencascade.js')` 의 WASM `env`
+    import 해결 불가 → Node 측 OCCT 사용 불가 확정
+  - Drift #3 (해결): `@vite-ignore` ↔ Vite bundling architectural 한계
+    → `opencascade-deps` lazy chunk 미생성 → browser dynamic import
+    실패. C-ε amendment 로 본체 fix
+  - Drift #4 (해결): STEP/IGES API 가 dynamic library (libs) 로딩
+    필요 — empty `libs: []` 시 base API 만 제공. mock 회귀가 통과한
+    이유 — mock OCCT 가 모든 API 노출
+  - Drift #5 (봉인): Browser env OCCT init 180s+ 소요 — CI smoke
+    부적합. Real init 검증은 별도 slow channel deferred
+- **Lock-ins L1~L7** (C-ε amendment 후):
+  - L1 amendment: `dependencies` 등록 (이전 optionalDep+devDep 폐기)
+  - L2 ~ L7: 변경 없음 (NIST corpus / 1e-3 mm tolerance / warnings 누적
+    / Playwright truth / BRepMesh deferred / mock 보존)
+- **누적 회귀**: vitest **+8** (1569 → 1577, 절대 #[ignore] 금지 8/8
+  준수). Playwright **+2** (15 → 17, drift #3 architectural lock).
+  axia-geo / axia-core / axia-wasm 0 (TS-only).
+- **Bundle 영향** (P20.C #2):
+  - **Initial bundle**: 724.76 → **724.84 kB** (+80 bytes — `loadOcct`
+    function declaration). MB scale 미달 (0.011%). P20.C #2 **spirit
+    유지**, +80 bytes 의 명시적 trade-off (architectural fix 의 minimum
+    cost)
+  - **NEW lazy chunk**: `opencascade-deps-{hash}.js` **5.37 MB** (gzip
+    463.62 kB) — STEP/IGES 첫 import 시 fetch
+  - **NEW static assets**: 50+ OCCT WASM 파일 (`module.TK*.wasm` +
+    `opencascade.{core,dataExchangeBase,etc}.wasm`)
+- **사용자 검증 가능 범위**:
+  - ✅ Architecture: chunk fetch / module exports / loadOcct entry
+    (Playwright 검증 완료)
+  - ⏸️ Visual verification: `_convertToThreeGroup` placeholder — viewport
+    빈 group → **demo readiness 0%** 유지
+  - ⏸️ Real init smoke: timing 한계 (Drift #5) — slow channel deferred
+  - ⏸️ Corpus round-trip: 별도 §3.5.1 또는 다음 ADR
+- **다음 ADR cross-trigger**:
+  - **ADR-083 (가칭) — BRepMesh Tessellation MVP** — `_convertToThreeGroup`
+    본체 활성. STEP import 결과 viewport 표시. 사용자 검증의 *visual*
+    가치 unlock.
+  - 별도 ADR — WasmBridge owner-ID 매핑 (`bridge.setFaceSurface*`),
+    Toast progress UX 개선, NIST corpus fixture
+- **Cross-link**: ADR-035 (Stage 4-A 활성), ADR-036 (P21 mapping
+  truth), ADR-075 (Playwright 인프라), ADR-081 §알려진 한계 #3
+  (완전 closure — *진짜 원인은 architectural bundler-runtime 한계
+  였음*), ADR-046 P31 (P1 + P3 페르소나 가치).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
