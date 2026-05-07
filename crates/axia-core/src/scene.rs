@@ -3808,6 +3808,37 @@ impl Scene {
             self.face_to_xia.remove(fid);
         }
 
+        // ADR-079 W-1-α / ADR-086 follow-up — attach Plane AnalyticSurface
+        // to created face_ids so kernel-aware ops (createSolidExtrude /
+        // offset / Boolean) can run without `NoProfileSurface` error.
+        // Form-layer Shape rect 은 본질적으로 planar — geometric truth 로
+        // Plane 항상 attach (LOCKED #26 P7 정합 — 0 차원 허용은 face 두께
+        // 측면, surface metadata 는 별개).
+        //
+        // Plane params:
+        //   origin = center, normal = normalized normal,
+        //   basis_u = normalized up, u_range/v_range = ±1e6 (effectively
+        //   infinite — actual rect bounds enforced by DCEL boundary).
+        if normal.length_squared() > 1e-12 && up.length_squared() > 1e-12 {
+            let n_norm = normal.normalize();
+            let u_norm = up.normalize();
+            // basis_u must be perpendicular to normal — Gram-Schmidt project
+            let dot = u_norm.dot(n_norm);
+            let basis_u = (u_norm - n_norm * dot).normalize_or_zero();
+            if basis_u.length_squared() > 1e-12 {
+                let plane = axia_geo::AnalyticSurface::Plane {
+                    origin: center,
+                    normal: n_norm,
+                    basis_u,
+                    u_range: (-1e6, 1e6),
+                    v_range: (-1e6, 1e6),
+                };
+                for &fid in &face_ids {
+                    self.mesh.set_face_surface(fid, Some(plane.clone()));
+                }
+            }
+        }
+
         // Create the form-layer Shape with the inherited metadata.
         let shape_id = self.create_shape(name, face_ids);
         if let Some(shape) = self.shapes.get_mut(&shape_id) {
@@ -10387,6 +10418,73 @@ mod tests {
         scene.mesh.faces[face].set_surface(Some(surface));
         let shape_id = scene.create_shape("Rect Shape".to_string(), vec![face]);
         (shape_id, face)
+    }
+
+    #[test]
+    fn draw_rect_as_shape_attaches_plane_surface_to_face() {
+        // ADR-079 W-1-α / ADR-086 follow-up regression — DrawRectAsShape
+        // 결과 face 가 AnalyticSurface::Plane attached 보장. 없으면
+        // createSolidExtrude 가 NoProfileSurface 로 거부 (사용자 보고
+        // 2026-05-08).
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::X,
+            width: 10.0,
+            height: 10.0,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        assert!(!shape.face_ids.is_empty(), "shape should have at least 1 face");
+
+        // Each face must have AnalyticSurface::Plane attached.
+        for &fid in &shape.face_ids {
+            let surf = scene.mesh.face_surface(fid)
+                .expect("face must have AnalyticSurface attached after DrawRectAsShape");
+            assert!(
+                matches!(surf, axia_geo::AnalyticSurface::Plane { .. }),
+                "face {fid:?} should have Plane surface, got {:?}",
+                surf,
+            );
+        }
+    }
+
+    #[test]
+    fn draw_rect_as_shape_then_create_solid_extrude_succeeds_no_fallback() {
+        // End-to-end regression — DrawRectAsShape → CreateSolid (Extrude)
+        // 가 NoProfileSurface 없이 정상 box 생성 (사용자 보고 fix).
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::X,
+            width: 10.0,
+            height: 10.0,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let profile_face = scene.get_shape(shape_id).expect("shape").face_ids[0];
+
+        let extrude_result = scene.execute(Command::CreateSolid {
+            face_id: profile_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 5.0 },
+        });
+        match extrude_result {
+            CommandResult::SolidCreated { kind, face_count } => {
+                assert_eq!(kind, axia_geo::SolidKind::Box);
+                assert_eq!(face_count, 6, "Box has 6 faces");
+            }
+            CommandResult::Error(msg) => {
+                panic!("Expected SolidCreated, got Error: {}", msg);
+            }
+            other => panic!("expected SolidCreated, got {:?}", other),
+        }
     }
 
     #[test]
