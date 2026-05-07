@@ -852,6 +852,92 @@
   dispatch key 로 사용), ADR-016 (multi-loop face Q2), ADR-027 (NURBS
   Kernel — curve offset 정확성), ADR-038 P23 (surface-aware normals).
 
+### 28. ADR-081 — STEP/IGES NURBS-class Import Activation (W-α ~ W-η, 2026-05-07)
+- **사용자 결재 (canonical)**:
+  > "ADR-079 W-3-δ 가 NURBS-class hosts 활성, ADR-080 V-β-δ 가 NURBS-
+  > class curves 활성. 외부 CAD 파일 (STEP / IGES) 의 NURBS-class 표면
+  > 이 이제 axia-engine 의 모든 op 의 입력으로 가능. STEP/IGES import
+  > 의 BRep traversal + AnalyticCurve / AnalyticSurface promotion 본체
+  > 를 활성화하여 사용자 facing CAD interop 의 첫 메이저 milestone
+  > 마무리."
+- **Path Z atomic 7-단계 closure** (W-α ~ W-η, 2026-05-06 ~ 2026-05-07):
+  - W-α (spec only commit): ✅ — `c297093`
+  - W-β (occtCurvePromote 11 본체 활성, mock-based unit tests): ✅ —
+    `dc54c06` (vitest +12) — Direct 6 (Line/Circle/Arc/Bezier/BSpline/
+    NURBS) + Conic 3 (Ellipse/Parabola/Hyperbola, Piegl A7.1/4/5) +
+    Fitting 1 (OffsetCurve) + TrimmedCurve
+  - W-γ (occtSurfacePromote 12 본체 활성, mock-based unit tests): ✅ —
+    `47b40c0` (vitest +13) — Direct 5 (Plane/Cylinder/Sphere/Cone/Torus)
+    + BezierPatch + BSplineSurface + NURBSSurface + Sweep 2 deferred
+    (Piegl A8.1/2) + Offset deferred + RectangularTrimmedSurface
+  - W-δ (BRep traversal + face/edge index promotion): ✅ — `8bed5e7`
+    (vitest +7) — TopExp_Explorer + stable 0-based traversal index +
+    P22.7 owner-ID prep
+  - W-ε (Trim loop handling, PCurve, ADR-036 P21.3): ✅ — `a23cae1`
+    (vitest +12) — TrimCurve2D Rust enum 1:1 mirror (Line/Arc/Bezier/
+    BSpline) + outer wire stable 정렬 + RectangularTrimmedSurface
+    fast-path
+  - W-ζ (Corpus round-trip 검증, 5 fixtures, 1e-3 mm): ✅ — `4a0f838`
+    (vitest +5) — NIST plane + NIST cylinder + SolidWorks NURBS 3×3 +
+    Fusion B-spline + CATIA RectangularTrimmedSurface, closed-form
+    geometric property + ADR-036 P21.6 답습
+  - W-η (UI integration, Toast progress + traversal passthrough): ✅
+    — `144835f` (vitest +4) — `onLoadingStart → Toast.info` + warnings
+    → `Toast.warning` + clean import → `Toast.success` + `traversal?:
+    BRepTraversalResult` ImportResult 통과 (P22.7 owner-ID 매핑 prep)
+- **Lock-ins L1~L7**:
+  - L1 — Format priority (ADR-035 P20.A 답습): STEP AP242 primary,
+    AP203/AP214 secondary, IGES 5.3 legacy
+  - L2 — OCCT.js Stage 4-A activation: dynamic loader scaffold 위
+    BRep traversal + promote 본체 활성. Initial bundle 0MB 증가 강제
+    유지 (P20.C #2 strict)
+  - L3 — ADR-036 P21 mapping reuse: SUPPORTED_CURVE_KINDS (11) /
+    SUPPORTED_SURFACE_KINDS (12) drift guard 회귀 유지
+  - L4 — Tolerance default 1e-3 mm
+  - L5 — Failure mode ImportResult.warnings (P21.7) — fatal 아닌 누적,
+    `face[N]:` / `edge[N]:` / `wire[N].edge[M]:` prefix 로 owner-ID
+    역추적 가능
+  - L6 — Owner ID promotion (ADR-037 P22 정합): import 후 face/edge
+    에 axia owner ID 즉시 부여 (W-η traversal 통과로 prep 완료)
+  - L7 — ADR-079 W-3-δ + ADR-080 V-β-δ 활성 의존: import 된 NURBS-
+    class face 가 즉시 offset / extrude / push-pull 가능
+- **누적 회귀**: vitest **+53** (1512 → 1569, 절대 #[ignore] 금지
+  53/53 준수). axia-geo / axia-core / axia-wasm 0 (TS-only 변경).
+  vite build 정상 (2.08~2.15s), Initial bundle **724.76 kB 7-commit
+  일관 보존** (P20.C #2 0MB 증가 강제), `axia_wasm_bg.wasm` 0 변경.
+  StepIgesImporter chunk: 30.22 kB lazy load.
+- **Wrapper version-tolerant 패턴 일관 적용** (ADR-035 P20.7 답습):
+  `_2 ?? _1 ?? bare` chain + `Handle_Geom_*::DownCast` + `.get?.()`
+  pattern + `IsNull?.()` chain. NCollection_Array2 footgun (LOCKED #14)
+  은 `Pole(i, j)` / `Weight(i, j)` 직접 accessor 로 우회 일관 적용.
+- **Stable index policy** (ADR-037 P22.7): traversal order 0-based 단조
+  증가, Tessellate fallback 도 동일 index 부여. owner-ID 매핑 정합
+  강제.
+- **사용자 가치 anchor** (ADR-046 P31 두 페르소나):
+  - P1 (건축/디자인): 기존 CAD 파일 (SolidWorks/Fusion/CATIA STEP) →
+    AxiA 직접 편집, workflow 통합
+  - P3 (AI 협업자): AI agent 가 STEP file 입력 → axia-engine 모든 op
+    적용 (ADR-041 MCP capability tier 1 자연 확장)
+- **알려진 한계** (모두 별도 ADR 또는 future track):
+  - WasmBridge owner-ID 매핑 (`bridge.setFaceSurface*` + metadata
+    rebuild) 미구현 — `traversal` 필드는 통과되지만 axia FaceId/EdgeId
+    실제 attach 는 별도 PR
+  - `_convertToThreeGroup` BRepMesh tessellation 미구현 — 빈 group 반환
+  - 실제 STEP/IGES 파일 코퍼스 검증 (NIST/SolidWorks/Fusion/CATIA actual
+    files): OCCT.js 설치 + Playwright E2E (ADR-075 인프라 활용) 필요.
+    본 트랙 53 회귀는 mock fixture 만 — *demo 시 실파일 risk*
+  - W-3-ε deferred: Sweep/Offset surface 본체 (Piegl A8.1/2) +
+    Geom2d_Ellipse/Hyperbola/Parabola/rational PCurve — 별도 트랙
+  - Toast 한국어 wording i18n (ADR-046 Phase 2) — 현재 하드코딩
+- **Cross-link**: ADR-035 (Stage 4-A/4-B 12개월 default decision matrix
+  — 본 트랙은 4-A 본체 활성), ADR-036 (P21 11+12 mapping table —
+  stub→본체), ADR-079 (7 SolidKind import face 가 모든 mode 의 profile
+  가능), ADR-080 (8 host × 6 curve dispatch — import face/edge 자연
+  통과), ADR-027 (NURBS Kernel storage), ADR-037 (P22 owner-ID), ADR-038
+  (P23 surface-aware normals — `tessellate_face_surface`), ADR-041
+  (MCP capability tier 1 자연 확장), ADR-046 (P31 두 페르소나 가치
+  anchor).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
