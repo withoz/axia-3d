@@ -4081,7 +4081,14 @@ impl Scene {
                 e.set_curve(Some(curve));
             }
         }
-        let _ = edge_ids;
+
+        // ADR-088 Phase 1 (S-γ) — assign curve_owner_id to all N segments.
+        // LOCKED #15 P22.5: same logical curve = same owner_id → SelectTool
+        // walk promotes one click to all N segments.
+        let owner_id = self.mesh.next_curve_owner_id();
+        for &eid in &edge_ids {
+            self.mesh.set_edge_curve_owner_id(eid, Some(owner_id));
+        }
 
         let xia_id = self.create_xia("Circle".to_string());
         if let Some(xia) = self.xias.get_mut(&xia_id) {
@@ -10677,6 +10684,102 @@ mod tests {
             }
             other => panic!("expected SolidCreated, got {:?}", other),
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-088 S-γ regression — DrawCircle/AsShape segments share owner_id.
+    // LOCKED #15 P22.5 enforcement at creation time.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr088_s_gamma_draw_circle_segments_share_owner_id() {
+        // DrawCircle 의 N segments 모두 같은 curve_owner_id 부여 → 한 segment
+        // 클릭 시 SelectTool walk 가 N segments 전체 선택 (LOCKED #15 P22.5).
+        let mut scene = Scene::new();
+        let segments = 16u32;
+        let _ = scene.execute(Command::DrawCircle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments,
+        });
+
+        // Collect curve_owner_id from all active edges with Arc curve.
+        let mut owners = std::collections::HashSet::new();
+        let mut arc_segment_count = 0;
+        for (eid, edge) in scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            if let Some(axia_geo::AnalyticCurve::Arc { .. }) = edge.curve() {
+                let owner = scene.mesh.edge_curve_owner_id(eid);
+                assert!(owner.is_some(),
+                    "ADR-088 S-γ: Arc segment must have curve_owner_id");
+                owners.insert(owner.unwrap());
+                arc_segment_count += 1;
+            }
+        }
+
+        assert_eq!(arc_segment_count, segments as usize,
+            "expected {} Arc segments, got {}", segments, arc_segment_count);
+        assert_eq!(owners.len(), 1,
+            "ADR-088 S-γ: all {} segments must share single owner_id, got {} distinct ids",
+            segments, owners.len());
+    }
+
+    #[test]
+    fn adr088_s_gamma_draw_circle_as_shape_segments_share_owner_id() {
+        // DrawCircleAsShape 도 동일 (form-mode kernel-aware path).
+        let mut scene = Scene::new();
+        let segments = 24u32;
+        let _ = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 3.0,
+            segments,
+        });
+
+        let mut owners = std::collections::HashSet::new();
+        let mut arc_segment_count = 0;
+        for (eid, edge) in scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            if let Some(axia_geo::AnalyticCurve::Arc { .. }) = edge.curve() {
+                let owner = scene.mesh.edge_curve_owner_id(eid);
+                assert!(owner.is_some());
+                owners.insert(owner.unwrap());
+                arc_segment_count += 1;
+            }
+        }
+        assert_eq!(arc_segment_count, segments as usize);
+        assert_eq!(owners.len(), 1, "AsShape variant must also single owner");
+    }
+
+    #[test]
+    fn adr088_s_gamma_two_circles_get_distinct_owner_ids() {
+        // 두 개의 별개 원 → 두 개의 distinct owner_id (cross-circle leak 차단).
+        let mut scene = Scene::new();
+        let _ = scene.execute(Command::DrawCircle {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 1.0,
+            segments: 8,
+        });
+        let _ = scene.execute(Command::DrawCircle {
+            center: DVec3::new(10.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 1.0,
+            segments: 8,
+        });
+
+        let mut owners = std::collections::HashSet::new();
+        for (eid, edge) in scene.mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            if let Some(axia_geo::AnalyticCurve::Arc { .. }) = edge.curve() {
+                if let Some(o) = scene.mesh.edge_curve_owner_id(eid) {
+                    owners.insert(o);
+                }
+            }
+        }
+        assert_eq!(owners.len(), 2,
+            "ADR-088 S-γ: 2 separate circles must have 2 distinct owner_ids");
     }
 
     #[test]

@@ -937,6 +937,12 @@ impl AxiaEngine {
                     }));
                 }
             }
+            // ADR-088 Phase 1 (S-γ) — assign single curve_owner_id to all
+            // arc segments (LOCKED #15 P22.5).
+            let owner_id = self.scene.mesh.next_curve_owner_id();
+            for &eid in &edge_ids {
+                self.scene.mesh.set_edge_curve_owner_id(eid, Some(owner_id));
+            }
         }
 
         self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
@@ -1002,6 +1008,11 @@ impl AxiaEngine {
                     e.set_curve(Some(curve.clone()));
                 }
             }
+            // ADR-088 Phase 1 (S-γ) — single owner_id for all Bezier segments.
+            let owner_id = self.scene.mesh.next_curve_owner_id();
+            for &eid in &edge_ids {
+                self.scene.mesh.set_edge_curve_owner_id(eid, Some(owner_id));
+            }
         }
 
         self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
@@ -1064,6 +1075,11 @@ impl AxiaEngine {
                 if let Some(e) = self.scene.mesh.edges.get_mut(eid) {
                     e.set_curve(Some(curve.clone()));
                 }
+            }
+            // ADR-088 Phase 1 (S-γ) — single owner_id for all B-spline segments.
+            let owner_id = self.scene.mesh.next_curve_owner_id();
+            for &eid in &edge_ids {
+                self.scene.mesh.set_edge_curve_owner_id(eid, Some(owner_id));
             }
         }
 
