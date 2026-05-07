@@ -294,6 +294,94 @@ mod tests {
         assert_eq!(mesh.face_count(), 2);
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-086 O-ε — ADR-007 invariant 회귀 (post-inject verifier)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn invariant_quad_inject_passes_adr007_verifier() {
+        // ADR-086 O-ε — inject 결과 face 가 ADR-007 invariant verifier
+        // 통과 보장. add_face_with_holes 자동 정합 답습.
+        let mut mesh = Mesh::default();
+        let boundary = ImportFaceBoundary {
+            outer_loop: vec![
+                vec3(0.0, 0.0, 0.0),
+                vec3(10.0, 0.0, 0.0),
+                vec3(10.0, 10.0, 0.0),
+                vec3(0.0, 10.0, 0.0),
+            ],
+            inner_loops: vec![],
+        };
+        let _ = inject_external_face(&mut mesh, boundary, None, FORM_MAT)
+            .expect("inject should succeed");
+
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-007 invariant violation after inject: {}",
+            report.summary(),
+        );
+        assert_eq!(report.checked_faces, 1);
+    }
+
+    #[test]
+    fn invariant_two_inject_faces_both_pass_adr007() {
+        // 2 disjoint faces inject → 둘 다 ADR-007 통과 (no cross-contamination)
+        let mut mesh = Mesh::default();
+        let make_quad = |z: f64| ImportFaceBoundary {
+            outer_loop: vec![
+                vec3(0.0, 0.0, z),
+                vec3(10.0, 0.0, z),
+                vec3(10.0, 10.0, z),
+                vec3(0.0, 10.0, z),
+            ],
+            inner_loops: vec![],
+        };
+        let _ = inject_external_face(&mut mesh, make_quad(0.0), None, FORM_MAT).unwrap();
+        let _ = inject_external_face(&mut mesh, make_quad(5.0), None, FORM_MAT).unwrap();
+
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-007 invariant violation: {}",
+            report.summary(),
+        );
+        assert_eq!(report.checked_faces, 2);
+    }
+
+    #[test]
+    fn invariant_inject_with_plane_surface_passes_adr007() {
+        // Plane analytic surface attach 후에도 ADR-007 invariant 통과
+        use crate::surfaces::AnalyticSurface;
+
+        let mut mesh = Mesh::default();
+        let boundary = ImportFaceBoundary {
+            outer_loop: vec![
+                vec3(0.0, 0.0, 0.0),
+                vec3(10.0, 0.0, 0.0),
+                vec3(10.0, 10.0, 0.0),
+                vec3(0.0, 10.0, 0.0),
+            ],
+            inner_loops: vec![],
+        };
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-1e6, 1e6),
+            v_range: (-1e6, 1e6),
+        };
+        let _ = inject_external_face(&mut mesh, boundary, Some(plane), FORM_MAT)
+            .expect("inject should succeed");
+
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-007 invariant violation with surface: {}",
+            report.summary(),
+        );
+    }
+
     #[test]
     fn inject_shared_vertex_dedup_via_spatial_hash() {
         // 두 face 가 같은 vertex 를 공유 (LOCKED #5 spatial hash dedup)

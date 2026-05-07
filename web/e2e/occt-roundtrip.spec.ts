@@ -86,7 +86,25 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
         );
         const importResult = await importer.importFile(file);
 
-        // Step 3: extract verifiable invariants
+        // Step 3 — ADR-086 O-δ axia DCEL injection (manual call, since
+        // FileImporter wiring is at higher layer).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const bridge = c.get<any>('bridge');
+        let axiaFaceCount = 0;
+        let injectFaceMappingSize = 0;
+        let firstFaceAxiaId: number | null = null;
+        if (bridge && typeof bridge.injectExternalFaceNoSurface === 'function') {
+          const injectResult = importer.injectIntoAxia(bridge, importResult.group);
+          injectFaceMappingSize = injectResult.faceIndexToAxiaId.size;
+          axiaFaceCount = bridge.getStats?.()?.faces ?? 0;
+          // First face's userData.axiaFaceId (O-δ wiring)
+          const firstFaceGroup = importResult.group?.children?.find(
+            (c: { name?: string }) => c?.name?.startsWith('face-'),
+          );
+          firstFaceAxiaId = firstFaceGroup?.userData?.axiaFaceId ?? null;
+        }
+
+        // Step 4: extract verifiable invariants
         return {
           ok: true,
           format: importResult.format,
@@ -99,6 +117,11 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
           traversalEdgeCount: importResult.traversal?.edges?.length ?? 0,
           warningsCount: importResult.warnings?.length ?? 0,
           warningsSample: importResult.warnings?.slice(0, 5) ?? [],
+          // ADR-086 O-δ ground truth invariants
+          injectFaceMappingSize,
+          axiaFaceCount,
+          firstFaceAxiaId,
+          bridgeAvailable: !!bridge,
         };
       } catch (e) {
         return { ok: false, reason: String(e).slice(0, 500) };
@@ -122,6 +145,16 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
       if (result.firstChildName) {
         expect(result.firstChildName).toMatch(/^face-/);
       }
+
+      // ADR-086 O-ε — axia DCEL injection ground truth invariants
+      expect(result.bridgeAvailable).toBe(true);
+      // Injection mapping has at least 1 face (corpus has 1 quad)
+      expect(result.injectFaceMappingSize).toBeGreaterThanOrEqual(1);
+      // axia engine FaceCount >= 1 (DCEL inject succeeded)
+      expect(result.axiaFaceCount).toBeGreaterThanOrEqual(1);
+      // First face's userData.axiaFaceId is set (O-δ wiring)
+      expect(result.firstFaceAxiaId).not.toBeNull();
+      expect(typeof result.firstFaceAxiaId).toBe('number');
     }
   });
 });
