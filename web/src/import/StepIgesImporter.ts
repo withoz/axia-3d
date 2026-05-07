@@ -115,7 +115,8 @@ export class StepIgesImporter {
 
   private async _loadOcct(): Promise<OcctInstance> {
     debugLog('[StepIgesImporter] dynamic import opencascade.js');
-    let mod: { default?: () => Promise<OcctInstance> } | undefined;
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    let mod: any | undefined;
     try {
       // Variable indirection prevents Vite static analysis — opencascade.js
       // is an optionalDependency (ADR-035 P20.7), so static resolution must
@@ -126,12 +127,35 @@ export class StepIgesImporter {
       debugWarn('[StepIgesImporter] opencascade.js import failed:', e);
       throw new Error(NOT_INSTALLED_MESSAGE);
     }
-    if (!mod || typeof mod.default !== 'function') {
+    if (!mod) {
       throw new Error(NOT_INSTALLED_MESSAGE);
     }
-    const occt = await mod.default();
+    // ADR-082 C-γ wrapper drift #1 fix:
+    //   opencascade.js v2 의 entry 는 `initOpenCascade(settings)` 임 — 우리
+    //   초기 코드의 `mod.default()` 가정은 잘못. 53 mock 회귀가 false
+    //   positive 였던 구체 사례. (P21.7 typed warnings 정합 — fatal 아닌
+    //   명확 진단 메시지로 throw.)
+    //
+    // Settings 정책 (web-bundler 환경):
+    //   - `libs` 미지정 시 기본 module set 으로 로드 (web bundler 가
+    //     `.wasm` URL 자동 해결).
+    //   - Node test 환경은 별도 wrapping 필요 (C-δ Playwright 또는 별도
+    //     ADR 에서 처리).
+    const initFn = mod.initOpenCascade ?? mod.default;
+    if (typeof initFn !== 'function') {
+      throw new Error(
+        `${NOT_INSTALLED_MESSAGE}\n\n` +
+        '(진단: opencascade.js 패키지에서 initOpenCascade entry 를 찾지 못함 — ' +
+        '버전 호환성 issue 의심. ADR-082 L1 lock-in semver caret 범위 확인.)',
+      );
+    }
+    // initOpenCascade signature: settings { mainJS, mainWasm, libs, module }.
+    // 우리는 default settings 사용 (web bundler 가 .wasm URL 해결) — 빈
+    // 객체 전달이 권장.
+    const occt = await initFn.call(mod, {});
     debugLog('[StepIgesImporter] OCCT.js init complete');
     return occt;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   /**
