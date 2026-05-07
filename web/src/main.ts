@@ -197,6 +197,15 @@ async function main() {
   //   통해 chunk 접근 (browser context 의 bare specifier resolve 우회).
   container.register('loadOcct', () => import('opencascade.js'));
 
+  // ADR-083 T-δ — StepIgesImporter loader for E2E testing.
+  //   Vite 가 StepIgesImporter chunk 를 hash-named 로 빌드하므로 Playwright
+  //   page.evaluate 에서 direct path import 불가. Container entry 를 통해
+  //   StepIgesImporter module 접근 (loadOcct 패턴 답습).
+  container.register(
+    'loadStepIgesImporter',
+    () => import('./import/StepIgesImporter'),
+  );
+
   // Export single container to window (replaces all window.__axia_* globals)
   (window as any).__axia = container;
 
