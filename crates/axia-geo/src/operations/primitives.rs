@@ -191,7 +191,19 @@ impl Mesh {
         Ok(faces)
     }
 
-    /// Create a truncated cone (proper geometry, no degenerate faces).
+    /// Create a true cone with single apex vertex (사용자 시연 2026-05-08):
+    /// - 1 apex vertex at top
+    /// - N base ring vertices
+    /// - 1 N-gon base cap face (Plane surface, normal -up)
+    /// - N triangle side faces sharing apex (Cone surface)
+    ///
+    /// ADR-087 K-η: 이전 truncated frustum (top_radius = 0.1 * radius) →
+    /// true cone (top_radius = 0). 사용자 보고 "콘의 VERTEX가 이상":
+    /// truncation 으로 인한 small flat top cap 제거, single apex 정점.
+    ///
+    /// Manifold safety (ADR-007): N triangles share apex (N-valent vertex).
+    /// 이는 manifold 정의 (edge incidence) 에서 허용 — sphere 의 polar fan
+    /// 패턴 (LOCKED #16 ADR-007 Phase 2) 동일.
     pub fn create_cone(
         &mut self,
         center: DVec3,
@@ -200,6 +212,16 @@ impl Mesh {
         segments: u32,
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
+        if segments < 3 {
+            anyhow::bail!("create_cone: need segments >= 3 (got {})", segments);
+        }
+        if radius <= 1e-9 || height <= 1e-9 {
+            anyhow::bail!(
+                "create_cone: radius and height must be positive (got r={}, h={})",
+                radius, height,
+            );
+        }
+
         let mut faces = Vec::new();
         let up = DVec3::Y;
         let arbitrary = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
@@ -207,11 +229,13 @@ impl Mesh {
         let tangent = up.cross(radial).normalize();
 
         let base_center = center;
-        let top_center = center + up * height;
-        
-        // Top radius is 10% of base radius for cone appearance
-        let top_radius = radius * 0.1;
+        let apex_pt = center + up * height;
 
+        // Apex single vertex.
+        let apex_v = self.add_vertex(apex_pt);
+
+        // Base ring vertices (CCW from above when viewed normally; reversed
+        // for the base cap face below to ensure outward (-up) normal).
         let mut base_verts = Vec::with_capacity(segments as usize);
         for i in 0..segments {
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
@@ -219,101 +243,56 @@ impl Mesh {
             base_verts.push(self.add_vertex(pos));
         }
 
-        let mut top_verts = Vec::with_capacity(segments as usize);
-        for i in 0..segments {
-            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
-            let pos = top_center + radial * (top_radius * angle.cos()) + tangent * (top_radius * angle.sin());
-            top_verts.push(self.add_vertex(pos));
-        }
-
+        // Base cap face (CW when viewed from above → normal points -up).
         let mut base_face_verts = base_verts.clone();
         base_face_verts.reverse();
         let base_face = self.add_face(&base_face_verts, material)?;
         faces.push(base_face);
 
-        let top_face = self.add_face(&top_verts, material)?;
-        faces.push(top_face);
-
-        // ADR-032 P17 + ADR-087 K-η fix — compute extrapolated full cone
-        // parameters from the (possibly truncated) frustum.
-        //
-        // Cone formula: P(u, v) = apex + v·axis + v·tan(α)·(cos(u)·ref + sin(u)·perp)
-        // - v = signed axial distance from apex along axis_dir
-        // - radius at v = v·tan(α)
-        //
-        // For a truncated cone tapering UP (base radius > top radius), the
-        // full-cone apex sits ABOVE the top (the cone narrows to a point as
-        // we go up). We orient the Cone surface with apex above and axis_dir
-        // pointing DOWN (from apex toward base) so that:
-        //   v_base = (base - apex)·axis_dir  > 0, radius v_base·tan(α) = base_radius
-        //   v_top  = (top  - apex)·axis_dir  > 0, radius v_top·tan(α)  = top_radius
-        //
-        // 사용자 시연 (2026-05-08): apex 가 base 아래 (+axis_dir=up) 였던
-        // 이전 코드는 cone surface 를 widens-going-up 으로 구성 → 사용자
-        // mesh top verts (radius 5 at y=h) 와 surface 의 v_top=h+offset
-        // 위 radius (= base_r*(h+offset)/offset >> top_r) 이 불일치 →
-        // 측면 흰색이 base 너머로 퍼져 보임.
-        let radius_diff = radius - top_radius;
-        let cone_half_angle = (radius_diff / height).atan().abs();
-        // Full-cone height from apex = radius / tan(α). apex 가 base 위
-        // (apex_offset 만큼 떨어진 위치).
-        let apex_offset = if radius_diff.abs() > 1e-9 {
-            radius * height / radius_diff
-        } else {
-            // Cylinder-like (no taper) — fallback: place apex far away
-            f64::INFINITY
-        };
-        let apex_pt = if apex_offset.is_finite() {
-            base_center + up * apex_offset.abs()
-        } else {
-            base_center
-        };
-        // axis_dir: apex 에서 base 쪽 (-up).
+        // ADR-087 K-η Cone surface params: apex above base, axis points
+        // DOWN (apex → base). v = axial distance from apex along axis_dir.
+        // At v = height: radius = height * tan(α) = radius (base) ✓
+        // At v = 0: radius = 0 (apex) ✓
+        let cone_half_angle = (radius / height).atan();
         let cone_axis_dir = -up;
+        let v_base = height; // (base - apex)·(-up) = height since apex = base + up*height
 
-        // Side quads
+        // Side triangles — N faces, each sharing apex_v + two adjacent
+        // base ring verts. Winding: [apex, base[i+1], base[i]] gives outward
+        // normal (perpendicular to axis, radially outward).
+        let two_pi = 2.0 * std::f64::consts::PI;
         for i in 0..segments {
             let next = (i + 1) % segments;
-            let quad = vec![
-                base_verts[i as usize],
+            let tri = vec![
+                apex_v,
                 base_verts[next as usize],
-                top_verts[next as usize],
-                top_verts[i as usize],
+                base_verts[i as usize],
             ];
-            let side_face = self.add_face(&quad, material)?;
+            let side_face = self.add_face(&tri, material)?;
 
-            // Attach analytic Cone surface (or fallback to Plane stripes for
-            // cylinder-like degenerate cases).
-            let two_pi = 2.0 * std::f64::consts::PI;
+            // Cone surface attach — partial sector (theta_start..theta_end),
+            // v_range from apex (0) to base (height).
             let theta_start = two_pi * (i as f64) / (segments as f64);
             let theta_end = two_pi * ((i + 1) as f64) / (segments as f64);
-            if apex_offset.is_finite() && cone_half_angle > 1e-9 {
-                let v_base = (base_center - apex_pt).dot(cone_axis_dir);
-                let v_top = (top_center - apex_pt).dot(cone_axis_dir);
-                let v_min = v_base.min(v_top);
-                let v_max = v_base.max(v_top);
-                let surface = AnalyticSurface::Cone {
-                    apex: apex_pt,
-                    axis_dir: cone_axis_dir,
-                    half_angle: cone_half_angle,
-                    ref_dir: radial,
-                    u_range: (theta_start, theta_end),
-                    v_range: (v_min, v_max),
-                };
-                if let Some(f) = self.faces.get_mut(side_face) {
-                    f.set_surface(Some(surface));
-                }
+            let surface = AnalyticSurface::Cone {
+                apex: apex_pt,
+                axis_dir: cone_axis_dir,
+                half_angle: cone_half_angle,
+                ref_dir: radial,
+                u_range: (theta_start, theta_end),
+                v_range: (0.0, v_base),
+            };
+            if let Some(f) = self.faces.get_mut(side_face) {
+                f.set_surface(Some(surface));
             }
             faces.push(side_face);
         }
 
-        // ADR-087 K-δ — Cone caps (base + top) get Plane Surface, mirroring
-        // ADR-032 P17 cylinder caps. Without this, Push/Pull on cone caps
-        // would reject with NoProfileSurface.
+        // ADR-087 K-δ — Base cap Plane surface attach for kernel-aware ops
+        // (Push/Pull / Boolean / Offset). True cone has no top cap.
         let v_perp = up.cross(radial).normalize_or_zero();
         let plane_basis_u = if v_perp.length_squared() > 0.5 { v_perp } else { radial };
-        let cap_max_radius = radius.max(top_radius);
-        let cap_range = (-cap_max_radius * 1.5, cap_max_radius * 1.5);
+        let cap_range = (-radius * 1.5, radius * 1.5);
         if let Some(f) = self.faces.get_mut(base_face) {
             f.set_surface(Some(AnalyticSurface::Plane {
                 origin: base_center,
@@ -323,19 +302,9 @@ impl Mesh {
                 v_range: cap_range,
             }));
         }
-        if let Some(f) = self.faces.get_mut(top_face) {
-            f.set_surface(Some(AnalyticSurface::Plane {
-                origin: top_center,
-                normal: up,                  // outward at top = +axis
-                basis_u: plane_basis_u,
-                u_range: cap_range,
-                v_range: cap_range,
-            }));
-        }
 
-        // Hide tessellation chord rings (base + top) — same as cylinder.
+        // Hide tessellation chord rings (base only — true cone has no top).
         self.mark_face_outer_soft(base_face)?;
-        self.mark_face_outer_soft(top_face)?;
 
         Ok(faces)
     }
@@ -577,13 +546,14 @@ mod tests {
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let radius = 50.0;
-        let faces = mesh.create_cone(DVec3::ZERO, radius, 100.0, 16, mat).unwrap();
+        let height = 100.0;
+        let faces = mesh.create_cone(DVec3::ZERO, radius, height, 16, mat).unwrap();
         let mut cone_count = 0;
         for &fid in &faces {
             if let Some(AnalyticSurface::Cone { half_angle, .. }) = mesh.face_surface(fid) {
-                // Truncated cone: top_radius = 0.1 × radius, height = 100
-                // tan(half_angle) = (50 - 5) / 100 = 0.45 → half_angle ≈ 0.4225 rad
-                let expected = 0.45_f64.atan();
+                // ADR-087 K-η true cone: tan(half_angle) = radius / height = 0.5
+                // → half_angle = atan(0.5) ≈ 0.4636 rad.
+                let expected = (radius / height).atan();
                 assert!((half_angle - expected).abs() < 1e-6,
                     "half_angle {} ≠ expected {}", half_angle, expected);
                 cone_count += 1;
@@ -729,50 +699,80 @@ mod tests {
         let height = 100.0;
         let segments = 16u32;
         let faces = mesh.create_cone(DVec3::ZERO, radius, height, segments, mat).unwrap();
-        let top_radius = radius * 0.1; // K-δ default
-        // Side faces start at index 2 (after base, top caps).
-        let side_face = faces[2];
+        // ADR-087 K-η true cone — faces[0]=base cap, faces[1..]=N side triangles.
+        let side_face = faces[1];
         let surf = mesh.face_surface(side_face).expect("Cone surface attached");
         let (v_min, v_max) = match surf {
             AnalyticSurface::Cone { v_range, .. } => *v_range,
             _ => panic!("expected Cone surface"),
         };
-        // Evaluate at u=0 (ref_dir direction), v=v_min (top, smaller v from
-        // apex) and v=v_max (base).
-        let p_at_v_min = surf.evaluate(0.0, v_min);
-        let p_at_v_max = surf.evaluate(0.0, v_max);
-        // Distance from axis (radius) at each v.
-        let r_at_min = ((p_at_v_min.x).powi(2) + (p_at_v_min.z).powi(2)).sqrt();
-        let r_at_max = ((p_at_v_max.x).powi(2) + (p_at_v_max.z).powi(2)).sqrt();
-        // v_min corresponds to TOP (closer to apex, smaller radius).
-        // v_max corresponds to BASE (farther from apex, larger radius).
+        // True cone: v_min = 0 (apex), v_max = height (base).
+        let p_apex = surf.evaluate(0.0, v_min);
+        let p_base = surf.evaluate(0.0, v_max);
+        let r_apex = ((p_apex.x).powi(2) + (p_apex.z).powi(2)).sqrt();
+        let r_base = ((p_base.x).powi(2) + (p_base.z).powi(2)).sqrt();
         assert!(
-            (r_at_min - top_radius).abs() < 1e-3,
-            "ADR-087 K-η: Cone surface at v_min={v_min} should yield radius {top_radius}, got {r_at_min}",
+            r_apex < 1e-3,
+            "ADR-087 K-η: Cone apex (v={v_min}) radius should be 0, got {r_apex}",
         );
         assert!(
-            (r_at_max - radius).abs() < 1e-3,
-            "ADR-087 K-η: Cone surface at v_max={v_max} should yield radius {radius}, got {r_at_max}",
+            (r_base - radius).abs() < 1e-3,
+            "ADR-087 K-η: Cone base (v={v_max}) radius should be {radius}, got {r_base}",
         );
     }
 
-    /// ADR-087 K-δ — Cone caps (base + top) 는 Plane surface attach.
-    /// Cylinder 와 동일 패턴 (ADR-032 P17).
+    /// ADR-087 K-η — Cone is a TRUE cone (single apex, no top cap).
+    /// Only base cap has Plane surface; sides have Cone surface.
     #[test]
-    fn k_delta_cone_caps_have_plane_surface() {
+    fn k_eta_cone_has_only_base_cap_with_plane_surface() {
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
-        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
-        // faces[0] = base cap, faces[1] = top cap, faces[2..] = side faces.
-        for &fid in &faces[..2] {
+        let segments = 16u32;
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, segments, mat).unwrap();
+        // True cone: 1 base cap + N side triangles. No top cap.
+        assert_eq!(
+            faces.len() as u32, 1 + segments,
+            "true cone should have 1 base + N side faces (got {})",
+            faces.len(),
+        );
+        // faces[0] = base cap (Plane), faces[1..] = side triangles (Cone).
+        match mesh.face_surface(faces[0]) {
+            Some(AnalyticSurface::Plane { .. }) => {}
+            other => panic!("base cap should have Plane surface, got {:?}", other),
+        }
+        for &fid in &faces[1..] {
             match mesh.face_surface(fid) {
-                Some(AnalyticSurface::Plane { .. }) => {}
-                other => panic!(
-                    "ADR-087 K-δ: cone cap face should have Plane surface, got {:?}",
-                    other,
-                ),
+                Some(AnalyticSurface::Cone { .. }) => {}
+                other => panic!("side face should have Cone surface, got {:?}", other),
             }
         }
+    }
+
+    /// ADR-087 K-η — Apex must be a single shared vertex (n-valent), not
+    /// N separate truncation verts.
+    #[test]
+    fn k_eta_cone_apex_is_single_vertex() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let segments = 16u32;
+        let height = 100.0;
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, height, segments, mat).unwrap();
+        // Find vertex at expected apex position (0, height, 0).
+        let apex_pos = DVec3::new(0.0, height, 0.0);
+        let mut apex_count = 0;
+        for (_, vert) in mesh.verts.iter().filter(|(_, v)| v.is_active()) {
+            if (vert.pos() - apex_pos).length() < 1e-6 {
+                apex_count += 1;
+            }
+        }
+        assert_eq!(
+            apex_count, 1,
+            "ADR-087 K-η: apex should be a SINGLE vertex (got {} verts at {:?}) \
+             — true cone has 1 apex, no truncation cap",
+            apex_count, apex_pos,
+        );
+        // Side faces 모두 apex 와 관련 (faces[1..] = N side triangles).
+        let _ = faces;
     }
 
     #[test]
