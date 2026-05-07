@@ -191,6 +191,12 @@ async function main() {
   const commandInput = new CommandInput();
   container.register('commandInput', commandInput);
 
+  // ADR-082 C-ε — OCCT loader (bundled function, Vite static analysis 활용).
+  //   `loadOcct()` 호출 시 Vite 가 build-time 에 분석한 opencascade-deps
+  //   lazy chunk 가 fetch + execute 됨. Playwright E2E 도 본 entry 를
+  //   통해 chunk 접근 (browser context 의 bare specifier resolve 우회).
+  container.register('loadOcct', () => import('opencascade.js'));
+
   // Export single container to window (replaces all window.__axia_* globals)
   (window as any).__axia = container;
 

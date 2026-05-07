@@ -180,9 +180,49 @@ ADR-081 §알려진 한계 #3 명시:
 
 회귀: Playwright +1 (1 corpus 1 round-trip).
 
-### 3.5 (optional) C-ε — Additional corpus + W-η UI integration 실파일 검증
+### 3.5 C-ε — Drift #3 Architectural Fix (amendment 2026-05-08)
 
-C-δ closure 후 사용자 결재로 진입 가능. NIST 2번째 파일 또는
+**Trigger**: C-δ 발견 — drift #3 (architectural bundler-runtime 한계):
+> `StepIgesImporter._loadOcct` 의 `/* @vite-ignore */` 패턴 (ADR-035 P20.7
+> graceful build 보호용) 이 Vite 의 import 분석을 차단 → opencascade.js
+> 가 production build 에 bundle 안 됨 → browser dynamic import 가
+> bare specifier 'opencascade.js' resolve 못함. **현재 production build
+> 에서 OCCT 실 사용 불가능**.
+
+**사용자 결재 (2026-05-08)**: 권장안 A 채택 — ADR-082 amendment + C-ε
+진입.
+
+**Resolution path**:
+1. **`StepIgesImporter._loadOcct` 수정**:
+   - `/* @vite-ignore */` 주석 제거
+   - `'opencascade' + '.js'` 동적 string indirection → literal `'opencascade.js'`
+   - Vite 가 정상 import 분석 → `opencascade-deps` lazy chunk 생성
+2. **L1 amendment** (lock-in 정책 수정):
+   - **이전**: `optionalDependencies` 유지 + `devDependencies` 추가 (production graceful + test 명시)
+   - **변경**: `dependencies` 로 승격 (build 강제 requirement). optionalDep / devDep 양쪽 제거.
+   - **근거**: drift #3 발견으로 "graceful build 시 OCCT 실 사용 불가" 가 무의미한 약속 임이 확인됨. 실제 가치를 위해서는 build-time 의존성 명시 필요.
+3. **Trade-off accept**:
+   - `npm install --no-optional` 시나리오 미지원 (이전 ADR-035 P20.7 의도였으나 실효 없음)
+   - `opencascade.js` 가 항상 production build 에 lazy chunk 로 포함
+   - **P20.C #2 strict 유지** — initial bundle 0MB 영향 없음, lazy chunk 만 추가
+4. **C-δ Playwright 테스트 invert**:
+   - `Drift #3 회귀 가드` (negative) → `OCCT browser load 회귀` (positive): `import('opencascade.js')` 가 success → `initOpenCascade` 호출 가능
+   - `chunk absence` (negative) → `chunk presence` (positive): `opencascade-deps-{hash}.js` 가 dist 에 존재
+5. **Real Chromium round-trip** (원래 C-δ 의도, 본 amendment 로 활성):
+   - `traversal.faces.length >= 1` ground truth 검증 (corpus 생성 또는 fetch 후속)
+6. **L3 (initial bundle 0MB) strict 검증**: amendment 적용 전후 initial
+   bundle hash 동일성 + size 동일성 명시 회귀
+
+**ADR-082 수정 후 lock-in 표** (참고):
+- L1 amendment ↑
+- L2 ~ L7: 변경 없음
+- 신규 amendment 회귀 budget: vitest +0~1, Playwright +0~2 (기존 negative 2개 invert + 추가 round-trip 1개)
+
+**원래 §3.5 (optional C-ε additional corpus)** → §3.5.1 로 강등:
+
+### 3.5.1 (optional) Additional corpus + W-η UI integration 실파일 검증
+
+C-ε closure 후 사용자 결재로 진입 가능. NIST 2번째 파일 또는
 SolidWorks 1 파일 추가. 본 ADR 의 minimum scope 외.
 
 ### 3.6 (optional) C-ζ — LOCKED #29 갱신 + 회고

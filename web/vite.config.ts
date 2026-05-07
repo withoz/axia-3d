@@ -1,8 +1,42 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import wasm from 'vite-plugin-wasm';
 
+/**
+ * ADR-082 C-ε amendment (drift #3 fix):
+ *   opencascade.js 의 `module.TK*.wasm` 파일들은 Emscripten 의 `env`
+ *   import 를 가짐 — Rollup 의 ESM 링킹과 호환 안 됨. 이들을 URL 문자열
+ *   로 처리하는 plugin (`?url` 효과를 자동 적용).
+ *
+ *   효과: opencascade.js index.js 의 `export { default as TK* } from
+ *   './module.TK*.wasm'` 가 *URL string* 으로 해석되어 Emscripten loader
+ *   가 fetch + instantiate. Rollup 은 .wasm 을 module 로 링크 시도하지
+ *   않음.
+ */
+function opencascadeWasmAsUrl(): Plugin {
+  return {
+    name: 'opencascade-wasm-as-url',
+    enforce: 'pre',
+    async resolveId(source, importer) {
+      // opencascade.js 내부의 .wasm import 만 가로채기 (다른 wasm 패키지
+      // 영향 없음 — wasm-pack 산출 등은 vite-plugin-wasm 정상 처리)
+      if (
+        source.endsWith('.wasm') &&
+        importer &&
+        importer.includes('opencascade.js')
+      ) {
+        // 자기 자신을 resolve 한 후 ?url suffix 부착으로 Vite 가 URL 처리
+        const resolved = await this.resolve(source, importer, { skipSelf: true });
+        if (resolved) {
+          return resolved.id + '?url';
+        }
+      }
+      return null;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [wasm()],
+  plugins: [opencascadeWasmAsUrl(), wasm()],
   server: {
     port: 3000,
     open: true,
@@ -23,8 +57,8 @@ export default defineConfig({
               id.includes('node_modules/rhino3dm')) {
             return 'file-io-libs';
           }
-          // OCCT.js (STEP/IGES) → 분리 청크 (ADR-035 P20.1).
-          // optionalDependency — 설치 시에만 chunk 생성. 메인 번들 영향 0.
+          // OCCT.js (STEP/IGES) → 분리 청크 (ADR-035 P20.1, ADR-082 C-ε).
+          // dependencies 등급 (ADR-082 §3.5 amendment) — lazy chunk 강제.
           if (id.includes('node_modules/opencascade.js')) {
             return 'opencascade-deps';
           }

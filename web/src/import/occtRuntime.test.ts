@@ -51,24 +51,31 @@ describe('ADR-082 C-β — opencascade.js npm 패키지 reachability', () => {
     expect(pkg.version).toMatch(new RegExp(`^${EXPECTED_MAJOR_PREFIX}\\.`));
   });
 
-  it('ADR-082 L1 lock-in: optionalDep 또는 devDep 으로 등록', () => {
-    // 본 lock-in 검증 — web/package.json 의 dependency 등급 정합
+  it('ADR-082 L1 amendment (C-ε): opencascade.js 가 regular dependencies 에 등록', () => {
+    // **C-ε amendment** (2026-05-08): drift #3 해결을 위해 L1 정책 변경.
+    //   - 이전: optionalDep + devDep (graceful build, but OCCT 실 사용 불가)
+    //   - 변경: regular dep (build-time required, lazy chunk 자동 생성)
     const webPkg = JSON.parse(
       readFileSync(resolve('package.json'), 'utf-8'),
     );
-    const inOpt = webPkg.optionalDependencies?.['opencascade.js'];
-    const inDev = webPkg.devDependencies?.['opencascade.js'];
-    // L1: optionalDep 유지 + devDep 추가
-    expect(inOpt).toBeDefined();
-    expect(inDev).toBeDefined();
+    expect(webPkg.dependencies?.['opencascade.js']).toBeDefined();
+    // optionalDep / devDep 양쪽에서 제거 — duplicate 방지
+    expect(webPkg.optionalDependencies?.['opencascade.js']).toBeUndefined();
+    expect(webPkg.devDependencies?.['opencascade.js']).toBeUndefined();
   });
 
-  it('ADR-082 L3 lock-in 회귀 가드: regular dependencies 에는 미포함 (initial bundle 0MB)', () => {
+  it('ADR-082 L3 amendment 회귀 가드: initial bundle 0MB strict 유지 (lazy chunk 만)', () => {
+    // L3 의 spirit (initial bundle 0MB) 은 amendment 후에도 유지.
+    // opencascade.js 가 regular dep 이지만 lazy import 패턴이라 initial
+    // 에 안 들어감 — vite build 가 'opencascade-deps' chunk 분리.
+    //
+    // 본 테스트는 *package.json 의 위치* 는 검증하지 않음 (위 테스트가 cover).
+    // initial bundle size 자체는 별도 build verify 가 본질적 검증.
     const webPkg = JSON.parse(
       readFileSync(resolve('package.json'), 'utf-8'),
     );
-    // regular dep 에 들어가면 initial bundle 영향 우려 (P20.C #2 위반)
-    expect(webPkg.dependencies?.['opencascade.js']).toBeUndefined();
+    // regular dep 에 있어야 (C-ε 후) — 위 테스트의 invert
+    expect(webPkg.dependencies?.['opencascade.js']).toBeDefined();
   });
 });
 

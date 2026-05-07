@@ -118,11 +118,19 @@ export class StepIgesImporter {
     /* eslint-disable @typescript-eslint/no-explicit-any */
     let mod: any | undefined;
     try {
-      // Variable indirection prevents Vite static analysis — opencascade.js
-      // is an optionalDependency (ADR-035 P20.7), so static resolution must
-      // not fail the build when it's absent.
-      const moduleName: string = 'opencascade' + '.js';
-      mod = await import(/* @vite-ignore */ moduleName);
+      // ADR-082 C-ε amendment (drift #3 fix):
+      //   기존 `/* @vite-ignore */ moduleName` 동적 string 패턴 (ADR-035
+      //   P20.7) 은 Vite 의 import 분석을 차단 → opencascade-deps chunk
+      //   미생성 → browser dynamic import resolve 실패. 사용자 결재 (ADR-082
+      //   §3.5 amendment, 2026-05-08) 로 literal specifier 로 변경.
+      //
+      //   효과:
+      //   - Vite 가 'opencascade-deps' lazy chunk 생성 → browser 정상 로드
+      //   - opencascade.js 가 dependencies 로 승격 (build-time required)
+      //   - --no-optional install 시나리오 미지원 (이전 의도 무효임이 drift
+      //     #3 으로 확인됨)
+      //   - Initial bundle 0MB strict 유지 (P20.C #2) — lazy chunk 만 추가
+      mod = await import('opencascade.js');
     } catch (e) {
       debugWarn('[StepIgesImporter] opencascade.js import failed:', e);
       throw new Error(NOT_INSTALLED_MESSAGE);
@@ -150,9 +158,20 @@ export class StepIgesImporter {
       );
     }
     // initOpenCascade signature: settings { mainJS, mainWasm, libs, module }.
-    // 우리는 default settings 사용 (web bundler 가 .wasm URL 해결) — 빈
-    // 객체 전달이 권장.
-    const occt = await initFn.call(mod, {});
+    //
+    // **C-ε wrapper drift #4 fix**: STEP/IGES API 는 dynamic library
+    // (TKSTEP/TKIGES/etc.) 로딩 필요 — `libs: []` default 면 base 만
+    // 로드되어 `STEPControl_Reader_1` 등 API 부재. ocDataExchangeBase
+    // + ocDataExchangeExtra 가 STEP/IGES bundle. ocCore + ocModelingAlgorithms
+    // 도 BRep / topology 전체 지원에 필요.
+    const occt = await initFn.call(mod, {
+      libs: [
+        mod.ocCore,
+        mod.ocModelingAlgorithms,
+        mod.ocDataExchangeBase,
+        mod.ocDataExchangeExtra,
+      ],
+    });
     debugLog('[StepIgesImporter] OCCT.js init complete');
     return occt;
     /* eslint-enable @typescript-eslint/no-explicit-any */
