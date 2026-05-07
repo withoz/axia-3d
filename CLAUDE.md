@@ -1377,10 +1377,16 @@
     flag 폐기 (K-ε) + legacy 삭제 (K-ζ) = single-path enforcement
   - ADR-046 P31 #4 (additive only): 메뉴/단축키/툴바 외부 ID UNCHANGED
 - **후속 트랙 (deferred to separate ADRs)**:
-  - **ADR-088 (Phase 1)**: `curve_owner_id` grouping for analytic
-    curves — selection-time enforcement of LOCKED #15 (ADR-037 P22.5).
-    Circle 의 N segments 가 한 클릭으로 통일 선택. DCEL 무surgery,
-    Edge 에 `curve_owner_id: Option<u32>` 필드 추가만.
+  - **ADR-088 (Phase 1) ✅ Closed (2026-05-08)**: `curve_owner_id`
+    grouping for analytic curves — selection-time enforcement of
+    LOCKED #15 (ADR-037 P22.5). Circle 의 N segments 가 한 클릭으로
+    통일 선택. DCEL 무surgery, Edge 에 `curve_owner_id: Option<u32>`
+    필드 추가만. **5-step Path Z atomic** (S-α `6bc16e6` spec → S-β
+    `d3aa9ae` Edge schema + Mesh counter → S-γ `535ce4e` DrawCircle/
+    Arc/Bezier/BSpline owner_id 부여 → S-δ `2fbf0c2` WASM exports +
+    TS bridge + SelectTool walk → S-ε docs closure). **회귀 +10**
+    (axia-core +3 / axia-geo +3 / vitest +4 / 절대 #[ignore] 금지
+    10/10). 사용자 facing: DrawCircle 한 클릭 → N segments 전체 선택.
   - **ADR-089 (Phase 2, future)**: True kernel-native closed edges
     — DCEL Edge schema relaxation (self-loop allowed, v_small ==
     v_large for closed curves). add_face accepting curve loops directly.

@@ -1,7 +1,7 @@
 # ADR-088 — Curve Owner ID Grouping for Analytic Curve Edges (Phase 1)
 
-**Status**: **Accepted** (S-α spec only — code 변경은 후속 S-β ~ S-ε
-별도 atomic commits, 각 step 사용자 결재)
+**Status**: **Accepted + Closed** (S-α ~ S-ε 모두 완료, 2026-05-08).
+ADR-089 (Phase 2: true kernel-native closed edges) 후속 트랙.
 **Date**: 2026-05-08
 **Author**: AXiA team (사용자 통찰 + Claude spec)
 **Anchor**: 사용자 통찰 (2026-05-08, ADR-087 K-η closure 직후):
@@ -170,12 +170,104 @@ Phase 1 만으로 사용자 facing 문제 (segment selection) 즉시 해결 + Ph
 
 ## §D Acceptance Log
 
-### S-α (2026-05-08, 본 commit)
-- **사용자 결재**: 2026-05-08, "네 승인합니다."
+### S-α (2026-05-08, commit `6bc16e6`)
+- **사용자 결재**: "네 승인합니다."
 - **변경**: `docs/adr/088-curve-owner-id-grouping.md` (본 파일) 신설.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
 - **Bundle 영향**: 0 (TS/Rust 변경 0).
-- **다음 step**: S-β (Edge schema + Mesh counter).
+
+### S-β (2026-05-08, commit `d3aa9ae`)
+- **사용자 결재**: "네 승인합니다."
+- **변경**:
+  - `crates/axia-geo/src/entities/edge.rs`: `curve_owner_id: Option<u32>`
+    필드 + `#[serde(default)]` + getter/setter
+  - `crates/axia-geo/src/mesh.rs`: `next_curve_owner_id: u32` counter +
+    4 impl methods (`next_curve_owner_id`, `set_edge_curve_owner_id`,
+    `edge_curve_owner_id`, `edges_by_curve_owner`)
+- **회귀**: +3 (axia-geo)
+  - `adr088_edge_default_curve_owner_id_is_none` (L1 default)
+  - `adr088_mesh_counter_monotonic_unique` (L2 monotonic)
+  - `adr088_edges_by_curve_owner_groups_correctly` (cross-group isolation)
+- **Legacy 호환**: `#[serde(default)]` 양 필드 → 기존 `.axia` 파일 load 시
+  None / 0 자동.
+
+### S-γ (2026-05-08, commit `535ce4e`)
+- **사용자 결재**: "승인 합니다."
+- **변경 (4 creator sites)**:
+  - `Scene::exec_draw_circle`: N segments owner_id 부여 (Arc curve attach 후)
+  - `WasmBridge::draw_arc_with_curve`: Sub-arc segments owner_id 부여
+  - `WasmBridge::draw_bezier_with_curve`: Bezier segments owner_id 부여
+  - `WasmBridge::draw_bspline_with_curve`: B-spline segments owner_id 부여
+- **회귀**: +3 (axia-core)
+  - `adr088_s_gamma_draw_circle_segments_share_owner_id` (16 → 1 owner)
+  - `adr088_s_gamma_draw_circle_as_shape_segments_share_owner_id`
+    (AsShape delegate)
+  - `adr088_s_gamma_two_circles_get_distinct_owner_ids` (cross-leak 차단)
+- **DrawCircleAsShape / DrawLineAsShape** 는 `exec_draw_circle` 등으로
+  delegate → 자동 owner_id 부여.
+
+### S-δ (2026-05-08, commit `2fbf0c2`)
+- **사용자 결재**: "승인합니다."
+- **변경 (4 layers)**:
+  - WASM: `getEdgeCurveOwnerId` / `getEdgesByCurveOwner` 2 새 export
+  - export_baseline.txt: 2 새 entries
+  - TS bridge: `WasmBridge.getEdgeCurveOwnerId(eid)` / `getEdgesByCurveOwner(id)`
+  - `SelectTool::onMouseDown` single-click 분기에 curve_owner_id walk:
+    * ownerId >= 0 + groupEdges.length > 1 → group 전체 선택
+      (첫 edge: caller modifiers, 나머지: shift=true additive)
+    * ownerId < 0 또는 stale group → 단일 edge fallback (legacy 보존)
+- **회귀**: +4 (vitest, SelectTool S-δ describe block)
+- **기존 테스트 mock 업데이트** (3 files): SelectTool / SegmentVsCurveSelection
+  / HoverPickPromote — bridge mock 에 default `getEdgeCurveOwnerId: -1` /
+  `getEdgesByCurveOwner: []` 추가.
+- **사용자 facing**: DrawCircle 한 segment 클릭 → 전체 원 highlight ✅
+  LOCKED #15 P22.5 canonical 준수.
+
+### S-ε (2026-05-08, 본 commit) — Closure
+- **사용자 결재**: "승인합니다."
+- **변경**: 본 ADR §D Acceptance Log 최종 갱신 + Status closure.
+- **회귀**: +0 (docs only).
+
+---
+
+## §E ADR-088 누적 회귀 (S-α ~ S-ε 합산)
+
+| Suite | S-α 시작 전 | S-ε closure |
+|-------|------------|-------------|
+| axia-core | 193 | **196** (+3) |
+| axia-geo | 1107 | **1110** (+3) |
+| axia-wasm | 34 | 34 (baseline +1 line) |
+| vitest | 1618 | **1622** (+4) |
+| **Total** | 2952 | **2962** (+10) |
+
+**절대 #[ignore] 금지 10/10 준수**.
+
+---
+
+## §F Lessons (S-α ~ S-ε 회고)
+
+1. **Phase 분리 효과**: DCEL surgery (Phase 2 = ADR-089) 회피하면서도
+   사용자 facing canonical 의도 (LOCKED #15 P22.5) 달성. 점진 진화의
+   가치 — 큰 architectural surgery 를 한 번에 하지 않고 selection-layer
+   grouping 으로 단계 unlock.
+
+2. **selection-layer abstraction 의 가치**: DCEL representation (N edges)
+   과 user-facing entity (1 logical curve) 의 mismatch 를 selection
+   layer 의 grouping 으로 해결. 향후 ADR 가이드: layer 별 책임 분리
+   원칙 (DCEL=topology truth / selection=user intent) 적용.
+
+3. **delegate 자동 cover 패턴**: S-γ 에서 `DrawCircleAsShape` 가
+   `exec_draw_circle` 로 delegate 하는 구조 덕분에 owner_id 부여가
+   자동. K-α~K-ζ 의 AsShape ↔ 기본 exec 분리 architecture 의 자연
+   benefit.
+
+4. **defensive fallback**: S-δ 의 stale owner_id (group empty) 케이스
+   가 undo / erase / cascade 시나리오의 defense. `groupEdges.length
+   <= 1` 분기로 single edge fallback. Selection state 의 robustness.
+
+5. **mock 일관성 유지**: S-δ 에서 3 test file 의 bridge mock 업데이트.
+   bridge 인터페이스 확장 시 기본 mock (default no-op) 일관 적용 패턴
+   — 향후 bridge 메서드 추가 시 동일 절차.
 
 ---
 
