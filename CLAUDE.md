@@ -2123,9 +2123,9 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - Fillet 3-way corner (같은 vertex 공유 다중 엣지) 미해결 — 별도 작업
 - STEP/IGES OCCT.js 통합 미구현 — 10MB+ 번들 검토 필요
 
-## 메타-원칙 (#1~#13, ADR-014 까지 통과)
+## 메타-원칙 (#1~#14, ADR-087 까지 통과)
 
-설계 결정 시 참조하는 13개 메타-원칙. 자세한 출처는
+설계 결정 시 참조하는 14개 메타-원칙. 자세한 출처는
 `docs/adr/README.md` 참조.
 
 | # | 원칙 | 축 |
@@ -2143,6 +2143,47 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 | 11 | **Latency Budget First** (Hover 16/Click 33/Commit 100/Heavy 500 ms) | 성능 |
 | 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
 | 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
+| 14 | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) | 기하 본질 |
+
+### 메타-원칙 #14 — 면은 닫힌 경계로부터 유도된다
+
+**Canonical statement (사용자 통찰, 2026-05-08)**:
+> "면은 닫힌 경계로부터 유도된다."
+> ("A face is derived from a closed boundary.")
+
+**의미**:
+- Face 는 *first-class entity 가 아닌 byproduct* — closed edge loop 의
+  자연 결과 (ADR-019 "Line is Truth, Face is Byproduct" 의 가장 본질
+  형태).
+- Edge 는 fundamental — vertex 는 edge endpoint, face 는 edge cycle
+  의 derivation.
+- Closed boundary 가 있으면 face 가 합성되어야 (LOCKED #12 ADR-025 P11).
+- Closed boundary 가 기존 face 위에 있으면 그 face 를 분할 (LOCKED #1
+  ADR-021 P7).
+- Boundary 에 attach 된 analytic curve (Circle/Arc/Bezier/BSpline/NURBS)
+  가 face 의 경계 형상을 정의 — polygon approximation 은 render 부산물
+  (ADR-027 NURBS Kernel + ADR-028 Edge curve attach).
+- Face 의 surface metadata (Plane / Cylinder / Sphere / etc.) 는
+  *kernel-aware ops* (Push/Pull / Boolean / Offset) 의 입력 — render
+  영역 결정자 아님 (LOCKED #16 ADR-038 P23 + ADR-087 K-ε hotfix).
+
+**적용 사례 (역사적 맥락)**:
+- ADR-008 Axiom 1: Face = byproduct
+- ADR-015 LOCKED #1 의 v2.0 (component-merge resolver deferred)
+- ADR-019 "Line is Truth, Face is Byproduct"
+- ADR-025 P11 LOCKED #12: 닫힌 엣지 = 반드시 면
+- ADR-021 P7 LOCKED #1: 닫힌 경계로 면 분할
+- ADR-087 K-ε hotfix: Plane render → polygon path (DCEL boundary = exact)
+- ADR-088 Phase 1 (curve_owner_id), ADR-089 Phase 2 (true kernel-native
+  closed edges) 의 anchor.
+
+**가이드 (향후 ADR / 코드 결정 시)**:
+- "이 변경이 면을 closed edge boundary 의 byproduct 로 유지하는가?" 가
+  체크리스트 첫 질문.
+- Face 를 *first-class* 로 취급하면 mesh-era 잔존이 잠복 — 폴리곤
+  approximation 의존, kernel-aware ops 차단, selection unification
+  실패 등.
+- 답이 No 면 거부 또는 새 ADR 필요.
 
 ## Session 2026-04-28 완료 내역 (11 commits — RECT 면 합성 정책 정비)
 

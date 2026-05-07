@@ -1,15 +1,18 @@
 # ADR-019: Line is Truth, Face is Byproduct (v2.1)
 
-**Status**: Draft
+**Status**: Draft (canonical statement upgraded to 메타-원칙 #14, 2026-05-08)
 **Owner**: AXiA Geometry/Core
 **Related**: ADR-007 (Winding), ADR-008 (Axioms), ADR-016 (Conditional B1),
 ADR-017 (Edge/Line elevation; future), ADR-018 (Uniform Surface Render),
-ADR-020 (Centerline layer separation; candidate)
+ADR-020 (Centerline layer separation; candidate), ADR-087 (Kernel-Native
+Command Suite Reset 의 anchor)
 
 ---
 
-## 0. Summary (Decision Summary — 4 lines)
+## 0. Summary (Decision Summary — 5 lines)
 
+> **면은 닫힌 경계로부터 유도된다** (메타-원칙 #14, canonical 사용자 통찰
+> 2026-05-08).
 > Line is Truth. Face is Byproduct.
 > Erase는 깨고, 다시 만든다.
 > 모든 CCW 닫힌 경계는 면화한다.
