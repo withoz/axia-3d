@@ -154,6 +154,40 @@ impl Mesh {
         // Left (X=-hx, normal -X) verts where x bit = 0
         faces.push(self.add_face(&[v000, v001, v011, v010], material)?);
 
+        // ADR-087 K-δ — attach Plane AnalyticSurface to all 6 faces so
+        // kernel-aware ops (createSolidExtrude / Boolean / offset) accept
+        // any box face as profile. Mirrors ADR-032 P17 cylinder/cone caps.
+        // Each face's plane: origin = face center, normal = outward axis,
+        // basis_u = perpendicular axis. Order matches faces[] above.
+        let face_planes: [(DVec3, DVec3, DVec3); 6] = [
+            // Bottom (face 0): origin (cx, cy-hy, cz), normal -Y, basis +X
+            (center + DVec3::new(0.0, -hy, 0.0), -DVec3::Y, DVec3::X),
+            // Top (face 1): origin (cx, cy+hy, cz), normal +Y, basis +X
+            (center + DVec3::new(0.0,  hy, 0.0),  DVec3::Y, DVec3::X),
+            // Front (face 2): origin (cx, cy, cz+hz), normal +Z, basis +X
+            (center + DVec3::new(0.0, 0.0,  hz),  DVec3::Z, DVec3::X),
+            // Back (face 3): origin (cx, cy, cz-hz), normal -Z, basis +X
+            (center + DVec3::new(0.0, 0.0, -hz), -DVec3::Z, DVec3::X),
+            // Right (face 4): origin (cx+hx, cy, cz), normal +X, basis +Y
+            (center + DVec3::new( hx, 0.0, 0.0),  DVec3::X, DVec3::Y),
+            // Left (face 5): origin (cx-hx, cy, cz), normal -X, basis +Y
+            (center + DVec3::new(-hx, 0.0, 0.0), -DVec3::X, DVec3::Y),
+        ];
+        let max_extent = hx.max(hy).max(hz) * 1.5;
+        let plane_range = (-max_extent, max_extent);
+        for (i, &fid) in faces.iter().enumerate() {
+            let (origin, normal, basis_u) = face_planes[i];
+            if let Some(f) = self.faces.get_mut(fid) {
+                f.set_surface(Some(AnalyticSurface::Plane {
+                    origin,
+                    normal,
+                    basis_u,
+                    u_range: plane_range,
+                    v_range: plane_range,
+                }));
+            }
+        }
+
         Ok(faces)
     }
 
@@ -253,6 +287,32 @@ impl Mesh {
                 }
             }
             faces.push(side_face);
+        }
+
+        // ADR-087 K-δ — Cone caps (base + top) get Plane Surface, mirroring
+        // ADR-032 P17 cylinder caps. Without this, Push/Pull on cone caps
+        // would reject with NoProfileSurface.
+        let v_perp = up.cross(radial).normalize_or_zero();
+        let plane_basis_u = if v_perp.length_squared() > 0.5 { v_perp } else { radial };
+        let cap_max_radius = radius.max(top_radius);
+        let cap_range = (-cap_max_radius * 1.5, cap_max_radius * 1.5);
+        if let Some(f) = self.faces.get_mut(base_face) {
+            f.set_surface(Some(AnalyticSurface::Plane {
+                origin: base_center,
+                normal: -up,                 // outward at base = -axis
+                basis_u: plane_basis_u,
+                u_range: cap_range,
+                v_range: cap_range,
+            }));
+        }
+        if let Some(f) = self.faces.get_mut(top_face) {
+            f.set_surface(Some(AnalyticSurface::Plane {
+                origin: top_center,
+                normal: up,                  // outward at top = +axis
+                basis_u: plane_basis_u,
+                u_range: cap_range,
+                v_range: cap_range,
+            }));
         }
 
         // Hide tessellation chord rings (base + top) — same as cylinder.
@@ -514,15 +574,115 @@ mod tests {
         assert!(cone_count > 0, "expected ≥ 1 Cone surface");
     }
 
-    /// 회귀 보장 — Box (non-curved primitive) 는 surface 가 None.
+    /// ADR-087 K-δ — Box 6 faces 는 axis-aligned Plane 6개 attach.
+    /// 이전 정책 (`box_faces_have_no_surface`) 폐기 — Push/Pull /
+    /// createSolidExtrude / Boolean 의 입력으로 box face 사용 시
+    /// NoProfileSurface 거부 회귀 차단.
     #[test]
-    fn box_faces_have_no_surface() {
+    fn k_delta_box_faces_have_plane_surface() {
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let faces = mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
+        assert_eq!(faces.len(), 6, "box should have exactly 6 faces");
         for &fid in &faces {
-            assert!(mesh.face_surface(fid).is_none(),
-                "box face should have no analytic surface");
+            match mesh.face_surface(fid) {
+                Some(AnalyticSurface::Plane { .. }) => {}
+                other => panic!(
+                    "ADR-087 K-δ: box face should have Plane surface, got {:?}",
+                    other,
+                ),
+            }
+        }
+    }
+
+    /// ADR-087 K-δ — Box 6 faces 의 outward normal 정확성.
+    /// 정확한 axis-aligned outward normal 을 가져야 함.
+    #[test]
+    fn k_delta_box_face_planes_outward_normals_correct() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
+        // Order from create_box: Bottom, Top, Front, Back, Right, Left.
+        let expected_normals = [
+            -DVec3::Y, DVec3::Y,  // Bottom, Top
+            DVec3::Z, -DVec3::Z,  // Front, Back
+            DVec3::X, -DVec3::X,  // Right, Left
+        ];
+        for (i, &fid) in faces.iter().enumerate() {
+            if let Some(AnalyticSurface::Plane { normal, basis_u, .. }) = mesh.face_surface(fid) {
+                assert!(
+                    (*normal - expected_normals[i]).length() < 1e-12,
+                    "face {i}: normal {:?} != expected {:?}",
+                    normal, expected_normals[i],
+                );
+                // basis_u perpendicular to normal (Plane invariant)
+                assert!(
+                    basis_u.dot(*normal).abs() < 1e-12,
+                    "face {i}: basis_u not perpendicular to normal",
+                );
+            } else {
+                panic!("face {i} missing Plane surface");
+            }
+        }
+    }
+
+    /// ADR-087 K-δ — End-to-end: Box face + create_solid Extrude
+    /// 즉시 통과 (NoProfileSurface 거부 없음).
+    #[test]
+    fn k_delta_box_face_create_solid_extrude_succeeds() {
+        use crate::operations::create_solid::CreateSolidMode;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
+        let any_face = faces[0]; // bottom face
+        let result = mesh.create_solid(
+            any_face,
+            CreateSolidMode::Extrude { distance: 5.0 },
+            mat,
+        );
+        assert!(
+            result.is_ok(),
+            "ADR-087 K-δ: box face Extrude should succeed, got {:?}",
+            result.err(),
+        );
+    }
+
+    /// ADR-087 K-δ — End-to-end: Cone cap + create_solid Extrude.
+    #[test]
+    fn k_delta_cone_cap_create_solid_extrude_succeeds() {
+        use crate::operations::create_solid::CreateSolidMode;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        let cap_face = faces[0]; // base cap
+        let result = mesh.create_solid(
+            cap_face,
+            CreateSolidMode::Extrude { distance: 10.0 },
+            mat,
+        );
+        assert!(
+            result.is_ok(),
+            "ADR-087 K-δ: cone cap Extrude should succeed, got {:?}",
+            result.err(),
+        );
+    }
+
+    /// ADR-087 K-δ — Cone caps (base + top) 는 Plane surface attach.
+    /// Cylinder 와 동일 패턴 (ADR-032 P17).
+    #[test]
+    fn k_delta_cone_caps_have_plane_surface() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        // faces[0] = base cap, faces[1] = top cap, faces[2..] = side faces.
+        for &fid in &faces[..2] {
+            match mesh.face_surface(fid) {
+                Some(AnalyticSurface::Plane { .. }) => {}
+                other => panic!(
+                    "ADR-087 K-δ: cone cap face should have Plane surface, got {:?}",
+                    other,
+                ),
+            }
         }
     }
 
