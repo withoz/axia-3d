@@ -462,6 +462,9 @@ type AxiaEngineExtended = AxiaEngine & {
   clearFaceSurface?(faceId: number): boolean;
   faceSurfaceKind?(faceId: number): number;
   tessellateFaceSurface?(faceId: number, chordTol: number): Float64Array;
+  // ADR-086 O-γ — Inject external face (STEP/IGES Approach A)
+  injectExternalFaceNoSurface?(positionsXyz: Float64Array): number;
+  injectExternalFacePlane?(...args: number[]): number;
   // Material operations
   assign_material?(faceIds: Uint32Array, materialIdRaw: number): boolean;
   remove_material?(faceIds: Uint32Array): boolean;
@@ -1259,6 +1262,74 @@ export class WasmBridge {
     if (!fn) return new Float64Array(0);
     const result = fn.call(this.engine, faceId, chordTol);
     return result instanceof Float64Array ? result : new Float64Array(result as number[]);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-086 O-γ — Inject External Face (STEP/IGES Approach A)
+  // ════════════════════════════════════════════════════════════════════════
+  //
+  // Caller (StepIgesImporter integration, O-δ) 가 BRep traversal 의
+  // stable index → axia FaceId map 에 결과를 저장. Return -1 on error.
+
+  /**
+   * Inject an external face boundary into axia DCEL — no analytic surface.
+   *
+   * 사용 시나리오: STEP face 의 surface 가 promoteSurface 에서 Tessellate
+   * fallback 으로 떨어진 경우 (W-3-ε deferred / unsupported).
+   *
+   * @param positionsXyz - Flat outer boundary points (`xyz × N`, N>=3).
+   *   First point != last (loop closure implicit).
+   * @returns FaceId.raw() on success, -1 on error.
+   */
+  injectExternalFaceNoSurface(positionsXyz: Float64Array): number {
+    if (!this.engine) return -1;
+    const fn = (this.engine as unknown as {
+      injectExternalFaceNoSurface?: (pts: Float64Array) => number;
+    }).injectExternalFaceNoSurface;
+    if (!fn) return -1;
+    this.markDirty();
+    return fn.call(this.engine, positionsXyz);
+  }
+
+  /**
+   * Inject an external face boundary into axia DCEL — with Plane surface.
+   *
+   * 사용 시나리오: STEP face 의 surface 가 promoteSurface 에서 Plane variant
+   * 로 promote 된 경우 (W-γ direct mapping 5 중 가장 흔함).
+   *
+   * @param positionsXyz - Flat outer boundary points (`xyz × N`, N>=3).
+   * @param origin - Plane origin
+   * @param normal - Plane normal direction
+   * @param basisU - Plane reference U direction
+   * @returns FaceId.raw() on success, -1 on error.
+   */
+  injectExternalFacePlane(
+    positionsXyz: Float64Array,
+    origin: [number, number, number],
+    normal: [number, number, number],
+    basisU: [number, number, number],
+  ): number {
+    if (!this.engine) return -1;
+    const fn = (this.engine as unknown as {
+      injectExternalFacePlane?: (...args: number[]) => number;
+    }).injectExternalFacePlane;
+    if (!fn) return -1;
+    this.markDirty();
+    // WASM signature: (positions, ox, oy, oz, nx, ny, nz, ux, uy, uz)
+    // wasm-bindgen Float64Array 인자는 first positional — rest 는 numbers
+    // 우회: spread 형태로 호출 (wasm-bindgen 의 ...args[number] 시그니처 답습)
+    return (fn as (
+      pts: Float64Array,
+      ox: number, oy: number, oz: number,
+      nx: number, ny: number, nz: number,
+      ux: number, uy: number, uz: number,
+    ) => number).call(
+      this.engine,
+      positionsXyz,
+      origin[0], origin[1], origin[2],
+      normal[0], normal[1], normal[2],
+      basisU[0], basisU[1], basisU[2],
+    );
   }
 
   /** Get the first face ID owned by a XIA entity (drawRect returns XIA ID, pushPull needs face ID) */

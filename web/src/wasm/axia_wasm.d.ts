@@ -870,6 +870,28 @@ export class AxiaEngine {
      */
     import_snapshot(data: Uint8Array): boolean;
     /**
+     * Inject an external face boundary into axia DCEL — no surface.
+     *
+     * Args:
+     * - `positions_xyz`: flat array of `xyz × N` outer boundary points
+     *   (N >= 3). First point != last (loop closure implicit).
+     *
+     * Returns: new FaceId.raw() as i32, or -1 on error.
+     */
+    injectExternalFaceNoSurface(positions_xyz: Float64Array): number;
+    /**
+     * Inject an external face boundary into axia DCEL — with Plane surface.
+     *
+     * Args:
+     * - `positions_xyz`: flat outer boundary points (xyz × N)
+     * - plane_o[xyz]: Plane origin
+     * - plane_n[xyz]: Plane normal
+     * - plane_u[xyz]: Plane reference direction (basis_u)
+     *
+     * Returns: new FaceId.raw() as i32, or -1 on error.
+     */
+    injectExternalFacePlane(positions_xyz: Float64Array, plane_ox: number, plane_oy: number, plane_oz: number, plane_nx: number, plane_ny: number, plane_nz: number, plane_ux: number, plane_uy: number, plane_uz: number): number;
+    /**
      * ADR-030 Phase C — Compute intersections between two edges' analytic
      * curves. Returns a flat Float64Array `[x0, y0, z0, t1_0, t2_0, angle_0,
      * x1, y1, z1, t1_1, t2_1, angle_1, ...]` — 6 floats per intersection.
@@ -1671,6 +1693,8 @@ export interface InitOutput {
     readonly axiaengine_hasBooleanGroupSelection: (a: number) => number;
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
+    readonly axiaengine_injectExternalFaceNoSurface: (a: number, b: number, c: number) => number;
+    readonly axiaengine_injectExternalFacePlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_intersectEdges: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_intersectWithModel: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_isFaceInVolume: (a: number, b: number) => number;

@@ -552,6 +552,71 @@ describe('WasmBridge', () => {
     });
 
     // ──────────────────────────────────────────────────────────────────
+    // ADR-086 O-γ — inject external face (STEP/IGES Approach A) tests
+    // ──────────────────────────────────────────────────────────────────
+
+    it('injectExternalFaceNoSurface() forwards positions array to WASM', () => {
+      let capturedPositions: Float64Array | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        injectExternalFaceNoSurface: (pts: Float64Array) => {
+          capturedPositions = pts;
+          return 7;  // synthetic FaceId
+        },
+      };
+      const positions = new Float64Array([0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0]);
+      const faceId = bridge.injectExternalFaceNoSurface(positions);
+      expect(faceId).toBe(7);
+      expect(capturedPositions).toBe(positions);
+    });
+
+    it('injectExternalFaceNoSurface() returns -1 when WASM API missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};  // no inject method
+      const positions = new Float64Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      expect(bridge.injectExternalFaceNoSurface(positions)).toBe(-1);
+    });
+
+    it('injectExternalFacePlane() forwards positions + 9 plane params', () => {
+      let captured: { pts: Float64Array | null; args: number[] } = { pts: null, args: [] };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        injectExternalFacePlane: (pts: Float64Array, ...args: number[]) => {
+          captured = { pts, args };
+          return 42;  // synthetic FaceId
+        },
+      };
+      const positions = new Float64Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const faceId = bridge.injectExternalFacePlane(
+        positions,
+        [10, 20, 30],     // origin
+        [0, 0, 1],        // normal +Z
+        [1, 0, 0],        // basis_u +X
+      );
+      expect(faceId).toBe(42);
+      expect(captured.pts).toBe(positions);
+      expect(captured.args.length).toBe(9);
+      // origin
+      expect(captured.args[0]).toBe(10);
+      expect(captured.args[1]).toBe(20);
+      expect(captured.args[2]).toBe(30);
+      // normal
+      expect(captured.args[5]).toBe(1);  // nz
+      // basis_u
+      expect(captured.args[6]).toBe(1);  // ux
+    });
+
+    it('injectExternalFacePlane() returns -1 when WASM API missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      const positions = new Float64Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const result = bridge.injectExternalFacePlane(
+        positions, [0, 0, 0], [0, 0, 1], [1, 0, 0],
+      );
+      expect(result).toBe(-1);
+    });
+
+    // ──────────────────────────────────────────────────────────────────
     // ADR-032 P17 — Promotion on creation tests
     // ──────────────────────────────────────────────────────────────────
 

@@ -2489,6 +2489,51 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * Inject an external face boundary into axia DCEL — no surface.
+     *
+     * Args:
+     * - `positions_xyz`: flat array of `xyz × N` outer boundary points
+     *   (N >= 3). First point != last (loop closure implicit).
+     *
+     * Returns: new FaceId.raw() as i32, or -1 on error.
+     * @param {Float64Array} positions_xyz
+     * @returns {number}
+     */
+    injectExternalFaceNoSurface(positions_xyz) {
+        const ptr0 = passArrayF64ToWasm0(positions_xyz, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_injectExternalFaceNoSurface(this.__wbg_ptr, ptr0, len0);
+        return ret;
+    }
+    /**
+     * Inject an external face boundary into axia DCEL — with Plane surface.
+     *
+     * Args:
+     * - `positions_xyz`: flat outer boundary points (xyz × N)
+     * - plane_o[xyz]: Plane origin
+     * - plane_n[xyz]: Plane normal
+     * - plane_u[xyz]: Plane reference direction (basis_u)
+     *
+     * Returns: new FaceId.raw() as i32, or -1 on error.
+     * @param {Float64Array} positions_xyz
+     * @param {number} plane_ox
+     * @param {number} plane_oy
+     * @param {number} plane_oz
+     * @param {number} plane_nx
+     * @param {number} plane_ny
+     * @param {number} plane_nz
+     * @param {number} plane_ux
+     * @param {number} plane_uy
+     * @param {number} plane_uz
+     * @returns {number}
+     */
+    injectExternalFacePlane(positions_xyz, plane_ox, plane_oy, plane_oz, plane_nx, plane_ny, plane_nz, plane_ux, plane_uy, plane_uz) {
+        const ptr0 = passArrayF64ToWasm0(positions_xyz, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_injectExternalFacePlane(this.__wbg_ptr, ptr0, len0, plane_ox, plane_oy, plane_oz, plane_nx, plane_ny, plane_nz, plane_ux, plane_uy, plane_uz);
+        return ret;
+    }
+    /**
      * ADR-030 Phase C — Compute intersections between two edges' analytic
      * curves. Returns a flat Float64Array `[x0, y0, z0, t1_0, t2_0, angle_0,
      * x1, y1, z1, t1_1, t2_1, angle_1, ...]` — 6 floats per intersection.

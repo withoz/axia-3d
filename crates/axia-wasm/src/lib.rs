@@ -1490,7 +1490,114 @@ impl AxiaEngine {
         result
     }
 
-// ════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════
+    // ADR-086 O-γ — Inject External Face (STEP/IGES Approach A)
+    // ════════════════════════════════════════════════════════════════
+    //
+    // import 된 BRep face 를 axia DCEL 의 first-class entity 로 inject.
+    // Two variants:
+    //   1. injectExternalFaceNoSurface — DCEL face only (no analytic
+    //      surface attached)
+    //   2. injectExternalFacePlane — Plane analytic surface attached
+    //
+    // Returns: FaceId.raw() as i32 on success, -1 on failure.
+    //   Caller (TS, O-δ) 가 traversal stable index → axia FaceId map 에 저장.
+    //
+    // Future sub-step: Cylinder / Sphere / Cone / Torus / Bezier /
+    // BSpline / NURBS variants.
+
+    /// Inject an external face boundary into axia DCEL — no surface.
+    ///
+    /// Args:
+    /// - `positions_xyz`: flat array of `xyz × N` outer boundary points
+    ///   (N >= 3). First point != last (loop closure implicit).
+    ///
+    /// Returns: new FaceId.raw() as i32, or -1 on error.
+    #[wasm_bindgen(js_name = "injectExternalFaceNoSurface")]
+    pub fn inject_external_face_no_surface(
+        &mut self,
+        positions_xyz: &[f64],
+    ) -> i32 {
+        use axia_geo::operations::import_mesh::{ImportFaceBoundary, inject_external_face};
+        use axia_geo::MaterialId;
+        use glam::DVec3;
+
+        if positions_xyz.len() % 3 != 0 || positions_xyz.len() < 9 {
+            return -1;
+        }
+        let outer_loop: Vec<DVec3> = positions_xyz
+            .chunks_exact(3)
+            .map(|c| DVec3::new(c[0], c[1], c[2]))
+            .collect();
+        let boundary = ImportFaceBoundary {
+            outer_loop,
+            inner_loops: vec![],
+        };
+        // FORM_MATERIAL equivalent (LOCKED #26 ADR-049 P-5e-β)
+        match inject_external_face(&mut self.scene.mesh, boundary, None, MaterialId::new(0)) {
+            Ok(face_id) => {
+                self.mark_topology_changed();
+                face_id.raw() as i32
+            }
+            Err(_) => -1,
+        }
+    }
+
+    /// Inject an external face boundary into axia DCEL — with Plane surface.
+    ///
+    /// Args:
+    /// - `positions_xyz`: flat outer boundary points (xyz × N)
+    /// - plane_o[xyz]: Plane origin
+    /// - plane_n[xyz]: Plane normal
+    /// - plane_u[xyz]: Plane reference direction (basis_u)
+    ///
+    /// Returns: new FaceId.raw() as i32, or -1 on error.
+    #[wasm_bindgen(js_name = "injectExternalFacePlane")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn inject_external_face_plane(
+        &mut self,
+        positions_xyz: &[f64],
+        plane_ox: f64, plane_oy: f64, plane_oz: f64,
+        plane_nx: f64, plane_ny: f64, plane_nz: f64,
+        plane_ux: f64, plane_uy: f64, plane_uz: f64,
+    ) -> i32 {
+        use axia_geo::operations::import_mesh::{ImportFaceBoundary, inject_external_face};
+        use axia_geo::{AnalyticSurface, MaterialId};
+        use glam::DVec3;
+
+        if positions_xyz.len() % 3 != 0 || positions_xyz.len() < 9 {
+            return -1;
+        }
+        let outer_loop: Vec<DVec3> = positions_xyz
+            .chunks_exact(3)
+            .map(|c| DVec3::new(c[0], c[1], c[2]))
+            .collect();
+        let boundary = ImportFaceBoundary {
+            outer_loop,
+            inner_loops: vec![],
+        };
+        let surface = AnalyticSurface::Plane {
+            origin: DVec3::new(plane_ox, plane_oy, plane_oz),
+            normal: DVec3::new(plane_nx, plane_ny, plane_nz),
+            basis_u: DVec3::new(plane_ux, plane_uy, plane_uz),
+            u_range: (-1e6, 1e6),
+            v_range: (-1e6, 1e6),
+        };
+        match inject_external_face(
+            &mut self.scene.mesh,
+            boundary,
+            Some(surface),
+            MaterialId::new(0),
+        ) {
+            Ok(face_id) => {
+                self.mark_topology_changed();
+                face_id.raw() as i32
+            }
+            Err(_) => -1,
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ADR-062 Phase L₂ Path Z Step 3 — Validated attach (W2 per-kind)
     //
     // 5 new endpoints, additive-only (ADR-060 §D). Each mirrors the
