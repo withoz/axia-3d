@@ -1213,6 +1213,107 @@
   ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31 (P1+P3 wait 시
   신뢰성 가치 anchor).
 
+### 33. ADR-086 — WasmBridge Owner-ID Mapping / Approach A Full DCEL Injection (O-α ~ O-ε, 2026-05-08)
+- **사용자 결재 anchor (canonical)**:
+  > "WasmBridge owner-ID 매핑 — import 결과 (face/edge) 를 axia
+  > engine ops (offset / extrude / push-pull / Boolean) 의 입력으로
+  > 사용 가능 → ADR-079/080 활용 unlock. *최대 architectural value*.
+  > Approach A — Full DCEL Injection 채택."
+- **Path Z atomic 6-단계 closure** (O-α ~ O-ζ, 2026-05-08):
+  - O-α (spec only + 3 approach trade-off): ✅ — `e2e9afc`
+  - O-β (Rust core `inject_external_face`): ✅ — `8b7c223`
+    (axia-geo +7 tests) — thin wrapper over `add_face_with_holes` +
+    ADR-007 winding 자동 정합 + LOCKED #5 vertex dedup 활용
+  - O-γ-MVP (WASM bridge + TS wrapper, Plane + NoSurface variants):
+    ✅ — `a441fe4` (vitest +4) — 다른 surface kinds 는 후속 sub-step
+  - O-δ (StepIgesImporter integration, **architectural unlock**): ✅
+    — `85e4024` (vitest +16) — `extractFaceBoundary` (W-ε 답습) +
+    `injectIntoAxia` 메서드 + FileImporter `__axia.tryGet('bridge')`
+    자동 wiring
+  - O-ε (ADR-007 invariant + Playwright slow channel ground truth):
+    ✅ — `a0cc51e` (axia-geo +3 invariant tests, Playwright invariants
+    추가)
+  - O-ζ (closure + LOCKED 갱신, docs only): ✅ — 본 commit
+- **Approach 선택**: **A (Full DCEL Injection)** — 3 approach trade-off
+  매트릭스 (A: All ops / B: Lossy primitive / C: Virtual surface-only)
+  중 사용자가 *first-class equality + industry CAD parity* 가치로 결정.
+  - Approach A: 모든 engine ops (offset/extrude/Boolean) 활성, 큰 scope
+  - Approach B (lossy redraw): NURBS-class 의의 상실 → 거부
+  - Approach C (virtual face): partial 활성 → 거부
+- **Lock-ins L1~L7** (O-α §2.2 spec):
+  - L1: userData.faceIndex/edgeIndex → axia FaceId/EdgeId 매핑 책임
+  - L2: Backward compat (ADR-083 T-γ / ADR-084 E-γ 보존)
+  - L3: Initial bundle 0MB strict (P20.C #2)
+  - L4: Failure mode warnings 누적 (P21.7)
+  - L5: ADR-007 / ADR-016 / ADR-021 / ADR-025 invariant 정합
+  - L6: Selection / pick UX (ADR-037 P22.4)
+  - L7: Engineering note — opinionated single-approach
+- **누적 회귀**:
+  - axia-geo lib: 1090 → **1100** (+10, 7 inject + 3 invariant)
+  - vitest: 1605 → **1621** (+20, 4 bridge + 16 importer integration)
+  - Playwright: invariants 강화 (slow channel opt-in unchanged)
+  - 절대 #[ignore] 금지 30/30 준수
+- **Bundle 영향** (P20.C #2):
+  - **Initial bundle 724.99 → 725.65 kB** (+660 bytes — `loadStepIgesImporter`
+    container entry + WASM exports + TS bridge methods). 누적
+    ADR-082~086 deviation: **+890 bytes (0.12% of original 724.76 kB
+    baseline)**. MB scale 미달 (P20.C #2 spirit 유지).
+  - StepIgesImporter chunk: 37.07 → 41.20 kB (+4.13 kB lazy — boundary
+    + inject 코드)
+  - FileImporter chunk: 14.45 → 14.80 kB (+0.35 kB lazy — bridge
+    auto-wiring)
+  - opencascade-deps lazy chunk: 5.37 MB unchanged
+- **Architecture summary — Approach A의 layer 분리**:
+  ```
+  STEP/IGES file
+    ↓ OCCT.js (lazy chunk, ADR-082)
+  TopoDS_Shape (BRep)
+    ↓ traverseBrep (ADR-081 W-δ)
+  Stable face/edge index
+    ↓ promoteSurface / promoteCurve (ADR-081 W-γ/β)
+  AnalyticSurface enum + AnalyticCurve enum
+    ↓ tessellateShape / tessellateEdges (ADR-083 T-β / ADR-084 E-β)
+  FaceTessellation { positions, normals, indices, surface, boundaryPolygon }
+    ↓ extractFaceBoundary (ADR-086 O-δ)  ← NEW layer
+  outer_loop polygon (Float32Array xyz × N)
+    ↓ injectIntoAxia → bridge.injectExternalFace* (ADR-086 O-γ/δ)  ← NEW
+  axia DCEL FaceId
+    ↓ userData.axiaFaceId (Three.js Group)
+  사용자 facing pick / engine ops (offset / extrude / Boolean / NURBS-class)
+  ```
+- **사용자 검증 도달 (O-ε ground truth)**:
+  - ✅ Architecture: chunk + Rust core + WASM bridge + TS wrapper +
+    integration 모두 통합
+  - ✅ ADR-007 invariant: post-inject face 가 invariant verifier
+    통과 (3 회귀 lock-in)
+  - ✅ axia DCEL injection: T-δ slow channel `AXIA_E2E_SLOW=1` 검증 시
+    `bridge.getStats().faces >= 1` + `userData.axiaFaceId` 정합
+  - ⏸️ Real-runtime full demo: 사용자 manual 시연 (ADR-082 Drift #5
+    180s+ wait 흡수)
+- **Out of scope (별도 ADR)**:
+  - Cylinder / Sphere / Cone / Torus / Bezier / BSpline / NURBS surface
+    variants (O-γ 확장 — surface 8 kinds 의 7 추가)
+  - Inner loops (holes) 지원 (O-β 확장)
+  - Boundary edge analytic curve attach (`bridge.setEdgeCurve*`)
+  - WasmBridge stats 의 import-source 구분 (현재는 총 face count)
+  - OBJ/STL/glTF 등 다른 mesh 포맷 owner-ID 매핑
+  - .axia persistence (import 결과 직렬화)
+  - Edge selection / hover (ADR-037 P22 cross-cut)
+  - Material / texture metadata (STEP 색상 정보 활용)
+- **다음 ADR cross-trigger**:
+  - **ADR-087 (가칭) — Surface kinds 확장** (O-γ Cylinder/Sphere/Cone/
+    Torus + NURBS-class 7 variants 활성). 가장 자연 연장.
+  - Inner loops (holes) 지원 (O-β + O-δ 확장)
+  - Edge analytic curve attach (NURBS-class import 의 edge geometry)
+  - .axia persistence (import 결과 저장 — ADR-078 답습)
+  - 사용자 manual visual demo 회고 commit (선택적)
+- **Cross-link**: ADR-082 (drift #1~#5 fix 위 진행), ADR-083 (T-γ
+  userData.faceIndex source), ADR-084 (E-γ userData.edgeIndex source),
+  ADR-081 W-δ (stable index 답습), ADR-007/016/021/025 (DCEL invariant),
+  ADR-079/080 (engine ops 활성 의존 — first-class equality 가 NURBS-class
+  unlock), ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31 (P1+P3
+  industry CAD parity 첫 활성), ADR-037 P22.7 (owner-ID 자연 closure).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
