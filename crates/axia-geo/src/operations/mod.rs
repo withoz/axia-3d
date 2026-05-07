@@ -35,3 +35,4 @@ pub mod slice;
 pub mod repair;
 pub mod planar_walk;
 pub mod erase_resynth;
+pub mod import_mesh;
