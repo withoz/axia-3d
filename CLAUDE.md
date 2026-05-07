@@ -1143,6 +1143,76 @@
   index 답습), ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31
   (P1+P3 visual 가치 anchor), ADR-018 (edge color #333366).
 
+### 32. ADR-085 — Toast Progress UX MVP / Drift #5 Wait Visibility (P-α ~ P-β, 2026-05-08)
+- **사용자 결재 anchor (canonical)**:
+  > "ADR-082 Drift #5 (browser env OCCT init 180s+ 소요) 로 사용자가
+  > STEP 파일 import 후 face mesh 표시까지 *최소 3분 wait*. 현재는 단일
+  > `Toast.info` (8s) 만 표시 → 사용자가 wait 도중 *진행 상황 미인지*.
+  > 최단 demo 가치 path 의 두 번째 보강."
+- **Path Z atomic 3-단계 closure** (P-α ~ P-γ, 2026-05-08):
+  - P-α (spec only): ✅ — `176a1a4`
+  - P-β (`onStage` callback + FileImporter wiring): ✅ — `8700f1d`
+    (vitest +3) — `StepIgesImporter.onStage?: (stage, message) => void`
+    신규 + `engine_load`/`parse`/`tessellate` 3 stages + FileImporter
+    sequential Toast.info wiring
+  - P-γ (closure + LOCKED 갱신, docs only): ✅ — 본 commit
+- **Lock-ins L1~L7** (P-α §2.1 spec):
+  - L1: 3 stages (`engine_load`/`parse`/`tessellate`) — 사용자 facing
+    minimum (6+ stage 가능하지만 noise 회피)
+  - L2: `onStage?: (stage, message) => void` 신규 callback
+  - L3: Backward compat — `onLoadingStart`/`onLoadingEnd` preserved
+    (engine_load stage 의 시작과 시점 동일)
+  - L4: FileImporter sequential `Toast.info(message, 8000)` per stage
+    (engine_load 는 기존 onLoadingStart 가 처리 — 중복 방지)
+  - L5: Final stage 기존 패턴 답습 (warnings → Toast.warning, clean →
+    Toast.success)
+  - L6: Initial bundle 0MB strict (P20.C #2). chunk 영역만 변경
+  - L7: 한국어 하드코딩 (i18n 은 ADR-046 Phase 2 cross-cut, 본 ADR
+    scope 외)
+- **단계별 wait 시간 분석** (T-δ slow channel 측정):
+  - Stage 1 OCCT.js chunk fetch: ~5-10s
+  - Stage 2 initOpenCascade + libs: ~120-180s (Drift #5 본체)
+  - Stage 3 STEP file parse: ~1-5s
+  - Stage 4 traverseBrep: ~0.1s
+  - Stage 5 BRepMesh tessellation: ~5-30s
+  - Stage 6 Three.js Group 생성: ~0.1s
+  → 사용자 facing 3 통합 stage (engine_load = 1+2 / parse = 3+4 /
+  tessellate = 5+6)
+- **누적 회귀**: vitest **+3** (1598 → 1601, 절대 #[ignore] 금지 3/3
+  준수). axia-geo / axia-core / axia-wasm 0 (TS-only).
+- **Bundle 영향** (P20.C #2):
+  - **Initial bundle 724.99 kB unchanged** — ADR-082+083+084+085 누적
+    deviation 그대로 (+230 bytes from original 724.76 kB baseline).
+    본 ADR 추가 deviation 0.
+  - StepIgesImporter chunk: 36.94 → 37.07 kB (+0.13 kB — onStage callback
+    + 2 wiring 호출)
+  - FileImporter chunk: 14.40 → 14.45 kB (+0.05 kB — onStage Toast wiring)
+  - opencascade-deps lazy chunk: 5.37 MB unchanged
+- **사용자 facing 변화**:
+  - **이전**: 단일 Toast.info 8s 후 사라짐 → "멈췄나?" 혼란
+  - **이후**: 3-stage sequential Toast — 사용자가 어느 단계인지 인지 →
+    **Demo readiness 90% → 95%+**
+- **Out of scope** (별도 ADR):
+  - Persistent updatable Toast API (Toast 모듈 확장)
+  - Progress percentage indicator
+  - Cancel button (AbortController 통합)
+  - Stage-specific timing budget / metrics
+  - i18n stage messages (ADR-046 Phase 2)
+  - Drift #5 timing 단축 자체 (architectural ADR — WASM streaming
+    compile / parallel libs / cache)
+- **다음 ADR cross-trigger** (사용자 결재 후 가능):
+  - WasmBridge owner-ID 매핑 (`bridge.setFaceSurface*` /
+    `bridge.setEdgeCurve*`) — `userData.faceIndex` / `edgeIndex` 를
+    axia engine 으로 attach. ADR-037 P22 cross-cut
+  - Drift #5 timing 단축 architectural ADR (WASM streaming /
+    parallel libs / cache)
+  - Toast persistent + update API 확장 ADR
+  - i18n stage messages (ADR-046 Phase 2 자연 연장)
+- **Cross-link**: ADR-082 LOCKED #29 (Drift #5 trigger), ADR-083 /
+  ADR-084 (동일 사용자 facing path — STEP import wait → visual unlock),
+  ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31 (P1+P3 wait 시
+  신뢰성 가치 anchor).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
