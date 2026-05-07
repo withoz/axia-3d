@@ -41,6 +41,21 @@ export default defineConfig({
     port: 3000,
     open: true,
   },
+  /**
+   * ADR-082 C-ε amendment (dev server hang 방지):
+   *   opencascade.js 는 ~250MB unzipped + 50+ WASM modules — Vite 의
+   *   dev server pre-bundling (esbuild) 이 처리하려다가 hang 또는
+   *   극단 지연 발생. lazy import (`() => import('opencascade.js')`)
+   *   는 production build 에선 정상 (lazy chunk) 이지만 dev mode 에선
+   *   dependency optimization 단계가 별도로 실행됨.
+   *
+   *   `optimizeDeps.exclude` 로 dev server 가 opencascade.js 를 pre-bundle
+   *   안 하도록 강제 — runtime 시 lazy load 만. production build 는 영향
+   *   없음 (manualChunks 가 별도 처리).
+   */
+  optimizeDeps: {
+    exclude: ['opencascade.js'],
+  },
   build: {
     target: 'esnext',
     rollupOptions: {
