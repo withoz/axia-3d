@@ -1005,6 +1005,75 @@
   (완전 closure — *진짜 원인은 architectural bundler-runtime 한계
   였음*), ADR-046 P31 (P1 + P3 페르소나 가치).
 
+### 30. ADR-083 — BRepMesh Tessellation MVP / Visual Verification Unlock (T-α ~ T-δ, 2026-05-08)
+- **사용자 결재 anchor (canonical)**:
+  > "ADR-082 C-ε amendment closure 후 demo readiness 0% — viewport 가
+  > 비어 있어 사용자가 import 결과를 *볼 수 없음*. BRepMesh tessellation
+  > MVP 가 visual verification 의 첫 unlock. 사용자 검증의 진짜 의미는
+  > '표현된 결과를 보는 것'."
+- **Path Z atomic 5-단계 closure** (T-α ~ T-δ + T-ε docs only,
+  2026-05-08):
+  - T-α (spec only): ✅ — `83680a9`
+  - T-β (BRepMesh + Triangulation 추출 module): ✅ — `ffa1c7e` (vitest +8)
+  - T-γ (Three.js BufferGeometry + Mesh wiring, **visual unlock**): ✅
+    — `26e51ae` (vitest +4) — `_convertToThreeGroup` placeholder 제거
+    + `_faceToMesh` private 신규 + ADR-046 two-tone 재질
+  - T-δ (real Chromium round-trip slow channel): ✅ — `b238e8f`
+    (Playwright +1 skipped, env opt-in)
+    * Hand-crafted minimal AP203 corpus (`test_part_1.step`, license-
+      clean public domain, ~50 entities)
+    * `loadStepIgesImporter` container entry (loadOcct 패턴 답습)
+    * 5 min timeout (Drift #5 흡수), `AXIA_E2E_SLOW=1` opt-in
+  - T-ε (closure + LOCKED 갱신, docs only): ✅ — 본 commit
+- **Lock-ins L1~L7** (T-α §2.1 spec):
+  - L1: `BRepMesh_IncrementalMesh_2`, lineDeflection 0.1mm + angleDeflection
+    0.5 rad (산업 표준 visual quality)
+  - L2: `_convertToThreeGroup` 본체 활성, `_readShape` + `traverseBrep`
+    결과 활용
+  - L3: Per-face Three.js Mesh + BufferGeometry (position/normal/index),
+    ADR-046 default two-tone 재질
+  - L4: Tessellation tolerance fixed default (LOD 별도 ADR)
+  - L5: Failure mode warnings 누적 (P21.7 답습), empty Mesh 도 valid
+  - L6: Initial bundle 0MB strict (P20.C #2). StepIgesImporter chunk
+    영역만 수정
+  - L7: Visual verification — 사용자 STEP 열면 viewport 표시
+    (demo 0%→80%+)
+- **누적 회귀**: vitest **+12** (1577 → 1589, 절대 #[ignore] 금지
+  12/12 준수). Playwright **+1 skipped** (T-δ slow channel, opt-in 활성
+  시 +1 active). axia-geo / axia-core / axia-wasm 0 (TS-only).
+- **Bundle 영향** (P20.C #2):
+  - **Initial bundle**: 724.84 → **724.99 kB** (+150 bytes —
+    `loadStepIgesImporter` registration). 누적 ADR-082+083 deviation:
+    +230 bytes (0.032% of original 724.76 kB baseline). MB scale 미달.
+  - StepIgesImporter chunk: 30.55 → 34.60 kB (+4.05 kB, T-γ 본체 활성
+    + occtTessellate 통합)
+  - opencascade-deps lazy chunk: 5.37 MB unchanged
+- **사용자 검증 도달** (T-δ closure):
+  - ✅ Visual: STEP 파일 import → viewport 에 face 별 Three.js Mesh
+    표시 (front/back two-tone) → **demo readiness 0% → 80%+**
+  - ⏸️ User manual demo: 사용자 자체 시연은 별도 follow-up (T-ε-split
+    결재 — LOCKED #30 즉시 등재 + 시연은 후속 회고)
+  - ⏸️ Production sign-off: T-δ slow channel 의 1회 실행 결과 회고는
+    별도
+- **Mesh 구조 (T-γ wiring)**:
+  - `face-{N}` THREE.Group (W-δ stable index 답습)
+    - `userData.faceIndex: number` (W-δ 답습)
+    - `userData.surface?: SurfacePromotion` (W-γ surface 결과)
+    - `face-{N}-front`: MeshStandardMaterial #e8e8e8 FrontSide
+    - `face-{N}-back`: MeshStandardMaterial #9898b4 BackSide
+- **다음 ADR cross-trigger** (사용자 검증 후 결재 가능):
+  - WasmBridge owner-ID 매핑 (`bridge.setFaceSurface*`) — T-γ 의
+    `userData.surface` 를 axia FaceId 로 attach
+  - Edge wireframe rendering (T-γ 의 face Mesh 외 BRep edge 별도 표시)
+  - Toast progress UX 개선 (Drift #5 5min wait 사용자 안내)
+  - Material / texture mapping (STEP 의 색상 / material 정보 활용)
+  - LOD / quality slider (chord/angle tolerance UI)
+  - Real init slow channel CI 통합 (timing budget + nightly run)
+- **Cross-link**: ADR-082 (drift #1~#5 fix 위 진행 — drift #5 timing 은
+  T-δ slow channel 으로 흡수), ADR-081 W-δ (`traverseBrep` stable
+  index 활용), ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31
+  (P1+P3 visual 가치 anchor), ADR-018 (two-tone render policy).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
