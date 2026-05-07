@@ -1,7 +1,8 @@
 # ADR-087 — Kernel-Native Command Suite Reset (Architectural Spec)
 
-**Status**: **Accepted** (K-α spec only — code 변경은 후속 K-β ~ K-η
-별도 atomic commits, 각 step 사용자 결재)
+**Status**: **Accepted + Closed** (K-α ~ K-η 모두 완료, 2026-05-08).
+ADR-088 (Phase 1: curve_owner_id grouping) + ADR-089 (Phase 2: true
+kernel-native closed edges) 후속 트랙.
 **Date**: 2026-05-08
 **Author**: AXiA team (사용자 통찰 + Claude spec)
 **Anchor**: 사용자 통찰 (2026-05-08, ADR-086 closure + DrawRect→Push/Pull
@@ -202,13 +203,190 @@ K-ζ commit 전, 다음 모두 통과 후 결재:
 
 ## §D Acceptance Log
 
-### K-α (2026-05-08, 본 commit)
-- **사용자 결재**: 2026-05-08, "네 진입을 승인합니다."
-- **Commit hash**: (본 commit)
+### K-α (2026-05-08, commit `ef72956`)
+- **사용자 결재**: "네 진입을 승인합니다."
 - **변경**: `docs/adr/087-kernel-native-command-suite-reset.md` (본 파일) 신설.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
 - **Bundle 영향**: 0 (TS/Rust 변경 0).
-- **다음 step**: K-β (Polygon Plane attach + AsShape) — 사용자 별도 결재 후 진입.
+- **다음 step**: K-β (Polygon Plane attach + AsShape).
+
+### K-β (2026-05-08, commit `70aabaa`)
+- **사용자 결재**: "승인합니다"
+- **변경**:
+  - `crates/axia-core/src/scene.rs::exec_draw_circle_as_shape`:
+    Plane attach (basis_u Gram-Schmidt with X/Y fallback).
+  - `web/src/tools/DrawPolygonTool.ts`: form-mode 라우팅 추가
+    (drawCircleAsShape via N segments).
+- **핵심 발견**: K-α 와 동일한 root cause 가 `exec_draw_circle_as_shape`
+  에도 잠재 — Plane attach 누락. K-β 가 사촌 버그 cover.
+- **회귀**: +10 (axia-core +5, vitest +5).
+- **다음 step**: K-γ (LineCurve attach + DrawFreehandShape).
+
+### K-γ (2026-05-08, commit `d1e80e9`)
+- **사용자 결재**: "승인합니다" + Q3 defer (Centerline 시민권 결정은
+  K-ζ 또는 ADR-053 Phase 3 후속).
+- **변경**:
+  - `crates/axia-core/src/scene.rs::exec_draw_line_as_shape`: face path
+    Plane attach (centroid origin from `collect_loop_verts`).
+  - `crates/axia-wasm/src/lib.rs`: `drawPolylineAsShape` neuer export
+    (Command::DrawLineAsShape × N).
+  - `crates/axia-wasm/tests/export_baseline.txt`: drawPolylineAsShape 추가.
+  - `web/src/bridge/WasmBridge.ts`: TS bridge `drawPolylineAsShape` wrapper.
+  - `web/src/tools/DrawFreehandTool.ts`: form-mode 분기 (Plane normal hint).
+  - `web/src/tools/DrawFreehandTool.test.ts`: NEW 3 form-mode dispatch tests.
+- **회귀**: +6 (axia-core +3, vitest +3, axia-wasm baseline +1).
+- **다음 step**: K-δ (Primitive kernel-native).
+
+### K-δ (2026-05-08, commit `2f9b4b9`)
+- **사용자 결재**: "승인합니다", Q4 = Option A (단일 Sphere variant).
+- **🎯 핵심 발견**: ADR-032 P17 에서 Sphere/Cylinder 의 surface attach
+  이미 완료. K-δ scope 대폭 축소 — Box (surface 0) + Cone caps (Plane
+  부재) 만 처리.
+- **변경**:
+  - `crates/axia-geo/src/operations/primitives.rs::create_box`: 6 face
+    Plane attach (axis-aligned outward normals + face_planes lookup).
+  - `create_cone`: base + top cap Plane attach (cylinder 패턴 답습).
+  - 기존 guard `box_faces_have_no_surface` polarity flip → `k_delta_*`.
+- **회귀**: +5 (axia-geo).
+- **다음 step**: K-ε (Tool form-mode 1-way + flag 폐기).
+
+### K-ε (2026-05-08, commit `8548356`)
+- **사용자 결재**: Q6 = Option A (즉시 폐기).
+- **변경**:
+  - 5 Draw tools (Line/Rect/Circle/Polygon/Freehand) + PushPullTool 의
+    `getDrawShapeMode()` 분기 제거 → AsShape variants 직접 호출.
+  - `web/src/tools/DrawShapeModeSettings.ts` + `.test.ts` 모듈 삭제.
+  - `web/src/units/SettingsPanel.ts`: 토글 UI + listener + updateDisplay
+    제거.
+  - 6 tool tests + SettingsPanel.test simplification (OFF mode dispatch
+    삭제).
+- **회귀**: -11 (legacy mode 회귀 자산 cleanup, form-mode 100% 보존).
+- **LOCKED #26 P-5e-α 자연 closure**: flag 폐기 = "default ON" 정책의
+  "single-path enforcement" 진화.
+- **다음 step**: K-ε hotfix (Plane render polygon path).
+
+### K-ε hotfix (2026-05-08, commit `11eee34`)
+- **🔴 사용자 보고**: "Draw{Rect/Circle/Polygon/Line/Freehand} 페이스
+  생성 오류" — face 가 edge 를 벗어나서 그려짐.
+- **🎯 Root cause**: ADR-038 P23.1 의 `export_buffers` 가 Plane attach
+  시 `surface.tessellate(chord_tol)` → u_range/v_range = (-1e6, 1e6)
+  → 2km × 2km sampled grid 렌더 → 면이 edge 를 벗어남.
+- **📜 LOCKED #12 (ADR-025 P11)** 정합 위배 차단:
+  > "닫힌 엣지는 반드시 면을 합성한다" — face 영역은 DCEL closed edge
+  > loop 가 정의. Surface attach 는 metadata, render 결정자 아님.
+- **변경**: `crates/axia-geo/src/mesh.rs::export_buffers_inner` —
+  Plane variant → polygon path (DCEL boundary = exact). Curved
+  surface (Cylinder/Sphere/Cone/Torus/Bezier/BSpline/NURBS) 는
+  surface tessellation 유지.
+- **회귀**: +1 (axia-geo `k_epsilon_box_plane_uses_polygon_path_not_surface_tess`).
+- **영향**: K-α 부터 잠재 존재한 visual regression 의 retroactive closure.
+
+### K-ζ (2026-05-08, commit `b7982ce`)
+- **사용자 결재**: Option A (K-ζ 진행 + ADR-088 P7 disjoint-inner 별도) +
+  Q5 = Option A (즉시 삭제).
+- **🎯 Strategy 분리** — User-facing surface 만 삭제, internal Rust API
+  (Command enum variants) 보존:
+  - WASM exports 5개 삭제 (`draw_line` / `draw_rect` / `draw_circle` /
+    `draw_polyline` / `push_pull`)
+  - TS bridge wrappers 5개 삭제 (`drawLine` / `drawRect` / `drawCircle`
+    / `drawPolyline` / `pushPull`)
+  - Production callers 5 sites migration (ToolManagerRefactored / Offset
+    SessionManager / DrawArc / DrawBezier / CommandRegistry)
+  - Command enum variants 보존 (test 회귀 자산 245 sites 의 Xia-layer
+    contract 유지)
+- **변경**: 17 files, +132 / -477 (net -345 LoC).
+- **회귀**: 0 net (delete + migration + test simplification).
+- **LOCKED 회귀 자산 100% 보존**: LOCKED #1 P7, #12 P11, #7 P12 SSOT,
+  #26 Phase 1.
+
+### Cone hotfix #1 (2026-05-08, commit `4ab001a`)
+- **🔴 사용자 보고**: "콘이 이상하게 형성됨" — white smooth disc 가
+  base polygon 너머로 퍼짐.
+- **🎯 Root cause**: ADR-032 P17 의 cone primitive 의 apex_pt 가 base
+  BELOW (-Y) + axis_dir = +up → Cone surface 가 widens-going-up. Mesh
+  top verts (radius 5) 와 surface v_top (radius 95) 불일치.
+- **변경**: `apex_pt = base + up * apex_offset` (apex 위), `axis_dir =
+  -up` (apex → base).
+- **회귀**: +1 (axia-geo `k_eta_cone_surface_evaluates_to_correct_radii`).
+
+### Cone hotfix #2 — true cone restructure (2026-05-08, commit `7513c30`)
+- **🔴 사용자 보고**: "콘의 VERTEX가 이상합니다" — small flat top cap
+  (truncated frustum, top_radius = 0.1 * radius) 가 sharp apex 가 아님.
+- **변경**: `create_cone` 재구조화 — truncated frustum → true cone
+  with single apex.
+  - apex 단일 vertex
+  - N base ring vertices
+  - 1 N-gon base cap (Plane surface, normal -up)
+  - N triangle side faces (Cone surface, sharing apex)
+  - faces.len() = 1 + N (이전 2 + N)
+- **Manifold safety (ADR-007 / LOCKED #16)**: N-valent apex vertex
+  허용 (sphere polar fan pattern 답습).
+- **회귀**: +2 (`k_eta_cone_has_only_base_cap_with_plane_surface`,
+  `k_eta_cone_apex_is_single_vertex`).
+
+### Curved chord soft (2026-05-08, commit `b256546`)
+- **🔴 사용자 보고**: "매끈한 구, 와 원통이 아닙니다. 세그먼트 라인이
+  포함되어 있음" — visible vertical chord lines on cylinder + dot
+  patterns on sphere.
+- **🎯 Root cause**: ADR-038 P23.3 angle-based soft filter
+  (EDGE_VISIBILITY_ANGLE_DEG=20.1°) 는 16-segment cylinder = 22.5°
+  per segment 를 못 잡음.
+- **변경**: `create_cylinder/cone/sphere` 의 측면 face 에 명시적
+  `mark_face_outer_soft` 호출. HeFlags::SOFT 시각 플래그만 — topology
+  / surface metadata 무변화.
+- **회귀**: +0 (시각만 보강).
+
+### K-η (2026-05-08, 본 commit) — 회고 + LOCKED #34
+- **사용자 결재**: "🅰 권장 진행" — K-η closure + ADR-088 (Phase 1
+  curve_owner_id) → ADR-089 (Phase 2 true kernel-native closed edges)
+  점진 진화.
+- **변경**: 본 ADR §D Acceptance Log 갱신 + CLAUDE.md LOCKED #34 신규.
+
+---
+
+## §E ADR-087 누적 회귀 (K-α ~ K-η 합산)
+
+| Suite | K-α 시작 전 | K-η closure |
+|-------|------------|-------------|
+| axia-core | 185 | **193** (+8) |
+| axia-geo | 1099 | **1107** (+8) |
+| axia-wasm | 33 | **34** (+1, baseline) |
+| vitest | 1621 | **1618** (-3, K-ε cleanup -11 + K-β/γ +8) |
+| **Total** | 2938 | **2952** (+14 net) |
+
+**LoC 영향 (net)**: ~-700 lines (legacy paths fully cleaned).
+
+**절대 #[ignore] 금지 14/14 준수** (ADR-014 메타-원칙 #9).
+
+---
+
+## §F Lessons (K-α ~ K-η 회고)
+
+1. **사촌 버그 발견 패턴**: K-α 가 1 명령 (DrawRect) 의 Plane attach
+   누락 fix. K-β 진행 중 동일 패턴이 DrawCircle 에도 있음을 발견 →
+   사촌 버그 (Plane attach missing in family) 자동 cover. 향후 ADR
+   가이드: 한 fix 발견 시 패밀리 전체 audit 권장.
+
+2. **사용자 시연 게이트의 가치**: K-ζ 5 invariant 게이트 중 #4 (사용자
+   manual 시연) 이 K-ε hotfix (Plane render), Cone hotfix #1+#2,
+   Curved chord soft 등 4 개 회귀 발견. Test 회귀 자산만으로는 불가능.
+   향후 architectural ADR 의 ζ-step 사용자 시연 필수.
+
+3. **architectural 분리 원칙**: K-ζ 에서 user-facing surface 삭제 ≠
+   internal Rust API 삭제. 245 test sites 의 Xia-layer contract 보존
+   위해 Command enum variants 만 internal-only 로 강등 (production
+   code paths 차단). LoC -700 + 회귀 자산 100% 보존.
+
+4. **canonical 규칙 정합 점검**: 사용자 보고 회귀 (cone widens-going-up)
+   는 LOCKED #16 P23 위배. K-η hotfix 가 ADR-032 의 mesh-era 잔존
+   (truncated frustum) 을 노출 → true cone restructure. canonical
+   규칙은 시각 회귀로 자연 노출됨.
+
+5. **점진 진화의 가치**: ADR-087 closure 후 ADR-088 (Phase 1
+   curve_owner_id) → ADR-089 (Phase 2 true kernel-native closed edges)
+   의 점진 트랙. 큰 architectural surgery 를 한 번에 하지 않고 사용자
+   facing benefit 을 단계별 unlock. user 의도 ("추후 문제점 없애는
+   방법") 의 점진 실현.
 
 ---
 

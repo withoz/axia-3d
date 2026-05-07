@@ -1314,6 +1314,87 @@
   unlock), ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31 (P1+P3
   industry CAD parity 첫 활성), ADR-037 P22.7 (owner-ID 자연 closure).
 
+### 34. ADR-087 — Kernel-Native Command Suite Reset (K-α ~ K-η closure, 2026-05-08)
+- **사용자 통찰 (canonical)**:
+  > "명령어를 처음부터 커널에 맞게 다시 작성하는것이 좋을듯. 현재 명령
+  > 삭제하는것이 좋지 않은가?" (2026-05-08)
+- **anchor 결정**: ADR-027~086 의 5년 누적 커널은 충분히 성숙했으나,
+  사용자 facing 명령 (Draw / Push-Pull / primitives) 의 다수가
+  *kernel-blind* — `AnalyticSurface`/`AnalyticCurve` attach 없이 mesh
+  DCEL 만 생성. 결과: `create_solid` 등 kernel-native ops 가
+  `NoProfileSurface` 로 거부. 본 ADR 은 모든 user-facing Draw /
+  primitive 를 kernel-aware 로 reset.
+- **5 lock-in 원칙 (P-1)**:
+  - L1: 모든 Draw → form-layer Shape 만 (ADR-049/050 답습)
+  - L2: 모든 face → AnalyticSurface attach (Plane/Sphere/Cylinder/etc)
+  - L3: 모든 Edge → AnalyticCurve attach 가능 시 (Line/Arc/Bezier/etc)
+  - L4: Push/Pull = `create_solid` Extrude only (mesh pushPull 폐지)
+  - L5: Primitive = AnalyticSurface variant 직접 (mesh `create_*` 폐지)
+- **K-α ~ K-η Path Z atomic 9 commits** (ADR-087 §D Acceptance Log):
+  - K-α `ef72956` — spec only
+  - K-β `70aabaa` — DrawCircleAsShape Plane attach + DrawPolygonTool
+    form-mode (사촌 버그 cover)
+  - K-γ `d1e80e9` — DrawLineAsShape Plane attach (face path) +
+    drawPolylineAsShape WASM/TS + DrawFreehandTool form-mode
+  - K-δ `2f9b4b9` — Box 6 Plane attach + Cone caps Plane (Sphere/
+    Cylinder ADR-032 P17 already complete — 핵심 발견)
+  - K-ε `8548356` — Tool form-mode 1-way + drawShapeMode flag 폐기
+    (LOCKED #26 P-5e-α 자연 closure)
+  - K-ε hotfix `11eee34` — mesh.rs::export_buffers 가 Plane variant →
+    polygon path (LOCKED #12 ADR-025 P11 정합 회복, 사용자 시연 회귀
+    fix)
+  - K-ζ `b7982ce` — Legacy 일괄 삭제 (Q5=A): WASM exports 5개 +
+    TS bridge wrappers 5개 + 5 production callers migration. Command
+    enum variants 보존 (internal-only Rust API, 245 test sites Xia-
+    layer contract 유지). 17 files, +132 / -477 net (-345 LoC).
+  - Cone hotfix #1 `4ab001a` — apex 방향 fix (base 위 + axis_dir
+    -up). 사용자 시연 회귀 (cone widens-going-up).
+  - Cone hotfix #2 `7513c30` — true cone restructure (single apex,
+    truncated frustum 폐기). 사용자 시연 회귀 ("VERTEX 가 이상").
+  - Curved chord soft `b256546` — Sphere/Cylinder/Cone 측면 chord
+    edges 명시 mark_face_outer_soft (ADR-038 P23.3 angle filter
+    20.1° 가 16-segment 22.5° 못 잡음 — 사용자 시연 회귀).
+  - K-η `(본 commit)` — 회고 + LOCKED #34.
+- **회귀 누적**: axia-core +8, axia-geo +8, axia-wasm baseline +1,
+  vitest -3 (K-ε cleanup -11 + 추가 +8). 합계 **+14 net** (절대
+  #[ignore] 금지 14/14 준수). Code -700 LoC net.
+- **사용자 시연 게이트의 가치 (회고)**: K-ζ 5 invariant 게이트 중
+  #4 (사용자 manual 시연) 이 K-ε hotfix + Cone #1+#2 + Curved chord
+  soft 등 **4 개 회귀** 발견. Test 회귀 자산만으로 불가능. 향후
+  architectural ADR 의 ζ-step 사용자 시연 필수.
+- **architectural 분리 원칙 (K-ζ)**: User-facing surface 삭제 ≠
+  internal Rust API 삭제. Test 회귀 자산 245 sites 의 Xia-layer
+  contract 보존 위해 Command enum variants 만 internal-only 로 강등.
+  Production code paths (`web/src/`) 는 AsShape variants +
+  createSolidExtrude 만 사용. 향후 deletion ADR 가이드.
+- **불변 (LOCKED 정책 정합)**:
+  - LOCKED #1 (P7) / #12 (P11): face 합성 / 분할 회귀 자산 PASS 유지
+  - LOCKED #7 (ADR-026 P12 cardinal plane SSOT): 8 회귀 자산 AsShape
+    variants 로 재검증
+  - LOCKED #16 (ADR-038 P23): Plane variant polygon path + curved
+    surface tessellation 분리 정합
+  - LOCKED #26 (ADR-049 Two-Layer Citizenship Phase 1): drawShapeMode
+    flag 폐기 (K-ε) + legacy 삭제 (K-ζ) = single-path enforcement
+  - ADR-046 P31 #4 (additive only): 메뉴/단축키/툴바 외부 ID UNCHANGED
+- **후속 트랙 (deferred to separate ADRs)**:
+  - **ADR-088 (Phase 1)**: `curve_owner_id` grouping for analytic
+    curves — selection-time enforcement of LOCKED #15 (ADR-037 P22.5).
+    Circle 의 N segments 가 한 클릭으로 통일 선택. DCEL 무surgery,
+    Edge 에 `curve_owner_id: Option<u32>` 필드 추가만.
+  - **ADR-089 (Phase 2, future)**: True kernel-native closed edges
+    — DCEL Edge schema relaxation (self-loop allowed, v_small ==
+    v_large for closed curves). add_face accepting curve loops directly.
+    multi-week atomic surgery. ADR-027 NURBS Kernel 의 mesh-era 잔존
+    정리.
+  - **ADR-088 별도 (P7 disjoint-inner)**: "큰 RECT 안 작은 CIRCLE →
+    ring + sub-face 분할" — ADR-051 §2.5 component-merge resolver
+    deferred boundary 후속 (LOCKED #1 amendment 명시).
+- **Cross-link**: ADR-049/050 (Two-Layer Citizenship), ADR-079
+  (Create Solid surface-native), ADR-080 (Offset dimension-aware),
+  ADR-046 P31 (UI/UX strategy + menu additive only), ADR-035 P20.C #2
+  (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
+  ADR-082~086 (STEP/IGES face → engine ops first-class equality).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
