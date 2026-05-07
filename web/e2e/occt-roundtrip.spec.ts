@@ -47,7 +47,7 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
       !RUN_SLOW,
       'Slow channel — set AXIA_E2E_SLOW=1 to run (5 min OCCT init).',
     );
-    test.setTimeout(300_000);  // 5 min — Drift #5 (ADR-082) timing budget
+    test.setTimeout(600_000);  // 10 min — Drift #5 (ADR-082) + O-δ injectIntoAxia budget
 
     // Read corpus on Node side (Playwright host)
     const corpusPath = resolve('e2e/fixtures/corpus/test_part_1.step');
