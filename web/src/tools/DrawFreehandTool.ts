@@ -14,6 +14,7 @@ import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
 import { freehandFromPoints, tessellateCurve } from '../curves/Curve';
 import { getCurveRegistry } from '../curves/CurveRegistry';
+import { getDrawShapeMode } from './DrawShapeModeSettings';
 
 /** 연속 점 사이 최소 거리 (mm) — 너무 촘촘한 샘플링 방지 */
 const MIN_SAMPLE_DISTANCE = 0.5;
@@ -128,13 +129,22 @@ export class DrawFreehandTool implements ITool {
         flat[i * 3 + 1] = filtered[i].y;
         flat[i * 3 + 2] = filtered[i].z;
       }
-      this.ctx.bridge.drawPolyline(flat);
+      // ADR-087 K-γ — form-mode 시 drawPolylineAsShape 라우팅. 닫힌 loop
+      // 합성 시 face 에 Plane 자동 attach (plane.normal 을 explicit hint).
+      // legacy drawPolyline 은 form-mode OFF 일 때만 (K-ε 폐기 예정).
+      if (getDrawShapeMode() && this.plane) {
+        const n = this.plane.normal;
+        this.ctx.bridge.drawPolylineAsShape(flat, { x: n.x, y: n.y, z: n.z });
+      } else {
+        this.ctx.bridge.drawPolyline(flat);
+      }
       edgeCount = filtered.length - 1;
     }
 
     this.ctx.syncMesh();
     debugLog(
-      `[Freehand] raw=${this.rawPoints.length} tessellated=${pts.length} edges=${edgeCount}`
+      `[Freehand] raw=${this.rawPoints.length} tessellated=${pts.length} ` +
+      `edges=${edgeCount} mode=${getDrawShapeMode() ? 'AsShape' : 'legacy'}`
     );
   }
 

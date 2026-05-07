@@ -586,6 +586,39 @@ export class WasmBridge {
     return fn.call(this.engine, arr);
   }
 
+  /**
+   * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware 변형:
+   * 각 segment 가 `Command::DrawLineAsShape` 로 실행되어 결과 face (closing
+   * loop 합성 시) 에 AnalyticSurface::Plane 자동 attach.
+   *
+   * 호출자: DrawFreehandTool form-mode (drawShapeMode ON), DrawPolylineTool
+   * (향후).
+   *
+   * @param points 평탄화 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수)
+   * @param normal optional plane hint — 닫힌 loop face 합성 시 Plane attach.
+   *               undefined 또는 zero vector → free-edge planar pipeline 의
+   *               default 추론 (best-fit).
+   */
+  drawPolylineAsShape(
+    points: Float64Array | number[],
+    normal?: { x: number; y: number; z: number },
+  ): number {
+    if (!this.engine) return -1;
+    this.markDirty();
+    const arr = points instanceof Float64Array ? points : new Float64Array(points);
+    snapPolylineCardinal(arr);
+    const nx = normal?.x ?? 0;
+    const ny = normal?.y ?? 0;
+    const nz = normal?.z ?? 0;
+    const fn = (this.engine as unknown as {
+      drawPolylineAsShape?: (
+        points: Float64Array, nx: number, ny: number, nz: number,
+      ) => number;
+    }).drawPolylineAsShape;
+    if (!fn) return -1;
+    return fn.call(this.engine, arr, nx, ny, nz);
+  }
+
   drawRect(
     cx: number, cy: number, cz: number,
     nx: number, ny: number, nz: number,

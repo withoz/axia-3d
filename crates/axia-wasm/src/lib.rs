@@ -633,6 +633,78 @@ impl AxiaEngine {
         if any_failed { -1.0 } else { 0.0 }
     }
 
+    /// ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
+    /// 변형: 각 segment 를 `Command::DrawLineAsShape` 로 실행하여 (a) 결과
+    /// edge 들이 form-layer Shape 로 등록 + (b) 닫힌 loop 합성 시 face 에
+    /// AnalyticSurface::Plane 자동 attach (exec_draw_line_as_shape 의 face
+    /// path Plane attach via inherited surface_normal).
+    ///
+    /// 호출자: DrawFreehandTool form-mode (drawShapeMode ON).
+    /// surface_normal: optional plane hint — 닫힌 loop 합성 시 Plane attach
+    /// 에 사용. None 이면 inferred (free-edge planar pipeline 의 best-fit).
+    /// `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수).
+    /// 반환: 0 (success) 또는 -1.
+    #[wasm_bindgen(js_name = "drawPolylineAsShape")]
+    pub fn draw_polyline_as_shape(
+        &mut self,
+        points: &[f64],
+        nx: f64, ny: f64, nz: f64,
+    ) -> f64 {
+        if points.len() < 6 || points.len() % 3 != 0 {
+            console_error!(
+                "[RUST] drawPolylineAsShape: invalid points length {}",
+                points.len()
+            );
+            return -1.0;
+        }
+        let n = points.len() / 3;
+        if n < 2 {
+            return -1.0;
+        }
+
+        // surface_normal: caller 가 zero vector 전달 시 None (free-edge
+        // planar pipeline 의 default 추론).
+        let normal_hint = {
+            let v = DVec3::new(nx, ny, nz);
+            if v.length_squared() > 1e-12 { Some(v.normalize()) } else { None }
+        };
+
+        debug_log!(
+            "[RUST] drawPolylineAsShape: {} points → {} segments, normal_hint={:?}",
+            n, n - 1, normal_hint
+        );
+
+        self.scene.transactions.begin();
+        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
+
+        let mut any_failed = false;
+        for i in 0..n - 1 {
+            let start = DVec3::new(
+                points[i * 3], points[i * 3 + 1], points[i * 3 + 2],
+            );
+            let end = DVec3::new(
+                points[(i + 1) * 3], points[(i + 1) * 3 + 1], points[(i + 1) * 3 + 2],
+            );
+            let cmd = Command::DrawLineAsShape {
+                start,
+                end,
+                surface_normal: normal_hint,
+            };
+            let result = self.scene.execute(cmd);
+            if matches!(result, axia_core::commands::CommandResult::Error(_)) {
+                any_failed = true;
+            }
+        }
+
+        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+
+        self.mark_topology_changed();
+        self.invalidate_cache();
+
+        if any_failed { -1.0 } else { 0.0 }
+    }
+
     pub fn draw_rect(
         &mut self,
         cx: f64, cy: f64, cz: f64,

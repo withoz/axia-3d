@@ -1052,6 +1052,30 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
+     * 변형: 각 segment 를 `Command::DrawLineAsShape` 로 실행하여 (a) 결과
+     * edge 들이 form-layer Shape 로 등록 + (b) 닫힌 loop 합성 시 face 에
+     * AnalyticSurface::Plane 자동 attach (exec_draw_line_as_shape 의 face
+     * path Plane attach via inherited surface_normal).
+     *
+     * 호출자: DrawFreehandTool form-mode (drawShapeMode ON).
+     * surface_normal: optional plane hint — 닫힌 loop 합성 시 Plane attach
+     * 에 사용. None 이면 inferred (free-edge planar pipeline 의 best-fit).
+     * `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수).
+     * 반환: 0 (success) 또는 -1.
+     * @param {Float64Array} points
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @returns {number}
+     */
+    drawPolylineAsShape(points, nx, ny, nz) {
+        const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawPolylineAsShape(this.__wbg_ptr, ptr0, len0, nx, ny, nz);
+        return ret;
+    }
+    /**
      * @param {number} cx
      * @param {number} cy
      * @param {number} cz

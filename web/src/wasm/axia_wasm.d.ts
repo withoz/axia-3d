@@ -361,6 +361,20 @@ export class AxiaEngine {
      * 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
      */
     drawPolyline(points: Float64Array): number;
+    /**
+     * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
+     * 변형: 각 segment 를 `Command::DrawLineAsShape` 로 실행하여 (a) 결과
+     * edge 들이 form-layer Shape 로 등록 + (b) 닫힌 loop 합성 시 face 에
+     * AnalyticSurface::Plane 자동 attach (exec_draw_line_as_shape 의 face
+     * path Plane attach via inherited surface_normal).
+     *
+     * 호출자: DrawFreehandTool form-mode (drawShapeMode ON).
+     * surface_normal: optional plane hint — 닫힌 loop 합성 시 Plane attach
+     * 에 사용. None 이면 inferred (free-edge planar pipeline 의 best-fit).
+     * `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수).
+     * 반환: 0 (success) 또는 -1.
+     */
+    drawPolylineAsShape(points: Float64Array, nx: number, ny: number, nz: number): number;
     draw_circle(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
     /**
      * ADR-050 P-5c — Draw a circle as a form-layer Shape (no Xia).
@@ -1609,6 +1623,7 @@ export interface InitOutput {
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
+    readonly axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

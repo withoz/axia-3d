@@ -3902,6 +3902,59 @@ impl Scene {
             self.face_to_xia.remove(fid);
         }
 
+        // ADR-087 K-γ — Face path Plane attach. exec_draw_line 가 closing
+        // line 으로 face 를 합성한 경우 (face_ids non-empty), 그 face 들에
+        // AnalyticSurface::Plane 을 명시 attach 한다. 합성된 face 의 plane
+        // normal 은 inherited surface_normal (Xia 의 surface_normal 필드).
+        //
+        // 이 attach 가 없으면 4 개 DrawLineAsShape 로 닫힌 사각형 → Push/Pull
+        // 시 NoProfileSurface 회귀 (DrawRectAsShape K-α / DrawCircleAsShape
+        // K-β 와 동일 root cause).
+        //
+        // Plane origin: face 정점들의 centroid (best-fit). face_ids 가 여러
+        // 개여도 같은 surface_normal 평면 위 (free-edge planar pipeline 의
+        // 가정).
+        if !face_ids.is_empty() {
+            if let Some(n) = surface_normal_inherited {
+                if n.length_squared() > 1e-12 {
+                    let n_norm = n.normalize();
+                    // basis_u: World X 가 normal 과 거의 평행하면 World Y fallback
+                    let candidate = if n_norm.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+                    let dot = candidate.dot(n_norm);
+                    let basis_u = (candidate - n_norm * dot).normalize_or_zero();
+                    if basis_u.length_squared() > 1e-12 {
+                        // Centroid from face vertices (best-fit origin).
+                        let mut centroid = DVec3::ZERO;
+                        let mut total_verts: usize = 0;
+                        for &fid in &face_ids {
+                            let outer_start = self.mesh.faces[fid].outer().start;
+                            if let Ok(verts) = self.mesh.collect_loop_verts(outer_start) {
+                                for vid in verts {
+                                    centroid += self.mesh.verts[vid].pos();
+                                    total_verts += 1;
+                                }
+                            }
+                        }
+                        let origin = if total_verts > 0 {
+                            centroid / (total_verts as f64)
+                        } else {
+                            DVec3::ZERO
+                        };
+                        let plane = axia_geo::AnalyticSurface::Plane {
+                            origin,
+                            normal: n_norm,
+                            basis_u,
+                            u_range: (-1e6, 1e6),
+                            v_range: (-1e6, 1e6),
+                        };
+                        for &fid in &face_ids {
+                            self.mesh.set_face_surface(fid, Some(plane.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
         let shape_id = self.create_shape(name, face_ids);
         if let Some(shape) = self.shapes.get_mut(&shape_id) {
             shape.position = position;
@@ -10517,6 +10570,132 @@ mod tests {
             }
             other => panic!("expected SolidCreated, got {:?}", other),
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-087 K-γ regression — DrawLineAsShape face path MUST attach Plane
+    // AnalyticSurface when 4 lines close to form a face. Without this, 4
+    // DrawLineAsShape commands forming a square → Push/Pull rejects with
+    // NoProfileSurface (same root cause as K-α/K-β).
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn k_gamma_draw_line_as_shape_face_path_attaches_plane_when_loop_closes() {
+        // 4 DrawLineAsShape forming a closed square + explicit surface_normal.
+        // The 4th (closing) line synthesizes a face — that face MUST have
+        // AnalyticSurface::Plane attached.
+        let mut scene = Scene::new();
+        let n = DVec3::Z;
+        let _ = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 0.0, 0.0),
+            end:   DVec3::new(1.0, 0.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let _ = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(1.0, 0.0, 0.0),
+            end:   DVec3::new(1.0, 1.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let _ = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(1.0, 1.0, 0.0),
+            end:   DVec3::new(0.0, 1.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let r4 = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 1.0, 0.0),
+            end:   DVec3::new(0.0, 0.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let shape4_id = match r4 {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape4_id).expect("shape4 exists");
+        assert!(
+            !shape.face_ids.is_empty(),
+            "closing line must synthesize face"
+        );
+        for &fid in &shape.face_ids {
+            let surf = scene.mesh.face_surface(fid)
+                .expect("ADR-087 K-γ: face must have Plane after closing line");
+            assert!(
+                matches!(surf, axia_geo::AnalyticSurface::Plane { .. }),
+                "face should have Plane surface, got {:?}",
+                surf,
+            );
+        }
+    }
+
+    #[test]
+    fn k_gamma_draw_line_as_shape_then_create_solid_extrude_succeeds() {
+        // End-to-end — 4 DrawLineAsShape → CreateSolid(Extrude) 정상.
+        let mut scene = Scene::new();
+        let n = DVec3::Z;
+        let _ = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::ZERO,
+            end:   DVec3::new(2.0, 0.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let _ = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(2.0, 0.0, 0.0),
+            end:   DVec3::new(2.0, 2.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let _ = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(2.0, 2.0, 0.0),
+            end:   DVec3::new(0.0, 2.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let r4 = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::new(0.0, 2.0, 0.0),
+            end:   DVec3::ZERO,
+            surface_normal: Some(n),
+        });
+        let shape_id = match r4 {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let profile_face = scene.get_shape(shape_id).expect("shape").face_ids[0];
+
+        let result = scene.execute(Command::CreateSolid {
+            face_id: profile_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 1.0 },
+        });
+        match result {
+            CommandResult::SolidCreated { kind, face_count } => {
+                assert_eq!(kind, axia_geo::SolidKind::Box);
+                assert_eq!(face_count, 6, "Box has 6 faces");
+            }
+            CommandResult::Error(msg) => {
+                panic!("ADR-087 K-γ: expected SolidCreated, got Error: {}", msg);
+            }
+            other => panic!("expected SolidCreated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn k_gamma_draw_line_as_shape_no_face_no_plane() {
+        // Free-edge line (no closing) — Shape has no face_ids, no Plane
+        // attach attempted. surface_normal hint 가 있어도 face 없으면 무관.
+        let mut scene = Scene::new();
+        let r = scene.execute(Command::DrawLineAsShape {
+            start: DVec3::ZERO,
+            end:   DVec3::new(2.0, 0.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        let shape_id = match r {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        assert!(
+            shape.face_ids.is_empty(),
+            "free-edge line must not synthesize face"
+        );
+        assert!(
+            shape.standalone_edge_id.is_some(),
+            "free-edge line must populate standalone_edge_id"
+        );
     }
 
     // ════════════════════════════════════════════════════════════════════
