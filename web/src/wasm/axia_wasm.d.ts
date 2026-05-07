@@ -353,15 +353,8 @@ export class AxiaEngine {
      */
     drawCenterline(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number;
     /**
-     * ADR-012 §3 BatchCommand — N 개 연속 line 을 단일 WASM crossing 에 묶는다.
-     * `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수). N point ⇒
-     * (N-1) 개 line.
-     * 반환: 마지막으로 만들어진 segment 의 결과 — 0 (success) 또는 -1.
-     * 호출자: DrawArcTool / DrawFreehandTool / DrawBezierTool — 이전엔 N
-     * 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
-     */
-    drawPolyline(points: Float64Array): number;
-    /**
+     * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
+     * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
      * 변형: 각 segment 를 `Command::DrawLineAsShape` 로 실행하여 (a) 결과
      * edge 들이 form-layer Shape 로 등록 + (b) 닫힌 loop 합성 시 face 에
@@ -375,20 +368,17 @@ export class AxiaEngine {
      * 반환: 0 (success) 또는 -1.
      */
     drawPolylineAsShape(points: Float64Array, nx: number, ny: number, nz: number): number;
-    draw_circle(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
     /**
      * ADR-050 P-5c — Draw a circle as a form-layer Shape (no Xia).
      * Returns ShapeId.raw() as f64 on success, -1.0 on error.
      */
     draw_circle_as_shape(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number, segments: number): number;
-    draw_line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
     /**
      * ADR-050 P-5c — Draw a line as a form-layer Shape (no Xia).
      * Returns ShapeId.raw() as f64 on success, -1.0 on error.
      * `nx/ny/nz = 0` means surface_normal is None (free-edge mode).
      */
     draw_line_as_shape(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, nx: number, ny: number, nz: number): number;
-    draw_rect(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, ux: number, uy: number, uz: number, width: number, height: number): number;
     /**
      * ADR-050 P-5c — Draw a rectangle as a form-layer Shape (no Xia).
      * Returns ShapeId.raw() as f64 on success, -1.0 on error.
@@ -1138,12 +1128,6 @@ export class AxiaEngine {
      */
     promoteShapeToXia(shape_id: number, material_id: number): number;
     /**
-     * Push/Pull a face along its normal.
-     * dist > 0 = extrude outward (face kept)
-     * dist < 0 = recess inward  (face removed)
-     */
-    push_pull(face_id_raw: number, dist: number): boolean;
-    /**
      * Push/Pull a smooth group seamlessly (no gaps, wall faces connect adjacent surfaces)
      *
      * # Parameters
@@ -1622,13 +1606,9 @@ export interface InitOutput {
     readonly axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
-    readonly axiaengine_drawPolyline: (a: number, b: number, c: number) => number;
     readonly axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
-    readonly axiaengine_draw_circle: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
-    readonly axiaengine_draw_line: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
-    readonly axiaengine_draw_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_draw_rect_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly axiaengine_edgeAngleThreshold: (a: number) => number;
     readonly axiaengine_edgeClass: (a: number, b: number) => number;
@@ -1738,7 +1718,6 @@ export interface InitOutput {
     readonly axiaengine_pointInFace: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_previewEdgeEraseMerge: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_promoteShapeToXia: (a: number, b: number, c: number, d: number) => void;
-    readonly axiaengine_push_pull: (a: number, b: number, c: number) => number;
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;
     readonly axiaengine_removeConstraint: (a: number, b: number) => number;

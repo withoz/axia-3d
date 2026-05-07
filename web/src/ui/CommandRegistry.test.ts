@@ -11,7 +11,7 @@ function mockDeps(): CommandRegistryDeps {
       printError: vi.fn(),
     } as any,
     bridge: {
-      drawLine: vi.fn(),
+      drawLineAsShape: vi.fn(),
       normalizeForImport: vi.fn().mockReturnValue({
         degenerateRemoved: 0, windingFlipped: 0, normalsRecomputed: 0,
         isolatedVertsRemoved: 0, remainingViolations: 0,
@@ -88,7 +88,7 @@ describe('CommandRegistry', () => {
 
     it('coordinate args → draws line via bridge', () => {
       lineHandler.execute(['0,0,0', '10,20,30']);
-      expect(deps.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 10, 20, 30);
+      expect(deps.bridge.drawLineAsShape).toHaveBeenCalledWith(0, 0, 0, 10, 20, 30, 0, 0, 0);
       expect(deps.toolManager.syncMesh).toHaveBeenCalled();
     });
 

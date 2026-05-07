@@ -63,7 +63,8 @@ export function initCommandRegistry(deps: CommandRegistryDeps): void {
           throw new Error('모든 좌표는 숫자여야 합니다');
         }
 
-        bridge.drawLine(x1, y1, z1, x2, y2, z2);
+        // ADR-087 K-ζ — kernel-aware drawLineAsShape only.
+        bridge.drawLineAsShape(x1, y1, z1, x2, y2, z2, 0, 0, 0);
         toolManager.syncMesh();
         const len = Math.sqrt(
           (x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2

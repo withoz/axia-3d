@@ -10,10 +10,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const mockEngine: Record<string, any> = {
   __wbg_ptr: 1,
   free: vi.fn(),
-  draw_line: vi.fn().mockReturnValue(1),
-  draw_rect: vi.fn().mockReturnValue(2),
-  draw_circle: vi.fn().mockReturnValue(3),
-  push_pull: vi.fn().mockReturnValue(true),
+  draw_line_as_shape: vi.fn().mockReturnValue(1),
+  draw_rect_as_shape: vi.fn().mockReturnValue(2),
+  draw_circle_as_shape: vi.fn().mockReturnValue(3),
+  create_solid_extrude: vi.fn().mockReturnValue(true),
   face_count: vi.fn().mockReturnValue(6),
   vert_count: vi.fn().mockReturnValue(8),
   get_positions: vi.fn().mockReturnValue(new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0])),
@@ -117,23 +117,23 @@ describe('WasmBridge', () => {
 
   describe('draw operations', () => {
     it('drawLine() returns face count', () => {
-      const result = bridge.drawLine(0, 0, 0, 1, 0, 0, 0, 0, 1);
+      const result = bridge.drawLineAsShape(0, 0, 0, 1, 0, 0, 0, 0, 1);
       expect(typeof result).toBe('number');
     });
 
     it('drawRect() returns face count', () => {
-      const result = bridge.drawRect(0, 0, 0, 0, 0, 1, 1, 0, 0, 2, 1);
+      const result = bridge.drawRectAsShape(0, 0, 0, 0, 0, 1, 1, 0, 0, 2, 1);
       expect(typeof result).toBe('number');
     });
 
     it('drawCircle() returns face count', () => {
-      const result = bridge.drawCircle(0, 0, 0, 0, 0, 1, 5, 24);
+      const result = bridge.drawCircleAsShape(0, 0, 0, 0, 0, 1, 5, 24);
       expect(typeof result).toBe('number');
     });
 
     it('drawLine() marks buffers dirty', () => {
       bridge.getMeshBuffers(); // clear dirty flag
-      bridge.drawLine(0, 0, 0, 1, 0, 0, 0, 0, 1);
+      bridge.drawLineAsShape(0, 0, 0, 1, 0, 0, 0, 0, 1);
       // After draw, next getMeshBuffers should fetch fresh
       const buffers = bridge.getMeshBuffers();
       expect(buffers).not.toBeNull();
@@ -149,12 +149,12 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+        draw_rect_as_shape: (cx: number, cy: number, cz: number, ...rest: number[]) => {
           captured.push(cx, cy, cz, ...rest);
           return 1;
         },
       };
-      bridge.drawRect(1.0, 1e-7, 2.0, 0, 1, 0, 0, 0, 1, 5, 5);
+      bridge.drawRectAsShape(1.0, 1e-7, 2.0, 0, 1, 0, 0, 0, 1, 5, 5);
       expect(captured[0]).toBe(1.0);
       expect(captured[1]).toBe(0);  // ε snapped exactly to 0
       expect(captured[2]).toBe(2.0);
@@ -164,12 +164,12 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+        draw_rect_as_shape: (cx: number, cy: number, cz: number, ...rest: number[]) => {
           captured.push(cx, cy, cz, ...rest);
           return 1;
         },
       };
-      bridge.drawRect(1.0, 2.0, 5e-8, 0, 0, 1, 1, 0, 0, 5, 5);
+      bridge.drawRectAsShape(1.0, 2.0, 5e-8, 0, 0, 1, 1, 0, 0, 5, 5);
       expect(captured[2]).toBe(0);
     });
 
@@ -177,13 +177,13 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+        draw_rect_as_shape: (cx: number, cy: number, cz: number, ...rest: number[]) => {
           captured.push(cx, cy, cz, ...rest);
           return 1;
         },
       };
       // Normal not axis-aligned → no snap
-      bridge.drawRect(1.0, 1e-7, 2.0, 0.7, 0.7, 0, 0, 0, 1, 5, 5);
+      bridge.drawRectAsShape(1.0, 1e-7, 2.0, 0.7, 0.7, 0, 0, 0, 1, 5, 5);
       expect(captured[1]).toBeCloseTo(1e-7, 12);  // unchanged
     });
 
@@ -191,13 +191,13 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_rect: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+        draw_rect_as_shape: (cx: number, cy: number, cz: number, ...rest: number[]) => {
           captured.push(cx, cy, cz, ...rest);
           return 1;
         },
       };
       // 0.5 is way above 1e-3 tol → not snapped
-      bridge.drawRect(1.0, 0.5, 2.0, 0, 1, 0, 0, 0, 1, 5, 5);
+      bridge.drawRectAsShape(1.0, 0.5, 2.0, 0, 1, 0, 0, 0, 1, 5, 5);
       expect(captured[1]).toBe(0.5);
     });
 
@@ -205,12 +205,12 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_circle: (cx: number, cy: number, cz: number, ...rest: number[]) => {
+        draw_circle_as_shape: (cx: number, cy: number, cz: number, ...rest: number[]) => {
           captured.push(cx, cy, cz, ...rest);
           return 1;
         },
       };
-      bridge.drawCircle(1.0, 1e-7, 2.0, 0, 1, 0, 5, 24);
+      bridge.drawCircleAsShape(1.0, 1e-7, 2.0, 0, 1, 0, 5, 24);
       expect(captured[1]).toBe(0);
     });
 
@@ -218,12 +218,12 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_line: (...args: number[]) => {
+        draw_line_as_shape: (...args: number[]) => {
           captured.push(...args);
           return 1;
         },
       };
-      bridge.drawLine(1.0, 1e-7, 2.0, 5.0, 3e-8, 7.0);
+      bridge.drawLineAsShape(1.0, 1e-7, 2.0, 5.0, 3e-8, 7.0);
       expect(captured[1]).toBe(0);  // y0 snapped
       expect(captured[4]).toBe(0);  // y1 snapped
     });
@@ -232,13 +232,13 @@ describe('WasmBridge', () => {
       const captured: number[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_line: (...args: number[]) => {
+        draw_line_as_shape: (...args: number[]) => {
           captured.push(...args);
           return 1;
         },
       };
       // y0 ≈ 0 but y1 = 5 → not coplanar with y=0 plane → no snap
-      bridge.drawLine(1.0, 1e-7, 2.0, 5.0, 5.0, 7.0);
+      bridge.drawLineAsShape(1.0, 1e-7, 2.0, 5.0, 5.0, 7.0);
       expect(captured[1]).toBeCloseTo(1e-7, 12);  // preserved
     });
 
@@ -738,12 +738,12 @@ describe('WasmBridge', () => {
       const captured: Float64Array[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        drawPolyline: (arr: Float64Array) => {
+        drawPolylineAsShape: (arr: Float64Array) => {
           captured.push(arr.slice());
           return 1;
         },
       };
-      bridge.drawPolyline([0, 1e-7, 0,  5, 2e-8, 0,  5, 3e-8, 5,  0, 1e-7, 5]);
+      bridge.drawPolylineAsShape([0, 1e-7, 0,  5, 2e-8, 0,  5, 3e-8, 5,  0, 1e-7, 5]);
       const arr = captured[0];
       expect(arr[1]).toBe(0);
       expect(arr[4]).toBe(0);
@@ -754,7 +754,7 @@ describe('WasmBridge', () => {
 
   describe('push/pull', () => {
     it('pushPull() returns boolean', () => {
-      const result = bridge.pushPull(1, 5.0);
+      const result = bridge.createSolidExtrude(1, 5.0);
       expect(result).toBe(true);
     });
   });
@@ -789,14 +789,14 @@ describe('WasmBridge', () => {
       expect(uninitBridge.faceCount()).toBe(0);
     });
 
-    it('drawLine returns -1 when not ready', () => {
+    it('drawLineAsShape returns -1 when not ready', () => {
       const uninitBridge = new WasmBridge();
-      expect(uninitBridge.drawLine(0, 0, 0, 1, 0, 0, 0, 0, 1)).toBe(-1);
+      expect(uninitBridge.drawLineAsShape(0, 0, 0, 1, 0, 0, 0, 0, 1)).toBe(-1);
     });
 
-    it('pushPull returns false when not ready', () => {
+    it('createSolidExtrude returns false when not ready', () => {
       const uninitBridge = new WasmBridge();
-      expect(uninitBridge.pushPull(1, 5.0)).toBe(false);
+      expect(uninitBridge.createSolidExtrude(1, 5.0)).toBe(false);
     });
 
     it('undo returns false when not ready', () => {
@@ -1582,13 +1582,13 @@ describe('WasmBridge', () => {
       const drawCircleFn = vi.fn(() => 3);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = {
-        draw_rect: drawRectFn,
-        draw_line: drawLineFn,
-        draw_circle: drawCircleFn,
+        draw_rect_as_shape: drawRectFn,
+        draw_line_as_shape: drawLineFn,
+        draw_circle_as_shape: drawCircleFn,
       };
-      expect(bridge.drawRect(0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1)).toBe(1);
-      expect(bridge.drawLine(0, 0, 0, 1, 0, 0)).toBe(2);
-      expect(bridge.drawCircle(0, 0, 0, 0, 0, 1, 1, 8)).toBe(3);
+      expect(bridge.drawRectAsShape(0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1)).toBe(1);
+      expect(bridge.drawLineAsShape(0, 0, 0, 1, 0, 0)).toBe(2);
+      expect(bridge.drawCircleAsShape(0, 0, 0, 0, 0, 1, 1, 8)).toBe(3);
       expect(drawRectFn).toHaveBeenCalled();
       expect(drawLineFn).toHaveBeenCalled();
       expect(drawCircleFn).toHaveBeenCalled();
@@ -1616,14 +1616,11 @@ describe('WasmBridge', () => {
       expect(bridge.createSolidExtrude(1, 50)).toBe(false);
     });
 
-    it('legacy pushPull UNCHANGED — not affected by createSolidExtrude addition', () => {
-      const ppFn = vi.fn(() => true);
-      const csFn = vi.fn(() => true);
+    it('ADR-087 K-ζ — legacy pushPull bridge wrapper deleted; createSolidExtrude is sole entry', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (bridge as any).engine = { push_pull: ppFn, create_solid_extrude: csFn };
-      bridge.pushPull(7, 100);
-      expect(ppFn).toHaveBeenCalledTimes(1);
-      expect(csFn).not.toHaveBeenCalled();
+      const b: any = bridge;
+      expect(typeof b.pushPull).toBe('undefined');
+      expect(typeof b.createSolidExtrude).toBe('function');
     });
   });
 

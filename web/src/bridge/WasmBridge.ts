@@ -556,35 +556,8 @@ export class WasmBridge {
     } catch { /* ignore — telemetry not installed */ }
   }
 
-  drawLine(
-    x0: number, y0: number, z0: number,
-    x1: number, y1: number, z1: number,
-    nx = 0, ny = 0, nz = 0,
-  ): number {
-    if (!this.engine) return -1;
-    this.markDirty();
-    // ADR-026 P12 — Cardinal Plane SSOT: 두 endpoint 가 동일 cardinal plane 위면
-    // 정확한 axis-0 좌표로 강제. (양쪽 endpoint 가 같은 normal-axis 값을 가질 때만.)
-    [x0, y0, z0, x1, y1, z1] = snapCoplanarCardinal6(x0, y0, z0, x1, y1, z1);
-    return this.engine.draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz);
-  }
-
-  /** ADR-012 §3 BatchCommand — N개 연속 line 을 단일 WASM crossing 에
-   *  묶는다. `points` 는 [x0,y0,z0, x1,y1,z1, …] 평탄화 배열.
-   *  Arc / Bezier / Freehand 등 tessellated curve 에서 사용.
-   *  단일 transaction 이라 Ctrl+Z 한 번으로 전체 polyline undo. */
-  drawPolyline(points: Float64Array | number[]): number {
-    if (!this.engine) return -1;
-    this.markDirty();
-    const arr = points instanceof Float64Array ? points : new Float64Array(points);
-    // ADR-026 P12 — 모든 point 가 같은 cardinal plane 위면 정확히 axis-0 강제.
-    snapPolylineCardinal(arr);
-    const fn = (this.engine as unknown as {
-      drawPolyline?: (points: Float64Array) => number;
-    }).drawPolyline;
-    if (!fn) return -1;
-    return fn.call(this.engine, arr);
-  }
+  // ADR-087 K-ζ — `drawLine` / `drawPolyline` legacy bridge wrappers 폐기.
+  // `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
 
   /**
    * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware 변형:
@@ -619,30 +592,8 @@ export class WasmBridge {
     return fn.call(this.engine, arr, nx, ny, nz);
   }
 
-  drawRect(
-    cx: number, cy: number, cz: number,
-    nx: number, ny: number, nz: number,
-    ux: number, uy: number, uz: number,
-    width: number, height: number,
-  ): number {
-    if (!this.engine) return -1;
-    this.markDirty();
-    // ADR-026 P12 — Cardinal Plane SSOT: normal 이 cardinal axis 면 center 의
-    // 해당 axis 좌표를 정확히 0 으로 강제 (ε 정밀도 손실 차단).
-    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
-    return this.engine.draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
-  }
-
-  drawCircle(
-    cx: number, cy: number, cz: number,
-    nx: number, ny: number, nz: number,
-    radius: number, segments: number,
-  ): number {
-    if (!this.engine) return -1;
-    this.markDirty();
-    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
-    return this.engine.draw_circle(cx, cy, cz, nx, ny, nz, radius, segments);
-  }
+  // ADR-087 K-ζ — `drawRect` / `drawCircle` legacy bridge wrappers 폐기.
+  // `drawRectAsShape` / `drawCircleAsShape` 가 단일 entry.
 
   // ════════════════════════════════════════════════════════════════════════
   // ADR-050 P-5c — As-Shape Draw bridge wrappers.
@@ -1392,12 +1343,8 @@ export class WasmBridge {
     return this.engine.pointInFace(faceId, point[0], point[1], point[2]);
   }
 
-  /** Push/Pull: dist > 0 = extrude outward, dist < 0 = recess inward */
-  pushPull(faceId: number, dist: number): boolean {
-    if (!this.engine) return false;
-    this.markDirty();
-    return this.engine.push_pull(faceId, dist);
-  }
+  // ADR-087 K-ζ — `pushPull` legacy bridge wrapper 폐기.
+  // `createSolidExtrude` 가 단일 entry (Q3 fallback Rust 측 자동).
 
   /**
    * ADR-079 W-1-β — Surface-native solid extrusion (Push/Pull successor).

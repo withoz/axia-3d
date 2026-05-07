@@ -1123,17 +1123,26 @@ impl Scene {
     /// Execute a command and return the result.
     pub fn execute(&mut self, cmd: Command) -> CommandResult {
         match cmd {
+            // ADR-087 K-ζ — Legacy DrawLine / DrawRect / DrawCircle /
+            // PushPull 은 internal-only (Test 회귀 자산 보존용). User-facing
+            // entry 는 AsShape variants + CreateSolid (WASM/TS 에서만 노출).
             Command::DrawLine { start, end, surface_normal } => {
                 self.exec_draw_line(start, end, surface_normal)
+            }
+            Command::DrawRect { center, normal, up, width, height } => {
+                self.exec_draw_rect(center, normal, up, width, height)
+            }
+            Command::DrawCircle { center, normal, radius, segments } => {
+                self.exec_draw_circle(center, normal, radius, segments)
+            }
+            Command::PushPull { face_id, dist } => {
+                self.exec_push_pull(face_id, dist)
             }
             Command::DrawCenterline { start, end } => {
                 self.exec_draw_centerline(start, end)
             }
             Command::SetEdgeClass { edge_id, class_raw } => {
                 self.exec_set_edge_class(edge_id, class_raw)
-            }
-            Command::DrawRect { center, normal, up, width, height } => {
-                self.exec_draw_rect(center, normal, up, width, height)
             }
             Command::DrawRectAsShape { center, normal, up, width, height } => {
                 self.exec_draw_rect_as_shape(center, normal, up, width, height)
@@ -1143,12 +1152,6 @@ impl Scene {
             }
             Command::DrawCircleAsShape { center, normal, radius, segments } => {
                 self.exec_draw_circle_as_shape(center, normal, radius, segments)
-            }
-            Command::DrawCircle { center, normal, radius, segments } => {
-                self.exec_draw_circle(center, normal, radius, segments)
-            }
-            Command::PushPull { face_id, dist } => {
-                self.exec_push_pull(face_id, dist)
             }
             Command::CreateSolid { face_id, mode } => {
                 self.exec_create_solid(face_id, mode)
@@ -9326,7 +9329,10 @@ mod tests {
         let face_id: FaceId = scene.xias.get(&xid).and_then(|x| x.face_ids.first().copied())
             .expect("rect should have a face");
         // Push-pull to extrude into closed solid
-        let pp = scene.execute(Command::PushPull { face_id, dist: 2.0 });
+        let pp = scene.execute(Command::PushPull {
+            face_id,
+            dist: 2.0,
+        });
         // Push-pull may return PushPullDone or MeshUpdated; both are OK.
         if matches!(pp, CommandResult::Error(_)) {
             panic!("push-pull failed: {:?}", pp);
@@ -10218,7 +10224,7 @@ mod tests {
         // DrawRectAsShape — non-manifold count must remain ≤ 1
         // (deferred boundary).
         let mut scene = Scene::new();
-        scene.execute(Command::DrawRect {
+        scene.execute(Command::DrawRectAsShape {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
             width: 10.0, height: 6.0,
         });

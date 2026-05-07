@@ -1036,22 +1036,8 @@ export class AxiaEngine {
         return ret;
     }
     /**
-     * ADR-012 §3 BatchCommand — N 개 연속 line 을 단일 WASM crossing 에 묶는다.
-     * `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수). N point ⇒
-     * (N-1) 개 line.
-     * 반환: 마지막으로 만들어진 segment 의 결과 — 0 (success) 또는 -1.
-     * 호출자: DrawArcTool / DrawFreehandTool / DrawBezierTool — 이전엔 N
-     * 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
-     * @param {Float64Array} points
-     * @returns {number}
-     */
-    drawPolyline(points) {
-        const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.axiaengine_drawPolyline(this.__wbg_ptr, ptr0, len0);
-        return ret;
-    }
-    /**
+     * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
+     * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
      * 변형: 각 segment 를 `Command::DrawLineAsShape` 로 실행하여 (a) 결과
      * edge 들이 form-layer Shape 로 등록 + (b) 닫힌 loop 합성 시 face 에
@@ -1076,21 +1062,6 @@ export class AxiaEngine {
         return ret;
     }
     /**
-     * @param {number} cx
-     * @param {number} cy
-     * @param {number} cz
-     * @param {number} nx
-     * @param {number} ny
-     * @param {number} nz
-     * @param {number} radius
-     * @param {number} segments
-     * @returns {number}
-     */
-    draw_circle(cx, cy, cz, nx, ny, nz, radius, segments) {
-        const ret = wasm.axiaengine_draw_circle(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, radius, segments);
-        return ret;
-    }
-    /**
      * ADR-050 P-5c — Draw a circle as a form-layer Shape (no Xia).
      * Returns ShapeId.raw() as f64 on success, -1.0 on error.
      * @param {number} cx
@@ -1105,22 +1076,6 @@ export class AxiaEngine {
      */
     draw_circle_as_shape(cx, cy, cz, nx, ny, nz, radius, segments) {
         const ret = wasm.axiaengine_draw_circle_as_shape(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, radius, segments);
-        return ret;
-    }
-    /**
-     * @param {number} x0
-     * @param {number} y0
-     * @param {number} z0
-     * @param {number} x1
-     * @param {number} y1
-     * @param {number} z1
-     * @param {number} nx
-     * @param {number} ny
-     * @param {number} nz
-     * @returns {number}
-     */
-    draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz) {
-        const ret = wasm.axiaengine_draw_line(this.__wbg_ptr, x0, y0, z0, x1, y1, z1, nx, ny, nz);
         return ret;
     }
     /**
@@ -1140,24 +1095,6 @@ export class AxiaEngine {
      */
     draw_line_as_shape(x0, y0, z0, x1, y1, z1, nx, ny, nz) {
         const ret = wasm.axiaengine_draw_line_as_shape(this.__wbg_ptr, x0, y0, z0, x1, y1, z1, nx, ny, nz);
-        return ret;
-    }
-    /**
-     * @param {number} cx
-     * @param {number} cy
-     * @param {number} cz
-     * @param {number} nx
-     * @param {number} ny
-     * @param {number} nz
-     * @param {number} ux
-     * @param {number} uy
-     * @param {number} uz
-     * @param {number} width
-     * @param {number} height
-     * @returns {number}
-     */
-    draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height) {
-        const ret = wasm.axiaengine_draw_rect(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, ux, uy, uz, width, height);
         return ret;
     }
     /**
@@ -3143,18 +3080,6 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
-    }
-    /**
-     * Push/Pull a face along its normal.
-     * dist > 0 = extrude outward (face kept)
-     * dist < 0 = recess inward  (face removed)
-     * @param {number} face_id_raw
-     * @param {number} dist
-     * @returns {boolean}
-     */
-    push_pull(face_id_raw, dist) {
-        const ret = wasm.axiaengine_push_pull(this.__wbg_ptr, face_id_raw, dist);
-        return ret !== 0;
     }
     /**
      * Push/Pull a smooth group seamlessly (no gaps, wall faces connect adjacent surfaces)

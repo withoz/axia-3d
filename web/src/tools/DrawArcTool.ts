@@ -146,7 +146,8 @@ export class DrawArcTool implements ITool {
         flat[i * 3 + 1] = pts[i].y;
         flat[i * 3 + 2] = pts[i].z;
       }
-      this.ctx.bridge.drawPolyline(flat);
+      // ADR-087 K-ζ — kernel-aware drawPolylineAsShape only.
+      this.ctx.bridge.drawPolylineAsShape(flat);
     }
 
     this.ctx.syncMesh();

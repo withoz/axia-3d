@@ -537,101 +537,12 @@ impl AxiaEngine {
     // Draw commands
     // ========================================================================
 
-    pub fn draw_line(
-        &mut self,
-        x0: f64, y0: f64, z0: f64,
-        x1: f64, y1: f64, z1: f64,
-        nx: f64, ny: f64, nz: f64,
-    ) -> f64 {
-        let start = DVec3::new(x0, y0, z0);
-        let end = DVec3::new(x1, y1, z1);
-        let surface_normal = if nx == 0.0 && ny == 0.0 && nz == 0.0 {
-            None
-        } else {
-            Some(DVec3::new(nx, ny, nz))
-        };
+    /// ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
+    /// `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
 
-        let verts_before = self.scene.mesh.vert_count();
-        let faces_before = self.scene.mesh.face_count();
-        let edges_before = self.scene.mesh.edge_count();
+    // (legacy `pub fn draw_line` deleted — ADR-087 K-ζ)
 
-        debug_log!("[RUST] draw_line: ({:.4},{:.4},{:.4})→({:.4},{:.4},{:.4}) verts={} edges={} faces={}",
-            x0, y0, z0, x1, y1, z1, verts_before, edges_before, faces_before);
-
-        let cmd = Command::DrawLine {
-            start,
-            end,
-            surface_normal,
-        };
-        let result = self.scene.execute(cmd);
-
-        let verts_after = self.scene.mesh.vert_count();
-        let faces_after = self.scene.mesh.face_count();
-        let edges_after = self.scene.mesh.edge_count();
-
-        debug_log!("[RUST] draw_line result: verts={} edges={} faces={} (new_verts={} new_edges={} new_faces={})",
-            verts_after, edges_after, faces_after,
-            verts_after - verts_before, edges_after - edges_before, faces_after - faces_before);
-
-        match result {
-            axia_core::commands::CommandResult::EntityCreated(xia_id) => {
-                self.mark_topology_changed();  // new faces created
-                self.invalidate_cache();
-                xia_id as f64
-            }
-            _ => {
-                self.invalidate_cache();
-                -1.0
-            }
-        }
-    }
-
-    /// ADR-012 §3 BatchCommand — N 개 연속 line 을 단일 WASM crossing 에 묶는다.
-    /// `points`: 평탄화된 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수). N point ⇒
-    /// (N-1) 개 line.
-    /// 반환: 마지막으로 만들어진 segment 의 결과 — 0 (success) 또는 -1.
-    /// 호출자: DrawArcTool / DrawFreehandTool / DrawBezierTool — 이전엔 N
-    /// 회 crossing 했지만 이제 1 회. 단일 트랜잭션 (Ctrl+Z 1회로 전체 되돌림).
-    #[wasm_bindgen(js_name = "drawPolyline")]
-    pub fn draw_polyline(&mut self, points: &[f64]) -> f64 {
-        if points.len() < 6 || points.len() % 3 != 0 {
-            console_error!("[RUST] drawPolyline: invalid points length {}", points.len());
-            return -1.0;
-        }
-        let n = points.len() / 3;
-        if n < 2 {
-            return -1.0;
-        }
-
-        debug_log!("[RUST] drawPolyline: {} points → {} segments", n, n - 1);
-
-        // 단일 트랜잭션 — Ctrl+Z 한 번에 전체 polyline 되돌림.
-        self.scene.transactions.begin();
-        self.scene.transactions.set_before_snapshot(self.scene.scene_snapshot());
-
-        let mut any_failed = false;
-        for i in 0..n - 1 {
-            let start = DVec3::new(
-                points[i * 3], points[i * 3 + 1], points[i * 3 + 2],
-            );
-            let end = DVec3::new(
-                points[(i + 1) * 3], points[(i + 1) * 3 + 1], points[(i + 1) * 3 + 2],
-            );
-            let cmd = Command::DrawLine { start, end, surface_normal: None };
-            let result = self.scene.execute(cmd);
-            if matches!(result, axia_core::commands::CommandResult::Error(_)) {
-                any_failed = true;
-            }
-        }
-
-        self.scene.transactions.set_after_snapshot(self.scene.scene_snapshot());
-        self.scene.transactions.commit();
-
-        self.mark_topology_changed();
-        self.invalidate_cache();
-
-        if any_failed { -1.0 } else { 0.0 }
-    }
+    // (legacy `pub fn draw_polyline` deleted — ADR-087 K-ζ)
 
     /// ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
     /// 변형: 각 segment 를 `Command::DrawLineAsShape` 로 실행하여 (a) 결과
@@ -705,65 +616,8 @@ impl AxiaEngine {
         if any_failed { -1.0 } else { 0.0 }
     }
 
-    pub fn draw_rect(
-        &mut self,
-        cx: f64, cy: f64, cz: f64,
-        nx: f64, ny: f64, nz: f64,
-        ux: f64, uy: f64, uz: f64,
-        width: f64, height: f64,
-    ) -> f64 {
-        let cmd = Command::DrawRect {
-            center: DVec3::new(cx, cy, cz),
-            normal: DVec3::new(nx, ny, nz),
-            up: DVec3::new(ux, uy, uz),
-            width,
-            height,
-        };
-        let result = self.scene.execute(cmd);
-
-        match result {
-            axia_core::commands::CommandResult::EntityCreated(xia_id) => {
-                self.mark_topology_changed();  // new face created
-                self.invalidate_cache();
-
-                let face_count = self.scene.mesh.face_count();
-                debug_log!("[RUST] draw_rect: xia={} faces={} input_normal=({},{},{})",
-                    xia_id, face_count, nx, ny, nz);
-                xia_id as f64
-            },
-            _ => {
-                self.invalidate_cache();
-                -1.0
-            }
-        }
-    }
-
-    pub fn draw_circle(
-        &mut self,
-        cx: f64, cy: f64, cz: f64,
-        nx: f64, ny: f64, nz: f64,
-        radius: f64, segments: u32,
-    ) -> f64 {
-        let cmd = Command::DrawCircle {
-            center: DVec3::new(cx, cy, cz),
-            normal: DVec3::new(nx, ny, nz),
-            radius,
-            segments,
-        };
-        let result = self.scene.execute(cmd);
-
-        match result {
-            axia_core::commands::CommandResult::EntityCreated(xia_id) => {
-                self.mark_topology_changed();  // new face created
-                self.invalidate_cache();
-                xia_id as f64
-            }
-            _ => {
-                self.invalidate_cache();
-                -1.0
-            }
-        }
-    }
+    // (legacy `pub fn draw_rect` / `pub fn draw_circle` deleted — ADR-087
+    // K-ζ. drawRectAsShape / drawCircleAsShape 가 단일 entry.)
 
     // ════════════════════════════════════════════════════════════════════
     // ADR-050 P-5c — As-Shape Draw command bridge.
@@ -2151,80 +2005,9 @@ impl AxiaEngine {
     // Push/Pull
     // ========================================================================
 
-    /// Push/Pull a face along its normal.
-    /// dist > 0 = extrude outward (face kept)
-    /// dist < 0 = recess inward  (face removed)
-    pub fn push_pull(
-        &mut self,
-        face_id_raw: u32,
-        dist: f64,
-    ) -> bool {
-        let fid = FaceId::new(face_id_raw);
-
-        // ADR-016 Q2 — multi-loop face (ring with holes) 거부.
-        if let Some(face) = self.scene.mesh.faces.get(fid) {
-            if !face.inners().is_empty() {
-                debug_log!("[RUST] push_pull rejected: face {} has {} hole(s) — \
-                            multi-loop face Push/Pull unsupported (ADR-016 Q2)",
-                            face_id_raw, face.inners().len());
-                return false;
-            }
-        }
-
-        let faces_before = self.scene.mesh.face_count();
-
-        // Log face normal for direction debugging
-        let face_normal = if let Some(face) = self.scene.mesh.faces.get(fid) {
-            let n = face.normal();
-            format!("({:.3},{:.3},{:.3})", n.x, n.y, n.z)
-        } else {
-            "N/A".to_string()
-        };
-        debug_log!("[RUST] push_pull faceId={} dist={:.3} normal={} faces_before={}",
-            face_id_raw, dist, face_normal, faces_before);
-
-        let cmd = Command::PushPull {
-            face_id: fid,
-            dist,
-        };
-        let result = self.scene.execute(cmd);
-
-        let faces_after = self.scene.mesh.face_count();
-
-        let ok = match &result {
-            axia_core::commands::CommandResult::PushPullDone {
-                sides_created, adj_splits, base_removed, ref split_debug
-            } => {
-                debug_log!(
-                    "[RUST] after: faces={} (delta={:+}) sides={} adj_splits={} base_removed={}",
-                    faces_after, faces_after as i64 - faces_before as i64,
-                    sides_created, adj_splits, base_removed
-                );
-                for msg in split_debug {
-                    debug_log!("[SPLIT] {}", msg);
-                }
-                true
-            }
-            axia_core::commands::CommandResult::Error(e) => {
-                console_error!("[RUST] push_pull ERROR: {}", e);
-                self.set_error(e.to_string());
-                false
-            }
-            _ => {
-                debug_log!("[RUST] after: faces={} (delta={:+})",
-                    faces_after, faces_after as i64 - faces_before as i64);
-                false
-            }
-        };
-
-        // Push/Pull changes topology (adds side faces, merges coplanar faces)
-        if ok {
-            self.mark_topology_changed();
-        }
-
-        self.invalidate_cache();
-        ok
-    }
+    // (legacy `pub fn push_pull` deleted — ADR-087 K-ζ. createSolidExtrude
+    // 가 단일 entry. Q3 fallback to Mesh::push_pull 은 exec_create_solid
+    // 가 자동 처리.)
 
     /// ADR-079 W-1-β — Surface-native solid extrusion bridge.
     ///
@@ -2359,9 +2142,18 @@ impl AxiaEngine {
             // operating on multiple coplanar split siblings simultaneously.
             // The user clicked one face; that's the one that should extrude.
             let first = smooth_group[0];
-            let cmd = Command::PushPull { face_id: first, dist };
+            // ADR-087 K-ζ — kernel-aware CreateSolid Extrude (Q3 fallback
+            // to Mesh::push_pull 은 exec_create_solid 가 자동 처리).
+            let cmd = Command::CreateSolid {
+                face_id: first,
+                mode: axia_geo::CreateSolidMode::Extrude { distance: dist },
+            };
             let result = self.scene.execute(cmd);
-            let ok = matches!(result, axia_core::commands::CommandResult::PushPullDone { .. });
+            let ok = matches!(
+                result,
+                axia_core::commands::CommandResult::SolidCreated { .. }
+                    | axia_core::commands::CommandResult::PushPullDone { .. }
+            );
             if ok { self.mark_topology_changed(); }
             self.invalidate_cache();
             return ok;

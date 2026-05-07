@@ -977,7 +977,7 @@ export class ToolManager {
       let success = 0;
       let firstFailure = '';
       for (const fid of selFaces) {
-        const ok = this.bridge.pushPull(fid, distance);
+        const ok = this.bridge.createSolidExtrude(fid, distance);
         if (ok) {
           success++;
         } else if (!firstFailure) {
@@ -1198,7 +1198,7 @@ export class ToolManager {
       const targets = uniqueFaces.slice(0, created);
       let ok = 0;
       for (const fid of targets) {
-        if (this.bridge.pushPull(fid, height)) ok++;
+        if (this.bridge.createSolidExtrude(fid, height)) ok++;
       }
       if (ok > 0) {
         this.syncMesh();
@@ -2185,7 +2185,7 @@ export class ToolManager {
         if (sel.length === 0) { Toast.warning('재실행할 면을 선택하세요', 2500); return false; }
         try { localStorage.setItem('axia:thicken:distance', String(t)); } catch { /* ignore */ }
         let ok = 0;
-        for (const fid of sel) { if (this.bridge.pushPull(fid, t)) ok++; }
+        for (const fid of sel) { if (this.bridge.createSolidExtrude(fid, t)) ok++; }
         if (ok > 0) {
           this.syncMesh();
           this.selection.clearSelection();

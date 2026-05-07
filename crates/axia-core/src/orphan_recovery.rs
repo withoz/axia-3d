@@ -436,6 +436,8 @@ mod tests {
     use crate::commands::{Command, CommandResult};
 
     fn make_rect(scene: &mut Scene, cx: f64, cz: f64) -> XiaId {
+        // ADR-087 K-ζ — Use legacy Command::DrawRect (internal-only) so
+        // orphan_recovery tests retain their Xia-layer contract.
         let r = scene.execute(Command::DrawRect {
             center: DVec3::new(cx, 0.0, cz),
             normal: DVec3::new(0.0, 1.0, 0.0),

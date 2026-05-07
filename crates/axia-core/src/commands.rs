@@ -56,19 +56,26 @@ pub enum CommandResult {
 }
 
 /// All possible modeling commands.
+///
+/// ADR-087 K-ζ (2026-05-08) — Legacy Command variants (`DrawLine` /
+/// `DrawRect` / `DrawCircle` / `PushPull`) 는 **internal-only Rust API**
+/// 로 강등. User-facing surface (WASM exports + TS bridge wrappers + Tool
+/// dispatch) 는 삭제 — AsShape variants + CreateSolid 가 단일 user-facing
+/// entry. enum variants 보존 이유: 회귀 자산 (245 test sites) 의 Xia-layer
+/// contract (EntityCreated, scene.xias 등) 검증 유지. Test-only code 가
+/// 사용 가능, but production code paths (web/src/) 는 사용 금지.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
-    /// Draw a line between two points
+    /// **Internal-only (ADR-087 K-ζ)** — Draw a line between two points.
+    /// AsShape variant 가 user-facing entry. Test 회귀 자산 보존용.
     DrawLine {
         start: DVec3,
         end: DVec3,
         surface_normal: Option<DVec3>,
     },
 
-    /// Draw a centerline (reference axis). Unlike DrawLine, this skips
-    /// intersection-splitting, face synthesis, and free-edge loop detection —
-    /// creates a standalone edge tagged with `EdgeClass::Centerline`.
-    /// Used for floor-plan axes, column grids, wall centers.
+    /// Draw a centerline (reference axis). Q3 deferred per ADR-049
+    /// Phase 3 (Reference layer 별도 시민권). 향후 ADR-053 에서 처리.
     DrawCenterline {
         start: DVec3,
         end: DVec3,
@@ -82,13 +89,31 @@ pub enum Command {
         class_raw: u32,  // 0 = Geometry, 1 = Centerline
     },
 
-    /// Draw a rectangle
+    /// **Internal-only (ADR-087 K-ζ)** — Draw a rectangle (Xia layer).
+    /// `DrawRectAsShape` 가 user-facing entry.
     DrawRect {
         center: DVec3,
         normal: DVec3,
         up: DVec3,
         width: f64,
         height: f64,
+    },
+
+    /// **Internal-only (ADR-087 K-ζ)** — Draw a circle (Xia layer).
+    /// `DrawCircleAsShape` 가 user-facing entry.
+    DrawCircle {
+        center: DVec3,
+        normal: DVec3,
+        radius: f64,
+        segments: u32,
+    },
+
+    /// **Internal-only (ADR-087 K-ζ)** — Push/Pull (mesh-level Xia layer).
+    /// `CreateSolid { mode: Extrude }` 가 user-facing entry.
+    /// dist > 0 = extrude outward, dist < 0 = recess inward.
+    PushPull {
+        face_id: FaceId,
+        dist: f64,
     },
 
     /// ADR-050 P-5a — Draw a rectangle and produce a form-layer Shape
@@ -140,22 +165,6 @@ pub enum Command {
         normal: DVec3,
         radius: f64,
         segments: u32,
-    },
-
-    /// Draw a circle (regular polygon approximation)
-    DrawCircle {
-        center: DVec3,
-        normal: DVec3,
-        radius: f64,
-        segments: u32,
-    },
-
-    /// Push/Pull a face along its normal.
-    /// dist > 0 = extrude outward (face kept)
-    /// dist < 0 = recess inward  (face removed)
-    PushPull {
-        face_id: FaceId,
-        dist: f64,
     },
 
     /// ADR-079 W-1 — Surface-native solid creation from a profile face.

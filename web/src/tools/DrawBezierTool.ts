@@ -140,7 +140,8 @@ export class DrawBezierTool implements ITool {
           flat[i * 3 + 1] = filtered[i].y;
           flat[i * 3 + 2] = filtered[i].z;
         }
-        this.ctx.bridge.drawPolyline(flat);
+        // ADR-087 K-ζ — kernel-aware drawPolylineAsShape only.
+        this.ctx.bridge.drawPolylineAsShape(flat);
       }
     }
     this.ctx.syncMesh();
