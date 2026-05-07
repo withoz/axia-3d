@@ -40,14 +40,7 @@ describe('DrawRectTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawRectTool;
 
-  beforeEach(async () => {
-    // ADR-050 P-5e-α — module-level default is `true`. Explicitly
-    // reset to `false` so legacy-path tests below exercise the
-    // bridge.drawRect path. Form-mode tests call setDrawShapeMode(true)
-    // in their own scope.
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(false);
-
+  beforeEach(() => {
     ctx = mockToolContext();
     tool = new DrawRectTool(ctx);
   });
@@ -107,34 +100,14 @@ describe('DrawRectTool', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // ADR-050 P-5d — Draw Shape Mode dispatch (form vs property layer)
+  // ADR-087 K-ε — kernel-aware drawRectAsShape only path.
   // ════════════════════════════════════════════════════════════════════════
-  describe('ADR-050 P-5d Draw Shape Mode dispatch', () => {
-    it('VCB path with flag OFF (default) calls bridge.drawRect (legacy Xia)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(false);
-
-      // Skip onMouseDown so this.plane stays null → applyVCBValue uses
-      // its inline default plane (normal/up/right/onFace), avoiding the
-      // mock's getDrawPlane which lacks `right`.
-      tool.applyVCBValue(100, 200);
-
-      expect(ctx.bridge.drawRect).toHaveBeenCalledTimes(1);
-      expect(ctx.bridge.drawRectAsShape).not.toHaveBeenCalled();
-
-      setDrawShapeMode(false); // teardown
-    });
-
-    it('VCB path with flag ON calls bridge.drawRectAsShape (form Shape)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(true);
-
+  describe('ADR-087 K-ε kernel-aware dispatch', () => {
+    it('VCB path always calls bridge.drawRectAsShape (Plane attach)', () => {
       tool.applyVCBValue(100, 200);
 
       expect(ctx.bridge.drawRectAsShape).toHaveBeenCalledTimes(1);
       expect(ctx.bridge.drawRect).not.toHaveBeenCalled();
-
-      setDrawShapeMode(false); // teardown
     });
   });
 });

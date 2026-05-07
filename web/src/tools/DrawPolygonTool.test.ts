@@ -47,11 +47,7 @@ describe('DrawPolygonTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawPolygonTool;
 
-  beforeEach(async () => {
-    // Default flag OFF for legacy-path tests; form-mode tests opt in.
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(false);
-
+  beforeEach(() => {
     ctx = mockToolContext();
     tool = new DrawPolygonTool(ctx);
     // Bypass onActivate prompt by setting sides via reflection.
@@ -71,45 +67,21 @@ describe('DrawPolygonTool', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // ADR-087 K-β — DrawPolygonTool form-mode dispatch
+  // ADR-087 K-ε — kernel-aware drawCircleAsShape only path (Polygon = N-gon).
   // ════════════════════════════════════════════════════════════════════════
-  describe('ADR-087 K-β form-mode dispatch', () => {
-    it('VCB path with flag OFF calls bridge.drawCircle (legacy)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(false);
-
-      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
-      tool.applyVCBValue(50);
-
-      expect(ctx.bridge.drawCircle).toHaveBeenCalledTimes(1);
-      expect(ctx.bridge.drawCircleAsShape).not.toHaveBeenCalled();
-      // Polygon uses N segments.
-      const args = ctx.bridge.drawCircle.mock.calls[0];
-      expect(args[7]).toBe(6); // sides
-
-      setDrawShapeMode(false); // teardown
-    });
-
-    it('VCB path with flag ON calls bridge.drawCircleAsShape (form Shape, Plane attach)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(true);
-
+  describe('ADR-087 K-ε kernel-aware dispatch', () => {
+    it('VCB path always calls bridge.drawCircleAsShape (Plane attach)', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.applyVCBValue(50);
 
       expect(ctx.bridge.drawCircleAsShape).toHaveBeenCalledTimes(1);
       expect(ctx.bridge.drawCircle).not.toHaveBeenCalled();
-      // Verify N-gon segment count passed through.
+      // Polygon uses N segments.
       const args = ctx.bridge.drawCircleAsShape.mock.calls[0];
-      expect(args[7]).toBe(6); // sides — hexagon
-
-      setDrawShapeMode(false); // teardown
+      expect(args[7]).toBe(6); // sides
     });
 
-    it('different sides (N=8 octagon) preserved through form-mode dispatch', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(true);
-
+    it('different sides (N=8 octagon) preserved through dispatch', () => {
       (tool as any).sides = 8; // octagon
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.applyVCBValue(100);
@@ -117,8 +89,6 @@ describe('DrawPolygonTool', () => {
       expect(ctx.bridge.drawCircleAsShape).toHaveBeenCalledTimes(1);
       const args = ctx.bridge.drawCircleAsShape.mock.calls[0];
       expect(args[7]).toBe(8);
-
-      setDrawShapeMode(false); // teardown
     });
   });
 });

@@ -27,7 +27,6 @@ import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
 import { Toast } from '../ui/Toast';
-import { getDrawShapeMode } from './DrawShapeModeSettings';
 
 // ═══════════════════════════════════════════════════
 //  Geometry helper: 2D segment-segment intersection
@@ -467,20 +466,13 @@ export class DrawLineTool implements ITool {
     // 그리기 평면의 normal을 hint로 전달 — WASM이 면 생성 시 winding을
     // 맞춰 일관된 방향으로 normal이 나오도록 함 (CW/CCW 드로잉 상관없이).
     const n = this.drawingPlane?.normal;
-    // ADR-050 P-5d — branch on Draw Shape Mode (form vs property layer).
-    if (getDrawShapeMode()) {
-      this.ctx.bridge.drawLineAsShape(
-        this.startPoint.x, this.startPoint.y, this.startPoint.z,
-        this.previewEnd.x, this.previewEnd.y, this.previewEnd.z,
-        n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
-      );
-    } else {
-      this.ctx.bridge.drawLine(
-        this.startPoint.x, this.startPoint.y, this.startPoint.z,
-        this.previewEnd.x, this.previewEnd.y, this.previewEnd.z,
-        n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
-      );
-    }
+    // ADR-087 K-ε — kernel-aware drawLineAsShape only path. Plane attach
+    // 자동 (ADR-087 K-γ exec_draw_line_as_shape face path).
+    this.ctx.bridge.drawLineAsShape(
+      this.startPoint.x, this.startPoint.y, this.startPoint.z,
+      this.previewEnd.x, this.previewEnd.y, this.previewEnd.z,
+      n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
+    );
 
     const facesAfter = this.ctx.bridge.faceCount();
     const faceCreated = facesAfter > facesBefore;
@@ -649,20 +641,12 @@ export class DrawLineTool implements ITool {
     const facesBefore = this.ctx.bridge.faceCount();
 
     const n = this.drawingPlane?.normal;
-    // ADR-050 P-5d — branch on Draw Shape Mode (form vs property layer).
-    if (getDrawShapeMode()) {
-      this.ctx.bridge.drawLineAsShape(
-        start.x, start.y, start.z,
-        end.x, end.y, end.z,
-        n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
-      );
-    } else {
-      this.ctx.bridge.drawLine(
-        start.x, start.y, start.z,
-        end.x, end.y, end.z,
-        n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
-      );
-    }
+    // ADR-087 K-ε — kernel-aware drawLineAsShape only path.
+    this.ctx.bridge.drawLineAsShape(
+      start.x, start.y, start.z,
+      end.x, end.y, end.z,
+      n?.x ?? 0, n?.y ?? 0, n?.z ?? 0,
+    );
 
     const facesAfter = this.ctx.bridge.faceCount();
     const faceCreated = facesAfter > facesBefore;

@@ -15,7 +15,6 @@
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
-import { getDrawShapeMode } from './DrawShapeModeSettings';
 
 /** Max distance from first click to prevent runaway geometry when ray grazes the plane */
 const MAX_DRAW_DISTANCE = 50000;
@@ -87,22 +86,13 @@ export class DrawRectTool implements ITool {
         const n = this.plane.normal;
         const u = this.plane.up;
 
-        // ADR-050 P-5d — branch on Draw Shape Mode (form vs property layer).
-        if (getDrawShapeMode()) {
-          this.ctx.bridge.drawRectAsShape(
-            center.x, center.y, center.z,
-            n.x, n.y, n.z,
-            u.x, u.y, u.z,
-            Math.abs(width), Math.abs(height),
-          );
-        } else {
-          this.ctx.bridge.drawRect(
-            center.x, center.y, center.z,
-            n.x, n.y, n.z,
-            u.x, u.y, u.z,
-            Math.abs(width), Math.abs(height),
-          );
-        }
+        // ADR-087 K-ε — kernel-aware drawRectAsShape only path.
+        this.ctx.bridge.drawRectAsShape(
+          center.x, center.y, center.z,
+          n.x, n.y, n.z,
+          u.x, u.y, u.z,
+          Math.abs(width), Math.abs(height),
+        );
         debugLog(`[Rect] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): ${Math.abs(width).toFixed(2)} x ${Math.abs(height).toFixed(2)}`);
         this.ctx.syncMesh();
       }
@@ -160,22 +150,13 @@ export class DrawRectTool implements ITool {
       .addScaledVector(plane.right, w / 2)
       .addScaledVector(plane.up, h / 2);
 
-    // ADR-050 P-5d — branch on Draw Shape Mode (form vs property layer).
-    if (getDrawShapeMode()) {
-      this.ctx.bridge.drawRectAsShape(
-        center.x, center.y, center.z,
-        plane.normal.x, plane.normal.y, plane.normal.z,
-        plane.up.x, plane.up.y, plane.up.z,
-        w, h,
-      );
-    } else {
-      this.ctx.bridge.drawRect(
-        center.x, center.y, center.z,
-        plane.normal.x, plane.normal.y, plane.normal.z,
-        plane.up.x, plane.up.y, plane.up.z,
-        w, h,
-      );
-    }
+    // ADR-087 K-ε — kernel-aware drawRectAsShape only path.
+    this.ctx.bridge.drawRectAsShape(
+      center.x, center.y, center.z,
+      plane.normal.x, plane.normal.y, plane.normal.z,
+      plane.up.x, plane.up.y, plane.up.z,
+      w, h,
+    );
     debugLog(`[VCB/Rect] ${w}×${h}`);
     this.cleanup();
     this.ctx.syncMesh();

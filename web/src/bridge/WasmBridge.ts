@@ -591,7 +591,7 @@ export class WasmBridge {
    * 각 segment 가 `Command::DrawLineAsShape` 로 실행되어 결과 face (closing
    * loop 합성 시) 에 AnalyticSurface::Plane 자동 attach.
    *
-   * 호출자: DrawFreehandTool form-mode (drawShapeMode ON), DrawPolylineTool
+   * 호출자: DrawFreehandTool (ADR-087 K-ε kernel-aware only path), DrawPolylineTool
    * (향후).
    *
    * @param points 평탄화 [x0,y0,z0,x1,y1,z1,…] 배열 (3 의 배수)

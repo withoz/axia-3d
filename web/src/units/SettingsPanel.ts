@@ -15,7 +15,6 @@ import {
   MERGE_TOL_MAX,
 } from '../tools/MergeSettings';
 import { getAutoIntersect, setAutoIntersect } from '../tools/AutoIntersectSettings';
-import { getDrawShapeMode, setDrawShapeMode } from '../tools/DrawShapeModeSettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -123,14 +122,6 @@ export class SettingsPanel {
         <div class="sp-hint">새 면이 기존 면과 3D 교차하면 edge 로 자동 분할 (SketchUp 스타일)</div>
       </div>
 
-      <div class="sp-section">
-        <label class="sp-label">
-          <input type="checkbox" id="sp-draw-shape-mode" />
-          그리기 모드: 형태 (실험)
-        </label>
-        <div class="sp-hint">ADR-050 Phase 1 — 새 도구가 form-layer Shape 를 만듭니다. 재질 부여 시 Xia 로 승격.</div>
-      </div>
-
       <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
@@ -191,12 +182,6 @@ export class SettingsPanel {
       setAutoIntersect(autoIntCheck.checked);
     });
 
-    // ADR-050 P-5d — Draw Shape Mode (form-layer opt-in)
-    const shapeModeCheck = panel.querySelector('#sp-draw-shape-mode') as HTMLInputElement;
-    shapeModeCheck.addEventListener('change', () => {
-      setDrawShapeMode(shapeModeCheck.checked);
-    });
-
     return panel;
   }
 
@@ -236,10 +221,6 @@ export class SettingsPanel {
     // 자동 교차
     const autoIntCheck = this.panel.querySelector('#sp-auto-intersect') as HTMLInputElement;
     autoIntCheck.checked = getAutoIntersect();
-
-    // ADR-050 P-5d — Draw Shape Mode
-    const shapeModeCheck = this.panel.querySelector('#sp-draw-shape-mode') as HTMLInputElement;
-    shapeModeCheck.checked = getDrawShapeMode();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;

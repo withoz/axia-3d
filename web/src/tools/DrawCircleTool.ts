@@ -15,7 +15,6 @@
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
-import { getDrawShapeMode } from './DrawShapeModeSettings';
 
 /** Max distance from center to prevent runaway geometry when ray grazes the plane */
 const MAX_DRAW_DISTANCE = 50000;
@@ -77,20 +76,12 @@ export class DrawCircleTool implements ITool {
       const radius = this.circleCenter.distanceTo(planePoint);
       if (radius > 1) {
         const n = this.plane.normal;
-        // ADR-050 P-5d — branch on Draw Shape Mode (form vs property layer).
-        if (getDrawShapeMode()) {
-          this.ctx.bridge.drawCircleAsShape(
-            this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-            n.x, n.y, n.z,
-            radius, 24,
-          );
-        } else {
-          this.ctx.bridge.drawCircle(
-            this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-            n.x, n.y, n.z,
-            radius, 24,
-          );
-        }
+        // ADR-087 K-ε — kernel-aware drawCircleAsShape only path.
+        this.ctx.bridge.drawCircleAsShape(
+          this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+          n.x, n.y, n.z,
+          radius, 24,
+        );
         debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
         this.ctx.syncMesh();
       }
@@ -139,20 +130,12 @@ export class DrawCircleTool implements ITool {
     };
 
     const n = plane.normal;
-    // ADR-050 P-5d — branch on Draw Shape Mode (form vs property layer).
-    if (getDrawShapeMode()) {
-      this.ctx.bridge.drawCircleAsShape(
-        this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-        n.x, n.y, n.z,
-        value, 24,
-      );
-    } else {
-      this.ctx.bridge.drawCircle(
-        this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-        n.x, n.y, n.z,
-        value, 24,
-      );
-    }
+    // ADR-087 K-ε — kernel-aware drawCircleAsShape only path.
+    this.ctx.bridge.drawCircleAsShape(
+      this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+      n.x, n.y, n.z,
+      value, 24,
+    );
     debugLog(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
     this.cleanup();
     this.ctx.syncMesh();

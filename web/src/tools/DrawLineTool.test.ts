@@ -61,15 +61,7 @@ describe('DrawLineTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawLineTool;
 
-  beforeEach(async () => {
-    // ADR-050 P-5e-α — module-level default is `true`. Explicitly
-    // reset to `false` so legacy-path tests below exercise the
-    // bridge.drawLine path (they predate the form-mode flag).
-    // Tests that need form-mode call `setDrawShapeMode(true)` in their
-    // own scope.
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(false);
-
+  beforeEach(() => {
     ctx = mockToolContext();
     tool = new DrawLineTool(ctx);
   });
@@ -117,7 +109,7 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
 
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 100, 0, 0, 0, 1, 0);
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledWith(0, 0, 0, 100, 0, 0, 0, 1, 0);
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
@@ -133,7 +125,7 @@ describe('DrawLineTool', () => {
       tool.onActivate();
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0.5, 0, 0));
-      expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+      expect(ctx.bridge.drawLineAsShape).not.toHaveBeenCalled();
     });
   });
 
@@ -161,12 +153,12 @@ describe('DrawLineTool', () => {
       tool.onActivate();
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.applyVCBValue(500);
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 500, 0, 0, 0, 1, 0);
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledWith(0, 0, 0, 500, 0, 0, 0, 1, 0);
     });
 
     it('does nothing when not in Drawing state', () => {
       tool.applyVCBValue(500);
-      expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+      expect(ctx.bridge.drawLineAsShape).not.toHaveBeenCalled();
     });
   });
 
@@ -188,7 +180,7 @@ describe('DrawLineTool', () => {
         [10, 0, 10],
         [90, 0, 90],
       );
-      expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+      expect(ctx.bridge.drawLineAsShape).not.toHaveBeenCalled();
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
@@ -203,7 +195,7 @@ describe('DrawLineTool', () => {
 
       // splitFaceByLine was called but returned error → fallback to drawLine
       expect(ctx.bridge.splitFaceByLine).toHaveBeenCalled();
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90, 0, 1, 0);
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90, 0, 1, 0);
     });
 
     it('falls back to drawLine when splitFaceByLine throws', () => {
@@ -215,7 +207,7 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(10, 0, 10));
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
 
-      expect(ctx.bridge.drawLine).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90, 0, 1, 0);
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledWith(10, 0, 10, 90, 0, 90, 0, 1, 0);
     });
 
     it('uses regular drawLine when start and end are on different faces', () => {
@@ -231,7 +223,7 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
 
       expect(ctx.bridge.splitFaceByLine).not.toHaveBeenCalled();
-      expect(ctx.bridge.drawLine).toHaveBeenCalled();
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalled();
     });
 
     it('uses regular drawLine when clicking on empty space (no face)', () => {
@@ -242,7 +234,7 @@ describe('DrawLineTool', () => {
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(90, 0, 90));
 
       expect(ctx.bridge.splitFaceByLine).not.toHaveBeenCalled();
-      expect(ctx.bridge.drawLine).toHaveBeenCalled();
+      expect(ctx.bridge.drawLineAsShape).toHaveBeenCalled();
     });
 
     it('returns to Armed after successful face split', () => {
@@ -322,35 +314,16 @@ describe('DrawLineTool', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // ADR-050 P-5d — Draw Shape Mode dispatch
+  // ADR-087 K-ε — kernel-aware drawLineAsShape only path.
   // ════════════════════════════════════════════════════════════════════════
-  describe('ADR-050 P-5d Draw Shape Mode dispatch', () => {
-    it('flag OFF (default) → bridge.drawLine called (legacy Xia)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(false);
-
-      tool.onActivate();
-      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
-      tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
-
-      expect(ctx.bridge.drawLine).toHaveBeenCalledTimes(1);
-      expect(ctx.bridge.drawLineAsShape).not.toHaveBeenCalled();
-
-      setDrawShapeMode(false); // teardown
-    });
-
-    it('flag ON → bridge.drawLineAsShape called (form Shape)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(true);
-
+  describe('ADR-087 K-ε kernel-aware dispatch', () => {
+    it('always calls bridge.drawLineAsShape (Plane attach on face path)', () => {
       tool.onActivate();
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.onMouseDown({ button: 0 } as MouseEvent, new THREE.Vector3(100, 0, 0));
 
       expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledTimes(1);
       expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
-
-      setDrawShapeMode(false); // teardown
     });
   });
 });

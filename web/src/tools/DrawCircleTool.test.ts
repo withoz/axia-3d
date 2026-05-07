@@ -40,14 +40,7 @@ describe('DrawCircleTool', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawCircleTool;
 
-  beforeEach(async () => {
-    // ADR-050 P-5e-α — module-level default is `true`. Explicitly
-    // reset to `false` so legacy-path tests below exercise the
-    // bridge.drawCircle path. Form-mode tests call setDrawShapeMode(true)
-    // in their own scope.
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(false);
-
+  beforeEach(() => {
     ctx = mockToolContext();
     tool = new DrawCircleTool(ctx);
   });
@@ -106,33 +99,15 @@ describe('DrawCircleTool', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // ADR-050 P-5d — Draw Shape Mode dispatch
+  // ADR-087 K-ε — kernel-aware drawCircleAsShape only path.
   // ════════════════════════════════════════════════════════════════════════
-  describe('ADR-050 P-5d Draw Shape Mode dispatch', () => {
-    it('VCB path with flag OFF (default) calls bridge.drawCircle (legacy Xia)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(false);
-
-      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
-      tool.applyVCBValue(50);
-
-      expect(ctx.bridge.drawCircle).toHaveBeenCalledTimes(1);
-      expect(ctx.bridge.drawCircleAsShape).not.toHaveBeenCalled();
-
-      setDrawShapeMode(false); // teardown
-    });
-
-    it('VCB path with flag ON calls bridge.drawCircleAsShape (form Shape)', async () => {
-      const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-      setDrawShapeMode(true);
-
+  describe('ADR-087 K-ε kernel-aware dispatch', () => {
+    it('VCB path always calls bridge.drawCircleAsShape (Plane attach)', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       tool.applyVCBValue(50);
 
       expect(ctx.bridge.drawCircleAsShape).toHaveBeenCalledTimes(1);
       expect(ctx.bridge.drawCircle).not.toHaveBeenCalled();
-
-      setDrawShapeMode(false); // teardown
     });
   });
 });

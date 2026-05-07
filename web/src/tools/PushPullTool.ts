@@ -6,7 +6,6 @@ import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog, debugWarn } from '../utils/debug';
 import { Toast } from '../ui/Toast';
-import { getDrawShapeMode } from './DrawShapeModeSettings';
 
 export class PushPullTool implements ITool {
   readonly name = 'pushpull';
@@ -303,15 +302,12 @@ export class PushPullTool implements ITool {
       }
 
       // Bug F fix: seamless 미지원 또는 실패 → per-face fallback
-      // ADR-079 W-1-β — form mode 시 createSolidExtrude 라우팅. Q3 lock-in
-      // 의 Scene-level fallback 이 NotYetSupported (smooth group panel) 시
-      // legacy push_pull 자동 호출 — 사용자 facing 거동 동일.
-      const useFormMode = getDrawShapeMode();
+      // ADR-087 K-ε — kernel-aware createSolidExtrude only path.
+      // Scene-level Q3 fallback (NotYetSupported → push_pull) 은 Rust
+      // 측 exec_create_solid 가 자동 처리 — 사용자 facing 거동 동일.
       let successCount = 0;
       for (const fid of this.smoothGroupFaces) {
-        const ok = useFormMode
-          ? this.ctx.bridge.createSolidExtrude(fid, dist)
-          : this.ctx.bridge.pushPull(fid, dist);
+        const ok = this.ctx.bridge.createSolidExtrude(fid, dist);
         if (ok) successCount++;
       }
       if (successCount > 0) {
@@ -325,14 +321,11 @@ export class PushPullTool implements ITool {
     } else {
       const faceId = this.ppFaceId >= 0 ? this.ppFaceId : this.ctx.getSelectedFaces()[0];
       if (faceId < 0) return;
-      // ADR-079 W-1-β — form mode 시 createSolidExtrude (Plane Box → success
-      // / 그 외 → Q3 fallback to push_pull). Legacy mode 는 직접 push_pull.
-      const useFormMode = getDrawShapeMode();
-      const success = useFormMode
-        ? this.ctx.bridge.createSolidExtrude(faceId, dist)
-        : this.ctx.bridge.pushPull(faceId, dist);
-      debugLog('[PP] result=', success, 'dist=', dist.toFixed(2),
-        'mode=', useFormMode ? 'createSolidExtrude' : 'pushPull (legacy)');
+      // ADR-087 K-ε — kernel-aware createSolidExtrude only path. Scene-level
+      // Q3 fallback (NotYetSupported → push_pull) 은 Rust exec_create_solid
+      // 가 자동 처리.
+      const success = this.ctx.bridge.createSolidExtrude(faceId, dist);
+      debugLog('[PP] result=', success, 'dist=', dist.toFixed(2));
       if (success) {
         this.lastPPDist = dist;
         this.ctx.syncMesh();

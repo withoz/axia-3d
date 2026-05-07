@@ -170,26 +170,14 @@ describe('SettingsPanel', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // ADR-050 P-5d — Draw Shape Mode toggle UI
+  // ADR-087 K-ε — Draw Shape Mode flag deprecated. Kernel-aware path is
+  // the only path now (no toggle in SettingsPanel).
   // ════════════════════════════════════════════════════════════════════════
-  describe('ADR-050 P-5d — Draw Shape Mode toggle', () => {
-    it('renders draw-shape-mode checkbox and toggling it updates the setting', async () => {
-      const { getDrawShapeMode, setDrawShapeMode } = await import(
-        '../tools/DrawShapeModeSettings'
-      );
-      setDrawShapeMode(false);
+  describe('ADR-087 K-ε — DrawShapeMode toggle removed', () => {
+    it('SettingsPanel no longer renders sp-draw-shape-mode checkbox', () => {
       panel.open();
-
-      const checkbox = document.getElementById('sp-draw-shape-mode') as HTMLInputElement;
-      expect(checkbox).not.toBeNull();
-      expect(checkbox.type).toBe('checkbox');
-      expect(checkbox.checked).toBe(false);
-
-      checkbox.checked = true;
-      checkbox.dispatchEvent(new Event('change'));
-      expect(getDrawShapeMode()).toBe(true);
-
-      setDrawShapeMode(false); // teardown
+      const checkbox = document.getElementById('sp-draw-shape-mode');
+      expect(checkbox).toBeNull();
     });
   });
 });

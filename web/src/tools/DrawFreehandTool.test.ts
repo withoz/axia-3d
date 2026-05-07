@@ -41,13 +41,11 @@ function mockToolContext() {
   } as any;
 }
 
-describe('DrawFreehandTool — ADR-087 K-γ form-mode dispatch', () => {
+describe('DrawFreehandTool — ADR-087 K-ε kernel-aware dispatch', () => {
   let ctx: ReturnType<typeof mockToolContext>;
   let tool: DrawFreehandTool;
 
-  beforeEach(async () => {
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(false);
+  beforeEach(() => {
     ctx = mockToolContext();
     tool = new DrawFreehandTool(ctx);
   });
@@ -59,23 +57,7 @@ describe('DrawFreehandTool — ADR-087 K-γ form-mode dispatch', () => {
     (t as any).rawPoints = pts.map(([x, y, z]) => new THREE.Vector3(x, y, z));
   }
 
-  it('legacy mode (flag OFF) calls bridge.drawPolyline', async () => {
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(false);
-
-    injectPoints(tool, [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]);
-    tool.onMouseUp({} as MouseEvent);
-
-    expect(ctx.bridge.drawPolyline).toHaveBeenCalledTimes(1);
-    expect(ctx.bridge.drawPolylineAsShape).not.toHaveBeenCalled();
-
-    setDrawShapeMode(false);
-  });
-
-  it('form-mode (flag ON) calls bridge.drawPolylineAsShape with normal hint', async () => {
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(true);
-
+  it('always calls bridge.drawPolylineAsShape with normal hint', () => {
     injectPoints(tool, [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]);
     tool.onMouseUp({} as MouseEvent);
 
@@ -85,14 +67,9 @@ describe('DrawFreehandTool — ADR-087 K-γ form-mode dispatch', () => {
     const args = ctx.bridge.drawPolylineAsShape.mock.calls[0];
     const normalArg = args[1];
     expect(normalArg).toEqual({ x: 0, y: 0, z: 1 });
-
-    setDrawShapeMode(false);
   });
 
-  it('form-mode preserves polyline points order', async () => {
-    const { setDrawShapeMode } = await import('./DrawShapeModeSettings');
-    setDrawShapeMode(true);
-
+  it('preserves polyline points order', () => {
     injectPoints(tool, [[10, 0, 0], [10, 5, 0], [0, 5, 0], [0, 0, 0]]);
     tool.onMouseUp({} as MouseEvent);
 
@@ -103,7 +80,5 @@ describe('DrawFreehandTool — ADR-087 K-γ form-mode dispatch', () => {
     expect(flat[0]).toBe(10); // x0
     expect(flat[3]).toBe(10); // x1
     expect(flat[7]).toBe(5);  // y2
-
-    setDrawShapeMode(false);
   });
 });
