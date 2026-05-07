@@ -42,6 +42,32 @@ import { debugLog, debugWarn } from '../utils/debug';
 // ────────────────────────────────────────────────────────────────────────
 
 /**
+ * Per-edge polyline buffer — Three.js LineSegments BufferGeometry 직접
+ * 입력 가능한 형식 (ADR-084 E-β).
+ *
+ * `index` 는 W-δ traversal 의 stable edge index 와 동기화 (caller 가
+ * axia EdgeId 로 매핑, ADR-037 P22.7).
+ */
+export interface EdgeTessellation {
+  /** 0-based traversal index (W-δ 답습). */
+  index: number;
+  /** Polyline node positions (xyz × N). */
+  positions: Float32Array;
+  /**
+   * LineSegments pair indices (2 × (N-1)). Each pair `[i, i+1]` 는 한
+   * line segment. Three.js `LineSegments` + indexed `BufferGeometry`
+   * 직접 입력. Empty (positions 길이 < 2) 시 length 0.
+   */
+  indices: Uint32Array;
+}
+
+/** Edge tessellation 호출 결과. */
+export interface EdgesTessellateResult {
+  edges: EdgeTessellation[];
+  warnings: string[];
+}
+
+/**
  * Per-face tessellation buffers — Three.js BufferGeometry 직접 입력
  * 가능한 형식.
  *
@@ -344,6 +370,168 @@ export function tessellateShape(
   );
   if (result.warnings.length > 0) {
     debugWarn(`[tessellateShape] warnings:`, result.warnings.slice(0, 3));
+  }
+
+  return result;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-084 E-β — tessellateEdges (BRep edge polyline 추출)
+// ────────────────────────────────────────────────────────────────────────
+
+/** Extract Polygon3D handle from edge + identity-location. */
+function extractPolygon3D(
+  occt: any,
+  edge: any,
+  location: any,
+): { polygon: any | null; error?: string } {
+  try {
+    // BRep_Tool.Polygon3D(edge, location) — static method
+    const handle = occt?.BRep_Tool?.Polygon3D?.(edge, location);
+    if (!handle || handle.IsNull?.()) {
+      return { polygon: null, error: 'Polygon3D handle null (BRepMesh 결과 부재 또는 edge 미tessellate)' };
+    }
+    const polygon = handle.get?.() ?? handle;
+    return { polygon };
+  } catch (e) {
+    return { polygon: null, error: `Polygon3D extract: ${String(e)}` };
+  }
+}
+
+/**
+ * Convert one Poly_Polygon3D to Float32Array positions + LineSegments
+ * pair indices (Uint32Array).
+ *
+ * Polyline of N nodes → N-1 line segments → 2*(N-1) indices.
+ */
+function convertPolygon3D(polygon: any): {
+  positions: Float32Array;
+  indices: Uint32Array;
+} {
+  const nNodes: number = polygon.NbNodes?.() ?? 0;
+  if (nNodes < 2) {
+    return { positions: new Float32Array(0), indices: new Uint32Array(0) };
+  }
+
+  // Nodes 추출 — TColgp_Array1OfPnt (1-based)
+  const positions = new Float32Array(nNodes * 3);
+  try {
+    const nodes = polygon.Nodes?.();
+    if (nodes) {
+      const lo: number = nodes.Lower?.() ?? 1;
+      const hi: number = nodes.Upper?.() ?? nNodes;
+      for (let i = lo; i <= hi; i++) {
+        const p = nodes.Value?.(i);
+        if (!p) continue;
+        const off = (i - lo) * 3;
+        positions[off] = p.X();
+        positions[off + 1] = p.Y();
+        positions[off + 2] = p.Z();
+      }
+    }
+  } catch {
+    // Fall back to per-node accessor (graceful)
+  }
+
+  // LineSegments pair indices: [0,1, 1,2, ..., N-2,N-1]
+  const indices = new Uint32Array((nNodes - 1) * 2);
+  for (let i = 0; i < nNodes - 1; i++) {
+    indices[i * 2] = i;
+    indices[i * 2 + 1] = i + 1;
+  }
+
+  return { positions, indices };
+}
+
+/**
+ * Extract per-edge polylines from a TopoDS_Shape (ADR-084 E-β).
+ *
+ * **Pre-condition**: shape 가 이미 `BRepMesh_IncrementalMesh` 적용됨
+ * (예: tessellateShape() 호출 후). Polygon3D 가 mesh 결과의 부산물 —
+ * mesh 미적용 시 모든 edge 가 null Polygon3D 반환.
+ *
+ * **Algorithm**:
+ * 1. `TopExp_Explorer(shape, TopAbs_EDGE)` 로 edge 순회 (W-δ 답습)
+ * 2. 각 edge → `BRep_Tool.Polygon3D(edge, location)` → Handle_Poly_Polygon3D
+ * 3. polygon.Nodes() → TColgp_Array1OfPnt → Float32Array (xyz × N)
+ * 4. LineSegments pair indices (2 × (N-1))
+ * 5. Stable index (W-δ 답습)
+ *
+ * **Failure modes** (P21.7 답습):
+ * - Polygon3D null → edge-level warning, skip
+ * - Empty polyline (NbNodes<2) → empty buffers, valid output
+ *
+ * @param occt - opencascade.js runtime instance
+ * @param shape - TopoDS_Shape (BRepMesh 적용 완료 가정)
+ * @returns `{ edges, warnings }` — per-edge polyline 결과
+ */
+export function tessellateEdges(
+  occt: unknown,
+  shape: unknown,
+): EdgesTessellateResult {
+  const result: EdgesTessellateResult = { edges: [], warnings: [] };
+
+  if (!occt || !shape) {
+    result.warnings.push('tessellateEdges: occt or shape is null');
+    return result;
+  }
+
+  const o = occt as any;
+  const TopAbs_EDGE = getTopAbs(o, 'TopAbs_EDGE', 6);
+  const TopAbs_SHAPE = getTopAbs(o, 'TopAbs_SHAPE', 8);
+  const exp = makeExplorer(o, shape, TopAbs_EDGE, TopAbs_SHAPE);
+  if (!exp) {
+    result.warnings.push('tessellateEdges: TopExp_Explorer unavailable');
+    return result;
+  }
+
+  const location = makeIdentityLocation(o);
+  if (!location) {
+    result.warnings.push('tessellateEdges: TopLoc_Location ctor unavailable');
+    return result;
+  }
+
+  let edgeIdx = 0;
+  try {
+    while (exp.More?.()) {
+      const edge = exp.Current?.();
+      if (edge) {
+        const polyRes = extractPolygon3D(o, edge, location);
+        if (polyRes.polygon) {
+          try {
+            const buffers = convertPolygon3D(polyRes.polygon);
+            // Skip empty polylines (NbNodes < 2)
+            if (buffers.positions.length === 0) {
+              result.warnings.push(`edge[${edgeIdx}]: empty polyline (NbNodes<2)`);
+            } else {
+              result.edges.push({
+                index: edgeIdx,
+                positions: buffers.positions,
+                indices: buffers.indices,
+              });
+            }
+          } catch (e) {
+            result.warnings.push(`edge[${edgeIdx}] convert: ${String(e)}`);
+          }
+        } else {
+          result.warnings.push(
+            `edge[${edgeIdx}]: ${polyRes.error ?? 'Polygon3D null'}`,
+          );
+        }
+      }
+      edgeIdx++;
+      exp.Next?.();
+    }
+  } catch (e) {
+    result.warnings.push(`tessellateEdges edge iteration: ${String(e)}`);
+  }
+
+  debugLog(
+    `[tessellateEdges] ${result.edges.length} edges tessellated, ` +
+    `${result.warnings.length} warning(s)`,
+  );
+  if (result.warnings.length > 0) {
+    debugWarn(`[tessellateEdges] warnings:`, result.warnings.slice(0, 3));
   }
 
   return result;

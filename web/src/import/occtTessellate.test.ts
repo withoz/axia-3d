@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { tessellateShape } from './occtTessellate';
+import { tessellateShape, tessellateEdges } from './occtTessellate';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -312,5 +312,150 @@ describe('ADR-083 T-β — occtTessellate', () => {
     tessellateShape(occt, {});
     expect(capturedLineDef).toBe(0.1);
     expect(capturedAngleDef).toBe(0.5);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-084 E-β — tessellateEdges (BRep edge polyline 추출)
+// ════════════════════════════════════════════════════════════════════════
+
+describe('ADR-084 E-β — tessellateEdges', () => {
+  /** TColgp_Array1OfPnt mock — 1-based indexing. */
+  function mockPolyArrayPnt(pts: Array<[number, number, number]>) {
+    return {
+      Lower: () => 1,
+      Upper: () => pts.length,
+      Value: (i: number) => mockPnt(...pts[i - 1]),
+    };
+  }
+
+  /** Poly_Polygon3D mock — N nodes polyline. */
+  function mockPolygon3D(nodes: Array<[number, number, number]>) {
+    return {
+      NbNodes: () => nodes.length,
+      Nodes: () => mockPolyArrayPnt(nodes),
+    };
+  }
+
+  /**
+   * Build mock OCCT object whose:
+   *   - TopExp_Explorer iterates given edges (TopAbs_EDGE)
+   *   - BRep_Tool.Polygon3D returns the mocked polygon per edge
+   */
+  function mockOcctWithEdges(edges: Array<{ poly: any | null }>) {
+    const TopAbs_EDGE = 6;
+    const TopAbs_SHAPE = 8;
+
+    const TopExp_Explorer_2 = function (this: any, _shape: any, kind: number) {
+      const items = kind === TopAbs_EDGE ? edges : [];
+      let i = 0;
+      Object.assign(this, {
+        More: () => i < items.length,
+        Current: () => items[i],
+        Next: () => { i++; },
+      });
+    } as any;
+
+    return {
+      TopAbs_ShapeEnum: { TopAbs_EDGE, TopAbs_SHAPE },
+      TopExp_Explorer_2,
+      TopLoc_Location_1: function (this: any) { /* identity */ } as any,
+      BRep_Tool: {
+        Polygon3D: (edge: any, _location: any) => {
+          if (edge.poly === null) return { IsNull: () => true, get: () => null };
+          return { IsNull: () => false, get: () => edge.poly };
+        },
+      },
+    };
+  }
+
+  it('null occt or shape → graceful warning, empty edges', () => {
+    const r1 = tessellateEdges(null, {});
+    expect(r1.edges).toEqual([]);
+    expect(r1.warnings.some(w => w.includes('null'))).toBe(true);
+
+    const r2 = tessellateEdges({}, null);
+    expect(r2.edges).toEqual([]);
+    expect(r2.warnings.some(w => w.includes('null'))).toBe(true);
+  });
+
+  it('happy path — single edge with 4 nodes → polyline + LineSegments indices', () => {
+    const poly = mockPolygon3D([
+      [0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0],
+    ]);
+    const occt = mockOcctWithEdges([{ poly }]);
+
+    const r = tessellateEdges(occt, {});
+    expect(r.edges).toHaveLength(1);
+    const edge = r.edges[0];
+
+    expect(edge.index).toBe(0);  // W-δ stable index
+    // 4 nodes × 3 = 12 floats
+    expect(edge.positions.length).toBe(12);
+    expect(edge.positions[0]).toBe(0);   // node[0] X
+    expect(edge.positions[3]).toBe(10);  // node[1] X
+    expect(edge.positions[7]).toBe(10);  // node[2] Y
+
+    // LineSegments pair indices: 4 nodes → 3 segments → 6 indices
+    expect(edge.indices.length).toBe(6);
+    expect(Array.from(edge.indices)).toEqual([0, 1, 1, 2, 2, 3]);
+  });
+
+  it('multi-edge — 4 edges of a square → indices 0..3 (W-δ stable order)', () => {
+    const occt = mockOcctWithEdges([
+      { poly: mockPolygon3D([[0, 0, 0], [10, 0, 0]]) },
+      { poly: mockPolygon3D([[10, 0, 0], [10, 10, 0]]) },
+      { poly: mockPolygon3D([[10, 10, 0], [0, 10, 0]]) },
+      { poly: mockPolygon3D([[0, 10, 0], [0, 0, 0]]) },
+    ]);
+
+    const r = tessellateEdges(occt, {});
+    expect(r.edges).toHaveLength(4);
+    for (let i = 0; i < 4; i++) {
+      expect(r.edges[i].index).toBe(i);
+      expect(r.edges[i].positions.length).toBe(6);  // 2 nodes × 3
+      expect(Array.from(r.edges[i].indices)).toEqual([0, 1]);
+    }
+  });
+
+  it('per-edge Polygon3D null → edge-level warning + others continue (P21.7)', () => {
+    const occt = mockOcctWithEdges([
+      { poly: mockPolygon3D([[0, 0, 0], [1, 0, 0]]) },
+      { poly: null },
+      { poly: mockPolygon3D([[0, 0, 0], [0, 1, 0]]) },
+    ]);
+
+    const r = tessellateEdges(occt, {});
+    expect(r.edges).toHaveLength(2);
+    // edge[1] skipped, edge[0] and edge[2] kept (with their original index)
+    expect(r.edges[0].index).toBe(0);
+    expect(r.edges[1].index).toBe(2);
+    expect(r.warnings.some(w => w.startsWith('edge[1]'))).toBe(true);
+  });
+
+  it('empty polyline (NbNodes<2) → warning + skip (no buffer)', () => {
+    const occt = mockOcctWithEdges([
+      { poly: { NbNodes: () => 0, Nodes: () => mockPolyArrayPnt([]) } },
+      { poly: { NbNodes: () => 1, Nodes: () => mockPolyArrayPnt([[0, 0, 0]]) } },
+      { poly: mockPolygon3D([[0, 0, 0], [1, 0, 0]]) },
+    ]);
+
+    const r = tessellateEdges(occt, {});
+    // 2 empty + 1 valid → 1 edge in result
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0].index).toBe(2);
+    expect(r.warnings.filter(w => w.includes('empty polyline')).length).toBe(2);
+  });
+
+  it('TopExp_Explorer ctor unavailable → graceful warning', () => {
+    const occt: any = {
+      TopAbs_ShapeEnum: { TopAbs_EDGE: 6, TopAbs_SHAPE: 8 },
+      // TopExp_Explorer_2 missing
+      TopLoc_Location_1: function (this: any) { /* identity */ },
+    };
+
+    const r = tessellateEdges(occt, {});
+    expect(r.edges).toEqual([]);
+    expect(r.warnings.some(w => w.includes('TopExp_Explorer'))).toBe(true);
   });
 });
