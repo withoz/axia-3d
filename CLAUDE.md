@@ -1074,6 +1074,75 @@
   index 활용), ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31
   (P1+P3 visual 가치 anchor), ADR-018 (two-tone render policy).
 
+### 31. ADR-084 — BRep Edge Wireframe Rendering MVP (E-α ~ E-γ, 2026-05-08)
+- **사용자 결재 anchor (canonical)**:
+  > "ADR-083 visual unlock 후 demo quality 추가 향상 — face mesh 만으로
+  > 는 BRep topology (edge) 가 명시적으로 안 보임. CAD 사용자에게
+  > *edge* 는 critical visual cue (chamfer/fillet/sharp boundary 식별).
+  > 최단 demo 가치 path 의 첫 보강."
+- **Path Z atomic 4-단계 closure** (E-α ~ E-δ, 2026-05-08):
+  - E-α (spec only): ✅ — `dd8c7e0`
+  - E-β (`tessellateEdges` API + Polygon3D 추출): ✅ — `6639c8d`
+    (vitest +6) — `BRep_Tool.Polygon3D` 활용 + LineSegments pair
+    indices + W-δ stable edge index 답습
+  - E-γ (edges sub-group wiring, **BRep edge visual unlock**): ✅ —
+    `5ac8cff` (vitest +3) — `_convertToThreeGroup` 갱신 + `_edgeToLine`
+    private 신규 + ADR-018 LineMaterial #333366
+  - E-δ (closure + LOCKED 갱신, docs only): ✅ — 본 commit
+- **Lock-ins L1~L7** (E-α §2.1 spec):
+  - L1: `BRep_Tool.Polygon3D(edge, location)` entry — BRepMesh 부산물
+    활용. PolygonOnTriangulation 은 future
+  - L2: Per-edge LineSegments + BufferGeometry (position + index pair
+    attributes). W-δ stable index 답습 (`edge-{N}` 명명)
+  - L3: `LineBasicMaterial #333366` (ADR-018 + FileImporter 일관)
+  - L4: `edges` sub-group 구조 — face-N siblings 외부 별도 group
+  - L5: Failure mode warnings 누적 (P21.7 답습), empty polyline skip
+  - L6: Initial bundle 0MB strict (P20.C #2). occtTessellate.ts 확장만
+  - L7: `userData.edgeIndex` (W-δ stable index 답습) — caller 가 향후
+    axia EdgeId 매핑 시 활용
+- **누적 회귀**: vitest **+9** (1589 → 1598, 절대 #[ignore] 금지 9/9
+  준수). axia-geo / axia-core / axia-wasm 0 (TS-only).
+- **Bundle 영향** (P20.C #2):
+  - **Initial bundle 724.99 kB unchanged** — ADR-082+083 deviation 그대로
+    유지 (+230 bytes from original 724.76 kB baseline). 본 ADR 추가
+    deviation 0.
+  - StepIgesImporter chunk: 34.60 → 36.94 kB (+2.34 kB — E-γ wiring +
+    E-β tessellateEdges. lazy chunk 영역으로 P20.C #2 무영향)
+  - opencascade-deps lazy chunk: 5.37 MB unchanged
+- **Group 구조 (E-γ wiring)**:
+  ```
+  THREE.Group { name: 'STEP: foo.step' }
+  ├─ face-0 (T-γ)
+  │   ├─ face-0-front (MeshStandardMaterial #e8e8e8 FrontSide)
+  │   └─ face-0-back  (MeshStandardMaterial #9898b4 BackSide)
+  ├─ face-1 ...
+  └─ edges (E-γ NEW)
+      ├─ edge-0 LineSegments (LineBasicMaterial #333366)
+      ├─ edge-1 ...
+  ```
+  - face: `userData.faceIndex` (W-δ traversal index, T-γ)
+  - edge: `userData.edgeIndex` (W-δ traversal index, E-γ NEW)
+  - caller (W-η downstream / WasmBridge) 가 axia FaceId / EdgeId 로
+    매핑 시 활용 — owner-ID attach 는 별도 ADR
+- **사용자 검증 도달** (E-γ closure):
+  - ✅ **BRep edge visual**: face mesh + edge wireframe 동시 표시
+  - **Demo readiness 80% → 90%+** (incremental gain)
+  - User manual demo: T-δ slow channel `AXIA_E2E_SLOW=1` 으로 검증
+    가능. 별도 follow-up 회고
+- **다음 ADR cross-trigger** (사용자 결재 후 가능):
+  - **ADR-085 (가칭) — Toast progress UX** (Drift #5 5min wait 사용자
+    안내) — 권장 path #3
+  - WasmBridge owner-ID 매핑 (`bridge.setFaceSurface*` /
+    `bridge.setEdgeCurve*`) — `userData.faceIndex` / `edgeIndex` 를
+    axia engine 으로 attach
+  - Sharp edge vs silhouette 구분 (색상 / 두께 차별화)
+  - Edge selection / hover (ADR-037 P22 cross-cut)
+  - PolygonOnTriangulation (face-mesh 정합 edge polyline)
+- **Cross-link**: ADR-083 (T-γ face wiring 패턴 답습 + group/userData
+  정합), ADR-082 (drift #1~#5 fix 위 진행), ADR-081 W-δ (stable edge
+  index 답습), ADR-035 P20.C #2 (initial bundle 0MB), ADR-046 P31
+  (P1+P3 visual 가치 anchor), ADR-018 (edge color #333366).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
