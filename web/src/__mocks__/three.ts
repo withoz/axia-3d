@@ -120,6 +120,8 @@ export class BufferGeometry {
   setIndex(index: any) { this.index = index; }
   dispose() {}
   computeVertexNormals() {}
+  computeBoundingSphere() {}
+  computeBoundingBox() {}
   setFromPoints(_points: any[]) { return this; }
 }
 

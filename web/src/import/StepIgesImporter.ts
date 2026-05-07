@@ -33,6 +33,7 @@
 import * as THREE from 'three';
 import { debugLog, debugWarn } from '../utils/debug';
 import { traverseBrep, type BRepTraversalResult } from './occtBrepTraversal';
+import { tessellateShape, type FaceTessellation } from './occtTessellate';
 
 /** OCCT.js 인스턴스 핸들 (opencascade.js v2 API). */
 type OcctInstance = unknown;
@@ -213,8 +214,15 @@ export class StepIgesImporter {
       warnings.push('STEP/IGES shape 추출 실패 — traversal 건너뜀');
     }
 
-    // W-η 미구현 — Three.js Group 생성은 후속 commit. 현재는 빈 group.
-    const group = await this._convertToThreeGroup(occt, bytes, format, file.name);
+    // ADR-083 T-γ — BRepMesh tessellation + Three.js BufferGeometry 생성.
+    // shape 가 추출되면 face 별 Mesh 를 group 에 채워서 viewport 표시.
+    const { group, tessellationWarnings } = this._convertToThreeGroup(
+      occt,
+      shape,
+      format,
+      file.name,
+    );
+    warnings.push(...tessellationWarnings);
 
     return {
       group,
@@ -281,28 +289,123 @@ export class StepIgesImporter {
   }
 
   /**
-   * OCCT BRep → THREE.Group 변환.
+   * OCCT BRep → THREE.Group 변환 (ADR-083 T-γ).
    *
-   * **MVP scaffolding** — 실제 BRep tessellation 로직은 OCCT.js 가
-   * 설치된 환경에서 BRepMesh_IncrementalMesh 와 mesh extraction API 로
-   * 구현. 현재 commit 은 wiring 만 검증하고 P20.D 검증 코퍼스 5개
-   * 파일에 대한 회귀 테스트는 OCCT 통합 후 별도 추가.
+   * `tessellateShape` (T-β) 의 per-face buffer 결과 를 Three.js
+   * BufferGeometry + Mesh 로 변환. ADR-046 default two-tone 재질 적용
+   * (외부 #e8e8e8, 내부 #9898b4).
+   *
+   * **Failure modes** (P21.7 답습):
+   * - shape null → empty group + warning, fatal 아님
+   * - per-face geometry 생성 실패 → face-level warning, 다른 face 계속
+   * - tessellation 결과 빈 buffer (NbNodes=0) → mesh 없이 skip
+   *
+   * @returns `{ group, tessellationWarnings }` — caller (importFile)
+   *   가 warnings 통합
    */
-  private async _convertToThreeGroup(
-    _occt: OcctInstance,
-    _bytes: Uint8Array,
+  private _convertToThreeGroup(
+    occt: OcctInstance,
+    shape: unknown,
     format: 'step' | 'iges',
     fileName: string,
-  ): Promise<THREE.Group> {
+  ): { group: THREE.Group; tessellationWarnings: string[] } {
     const group = new THREE.Group();
     group.name = `${format.toUpperCase()}: ${fileName}`;
 
-    // P20.7 후속 작업: BRepTools_ShapeSet → IncrementalMesh →
-    // TopExp_Explorer 로 face 순회 → BufferGeometry 생성.
-    // 첫 OCCT 통합 PR 에서 채워질 자리.
-    debugWarn('[StepIgesImporter] BRep tessellation 미구현 — empty group 반환');
+    if (!shape) {
+      const reason = 'shape null — tessellation 건너뜀';
+      debugWarn(`[StepIgesImporter] ${reason}`);
+      return { group, tessellationWarnings: [reason] };
+    }
 
-    return group;
+    // T-β tessellateShape 호출 (ADR-083 §3.2).
+    const tess = tessellateShape(occt, shape);
+    debugLog(
+      `[StepIgesImporter] tessellation: ${tess.faces.length} faces, ` +
+      `${tess.warnings.length} warning(s)`,
+    );
+
+    // ADR-046 two-tone — 외부 standard 재질 + 내부 dimmed 재질.
+    // ADR-018: closed solid 의 wall 은 two-tone, open mesh 의 sheet 는
+    // 양면 white. STEP 의 import 결과는 default 로 closed solid 가정 —
+    // 향후 ADR 에서 volumeFlags 활용 정밀화.
+    const frontMat = new THREE.MeshStandardMaterial({
+      color: 0xe8e8e8,
+      side: THREE.FrontSide,
+      roughness: 0.6,
+      metalness: 0.1,
+    });
+    const backMat = new THREE.MeshStandardMaterial({
+      color: 0x9898b4,
+      side: THREE.BackSide,
+      roughness: 0.7,
+      metalness: 0.05,
+    });
+
+    for (const face of tess.faces) {
+      try {
+        const mesh = this._faceToMesh(face, frontMat, backMat);
+        if (mesh) {
+          group.add(mesh);
+        }
+      } catch (e) {
+        tess.warnings.push(`face[${face.index}] mesh 생성: ${String(e)}`);
+      }
+    }
+
+    return { group, tessellationWarnings: tess.warnings };
+  }
+
+  /**
+   * Per-face FaceTessellation → Three.js Group (front + back mesh).
+   *
+   * 빈 buffer (positions.length === 0) 은 null 반환 — caller 가 skip.
+   *
+   * **재질 정책**: front (#e8e8e8) + back (#9898b4) 같은 BufferGeometry
+   * 공유. ADR-018 two-tone 답습.
+   */
+  private _faceToMesh(
+    face: FaceTessellation,
+    frontMat: THREE.Material,
+    backMat: THREE.Material,
+  ): THREE.Group | null {
+    if (face.positions.length === 0 || face.indices.length === 0) {
+      return null;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(face.positions, 3));
+    // Normals — buffer 가 zero-filled (HasNormals=false) 면 computeVertexNormals
+    // 으로 fallback. 둘 다 동일하게 attribute 설정.
+    if (face.normals.length === face.positions.length) {
+      geom.setAttribute('normal', new THREE.BufferAttribute(face.normals, 3));
+      // zero-fill 인지 확인해 fallback 결정 (모든 normal 이 0 이면 compute)
+      const hasNonZeroNormal = face.normals.some(v => v !== 0);
+      if (!hasNonZeroNormal) {
+        geom.computeVertexNormals();
+      }
+    } else {
+      geom.computeVertexNormals();
+    }
+    geom.setIndex(new THREE.BufferAttribute(face.indices, 1));
+    geom.computeBoundingSphere();
+
+    // Front + back mesh 같은 geometry 공유 (ADR-018 two-tone)
+    const frontMesh = new THREE.Mesh(geom, frontMat);
+    frontMesh.name = `face-${face.index}-front`;
+    const backMesh = new THREE.Mesh(geom, backMat);
+    backMesh.name = `face-${face.index}-back`;
+
+    const faceGroup = new THREE.Group();
+    faceGroup.name = `face-${face.index}`;
+    faceGroup.add(frontMesh);
+    faceGroup.add(backMesh);
+    // T-β surface promotion 결과를 userData 에 보존 (caller W-η 가 axia
+    // FaceId 매핑 시 활용 가능, ADR-037 P22.7).
+    if (face.surface) {
+      faceGroup.userData.surface = face.surface;
+    }
+    faceGroup.userData.faceIndex = face.index;
+    return faceGroup;
   }
 
   private _countMeshes(group: THREE.Group): number {
