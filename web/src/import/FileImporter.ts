@@ -207,6 +207,15 @@ export class FileImporter {
       const importer = StepIgesImporter.getInstance();
       importer.onLoadingStart = (msg: string) => Toast.info(msg, 8000);
       importer.onLoadingEnd = () => { /* completion Toast 는 결과 분기에서 */ };
+      // ADR-085 P-β — Stage progress (Drift #5 wait time 사용자 인지 개선).
+      // 각 stage 시작 시 sequential Toast.info — 사용자가 어느 단계인지
+      // 인지. engine_load stage 는 onLoadingStart 와 시점 동일하므로
+      // 중복 호출 방지 (engine_load 의 첫 fire 는 이미 onLoadingStart 가
+      // 처리). parse / tessellate 만 본 callback 으로 표시.
+      importer.onStage = (stage, msg) => {
+        if (stage === 'engine_load') return;  // backward compat — onLoadingStart already fired
+        Toast.info(msg, 8000);
+      };
 
       const result = await importer.importFile(file);
       // FileImporter 의 ImportResult schema 와 매핑

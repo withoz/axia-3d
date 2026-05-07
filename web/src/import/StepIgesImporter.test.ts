@@ -54,6 +54,68 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
     expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
+  // ────────────────────────────────────────────────────────────────────
+  // ADR-085 P-β — onStage callback (Drift #5 progress visibility)
+  // ────────────────────────────────────────────────────────────────────
+
+  describe('ADR-085 P-β — onStage progress callback', () => {
+    it('engine_load stage fires during ensureLoaded() (sync with onLoadingStart)', async () => {
+      const importer = StepIgesImporter.getInstance();
+      const onStageSpy = vi.fn();
+      const onLoadingStartSpy = vi.fn();
+      importer.onStage = onStageSpy;
+      importer.onLoadingStart = onLoadingStartSpy;
+
+      try {
+        await importer.ensureLoaded();
+      } catch (_e) {
+        // expected — opencascade.js not installed in test env
+      }
+
+      // engine_load stage 가 onLoadingStart 와 동시에 fire (backward compat)
+      expect(onStageSpy).toHaveBeenCalled();
+      const engineLoadCalls = onStageSpy.mock.calls.filter(
+        (call) => call[0] === 'engine_load',
+      );
+      expect(engineLoadCalls.length).toBe(1);
+      expect(engineLoadCalls[0][1]).toContain('STEP/IGES');
+      // Backward compat: existing onLoadingStart 도 여전히 fire
+      expect(onLoadingStartSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('onStage callback signature accepts 3 stages', () => {
+      // Type-level check — runtime sanity
+      const importer = StepIgesImporter.getInstance();
+      const validStages: Array<'engine_load' | 'parse' | 'tessellate'> = [
+        'engine_load',
+        'parse',
+        'tessellate',
+      ];
+      importer.onStage = (stage, msg) => {
+        expect(validStages).toContain(stage);
+        expect(typeof msg).toBe('string');
+      };
+      // Manually invoke to verify shape
+      importer.onStage('engine_load', '엔진 로딩 중...');
+      importer.onStage('parse', '파일 분석 중...');
+      importer.onStage('tessellate', 'Mesh 생성 중...');
+    });
+
+    it('onStage backward compat: omitting it doesn\'t break ensureLoaded', async () => {
+      const importer = StepIgesImporter.getInstance();
+      // onStage 미지정 — undefined optional
+      importer.onStage = undefined;
+      let threw = false;
+      try {
+        await importer.ensureLoaded();
+      } catch (_e) {
+        threw = true;
+      }
+      // 기존 graceful failure path 가 그대로 작동 (NOT_INSTALLED throw)
+      expect(threw).toBe(true);
+    });
+  });
+
   it('isLoaded() reflects load state', async () => {
     const importer = StepIgesImporter.getInstance();
     expect(importer.isLoaded()).toBe(false);

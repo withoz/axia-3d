@@ -84,6 +84,24 @@ export class StepIgesImporter {
   public onLoadingStart?: (message: string) => void;
   public onLoadingEnd?: () => void;
 
+  /**
+   * ADR-085 P-β — Stage progress callback (user-facing wait time
+   * visibility, Drift #5 perception 개선).
+   *
+   * `importFile` 도중 stage 별로 fire:
+   * - `engine_load`: OCCT chunk fetch + initOpenCascade + libs
+   *   (~180s, Drift #5 본체)
+   * - `parse`: STEP/IGES file parse + traverseBrep (~5s)
+   * - `tessellate`: BRepMesh + Three.js Mesh/Edge 생성 (~5-30s)
+   *
+   * `onLoadingStart` / `onLoadingEnd` 는 backward compat 유지 —
+   * `engine_load` stage 의 시작 / 끝 에서 자동 fire.
+   */
+  public onStage?: (
+    stage: 'engine_load' | 'parse' | 'tessellate',
+    message: string,
+  ) => void;
+
   static getInstance(): StepIgesImporter {
     if (!StepIgesImporter._instance) {
       StepIgesImporter._instance = new StepIgesImporter();
@@ -106,7 +124,10 @@ export class StepIgesImporter {
     if (this._occt) return this._occt;
     if (this._loadingPromise) return this._loadingPromise;
 
+    // ADR-085 P-β — engine_load stage 시작 (Drift #5 ~180s 본체).
+    // Backward compat: onLoadingStart 도 동일 시점에 fire.
     this.onLoadingStart?.(LOADING_MESSAGE);
+    this.onStage?.('engine_load', LOADING_MESSAGE);
     this._loadingPromise = this._loadOcct().finally(() => {
       this.onLoadingEnd?.();
     });
@@ -203,6 +224,9 @@ export class StepIgesImporter {
 
     debugLog(`[StepIgesImporter] importing ${format.toUpperCase()}: ${file.name} (${bytes.length} bytes)`);
 
+    // ADR-085 P-β — parse stage 시작 (engine_load 완료 후, ~5s 소요).
+    this.onStage?.('parse', '파일 분석 중...');
+
     // OCCT.js 의 STEP/IGES API 호출 — 실제 binding 은 opencascade.js v2 의
     // STEPControl_Reader / IGESControl_Reader 를 거친다.
     const shape = await this._readShape(occt, bytes, format);
@@ -218,6 +242,9 @@ export class StepIgesImporter {
     } else {
       warnings.push('STEP/IGES shape 추출 실패 — traversal 건너뜀');
     }
+
+    // ADR-085 P-β — tessellate stage 시작 (~5-30s 소요).
+    this.onStage?.('tessellate', 'Mesh 생성 중...');
 
     // ADR-083 T-γ — BRepMesh tessellation + Three.js BufferGeometry 생성.
     // shape 가 추출되면 face 별 Mesh 를 group 에 채워서 viewport 표시.
