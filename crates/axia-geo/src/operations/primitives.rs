@@ -48,6 +48,7 @@ impl Mesh {
         let top_face = self.add_face(&top_verts, material)?;
         faces.push(top_face);
 
+        let mut side_faces_for_soften: Vec<FaceId> = Vec::with_capacity(segments as usize);
         for i in 0..segments {
             let next = (i + 1) % segments;
             let quad = vec![
@@ -57,6 +58,7 @@ impl Mesh {
                 top_verts[i as usize],
             ];
             let side_face = self.add_face(&quad, material)?;
+            side_faces_for_soften.push(side_face);
 
             // ADR-032 P17 — attach Cylinder analytic surface to each side
             // face for view-time refinement and downstream analytical ops.
@@ -101,10 +103,16 @@ impl Mesh {
         }
 
         // Hide tessellation chord edges on top/bottom rings so the cylinder
-        // appears as a smooth curve rather than an n-gon. Verticals between
-        // side faces are already hidden by the angle-based soft filter (~15°).
+        // appears as a smooth curve rather than an n-gon.
         self.mark_face_outer_soft(base_face)?;
         self.mark_face_outer_soft(top_face)?;
+        // ADR-087 K-η: vertical chord edges between adjacent side faces
+        // also marked soft. Angle-based filter (~20.1°) doesn't catch them
+        // for low segment count (e.g., 16 segments → 22.5° each, > 20.1°).
+        // Explicit soft marking → smooth visual at any segment count.
+        for &fid in &side_faces_for_soften {
+            self.mark_face_outer_soft(fid)?;
+        }
 
         Ok(faces)
     }
@@ -261,6 +269,7 @@ impl Mesh {
         // base ring verts. Winding: [apex, base[i+1], base[i]] gives outward
         // normal (perpendicular to axis, radially outward).
         let two_pi = 2.0 * std::f64::consts::PI;
+        let mut side_faces_for_soften: Vec<FaceId> = Vec::with_capacity(segments as usize);
         for i in 0..segments {
             let next = (i + 1) % segments;
             let tri = vec![
@@ -269,6 +278,7 @@ impl Mesh {
                 base_verts[i as usize],
             ];
             let side_face = self.add_face(&tri, material)?;
+            side_faces_for_soften.push(side_face);
 
             // Cone surface attach — partial sector (theta_start..theta_end),
             // v_range from apex (0) to base (height).
@@ -305,6 +315,10 @@ impl Mesh {
 
         // Hide tessellation chord rings (base only — true cone has no top).
         self.mark_face_outer_soft(base_face)?;
+        // ADR-087 K-η: side fan chord edges (apex→base) also soft.
+        for &fid in &side_faces_for_soften {
+            self.mark_face_outer_soft(fid)?;
+        }
 
         Ok(faces)
     }
@@ -453,6 +467,15 @@ impl Mesh {
                 }
                 faces.push(f);
             }
+        }
+
+        // ADR-087 K-η — Sphere 의 모든 face 가 동일 Sphere surface 를 공유
+        // → 인접 face 사이 chord edges 는 surface 의 부산물 (tessellation
+        // boundary), 시각적으로 hide 해야 매끈한 구. 모든 face 의 outer
+        // edges 를 soft 마킹.
+        let all_sphere_faces = faces.clone();
+        for fid in all_sphere_faces {
+            self.mark_face_outer_soft(fid)?;
         }
 
         Ok(faces)
