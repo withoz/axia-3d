@@ -620,6 +620,16 @@ export class AxiaEngine {
      */
     getEdgeCurveJson(edge_id_raw: number): string;
     /**
+     * ADR-088 Phase 1 (S-δ) — Read curve owner group ID for an edge.
+     * Returns the owner_id (>= 0) if edge has a group, -1 if no group
+     * (single segment) or edge invalid/inactive.
+     *
+     * Caller (SelectTool walk): pick edge → call this → if >= 0, call
+     * `getEdgesByCurveOwner(id)` to get all segments of the same logical
+     * analytic curve (LOCKED #15 P22.5 enforcement).
+     */
+    getEdgeCurveOwnerId(edge_id: number): number;
+    /**
      * Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
      * 실패 시 빈 벡터.
      */
@@ -655,6 +665,15 @@ export class AxiaEngine {
      * 현재 값: `axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG = 20.1`
      */
     getEdgeVisibilityAngleDeg(): number;
+    /**
+     * ADR-088 Phase 1 (S-δ) — Get all active edges sharing a given
+     * curve owner group ID. Returns empty array if no edges match
+     * (stale id, all deactivated, etc.) — defensive against undo /
+     * erase / cascade scenarios.
+     *
+     * Caller: SelectTool walk after `getEdgeCurveOwnerId` returns >= 0.
+     */
+    getEdgesByCurveOwner(owner_id: number): Uint32Array;
     getFaceMapLen(): number;
     getFaceMapPtr(): number;
     getFaceNormalsCached(face_id_raw: number): Float64Array;
@@ -1639,9 +1658,11 @@ export interface InitOutput {
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeCurveJson: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getEdgeCurveOwnerId: (a: number, b: number) => number;
     readonly axiaengine_getEdgeEndpoints: (a: number, b: number, c: number) => void;
     readonly axiaengine_getEdgePolylineCached: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_getEdgeVisibilityAngleDeg: (a: number) => number;
+    readonly axiaengine_getEdgesByCurveOwner: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceMapLen: (a: number) => number;
     readonly axiaengine_getFaceMapPtr: (a: number) => number;
     readonly axiaengine_getFaceNormalsCached: (a: number, b: number, c: number) => void;

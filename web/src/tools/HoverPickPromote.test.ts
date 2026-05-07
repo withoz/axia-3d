@@ -51,6 +51,9 @@ function makeContext(faceMap: number[], edgeMap: number[], faceIdAt: number) {
       getMeshBuffers: vi.fn().mockReturnValue(null),
       getEdgeLines: vi.fn().mockReturnValue(null),
       collectEdgeChain: vi.fn().mockReturnValue([]),
+      // ADR-088 Phase 1 (S-δ) — default: no curve owner group
+      getEdgeCurveOwnerId: vi.fn().mockReturnValue(-1),
+      getEdgesByCurveOwner: vi.fn().mockReturnValue([]),
     },
     getFaceId: vi.fn().mockReturnValue(faceIdAt),
     faceMap,

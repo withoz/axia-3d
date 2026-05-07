@@ -432,6 +432,9 @@ type AxiaEngineExtended = AxiaEngine & {
   ): boolean;
   clearEdgeCurve?(edgeId: number): boolean;
   edgeCurveKind?(edgeId: number): number;
+  // ADR-088 Phase 1 — curve_owner_id grouping (LOCKED #15 P22.5)
+  getEdgeCurveOwnerId?(edgeId: number): number;
+  getEdgesByCurveOwner?(ownerId: number): Uint32Array;
   // ADR-029 Phase B — Free-form curves
   setEdgeBezierCurve?(edgeId: number, controlPts: Float64Array): boolean;
   setEdgeBSplineCurve?(
@@ -1018,6 +1021,42 @@ export class WasmBridge {
   edgeCurveKind(edgeId: number): number {
     if (!this.engine) return -1;
     return this.engine.edgeCurveKind(edgeId);
+  }
+
+  /**
+   * ADR-088 Phase 1 (S-δ) — Read curve owner group ID for an edge
+   * (LOCKED #15 P22.5 enforcement support).
+   *
+   * Returns:
+   * - `>= 0`: edge belongs to an analytic curve group (e.g., one of N
+   *   segments of a Circle). Use `getEdgesByCurveOwner` to fetch all
+   *   segments sharing this id.
+   * - `-1`: edge is single-segment (no group), or invalid/inactive.
+   *
+   * Caller (SelectTool walk): if owner_id >= 0, promote selection to all
+   * segments of the same logical analytic curve.
+   */
+  getEdgeCurveOwnerId(edgeId: number): number {
+    if (!this.engine) return -1;
+    const fn = this.engine.getEdgeCurveOwnerId;
+    if (!fn) return -1;
+    return fn.call(this.engine, edgeId);
+  }
+
+  /**
+   * ADR-088 Phase 1 (S-δ) — Get all active edges sharing a curve owner
+   * group ID (LOCKED #15 P22.5).
+   *
+   * Returns empty array if no edges match (defensive against stale id
+   * after undo / erase / cascade). Use after `getEdgeCurveOwnerId`
+   * returns >= 0.
+   */
+  getEdgesByCurveOwner(ownerId: number): number[] {
+    if (!this.engine) return [];
+    const fn = this.engine.getEdgesByCurveOwner;
+    if (!fn) return [];
+    const result = fn.call(this.engine, ownerId);
+    return Array.from(result);
   }
 
   /**

@@ -53,6 +53,9 @@ function makeFreshContext(faceMap: number[], edgeMap: number[], getFaceIdReturn:
       getMeshBuffers: vi.fn().mockReturnValue(null),
       getEdgeLines: vi.fn().mockReturnValue(null),
       collectEdgeChain: vi.fn().mockReturnValue([]),  // Empty chain — single edge fallback
+      // ADR-088 Phase 1 (S-δ) — default: no curve owner group (legacy single-segment)
+      getEdgeCurveOwnerId: vi.fn().mockReturnValue(-1),
+      getEdgesByCurveOwner: vi.fn().mockReturnValue([]),
     },
     getFaceId: vi.fn().mockReturnValue(getFaceIdReturn),
     faceMap,

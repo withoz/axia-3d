@@ -1632,6 +1632,21 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-088 Phase 1 (S-δ) — Read curve owner group ID for an edge.
+     * Returns the owner_id (>= 0) if edge has a group, -1 if no group
+     * (single segment) or edge invalid/inactive.
+     *
+     * Caller (SelectTool walk): pick edge → call this → if >= 0, call
+     * `getEdgesByCurveOwner(id)` to get all segments of the same logical
+     * analytic curve (LOCKED #15 P22.5 enforcement).
+     * @param {number} edge_id
+     * @returns {number}
+     */
+    getEdgeCurveOwnerId(edge_id) {
+        const ret = wasm.axiaengine_getEdgeCurveOwnerId(this.__wbg_ptr, edge_id);
+        return ret;
+    }
+    /**
      * Edge의 두 끝점 VertId를 반환 ([v_small, v_large]).
      * 실패 시 빈 벡터.
      * @param {number} edge_id_raw
@@ -1699,6 +1714,29 @@ export class AxiaEngine {
     getEdgeVisibilityAngleDeg() {
         const ret = wasm.axiaengine_getEdgeVisibilityAngleDeg(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * ADR-088 Phase 1 (S-δ) — Get all active edges sharing a given
+     * curve owner group ID. Returns empty array if no edges match
+     * (stale id, all deactivated, etc.) — defensive against undo /
+     * erase / cascade scenarios.
+     *
+     * Caller: SelectTool walk after `getEdgeCurveOwnerId` returns >= 0.
+     * @param {number} owner_id
+     * @returns {Uint32Array}
+     */
+    getEdgesByCurveOwner(owner_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getEdgesByCurveOwner(retptr, this.__wbg_ptr, owner_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * @returns {number}

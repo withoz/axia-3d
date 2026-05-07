@@ -40,6 +40,9 @@ function mockToolContext() {
     bridge: {
       getMeshBuffers: vi.fn().mockReturnValue(null),
       getEdgeLines: vi.fn().mockReturnValue(null),
+      // ADR-088 Phase 1 (S-δ) — default: no curve owner group (legacy behavior)
+      getEdgeCurveOwnerId: vi.fn().mockReturnValue(-1),
+      getEdgesByCurveOwner: vi.fn().mockReturnValue([]),
     },
     getFaceId: vi.fn().mockReturnValue(5),
     faceMap: [0, 1, 2, 3],
@@ -452,6 +455,82 @@ describe('SelectTool', () => {
           null,
         ),
       ).not.toThrow();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-088 Phase 1 (S-δ) — curve_owner_id grouping for analytic curve
+  // edges. LOCKED #15 (ADR-037 P22.5) enforcement at click time.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-088 S-δ — curve_owner_id walk on single-click', () => {
+    it('single-click on Circle segment promotes to ALL group segments', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      // edgeId = 10 (edgeMap[0]), owner_id = 42, group = 24 segments
+      ctx.bridge.getEdgeCurveOwnerId.mockReturnValue(42);
+      ctx.bridge.getEdgesByCurveOwner.mockReturnValue([100, 101, 102, 103]);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // First call: caller's modifiers passed through (single, replace).
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(100, false, false, false);
+      // Subsequent: additive (shift=true).
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(101, true, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(102, true, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(103, true, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledTimes(4);
+
+      // Owner query was called with the picked edge's id (10).
+      expect(ctx.bridge.getEdgeCurveOwnerId).toHaveBeenCalledWith(10);
+      expect(ctx.bridge.getEdgesByCurveOwner).toHaveBeenCalledWith(42);
+    });
+
+    it('single-click on standalone edge (no group) → single edge select (legacy)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.getEdgeCurveOwnerId.mockReturnValue(-1); // no group
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.getEdgesByCurveOwner).not.toHaveBeenCalled();
+    });
+
+    it('single-click with shift modifier → first edge with shift, rest additive', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.getEdgeCurveOwnerId.mockReturnValue(7);
+      ctx.bridge.getEdgesByCurveOwner.mockReturnValue([200, 201, 202]);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // First call gets shift=true (caller's intent).
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(200, true, false, false);
+      // Subsequent always additive (regardless of caller's modifiers).
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(201, true, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(202, true, false, false);
+    });
+
+    it('stale owner_id (group empty) → fall back to single edge', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({ type: 'edge', hit: { index: 0 } });
+      ctx.bridge.getEdgeCurveOwnerId.mockReturnValue(99);
+      ctx.bridge.getEdgesByCurveOwner.mockReturnValue([]); // stale, all deactivated
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // Defensive fall back to single edge.
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false, false);
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledTimes(1);
     });
   });
 });

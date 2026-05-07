@@ -201,8 +201,32 @@ export class SelectTool implements ITool {
         debugLog(`[SelectTool] Double-click edge → edge + adjacent faces`);
         this.ctx.selection.selectEdgeWithFaces(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
       } else {
-        // Single-click — 엣지 자체만.
-        this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
+        // Single-click — ADR-088 Phase 1 (S-δ) curve_owner_id walk.
+        // LOCKED #15 (ADR-037 P22.5): "Edge.curve = Some(...) 인 edge 의
+        // N segments 모두 동일 EdgeId 로 promote." DCEL representation 은
+        // N 개 분리 edges 이지만 logical curve 는 단일 entity → 한 클릭
+        // 으로 group 전체 선택.
+        const ownerId = this.ctx.bridge.getEdgeCurveOwnerId(edgeId);
+        if (ownerId >= 0) {
+          const groupEdges = this.ctx.bridge.getEdgesByCurveOwner(ownerId);
+          if (groupEdges.length > 1) {
+            // Multi-segment curve: first edge with caller's modifiers,
+            // remaining as additive (same selection state).
+            this.ctx.selection.handleEdgeClick(groupEdges[0], e.shiftKey, e.ctrlKey, !!e.altKey);
+            for (let i = 1; i < groupEdges.length; i++) {
+              this.ctx.selection.handleEdgeClick(groupEdges[i], true, false, false);
+            }
+            debugLog(
+              `[SelectTool] ADR-088 curve_owner walk: ${groupEdges.length} segments selected (owner=${ownerId})`,
+            );
+          } else {
+            // Single-segment group (degenerate) or stale id — fall back.
+            this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
+          }
+        } else {
+          // No owner_id (single segment, e.g., DrawLine) — direct selection.
+          this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey, !!e.altKey);
+        }
       }
       return;
     }

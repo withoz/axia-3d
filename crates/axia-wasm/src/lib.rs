@@ -1105,6 +1105,37 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-088 Phase 1 (S-δ) — Read curve owner group ID for an edge.
+    /// Returns the owner_id (>= 0) if edge has a group, -1 if no group
+    /// (single segment) or edge invalid/inactive.
+    ///
+    /// Caller (SelectTool walk): pick edge → call this → if >= 0, call
+    /// `getEdgesByCurveOwner(id)` to get all segments of the same logical
+    /// analytic curve (LOCKED #15 P22.5 enforcement).
+    #[wasm_bindgen(js_name = "getEdgeCurveOwnerId")]
+    pub fn get_edge_curve_owner_id(&self, edge_id: u32) -> i32 {
+        use axia_geo::EdgeId;
+        let eid = EdgeId::new(edge_id);
+        match self.scene.mesh.edge_curve_owner_id(eid) {
+            Some(owner) => owner as i32,
+            None => -1,
+        }
+    }
+
+    /// ADR-088 Phase 1 (S-δ) — Get all active edges sharing a given
+    /// curve owner group ID. Returns empty array if no edges match
+    /// (stale id, all deactivated, etc.) — defensive against undo /
+    /// erase / cascade scenarios.
+    ///
+    /// Caller: SelectTool walk after `getEdgeCurveOwnerId` returns >= 0.
+    #[wasm_bindgen(js_name = "getEdgesByCurveOwner")]
+    pub fn get_edges_by_curve_owner(&self, owner_id: u32) -> Vec<u32> {
+        self.scene.mesh.edges_by_curve_owner(owner_id)
+            .into_iter()
+            .map(|eid| eid.raw())
+            .collect()
+    }
+
     /// Check whether an edge has an analytic curve attached.
     /// Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
     /// 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.
