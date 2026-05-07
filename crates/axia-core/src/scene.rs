@@ -4089,6 +4089,38 @@ impl Scene {
             self.face_to_xia.remove(fid);
         }
 
+        // ADR-087 K-β — attach Plane AnalyticSurface to created face_ids
+        // so kernel-aware ops (createSolidExtrude / offset / Boolean) can
+        // run without `NoProfileSurface` error. Circle/polygon (DrawCircle
+        // with N=3..24 segments) Shape 은 항상 planar — geometric truth
+        // 로 Plane 항상 attach. Mirrors P-5a `exec_draw_rect_as_shape`.
+        //
+        // basis_u derivation: circle 은 명시적 up 인자가 없으므로 normal
+        // 에 perpendicular 한 임의 방향 선택. World X 가 normal 과 거의
+        // 평행하면 World Y 를 fallback (Gram-Schmidt 안정성).
+        if normal.length_squared() > 1e-12 {
+            let n_norm = normal.normalize();
+            let candidate = if n_norm.x.abs() < 0.9 {
+                DVec3::X
+            } else {
+                DVec3::Y
+            };
+            let dot = candidate.dot(n_norm);
+            let basis_u = (candidate - n_norm * dot).normalize_or_zero();
+            if basis_u.length_squared() > 1e-12 {
+                let plane = axia_geo::AnalyticSurface::Plane {
+                    origin: center,
+                    normal: n_norm,
+                    basis_u,
+                    u_range: (-1e6, 1e6),
+                    v_range: (-1e6, 1e6),
+                };
+                for &fid in &face_ids {
+                    self.mesh.set_face_surface(fid, Some(plane.clone()));
+                }
+            }
+        }
+
         let shape_id = self.create_shape(name, face_ids);
         if let Some(shape) = self.shapes.get_mut(&shape_id) {
             shape.position = position;
@@ -10484,6 +10516,177 @@ mod tests {
                 panic!("Expected SolidCreated, got Error: {}", msg);
             }
             other => panic!("expected SolidCreated, got {:?}", other),
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-087 K-β regression — DrawCircleAsShape + DrawPolygon (via N-gon
+    // circle approximation) MUST attach Plane AnalyticSurface, mirroring
+    // DrawRectAsShape (P-5a). Without these, createSolidExtrude on a
+    // circle/polygon profile rejects with NoProfileSurface — the same
+    // bug that 5db6d41 fixed for rect.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn draw_circle_as_shape_attaches_plane_surface_to_face() {
+        // ADR-087 K-β — DrawCircleAsShape 결과 face 가 AnalyticSurface::
+        // Plane attached 보장. createSolidExtrude / Boolean / Offset 의
+        // 입력으로 즉시 사용 가능.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments: 16,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        assert!(!shape.face_ids.is_empty(), "circle shape must have ≥1 face");
+
+        for &fid in &shape.face_ids {
+            let surf = scene.mesh.face_surface(fid)
+                .expect("face must have AnalyticSurface attached after DrawCircleAsShape");
+            assert!(
+                matches!(surf, axia_geo::AnalyticSurface::Plane { .. }),
+                "face {fid:?} should have Plane surface, got {:?}",
+                surf,
+            );
+        }
+    }
+
+    #[test]
+    fn draw_circle_as_shape_then_create_solid_extrude_succeeds() {
+        // ADR-087 K-β end-to-end — DrawCircleAsShape → CreateSolid(Extrude)
+        // 정상 cylindrical solid 생성. NoProfileSurface 거부 없음.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments: 16,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let profile_face = scene.get_shape(shape_id).expect("shape").face_ids[0];
+
+        let extrude_result = scene.execute(Command::CreateSolid {
+            face_id: profile_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 3.0 },
+        });
+        match extrude_result {
+            CommandResult::SolidCreated { kind: _, face_count } => {
+                // 16-gon profile → 1 top + 1 bottom + 16 sides = 18 faces
+                assert!(
+                    face_count >= 6,
+                    "extruded circle should produce a closed solid with ≥6 faces, got {}",
+                    face_count,
+                );
+            }
+            CommandResult::Error(msg) => {
+                panic!("Expected SolidCreated, got Error: {}", msg);
+            }
+            other => panic!("expected SolidCreated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn draw_polygon_via_circle_as_shape_attaches_plane_surface() {
+        // ADR-087 K-β — DrawPolygon (via DrawCircleAsShape with N=6)
+        // 도 동일하게 Plane attach. Hexagon (육각형) face 가 first-class
+        // kernel-aware Shape.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 3.0,
+            segments: 6,  // hexagon
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        for &fid in &shape.face_ids {
+            let surf = scene.mesh.face_surface(fid)
+                .expect("hexagon face must have Plane attached");
+            assert!(
+                matches!(surf, axia_geo::AnalyticSurface::Plane { .. }),
+                "hexagon face should have Plane surface",
+            );
+        }
+    }
+
+    #[test]
+    fn draw_circle_as_shape_plane_basis_perpendicular_to_normal() {
+        // ADR-087 K-β invariant — basis_u 가 normal 에 perpendicular
+        // (Gram-Schmidt 정합). 어떤 normal 방향이든 정상 Plane 생성.
+        let mut scene = Scene::new();
+        // Tilted normal — explicit non-cardinal direction.
+        let normal = DVec3::new(1.0, 1.0, 1.0).normalize();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::new(2.0, 3.0, 4.0),
+            normal,
+            radius: 1.0,
+            segments: 12,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        let fid = shape.face_ids[0];
+        let surf = scene.mesh.face_surface(fid).expect("Plane attached");
+        match surf {
+            axia_geo::AnalyticSurface::Plane { normal: pn, basis_u, .. } => {
+                let dot = basis_u.dot(*pn).abs();
+                assert!(
+                    dot < 1e-9,
+                    "basis_u must be perpendicular to plane normal (dot={dot})",
+                );
+                let basis_len = basis_u.length();
+                assert!(
+                    (basis_len - 1.0).abs() < 1e-9,
+                    "basis_u must be normalized (len={basis_len})",
+                );
+            }
+            other => panic!("expected Plane surface, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn draw_circle_as_shape_plane_normal_aligned_with_world_x() {
+        // ADR-087 K-β edge case — World X 와 거의 평행한 normal 의
+        // basis_u fallback (World X → World Y). Circle 이 YZ 평면에
+        // 위치한 경우 정상 동작.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::X,
+            radius: 1.0,
+            segments: 8,
+        });
+        let shape_id = match result {
+            CommandResult::ShapeCreated(raw) => crate::ShapeId::new(raw),
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        let shape = scene.get_shape(shape_id).expect("shape exists");
+        let fid = shape.face_ids[0];
+        let surf = scene.mesh.face_surface(fid).expect("Plane attached");
+        match surf {
+            axia_geo::AnalyticSurface::Plane { normal: pn, basis_u, .. } => {
+                // Normal should remain +X
+                assert!((pn.x - 1.0).abs() < 1e-9);
+                // basis_u must be perpendicular to X — i.e., zero X component
+                assert!(basis_u.x.abs() < 1e-9, "basis_u should have no X component");
+                let basis_len = basis_u.length();
+                assert!((basis_len - 1.0).abs() < 1e-9);
+            }
+            other => panic!("expected Plane surface, got {:?}", other),
         }
     }
 

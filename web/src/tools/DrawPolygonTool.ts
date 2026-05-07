@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
+import { getDrawShapeMode } from './DrawShapeModeSettings';
 
 const MAX_DRAW_DISTANCE = 50000;
 
@@ -85,12 +86,25 @@ export class DrawPolygonTool implements ITool {
       const radius = this.center.distanceTo(planePoint);
       if (radius > 1) {
         const n = this.plane.normal;
-        this.ctx.bridge.drawCircle(
-          this.center.x, this.center.y, this.center.z,
-          n.x, n.y, n.z,
-          radius, this.sides,
-        );
-        debugLog(`[Polygon] ${this.sides}-gon R=${radius.toFixed(2)}`);
+        // ADR-087 K-β — form-mode 시 drawCircleAsShape (Plane attach
+        // 자동) 라우팅. Polygon 은 N-gon = circle with N segments —
+        // Plane attach 동일 의미. legacy drawCircle 은 form-mode OFF
+        // 일 때만 (K-ε 에서 폐기 예정).
+        if (getDrawShapeMode()) {
+          this.ctx.bridge.drawCircleAsShape(
+            this.center.x, this.center.y, this.center.z,
+            n.x, n.y, n.z,
+            radius, this.sides,
+          );
+        } else {
+          this.ctx.bridge.drawCircle(
+            this.center.x, this.center.y, this.center.z,
+            n.x, n.y, n.z,
+            radius, this.sides,
+          );
+        }
+        debugLog(`[Polygon] ${this.sides}-gon R=${radius.toFixed(2)} ` +
+          `mode=${getDrawShapeMode() ? 'AsShape' : 'legacy'}`);
         this.ctx.syncMesh();
       }
       this.cleanup();
@@ -118,12 +132,22 @@ export class DrawPolygonTool implements ITool {
   applyVCBValue(value: number): void {
     if (!this.center || !this.plane) return;
     const n = this.plane.normal;
-    this.ctx.bridge.drawCircle(
-      this.center.x, this.center.y, this.center.z,
-      n.x, n.y, n.z,
-      value, this.sides,
-    );
-    debugLog(`[VCB/Polygon] ${this.sides}-gon R=${value}`);
+    // ADR-087 K-β — VCB path 도 form-mode 라우팅.
+    if (getDrawShapeMode()) {
+      this.ctx.bridge.drawCircleAsShape(
+        this.center.x, this.center.y, this.center.z,
+        n.x, n.y, n.z,
+        value, this.sides,
+      );
+    } else {
+      this.ctx.bridge.drawCircle(
+        this.center.x, this.center.y, this.center.z,
+        n.x, n.y, n.z,
+        value, this.sides,
+      );
+    }
+    debugLog(`[VCB/Polygon] ${this.sides}-gon R=${value} ` +
+      `mode=${getDrawShapeMode() ? 'AsShape' : 'legacy'}`);
     this.cleanup();
     this.ctx.syncMesh();
   }
