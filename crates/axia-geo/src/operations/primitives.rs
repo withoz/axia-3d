@@ -626,6 +626,36 @@ mod tests {
         }
     }
 
+    /// ADR-087 K-ε hotfix — LOCKED #12 (ADR-025 P11) regression guard:
+    /// Plane attach must NOT cause render mesh to exceed DCEL edges.
+    ///
+    /// Box has 6 axis-aligned Plane faces (K-δ). export_buffers must use
+    /// polygon tessellation (DCEL boundary = exact), NOT surface
+    /// tessellation (which would render Plane as 2km × 2km mesh from the
+    /// (-1e6, 1e6) parameter range).
+    ///
+    /// Test: emitted vertex count for a 10×10×10 box must be the polygon
+    /// fan triangulation count (4 verts × 6 faces = 24 verts) — not
+    /// the surface tessellation count (a sampled grid of >> 24 verts).
+    #[test]
+    fn k_epsilon_box_plane_uses_polygon_path_not_surface_tess() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
+        let (positions, _normals, _indices, _face_map, _positions_f64) =
+            mesh.export_buffers().unwrap();
+        let n_verts = positions.len() / 3;
+        // Polygon path emits each face's outer-loop vertices duplicated
+        // per-face (no welding). Box: 6 faces × 4 verts = 24 verts.
+        // Surface tessellation would emit O(grid resolution²) >> 24.
+        assert!(
+            n_verts < 100,
+            "ADR-087 K-ε hotfix: Box Plane faces should use polygon path \
+             (expected ~24 verts, got {n_verts}). Surface tessellation of \
+             Plane (-1e6, 1e6) would explode the vertex count.",
+        );
+    }
+
     /// ADR-087 K-δ — End-to-end: Box face + create_solid Extrude
     /// 즉시 통과 (NoProfileSurface 거부 없음).
     #[test]

@@ -4023,7 +4023,20 @@ impl Mesh {
             // `Face.surface = Some(AnalyticSurface)` 이면 surface 의 정확한
             // tessellation + analytic normal 사용. 없으면 기존 path
             // (DCEL fan averaging) 유지.
+            //
+            // ADR-087 K-ε hotfix — LOCKED #12 (ADR-025 P11) "닫힌 엣지로
+            // face 합성" 규칙: Plane variant 는 polygon = exact 이므로
+            // surface tessellation 을 *건너뛰고* DCEL polygon path 로
+            // fall through. Plane.u_range/v_range = (-1e6, 1e6) 가
+            // tessellate 시 2km × 2km mesh 로 확장되어 face 가 edge 를
+            // 벗어나는 회귀 차단. Curved surface (Cylinder/Sphere/Cone/
+            // Torus/Bezier/BSpline/NURBS) 는 surface tessellation 유지
+            // (chord-based curve 샘플링 필수).
             if let Some(surface) = face.surface() {
+                if matches!(surface, crate::surfaces::AnalyticSurface::Plane { .. }) {
+                    // Plane → polygon path (DCEL boundary = exact)
+                    // fall through to the polygon tessellation below.
+                } else {
                 use crate::surfaces::SurfaceOps;
                 let tess = surface.tessellate(ANALYTIC_CHORD_TOL);
                 if tess.vertices.is_empty() || tess.triangles.is_empty() {
@@ -4063,6 +4076,7 @@ impl Mesh {
                 vert_offset += n_verts as u32;
                 stats.emitted += 1;
                 continue;  // skip the planar polygon path below
+                }  // close inner else (curved surface branch)
             }
 
             let normal = face.normal();
