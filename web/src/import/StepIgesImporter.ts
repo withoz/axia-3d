@@ -33,7 +33,12 @@
 import * as THREE from 'three';
 import { debugLog, debugWarn } from '../utils/debug';
 import { traverseBrep, type BRepTraversalResult } from './occtBrepTraversal';
-import { tessellateShape, type FaceTessellation } from './occtTessellate';
+import {
+  tessellateShape,
+  tessellateEdges,
+  type FaceTessellation,
+  type EdgeTessellation,
+} from './occtTessellate';
 
 /** OCCT.js 인스턴스 핸들 (opencascade.js v2 API). */
 type OcctInstance = unknown;
@@ -353,7 +358,60 @@ export class StepIgesImporter {
       }
     }
 
+    // ADR-084 E-γ — BRep edge wireframe rendering.
+    // BRepMesh_IncrementalMesh 가 이미 적용된 shape 위에 Polygon3D 추출 →
+    // edges sub-group 으로 group 에 추가. ADR-018 정책 답습 (LineMaterial
+    // #333366 일관).
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x333366 });
+    const edgeTess = tessellateEdges(occt, shape);
+    if (edgeTess.edges.length > 0) {
+      const edgesGroup = new THREE.Group();
+      edgesGroup.name = 'edges';
+      for (const edge of edgeTess.edges) {
+        try {
+          const lineSeg = this._edgeToLine(edge, edgeMat);
+          if (lineSeg) {
+            edgesGroup.add(lineSeg);
+          }
+        } catch (e) {
+          edgeTess.warnings.push(`edge[${edge.index}] line 생성: ${String(e)}`);
+        }
+      }
+      if (edgesGroup.children.length > 0) {
+        group.add(edgesGroup);
+      }
+    }
+    // edge tessellation warnings → caller 에 통합
+    for (const w of edgeTess.warnings) {
+      tess.warnings.push(w);
+    }
+
     return { group, tessellationWarnings: tess.warnings };
+  }
+
+  /**
+   * Per-edge EdgeTessellation → Three.js LineSegments (ADR-084 E-γ).
+   *
+   * 빈 buffer (positions.length === 0) 은 null 반환 — caller 가 skip.
+   * userData.edgeIndex (W-δ stable index 답습) — caller (W-η downstream)
+   * 가 axia EdgeId 매핑 시 활용.
+   */
+  private _edgeToLine(
+    edge: EdgeTessellation,
+    edgeMat: THREE.Material,
+  ): THREE.LineSegments | null {
+    if (edge.positions.length === 0 || edge.indices.length === 0) {
+      return null;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(edge.positions, 3));
+    geom.setIndex(new THREE.BufferAttribute(edge.indices, 1));
+    geom.computeBoundingSphere();
+
+    const lineSeg = new THREE.LineSegments(geom, edgeMat);
+    lineSeg.name = `edge-${edge.index}`;
+    lineSeg.userData.edgeIndex = edge.index;
+    return lineSeg;
   }
 
   /**

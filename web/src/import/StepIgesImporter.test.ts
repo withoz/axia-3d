@@ -212,6 +212,135 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       expect(result.group.name).toBe('IGES: part.iges');
     });
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-084 E-γ — edges sub-group wiring
+    // ────────────────────────────────────────────────────────────────
+
+    function mockPolygon3D(nodes: Array<[number, number, number]>) {
+      return {
+        NbNodes: () => nodes.length,
+        Nodes: () => ({
+          Lower: () => 1,
+          Upper: () => nodes.length,
+          Value: (i: number) => mockPnt(...nodes[i - 1]),
+        }),
+      };
+    }
+
+    /**
+     * Build mock OCCT with both faces AND edges — extends mockOcctWithFaces
+     * with Polygon3D dispatch for edges.
+     */
+    function mockOcctWithFacesAndEdges(
+      faces: Array<{ tri: any | null }>,
+      edges: Array<{ poly: any | null }>,
+    ) {
+      const occt = mockOcctWithFaces(faces);
+      const TopAbs_FACE = 4;
+      const TopAbs_EDGE = 6;
+      const TopAbs_SHAPE = 8;
+
+      // Override TopExp_Explorer_2 to dispatch on kind
+      occt.TopExp_Explorer_2 = function (this: any, _shape: any, kind: number) {
+        let items: any[] = [];
+        if (kind === TopAbs_FACE) items = faces;
+        else if (kind === TopAbs_EDGE) items = edges;
+        let i = 0;
+        Object.assign(this, {
+          More: () => i < items.length,
+          Current: () => items[i],
+          Next: () => { i++; },
+        });
+      } as any;
+
+      occt.TopAbs_ShapeEnum = { TopAbs_FACE, TopAbs_EDGE, TopAbs_SHAPE };
+
+      // Add Polygon3D dispatch
+      occt.BRep_Tool.Polygon3D = (edge: any) => {
+        if (edge.poly === null) return { IsNull: () => true, get: () => null };
+        return { IsNull: () => false, get: () => edge.poly };
+      };
+
+      return occt;
+    }
+
+    it('E-γ: face + edges → group has face-N + edges sub-group', () => {
+      const importer = StepIgesImporter.getInstance();
+      const tri = mockTriangulation(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+        [[1, 2, 3]],
+      );
+      const occt = mockOcctWithFacesAndEdges(
+        [{ tri }],
+        [
+          { poly: mockPolygon3D([[0, 0, 0], [1, 0, 0]]) },
+          { poly: mockPolygon3D([[1, 0, 0], [0, 1, 0]]) },
+          { poly: mockPolygon3D([[0, 1, 0], [0, 0, 0]]) },
+        ],
+      );
+
+      const result = (importer as any)._convertToThreeGroup(
+        occt, {}, 'step', 'tri.step',
+      );
+      // group: face-0 + edges sub-group
+      expect(result.group.children.length).toBe(2);
+      const faceGroup = result.group.children.find((c: any) => c.name === 'face-0');
+      const edgesGroup = result.group.children.find((c: any) => c.name === 'edges');
+      expect(faceGroup).toBeDefined();
+      expect(edgesGroup).toBeDefined();
+      // Edges sub-group has 3 LineSegments (W-δ stable indices 0/1/2)
+      expect(edgesGroup.children.length).toBe(3);
+      expect(edgesGroup.children[0].name).toBe('edge-0');
+      expect(edgesGroup.children[1].name).toBe('edge-1');
+      expect(edgesGroup.children[2].name).toBe('edge-2');
+      expect(edgesGroup.children[0].userData.edgeIndex).toBe(0);
+    });
+
+    it('E-γ: zero edges → no edges sub-group (graceful)', () => {
+      const importer = StepIgesImporter.getInstance();
+      const tri = mockTriangulation(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+        [[1, 2, 3]],
+      );
+      const occt = mockOcctWithFacesAndEdges([{ tri }], []);
+
+      const result = (importer as any)._convertToThreeGroup(
+        occt, {}, 'step', 'noedges.step',
+      );
+      // Only face-0, no edges sub-group
+      expect(result.group.children.length).toBe(1);
+      expect(result.group.children[0].name).toBe('face-0');
+      const edgesGroup = result.group.children.find((c: any) => c.name === 'edges');
+      expect(edgesGroup).toBeUndefined();
+    });
+
+    it('E-γ: per-edge null Polygon3D → others continue (P21.7)', () => {
+      const importer = StepIgesImporter.getInstance();
+      const tri = mockTriangulation(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+        [[1, 2, 3]],
+      );
+      const occt = mockOcctWithFacesAndEdges(
+        [{ tri }],
+        [
+          { poly: mockPolygon3D([[0, 0, 0], [1, 0, 0]]) },
+          { poly: null },  // skipped
+          { poly: mockPolygon3D([[0, 1, 0], [0, 0, 0]]) },
+        ],
+      );
+
+      const result = (importer as any)._convertToThreeGroup(
+        occt, {}, 'step', 'mixed.step',
+      );
+      const edgesGroup = result.group.children.find((c: any) => c.name === 'edges');
+      expect(edgesGroup).toBeDefined();
+      // 2 edges (edge[1] skipped due to null Polygon3D)
+      expect(edgesGroup.children.length).toBe(2);
+      expect(edgesGroup.children[0].userData.edgeIndex).toBe(0);
+      expect(edgesGroup.children[1].userData.edgeIndex).toBe(2);  // W-δ stable index preserved
+      expect(result.tessellationWarnings.some((w: string) => w.startsWith('edge[1]'))).toBe(true);
+    });
+
     /* eslint-enable @typescript-eslint/no-explicit-any */
   });
 
