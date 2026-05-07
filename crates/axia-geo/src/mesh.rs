@@ -115,6 +115,15 @@ pub struct Mesh {
     /// (telemetry). Exposed via `cache_stats()` / WASM `getCacheStats`.
     #[serde(skip, default)]
     cache_eviction_count: std::cell::RefCell<u64>,
+
+    /// ADR-088 Phase 1 — monotonic counter for `Edge.curve_owner_id`
+    /// allocation (LOCKED #15 P22.5 enforcement). Incremented each time
+    /// `next_curve_owner_id()` is called (e.g., per DrawCircle creation).
+    /// All N segments of a single logical analytic curve share the same id.
+    /// `serde(default)` for legacy snapshot compat — old `.axia` files
+    /// load with counter = 0.
+    #[serde(default)]
+    next_curve_owner_id: u32,
 }
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
@@ -352,7 +361,68 @@ impl Mesh {
             last_export_empty_faces: std::cell::RefCell::new(Vec::new()),
             cache_clock: std::cell::RefCell::new(0),
             cache_eviction_count: std::cell::RefCell::new(0),
+            // ADR-088 Phase 1 — start at 0, allocate via next_curve_owner_id().
+            next_curve_owner_id: 0,
         }
+    }
+
+    // ========================================================================
+    // ADR-088 Phase 1 — Curve Owner ID Grouping (LOCKED #15 P22.5)
+    // ========================================================================
+
+    /// ADR-088 Phase 1 — allocate a fresh curve owner group ID. Use this
+    /// once per logical analytic curve (e.g., per DrawCircle), then call
+    /// `set_edge_curve_owner_id(eid, Some(id))` on each segment of that
+    /// curve. All segments sharing the id form a single selection unit
+    /// per LOCKED #15 P22.5.
+    ///
+    /// Monotonic — IDs are never reused even if associated edges are
+    /// deactivated. u32::MAX = 4 billion groups (practically unlimited).
+    pub fn next_curve_owner_id(&mut self) -> u32 {
+        let id = self.next_curve_owner_id;
+        self.next_curve_owner_id = self.next_curve_owner_id.checked_add(1)
+            .expect("Mesh::next_curve_owner_id overflow (u32::MAX)");
+        id
+    }
+
+    /// ADR-088 Phase 1 — set the curve owner group ID on an edge.
+    /// `None` removes grouping (edge becomes single-segment).
+    /// Returns `false` if edge is missing or inactive.
+    pub fn set_edge_curve_owner_id(
+        &mut self,
+        edge_id: EdgeId,
+        owner: Option<u32>,
+    ) -> bool {
+        if let Some(edge) = self.edges.get_mut(edge_id) {
+            if !edge.is_active() {
+                return false;
+            }
+            edge.set_curve_owner_id(owner);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-088 Phase 1 — read the curve owner group ID of an edge.
+    /// Returns `None` if edge is missing, inactive, or has no group.
+    pub fn edge_curve_owner_id(&self, edge_id: EdgeId) -> Option<u32> {
+        self.edges.get(edge_id)
+            .filter(|e| e.is_active())
+            .and_then(|e| e.curve_owner_id())
+    }
+
+    /// ADR-088 Phase 1 — collect all active edges sharing a given curve
+    /// owner group ID. Used by SelectTool walk: pick one edge → group
+    /// promote (LOCKED #15 P22.5).
+    ///
+    /// Returns empty vec if no edges match (defensive: stale id, all
+    /// deactivated, etc.).
+    pub fn edges_by_curve_owner(&self, owner: u32) -> Vec<EdgeId> {
+        self.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.curve_owner_id() == Some(owner))
+            .map(|(id, _)| id)
+            .collect()
     }
 
     // ========================================================================
@@ -8754,5 +8824,84 @@ mod tests {
         let n2 = m2.faces[via_trim].normal();
         assert!((n1 - n2).length() < 1e-9,
             "drop-in alongside must produce identical normals");
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-088 S-β regression — Edge.curve_owner_id field + Mesh counter.
+    //
+    // L1 (additive): Edge 기존 필드 / DCEL topology 무변화. owner_id 는
+    //   default None — 기존 edge 동작 영향 0.
+    // L2 (monotonic): Mesh::next_curve_owner_id() 가 unique IDs 발급.
+    // L3 prep (group query): edges_by_curve_owner(id) 가 같은 그룹의
+    //   모든 active edges 반환.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr088_edge_default_curve_owner_id_is_none() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::ZERO);
+        let v1 = mesh.add_vertex(DVec3::X);
+        let (_, _, eid) = mesh.draw_line(DVec3::ZERO, DVec3::X).unwrap();
+        let _ = (v0, v1);
+        assert_eq!(mesh.edge_curve_owner_id(eid), None,
+            "ADR-088 L1: new edges must have curve_owner_id = None");
+    }
+
+    #[test]
+    fn adr088_mesh_counter_monotonic_unique() {
+        let mut mesh = Mesh::new();
+        let id0 = mesh.next_curve_owner_id();
+        let id1 = mesh.next_curve_owner_id();
+        let id2 = mesh.next_curve_owner_id();
+        assert_eq!(id0, 0);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert!(id0 < id1 && id1 < id2,
+            "ADR-088 L2: next_curve_owner_id must be monotonic");
+    }
+
+    #[test]
+    fn adr088_edges_by_curve_owner_groups_correctly() {
+        // Simulate 3 segments of one circle (owner 0) + 2 segments of another
+        // (owner 1) + 1 standalone line (None). Verify group queries return
+        // correct edges.
+        let mut mesh = Mesh::new();
+        // Curve A: 3 segments
+        let owner_a = mesh.next_curve_owner_id();
+        let (_, _, e_a0) = mesh.draw_line(DVec3::new(0.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (_, _, e_a1) = mesh.draw_line(DVec3::new(1.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0)).unwrap();
+        let (_, _, e_a2) = mesh.draw_line(DVec3::new(1.0, 1.0, 0.0), DVec3::new(0.0, 1.0, 0.0)).unwrap();
+        assert!(mesh.set_edge_curve_owner_id(e_a0, Some(owner_a)));
+        assert!(mesh.set_edge_curve_owner_id(e_a1, Some(owner_a)));
+        assert!(mesh.set_edge_curve_owner_id(e_a2, Some(owner_a)));
+
+        // Curve B: 2 segments (different group)
+        let owner_b = mesh.next_curve_owner_id();
+        let (_, _, e_b0) = mesh.draw_line(DVec3::new(5.0, 0.0, 0.0), DVec3::new(6.0, 0.0, 0.0)).unwrap();
+        let (_, _, e_b1) = mesh.draw_line(DVec3::new(6.0, 0.0, 0.0), DVec3::new(6.0, 1.0, 0.0)).unwrap();
+        assert!(mesh.set_edge_curve_owner_id(e_b0, Some(owner_b)));
+        assert!(mesh.set_edge_curve_owner_id(e_b1, Some(owner_b)));
+
+        // Standalone line — no owner
+        let (_, _, e_s) = mesh.draw_line(DVec3::new(10.0, 0.0, 0.0), DVec3::new(11.0, 0.0, 0.0)).unwrap();
+        assert_eq!(mesh.edge_curve_owner_id(e_s), None);
+
+        // Group queries
+        let group_a = mesh.edges_by_curve_owner(owner_a);
+        assert_eq!(group_a.len(), 3, "Curve A should have 3 segments");
+        assert!(group_a.contains(&e_a0));
+        assert!(group_a.contains(&e_a1));
+        assert!(group_a.contains(&e_a2));
+
+        let group_b = mesh.edges_by_curve_owner(owner_b);
+        assert_eq!(group_b.len(), 2, "Curve B should have 2 segments");
+        assert!(group_b.contains(&e_b0));
+        assert!(group_b.contains(&e_b1));
+
+        // Cross-group isolation
+        assert!(!group_a.contains(&e_b0), "groups must not leak");
+        assert!(!group_b.contains(&e_a0), "groups must not leak");
+        assert!(!group_a.contains(&e_s));
+        assert!(!group_b.contains(&e_s));
     }
 }

@@ -141,6 +141,20 @@ pub struct Edge {
     /// fill from `&Edge` read paths.
     #[serde(skip)]
     polyline_cache: RefCell<Option<PolylineCacheEntry>>,
+
+    /// ADR-088 Phase 1 — optional curve owner group ID for selection-layer
+    /// promotion (LOCKED #15 P22.5). When `Some(id)`, this edge is one of
+    /// N segments of a single logical analytic curve (e.g., a Circle's
+    /// 24 segments all share the same `curve_owner_id`). SelectTool walk
+    /// promotes from one segment to all sharing the owner_id.
+    ///
+    /// `None` = single-segment edge (legacy, no grouping).
+    ///
+    /// Drop-in alongside `curve` field (ADR-028) — additive only. DCEL
+    /// topology UNCHANGED. `serde(default)` allows old `.axia` files to
+    /// load with `curve_owner_id = None` automatically.
+    #[serde(default)]
+    curve_owner_id: Option<u32>,
 }
 
 impl Edge {
@@ -157,7 +171,25 @@ impl Edge {
             // ADR-061 Step 1b — cache slots start at version 0 + empty.
             curve_version: 0,
             polyline_cache: RefCell::new(None),
+            // ADR-088 Phase 1 — no owner group by default (single segment).
+            curve_owner_id: None,
         }
+    }
+
+    /// ADR-088 Phase 1 — read the optional curve owner group ID.
+    /// `None` = single segment (legacy). `Some(id)` = part of N-segment
+    /// analytic curve group sharing the same id.
+    #[inline]
+    pub fn curve_owner_id(&self) -> Option<u32> {
+        self.curve_owner_id
+    }
+
+    /// ADR-088 Phase 1 — set the curve owner group ID. Use `Mesh::
+    /// next_curve_owner_id()` to allocate a fresh monotonic id, then
+    /// call this on each segment of a single logical curve.
+    #[inline]
+    pub fn set_curve_owner_id(&mut self, owner: Option<u32>) {
+        self.curve_owner_id = owner;
     }
 
     // ── ADR-061 Phase P-narrow Step 1b — Cache accessors ─────────────
