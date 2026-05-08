@@ -645,6 +645,57 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 
 ---
 
+### A-ρ-α (2026-05-08, render-only Cylinder smoothness amendment)
+
+**사용자 관찰 (2026-05-08)**: "원통의 옆면속에 폴리곤이 속에 있습니다"
+— Path A tessellate-then-extrude 의 cylinder 측면이 polygon quad 로
+보이는 것 (메타-원칙 #14 측면 회귀). 사용자 결재: 옵션 🅲 "render-only
+fix — DCEL polygon 유지하되 viewport 가 surface metadata 기반
+chord-tolerant tessellation 표시".
+
+**Path Z 3-sub-step roadmap (A-ρ render-only smooth)**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-ρ-α (본 amendment) | spec only | +0 |
+| A-ρ-β | export_buffers_inner Cylinder u-slice tessellation | +4 |
+| A-ρ-γ | Browser smoke + closure | +0 |
+
+**Lock-ins (A-ρ-α 시점)**:
+- **L-ρ-1** **DCEL UNCHANGED**: 측면 face 의 polygon quad (4-vert)
+  topology 보존. select / hover / edit ops 모두 quad 기준 작동.
+- **L-ρ-2** **Render path 만 변경**: `export_buffers_inner` 에서
+  Cylinder 측면 face 감지 시 boundary verts → u_range 추출 → 그
+  sub-slice 만 surface tessellation.
+- **L-ρ-3** **u_range 추출**: 4 boundary verts 의 (axis_origin 으로
+  부터의 angle θ) 계산. quad 의 좌/우 edge 가 cylinder 의 두 u 값
+  → `[u_lo, u_hi]` 결정. v_range 는 quad 의 axial extent.
+- **L-ρ-4** **Plane fast-path 보존** (LOCKED #16 K-ε hotfix): Plane
+  variant 는 polygon path 그대로. Cylinder/Sphere/Cone/Torus 등
+  curved surface 만 본 fast-path 로 분기.
+- **L-ρ-5** **Backward compat**: 기존 폴리곤 face (surface=None) 또는
+  Plane face 모두 unchanged. 본 fast-path 는 Cylinder + 4-vert quad
+  case 에만 발동.
+- **L-ρ-6** **chord_tol 정책**: ADR-038 P23.2 `ANALYTIC_CHORD_TOL =
+  0.1mm` 답습. future adaptive LOD 별도 ADR.
+- **L-ρ-7** **Sphere/Cone/Torus 동일 패턴**: 본 ADR 은 Cylinder 만
+  처리 (가장 흔한 case). Sphere/Cone/Torus side face 는 future
+  sub-step (동일 패턴 답습).
+
+**Non-goals**:
+- **N-ρ-1** DCEL topology 변경 (Path B 영역).
+- **N-ρ-2** Sphere / Cone / Torus side face fast-path (별도 sub-step).
+- **N-ρ-3** Wireframe edge tessellation (현재 polygon edge 사이의 짧은
+  vertical line 들이 보임 — 이는 별도 fix). 본 ADR 은 face 의 surface
+  부분만 매끈하게.
+
+### A-ρ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅲 render-only fix 진행".
+- **변경**: 본 §D `A-ρ-α` amendment. roadmap / lock-ins / non-goals.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+---
+
 ### A-λ-γ (browser real-runtime closure)
 - **시연**: SettingsPanel "곡선 모드 (실험)" 토글 ON →
   DrawCircleTool VCB R=750 → bridge.drawCircleAsCurve 호출 (spy
