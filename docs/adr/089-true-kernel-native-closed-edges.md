@@ -961,10 +961,61 @@ smoothness) + A-τ (edge smooth-group hide) + A-υ (leftover cleanup)
   uv 추출 복잡).
 - **N-φ-2** Non-quad curved face (별도 trianglulation rebuild).
 
-### A-φ-α (본 commit)
+### A-φ-α (commit `a91497f`)
 - **사용자 결재**: 2026-05-08, "Sphere/Cone/Torus 동일 패턴 답습".
 - **변경**: 본 §D `A-φ-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-φ-β (commit `f39ad41`)
+- **변경**: `crates/axia-geo/src/mesh.rs`:
+  * `compute_uv_slice_for_quad_face` helper 신규 — 4 곡면 (Cylinder/
+    Sphere/Cone/Torus) 모두 dispatch 가능한 generic uv-slice 추출.
+  * 기존 A-ρ-β Cylinder fast-path inline 코드 → generic helper 호출
+    refactor (code -75 lines).
+- **회귀**: axia-geo 1169 → 1175 (+6). 절대 #[ignore] 금지 6/6 준수:
+  * `sphere_quad_emits_sliced_tessellation`
+  * `sphere_quad_normals_radial`
+  * `cone_quad_emits_sliced_tessellation`
+  * `torus_quad_emits_sliced_tessellation`
+  * `uv_slice_helper_returns_none_for_plane` (Plane fall-through guard)
+  * `uv_slice_returns_none_for_non_quad_face` (3-vert reject)
+- **LOCKED guards**: axia-core 200 unchanged.
+
+### A-φ-γ (closure)
+- **결과**: 4 곡면 도형 (Cylinder/Sphere/Cone/Torus) 모두 visual
+  smoothness fast-path 적용. architectural 일관성 확보.
+- **시각**: Sphere/Cone primitives 의 side face 도 Cylinder 와 동등한
+  매끈한 surface tessellation.
+- **A-τ-β smooth-group edge hide** 는 이미 4 곡면 모두 처리 (helper
+  `surfaces_in_same_smooth_group` 가 이미 모두 cover) — 본 ADR 은
+  face render만 추가, edge 무변화 (L-φ-5).
+
+**ADR-089 누적 트랙 (A-α ~ A-φ)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| A-ρ Path A (face Cylinder smooth) | +4 | u-slice tessellation |
+| A-τ Path A (edge smooth-group) | +4 | vertical 분할선 hide |
+| A-υ Path A (leftover cleanup) | +3 | polyline overlap 제거 |
+| **A-φ Path A (Sphere/Cone/Torus uv-slice)** | **+6** | **4 곡면 일관성** |
+| **누적** | **axia-geo +52 / vitest +7 = +59** | **모든 곡면 visual closure** |
+
+### A-φ-γ (본 commit)
+- **변경**: 본 §D `A-φ-γ` closure entry.
+- **회귀**: +0 (closure docs).
+- **다음 step**: ADR-089 Path A 의 visual + topology 모든 cleanup
+  완료. 후속 후보 — A-θ Path B (DCEL 진정한 kernel-native cylinder),
+  DrawArc/DrawBezier closed-curve 시민권 확장, Snapshot legacy
+  migration (A-μ).
 
 ---
 
