@@ -486,7 +486,65 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **결과**: 사용자 facing path 의 closed-curve → closed-curve offset
   완성. 메타-원칙 #14 정합 (kernel-native input → kernel-native output).
 - **회귀**: +0 (smoke verification). A-ι track total **+4**.
-- **다음 step**: A-ν (LOCKED 245 sites 재검증 + 사용자 시연).
+
+---
+
+### A-ν (regression sweep + closure)
+
+**모든 회귀 자산 sweep** (2026-05-08):
+
+| Suite | Pass | 비교 |
+|-------|------|-----|
+| axia-geo lib | **1158/1158** | ADR-089 누적 +35 (1123 → 1158) |
+| axia-core lib | **200/200** | LOCKED guards all PASS |
+| axia-transaction | 4/4 | unchanged |
+| axia-wasm | 0/0 | (unit-test 없음) |
+| Vitest (web) | **1627/1627** (+1 skipped slow) | A-λ-β +5 |
+| **합계** | **2989/2989** | 절대 #[ignore] 금지 0 violations |
+
+**LOCKED guards 명시 검증**:
+- `test_p7_canonical_sweep_locked_scenarios` (LOCKED #1 ADR-021 P7) ✓
+- `test_p11_27rect_orphan_count_regression_guard` (LOCKED #12 ADR-025 P11) ✓
+- `test_draw_order_independence` ✓
+- `test_user_pattern_no_missing_faces` ✓
+- `test_complex_overlap_no_missing_faces` ✓
+- `test_p7_canonical_stacked_inner_manifold` (LOCKED #1 amendment, ADR-051) ✓
+- `test_p7_canonical_disjoint_inner_multi_hole` ✓
+- `test_p7_canonical_burge_centered_scenario_no_violations` ✓
+
+**ADR-089 누적 트랙 (A-α ~ A-ν)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +5 / +8 / +6 / +3 | Edge schema / HE wiring / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch unlock |
+| A-θ (Push-Pull Path A) | +5 | Cylinder via tessellation |
+| A-κ (Render Path A) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 (vitest) | DrawCircleTool 토글 |
+| A-ι (Offset Path A) | +4 | closed-curve self-loop offset |
+| **A-ν (regression sweep)** | **+0** | 모든 회귀 PASS |
+| **누적** | **axia-geo +35 / vitest +5** | **메타-원칙 #14 의 첫 깊은 실현** |
+
+**사용자 시연 가능 facing path**:
+1. SettingsPanel "곡선 모드 (실험)" 토글 ON
+2. DrawCircle 도구 → 곡선 face 매끈 disk 표시
+3. PushPull → tessellate-extrude → Cylinder
+4. Boolean (NURBS dispatch) → SSI 활성
+5. Offset → closed-curve self-loop output
+
+**결재 가능 후속 결정 (A-ν closure 후)**:
+- **default ON**: SettingsPanel 토글의 default 를 false → true 로 전환
+  (LOCKED #26 P-5e-α 의 ADR-049 답습 패턴). 사용자 결재 필요.
+- **A-θ Path B** 별도 ADR: 진정한 kernel-native cylinder (3주).
+- **A-μ** Snapshot legacy migration: .axia 파일 schema versioning.
+- **DrawArc/DrawBezier closed-curve** 마이그레이션 (별도 sub-step).
+
+### A-ν (본 commit)
+- **변경**: 본 §D `A-ν` regression sweep entry. 회귀 +0 (sweep only).
+- **Bundle 영향**: 0 (docs only).
+- **다음 step**: 사용자 결재 후 default ON 또는 후속 트랙 (Path B /
+  Snapshot migration / DrawArc).
 
 ---
 
