@@ -353,10 +353,36 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **N-κ-3** Curve type 외 closed-curve 지원 (Bezier closed curve 등).
   Circle 만 (current schema).
 
-### A-κ-α (본 commit)
+### A-κ-α (commit `7775c75`)
 - **사용자 결재**: 2026-05-08, "A-κ render pipeline 가장 자연 다음".
 - **변경**: 본 §D `A-κ-α` amendment. roadmap / lock-ins / non-goals.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-κ-β (commit `cdaf268`)
+- **변경**: `crates/axia-geo/src/mesh.rs`:
+  * `export_buffers_inner` 의 polygon path 진입 전 closed-curve face
+    fast-path (loop_verts.len() == 1 + Circle curve detect).
+  * `export_edge_lines_with_map` 진입 시 self-loop edge + Circle curve
+    detect → polyline tessellation 으로 emit. 모든 segment 가 같은
+    EdgeId map (LOCKED #15 P22.5).
+- **회귀**: axia-geo 1148 → 1154 (+6). 절대 #[ignore] 금지 6/6 준수.
+- **LOCKED guards**: axia-core 200 unchanged.
+- **Bundle 영향**: WASM 재빌드. JS chunk 0 변경 (read-only Rust).
+
+### A-κ-γ (browser real-runtime closure)
+- **시연**: `drawCircleAsCurve(0,0,0, 0,0,1, 500)` (radius 500mm) →
+  158-segment tessellation visible 매끈 disk. bbox `min(-500, -499, 0)`,
+  `max(500, 500, 0)`. Three.js mesh.children = 3 (front/back/edges).
+- **결과**: AxiA 의 첫 1-vert/1-edge/1-face DCEL canonical Phase 2
+  closed-curve 표현이 viewport 에 visually rendered. 매끈한 곡선
+  wireframe (industry CAD parity).
+- **사용자 가치 anchor (메타-원칙 #14 정합)**: 닫힌 경계 (Circle curve
+  self-loop edge) 가 자체 토폴로지 1 face 로 derived 되어 시각적으로
+  표시 — render layer 도 kernel-native 의 byproduct 로 표현.
+- **회귀**: +0 (smoke verification). A-κ track total **+6** (1148 →
+  1154).
+- **다음 step**: ADR-089 다음 후보 — A-ι (Offset closed-curve), A-λ
+  (UI tool DrawCircleAsCurveTool), 또는 A-θ Path B 별도 ADR.
 
 ---
 
