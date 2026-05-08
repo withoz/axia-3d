@@ -369,6 +369,44 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **LOCKED guards**: axia-core 200 unchanged.
 - **Bundle 영향**: WASM 재빌드. JS chunk 0 변경 (read-only Rust).
 
+### A-λ-α (2026-05-08, spec amendment)
+
+**Path Z 3-sub-step roadmap (A-λ UI exposure)**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-λ-α (본 amendment) | spec only | +0 |
+| A-λ-β | DrawCurveSettings + DrawCircleTool branch + SettingsPanel toggle | +5 |
+| A-λ-γ | Browser smoke + closure | +0 |
+
+**Lock-ins (A-λ-α 시점)**:
+- **L-λ-1** **DrawCurveSettings module** — AutoIntersectSettings 패턴
+  답습. localStorage 키 `axia:draw-curve-mode`, default OFF (additive
+  only, ADR-046 P31 #4 정합 — muscle memory 보호).
+- **L-λ-2** **DrawCircleTool 분기** — 2 call sites (mouseup + VCB) 모두
+  flag check 후 `drawCircleAsCurve` (kernel-native) 또는
+  `drawCircleAsShape` (legacy 24-segment polygon) 분기.
+- **L-λ-3** **SettingsPanel 토글** — "곡선 모드 (실험)" 체크박스 추가.
+  ADR-049 P-5d 의 "그리기 모드: 형태 (실험)" 토글과 동일 스타일.
+- **L-λ-4** **Default OFF** — 기존 사용자 facing 동작 (24-segment
+  polygon Shape) 무변화. 명시 opt-in 후에만 kernel-native 활성.
+- **L-λ-5** **DrawCircleTool 외 다른 도구는 unchanged** — DrawArcTool /
+  DrawBezierTool 등 향후 별도 sub-step. 본 ADR 은 Circle 만.
+- **L-λ-6** **Backward compat** — 기존 회귀 자산 (DrawCircleTool.test.ts
+  의 ADR-087 K-ε regression) 모두 PASS 유지.
+
+**Non-goals**:
+- **N-λ-1** 도구 메뉴/단축키/툴바 외부 ID 변경 — additive only.
+- **N-λ-2** 다른 Draw 도구 (DrawArc / DrawBezier 등) 마이그레이션.
+- **N-λ-3** Default ON 으로 toggle 변경 — 사용자 결재 후 별도 sub-step.
+
+### A-λ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "A-λ UI 노출 가장 자연 다음".
+- **변경**: 본 §D `A-λ-α` amendment.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+---
+
 ### A-κ-γ (browser real-runtime closure)
 - **시연**: `drawCircleAsCurve(0,0,0, 0,0,1, 500)` (radius 500mm) →
   158-segment tessellation visible 매끈 disk. bbox `min(-500, -499, 0)`,
