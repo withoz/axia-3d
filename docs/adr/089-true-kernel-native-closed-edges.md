@@ -919,11 +919,52 @@ smoothness) + A-τ (edge smooth-group hide) + A-υ (leftover cleanup)
 ### A-υ-γ (본 commit)
 - **변경**: 본 §D `A-υ-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-υ track closure 완료. ADR-089 Path A 모든 visual
-  + topological cleanup 완성. 후속 후보 — Sphere/Cone/Torus side face
-  fast-path (A-ρ + A-τ 동일 패턴), A-θ Path B (DCEL 진정한 kernel-
-  native cylinder, 별도 ADR), DrawArc/DrawBezier closed-curve 시민권
-  확장.
+
+---
+
+### A-φ-α (2026-05-08, Sphere/Cone/Torus uv-slice amendment)
+
+**사용자 결재**: A-ρ Cylinder uv-slice 패턴을 다른 곡면 도형에 답습.
+
+**Path Z 3-sub-step**:
+
+| Sub-step | 핵심 변경 | 회귀 |
+|----------|----------|-----|
+| A-φ-α (본 amendment) | spec only | +0 |
+| A-φ-β | Sphere/Cone/Torus uv-slice fast-path | +6 |
+| A-φ-γ | Regression sweep + closure | +0 |
+
+**Lock-ins**:
+- **L-φ-1** **공통 패턴**: 4 곡면 (Cylinder/Sphere/Cone/Torus) 모두
+  rotational symmetry → u (longitude) 는 동일 atan2 패턴. v 는 surface
+  kind 별 다름.
+- **L-φ-2** **Inversion 공식**:
+  - Cylinder (기존 A-ρ): u = atan2((p-axis_origin)·basis_v, ·ref_dir),
+    v = (p-axis_origin)·axis_dir
+  - Sphere: u = atan2((p-center).y, (p-center).x), v = asin((p-center).z
+    / radius). Z-up sphere convention (sphere::evaluate 답습).
+  - Cone: u = atan2((p-apex)·perp, (p-apex)·ref_dir),
+    v = (p-apex)·axis_dir
+  - Torus: u = atan2(local_xy·perp, local_xy·ref_dir) where local_xy
+    is component perpendicular to axis. v = atan2(axial, |local_xy| -
+    major_radius).
+- **L-φ-3** **Tessellation 4-vert 유지**: 모든 폴리곤 quad face (4
+  boundary verts) 가정. Non-quad curved face 는 fall-through.
+- **L-φ-4** **Fallback unchanged**: parametric inversion 실패 (예:
+  apex/center coincident) → 기존 full-surface tessellation fall-through.
+- **L-φ-5** **Sphere/Cone/Torus smooth-group already supported** —
+  A-τ-β `surfaces_in_same_smooth_group` 가 이미 4 곡면 모두 처리.
+  본 ADR 은 face render 만 추가, edge wireframe 무변화.
+
+**Non-goals**:
+- **N-φ-1** Bezier/B-spline/NURBS surface uv-slice (별도 ADR — chord-
+  uv 추출 복잡).
+- **N-φ-2** Non-quad curved face (별도 trianglulation rebuild).
+
+### A-φ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "Sphere/Cone/Torus 동일 패턴 답습".
+- **변경**: 본 §D `A-φ-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
