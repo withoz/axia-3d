@@ -242,6 +242,72 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 
 ---
 
+### A-θ-α (2026-05-08, spec amendment)
+
+**Path A 채택** (사용자 결재 2026-05-08): "ADR-088/089 패턴 (S-α spec
+→ 점진 atomic) 답습 시 (1) 권장 — 길 1 → 길 2 점진." 즉시 사용 가치
++ 진정한 kernel-native 는 별도 ADR 보장.
+
+**§A-θ Sub-step roadmap (Path A, 4-단계 atomic)**:
+
+| Sub-step | Title | 핵심 변경 | 회귀 (예상) |
+|----------|-------|----------|-----------|
+| A-θ-α (본 amendment) | spec only | 본 §D 추가 | +0 |
+| A-θ-β | Rust core tessellate-then-extrude | `extrude_planar_cylinder` closed-curve fast-path | +5 |
+| A-θ-γ | WASM/TS verify + regression sweep | 기존 `createSolidExtrude` 자동 통과 검증 | +0~3 |
+| A-θ-δ | 사용자 시연 (closed-curve Push-Pull) | browser real-runtime drawCircleAsCurve → Push-Pull | +0 |
+
+**Lock-ins (A-θ-α 시점)**:
+- **L-θ-1** **Path A 잠정 (mesh-era 회귀 한정)**: top + 측면 N개
+  faces = polygonal. closed-curve face (profile) 는 보존되지 않고
+  tessellation 시 polygonal 로 강등. 메타-원칙 #14 의 측면 (Path B
+  별도 ADR 시 closure).
+- **L-θ-2** **Detection point**: `extrude_planar_cylinder` entry 의
+  `boundary_verts.len() < 3` bail 직전. 1-vert + Circle curve self-loop
+  edge 감지 시 tessellation fast-path 분기.
+- **L-θ-3** **Tessellation default N=32 segments** (ADR-087 K-δ
+  Cylinder 답습). Future adaptive LOD = 별도 ADR.
+- **L-θ-4** **Substituted profile face**: 새 polygonal face (32 verts +
+  32 edges) 로 교체. 원본 closed-curve face 는 `remove_face` 로 비활성
+  (snapshot diff = 1 closed-curve face 제거 + 1 polygonal face 추가).
+- **L-θ-5** **AnalyticSurface inheritance**: 새 polygonal face 는 원본
+  closed-curve face 의 Plane surface 를 그대로 inherit (A-η-1 Plane
+  attach 가 자연 보존).
+- **L-θ-6** **Backward compat**: polygonal-circle Push-Pull (ADR-087
+  K-δ Cylinder primitive 답습) 은 unchanged. 본 fast-path 는 closed-
+  curve 입력에만 발동.
+- **L-θ-7** **Path B 별도 ADR**: 진정한 kernel-native cylinder (2
+  closed-curve loop boundary) 는 future ADR. 현재 Path A 는 임시방편.
+
+**Non-goals (A-θ-α 시점)**:
+- **N-θ-1** Cone / Sphere / Torus closed-curve profile 지원 (Path A
+  도) — Circle curve 만 (closed-curve = Circle in current schema).
+- **N-θ-2** Adaptive tessellation density (zoom / chord-tol 기반).
+- **N-θ-3** AnalyticEdge curve 보존 in result solid 의 측면 walls
+  (Path B scope).
+- **N-θ-4** Boolean dispatch path 의 closed-curve top/side face 처리
+  (Path B scope; A-θ Path A 의 결과는 모두 polygonal Plane).
+
+**Cross-link**:
+- ADR-087 K-δ (Cone/Cylinder 의 polygon-mode 1차 시민권) — Path A 의
+  source pattern.
+- ADR-079 W-1-α / W-2-α (`extrude_planar_box` / `extrude_planar_
+  cylinder`) — Path A 의 직접 진입점.
+- LOCKED #34 (ADR-087): Cone/Cylinder/Sphere 의 polygon path 자체는
+  본 fast-path 와 무관 (직접 primitive 경로).
+- ADR-089 §A-θ Path B (future ADR): 진정한 kernel-native cylinder
+  의 별도 트랙.
+
+### A-θ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "(1) 권장 — Path A 먼저, Path B 별도".
+- **변경**: 본 §D `A-θ-α` amendment 추가. Roadmap / lock-ins /
+  non-goals / cross-link 명시.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+- **Bundle 영향**: 0.
+- **다음 step**: A-θ-β (Rust core tessellate-then-extrude).
+
+---
+
 ## 7. Cross-link
 
 - **메타-원칙 #14** ("면은 닫힌 경계로부터 유도된다"): 본 ADR 의
