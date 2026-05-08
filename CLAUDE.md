@@ -1401,6 +1401,109 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-π closure, 2026-05-08)
+- **사용자 통찰 (canonical, 2026-05-08)**:
+  > "면은 닫힌 경계로부터 유도된다."
+  메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
+  citizen 으로, 1 vert (anchor) + 1 self-loop edge (with AnalyticCurve)
+  + 1 face 의 canonical Phase 2 표현.
+- **anchor 결정**: 모든 closed-curve 도형 (Circle 우선, Arc/Bezier/
+  BSpline/NURBS 후속) 은 kernel-native 표현으로 저장. legacy polygonal
+  approximation 은 backward-compat escape hatch 로만 보존.
+- **A-α ~ A-π Path Z atomic 15 sub-step closure**:
+  - **A-α** `bb71b8e` — spec only (ADR-089 본문 + 13-step roadmap)
+  - **A-β/A-γ/A-δ/A-ε** — 시민권 인프라: Edge schema (self-loop 허용),
+    half-edge wiring (next/prev/next_rad self-loop), `add_face_closed_
+    curve` API, spatial-hash dedup 호환
+  - **A-ζ** — face synthesis pipeline: LOCKED #1 P7 / LOCKED #12 P11
+    closed-curve aware. detect_free_edge_loop self-loop guard +
+    resolve_planar_free_faces fast-path
+  - **A-η-1** `92f4e68` — Boolean Plane attach: closed-curve face 가
+    `classify_dispatch_eligibility` 통과 → ADR-064/066 NURBS dispatch
+    의 NURBS path 로 라우팅
+  - **A-θ Path A** `2cc2bc0` — Push-Pull tessellate-then-extrude:
+    closed-curve face → Cylinder (24+ side faces). 메타-원칙 #14 측면
+    회귀, Path B (별도 future ADR) 까지 deferred
+  - **A-κ Path A** `cdaf268` — Render pipeline curve-aware:
+    `export_buffers_inner` + `export_edge_lines_with_map` closed-curve
+    fast-path. viewport 시각 표시 + 매끈 wireframe (industry CAD parity)
+  - **A-λ** `af9ff7a` — UI exposure: DrawCurveSettings module +
+    DrawCircleTool branch + SettingsPanel "곡선 모드 (실험)" 토글
+  - **A-ι Path A** `450b916` — Offset closed-curve: `offset_arc_on_
+    plane` Circle 분기에서 self-loop detection → kernel-native input
+    → kernel-native output (1 anchor + 1 self-loop edge with new Circle)
+  - **A-ν** `f5193d9` — regression sweep: 2989/2989 PASS (axia-geo
+    1158 + axia-core 200 + axia-transaction 4 + vitest 1627). 모든
+    LOCKED guards (#1, #5, #12, #15, #16, #26, #34) 명시 PASS
+  - **A-π Path Z** (3 sub-step, default ON 전환): `93a567c` /
+    `7ac0f72` / `23e3750`. ADR-049 P-5e-α / ADR-087 K-ε hotfix 답습
+    패턴. localStorage 'false' 명시 OFF preference 보존
+- **5 lock-in 원칙 (canonical)**:
+  - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
+    Phase 2). 메타-원칙 #14 정합
+  - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
+    부산물 일 뿐 (ADR-019 답습)
+  - L3: Default ON — DrawCircle 도구의 자동 동작. SettingsPanel 토글
+    은 escape hatch 만 (legacy 사용자 preservation)
+  - L4: Path A (잠정 tessellate) — Push-Pull / Boolean / Render 의
+    polygonal substitute. Path B (진정한 kernel-native cylinder) 은
+    별도 future ADR
+  - L5: Backward compat — polygonal Circle (legacy 24-segment) 의
+    회귀 자산 모두 PASS 유지. localStorage `axia:draw-curve-mode = 'false'`
+    explicit OFF preference 영구 보존
+- **회귀 누적 (절대 #[ignore] 금지)**:
+  - axia-geo +35 (1123 → 1158, A-α ~ A-ι 누적)
+  - vitest +7 (1622 → 1629, A-λ + A-π)
+  - **합계 +42**, 절대 #[ignore] 금지 42/42 준수
+- **사용자 facing 동작 (default ON 후)**:
+  - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
+  - PushPull → tessellate-extrude → Cylinder (Path A)
+  - Boolean → NURBS SSI dispatch 활성
+  - Offset → self-loop output (kernel-native preserved)
+  - Render → 매끈 곡선 + analytic Plane normal
+  - SettingsPanel "곡선 모드 (실험)" 체크박스 → explicit OFF escape hatch
+- **회귀 방지 테스트 강화** (절대 #[ignore] 금지):
+  - `adr089_a_eta_1_closed_curve_face_has_plane_surface_attached`
+  - `adr089_a_eta_1_closed_curve_face_passes_boolean_eligibility`
+  - `adr089_a_theta_closed_curve_face_extrudes_to_cylinder`
+  - `adr089_a_theta_closed_curve_attaches_cylinder_surface_to_sides`
+  - `adr089_a_kappa_closed_curve_face_emits_triangles`
+  - `adr089_a_kappa_closed_curve_edge_emits_polyline_segments`
+  - `adr089_a_iota_closed_curve_offset_produces_self_loop`
+  - `adr089_a_iota_polygonal_circle_unaffected_by_self_loop_path` (회귀 가드)
+  - DrawCurveSettings.test.ts (6 tests)
+  - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
+- **불변 (LOCKED 정책 정합)**:
+  - LOCKED #1 (P7) / #12 (P11): closed-curve face 도 동일 face 합성 /
+    분할 회귀 자산 PASS 유지
+  - LOCKED #5 (1.5μm spatial-hash): self-loop anchor vertex 도 동일
+    dedup 정책
+  - LOCKED #15 (P22.5): closed-curve edge wireframe 의 N segment 모두
+    같은 EdgeId map (owner-ID uniformity)
+  - LOCKED #16 (P23): closed-curve face 의 Plane variant 가 polygon
+    path 로 fall-through (ADR-038 K-ε hotfix 답습)
+  - LOCKED #26 (Two-Layer Citizenship Phase 1): closed-curve 도 form-
+    layer Shape / property-layer Xia 분리 정합
+  - LOCKED #34 (ADR-087): kernel-native command suite — DrawCircle
+    의 자동 surface attach 패턴 답습
+  - ADR-046 P31 #4 (additive only): SettingsPanel 토글 + 메뉴/단축키/
+    툴바 외부 ID UNCHANGED
+- **후속 트랙 (deferred to separate ADRs)**:
+  - **A-μ (future)**: Snapshot schema migration — .axia 파일 versioning
+    (legacy polygon ↔ kernel-native bidirectional)
+  - **A-θ Path B (future)**: 진정한 kernel-native cylinder (1 closed-
+    curve profile + 1 closed-curve top + 1 cylindrical side face with
+    2 self-loop loop boundary). 3주 atomic 트랙
+  - **DrawArc / DrawBezier closed-curve**: 다른 곡선 도구의 시민권
+    확장 (Bezier closed curve / NURBS closed curve 등)
+- **Cross-link**: 메타-원칙 #14 (canonical anchor), ADR-019 (Line is
+  Truth), ADR-027 (NURBS Kernel infrastructure), ADR-028 (Edge curve
+  attach), ADR-049/050 (Two-Layer Citizenship), ADR-051 (P7 strict),
+  ADR-064/066 (NURBS Boolean DCEL), ADR-079 (Create Solid), ADR-080
+  (Offset dimension-aware), ADR-081 (STEP/IGES NURBS-class), ADR-087
+  (Kernel-Native Command Suite Reset — directly preceding ADR), ADR-088
+  (curve_owner_id grouping). LOCKED #1, #5, #12, #15, #16, #26, #34.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
