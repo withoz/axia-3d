@@ -784,10 +784,59 @@ smooth-group edge hiding.
 - **N-τ-4** Wireframe polyline tessellation — boundary edge (Cylinder ↔
   Plane) 는 polygon 으로 보존. closed-curve self-loop 은 별도 path.
 
-### A-τ-α (본 commit)
+### A-τ-α (commit `c0d6745`)
 - **사용자 결재**: 2026-05-08, "wireframe edge tessellation 진행".
 - **변경**: 본 §D `A-τ-α` amendment.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-τ-β (commit `98c83bd`)
+- **변경**: `crates/axia-geo/src/mesh.rs`:
+  * `export_edge_lines_with_map` 의 2-face 분기에 smooth-group skip
+    조건 추가. 두 face 가 같은 곡면 surface 일 때 hide.
+  * `surfaces_in_same_smooth_group` helper 신규 — Cylinder / Sphere
+    / Cone / Torus 별 base parameters 비교.
+- **회귀**: axia-geo 1162 → 1166 (+4). 절대 #[ignore] 금지 4/4 준수.
+
+### A-τ-γ (browser real-runtime closure)
+
+**시연 결과** (R=400 cylinder, 23-segment Path A):
+- Edge segments: 117 → **69** (-41% reduction)
+- Unique edges visible: 47
+- **Hidden 23 vertical edges** (Cylinder-Cylinder smooth-group internal)
+- Visible: 23 top circle Arc + 23 bottom circle Arc + 23 leftover
+  self-loop Circle polyline (A-κ-β closed-curve edge render)
+- 시각: vertical polygon 분할선 모두 사라짐 → 매끈한 cylinder
+  silhouette + 명확한 top/bottom circle outline
+
+**Architectural unlock**: A-ρ (face surface smoothness) + A-τ
+(edge wireframe smooth-group hiding) 결합으로 메타-원칙 #14 측면
+회귀의 **시각 closure 완성** — DCEL 은 polygon quad 보존 (Path B
+별도 ADR), 시각은 진정한 매끈 cylinder.
+
+**ADR-089 누적 트랙 (A-α ~ A-τ)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| A-ρ Path A (face smooth) | +4 | u-slice tessellation |
+| **A-τ Path A (edge smooth-group)** | **+4** | **vertical 분할선 hide** |
+| **누적** | **axia-geo +43 / vitest +7 = +50** | **메타-원칙 #14 측면 시각 closure** |
+
+### A-τ-γ (본 commit)
+- **변경**: 본 §D `A-τ-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-τ track closure 완료. 후속 후보 — A-θ Path B (DCEL
+  진정한 kernel-native cylinder, 별도 ADR), Sphere/Cone/Torus
+  side face fast-path (A-ρ + A-τ 동일 패턴), DrawArc/DrawBezier
+  closed-curve 시민권 확장.
 
 ---
 
