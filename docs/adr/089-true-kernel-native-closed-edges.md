@@ -400,10 +400,36 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **N-λ-2** 다른 Draw 도구 (DrawArc / DrawBezier 등) 마이그레이션.
 - **N-λ-3** Default ON 으로 toggle 변경 — 사용자 결재 후 별도 sub-step.
 
-### A-λ-α (본 commit)
+### A-λ-α (commit `fe3a897`)
 - **사용자 결재**: 2026-05-08, "A-λ UI 노출 가장 자연 다음".
 - **변경**: 본 §D `A-λ-α` amendment.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-λ-β (commit `af9ff7a`)
+- **변경**:
+  * `web/src/tools/DrawCurveSettings.ts` (신규) — AutoIntersectSettings
+    pattern 답습. localStorage `axia:draw-curve-mode`, default OFF.
+  * `web/src/tools/DrawCircleTool.ts` — 2 call sites (mouseup + VCB)
+    flag check 후 `drawCircleAsCurve` (kernel-native) 또는
+    `drawCircleAsShape` (legacy) 분기.
+  * `web/src/units/SettingsPanel.ts` — "곡선 모드 (실험)" 체크박스 추가.
+- **회귀**: vitest +5 (DrawCurveSettings.test.ts). DrawCircleTool.test.ts
+  (9) 모두 PASS — flag default OFF 일 때 동작 unchanged (regression
+  guard).
+- **Bundle 영향**: ~0.3 kB (DrawCurveSettings module + SettingsPanel
+  toggle).
+
+### A-λ-γ (browser real-runtime closure)
+- **시연**: SettingsPanel "곡선 모드 (실험)" 토글 ON →
+  DrawCircleTool VCB R=750 → bridge.drawCircleAsCurve 호출 (spy
+  검증) → mesh: 1 vert / 1 edge / 1 face → viewport 매끈한 disk render.
+- **결과**: 사용자 facing path 완성. console 직접 호출 없이 메뉴
+  토글만으로 kernel-native closed-curve 활성. ADR-089 Path A 사용자
+  시연 가치 closure.
+- **회귀**: +0 (smoke verification). A-λ track total **+5**.
+- **다음 step**: ADR-089 다음 후보 — A-ι (Offset closed-curve), A-ν
+  (LOCKED 245 sites 재검증), A-μ (Snapshot legacy migration), 또는
+  A-θ Path B 별도 ADR.
 
 ---
 
