@@ -4324,91 +4324,17 @@ impl Mesh {
                 } else {
                 use crate::surfaces::SurfaceOps;
 
-                // ADR-089 A-ρ-β — Cylinder side face u-slice fast-path.
-                // For 4-vert quad faces with shared Cylinder surface (full
-                // u_range = 0..2π, all 23 side faces share same instance),
-                // compute the quad's actual u/v sub-range from its
-                // boundary verts and tessellate only that slice.
-                // L-ρ-1 / L-ρ-2 / L-ρ-3 / L-ρ-5.
-                //
-                // Without this fast-path, each side face renders the FULL
-                // cylinder (overlapping mesh, polygon edge artifacts).
+                // ADR-089 A-ρ-β / A-φ-β — curved surface uv-slice fast-path.
+                // For 4-vert quad faces with shared curved surface
+                // (Cylinder/Sphere/Cone/Torus), compute the quad's actual
+                // uv sub-range from its boundary verts and tessellate only
+                // that slice. L-φ-1 / L-φ-2 / L-φ-3 / L-φ-4.
                 let face_surface_owned;
+                let slice = compute_uv_slice_for_quad_face(self, face, surface);
                 let render_surface: &crate::surfaces::AnalyticSurface =
-                    if let crate::surfaces::AnalyticSurface::Cylinder {
-                        axis_origin, axis_dir, radius, ref_dir,
-                        u_range: _full_u, v_range: _full_v,
-                    } = surface {
-                        // Try to derive sub-Cylinder from boundary verts.
-                        let quad_verts_opt = self
-                            .collect_loop_verts(face.outer().start)
-                            .ok();
-                        if let Some(quad_verts) = quad_verts_opt {
-                            if quad_verts.len() == 4 {
-                                let axis_dir_n = axis_dir.normalize_or_zero();
-                                let ref_dir_n = ref_dir.normalize_or_zero();
-                                let basis_v = axis_dir_n.cross(ref_dir_n);
-                                let mut us = Vec::with_capacity(4);
-                                let mut vs = Vec::with_capacity(4);
-                                let mut all_ok = true;
-                                for &vid in &quad_verts {
-                                    match self.vertex_pos(vid) {
-                                        Ok(p) => {
-                                            let local = p - *axis_origin;
-                                            let lx = local.dot(ref_dir_n);
-                                            let ly = local.dot(basis_v);
-                                            let u = ly.atan2(lx);
-                                            let v = local.dot(axis_dir_n);
-                                            us.push(u);
-                                            vs.push(v);
-                                        }
-                                        Err(_) => { all_ok = false; break; }
-                                    }
-                                }
-                                if all_ok {
-                                    // u: pick contiguous range. For a quad
-                                    // on cylinder, 2 verts share u_lo and 2
-                                    // share u_hi (within tolerance). To
-                                    // handle wrap-around (e.g., quad
-                                    // spanning ±π discontinuity), unwrap
-                                    // angles relative to first.
-                                    let u0 = us[0];
-                                    let unwrap = |u: f64| -> f64 {
-                                        let mut d = u - u0;
-                                        while d > std::f64::consts::PI { d -= std::f64::consts::TAU; }
-                                        while d < -std::f64::consts::PI { d += std::f64::consts::TAU; }
-                                        u0 + d
-                                    };
-                                    let unwrapped: Vec<f64> = us.iter().map(|&u| unwrap(u)).collect();
-                                    let u_min = unwrapped.iter().cloned().fold(f64::INFINITY, f64::min);
-                                    let u_max = unwrapped.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                                    let v_min = vs.iter().cloned().fold(f64::INFINITY, f64::min);
-                                    let v_max = vs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                                    if (u_max - u_min).abs() > 1e-9
-                                        && (v_max - v_min).abs() > 1e-9
-                                    {
-                                        face_surface_owned =
-                                            crate::surfaces::AnalyticSurface::Cylinder {
-                                                axis_origin: *axis_origin,
-                                                axis_dir: *axis_dir,
-                                                radius: *radius,
-                                                ref_dir: *ref_dir,
-                                                u_range: (u_min, u_max),
-                                                v_range: (v_min, v_max),
-                                            };
-                                        &face_surface_owned
-                                    } else {
-                                        surface
-                                    }
-                                } else {
-                                    surface
-                                }
-                            } else {
-                                surface
-                            }
-                        } else {
-                            surface
-                        }
+                    if let Some(sliced) = slice {
+                        face_surface_owned = sliced;
+                        &face_surface_owned
                     } else {
                         surface
                     };
@@ -6618,6 +6544,155 @@ impl Mesh {
 impl Default for Mesh {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// ADR-089 A-φ-β — Compute uv-slice sub-surface for a 4-vert quad face
+/// on a curved analytic surface (Cylinder/Sphere/Cone/Torus).
+///
+/// Returns `Some(sub_surface_with_tight_uv_range)` if extraction succeeds,
+/// `None` otherwise (caller falls through to full-surface tessellation).
+///
+/// L-φ-2 inversion formulas:
+/// - Cylinder: u = atan2(local·basis_v, local·ref_dir),
+///   v = local·axis_dir
+/// - Sphere: u = atan2(local.y, local.x), v = asin(local.z / radius)
+///   (Z-up sphere, matches sphere::evaluate)
+/// - Cone: u = atan2(local·basis_v, local·ref_dir),
+///   v = local·axis_dir (axial distance from apex)
+/// - Torus: split local into axial + radial, then
+///   u = atan2(radial·basis_v, radial·ref_dir),
+///   v = atan2(axial / minor_radius, (|radial| - major_radius) / minor_radius)
+fn compute_uv_slice_for_quad_face(
+    mesh: &Mesh,
+    face: &Face,
+    surface: &crate::surfaces::AnalyticSurface,
+) -> Option<crate::surfaces::AnalyticSurface> {
+    use crate::surfaces::AnalyticSurface as S;
+
+    let quad_verts = mesh.collect_loop_verts(face.outer().start).ok()?;
+    if quad_verts.len() != 4 { return None; }
+    let positions: Vec<DVec3> = quad_verts
+        .iter()
+        .filter_map(|v| mesh.vertex_pos(*v).ok())
+        .collect();
+    if positions.len() != 4 { return None; }
+
+    // Helper: unwrap angles relative to first to handle ±π wrap.
+    let unwrap_angles = |angles: &[f64]| -> Vec<f64> {
+        if angles.is_empty() { return Vec::new(); }
+        let u0 = angles[0];
+        angles.iter().map(|&u| {
+            let mut d = u - u0;
+            while d > std::f64::consts::PI { d -= std::f64::consts::TAU; }
+            while d < -std::f64::consts::PI { d += std::f64::consts::TAU; }
+            u0 + d
+        }).collect()
+    };
+
+    let range_of = |vs: &[f64]| -> (f64, f64) {
+        let mn = vs.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = vs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        (mn, mx)
+    };
+
+    let make_slice = |us_unwrapped: Vec<f64>, vs: Vec<f64>,
+                      base: &S| -> Option<S> {
+        let (u_min, u_max) = range_of(&us_unwrapped);
+        let (v_min, v_max) = range_of(&vs);
+        if (u_max - u_min).abs() < 1e-9 || (v_max - v_min).abs() < 1e-9 {
+            return None;
+        }
+        match base {
+            S::Cylinder { axis_origin, axis_dir, radius, ref_dir, .. } =>
+                Some(S::Cylinder {
+                    axis_origin: *axis_origin, axis_dir: *axis_dir,
+                    radius: *radius, ref_dir: *ref_dir,
+                    u_range: (u_min, u_max), v_range: (v_min, v_max),
+                }),
+            S::Sphere { center, radius, .. } =>
+                Some(S::Sphere {
+                    center: *center, radius: *radius,
+                    u_range: (u_min, u_max), v_range: (v_min, v_max),
+                }),
+            S::Cone { apex, axis_dir, half_angle, ref_dir, .. } =>
+                Some(S::Cone {
+                    apex: *apex, axis_dir: *axis_dir,
+                    half_angle: *half_angle, ref_dir: *ref_dir,
+                    u_range: (u_min, u_max), v_range: (v_min, v_max),
+                }),
+            S::Torus { center, axis_dir, ref_dir, major_radius, minor_radius, .. } =>
+                Some(S::Torus {
+                    center: *center, axis_dir: *axis_dir, ref_dir: *ref_dir,
+                    major_radius: *major_radius, minor_radius: *minor_radius,
+                    u_range: (u_min, u_max), v_range: (v_min, v_max),
+                }),
+            _ => None,
+        }
+    };
+
+    match surface {
+        S::Cylinder { axis_origin, axis_dir, ref_dir, .. } => {
+            let axis_n = axis_dir.normalize_or_zero();
+            let ref_n = ref_dir.normalize_or_zero();
+            let basis_v = axis_n.cross(ref_n);
+            let mut us = Vec::with_capacity(4);
+            let mut vs = Vec::with_capacity(4);
+            for p in &positions {
+                let local = *p - *axis_origin;
+                us.push(local.dot(basis_v).atan2(local.dot(ref_n)));
+                vs.push(local.dot(axis_n));
+            }
+            make_slice(unwrap_angles(&us), vs, surface)
+        }
+        S::Sphere { center, radius, .. } => {
+            let mut us = Vec::with_capacity(4);
+            let mut vs = Vec::with_capacity(4);
+            for p in &positions {
+                let local = *p - *center;
+                us.push(local.y.atan2(local.x));
+                let z_norm = (local.z / *radius).clamp(-1.0, 1.0);
+                vs.push(z_norm.asin());
+            }
+            make_slice(unwrap_angles(&us), vs, surface)
+        }
+        S::Cone { apex, axis_dir, ref_dir, .. } => {
+            let axis_n = axis_dir.normalize_or_zero();
+            let ref_n = ref_dir.normalize_or_zero();
+            let basis_v = axis_n.cross(ref_n);
+            let mut us = Vec::with_capacity(4);
+            let mut vs = Vec::with_capacity(4);
+            for p in &positions {
+                let local = *p - *apex;
+                us.push(local.dot(basis_v).atan2(local.dot(ref_n)));
+                vs.push(local.dot(axis_n));
+            }
+            make_slice(unwrap_angles(&us), vs, surface)
+        }
+        S::Torus {
+            center, axis_dir, ref_dir,
+            major_radius, minor_radius, ..
+        } => {
+            let axis_n = axis_dir.normalize_or_zero();
+            let ref_n = ref_dir.normalize_or_zero();
+            let basis_v = axis_n.cross(ref_n);
+            if *minor_radius < 1e-9 { return None; }
+            let mut us = Vec::with_capacity(4);
+            let mut vs = Vec::with_capacity(4);
+            for p in &positions {
+                let local = *p - *center;
+                let axial = local.dot(axis_n);
+                let radial = local - axis_n * axial;
+                let r_len = radial.length();
+                us.push(radial.dot(basis_v).atan2(radial.dot(ref_n)));
+                let v_arg_x = (r_len - *major_radius) / *minor_radius;
+                let v_arg_y = axial / *minor_radius;
+                vs.push(v_arg_y.atan2(v_arg_x));
+            }
+            // For Torus, v also wraps — unwrap both
+            make_slice(unwrap_angles(&us), unwrap_angles(&vs), surface)
+        }
+        _ => None,
     }
 }
 
@@ -10130,6 +10205,210 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-φ-β: Sphere/Cone/Torus uv-slice fast-path
+    // ────────────────────────────────────────────────────────────────────
+
+    fn build_sphere_quad_face(
+        mesh: &mut Mesh,
+        radius: f64,
+        u_lo: f64, u_hi: f64,
+        v_lo: f64, v_hi: f64,
+    ) -> FaceId {
+        let pt = |u: f64, v: f64| -> DVec3 {
+            DVec3::new(
+                radius * v.cos() * u.cos(),
+                radius * v.cos() * u.sin(),
+                radius * v.sin(),
+            )
+        };
+        let v0 = mesh.add_vertex(pt(u_lo, v_lo));
+        let v1 = mesh.add_vertex(pt(u_hi, v_lo));
+        let v2 = mesh.add_vertex(pt(u_hi, v_hi));
+        let v3 = mesh.add_vertex(pt(u_lo, v_hi));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let sph = crate::surfaces::AnalyticSurface::Sphere {
+            center: DVec3::ZERO, radius,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        mesh.faces[face].set_surface(Some(sph));
+        face
+    }
+
+    #[test]
+    fn adr089_a_phi_sphere_quad_emits_sliced_tessellation() {
+        let mut mesh = Mesh::new();
+        let _f = build_sphere_quad_face(
+            &mut mesh, 100.0,
+            0.0, std::f64::consts::PI / 6.0,  // u: 30° wedge
+            0.0, std::f64::consts::PI / 6.0,  // v: 30° band
+        );
+        let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let tris = indices.len() / 3;
+        // Without slice: full sphere ~2000+ tris. With slice: ~50 tris.
+        assert!(tris < 200,
+            "ADR-089 A-φ-β: sphere u-slice must produce ≪ 200 tris, got {}", tris);
+        assert!(tris > 0);
+    }
+
+    #[test]
+    fn adr089_a_phi_sphere_quad_normals_radial() {
+        let mut mesh = Mesh::new();
+        let radius = 50.0;
+        let _f = build_sphere_quad_face(
+            &mut mesh, radius,
+            0.0, std::f64::consts::PI / 4.0,
+            0.0, std::f64::consts::PI / 4.0,
+        );
+        let (positions, normals, _idx, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let n_verts = positions.len() / 3;
+        for i in 0..n_verts {
+            let p = DVec3::new(
+                positions[i * 3] as f64,
+                positions[i * 3 + 1] as f64,
+                positions[i * 3 + 2] as f64,
+            );
+            let n = DVec3::new(
+                normals[i * 3] as f64,
+                normals[i * 3 + 1] as f64,
+                normals[i * 3 + 2] as f64,
+            );
+            // Sphere normal = radial direction (p - center)/radius, outward.
+            // Allow some tolerance — chord points may not be exactly on sphere.
+            let p_dir = p.normalize_or_zero();
+            assert!(p_dir.dot(n) > 0.95,
+                "sphere normal at vert {} not radial: p_dir={:?} n={:?}", i, p_dir, n);
+        }
+    }
+
+    fn build_cone_quad_face(
+        mesh: &mut Mesh,
+        half_angle: f64,
+        u_lo: f64, u_hi: f64,
+        v_lo: f64, v_hi: f64,
+    ) -> FaceId {
+        // Cone with apex at origin, axis +Z, ref_dir +X
+        let pt = |u: f64, v: f64| -> DVec3 {
+            let r = v * half_angle.tan();
+            DVec3::new(r * u.cos(), r * u.sin(), v)
+        };
+        let v0 = mesh.add_vertex(pt(u_lo, v_lo));
+        let v1 = mesh.add_vertex(pt(u_hi, v_lo));
+        let v2 = mesh.add_vertex(pt(u_hi, v_hi));
+        let v3 = mesh.add_vertex(pt(u_lo, v_hi));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let cone = crate::surfaces::AnalyticSurface::Cone {
+            apex: DVec3::ZERO, axis_dir: DVec3::Z,
+            half_angle, ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (10.0, 200.0),
+        };
+        mesh.faces[face].set_surface(Some(cone));
+        face
+    }
+
+    #[test]
+    fn adr089_a_phi_cone_quad_emits_sliced_tessellation() {
+        let mut mesh = Mesh::new();
+        let _f = build_cone_quad_face(
+            &mut mesh,
+            std::f64::consts::PI / 6.0, // 30° half-angle
+            0.0, std::f64::consts::PI / 8.0,  // u-slice
+            50.0, 150.0,                       // axial
+        );
+        let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let tris = indices.len() / 3;
+        assert!(tris < 200,
+            "ADR-089 A-φ-β: cone uv-slice must produce ≪ 200 tris, got {}", tris);
+        assert!(tris > 0);
+    }
+
+    fn build_torus_quad_face(
+        mesh: &mut Mesh,
+        major_radius: f64,
+        minor_radius: f64,
+        u_lo: f64, u_hi: f64,
+        v_lo: f64, v_hi: f64,
+    ) -> FaceId {
+        let pt = |u: f64, v: f64| -> DVec3 {
+            let radial = major_radius + minor_radius * v.cos();
+            DVec3::new(radial * u.cos(), radial * u.sin(), minor_radius * v.sin())
+        };
+        let v0 = mesh.add_vertex(pt(u_lo, v_lo));
+        let v1 = mesh.add_vertex(pt(u_hi, v_lo));
+        let v2 = mesh.add_vertex(pt(u_hi, v_hi));
+        let v3 = mesh.add_vertex(pt(u_lo, v_hi));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let tor = crate::surfaces::AnalyticSurface::Torus {
+            center: DVec3::ZERO, axis_dir: DVec3::Z, ref_dir: DVec3::X,
+            major_radius, minor_radius,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, std::f64::consts::TAU),
+        };
+        mesh.faces[face].set_surface(Some(tor));
+        face
+    }
+
+    #[test]
+    fn adr089_a_phi_torus_quad_emits_sliced_tessellation() {
+        let mut mesh = Mesh::new();
+        let _f = build_torus_quad_face(
+            &mut mesh, 100.0, 20.0,
+            0.0, std::f64::consts::PI / 8.0,
+            0.0, std::f64::consts::PI / 8.0,
+        );
+        let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let tris = indices.len() / 3;
+        // Torus uses fixed grid tessellation (~16×16 for slice). Without
+        // slice, full torus would emit ~10000+ tris.
+        assert!(tris < 600,
+            "ADR-089 A-φ-β: torus uv-slice must produce ≪ 600 tris, got {}", tris);
+        assert!(tris > 0);
+    }
+
+    #[test]
+    fn adr089_a_phi_uv_slice_helper_returns_none_for_plane() {
+        // Plane → not a curved kind, helper returns None (caller falls
+        // through to polygon path).
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let plane = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-1.0, 1.0), v_range: (-1.0, 1.0),
+        };
+        mesh.faces[face].set_surface(Some(plane.clone()));
+        let result = compute_uv_slice_for_quad_face(
+            &mesh, &mesh.faces[face], &plane);
+        assert!(result.is_none(),
+            "ADR-089 A-φ-β: Plane must not be uv-sliced (Plane fast-path handles it)");
+    }
+
+    #[test]
+    fn adr089_a_phi_uv_slice_returns_none_for_non_quad_face() {
+        // 3-vert (triangle) face → return None.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let a = std::f64::consts::PI / 8.0;
+        let v1 = mesh.add_vertex(DVec3::new(100.0 * a.cos(), 100.0 * a.sin(), 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(100.0, 0.0, 50.0));
+        let face = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        let cyl = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z,
+            radius: 100.0, ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU), v_range: (0.0, 100.0),
+        };
+        mesh.faces[face].set_surface(Some(cyl.clone()));
+        let result = compute_uv_slice_for_quad_face(
+            &mesh, &mesh.faces[face], &cyl);
+        assert!(result.is_none(),
+            "ADR-089 A-φ-β: 3-vert face must not be uv-sliced (L-φ-3)");
     }
 
     // ────────────────────────────────────────────────────────────────────
