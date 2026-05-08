@@ -689,10 +689,59 @@ chord-tolerant tessellation 표시".
   vertical line 들이 보임 — 이는 별도 fix). 본 ADR 은 face 의 surface
   부분만 매끈하게.
 
-### A-ρ-α (본 commit)
+### A-ρ-α (commit `bc70af1`)
 - **사용자 결재**: 2026-05-08, "🅲 render-only fix 진행".
 - **변경**: 본 §D `A-ρ-α` amendment. roadmap / lock-ins / non-goals.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-ρ-β (commit `58047c4`)
+- **변경**: `crates/axia-geo/src/mesh.rs`:
+  * `export_buffers_inner` Cylinder 분기 — 4 boundary verts → 각
+    vert 의 (θ via atan2, axial v via dot(axis_dir)) 추출.
+  * Wrap-around safe unwrap (relative to first u, ±π normalize).
+  * Sub-Cylinder 생성 (u_range = (u_min, u_max), v_range =
+    (v_min, v_max)) → 그 slice 만 tessellate.
+  * Plane fast-path 보존 (LOCKED #16 K-ε hotfix unchanged).
+- **회귀**: axia-geo 1158 → 1162 (+4). 절대 #[ignore] 금지 4/4 준수:
+  * `cylinder_quad_emits_sliced_tessellation` (tris < 100, NOT 1000+)
+  * `cylinder_quad_normals_radial` (모든 normal radial outward)
+  * `cylinder_quad_tessellation_within_quad_bounds` (theta 안 벗어남)
+  * `polygonal_face_unaffected` (regression guard)
+- **LOCKED guards**: axia-core 200 unchanged.
+
+### A-ρ-γ (browser real-runtime closure)
+
+**시연 결과**:
+- Pre-fix triangle count: **26,594** (각 quad 가 full cylinder 통째로
+  tessellate)
+- Post-fix triangle count: **778** (각 quad 의 정확한 u-slice)
+- **33x reduction**, 시각 매끈도 향상 — polygon quad artifact 사라짐
+- DCEL UNCHANGED (25 face / 70 edge / 46 vert)
+- Face delete 후 hole 사각형 boundary 명확 + cylinder wall 표면 매끈
+
+**ADR-089 누적 트랙 (A-α ~ A-ρ)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| **A-ρ Path A (render Cylinder smooth)** | **+4** | **매끈 표면 + DCEL polygon 보존** |
+| **누적** | **axia-geo +39 / vitest +7 = +46** | **메타-원칙 #14 측면 회귀 visual closure** |
+
+### A-ρ-γ (본 commit)
+- **변경**: 본 §D `A-ρ-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-ρ track closure 완료. 후속 후보 — A-θ Path B (DCEL
+  진정한 kernel-native cylinder, 별도 ADR), A-μ (Snapshot legacy
+  migration), DrawArc/DrawBezier 시민권 확장, Sphere/Cone/Torus
+  side face 동일 패턴 fast-path.
 
 ---
 
