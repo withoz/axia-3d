@@ -29,7 +29,10 @@ export class SelectionManager {
   private selected = new Set<number>();
   private selectedEdges = new Set<number>();  // 선택된 EdgeId
   private hovered = -1;
-  private hoveredEdgeSegIndex = -1;  // hover 중인 edge segment index
+  private hoveredEdgeSegIndex = -1;  // hover 중인 edge segment index (single)
+  /** ADR-088 Phase 1 (S-ζ) — hover 중인 edge segment indices group
+   *  (curve_owner_id grouping). Mutually exclusive with hoveredEdgeSegIndex. */
+  private hoveredEdgeSegIndices: number[] = [];
 
   // ── Three.js 하이라이트 메시 ──
   private highlightGroup: THREE.Group;
@@ -152,6 +155,12 @@ export class SelectionManager {
     if (this.isXiaSelected) this.rebuildXiaDots();
   }
 
+  /** ADR-088 Phase 1 (S-ζ) — read-only access to edgeMap for callers
+   *  needing segIndex ↔ edgeId lookup (e.g., ToolManager hover walk). */
+  getEdgeMap(): Uint32Array | null {
+    return this.edgeMap;
+  }
+
   /** Edge 버퍼 업데이트 (syncMesh 시 호출) */
   updateEdgeBuffers(edgeLines: Float32Array | null, edgeMap: Uint32Array | null) {
     this.edgeLines = edgeLines;
@@ -271,14 +280,34 @@ export class SelectionManager {
 
   /** Edge hover 업데이트 */
   setEdgeHover(segIndex: number) {
-    if (segIndex === this.hoveredEdgeSegIndex) return;
+    if (segIndex === this.hoveredEdgeSegIndex && this.hoveredEdgeSegIndices.length === 0) return;
     this.hoveredEdgeSegIndex = segIndex;
+    this.hoveredEdgeSegIndices = [];  // group hover 해제
+    this.rebuildEdgeHoverLine();
+  }
+
+  /**
+   * ADR-088 Phase 1 (S-ζ hotfix) — Group hover for analytic curve segments.
+   * LOCKED #15 P22.5 enforcement at hover layer (이전 S-δ 는 click 만).
+   *
+   * Curve_owner_id 가 있는 edge 의 hover 는 모든 N segments 동시 highlight
+   * → 사용자 시각이 "logical curve = 1 entity" 로 unify.
+   */
+  setEdgeHoverGroup(segIndices: number[]) {
+    // No-op if same group already shown.
+    if (this.hoveredEdgeSegIndices.length === segIndices.length &&
+        this.hoveredEdgeSegIndices.every((v, i) => v === segIndices[i])) {
+      return;
+    }
+    this.hoveredEdgeSegIndex = -1;  // single hover 해제
+    this.hoveredEdgeSegIndices = segIndices.slice();
     this.rebuildEdgeHoverLine();
   }
 
   clearEdgeHover() {
-    if (this.hoveredEdgeSegIndex < 0) return;
+    if (this.hoveredEdgeSegIndex < 0 && this.hoveredEdgeSegIndices.length === 0) return;
     this.hoveredEdgeSegIndex = -1;
+    this.hoveredEdgeSegIndices = [];
     this.rebuildEdgeHoverLine();
   }
 
@@ -1624,21 +1653,32 @@ export class SelectionManager {
       this.edgeHoverLine = null;
     }
 
-    if (this.hoveredEdgeSegIndex < 0 || !this.edgeLines) return;
+    if (!this.edgeLines) return;
 
-    const base = this.hoveredEdgeSegIndex * 6;
-    if (base + 5 >= this.edgeLines.length) return;
+    // ADR-088 Phase 1 (S-ζ) — Build positions array from either single
+    // (legacy) or group (curve_owner_id) hover state.
+    const segIndices: number[] = this.hoveredEdgeSegIndices.length > 0
+      ? this.hoveredEdgeSegIndices
+      : (this.hoveredEdgeSegIndex >= 0 ? [this.hoveredEdgeSegIndex] : []);
+    if (segIndices.length === 0) return;
 
-    // 이미 선택된 edge는 hover 표시 생략
-    if (this.edgeMap && this.selectedEdges.has(this.edgeMap[this.hoveredEdgeSegIndex])) return;
+    const positions: number[] = [];
+    for (const segIdx of segIndices) {
+      const base = segIdx * 6;
+      if (base + 5 >= this.edgeLines.length) continue;
+      // Skip already-selected edges from hover (visual cleanliness).
+      if (this.edgeMap && this.selectedEdges.has(this.edgeMap[segIdx])) continue;
+      positions.push(
+        this.edgeLines[base], this.edgeLines[base+1], this.edgeLines[base+2],
+        this.edgeLines[base+3], this.edgeLines[base+4], this.edgeLines[base+5],
+      );
+    }
+    if (positions.length === 0) return;
 
     // Line2 — LineMaterial 의 linewidth 는 픽셀 단위로 정확히 적용 (Windows
     // WebGL 의 LineBasicMaterial 1px 한계 회피).
     const geo = new LineSegmentsGeometry();
-    geo.setPositions(new Float32Array([
-      this.edgeLines[base], this.edgeLines[base+1], this.edgeLines[base+2],
-      this.edgeLines[base+3], this.edgeLines[base+4], this.edgeLines[base+5],
-    ]));
+    geo.setPositions(new Float32Array(positions));
     const mat = new LineMaterial({
       color: SelectionManager.HOVER_COLOR,
       linewidth: SelectionManager.HOVER_LINE_WIDTH_PX,

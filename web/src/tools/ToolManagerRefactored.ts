@@ -3414,7 +3414,30 @@ export class ToolManager {
         if (picked && picked.type === 'edge' && picked.hit.index != null) {
           this.selection.clearHover();
           const segIndex = Math.floor(picked.hit.index / 2);
-          this.selection.setEdgeHover(segIndex);
+          // ADR-088 Phase 1 (S-ζ hotfix) — curve_owner_id walk for hover.
+          // LOCKED #15 P22.5: Circle 의 N segments 가 logical 1 entity →
+          // hover 시 전체 그룹 highlight (S-δ 의 click 동작과 정합).
+          const edgeMap = this.selection.getEdgeMap?.() ?? null;
+          let groupIndices: number[] | null = null;
+          if (edgeMap && segIndex >= 0 && segIndex < edgeMap.length) {
+            const edgeId = edgeMap[segIndex];
+            const ownerId = this.bridge.getEdgeCurveOwnerId(edgeId);
+            if (ownerId >= 0) {
+              const groupEdges = new Set(this.bridge.getEdgesByCurveOwner(ownerId));
+              if (groupEdges.size > 1) {
+                // Map group edges back to seg indices in edgeMap.
+                groupIndices = [];
+                for (let i = 0; i < edgeMap.length; i++) {
+                  if (groupEdges.has(edgeMap[i])) groupIndices.push(i);
+                }
+              }
+            }
+          }
+          if (groupIndices && groupIndices.length > 1) {
+            this.selection.setEdgeHoverGroup(groupIndices);
+          } else {
+            this.selection.setEdgeHover(segIndex);
+          }
         } else if (picked && picked.type === 'face' && picked.hit.faceIndex != null) {
           const fid = this.getFaceId(picked.hit.faceIndex);
           this.selection.setHover(fid);

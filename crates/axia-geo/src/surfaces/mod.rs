@@ -539,19 +539,29 @@ impl AnalyticSurface {
         match self {
             AnalyticSurface::Plane { .. } => (2, 2),  // 1 quad
             AnalyticSurface::Cylinder { radius, .. } => {
+                // u (circumferential, curved): chord-tolerance based.
+                // v (axial, STRAIGHT): 2 verts sufficient — curvature 0.
+                // ADR-088 Phase 1 (S-ζ perf fix, 2026-05-08): 이전 코드는
+                // n_v = (v_span/chord_tol).min(256) → 100mm height + 0.1mm
+                // tol = 256 verts/face × 16 side faces = 4K+ verts (cylinder
+                // 단독). 사용자 시연 (2026-05-08): 생성 속도 너무 느림.
                 let n_u = sagitta_segments(*radius, u_span, chord_tol).max(8);
-                let n_v = ((v_span / chord_tol).ceil().max(2.0) as usize).min(256).max(2);
+                let n_v = 2;
                 (n_u, n_v)
             }
             AnalyticSurface::Sphere { radius, .. } => {
+                // u (longitude) and v (latitude) both curved on sphere.
                 let n_u = sagitta_segments(*radius, u_span, chord_tol).max(8);
                 let n_v = sagitta_segments(*radius, v_span, chord_tol).max(4);
                 (n_u, n_v)
             }
             AnalyticSurface::Cone { half_angle, v_range, .. } => {
+                // u (circumferential, curved): chord-tolerance based.
+                // v (axial along cone slope, STRAIGHT): 2 verts sufficient.
+                // ADR-088 Phase 1 (S-ζ perf fix, 2026-05-08).
                 let r_max = v_range.1 * half_angle.sin();
                 let n_u = sagitta_segments(r_max.max(1e-9), u_span, chord_tol).max(8);
-                let n_v = ((v_span / chord_tol).ceil().max(2.0) as usize).min(256).max(2);
+                let n_v = 2;
                 (n_u, n_v)
             }
             AnalyticSurface::Torus { major_radius, minor_radius, .. } => {
