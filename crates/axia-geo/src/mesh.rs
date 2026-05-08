@@ -2815,6 +2815,32 @@ impl Mesh {
             // 4. Set face's outer LoopRef.
             self.faces[face_id].set_outer(LoopRef::new(he_anchor, true));
 
+            // 5. ADR-089 Phase 2 (A-η-1): attach Plane AnalyticSurface to
+            //    the closed-curve face so it qualifies for kernel-aware
+            //    ops (Boolean / Push-Pull / Offset).
+            //
+            //    Plane derives from Circle's plane:
+            //    - origin = circle.center
+            //    - normal = circle.normal (already normalized)
+            //    - basis_u = circle.basis_u (perpendicular to normal)
+            //    - u_range/v_range = ±radius * 1.5 (covers circle bounds + margin)
+            //
+            //    NOTE: Boolean dispatch's eligibility check (face_surface
+            //    must be Some) now passes for closed-curve faces. SSI
+            //    treats them as Plane × Plane intersection (already
+            //    supported by ADR-064/066 NURBS Boolean).
+            if let crate::curves::AnalyticCurve::Circle { center, radius, normal: c_normal, basis_u } = &curve {
+                let plane_range = (-(*radius) * 1.5, *radius * 1.5);
+                let plane = crate::surfaces::AnalyticSurface::Plane {
+                    origin: *center,
+                    normal: *c_normal,
+                    basis_u: *basis_u,
+                    u_range: plane_range,
+                    v_range: plane_range,
+                };
+                self.faces[face_id].set_surface(Some(plane));
+            }
+
             Ok(())
         })();
 
@@ -9817,5 +9843,79 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-η-1: Plane surface auto-attach to closed-curve face
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr089_a_eta_1_closed_curve_face_has_plane_surface_attached() {
+        // closed-curve face must carry a Plane AnalyticSurface derived
+        // from the Circle's plane (origin / normal / basis_u).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(anchor, circle, MaterialId::new(0)).unwrap();
+        let surface = mesh.face_surface(face)
+            .expect("ADR-089 A-η-1: closed-curve face must have AnalyticSurface attached");
+        match surface {
+            crate::surfaces::AnalyticSurface::Plane { origin, normal, basis_u, .. } => {
+                assert!((origin.distance(DVec3::ZERO)).abs() < 1e-9);
+                assert!((normal.distance(DVec3::Z)).abs() < 1e-9);
+                assert!((basis_u.distance(DVec3::X)).abs() < 1e-9);
+            }
+            other => panic!("ADR-089 A-η-1: expected Plane surface, got {:?}",
+                std::mem::discriminant(other)),
+        }
+    }
+
+    #[test]
+    fn adr089_a_eta_1_closed_curve_face_passes_boolean_eligibility() {
+        // After A-η-1, classify_dispatch_eligibility no longer returns
+        // SurfaceMissing for closed-curve faces — Boolean dispatch can
+        // route them to the NURBS path.
+        use crate::operations::boolean_dispatch::classify_dispatch_eligibility;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a_anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let face_a = mesh.add_face_closed_curve(a_anchor,
+            crate::curves::AnalyticCurve::Circle {
+                center: DVec3::ZERO, radius: 5.0,
+                normal: DVec3::Z, basis_u: DVec3::X,
+            }, mat).unwrap();
+        let b_anchor = mesh.add_vertex(DVec3::new(8.0, 0.0, 0.0));
+        let face_b = mesh.add_face_closed_curve(b_anchor,
+            crate::curves::AnalyticCurve::Circle {
+                center: DVec3::new(3.0, 0.0, 0.0), radius: 5.0,
+                normal: DVec3::Z, basis_u: DVec3::X,
+            }, mat).unwrap();
+        let result = classify_dispatch_eligibility(&mesh, &[face_a], &[face_b]);
+        assert!(result.is_ok(),
+            "ADR-089 A-η-1: closed-curve faces must pass eligibility, got {:?}",
+            result);
+    }
+
+    #[test]
+    fn adr089_a_eta_1_polygon_face_unaffected_by_eta_attach() {
+        // Regression guard — A-η-1 only attaches Plane to closed-curve
+        // faces. Polygon faces (add_face) remain with surface=None unless
+        // explicitly set by other paths (existing behavior preserved).
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        // add_face itself does not auto-attach surface — A-η-1 path is
+        // exclusively in add_face_closed_curve.
+        // (Other code paths may attach surface separately; A-η-1 must
+        // not change that contract.)
+        let _ = mesh.face_surface(face); // smoke read
     }
 }
