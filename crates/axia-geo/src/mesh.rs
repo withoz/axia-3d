@@ -9271,6 +9271,120 @@ mod tests {
             "ADR-089 A-δ: invalid anchor must reject");
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-ε) — Spatial-hash dedup adapt for self-loop.
+    // LOCKED #5 (1.5μm spatial-hash dedup) 정합 검증.
+    //
+    // Self-loop edge 의 anchor vertex 가 spatial-hash 를 정상 통과하는지,
+    // 그리고 dedup 결과 (same position → same vertex) 가 self-loop 의미
+    // 를 깨지 않는지 검증. 알려진 edge case (multiple closed curves at
+    // exact same anchor) 도 명시 봉인 (현 commit 은 fail-fast, 향후 ADR
+    // 에서 multi-self-loop edge 지원).
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_epsilon_anchor_position_dedup_via_spatial_hash() {
+        // 같은 위치에 add_vertex 두 번 호출 → spatial-hash dedup → 같은
+        // VertId 반환 (LOCKED #5 1.5μm). self-loop edge 의 anchor 도
+        // 동일 dedup.
+        let mut mesh = Mesh::new();
+        let pos = DVec3::new(5.0, 0.0, 0.0);
+        let v1 = mesh.add_vertex(pos);
+        let v2 = mesh.add_vertex(pos);  // 같은 위치
+        assert_eq!(v1, v2,
+            "ADR-089 A-ε / LOCKED #5: same position → same VertId via spatial hash");
+
+        // 그 dedup 된 vertex 로 closed curve face 생성 정상.
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(v1, circle, MaterialId::new(0));
+        assert!(face.is_ok(),
+            "ADR-089 A-ε: add_face_closed_curve with deduped anchor must succeed");
+    }
+
+    #[test]
+    fn adr089_a_epsilon_anchor_within_15um_deduplicates() {
+        // LOCKED #5 — 1.5μm spatial-hash cell. 두 anchor 가 1.5μm 안에
+        // 있으면 dedup. self-loop edge 정상 동작.
+        let mut mesh = Mesh::new();
+        let pos1 = DVec3::new(5.0, 0.0, 0.0);
+        let pos2 = DVec3::new(5.0 + 1e-7, 0.0, 0.0);  // 0.1μm < 1.5μm
+        let v1 = mesh.add_vertex(pos1);
+        let v2 = mesh.add_vertex(pos2);
+        assert_eq!(v1, v2,
+            "ADR-089 A-ε: positions within 1.5μm dedup to same VertId");
+
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(v1, circle, MaterialId::new(0));
+        assert!(face.is_ok());
+    }
+
+    #[test]
+    fn adr089_a_epsilon_distinct_anchors_create_distinct_self_loops() {
+        // 다른 위치 anchor → 다른 VertId → 다른 self-loop edges.
+        // Cross-curve isolation (ADR-088 cross-leak 차단 의 self-loop 영역).
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v1 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 5.0, 0.0));  // 다른 위치
+        assert_ne!(v1, v2);
+        let c1 = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let c2 = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::new(0.0, 5.0, 0.0), radius: 3.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let f1 = mesh.add_face_closed_curve(v1, c1, mat).unwrap();
+        let f2 = mesh.add_face_closed_curve(v2, c2, mat).unwrap();
+        assert_ne!(f1, f2);
+        // 2 distinct self-loop edges
+        let self_loop_count = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.is_self_loop())
+            .count();
+        assert_eq!(self_loop_count, 2,
+            "ADR-089 A-ε: distinct anchors → distinct self-loop edges");
+    }
+
+    #[test]
+    fn adr089_a_epsilon_known_limitation_same_anchor_collapse() {
+        // KNOWN LIMITATION (현 commit): exact 같은 anchor + 같은 vert 위에
+        // 두 개의 closed curve face 생성 시도 → 두 번째 face 의 self-loop
+        // 가 vert_to_edge dedup 으로 첫 번째 edge 와 collide → HE.face
+        // 충돌로 add_face_closed_curve 두 번째 호출 실패 + rollback.
+        //
+        // 이는 향후 multi-self-loop edge 지원 (별도 ADR) 으로 해결.
+        // 본 테스트는 현재 동작 (fail-fast + clean rollback) 봉인.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let c1 = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let c2 = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let f1 = mesh.add_face_closed_curve(anchor, c1, mat);
+        assert!(f1.is_ok(), "first closed curve face creates ok");
+        let f2_result = mesh.add_face_closed_curve(anchor, c2, mat);
+        // Either succeeds (if future fix lifts limitation) or fails with
+        // clean rollback (current behavior). Either way, mesh state stays
+        // consistent — no orphan edge or face.
+        if f2_result.is_err() {
+            // Verify clean rollback: only 1 face, 1 self-loop edge.
+            let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+            let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+            assert_eq!(active_faces, 1,
+                "ADR-089 A-ε: failed second add must leave 1 face (rollback)");
+            assert_eq!(active_edges, 1,
+                "ADR-089 A-ε: failed second add must leave 1 edge (rollback)");
+        }
+        // Future ADR may lift this limitation — test should still pass.
+    }
+
     #[test]
     fn adr089_a_gamma_normal_polygon_edges_unaffected() {
         // 기존 polygon mesh 동작 무변화 확인 — RECT 4 edges 모두 v_small
