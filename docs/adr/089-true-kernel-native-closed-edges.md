@@ -738,10 +738,56 @@ chord-tolerant tessellation 표시".
 ### A-ρ-γ (본 commit)
 - **변경**: 본 §D `A-ρ-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-ρ track closure 완료. 후속 후보 — A-θ Path B (DCEL
-  진정한 kernel-native cylinder, 별도 ADR), A-μ (Snapshot legacy
-  migration), DrawArc/DrawBezier 시민권 확장, Sphere/Cone/Torus
-  side face 동일 패턴 fast-path.
+
+---
+
+### A-τ-α (2026-05-08, smooth-group edge hiding amendment)
+
+**사용자 결재 (2026-05-08)**: A-ρ closure 후 wall 의 23 vertical 분할선
+가 여전히 보이는 점 (polygon quad edge wireframe). 다음 자연 단계 —
+smooth-group edge hiding.
+
+**Path Z 3-sub-step roadmap**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-τ-α (본 amendment) | spec only | +0 |
+| A-τ-β | export_edge_lines_with_map smooth-group skip | +4 |
+| A-τ-γ | Browser smoke + closure | +0 |
+
+**Lock-ins (A-τ-α 시점)**:
+- **L-τ-1** **Smooth-group skip 조건**: 한 edge 가 정확히 2 face 사이
+  (manifold) + 두 face 가 **같은 AnalyticSurface 인스턴스** (Cylinder/
+  Sphere/Cone/Torus 등 곡면, 동일 parameters within EPSILON) → edge
+  hide.
+- **L-τ-2** **Plane / None 보존**: 양쪽 face 가 Plane 이거나 surface=None
+  이면 기존 angle_threshold 분기 유지 (LOCKED #16 K-ε hotfix 답습).
+- **L-τ-3** **HARD flag override**: HE 의 HARD flag 가 set 이면 hide
+  policy 무시, 강제 표시 (사용자 명시 edge / face split edge).
+- **L-τ-4** **CCW boundary 보존**: cylinder 의 top circle / bottom circle
+  edges (cylinder 와 plane 사이의 경계) 는 한 쪽이 Cylinder, 반대쪽이
+  Plane → 다른 surface kind, edge 표시 (boundary 명확화).
+- **L-τ-5** **Backward compat**: 기존 polygonal mesh (surface=None 양쪽)
+  은 angle_threshold 그대로. 본 fast-path 는 곡면 surface 양쪽 일치
+  case 에만 발동.
+- **L-τ-6** **Surface equality**: Cylinder 비교 — `axis_origin`,
+  `axis_dir`, `radius`, `ref_dir` 4 fields EPSILON_LENGTH within. u_range
+  / v_range 는 비교 제외 (각 face 마다 다름).
+
+**Non-goals**:
+- **N-τ-1** Sphere / Cone / Torus 비교 (각 surface kind 별 같은 패턴).
+  본 ADR 은 Cylinder 만, 다른 surface 는 future sub-step.
+- **N-τ-2** Bezier/BSpline/NURBS surface 비교 (parameter 비교 복잡 —
+  별도 ADR).
+- **N-τ-3** Top / Bottom circle polygon edges (Cylinder ↔ Plane 경계)
+  — boundary 로 표시 보존 (L-τ-4).
+- **N-τ-4** Wireframe polyline tessellation — boundary edge (Cylinder ↔
+  Plane) 는 polygon 으로 보존. closed-curve self-loop 은 별도 path.
+
+### A-τ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "wireframe edge tessellation 진행".
+- **변경**: 본 §D `A-τ-α` amendment.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
 
 ---
 
