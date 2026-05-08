@@ -543,8 +543,53 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 ### A-ν (본 commit)
 - **변경**: 본 §D `A-ν` regression sweep entry. 회귀 +0 (sweep only).
 - **Bundle 영향**: 0 (docs only).
-- **다음 step**: 사용자 결재 후 default ON 또는 후속 트랙 (Path B /
-  Snapshot migration / DrawArc).
+
+---
+
+### A-π-α (2026-05-08, default ON spec amendment)
+
+**사용자 결재 (2026-05-08)**: "default ON 전환 결재 승인" — A-ν sweep
+2989/2989 PASS 가 default ON 전환 안정성 입증.
+
+**Path Z 3-sub-step roadmap (A-π default ON)**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-π-α (본 amendment) | spec only | +0 |
+| A-π-β | DrawCurveSettings default flip + test 갱신 | ±0 (test 갱신만) |
+| A-π-γ | Browser smoke + closure | +0 |
+
+**Lock-ins (A-π-α 시점, ADR-049 P-5e-α / ADR-087 K-ε hotfix 답습)**:
+- **L-π-1** **Default false → true**: `DrawCurveSettings.ts` 의 module
+  init 에서 `let current = false` → `true`. localStorage 'false'
+  명시 OFF preference 는 보존 (saved === 'false' branch unchanged).
+- **L-π-2** **Backward compat**: 기존 사용자가 `axia:draw-curve-mode =
+  'false'` 명시 OFF 한 적이 있으면 그대로 유지. localStorage 빈 상태
+  (신규 사용자) 는 true 로 시작.
+- **L-π-3** **Tests 갱신**: `defaults to OFF` 테스트는 `defaults to ON`
+  로 의미 변경. 다른 4 tests 의 set/get 동작은 unchanged.
+- **L-π-4** **DrawCircleTool 자동 kernel-native**: 신규 사용자가 Circle
+  도구로 그릴 때 자동으로 closed-curve face 생성. SettingsPanel 토글은
+  사용자가 명시 OFF 하고 싶을 때 사용.
+- **L-π-5** **회귀 자산 PASS 유지** (A-ν 검증 답습): LOCKED #1/#12/#15/
+  #16/#26/#34 모든 회귀 PASS. DrawCircleTool.test.ts (9) 의 mock 은
+  `drawCircleAsCurve` / `drawCircleAsShape` 둘 다 spy 처리 — flag default
+  변경에 따라 어느 쪽이 호출되는지 검증 가능.
+- **L-π-6** **사용자 facing 변화**: Circle 도구의 출력이 24-segment
+  polygon → 1-vert/1-edge/1-face closed-curve. 모든 op (Boolean / Push-
+  Pull / Offset) 자동 호환 (A-η-1 ~ A-ι 활성).
+- **L-π-7** **Rollback**: localStorage 명시 OFF 또는 SettingsPanel
+  토글 해제로 즉시 legacy 동작 복원.
+
+**Non-goals**:
+- **N-π-1** DrawArc/DrawBezier 도구 default 변경 — 본 ADR 은 Circle 만.
+- **N-π-2** SettingsPanel 토글 자체 제거 — 명시 OFF 경로 보존 필수.
+- **N-π-3** 메뉴/단축키/툴바 외부 ID 변경 (ADR-046 P31 #4 additive only).
+
+### A-π-α (본 commit)
+- **사용자 결재**: 2026-05-08, "default ON 전환 결재 승인".
+- **변경**: 본 §D `A-π-α` amendment. roadmap / lock-ins / non-goals.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
 
 ---
 
