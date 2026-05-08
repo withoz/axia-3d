@@ -2797,6 +2797,9 @@ impl Scene {
                 if !edge.class().is_topological() { continue; }
                 if edge.v_small() != v && edge.v_large() != v { continue; }
                 if !self.mesh.is_edge_completely_free(eid) { continue; }
+                // ADR-089 A-ζ-2: self-loop edges (closed analytic curves)
+                // are not polygon-chain participants — skip in chain walking.
+                if edge.is_self_loop() { continue; }
                 let other = if edge.v_small() == v { edge.v_large() } else { edge.v_small() };
                 out.push(other);
             }

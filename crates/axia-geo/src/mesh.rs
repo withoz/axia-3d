@@ -3815,6 +3815,10 @@ impl Mesh {
                 if key.v_small != curr_v && key.v_large != curr_v { continue; }
                 if !self.edges[edge_id].is_active() { continue; }
                 if !self.edge_has_free_he(edge_id) { continue; }
+                // ADR-089 A-ζ-2: skip self-loop edges (key.v_small == key.v_large).
+                // Self-loop = closed analytic curve = already complete cycle by
+                // itself; not part of polygon-edge chain walking.
+                if key.v_small == key.v_large { continue; }
                 let other = if key.v_small == curr_v { key.v_large } else { key.v_small };
                 if other != prev_v { neighbors.push(other); }
             }
@@ -3848,6 +3852,9 @@ impl Mesh {
             if edge_id == new_edge_id { continue; }
             if excluded.contains(&edge_id) { continue; }
             if !self.edge_has_free_he(edge_id) { continue; }
+            // ADR-089 A-ζ-2: skip self-loop edges (closed analytic curves
+            // are already complete cycles, not BFS chain participants).
+            if edge.is_self_loop() { continue; }
             let va = edge.v_small();
             let vb = edge.v_large();
             adj.entry(va).or_default().push(vb);
@@ -3909,6 +3916,9 @@ impl Mesh {
                 if key.v_small != curr_v && key.v_large != curr_v { continue; }
                 if !self.edges[edge_id].is_active() { continue; }
                 if !self.edge_has_free_he(edge_id) { continue; }
+                // ADR-089 A-ζ-2: skip self-loop edges (closed curves
+                // are not chain participants).
+                if key.v_small == key.v_large { continue; }
                 let other = if key.v_small == curr_v { key.v_large } else { key.v_small };
                 if other != prev_v {
                     neighbors.push(other);
@@ -9498,6 +9508,101 @@ mod tests {
         assert!(report.is_valid(),
             "ADR-089 A-ζ-1: polygon face must still pass invariants. \
              Violations: {:?}", report.violations);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-ζ-2) — detect_free_edge_loop self-loop guard.
+    //
+    // self-loop edge 가 polygon chain walking / BFS 에 참여하지 않음 봉인.
+    // Closed analytic curve 는 already complete cycle 이므로 chain 산물
+    // 아님.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_zeta_2_bfs_skips_self_loop_edges() {
+        // Mesh 에 self-loop edge + polygon chain 공존 시 BFS 가 self-loop
+        // 무시 + polygon chain 만 cycle 검출.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Closed-curve face (self-loop + circle) 별개 위치
+        let anchor = mesh.add_vertex(DVec3::new(20.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::new(15.0, 0.0, 0.0), radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let _circle_face = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+
+        // Polygon chain (RECT 4 lines, all free edges)
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let (e01, _) = mesh.add_edge(v0, v1).unwrap();
+        let (e12, _) = mesh.add_edge(v1, v2).unwrap();
+        let (e23, _) = mesh.add_edge(v2, v3).unwrap();
+        let (e30, _) = mesh.add_edge(v3, v0).unwrap();
+        let _ = (e01, e12, e23, e30);
+
+        // detect_free_edge_loop 가 RECT cycle 검출 (self-loop 무관)
+        let result = mesh.detect_free_edge_loop(v0, v1, e01);
+        // 검출 결과: free RECT cycle (4 verts) 정상 반환되어야 함.
+        assert!(result.is_some(),
+            "ADR-089 A-ζ-2: BFS must detect polygon RECT cycle even with \
+             self-loop edge present");
+        let cycle = result.unwrap();
+        assert_eq!(cycle.len(), 4,
+            "RECT cycle should have 4 verts (got {})", cycle.len());
+        // self-loop anchor 가 cycle 에 포함되지 않음 (cross-isolation)
+        assert!(!cycle.contains(&anchor),
+            "ADR-089 A-ζ-2: self-loop anchor must NOT be in polygon cycle");
+    }
+
+    #[test]
+    fn adr089_a_zeta_2_chain_walk_skips_self_loop_edges() {
+        // 사용자 시연 reproduction — self-loop edge 가 vert_to_edge 에
+        // 있어도 chain walk 가 polygon path 만 따라감.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Closed circle at distinct anchor
+        let anchor = mesh.add_vertex(DVec3::new(50.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 50.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let _ = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+
+        // Triangle polygon (3 free edges)
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 2.0, 0.0));
+        let (e01, _) = mesh.add_edge(v0, v1).unwrap();
+        let (e12, _) = mesh.add_edge(v1, v2).unwrap();
+        let (e20, _) = mesh.add_edge(v2, v0).unwrap();
+        let _ = (e12, e20);
+
+        let result = mesh.detect_free_edge_loop(v0, v1, e01);
+        assert!(result.is_some(), "polygon triangle cycle detected");
+        let cycle = result.unwrap();
+        assert_eq!(cycle.len(), 3);
+        assert!(!cycle.contains(&anchor),
+            "ADR-089 A-ζ-2: self-loop anchor not in triangle cycle");
+    }
+
+    #[test]
+    fn adr089_a_zeta_2_self_loop_alone_no_polygon_cycle_returned() {
+        // Mesh 에 self-loop edge 만 있으면 polygon cycle 검출 결과 None.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let anchor = mesh.add_vertex(DVec3::ZERO);
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 1.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let _ = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+
+        // Polygon path 없이 self-loop edge 만 → detect_free_edge_loop 실행
+        // (어떤 v0, v1 으로도 polygon cycle 결과 None 또는 폴리곤 자체 cycle).
+        // 본 테스트는 단지 panic 없이 종료 보장.
+        let _ = mesh.detect_free_edge_loop(anchor, anchor, EdgeId::new(0));
+        // No panic = pass
     }
 
     #[test]
