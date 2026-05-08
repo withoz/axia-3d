@@ -833,10 +833,45 @@ smooth-group edge hiding.
 ### A-τ-γ (본 commit)
 - **변경**: 본 §D `A-τ-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-τ track closure 완료. 후속 후보 — A-θ Path B (DCEL
-  진정한 kernel-native cylinder, 별도 ADR), Sphere/Cone/Torus
-  side face fast-path (A-ρ + A-τ 동일 패턴), DrawArc/DrawBezier
-  closed-curve 시민권 확장.
+
+---
+
+### A-υ-α (2026-05-08, leftover self-loop cleanup amendment)
+
+**관찰 (A-τ-γ 시연 결과)**: closed-curve self-loop edge 가 A-θ-β
+`extrude_closed_curve_face_via_tessellation` 의 `remove_face` 후
+orphan 으로 남아 23 polyline segment 잔존 → bottom Arc 23 segment 와
+시각 overlap.
+
+**Path Z 3-sub-step roadmap**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-υ-α (본 amendment) | spec only | +0 |
+| A-υ-β | extrude_closed_curve_face_via_tessellation 의 self-loop edge + anchor vertex 명시 cleanup | +3 |
+| A-υ-γ | Browser smoke + closure | +0 |
+
+**Lock-ins (A-υ-α 시점)**:
+- **L-υ-1** **명시 cleanup**: A-θ-β 에서 `remove_face(profile_face)`
+  직후 self-loop edge id 명시 deactivate. anchor vertex 가 다른 edge
+  를 참조하지 않으면 deactivate.
+- **L-υ-2** **safe deletion**: deactivate 전 referencing 검사. anchor
+  가 self-loop 외 다른 edge 참조 시 보존 (다른 standalone wire 일 수
+  있음).
+- **L-υ-3** **Backward compat**: 기존 폴리곤 path 무영향 (self-loop
+  detection 안되면 skip).
+- **L-υ-4** **Render 결과**: 69 segments → 46 segments (-33%).
+  자체 polyline 사라짐, top 23 + bottom 23 만 남음.
+
+**Non-goals**:
+- **N-υ-1** Generic orphan edge GC (별도 ADR — sweep-style).
+- **N-υ-2** Anchor vertex 의 다른 활용 추적 (예: snap reference 로 기존
+  사용된 vertex 의 의도적 보존). L-υ-2 의 referencing 검사로 자연 보존.
+
+### A-υ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "leftover self-loop edge cleanup 진행".
+- **변경**: 본 §D `A-υ-α` amendment.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
 
 ---
 
