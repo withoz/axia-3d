@@ -1594,10 +1594,78 @@ impl Mesh {
 
         let mut created_all: Vec<FaceId> = Vec::new();
         for comp in filtered_components {
+            // ADR-089 Phase 2 (A-ζ-3): closed-curve component fast-path.
+            // Component 가 self-loop edge + analytic curve (단일) 이면
+            // polygon resolve 우회 → 1-HE 1-vert face 직접 wiring.
+            // Polygon 경로 (≥3 verts) 영향 0.
+            if let Some(face) = self.try_resolve_closed_curve_component(comp, material) {
+                created_all.push(face);
+                continue;
+            }
             let faces = self.resolve_component(comp, material, required_edge_set.as_ref());
             created_all.extend(faces);
         }
         created_all
+    }
+
+    /// ADR-089 Phase 2 (A-ζ-3) — closed-curve component fast-path.
+    ///
+    /// Component 가 다음 패턴이면 (typical: standalone closed circle):
+    /// - 정확히 1 distinct edge
+    /// - edge 가 self-loop (v_small == v_large)
+    /// - edge.curve = Some(...) (analytic curve attached)
+    /// - 1 또는 2 free HEs (2 = twin pair, 둘 중 하나만 face 부여)
+    ///
+    /// → 1 HE 를 face 에 wire (next/prev = self) + face.outer = LoopRef.
+    /// 결과 FaceId 반환.
+    ///
+    /// 그 외 패턴 (polygon, mixed, 등) → None 반환 → 호출자가 polygon
+    /// resolve_component fallback.
+    fn try_resolve_closed_curve_component(
+        &mut self,
+        comp_hes: &[HeId],
+        material: MaterialId,
+    ) -> Option<FaceId> {
+        if comp_hes.is_empty() { return None; }
+        // Distinct edges in component.
+        let mut edge_set: FxHashSet<EdgeId> = FxHashSet::default();
+        for &he in comp_hes {
+            edge_set.insert(self.hes[he].edge());
+        }
+        if edge_set.len() != 1 { return None; }
+        let eid = *edge_set.iter().next().unwrap();
+        let edge = self.edges.get(eid)?;
+        if !edge.is_active() { return None; }
+        if !edge.is_self_loop() { return None; }
+        // curve 부착 필수 (A-δ contract — 없으면 degenerate).
+        let _curve = edge.curve()?;
+        // anchor vertex
+        let anchor = edge.v_small();
+
+        // Pick first free HE (face is null per filter in caller).
+        let he_anchor = comp_hes[0];
+
+        // Compute face normal from curve.
+        let normal = match edge.curve() {
+            Some(crate::curves::AnalyticCurve::Circle { normal, .. }) => normal.normalize_or_zero(),
+            _ => return None, // 본 commit 은 Circle 만 (A-η 후속)
+        };
+        if normal.length_squared() < 1e-12 { return None; }
+        let _ = anchor;  // (현재 사용 안 함, future face metadata 확장용)
+
+        // Insert face with placeholder, then wire single HE.
+        let face_id = self.faces.insert(Face::new(
+            LoopRef::default(),
+            normal,
+            FACE_TOLERANCE,
+            material,
+        ));
+        self.hes[he_anchor].set_next(he_anchor);
+        self.hes[he_anchor].set_prev(he_anchor);
+        self.hes[he_anchor].set_face(face_id);
+        self.hes[he_anchor].set_outer(true);
+        self.faces[face_id].set_outer(LoopRef::new(he_anchor, true));
+        Some(face_id)
     }
 
     /// 단일 component의 free HE들에 대해 평면 결정 + leftmost-turn + face 생성.
@@ -9517,6 +9585,102 @@ mod tests {
     // Closed analytic curve 는 already complete cycle 이므로 chain 산물
     // 아님.
     // ════════════════════════════════════════════════════════════════════
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-ζ-3) — resolve_planar_free_faces closed-curve
+    // component fast-path.
+    //
+    // Standalone self-loop edge + analytic curve (no face yet) →
+    // resolve_planar_free_faces 가 1-HE 1-vert face 합성. Polygon path
+    // 영향 0.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_zeta_3_standalone_self_loop_resolves_to_face() {
+        // Manually construct: 1 anchor + 1 self-loop edge with curve, NO
+        // face yet. resolve_planar_free_faces should synthesize 1 face.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let (eid, _) = mesh.add_edge(anchor, anchor).unwrap();
+        mesh.edges[eid].set_curve(Some(crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        }));
+        // 시점: edge 존재, free HEs (face = null), face 없음.
+        assert_eq!(
+            mesh.faces.iter().filter(|(_, f)| f.is_active()).count(),
+            0, "before resolve: 0 faces");
+
+        let mat = MaterialId::new(0);
+        let created = mesh.resolve_planar_free_faces(mat);
+        assert!(!created.is_empty(),
+            "ADR-089 A-ζ-3: closed-curve component must synthesize a face");
+        assert_eq!(created.len(), 1,
+            "ADR-089 A-ζ-3: 1 component → 1 face");
+        // Face 가 valid (verify_face_invariants A-ζ-1 exemption 통과).
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-089 A-ζ-3: synthesized closed-curve face must pass invariants. \
+             Violations: {:?}", report.violations);
+    }
+
+    #[test]
+    fn adr089_a_zeta_3_polygon_chain_unaffected_by_fast_path() {
+        // Polygon free-edge component (≥3 verts) 는 기존 resolve_component
+        // 경로 사용. closed-curve fast-path 가 polygon 영향 안 줌.
+        let mut mesh = Mesh::new();
+        // RECT free edges (no face)
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _ = mesh.add_edge(v0, v1).unwrap();
+        let _ = mesh.add_edge(v1, v2).unwrap();
+        let _ = mesh.add_edge(v2, v3).unwrap();
+        let _ = mesh.add_edge(v3, v0).unwrap();
+
+        let mat = MaterialId::new(0);
+        let created = mesh.resolve_planar_free_faces(mat);
+        // Polygon RECT 는 1 face 합성 (existing resolve_component path).
+        assert_eq!(created.len(), 1,
+            "ADR-089 A-ζ-3: polygon RECT 4-edge cycle → 1 face (legacy path)");
+        // Face 의 outer loop ≥ 3 verts (polygon).
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "polygon face must pass invariants. Violations: {:?}", report.violations);
+    }
+
+    #[test]
+    fn adr089_a_zeta_3_mixed_components_handled_independently() {
+        // Polygon RECT + standalone closed-curve circle 같은 mesh 에서
+        // resolve_planar_free_faces 가 둘 다 face 로 변환.
+        let mut mesh = Mesh::new();
+        // RECT free edges
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _ = mesh.add_edge(v0, v1).unwrap();
+        let _ = mesh.add_edge(v1, v2).unwrap();
+        let _ = mesh.add_edge(v2, v3).unwrap();
+        let _ = mesh.add_edge(v3, v0).unwrap();
+        // Standalone closed-curve circle (별개 위치)
+        let anchor = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let (eid_circle, _) = mesh.add_edge(anchor, anchor).unwrap();
+        mesh.edges[eid_circle].set_curve(Some(crate::curves::AnalyticCurve::Circle {
+            center: DVec3::new(5.0, 0.0, 0.0), radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        }));
+
+        let mat = MaterialId::new(0);
+        let created = mesh.resolve_planar_free_faces(mat);
+        assert_eq!(created.len(), 2,
+            "ADR-089 A-ζ-3: 2 components (polygon + closed-curve) → 2 faces. Got {}",
+            created.len());
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-089 A-ζ-3: mixed faces must pass invariants. Violations: {:?}",
+            report.violations);
+    }
 
     #[test]
     fn adr089_a_zeta_2_bfs_skips_self_loop_edges() {
