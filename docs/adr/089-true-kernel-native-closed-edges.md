@@ -457,10 +457,36 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
   flag 외 추가 토글 없음). 사용자가 closed-curve face 의 boundary edge
   선택 후 Offset 호출 시 자동 활성.
 
-### A-ι-α (본 commit)
+### A-ι-α (commit `83210ff`)
 - **사용자 결재**: 2026-05-08, "A-ι 진행".
 - **변경**: 본 §D `A-ι-α` amendment.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-ι-β (commit `450b916`)
+- **변경**: `crates/axia-geo/src/operations/offset.rs`:
+  * `offset_arc_on_plane` Circle 분기 (angles=None) 에 self-loop
+    detection fast-path 추가.
+  * Detection: `self.edges[edge_id].is_self_loop()`.
+  * Self-loop 시: 새 anchor (center + new_radius * basis_u) +
+    `add_edge(anchor, anchor)` self-loop + Circle curve attach.
+  * Result: `OffsetEdgeResult { new_v0 == new_v1, new_edge=self-loop }`.
+- **회귀**: axia-geo 1154 → 1158 (+4). 절대 #[ignore] 금지 4/4 준수:
+  * `closed_curve_offset_produces_self_loop`
+  * `closed_curve_offset_inward_radius_decreases`
+  * `closed_curve_offset_collapse_rejected`
+  * `polygonal_circle_unaffected_by_self_loop_path` (regression guard)
+- **LOCKED guards**: axia-core 200 unchanged.
+
+### A-ι-γ (browser real-runtime closure)
+- **시연**: `drawCircleAsCurve(R=500)` → 1 vert/1 edge/1 face →
+  `offsetEdgeOnHost(edge=0, dist=100)` → `{ ok: true, newV0=newV1=1,
+  newEdge=1 }` self-loop output.
+- **Post-state**: 2 verts / 2 edges / 1 face (original + offset 둘 다
+  self-loop). Invariants 1/1 valid.
+- **결과**: 사용자 facing path 의 closed-curve → closed-curve offset
+  완성. 메타-원칙 #14 정합 (kernel-native input → kernel-native output).
+- **회귀**: +0 (smoke verification). A-ι track total **+4**.
+- **다음 step**: A-ν (LOCKED 245 sites 재검증 + 사용자 시연).
 
 ---
 
