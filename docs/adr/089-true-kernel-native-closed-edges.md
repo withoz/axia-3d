@@ -586,10 +586,62 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **N-π-2** SettingsPanel 토글 자체 제거 — 명시 OFF 경로 보존 필수.
 - **N-π-3** 메뉴/단축키/툴바 외부 ID 변경 (ADR-046 P31 #4 additive only).
 
-### A-π-α (본 commit)
+### A-π-α (commit `93a567c`)
 - **사용자 결재**: 2026-05-08, "default ON 전환 결재 승인".
 - **변경**: 본 §D `A-π-α` amendment. roadmap / lock-ins / non-goals.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-π-β (commit `7ac0f72`)
+- **변경**:
+  * `web/src/tools/DrawCurveSettings.ts` — `let current = false` →
+    `true`. localStorage 'false' branch unchanged (L-π-2 explicit OFF
+    preservation).
+  * `web/src/tools/DrawCurveSettings.test.ts` — "defaults to OFF" →
+    "defaults to ON" + 신규 "explicit OFF preserved" test (+1).
+  * `web/src/tools/DrawCircleTool.test.ts` — ADR-087 K-ε regression
+    replaced by 2 dual-mode tests (default ON + explicit OFF, +1).
+- **회귀**: vitest 1627 → 1629 (+2). 절대 #[ignore] 금지 2/2 준수.
+
+### A-π-γ (browser real-runtime closure)
+
+**Default ON 검증 (Fresh user)**:
+- localStorage `null` (fresh state)
+- DrawCircleTool VCB R=600 → `drawCircleAsCurve` 호출 (NOT
+  `drawCircleAsShape`) ✓
+- Mesh: 1 vert / 1 edge / 1 face (kernel-native canonical Phase 2) ✓
+
+**Explicit OFF 보존 검증 (L-π-2)**:
+- localStorage `'false'` (사용자 명시 OFF)
+- DrawCircleTool VCB R=400 → `drawCircleAsShape` 호출 ✓
+- Mesh: 24 verts / 24 edges / 1 face (legacy 24-segment polygon) ✓
+
+**결과**: ADR-049 P-5e-α / ADR-087 K-ε hotfix 답습 패턴 완벽 작동.
+- 신규 사용자: 자동 kernel-native (메뉴 토글 없이 Circle 그리기만으로
+  closed-curve face 생성).
+- 기존 명시 OFF 사용자: preference 그대로 유지 (legacy polygon).
+- SettingsPanel 토글: 양쪽 전환 escape hatch.
+
+**ADR-089 누적 트랙 (A-α ~ A-π)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| **A-π (default ON)** | **+2** | **자동 kernel-native** |
+| **누적** | **axia-geo +35 / vitest +7** | **메타-원칙 #14 의 깊은 실현 + 사용자 default** |
+
+### A-π-γ (본 commit)
+- **변경**: 본 §D `A-π-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-π track closure 완료. 후속 후보 — A-μ (Snapshot
+  legacy migration), A-θ Path B 별도 ADR, DrawArc/DrawBezier closed-
+  curve 마이그레이션.
 
 ---
 
