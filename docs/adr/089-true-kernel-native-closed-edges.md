@@ -868,10 +868,62 @@ orphan 으로 남아 23 polyline segment 잔존 → bottom Arc 23 segment 와
 - **N-υ-2** Anchor vertex 의 다른 활용 추적 (예: snap reference 로 기존
   사용된 vertex 의 의도적 보존). L-υ-2 의 referencing 검사로 자연 보존.
 
-### A-υ-α (본 commit)
+### A-υ-α (commit `42c8efb`)
 - **사용자 결재**: 2026-05-08, "leftover self-loop edge cleanup 진행".
 - **변경**: 본 §D `A-υ-α` amendment.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+### A-υ-β (commit `4dfadd7`)
+- **변경**: `crates/axia-geo/src/operations/create_solid.rs`:
+  * `extrude_closed_curve_face_via_tessellation` step 3b 신규.
+  * `remove_face(profile_face)` 직후 `remove_edge_and_halfedges
+    (self_loop_edge_id)` + isolated anchor vertex deactivate.
+- **회귀**: axia-geo 1166 → 1169 (+3). 절대 #[ignore] 금지 3/3 준수:
+  * `self_loop_edge_cleanup_after_extrude`
+  * `anchor_vertex_deactivated_if_isolated`
+  * `extrude_polygon_unaffected` (regression guard)
+- **LOCKED guards**: axia-core 200 unchanged.
+
+### A-υ-γ (browser real-runtime closure)
+
+**시연 결과** (R=400 cylinder, 23-segment Path A):
+- Before: 70 edges / 69 segments / 47 unique visible edges (23 top + 23
+  bottom + 23 leftover self-loop polyline overlap)
+- After: **69 edges / 46 segments / 46 unique** ← 정확히 23 top Arc + 23
+  bottom Arc 만, leftover polyline overlap 사라짐
+- 시각: 매끈한 cylinder + 명확한 top/bottom circle outline + vertical
+  분할선 hidden (A-τ) + leftover polyline overlap 사라짐 (A-υ)
+
+**메타-원칙 #14 측면 시각 closure 완전 달성** — A-ρ (face surface
+smoothness) + A-τ (edge smooth-group hide) + A-υ (leftover cleanup)
+3-단계 결합으로 Path A 의 visual quality 가 산업 CAD parity 도달.
+
+**ADR-089 누적 트랙 (A-α ~ A-υ)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| A-ρ Path A (face smooth) | +4 | u-slice tessellation |
+| A-τ Path A (edge smooth-group) | +4 | vertical 분할선 hide |
+| **A-υ Path A (leftover cleanup)** | **+3** | **polyline overlap 제거** |
+| **누적** | **axia-geo +46 / vitest +7 = +53** | **메타-원칙 #14 측면 시각 closure 완성** |
+
+### A-υ-γ (본 commit)
+- **변경**: 본 §D `A-υ-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-υ track closure 완료. ADR-089 Path A 모든 visual
+  + topological cleanup 완성. 후속 후보 — Sphere/Cone/Torus side face
+  fast-path (A-ρ + A-τ 동일 패턴), A-θ Path B (DCEL 진정한 kernel-
+  native cylinder, 별도 ADR), DrawArc/DrawBezier closed-curve 시민권
+  확장.
 
 ---
 
