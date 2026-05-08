@@ -2648,6 +2648,117 @@ impl Mesh {
         }
     }
 
+    /// ADR-089 Phase 2 (A-δ) — Add a face whose outer boundary is a single
+    /// closed analytic curve (Circle / closed Bezier / closed B-spline /
+    /// closed NURBS). This is the kernel-native representation of closed
+    /// 2D shapes — 1 vertex anchor + 1 self-loop edge + 1 face, in
+    /// contrast to the legacy 24-segment polygon decomposition.
+    ///
+    /// **메타-원칙 #14 의 deepest realization**: face = closed curve edge
+    /// 의 byproduct. 24 polygon segments → 1 self-loop edge.
+    ///
+    /// Drop-in alongside `add_face` / `add_face_with_holes` — existing
+    /// polygon flow UNCHANGED. Caller must provide:
+    /// - `anchor`: the single anchor vertex on the curve (e.g., circle's
+    ///   point at θ=0)
+    /// - `curve`: an `AnalyticCurve` whose start and end coincide
+    ///   (closed). Open curves (Line, Arc < 2π) reject with error.
+    /// - `material`: face material id
+    ///
+    /// Returns the new `FaceId` on success. Errors:
+    /// - `anchor` invalid or inactive vertex
+    /// - `curve` is not closed (start ≠ end at curve params)
+    ///
+    /// **Boundary geometry validation deferred** (A-ζ): face synthesis
+    /// pipeline 의 invariants 는 별도 step. 본 commit 은 schema + DCEL
+    /// 입력 / 출력만 보장.
+    pub fn add_face_closed_curve(
+        &mut self,
+        anchor: VertId,
+        curve: crate::curves::AnalyticCurve,
+        material: MaterialId,
+    ) -> Result<FaceId> {
+        // Validate anchor vertex.
+        let anchor_vert = self.verts.get(anchor)
+            .ok_or_else(|| anyhow::anyhow!(
+                "ADR-089 A-δ: anchor vertex {:?} not found",
+                anchor,
+            ))?;
+        if !anchor_vert.is_active() {
+            bail!("ADR-089 A-δ: anchor vertex {:?} is inactive", anchor);
+        }
+
+        // Validate curve closed-ness.
+        // Pragmatic check: Circle (always closed), full Arc (start == end
+        // mod 2π), closed Bezier (control_pts[0] == control_pts[last]).
+        // For now, accept Circle unconditionally and reject others until
+        // A-η lifts curve-specific closed predicates.
+        match &curve {
+            crate::curves::AnalyticCurve::Circle { .. } => { /* always closed */ }
+            other => bail!(
+                "ADR-089 A-δ: only Circle is supported in this commit \
+                 (got {:?}). Other closed curves (Bezier loop, BSpline loop, \
+                 NURBS loop) deferred to A-ι/A-η.",
+                std::mem::discriminant(other),
+            ),
+        }
+
+        // Compute face normal from the curve (Circle has explicit normal).
+        let normal = match &curve {
+            crate::curves::AnalyticCurve::Circle { normal, .. } => normal.normalize_or_zero(),
+            _ => DVec3::Z, // unreachable per validation above
+        };
+        if normal.length_squared() < 1e-12 {
+            bail!("ADR-089 A-δ: curve normal is degenerate");
+        }
+
+        // Snapshot for rollback (mirror add_face_with_holes pattern).
+        let edges_before: FxHashSet<EdgeId> = self.edges.iter().map(|(id, _)| id).collect();
+        let hes_before: FxHashSet<HeId> = self.hes.iter().map(|(id, _)| id).collect();
+
+        // Create face with placeholder loop.
+        let face_id = self.faces.insert(Face::new(
+            LoopRef::default(),
+            normal,
+            FACE_TOLERANCE,
+            material,
+        ));
+
+        // Try to build the self-loop edge + 1-HE outer boundary.
+        let build_result: Result<()> = (|| {
+            // 1. Self-loop edge (anchor → anchor) with curve attached.
+            let (eid, _) = self.add_edge(anchor, anchor)?;
+            self.edges[eid].set_curve(Some(curve.clone()));
+
+            // 2. Get the half-edge anchored on this self-loop. add_edge
+            //    creates 2 HE pair; pick any (forward).
+            let he_anchor = self.edges[eid].any_he();
+            if he_anchor.is_null() {
+                bail!("ADR-089 A-δ: self-loop edge {:?} has no half-edge", eid);
+            }
+
+            // 3. Wire HE.next == HE itself, HE.prev == HE itself
+            //    (cycle of length 1). Set face = face_id, outer flag = true.
+            self.hes[he_anchor].set_next(he_anchor);
+            self.hes[he_anchor].set_prev(he_anchor);
+            self.hes[he_anchor].set_face(face_id);
+            self.hes[he_anchor].set_outer(true);
+
+            // 4. Set face's outer LoopRef.
+            self.faces[face_id].set_outer(LoopRef::new(he_anchor, true));
+
+            Ok(())
+        })();
+
+        match build_result {
+            Ok(()) => Ok(face_id),
+            Err(e) => {
+                self.rollback_partial_face_creation(face_id, &edges_before, &hes_before);
+                Err(e)
+            }
+        }
+    }
+
     /// Rollback a partially-constructed face after `add_face_with_holes` failure.
     ///
     /// Steps:
@@ -9001,6 +9112,163 @@ mod tests {
             edge.curve(),
             Some(crate::curves::AnalyticCurve::Circle { .. })
         ));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-δ) — add_face_closed_curve API.
+    //
+    // Single-vert closed curve face creation. Drop-in alongside add_face /
+    // add_face_with_holes — kernel-native representation of closed analytic
+    // curves (Circle 우선, Bezier/BSpline/NURBS loop 는 향후).
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_delta_closed_circle_face_creates_1_vert_1_edge_1_face() {
+        // 캐noncial Phase 2 표현: 1 anchor vert + 1 self-loop edge with
+        // Circle curve + 1 face with 1-HE outer loop.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0)); // on circle at θ=0
+        let mat = MaterialId::new(0);
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+
+        // Topology checks
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_faces, 1, "ADR-089 A-δ: 1 closed face");
+        assert_eq!(active_edges, 1, "ADR-089 A-δ: 1 self-loop edge");
+        assert_eq!(active_verts, 1, "ADR-089 A-δ: 1 anchor vertex");
+
+        // Edge invariants
+        let edges_iter: Vec<EdgeId> = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).map(|(id, _)| id).collect();
+        assert_eq!(edges_iter.len(), 1);
+        let eid = edges_iter[0];
+        assert!(mesh.edges[eid].is_self_loop(),
+            "ADR-089 A-δ: edge must be self-loop");
+        assert!(matches!(
+            mesh.edges[eid].curve(),
+            Some(crate::curves::AnalyticCurve::Circle { .. })
+        ), "ADR-089 A-δ: Circle curve attached to self-loop edge");
+
+        // Face outer loop = 1 HE (collect_loop_hes returns 1-element vec)
+        let outer_start = mesh.faces[face].outer().start;
+        let loop_hes = mesh.collect_loop_hes(outer_start).unwrap();
+        assert_eq!(loop_hes.len(), 1,
+            "ADR-089 A-δ: closed-curve face outer loop has 1 HE");
+
+        // collect_loop_verts also returns 1 vertex (anchor)
+        let loop_verts = mesh.collect_loop_verts(outer_start).unwrap();
+        assert_eq!(loop_verts.len(), 1);
+        assert_eq!(loop_verts[0], anchor);
+    }
+
+    #[test]
+    fn adr089_a_delta_he_self_cycle_correct() {
+        // Self-loop face boundary HE: next == prev == self (cycle length 1).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::ZERO);
+        let mat = MaterialId::new(0);
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+        let outer_start = mesh.faces[face].outer().start;
+        let he = &mesh.hes[outer_start];
+        assert_eq!(he.next(), outer_start,
+            "ADR-089 A-δ: HE.next == self for closed-curve cycle");
+        assert_eq!(he.prev(), outer_start,
+            "ADR-089 A-δ: HE.prev == self for closed-curve cycle");
+        assert_eq!(he.face(), face);
+        assert_eq!(he.dst(), anchor);
+    }
+
+    #[test]
+    fn adr089_a_delta_face_normal_inherited_from_curve() {
+        // Face normal == curve.normal.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::ZERO);
+        let mat = MaterialId::new(0);
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 1.0,
+            normal: DVec3::Y, // arbitrary axis
+            basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+        let face_normal = mesh.faces[face].normal();
+        assert!((face_normal - DVec3::Y).length() < 1e-9,
+            "ADR-089 A-δ: face normal must inherit curve normal (got {:?})",
+            face_normal);
+    }
+
+    #[test]
+    fn adr089_a_delta_two_circles_independent() {
+        // Multiple closed-curve faces don't collide. Each = own anchor + edge + face.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a1 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let a2 = mesh.add_vertex(DVec3::new(0.0, 0.0, 5.0));
+        let c1 = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let c2 = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::new(0.0, 0.0, 5.0), radius: 3.0,
+            normal: DVec3::X, basis_u: DVec3::Y,
+        };
+        let f1 = mesh.add_face_closed_curve(a1, c1, mat).unwrap();
+        let f2 = mesh.add_face_closed_curve(a2, c2, mat).unwrap();
+        assert_ne!(f1, f2);
+        assert_eq!(
+            mesh.faces.iter().filter(|(_, f)| f.is_active()).count(),
+            2, "ADR-089 A-δ: 2 closed-curve faces independent");
+        assert_eq!(
+            mesh.edges.iter().filter(|(_, e)| e.is_active()).count(),
+            2, "ADR-089 A-δ: 2 self-loop edges independent");
+    }
+
+    #[test]
+    fn adr089_a_delta_rejects_non_circle_curve() {
+        // Open / non-Circle curves rejected (deferred to A-η).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::ZERO);
+        let mat = MaterialId::new(0);
+        // Line is not a closed curve.
+        let v_a = mesh.add_vertex(DVec3::ZERO);
+        let v_b = mesh.add_vertex(DVec3::X);
+        let line = crate::curves::AnalyticCurve::Line {
+            start: v_a,
+            end: v_b,
+        };
+        let result = mesh.add_face_closed_curve(anchor, line, mat);
+        assert!(result.is_err(),
+            "ADR-089 A-δ: non-Circle curve must reject (got Ok)");
+        // Mesh state restored after rollback (no leaked face/edge).
+        assert_eq!(mesh.faces.iter().filter(|(_, f)| f.is_active()).count(), 0);
+        assert_eq!(mesh.edges.iter().filter(|(_, e)| e.is_active()).count(), 0);
+    }
+
+    #[test]
+    fn adr089_a_delta_rejects_invalid_anchor() {
+        // Stale / invalid anchor vertex rejected.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let bogus = VertId::new(99999); // never created
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 1.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let result = mesh.add_face_closed_curve(bogus, circle, mat);
+        assert!(result.is_err(),
+            "ADR-089 A-δ: invalid anchor must reject");
     }
 
     #[test]
