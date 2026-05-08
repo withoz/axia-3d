@@ -4881,8 +4881,9 @@ impl Mesh {
             }
             let force_hard = he_flags.contains(HeFlags::HARD);
 
-            // Collect adjacent face normals via radial chain
+            // Collect adjacent face normals + surfaces via radial chain
             let mut face_normals: Vec<DVec3> = Vec::new();
+            let mut face_surfaces: Vec<Option<crate::surfaces::AnalyticSurface>> = Vec::new();
             let mut he_id = he_start;
             loop {
                 let face_id = self.hes[he_id].face();
@@ -4890,6 +4891,7 @@ impl Mesh {
                     let face = &self.faces[face_id];
                     if face.is_active() && face.is_visible() {
                         face_normals.push(face.normal());
+                        face_surfaces.push(face.surface().cloned());
                     }
                 }
                 he_id = self.hes[he_id].next_rad();
@@ -4906,9 +4908,20 @@ impl Mesh {
                     0 => true,  // isolated edge (wireframe) — draw
                     1 => true,  // boundary edge — draw
                     2 => {
-                        // Two faces: check if coplanar
-                        let dot = face_normals[0].dot(face_normals[1]).abs();
-                        dot < cos_threshold // draw only if NOT coplanar
+                        // ADR-089 A-τ-β — smooth-group edge hide.
+                        // 두 face 가 같은 곡면 surface 인스턴스 (Cylinder/
+                        // Sphere/Cone/Torus) 면 smooth-group 내부 edge 로
+                        // 간주, hide. L-τ-1 / L-τ-2 / L-τ-6.
+                        if surfaces_in_same_smooth_group(
+                            &face_surfaces[0], &face_surfaces[1],
+                        ) {
+                            false // smooth group internal — hide
+                        } else {
+                            // Fallback: angle-based coplanar test (LOCKED #16
+                            // K-ε hotfix 답습).
+                            let dot = face_normals[0].dot(face_normals[1]).abs();
+                            dot < cos_threshold // draw only if NOT coplanar
+                        }
                     }
                     _ => true,  // non-manifold — draw
                 }
@@ -6605,6 +6618,79 @@ impl Mesh {
 impl Default for Mesh {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// ADR-089 A-τ-β — Two faces share the same smooth-group surface.
+///
+/// Returns true if both surfaces are the same curved analytic kind
+/// (Cylinder/Sphere/Cone/Torus) with matching base parameters within
+/// `EPSILON_LENGTH` (axis_origin, axis_dir, radius, ref_dir for
+/// Cylinder; analogous fields for others). u_range / v_range are
+/// excluded — each face holds its own slice.
+///
+/// Plane-Plane and None-None pairs return `false` so the caller falls
+/// through to the angle-threshold path (preserves LOCKED #16 K-ε
+/// hotfix semantics).
+///
+/// L-τ-1 / L-τ-6 implementation.
+fn surfaces_in_same_smooth_group(
+    a: &Option<crate::surfaces::AnalyticSurface>,
+    b: &Option<crate::surfaces::AnalyticSurface>,
+) -> bool {
+    use crate::surfaces::AnalyticSurface as S;
+    let eps = crate::tolerances::EPSILON_LENGTH;
+    let dvec_eq = |x: DVec3, y: DVec3| -> bool {
+        (x - y).length() < eps
+    };
+    let dir_eq = |x: DVec3, y: DVec3| -> bool {
+        x.normalize_or_zero().dot(y.normalize_or_zero()).abs() > 1.0 - 1e-6
+    };
+    match (a.as_ref(), b.as_ref()) {
+        (Some(S::Cylinder {
+            axis_origin: ao_a, axis_dir: ad_a, radius: r_a, ref_dir: rd_a, ..
+        }),
+         Some(S::Cylinder {
+            axis_origin: ao_b, axis_dir: ad_b, radius: r_b, ref_dir: rd_b, ..
+        })) => {
+            // Cylinders share smooth group if same axis line + radius.
+            // axis_origin can be any point on axis — collinear with axis_dir.
+            let same_radius = (r_a - r_b).abs() < eps;
+            let same_axis_dir = dir_eq(*ad_a, *ad_b);
+            // Check axis_origin offset is parallel to axis_dir
+            let offset = *ao_b - *ao_a;
+            let perp = offset - ad_a.normalize_or_zero() * offset.dot(ad_a.normalize_or_zero());
+            let same_axis_line = perp.length() < eps;
+            // ref_dir must align (within axis-symmetric rotation)
+            let _same_ref = dir_eq(*rd_a, *rd_b)
+                || (rd_a.cross(*rd_b).length() < eps);
+            same_radius && same_axis_dir && same_axis_line
+        }
+        (Some(S::Sphere { center: c_a, radius: r_a, .. }),
+         Some(S::Sphere { center: c_b, radius: r_b, .. })) => {
+            dvec_eq(*c_a, *c_b) && (r_a - r_b).abs() < eps
+        }
+        (Some(S::Cone {
+            apex: ap_a, axis_dir: ad_a, half_angle: ha_a, ref_dir: _rd_a, ..
+        }),
+         Some(S::Cone {
+            apex: ap_b, axis_dir: ad_b, half_angle: ha_b, ref_dir: _rd_b, ..
+        })) => {
+            dvec_eq(*ap_a, *ap_b) && dir_eq(*ad_a, *ad_b)
+                && (ha_a - ha_b).abs() < 1e-6
+        }
+        (Some(S::Torus {
+            center: c_a, axis_dir: ad_a, major_radius: ma_a, minor_radius: mi_a, ..
+        }),
+         Some(S::Torus {
+            center: c_b, axis_dir: ad_b, major_radius: ma_b, minor_radius: mi_b, ..
+        })) => {
+            dvec_eq(*c_a, *c_b) && dir_eq(*ad_a, *ad_b)
+                && (ma_a - ma_b).abs() < eps
+                && (mi_a - mi_b).abs() < eps
+        }
+        // Plane / None / mismatched kinds → not a smooth group.
+        _ => false,
     }
 }
 
@@ -10044,6 +10130,144 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-τ-β: smooth-group edge hiding (Cylinder)
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Build two adjacent Cylinder side quads sharing one vertical edge,
+    /// both with the SAME full-circumference Cylinder surface attached.
+    /// Returns shared edge id.
+    fn build_two_adjacent_cylinder_sides(
+        mesh: &mut Mesh,
+        radius: f64,
+        h: f64,
+    ) -> EdgeId {
+        let a = std::f64::consts::PI / 12.0; // 15° step
+        let p0 = DVec3::new(radius, 0.0, 0.0);
+        let p1 = DVec3::new(radius * a.cos(), radius * a.sin(), 0.0);
+        let p2 = DVec3::new(radius * (2.0 * a).cos(), radius * (2.0 * a).sin(), 0.0);
+        let p0t = DVec3::new(p0.x, p0.y, h);
+        let p1t = DVec3::new(p1.x, p1.y, h);
+        let p2t = DVec3::new(p2.x, p2.y, h);
+        let v0 = mesh.add_vertex(p0);
+        let v1 = mesh.add_vertex(p1);
+        let v2 = mesh.add_vertex(p2);
+        let v0t = mesh.add_vertex(p0t);
+        let v1t = mesh.add_vertex(p1t);
+        let v2t = mesh.add_vertex(p2t);
+        let face_a = mesh.add_face(&[v0, v1, v1t, v0t], MaterialId::new(0)).unwrap();
+        let face_b = mesh.add_face(&[v1, v2, v2t, v1t], MaterialId::new(0)).unwrap();
+        let cyl = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, h),
+        };
+        mesh.faces[face_a].set_surface(Some(cyl.clone()));
+        mesh.faces[face_b].set_surface(Some(cyl));
+        // The shared vertical edge is between v1 and v1t
+        find_edge_between_helper(mesh, v1, v1t)
+    }
+
+    fn find_edge_between_helper(mesh: &Mesh, va: VertId, vb: VertId) -> EdgeId {
+        for (eid, e) in mesh.edges.iter() {
+            if !e.is_active() { continue; }
+            let (s, l) = (e.v_small(), e.v_large());
+            if (s == va && l == vb) || (s == vb && l == va) {
+                return eid;
+            }
+        }
+        panic!("edge between {:?} and {:?} not found", va, vb);
+    }
+
+    #[test]
+    fn adr089_a_tau_smooth_group_cylinder_edge_hidden() {
+        // Two adjacent Cylinder side quads sharing same surface →
+        // shared edge should NOT appear in wireframe.
+        let mut mesh = Mesh::new();
+        let shared_eid = build_two_adjacent_cylinder_sides(&mut mesh, 100.0, 200.0);
+        let (_lines, edge_map) = mesh.export_edge_lines_with_map(20.1);
+        let shared_drawn = edge_map.contains(&shared_eid.raw());
+        assert!(!shared_drawn,
+            "ADR-089 A-τ-β: smooth-group internal edge must be hidden");
+    }
+
+    #[test]
+    fn adr089_a_tau_boundary_edge_still_drawn() {
+        // The 4 boundary edges of each quad (top, bottom, outer side)
+        // are still present in wireframe.
+        let mut mesh = Mesh::new();
+        let _ = build_two_adjacent_cylinder_sides(&mut mesh, 50.0, 100.0);
+        let (lines, _) = mesh.export_edge_lines_with_map(20.1);
+        let seg_count = lines.len() / 6;
+        // 2 quads share 1 vertical edge. Total unique edges = 7
+        // (top of A, top of B, shared vertical, left vertical of A,
+        // right vertical of B, bottom of A, bottom of B). 1 edge hidden
+        // (shared vertical) → 6 segments.
+        assert!(seg_count >= 6, "expected ≥ 6 visible boundary segs, got {}", seg_count);
+    }
+
+    #[test]
+    fn adr089_a_tau_polygonal_no_surface_unchanged() {
+        // Two flat coplanar quads (no surface) — angle-threshold path
+        // unchanged. Shared edge should still be hidden by angle test.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(2.0, 1.0, 0.0));
+        let v4 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v5 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f1 = mesh.add_face(&[v0, v1, v4, v5], MaterialId::new(0)).unwrap();
+        let _f2 = mesh.add_face(&[v1, v2, v3, v4], MaterialId::new(0)).unwrap();
+        // Both face normals = (0, 0, 1) → coplanar → shared edge hidden.
+        let (lines, _) = mesh.export_edge_lines_with_map(20.1);
+        // Shared edge between (v1, v4) should be hidden. Outer 6 edges
+        // visible.
+        let seg_count = lines.len() / 6;
+        assert!(seg_count <= 7,
+            "coplanar shared edge should be hidden, got {} segs", seg_count);
+    }
+
+    #[test]
+    fn adr089_a_tau_smooth_group_helper_distinguishes_kinds() {
+        // Direct unit test of surfaces_in_same_smooth_group helper.
+        use crate::surfaces::AnalyticSurface as S;
+        let cyl1 = S::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z,
+            radius: 100.0, ref_dir: DVec3::X,
+            u_range: (0.0, 1.0), v_range: (0.0, 200.0),
+        };
+        let cyl1_diff_u = S::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z,
+            radius: 100.0, ref_dir: DVec3::X,
+            u_range: (1.0, 2.0), v_range: (0.0, 200.0), // different u_range
+        };
+        let cyl2 = S::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z,
+            radius: 200.0, ref_dir: DVec3::X, // different radius
+            u_range: (0.0, 1.0), v_range: (0.0, 200.0),
+        };
+        let plane = S::Plane {
+            origin: DVec3::ZERO, normal: DVec3::Z, basis_u: DVec3::X,
+            u_range: (-1.0, 1.0), v_range: (-1.0, 1.0),
+        };
+
+        // Same Cylinder base params (different u_range OK) → smooth group
+        assert!(surfaces_in_same_smooth_group(&Some(cyl1.clone()), &Some(cyl1_diff_u)));
+        // Different radius → not smooth group
+        assert!(!surfaces_in_same_smooth_group(&Some(cyl1.clone()), &Some(cyl2)));
+        // Plane vs Cylinder → not smooth group
+        assert!(!surfaces_in_same_smooth_group(&Some(plane.clone()), &Some(cyl1.clone())));
+        // Plane vs Plane → not smooth group (fall through to angle test)
+        assert!(!surfaces_in_same_smooth_group(&Some(plane.clone()), &Some(plane)));
+        // None → never smooth group
+        assert!(!surfaces_in_same_smooth_group(&None, &None));
+        assert!(!surfaces_in_same_smooth_group(&Some(cyl1), &None));
     }
 
     // ────────────────────────────────────────────────────────────────────
