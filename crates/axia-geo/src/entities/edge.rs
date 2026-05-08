@@ -94,8 +94,21 @@ impl EdgeClass {
 
 /// An edge in the Half-Edge mesh.
 ///
-/// Stores its two endpoint vertices in canonical order (v_small < v_large)
-/// and a reference to one of its half-edges for radial traversal.
+/// Stores its two endpoint vertices in canonical order
+/// (v_small ≤ v_large — equality allowed for self-loops per ADR-089) and
+/// a reference to one of its half-edges for radial traversal.
+///
+/// **ADR-089 Phase 2 (A-β, 2026-05-08)**: Self-loop edges (`v_small ==
+/// v_large`) are explicitly permitted as an additive schema relaxation.
+/// They represent **closed analytic curves** (e.g., full circle, closed
+/// Bezier loop, closed B-spline) where the entire curve loops back to a
+/// single anchor vertex. The geometric path between the (identical)
+/// endpoints is defined by `Edge.curve = Some(...)`.
+///
+/// Open edges (default polygon mesh) maintain `v_small < v_large` strict
+/// ordering by `VertPairKey::new`. Self-loops are an opt-in extension —
+/// callers that don't construct self-loop edges experience zero behavior
+/// change (메타-원칙 #14 의 deepest realization).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Edge {
     /// Smaller vertex ID (canonical ordering)
@@ -312,6 +325,22 @@ impl Edge {
     #[inline]
     pub fn v_large(&self) -> VertId {
         self.v_large
+    }
+
+    /// ADR-089 Phase 2 (A-β) — true if this edge is a self-loop, i.e.,
+    /// both endpoints are the same vertex. Self-loops represent closed
+    /// analytic curves (full circle, closed Bezier, etc.) per `Edge.curve`.
+    ///
+    /// For polygon (default) edges this returns `false`. For closed-curve
+    /// edges (constructed via future `add_face_with_curve_loops` API in
+    /// A-δ) this returns `true`.
+    ///
+    /// Caller invariant: a self-loop edge SHOULD have `Edge.curve = Some(...)`
+    /// (analytic curve definition). A self-loop without curve attached is
+    /// degenerate (collapsed line) and should be rejected by face synthesis.
+    #[inline]
+    pub fn is_self_loop(&self) -> bool {
+        self.v_small == self.v_large
     }
 
     #[inline]
@@ -619,5 +648,87 @@ mod tests {
             "stale cache from pre-save state MUST NOT register as cache hit \
              after load (pre={} vs post={})",
             pre_save_v, restored.curve_version());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-β) — Edge schema relaxation: self-loop allowed.
+    //
+    // Invariant tests for closed analytic curve edges (Phase 2 base).
+    // Schema only — no behavior change for polygon edges. Self-loop case
+    // is opt-in (callers must explicitly construct with v_small == v_large).
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_beta_open_edge_is_not_self_loop() {
+        // Default polygon edge (v_small != v_large) — is_self_loop() = false.
+        let v0 = VertId::new(0);
+        let v1 = VertId::new(1);
+        let e = Edge::new(v0, v1, 1e-6);
+        assert!(!e.is_self_loop(),
+            "ADR-089 A-β L1: open edge must not be self-loop");
+        assert_eq!(e.v_small(), v0);
+        assert_eq!(e.v_large(), v1);
+    }
+
+    #[test]
+    fn adr089_a_beta_self_loop_edge_constructible() {
+        // Self-loop case: v_small == v_large == single anchor vertex.
+        // Schema allows this construction (additive, opt-in for closed curves).
+        let v_anchor = VertId::new(42);
+        let e = Edge::new(v_anchor, v_anchor, 1e-6);
+        assert!(e.is_self_loop(),
+            "ADR-089 A-β L1: edge with v_small == v_large is self-loop");
+        assert_eq!(e.v_small(), v_anchor);
+        assert_eq!(e.v_large(), v_anchor);
+    }
+
+    #[test]
+    fn adr089_a_beta_self_loop_with_circle_curve_attached() {
+        // Closed curve case: self-loop edge + analytic curve attached.
+        // This is the canonical Phase 2 representation of a closed circle.
+        let v_anchor = VertId::new(5);
+        let mut e = Edge::new(v_anchor, v_anchor, 1e-6);
+        e.set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        }));
+        assert!(e.is_self_loop());
+        assert!(matches!(e.curve(), Some(AnalyticCurve::Circle { .. })));
+    }
+
+    #[test]
+    fn adr089_a_beta_vert_pair_key_self_loop_canonical() {
+        // VertPairKey::new(v, v) yields { v_small: v, v_large: v }.
+        // Self-loop key is canonically equal to itself (HashMap stable).
+        use crate::entities::id::VertPairKey;
+        let v = VertId::new(10);
+        let key1 = VertPairKey::new(v, v);
+        let key2 = VertPairKey::new(v, v);
+        assert_eq!(key1, key2);
+        assert_eq!(key1.v_small, v);
+        assert_eq!(key1.v_large, v);
+    }
+
+    #[test]
+    fn adr089_a_beta_self_loop_serde_roundtrip_preserves() {
+        // Serialize + deserialize self-loop edge with curve. Schema must
+        // preserve self-loop semantics across `.axia` save/load.
+        let v = VertId::new(7);
+        let mut e = Edge::new(v, v, 1e-6);
+        e.set_curve(Some(AnalyticCurve::Circle {
+            center: DVec3::new(1.0, 2.0, 3.0),
+            radius: 10.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        }));
+        let json = serde_json::to_string(&e).unwrap();
+        let restored: Edge = serde_json::from_str(&json).unwrap();
+        assert!(restored.is_self_loop(),
+            "ADR-089 A-β L1: self-loop must survive serde roundtrip");
+        assert_eq!(restored.v_small(), v);
+        assert_eq!(restored.v_large(), v);
+        assert!(matches!(restored.curve(), Some(AnalyticCurve::Circle { .. })));
     }
 }
