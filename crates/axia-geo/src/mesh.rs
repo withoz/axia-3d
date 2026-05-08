@@ -4323,7 +4323,97 @@ impl Mesh {
                     // fall through to the polygon tessellation below.
                 } else {
                 use crate::surfaces::SurfaceOps;
-                let tess = surface.tessellate(ANALYTIC_CHORD_TOL);
+
+                // ADR-089 A-ρ-β — Cylinder side face u-slice fast-path.
+                // For 4-vert quad faces with shared Cylinder surface (full
+                // u_range = 0..2π, all 23 side faces share same instance),
+                // compute the quad's actual u/v sub-range from its
+                // boundary verts and tessellate only that slice.
+                // L-ρ-1 / L-ρ-2 / L-ρ-3 / L-ρ-5.
+                //
+                // Without this fast-path, each side face renders the FULL
+                // cylinder (overlapping mesh, polygon edge artifacts).
+                let face_surface_owned;
+                let render_surface: &crate::surfaces::AnalyticSurface =
+                    if let crate::surfaces::AnalyticSurface::Cylinder {
+                        axis_origin, axis_dir, radius, ref_dir,
+                        u_range: _full_u, v_range: _full_v,
+                    } = surface {
+                        // Try to derive sub-Cylinder from boundary verts.
+                        let quad_verts_opt = self
+                            .collect_loop_verts(face.outer().start)
+                            .ok();
+                        if let Some(quad_verts) = quad_verts_opt {
+                            if quad_verts.len() == 4 {
+                                let axis_dir_n = axis_dir.normalize_or_zero();
+                                let ref_dir_n = ref_dir.normalize_or_zero();
+                                let basis_v = axis_dir_n.cross(ref_dir_n);
+                                let mut us = Vec::with_capacity(4);
+                                let mut vs = Vec::with_capacity(4);
+                                let mut all_ok = true;
+                                for &vid in &quad_verts {
+                                    match self.vertex_pos(vid) {
+                                        Ok(p) => {
+                                            let local = p - *axis_origin;
+                                            let lx = local.dot(ref_dir_n);
+                                            let ly = local.dot(basis_v);
+                                            let u = ly.atan2(lx);
+                                            let v = local.dot(axis_dir_n);
+                                            us.push(u);
+                                            vs.push(v);
+                                        }
+                                        Err(_) => { all_ok = false; break; }
+                                    }
+                                }
+                                if all_ok {
+                                    // u: pick contiguous range. For a quad
+                                    // on cylinder, 2 verts share u_lo and 2
+                                    // share u_hi (within tolerance). To
+                                    // handle wrap-around (e.g., quad
+                                    // spanning ±π discontinuity), unwrap
+                                    // angles relative to first.
+                                    let u0 = us[0];
+                                    let unwrap = |u: f64| -> f64 {
+                                        let mut d = u - u0;
+                                        while d > std::f64::consts::PI { d -= std::f64::consts::TAU; }
+                                        while d < -std::f64::consts::PI { d += std::f64::consts::TAU; }
+                                        u0 + d
+                                    };
+                                    let unwrapped: Vec<f64> = us.iter().map(|&u| unwrap(u)).collect();
+                                    let u_min = unwrapped.iter().cloned().fold(f64::INFINITY, f64::min);
+                                    let u_max = unwrapped.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                                    let v_min = vs.iter().cloned().fold(f64::INFINITY, f64::min);
+                                    let v_max = vs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                                    if (u_max - u_min).abs() > 1e-9
+                                        && (v_max - v_min).abs() > 1e-9
+                                    {
+                                        face_surface_owned =
+                                            crate::surfaces::AnalyticSurface::Cylinder {
+                                                axis_origin: *axis_origin,
+                                                axis_dir: *axis_dir,
+                                                radius: *radius,
+                                                ref_dir: *ref_dir,
+                                                u_range: (u_min, u_max),
+                                                v_range: (v_min, v_max),
+                                            };
+                                        &face_surface_owned
+                                    } else {
+                                        surface
+                                    }
+                                } else {
+                                    surface
+                                }
+                            } else {
+                                surface
+                            }
+                        } else {
+                            surface
+                        }
+                    } else {
+                        surface
+                    };
+
+                let tess = render_surface.tessellate(ANALYTIC_CHORD_TOL);
                 if tess.vertices.is_empty() || tess.triangles.is_empty() {
                     stats.analytic_empty_tess += 1;
                     continue;
@@ -4343,7 +4433,7 @@ impl Mesh {
                     positions_f64.push(p.z);
 
                     let uv = tess.uv.get(i).copied().unwrap_or([0.0, 0.0]);
-                    let n = surface.normal(uv[0], uv[1]);
+                    let n = render_surface.normal(uv[0], uv[1]);
                     // Defensive: degenerate normal → fallback to face plane normal.
                     let n = if n.length_squared() < 1e-20 { face.normal() } else { n };
                     normals.push(n.x as f32);
@@ -9954,6 +10044,124 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-ρ-β: Cylinder side face render u-slice fast-path
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Helper — build a 4-vert quad face on a cylinder of given (radius,
+    /// axis_origin=ZERO, axis_dir=Z, ref_dir=X) at theta-slice [θ_lo, θ_hi]
+    /// from z=0 to z=h. Attaches FULL u_range Cylinder surface (mimics
+    /// extrude_planar_cylinder where all sides share full surface).
+    fn build_cylinder_quad_face(
+        mesh: &mut Mesh,
+        radius: f64,
+        h: f64,
+        theta_lo: f64,
+        theta_hi: f64,
+    ) -> FaceId {
+        let p0 = DVec3::new(radius * theta_lo.cos(), radius * theta_lo.sin(), 0.0);
+        let p1 = DVec3::new(radius * theta_hi.cos(), radius * theta_hi.sin(), 0.0);
+        let p2 = DVec3::new(radius * theta_hi.cos(), radius * theta_hi.sin(), h);
+        let p3 = DVec3::new(radius * theta_lo.cos(), radius * theta_lo.sin(), h);
+        let v0 = mesh.add_vertex(p0);
+        let v1 = mesh.add_vertex(p1);
+        let v2 = mesh.add_vertex(p2);
+        let v3 = mesh.add_vertex(p3);
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        // Attach full-circumference Cylinder (mimic A-θ Path A behavior)
+        let cyl = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, h),
+        };
+        mesh.faces[face].set_surface(Some(cyl));
+        face
+    }
+
+    #[test]
+    fn adr089_a_rho_cylinder_quad_emits_sliced_tessellation() {
+        // Cylinder side quad (theta in [0, π/12]) must NOT render the full
+        // cylinder. Triangle count should be small (~chord/π/12) not
+        // huge (~chord*2π).
+        let mut mesh = Mesh::new();
+        let _f = build_cylinder_quad_face(
+            &mut mesh, 100.0, 200.0, 0.0, std::f64::consts::PI / 12.0,
+        );
+        let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let tris = indices.len() / 3;
+        // For a quad spanning π/12 (~15°) with chord_tol=0.1mm and r=100mm,
+        // segment count ≈ (π/12) / (2*acos(1 - 0.001)) ≈ 6 segments.
+        // Each segment of single quad row → 2 triangles → ~12 tris.
+        // Without u-slice fix, full cylinder (all 24 quads) would be
+        // emitted → 24 * 12 = ~288 tris.
+        assert!(tris < 100, "ADR-089 A-ρ-β: u-slice must produce ≪ 100 tris, got {}", tris);
+        assert!(tris > 0, "must produce some triangles");
+    }
+
+    #[test]
+    fn adr089_a_rho_cylinder_quad_normals_radial() {
+        // All emitted vertex normals must be radial (pointing outward
+        // from cylinder axis).
+        let mut mesh = Mesh::new();
+        let _f = build_cylinder_quad_face(
+            &mut mesh, 100.0, 200.0, 0.0, std::f64::consts::PI / 6.0,
+        );
+        let (positions, normals, _idx, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let n_verts = positions.len() / 3;
+        for i in 0..n_verts {
+            let px = positions[i * 3];
+            let py = positions[i * 3 + 1];
+            let _pz = positions[i * 3 + 2];
+            let nx = normals[i * 3];
+            let ny = normals[i * 3 + 1];
+            let nz = normals[i * 3 + 2];
+            // Normal should be (px, py, 0) / radius (radial), z-component ≈ 0
+            assert!(nz.abs() < 1e-3, "normal[{i}].z should be ~0 (radial), got {nz}");
+            // Direction sanity: nx*px + ny*py > 0 (outward)
+            let dot = nx * px + ny * py;
+            assert!(dot > 0.0, "normal must be outward, dot={dot} at vert {i}");
+        }
+    }
+
+    #[test]
+    fn adr089_a_rho_cylinder_quad_tessellation_within_quad_bounds() {
+        // Tessellated points must lie within the quad's theta range
+        // [theta_lo - ε, theta_hi + ε], not span the full cylinder.
+        let mut mesh = Mesh::new();
+        let theta_lo = std::f64::consts::PI / 4.0;
+        let theta_hi = std::f64::consts::PI / 3.0;
+        let _f = build_cylinder_quad_face(
+            &mut mesh, 50.0, 100.0, theta_lo, theta_hi,
+        );
+        let (positions, _norm, _idx, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let n_verts = positions.len() / 3;
+        for i in 0..n_verts {
+            let px = positions[i * 3] as f64;
+            let py = positions[i * 3 + 1] as f64;
+            let theta = py.atan2(px);
+            assert!(theta >= theta_lo - 1e-3 && theta <= theta_hi + 1e-3,
+                "vert {i} theta = {theta} out of [{theta_lo}, {theta_hi}]");
+        }
+    }
+
+    #[test]
+    fn adr089_a_rho_polygonal_face_unaffected() {
+        // Regression — polygonal face (no Cylinder surface) keeps using
+        // earcut polygon path.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        // Earcut produces 2 triangles for a quad (no Cylinder surface).
+        assert_eq!(indices.len() / 3, 2);
     }
 
     // ────────────────────────────────────────────────────────────────────
