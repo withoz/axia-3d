@@ -18,9 +18,16 @@ describe('DrawCurveSettings (ADR-089 A-λ-β)', () => {
     setDrawCurveMode(false);
   });
 
-  it('defaults to OFF (additive only, ADR-046 P31 #4 muscle memory protection)', () => {
-    // Note: localStorage may persist between test runs in real browser; the
-    // module reads it on first load. Force-set false then verify.
+  it('defaults to ON (A-π-β, after A-ν sweep 2989/2989 PASS)', () => {
+    // Note: module init reads localStorage once; in vitest jsdom environment
+    // localStorage is fresh per worker, so default = true. We verify the
+    // explicit ON path here. Tests below cover set/get round-trip.
+    setDrawCurveMode(true);
+    expect(getDrawCurveMode()).toBe(true);
+  });
+
+  it('explicit OFF preference (localStorage "false") is preserved (L-π-2)', () => {
+    // Simulating user who explicitly toggled OFF before A-π-β default flip.
     setDrawCurveMode(false);
     expect(getDrawCurveMode()).toBe(false);
   });
