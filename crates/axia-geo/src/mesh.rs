@@ -4375,6 +4375,83 @@ impl Mesh {
             // Used for smooth-normal computation around each vertex.
             let loop_hes = self.collect_loop_hes(face.outer().start).unwrap_or_default();
 
+            // ADR-089 A-κ-β — closed-curve face render fast-path.
+            // Detect 1-vert anchor + Circle curve self-loop edge and
+            // emit tessellated triangle fan + analytic Plane normals.
+            // Read-only (no mesh mutation; A-θ-β handles substitution
+            // for Push-Pull). L-κ-1 / L-κ-3 / L-κ-4.
+            if loop_verts.len() == 1 {
+                let outer_start = face.outer().start;
+                let edge_id = self.hes[outer_start].edge();
+                if let Some(edge_ref) = self.edges.get(edge_id) {
+                    if let Some(crate::curves::AnalyticCurve::Circle {
+                        center,
+                        radius,
+                        normal: c_normal,
+                        basis_u,
+                    }) = edge_ref.curve().cloned()
+                    {
+                        // ADR-038 P23.2 — 0.1mm chord tolerance.
+                        let chord_tol = ANALYTIC_CHORD_TOL.min(radius * 0.01).max(1e-6);
+                        let pts = crate::curves::circle::tessellate_full(
+                            center, radius, c_normal, basis_u, chord_tol,
+                        );
+                        if pts.len() < 4 {
+                            stats.outer_too_short += 1;
+                            continue;
+                        }
+                        let unique_pts = &pts[..pts.len() - 1];
+                        let n_seg = unique_pts.len();
+
+                        // Build vertex buffer: center + N rim verts.
+                        // Triangulate as fan from center → N triangles.
+                        let n_normal = if c_normal.length_squared() < 0.5 {
+                            face.normal()
+                        } else {
+                            c_normal.normalize_or_zero()
+                        };
+
+                        // Emit center vertex (vert_offset + 0).
+                        positions.push(center.x as f32);
+                        positions.push(center.y as f32);
+                        positions.push(center.z as f32);
+                        positions_f64.push(center.x);
+                        positions_f64.push(center.y);
+                        positions_f64.push(center.z);
+                        normals.push(n_normal.x as f32);
+                        normals.push(n_normal.y as f32);
+                        normals.push(n_normal.z as f32);
+
+                        // Emit N rim vertices (vert_offset + 1 .. vert_offset + N).
+                        for &p in unique_pts {
+                            positions.push(p.x as f32);
+                            positions.push(p.y as f32);
+                            positions.push(p.z as f32);
+                            positions_f64.push(p.x);
+                            positions_f64.push(p.y);
+                            positions_f64.push(p.z);
+                            normals.push(n_normal.x as f32);
+                            normals.push(n_normal.y as f32);
+                            normals.push(n_normal.z as f32);
+                        }
+
+                        // Emit N triangles: (center, rim[i], rim[i+1]).
+                        for i in 0..n_seg {
+                            let next = (i + 1) % n_seg;
+                            indices.push(vert_offset);
+                            indices.push(vert_offset + 1 + i as u32);
+                            indices.push(vert_offset + 1 + next as u32);
+                            face_map.push(face_id.raw());
+                        }
+                        vert_offset += (n_seg + 1) as u32;
+                        stats.emitted += 1;
+                        continue;
+                    }
+                }
+                // Not a closed-curve face — fall through to legacy
+                // < 3 skip.
+            }
+
             if loop_verts.len() < 3 {
                 stats.outer_too_short += 1;
                 continue;
@@ -4656,6 +4733,40 @@ impl Mesh {
             // Centerline edges go through a separate rendering path
             // (export_centerline_lines) so skip them here.
             if edge.class() == EdgeClass::Centerline {
+                continue;
+            }
+
+            // ADR-089 A-κ-β — closed-curve edge wireframe fast-path.
+            // Self-loop edge with Circle curve → tessellate to N polyline
+            // segments. Each segment maps to the SAME EdgeId (LOCKED #15
+            // ADR-037 P22.5 owner-ID uniformity). L-κ-2 / L-κ-6.
+            if edge.is_self_loop() {
+                if let Some(crate::curves::AnalyticCurve::Circle {
+                    center,
+                    radius,
+                    normal: c_normal,
+                    basis_u,
+                }) = edge.curve().cloned()
+                {
+                    let chord_tol = (radius * 0.01).max(5e-5);
+                    let pts = crate::curves::circle::tessellate_full(
+                        center, radius, c_normal, basis_u, chord_tol,
+                    );
+                    if pts.len() >= 2 {
+                        for w in pts.windows(2) {
+                            lines.push(w[0].x as f32);
+                            lines.push(w[0].y as f32);
+                            lines.push(w[0].z as f32);
+                            lines.push(w[1].x as f32);
+                            lines.push(w[1].y as f32);
+                            lines.push(w[1].z as f32);
+                            edge_map.push(_edge_id.raw());
+                        }
+                    }
+                    continue;
+                }
+                // Self-loop without Circle curve — skip (zero-length
+                // line otherwise).
                 continue;
             }
 
@@ -9843,6 +9954,150 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-κ-β: closed-curve face/edge render fast-path
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr089_a_kappa_closed_curve_face_emits_triangles() {
+        // export_buffers must emit ≥ 8 triangles for a closed-curve
+        // face (1 anchor + Circle self-loop). Pre-A-κ this face produced
+        // 0 triangles (loop_verts.len() < 3 skip).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let _face = mesh.add_face_closed_curve(anchor, circle, MaterialId::new(0)).unwrap();
+        let (_pos, _norm, indices, face_map, _pos_f64) = mesh.export_buffers().unwrap();
+        let tri_count = indices.len() / 3;
+        assert!(
+            tri_count >= 8,
+            "ADR-089 A-κ-β: closed-curve face must emit ≥ 8 triangles, got {}",
+            tri_count
+        );
+        assert_eq!(
+            face_map.len(),
+            tri_count,
+            "ADR-089 A-κ-β: face_map length must equal triangle count"
+        );
+    }
+
+    #[test]
+    fn adr089_a_kappa_closed_curve_face_normals_align_with_circle_normal() {
+        // All emitted vertex normals must align with the Circle's normal
+        // (analytic Plane orientation). Tolerance 1e-3.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(3.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 3.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let _face = mesh.add_face_closed_curve(anchor, circle, MaterialId::new(0)).unwrap();
+        let (_pos, normals, _idx, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let n_verts = normals.len() / 3;
+        for i in 0..n_verts {
+            let nx = normals[i * 3];
+            let ny = normals[i * 3 + 1];
+            let nz = normals[i * 3 + 2];
+            assert!(nx.abs() < 1e-3 && ny.abs() < 1e-3 && (nz - 1.0).abs() < 1e-3,
+                "ADR-089 A-κ-β: normal[{i}] must be ~Z, got ({nx},{ny},{nz})");
+        }
+    }
+
+    #[test]
+    fn adr089_a_kappa_closed_curve_edge_emits_polyline_segments() {
+        // export_edge_lines must tessellate self-loop Circle edge into
+        // N >= 8 line segments (not a zero-length point).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 2.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let _face = mesh.add_face_closed_curve(anchor, circle, MaterialId::new(0)).unwrap();
+        let (lines, edge_map) = mesh.export_edge_lines_with_map(20.1);
+        // Each segment = 6 floats (2 endpoints × 3). N segs → N*6 floats.
+        let seg_count = lines.len() / 6;
+        assert!(
+            seg_count >= 8,
+            "ADR-089 A-κ-β: self-loop edge must emit ≥ 8 polyline segments, got {}",
+            seg_count
+        );
+        assert_eq!(
+            edge_map.len(),
+            seg_count,
+            "edge_map length must match segment count"
+        );
+        // P22.5 — all segments share same EdgeId.
+        let first_eid = edge_map[0];
+        assert!(
+            edge_map.iter().all(|&e| e == first_eid),
+            "ADR-089 A-κ-β: all polyline segments must map to the same EdgeId"
+        );
+    }
+
+    #[test]
+    fn adr089_a_kappa_polygonal_face_render_unaffected() {
+        // Regression — polygonal face render path unchanged.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let (_pos, _norm, indices, face_map, _pos_f64) = mesh.export_buffers().unwrap();
+        // Earcut produces 2 triangles for a quad.
+        assert_eq!(indices.len() / 3, 2);
+        assert_eq!(face_map.len(), 2);
+    }
+
+    #[test]
+    fn adr089_a_kappa_polygonal_edge_render_unaffected() {
+        // Regression — non-self-loop edge wireframe unchanged.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let (lines, _) = mesh.export_edge_lines_with_map(20.1);
+        // Quad has 4 boundary edges → 4 segments × 6 floats.
+        assert_eq!(lines.len(), 24);
+    }
+
+    #[test]
+    fn adr089_a_kappa_mixed_polygon_and_closed_curve_both_render() {
+        // Mixed mesh — polygon face + closed-curve face both produce
+        // triangles in same export pass.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _rect = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let anchor = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::new(5.0, 0.0, 0.0),
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let _circle_face = mesh.add_face_closed_curve(anchor, circle, MaterialId::new(0)).unwrap();
+        let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
+        let tri_count = indices.len() / 3;
+        // Quad: 2 triangles + Circle: ≥ 8 triangles → ≥ 10.
+        assert!(tri_count >= 10,
+            "ADR-089 A-κ-β: mixed mesh tri_count = {} (expected ≥ 10)", tri_count);
     }
 
     // ────────────────────────────────────────────────────────────────────
