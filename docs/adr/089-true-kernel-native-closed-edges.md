@@ -298,13 +298,37 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - ADR-089 §A-θ Path B (future ADR): 진정한 kernel-native cylinder
   의 별도 트랙.
 
-### A-θ-α (본 commit)
+### A-θ-α (commit `16fb58c`)
 - **사용자 결재**: 2026-05-08, "(1) 권장 — Path A 먼저, Path B 별도".
 - **변경**: 본 §D `A-θ-α` amendment 추가. Roadmap / lock-ins /
   non-goals / cross-link 명시.
 - **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
 - **Bundle 영향**: 0.
-- **다음 step**: A-θ-β (Rust core tessellate-then-extrude).
+
+### A-θ-β (commit `2cc2bc0`)
+- **변경**: `crates/axia-geo/src/operations/create_solid.rs`:
+  * `extrude_planar_cylinder` entry 에 `boundary_verts.len() == 1`
+    fast-path 추가 (L-θ-2).
+  * `extrude_closed_curve_face_via_tessellation` 신규 helper —
+    Circle curve detection → tessellate (chord_tol = radius/100,
+    min 8) → soft-delete original → polygonal substitute + Plane
+    inherit + Arc curve 부여 → recurse.
+- **회귀**: axia-geo 1143 → 1148 (+5). 절대 #[ignore] 금지 5/5 준수.
+- **LOCKED guards**: axia-core 200 unchanged.
+
+### A-θ-γ + A-θ-δ (browser real-runtime closure)
+- **WASM/TS bridge**: `createSolidExtrude` 자동 통과 (passthrough,
+  코드 변경 0).
+- **Browser real-runtime 시연**:
+  * `drawCircleAsCurve(center=ZERO, normal=Z, basis_u=X, radius=5)`
+    → shape 1 / face 0 / surface kind = 1 (Plane).
+  * `createSolidExtrude(face=0, dist=10.0)` → true.
+  * Post-state: 46 verts / 70 edges / **25 faces** (23 polygonal
+    substitute bottom + 1 top + 23 sides), invariants 25/25 valid +
+    0 violations.
+- **회귀**: +0 (smoke verification). 누적 A-θ track total **+5**.
+- **다음 step**: A-θ closure 완료. ADR-089 다음 후보 — A-ι (Offset),
+  A-κ (Render), A-λ (WASM/UI), 또는 A-θ Path B 별도 ADR.
 
 ---
 
