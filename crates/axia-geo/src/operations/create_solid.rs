@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::curves::{AnalyticCurve, CurveOps};
 use crate::curves::synthesize::synthesize_plane_surface;
-use crate::entities::{FaceId, MaterialId};
+use crate::entities::{FaceId, MaterialId, VertId};
 use crate::mesh::Mesh;
 use crate::surfaces::AnalyticSurface;
 
@@ -391,6 +391,20 @@ impl Mesh {
             bail!("extrude_planar_cylinder: profile face has null outer loop start");
         }
         let boundary_verts = self.collect_loop_verts(outer_start)?;
+
+        // ADR-089 A-θ-β — closed-curve face fast-path (Path A
+        // tessellate-then-extrude). Detect 1-vert anchor + Circle
+        // self-loop edge and substitute a tessellated polygonal
+        // profile before continuing. L-θ-2 / L-θ-3 / L-θ-4 / L-θ-5.
+        if boundary_verts.len() == 1 {
+            return self.extrude_closed_curve_face_via_tessellation(
+                profile_face,
+                dist,
+                material,
+                profile_surface,
+            );
+        }
+
         if boundary_verts.len() < 3 {
             bail!(
                 "extrude_planar_cylinder: profile boundary has only {} verts (need ≥ 3)",
@@ -520,6 +534,123 @@ impl Mesh {
             adjacent_splits,
             split_debug: Vec::new(),
         })
+    }
+
+    /// ADR-089 A-θ-β — closed-curve face Push-Pull via tessellation
+    /// (Path A jamjeong; Path B 진정한 kernel-native cylinder 는 별도
+    /// future ADR).
+    ///
+    /// Detect: profile has exactly 1 boundary vertex (anchor) + 1
+    /// self-loop edge with `AnalyticCurve::Circle` curve.
+    ///
+    /// Process (L-θ-3 / L-θ-4 / L-θ-5):
+    /// 1. Extract Circle (center, radius, normal, basis_u) from edge curve.
+    /// 2. Tessellate to N points (default chord_tol = radius/100, → ~32
+    ///    segments for 1m radius; min 8 enforced by `segment_count_for_arc`).
+    /// 3. Soft-delete original closed-curve face (`remove_face`).
+    /// 4. Add a fresh polygonal face with N tessellated vertices.
+    /// 5. Inherit Plane surface from original closed-curve face.
+    /// 6. Recurse `extrude_planar_cylinder` with substituted profile —
+    ///    the recursion's `boundary_verts.len() == N >= 8` skips the
+    ///    fast-path and proceeds with normal extrusion.
+    ///
+    /// **Result**: top + N side faces are Plane / Cylinder (ADR-087 K-δ
+    /// Cylinder primitive 와 동일 토폴로지). closed-curve canonical
+    /// 표현 은 result solid 에 보존되지 않음 — 메타-원칙 #14 측면 회귀
+    /// 가 Path B (별도 ADR) 까지 deferred.
+    fn extrude_closed_curve_face_via_tessellation(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        material: MaterialId,
+        profile_surface: &AnalyticSurface,
+    ) -> Result<CreateSolidResult> {
+        // 1. Locate self-loop edge + Circle curve.
+        let outer_start = self.faces[profile_face].outer().start;
+        let edge_id = self.hes[outer_start].edge();
+        let curve = self
+            .edges
+            .get(edge_id)
+            .and_then(|e| e.curve().cloned())
+            .ok_or(SolidError::NotYetSupported {
+                reason:
+                    "extrude closed-curve fast-path: self-loop edge has no AnalyticCurve attached"
+                        .to_string(),
+            })?;
+        let (center, radius, normal, basis_u) = match curve {
+            AnalyticCurve::Circle {
+                center,
+                radius,
+                normal,
+                basis_u,
+            } => (center, radius, normal, basis_u),
+            _ => {
+                return Err(SolidError::NotYetSupported {
+                    reason: format!(
+                        "extrude closed-curve fast-path: only Circle curves supported \
+                         in Path A (got {:?})",
+                        std::mem::discriminant(&curve),
+                    ),
+                }
+                .into());
+            }
+        };
+
+        // 2. Tessellate (chord_tol = radius / 100 → ~32 seg, min 8).
+        let chord_tol = (radius * 0.01).max(1e-6);
+        let pts = crate::curves::circle::tessellate_full(
+            center, radius, normal, basis_u, chord_tol,
+        );
+        // tessellate_full returns N+1 closed (last == first) — drop tail.
+        if pts.len() < 4 {
+            bail!(
+                "extrude_closed_curve_face_via_tessellation: tessellation produced {} points \
+                 (need ≥ 4 incl. closing duplicate)",
+                pts.len()
+            );
+        }
+        let unique_pts = &pts[..pts.len() - 1];
+        let tess_verts: Vec<VertId> =
+            unique_pts.iter().map(|p| self.add_vertex(*p)).collect();
+
+        // 3. Soft-delete original closed-curve face.
+        self.remove_face(profile_face)?;
+
+        // 4. Create polygonal substitute face.
+        let substituted = self.add_face(&tess_verts, material)?;
+
+        // 5. Inherit Plane surface (L-θ-5).
+        if let Some(face_mut) = self.faces.get_mut(substituted) {
+            face_mut.set_surface(Some(profile_surface.clone()));
+        }
+
+        // 6. Attach Arc curves to each substitute edge — required for
+        //    `extract_shared_circle_params` (called by recursion) to
+        //    classify the boundary as `AllCircular` and recover
+        //    (center, radius, normal, basis_u). Without curve attach,
+        //    the recursion fails with "edge is not Circle/Arc".
+        let n_seg = tess_verts.len();
+        let edges = self.face_outer_edges(substituted)?;
+        let two_pi = std::f64::consts::TAU;
+        for (i, &eid) in edges.iter().enumerate() {
+            let theta_start = (i as f64) * two_pi / (n_seg as f64);
+            let theta_end = ((i + 1) as f64) * two_pi / (n_seg as f64);
+            let arc = AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle: theta_start,
+                end_angle: theta_end,
+            };
+            if let Some(edge_mut) = self.edges.get_mut(eid) {
+                edge_mut.set_curve(Some(arc));
+            }
+        }
+
+        // 7. Recurse — substitute now has N >= 8 verts + Arc curves;
+        //    fast-path skipped, AllCircular branch matches.
+        self.extrude_planar_cylinder(substituted, dist, material, profile_surface)
     }
 
     /// ADR-079 W-3-δ — Extrude on NURBS-class profile (tessellation-based).
@@ -4346,5 +4477,147 @@ mod tests {
             msg.contains("FaceNotFound") || msg.contains("face not found"),
             "expected FaceNotFound, got: {msg}"
         );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-θ-β: closed-curve face Push-Pull (Path A tessellate)
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Build a canonical closed-curve face: 1 anchor + 1 self-loop edge
+    /// with Circle curve attached + Plane surface attach (A-η-1).
+    fn build_closed_curve_circle_face(
+        mesh: &mut Mesh,
+        center: DVec3,
+        radius: f64,
+    ) -> FaceId {
+        let anchor_pos = center + DVec3::X * radius; // θ=0
+        let anchor = mesh.add_vertex(anchor_pos);
+        let circle = AnalyticCurve::Circle {
+            center,
+            radius,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        mesh.add_face_closed_curve(anchor, circle, MaterialId::new(0))
+            .expect("add_face_closed_curve")
+    }
+
+    #[test]
+    fn adr089_a_theta_closed_curve_face_extrudes_to_cylinder() {
+        // Closed-curve face (1 anchor + 1 self-loop edge) must extrude
+        // via Path A tessellate fast-path → Cylinder solid result.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let face_count_before = mesh.face_count();
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 10.0 },
+                MaterialId::new(0),
+            )
+            .expect("ADR-089 A-θ-β: closed-curve Push-Pull must succeed");
+
+        assert_eq!(
+            result.solid_kind,
+            SolidKind::Cylinder,
+            "ADR-089 A-θ-β: result must be Cylinder"
+        );
+        // Tessellation produces N >= 8 segments. side_faces.len() >= 8.
+        assert!(
+            result.side_faces.len() >= 8,
+            "tessellation must produce ≥ 8 side faces, got {}",
+            result.side_faces.len()
+        );
+        // Original closed-curve face was removed; substituted polygonal
+        // face + top + N sides added. face_count_before was 1 (closed
+        // curve face); after: 1 substituted + 1 top + N sides.
+        assert!(mesh.face_count() > face_count_before);
+
+        // Invariants pass.
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-089 A-θ-β: invariants must pass, violations: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn adr089_a_theta_closed_curve_negative_distance_recess() {
+        // dist < 0 (recess) must also work via Path A.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 2.0);
+
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: -3.0 },
+                MaterialId::new(0),
+            )
+            .expect("recess must succeed");
+
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        assert!(result.side_faces.len() >= 8);
+    }
+
+    #[test]
+    fn adr089_a_theta_closed_curve_attaches_cylinder_surface_to_sides() {
+        // Side walls of resulting cylinder must carry AnalyticSurface::
+        // Cylinder (so subsequent ops — Boolean / Offset — see kernel).
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 4.0);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 6.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        for &side in &result.side_faces {
+            let surface = mesh.faces[side].surface();
+            assert!(
+                matches!(surface, Some(AnalyticSurface::Cylinder { .. })),
+                "ADR-089 A-θ-β: side wall must have Cylinder surface, got {:?}",
+                surface.map(|s| s.kind_label())
+            );
+        }
+    }
+
+    #[test]
+    fn adr089_a_theta_polygonal_circle_unaffected_by_fast_path() {
+        // Regression guard — polygonal circle (≥ 3 verts, Arc curves) must
+        // continue using the existing extrude_planar_cylinder path, not
+        // the new closed-curve fast-path.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 16);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 7.0 },
+                MaterialId::new(0),
+            )
+            .expect("polygonal circle path unchanged");
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        // Polygonal path: profile_face IS the original (not removed).
+        assert_eq!(result.profile_face, profile);
+        assert_eq!(result.side_faces.len(), 16);
+    }
+
+    #[test]
+    fn adr089_a_theta_zero_distance_rejected_before_tessellation() {
+        // Degenerate distance (< EPSILON_LENGTH) must reject upfront —
+        // Path A fast-path must not run if distance is invalid.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 1.0);
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 0.0 },
+            MaterialId::new(0),
+        );
+        assert!(result.is_err(), "zero-distance must error");
+        // Profile face should still be intact (no premature mutation).
+        assert!(mesh.faces.contains(profile));
     }
 }
