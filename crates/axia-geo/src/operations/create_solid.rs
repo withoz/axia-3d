@@ -567,7 +567,9 @@ impl Mesh {
     ) -> Result<CreateSolidResult> {
         // 1. Locate self-loop edge + Circle curve.
         let outer_start = self.faces[profile_face].outer().start;
-        let edge_id = self.hes[outer_start].edge();
+        let self_loop_edge_id = self.hes[outer_start].edge();
+        let anchor_vid = self.edges[self_loop_edge_id].v_small();
+        let edge_id = self_loop_edge_id;
         let curve = self
             .edges
             .get(edge_id)
@@ -615,6 +617,25 @@ impl Mesh {
 
         // 3. Soft-delete original closed-curve face.
         self.remove_face(profile_face)?;
+
+        // 3b. ADR-089 A-υ-β — cleanup orphan self-loop edge + anchor.
+        // After remove_face the closed-curve self-loop edge has no
+        // active face referencing it. Without this cleanup the edge
+        // still renders as 23 polyline segments (A-κ-β closed-curve
+        // edge wireframe path) overlapping the new polygonal bottom.
+        // L-υ-1 / L-υ-2.
+        if self.edges.contains(self_loop_edge_id)
+            && self.edges[self_loop_edge_id].is_active()
+        {
+            let _ = self.remove_edge_and_halfedges(self_loop_edge_id);
+        }
+        // Anchor vertex: deactivate if no other edges reference it.
+        // (L-υ-2 — preserve if used by other standalone wires.)
+        if self.verts.contains(anchor_vid) && self.verts[anchor_vid].is_active() {
+            if self.verts[anchor_vid].outgoing().is_none() {
+                self.verts[anchor_vid].set_active(false);
+            }
+        }
 
         // 4. Create polygonal substitute face.
         let substituted = self.add_face(&tess_verts, material)?;
@@ -4603,6 +4624,80 @@ mod tests {
         // Polygonal path: profile_face IS the original (not removed).
         assert_eq!(result.profile_face, profile);
         assert_eq!(result.side_faces.len(), 16);
+    }
+
+    #[test]
+    fn adr089_a_upsilon_self_loop_edge_cleanup_after_extrude() {
+        // After A-θ-β extrude_closed_curve_face_via_tessellation, the
+        // original closed-curve self-loop edge must be deactivated so
+        // the wireframe export does not emit overlapping polylines on
+        // the new bottom polygon.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        // Capture original self-loop edge id BEFORE extrude.
+        let outer_start = mesh.faces[profile].outer().start;
+        let original_edge = mesh.hes[outer_start].edge();
+        assert!(mesh.edges[original_edge].is_self_loop(),
+            "pre-condition: original edge must be self-loop");
+        // Extrude
+        let _ = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 10.0 },
+                MaterialId::new(0),
+            )
+            .expect("extrude OK");
+        // Original self-loop edge must be inactive (or removed from edges
+        // SlotStorage). L-υ-1.
+        let still_active = mesh
+            .edges
+            .get(original_edge)
+            .map(|e| e.is_active())
+            .unwrap_or(false);
+        assert!(!still_active,
+            "ADR-089 A-υ-β: leftover self-loop edge must be cleaned up");
+    }
+
+    #[test]
+    fn adr089_a_upsilon_anchor_vertex_deactivated_if_isolated() {
+        // Anchor vertex of the closed-curve face must be deactivated
+        // after extrude (it has no other edge references). L-υ-2.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 3.0);
+        let outer_start = mesh.faces[profile].outer().start;
+        let original_edge = mesh.hes[outer_start].edge();
+        let anchor = mesh.edges[original_edge].v_small();
+        let _ = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 5.0 },
+                MaterialId::new(0),
+            )
+            .expect("extrude OK");
+        let anchor_active = mesh.verts.get(anchor).map(|v| v.is_active()).unwrap_or(false);
+        assert!(!anchor_active,
+            "ADR-089 A-υ-β: isolated anchor vertex must be deactivated");
+    }
+
+    #[test]
+    fn adr089_a_upsilon_extrude_polygon_unaffected() {
+        // Regression — polygonal Circle face (no self-loop) keeps using
+        // existing extrude path. No anchor vertex / self-loop concept.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 16);
+        let face_count_before = mesh.face_count();
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 7.0 },
+                MaterialId::new(0),
+            )
+            .expect("polygon Circle extrude OK");
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        assert_eq!(result.profile_face, profile);
+        assert!(mesh.faces[profile].is_active(),
+            "regression guard — polygonal profile preserved");
+        assert!(mesh.face_count() > face_count_before);
     }
 
     #[test]
