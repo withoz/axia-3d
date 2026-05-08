@@ -419,6 +419,51 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **Bundle 영향**: ~0.3 kB (DrawCurveSettings module + SettingsPanel
   toggle).
 
+### A-ι-α (2026-05-08, spec amendment)
+
+**Path Z 3-sub-step roadmap (A-ι Offset closed-curve)**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-ι-α (본 amendment) | spec only | +0 |
+| A-ι-β | offset_arc_on_plane self-loop awareness | +4 |
+| A-ι-γ | browser smoke + closure | +0 |
+
+**Lock-ins (A-ι-α 시점)**:
+- **L-ι-1** **Self-loop output**: closed-curve self-loop edge + Circle
+  curve 입력 시, 결과도 self-loop (1 anchor + 1 self-loop edge with
+  Circle radius ± dist). 메타-원칙 #14 정합 — kernel-native input →
+  kernel-native output.
+- **L-ι-2** **Detection point**: `offset_arc_on_plane` 의 Circle 분기
+  (angles=None) 에서 `self.edges[edge_id].is_self_loop()` 체크.
+  Self-loop 이면 신 closed-curve path, 아니면 legacy 2-vert path 유지.
+- **L-ι-3** **Anchor vertex**: 새 closed-curve 의 anchor 는 theta=0
+  위치 (center + new_radius * basis_u). add_edge(anchor, anchor) 가
+  self-loop 생성 (A-γ 답습).
+- **L-ι-4** **Result OffsetEdgeResult**: new_v0 = new_v1 = anchor,
+  new_edge = self-loop. caller 가 same-vert 라는 사실 인지 가능.
+- **L-ι-5** **Backward compat**: 2-vert Circle edge (synthetic) 의
+  legacy path 는 unchanged. 본 fast-path 는 self-loop 입력에만 발동.
+- **L-ι-6** **RadiusCollapse guard**: new_radius ≤ EPSILON_LENGTH 시
+  `OffsetEdgeError::RadiusCollapse` (기존 §V2-β-C 답습).
+- **L-ι-7** **Free wire 호환**: closed-curve self-loop edge 가 face
+  없는 free wire 인 경우 (V-δ 답습) 동일 동작 — `derive_free_wire_plane`
+  + finish_plane_offset 분기로 자연 통과.
+
+**Non-goals**:
+- **N-ι-1** Bezier/B-spline closed-curve (현재 schema = Circle only).
+- **N-ι-2** Cylinder/Sphere host 의 closed-curve offset.
+- **N-ι-3** UI 노출 — OffsetTool 에 자동 호환 (A-λ 의 DrawCurveSettings
+  flag 외 추가 토글 없음). 사용자가 closed-curve face 의 boundary edge
+  선택 후 Offset 호출 시 자동 활성.
+
+### A-ι-α (본 commit)
+- **사용자 결재**: 2026-05-08, "A-ι 진행".
+- **변경**: 본 §D `A-ι-α` amendment.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+---
+
 ### A-λ-γ (browser real-runtime closure)
 - **시연**: SettingsPanel "곡선 모드 (실험)" 토글 ON →
   DrawCircleTool VCB R=750 → bridge.drawCircleAsCurve 호출 (spy
