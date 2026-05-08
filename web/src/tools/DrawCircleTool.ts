@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
+import { getDrawCurveMode } from './DrawCurveSettings';
 
 /** Max distance from center to prevent runaway geometry when ray grazes the plane */
 const MAX_DRAW_DISTANCE = 50000;
@@ -76,13 +77,25 @@ export class DrawCircleTool implements ITool {
       const radius = this.circleCenter.distanceTo(planePoint);
       if (radius > 1) {
         const n = this.plane.normal;
-        // ADR-087 K-ε — kernel-aware drawCircleAsShape only path.
-        this.ctx.bridge.drawCircleAsShape(
-          this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-          n.x, n.y, n.z,
-          radius, 24,
-        );
-        debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
+        // ADR-089 A-λ-β — DrawCurveSettings flag check.
+        // Curve mode (opt-in): kernel-native closed-curve face
+        // (1 vert + 1 self-loop edge with AnalyticCurve::Circle).
+        // Legacy mode (default): 24-segment polygon Shape (ADR-087 K-ε).
+        if (getDrawCurveMode()) {
+          this.ctx.bridge.drawCircleAsCurve(
+            this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+            n.x, n.y, n.z,
+            radius,
+          );
+          debugLog(`[Circle/Curve] Kernel-native R=${radius.toFixed(2)} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+        } else {
+          this.ctx.bridge.drawCircleAsShape(
+            this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+            n.x, n.y, n.z,
+            radius, 24,
+          );
+          debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
+        }
         this.ctx.syncMesh();
       }
       this.cleanup();
@@ -130,13 +143,22 @@ export class DrawCircleTool implements ITool {
     };
 
     const n = plane.normal;
-    // ADR-087 K-ε — kernel-aware drawCircleAsShape only path.
-    this.ctx.bridge.drawCircleAsShape(
-      this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-      n.x, n.y, n.z,
-      value, 24,
-    );
-    debugLog(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    // ADR-089 A-λ-β — DrawCurveSettings flag check (VCB path).
+    if (getDrawCurveMode()) {
+      this.ctx.bridge.drawCircleAsCurve(
+        this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+        n.x, n.y, n.z,
+        value,
+      );
+      debugLog(`[VCB/Circle/Curve] Kernel-native R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    } else {
+      this.ctx.bridge.drawCircleAsShape(
+        this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+        n.x, n.y, n.z,
+        value, 24,
+      );
+      debugLog(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    }
     this.cleanup();
     this.ctx.syncMesh();
   }

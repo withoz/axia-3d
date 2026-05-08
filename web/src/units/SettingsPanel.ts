@@ -15,6 +15,7 @@ import {
   MERGE_TOL_MAX,
 } from '../tools/MergeSettings';
 import { getAutoIntersect, setAutoIntersect } from '../tools/AutoIntersectSettings';
+import { getDrawCurveMode, setDrawCurveMode } from '../tools/DrawCurveSettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -122,6 +123,14 @@ export class SettingsPanel {
         <div class="sp-hint">새 면이 기존 면과 3D 교차하면 edge 로 자동 분할 (SketchUp 스타일)</div>
       </div>
 
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-draw-curve-mode" />
+          곡선 모드 (실험) — kernel-native 닫힌 곡선
+        </label>
+        <div class="sp-hint">DrawCircle: 24-segment polygon 대신 1 self-loop edge + AnalyticCurve::Circle 로 그리기 (ADR-089)</div>
+      </div>
+
       <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
@@ -182,6 +191,12 @@ export class SettingsPanel {
       setAutoIntersect(autoIntCheck.checked);
     });
 
+    // ADR-089 A-λ-β — Draw curve mode (kernel-native closed-curve)
+    const drawCurveCheck = panel.querySelector('#sp-draw-curve-mode') as HTMLInputElement;
+    drawCurveCheck.addEventListener('change', () => {
+      setDrawCurveMode(drawCurveCheck.checked);
+    });
+
     return panel;
   }
 
@@ -221,6 +236,10 @@ export class SettingsPanel {
     // 자동 교차
     const autoIntCheck = this.panel.querySelector('#sp-auto-intersect') as HTMLInputElement;
     autoIntCheck.checked = getAutoIntersect();
+
+    // ADR-089 A-λ-β — 곡선 모드 (kernel-native)
+    const drawCurveCheck = this.panel.querySelector('#sp-draw-curve-mode') as HTMLInputElement;
+    drawCurveCheck.checked = getDrawCurveMode();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;
