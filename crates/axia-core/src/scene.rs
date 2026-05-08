@@ -1153,6 +1153,9 @@ impl Scene {
             Command::DrawCircleAsShape { center, normal, radius, segments } => {
                 self.exec_draw_circle_as_shape(center, normal, radius, segments)
             }
+            Command::DrawCircleAsCurve { center, normal, radius } => {
+                self.exec_draw_circle_as_curve(center, normal, radius)
+            }
             Command::CreateSolid { face_id, mode } => {
                 self.exec_create_solid(face_id, mode)
             }
@@ -4196,6 +4199,79 @@ impl Scene {
         // ADR-050 P-5e-γ — collapse to single transaction.
         self.transactions
             .replace_last_after_snapshot(self.scene_snapshot());
+
+        CommandResult::ShapeCreated(shape_id.raw())
+    }
+
+    /// ADR-089 Phase 2 (A-ζ-4) — Draw circle as TRUE kernel-native
+    /// closed-curve face. 1 anchor vertex + 1 self-loop edge with Circle
+    /// curve + 1 face. **메타-원칙 #14 의 deepest realization**.
+    ///
+    /// Schema: 사용자 facing entry for ADR-089. 기존 DrawCircle (24
+    /// segments polygon) / DrawCircleAsShape (form-layer Shape, 24
+    /// segments) 와 architectural 으로 다름. Drop-in 옵션 — 기존 legacy
+    /// path UNCHANGED.
+    ///
+    /// Returns `ShapeCreated(ShapeId.raw())`. Form-layer Shape 등록.
+    fn exec_draw_circle_as_curve(
+        &mut self,
+        center: DVec3,
+        normal: DVec3,
+        radius: f64,
+    ) -> CommandResult {
+        // Validate inputs.
+        if radius <= 1e-6 {
+            return CommandResult::Error(
+                format!("circle radius {:.2e} below epsilon", radius)
+            );
+        }
+        let n_norm = if normal.length_squared() > 1e-12 {
+            normal.normalize()
+        } else {
+            return CommandResult::Error("normal must be non-zero".to_string());
+        };
+        // Build plane basis_u: World X if not parallel, else World Y.
+        let candidate = if n_norm.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+        let dot = candidate.dot(n_norm);
+        let basis_u = (candidate - n_norm * dot).normalize_or_zero();
+        if basis_u.length_squared() < 1e-12 {
+            return CommandResult::Error("could not build plane basis".to_string());
+        }
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        // 1. Anchor vertex on the circle (at θ=0 — center + basis_u * radius).
+        let anchor_pos = center + basis_u * radius;
+        let anchor = self.mesh.add_vertex(anchor_pos);
+
+        // 2. add_face_closed_curve creates self-loop edge + face + Circle curve.
+        let circle = axia_geo::AnalyticCurve::Circle {
+            center,
+            radius,
+            normal: n_norm,
+            basis_u,
+        };
+        let face_id = match self.mesh.add_face_closed_curve(anchor, circle, FORM_MATERIAL) {
+            Ok(fid) => fid,
+            Err(e) => {
+                self.transactions.cancel();
+                return CommandResult::Error(format!(
+                    "ADR-089 A-ζ-4 add_face_closed_curve failed: {}",
+                    e,
+                ));
+            }
+        };
+
+        // 3. Form-layer Shape 등록 (ADR-050 답습).
+        let shape_id = self.create_shape("Circle (kernel-native)".to_string(), vec![face_id]);
+        if let Some(shape) = self.shapes.get_mut(&shape_id) {
+            shape.position = center;
+            shape.surface_normal = Some(n_norm);
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
 
         CommandResult::ShapeCreated(shape_id.raw())
     }
@@ -10783,6 +10859,145 @@ mod tests {
         }
         assert_eq!(owners.len(), 2,
             "ADR-088 S-γ: 2 separate circles must have 2 distinct owner_ids");
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-ζ-4) — DrawCircleAsCurve end-to-end tests.
+    //
+    // 사용자 facing 첫 변화. Polygon decomposition (DrawCircle / DrawCircle
+    // AsShape) 와 architectural 으로 다름 — 1 anchor + 1 self-loop edge
+    // + 1 closed-curve face + Form-layer Shape.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_zeta_4_creates_kernel_native_circle_topology() {
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+        });
+        let shape_raw = match result {
+            CommandResult::ShapeCreated(raw) => raw,
+            other => panic!("expected ShapeCreated, got {:?}", other),
+        };
+        // Topology: 1 anchor vert + 1 self-loop edge + 1 face
+        let active_verts = scene.mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        let active_edges = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        let active_faces = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_verts, 1, "ADR-089 A-ζ-4: 1 anchor vertex (메타-원칙 #14)");
+        assert_eq!(active_edges, 1, "ADR-089 A-ζ-4: 1 self-loop edge");
+        assert_eq!(active_faces, 1, "ADR-089 A-ζ-4: 1 closed-curve face");
+
+        // The single edge is a self-loop with Circle curve attached.
+        let (eid, edge) = scene.mesh.edges.iter()
+            .find(|(_, e)| e.is_active())
+            .map(|(id, e)| (id, e))
+            .unwrap();
+        assert!(edge.is_self_loop(),
+            "ADR-089 A-ζ-4: edge must be self-loop");
+        assert!(matches!(
+            edge.curve(),
+            Some(axia_geo::AnalyticCurve::Circle { .. })
+        ), "ADR-089 A-ζ-4: edge must have Circle curve");
+        let _ = eid;
+
+        // Form-layer Shape registered.
+        let shape = scene.get_shape(crate::ShapeId::new(shape_raw))
+            .expect("ADR-089 A-ζ-4: Shape must exist");
+        assert_eq!(shape.face_ids.len(), 1);
+
+        // Invariants pass (A-ζ-1 exemption).
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-089 A-ζ-4: kernel-native circle must pass invariants. \
+             Violations: {:?}", report.violations);
+    }
+
+    #[test]
+    fn adr089_a_zeta_4_drawCircle_legacy_unchanged() {
+        // 기존 DrawCircle (24-segment polygon) 동작 무변화 검증.
+        let mut scene = Scene::new();
+        let result = scene.execute(Command::DrawCircle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments: 24,
+        });
+        match result {
+            CommandResult::EntityCreated(_) => { /* legacy Xia path */ }
+            other => panic!("legacy DrawCircle must return EntityCreated, got {:?}", other),
+        }
+        // Topology: 24 verts + 24 line edges + 1 face
+        let active_verts = scene.mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        let active_edges = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        assert_eq!(active_verts, 24, "legacy: 24 polygon verts");
+        assert_eq!(active_edges, 24, "legacy: 24 line edges");
+        // No self-loop edges in legacy path.
+        let self_loops = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.is_self_loop())
+            .count();
+        assert_eq!(self_loops, 0,
+            "ADR-089 A-ζ-4: legacy DrawCircle must NOT create self-loop edges");
+    }
+
+    #[test]
+    fn adr089_a_zeta_4_kernel_native_and_legacy_coexist() {
+        // 한 mesh 에 kernel-native circle + legacy DrawCircle 공존 검증.
+        let mut scene = Scene::new();
+        // Kernel-native circle (1 vert + 1 self-loop)
+        let _ = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(20.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 3.0,
+        });
+        // Legacy DrawCircle (24 verts + 24 edges)
+        let _ = scene.execute(Command::DrawCircle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+            segments: 24,
+        });
+
+        let active_faces = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_faces, 2,
+            "ADR-089 A-ζ-4: 2 faces (kernel-native + legacy)");
+
+        let self_loops = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active() && e.is_self_loop())
+            .count();
+        assert_eq!(self_loops, 1,
+            "ADR-089 A-ζ-4: exactly 1 self-loop edge (kernel-native circle)");
+
+        // All invariants pass.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "Mixed mesh must pass invariants. Violations: {:?}", report.violations);
+    }
+
+    #[test]
+    fn adr089_a_zeta_4_rejects_invalid_inputs() {
+        let mut scene = Scene::new();
+        // Zero radius
+        let r1 = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO, normal: DVec3::Z, radius: 0.0,
+        });
+        assert!(matches!(r1, CommandResult::Error(_)));
+        // Zero normal
+        let r2 = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO, normal: DVec3::ZERO, radius: 1.0,
+        });
+        assert!(matches!(r2, CommandResult::Error(_)));
+        // Mesh state untouched (rollback or no-op).
+        assert_eq!(
+            scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count(),
+            0, "no faces created on error");
     }
 
     #[test]

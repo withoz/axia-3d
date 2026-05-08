@@ -724,6 +724,49 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-089 Phase 2 (A-ζ-4) — Draw circle as TRUE kernel-native
+    /// closed-curve face. **메타-원칙 #14 의 deepest realization** —
+    /// 1 anchor vertex + 1 self-loop edge + 1 closed-curve face.
+    /// 24-segment polygon decomposition 폐기.
+    ///
+    /// Drop-in alongside drawCircleAsShape — segments parameter 없음
+    /// (analytic curve = formula 1개). Returns ShapeId.raw() as f64
+    /// on success, -1.0 on error.
+    ///
+    /// 호출자: 향후 DrawCircleTool 의 kernel-native flag (A-λ) 또는
+    /// 사용자 DevTools 직접 호출.
+    #[wasm_bindgen(js_name = "drawCircleAsCurve")]
+    pub fn draw_circle_as_curve(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        nx: f64, ny: f64, nz: f64,
+        radius: f64,
+    ) -> f64 {
+        let cmd = Command::DrawCircleAsCurve {
+            center: DVec3::new(cx, cy, cz),
+            normal: DVec3::new(nx, ny, nz),
+            radius,
+        };
+        let result = self.scene.execute(cmd);
+        match result {
+            axia_core::commands::CommandResult::ShapeCreated(shape_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                shape_id as f64
+            }
+            axia_core::commands::CommandResult::Error(e) => {
+                console_error!("[RUST] drawCircleAsCurve ERROR: {}", e);
+                self.set_error(e);
+                self.invalidate_cache();
+                -1.0
+            }
+            _ => {
+                self.invalidate_cache();
+                -1.0
+            }
+        }
+    }
+
     // ========================================================================
     // ADR-028 Phase A — Analytic Edge Curve API
     // ========================================================================

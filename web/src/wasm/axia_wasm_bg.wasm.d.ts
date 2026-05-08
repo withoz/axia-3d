@@ -52,6 +52,7 @@ export const axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: n
 export const axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+export const axiaengine_drawCircleAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
 export const axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

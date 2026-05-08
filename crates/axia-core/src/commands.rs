@@ -167,6 +167,27 @@ pub enum Command {
         segments: u32,
     },
 
+    /// ADR-089 Phase 2 (A-ζ-4) — Draw a circle as a TRUE kernel-native
+    /// closed-curve face. **메타-원칙 #14 의 deepest realization**:
+    /// 1 anchor vertex + 1 self-loop edge + 1 closed-curve face.
+    /// Polygon decomposition (DrawCircle / DrawCircleAsShape 의 24 segments)
+    /// 와 architectural 으로 다름 — wireframe 매끈, 메모리 가벼움.
+    ///
+    /// Contract:
+    /// - `center`, `normal`: closed circle 의 plane
+    /// - `radius`: 원 반지름
+    /// - segments parameter 없음 (analytic curve = formula 1개)
+    /// - Returns `CommandResult::ShapeCreated(ShapeId.raw())`
+    ///
+    /// 기존 DrawCircle / DrawCircleAsShape UNCHANGED — drop-in 옵션.
+    /// 사용자 facing entry: WASM `drawCircleAsCurve` (A-ζ-4 commit) +
+    /// 향후 UI dispatch (DrawCircleTool kernel-native flag, A-λ).
+    DrawCircleAsCurve {
+        center: DVec3,
+        normal: DVec3,
+        radius: f64,
+    },
+
     /// ADR-079 W-1 — Surface-native solid creation from a profile face.
     /// `create_solid` 의 architectural successor to mesh-era push_pull.
     /// Smart routing within `Extrude` mode based on profile surface kind

@@ -679,6 +679,32 @@ export class WasmBridge {
     return fn.call(this.engine, cx, cy, cz, nx, ny, nz, radius, segments);
   }
 
+  /**
+   * ADR-089 Phase 2 (A-ζ-4) — Draw circle as TRUE kernel-native closed
+   * curve. **메타-원칙 #14 의 deepest realization**: 1 anchor vert +
+   * 1 self-loop edge with Circle curve + 1 closed-curve face.
+   *
+   * Drop-in alongside `drawCircleAsShape` (24-segment polygon). No
+   * `segments` parameter — analytic curve = formula 1개.
+   * Returns ShapeId.raw() on success, -1 on error.
+   *
+   * Caller (현재): DevTools 직접 호출 또는 향후 DrawCircleTool 의
+   * kernel-native flag (A-λ).
+   */
+  drawCircleAsCurve(
+    cx: number, cy: number, cz: number,
+    nx: number, ny: number, nz: number,
+    radius: number,
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).drawCircleAsCurve;
+    if (!fn) return -1;
+    this.markDirty();
+    [cx, cy, cz] = snapCardinalCenter(cx, cy, cz, nx, ny, nz);
+    return fn.call(this.engine, cx, cy, cz, nx, ny, nz, radius);
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // ADR-028 Phase A — Analytic Edge Curve API
   // ════════════════════════════════════════════════════════════════════════

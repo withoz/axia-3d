@@ -1036,6 +1036,31 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-089 Phase 2 (A-ζ-4) — Draw circle as TRUE kernel-native
+     * closed-curve face. **메타-원칙 #14 의 deepest realization** —
+     * 1 anchor vertex + 1 self-loop edge + 1 closed-curve face.
+     * 24-segment polygon decomposition 폐기.
+     *
+     * Drop-in alongside drawCircleAsShape — segments parameter 없음
+     * (analytic curve = formula 1개). Returns ShapeId.raw() as f64
+     * on success, -1.0 on error.
+     *
+     * 호출자: 향후 DrawCircleTool 의 kernel-native flag (A-λ) 또는
+     * 사용자 DevTools 직접 호출.
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} nz
+     * @param {number} radius
+     * @returns {number}
+     */
+    drawCircleAsCurve(cx, cy, cz, nx, ny, nz, radius) {
+        const ret = wasm.axiaengine_drawCircleAsCurve(this.__wbg_ptr, cx, cy, cz, nx, ny, nz, radius);
+        return ret;
+    }
+    /**
      * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
      * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware

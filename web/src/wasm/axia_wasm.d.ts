@@ -353,6 +353,20 @@ export class AxiaEngine {
      */
     drawCenterline(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number;
     /**
+     * ADR-089 Phase 2 (A-ζ-4) — Draw circle as TRUE kernel-native
+     * closed-curve face. **메타-원칙 #14 의 deepest realization** —
+     * 1 anchor vertex + 1 self-loop edge + 1 closed-curve face.
+     * 24-segment polygon decomposition 폐기.
+     *
+     * Drop-in alongside drawCircleAsShape — segments parameter 없음
+     * (analytic curve = formula 1개). Returns ShapeId.raw() as f64
+     * on success, -1.0 on error.
+     *
+     * 호출자: 향후 DrawCircleTool 의 kernel-native flag (A-λ) 또는
+     * 사용자 DevTools 직접 호출.
+     */
+    drawCircleAsCurve(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number): number;
+    /**
      * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
      * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
@@ -1625,6 +1639,7 @@ export interface InitOutput {
     readonly axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly axiaengine_drawCircleAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
     readonly axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
