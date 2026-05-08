@@ -586,6 +586,40 @@ impl Mesh {
             });
         }
 
+        // ADR-089 A-ι-β — closed-curve self-loop fast-path.
+        // If the input edge is a self-loop (1-vert Circle, ADR-089 A-α/A-β
+        // canonical Phase 2), produce a kernel-native self-loop output:
+        // 1 anchor + 1 self-loop edge with Circle curve at new_radius.
+        // L-ι-1 / L-ι-2 / L-ι-3 / L-ι-4.
+        if angles.is_none() {
+            let is_self_loop = self
+                .edges
+                .get(edge_id)
+                .map(|e| e.is_self_loop())
+                .unwrap_or(false);
+            if is_self_loop {
+                let new_anchor = self.add_vertex(
+                    center + new_radius * basis_u_unit,
+                );
+                let (new_edge, _) = self
+                    .add_edge(new_anchor, new_anchor)
+                    .map_err(|_| OffsetEdgeError::EdgeNotFound(edge_id))?;
+                if let Some(e) = self.edges.get_mut(new_edge) {
+                    e.set_curve(Some(AnalyticCurve::Circle {
+                        center,
+                        radius: new_radius,
+                        normal: arc_normal,
+                        basis_u,
+                    }));
+                }
+                return Ok(OffsetEdgeResult {
+                    new_v0: new_anchor,
+                    new_v1: new_anchor,
+                    new_edge,
+                });
+            }
+        }
+
         // Compute new endpoint positions.
         let (theta_start, theta_end) = match angles {
             Some((s, e)) => (s, e),
@@ -4640,5 +4674,150 @@ mod tests {
             .err()
             .expect("must reject zero dist");
         assert!(matches!(err, OffsetEdgeError::DegenerateDistance(_)));
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-ι-β: closed-curve self-loop offset
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Build a kernel-native closed-curve face (1 anchor + 1 self-loop
+    /// edge with Circle curve) on z=0 plane. Returns (face_id, edge_id).
+    fn build_closed_curve_face_for_offset(
+        mesh: &mut Mesh,
+        center: DVec3,
+        radius: f64,
+    ) -> (FaceId, EdgeId) {
+        let anchor = mesh.add_vertex(center + DVec3::X * radius);
+        let circle = AnalyticCurve::Circle {
+            center,
+            radius,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let face = mesh
+            .add_face_closed_curve(anchor, circle, MaterialId::new(0))
+            .expect("add_face_closed_curve");
+        let edge = mesh
+            .face_outer_edges(face)
+            .expect("face_outer_edges")[0];
+        (face, edge)
+    }
+
+    #[test]
+    fn adr089_a_iota_closed_curve_offset_produces_self_loop() {
+        // Closed-curve self-loop edge offset → self-loop output (1 anchor
+        // + 1 self-loop edge with new Circle curve).
+        let mut mesh = Mesh::new();
+        let (_face, edge) = build_closed_curve_face_for_offset(
+            &mut mesh, DVec3::ZERO, 5.0,
+        );
+        let result = mesh
+            .offset_edge_on_host_face(edge, 2.0)
+            .expect("ADR-089 A-ι-β: closed-curve offset must succeed");
+        // L-ι-4: self-loop output (new_v0 == new_v1).
+        assert_eq!(
+            result.new_v0, result.new_v1,
+            "ADR-089 A-ι-β: closed-curve offset result must be self-loop"
+        );
+        // New edge is self-loop with Circle curve.
+        let new_edge = mesh.edges.get(result.new_edge).expect("new edge");
+        assert!(new_edge.is_self_loop());
+        match new_edge.curve() {
+            Some(AnalyticCurve::Circle { radius, .. }) => {
+                // Sign convention: positive dist = right-side (outward
+                // for CCW circle in +Z normal), so radius increases.
+                let expected_diff = (radius - 5.0).abs();
+                assert!(
+                    (expected_diff - 2.0).abs() < 1e-6,
+                    "ADR-089 A-ι-β: new radius must be 5±2, got {}",
+                    radius
+                );
+            }
+            other => panic!("expected Circle curve, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn adr089_a_iota_closed_curve_offset_inward_radius_decreases() {
+        // Negative dist (inward) reduces radius.
+        let mut mesh = Mesh::new();
+        let (_face, edge) = build_closed_curve_face_for_offset(
+            &mut mesh, DVec3::ZERO, 10.0,
+        );
+        let result = mesh
+            .offset_edge_on_host_face(edge, -3.0)
+            .expect("inward offset must succeed");
+        assert_eq!(result.new_v0, result.new_v1);
+        let new_edge = mesh.edges.get(result.new_edge).unwrap();
+        if let Some(AnalyticCurve::Circle { radius, .. }) = new_edge.curve() {
+            let diff = (radius - 10.0).abs();
+            assert!((diff - 3.0).abs() < 1e-6,
+                "expected radius ~7, got {}", radius);
+        } else {
+            panic!("expected Circle curve");
+        }
+    }
+
+    #[test]
+    fn adr089_a_iota_closed_curve_offset_collapse_rejected() {
+        // dist exceeding radius → RadiusCollapse error.
+        let mut mesh = Mesh::new();
+        let (_face, edge) = build_closed_curve_face_for_offset(
+            &mut mesh, DVec3::ZERO, 1.0,
+        );
+        let err = mesh
+            .offset_edge_on_host_face(edge, -2.0)
+            .err()
+            .expect("collapse must error");
+        assert!(matches!(err, OffsetEdgeError::RadiusCollapse { .. }));
+    }
+
+    #[test]
+    fn adr089_a_iota_polygonal_circle_unaffected_by_self_loop_path() {
+        // Regression — polygonal circle (legacy 2-vert Arc edges) must
+        // continue using existing path, not self-loop fast-path.
+        let mut mesh = Mesh::new();
+        let n = 8;
+        let radius = 5.0;
+        let mut verts = Vec::with_capacity(n);
+        for i in 0..n {
+            let theta = (i as f64) * std::f64::consts::TAU / (n as f64);
+            verts.push(mesh.add_vertex(DVec3::new(
+                radius * theta.cos(),
+                radius * theta.sin(),
+                0.0,
+            )));
+        }
+        let face = mesh.add_face(&verts, MaterialId::new(0)).unwrap();
+        mesh.faces[face].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-radius, radius),
+            v_range: (-radius, radius),
+        }));
+        // Attach Arc curves
+        let edges = mesh.face_outer_edges(face).unwrap();
+        for (i, &eid) in edges.iter().enumerate() {
+            let theta_s = (i as f64) * std::f64::consts::TAU / (n as f64);
+            let theta_e = ((i + 1) as f64) * std::f64::consts::TAU / (n as f64);
+            mesh.edges[eid].set_curve(Some(AnalyticCurve::Arc {
+                center: DVec3::ZERO,
+                radius,
+                normal: DVec3::Z,
+                basis_u: DVec3::X,
+                start_angle: theta_s,
+                end_angle: theta_e,
+            }));
+        }
+        // Offset first arc edge — should produce 2 distinct verts (NOT
+        // self-loop), preserving legacy semantic.
+        let result = mesh
+            .offset_edge_on_host_face(edges[0], 1.0)
+            .expect("polygonal Arc offset OK");
+        assert_ne!(
+            result.new_v0, result.new_v1,
+            "Polygonal Arc edge offset must produce 2 distinct verts"
+        );
     }
 }
