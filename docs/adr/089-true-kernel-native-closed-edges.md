@@ -316,6 +316,50 @@ Onshape/Fusion 360/SolidWorks 의 BRep:
 - **회귀**: axia-geo 1143 → 1148 (+5). 절대 #[ignore] 금지 5/5 준수.
 - **LOCKED guards**: axia-core 200 unchanged.
 
+### A-κ-α (2026-05-08, spec amendment)
+
+**Path Z 3-sub-step roadmap (A-κ Path A render)**:
+
+| Sub-step | 핵심 변경 | 회귀 (예상) |
+|----------|----------|-----------|
+| A-κ-α (본 amendment) | spec only | +0 |
+| A-κ-β | `export_buffers_inner` + `export_edge_lines_with_map` closed-curve fast-path | +6 |
+| A-κ-γ | Browser smoke + closure | +0 |
+
+**Lock-ins (A-κ-α 시점)**:
+- **L-κ-1** **Face render**: `export_buffers_inner` 의 polygon path 진입
+  전 closed-curve face 감지 → Circle curve tessellate (chord_tol = 0.1mm,
+  ADR-038 P23.2) → fan triangulate from anchor → emit.
+- **L-κ-2** **Edge wireframe**: `export_edge_lines_with_map` 진입 시
+  self-loop edge 감지 → Circle curve tessellate to N polyline points →
+  N-1 line segments 으로 emit (각 segment 가 같은 EdgeId map 받음 —
+  LOCKED #15 ADR-037 P22.5 답습).
+- **L-κ-3** **Read-only**: A-κ-β 는 mesh state 변경 0 (A-θ-β 는
+  tessellate-then-extrude 시 add_vertex/add_face/remove_face 변경했지만,
+  render 는 read-only).
+- **L-κ-4** **Plane fast-path 우회**: LOCKED #16 ADR-038 P23 K-ε hotfix
+  의 Plane → polygon path 가 closed-curve 에는 부적합 — closed-curve
+  detection 이 선행하여 분기.
+- **L-κ-5** **Backward compat**: 폴리곤 face / 폴리곤 edge 의 render
+  path 는 unchanged. closed-curve 가 아니면 기존 분기 유지.
+- **L-κ-6** **chord_tol 정책**: face = 0.1mm (ADR-038 P23.2), edge =
+  0.05mm (더 정밀, 사용자가 wireframe 의 곡선 매끈함을 직접 봄). future
+  adaptive LOD 별도 ADR.
+
+**Non-goals**:
+- **N-κ-1** GPU shader curve evaluation (vertex shader) — CPU
+  tessellation 결과 emit 만.
+- **N-κ-2** Adaptive LOD (zoom-aware tessellation density).
+- **N-κ-3** Curve type 외 closed-curve 지원 (Bezier closed curve 등).
+  Circle 만 (current schema).
+
+### A-κ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "A-κ render pipeline 가장 자연 다음".
+- **변경**: 본 §D `A-κ-α` amendment. roadmap / lock-ins / non-goals.
+- **회귀**: +0 (docs only). 절대 #[ignore] 금지 0/0 준수.
+
+---
+
 ### A-θ-γ + A-θ-δ (browser real-runtime closure)
 - **WASM/TS bridge**: `createSolidExtrude` 자동 통과 (passthrough,
   코드 변경 0).
