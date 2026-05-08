@@ -8904,4 +8904,128 @@ mod tests {
         assert!(!group_a.contains(&e_s));
         assert!(!group_b.contains(&e_s));
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-γ) — Half-edge wiring invariants for self-loops.
+    //
+    // Self-loop edge (v_small == v_large == v_anchor) 의 lower-level
+    // traversal 이 무한 loop 없이 정상 동작 봉인. add_face 등 high-level
+    // API 는 A-δ 에서 별도 처리 — 본 commit 은 add_edge + manual HE
+    // wiring 만 검증.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_gamma_add_edge_self_loop_creates_2_he() {
+        // add_edge(v, v) 가 self-loop edge + 2 HE pair 생성. 기존 polygon
+        // edge 와 동일 메커니즘 (v_start == v_end 만 다름).
+        let mut mesh = Mesh::new();
+        let v = mesh.add_vertex(DVec3::ZERO);
+        let (eid, created) = mesh.add_edge(v, v).unwrap();
+        assert!(created, "self-loop edge should be newly created");
+        let edge = &mesh.edges[eid];
+        assert!(edge.is_self_loop(),
+            "ADR-089 A-γ: edge created by add_edge(v,v) must be self-loop");
+        assert_eq!(edge.v_small(), v);
+        assert_eq!(edge.v_large(), v);
+        // any_he 는 valid 한 HE 가리킴.
+        let he_anchor = edge.any_he();
+        assert!(!he_anchor.is_null(), "self-loop edge must have at least 1 HE");
+        // dst() 는 v.
+        assert_eq!(mesh.hes[he_anchor].dst(), v);
+    }
+
+    #[test]
+    fn adr089_a_gamma_self_loop_he_twin_chain_terminates() {
+        // self-loop edge 의 next_rad chain 이 무한 loop 없이 종료.
+        // 2 HE pair (twin pair) 가 정상.
+        let mut mesh = Mesh::new();
+        let v = mesh.add_vertex(DVec3::ZERO);
+        let (eid, _) = mesh.add_edge(v, v).unwrap();
+        let he_start = mesh.edges[eid].any_he();
+        // Walk next_rad until back to start. Should terminate within 256
+        // iterations (manifold edge has 2 HE; self-loop is also 2 HE).
+        let mut he = he_start;
+        let mut count = 0;
+        loop {
+            count += 1;
+            if count > 256 {
+                panic!("ADR-089 A-γ: next_rad chain did not terminate within 256 \
+                        iterations for self-loop edge — infinite loop suspected");
+            }
+            he = mesh.hes[he].next_rad();
+            if he == he_start { break; }
+        }
+        assert!(count >= 1 && count <= 4,
+            "ADR-089 A-γ: self-loop manifold edge should have ≤4 HE in radial \
+             chain (typically 2 — twin pair). Got {}",
+            count);
+    }
+
+    #[test]
+    fn adr089_a_gamma_self_loop_he_dst_matches_anchor() {
+        // self-loop edge 의 양쪽 HE 모두 dst() == v_anchor.
+        let mut mesh = Mesh::new();
+        let v = mesh.add_vertex(DVec3::new(1.0, 2.0, 3.0));
+        let (eid, _) = mesh.add_edge(v, v).unwrap();
+        let he_start = mesh.edges[eid].any_he();
+        // Iterate radial chain, verify each HE's dst is v.
+        let mut he = he_start;
+        let mut count = 0;
+        loop {
+            assert_eq!(mesh.hes[he].dst(), v,
+                "ADR-089 A-γ: every HE on self-loop edge must have dst() == v_anchor");
+            count += 1;
+            if count > 16 { break; }
+            he = mesh.hes[he].next_rad();
+            if he == he_start { break; }
+        }
+        assert!(count >= 1);
+    }
+
+    #[test]
+    fn adr089_a_gamma_self_loop_with_circle_curve_persists() {
+        // self-loop edge 에 Circle curve attach + 다시 read 가능.
+        // Edge.curve = Some(Circle) 이 self-loop edge 와 양립.
+        let mut mesh = Mesh::new();
+        let v = mesh.add_vertex(DVec3::ZERO);
+        let (eid, _) = mesh.add_edge(v, v).unwrap();
+        mesh.edges[eid].set_curve(Some(crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        }));
+        let edge = &mesh.edges[eid];
+        assert!(edge.is_self_loop());
+        assert!(matches!(
+            edge.curve(),
+            Some(crate::curves::AnalyticCurve::Circle { .. })
+        ));
+    }
+
+    #[test]
+    fn adr089_a_gamma_normal_polygon_edges_unaffected() {
+        // 기존 polygon mesh 동작 무변화 확인 — RECT 4 edges 모두 v_small
+        // < v_large 유지, is_self_loop() 모두 false.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let mat = MaterialId::new(0);
+        let _f = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let mut self_loop_count = 0;
+        for (_eid, edge) in mesh.edges.iter() {
+            if !edge.is_active() { continue; }
+            if edge.is_self_loop() {
+                self_loop_count += 1;
+            } else {
+                // canonical 정렬 v_small < v_large 검증
+                assert!(edge.v_small().raw() < edge.v_large().raw(),
+                    "non-self-loop edge must have v_small < v_large");
+            }
+        }
+        assert_eq!(self_loop_count, 0,
+            "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
 }
