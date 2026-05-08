@@ -5696,9 +5696,33 @@ impl Mesh {
                     continue;
                 }
             };
+            // ADR-089 Phase 2 (A-ζ-1, 2026-05-08): I1 invariant 갱신.
+            // Closed-curve face (1 vert anchor + 1 self-loop edge with
+            // analytic curve attached) 도 valid — face = closed boundary
+            // 의 byproduct (메타-원칙 #14). Polygon face (≥3 verts) 동작
+            // 무변화.
             if outer_verts.len() < 3 {
-                violations.push(format!("face {:?}: outer loop has {} verts (< 3)",
-                    fid, outer_verts.len()));
+                // Closed-curve exemption: outer loop = 1 vert + 1 self-loop
+                // edge with Edge.curve.is_some().
+                let is_closed_curve_face = outer_verts.len() == 1
+                    && self.collect_loop_hes(outer_start).map(|hes| {
+                        hes.len() == 1 && {
+                            let he = &self.hes[hes[0]];
+                            self.edges.get(he.edge())
+                                .filter(|e| e.is_active())
+                                .and_then(|e| e.curve())
+                                .is_some()
+                        }
+                    }).unwrap_or(false);
+                if !is_closed_curve_face {
+                    violations.push(format!("face {:?}: outer loop has {} verts (< 3)",
+                        fid, outer_verts.len()));
+                    continue;
+                }
+                // Skip I2 (winding check via compute_normal) for closed-curve
+                // face — the curve's analytic normal is the truth source.
+                // Skip I4 (outer HE face check) — single HE already wired in
+                // add_face_closed_curve. Continue to next face for I5.
                 continue;
             }
 
@@ -5720,7 +5744,9 @@ impl Mesh {
                 }
             }
 
-            // I3: inner loops도 collect 가능해야 함 + 각각 ≥ 3 verts
+            // I3: inner loops 도 collect 가능해야 함 + 각각 ≥ 3 verts
+            // (ADR-089 A-ζ-1 exemption: 1-vert inner with self-loop edge +
+            // analytic curve = valid closed-curve hole).
             for (ii, inner) in face.inners().iter().enumerate() {
                 if inner.start.is_null() {
                     violations.push(format!("face {:?}: inner[{}] null start", fid, ii));
@@ -5728,6 +5754,24 @@ impl Mesh {
                 }
                 match self.collect_loop_verts(inner.start) {
                     Ok(iv) if iv.len() >= 3 => {}
+                    Ok(iv) if iv.len() == 1 => {
+                        // ADR-089 A-ζ-1: closed-curve hole exemption.
+                        let is_closed_curve_hole = self.collect_loop_hes(inner.start)
+                            .map(|hes| {
+                                hes.len() == 1 && {
+                                    let he = &self.hes[hes[0]];
+                                    self.edges.get(he.edge())
+                                        .filter(|e| e.is_active())
+                                        .and_then(|e| e.curve())
+                                        .is_some()
+                                }
+                            }).unwrap_or(false);
+                        if !is_closed_curve_hole {
+                            violations.push(format!(
+                                "face {:?}: inner[{}] has 1 vert without analytic curve",
+                                fid, ii));
+                        }
+                    }
                     Ok(iv) => violations.push(format!(
                         "face {:?}: inner[{}] has {} verts (< 3)", fid, ii, iv.len())),
                     Err(e) => violations.push(format!(
@@ -9383,6 +9427,101 @@ mod tests {
                 "ADR-089 A-ε: failed second add must leave 1 edge (rollback)");
         }
         // Future ADR may lift this limitation — test should still pass.
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-089 Phase 2 (A-ζ-1) — verify_face_invariants I1/I3 갱신.
+    //
+    // Closed-curve face (1 vert anchor + 1 self-loop edge with analytic
+    // curve) 가 invariant report 에서 violation 으로 잡히지 않음 봉인.
+    // Polygon face 동작 무변화 (≥3 verts 강제 유지).
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr089_a_zeta_1_closed_curve_face_passes_invariants() {
+        // add_face_closed_curve 로 만든 face 가 verify_face_invariants
+        // PASS — 1 vert outer 가 closed-curve exemption 으로 허용.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let mat = MaterialId::new(0);
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let _face = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-089 A-ζ-1: closed-curve face must pass I1 invariant. \
+             Violations: {:?}", report.violations);
+    }
+
+    #[test]
+    fn adr089_a_zeta_1_degenerate_1vert_no_curve_still_violates() {
+        // Negative case: 1-vert outer WITHOUT curve attached → 여전히 I1
+        // violation (closed-curve exemption 은 curve 가 attached 일 때만).
+        // 직접 mesh 조작으로 잘못된 face 만들기 (실제 API 통해선 불가능).
+        let mut mesh = Mesh::new();
+        let v = mesh.add_vertex(DVec3::ZERO);
+        let (eid, _) = mesh.add_edge(v, v).unwrap();
+        // curve 부착 안 함 — degenerate
+        let mat = MaterialId::new(0);
+        let face_id = mesh.faces.insert(crate::entities::Face::new(
+            crate::entities::LoopRef::default(),
+            DVec3::Z,
+            1e-6,
+            mat,
+        ));
+        let he = mesh.edges[eid].any_he();
+        mesh.hes[he].set_next(he);
+        mesh.hes[he].set_prev(he);
+        mesh.hes[he].set_face(face_id);
+        mesh.hes[he].set_outer(true);
+        mesh.faces[face_id].set_outer(crate::entities::LoopRef::new(he, true));
+        let report = mesh.verify_face_invariants();
+        assert!(!report.is_valid() || report.violations.iter()
+            .any(|v| v.contains("1 vert without analytic curve")
+                  || v.contains("outer loop has 1 verts")),
+            "ADR-089 A-ζ-1: 1-vert without curve should violate I1");
+    }
+
+    #[test]
+    fn adr089_a_zeta_1_polygon_face_unaffected() {
+        // Polygon face (RECT) 의 invariant 동작 무변화 — A-ζ-1 fix 가
+        // ≥3 verts 동작 영향 0.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let mat = MaterialId::new(0);
+        let _f = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-089 A-ζ-1: polygon face must still pass invariants. \
+             Violations: {:?}", report.violations);
+    }
+
+    #[test]
+    fn adr089_a_zeta_1_mixed_polygon_and_closed_curve_pass() {
+        // Polygon face + closed-curve face 같은 mesh 에 공존 시 모두 PASS.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // Polygon RECT
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _rect = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        // Closed-curve circle (별개 위치)
+        let anchor = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::new(5.0, 0.0, 0.0), radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let _circle_face = mesh.add_face_closed_curve(anchor, circle, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-089 A-ζ-1: mixed polygon + closed-curve must all pass. \
+             Violations: {:?}", report.violations);
     }
 
     #[test]
