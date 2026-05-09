@@ -436,6 +436,8 @@ type AxiaEngineExtended = AxiaEngine & {
   // ADR-088 Phase 1 — curve_owner_id grouping (LOCKED #15 P22.5)
   getEdgeCurveOwnerId?(edgeId: number): number;
   getEdgesByCurveOwner?(ownerId: number): Uint32Array;
+  walkFaceOwnerSiblings?(faceId: number): Uint32Array;
+  getFaceSurfaceOwnerId?(faceId: number): number;
   // ADR-029 Phase B — Free-form curves
   setEdgeBezierCurve?(edgeId: number, controlPts: Float64Array): boolean;
   setEdgeBSplineCurve?(
@@ -1191,6 +1193,40 @@ export class WasmBridge {
     if (!fn) return [];
     const result = fn.call(this.engine, ownerId);
     return Array.from(result);
+  }
+
+  /**
+   * ADR-093 D-γ — Walk face owner-siblings (Cylinder side group).
+   *
+   * Selection-layer entry point: given a clicked face, returns all
+   * active faces sharing its `surface_owner_id`. If the face has no
+   * owner-id, returns just `[faceId]` (single-face selection unchanged
+   * — additive only per Lock-in D-D).
+   *
+   * Graceful fallback when WASM endpoint missing (legacy build): returns
+   * `[faceId]` so SelectTool degrades to single-face selection without
+   * throw.
+   */
+  walkFaceOwnerSiblings(faceId: number): number[] {
+    if (!this.engine) return [faceId];
+    const fn = this.engine.walkFaceOwnerSiblings;
+    if (!fn) return [faceId];
+    const result = fn.call(this.engine, faceId);
+    return Array.from(result);
+  }
+
+  /**
+   * ADR-093 D-γ — Read the surface owner-id of a face.
+   *
+   * Returns -1 if face has no owner-id (standalone) OR is missing /
+   * inactive OR endpoint unavailable. Mirrors `getEdgeCurveOwnerId`
+   * from ADR-088.
+   */
+  getFaceSurfaceOwnerId(faceId: number): number {
+    if (!this.engine) return -1;
+    const fn = this.engine.getFaceSurfaceOwnerId;
+    if (!fn) return -1;
+    return fn.call(this.engine, faceId);
   }
 
   /**

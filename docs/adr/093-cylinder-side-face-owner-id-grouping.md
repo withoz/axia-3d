@@ -242,5 +242,32 @@ D-δ: SelectTool integration — single click promote / group click 일관 / Ins
   * Selection layer enforcement 는 D-γ/D-δ 에서 활성 — engine 자료는
     D-β 로 완전 봉인
 
-### D-γ ~ D-ε (예정)
+### D-γ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인".
+- **변경**:
+  * `crates/axia-wasm/src/lib.rs` — 2 신규 export:
+    - `walkFaceOwnerSiblings(face_id: u32) -> Vec<u32>` (selection-layer
+      entry point, single face → group siblings)
+    - `getFaceSurfaceOwnerId(face_id: u32) -> i32` (-1 = no owner,
+      mirrors getEdgeCurveOwnerId from ADR-088)
+  * `crates/axia-wasm/tests/export_baseline.txt` — 2 entries 추가
+    (`getFaceSurfaceOwnerId`, `walkFaceOwnerSiblings`, alphabetical 위치)
+  * `crates/axia-wasm/tests/step6_additive_only.rs` — 2 wiring tests
+    (signature + return type + delegation 검증)
+  * `web/src/bridge/WasmBridge.ts`:
+    - `AxiaEngineExtended` interface 에 `walkFaceOwnerSiblings` /
+      `getFaceSurfaceOwnerId` 추가
+    - `WasmBridge.walkFaceOwnerSiblings(faceId): number[]` typed wrapper
+      — endpoint missing 시 graceful fallback `[faceId]` (single-face
+      selection 보존, additive only)
+    - `WasmBridge.getFaceSurfaceOwnerId(faceId): number` — endpoint
+      missing 시 -1
+- **회귀**:
+  * axia-wasm 36 → 38 (+2 wiring)
+  * vitest WasmBridge.test.ts 139 → 143 (+4 wrapper tests:
+    success / graceful fallback / owner-id success / owner-id missing)
+  * 합계 **+6**, 절대 #[ignore] 금지 6/6 준수
+- **누적** (D-α ~ D-γ): axia-geo +8, axia-wasm +2, vitest +4 = **+14**.
+
+### D-δ ~ D-ε (예정)
 별도 sub-step 결재 시 commit 진행.

@@ -1302,6 +1302,41 @@ impl AxiaEngine {
             .collect()
     }
 
+    /// ADR-093 D-γ — Walk face owner-siblings.
+    ///
+    /// Selection-layer entry point: given a clicked face, returns all
+    /// active faces sharing its `surface_owner_id` (Cylinder side group).
+    /// If the face has no owner-id (None), returns just `[face_id]`
+    /// (no group — single-face selection unchanged).
+    ///
+    /// Returns empty array if the face is missing/inactive (defensive
+    /// against stale ids).
+    ///
+    /// Caller: SelectTool pickFace → automatic group promote (Lock-in
+    /// D-D — single face click promotes to entire surface group).
+    #[wasm_bindgen(js_name = "walkFaceOwnerSiblings")]
+    pub fn walk_face_owner_siblings(&self, face_id: u32) -> Vec<u32> {
+        use axia_geo::FaceId;
+        let fid = FaceId::new(face_id);
+        self.scene.mesh.walk_face_owner_siblings(fid)
+            .into_iter()
+            .map(|f| f.raw())
+            .collect()
+    }
+
+    /// ADR-093 D-γ — Read the surface owner-id of a face.
+    /// Returns -1 if the face has no owner-id (standalone) or is
+    /// missing/inactive. Mirrors `getEdgeCurveOwnerId` from ADR-088.
+    #[wasm_bindgen(js_name = "getFaceSurfaceOwnerId")]
+    pub fn get_face_surface_owner_id(&self, face_id: u32) -> i32 {
+        use axia_geo::FaceId;
+        let fid = FaceId::new(face_id);
+        match self.scene.mesh.face_surface_owner_id(fid) {
+            Some(owner) => owner as i32,
+            None => -1,
+        }
+    }
+
     /// Check whether an edge has an analytic curve attached.
     /// Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
     /// 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.

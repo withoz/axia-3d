@@ -639,6 +639,47 @@ fn shape_p4_mutators_use_transactions_readonly_skip() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-093 D-γ — Cylinder side face owner-id WASM endpoints.
+// ════════════════════════════════════════════════════════════════════════
+
+/// D-γ #1 — `walkFaceOwnerSiblings` endpoint wired with correct js_name
+/// and `Vec<u32>` return signature (single face → group siblings).
+#[test]
+fn adr093_d_gamma_walk_face_owner_siblings_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn walk_face_owner_siblings"),
+        "ADR-093 D-γ: missing Rust function walk_face_owner_siblings");
+    assert!(l.contains("js_name = \"walkFaceOwnerSiblings\""),
+        "ADR-093 D-γ: missing js_name = \"walkFaceOwnerSiblings\"");
+    let idx = l.find("pub fn walk_face_owner_siblings")
+        .expect("walk_face_owner_siblings");
+    let body = char_safe_slice(&l, idx, 600);
+    assert!(body.contains("-> Vec<u32>"),
+        "ADR-093 D-γ: walkFaceOwnerSiblings must return Vec<u32>");
+    // Must delegate to mesh::walk_face_owner_siblings
+    assert!(body.contains("walk_face_owner_siblings"),
+        "ADR-093 D-γ: must delegate to Mesh::walk_face_owner_siblings");
+}
+
+/// D-γ #2 — `getFaceSurfaceOwnerId` endpoint wired with i32 return
+/// (-1 = no owner, mirrors getEdgeCurveOwnerId).
+#[test]
+fn adr093_d_gamma_get_face_surface_owner_id_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn get_face_surface_owner_id"),
+        "ADR-093 D-γ: missing Rust function get_face_surface_owner_id");
+    assert!(l.contains("js_name = \"getFaceSurfaceOwnerId\""),
+        "ADR-093 D-γ: missing js_name = \"getFaceSurfaceOwnerId\"");
+    let idx = l.find("pub fn get_face_surface_owner_id")
+        .expect("get_face_surface_owner_id");
+    let body = char_safe_slice(&l, idx, 500);
+    assert!(body.contains("-> i32"),
+        "ADR-093 D-γ: getFaceSurfaceOwnerId must return i32 (-1 = no owner)");
+    assert!(body.contains("None => -1"),
+        "ADR-093 D-γ: must return -1 for None owner_id");
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-091 D-γ — Material removal → Shape demotion WASM endpoint.
 // ════════════════════════════════════════════════════════════════════════
 

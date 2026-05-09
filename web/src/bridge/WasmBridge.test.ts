@@ -1554,6 +1554,38 @@ describe('WasmBridge', () => {
       expect(() => bridge.demoteXiaToShape(7))
         .toThrow(/WASM endpoint missing/);
     });
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
+    // ────────────────────────────────────────────────────────────────
+
+    it('walkFaceOwnerSiblings returns engine result as number[] (success path)', () => {
+      const fn = vi.fn(() => new Uint32Array([10, 11, 12, 13]));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { walkFaceOwnerSiblings: fn };
+      expect(bridge.walkFaceOwnerSiblings(10)).toEqual([10, 11, 12, 13]);
+      expect(fn).toHaveBeenCalledWith(10);
+    });
+
+    it('walkFaceOwnerSiblings returns [faceId] when WASM endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.walkFaceOwnerSiblings(42)).toEqual([42]);
+    });
+
+    it('getFaceSurfaceOwnerId returns engine value (success path)', () => {
+      const fn = vi.fn(() => 7);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getFaceSurfaceOwnerId: fn };
+      expect(bridge.getFaceSurfaceOwnerId(10)).toBe(7);
+      expect(fn).toHaveBeenCalledWith(10);
+    });
+
+    it('getFaceSurfaceOwnerId returns -1 when endpoint missing (no owner sentinel)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getFaceSurfaceOwnerId(7)).toBe(-1);
+    });
   });
 
   // ════════════════════════════════════════════════════════════════════════
