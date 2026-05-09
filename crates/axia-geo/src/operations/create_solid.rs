@@ -5524,6 +5524,145 @@ mod tests {
             "expect ≥ 2 rings worth of polyline segments");
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-094 B-ε-prep — Boolean dispatch additive (multi-loop face SSI)
+    //
+    // Verifies that Boolean dispatch's eligibility + SSI dispatch
+    // *naturally accepts* annulus side faces. Existing eligibility
+    // (classify_dispatch_eligibility) checks face.surface() presence
+    // and surface_to_bspline conversion — it does NOT inspect outer/
+    // inners. nurbs_boolean_v2 operates purely in surface parameter
+    // space — operand boundary loops only matter for trim. So multi-
+    // loop schema should pass through transparently.
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr094_b_epsilon_prep_top_bot_passes_boolean_eligibility() {
+        // Path B의 top + bottom closed-curve face 둘 다 Plane surface
+        // (ADR-089 A-η-1). Plane × Plane Boolean dispatch는 already
+        // 지원됨 — 본 테스트가 architectural anchor: Path B faces 가
+        // 기존 Boolean SSI 와 호환.
+        use crate::operations::boolean_dispatch::classify_dispatch_eligibility;
+
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("Path B cylinder OK");
+
+        // Top face × bottom face — both Plane surfaces, Path B endpoints.
+        let r = classify_dispatch_eligibility(
+            &mesh, &[result.profile_face], &[result.top_face],
+        );
+        assert!(r.is_ok(),
+            "Path B top × bottom (Plane × Plane) must pass eligibility, \
+             got {:?}", r);
+    }
+
+    #[test]
+    fn adr094_b_epsilon_prep_annulus_eligibility_surface_kind_only() {
+        // Architectural anchor: Boolean dispatch eligibility는 **surface-
+        // driven**, NOT boundary-loop-driven. 다중 boundary loop 와는
+        // 무관하게 surface kind 만 검사. Cylinder → NURBS conversion
+        // 자체는 *pre-existing limitation* (별도 phase, all cylinder
+        // operands 가 동일 영향 — Path A 든 Path B 든 같음).
+        //
+        // 본 테스트는 eligibility 가 multi-loop schema 자체로는 거부
+        // 안 한다는 architectural anchor 검증. 거부 사유는 surface kind
+        // 만 (Cylinder Unsupported).
+        use crate::operations::boolean_dispatch::classify_dispatch_eligibility;
+        use crate::operations::boolean_dispatch::NurbsBooleanFailReason;
+
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("Path B cylinder OK");
+        let annulus = result.side_faces[0];
+
+        // Verify multi-loop schema set.
+        assert!(mesh.face_has_multi_loop_schema(annulus));
+        assert_eq!(mesh.face_boundary_loops(annulus).len(), 2);
+
+        // Pair with another Plane face to isolate Cylinder side as cause.
+        let plane2 = build_closed_curve_circle_face(
+            &mut mesh, DVec3::new(20.0, 0.0, 4.0), 3.0,
+        );
+        let err = classify_dispatch_eligibility(&mesh, &[annulus], &[plane2])
+            .expect_err("Cylinder side currently rejected by surface_to_bspline \
+                         pre-existing limitation");
+        // Rejection reason = surface kind, NOT multi-loop schema.
+        match err {
+            NurbsBooleanFailReason::UnsupportedSurfaceKind { kind, .. } => {
+                assert_eq!(kind, "Cylinder",
+                    "rejection reason must be Cylinder surface kind \
+                     (pre-existing limitation, NOT multi-loop schema)");
+            }
+            other => panic!(
+                "expected UnsupportedSurfaceKind, got {:?} — multi-loop \
+                 schema must NOT cause eligibility failure", other,
+            ),
+        }
+    }
+
+    #[test]
+    fn adr094_b_epsilon_prep_annulus_surface_extraction_unchanged() {
+        // Boolean dispatch reads face.surface() + face.material() — both
+        // work for annulus identically to legacy quad face. Architectural
+        // anchor: surface-driven dispatch is multi-loop transparent.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+        let annulus = result.side_faces[0];
+
+        let surface = mesh.face_surface(annulus)
+            .expect("annulus has surface");
+        let _ = mesh.faces[annulus].material();
+        // Verify it's a Cylinder (not None, not Plane).
+        match surface {
+            AnalyticSurface::Cylinder { radius, .. } => {
+                assert!((radius - 5.0).abs() < 1e-9,
+                    "annulus radius preserved");
+            }
+            other => panic!("expected Cylinder, got {:?}", other.kind_label()),
+        }
+    }
+
+    #[test]
+    fn adr094_b_epsilon_prep_legacy_path_a_eligibility_same_failure_mode() {
+        // Coexist anchor — Path A side quad (also Cylinder) and Path B
+        // annulus (Cylinder) get the SAME pre-existing limitation
+        // failure reason. Multi-loop schema 자체는 eligibility 영향 0.
+        use crate::operations::boolean_dispatch::classify_dispatch_eligibility;
+        use crate::operations::boolean_dispatch::NurbsBooleanFailReason;
+
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 8.0 },
+                MaterialId::new(0),
+            )
+            .expect("Path A cylinder OK");
+        let path_a_quad = result.side_faces[0];
+
+        let plane2 = build_closed_curve_circle_face(
+            &mut mesh, DVec3::new(20.0, 0.0, 4.0), 3.0,
+        );
+        // Path A side quad rejection — same surface kind reason.
+        match classify_dispatch_eligibility(&mesh, &[path_a_quad], &[plane2]) {
+            Err(NurbsBooleanFailReason::UnsupportedSurfaceKind { kind, .. }) => {
+                assert_eq!(kind, "Cylinder",
+                    "Path A quad gets identical rejection reason — \
+                     architectural symmetry between Path A / Path B");
+            }
+            other => panic!("expected UnsupportedSurfaceKind, got {:?}", other),
+        }
+    }
+
     #[test]
     fn adr094_b_delta_prep_rejects_non_closed_curve_profile() {
         // B-δ-prep precondition: profile must be closed-curve. Polygonal

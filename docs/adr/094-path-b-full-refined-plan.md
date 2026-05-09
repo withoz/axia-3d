@@ -346,5 +346,45 @@ ADR-090 §4 의 위험 매트릭스 + 본 ADR 의 additive-first 전략으로 �
     — annulus = 2 closed boundaries (top + bot circles) → engine 자연
     derivation. 별도 분기 unnecessary.
 
-### B-ε-prep ~ B-θ (예정)
+### B-ε-prep (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Boolean dispatch additive 진입.
+- **Architectural 발견 — Boolean dispatch 가 surface-driven**:
+  사전 검토 시 *multi-loop face 분기 추가 필요* 예상했으나, 검증 결과
+  **Boolean SSI eligibility / dispatch 가 boundary loops 를 inspect
+  안 함**. 오직 face.surface() + face.material() + 단일 face 카운트만
+  검사. multi-loop schema 자체는 eligibility 영향 0.
+  - `classify_dispatch_eligibility`: face_surface presence + count + surface_to_bspline
+    conversion check
+  - `nurbs_boolean_to_dcel`: face.surface().clone() + face.material() —
+    boundary loops 미접근
+  - `nurbs_boolean_v2`: surface 파라미터 공간 SSI — 완전히 boundary-
+    independent
+- **Pre-existing 한계 명시**: `surface_to_bspline` 가 Cylinder/Sphere/
+  Cone/Torus 를 *아직 지원 안 함* (UnsupportedSurfaceKind). 본 한계는
+  Path A 든 Path B 든 동일 적용 — analytic primitive surface 의 NURBS
+  conversion 은 별도 phase (Phase J/K NURBS Boolean for primitive
+  surfaces). 본 ADR scope 외.
+- **변경**: code 0 — verification tests only.
+- **회귀** (axia-geo 1234 → 1238, +4):
+  * `top_bot_passes_boolean_eligibility` — Path B top + bottom Plane
+    faces 가 eligibility 통과 (architectural anchor — Path B endpoints
+    Boolean compatible)
+  * `annulus_eligibility_surface_kind_only` — multi-loop schema 가
+    eligibility 영향 0 검증. 거부 사유는 Cylinder surface_to_bspline
+    pre-existing limitation 만
+  * `annulus_surface_extraction_unchanged` — face.surface() / face.
+    material() Path B annulus 도 정상 동작 (Cylinder + radius 보존)
+  * `legacy_path_a_eligibility_same_failure_mode` — Path A side quad
+    도 동일 Cylinder rejection (architectural symmetry)
+  * 합계 **+4**, 절대 #[ignore] 금지 4/4 준수
+- **누적 회귀** (B-α ~ B-ε-prep): axia-geo +23.
+- **Architectural 의미**:
+  * ADR-064 / ADR-066 NURBS Boolean dispatch 가 **boundary topology
+    transparent** — annulus 의 multi-loop schema 가 자연 통과
+  * ADR-094 §1 architectural goal 의 *Boolean compatibility* 자연
+    충족 (surface kind 한계 외)
+  * Path B 의 enabled-by-default 시점에서도 Boolean SSI 인프라 변경
+    불필요 — 기존 surface conversion 한계만 별도 phase 진행
+
+### B-η ~ B-θ (예정)
 별도 sub-step 결재 시 commit 진행.
