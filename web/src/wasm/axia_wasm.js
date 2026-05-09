@@ -789,6 +789,94 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * ADR-095 Phase 3-γ — Create a ConstructionLine Reference (작도선).
+     *
+     * Returns the new ReferenceId on success. On R-B violation
+     * (edge already in Reference), throws JS Error with the rejection
+     * reason.
+     * @param {string} name
+     * @param {Uint32Array} edge_ids
+     * @returns {number}
+     */
+    createReferenceConstructionLine(name, edge_ids) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(edge_ids, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_createReferenceConstructionLine(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ADR-095 Phase 3-γ — Create an ImportedMesh Reference (외부 import).
+     *
+     * Returns the new ReferenceId on success. R-B violation
+     * (face already owned by Form/Property/Reference) → JS Error.
+     * @param {string} name
+     * @param {Uint32Array} face_ids
+     * @param {string | null} [source_path]
+     * @returns {number}
+     */
+    createReferenceImportedMesh(name, face_ids, source_path) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(face_ids, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            var ptr2 = isLikeNone(source_path) ? 0 : passStringToWasm0(source_path, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            var len2 = WASM_VECTOR_LEN;
+            wasm.axiaengine_createReferenceImportedMesh(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ADR-095 Phase 3-γ — Create a PointCloud Reference (스캔 데이터).
+     *
+     * Returns the new ReferenceId on success. R-B violation
+     * (vert already in Reference) → JS Error.
+     * @param {string} name
+     * @param {Uint32Array} vert_ids
+     * @returns {number}
+     */
+    createReferencePointCloud(name, vert_ids) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray32ToWasm0(vert_ids, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.axiaengine_createReferencePointCloud(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * ADR-050 P-4 — Create a new Shape (form-layer citizen).
      *
      * Returns the new ShapeId as `u32`. Mirror of TS-side eventual
@@ -910,6 +998,16 @@ export class AxiaEngine {
     deleteEdgeCascade(edge_id_raw) {
         const ret = wasm.axiaengine_deleteEdgeCascade(this.__wbg_ptr, edge_id_raw);
         return ret;
+    }
+    /**
+     * ADR-095 Phase 3-γ — Delete a Reference. Returns true if removed.
+     * Reverse 인덱스도 자동 정리.
+     * @param {number} id
+     * @returns {boolean}
+     */
+    deleteReference(id) {
+        const ret = wasm.axiaengine_deleteReference(this.__wbg_ptr, id);
+        return ret !== 0;
     }
     /**
      * ADR-050 P-4 — Delete a Shape by id. Returns true if deleted.
@@ -1900,6 +1998,16 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-095 Phase 3-γ — Reverse lookup: get the Reference ID owning
+     * a given face. Returns -1 if face is not part of any Reference.
+     * @param {number} face_id
+     * @returns {number}
+     */
+    getFaceReferenceId(face_id) {
+        const ret = wasm.axiaengine_getFaceReferenceId(this.__wbg_ptr, face_id);
+        return ret;
+    }
+    /**
      * ADR-060 Phase O Step 6 — Face analytic surface as JSON.
      *
      * Returns the face's `AnalyticSurface` (Phase D/E) as a JSON
@@ -2119,6 +2227,52 @@ export class AxiaEngine {
     getPositionsPtr() {
         const ret = wasm.axiaengine_getPositionsPtr(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * ADR-095 Phase 3-γ — All currently-stored Reference IDs (sorted
+     * ascending). Returns empty Vec if none.
+     * @returns {Uint32Array}
+     */
+    getReferenceIds() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getReferenceIds(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ADR-095 Phase 3-γ — Read a Reference as JSON.
+     * Returns `{ id, name, category, visible, locked }` or empty
+     * string if id missing.
+     *
+     * `category` shape:
+     * - `{"kind":"ConstructionLine","edge_ids":[...]}`
+     * - `{"kind":"ImportedMesh","face_ids":[...],"source_path":...|null}`
+     * - `{"kind":"PointCloud","vert_ids":[...]}`
+     * @param {number} id
+     * @returns {string}
+     */
+    getReferenceJson(id) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getReferenceJson(retptr, this.__wbg_ptr, id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * ADR-050 P-4 — Returns the face IDs owned by a Shape, or empty
@@ -3866,6 +4020,28 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-095 Phase 3-γ — Toggle Reference locked flag.
+     * Returns false if id missing.
+     * @param {number} id
+     * @param {boolean} locked
+     * @returns {boolean}
+     */
+    setReferenceLocked(id, locked) {
+        const ret = wasm.axiaengine_setReferenceLocked(this.__wbg_ptr, id, locked);
+        return ret !== 0;
+    }
+    /**
+     * ADR-095 Phase 3-γ — Toggle Reference visibility flag.
+     * Returns false if id missing.
+     * @param {number} id
+     * @param {boolean} visible
+     * @returns {boolean}
+     */
+    setReferenceVisible(id, visible) {
+        const ret = wasm.axiaengine_setReferenceVisible(this.__wbg_ptr, id, visible);
+        return ret !== 0;
+    }
+    /**
      * 중첩 그룹 설정
      * @param {number} child_id
      * @param {number} parent_id
@@ -4681,6 +4857,10 @@ let heap = new Array(1024).fill(undefined);
 heap.push(undefined, null, true, false);
 
 let heap_next = heap.length;
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
+}
 
 function passArray32ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 4, 4) >>> 0;

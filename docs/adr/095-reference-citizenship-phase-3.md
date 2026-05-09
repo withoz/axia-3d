@@ -1,6 +1,6 @@
-# ADR-095: Reference Citizenship (Two-Layer Citizenship Phase 3)
+# ADR-095: Reference Citizenship (Two-Layer Citizenship Phase 3) — **Accepted**
 
-- **Status**: Proposed (Phase 3-α — spec only)
+- **Status**: Accepted (Phase 3-α ~ 3-ζ closure 2026-05-09)
 - **Date**: 2026-05-09
 - **Anchor**: LOCKED #26 의 Phase 3 명시 약속. ADR-049 §4 Phase 3
   ("Reference 시민권 분리 — Construction Line / Imported Mesh /
@@ -341,5 +341,86 @@ pub enum ReferenceCategory {
 - **누적** (Phase 3-α ~ 3-ε): axia-core +17, axia-wasm baseline +9,
   vitest +20 = **+46**.
 
-### Phase 3-ζ (예정 — 사용자 시연 + closure)
-별도 sub-step 결재 시 commit 진행.
+### Phase 3-ζ (본 commit — 사용자 시연 + closure)
+- **사용자 결재**: 2026-05-09, "승인" — 사용자 시연 + closure.
+- **사용자 시연 PASS** (real Chromium 4/4):
+  - Scenario 1: 3 categories CRUD (CL/PC create + getReferenceIds list +
+    getReference JSON parse 검증)
+  - Scenario 2: R-B violation (Path B cylinder 의 Shape-owned face 를
+    Reference 등록 시도 → engine throw + bridge propagate)
+  - Scenario 3: Snapshot round-trip (export/import → references 보존)
+  - Scenario 4: getReference JSON parse → tagged union
+    (`category.kind === 'ConstructionLine'`)
+- **변경**:
+  * `web/e2e/adr-095-demo.spec.ts` (신규) — Real Chromium 4 specs
+  * `CLAUDE.md` LOCKED #26 — Phase 3 closure entry
+  * `docs/adr/README.md` — ADR-095 status `Proposed` → `Accepted`
+  * 본 ADR §E Lessons 추가
+- **회귀** (Playwright +4): 4 scenarios 모두 PASS in real Chromium.
+  합계 **+4**, 절대 #[ignore] 금지 4/4 준수.
+- **누적 회귀** (Phase 3-α ~ 3-ζ): axia-core +17, axia-wasm baseline
+  +9, vitest +20, Playwright +4 = **+50**.
+
+## E. Lessons
+
+### L1 — additive coexist 다층 적용 (5 sub-step zero regression)
+
+**관찰**: ADR-095 의 5 sub-step 모두 *additive coexist* 패턴으로 진행.
+245+ Form/Property 회귀 자산 영향 0 + 새 시민권 type 자연 도입.
+
+**Architectural lesson**: ADR-094 §E L1 (Path B-full additive-first)
+의 메타 패턴이 시민권 모델 확장에서도 자연 답습. 새 직교 시민권
+도입은 항상 additive coexist 가능 — Form/Property 와 mutually
+exclusive 만 강제.
+
+### L2 — Mesh-level Map (ADR-091 §E L1) 더 깊은 적용
+
+**관찰**: Reference 의 모든 데이터 (`Scene.references` /
+`face_to_reference` / `edge_to_reference` / `vert_to_reference`)
+가 Mesh/Scene-level HashMap 으로 도입. 어떤 entity (Face / Edge /
+Vert) struct 도 변경 안 됨. Bincode legacy 호환 자연 보존.
+
+**향후 ADR 가이드** — 직교 시민권 추가 시 항상 Scene-level reverse
+인덱스 + HashMap 패턴. struct field 추가 금지 canonical (ADR-091
+§E L1).
+
+### L3 — 사용자 facing 한국어 변환 (humanizeRBViolation)
+
+**관찰**: Engine layer 의 영문 error message ("face FaceId(7) is
+owned by a Xia") 가 사용자 facing 으로 부적절. UI orchestration
+helper (`MarkAsReference.ts::humanizeRBViolation`) 가 4 가지 case
+한국어 변환 → Toast 직접 활용.
+
+**향후 ADR 가이드** — 사용자 facing 액션의 engine throw → UI
+orchestration helper 가 한국어 변환 SSOT. ADR-091 §E L4 (UI
+orchestration 분리) 의 자연 확장.
+
+### L4 — Three-Layer Citizenship Model 활성
+
+**Architectural milestone**: LOCKED #26 의 Two-Layer Citizenship
+Model 이 본 ADR 으로 *three-layer* 로 확장:
+- **Form** (Shape) — 기하 추상, no material
+- **Property** (Xia) — 부재 정체성, with material
+- **Reference** (NEW) — 외부/작도, *수정 안 함*
+
+3 시민권 모두 Mutually Exclusive geometry ownership — 한 face / edge
+/ vert 가 동시에 둘 이상 시민권에 속할 수 없음. ADR-091 D-β /
+ADR-091 D-ε 의 Form ↔ Property transition (promote / demote) 위에
+Reference 의 *직교* 시민권이 추가.
+
+**메타-원칙 #2 ("외부 참조는 형태/모양만") architectural 정착** —
+LOCKED #26 의 5-Phase 로드맵 중 Phase 3 closure. STEP/IGES import
+(ADR-081~086) 결과를 Reference 로 자연 분류 가능 (future Phase
+3 후속 작업).
+
+### L5 — 5개월 누적 architectural quality 자연 결합 (5번째)
+
+본 ADR 의 모든 sub-step 이 *기존 framework 와 자연 결합*:
+- ADR-091 §E L1 (Mesh-level map) → Phase 3-β 직접 답습
+- A-μ forward-compat reject → Phase 3-ε 직접 답습
+- ADR-091 D-ε section 7d 패턴 → Phase 3-ε section 8 답습
+- ADR-091 §E L4 (UI orchestration) → Phase 3-δ 답습
+
+ADR-094 §E L3 의 "자연 결합" pattern 이 ADR-095 에서도 직접 답습 —
+multi-week atomic 트랙뿐 아니라 시민권 모델 확장에서도 5개월 누적
+quality 의 자연 leverage 입증.

@@ -243,6 +243,28 @@ export class AxiaEngine {
      */
     countFreeEdges(): number;
     /**
+     * ADR-095 Phase 3-γ — Create a ConstructionLine Reference (작도선).
+     *
+     * Returns the new ReferenceId on success. On R-B violation
+     * (edge already in Reference), throws JS Error with the rejection
+     * reason.
+     */
+    createReferenceConstructionLine(name: string, edge_ids: Uint32Array): number;
+    /**
+     * ADR-095 Phase 3-γ — Create an ImportedMesh Reference (외부 import).
+     *
+     * Returns the new ReferenceId on success. R-B violation
+     * (face already owned by Form/Property/Reference) → JS Error.
+     */
+    createReferenceImportedMesh(name: string, face_ids: Uint32Array, source_path?: string | null): number;
+    /**
+     * ADR-095 Phase 3-γ — Create a PointCloud Reference (스캔 데이터).
+     *
+     * Returns the new ReferenceId on success. R-B violation
+     * (vert already in Reference) → JS Error.
+     */
+    createReferencePointCloud(name: string, vert_ids: Uint32Array): number;
+    /**
      * ADR-050 P-4 — Create a new Shape (form-layer citizen).
      *
      * Returns the new ShapeId as `u32`. Mirror of TS-side eventual
@@ -294,6 +316,11 @@ export class AxiaEngine {
      * many faces were removed as a side effect.
      */
     deleteEdgeCascade(edge_id_raw: number): number;
+    /**
+     * ADR-095 Phase 3-γ — Delete a Reference. Returns true if removed.
+     * Reverse 인덱스도 자동 정리.
+     */
+    deleteReference(id: number): boolean;
     /**
      * ADR-050 P-4 — Delete a Shape by id. Returns true if deleted.
      * Transaction-wrapped.
@@ -736,6 +763,11 @@ export class AxiaEngine {
     getFaceMapPtr(): number;
     getFaceNormalsCached(face_id_raw: number): Float64Array;
     /**
+     * ADR-095 Phase 3-γ — Reverse lookup: get the Reference ID owning
+     * a given face. Returns -1 if face is not part of any Reference.
+     */
+    getFaceReferenceId(face_id: number): number;
+    /**
      * ADR-060 Phase O Step 6 — Face analytic surface as JSON.
      *
      * Returns the face's `AnalyticSurface` (Phase D/E) as a JSON
@@ -818,6 +850,22 @@ export class AxiaEngine {
      * 길이/포인터 둘 다 필요하므로 별도 함수 2개로 노출.
      */
     getPositionsPtr(): number;
+    /**
+     * ADR-095 Phase 3-γ — All currently-stored Reference IDs (sorted
+     * ascending). Returns empty Vec if none.
+     */
+    getReferenceIds(): Uint32Array;
+    /**
+     * ADR-095 Phase 3-γ — Read a Reference as JSON.
+     * Returns `{ id, name, category, visible, locked }` or empty
+     * string if id missing.
+     *
+     * `category` shape:
+     * - `{"kind":"ConstructionLine","edge_ids":[...]}`
+     * - `{"kind":"ImportedMesh","face_ids":[...],"source_path":...|null}`
+     * - `{"kind":"PointCloud","vert_ids":[...]}`
+     */
+    getReferenceJson(id: number): string;
     /**
      * ADR-050 P-4 — Returns the face IDs owned by a Shape, or empty
      * vec if the shape doesn't exist (no error — graceful for callers
@@ -1432,6 +1480,16 @@ export class AxiaEngine {
      */
     setFaceSurfaceTorus(face_id: number, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, rx: number, ry: number, rz: number, major_radius: number, minor_radius: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
     /**
+     * ADR-095 Phase 3-γ — Toggle Reference locked flag.
+     * Returns false if id missing.
+     */
+    setReferenceLocked(id: number, locked: boolean): boolean;
+    /**
+     * ADR-095 Phase 3-γ — Toggle Reference visibility flag.
+     * Returns false if id missing.
+     */
+    setReferenceVisible(id: number, visible: boolean): boolean;
+    /**
      * 중첩 그룹 설정
      */
     set_group_parent(child_id: number, parent_id: number): boolean;
@@ -1701,6 +1759,9 @@ export interface InitOutput {
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly axiaengine_constraintCount: (a: number) => number;
     readonly axiaengine_countFreeEdges: (a: number) => number;
+    readonly axiaengine_createReferenceConstructionLine: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly axiaengine_createReferenceImportedMesh: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly axiaengine_createReferencePointCloud: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_createShape: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly axiaengine_create_box: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_create_cone: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
@@ -1709,6 +1770,7 @@ export interface InitOutput {
     readonly axiaengine_create_solid_extrude: (a: number, b: number, c: number) => number;
     readonly axiaengine_create_sphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_deleteEdgeCascade: (a: number, b: number) => number;
+    readonly axiaengine_deleteReference: (a: number, b: number) => number;
     readonly axiaengine_deleteShape: (a: number, b: number) => number;
     readonly axiaengine_delete_edge: (a: number, b: number) => number;
     readonly axiaengine_delete_face: (a: number, b: number) => number;
@@ -1764,6 +1826,7 @@ export interface InitOutput {
     readonly axiaengine_getFaceMapLen: (a: number) => number;
     readonly axiaengine_getFaceMapPtr: (a: number) => number;
     readonly axiaengine_getFaceNormalsCached: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getFaceReferenceId: (a: number, b: number) => number;
     readonly axiaengine_getFaceSurfaceJson: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceSurfaceOwnerId: (a: number, b: number) => number;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
@@ -1778,6 +1841,8 @@ export interface InitOutput {
     readonly axiaengine_getPositionsF64: (a: number, b: number) => void;
     readonly axiaengine_getPositionsLen: (a: number) => number;
     readonly axiaengine_getPositionsPtr: (a: number) => number;
+    readonly axiaengine_getReferenceIds: (a: number, b: number) => void;
+    readonly axiaengine_getReferenceJson: (a: number, b: number, c: number) => void;
     readonly axiaengine_getShapeFaceIds: (a: number, b: number, c: number) => void;
     readonly axiaengine_getShapeIds: (a: number, b: number) => void;
     readonly axiaengine_getSnapVerticesF64: (a: number, b: number) => void;
@@ -1870,6 +1935,8 @@ export interface InitOutput {
     readonly axiaengine_setFaceSurfacePlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
     readonly axiaengine_setFaceSurfaceSphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_setFaceSurfaceTorus: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => number;
+    readonly axiaengine_setReferenceLocked: (a: number, b: number, c: number) => number;
+    readonly axiaengine_setReferenceVisible: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;
     readonly axiaengine_sheetBoolean: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_sliceVolumeByPlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;

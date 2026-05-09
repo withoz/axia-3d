@@ -755,8 +755,32 @@
       Scene-level map 으로 분리**.
     * **다음 ADR 가이드**: ADR-091 §E Lessons (Path Z 효율성 / bincode
       위험 / 6-layer 패턴 / 사전 검토 가치) 참조.
-  - **Phase 3** (ADR-053 예정): Reference 시민권 분리 (Construction Line /
-    Imported Mesh / Point Cloud)
+  - **Phase 3** ✅ **완료 (2026-05-09)** — ADR-095 Path Z atomic 6
+    sub-step closure (Phase 3-α ~ 3-ζ):
+    * **ADR-095** — Reference 시민권 (Construction Line / Imported
+      Mesh / Point Cloud) 도입. Form/Property 와 직교 (mutually
+      exclusive geometry ownership). LOCKED #26 메타-원칙 #2 의
+      architectural 정착.
+    * **회귀 누적**: axia-core +17 (Reference struct 4 + scene CRUD 9
+      + section 8 4) + axia-wasm baseline +9 (9 exports) + vitest +20
+      (WasmBridge 9 + MarkAsReference 11) + Playwright +4 (real
+      Chromium 4 scenarios). 합계 **+50**, 절대 #[ignore] 금지 50/50
+      준수.
+    * **사용자 facing 변화**: 3 시민권 활성. Construction line /
+      external CAD imports / point clouds 가 first-class Reference
+      시민. R-B violation 시 사용자 facing 한국어 메시지 (Xia/Shape/
+      Reference owned 4 case + endpoint missing).
+    * **Three-Layer Citizenship Model**: 본 ADR 으로 시민권 모델 확장
+      ("Two-Layer" → "Three-Layer" 자연 진화):
+      - Form (Shape) — 기하 추상
+      - Property (Xia) — 부재 정체성 with material
+      - Reference (NEW) — 외부/작도, *수정 안 함*
+    * **Lessons applied (5 누적)**:
+      - L1 additive coexist 다층 적용 (5 sub-step zero regression)
+      - L2 Mesh-level Map canonical 더 깊은 적용 (ADR-091 §E L1)
+      - L3 사용자 facing 한국어 변환 (humanizeRBViolation 패턴)
+      - L4 Three-Layer Citizenship Model 활성 (메타-원칙 #2 정착)
+      - L5 5개월 누적 architectural quality 자연 결합 (ADR-094 §E L3 답습)
   - **Phase 4** (ADR-054 예정): 위상 손상 자동 복구 + 실패 시 사용자 다이얼로그
     (Q5 사건 2-4, v3.2 §12.3 §12.5)
   - **Phase 5** (ADR-055+): 자산 라이브러리 3계층 + Layered material (§13)
