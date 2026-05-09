@@ -10,6 +10,8 @@ import { WasmBridge } from '../bridge/WasmBridge';
 import { Viewport } from '../viewport/Viewport';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { debugLog } from '../utils/debug';
+import { Toast } from './Toast';
+import { attemptMaterialRemovalDemote } from '../citizenship/MaterialRemovalDemote';
 
 export interface XiaInspectorDeps {
   bridge: WasmBridge;
@@ -167,6 +169,35 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
   // MaterialLibrary 변경 이벤트 → Viewport 동기화
   matLib.onChange(refreshViewportColors);
 
+  // ADR-091 D-δ — Material Removal → Shape 가역 강등 trigger.
+  // Called from both entry points (dropdown "없음" + 재질 해제 버튼,
+  // Lock-in D-F=c). Attempts to demote each owning Xia, then surfaces
+  // a 5-second "되돌리기" Toast so the user can one-click undo per
+  // Lock-in D-E=a.
+  const triggerMaterialRemovalDemote = (faceIds: number[]) => {
+    if (faceIds.length === 0) return;
+    const result = attemptMaterialRemovalDemote(bridge, faceIds);
+    if (result.demoted.length > 0) {
+      const n = result.demoted.length;
+      const msg = n === 1
+        ? '재질 제거됨 — 형태로 강등'
+        : `${n}개 객체 재질 제거됨 — 형태로 강등`;
+      Toast.infoWithAction(msg, {
+        label: '되돌리기',
+        onClick: () => {
+          bridge.undo();
+          updateInspector(currentFaceIds);
+        },
+      }, 5000);
+    }
+    // Partial failures are surfaced separately — the demoted Xias are
+    // still gone, but eligible-but-rejected ones (rare with current
+    // gating) deserve a warning so the user understands the state.
+    if (result.errors.length > 0) {
+      Toast.warning(`재질 제거 시 ${result.errors.length}건 강등 실패 (나머지는 적용됨)`);
+    }
+  };
+
   // ── 재질 변경 이벤트 ──
   matSelect?.addEventListener('change', () => {
     const materialId = matSelect.value;
@@ -177,6 +208,8 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
       matLib.assignToFaces(targetFaces, materialId);
     } else if (targetFaces.length > 0 && !materialId) {
       matLib.unassignFromFaces(targetFaces);
+      // ADR-091 D-δ — material → "없음" 트리거 (D-F=c entry #1).
+      triggerMaterialRemovalDemote(targetFaces);
     }
     currentFaceIds = targetFaces;
     updatePhysicalPanel(materialId || null);
@@ -190,6 +223,8 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
       matLib.unassignFromFaces(currentFaceIds);
       matSelect.value = '';
       updatePhysicalPanel(null);
+      // ADR-091 D-δ — 재질 해제 버튼 트리거 (D-F=c entry #2).
+      triggerMaterialRemovalDemote(currentFaceIds);
     } else if (matSelect.value) {
       matLib.assignToFaces(currentFaceIds, matSelect.value);
       updatePhysicalPanel(matSelect.value);

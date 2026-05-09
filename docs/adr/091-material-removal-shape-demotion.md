@@ -197,5 +197,39 @@ D-ζ 단계: 실제 Chromium 재질 제거 → Shape badge → Undo 복원
   * vitest WasmBridge.test.ts 136 → 139 (+3 wrapper)
   * 합계 **+5**, 절대 #[ignore] 금지 5/5 준수.
 
-### D-δ ~ D-η (예정)
+### D-δ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인합니다".
+- **변경**:
+  * `web/src/ui/Toast.ts` — `ToastAction { label, onClick }` interface
+    + `show()` 5번째 인자 `action?` 추가 (backward-compatible) +
+    static `Toast.infoWithAction(message, action, duration=5000)`
+    convenience method. Action button 은 `<button>` element, click 시
+    handler 1회 invoke + toast 즉시 dismiss + propagation 차단.
+  * `web/src/citizenship/MaterialRemovalDemote.ts` (신규):
+    - `resolveOwningXiaIds(bridge, faceIds): number[]` — face → Xia
+      매핑 (unique, 첫 등장 순서 보존, no-owner skip)
+    - `attemptMaterialRemovalDemote(bridge, faceIds): { demoted,
+      errors, visited }` — visited Xia 별 demoteXiaToShape 시도, partial
+      failure 흡수
+    - 별도 모듈로 분리하여 D-δ 트리거 점 (Inspector 2개) 사이의 SSOT
+      + test 격리 가능.
+  * `web/src/ui/XiaInspector.ts`:
+    - matSelect change "없음" + xi-assign-btn 해제 버튼 양쪽에서
+      `attemptMaterialRemovalDemote` 호출 (Lock-in D-F=c entry #1, #2).
+    - 강등 성공 시 `Toast.infoWithAction("재질 제거됨 — 형태로 강등",
+      { label: "되돌리기", onClick: bridge.undo() }, 5000)` (D-E=a).
+      여러 Xia 강등 시 "N개 객체 ..." pluralization.
+    - Partial failure 시 별도 `Toast.warning(...)`.
+- **회귀**:
+  * vitest Toast.test.ts 15 → 17 (+2: action button render / single-
+    invoke + dismiss)
+  * vitest MaterialRemovalDemote.test.ts 0 → 9 (신규):
+    resolveOwningXiaIds 4개 (unique / no-owner skip / order /
+    empty) + attemptMaterialRemovalDemote 5개 (success / partial
+    failure / no-owner skip / empty / shared faces dedup)
+  * 합계 **+11**, 절대 #[ignore] 금지 11/11 준수
+  * 전체 vitest 1632 → 1646 (+14, D-γ +3 + D-δ +11) — XiaInspector.test
+    2/2 회귀 자산 unchanged (Inspector wiring 변경에도 PASS 유지)
+
+### D-ε ~ D-η (예정)
 별도 sub-step 결재 시 commit 진행.
