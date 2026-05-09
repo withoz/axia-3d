@@ -1401,7 +1401,7 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
-### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Α closure, 2026-05-08)
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Β closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
   메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
@@ -1495,7 +1495,22 @@
     0, 0.5, 1,1,1,1] + degree 3 → 1 vert / 1 edge / 1 face,
     faceKind=Plane (1), curveKind=BSpline (5). NURBS / Arc / periodic
     knot vector 은 future ADR (현재 deferred).
-- **13 lock-in 원칙 (canonical)**:
+  - **A-Β 3-sub-step** (closed NURBS 시민권): `9dae865` / `09f14aa`
+    / `03edd5a`. `add_face_closed_curve` 의 NURBS match arm —
+    closure check (clamped knots case) + `nurbs::validate` (weights
+    > 0, weights/control_pts length match, knots/degree validation).
+    `bezier_best_fit_normal` helper 재사용 (control polygon best-fit
+    plane, weights 무관 — L-Β-3). Plane attach + Render fast-path
+    iterator 확장 (Bezier/BSpline/NURBS 통합 — `curve_control_pts`
+    Option). `nurbs::validate` visibility `fn` → `pub fn`. `Command::
+    DrawClosedNURBSAsCurve` + WASM `drawClosedNURBSAsCurve
+    (controlPts, weights, knots, degree)` + TS bridge wrapper.
+    Browser smoke 검증: 5 cp + uniform weights + clamped knots +
+    degree 3 → faceKind=Plane(1), curveKind=NURBS(6). Open NURBS,
+    zero weight 모두 -1 거부. **closed-curve 시민권 4 곡선 type
+    모두 활성** (Circle / Bezier / BSpline / NURBS). Arc / periodic
+    knot vector 만 future ADR.
+- **14 lock-in 원칙 (canonical)**:
   - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
     Phase 2). 메타-원칙 #14 정합
   - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
@@ -1549,8 +1564,17 @@
     (clamped knots case 만 활성). closed BSpline = 1 anchor + 1
     self-loop edge with `AnalyticCurve::BSpline` + Plane surface 의
     canonical Phase 2 표현.
+  - **L14 (A-Β closed NURBS 시민권)**: `add_face_closed_curve` 가
+    BSpline 에 더해 **closed NURBS** (rational, weights 추가) 도
+    first-class 처리. `nurbs::validate` 로 weights (모두 > 0, length
+    match) + knots/degree 검증. control polygon best-fit plane (weights
+    무관 — L-Β-3). Arc / **periodic knot vector** closed NURBS 는
+    future ADR. **closed-curve 시민권 4 곡선 type 모두 활성**: Circle
+    / closed Bezier / closed BSpline / closed NURBS — 메타-원칙 #14
+    의 진정한 architectural closure. 4 곡선 type 모두 1 anchor + 1
+    self-loop edge + 1 face (Plane surface) canonical Phase 2 표현.
 - **회귀 누적 (절대 #[ignore] 금지)**:
-  - axia-geo +63 (1123 → 1186, A-α ~ A-Α 누적)
+  - axia-geo +66 (1123 → 1189, A-α ~ A-Β 누적)
     - A-α ~ A-ι: +35 (시민권 인프라 / face synthesis / Boolean /
       Push-Pull / Render / Offset)
     - A-ρ +4 (Cylinder uv-slice render)
@@ -1560,11 +1584,12 @@
     - A-χ +3 (split surface inheritance)
     - A-ω +5 (closed Bezier 시민권)
     - A-Α +3 (closed BSpline 시민권)
+    - A-Β +3 (closed NURBS 시민권)
   - vitest +10 (1622 → 1632, A-λ + A-π + A-ψ)
     - A-λ +5 (DrawCurveSettings + DrawCircleTool)
     - A-π +2 (default ON)
     - A-ψ +3 (DrawBezierTool closure detection)
-  - **합계 +73**, 절대 #[ignore] 금지 73/73 준수
+  - **합계 +76**, 절대 #[ignore] 금지 76/76 준수
 - **사용자 facing 동작 (default ON 후)**:
   - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
   - PushPull → tessellate-extrude → Cylinder (Path A)
@@ -1606,8 +1631,11 @@
     `circle_path_unaffected` (regression guard)
   - **A-Α**: `closed_bspline_creates_self_loop_face`,
     `open_bspline_rejected`,
-    `nurbs_still_rejected` (Arc/NURBS deferred guard),
     `invalid_knots_rejected` (knot validation)
+  - **A-Β**: `closed_nurbs_creates_self_loop_face`,
+    `open_nurbs_rejected`,
+    `zero_weight_nurbs_rejected` (weight validation),
+    `arcs_still_rejected` (Arc deferred guard)
   - DrawCurveSettings.test.ts (6 tests)
   - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
   - **A-ψ DrawBezierTool.test.ts** (3 tests):
