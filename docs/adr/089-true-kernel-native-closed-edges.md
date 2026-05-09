@@ -1242,11 +1242,49 @@ closed-curve 시민권 확장. 안전한 완성도 우선."
 ### A-ω-δ (본 commit)
 - **변경**: 본 §D `A-ω-δ` closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-ω track closure 완료. ADR-089 의 "다른 곡선 시민권"
-  첫 확장 달성. 후속 후보 — closed BSpline / NURBS 시민권 (A-ω 패턴
-  답습 + periodic knot vector 처리), DrawBezierTool UI 분기 (closed
-  loop 자동 감지), A-θ Path B (DCEL 진정한 kernel-native cylinder),
-  Snapshot legacy migration (A-μ).
+
+---
+
+### A-ψ-α (2026-05-08, DrawBezierTool UI 분기 amendment)
+
+**사용자 결재 (2026-05-08)**: A-ω closed Bezier WASM bridge 사용
+가능 후 도구 UI 자동 노출.
+
+**Path Z 3-sub-step**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-ψ-α (본 amendment) | spec only | +0 |
+| A-ψ-β | DrawBezierTool.commit() closure detection branch | +3 |
+| A-ψ-γ | browser smoke + closure | +0 |
+
+**Lock-ins**:
+- **L-ψ-1** **DrawCurveSettings flag 답습**: DrawCircleTool A-λ 패턴
+  (getDrawCurveMode flag ON/OFF 분기) 답습. default ON 시 closure
+  detect 활성, OFF 시 기존 4-pt cubic Bezier 만.
+- **L-ψ-2** **Closure detection**: 4번째 클릭 위치 P3 와 첫 클릭 P0 사이
+  거리 < EPSILON (ADR-026 P12 cardinal snap 1e-3 범위 내) 시 closed
+  Bezier 로 처리.
+- **L-ψ-3** **Branch**: closure detected → `bridge.drawClosedBezierAsCurve
+  ([P0, P1, P2, P3, P0])` (5 control points, 마지막 = 첫 점).
+  closure NOT detected → 기존 `bridge.drawBezierWithCurve(...)` 답습.
+- **L-ψ-4** **Backward compat**: flag OFF 또는 closure mismatch 시
+  기존 4-pt Bezier 동작 unchanged.
+- **L-ψ-5** **회귀 자산 보존**: DrawBezierTool 기존 테스트 모두 PASS.
+- **L-ψ-6** **사용자 facing 안내**: closure detected 시 debugLog 메시지
+  로 "closed Bezier" 표시.
+
+**Non-goals**:
+- **N-ψ-1** Multi-segment Bezier 지원 (4-pt cubic only). N>4 control
+  points 의 closed loop 는 별도 ADR (control point editor / sketch
+  mode 답습 영역).
+- **N-ψ-2** Visual snap to P0 — 사용자가 P3 를 P0 위에 정확히 놓아야
+  closure 발동. snap-to-first-point UI hint 는 future sub-step.
+
+### A-ψ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "DrawBezierTool UI 분기 진행".
+- **변경**: 본 §D `A-ψ-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
