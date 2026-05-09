@@ -1401,7 +1401,7 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
-### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-χ closure, 2026-05-08)
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-ψ closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
   메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
@@ -1465,7 +1465,24 @@
     부여. Sphere×Sphere intersect 시연: 2236 face / 90% kind=0 →
     568 face / **100% kind=Sphere**. Auto-intersect / Boolean /
     Push-Pull split path 모두 metadata persistence 확보.
-- **10 lock-in 원칙 (canonical)**:
+  - **A-ω 4-sub-step** (closed Bezier 시민권 첫 확장): `e3c6126` /
+    `ae56b2b` / `a97f079` / `fc5c057` + closure docs `11fe34e`.
+    `add_face_closed_curve` 의 A-δ Circle-only 제약 해제 — closed
+    Bezier loop (control_pts[0] ≈ control_pts[last]) 도 first-class
+    citizen. `bezier_best_fit_normal` helper, Plane attach 확장
+    (centroid + best-fit plane normal + AABB extent), `Command::
+    DrawClosedBezierAsCurve` + WASM `drawClosedBezierAsCurve`,
+    Render fast-path (face fan + edge polyline). BSpline / NURBS /
+    Arc 는 future ADR (deferred — periodic knot 복잡성).
+  - **A-ψ 3-sub-step** (DrawBezierTool UI 분기): `d43a4a1` /
+    `cb3a368` / `f55dc5e`. Tool 의 `commit()` 에 closure auto-detection
+    branch — DrawCurveSettings flag (A-λ 답습) ON + |P3-P0| < 1e-3 mm
+    (ADR-026 P12 cardinal snap range) 시 `drawClosedBezierAsCurve`
+    라우팅. closed branch → 5 control points (P0 duplicated as last,
+    exact closure on engine side). 사용자가 4번째 클릭을 첫 클릭에
+    정확히 맞추면 자동 closed Bezier face 생성. 매뉴얼 토글 / 명시
+    명령 불필요.
+- **12 lock-in 원칙 (canonical)**:
   - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
     Phase 2). 메타-원칙 #14 정합
   - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
@@ -1497,8 +1514,21 @@
   - **L10 (메타-원칙 #14 측면 시각 closure)**: A-ρ + A-τ + A-υ + A-φ
     + A-χ 결합으로 Path A 의 visual quality 가 산업 CAD parity 도달.
     DCEL polygon 유지, 시각만 매끈. Path B 는 future ADR scope.
+  - **L11 (A-ω closed Bezier 시민권)**: `add_face_closed_curve` 가
+    Circle 에 더해 **closed Bezier loop** (control_pts[0] ≈
+    control_pts[last]) 도 first-class 처리. Plane attach 확장
+    (best-fit plane normal). BSpline / NURBS / Arc 는 future ADR
+    (periodic knot 복잡성). closed Bezier 는 1 anchor + 1 self-loop
+    edge with `AnalyticCurve::Bezier` + Plane surface 의 canonical
+    Phase 2 표현.
+  - **L12 (A-ψ closure auto-detection)**: DrawBezierTool 의
+    `commit()` 이 DrawCurveSettings flag (A-λ 답습) ON + P3 ↔ P0
+    거리 < 1e-3 mm (ADR-026 P12 cardinal snap range) 시 자동
+    `drawClosedBezierAsCurve` 라우팅. exact closure 강제 (cp[4] =
+    cp[0]). 사용자가 4번째 클릭을 첫 클릭에 정확히 맞추면 자연 closed
+    Bezier face 생성. 매뉴얼 토글 / 명시 명령 불필요.
 - **회귀 누적 (절대 #[ignore] 금지)**:
-  - axia-geo +55 (1123 → 1178, A-α ~ A-χ 누적)
+  - axia-geo +60 (1123 → 1183, A-α ~ A-ω 누적)
     - A-α ~ A-ι: +35 (시민권 인프라 / face synthesis / Boolean /
       Push-Pull / Render / Offset)
     - A-ρ +4 (Cylinder uv-slice render)
@@ -1506,8 +1536,12 @@
     - A-υ +3 (leftover cleanup)
     - A-φ +6 (Sphere/Cone/Torus uv-slice)
     - A-χ +3 (split surface inheritance)
-  - vitest +7 (1622 → 1629, A-λ + A-π)
-  - **합계 +62**, 절대 #[ignore] 금지 62/62 준수
+    - A-ω +5 (closed Bezier 시민권)
+  - vitest +10 (1622 → 1632, A-λ + A-π + A-ψ)
+    - A-λ +5 (DrawCurveSettings + DrawCircleTool)
+    - A-π +2 (default ON)
+    - A-ψ +3 (DrawBezierTool closure detection)
+  - **합계 +70**, 절대 #[ignore] 금지 70/70 준수
 - **사용자 facing 동작 (default ON 후)**:
   - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
   - PushPull → tessellate-extrude → Cylinder (Path A)
@@ -1543,8 +1577,17 @@
   - **A-χ**: `split_face_propagates_surface_to_face_b`,
     `split_face_no_surface_unchanged` (regression guard),
     `split_propagates_cylinder_with_full_uv_range`
+  - **A-ω**: `closed_bezier_creates_self_loop_face`,
+    `open_bezier_rejected`,
+    `collinear_bezier_rejected`,
+    `bsplines_still_rejected`,
+    `circle_path_unaffected` (regression guard)
   - DrawCurveSettings.test.ts (6 tests)
   - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
+  - **A-ψ DrawBezierTool.test.ts** (3 tests):
+    `open_bezier_legacy_path`,
+    `closed_bezier_dispatched_to_drawClosedBezierAsCurve`,
+    `drawCurveMode_OFF_always_legacy`
 - **불변 (LOCKED 정책 정합)**:
   - LOCKED #1 (P7) / #12 (P11): closed-curve face 도 동일 face 합성 /
     분할 회귀 자산 PASS 유지
