@@ -5114,6 +5114,47 @@ impl Mesh {
             };
 
             if draw {
+                // ADR-092 C-β extension — Arc tessellation for non-self-
+                // loop edges with AnalyticCurve::Arc attached. Mirrors the
+                // self-loop Circle fast-path (line 4986-5008) for the
+                // post-Push-Pull case where Bottom/Top face boundary edges
+                // carry Arc metadata pointing back at the original Circle.
+                // Without this branch, Arc-attached edges render as straight
+                // chord lines, leaving the polygon-rim defect (사용자 시연
+                // 2026-05-09 결함 1) un-fixed.
+                if let Some(crate::curves::AnalyticCurve::Arc {
+                    center,
+                    radius,
+                    normal: c_normal,
+                    basis_u,
+                    start_angle,
+                    end_angle,
+                }) = edge.curve().cloned()
+                {
+                    let chord_tol = (radius * 0.01).max(5e-5);
+                    let pts = crate::curves::arc::tessellate(
+                        center,
+                        radius,
+                        c_normal,
+                        basis_u,
+                        start_angle,
+                        end_angle,
+                        chord_tol,
+                    );
+                    if pts.len() >= 2 {
+                        for w in pts.windows(2) {
+                            lines.push(w[0].x as f32);
+                            lines.push(w[0].y as f32);
+                            lines.push(w[0].z as f32);
+                            lines.push(w[1].x as f32);
+                            lines.push(w[1].y as f32);
+                            lines.push(w[1].z as f32);
+                            edge_map.push(_edge_id.raw());
+                        }
+                        continue;
+                    }
+                }
+                // Default: emit single straight chord segment.
                 lines.push(p0.x as f32);
                 lines.push(p0.y as f32);
                 lines.push(p0.z as f32);

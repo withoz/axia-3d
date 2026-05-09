@@ -231,5 +231,40 @@ sample 검증 (top boundary 의 polyline 이 chord-tolerant smooth).
   Push-Pull 은 별도 후속 sub-step / ADR — 본 ADR scope 외.
 - 누적 회귀 (C-α ~ C-β): axia-geo +7. 절대 #[ignore] 금지 7/7 준수.
 
-### C-γ ~ C-ε (예정)
-별도 sub-step 결재 시 commit 진행.
+### C-δ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인 합니다" (C-γ skip + C-δ 직진).
+- **사전 검증 단계 추가 발견 (Render path gap)**: C-β 가 Arc curves 부착
+  까지만 처리. Render path `export_edge_lines_with_map` 의 self-loop
+  fast-path (mesh.rs:4985+) 는 self-loop edges 만 Arc/Circle tessellation
+  활용. **Non-self-loop edges 의 Arc curve 는 무시되고 단일 chord 직선만
+  emit** — Push-Pull 결과의 top/bottom rim 은 ADR-089 A-θ 후 N polygon
+  edges 인 non-self-loop edges 라서 Arc 부착되어도 시각 변화 0.
+  → Render path 도 함께 정정 필요.
+- **변경**:
+  * `crates/axia-geo/src/mesh.rs::export_edge_lines_with_map` —
+    non-self-loop edges 의 draw 분기에 Arc curve fast-path 추가 (single
+    chord 대신 chord-tolerant tessellation, edge_map 에 모든 sub-segment
+    가 동일 EdgeId 매핑 — LOCKED #15 ADR-037 P22.5 owner-ID uniformity).
+  * `web/e2e/adr-092-pushpull-circle-rim.spec.ts` (신규) — Real Chromium
+    2 specs:
+    - `top rim has Arc curves after Push-Pull on closed-curve Circle`:
+      drawCircleAsCurve (closed-curve mode) → createSolidExtrude → edgeMap
+      group by EdgeId → multi-segment edges ≥ 16 검증 (2N=2*8 minimum
+      for radius=5).
+    - `Arc-attached top edges produce visibly smoother polyline than
+      straight lines`: avgSegPerCurveEdge > 1 검증 (Arc tessellation
+      sampling 동작 확인).
+- **회귀**:
+  * Playwright 21 → 23 (+2). C-δ 2 specs 모두 PASS in real Chromium.
+  * axia-geo 1207 → 1207 unchanged (render path 변경은 기존 회귀에
+    영향 0 — 자세한 회귀 자산 보존).
+- **사용자 결과 검증 path**:
+  - 빌드: `npm run build:wasm` + `npx vite build` → production-like 번들에
+    C-β + render path 정정 모두 포함.
+  - 시연: DrawCircle (closed-curve mode) → PushPull → top rim 매끈 ring
+    visible. ADR-090 §6 Path B trigger 매트릭스 재평가 anchor.
+- **누적 회귀** (C-α ~ C-δ): axia-geo +7, Playwright +2 = **+9**.
+  절대 #[ignore] 금지 9/9 준수.
+
+### C-ε (예정 — closure)
+LOCKED #35 amendment + ADR-090 §6 trigger 갱신 + 회고 commit.
