@@ -1566,10 +1566,51 @@ audit + Snapshot version handshake 강화. Path B pre-trigger 준비."
 - **N-μ-2** SNAPSHOT_VERSION bump (V3) — Path B trigger 시
 - **N-μ-3** 외부 .axia 코퍼스 회귀 — 사용자 제공 시 추가
 
-### A-μ-α (본 commit)
+### A-μ-α (commit `53601d6`)
 - **사용자 결재**: 2026-05-08, "🅰+🅲 진입 승인".
 - **변경**: 본 §D `A-μ-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-μ-β/γ (commit `84ffab0`, combined)
+
+**🅲 Version handshake 강화**:
+- `import_versioned_snapshot` 의 `v > SNAPSHOT_VERSION` 분기 추가 —
+  명시적 forward-compat reject (silent garbage 차단). 사용자 facing
+  message: "newer than supported, upgrade required".
+- `analyze_snapshot` 신규 — read-only inspection. version + section
+  presence flags 반환. legacy file detection 가능.
+- `SnapshotInfo` / `SnapshotSections` struct 신규 — version /
+  has_magic / 7 sections presence flags / non-fatal error.
+
+**🅰 Legacy file load audit**:
+9 regression tests (synthesized fixtures, programmatic generation):
+- `analyze_full_v2_snapshot` — 현재 build V2 + 7 sections
+- `analyze_legacy_headerless_snapshot` — 헤더 없는 mesh-only
+- `analyze_short_data` — 8 bytes 미만 / truncated
+- `v_too_new_rejected_with_clear_message` — V99 future 거부
+- `corrupt_magic_falls_back_to_legacy` — wrong magic
+- `v2_roundtrip_preserves_shapes_and_groups` — ADR-050
+- `v2_roundtrip_preserves_closed_curve_face` — ADR-089 Circle
+- `v2_roundtrip_preserves_closed_bezier_face` — ADR-089 A-ω Bezier
+- `legacy_v1_synthesized_loads` — V1 mesh-only legacy
+
+**회귀**: axia-core 200 → 209 (+9). 절대 #[ignore] 금지 9/9 준수.
+
+**ADR-089 누적 트랙 (A-α ~ A-μ)** — Path B pre-trigger 준비 완료:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-Β (closed-curve 시민권 4 type) | +66 axia-geo | Circle / Bezier / BSpline / NURBS first-class |
+| A-λ + A-π + A-ψ (UI 분기) | +10 vitest | DrawCircle/Bezier 자동 분기 |
+| **A-μ (snapshot version + audit)** | **+9 axia-core** | **legacy compat + forward-compat reject** |
+| **누적** | **axia-geo +66 / axia-core +9 / vitest +10 = +85** | **production safety + Path B 준비** |
+
+### A-μ-δ (본 commit) — closure
+- **변경**: 본 §D `A-μ-β/γ` closure entry.
+- **회귀**: +0 (closure docs).
+- **다음 step**: A-μ track closure 완료. Path B (ADR-090) 진입 시
+  V3 schema bump 자연 가능 (forward-compat 인프라 활성). 후속 후보:
+  LOCKED #35 갱신 (A-μ 추가), 다른 우선순위 ADR 트랙.
 
 ---
 
