@@ -98,6 +98,17 @@ async function main() {
     if (bridge.isReady()) bridge.setAutoIntersectOnDraw(v);
   });
 
+  // ADR-094 B-θ post-retrospective default ON — Cylinder Path B 활성
+  // (산업 CAD parity, 3 face / 2 edge / 2 vert, ~95% 메모리 절감).
+  // ADR-049 P-5e-α 답습 — engine default OFF + production default ON
+  // via localStorage. explicit OFF preference 보존.
+  const { getCylinderPathBMode, onCylinderPathBModeChange } =
+    await import('./tools/CylinderPathBSettings');
+  if (bridge.isReady()) bridge.setCylinderPathBDefault(getCylinderPathBMode());
+  onCylinderPathBModeChange((on) => {
+    if (bridge.isReady()) bridge.setCylinderPathBDefault(on);
+  });
+
   // Note: WASM is optional for basic Three.js rendering (e.g., Sphere tool)
   // Continue even if WASM fails to initialize
   if (!bridge.isReady()) {

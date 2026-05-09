@@ -1429,6 +1429,30 @@
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
 ### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Δ closure, 2026-05-09)
+- **ADR-094 amendment + default ON (2026-05-09)** — Path B-full
+  Refined Plan closure + production default activation. 산업 CAD parity
+  (3 face / 2 edge / 2 vert) + 95%+ 메모리 절감 즉시 활성:
+  * **Default ON 결재** (B-θ retrospective 7/7 PASS 후): main.ts init
+    가 CylinderPathBSettings → bridge.setCylinderPathBDefault 자동
+    활성화. 신규 사용자 자동 Path B, 기존 explicit OFF preference
+    (localStorage `axia:cylinder-path-b-mode = 'false'`) 보존.
+    ADR-049 P-5e-α / ADR-087 K-ε hotfix 답습.
+  * **Architectural anchor**: ADR-049 P-5e-α 의 두 layer 분리 (engine
+    default OFF + production default ON via localStorage) 가 ADR-094
+    에서도 정합 — engine 회귀 자산 245+ 보존 + 사용자 즉시 Path B 사용.
+  * **회귀** (default ON 추가): vitest CylinderPathBSettings.test 5
+    (default 갱신 + 토글 패턴 정정) + Playwright +2 (default ON
+    activation + explicit OFF preservation). 합계 **+7** (B-θ retrospective
+    +7 + default ON +7 = +14 누적).
+  * **사용자 시연 sweep** (B-θ retrospective 7/7 PASS):
+    - Scenario 1: Path B 활성 + 3/2/2 anchor
+    - Scenario 2: Selection (annulus group of 1, walk = self)
+    - Scenario 3: Undo×2 → baseline 복원
+    - Scenario 4: Snapshot round-trip (Mesh-level maps 보존)
+    - Scenario 5: Path A ↔ Path B toggle integrity
+    - Scenario 6: Visual capture (overall + rim zoom)
+    - Scenario 7: 5× cylinders linear scaling (15/10/10)
+
 - **ADR-094 amendment (2026-05-09)** — Path B-full Refined Plan
   closure (multi-week atomic architectural track):
   * **사용자 시연 결재 (2026-05-09)**: ADR-093 closure 후 memory /

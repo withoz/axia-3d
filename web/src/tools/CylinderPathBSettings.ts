@@ -6,9 +6,11 @@
  * 메모리 절감) 또는 legacy Path A (25 face polygon strip) 중 어느
  * 경로를 사용할지.
  *
- * **Default OFF** (B-η — 사용자 시연 게이트 통과 전): 기존 사용자
- * 워크플로우 보존, 회귀 risk 격리. 사용자가 explicit ON 으로 활성화
- * 시 Path B 사용.
+ * **Default ON** (B-θ user retrospective 7/7 PASS 후, 2026-05-09):
+ * 산업 CAD parity (3 face / 2 edge / 2 vert) + 95%+ 메모리 절감 즉시
+ * 활성. 신규 사용자 자동 Path B, 기존 explicit OFF preference
+ * (localStorage `'false'`) 보존. ADR-049 P-5e-α / ADR-087 K-ε hotfix
+ * 답습 패턴.
  *
  * Pattern reference: DrawCurveSettings (ADR-089 A-λ-β/π-β) — localStorage
  * 에 저장되어 세션 간 유지. ADR-049 P-5e-α 답습.
@@ -24,10 +26,10 @@
 
 const STORAGE_KEY = 'axia:cylinder-path-b-mode';
 
-let current = false; // B-η: default OFF (시연 게이트 통과 전)
+let current = true; // B-θ post-retrospective: default ON
 try {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved === 'true') current = true; // explicit ON preference
+  if (saved === 'false') current = false; // explicit OFF preference 보존
 } catch { /* private mode */ }
 
 const listeners = new Set<(enabled: boolean) => void>();
