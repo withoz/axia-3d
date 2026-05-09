@@ -122,6 +122,24 @@ export interface OrphanRecoveryResult {
   error: string | null;
 }
 
+// ═══ ADR-097 T-δ Topology Damage / Auto-Recovery types ═══════════════
+export type TopologyDamageKind =
+  | { kind: 'BoundaryEdge'; edge_id: number; incident_face: number }
+  | { kind: 'NonManifold'; edge_id: number; face_count: number }
+  | { kind: 'Degenerate'; face_id: number; reason: string }
+  | { kind: 'Orphan'; face_id: number };
+
+export interface TopologyDamageReport {
+  damages: TopologyDamageKind[];
+  checkedFaces: number;
+  checkedEdges: number;
+}
+
+export type RecoveryOutcome =
+  | { kind: 'NoOp' }
+  | { kind: 'Recovered'; fixesApplied: number; initialDamages: number }
+  | { kind: 'PartialFailure'; fixesApplied: number; remainingCount: number };
+
 export interface MeshBuffers {
   positions: Float32Array;
   positionsF64?: Float64Array;  // CAD-grade f64 positions (same layout as positions)
@@ -440,6 +458,9 @@ type AxiaEngineExtended = AxiaEngine & {
   getFaceSurfaceOwnerId?(faceId: number): number;
   setCylinderPathBDefault?(on: boolean): void;
   getCylinderPathBDefault?(): boolean;
+  // ADR-097 T-δ — Topology damage detection + recovery
+  detectTopologyDamage?(): string;
+  attemptAutoRecovery?(): string;
   // ADR-095 Phase 3-γ — Reference citizenship
   createReferenceConstructionLine?(name: string, edgeIds: Uint32Array): number;
   createReferenceImportedMesh?(name: string, faceIds: Uint32Array, sourcePath?: string): number;
@@ -1269,6 +1290,64 @@ export class WasmBridge {
     const fn = this.engine.getCylinderPathBDefault;
     if (!fn) return false;
     return fn.call(this.engine);
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-097 T-δ — Topology damage detection + recovery
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-097 T-γ — Detect topology damage. Parses JSON from engine.
+   * Returns null on missing endpoint (graceful — legacy build).
+   */
+  detectTopologyDamage(): TopologyDamageReport | null {
+    if (!this.engine || !this.engine.detectTopologyDamage) return null;
+    const json = this.engine.detectTopologyDamage();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any;
+      return {
+        damages: parsed.damages,
+        checkedFaces: parsed.checkedFaces,
+        checkedEdges: parsed.checkedEdges,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-097 T-γ — Attempt auto-recovery dispatcher. Returns parsed
+   * RecoveryOutcome union. null on missing endpoint.
+   */
+  attemptAutoRecovery(): RecoveryOutcome | null {
+    if (!this.engine || !this.engine.attemptAutoRecovery) return null;
+    this.markDirty();
+    const json = this.engine.attemptAutoRecovery();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any;
+      switch (parsed.kind) {
+        case 'NoOp':
+          return { kind: 'NoOp' };
+        case 'Recovered':
+          return {
+            kind: 'Recovered',
+            fixesApplied: parsed.fixesApplied,
+            initialDamages: parsed.initialDamages,
+          };
+        case 'PartialFailure':
+          return {
+            kind: 'PartialFailure',
+            fixesApplied: parsed.fixesApplied,
+            remainingCount: parsed.remainingCount,
+          };
+        default:
+          return null;
+      }
+    } catch {
+      return null;
+    }
   }
 
   // ════════════════════════════════════════════════════════════════════

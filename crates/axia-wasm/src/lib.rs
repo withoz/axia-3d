@@ -1359,6 +1359,95 @@ impl AxiaEngine {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ADR-097 T-δ — Topology damage detection + recovery WASM API
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-097 T-γ — Detect topology damage (Phase 4).
+    ///
+    /// Scene-level wrapper (Mesh detect + Orphan). Returns JSON:
+    /// `{ "damages": [...], "checkedFaces": N, "checkedEdges": N }`
+    ///
+    /// damages 의 each item: `{ "kind": "BoundaryEdge|NonManifold|
+    /// Degenerate|Orphan", ...kind-specific fields }`.
+    #[wasm_bindgen(js_name = "detectTopologyDamage")]
+    pub fn detect_topology_damage(&self) -> String {
+        use axia_geo::TopologyDamageKind;
+        let report = self.scene.detect_topology_damage();
+        let mut json = String::with_capacity(256);
+        json.push_str("{\"damages\":[");
+        let mut first = true;
+        for d in &report.damages {
+            if !first { json.push(','); }
+            first = false;
+            match d {
+                TopologyDamageKind::BoundaryEdge { edge_id, incident_face } => {
+                    json.push_str(&format!(
+                        "{{\"kind\":\"BoundaryEdge\",\"edgeId\":{},\"incidentFace\":{}}}",
+                        edge_id.raw(), incident_face.raw(),
+                    ));
+                }
+                TopologyDamageKind::NonManifold { edge_id, face_count } => {
+                    json.push_str(&format!(
+                        "{{\"kind\":\"NonManifold\",\"edgeId\":{},\"faceCount\":{}}}",
+                        edge_id.raw(), face_count,
+                    ));
+                }
+                TopologyDamageKind::Degenerate { face_id, reason } => {
+                    json.push_str(&format!(
+                        "{{\"kind\":\"Degenerate\",\"faceId\":{},\"reason\":\"{}\"}}",
+                        face_id.raw(), reason,
+                    ));
+                }
+                TopologyDamageKind::Orphan { face_id } => {
+                    json.push_str(&format!(
+                        "{{\"kind\":\"Orphan\",\"faceId\":{}}}",
+                        face_id.raw(),
+                    ));
+                }
+            }
+        }
+        json.push_str(&format!(
+            "],\"checkedFaces\":{},\"checkedEdges\":{}}}",
+            report.checked_faces, report.checked_edges,
+        ));
+        json
+    }
+
+    /// ADR-097 T-γ — Auto-recovery dispatcher (Phase 4).
+    ///
+    /// Returns JSON: `{ "kind": "NoOp|Recovered|PartialFailure",
+    /// ...kind-specific fields }`.
+    /// - NoOp: `{"kind":"NoOp"}`
+    /// - Recovered: `{"kind":"Recovered","fixesApplied":N,"initialDamages":N}`
+    /// - PartialFailure: `{"kind":"PartialFailure","fixesApplied":N,
+    ///   "remainingCount":N}`
+    ///
+    /// Caller (TS bridge / Orchestrator) 가 결과 기반으로 사용자
+    /// 다이얼로그 escalation 판단.
+    #[wasm_bindgen(js_name = "attemptAutoRecovery")]
+    pub fn attempt_auto_recovery(&mut self) -> String {
+        use axia_geo::RecoveryOutcome;
+        let outcome = self.scene.mesh.attempt_auto_recovery();
+        match outcome {
+            RecoveryOutcome::NoOp => {
+                "{\"kind\":\"NoOp\"}".to_string()
+            }
+            RecoveryOutcome::Recovered { fixes_applied, initial_damages } => {
+                format!(
+                    "{{\"kind\":\"Recovered\",\"fixesApplied\":{},\"initialDamages\":{}}}",
+                    fixes_applied, initial_damages,
+                )
+            }
+            RecoveryOutcome::PartialFailure { fixes_applied, remaining } => {
+                format!(
+                    "{{\"kind\":\"PartialFailure\",\"fixesApplied\":{},\"remainingCount\":{}}}",
+                    fixes_applied, remaining.damages.len(),
+                )
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM API
     //
     // 3 categories: ConstructionLine / ImportedMesh / PointCloud.

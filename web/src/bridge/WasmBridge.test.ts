@@ -2009,4 +2009,95 @@ describe('WasmBridge', () => {
       expect(newFn).not.toHaveBeenCalled();
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // ADR-097 T-δ — Topology damage detection + auto-recovery
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('ADR-097 T-δ topology damage / auto-recovery', () => {
+    let bridge: WasmBridge;
+
+    beforeEach(() => {
+      bridge = new WasmBridge();
+    });
+
+    it('detectTopologyDamage parses JSON report (clean scene)', () => {
+      const fn = vi.fn(() => '{"damages":[],"checkedFaces":3,"checkedEdges":12}');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { detectTopologyDamage: fn };
+      const r = bridge.detectTopologyDamage();
+      expect(r).toEqual({ damages: [], checkedFaces: 3, checkedEdges: 12 });
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('detectTopologyDamage parses 4 damage variants', () => {
+      const json = JSON.stringify({
+        damages: [
+          { kind: 'BoundaryEdge', edge_id: 1, incident_face: 7 },
+          { kind: 'NonManifold', edge_id: 2, face_count: 3 },
+          { kind: 'Degenerate', face_id: 8, reason: 'zero_normal' },
+          { kind: 'Orphan', face_id: 9 },
+        ],
+        checkedFaces: 5,
+        checkedEdges: 20,
+      });
+      const fn = vi.fn(() => json);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { detectTopologyDamage: fn };
+      const r = bridge.detectTopologyDamage();
+      expect(r?.damages).toHaveLength(4);
+      expect(r?.damages[0]).toMatchObject({ kind: 'BoundaryEdge', edge_id: 1 });
+      expect(r?.damages[3]).toMatchObject({ kind: 'Orphan', face_id: 9 });
+    });
+
+    it('detectTopologyDamage returns null when endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.detectTopologyDamage()).toBeNull();
+    });
+
+    it('attemptAutoRecovery parses NoOp variant', () => {
+      const fn = vi.fn(() => '{"kind":"NoOp"}');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptAutoRecovery: fn };
+      expect(bridge.attemptAutoRecovery()).toEqual({ kind: 'NoOp' });
+    });
+
+    it('attemptAutoRecovery parses Recovered variant', () => {
+      const fn = vi.fn(() =>
+        '{"kind":"Recovered","fixesApplied":4,"initialDamages":4}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptAutoRecovery: fn };
+      expect(bridge.attemptAutoRecovery()).toEqual({
+        kind: 'Recovered', fixesApplied: 4, initialDamages: 4,
+      });
+    });
+
+    it('attemptAutoRecovery parses PartialFailure variant', () => {
+      const fn = vi.fn(() =>
+        '{"kind":"PartialFailure","fixesApplied":2,"remainingCount":3}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptAutoRecovery: fn };
+      expect(bridge.attemptAutoRecovery()).toEqual({
+        kind: 'PartialFailure', fixesApplied: 2, remainingCount: 3,
+      });
+    });
+
+    it('attemptAutoRecovery markDirty triggers cache invalidation', () => {
+      const fn = vi.fn(() => '{"kind":"NoOp"}');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptAutoRecovery: fn };
+      const spy = vi.spyOn(bridge, 'markDirty');
+      bridge.attemptAutoRecovery();
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('attemptAutoRecovery returns null when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.attemptAutoRecovery()).toBeNull();
+    });
+  });
 });

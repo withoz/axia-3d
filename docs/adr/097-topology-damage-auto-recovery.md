@@ -260,5 +260,51 @@ Mesh::attempt_auto_recovery(&mut self) -> RecoveryOutcome
 - **사후 정정**: T-β `summary_format` test 가 4-tuple 변경 후
   "4 boundary edge" → "4 boundary" 로 갱신 (변경된 wording 정합).
 
-### T-δ ~ T-ζ (예정)
-별도 sub-step 결재 시 commit 진행.
+### T-δ (본 commit)
+- **commit**: 본 commit (UI orchestration helper)
+- **WASM exports**:
+  * `detectTopologyDamage() -> String` (JSON `{damages, checkedFaces,
+    checkedEdges}`)
+  * `attemptAutoRecovery() -> String` (JSON union `NoOp` /
+    `Recovered` / `PartialFailure`)
+  * `tests/export_baseline.txt` 갱신 (additive — `attemptAutoRecovery`
+    + `detectTopologyDamage`)
+- **TS bridge** (`web/src/bridge/WasmBridge.ts`):
+  * `TopologyDamageKind` discriminated union (4 variants)
+  * `TopologyDamageReport` + `RecoveryOutcome` types exported
+  * Typed wrappers: `detectTopologyDamage()` / `attemptAutoRecovery()`
+    — graceful null on missing endpoint, markDirty on recovery
+- **UI helpers** (`web/src/citizenship/`):
+  * `TopologyRecoveryDialog.ts` — 3-option modal ([Undo] / [강등]
+    / [수동수정]), backdrop + ESC dismiss, single-instance guard,
+    `enableDemote` flag
+  * `TopologyRecoveryOrchestrator.ts` — full Phase 4 flow:
+    detect → attemptRecover → escalate. `humanizeDamageReport`
+    SSOT for Korean wording (ADR-095 §E L3 답습). `OrchestratorResult`
+    surfaces 5 statuses + telemetry outcome
+- **회귀 (Vitest, jsdom)**:
+  * `WasmBridge.test.ts` — 8 tests (4 detect + 4 recovery variants
+    + markDirty + missing endpoints)
+  * `TopologyRecoveryDialog.test.ts` — 9 tests (render / 3 button
+    choices / ESC / backdrop / cleanup / single-instance)
+  * `TopologyRecoveryOrchestrator.test.ts` — 10 tests (humanize 3
+    + 7 flow paths: unavailable / clean / recovered / partial+undo
+    / partial+manual / demote+resolver / demote without resolver)
+  * 합계 **+27**, 절대 #[ignore] 금지 27/27 준수.
+- **Cargo**: axia-wasm 42/42 PASS (baseline additive guard PASS).
+  axia-geo 1256 / axia-core 238 unchanged.
+- **누적** (T-α ~ T-δ): axia-geo +11, axia-core +4, axia-wasm 0 net
+  (additive exports), vitest +27 = **+42**, 절대 #[ignore] 금지
+  42/42 준수.
+- **Lock-ins applied**:
+  * T-A=a — orchestrator SSOT 진입점
+  * T-G=a — escalation only on PartialFailure
+  * T-H=b — humanize at orchestrator boundary
+  * ADR-091 §E L4 — UI orchestration 분리 (Dialog / Orchestrator
+    별도 모듈)
+  * ADR-095 §E L3 — `humanizeDamageReport` 한국어 wording SSOT
+
+### T-ε ~ T-ζ (예정)
+별도 sub-step 결재 시 commit 진행. T-ε 는 Settings flag
+(`axia:auto-topology-recovery`) + main.ts wiring. T-ζ 는 Real
+Chromium 시연 + closure.

@@ -639,6 +639,39 @@ fn shape_p4_mutators_use_transactions_readonly_skip() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-097 T-δ — Topology damage detection + recovery WASM endpoints.
+// ════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn adr097_t_delta_endpoints_wired() {
+    let l = lib_src();
+    for (rust_name, js_name) in [
+        ("pub fn detect_topology_damage", "detectTopologyDamage"),
+        ("pub fn attempt_auto_recovery",  "attemptAutoRecovery"),
+    ] {
+        assert!(l.contains(rust_name),
+            "ADR-097 T-δ: missing Rust function {}", rust_name);
+        let attr = format!("js_name = \"{}\"", js_name);
+        assert!(l.contains(&attr),
+            "ADR-097 T-δ: missing js_name attr {}", attr);
+    }
+}
+
+#[test]
+fn adr097_t_delta_signatures_return_string_json() {
+    let l = lib_src();
+    for fn_name in [
+        "pub fn detect_topology_damage",
+        "pub fn attempt_auto_recovery",
+    ] {
+        let idx = l.find(fn_name).expect(fn_name);
+        let body = char_safe_slice(&l, idx, 800);
+        assert!(body.contains("-> String"),
+            "ADR-097 T-δ: {} must return String (JSON)", fn_name);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM endpoints.
 // ════════════════════════════════════════════════════════════════════════
 
