@@ -6627,6 +6627,96 @@ impl Mesh {
         }
     }
 
+    /// ADR-097 T-γ — Topology damage 자동 recovery dispatcher.
+    ///
+    /// **Architectural 본질**: 새 알고리즘 발명 0 — 기존 자산
+    /// (`repair_non_manifold_edges_geometric` / face deactivation)
+    /// 의 atomic fixed-point orchestration.
+    ///
+    /// **Strategy**:
+    /// 1. `detect_topology_damage()` 호출 → damage 0 면 NoOp 반환
+    /// 2. fixed-point loop (max 3 iter):
+    ///    - NonManifold → `repair_non_manifold_edges_geometric` 호출
+    ///    - Degenerate → face soft-delete (`face.set_active(false)`)
+    ///    - BoundaryEdge → skip (auto-fix 미시도, 다이얼로그 escalation)
+    ///    - Orphan → Mesh-level 검출 안 됨 (Scene wrapper 책임)
+    /// 3. re-detect; damage 0 면 Recovered, 잔존 시 PartialFailure
+    ///
+    /// **Atomic 보장**: caller (Scene / TransactionManager) 가
+    /// transaction wrap 책임. 본 메서드 자체는 not all-or-nothing —
+    /// 부분 fix 도 가능 (PartialFailure 시 일부 fixes_applied > 0).
+    ///
+    /// **사건별 dispatch policy** (ADR-097 §2.2 T-D):
+    /// - BoundaryEdge: 사용자 의도 모호 → escalation (Sheet 가능성).
+    /// - NonManifold: always damage → repair 시도.
+    /// - Degenerate: always damage → deactivate.
+    /// - Orphan: Scene wrapper 에서 추가 dispatch.
+    pub fn attempt_auto_recovery(&mut self) -> crate::topology_damage::RecoveryOutcome {
+        use crate::topology_damage::{RecoveryOutcome, TopologyDamageKind};
+
+        let initial_report = self.detect_topology_damage();
+        if initial_report.is_clean() {
+            return RecoveryOutcome::NoOp;
+        }
+        let initial_damages = initial_report.damages.len();
+
+        const MAX_ITER: usize = 3;
+        let mut fixes_applied: usize = 0;
+
+        for _iter in 0..MAX_ITER {
+            let report = self.detect_topology_damage();
+            if report.is_clean() {
+                return RecoveryOutcome::Recovered { fixes_applied, initial_damages };
+            }
+
+            let mut any_fix_this_iter = false;
+
+            // Pass 1: Degenerate face deactivation (가장 안전 — face
+            // 단독 변경, edge / topology 영향 0).
+            let degenerate_faces: Vec<crate::FaceId> = report.damages.iter()
+                .filter_map(|d| match d {
+                    TopologyDamageKind::Degenerate { face_id, .. } => Some(*face_id),
+                    _ => None,
+                })
+                .collect();
+            for fid in degenerate_faces {
+                if let Some(face) = self.faces.get_mut(fid) {
+                    if face.is_active() {
+                        face.set_active(false);
+                        fixes_applied += 1;
+                        any_fix_this_iter = true;
+                    }
+                }
+            }
+
+            // Pass 2: NonManifold edge repair (geometric strategy).
+            // 한 fixed-point iter 에서 시도하면 다음 iter 재 detection.
+            let has_non_manifold = report.damages.iter()
+                .any(|d| matches!(d, TopologyDamageKind::NonManifold { .. }));
+            if has_non_manifold {
+                let repair_report = self.repair_non_manifold_edges_geometric();
+                if repair_report.edges_repaired > 0 {
+                    fixes_applied += repair_report.edges_repaired;
+                    any_fix_this_iter = true;
+                }
+            }
+
+            // BoundaryEdge / Orphan: 본 dispatcher 미시도 (escalation).
+            if !any_fix_this_iter {
+                // No progress — break to avoid infinite loop.
+                break;
+            }
+        }
+
+        // Final report.
+        let remaining = self.detect_topology_damage();
+        if remaining.is_clean() {
+            RecoveryOutcome::Recovered { fixes_applied, initial_damages }
+        } else {
+            RecoveryOutcome::PartialFailure { fixes_applied, remaining }
+        }
+    }
+
     /// 전체 mesh의 face orientation invariants 검증 결과.
     ///
     /// 위반 사항이 있으면 `violations`에 Human-readable 메시지 열거.
@@ -12260,7 +12350,7 @@ mod tests {
         let mut mesh = Mesh::new();
         let _f = build_quad_face(&mut mesh);
         let report = mesh.detect_topology_damage();
-        let (be, nm, dg) = report.count_by_kind();
+        let (be, nm, dg, _orph) = report.count_by_kind();
         assert_eq!(be, 4, "single quad → 4 boundary edges");
         assert_eq!(nm, 0);
         assert_eq!(dg, 0);
@@ -12283,7 +12373,7 @@ mod tests {
         let _f2 = mesh.add_face(&[v1, v4, v5, v2], MaterialId::new(0)).unwrap();
 
         let report = mesh.detect_topology_damage();
-        let (be, nm, dg) = report.count_by_kind();
+        let (be, nm, dg, _orph) = report.count_by_kind();
         // 7 edges total. 1 shared (manifold), 6 boundary. So 6 BE damages.
         assert_eq!(be, 6, "two-face strip → 6 boundary edges, got {}", be);
         assert_eq!(nm, 0, "no non-manifold");
@@ -12298,7 +12388,7 @@ mod tests {
         let report = mesh.detect_topology_damage();
         let s = report.summary();
         assert!(s.contains("damages"));
-        assert!(s.contains("4 boundary edge"));
+        assert!(s.contains("4 boundary"));
     }
 
     #[test]
@@ -12329,6 +12419,78 @@ mod tests {
         assert_eq!(be.label(), "BoundaryEdge");
         assert_eq!(nm.label(), "NonManifold");
         assert_eq!(dg.label(), "Degenerate");
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-097 T-γ — Recovery dispatcher (Mesh-level)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr097_t_gamma_clean_mesh_returns_noop() {
+        use crate::topology_damage::RecoveryOutcome;
+        let mut mesh = Mesh::new();
+        let outcome = mesh.attempt_auto_recovery();
+        assert!(matches!(outcome, RecoveryOutcome::NoOp),
+            "clean mesh → NoOp, got {:?}", outcome.label());
+        assert!(outcome.is_success());
+    }
+
+    #[test]
+    fn adr097_t_gamma_boundary_edge_only_partial_failure() {
+        // Single quad face → 4 boundary edges. T-γ 가 BoundaryEdge auto-fix
+        // 미시도 → PartialFailure (escalation 대상).
+        use crate::topology_damage::RecoveryOutcome;
+        let mut mesh = Mesh::new();
+        let _ = build_quad_face(&mut mesh);
+        let outcome = mesh.attempt_auto_recovery();
+        match outcome {
+            RecoveryOutcome::PartialFailure { fixes_applied, remaining } => {
+                assert_eq!(fixes_applied, 0,
+                    "BoundaryEdge auto-fix 미시도 — fixes_applied 0");
+                let (be, _, _, _) = remaining.count_by_kind();
+                assert_eq!(be, 4, "4 boundary edges 잔존");
+            }
+            other => panic!("expected PartialFailure, got {:?}", other.label()),
+        }
+    }
+
+    #[test]
+    fn adr097_t_gamma_recovery_outcome_labels_stable() {
+        use crate::topology_damage::{RecoveryOutcome, TopologyDamageReport};
+        let no_op = RecoveryOutcome::NoOp;
+        let recovered = RecoveryOutcome::Recovered {
+            fixes_applied: 1, initial_damages: 1,
+        };
+        let partial = RecoveryOutcome::PartialFailure {
+            fixes_applied: 0,
+            remaining: TopologyDamageReport {
+                damages: vec![], checked_faces: 0, checked_edges: 0,
+            },
+        };
+        assert_eq!(no_op.label(), "NoOp");
+        assert_eq!(recovered.label(), "Recovered");
+        assert_eq!(partial.label(), "PartialFailure");
+        assert!(no_op.is_success());
+        assert!(recovered.is_success());
+        assert!(!partial.is_success());
+    }
+
+    #[test]
+    fn adr097_t_gamma_recovery_progress_tracks_fixes_applied() {
+        // Recovery 가 진행 안 되면 break (max iter 무한 루프 방지).
+        // Single quad → BoundaryEdge only → 0 progress → PartialFailure
+        // with fixes_applied=0.
+        use crate::topology_damage::RecoveryOutcome;
+        let mut mesh = Mesh::new();
+        let _ = build_quad_face(&mut mesh);
+        let outcome = mesh.attempt_auto_recovery();
+        match outcome {
+            RecoveryOutcome::PartialFailure { fixes_applied, .. } => {
+                assert_eq!(fixes_applied, 0,
+                    "no progress → break with 0 fixes");
+            }
+            other => panic!("expected PartialFailure, got {:?}", other.label()),
+        }
     }
 
     #[test]

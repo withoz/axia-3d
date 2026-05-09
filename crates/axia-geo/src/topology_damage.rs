@@ -59,8 +59,18 @@ pub enum TopologyDamageKind {
         face_id: FaceId,
         reason: &'static str,
     },
-    // 사건 4 (Orphan) — Scene context (face_to_xia / face_to_shape /
-    // face_to_reference) 필요. T-γ Scene-level wrapper 에서 추가.
+
+    /// **사건 4 (orphan face)**: face 가 active 이지만 어느 시민권
+    /// 시민에도 등록되지 않음 (face_to_xia / face_to_shape /
+    /// face_to_reference 모두 부재).
+    ///
+    /// 출처: Scene-level reverse 인덱스 검사 (T-γ Scene wrapper).
+    /// Mesh-level `detect_topology_damage` 는 본 variant 미생성.
+    /// Recovery 자산 (T-γ): Scene::orphan_recovery 또는 face 의 명시
+    /// 시민권 등록 (사용자 다이얼로그 prompt).
+    Orphan {
+        face_id: FaceId,
+    },
 }
 
 impl TopologyDamageKind {
@@ -70,6 +80,50 @@ impl TopologyDamageKind {
             Self::BoundaryEdge { .. } => "BoundaryEdge",
             Self::NonManifold { .. } => "NonManifold",
             Self::Degenerate { .. } => "Degenerate",
+            Self::Orphan { .. } => "Orphan",
+        }
+    }
+}
+
+/// ADR-097 T-γ — Recovery 시도의 결과. dispatcher 가 호출자에게 반환.
+///
+/// `Recovered`: 모든 damage atomic recovery 성공.
+/// `PartialFailure`: 일부 damage 잔존 — 사용자 다이얼로그 escalation
+/// 필요 ([Undo] / [강등] / [수동수정]).
+/// `NoOp`: 처음부터 damage 0 — recovery 미시도.
+#[derive(Debug, Clone)]
+pub enum RecoveryOutcome {
+    /// 처음부터 damage 0 — recovery 미시도.
+    NoOp,
+    /// 모든 damage 자동 recovery 성공.
+    Recovered {
+        /// 적용된 fix 수 (telemetry).
+        fixes_applied: usize,
+        /// 처음 detected 한 damage 수 (telemetry).
+        initial_damages: usize,
+    },
+    /// 일부 damage 잔존 — 사용자 다이얼로그 escalation 필요.
+    PartialFailure {
+        /// 적용된 fix 수.
+        fixes_applied: usize,
+        /// 잔존 damage 의 typed report.
+        remaining: TopologyDamageReport,
+    },
+}
+
+impl RecoveryOutcome {
+    /// Recovery 성공 여부 (NoOp 또는 Recovered).
+    #[inline]
+    pub fn is_success(&self) -> bool {
+        matches!(self, Self::NoOp | Self::Recovered { .. })
+    }
+
+    /// Stable label for telemetry.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::NoOp => "NoOp",
+            Self::Recovered { .. } => "Recovered",
+            Self::PartialFailure { .. } => "PartialFailure",
         }
     }
 }
@@ -93,19 +147,22 @@ impl TopologyDamageReport {
         self.damages.is_empty()
     }
 
-    /// Damage 의 분류별 count (telemetry).
-    pub fn count_by_kind(&self) -> (usize, usize, usize) {
+    /// Damage 의 분류별 count (telemetry). Returns
+    /// (boundary_edge, non_manifold, degenerate, orphan).
+    pub fn count_by_kind(&self) -> (usize, usize, usize, usize) {
         let mut be = 0;
         let mut nm = 0;
         let mut dg = 0;
+        let mut orph = 0;
         for d in &self.damages {
             match d {
                 TopologyDamageKind::BoundaryEdge { .. } => be += 1,
                 TopologyDamageKind::NonManifold { .. } => nm += 1,
                 TopologyDamageKind::Degenerate { .. } => dg += 1,
+                TopologyDamageKind::Orphan { .. } => orph += 1,
             }
         }
-        (be, nm, dg)
+        (be, nm, dg, orph)
     }
 
     /// Human-readable 요약 (사용자 facing 다이얼로그 prefix 활용).
@@ -116,10 +173,10 @@ impl TopologyDamageReport {
                 self.checked_faces, self.checked_edges,
             )
         } else {
-            let (be, nm, dg) = self.count_by_kind();
+            let (be, nm, dg, orph) = self.count_by_kind();
             format!(
-                "✗ {} damages: {} boundary edge / {} non-manifold / {} degenerate",
-                self.damages.len(), be, nm, dg,
+                "✗ {} damages: {} boundary / {} non-manifold / {} degenerate / {} orphan",
+                self.damages.len(), be, nm, dg, orph,
             )
         }
     }

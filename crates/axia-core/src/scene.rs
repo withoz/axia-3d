@@ -649,6 +649,31 @@ impl Scene {
         self.rebuild_reference_reverse_indexes();
     }
 
+    /// ADR-097 T-γ — Scene-level topology damage detection wrapper.
+    ///
+    /// Mesh::detect_topology_damage 의 결과 (사건 2 + 3) 위에 사건 4
+    /// (Orphan) 를 추가. Three-Layer Citizenship 정합 — face active
+    /// 이지만 face_to_xia / face_to_shape / face_to_reference 모두
+    /// 부재 면 Orphan damage 로 분류.
+    ///
+    /// **Read-only**: Scene state 변경 0.
+    pub fn detect_topology_damage(&self) -> axia_geo::TopologyDamageReport {
+        use axia_geo::TopologyDamageKind;
+        let mut report = self.mesh.detect_topology_damage();
+
+        // Orphan detection — face active + 모든 reverse 인덱스 부재.
+        for (fid, face) in self.mesh.faces.iter() {
+            if !face.is_active() { continue; }
+            let in_xia = self.face_to_xia.contains_key(&fid);
+            let in_shape = self.face_to_shape.contains_key(&fid);
+            let in_reference = self.face_to_reference.contains_key(&fid);
+            if !in_xia && !in_shape && !in_reference {
+                report.damages.push(TopologyDamageKind::Orphan { face_id: fid });
+            }
+        }
+        report
+    }
+
     /// ADR-095 Phase 3-ε — Reverse index rebuild for Reference state.
     /// Called by `restore_scene_snapshot` after section 8 deserializes.
     /// Mirrors `rebuild_face_to_shape_index` pattern (ADR-079 W-1).
@@ -13297,6 +13322,82 @@ mod tests {
         assert_eq!(restored.face_to_reference.get(&face).copied(), Some(id_im));
         assert_eq!(restored.edge_to_reference.get(&e1).copied(), Some(id_cl));
         assert_eq!(restored.vert_to_reference.get(&v_isolated).copied(), Some(id_pc));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // ADR-097 T-γ — Scene-level topology damage detection (orphan)
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr097_t_gamma_scene_clean_passes_through_mesh_report() {
+        // Empty scene — mesh report (clean) 그대로 통과 + orphan 0.
+        let scene = Scene::new();
+        let report = scene.detect_topology_damage();
+        assert!(report.is_clean());
+        let (_, _, _, orph) = report.count_by_kind();
+        assert_eq!(orph, 0);
+    }
+
+    #[test]
+    fn adr097_t_gamma_scene_orphan_face_detected() {
+        // Direct mesh.add_face — face_to_xia / shape / reference 모두 부재
+        // → Orphan damage 검출.
+        use axia_geo::TopologyDamageKind;
+        let mut scene = Scene::new();
+        let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v0, v1, v2, v3], FORM_MATERIAL).unwrap();
+        // No registration — orphan.
+
+        let report = scene.detect_topology_damage();
+        let orph_count = report.damages.iter()
+            .filter(|d| matches!(d, TopologyDamageKind::Orphan { .. }))
+            .count();
+        assert_eq!(orph_count, 1, "1 orphan face detected");
+
+        // Find the orphan damage with matching face_id.
+        let found = report.damages.iter().any(|d| match d {
+            TopologyDamageKind::Orphan { face_id } => *face_id == face,
+            _ => false,
+        });
+        assert!(found, "orphan damage references the unregistered face");
+    }
+
+    #[test]
+    fn adr097_t_gamma_scene_face_owned_by_xia_not_orphan() {
+        // Xia 소유 face → orphan 아님.
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        scene.promote_shape_to_xia(shape_id, MaterialId::new(7)).unwrap();
+        let report = scene.detect_topology_damage();
+        let orph = report.damages.iter()
+            .filter(|d| matches!(d, axia_geo::TopologyDamageKind::Orphan { .. }))
+            .count();
+        assert_eq!(orph, 0, "Xia-owned faces must not be orphans");
+    }
+
+    #[test]
+    fn adr097_t_gamma_scene_face_owned_by_reference_not_orphan() {
+        // Reference 소유 face → orphan 아님.
+        let mut scene = Scene::new();
+        let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v0, v1, v2, v3], FORM_MATERIAL).unwrap();
+        let _ = scene.create_reference(
+            "Ref".into(),
+            crate::ReferenceCategory::ImportedMesh {
+                face_ids: vec![face], source_path: None,
+            },
+        ).unwrap();
+        let report = scene.detect_topology_damage();
+        let orph = report.damages.iter()
+            .filter(|d| matches!(d, axia_geo::TopologyDamageKind::Orphan { .. }))
+            .count();
+        assert_eq!(orph, 0, "Reference-owned faces must not be orphans");
     }
 
     #[test]

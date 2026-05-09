@@ -223,5 +223,42 @@ Mesh::attempt_auto_recovery(&mut self) -> RecoveryOutcome
   edge / HE radial chain 구조만 활용. additive coexist 검증 (1252
   axia-geo tests 전체 PASS, 245+ LOCKED 회귀 자산 영향 0).
 
-### T-γ ~ T-ζ (예정)
+### T-γ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Recovery dispatcher 진입.
+- **변경**:
+  * `crates/axia-geo/src/topology_damage.rs`:
+    - `TopologyDamageKind::Orphan { face_id }` variant 추가 (Scene
+      wrapper 가 채움)
+    - `RecoveryOutcome` enum 신규 (NoOp / Recovered / PartialFailure)
+    - `count_by_kind` → 4-tuple (be, nm, dg, **orph**)
+    - `summary` 갱신 (orphan count 포함)
+  * `crates/axia-geo/src/lib.rs` — `RecoveryOutcome` re-export
+  * `crates/axia-geo/src/mesh.rs::Mesh::attempt_auto_recovery` 신규:
+    - Initial detect → clean 시 NoOp
+    - Fixed-point loop (max 3 iter):
+      * Pass 1: Degenerate face deactivation
+      * Pass 2: NonManifold edge `repair_non_manifold_edges_geometric`
+      * BoundaryEdge / Orphan: skip (escalation)
+    - Final detect → Recovered 또는 PartialFailure (with remaining)
+    - Atomic 보장 — caller (Scene / Transaction) 책임
+  * `crates/axia-core/src/scene.rs::Scene::detect_topology_damage`:
+    - Mesh::detect_topology_damage 결과 + Orphan 추가 (Three-Layer
+      Citizenship — face active + 모든 reverse 인덱스 부재)
+- **회귀** (axia-geo +4, axia-core +4):
+  * **axia-geo 1252 → 1256 (+4)**:
+    - `clean_mesh_returns_noop`
+    - `boundary_edge_only_partial_failure` (BE auto-fix 미시도 검증)
+    - `recovery_outcome_labels_stable` (telemetry)
+    - `recovery_progress_tracks_fixes_applied` (max iter break)
+  * **axia-core 234 → 238 (+4)**:
+    - `scene_clean_passes_through_mesh_report`
+    - `scene_orphan_face_detected` (Three-Layer 정합)
+    - `scene_face_owned_by_xia_not_orphan` (Property)
+    - `scene_face_owned_by_reference_not_orphan` (Reference)
+  * 합계 **+8**, 절대 #[ignore] 금지 8/8 준수.
+- **누적** (T-α ~ T-γ): axia-geo +11, axia-core +4 = **+15**.
+- **사후 정정**: T-β `summary_format` test 가 4-tuple 변경 후
+  "4 boundary edge" → "4 boundary" 로 갱신 (변경된 wording 정합).
+
+### T-δ ~ T-ζ (예정)
 별도 sub-step 결재 시 commit 진행.
