@@ -726,8 +726,10 @@
     * **다음 ADR 가이드**: ADR-050 §E Lessons (Path Z 효율성 / FORM_MATERIAL
       sentinel / replace_last_after_snapshot UX / 명명 정합 / 점진 마이그
       레이션 / 3-layer 봉인) 참조
-  - **Phase 2** (ADR-052 예정): 재질 제거 → Shape 가역 강등 + 5초 알림 +
-    재질 임시 보존 (Q5 사건 1)
+  - **Phase 2** (ADR-091, D-α spec 진행 중 2026-05-09): 재질 제거 →
+    Shape 가역 강등 + 5초 알림 + Undo 영구 history (Q5 사건 1).
+    `Xia.original_shape_id` 추가 → promote→demote→promote 라운드트립
+    ID 보존
   - **Phase 3** (ADR-053 예정): Reference 시민권 분리 (Construction Line /
     Imported Mesh / Point Cloud)
   - **Phase 4** (ADR-054 예정): 위상 손상 자동 복구 + 실패 시 사용자 다이얼로그
