@@ -1055,10 +1055,79 @@ auto-intersect ON 시 face split 으로 1985 face 모두 surface=None**
 - **N-χ-2** Boolean / Push-Pull 의 별도 split site (별도 sub-step
   trigger 시 동일 패턴 답습).
 
-### A-χ-α (본 commit)
+### A-χ-α (commit `29cf2f9`)
 - **사용자 결재**: 2026-05-08, "A-χ 진입로 진입 승인".
 - **변경**: 본 §D `A-χ-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-χ-β (commits `faae3b0` + `b2ac1eb`)
+
+**1차 pass (`faae3b0`)** — 5 face_split sites:
+- `mesh.split_face` (direct DCEL surgery): face_b 새 슬롯에 parent
+  surface clone 부여. face_id 자동 보존.
+- `split_face_by_chain` (B2 mixed-cycle): both sub-faces 에 부여.
+- `split_face_case_b` (Phase G hole-eaten): face_1 + face_2.
+- `split_face_case_c` (Phase G endpoint-on-hole): single new face.
+- `split_face_case_d` (Phase G2 multi-hole): single new face.
+
+**2차 pass (`b2ac1eb`)** — boolean.rs:
+- `split_faces_by_intersections` 의 add_face 후 parent surface
+  clone 부여. **Auto-intersect 의 진짜 hot path 였음** — 1차 pass
+  로는 sphere×sphere intersect 시 2008 faces 가 surface lose 했음.
+
+**Pattern**: capture parent_surface BEFORE remove/add → set on each
+new sub-face. uv_range 풀 surface 보존 (A-ρ/A-φ 가 boundary verts
+로 sub-slice 자동 계산).
+
+**회귀**: axia-geo 1175 → 1178 (+3, 절대 #[ignore] 금지 3/3 준수).
+LOCKED guards (axia-core 200) PASS.
+
+### A-χ-γ (browser real-runtime closure)
+
+**Sphere×Sphere intersect 시연**:
+
+| 항목 | Before A-χ | After A-χ |
+|------|-----------|-----------|
+| Active faces | 2236 | **568** |
+| kind=Sphere | 228 (10%) | **568 (100%)** ✓ |
+| kind=0 (no surface) | 2008 (90%) | **0** ✓ |
+| Edge segments | 266 | **28** (-89%) |
+| 시각 | scribble polygon marks 가득 | **매끈 two-sphere + 교차 patch** |
+
+**Architectural impact** (LOCKED guards 정합):
+- A-ρ/A-φ uv-slice fast-path 모든 곡면 split 후에도 작동
+- A-τ smooth-group edge hide 모든 split 후에도 작동
+- Boolean / Push-Pull / STEP/IGES 의 face split 도 동일 fix 자연
+  적용 (split_faces_by_intersections 가 공통 hot path)
+
+**ADR-089 누적 트랙 (A-α ~ A-χ)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| A-ρ Path A (face Cylinder smooth) | +4 | u-slice tessellation |
+| A-τ Path A (edge smooth-group) | +4 | vertical 분할선 hide |
+| A-υ Path A (leftover cleanup) | +3 | polyline overlap 제거 |
+| A-φ Path A (Sphere/Cone/Torus) | +6 | 4 곡면 일관성 |
+| **A-χ Path A (split surface inherit)** | **+3** | **모든 split 후 surface 보존** |
+| **누적** | **axia-geo +55 / vitest +7 = +62** | **곡면 metadata persistence** |
+
+### A-χ-γ (본 commit)
+- **변경**: 본 §D `A-χ-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-χ track closure 완료. ADR-089 Path A visual +
+  topology + metadata persistence 모든 cleanup 완성. 후속 후보 —
+  A-θ Path B (DCEL 진정한 kernel-native cylinder), Snapshot legacy
+  migration (A-μ), DrawArc/DrawBezier 시민권 확장, LOCKED #35 갱신
+  (A-ρ/τ/υ/φ/χ 추가 트랙 봉인).
 
 ---
 
