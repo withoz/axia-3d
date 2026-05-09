@@ -1751,10 +1751,55 @@ Periodic knot vector + Documentation consolidation. ADR-089 의 진정한
 - **N-Δ-2** WASM bridge 변경 (caller 가 periodic knots 전달하면 됨).
 - **N-Δ-3** Tool UI 변경 (DrawBSpline/NURBS Tool 미존재).
 
-### A-Δ-α (본 commit)
+### A-Δ-α (commit `14bb01b`)
 - **사용자 결재**: 2026-05-08, "🅰 진입 승인".
 - **변경**: 본 §D `A-Δ-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-Δ-β (commit `28ffa68`)
+- **변경**:
+  * `crates/axia-geo/src/curves/bspline.rs` — `is_periodic_knots`
+    신규 (pub). uniform spacing + not clamped 검증.
+  * `crates/axia-geo/src/curves/nurbs.rs` — `is_periodic_knots`
+    신규 (bspline delegate).
+  * `crates/axia-geo/src/mesh.rs` add_face_closed_curve —
+    BSpline/NURBS match arm 의 dual closure type:
+    - Type A (clamped): 기존 cp[0] ≈ cp[last]
+    - Type B (periodic): control polygon 미닫힘 허용
+  * 자연 detect (is_periodic 호출 → Type B 자동 활성).
+- **회귀**: axia-geo 1194 → 1200 (+6):
+  * `is_periodic_knots_uniform_not_clamped`
+  * `is_periodic_knots_clamped_rejected`
+  * `is_periodic_knots_non_uniform_rejected`
+  * `periodic_bspline_open_polygon_accepted`
+  * `clamped_open_polygon_still_rejected` (Type A regression guard)
+  * `periodic_nurbs_open_polygon_accepted`
+
+### A-Δ-γ (closure)
+- **결과**: ADR-089 closed-curve 시민권의 진정한 마지막 closure 활성.
+  4 곡선 type × 2 closure type = 8 가지 closed-curve 자연 처리.
+- **사용자 facing 의미**: 산업 CAD 의 표준 NURBS (uniform knots,
+  control polygon 미닫힘) 도 first-class. Onshape/SolidWorks export
+  수입 시 클램프드/페리오딕 모두 자연 매핑.
+
+**ADR-089 누적 트랙 (A-α ~ A-Δ)** — closed-curve 시민권 진정한 closure:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-Β (closed-curve 시민권 4 type, clamped) | axia-geo +66 | 4 곡선 type clamped closure |
+| A-λ + A-π + A-ψ (UI 분기) | vitest +10 | 사용자 facing UI |
+| A-μ (snapshot) | axia-core +9 | legacy compat + forward-compat |
+| A-Γ (Path B trigger 정량화) | axia-geo +5 | ADR-090 §6 데이터 anchor |
+| **A-Δ (periodic knots)** | **axia-geo +6** | **closed-curve 시민권 진정한 마지막 closure** |
+| **누적** | **axia-geo +77 / axia-core +9 / vitest +10 = +96** | **8가지 closed-curve 자연 처리** |
+
+### A-Δ-γ (본 commit)
+- **변경**: 본 §D `A-Δ-β` + `A-Δ-γ` closure entry.
+- **회귀**: +0 (closure docs).
+- **다음 step**: A-Δ track closure 완료. ADR-089 closed-curve 시민권
+  진정한 architectural closure 도달. 후속 후보: LOCKED #35 갱신
+  (A-Δ 추가), Documentation consolidation (90 ADR navigation), STEP
+  export 구현 (Path B trigger), 다른 우선순위 ADR.
 
 ---
 

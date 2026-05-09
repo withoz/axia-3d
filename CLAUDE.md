@@ -1401,6 +1401,25 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Δ closure, 2026-05-09)
+- **A-Δ amendment (2026-05-09)** — Periodic knot vector closed BSpline /
+  NURBS:
+  * `bspline::is_periodic_knots(knots, degree)` + `nurbs::is_periodic_
+    knots` (delegates) helpers — uniform spacing detection + clamped
+    end exclusion.
+  * `add_face_closed_curve` 의 BSpline / NURBS 분기에서 dual closure
+    type 지원: Type A clamped (control_pts[0] ≈ control_pts[last]) /
+    Type B periodic (knot vector uniform + non-clamped). control point
+    closure check 는 clamped 만 강제.
+  * 회귀 +6 (axia-geo 1194 → 1200, 절대 #[ignore] 금지 6/6 준수):
+    `periodic_knot_detection_*` 4개 + `closed_bspline_periodic_*` /
+    `closed_nurbs_periodic_*`.
+  * commit `28ffa68`. 자세한 결산은 ADR-089 §D A-Δ-γ.
+  * 의의: 산업 표준 closed B-spline / NURBS 표현 (e.g., STEP `B_SPLINE_
+    CURVE_WITH_KNOTS` periodic flag) 호환. closed Bezier (A-ω) +
+    clamped closed BSpline (A-Α) + clamped closed NURBS (A-Β) + periodic
+    closed BSpline / NURBS (A-Δ) 모두 first-class.
+
 ### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Γ closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
