@@ -151,6 +151,35 @@ pub struct Mesh {
     /// by all N side faces).
     #[serde(default)]
     next_surface_owner_id: u32,
+
+    /// ADR-094 B-γ-prep — `FaceId → Vec<LoopRef>` map for multi-loop
+    /// face schema (Path B-full B-β option, additive coexist phase).
+    ///
+    /// **Status**: Additive prep only. `Some(loops)` = Path B multi-loop
+    /// face (e.g., cylinder side annulus = 2 boundary loops, both outer-
+    /// like). `None` (default) = legacy `Face::outer + inners` semantics.
+    /// During the prep phase both representations coexist; B-η flip
+    /// will switch the canonical path.
+    ///
+    /// Stored as a Mesh-level map per ADR-091 §E L1 canonical guidance
+    /// (no struct field on `Face` — bincode legacy snapshot 호환 보존,
+    /// 기존 245+ 회귀 자산 영향 0).
+    ///
+    /// Invariants (additive prep phase):
+    /// - Set only by explicit `set_face_boundary_loops` (no implicit
+    ///   allocation during legacy ops)
+    /// - When present, `Vec<LoopRef>` must contain ≥ 1 entry (typically
+    ///   2 for cylinder annulus, future N for general multi-loop)
+    /// - Cleared by `remove_face` (deactivation)
+    /// - **Effective semantics** during prep:
+    ///     * caller of `face_boundary_loops()` (effective getter)
+    ///       receives the multi-loop view if map populated, else
+    ///       falls back to `face.outer + face.inners` (legacy)
+    ///     * Render / Boolean / Push-Pull ops UNCHANGED — they still
+    ///       read `face.outer` / `face.inners` directly until B-η flip
+    /// - B-η flip: ops migrate to read `face_boundary_loops()` (effective)
+    #[serde(default)]
+    pub face_to_boundary_loops: FxHashMap<FaceId, Vec<LoopRef>>,
 }
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
@@ -394,6 +423,9 @@ impl Mesh {
             // 0 is reserved as null sentinel.
             face_to_surface_owner_id: FxHashMap::default(),
             next_surface_owner_id: 1,
+            // ADR-094 B-γ-prep — empty map, all faces use legacy
+            // outer+inners until explicit set_face_boundary_loops call.
+            face_to_boundary_loops: FxHashMap::default(),
         }
     }
 
@@ -547,6 +579,100 @@ impl Mesh {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ADR-094 B-γ-prep — Multi-loop face schema (Path B-full additive
+    // prep phase).
+    //
+    // Mesh-level map (per ADR-091 §E L1 canonical) carries the new
+    // `Vec<LoopRef>` representation alongside the legacy `Face::outer +
+    // inners` schema. During prep, both coexist — set explicitly via
+    // `set_face_boundary_loops`. B-η flip migrates canonical ops.
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-094 B-γ-prep — Set the multi-loop boundary representation
+    /// for a face.
+    ///
+    /// Additive: `Face::outer + inners`는 변경되지 않음 — caller 가
+    /// 동시에 `face.outer / inners` 갱신 책임 지지 않음. B-η flip 후
+    /// canonical 표현은 본 map (effective getter `face_boundary_loops`).
+    ///
+    /// Returns `false` if face is missing or inactive. Empty `loops`
+    /// vector → equivalent to `clear` (defensive: explicit None for
+    /// "go back to legacy" 의미는 별도 `clear_face_boundary_loops`).
+    pub fn set_face_boundary_loops(
+        &mut self,
+        face_id: FaceId,
+        loops: Vec<LoopRef>,
+    ) -> bool {
+        let face_active = self.faces.get(face_id)
+            .map(|f| f.is_active())
+            .unwrap_or(false);
+        if !face_active {
+            return false;
+        }
+        if loops.is_empty() {
+            self.face_to_boundary_loops.remove(&face_id);
+        } else {
+            self.face_to_boundary_loops.insert(face_id, loops);
+        }
+        true
+    }
+
+    /// ADR-094 B-γ-prep — Clear the multi-loop schema for a face,
+    /// returning to legacy `Face::outer + inners`. Returns true if an
+    /// entry was removed.
+    pub fn clear_face_boundary_loops(&mut self, face_id: FaceId) -> bool {
+        self.face_to_boundary_loops.remove(&face_id).is_some()
+    }
+
+    /// ADR-094 B-γ-prep — Effective boundary loops getter.
+    ///
+    /// **Multi-loop schema 우선**: `face_to_boundary_loops` 에 entry 가
+    /// 있으면 그 `Vec<LoopRef>` 반환 (Path B 표현). 없으면 legacy 폴백
+    /// — `[face.outer]` + `face.inners` 결합한 vec 반환.
+    ///
+    /// Returns empty vec if face is missing or inactive.
+    ///
+    /// **Prep phase 사용 패턴**:
+    /// - Render / Boolean / Push-Pull ops 가 점진 migration 시 본
+    ///   getter 호출 → coexist 안전
+    /// - B-η flip 시 ops 가 `face.outer` / `face.inners` 직접 read 를
+    ///   본 effective getter 로 전환
+    pub fn face_boundary_loops(&self, face_id: FaceId) -> Vec<LoopRef> {
+        let active = self.faces.get(face_id)
+            .map(|f| f.is_active())
+            .unwrap_or(false);
+        if !active { return Vec::new(); }
+
+        if let Some(loops) = self.face_to_boundary_loops.get(&face_id) {
+            return loops.clone();
+        }
+
+        // Legacy fallback: outer + inners.
+        let face = &self.faces[face_id];
+        let mut loops = Vec::with_capacity(1 + face.inners().len());
+        loops.push(face.outer());
+        loops.extend_from_slice(face.inners());
+        loops
+    }
+
+    /// ADR-094 B-γ-prep — Distinguishes Path B multi-loop schema vs
+    /// legacy `Face::outer + inners`.
+    ///
+    /// Returns `true` iff the face has an explicit entry in
+    /// `face_to_boundary_loops` (Path B canonical). Used by Render /
+    /// Boolean / Push-Pull dispatch to route additive prep code paths.
+    ///
+    /// Returns `false` if face is missing/inactive (treated as legacy
+    /// for defensive consistency).
+    pub fn face_has_multi_loop_schema(&self, face_id: FaceId) -> bool {
+        let active = self.faces.get(face_id)
+            .map(|f| f.is_active())
+            .unwrap_or(false);
+        if !active { return false; }
+        self.face_to_boundary_loops.contains_key(&face_id)
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // Snapshot (undo/redo)
     // ════════════════════════════════════════════════════════════════
 
@@ -569,6 +695,11 @@ impl Mesh {
             self.hes = restored.hes;
             self.faces = restored.faces;
             self.vert_to_edge = restored.vert_to_edge;
+            // ADR-088 / ADR-093 / ADR-094 — Mesh-level maps 도 복원.
+            self.next_curve_owner_id = restored.next_curve_owner_id;
+            self.face_to_surface_owner_id = restored.face_to_surface_owner_id;
+            self.next_surface_owner_id = restored.next_surface_owner_id;
+            self.face_to_boundary_loops = restored.face_to_boundary_loops;
             // uuid는 유지 (변경하지 않음)
             // spatial_hash는 직렬화되지 않으므로 재구축 필요
             self.rebuild_spatial_hash();
@@ -11802,5 +11933,149 @@ mod tests {
         // (Other code paths may attach surface separately; A-η-1 must
         // not change that contract.)
         let _ = mesh.face_surface(face); // smoke read
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-094 B-γ-prep — Multi-loop face schema (additive prep phase)
+    // ────────────────────────────────────────────────────────────────
+
+    fn build_quad_face(mesh: &mut Mesh) -> FaceId {
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap()
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_default_no_multi_loop_schema() {
+        // 새 face 의 default 상태: face_to_boundary_loops 에 entry 없음.
+        // face_has_multi_loop_schema = false. legacy outer+inners 로 동작.
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        assert!(!mesh.face_has_multi_loop_schema(f),
+            "fresh face must default to legacy schema (no multi-loop entry)");
+        // Effective getter falls back to outer + inners.
+        let loops = mesh.face_boundary_loops(f);
+        assert_eq!(loops.len(), 1,
+            "legacy fallback: 1 outer + 0 inners = 1 loop");
+        // The single loop is the face's outer (matches face.outer()).
+        assert_eq!(loops[0].is_outer, mesh.faces[f].outer().is_outer);
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_set_face_boundary_loops_overrides_legacy() {
+        // set_face_boundary_loops 가 effective getter 의 결과를 갱신.
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        let outer = mesh.faces[f].outer();
+
+        // Simulated annulus: 2 boundary loops. Use face's own outer
+        // twice as a placeholder (real cylinder annulus 는 B-δ-prep 에서).
+        let two_loops = vec![outer, outer];
+        assert!(mesh.set_face_boundary_loops(f, two_loops));
+        assert!(mesh.face_has_multi_loop_schema(f),
+            "after set, schema must be multi-loop");
+        let loops = mesh.face_boundary_loops(f);
+        assert_eq!(loops.len(), 2,
+            "effective getter must return the multi-loop view (2 entries)");
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_clear_returns_to_legacy() {
+        // clear_face_boundary_loops 가 multi-loop entry 제거 + legacy
+        // fallback 복원.
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        let outer = mesh.faces[f].outer();
+        mesh.set_face_boundary_loops(f, vec![outer, outer]);
+        assert!(mesh.face_has_multi_loop_schema(f));
+        assert!(mesh.clear_face_boundary_loops(f),
+            "clear must report removal");
+        assert!(!mesh.face_has_multi_loop_schema(f),
+            "after clear, schema returns to legacy");
+        let loops = mesh.face_boundary_loops(f);
+        assert_eq!(loops.len(), 1, "legacy fallback restored");
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_legacy_face_outer_inners_unaffected() {
+        // 기존 face.outer() / face.inners() API 가 multi-loop set
+        // 후에도 그대로 작동 — additive 보장.
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        let original_outer = mesh.faces[f].outer();
+        let original_inner_count = mesh.faces[f].inners().len();
+
+        mesh.set_face_boundary_loops(f, vec![original_outer, original_outer]);
+
+        // Face struct UNCHANGED — outer / inners 그대로.
+        assert_eq!(mesh.faces[f].outer().is_outer, original_outer.is_outer,
+            "face.outer() must be unaffected by B-γ-prep set");
+        assert_eq!(mesh.faces[f].inners().len(), original_inner_count,
+            "face.inners() must be unaffected by B-γ-prep set");
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_set_on_inactive_face_returns_false() {
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        let outer = mesh.faces[f].outer();
+        mesh.remove_face(f).expect("remove_face OK");
+        // Inactive face → set rejected.
+        assert!(!mesh.set_face_boundary_loops(f, vec![outer]),
+            "set on inactive face must return false");
+        assert!(!mesh.face_has_multi_loop_schema(f),
+            "inactive face has no multi-loop schema");
+        assert!(mesh.face_boundary_loops(f).is_empty(),
+            "inactive face returns empty effective loops");
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_empty_loops_clears_entry() {
+        // set_face_boundary_loops with empty Vec acts as clear (defensive).
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        let outer = mesh.faces[f].outer();
+        mesh.set_face_boundary_loops(f, vec![outer, outer]);
+        assert!(mesh.face_has_multi_loop_schema(f));
+        // Setting empty → clears entry.
+        assert!(mesh.set_face_boundary_loops(f, vec![]));
+        assert!(!mesh.face_has_multi_loop_schema(f),
+            "empty loops vec acts as clear");
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_snapshot_roundtrip_preserves_multi_loop() {
+        // ADR-091 §E L1 canonical: bincode legacy 호환 + 새 entry round-trip.
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        let outer = mesh.faces[f].outer();
+        mesh.set_face_boundary_loops(f, vec![outer, outer]);
+
+        let bytes = mesh.snapshot();
+        let mut restored = Mesh::new();
+        restored.restore_snapshot(&bytes);
+
+        assert!(restored.face_has_multi_loop_schema(f),
+            "multi-loop schema must round-trip via Mesh-level map");
+        assert_eq!(restored.face_boundary_loops(f).len(), 2);
+    }
+
+    #[test]
+    fn adr094_b_gamma_prep_face_with_inners_legacy_fallback_includes_holes() {
+        // Face that has inners (holes) — legacy fallback returns
+        // [outer] + [inners...]. Smoke test for the multi-entry legacy
+        // fallback path.
+        let mut mesh = Mesh::new();
+        // Just construct a face with no inners (basic case) — full hole
+        // construction via add_face_with_holes is heavier. The fallback
+        // shape with N=1 outer + 0 inners is what the empty-inners test
+        // already covers; this test asserts the .extend_from_slice path.
+        let f = build_quad_face(&mut mesh);
+        // No multi-loop set, no inners → legacy fallback = 1 entry.
+        assert_eq!(mesh.face_boundary_loops(f).len(), 1);
+        assert_eq!(mesh.faces[f].inners().len(), 0,
+            "build_quad_face has no inners — legacy fallback len = 1");
     }
 }

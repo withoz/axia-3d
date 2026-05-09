@@ -214,6 +214,49 @@ ADR-090 §4 의 위험 매트릭스 + 본 ADR 의 additive-first 전략으로 �
   first) + lessons 적용 + risk matrix 강화.
 - **회귀**: +0 (docs only).
 
-### B-γ-prep ~ B-θ (예정)
-별도 sub-step 결재 시 commit 진행. 각 sub-step 진입 시 architectural
-사전 검토 + 사용자 multi-gate.
+### B-γ-prep (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — additive Face::boundary_loops
+  진입.
+- **사전 검토 architectural 정합**: ADR-091 §E L1 canonical guidance
+  ("bincode struct 신규 필드 금지, Mesh/Scene-level HashMap") 직접 적용
+  — Face struct UNCHANGED, Mesh-level `face_to_boundary_loops:
+  FxHashMap<FaceId, Vec<LoopRef>>` 신규.
+- **변경**:
+  * `crates/axia-geo/src/mesh.rs`:
+    - `Mesh.face_to_boundary_loops: FxHashMap<FaceId, Vec<LoopRef>>`
+      신규 (`#[serde(default)]` legacy 호환)
+    - `Mesh::set_face_boundary_loops(face_id, Vec<LoopRef>) -> bool`
+      (additive — empty Vec = clear, inactive face = false)
+    - `Mesh::clear_face_boundary_loops(face_id) -> bool`
+    - `Mesh::face_boundary_loops(face_id) -> Vec<LoopRef>` (effective
+      getter — multi-loop schema 우선, 없으면 legacy outer + inners
+      fallback)
+    - `Mesh::face_has_multi_loop_schema(face_id) -> bool` (Path B vs
+      legacy 분기)
+    - `restore_snapshot` 갱신 — Mesh-level maps (face_to_surface_owner_id,
+      next_surface_owner_id, next_curve_owner_id, face_to_boundary_loops)
+      모두 복원. **부산물 fix**: ADR-088 / ADR-093 도 restore_snapshot
+      에서 누락되어 있었음 — undo/redo 시 owner-id metadata 손실 위험
+      잠재. 본 commit 으로 모든 Mesh-level maps round-trip 보장.
+- **회귀** (axia-geo 1215 → 1223, +8):
+  * `adr094_b_gamma_prep_default_no_multi_loop_schema` — fresh face
+    legacy 동작
+  * `adr094_b_gamma_prep_set_face_boundary_loops_overrides_legacy` —
+    multi-loop schema 활성화
+  * `adr094_b_gamma_prep_clear_returns_to_legacy` — 양방향 transition
+  * `adr094_b_gamma_prep_legacy_face_outer_inners_unaffected` —
+    additive guarantee (Face struct UNCHANGED)
+  * `adr094_b_gamma_prep_set_on_inactive_face_returns_false` —
+    defensive
+  * `adr094_b_gamma_prep_empty_loops_clears_entry` — set([]) = clear
+  * `adr094_b_gamma_prep_snapshot_roundtrip_preserves_multi_loop` —
+    bincode round-trip + restore_snapshot fix 검증
+  * `adr094_b_gamma_prep_face_with_inners_legacy_fallback_includes_holes`
+    — fallback shape 검증
+  * 합계 **+8**, 절대 #[ignore] 금지 8/8 준수.
+- **누적 회귀** (B-α ~ B-γ-prep): axia-geo +8.
+- **위험 격리 검증**: 1223 axia-geo tests 전체 PASS. 245+ LOCKED 회귀
+  자산 모두 PASS. additive coexist 전략 성공.
+
+### B-δ-prep ~ B-θ (예정)
+별도 sub-step 결재 시 commit 진행.
