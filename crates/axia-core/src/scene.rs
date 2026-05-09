@@ -68,6 +68,10 @@ pub struct SnapshotSections {
     pub shape_to_xia: bool,
     /// ADR-091 D-ε — xia_to_original_shape map (sub-section 7d)
     pub xia_to_original_shape: bool,
+    /// ADR-095 Phase 3-ε — Reference 시민권 (section 8)
+    pub references: bool,
+    /// ADR-095 Phase 3-ε — next_reference_id (section 8 sub)
+    pub next_reference_id: bool,
 }
 
 /// ADR-089 A-μ-β — Snapshot analysis result.
@@ -382,8 +386,16 @@ impl Scene {
             eprintln!("[Scene] XiaToOriginalShape serialize failed: {}", e);
             Vec::new()
         });
+        // ADR-095 Phase 3-ε — section 8 (additive). Reference 시민권
+        // persistence. Legacy V2 snapshots truncate before this section
+        // → restore reads empty map.
+        let references_data = bincode::serialize(&self.references).unwrap_or_else(|e| {
+            eprintln!("[Scene] References serialize failed: {}", e);
+            Vec::new()
+        });
         let next_xia = self.next_xia_id;
         let next_shape = self.next_shape_id;
+        let next_reference = self.next_reference_id;
 
         // [mesh_len:u64][mesh_data][xia_len:u64][xia_data]
         // [group_len:u64][group_data][next_xia_id:u64]
@@ -393,11 +405,14 @@ impl Scene {
         // [next_shape_id:u64]                           ← ADR-050 P-3 (additive)
         // [shape_to_xia_len:u64][shape_to_xia_data]     ← ADR-050 P-3 (additive)
         // [xia_to_orig_shape_len:u64][xia_to_orig_shape_data] ← ADR-091 D-ε (additive)
+        // [references_len:u64][references_data]            ← ADR-095 Phase 3-ε (additive)
+        // [next_reference_id:u64]                          ← ADR-095 Phase 3-ε (additive)
         let mut buf = Vec::with_capacity(
             8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8
                 + 8 + constraints_data.len() + 8 + boolean_group_data.len()
                 + 8 + shapes_data.len() + 8 + 8 + shape_to_xia_data.len()
-                + 8 + xia_to_original_shape_data.len(),
+                + 8 + xia_to_original_shape_data.len()
+                + 8 + references_data.len() + 8,
         );
         buf.extend_from_slice(&(mesh_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&mesh_data);
@@ -422,6 +437,12 @@ impl Scene {
         // truncate before this section → restore reads None (empty map).
         buf.extend_from_slice(&(xia_to_original_shape_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&xia_to_original_shape_data);
+        // ADR-095 Phase 3-ε — section 8 (additive). Legacy snapshots
+        // (V2 / pre-Phase 3) truncate before this section → restore
+        // reads empty references + next_reference_id = 1 default.
+        buf.extend_from_slice(&(references_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&references_data);
+        buf.extend_from_slice(&(next_reference as u64).to_le_bytes());
         buf
     }
 
@@ -584,10 +605,76 @@ impl Scene {
             self.xia_to_original_shape.clear();
         }
 
-        // 8. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
+        // 8. ADR-095 Phase 3-ε — Reference 시민권 persistence (additive,
+        //    backward-compat). Legacy snapshots (V2 / pre-Phase 3)
+        //    truncate before section 8 → restore reads empty references
+        //    + next_reference_id = 1 default.
+        let mut references_section_present = false;
+        if offset + 8 <= data.len() {
+            let rlen = read_len(data, &mut offset);
+            if rlen > 0 && offset + rlen <= data.len() {
+                if let Ok(restored) = bincode::deserialize::<HashMap<crate::ReferenceId, crate::Reference>>(
+                    &data[offset..offset + rlen],
+                ) {
+                    self.references = restored;
+                    references_section_present = true;
+                }
+                offset += rlen;
+            } else if rlen == 0 {
+                self.references.clear();
+                references_section_present = true;
+            }
+        }
+        if references_section_present && offset + 8 <= data.len() {
+            self.next_reference_id = u64::from_le_bytes(
+                data[offset..offset + 8].try_into().unwrap_or([0; 8]),
+            ) as u32;
+            offset += 8;
+        }
+        if !references_section_present {
+            // Legacy snapshot (pre-ADR-095 Phase 3-ε) — reset Reference state.
+            self.references.clear();
+            self.next_reference_id = 1;
+        }
+        // Suppress unused-assignment warning — offset 가 계속 갱신되므로
+        // 향후 sub-section 추가 시 그대로 사용 가능.
+        let _ = offset;
+
+        // 9. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
         self.rebuild_face_to_xia_index();
         // ADR-079 W-1 — face_to_shape 도 rebuild (Shape.face_ids 에서 derive).
         self.rebuild_face_to_shape_index();
+        // ADR-095 Phase 3-ε — Reference 의 reverse 인덱스 (face/edge/
+        // vert_to_reference) rebuild from references state.
+        self.rebuild_reference_reverse_indexes();
+    }
+
+    /// ADR-095 Phase 3-ε — Reverse index rebuild for Reference state.
+    /// Called by `restore_scene_snapshot` after section 8 deserializes.
+    /// Mirrors `rebuild_face_to_shape_index` pattern (ADR-079 W-1).
+    fn rebuild_reference_reverse_indexes(&mut self) {
+        self.face_to_reference.clear();
+        self.edge_to_reference.clear();
+        self.vert_to_reference.clear();
+        for (rid, reference) in &self.references {
+            match &reference.category {
+                crate::ReferenceCategory::ConstructionLine { edge_ids } => {
+                    for &eid in edge_ids {
+                        self.edge_to_reference.insert(eid, *rid);
+                    }
+                }
+                crate::ReferenceCategory::ImportedMesh { face_ids, .. } => {
+                    for &fid in face_ids {
+                        self.face_to_reference.insert(fid, *rid);
+                    }
+                }
+                crate::ReferenceCategory::PointCloud { vert_ids } => {
+                    for &vid in vert_ids {
+                        self.vert_to_reference.insert(vid, *rid);
+                    }
+                }
+            }
+        }
     }
 
     /// Create a new XIA entity in the scene.
@@ -5394,6 +5481,15 @@ impl Scene {
         // Sub-section 7d: xia_to_original_shape (ADR-091 D-ε)
         if let Some(len) = read_len(payload, &mut offset) {
             if offset + len <= payload.len() { sections.xia_to_original_shape = true; offset += len; }
+        }
+        // Section 8: References (ADR-095 Phase 3-ε) — references map +
+        // next_reference_id (8 bytes, no length prefix).
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.references = true; offset += len; }
+        }
+        if offset + 8 <= payload.len() {
+            sections.next_reference_id = true;
+            offset += 8;
         }
         Ok(SnapshotInfo { version, has_magic: true, sections, error: None })
     }
@@ -12844,21 +12940,13 @@ mod tests {
         scene.promote_shape_to_xia(shape_id, MaterialId::new(7)).unwrap();
         let bytes = scene.export_versioned_snapshot().expect("export");
 
-        // The trailing sub-section is the last 8 bytes of length prefix
-        // + the bincode-serialized HashMap. We need the raw scene_snapshot
-        // (without AXIA + version + payload-len header) to compute the
-        // byte position of sub-section 7d.
-        //
-        // Easier: serialize again, then truncate by the size of the
-        // last bincode-serialized map. We know the map has 1 entry
-        // (XiaId u32 → ShapeId u32) — bincode stores HashMap as
-        // [u64 len][k][v]... so 1 entry ≈ 8 + 4 + 4 = 16 bytes.
-        // Plus 8 bytes for the section length prefix → ~24 bytes total.
-        //
-        // Build by re-exporting and stripping the last (8 + map_size)
-        // bytes. We compute map_size from a fresh bincode pass.
-        let map_data = bincode::serialize(&scene.xia_to_original_shape).unwrap();
-        let strip_len = 8 + map_data.len();
+        // ADR-095 Phase 3-ε amendment — snapshot now has section 8
+        // (references) AFTER sub-section 7d. To simulate legacy V2
+        // without 7d, strip BOTH section 8 (8 + refs_data + 8 next_ref_id)
+        // AND sub-section 7d (8 + xia_to_orig_data).
+        let refs_data = bincode::serialize(&scene.references).unwrap();
+        let xia_orig_data = bincode::serialize(&scene.xia_to_original_shape).unwrap();
+        let strip_len = (8 + refs_data.len() + 8) + (8 + xia_orig_data.len());
         assert!(bytes.len() > strip_len);
         let mut legacy = bytes.clone();
         legacy.truncate(legacy.len() - strip_len);
@@ -13082,6 +13170,133 @@ mod tests {
             .unwrap();
         let ids = scene.list_reference_ids();
         assert_eq!(ids, vec![id1, id2, id3]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // ADR-095 Phase 3-ε — Snapshot section 8 (Reference persistence)
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr095_phase3_epsilon_references_roundtrip_v2() {
+        // Reference 등록 → versioned snapshot export → fresh import →
+        // references state 보존 + reverse 인덱스 정합.
+        let mut scene = Scene::new();
+        let v1 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let (e1, _) = scene.mesh.add_edge(v1, v2).unwrap();
+
+        let id = scene
+            .create_reference(
+                "Center axis".into(),
+                crate::ReferenceCategory::ConstructionLine { edge_ids: vec![e1] },
+            )
+            .unwrap();
+
+        // Round-trip via versioned snapshot.
+        let bytes = scene.export_versioned_snapshot().expect("export v2");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import v2");
+
+        // Reference state preserved.
+        assert!(restored.references.contains_key(&id),
+            "Reference must round-trip");
+        let r = restored.get_reference(id).unwrap();
+        assert_eq!(r.name, "Center axis");
+        // Reverse index rebuilt.
+        assert_eq!(restored.edge_to_reference.get(&e1).copied(), Some(id),
+            "edge_to_reference must be rebuilt on restore");
+    }
+
+    #[test]
+    fn adr095_phase3_epsilon_next_reference_id_roundtrip() {
+        // next_reference_id 가 round-trip 시 보존 — 후속 create_
+        // reference 호출이 충돌 없이 진행.
+        let mut scene = Scene::new();
+        let v1 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+
+        // 3 references created (next_id = 4 after).
+        let _r1 = scene.create_reference("R1".into(),
+            crate::ReferenceCategory::PointCloud { vert_ids: vec![v1] }).unwrap();
+        let _r2 = scene.create_reference("R2".into(),
+            crate::ReferenceCategory::PointCloud { vert_ids: vec![v2] }).unwrap();
+        let r3 = scene.create_reference("R3".into(),
+            crate::ReferenceCategory::PointCloud { vert_ids: vec![v3] }).unwrap();
+        assert_eq!(r3.raw(), 3);
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+
+        // Create another after restore — must get id 4 (counter preserved).
+        let v4 = restored.mesh.add_vertex(DVec3::new(3.0, 0.0, 0.0));
+        let r4 = restored.create_reference("R4".into(),
+            crate::ReferenceCategory::PointCloud { vert_ids: vec![v4] }).unwrap();
+        assert_eq!(r4.raw(), 4,
+            "next_reference_id must round-trip — fresh create gets id 4");
+    }
+
+    #[test]
+    fn adr095_phase3_epsilon_legacy_v2_without_section_8_loads_empty() {
+        // Pre-Phase 3 V2 snapshot (section 8 missing) → restore reads
+        // empty references + next_reference_id = 1 default.
+        let mut scene = Scene::new();
+        let _shape = build_shape_unit_cube(&mut scene);
+        let bytes = scene.export_versioned_snapshot().expect("export");
+
+        // Strip section 8 (8 bytes refs_len + refs_data + 8 bytes
+        // next_reference_id).
+        let refs_data = bincode::serialize(&scene.references).unwrap();
+        let strip_len = 8 + refs_data.len() + 8;
+        assert!(bytes.len() > strip_len);
+        let mut legacy = bytes.clone();
+        legacy.truncate(legacy.len() - strip_len);
+        // Patch payload_len (header = 16 bytes).
+        let new_payload_len = (legacy.len() - 16) as u64;
+        legacy[8..16].copy_from_slice(&new_payload_len.to_le_bytes());
+
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&legacy).expect("import legacy");
+        assert!(restored.references.is_empty(),
+            "legacy V2 without section 8 must load empty references");
+        assert_eq!(restored.next_reference_id, 1,
+            "next_reference_id must default to 1");
+        // Shape state still preserved (section 7).
+        assert_eq!(restored.shapes.len(), 1, "Shape count preserved");
+    }
+
+    #[test]
+    fn adr095_phase3_epsilon_reverse_index_rebuilt_after_restore() {
+        // 3 categories all rebuild reverse indexes correctly after
+        // restore — face_to_reference, edge_to_reference, vert_to_
+        // reference.
+        let mut scene = Scene::new();
+        let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v0, v1, v2, v3], FORM_MATERIAL).unwrap();
+        let (e1, _) = scene.mesh.add_edge(v0, v1).unwrap();
+        let v_isolated = scene.mesh.add_vertex(DVec3::new(5.0, 5.0, 0.0));
+
+        let id_im = scene.create_reference("IM".into(),
+            crate::ReferenceCategory::ImportedMesh {
+                face_ids: vec![face], source_path: None,
+            }).unwrap();
+        let id_cl = scene.create_reference("CL".into(),
+            crate::ReferenceCategory::ConstructionLine { edge_ids: vec![e1] }).unwrap();
+        let id_pc = scene.create_reference("PC".into(),
+            crate::ReferenceCategory::PointCloud { vert_ids: vec![v_isolated] }).unwrap();
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+
+        // All 3 reverse indexes rebuilt.
+        assert_eq!(restored.face_to_reference.get(&face).copied(), Some(id_im));
+        assert_eq!(restored.edge_to_reference.get(&e1).copied(), Some(id_cl));
+        assert_eq!(restored.vert_to_reference.get(&v_isolated).copied(), Some(id_pc));
     }
 
     #[test]

@@ -311,5 +311,35 @@ pub enum ReferenceCategory {
   * "Promote Reference to Form" inverse 액션
   * Render visual 구분 (작도선 dashed 등) — ADR-095 §8 참조
 
-### Phase 3-ε ~ 3-ζ (예정)
+### Phase 3-ε (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Snapshot 영속화 진입.
+- **변경**:
+  * `crates/axia-core/src/scene.rs`:
+    - `scene_snapshot()` → section 8 추가 (additive after 7d):
+      `[references_len:u64][references_data][next_reference_id:u64]`
+    - `restore_scene_snapshot()` 갱신 — section 8 detected 시 restore,
+      미detected (legacy V2 / pre-Phase 3) 시 empty + next_id=1 default.
+      Reverse 인덱스 (face/edge/vert_to_reference) rebuild via 신규
+      `rebuild_reference_reverse_indexes()` helper (face_to_shape 패턴
+      답습)
+    - `analyze_snapshot` (A-μ) — section 8 인식 (references +
+      next_reference_id 두 sub-section)
+    - `SnapshotSections.references / next_reference_id` 필드 추가
+- **사후 정정** (existing test): `adr091_d_epsilon_legacy_v2_without_
+  section_7d_loads_empty_map` — snapshot trailing 이 section 8 추가로
+  변경됨. 테스트의 strip 길이를 (8 + refs + 8 + 7d) 로 갱신.
+- **회귀** (axia-core 230 → 234, +4):
+  * `references_roundtrip_v2` — Reference 등록 → snapshot → import →
+    references state + reverse 인덱스 정합 검증
+  * `next_reference_id_roundtrip` — counter 보존 (3 → restore → next
+    create = 4)
+  * `legacy_v2_without_section_8_loads_empty` — pre-Phase 3 호환 (empty
+    + default 1, Shape state 보존)
+  * `reverse_index_rebuilt_after_restore` — 3 categories 모두 face/
+    edge/vert_to_reference 정합
+  * 합계 **+4**, 절대 #[ignore] 금지 4/4 준수.
+- **누적** (Phase 3-α ~ 3-ε): axia-core +17, axia-wasm baseline +9,
+  vitest +20 = **+46**.
+
+### Phase 3-ζ (예정 — 사용자 시연 + closure)
 별도 sub-step 결재 시 commit 진행.
