@@ -18,6 +18,7 @@ export const axiaengine_attachFaceSurfaceCylinderValidated: (a: number, b: numbe
 export const axiaengine_attachFaceSurfacePlaneValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => void;
 export const axiaengine_attachFaceSurfaceSphereValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
 export const axiaengine_attachFaceSurfaceTorusValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
+export const axiaengine_attemptAutoRecovery: (a: number, b: number) => void;
 export const axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -53,6 +54,7 @@ export const axiaengine_delete_edge: (a: number, b: number) => number;
 export const axiaengine_delete_face: (a: number, b: number) => number;
 export const axiaengine_delete_group: (a: number, b: number) => number;
 export const axiaengine_demoteXiaToShape: (a: number, b: number, c: number) => void;
+export const axiaengine_detectTopologyDamage: (a: number, b: number) => void;
 export const axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
 export const axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;

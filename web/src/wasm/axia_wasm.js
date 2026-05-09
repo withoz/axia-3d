@@ -403,6 +403,36 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-097 T-γ — Auto-recovery dispatcher (Phase 4).
+     *
+     * Returns JSON: `{ "kind": "NoOp|Recovered|PartialFailure",
+     * ...kind-specific fields }`.
+     * - NoOp: `{"kind":"NoOp"}`
+     * - Recovered: `{"kind":"Recovered","fixesApplied":N,"initialDamages":N}`
+     * - PartialFailure: `{"kind":"PartialFailure","fixesApplied":N,
+     *   "remainingCount":N}`
+     *
+     * Caller (TS bridge / Orchestrator) 가 결과 기반으로 사용자
+     * 다이얼로그 escalation 판단.
+     * @returns {string}
+     */
+    attemptAutoRecovery() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attemptAutoRecovery(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * New variant: merge failure falls back to SOFT edge (hidden, topology
      * preserved) instead of destroying the adjacent faces. Recommended
      * default for interactive Erase tool.
@@ -1096,6 +1126,32 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * ADR-097 T-γ — Detect topology damage (Phase 4).
+     *
+     * Scene-level wrapper (Mesh detect + Orphan). Returns JSON:
+     * `{ "damages": [...], "checkedFaces": N, "checkedEdges": N }`
+     *
+     * damages 의 each item: `{ "kind": "BoundaryEdge|NonManifold|
+     * Degenerate|Orphan", ...kind-specific fields }`.
+     * @returns {string}
+     */
+    detectTopologyDamage() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_detectTopologyDamage(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
         }
     }
     /**

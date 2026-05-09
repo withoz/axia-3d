@@ -1,6 +1,6 @@
 # ADR-097: Topology Damage Auto-Recovery (Two-Layer Citizenship Phase 4)
 
-- **Status**: Proposed (T-α — spec only)
+- **Status**: Accepted (T-α ~ T-ζ all closed, 2026-05-09)
 - **Date**: 2026-05-09
 - **Anchor**: LOCKED #26 Phase 4 명시 약속. ADR-049 §4 Q5 final
   ("v3.2 §12 strict — 위상 손상 = 자동 복구 시도 → 실패 시 사용자
@@ -336,7 +336,72 @@ Mesh::attempt_auto_recovery(&mut self) -> RecoveryOutcome
   * ServiceContainer SSOT 진입점 (window.__axia 단일 export)
 - **Full vitest sweep**: 109 files, **1729/1729 PASS** (1 skipped 무관).
 
-### T-ζ (예정)
-별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
-E2E) — Default OFF → 토글 → 손상 mesh 생성 → orchestrator 호출 →
-Recovered/PartialFailure 시각 검증.
+### T-ζ (본 commit) — Real Chromium closure
+- **commit**: 본 commit (Playwright E2E + ADR-097 closure)
+- **production bundle 재빌드**: WASM `detectTopologyDamage` /
+  `attemptAutoRecovery` exports + main.ts `topologyRecovery` service
+  + lazy `TopologyRecoveryOrchestrator-{hash}.js` chunk (4.15 kB).
+  Initial bundle 변동 minimal (T-ε wiring +160 bytes).
+- **main.ts 사후 정정**: `register('topologyRecovery', () => async)`
+  가 factory wrapper 였으나 ServiceContainer 는 단순 storage 라
+  `await get()()` 가 필요. 단일 async function 으로 정정 →
+  `register('topologyRecovery', topologyRecovery)`. 사용자 facing
+  surface 정합 (E2E + production op-completion sites 동일).
+- **Playwright spec** (`web/e2e/adr-097-demo.spec.ts`, 4 scenarios):
+  * Scenario 1 — Default OFF: localStorage 미설정 → orchestrator
+    `{ skipped: true }` 반환 (flag check 정합)
+  * Scenario 2 — Explicit ON preference 보존: localStorage 'true'
+    → orchestrator runs → status 'clean' (clean scene NoOp)
+  * Scenario 3 — Bridge surface: `bridge.detectTopologyDamage()` +
+    `bridge.attemptAutoRecovery()` production bundle 노출. Empty
+    damages array + NoOp recovery 검증
+  * Scenario 4 — Flag 영구 보존 across `page.reload()` (process
+    boundary, ADR-078 P-4 답습) — explicit ON 진짜 보존
+- **회귀 (Real Chromium)**: Playwright +4 (production layer 검증).
+  Full Playwright sweep: **32/32 PASS** (1 skipped 무관). 기존
+  ADR-075/077/078/091/094/096 E2E 무영향.
+- **누적 (T-α ~ T-ζ closure)**:
+  * axia-geo +11 (T-β 7 + T-γ 4 detection + recovery)
+  * axia-core +4 (T-γ scene::detect_topology_damage 4 invariants)
+  * axia-wasm 0 net (additive exports, baseline guard PASS)
+  * vitest +32 (T-δ 27: WasmBridge 8 + Dialog 9 + Orchestrator 10;
+    T-ε 5: AutoTopologyRecoverySettings)
+  * Playwright +4 (T-ζ Real Chromium)
+  * **합계 +51**, 절대 #[ignore] 금지 51/51 준수
+- **사용자 facing 변화 요약** (Phase 4 closure):
+  * `axia:auto-topology-recovery` localStorage flag (Default OFF)
+  * SettingsPanel 체크박스 "위상 손상 자동 복구 (실험)"
+  * `window.__axia.get('topologyRecovery')()` 진입점 (op-completion
+    sites + E2E 동일 surface)
+  * 토폴로지 변경 op 후 손상 감지 → 자동 복구 → PartialFailure 시
+    사용자 다이얼로그 ([Undo] / [강등] / [수동수정])
+- **LOCKED #26 Phase 4 closure**: Two-Layer Citizenship Phase 4
+  (위상 손상 자동 복구 + 실패 시 사용자 다이얼로그) 활성. ADR-049
+  §4 Q5 final + v3.2 §12.3 / §12.5 모든 약속 정합.
+- **6-Layer Path Z atomic 패턴 일반화** (ADR-091 §E + ADR-094 §E
+  답습): Detection (axia-geo) + Recovery (axia-geo) + Scene context
+  (axia-core) + Bridge (axia-wasm) + UI orchestration (TS Dialog +
+  Orchestrator) + Settings + Real Chromium E2E. ADR-091 6-layer +
+  ADR-094 7-layer 위에 자연 확장. **향후 ADR 가이드**: 사용자 facing
+  변경의 3가지 invariant (engine truth + UI orchestration + Settings
+  flag) 동시 활성화 시 본 패턴 답습 권장.
+- **Lessons (canonical patterns)**:
+  * **L1** — UI orchestration 분리 (Dialog + Orchestrator 별도
+    모듈, ADR-091 §E L4 답습 + 확장)
+  * **L2** — humanize at boundary (`humanizeDamageReport` SSOT,
+    ADR-095 §E L3 답습)
+  * **L3** — Default OFF for self-modifying ops (ADR-094 default
+    ON 패턴과 다름 — 094 는 시각 불변 메모리 절감, 097 은 시각
+    가변 토폴로지 변경)
+  * **L4** — ServiceContainer storage 의 함정 (factory wrapper 가
+    아닌 직접 instance 등록)
+  * **L5** — Recovery 자산 inventory 의 가치 (5개월 누적 자산
+    `verify_face_invariants` / `repair_non_manifold_edges` /
+    `deactivate_empty_emit_faces` / `orphan_recovery` 모두 활용
+    — 새 알고리즘 0)
+
+## Phase 4 closure → ADR-049 LOCKED #26 Phase 4 ✅
+
+본 ADR 으로 Two-Layer Citizenship Model 의 5-Phase 로드맵 중
+**Phase 1 ~ Phase 4 모두 closure**. Phase 5 (자산 라이브러리
+3계층 + Layered material) 는 ADR-055+ 별도 트랙.

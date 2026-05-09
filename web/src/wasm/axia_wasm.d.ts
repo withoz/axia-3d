@@ -82,6 +82,20 @@ export class AxiaEngine {
     attachFaceSurfaceSphereValidated(face_id: number, cx: number, cy: number, cz: number, radius: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
     attachFaceSurfaceTorusValidated(face_id: number, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, rx: number, ry: number, rz: number, major_radius: number, minor_radius: number, u_min: number, u_max: number, v_min: number, v_max: number, tol_mm: number): string;
     /**
+     * ADR-097 T-γ — Auto-recovery dispatcher (Phase 4).
+     *
+     * Returns JSON: `{ "kind": "NoOp|Recovered|PartialFailure",
+     * ...kind-specific fields }`.
+     * - NoOp: `{"kind":"NoOp"}`
+     * - Recovered: `{"kind":"Recovered","fixesApplied":N,"initialDamages":N}`
+     * - PartialFailure: `{"kind":"PartialFailure","fixesApplied":N,
+     *   "remainingCount":N}`
+     *
+     * Caller (TS bridge / Orchestrator) 가 결과 기반으로 사용자
+     * 다이얼로그 escalation 판단.
+     */
+    attemptAutoRecovery(): string;
+    /**
      * New variant: merge failure falls back to SOFT edge (hidden, topology
      * preserved) instead of destroying the adjacent faces. Recommended
      * default for interactive Erase tool.
@@ -365,6 +379,16 @@ export class AxiaEngine {
      * (Xia + shape_to_xia linkage preserved).
      */
     demoteXiaToShape(xia_id: number): string;
+    /**
+     * ADR-097 T-γ — Detect topology damage (Phase 4).
+     *
+     * Scene-level wrapper (Mesh detect + Orphan). Returns JSON:
+     * `{ "damages": [...], "checkedFaces": N, "checkedEdges": N }`
+     *
+     * damages 의 each item: `{ "kind": "BoundaryEdge|NonManifold|
+     * Degenerate|Orphan", ...kind-specific fields }`.
+     */
+    detectTopologyDamage(): string;
     /**
      * ADR-032 P17 — Draw a tessellated arc and attach analytic Arc curves
      * to each segment edge in one atomic op.
@@ -1741,6 +1765,7 @@ export interface InitOutput {
     readonly axiaengine_attachFaceSurfacePlaneValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => void;
     readonly axiaengine_attachFaceSurfaceSphereValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly axiaengine_attachFaceSurfaceTorusValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
+    readonly axiaengine_attemptAutoRecovery: (a: number, b: number) => void;
     readonly axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -1776,6 +1801,7 @@ export interface InitOutput {
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
     readonly axiaengine_demoteXiaToShape: (a: number, b: number, c: number) => void;
+    readonly axiaengine_detectTopologyDamage: (a: number, b: number) => void;
     readonly axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;

@@ -221,7 +221,7 @@ async function main() {
   //   Lazy-imports orchestrator + Settings flag; checks flag inside
   //   the closure so listeners stay reactive to live setSetting updates.
   //   Call from any op-completion site (or from window.__axia for E2E).
-  container.register('topologyRecovery', () => async () => {
+  const topologyRecovery = async () => {
     const [{ attemptRecoveryWithDialog }, { getAutoTopologyRecoveryMode }] =
       await Promise.all([
         import('./citizenship/TopologyRecoveryOrchestrator'),
@@ -230,7 +230,8 @@ async function main() {
     if (!getAutoTopologyRecoveryMode()) return { skipped: true } as const;
     if (!bridge.isReady()) return { skipped: true } as const;
     return attemptRecoveryWithDialog(bridge);
-  });
+  };
+  container.register('topologyRecovery', topologyRecovery);
 
   // Export single container to window (replaces all window.__axia_* globals)
   (window as any).__axia = container;
