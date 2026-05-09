@@ -49,29 +49,42 @@ extrude_closed_curve_face_via_tessellation:
   ③ create top face from N polygon edges (no curve metadata) ← 결함 1
 ```
 
-**ADR-092 후**:
+**ADR-092 후 (정정 — manifold-safe)**:
 ```
 DrawCircle → 1 vert + 1 self-loop edge (Circle) + 1 Plane face
   ↓ Push-Pull
 extrude_closed_curve_face_via_tessellation:
   ① tessellate Circle → N polygon points (chord_tol = 1.5mm) — UNCHANGED
-  ② create N side quad faces (Cylinder surface) — UNCHANGED
-  ③ create top face: 1 anchor (translated) + 1 self-loop edge with
-     translated AnalyticCurve::Circle + 1 Plane face                ← NEW
+  ② Bottom (substitute) face N edges 에 Arc curves 부착 — UNCHANGED
+     (existing code line 656-670)
+  ③ extrude_planar_cylinder recurse — UNCHANGED (top + N side quads)
+  ④ TOP face N edges 에 Arc curves 부착 (translated center)         ← NEW
+     · DCEL topology unchanged (manifold 보존)
+     · Render path (A-κ Arc tessellation) 가 N Arc 들을 sampling
+       → 시각적으로 매끈한 ring 으로 보임
 ```
 
-Side ↔ top topology:
-- top face 의 self-loop edge: 1 anchor vert + Circle (DCEL 단독)
-- side faces 의 top boundary edges: N Line edges (별개 verts)
-- top anchor vert 와 side top boundary verts 는 *별개* — 즉 top face 는
-  side faces 와 vertex 공유 0 (시각적으로는 같은 평면에 있지만 DCEL
-  topology 분리)
+**Manifold-safe 정정 사유**:
+- 원안 (1 self-loop edge with Circle on top face) 은 side quads 의 top
+  boundary edges 가 boundary edges (1 incident face) 가 되어 솔리드 개방
+  → `verify_p7_manifold` 위반.
+- 정정안: Top face 와 side quads 가 *같은 edge 들* 을 공유 (DCEL
+  unchanged) + 그 edges 에 Arc metadata 추가. Manifold 보존, 시각
+  smoothness 동등 (Arc N개 = Circle 1개 의 segment 분해).
+
+Side ↔ top topology (정정):
+- Top face 와 side N quads 는 N edges 를 manifold 공유 (각 edge 2 incident
+  faces). 변경 없음.
+- 새로 추가되는 것은 **edge metadata** 만 (Arc curve 부착) — render
+  path (A-κ 답습) 가 자동 활용.
 
 ### 2.2 Lock-ins (canonical)
 
-- **L1 — Top boundary preservation**: closed-curve face 의 Push-Pull
-  결과 top face 는 1 self-loop edge with translated `AnalyticCurve::*`.
-  4 type (Circle/Bezier/BSpline/NURBS) 모두 동일 패턴.
+- **L1 — Top boundary preservation (정정)**: closed-curve face 의
+  Push-Pull 결과 top face 의 N polygon edges 에 `AnalyticCurve::Arc`
+  부착 (translated center). Bottom 답습 (existing step 6). DCEL
+  unchanged (manifold-safe). Render fast-path (A-κ Arc tessellation)
+  자동 활용.
 - **L2 — Side faces unchanged**: N quad faces with `AnalyticSurface::
   Cylinder` (Path A 답습). 측면 시각 smoothness 는 A-ρ uv-slice 가 처리.
 - **L3 — Bottom face unchanged**: 원본 closed-curve 보존 (이미 1
@@ -79,9 +92,8 @@ Side ↔ top topology:
 - **L4 — Curve translation**: `AnalyticCurve` 의 in-place / clone-then-
   translate. Circle 은 center 만 translation, Bezier/BSpline/NURBS 는
   control_pts 모두 translation, knots/weights 는 invariant.
-- **L5 — DCEL topology 자연 분리**: top face 의 closed-curve edge 는
-  side faces 와 vertex 공유 0. 별개 anchor vert (top center 또는 top
-  의 임의 boundary point — 구현 결정).
+- **L5 (정정) — DCEL topology unchanged**: Top face 와 side quads 가
+  N edges manifold 공유. 변경 없음. 추가는 metadata (Arc curve) 만.
 - **L6 — Render**: A-κ closed-curve fast-path 자동 적용 — top rim 매끈.
 - **L7 — Manifold invariant**: `verify_p7_manifold` (LOCKED #1 ADR-051)
   + ADR-007 winding 강제. top face winding 은 normal 방향 (extrude
@@ -96,14 +108,14 @@ Side ↔ top topology:
 
 | ID | 결정 | 채택 |
 |----|------|------|
-| C-A | top boundary preservation | 1 self-loop edge with translated `AnalyticCurve::*` |
+| C-A | top boundary preservation | N polygon edges with `AnalyticCurve::Arc` (translated center). DCEL unchanged. |
 | C-B | side faces 처리 | unchanged — N quad faces with `AnalyticSurface::Cylinder` (Path A 답습) |
 | C-C | bottom face | unchanged |
-| C-D | 곡선 type 지원 | 4종 (Circle/Bezier/BSpline/NURBS) all-in-atomic |
-| C-E | render | A-κ closed-curve fast-path 자동 |
+| C-D | 곡선 type 지원 | **MVP: Circle 만** (현재 `extrude_closed_curve_face_via_tessellation` 가 Circle 만 지원). Bezier/BSpline/NURBS 는 별도 후속 — 본 ADR scope 외. |
+| C-E | render | A-κ Arc tessellation fast-path 자동 |
 | C-F | manifold invariant | verify_p7_manifold + ADR-007 |
-| C-G | top ↔ side topology | DCEL 자연 분리 (vertex 공유 0) |
-| C-H | curve translation | in-place `translate(&mut self, v: DVec3)` 또는 clone+translate |
+| C-G | top ↔ side topology | manifold edge sharing 보존 |
+| C-H | curve construction | `AnalyticCurve::Arc` 새 instance with translated center (clone-then-mutate-center) |
 
 ## 3. Path Z Atomic Decomposition (5 sub-step)
 
@@ -183,5 +195,41 @@ sample 검증 (top boundary 의 polyline 이 chord-tolerant smooth).
   PushPull → top rim polygon).
 - **회귀**: +0 (docs only).
 
-### C-β ~ C-ε (예정)
+### C-β (본 commit)
+- **사용자 결재**: 2026-05-09, "승인 진행합니다".
+- **사전 검토 architectural pivot**: 원안 ("1 self-loop edge with
+  translated `AnalyticCurve::Circle` on top face") 가 manifold violation
+  위험 발견 — side quads 의 top boundary edges 가 boundary edges (1
+  incident face) 가 되어 솔리드 개방 → `verify_p7_manifold` 실패.
+  ADR §2.1 / §2.2 / §2.3 정정으로 manifold-safe 접근 명시:
+  Top face 의 N polygon edges 에 `AnalyticCurve::Arc` 부착 (Bottom 의
+  step 6 답습). DCEL topology unchanged (manifold 보존), Render
+  fast-path (A-κ Arc tessellation) 가 N Arc 들을 sampling → 시각적으로
+  매끈한 ring.
+- **변경**:
+  * `crates/axia-geo/src/operations/create_solid.rs::extrude_closed_curve_
+    face_via_tessellation` step 8 추가 (recurse 후) — top face N edges
+    iterate + translated center (`profile_normal · dist + center`) 로
+    `AnalyticCurve::Arc` 부착. Loop order index `i` 그대로 사용 (Arc 는
+    direction-agnostic — 양방향 sampling 동등 visual). `n_seg_top ==
+    n_seg` guard 로 face_outer_edges 정합 검증.
+- **회귀** (axia-geo 1200 → 1207, +7):
+  * `adr092_c_beta_top_face_edges_have_arc_curves` — top 모든 N edges
+    AnalyticCurve::Arc 부착 검증
+  * `adr092_c_beta_top_arc_center_is_translated_from_bottom` —
+    architectural anchor (top center = bottom + normal · dist)
+  * `adr092_c_beta_top_arc_radius_matches_bottom` — 비-scale 변환
+  * `adr092_c_beta_top_arc_normal_matches_profile` — normal inheritance
+  * `adr092_c_beta_dcel_topology_unchanged_manifold_safe` — manifold
+    보존 (가장 핵심 invariant)
+  * `adr092_c_beta_negative_distance_translation_correct` — recess 부호
+  * `adr092_c_beta_polygonal_path_unaffected` — regression guard
+    (polygonal circle path 영향 0)
+- **C-D scope 정정**: MVP = Circle 만. extrude_closed_curve_face_via_
+  tessellation 자체가 현재 Circle 만 지원 (`AnalyticCurve::Circle` match
+  arm 외 NotYetSupported error). Bezier/BSpline/NURBS 의 closed-curve
+  Push-Pull 은 별도 후속 sub-step / ADR — 본 ADR scope 외.
+- 누적 회귀 (C-α ~ C-β): axia-geo +7. 절대 #[ignore] 금지 7/7 준수.
+
+### C-γ ~ C-ε (예정)
 별도 sub-step 결재 시 commit 진행.

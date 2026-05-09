@@ -671,7 +671,57 @@ impl Mesh {
 
         // 7. Recurse — substitute now has N >= 8 verts + Arc curves;
         //    fast-path skipped, AllCircular branch matches.
-        self.extrude_planar_cylinder(substituted, dist, material, profile_surface)
+        let result = self.extrude_planar_cylinder(
+            substituted, dist, material, profile_surface,
+        )?;
+
+        // 8. ADR-092 C-β — attach Arc curves to TOP face's N edges
+        //    (mirror step 6 for bottom). Translated center =
+        //    profile_normal · dist + original center. DCEL topology
+        //    unchanged (manifold-safe per L1/L5). Render fast-path
+        //    (A-κ Arc tessellation) samples the analytic curves and
+        //    emits a smooth ring polyline — fixes "원에 대한 완벽한
+        //    처리가 안되고 있습니다" (2026-05-09 사용자 시연 결함 1).
+        let profile_normal = match profile_surface {
+            AnalyticSurface::Plane { normal, .. } => normal.normalize_or_zero(),
+            _ => DVec3::ZERO, // unreachable — extrude_planar_cylinder enforces Plane
+        };
+        if profile_normal.length_squared() > 0.5 {
+            let translation = profile_normal * dist;
+            let top_center = center + translation;
+            // Top face edges in face_outer_edges() loop order — same N
+            // chord positions as bottom (just translated). Index i
+            // corresponds to angular sector [i, i+1)/N · 2π.
+            //
+            // Note on winding: top face may have reversed loop order
+            // vs bottom (CCW from above vs CCW from below). The Arc
+            // curve is direction-agnostic — the same Arc(theta_a,
+            // theta_b) and Arc(theta_b, theta_a) sample the same point
+            // set. Visual ring is identical regardless of loop order.
+            if let Ok(top_edges) = self.face_outer_edges(result.top_face) {
+                let n_seg_top = top_edges.len();
+                if n_seg_top == n_seg {
+                    for (i, &eid) in top_edges.iter().enumerate() {
+                        let theta_start = (i as f64) * two_pi / (n_seg_top as f64);
+                        let theta_end =
+                            ((i + 1) as f64) * two_pi / (n_seg_top as f64);
+                        let arc = AnalyticCurve::Arc {
+                            center: top_center,
+                            radius,
+                            normal,
+                            basis_u,
+                            start_angle: theta_start,
+                            end_angle: theta_end,
+                        };
+                        if let Some(edge_mut) = self.edges.get_mut(eid) {
+                            edge_mut.set_curve(Some(arc));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// ADR-079 W-3-δ — Extrude on NURBS-class profile (tessellation-based).
@@ -4603,6 +4653,236 @@ mod tests {
                 "ADR-089 A-θ-β: side wall must have Cylinder surface, got {:?}",
                 surface.map(|s| s.kind_label())
             );
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-092 C-β — Push-Pull preserves closed-curve metadata on top
+    //   face boundary (manifold-safe: Arc curves on N polygon edges).
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr092_c_beta_top_face_edges_have_arc_curves() {
+        // After Push-Pull, the TOP face's N polygon edges must carry
+        // AnalyticCurve::Arc with translated center — fixes the
+        // "polygon rim visible at top" defect (사용자 시연 2026-05-09).
+        let mut mesh = Mesh::new();
+        let profile =
+            build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 10.0 },
+                MaterialId::new(0),
+            )
+            .expect("closed-curve Push-Pull must succeed");
+
+        let top_edges = mesh
+            .face_outer_edges(result.top_face)
+            .expect("top face has outer edges");
+        assert!(
+            top_edges.len() >= 8,
+            "top face must have ≥ 8 polygon edges, got {}",
+            top_edges.len()
+        );
+
+        // Every top edge must have an AnalyticCurve::Arc attached.
+        let mut arc_count = 0;
+        let mut all_have_arc = true;
+        for &eid in &top_edges {
+            match mesh.edges[eid].curve() {
+                Some(AnalyticCurve::Arc { .. }) => arc_count += 1,
+                _ => all_have_arc = false,
+            }
+        }
+        assert!(
+            all_have_arc,
+            "ADR-092 C-β: ALL {} top face edges must have Arc curve, only {} did",
+            top_edges.len(),
+            arc_count
+        );
+    }
+
+    #[test]
+    fn adr092_c_beta_top_arc_center_is_translated_from_bottom() {
+        // The Arc center on top edges must equal bottom_center +
+        // (profile_normal · dist). This is the architectural anchor —
+        // top boundary is the same Circle, just translated.
+        let mut mesh = Mesh::new();
+        let bottom_center = DVec3::new(3.0, 4.0, 0.0); // arbitrary
+        let profile =
+            build_closed_curve_circle_face(&mut mesh, bottom_center, 5.0);
+        let dist = 7.0;
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: dist },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        // Profile normal for build_closed_curve_circle_face is +Z.
+        let expected_top_center = bottom_center + DVec3::Z * dist;
+
+        let top_edges = mesh.face_outer_edges(result.top_face).unwrap();
+        for &eid in &top_edges {
+            if let Some(AnalyticCurve::Arc { center, .. }) =
+                mesh.edges[eid].curve()
+            {
+                assert!(
+                    (*center - expected_top_center).length() < 1e-9,
+                    "ADR-092 C-β: Arc center expected {:?}, got {:?}",
+                    expected_top_center,
+                    center
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adr092_c_beta_top_arc_radius_matches_bottom() {
+        // Top Arcs must share the bottom's radius (extrusion is purely
+        // axial — no scaling).
+        let mut mesh = Mesh::new();
+        let radius = 5.0;
+        let profile =
+            build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, radius);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 8.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        let top_edges = mesh.face_outer_edges(result.top_face).unwrap();
+        for &eid in &top_edges {
+            if let Some(AnalyticCurve::Arc { radius: r, .. }) =
+                mesh.edges[eid].curve()
+            {
+                assert!(
+                    (*r - radius).abs() < 1e-9,
+                    "ADR-092 C-β: Arc radius {} does not match bottom radius {}",
+                    r,
+                    radius
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adr092_c_beta_dcel_topology_unchanged_manifold_safe() {
+        // C-β must NOT alter DCEL topology — only Arc metadata is added
+        // to existing edges. Same face count + manifold invariants pass.
+        let mut mesh = Mesh::new();
+        let profile =
+            build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let _ = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 10.0 },
+                MaterialId::new(0),
+            )
+            .expect("Push-Pull OK");
+
+        // Manifold invariants must hold — boundary edges remain shared
+        // between top face and side quads (no orphan boundary edges
+        // introduced by C-β).
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-092 C-β: manifold must hold post-Arc-attach, violations: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn adr092_c_beta_negative_distance_translation_correct() {
+        // Recess (dist < 0) must place Arc center at bottom_center +
+        // normal · negative_dist (downward). Smoke for sign correctness.
+        let mut mesh = Mesh::new();
+        let profile =
+            build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 3.0);
+        let dist = -4.0;
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: dist },
+                MaterialId::new(0),
+            )
+            .expect("recess OK");
+
+        let expected_top_center = DVec3::new(0.0, 0.0, dist); // 0 + Z·(-4)
+        let top_edges = mesh.face_outer_edges(result.top_face).unwrap();
+        let first = top_edges[0];
+        if let Some(AnalyticCurve::Arc { center, .. }) =
+            mesh.edges[first].curve()
+        {
+            assert!(
+                (*center - expected_top_center).length() < 1e-9,
+                "ADR-092 C-β: recess top Arc center expected {:?}, got {:?}",
+                expected_top_center,
+                center
+            );
+        } else {
+            panic!("ADR-092 C-β: top edge must have Arc curve");
+        }
+    }
+
+    #[test]
+    fn adr092_c_beta_polygonal_path_unaffected() {
+        // Regression guard — polygonal circle (build_circle_face with
+        // explicit segments) does NOT enter
+        // extrude_closed_curve_face_via_tessellation, so its top face
+        // edges should NOT receive new Arc curves from C-β. Their
+        // existing Arc state (set by the polygonal path) remains.
+        // Smoke — the test just verifies no panic / no manifold break
+        // along the polygonal path after C-β patch.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 16);
+        let _ = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 7.0 },
+                MaterialId::new(0),
+            )
+            .expect("polygonal Push-Pull OK");
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-092 C-β: polygonal path must remain manifold, violations: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn adr092_c_beta_top_arc_normal_matches_profile() {
+        // Top Arcs must inherit the profile normal (extrusion is along
+        // the profile normal, top plane is parallel).
+        let mut mesh = Mesh::new();
+        let profile =
+            build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 6.0 },
+                MaterialId::new(0),
+            )
+            .expect("create_solid OK");
+
+        let top_edges = mesh.face_outer_edges(result.top_face).unwrap();
+        for &eid in &top_edges {
+            if let Some(AnalyticCurve::Arc { normal, .. }) =
+                mesh.edges[eid].curve()
+            {
+                // Profile normal for build_closed_curve_circle_face is +Z.
+                let dot = normal.dot(DVec3::Z).abs();
+                assert!(
+                    dot > 0.99,
+                    "ADR-092 C-β: top Arc normal {:?} must align with +Z",
+                    normal
+                );
+            }
         }
     }
 
