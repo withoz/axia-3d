@@ -1332,10 +1332,54 @@ closed-curve 시민권 확장. 안전한 완성도 우선."
 ### A-ψ-γ (본 commit)
 - **변경**: 본 §D `A-ψ-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-ψ track closure 완료. closed Bezier 사용자 facing
-  완성. 후속 후보 — closed BSpline/NURBS 시민권 확장, LOCKED #35
-  갱신 (A-ω + A-ψ 추가), A-θ Path B (DCEL 진정한 kernel-native
-  cylinder), Snapshot legacy migration (A-μ).
+
+---
+
+### A-Α-α (2026-05-08, closed BSpline 시민권 amendment)
+
+**사용자 결재 (2026-05-08)**: "🅰 자연 architectural — closed BSpline
+→ DrawBSplineTool UI 1주 트랙. 안전한 완성도 우선."
+
+**현재 상태**:
+- A-ω 가 closed Bezier 시민권 활성. BSpline / NURBS 는 deferred.
+- BSpline = 산업 CAD NURBS 의 토대 — 다음 자연 단계.
+
+**Path Z 3-sub-step (closed BSpline)**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-Α-α (본 amendment) | spec only | +0 |
+| A-Α-β | add_face_closed_curve BSpline acceptance + Plane attach + Render fast-path | +5 |
+| A-Α-γ | WASM bridge + closure | +0 |
+
+**Lock-ins**:
+- **L-Α-1** **Closure check (clamped knots)**: BSpline closure 판정
+  은 `control_pts[0] ≈ control_pts[last]` (within EPSILON_LENGTH).
+  Periodic knot vector (wrapped) 는 future ADR (다른 closure 의미).
+- **L-Α-2** **Plane normal**: Bezier 답습 (`bezier_best_fit_normal`
+  helper 재사용 — Bezier/BSpline 모두 control points best-fit plane).
+- **L-Α-3** **Plane attach**: A-η-1 답습 — origin = centroid, normal
+  = best-fit plane normal, basis_u = first non-zero in-plane vector,
+  u/v range = AABB extent × 1.5.
+- **L-Α-4** **Render fast-path**: A-ω-δ 답습 — bspline::tessellate
+  로 polyline → centroid fan triangulation. Edge wireframe 도 동일.
+- **L-Α-5** **Knots validation**: bspline::validate 가 이미 clamped
+  / open uniform knots 검증 — caller 가 valid 한 knots 전달 책임.
+- **L-Α-6** **Backward compat**: 기존 BSpline drawBSplineWithCurve
+  unchanged. 본 fast-path 는 closed BSpline 만 발동.
+
+**Non-goals**:
+- **N-Α-1** Periodic knot vector (wrapped) closed BSpline — 별도
+  future ADR. 현재 closed = control_pts[0] ≈ control_pts[last]
+  (clamped knots case).
+- **N-Α-2** NURBS (rational BSpline) closed 시민권 — 별도 future
+  sub-step (weights 처리 추가).
+- **N-Α-3** DrawBSplineTool UI 분기 — 별도 sub-step (A-Β).
+
+### A-Α-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅰 자연 architectural 진행".
+- **변경**: 본 §D `A-Α-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
