@@ -4532,6 +4532,77 @@ impl Mesh {
                         stats.emitted += 1;
                         continue;
                     }
+                    // ADR-089 A-ω-δ — closed Bezier render fast-path.
+                    // Tessellate Bezier control points to polyline → fan
+                    // triangulate from centroid (analogous to Circle path).
+                    if let Some(crate::curves::AnalyticCurve::Bezier {
+                        control_pts,
+                    }) = edge_ref.curve().cloned()
+                    {
+                        let chord_tol = ANALYTIC_CHORD_TOL;
+                        let pts = match crate::curves::bezier::tessellate(
+                            &control_pts, chord_tol,
+                        ) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                stats.outer_too_short += 1;
+                                continue;
+                            }
+                        };
+                        if pts.len() < 3 {
+                            stats.outer_too_short += 1;
+                            continue;
+                        }
+                        // Drop closing duplicate if present.
+                        let unique_pts: &[DVec3] =
+                            if (pts[0] - pts[pts.len() - 1]).length()
+                                < crate::tolerances::EPSILON_LENGTH
+                                && pts.len() >= 4
+                            {
+                                &pts[..pts.len() - 1]
+                            } else {
+                                &pts[..]
+                            };
+                        let n_seg = unique_pts.len();
+                        // Centroid for fan triangulation.
+                        let centroid = unique_pts.iter().fold(DVec3::ZERO, |a, p| a + *p)
+                            / (n_seg as f64);
+                        // Normal: face's stored normal (computed in
+                        // add_face_closed_curve via best-fit plane).
+                        let n_normal = face.normal();
+
+                        // Emit centroid + rim verts.
+                        positions.push(centroid.x as f32);
+                        positions.push(centroid.y as f32);
+                        positions.push(centroid.z as f32);
+                        positions_f64.push(centroid.x);
+                        positions_f64.push(centroid.y);
+                        positions_f64.push(centroid.z);
+                        normals.push(n_normal.x as f32);
+                        normals.push(n_normal.y as f32);
+                        normals.push(n_normal.z as f32);
+                        for &p in unique_pts {
+                            positions.push(p.x as f32);
+                            positions.push(p.y as f32);
+                            positions.push(p.z as f32);
+                            positions_f64.push(p.x);
+                            positions_f64.push(p.y);
+                            positions_f64.push(p.z);
+                            normals.push(n_normal.x as f32);
+                            normals.push(n_normal.y as f32);
+                            normals.push(n_normal.z as f32);
+                        }
+                        for i in 0..n_seg {
+                            let next = (i + 1) % n_seg;
+                            indices.push(vert_offset);
+                            indices.push(vert_offset + 1 + i as u32);
+                            indices.push(vert_offset + 1 + next as u32);
+                            face_map.push(face_id.raw());
+                        }
+                        vert_offset += (n_seg + 1) as u32;
+                        stats.emitted += 1;
+                        continue;
+                    }
                 }
                 // Not a closed-curve face — fall through to legacy
                 // < 3 skip.
@@ -4850,7 +4921,29 @@ impl Mesh {
                     }
                     continue;
                 }
-                // Self-loop without Circle curve — skip (zero-length
+                // ADR-089 A-ω-δ — Bezier closed self-loop wireframe.
+                if let Some(crate::curves::AnalyticCurve::Bezier {
+                    control_pts,
+                }) = edge.curve().cloned()
+                {
+                    if let Ok(pts) = crate::curves::bezier::tessellate(
+                        &control_pts, 0.05,
+                    ) {
+                        if pts.len() >= 2 {
+                            for w in pts.windows(2) {
+                                lines.push(w[0].x as f32);
+                                lines.push(w[0].y as f32);
+                                lines.push(w[0].z as f32);
+                                lines.push(w[1].x as f32);
+                                lines.push(w[1].y as f32);
+                                lines.push(w[1].z as f32);
+                                edge_map.push(_edge_id.raw());
+                            }
+                        }
+                    }
+                    continue;
+                }
+                // Self-loop without supported curve — skip (zero-length
                 // line otherwise).
                 continue;
             }
