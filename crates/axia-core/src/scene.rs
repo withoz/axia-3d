@@ -46,6 +46,45 @@ const AXIA_MAGIC: [u8; 4] = [b'A', b'X', b'I', b'A'];
 /// just no field-as-state.
 pub const FORM_MATERIAL: MaterialId = MaterialId::new(0);
 
+/// ADR-089 A-μ-β — Snapshot section presence flags.
+///
+/// Returned by `Scene::analyze_snapshot` — indicates which optional
+/// sections were present in a snapshot file. Useful for legacy file
+/// detection (e.g., V2 file without ADR-050 Shapes section).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SnapshotSections {
+    pub mesh: bool,
+    pub xias: bool,
+    pub groups: bool,
+    pub next_xia_id: bool,
+    pub constraints: bool,
+    /// ADR-078 P-1 — Boolean group tags
+    pub boolean_group_tags: bool,
+    /// ADR-050 P-3 — Form-layer Shapes
+    pub shapes: bool,
+    /// ADR-050 P-3 — next_shape_id (sub-section)
+    pub next_shape_id: bool,
+    /// ADR-050 P-3 — shape_to_xia map (sub-section)
+    pub shape_to_xia: bool,
+}
+
+/// ADR-089 A-μ-β — Snapshot analysis result.
+///
+/// Read-only inspection of a snapshot file's structure without
+/// modifying scene state. `version == 0` + `has_magic == false`
+/// indicates legacy mesh-only format (no header).
+#[derive(Clone, Debug)]
+pub struct SnapshotInfo {
+    /// Snapshot version (1, 2, or 0 for legacy headerless).
+    pub version: u32,
+    /// True if AXIA magic bytes were found.
+    pub has_magic: bool,
+    /// Which optional sections were detected (V2 only).
+    pub sections: SnapshotSections,
+    /// Non-fatal error message (e.g., truncation) — `None` if clean.
+    pub error: Option<String>,
+}
+
 /// The AXiA scene — owns the geometry mesh and all XIA entities.
 /// Principle 3 (ADR-008) — Face Operation Epoch.
 ///
@@ -4784,10 +4823,145 @@ impl Scene {
 
                 Ok(())
             }
+            v if v > SNAPSHOT_VERSION => anyhow::bail!(
+                "ADR-089 A-μ-β: snapshot version {} is newer than this build supports \
+                 (max {}). Likely saved by a newer AXiA build — upgrade required to \
+                 load this file. Forward-compat reject (silent garbage prevented).",
+                v, SNAPSHOT_VERSION,
+            ),
             v => anyhow::bail!(
-                "Unsupported snapshot version: {} (this build supports 1, 2)", v,
+                "Unsupported snapshot version: {} (this build supports 1..={}). \
+                 File may be corrupted.",
+                v, SNAPSHOT_VERSION,
             ),
         }
+    }
+
+    /// ADR-089 A-μ-β — Snapshot info analyzer (read-only, no state change).
+    ///
+    /// Returns version + presence of optional sections without modifying
+    /// scene state. Useful for legacy file detection and debugging.
+    ///
+    /// `Err` for invalid magic / truncation. `Ok(SnapshotInfo)` carries
+    /// version + section presence flags.
+    pub fn analyze_snapshot(data: &[u8]) -> Result<SnapshotInfo> {
+        if data.len() < 8 {
+            return Ok(SnapshotInfo {
+                version: 0,
+                has_magic: false,
+                sections: SnapshotSections::default(),
+                error: Some("file too short for header (< 8 bytes), \
+                             likely legacy mesh-only or corrupt".to_string()),
+            });
+        }
+        let has_magic = &data[0..4] == &AXIA_MAGIC;
+        if !has_magic {
+            // Legacy bincode mesh-only format — no version header.
+            return Ok(SnapshotInfo {
+                version: 0,
+                has_magic: false,
+                sections: SnapshotSections::default(),
+                error: None,
+            });
+        }
+        let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        if version == 1 {
+            return Ok(SnapshotInfo {
+                version,
+                has_magic: true,
+                sections: SnapshotSections {
+                    mesh: true,
+                    ..SnapshotSections::default()
+                },
+                error: None,
+            });
+        }
+        if version != 2 {
+            return Ok(SnapshotInfo {
+                version,
+                has_magic: true,
+                sections: SnapshotSections::default(),
+                error: Some(format!(
+                    "unsupported version {} (this build: 1..={})",
+                    version, SNAPSHOT_VERSION,
+                )),
+            });
+        }
+        // V2 — analyze section presence by walking length-prefixed sections.
+        if data.len() < 16 {
+            return Ok(SnapshotInfo {
+                version,
+                has_magic: true,
+                sections: SnapshotSections::default(),
+                error: Some("V2 truncated: missing payload length".to_string()),
+            });
+        }
+        let payload_len = u64::from_le_bytes(
+            data[8..16].try_into().unwrap_or([0; 8])
+        ) as usize;
+        if data.len() < 16 + payload_len {
+            return Ok(SnapshotInfo {
+                version,
+                has_magic: true,
+                sections: SnapshotSections::default(),
+                error: Some("V2 truncated: payload data missing".to_string()),
+            });
+        }
+        let payload = &data[16..16 + payload_len];
+        let mut offset = 0usize;
+        let mut sections = SnapshotSections::default();
+        let read_len = |data: &[u8], off: &mut usize| -> Option<usize> {
+            if *off + 8 > data.len() { return None; }
+            let len = u64::from_le_bytes(
+                data[*off..*off + 8].try_into().unwrap_or([0; 8])
+            ) as usize;
+            *off += 8;
+            Some(len)
+        };
+        // Section 1: Mesh
+        if let Some(len) = read_len(payload, &mut offset) {
+            if len > 0 && offset + len <= payload.len() {
+                sections.mesh = true;
+                offset += len;
+            } else {
+                // Legacy mesh-only fallback (entire payload is mesh)
+                sections.mesh = true;
+                return Ok(SnapshotInfo { version, has_magic: true, sections, error: None });
+            }
+        }
+        // Section 2: XIAs
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.xias = true; offset += len; }
+        }
+        // Section 3: Groups
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.groups = true; offset += len; }
+        }
+        // Section 4: next_xia_id (8 bytes, no length prefix)
+        if offset + 8 <= payload.len() {
+            sections.next_xia_id = true;
+            offset += 8;
+        }
+        // Section 5: Constraints
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.constraints = true; offset += len; }
+        }
+        // Section 6: Boolean group tags (ADR-078)
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.boolean_group_tags = true; offset += len; }
+        }
+        // Section 7: Shapes (ADR-050) — 3 sub-sections
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.shapes = true; offset += len; }
+        }
+        if offset + 8 <= payload.len() {
+            sections.next_shape_id = true;
+            offset += 8;
+        }
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.shape_to_xia = true; offset += len; }
+        }
+        Ok(SnapshotInfo { version, has_magic: true, sections, error: None })
     }
 
     /// Import legacy snapshot format (no version header, direct bincode)
@@ -11873,5 +12047,181 @@ mod tests {
         assert_eq!(scene.boolean_group_tags, pre_tags,
             "boolean_group_tags must NOT be affected by promote");
         assert_eq!(scene.get_boolean_group_a(), vec![group_face]);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-μ-β / A-μ-γ — Snapshot legacy audit + version handshake
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr089_a_mu_analyze_full_v2_snapshot() {
+        // Current build saves V2 with all 7 sections present.
+        let mut scene = Scene::new();
+        scene.create_shape("test".to_string(), vec![]);
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let info = Scene::analyze_snapshot(&bytes).expect("analyze");
+        assert!(info.has_magic);
+        assert_eq!(info.version, 2);
+        assert!(info.sections.mesh, "mesh section present");
+        assert!(info.sections.shapes, "ADR-050 Shapes section present");
+        assert!(info.sections.boolean_group_tags, "ADR-078 Boolean section present");
+        assert!(info.error.is_none(), "no error: {:?}", info.error);
+    }
+
+    #[test]
+    fn adr089_a_mu_analyze_legacy_headerless_snapshot() {
+        // Pre-versioning legacy mesh-only file (raw bincode mesh).
+        let mut scene = Scene::new();
+        let mesh_data = scene.mesh.snapshot();
+        let info = Scene::analyze_snapshot(&mesh_data).expect("analyze");
+        assert!(!info.has_magic, "legacy file has no magic bytes");
+        assert_eq!(info.version, 0);
+        assert!(info.error.is_none());
+    }
+
+    #[test]
+    fn adr089_a_mu_analyze_short_data() {
+        // Truncated / empty file.
+        let info = Scene::analyze_snapshot(&[]).expect("analyze");
+        assert_eq!(info.version, 0);
+        assert!(info.error.is_some(), "should have error message");
+        // 7-byte truncated magic
+        let info = Scene::analyze_snapshot(&[b'A', b'X', b'I', b'A', 0, 0, 0]).expect("analyze");
+        assert!(info.error.is_some());
+    }
+
+    #[test]
+    fn adr089_a_mu_v_too_new_rejected_with_clear_message() {
+        // Synthesize a V99 (future) snapshot — magic + version 99 + dummy len.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"AXIA");
+        bytes.extend_from_slice(&99u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // payload length 0
+        let mut scene = Scene::new();
+        let err = scene.import_versioned_snapshot(&bytes).err().expect("must reject");
+        let msg = format!("{}", err);
+        assert!(msg.contains("99") && msg.contains("newer"),
+            "error must mention version 99 + newer: {}", msg);
+        assert!(msg.contains("Forward-compat") || msg.contains("upgrade"),
+            "error must hint upgrade path: {}", msg);
+    }
+
+    #[test]
+    fn adr089_a_mu_corrupt_magic_falls_back_to_legacy() {
+        // Wrong magic bytes — legacy fallback path.
+        let mut scene = Scene::new();
+        let mesh_data = scene.mesh.snapshot();
+        // Should NOT bail — falls through to import_legacy_snapshot
+        let result = scene.import_versioned_snapshot(&mesh_data);
+        assert!(result.is_ok(), "legacy bincode mesh-only should load");
+    }
+
+    #[test]
+    fn adr089_a_mu_v2_roundtrip_preserves_shapes_and_groups() {
+        // Full V2 round-trip — Shapes + Boolean group tags survive.
+        let mut scene = Scene::new();
+        let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v0, v1, v2, v3], FORM_MATERIAL).unwrap();
+        let shape_id = scene.create_shape("Test Shape".to_string(), vec![face]);
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+        // Round-trip: Shape preserved
+        assert!(restored.shapes.contains_key(&shape_id),
+            "Shape ID {:?} must survive roundtrip", shape_id);
+        let restored_shape = restored.shapes.get(&shape_id).unwrap();
+        assert_eq!(restored_shape.name, "Test Shape");
+        assert_eq!(restored_shape.face_ids.len(), 1);
+    }
+
+    #[test]
+    fn adr089_a_mu_v2_roundtrip_preserves_closed_curve_face() {
+        // ADR-089 closed-curve face survives snapshot round-trip.
+        let mut scene = Scene::new();
+        let anchor = scene.mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let circle = axia_geo::AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        scene.mesh.add_face_closed_curve(anchor, circle, FORM_MATERIAL).unwrap();
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+        // Closed-curve face survives — same vert/edge/face counts
+        let active_faces = restored.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        let active_edges = restored.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        let active_verts = restored.mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_faces, 1);
+        assert_eq!(active_edges, 1);
+        assert_eq!(active_verts, 1);
+        // Edge has Circle curve attached after roundtrip
+        let edges_iter: Vec<_> = restored.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).collect();
+        assert!(matches!(
+            edges_iter[0].1.curve(),
+            Some(axia_geo::AnalyticCurve::Circle { .. })
+        ));
+    }
+
+    #[test]
+    fn adr089_a_mu_v2_roundtrip_preserves_closed_bezier_face() {
+        // ADR-089 A-ω closed Bezier face survives snapshot round-trip.
+        let mut scene = Scene::new();
+        let anchor = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let bezier = axia_geo::AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+        };
+        scene.mesh.add_face_closed_curve(anchor, bezier, FORM_MATERIAL).unwrap();
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+        let edges_iter: Vec<_> = restored.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).collect();
+        assert_eq!(edges_iter.len(), 1, "1 closed Bezier self-loop edge");
+        assert!(matches!(
+            edges_iter[0].1.curve(),
+            Some(axia_geo::AnalyticCurve::Bezier { .. })
+        ));
+    }
+
+    #[test]
+    fn adr089_a_mu_legacy_v1_synthesized_loads() {
+        // Synthesize V1 (mesh-only) snapshot — legacy file from before
+        // 2026-04-24. Should load with empty XIAs/Groups/Shapes.
+        let mut original = Scene::new();
+        let v0 = original.mesh.add_vertex(DVec3::ZERO);
+        let v1 = original.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = original.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        original.mesh.add_face(&[v0, v1, v2], FORM_MATERIAL).unwrap();
+        let mesh_data = original.mesh.snapshot();
+        // V1 format: AXIA + 1u32 + u32 mesh_len + mesh_data
+        let mut v1_bytes = Vec::new();
+        v1_bytes.extend_from_slice(b"AXIA");
+        v1_bytes.extend_from_slice(&1u32.to_le_bytes());
+        v1_bytes.extend_from_slice(&(mesh_data.len() as u32).to_le_bytes());
+        v1_bytes.extend(mesh_data);
+
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&v1_bytes).expect("V1 import");
+        assert_eq!(restored.mesh.face_count(), 1, "mesh face restored");
+        assert!(restored.xias.is_empty(), "V1 has no XIAs");
+        assert!(restored.shapes.is_empty(), "V1 has no Shapes (added in ADR-050)");
     }
 }
