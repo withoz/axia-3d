@@ -1123,11 +1123,61 @@ LOCKED guards (axia-core 200) PASS.
 ### A-χ-γ (본 commit)
 - **변경**: 본 §D `A-χ-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-χ track closure 완료. ADR-089 Path A visual +
-  topology + metadata persistence 모든 cleanup 완성. 후속 후보 —
-  A-θ Path B (DCEL 진정한 kernel-native cylinder), Snapshot legacy
-  migration (A-μ), DrawArc/DrawBezier 시민권 확장, LOCKED #35 갱신
-  (A-ρ/τ/υ/φ/χ 추가 트랙 봉인).
+
+---
+
+### A-ω-α (2026-05-08, closed Bezier 시민권 확장 amendment)
+
+**사용자 결재 (2026-05-08)**: "🅰 빠른 가치 — DrawArc/DrawBezier
+closed-curve 시민권 확장. 안전한 완성도 우선."
+
+**현재 상태 진단**:
+- DrawArcTool / DrawBezierTool / DrawBSplineTool 모두 ADR-032 P17 의
+  `drawArcWithCurve` / `drawBezierWithCurve` / `drawBSplineWithCurve`
+  로 이미 kernel-native (curve 자동 attach to 2-vert edge).
+- `add_face_closed_curve` 는 ADR-089 A-δ 시점부터 **Circle only 강제
+  거부** (`bail!("only Circle is supported... deferred to A-ι/A-η")`).
+- Bezier closed loop (control_pts[0] ≈ control_pts[last]) 시민권
+  부재 — 1 anchor + 1 self-loop edge 표현 불가.
+
+**Path Z 4-sub-step roadmap (A-ω closed Bezier)**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-ω-α (본 amendment) | spec only | +0 |
+| A-ω-β | add_face_closed_curve Circle-only 제약 해제 (Bezier closed acceptance + curve-specific normal compute) | +5 |
+| A-ω-γ | WASM bridge drawClosedBezierAsCurve + Plane surface attach (A-η-1 답습) | +3 |
+| A-ω-δ | DrawBezierTool 분기 + browser smoke | +0 |
+
+**Lock-ins**:
+- **L-ω-1** **closure 검증**: Bezier `control_pts[0]` 와
+  `control_pts[last]` 위치 거리 < EPSILON_LENGTH. 이 조건 미충족 시
+  rejection (open Bezier 는 기존 drawBezierWithCurve 답습).
+- **L-ω-2** **Normal compute**: closed Bezier 의 normal = control
+  points best-fit plane normal (least-squares fit). degenerate
+  (collinear control_pts) → bail.
+- **L-ω-3** **A-η-1 Plane attach 확장**: closed Bezier face 도 Plane
+  surface attach (A-η-1 답습). origin = control_pts centroid,
+  basis_u/normal = best-fit plane.
+- **L-ω-4** **DrawBezierTool flag**: DrawCurveSettings flag 답습.
+  default ON 시 closed Bezier (control_pts[0]≈[last]) 자동 closed-
+  curve, 그 외 기존 drawBezierWithCurve.
+- **L-ω-5** **Backward compat**: 기존 drawBezierWithCurve / Open Bezier
+  unchanged. 본 fast-path 는 closed Bezier 만 발동.
+- **L-ω-6** **회귀 자산 보존**: LOCKED #35 모든 회귀 자산 PASS.
+
+**Non-goals**:
+- **N-ω-1** Closed BSpline / Closed NURBS 시민권 (별도 sub-step trigger
+  시 동일 패턴 답습 — periodic knot vector 처리 추가 복잡).
+- **N-ω-2** DrawArc closed-curve 시민권 — Arc 는 본질상 closed 아님
+  (full circle = Circle). Arc 도구는 ADR-032 P17 답습 그대로.
+- **N-ω-3** Closed Bezier 의 Boolean dispatch / Push-Pull 활성화 —
+  A-η-1 P~lane attach 으로 이미 연결됨 (자동 동작).
+
+### A-ω-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅰 빠른 가치 옵션 진행".
+- **변경**: 본 §D `A-ω-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
