@@ -2779,19 +2779,45 @@ impl Mesh {
                     );
                 }
             }
+            crate::curves::AnalyticCurve::BSpline { control_pts, knots, degree } => {
+                // L-Α-1 — closure check (clamped knots case).
+                // Periodic knot vector deferred to future ADR.
+                if control_pts.len() < 2 {
+                    bail!("ADR-089 A-Α-β: BSpline needs ≥ 2 control points");
+                }
+                // Validate knots (delegates to bspline::validate).
+                crate::curves::bspline::validate(control_pts, knots, *degree as usize)
+                    .map_err(|e| anyhow::anyhow!(
+                        "ADR-089 A-Α-β: BSpline validate failed: {}", e))?;
+                let p0 = control_pts[0];
+                let pn = control_pts[control_pts.len() - 1];
+                if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
+                    bail!(
+                        "ADR-089 A-Α-β: BSpline control points not closed \
+                         (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e}). \
+                         Periodic knot vector closed BSpline deferred to future ADR.",
+                        (p0 - pn).length(),
+                        crate::tolerances::EPSILON_LENGTH,
+                    );
+                }
+            }
             other => bail!(
-                "ADR-089 A-ω-β: closed BSpline / NURBS / Arc curves deferred \
-                 to future ADR (got {:?}). Use Circle or closed Bezier.",
+                "ADR-089 A-Α-β: closed NURBS / Arc curves deferred \
+                 to future ADR (got {:?}). Use Circle, closed Bezier, or closed BSpline.",
                 std::mem::discriminant(other),
             ),
         }
 
         // Compute face normal from the curve.
         // - Circle: explicit normal field.
-        // - Bezier: best-fit plane normal of control points (L-ω-2).
+        // - Bezier / BSpline: best-fit plane normal of control points
+        //   (L-ω-2 / L-Α-2 — same helper).
         let normal = match &curve {
             crate::curves::AnalyticCurve::Circle { normal, .. } => normal.normalize_or_zero(),
             crate::curves::AnalyticCurve::Bezier { control_pts } => {
+                bezier_best_fit_normal(control_pts)?
+            }
+            crate::curves::AnalyticCurve::BSpline { control_pts, .. } => {
                 bezier_best_fit_normal(control_pts)?
             }
             _ => DVec3::Z, // unreachable per validation above
@@ -2861,11 +2887,16 @@ impl Mesh {
                 self.faces[face_id].set_surface(Some(plane));
             }
 
-            // ADR-089 A-ω-γ — Plane surface attach for closed Bezier
-            // (A-η-1 답습). origin = control points centroid,
-            // normal = best-fit plane normal, basis_u = first non-zero
-            // edge from centroid. u/v range = AABB extent × 1.5.
-            if let crate::curves::AnalyticCurve::Bezier { control_pts } = &curve {
+            // ADR-089 A-ω-γ / A-Α-β — Plane surface attach for closed
+            // Bezier / BSpline (A-η-1 답습). origin = control points
+            // centroid, normal = best-fit plane normal, basis_u = first
+            // non-zero edge from centroid. u/v range = AABB extent ×1.5.
+            let bezier_or_bspline_pts: Option<&Vec<DVec3>> = match &curve {
+                crate::curves::AnalyticCurve::Bezier { control_pts } => Some(control_pts),
+                crate::curves::AnalyticCurve::BSpline { control_pts, .. } => Some(control_pts),
+                _ => None,
+            };
+            if let Some(control_pts) = bezier_or_bspline_pts {
                 let n_pts = control_pts.len() as f64;
                 let centroid = control_pts.iter().fold(DVec3::ZERO, |acc, p| acc + *p) / n_pts;
                 // basis_u: first significant tangent from centroid.
@@ -4532,23 +4563,28 @@ impl Mesh {
                         stats.emitted += 1;
                         continue;
                     }
-                    // ADR-089 A-ω-δ — closed Bezier render fast-path.
-                    // Tessellate Bezier control points to polyline → fan
-                    // triangulate from centroid (analogous to Circle path).
-                    if let Some(crate::curves::AnalyticCurve::Bezier {
-                        control_pts,
-                    }) = edge_ref.curve().cloned()
+                    // ADR-089 A-ω-δ / A-Α-β — closed Bezier / BSpline
+                    // render fast-path. Tessellate control points to
+                    // polyline → fan triangulate from centroid (analogous
+                    // to Circle path).
+                    let bezier_or_bspline_tess: Option<Vec<DVec3>> = match edge_ref.curve().cloned() {
+                        Some(crate::curves::AnalyticCurve::Bezier { control_pts }) => {
+                            crate::curves::bezier::tessellate(
+                                &control_pts, ANALYTIC_CHORD_TOL,
+                            ).ok()
+                        }
+                        Some(crate::curves::AnalyticCurve::BSpline {
+                            control_pts, knots, degree,
+                        }) => {
+                            crate::curves::bspline::tessellate(
+                                &control_pts, &knots, degree as usize,
+                                ANALYTIC_CHORD_TOL,
+                            ).ok()
+                        }
+                        _ => None,
+                    };
+                    if let Some(pts) = bezier_or_bspline_tess
                     {
-                        let chord_tol = ANALYTIC_CHORD_TOL;
-                        let pts = match crate::curves::bezier::tessellate(
-                            &control_pts, chord_tol,
-                        ) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                stats.outer_too_short += 1;
-                                continue;
-                            }
-                        };
                         if pts.len() < 3 {
                             stats.outer_too_short += 1;
                             continue;
@@ -4921,24 +4957,29 @@ impl Mesh {
                     }
                     continue;
                 }
-                // ADR-089 A-ω-δ — Bezier closed self-loop wireframe.
-                if let Some(crate::curves::AnalyticCurve::Bezier {
-                    control_pts,
-                }) = edge.curve().cloned()
-                {
-                    if let Ok(pts) = crate::curves::bezier::tessellate(
-                        &control_pts, 0.05,
-                    ) {
-                        if pts.len() >= 2 {
-                            for w in pts.windows(2) {
-                                lines.push(w[0].x as f32);
-                                lines.push(w[0].y as f32);
-                                lines.push(w[0].z as f32);
-                                lines.push(w[1].x as f32);
-                                lines.push(w[1].y as f32);
-                                lines.push(w[1].z as f32);
-                                edge_map.push(_edge_id.raw());
-                            }
+                // ADR-089 A-ω-δ / A-Α-β — Bezier / BSpline closed
+                // self-loop wireframe.
+                let curve_pts: Option<Vec<DVec3>> = match edge.curve().cloned() {
+                    Some(crate::curves::AnalyticCurve::Bezier { control_pts }) => {
+                        crate::curves::bezier::tessellate(&control_pts, 0.05).ok()
+                    }
+                    Some(crate::curves::AnalyticCurve::BSpline { control_pts, knots, degree }) => {
+                        crate::curves::bspline::tessellate(
+                            &control_pts, &knots, degree as usize, 0.05,
+                        ).ok()
+                    }
+                    _ => None,
+                };
+                if let Some(pts) = curve_pts {
+                    if pts.len() >= 2 {
+                        for w in pts.windows(2) {
+                            lines.push(w[0].x as f32);
+                            lines.push(w[0].y as f32);
+                            lines.push(w[0].z as f32);
+                            lines.push(w[1].x as f32);
+                            lines.push(w[1].y as f32);
+                            lines.push(w[1].z as f32);
+                            edge_map.push(_edge_id.raw());
                         }
                     }
                     continue;
@@ -10479,9 +10520,13 @@ mod tests {
             "ADR-089 A-ω-β: collinear Bezier must be rejected (no plane)");
     }
 
+    // A-Α-β: BSpline 시민권 활성 — 이전 'still_rejected' 테스트 의미 변경.
+
     #[test]
-    fn adr089_a_omega_bsplines_still_rejected() {
-        // BSpline / NURBS / Arc closed curves are deferred to future ADR.
+    fn adr089_a_alpha_closed_bspline_creates_self_loop_face() {
+        // Closed BSpline (control_pts[0] == control_pts[last] with
+        // clamped knot vector) → 1 anchor + 1 self-loop edge with
+        // BSpline curve + 1 face with Plane surface.
         let mut mesh = Mesh::new();
         let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
         let curve = crate::curves::AnalyticCurve::BSpline {
@@ -10490,13 +10535,96 @@ mod tests {
                 DVec3::new(10.0, 0.0, 0.0),
                 DVec3::new(10.0, 10.0, 0.0),
                 DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0), // closure
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("ADR-089 A-Α-β: closed BSpline must succeed");
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_faces, 1);
+        assert_eq!(active_edges, 1);
+        assert_eq!(active_verts, 1);
+        // Edge must be self-loop with BSpline curve.
+        let edges_iter: Vec<EdgeId> = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).map(|(id, _)| id).collect();
+        let eid = edges_iter[0];
+        assert!(mesh.edges[eid].is_self_loop());
+        assert!(matches!(
+            mesh.edges[eid].curve(),
+            Some(crate::curves::AnalyticCurve::BSpline { .. })
+        ));
+        // Plane surface attached.
+        assert!(matches!(
+            mesh.faces[face].surface(),
+            Some(crate::surfaces::AnalyticSurface::Plane { .. })
+        ));
+    }
+
+    #[test]
+    fn adr089_a_alpha_open_bspline_rejected() {
+        // BSpline with cp[0] != cp[last] should be rejected as not-closed.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                // No closure
             ],
             knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
             degree: 3,
         };
         let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
         assert!(result.is_err(),
-            "ADR-089 A-ω-β: BSpline still deferred (future ADR)");
+            "ADR-089 A-Α-β: open BSpline must be rejected");
+    }
+
+    #[test]
+    fn adr089_a_alpha_nurbs_still_rejected() {
+        // NURBS / Arc closed curves still deferred (future ADR).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::NURBS {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+            weights: vec![1.0, 1.0, 1.0, 1.0, 1.0],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-Α-β: NURBS still deferred (future ADR)");
+    }
+
+    #[test]
+    fn adr089_a_alpha_invalid_knots_rejected() {
+        // BSpline with invalid knot vector → bspline::validate fails.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+            knots: vec![0.0, 1.0], // wrong length
+            degree: 3,
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-Α-β: invalid knots must be rejected");
     }
 
     #[test]

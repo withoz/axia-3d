@@ -284,7 +284,7 @@ pub fn extract_bezier_strips(
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────
 
-fn validate(control_pts: &[DVec3], knots: &[f64], degree: usize) -> Result<()> {
+pub fn validate(control_pts: &[DVec3], knots: &[f64], degree: usize) -> Result<()> {
     if degree == 0 {
         bail!("bspline: degree must be ≥ 1, got 0");
     }
