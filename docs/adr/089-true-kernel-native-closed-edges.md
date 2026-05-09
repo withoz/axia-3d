@@ -1012,10 +1012,53 @@ smoothness) + A-τ (edge smooth-group hide) + A-υ (leftover cleanup)
 ### A-φ-γ (본 commit)
 - **변경**: 본 §D `A-φ-γ` closure entry.
 - **회귀**: +0 (closure docs).
-- **다음 step**: ADR-089 Path A 의 visual + topology 모든 cleanup
-  완료. 후속 후보 — A-θ Path B (DCEL 진정한 kernel-native cylinder),
-  DrawArc/DrawBezier closed-curve 시민권 확장, Snapshot legacy
-  migration (A-μ).
+
+---
+
+### A-χ-α (2026-05-08, face split surface inheritance)
+
+**관찰**: Sphere primitive 직접 후 (auto-intersect OFF) sphere 가 0
+edge 로 완벽 매끈, 256 face 모두 Sphere kind. 그러나 **default 인
+auto-intersect ON 시 face split 으로 1985 face 모두 surface=None**
+(kind=0). A-ρ/A-φ uv-slice 와 A-τ smooth-group hide 모두 작동 안 함.
+
+원인: `mesh.split_face` + `split_face_by_chain` + `split_face_case_b/c/d`
+의 모든 split site 가 parent face 의 AnalyticSurface 를 상속하지 않음.
+
+**Path Z 3-sub-step**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-χ-α (본 amendment) | spec only | +0 |
+| A-χ-β | 5 split sites surface inheritance | +5 |
+| A-χ-γ | browser smoke + closure | +0 |
+
+**Lock-ins**:
+- **L-χ-1** **mesh.split_face direct DCEL**: face_id 는 원래 슬롯
+  유지하므로 surface 자동 보존. face_b 새 face 에 parent surface
+  복사 필요.
+- **L-χ-2** **remove + add_face_with_holes 패턴**: 5 split sites
+  (split_face_by_chain, case_b, case_c, case_d, ...) 모두 parent
+  surface capture → remove → add → set_surface 로 재배포.
+- **L-χ-3** **uv_range 보존**: parent 의 full u_range/v_range 그대로
+  복사 (각 sub-face 의 boundary verts 가 A-ρ/A-φ uv-slice 로 자동
+  sub-range 계산).
+- **L-χ-4** **Hole 분배**: hole 도 parent surface 상속 (이미
+  reassign_loop_face 로 face 만 재배포 — surface 는 새 face owner 에
+  attach 되어야).
+- **L-χ-5** **Backward compat**: parent surface = None 이면 sub-faces
+  도 None (regression guard). 기존 Plane/None 동작 무변화.
+- **L-χ-6** **회귀 자산 보존**: LOCKED #1/#12/#16 회귀 자산 모두 PASS.
+
+**Non-goals**:
+- **N-χ-1** uv_range 의 sub-slice 자동 계산 — A-ρ/A-φ 가 이미 처리.
+- **N-χ-2** Boolean / Push-Pull 의 별도 split site (별도 sub-step
+  trigger 시 동일 패턴 답습).
+
+### A-χ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "A-χ 진입로 진입 승인".
+- **변경**: 본 §D `A-χ-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
