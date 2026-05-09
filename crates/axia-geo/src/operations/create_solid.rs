@@ -517,6 +517,15 @@ impl Mesh {
             self.faces[side_fid].set_surface(Some(cylinder_surface.clone()));
         }
 
+        // ADR-093 D-β — Surface owner-id grouping (B-MVP).
+        // All N side faces share a single fresh owner-id so the selection
+        // layer can promote a single-face click → entire cylinder side
+        // group (Lock-in D-F: allocation site = post N-side creation).
+        let owner_id = self.next_surface_owner_id();
+        for &side_fid in &side_faces {
+            self.set_face_surface_owner_id(side_fid, Some(owner_id));
+        }
+
         let adjacent_splits = 0;
 
         // Aggregate — profile + top + N sides.
@@ -4883,6 +4892,174 @@ mod tests {
                     normal
                 );
             }
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-093 D-β — Cylinder Side Face Owner-ID Grouping (B-MVP)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr093_d_beta_face_surface_owner_id_default_none() {
+        // 새 face 의 default surface_owner_id 는 None.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        assert_eq!(mesh.face_surface_owner_id(f), None,
+            "fresh face must have no surface_owner_id");
+    }
+
+    #[test]
+    fn adr093_d_beta_next_surface_owner_id_starts_at_1_and_increments() {
+        let mut mesh = Mesh::new();
+        let id1 = mesh.next_surface_owner_id();
+        let id2 = mesh.next_surface_owner_id();
+        let id3 = mesh.next_surface_owner_id();
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+    }
+
+    #[test]
+    fn adr093_d_beta_walk_returns_self_for_none_id() {
+        // owner_id 가 없는 face 는 walk 결과가 자기 자신.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        assert_eq!(mesh.walk_face_owner_siblings(f), vec![f]);
+    }
+
+    #[test]
+    fn adr093_d_beta_walk_collects_all_with_same_id() {
+        // 두 개 face 에 동일 owner_id 부여 → walk 가 둘 다 반환.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let v4 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v5 = mesh.add_vertex(DVec3::new(2.0, 1.0, 0.0));
+        let f1 = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let f2 = mesh.add_face(&[v1, v4, v5, v2], MaterialId::new(0)).unwrap();
+        let owner = mesh.next_surface_owner_id();
+        assert!(mesh.set_face_surface_owner_id(f1, Some(owner)));
+        assert!(mesh.set_face_surface_owner_id(f2, Some(owner)));
+        let mut siblings = mesh.walk_face_owner_siblings(f1);
+        siblings.sort_by_key(|f| f.raw());
+        let mut expected = vec![f1, f2]; expected.sort_by_key(|f| f.raw());
+        assert_eq!(siblings, expected,
+            "both faces with same owner must be returned as siblings");
+    }
+
+    #[test]
+    fn adr093_d_beta_extrude_planar_cylinder_assigns_same_owner_to_n_sides() {
+        // Path A cylinder 결과: N side faces 가 동일 owner_id 공유.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 8.0 },
+            MaterialId::new(0),
+        ).expect("create_solid OK");
+
+        // 모든 side face 가 owner_id 부여 + 같은 값 + None 아님
+        let owner_ids: Vec<Option<u32>> = result.side_faces.iter()
+            .map(|&fid| mesh.face_surface_owner_id(fid))
+            .collect();
+        assert!(owner_ids.iter().all(|o| o.is_some()),
+            "ALL side faces must have surface_owner_id, got {:?}", owner_ids);
+        let first = owner_ids[0];
+        assert!(owner_ids.iter().all(|&o| o == first),
+            "ALL side faces must share the SAME owner_id, got {:?}", owner_ids);
+
+        // walk 결과가 모든 side faces (sorted dedup)
+        let any_side = result.side_faces[0];
+        let mut siblings = mesh.walk_face_owner_siblings(any_side);
+        siblings.sort_by_key(|f| f.raw());
+        let mut expected = result.side_faces.clone();
+        expected.sort_by_key(|f| f.raw());
+        assert_eq!(siblings, expected,
+            "walk from one side face must return all N side faces");
+    }
+
+    #[test]
+    fn adr093_d_beta_extrude_planar_cylinder_owner_unique_per_cylinder() {
+        // 두 개 cylinder 생성 시 각자 독립적 owner_id.
+        let mut mesh = Mesh::new();
+
+        // Cylinder 1
+        let profile1 = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 3.0);
+        let result1 = mesh.create_solid(
+            profile1,
+            CreateSolidMode::Extrude { distance: 5.0 },
+            MaterialId::new(0),
+        ).expect("create_solid 1 OK");
+        let id1 = mesh.face_surface_owner_id(result1.side_faces[0]).unwrap();
+
+        // Cylinder 2 — 다른 위치
+        let profile2 = build_closed_curve_circle_face(
+            &mut mesh, DVec3::new(20.0, 0.0, 0.0), 4.0,
+        );
+        let result2 = mesh.create_solid(
+            profile2,
+            CreateSolidMode::Extrude { distance: 6.0 },
+            MaterialId::new(0),
+        ).expect("create_solid 2 OK");
+        let id2 = mesh.face_surface_owner_id(result2.side_faces[0]).unwrap();
+
+        assert_ne!(id1, id2,
+            "two distinct cylinders must have different owner_ids");
+
+        // walk 가 cross 안 함
+        let walk1 = mesh.walk_face_owner_siblings(result1.side_faces[0]);
+        let walk2 = mesh.walk_face_owner_siblings(result2.side_faces[0]);
+        for fid in &walk1 {
+            assert!(!walk2.contains(fid),
+                "cylinder 1 walk must not include cylinder 2 faces");
+        }
+    }
+
+    #[test]
+    fn adr093_d_beta_set_owner_on_inactive_face_returns_false() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        // Soft-delete the face
+        mesh.remove_face(f).expect("remove_face OK");
+        // setting owner on inactive face must fail (no panic)
+        assert!(!mesh.set_face_surface_owner_id(f, Some(7)),
+            "set_face_surface_owner_id on inactive face must return false");
+        // Reading owner on inactive face → None
+        assert_eq!(mesh.face_surface_owner_id(f), None);
+    }
+
+    #[test]
+    fn adr093_d_beta_polygonal_circle_path_also_gets_owner_id() {
+        // ADR-088 cross-cut — 폴리곤 circle path 도 cylinder 결과 → side
+        // faces 가 동일 owner_id 부여 (extrude_planar_cylinder 가 통합
+        // 진입점이므로 폴리곤 / closed-curve 둘 다 활성).
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 16);
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 7.0 },
+            MaterialId::new(0),
+        ).expect("polygonal circle OK");
+        let first_owner = mesh.face_surface_owner_id(result.side_faces[0]);
+        assert!(first_owner.is_some(),
+            "polygonal cylinder side faces also receive owner_id (D-F lock-in)");
+        for &fid in &result.side_faces {
+            assert_eq!(mesh.face_surface_owner_id(fid), first_owner,
+                "all 16 polygonal side faces share the same owner_id");
         }
     }
 

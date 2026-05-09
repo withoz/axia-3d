@@ -124,6 +124,33 @@ pub struct Mesh {
     /// load with counter = 0.
     #[serde(default)]
     next_curve_owner_id: u32,
+
+    /// ADR-093 D-β — `FaceId → surface owner-id` map for face grouping
+    /// (B-MVP — Path B Light). Faces with the same owner-id form a
+    /// logical "surface group" (e.g., the N quad faces forming a
+    /// cylinder side). Selection layer treats the group as one entity.
+    ///
+    /// Stored as a Mesh-level map per ADR-091 §E L1 canonical guidance
+    /// (bincode struct field 추가 금지 — Scene/Mesh-level HashMap 사용).
+    /// `Face` struct UNCHANGED — bincode legacy snapshot compatibility
+    /// preserved automatically.
+    ///
+    /// Invariants:
+    /// - Set only by `set_face_surface_owner_id` (allocation site:
+    ///   `extrude_planar_cylinder` post N-side creation, or future
+    ///   primitive constructors)
+    /// - Inherited by `face_split_*` (LOCKED #35 L9 cross-cut, future
+    ///   sub-step or ADR-093 amendment)
+    /// - Cleared on `remove_face` (face deactivation)
+    #[serde(default)]
+    pub face_to_surface_owner_id: FxHashMap<FaceId, u32>,
+
+    /// ADR-093 D-β — Monotonic counter for surface owner-id allocation
+    /// (mirrors `next_curve_owner_id` from ADR-088). One id per logical
+    /// surface group (e.g., one cylinder = one surface_owner_id shared
+    /// by all N side faces).
+    #[serde(default)]
+    next_surface_owner_id: u32,
 }
 
 static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
@@ -363,6 +390,10 @@ impl Mesh {
             cache_eviction_count: std::cell::RefCell::new(0),
             // ADR-088 Phase 1 — start at 0, allocate via next_curve_owner_id().
             next_curve_owner_id: 0,
+            // ADR-093 D-β — start at 1, allocate via next_surface_owner_id().
+            // 0 is reserved as null sentinel.
+            face_to_surface_owner_id: FxHashMap::default(),
+            next_surface_owner_id: 1,
         }
     }
 
@@ -425,9 +456,99 @@ impl Mesh {
             .collect()
     }
 
-    // ========================================================================
+    // ════════════════════════════════════════════════════════════════
+    // ADR-093 D-β — Surface owner-id grouping (B-MVP — Path B Light)
+    //
+    // Mesh-level map (per ADR-091 §E L1 canonical guidance — bincode
+    // struct field 추가 금지). Mirrors curve_owner_id pattern from
+    // ADR-088 but on Face/surface dimension.
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-093 D-β — Allocate a fresh surface owner-id (monotonic
+    /// counter starting at 1; 0 reserved as null). One id per logical
+    /// surface group (e.g., one cylinder = one id shared by all N
+    /// side faces).
+    ///
+    /// Mirrors `next_curve_owner_id()` from ADR-088. Monotonic — IDs
+    /// never reused even if associated faces deactivated.
+    pub fn next_surface_owner_id(&mut self) -> u32 {
+        let id = self.next_surface_owner_id;
+        self.next_surface_owner_id = self.next_surface_owner_id.checked_add(1)
+            .expect("Mesh::next_surface_owner_id overflow (u32::MAX)");
+        id
+    }
+
+    /// ADR-093 D-β — Set the surface owner group ID for a face.
+    /// `None` removes grouping (face becomes standalone — default).
+    /// Returns `false` if face is missing or inactive.
+    pub fn set_face_surface_owner_id(
+        &mut self,
+        face_id: FaceId,
+        owner: Option<u32>,
+    ) -> bool {
+        let face_active = self.faces.get(face_id)
+            .map(|f| f.is_active())
+            .unwrap_or(false);
+        if !face_active {
+            return false;
+        }
+        match owner {
+            Some(id) => { self.face_to_surface_owner_id.insert(face_id, id); }
+            None     => { self.face_to_surface_owner_id.remove(&face_id); }
+        }
+        true
+    }
+
+    /// ADR-093 D-β — Read the surface owner group ID of a face.
+    /// Returns `None` if face is missing, inactive, or has no group.
+    pub fn face_surface_owner_id(&self, face_id: FaceId) -> Option<u32> {
+        let active = self.faces.get(face_id)
+            .map(|f| f.is_active())
+            .unwrap_or(false);
+        if !active { return None; }
+        self.face_to_surface_owner_id.get(&face_id).copied()
+    }
+
+    /// ADR-093 D-β — Collect all active faces sharing a given surface
+    /// owner group ID. Used by SelectTool walk: pick one face → group
+    /// promote (LOCKED #15 ADR-037 P22.5 Face owner-id 자연 확장).
+    ///
+    /// Returns empty vec if no faces match (defensive: stale id, all
+    /// deactivated, etc.).
+    pub fn faces_by_surface_owner(&self, owner: u32) -> Vec<FaceId> {
+        self.face_to_surface_owner_id.iter()
+            .filter_map(|(&fid, &oid)| {
+                if oid != owner { return None; }
+                self.faces.get(fid)
+                    .filter(|f| f.is_active())
+                    .map(|_| fid)
+            })
+            .collect()
+    }
+
+    /// ADR-093 D-β — Walk owner-siblings from a starting face.
+    ///
+    /// Selection-layer entry point: given a clicked face, return all
+    /// active faces sharing its surface owner-id (group). If the face
+    /// has no owner-id (None), returns just `[face_id]` (no group).
+    ///
+    /// Result order is unspecified; callers (SelectionManager) handle
+    /// dedup/sort.
+    pub fn walk_face_owner_siblings(&self, face_id: FaceId) -> Vec<FaceId> {
+        match self.face_surface_owner_id(face_id) {
+            Some(owner) => self.faces_by_surface_owner(owner),
+            None => {
+                let active = self.faces.get(face_id)
+                    .map(|f| f.is_active())
+                    .unwrap_or(false);
+                if active { vec![face_id] } else { Vec::new() }
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // Snapshot (undo/redo)
-    // ========================================================================
+    // ════════════════════════════════════════════════════════════════
 
     /// 현재 메시 상태를 바이트로 직렬화 (스냅샷 저장)
     pub fn snapshot(&self) -> Vec<u8> {

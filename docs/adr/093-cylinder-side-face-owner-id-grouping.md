@@ -194,5 +194,53 @@ D-δ: SelectTool integration — single click promote / group click 일관 / Ins
   측면 우선 closure 명시.
 - **회귀**: +0 (docs only).
 
-### D-β ~ D-ε (예정)
+### D-β (본 commit)
+- **사용자 결재**: 2026-05-09, "승인".
+- **사전 검토 architectural 정정 (canonical)**: 원안 ("Face struct 에
+  surface_owner_id: Option<u32> 추가, ADR-088 답습") 가 **ADR-091 §E L1
+  canonical guidance 위반** 발견 — bincode struct field 추가 금지,
+  Mesh/Scene-level HashMap 사용 강제. 결정 정정: `Mesh.face_to_surface_
+  owner_id: FxHashMap<FaceId, u32>` 신규 (Face struct UNCHANGED — bincode
+  legacy snapshot 호환 보존).
+  > Note: ADR-088 (Edge.curve_owner_id) 의 동일 패턴 (Edge struct field
+  > 추가) 은 ADR-091 §E L1 canonical 이전 결정. 본 ADR 가 처음으로 L1
+  > 명시 적용. ADR-088 의 retroactive migration 은 별도 트랙.
+- **변경**:
+  * `crates/axia-geo/src/mesh.rs`:
+    - `Mesh.face_to_surface_owner_id: FxHashMap<FaceId, u32>` (`#[serde
+      (default)]` legacy 호환) + `Mesh.next_surface_owner_id: u32`
+      (start at 1).
+    - `next_surface_owner_id() -> u32` (monotonic, ADR-088 답습)
+    - `set_face_surface_owner_id(face_id, Option<u32>) -> bool` (active
+      face 만 설정, false on inactive)
+    - `face_surface_owner_id(face_id) -> Option<u32>` (active 검증 포함)
+    - `faces_by_surface_owner(owner) -> Vec<FaceId>` (group enumeration)
+    - `walk_face_owner_siblings(face_id) -> Vec<FaceId>` (selection-layer
+      entry point — None ID 시 자기 자신만, Some(id) 시 group 전체)
+  * `crates/axia-geo/src/operations/create_solid.rs::extrude_planar_
+    cylinder` — N side faces 생성 직후 fresh `next_surface_owner_id()`
+    + 모든 side faces 에 동일 ID 부여 (Lock-in D-F).
+- **회귀** (axia-geo 1207 → 1215, +8):
+  * `adr093_d_beta_face_surface_owner_id_default_none`
+  * `adr093_d_beta_next_surface_owner_id_starts_at_1_and_increments`
+  * `adr093_d_beta_walk_returns_self_for_none_id`
+  * `adr093_d_beta_walk_collects_all_with_same_id`
+  * `adr093_d_beta_extrude_planar_cylinder_assigns_same_owner_to_n_sides`
+    (architectural anchor — N sides 가 1 group)
+  * `adr093_d_beta_extrude_planar_cylinder_owner_unique_per_cylinder`
+    (cross-cylinder isolation)
+  * `adr093_d_beta_set_owner_on_inactive_face_returns_false`
+    (defensive — soft-deleted face)
+  * `adr093_d_beta_polygonal_circle_path_also_gets_owner_id` —
+    extrude_planar_cylinder 가 통합 진입점이라 폴리곤 / closed-curve
+    둘 다 활성 (D-F lock-in 명시 검증)
+  * 합계 **+8**, 절대 #[ignore] 금지 8/8 준수
+- **누적** (D-α ~ D-β): axia-geo +8.
+- **Architectural 의의**:
+  * ADR-091 §E L1 canonical guidance 의 첫 명시 적용
+  * ADR-088 의 Edge owner-id 패턴 위에 Face owner-id 자연 확장
+  * Selection layer enforcement 는 D-γ/D-δ 에서 활성 — engine 자료는
+    D-β 로 완전 봉인
+
+### D-γ ~ D-ε (예정)
 별도 sub-step 결재 시 commit 진행.
