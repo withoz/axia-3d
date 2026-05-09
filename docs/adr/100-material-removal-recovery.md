@@ -1,0 +1,171 @@
+# ADR-100: Material Removal Recovery (Two-Layer Citizenship Phase 5-C)
+
+- **Status**: Proposed (R-α — spec only)
+- **Date**: 2026-05-10
+- **Anchor**: LOCKED #26 Phase 5 약속 ("자산 라이브러리 3계층 +
+  Layered material") + v3.2 §12.3 (material 삭제 시 자연 복구 →
+  사용자 다이얼로그). ADR-049 §4 Q5 final ("v3.2 §12 strict — 재질
+  제거 = 5초 알림, 위상 손상 = 자동 복구 시도 → 실패 시 사용자
+  다이얼로그"). 본 ADR 은 Q5 사건 1 (재질 제거) 의 atomic closure.
+- **Parent**: ADR-049 (Two-Layer Citizenship Model)
+- **Sibling**: ADR-050 (Phase 1 ✅), ADR-091 (Phase 2 ✅), ADR-095
+  (Phase 3 ✅), ADR-097 (Phase 4 ✅), ADR-098 (Phase 5-A ✅)
+- **Successor (planned)**: ADR-099 (Phase 5-B — Layered material,
+  별도 세션 / multi-week)
+- **Direct ancestor pattern**: ADR-097 (Phase 4) — Orchestrator + Dialog
+  + Settings flag + Real Chromium E2E 의 5-layer atomic stack 답습.
+
+---
+
+## A. Problem Statement
+
+ADR-098 S-G 는 Material removal 의 surface 만 정의 — User tier 만
+제거 가능, System/Project 거부. 그러나 **Project 재질을 사용 중인
+Xia 가 있으면 어떻게 되나?** 현재는 거부도 자동 처리도 없음.
+
+v3.2 §12.3 + ADR-049 §4 Q5 promise:
+1. 재질 제거 시 사용자 알림 (Toast 5초)
+2. 자동 복구 시도 (Xia → Shape 강등 또는 fallback 재질)
+3. 실패 시 사용자 다이얼로그 ([Undo] / [강등] / [수동수정])
+
+**ADR-097 의 material-layer 변형** — Phase 4 가 위상 손상 자동 복구
+였다면, Phase 5-C 는 **재질 손상 (orphan material assignment) 자동
+복구**. 같은 Orchestrator 패턴, 다른 damage 종류.
+
+---
+
+## B. Lock-ins (사용자 결재 대기)
+
+### R-A — Damage detection scope: orphan material assignment
+**ADR-097 detect_topology_damage 패턴 답습.** Scene-level wrapper —
+`detect_orphan_material_assignments() -> OrphanMaterialReport`.
+- **사건 1 (canonical)**: Xia.material 이 material_library 에 없음
+  (e.g. removeUserMaterial 후 stale assignment)
+- **사건 2 (확장)**: Xia.material 이 material_library 에 있지만 tier 가
+  사라짐 (드물지만 가능 — bincode legacy 시나리오)
+
+R-α scope 는 **사건 1 만** — 사건 2 는 ADR-098 migrate_legacy_materials
+가 자연 복구 (idempotent). 본 ADR 의 entry는 사건 1.
+
+### R-B — Recovery 전략 우선순위 3-tier
+ADR-097 attempt_auto_recovery 와 동일 fixed-point loop:
+1. **Pass 1 (auto-demote)**: orphan-material Xia 의 해당 material 을
+   FORM_MATERIAL 로 set → ADR-091 D-δ 의 Xia → Shape demote 자동 trigger
+   (ADR-091 D-β `demote_xia_to_shape` 의 4-condition 통과 시).
+2. **Pass 2 (fallback)**: demote 실패 (예: face_ids 가 condition 미충족)
+   → fallback 재질 (System tier id 0 = Concrete) 로 reassign. 사용자
+   변경 인지 가능하도록 Toast 메시지에 "Concrete 로 임시 변경" 명시.
+3. **Pass 3 (escalate)**: fallback 도 실패 → PartialFailure → Dialog.
+
+### R-C — UI Orchestrator: ADR-097 패턴 직접 재사용
+신규 helper:
+- `web/src/citizenship/MaterialRemovalRecoveryDialog.ts` — ADR-097
+  TopologyRecoveryDialog 답습 (3-option modal: [Undo] / [강등] /
+  [수동수정])
+- `web/src/citizenship/MaterialRemovalRecoveryOrchestrator.ts` —
+  ADR-097 TopologyRecoveryOrchestrator 답습 (5-stage flow: detect →
+  recover → escalate)
+
+### R-D — Material removal API 확장
+ADR-098 `removeUserMaterial` (User only, S-G safety) 보존. 본 ADR 추가:
+- **`removeProjectMaterial(material_id) -> Result<RemovalOutcome>`** —
+  Project tier 재질 제거 + 사용 중인 face cascade. RemovalOutcome enum:
+  * `NoOp` — 사용 중인 face 없음, 단순 제거
+  * `Recovered { affected_xias: usize, faces_demoted: usize }` —
+    Pass 1+2 로 모든 사용처 복구
+  * `PartialFailure { affected_xias: usize, remaining_orphans: usize }`
+    → Orchestrator 가 dialog escalate
+- **System tier removal** 영원히 거부 (R-G safety, ADR-098 S-G 답습)
+
+### R-E — Default OFF (ADR-097 T-ε 답습)
+`axia:auto-material-recovery` localStorage flag, **Default OFF**.
+사용자 가 명시 활성 안 하면 `removeProjectMaterial` 호출 시 단순 reject
+(`MaterialInUse` Err). 활성 시 Orchestrator 자동 trigger.
+
+### R-F — Snapshot 영향 0
+ADR-098 section 9 보존 — material_library 만 직렬화. Material removal
+은 *runtime mutation* 이고 transaction 으로 wrap 됨 (ADR-091 D-β
+패턴 답습 — bridge 호출 시 push_snapshot before, replace_last_after
+on success).
+
+### R-G — Bridge surface (additive — ADR-076 baseline guard PASS)
+- `detectOrphanMaterialAssignments() -> String` (JSON report)
+- `attemptMaterialRemovalRecovery(material_id: u32) -> String`
+  (JSON outcome — NoOp/Recovered/PartialFailure)
+- `removeProjectMaterial(material_id: u32) -> String` (JSON
+  RemovalOutcome — convenience entry that combines `remove_material`
+  + auto-recovery)
+
+ADR-098 의 `removeUserMaterial` UNCHANGED.
+
+### R-H — ADR-097 5-layer atomic stack 직접 재사용
+Engine truth (axia-core detection + recovery) + Bridge (axia-wasm 3
+endpoints) + UI orchestration (Dialog + Orchestrator) + Settings flag
++ Real Chromium E2E. ADR-097 의 5-layer 와 거의 1:1 mirror —
+material-layer 변형으로 패턴 재사용.
+
+---
+
+## C. Path Z atomic 6-단계
+
+| # | Sub-step | 산출물 | 회귀 |
+|---|----------|--------|------|
+| 1 | **R-α** spec | 본 ADR | 0 |
+| 2 | **R-β** Rust core | `OrphanMaterialReport` + `MaterialRecoveryOutcome` enum + Scene::detect_orphan_material_assignments + Scene::attempt_material_removal_recovery + Scene::remove_project_material_with_recovery | axia-core +8~12 |
+| 3 | **R-γ** WASM bridge 3 endpoints | additive (ADR-076 §C-amendment-1 정합) + step6_additive_only.rs wiring | axia-wasm +3 wiring |
+| 4 | **R-δ** TS wrappers + Dialog + Orchestrator | ADR-097 helper 직접 답습 | vitest +18~22 |
+| 5 | **R-ε** Settings flag + main.ts wiring | `AutoMaterialRecoverySettings.ts` + container.register | vitest +5 |
+| 6 | **R-ζ** Real Chromium 시연 + closure | Playwright 4~5 scenarios | Playwright +4 |
+
+**예상 총합**: axia-core +10, axia-wasm +3, vitest +25, Playwright
++4. **합계 ~+42**, 절대 #[ignore] 금지.
+
+---
+
+## D. Risk Matrix
+
+| Risk | 영향 | 완화 |
+|------|------|------|
+| ADR-091 D-β demote API 호환성 | 매우 높음 | `demote_xia_to_shape` 직접 호출 — 새 API 추가 0 |
+| Snapshot section 9 영향 | 낮음 | Removal 은 runtime mutation, snapshot 영향 0. transaction wrap 만 |
+| Default OFF surface 미준수 | 높음 | ADR-097 T-ε 패턴 strict 답습 — `axia:auto-material-recovery` localStorage explicit ON |
+| Fallback Concrete 의 사용자 facing 혼동 | 중 | Toast "임시 Concrete 로 변경됨" 명시 + Inspector 색 변경 가시 (ADR-095 §E L3 humanize 답습) |
+| LOCKED #26 Form-layer material-agnostic 위반 | 매우 높음 | Form citizen (Shape) 영원히 material 무관 — Xia 의 material 만 변경, Shape 영향 0. 회귀 test 강제 |
+| Project tier 재질 사용 중 cascade 한계 | 중 | RemovalOutcome::PartialFailure 로 escalate. 자동 복구 시도 후 사용자 결정 |
+
+---
+
+## E. Cross-link
+
+- LOCKED #26 (Two-Layer Citizenship Phase 5-C 약속)
+- ADR-049 §4 Q5 final (재질 제거 + 위상 손상 dialog)
+- ADR-091 D-β (`demote_xia_to_shape` API — 직접 재사용)
+- ADR-097 (Phase 4 — 5-layer atomic stack 직접 답습)
+- ADR-098 S-G (`removeUserMaterial` — User tier 보존), R-D 의 surface 확장
+- ADR-076 §C-amendment-1 (export baseline additive guard)
+- ADR-046 P31 #4 (메뉴 additive only)
+
+---
+
+## F. Phase 5 closure 로드맵
+
+본 ADR 으로:
+- **Phase 5-A (ADR-098) ✅** — 3-Tier Material Scope
+- **Phase 5-C (ADR-100) — 본 ADR R-α 진입** — Material Removal Recovery
+- **Phase 5-B (ADR-099) — 별도 세션** — Layered material 4 PBR channels
+
+ADR-100 closure 시 LOCKED #26 Phase 5 의 2/3 완료 (5-A + 5-C). 5-B 는
+multi-week atomic 별도 세션.
+
+---
+
+## §D Acceptance Log
+
+### R-α (본 commit)
+- 본 ADR 작성. 사용자 결재 (2026-05-10): Option A + 사전 검토 spec
+  즉시 작성 + ADR-097 패턴 직접 답습.
+- 회귀 0 (spec only).
+- 다음 진입점 — R-β Rust core (별도 sub-step 결재).
+
+### R-β ~ R-ζ (예정)
+별도 sub-step 결재 시 commit 진행.
