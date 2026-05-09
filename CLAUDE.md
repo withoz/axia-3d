@@ -1401,7 +1401,7 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
-### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-ψ closure, 2026-05-08)
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Α closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
   메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
@@ -1482,7 +1482,20 @@
     exact closure on engine side). 사용자가 4번째 클릭을 첫 클릭에
     정확히 맞추면 자동 closed Bezier face 생성. 매뉴얼 토글 / 명시
     명령 불필요.
-- **12 lock-in 원칙 (canonical)**:
+  - **A-Α 3-sub-step** (closed BSpline 시민권): `fd3f36c` / `a70acf3`
+    / `aa2d5f2`. `add_face_closed_curve` 의 BSpline match arm —
+    closure check (`|cp[0]-cp[last]| < EPSILON_LENGTH` clamped knots
+    case) + `bspline::validate` (knots/degree validation). `bezier_
+    best_fit_normal` helper Bezier/BSpline 공통 재사용. Plane attach
+    + Render fast-path (face fan + edge wireframe) Bezier 답습으로
+    통합 (`bezier_or_bspline_pts` Option iterator). `bspline::validate`
+    visibility `fn` → `pub fn`. `Command::DrawClosedBSplineAsCurve` +
+    WASM `drawClosedBSplineAsCurve(controlPts, knots, degree)` + TS
+    bridge wrapper. Browser smoke 검증: 5 cp + clamped knots [0,0,0,
+    0, 0.5, 1,1,1,1] + degree 3 → 1 vert / 1 edge / 1 face,
+    faceKind=Plane (1), curveKind=BSpline (5). NURBS / Arc / periodic
+    knot vector 은 future ADR (현재 deferred).
+- **13 lock-in 원칙 (canonical)**:
   - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
     Phase 2). 메타-원칙 #14 정합
   - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
@@ -1527,8 +1540,17 @@
     `drawClosedBezierAsCurve` 라우팅. exact closure 강제 (cp[4] =
     cp[0]). 사용자가 4번째 클릭을 첫 클릭에 정확히 맞추면 자연 closed
     Bezier face 생성. 매뉴얼 토글 / 명시 명령 불필요.
+  - **L13 (A-Α closed BSpline 시민권)**: `add_face_closed_curve` 가
+    Circle / closed Bezier 에 더해 **closed BSpline** (clamped knots
+    + control_pts[0] ≈ control_pts[last]) 도 first-class 처리.
+    `bspline::validate` 로 knots/degree 검증 + `bezier_best_fit_normal`
+    재사용 (Bezier/BSpline 모두 control polygon best-fit plane). NURBS
+    / Arc / **periodic knot vector** closed BSpline 은 future ADR
+    (clamped knots case 만 활성). closed BSpline = 1 anchor + 1
+    self-loop edge with `AnalyticCurve::BSpline` + Plane surface 의
+    canonical Phase 2 표현.
 - **회귀 누적 (절대 #[ignore] 금지)**:
-  - axia-geo +60 (1123 → 1183, A-α ~ A-ω 누적)
+  - axia-geo +63 (1123 → 1186, A-α ~ A-Α 누적)
     - A-α ~ A-ι: +35 (시민권 인프라 / face synthesis / Boolean /
       Push-Pull / Render / Offset)
     - A-ρ +4 (Cylinder uv-slice render)
@@ -1537,11 +1559,12 @@
     - A-φ +6 (Sphere/Cone/Torus uv-slice)
     - A-χ +3 (split surface inheritance)
     - A-ω +5 (closed Bezier 시민권)
+    - A-Α +3 (closed BSpline 시민권)
   - vitest +10 (1622 → 1632, A-λ + A-π + A-ψ)
     - A-λ +5 (DrawCurveSettings + DrawCircleTool)
     - A-π +2 (default ON)
     - A-ψ +3 (DrawBezierTool closure detection)
-  - **합계 +70**, 절대 #[ignore] 금지 70/70 준수
+  - **합계 +73**, 절대 #[ignore] 금지 73/73 준수
 - **사용자 facing 동작 (default ON 후)**:
   - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
   - PushPull → tessellate-extrude → Cylinder (Path A)
@@ -1580,8 +1603,11 @@
   - **A-ω**: `closed_bezier_creates_self_loop_face`,
     `open_bezier_rejected`,
     `collinear_bezier_rejected`,
-    `bsplines_still_rejected`,
     `circle_path_unaffected` (regression guard)
+  - **A-Α**: `closed_bspline_creates_self_loop_face`,
+    `open_bspline_rejected`,
+    `nurbs_still_rejected` (Arc/NURBS deferred guard),
+    `invalid_knots_rejected` (knot validation)
   - DrawCurveSettings.test.ts (6 tests)
   - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
   - **A-ψ DrawBezierTool.test.ts** (3 tests):
