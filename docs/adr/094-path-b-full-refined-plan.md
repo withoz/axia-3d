@@ -258,5 +258,56 @@ ADR-090 §4 의 위험 매트릭스 + 본 ADR 의 additive-first 전략으로 �
 - **위험 격리 검증**: 1223 axia-geo tests 전체 PASS. 245+ LOCKED 회귀
   자산 모두 PASS. additive coexist 전략 성공.
 
-### B-δ-prep ~ B-θ (예정)
+### B-δ-prep (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — 새 cylinder primitive coexist
+  진입.
+- **Architectural milestone — 산업 CAD parity 달성 검증**:
+  Path B kernel-native cylinder의 3 face / 2 edge / 2 vert topology
+  를 첫 검증. ADR-090 §1.2 / ADR-094 §1 의 architectural goal 활성.
+  Path A (25 face / 70 edge / 46 vert) 와 coexist.
+- **변경**:
+  * `crates/axia-geo/src/operations/create_solid.rs::Mesh::extrude_
+    cylinder_kernel_native(profile_face, dist, material) -> Result<
+    CreateSolidResult>` 신규 (pub method, test entry 만 — production
+    paths 는 여전히 Path A 라우팅).
+    1. profile = closed-curve face with Circle 검증 (precondition)
+    2. translation = profile_normal · dist
+    3. top vert + translated Circle → `add_face_closed_curve` (ADR-089
+       패턴) → top closed-curve face
+    4. 두 self-loop edges 의 boundary HEs (twin via `next_rad`) 위치
+       파악
+    5. annulus side face 수동 low-level 생성 (`Face::new` + `faces.
+       insert`)
+    6. Boundary HEs wire to annulus (face = annulus, next/prev = self
+       for self-loop semantics)
+    7. Legacy schema: outer = bot_loop (is_outer=true), inners = [
+       top_loop (is_outer=false)] — 의미 ring + hole (Path A 코드 미
+       traverse)
+    8. **Path B canonical**: `face_to_boundary_loops[annulus] = [bot_
+       loop, top_loop]` (둘 다 is_outer=true, ADR-094 B-γ-prep 활용)
+    9. `AnalyticSurface::Cylinder` attach
+    10. CreateSolidResult { side_faces: [annulus], solid_kind: Cylinder }
+  * `entities` import: `Face`, `LoopRef` 추가 + `tolerances::FACE_
+    TOLERANCE` 추가
+- **회귀** (axia-geo 1223 → 1230, +7):
+  * `cylinder_native_face_count_3_2_2` — **architectural anchor**
+    (Path B 3 face / 2 edge / 2 vert 검증 = 산업 CAD parity 활성)
+  * `annulus_face_has_multi_loop_schema` — Path B canonical (B-γ-prep
+    활용)
+  * `annulus_has_cylinder_surface` — kernel-aware ops 활성 prep
+  * `top_face_is_closed_curve_with_plane` — ADR-089 A-η-1 inheritance
+  * `negative_distance_recess` — 부호 정합
+  * `legacy_path_a_unaffected` — coexist guarantee (additive)
+  * `rejects_non_closed_curve_profile` — precondition defensive
+  * 합계 **+7**, 절대 #[ignore] 금지 7/7 준수
+- **누적 회귀** (B-α ~ B-δ-prep): axia-geo +15.
+- **위험 격리 검증**: 1230 axia-geo tests 전체 PASS. Path A 회귀 자산
+  보존. additive coexist 전략 success.
+- **Out of scope (다음 prep sub-steps)**:
+  * Render path 의 annulus tessellation (B-ζ-prep)
+  * Boolean dispatch 의 multi-loop face SSI (B-ε-prep)
+  * Push-Pull / Offset 의 multi-loop face routing (B-η flip 시)
+  * 사용자 facing UI 통합 (B-η flip)
+
+### B-ζ-prep ~ B-θ (예정)
 별도 sub-step 결재 시 commit 진행.

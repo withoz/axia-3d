@@ -34,9 +34,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::curves::{AnalyticCurve, CurveOps};
 use crate::curves::synthesize::synthesize_plane_surface;
-use crate::entities::{FaceId, MaterialId, VertId};
+use crate::entities::{Face, FaceId, LoopRef, MaterialId, VertId};
 use crate::mesh::Mesh;
 use crate::surfaces::AnalyticSurface;
+use crate::tolerances::FACE_TOLERANCE;
 
 /// ADR-079 §2.1 — Solid creation mode (profile + mode → solid).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -731,6 +732,194 @@ impl Mesh {
         }
 
         Ok(result)
+    }
+
+    /// ADR-094 B-δ-prep — Path B kernel-native cylinder extrude (coexist
+    /// with `extrude_closed_curve_face_via_tessellation` Path A).
+    ///
+    /// **Status**: Additive prep — exposed via test entry point only.
+    /// Production paths still route through Path A. B-η flip will switch
+    /// the canonical entry.
+    ///
+    /// **Architectural goal** (ADR-094 §1, ADR-090 §1.2): cylinder DCEL =
+    /// 3 face / 2 edge / 2 vert (산업 CAD parity), instead of Path A's
+    /// 25 face / 70 edge / 46 vert.
+    ///
+    /// Process:
+    /// 1. Profile must be a closed-curve face (1 anchor + 1 self-loop
+    ///    edge with `AnalyticCurve::Circle`) — same precondition as Path A.
+    /// 2. Translate anchor + circle by `profile_normal · dist` → top
+    ///    anchor + top circle.
+    /// 3. Create top face via `add_face_closed_curve` (ADR-089 pattern).
+    /// 4. Locate boundary HEs (twin of each closed-curve face's anchor
+    ///    HE — the one with `face = NULL` after Path A topology).
+    /// 5. Create annulus side face manually:
+    ///    a. `Face::new` with placeholder + `faces.insert`.
+    ///    b. Wire both boundary HEs to the annulus face (face = annulus_id,
+    ///       next/prev = self for self-loop semantics).
+    ///    c. Set `face.outer = LoopRef(top_boundary_he, true)`,
+    ///       `face.inners = [LoopRef(bot_boundary_he, false)]` —
+    ///       legacy traversal sees a "ring with hole" semantic, which
+    ///       Path A code does NOT exercise on this face (test entry
+    ///       only).
+    ///    d. Set `face_to_boundary_loops[annulus_id] = [top_loop, bot_loop]`
+    ///       — Path B canonical (B-γ-prep effective getter).
+    /// 6. Attach `AnalyticSurface::Cylinder` to annulus face.
+    /// 7. Top + bottom faces inherit `AnalyticSurface::Plane` from their
+    ///    closed-curve construction (ADR-089 A-η-1).
+    ///
+    /// Returns `CreateSolidResult` with `solid_kind = SolidKind::Cylinder`,
+    /// `side_faces = [annulus_id]` (single face).
+    ///
+    /// **Out of scope (B-δ-prep)**: Push-Pull / Boolean / Render path
+    /// integration — those are separate prep sub-steps. The annulus face
+    /// is *constructed correctly* by this method, but downstream ops
+    /// won't render or process it as a single cylindrical face until
+    /// later prep steps land + B-η flip.
+    pub fn extrude_cylinder_kernel_native(
+        &mut self,
+        profile_face: FaceId,
+        dist: f64,
+        material: MaterialId,
+    ) -> Result<CreateSolidResult> {
+        // 1. Validate profile = closed-curve face with Circle.
+        let outer_start = self.faces[profile_face].outer().start;
+        if outer_start.is_null() {
+            bail!(
+                "B-δ-prep: profile face {profile_face:?} has null outer loop"
+            );
+        }
+        let bot_self_loop_eid = self.hes[outer_start].edge();
+        if !self.edges[bot_self_loop_eid].is_self_loop() {
+            bail!(
+                "B-δ-prep: profile face's outer edge {:?} is not a self-loop \
+                 (Path B requires closed-curve profile)",
+                bot_self_loop_eid,
+            );
+        }
+        let bot_anchor = self.edges[bot_self_loop_eid].v_small();
+        let curve = self
+            .edges
+            .get(bot_self_loop_eid)
+            .and_then(|e| e.curve().cloned())
+            .ok_or_else(|| anyhow::anyhow!(
+                "B-δ-prep: profile self-loop edge has no AnalyticCurve"
+            ))?;
+        let (center, radius, normal, basis_u) = match curve {
+            AnalyticCurve::Circle { center, radius, normal, basis_u } => {
+                (center, radius, normal, basis_u)
+            }
+            _ => bail!(
+                "B-δ-prep: only Circle profiles supported for kernel-native \
+                 cylinder (other closed curves → general analytic sweep, \
+                 future ADR)"
+            ),
+        };
+
+        // 2. Compute translation along the profile normal.
+        let translation = normal * dist;
+        let top_center = center + translation;
+        let top_anchor_pos = self.vertex_pos(bot_anchor)? + translation;
+
+        // 3. Create top vert + top closed-curve face (ADR-089 pattern).
+        let top_anchor = self.add_vertex(top_anchor_pos);
+        let top_circle = AnalyticCurve::Circle {
+            center: top_center,
+            radius,
+            normal,
+            basis_u,
+        };
+        let top_face = self.add_face_closed_curve(top_anchor, top_circle, material)?;
+
+        // 4. Locate the top self-loop edge + its boundary HE (twin of
+        //    the HE in the top face's outer loop).
+        let top_outer_start = self.faces[top_face].outer().start;
+        let top_self_loop_eid = self.hes[top_outer_start].edge();
+        let top_boundary_he = self.hes[top_outer_start].next_rad();
+        if top_boundary_he.is_null() || top_boundary_he == top_outer_start {
+            bail!(
+                "B-δ-prep: top self-loop edge {:?} has degenerate radial \
+                 chain — cannot locate boundary HE",
+                top_self_loop_eid,
+            );
+        }
+        let bot_boundary_he = self.hes[outer_start].next_rad();
+        if bot_boundary_he.is_null() || bot_boundary_he == outer_start {
+            bail!(
+                "B-δ-prep: bottom self-loop edge {:?} has degenerate radial \
+                 chain — cannot locate boundary HE",
+                bot_self_loop_eid,
+            );
+        }
+
+        // 5. Create the annulus side face (manual low-level construction).
+        let annulus_face = self.faces.insert(Face::new(
+            LoopRef::default(),
+            // Cylinder side face's "normal" is direction-dependent
+            // (depends on parametric position). DCEL Face::normal is a
+            // legacy field — use profile normal as a placeholder. The
+            // canonical surface info is the AnalyticSurface::Cylinder
+            // attached below.
+            normal,
+            FACE_TOLERANCE,
+            material,
+        ));
+
+        // 5a. Wire bottom boundary HE → annulus face (self-loop on annulus).
+        self.hes[bot_boundary_he].set_next(bot_boundary_he);
+        self.hes[bot_boundary_he].set_prev(bot_boundary_he);
+        self.hes[bot_boundary_he].set_face(annulus_face);
+        // Path B 의미: 두 boundary loop 모두 outer-equivalent (ADR-090
+        // §2.2). 그러나 legacy schema 의 outer/inners 구분 위해 bottom 을
+        // outer 로, top 을 inner ("hole") 로 picking — 본 face 는 Path A
+        // 코드 경로에서 traverse 안 됨 (test entry 전용).
+        self.hes[bot_boundary_he].set_outer(true);
+
+        // 5b. Wire top boundary HE → annulus face (self-loop, inner-loop
+        //     for legacy schema compat).
+        self.hes[top_boundary_he].set_next(top_boundary_he);
+        self.hes[top_boundary_he].set_prev(top_boundary_he);
+        self.hes[top_boundary_he].set_face(annulus_face);
+        self.hes[top_boundary_he].set_outer(false);
+
+        // 5c. Set legacy outer + inners.
+        self.faces[annulus_face].set_outer(LoopRef::new(bot_boundary_he, true));
+        self.faces[annulus_face].add_inner(LoopRef::new(top_boundary_he, false));
+
+        // 5d. Set Path B canonical multi-loop schema.
+        let bot_loop = LoopRef::new(bot_boundary_he, true);
+        let top_loop = LoopRef::new(top_boundary_he, true);
+        self.set_face_boundary_loops(annulus_face, vec![bot_loop, top_loop]);
+
+        // 6. Attach AnalyticSurface::Cylinder.
+        let (axis_dir, v_lo, v_hi) = if dist > 0.0 {
+            (normal, 0.0, dist)
+        } else {
+            (normal, dist, 0.0)
+        };
+        let cylinder_surface = AnalyticSurface::Cylinder {
+            axis_origin: center,
+            axis_dir,
+            radius,
+            ref_dir: basis_u,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (v_lo, v_hi),
+        };
+        self.faces[annulus_face].set_surface(Some(cylinder_surface));
+
+        // 7. Aggregate result. Top face has its Plane surface from
+        //    add_face_closed_curve (ADR-089 A-η-1). Bottom (profile_face)
+        //    too. Annulus has Cylinder.
+        let all_solid_faces = vec![profile_face, top_face, annulus_face];
+        Ok(CreateSolidResult {
+            profile_face,
+            solid_kind: SolidKind::Cylinder,
+            top_face,
+            side_faces: vec![annulus_face],
+            all_solid_faces,
+            adjacent_splits: 0,
+            split_debug: Vec::new(),
+        })
     }
 
     /// ADR-079 W-3-δ — Extrude on NURBS-class profile (tessellation-based).
@@ -5061,6 +5250,167 @@ mod tests {
             assert_eq!(mesh.face_surface_owner_id(fid), first_owner,
                 "all 16 polygonal side faces share the same owner_id");
         }
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-094 B-δ-prep — Path B kernel-native cylinder (additive coexist)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr094_b_delta_prep_cylinder_native_face_count_3_2_2() {
+        // Path B canonical: 3 face / 2 edge / 2 vert (산업 CAD parity).
+        // ADR-090 §1.2 / ADR-094 §1 architectural goal 검증.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let active_verts_before = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        let active_edges_before = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        let active_faces_before = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_verts_before, 1, "profile = 1 anchor vert");
+        assert_eq!(active_edges_before, 1, "profile = 1 self-loop edge");
+        assert_eq!(active_faces_before, 1, "profile = 1 closed-curve face");
+
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("kernel-native cylinder extrude OK");
+
+        // 3 face / 2 edge / 2 vert.
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_verts, 2, "Path B cylinder = 2 anchor verts (top + bot)");
+        assert_eq!(active_edges, 2, "Path B cylinder = 2 self-loop edges (top + bot circles)");
+        assert_eq!(active_faces, 3, "Path B cylinder = 3 faces (top + bot + annulus side)");
+
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        assert_eq!(result.side_faces.len(), 1,
+            "Path B annulus side = single face (not N quads)");
+    }
+
+    #[test]
+    fn adr094_b_delta_prep_annulus_face_has_multi_loop_schema() {
+        // Annulus side face must have face_to_boundary_loops entry
+        // (Path B canonical) with 2 loops (top + bot).
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+        let annulus = result.side_faces[0];
+
+        assert!(mesh.face_has_multi_loop_schema(annulus),
+            "annulus must have multi-loop schema (Path B canonical)");
+        let loops = mesh.face_boundary_loops(annulus);
+        assert_eq!(loops.len(), 2,
+            "annulus must have 2 boundary loops (top + bot circles)");
+    }
+
+    #[test]
+    fn adr094_b_delta_prep_annulus_has_cylinder_surface() {
+        // Annulus side face must carry AnalyticSurface::Cylinder for
+        // kernel-aware ops (Boolean / Push-Pull / Offset).
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 4.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 6.0, MaterialId::new(0))
+            .expect("create_solid OK");
+        let annulus = result.side_faces[0];
+        let surface = mesh.faces[annulus].surface();
+        assert!(
+            matches!(surface, Some(AnalyticSurface::Cylinder { .. })),
+            "annulus face must have Cylinder surface, got {:?}",
+            surface.map(|s| s.kind_label()),
+        );
+    }
+
+    #[test]
+    fn adr094_b_delta_prep_top_face_is_closed_curve_with_plane() {
+        // Top face must be a closed-curve face with translated Circle
+        // and Plane surface (ADR-089 A-η-1 inheritance).
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+        let top = result.top_face;
+
+        // Top face must have Plane surface (ADR-089 A-η-1).
+        assert!(
+            matches!(mesh.faces[top].surface(), Some(AnalyticSurface::Plane { .. })),
+            "top face must have Plane surface (ADR-089 A-η-1)",
+        );
+
+        // Top face's outer = self-loop edge with translated Circle.
+        let top_outer_start = mesh.faces[top].outer().start;
+        let top_eid = mesh.hes[top_outer_start].edge();
+        assert!(mesh.edges[top_eid].is_self_loop(),
+            "top face boundary must be a self-loop edge");
+        match mesh.edges[top_eid].curve() {
+            Some(AnalyticCurve::Circle { center, radius, .. }) => {
+                let expected_center = DVec3::Z * 8.0; // bot center + Z*8
+                assert!((*center - expected_center).length() < 1e-9,
+                    "top circle center expected {:?}, got {:?}",
+                    expected_center, center);
+                assert!((*radius - 5.0).abs() < 1e-9,
+                    "top circle radius preserved");
+            }
+            other => panic!("top edge must have Circle curve, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn adr094_b_delta_prep_negative_distance_recess() {
+        // Recess (dist < 0) must work — translation is signed.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 3.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, -4.0, MaterialId::new(0))
+            .expect("recess OK");
+        assert_eq!(result.solid_kind, SolidKind::Cylinder);
+        assert_eq!(result.side_faces.len(), 1);
+
+        // Top face should be at z = -4.
+        let top_outer_start = mesh.faces[result.top_face].outer().start;
+        let top_eid = mesh.hes[top_outer_start].edge();
+        if let Some(AnalyticCurve::Circle { center, .. }) = mesh.edges[top_eid].curve() {
+            assert!((center.z - (-4.0)).abs() < 1e-9,
+                "recess top circle z = -4, got {}", center.z);
+        }
+    }
+
+    #[test]
+    fn adr094_b_delta_prep_legacy_path_a_unaffected() {
+        // Coexist guarantee — Path A entry (extrude_closed_curve_face_via_
+        // tessellation via create_solid) UNCHANGED.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .create_solid(
+                profile,
+                CreateSolidMode::Extrude { distance: 8.0 },
+                MaterialId::new(0),
+            )
+            .expect("Path A still works");
+        // Path A produces N quad sides (≥ 8).
+        assert!(result.side_faces.len() >= 8,
+            "Path A coexist — quad sides preserved (got {})",
+            result.side_faces.len());
+    }
+
+    #[test]
+    fn adr094_b_delta_prep_rejects_non_closed_curve_profile() {
+        // B-δ-prep precondition: profile must be closed-curve. Polygonal
+        // profile must be rejected.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 16); // polygonal
+        let err = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect_err("polygonal profile must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("self-loop") || msg.contains("closed-curve"),
+            "rejection should mention self-loop / closed-curve precondition, \
+             got: {}", msg,
+        );
     }
 
     #[test]
