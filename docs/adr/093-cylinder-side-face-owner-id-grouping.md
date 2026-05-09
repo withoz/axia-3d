@@ -1,6 +1,6 @@
-# ADR-093: Cylinder Side Face Owner-ID Grouping (B-MVP — Path B Light)
+# ADR-093: Cylinder Side Face Owner-ID Grouping (B-MVP — Path B Light) — **Accepted**
 
-- **Status**: Proposed (D-α spec only)
+- **Status**: Accepted (D-α ~ D-ε closure 2026-05-09)
 - **Date**: 2026-05-09
 - **Anchor**: ADR-090 §6.3 결함 2 (Side hover/select N quads) — primary
   trigger 활성. 사용자 결재 (2026-05-09) 로 🅺 path 의 첫 단계.
@@ -302,6 +302,93 @@ D-δ: SelectTool integration — single click promote / group click 일관 / Ins
   * 비-cylinder face click → 단일 face (기존 동작 보존)
   * shift / ctrl / alt modifier 정합성 보존
 
-### D-ε (예정 — closure)
-LOCKED #35 amendment + ADR-090 §6.3 trigger 재평가 + 사용자 시연 게이트
-+ 회고 commit.
+### D-ε (본 commit — closure)
+- **사용자 결재**: 2026-05-09, "🅸 (D-ε closure) 먼저 — ADR-093 의
+  architectural sealing".
+- **사용자 시연 게이트 PASSED** (real Chromium, 2026-05-09):
+  - Cylinder r=5, h=8 생성 → 25 faces (1 closed-curve self-loop +
+    1 top + 1 bottom + ... 23 sides)
+  - 측면 face id=11 click → walk → siblings 23 (모두 선택)
+  - Inspector "체적 면 그룹" 으로 group 인식 + bounding box 10×10×8
+  - Screenshot: cylinder 측면 light blue tint (23 quad faces 일괄 선택)
+- **변경**:
+  * `CLAUDE.md` LOCKED #35 — ADR-093 amendment entry (B-MVP closure
+    + 누적 회귀 +18 + 사용자 facing 변화 + Path B-full trigger 갱신)
+  * `docs/adr/090-true-kernel-native-cylinder-path-b.md` §6.3 —
+    결함 2 selection 측면 ADR-093 으로 closure 표시
+  * `docs/adr/README.md` — ADR-093 status `Proposed` → `Accepted`
+  * 본 ADR §E Lessons 추가 (L1~L4)
+- **회귀**: +0 (docs only).
+
+## E. Lessons
+
+### L1 — ADR-091 §E L1 canonical guidance 의 첫 명시 적용
+
+**관찰**: 원안 (Face struct 에 surface_owner_id 추가, ADR-088 답습) 가
+ADR-091 §E L1 ("bincode 로 직렬화되는 기존 struct 에 신규 필드 추가
+**금지**, Mesh/Scene-level HashMap 사용") 위반. D-β 진입 사전 검토에서
+즉시 발견 + 정정.
+
+**정정**: `Mesh.face_to_surface_owner_id: FxHashMap<FaceId, u32>`
+신규. Face struct UNCHANGED. Bincode legacy snapshot 호환 자연 보존.
+
+**향후 ADR 가이드** (cumulative):
+- ADR-088 (Edge.curve_owner_id struct field) 은 ADR-091 L1 canonical
+  *이전* 결정 — 본 ADR 이 처음으로 L1 canonical 명시 적용 사례.
+- ADR-088 의 retroactive migration (Edge struct field → Mesh-level
+  map) 은 별도 트랙 (L1 canonical 의 backwards 적용).
+- 향후 모든 owner-id / linkage 데이터는 *struct field 가 아닌 Mesh /
+  Scene 레벨 map* 로 시작.
+
+### L2 — ADR-088 패턴의 자연 확장 (curve → surface)
+
+**관찰**: ADR-088 (Edge.curve_owner_id) 의 5-step Path Z atomic 패턴이
+거의 1:1 답습 가능. ID type 만 다른 동일 architecture:
+
+| 측면 | ADR-088 | ADR-093 |
+|---|---|---|
+| Schema | `Edge.curve_owner_id` | `Mesh.face_to_surface_owner_id` |
+| Allocation | DrawCircle/Arc 시 1 ID | Cylinder 생성 시 N sides 동일 1 ID |
+| Walker | `walk_edge_owner_siblings` | `walk_face_owner_siblings` |
+| Selection | edge click → 같은 ID 일괄 | face click → 같은 ID 일괄 |
+| 일수 | 2일 (5-step) | 2-3일 (5-step) |
+
+**향후 ADR 가이드** — 같은 패턴이 *Vertex owner-id* (예: shared
+endpoint of 다중 edges) 또는 *Volume owner-id* (다중 cylinder 가
+하나의 boolean union solid 등) 로도 자연 확장 가능. 본 ADR 의 5-step
+Path Z 답습.
+
+### L3 — Defensive bridge guard (test fixture 호환)
+
+**발견**: D-δ SelectTool 변경 후 다른 test fixture (SegmentVsCurveSelection,
+IntegratedAnalyticHoverFlow) 의 bridge mock 이 ADR-093 methods 미구현
+→ 4 tests fail.
+
+**정정**: SelectTool 가 `typeof bridge.getFaceSurfaceOwnerId !==
+'function'` 체크 후 legacy 단일 face 동작 fallback. WasmBridge wrapper
+의 graceful fallback 패턴을 한 단계 위 (caller) 에서도 적용.
+
+**향후 ADR 가이드** — bridge interface 확장 시 *caller layer 에서도
+defensive guard* 활용. WasmBridge wrapper 의 `endpoint missing →
+fallback` 만으로는 부족 (mock fixtures 가 typed wrapper 미통과 시).
+
+### L4 — Path B-full 트리거 anchor 활성
+
+**의의**: ADR-093 closure 후 ADR-090 §6.3 의 잔존 trigger 매트릭스가
+정량 anchor 로 활성:
+- ✅ 결함 2 selection 측면 — ADR-093 으로 closure
+- ❌ 메모리 비용 (large model, 1000+ cylinder × N quads)
+- ❌ STEP/IGES export 정확도 (DCEL 자체 polygon strip)
+- ❌ 산업 CAD parity (analytic cylindrical face)
+- ❌ Push-Pull again 누적 비용
+
+**다음 결재 anchor**:
+- 사용자 시연 만족 ("측면 = 1 entity 인식 충분") → Path B-full 보류
+  유지, ADR-090 deferred 상태 유지
+- 사용자 시연 불만족 ("memory / export / parity 등 추가 closure
+  필요") → ADR-090 Path B-full 진입 결재 활성 (B-γ ~ B-θ, 4-6주)
+
+**향후 ADR 가이드** — multi-week atomic 트랙 진입 전 *MVP atomic 으로
+가치 확보 → 사용자 시연 → trigger 재평가* 패턴 권장 (🅺 path 답습).
+ADR-091 §E L2 의 "사전 검토 가치" 와 함께 architectural risk 감소
+canonical 패턴.

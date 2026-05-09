@@ -1925,6 +1925,17 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-093 D-γ — Read the surface owner-id of a face.
+     * Returns -1 if the face has no owner-id (standalone) or is
+     * missing/inactive. Mirrors `getEdgeCurveOwnerId` from ADR-088.
+     * @param {number} face_id
+     * @returns {number}
+     */
+    getFaceSurfaceOwnerId(face_id) {
+        const ret = wasm.axiaengine_getFaceSurfaceOwnerId(this.__wbg_ptr, face_id);
+        return ret;
+    }
+    /**
      * Return the outer-loop vertex IDs of a face in walk order.
      * Empty vec on error (face missing, degenerate, etc.).
      * @param {number} face_id_raw
@@ -4256,6 +4267,35 @@ export class AxiaEngine {
     vert_count() {
         const ret = wasm.axiaengine_vert_count(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * ADR-093 D-γ — Walk face owner-siblings.
+     *
+     * Selection-layer entry point: given a clicked face, returns all
+     * active faces sharing its `surface_owner_id` (Cylinder side group).
+     * If the face has no owner-id (None), returns just `[face_id]`
+     * (no group — single-face selection unchanged).
+     *
+     * Returns empty array if the face is missing/inactive (defensive
+     * against stale ids).
+     *
+     * Caller: SelectTool pickFace → automatic group promote (Lock-in
+     * D-D — single face click promotes to entire surface group).
+     * @param {number} face_id
+     * @returns {Uint32Array}
+     */
+    walkFaceOwnerSiblings(face_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_walkFaceOwnerSiblings(retptr, this.__wbg_ptr, face_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU32FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * 씬의 XIA 개수.

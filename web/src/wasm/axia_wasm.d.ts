@@ -748,6 +748,12 @@ export class AxiaEngine {
      */
     getFaceSurfaceJson(face_id_raw: number): string;
     /**
+     * ADR-093 D-γ — Read the surface owner-id of a face.
+     * Returns -1 if the face has no owner-id (standalone) or is
+     * missing/inactive. Mirrors `getEdgeCurveOwnerId` from ADR-088.
+     */
+    getFaceSurfaceOwnerId(face_id: number): number;
+    /**
      * Return the outer-loop vertex IDs of a face in walk order.
      * Empty vec on error (face missing, degenerate, etc.).
      */
@@ -1567,6 +1573,21 @@ export class AxiaEngine {
     verifyOutwardNormals(): string;
     vert_count(): number;
     /**
+     * ADR-093 D-γ — Walk face owner-siblings.
+     *
+     * Selection-layer entry point: given a clicked face, returns all
+     * active faces sharing its `surface_owner_id` (Cylinder side group).
+     * If the face has no owner-id (None), returns just `[face_id]`
+     * (no group — single-face selection unchanged).
+     *
+     * Returns empty array if the face is missing/inactive (defensive
+     * against stale ids).
+     *
+     * Caller: SelectTool pickFace → automatic group promote (Lock-in
+     * D-D — single face click promotes to entire surface group).
+     */
+    walkFaceOwnerSiblings(face_id: number): Uint32Array;
+    /**
      * 씬의 XIA 개수.
      */
     xiaCount(): number;
@@ -1726,6 +1747,7 @@ export interface InitOutput {
     readonly axiaengine_getFaceMapPtr: (a: number) => number;
     readonly axiaengine_getFaceNormalsCached: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceSurfaceJson: (a: number, b: number, c: number) => void;
+    readonly axiaengine_getFaceSurfaceOwnerId: (a: number, b: number) => number;
     readonly axiaengine_getFaceVertices: (a: number, b: number, c: number) => void;
     readonly axiaengine_getFaceVolumeFlags: (a: number, b: number) => void;
     readonly axiaengine_getFreeEdgeSegments: (a: number, b: number) => void;
@@ -1852,6 +1874,7 @@ export interface InitOutput {
     readonly axiaengine_verifyInvariants: (a: number, b: number) => void;
     readonly axiaengine_verifyOutwardNormals: (a: number, b: number) => void;
     readonly axiaengine_vert_count: (a: number) => number;
+    readonly axiaengine_walkFaceOwnerSiblings: (a: number, b: number, c: number) => void;
     readonly axiaengine_xiaCount: (a: number) => number;
     readonly deltabuffers_getCacheVersion: (a: number) => number;
     readonly deltabuffers_getFaceVertCounts: (a: number, b: number) => void;

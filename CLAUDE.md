@@ -1429,6 +1429,56 @@
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
 ### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Δ closure, 2026-05-09)
+- **ADR-093 amendment (2026-05-09)** — Cylinder Side Face Owner-ID
+  Grouping (B-MVP — Path B Light, 🅺 path 첫 단계):
+  * **사용자 시연 결함 2 trigger** ("옆면과 관련이 있을것 같으니 ...
+    결함 2 까지 architectural closure") — ADR-090 §6.3 의 잔존 trigger
+    의 selection 측면 우선 closure. multi-week Path B-full (4-6주)
+    의 risk 회피 + 80% 사용자 facing 가치 확보.
+  * **D-β engine fix** — `Mesh.face_to_surface_owner_id: FxHashMap<
+    FaceId, u32>` (ADR-091 §E L1 canonical guidance 첫 명시 적용 —
+    Face struct UNCHANGED, bincode legacy 호환 보존). +
+    `next_surface_owner_id` allocator + `walk_face_owner_siblings`
+    walker API + `extrude_planar_cylinder` 의 N side faces 동일
+    owner_id 부여 (Lock-in D-F).
+  * **D-γ WASM bridge** — `walkFaceOwnerSiblings(face_id) -> Vec<u32>`
+    + `getFaceSurfaceOwnerId(face_id) -> i32` (-1 sentinel). TS bridge
+    typed wrapper 의 graceful fallback (endpoint missing 시 [faceId]).
+  * **D-δ SelectTool integration** — face single-click 분기에 ADR-088
+    curve_owner walk 패턴 답습. Defensive guard (`typeof !== 'function'`)
+    로 다른 test fixtures 호환. Cylinder 측면 click → 23 quad faces
+    일괄 선택.
+  * **D-ε 사용자 시연 PASS** (real Chromium): cylinder r=5 h=8 →
+    25 faces, 측면 face click → siblings=23 → selectedCount=23.
+    Inspector "체적 면 그룹" 으로 group 인식.
+  * **회귀** axia-geo +8 (default None / monotonic counter / walk
+    self-fallback / walk collect / extrude_planar_cylinder N sides
+    same id / cross-cylinder unique / inactive face defensive /
+    polygonal path 통합) + axia-wasm +2 (signature wiring) +
+    vitest +8 (D-γ wrapper 4 + D-δ SelectTool 4). 합계 **+18**, 절대
+    #[ignore] 금지 18/18 준수.
+  * **사용자 facing 변화**: Cylinder 측면 click → 22~23 quad faces
+    일괄 선택 (사용자 intent: "측면 = 1 entity"). 비-cylinder face
+    click → 단일 face (legacy 보존). shift/ctrl/alt modifier 정합성
+    유지.
+  * **ADR-091 §E L1 canonical guidance 첫 명시 적용** — Mesh-level
+    HashMap 접근 의 architectural 가치 lock-in. ADR-088
+    (Edge.curve_owner_id struct field) 은 L1 *이전* 결정 —
+    retroactive migration 별도 트랙.
+  * **ADR-090 Path B-full trigger anchor 활성**:
+    - ✅ 결함 2 selection 측면 closure (ADR-093)
+    - ❌ 메모리 비용 / STEP export 정확도 / 산업 CAD parity / Push-Pull
+      again 누적 — Path B-full 본격 진입 trigger
+    - 사용자 시연 만족도에 따라 Path B-full 보류 vs 진입 결재
+  * **Lessons (canonical patterns)**:
+    - L1 ADR-091 §E L1 canonical 첫 명시 적용 (Mesh-level map)
+    - L2 ADR-088 패턴 자연 확장 (curve→face owner-id, Vertex/Volume
+      도 동일 패턴 가능)
+    - L3 Defensive bridge guard (caller 에서도 graceful fallback —
+      WasmBridge wrapper 만으로 부족)
+    - L4 🅺 path canonical (MVP atomic 먼저 → 사용자 시연 → multi-week
+      Path B-full trigger 재평가)
+
 - **ADR-092 amendment (2026-05-09)** — Push-Pull top boundary
   closed-curve preservation (partial Path B atomic):
   * **사용자 시연 회귀 trigger** ("현재 원에 대한 완벽한 처리가

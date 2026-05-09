@@ -217,9 +217,28 @@ Path A 가 이미 visual + functional closure 달성. Path B 진입은 다음 �
   cylindrical face 가 자연 NURBS export 가능, Path A 는 polygon
 - ❌ Push-Pull again 시 측면이 N quads 로 누적 (cumulative cost)
 
-**현재 (2026-05-09) 상태**: ADR-092 가 결함 1 partial closure. **결함 2
-의 실 사용자 영향 측정** 이 다음 결재 anchor — 사용자 시연 결과에 따라
-Path B 진입 결재 활성.
+### 6.4 ADR-093 closure 후 trigger 매트릭스 갱신 (2026-05-09)
+
+**ADR-093 (B-MVP) 으로 closure** — selection 측면:
+- ✅ **결함 2 의 selection 측면** — 사용자 cylinder 측면 click → 22~23
+  quad faces 일괄 선택 (사용자 intent: "측면 = 1 entity"). real
+  Chromium 시연 PASS. surface_owner_id grouping (Mesh-level HashMap) +
+  SelectTool walk + Inspector "체적 면 그룹" 인식.
+
+**Path B-full 진입 결재 anchor (잔존 trigger)**:
+- ❌ **메모리 비용** — N quad faces 누적 (large model, 1000+ cylinder
+  scale)
+- ❌ **STEP/IGES export 정확도** — DCEL 자체가 polygon strip → analytic
+  cylinder export 손실
+- ❌ **산업 CAD parity** — single cylindrical face (annulus topology)
+  미달
+- ❌ **Push-Pull again 누적 비용** — multi-cylinder 합집합 시 quad
+  faces 합산
+
+**현재 (2026-05-09) 상태**: ADR-092 (결함 1 top rim) + ADR-093 (결함
+2 selection) closure. **사용자 시연 만족도** 가 Path B-full 결재
+trigger 의 핵심 지표 — selection 측면 만족 시 보류 유지 / memory
+parity export 등 추가 closure 필요 시 진입 활성.
 
 ---
 
