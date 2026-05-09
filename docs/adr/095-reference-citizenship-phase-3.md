@@ -240,5 +240,41 @@ pub enum ReferenceCategory {
 - **위험 격리 검증**: axia-core 230 + axia-geo 1245 모두 PASS. 245+
   Form/Property 회귀 자산 영향 0 (additive coexist).
 
-### Phase 3-γ ~ 3-ζ (예정)
+### Phase 3-γ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — WASM bridge + TS wrapper 진입.
+- **변경**:
+  * `crates/axia-wasm/src/lib.rs` — 9 신규 exports (camelCase via
+    wasm-bindgen):
+    - `createReferenceConstructionLine(name: String, edge_ids: Vec<u32>)
+      -> Result<u32, JsValue>` (strict throw on R-B violation)
+    - `createReferenceImportedMesh(name: String, face_ids: Vec<u32>,
+      source_path: Option<String>) -> Result<u32, JsValue>`
+    - `createReferencePointCloud(name: String, vert_ids: Vec<u32>)
+      -> Result<u32, JsValue>`
+    - `getReferenceIds() -> Vec<u32>` (sorted)
+    - `getReferenceJson(id: u32) -> String` — `{ id, name, category,
+      visible, locked }` 형태, missing 시 empty string. category JSON
+      shape: `{kind, edge_ids|face_ids|vert_ids, source_path?}`
+    - `deleteReference(id: u32) -> bool`
+    - `setReferenceVisible(id: u32, visible: bool) -> bool`
+    - `setReferenceLocked(id: u32, locked: bool) -> bool`
+    - `getFaceReferenceId(face_id: u32) -> i32` (-1 sentinel)
+  * `crates/axia-wasm/tests/export_baseline.txt` — 9 entries 추가
+  * `crates/axia-wasm/tests/step6_additive_only.rs` — 2 wiring tests
+    (9 endpoints + Result<u32, JsValue> strict throw signature)
+  * `web/src/bridge/WasmBridge.ts`:
+    - `AxiaEngineExtended` interface 에 9 exports 추가
+    - typed wrappers: 3 create (strict throw on R-B + endpoint missing),
+      `getReference()` (JSON parse → tagged union 형태), graceful
+      fallback for getReferenceIds / delete / set / getFaceReferenceId
+- **회귀**:
+  * axia-wasm 38 → 40 (+2 wiring tests)
+  * vitest WasmBridge.test 147 → 156 (+9 wrapper tests:
+    create 3 categories + R-B throw + JSON parse + graceful fallback
+    for missing endpoint)
+  * 합계 **+11**, 절대 #[ignore] 금지 11/11 준수.
+- **누적** (Phase 3-α ~ 3-γ): axia-core +13, axia-wasm baseline +9,
+  vitest +9 = **+31**.
+
+### Phase 3-δ ~ 3-ζ (예정)
 별도 sub-step 결재 시 commit 진행.

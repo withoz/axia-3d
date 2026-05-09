@@ -1358,6 +1358,177 @@ impl AxiaEngine {
         self.scene.mesh.cylinder_path_b_default()
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM API
+    //
+    // 3 categories: ConstructionLine / ImportedMesh / PointCloud.
+    // R-B mutually exclusive geometry ownership 강제 — Form/Property
+    // 충돌 시 strict throw (silent skip 차단, ADR-091 §E L1 canonical).
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-095 Phase 3-γ — Create a ConstructionLine Reference (작도선).
+    ///
+    /// Returns the new ReferenceId on success. On R-B violation
+    /// (edge already in Reference), throws JS Error with the rejection
+    /// reason.
+    #[wasm_bindgen(js_name = "createReferenceConstructionLine")]
+    pub fn create_reference_construction_line(
+        &mut self,
+        name: String,
+        edge_ids: Vec<u32>,
+    ) -> Result<u32, JsValue> {
+        use axia_geo::EdgeId;
+        let edges: Vec<EdgeId> = edge_ids.into_iter().map(EdgeId::new).collect();
+        match self.scene.create_reference(
+            name,
+            axia_core::ReferenceCategory::ConstructionLine { edge_ids: edges },
+        ) {
+            Ok(id) => Ok(id.raw()),
+            Err(e) => Err(JsValue::from_str(&format!(
+                "createReferenceConstructionLine: {}", e,
+            ))),
+        }
+    }
+
+    /// ADR-095 Phase 3-γ — Create an ImportedMesh Reference (외부 import).
+    ///
+    /// Returns the new ReferenceId on success. R-B violation
+    /// (face already owned by Form/Property/Reference) → JS Error.
+    #[wasm_bindgen(js_name = "createReferenceImportedMesh")]
+    pub fn create_reference_imported_mesh(
+        &mut self,
+        name: String,
+        face_ids: Vec<u32>,
+        source_path: Option<String>,
+    ) -> Result<u32, JsValue> {
+        use axia_geo::FaceId;
+        let faces: Vec<FaceId> = face_ids.into_iter().map(FaceId::new).collect();
+        match self.scene.create_reference(
+            name,
+            axia_core::ReferenceCategory::ImportedMesh {
+                face_ids: faces, source_path,
+            },
+        ) {
+            Ok(id) => Ok(id.raw()),
+            Err(e) => Err(JsValue::from_str(&format!(
+                "createReferenceImportedMesh: {}", e,
+            ))),
+        }
+    }
+
+    /// ADR-095 Phase 3-γ — Create a PointCloud Reference (스캔 데이터).
+    ///
+    /// Returns the new ReferenceId on success. R-B violation
+    /// (vert already in Reference) → JS Error.
+    #[wasm_bindgen(js_name = "createReferencePointCloud")]
+    pub fn create_reference_point_cloud(
+        &mut self,
+        name: String,
+        vert_ids: Vec<u32>,
+    ) -> Result<u32, JsValue> {
+        use axia_geo::VertId;
+        let verts: Vec<VertId> = vert_ids.into_iter().map(VertId::new).collect();
+        match self.scene.create_reference(
+            name,
+            axia_core::ReferenceCategory::PointCloud { vert_ids: verts },
+        ) {
+            Ok(id) => Ok(id.raw()),
+            Err(e) => Err(JsValue::from_str(&format!(
+                "createReferencePointCloud: {}", e,
+            ))),
+        }
+    }
+
+    /// ADR-095 Phase 3-γ — All currently-stored Reference IDs (sorted
+    /// ascending). Returns empty Vec if none.
+    #[wasm_bindgen(js_name = "getReferenceIds")]
+    pub fn get_reference_ids(&self) -> Vec<u32> {
+        self.scene.list_reference_ids()
+            .into_iter()
+            .map(|id| id.raw())
+            .collect()
+    }
+
+    /// ADR-095 Phase 3-γ — Read a Reference as JSON.
+    /// Returns `{ id, name, category, visible, locked }` or empty
+    /// string if id missing.
+    ///
+    /// `category` shape:
+    /// - `{"kind":"ConstructionLine","edge_ids":[...]}`
+    /// - `{"kind":"ImportedMesh","face_ids":[...],"source_path":...|null}`
+    /// - `{"kind":"PointCloud","vert_ids":[...]}`
+    #[wasm_bindgen(js_name = "getReferenceJson")]
+    pub fn get_reference_json(&self, id: u32) -> String {
+        use axia_core::ReferenceCategory;
+        let rid = axia_core::ReferenceId::new(id);
+        let Some(r) = self.scene.get_reference(rid) else {
+            return String::new();
+        };
+        let category_json = match &r.category {
+            ReferenceCategory::ConstructionLine { edge_ids } => {
+                let ids: Vec<u32> = edge_ids.iter().map(|e| e.raw()).collect();
+                format!("{{\"kind\":\"ConstructionLine\",\"edge_ids\":{:?}}}", ids)
+            }
+            ReferenceCategory::ImportedMesh { face_ids, source_path } => {
+                let ids: Vec<u32> = face_ids.iter().map(|f| f.raw()).collect();
+                let sp = match source_path {
+                    Some(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+                    None => "null".to_string(),
+                };
+                format!(
+                    "{{\"kind\":\"ImportedMesh\",\"face_ids\":{:?},\"source_path\":{}}}",
+                    ids, sp,
+                )
+            }
+            ReferenceCategory::PointCloud { vert_ids } => {
+                let ids: Vec<u32> = vert_ids.iter().map(|v| v.raw()).collect();
+                format!("{{\"kind\":\"PointCloud\",\"vert_ids\":{:?}}}", ids)
+            }
+        };
+        // Escape name properly (basic backslash + quote escape).
+        let name_escaped = r.name.replace('\\', "\\\\").replace('"', "\\\"");
+        format!(
+            "{{\"id\":{},\"name\":\"{}\",\"category\":{},\"visible\":{},\"locked\":{}}}",
+            r.id.raw(), name_escaped, category_json, r.visible, r.locked,
+        )
+    }
+
+    /// ADR-095 Phase 3-γ — Delete a Reference. Returns true if removed.
+    /// Reverse 인덱스도 자동 정리.
+    #[wasm_bindgen(js_name = "deleteReference")]
+    pub fn delete_reference(&mut self, id: u32) -> bool {
+        let rid = axia_core::ReferenceId::new(id);
+        self.scene.delete_reference(rid)
+    }
+
+    /// ADR-095 Phase 3-γ — Toggle Reference visibility flag.
+    /// Returns false if id missing.
+    #[wasm_bindgen(js_name = "setReferenceVisible")]
+    pub fn set_reference_visible(&mut self, id: u32, visible: bool) -> bool {
+        let rid = axia_core::ReferenceId::new(id);
+        self.scene.set_reference_visible(rid, visible)
+    }
+
+    /// ADR-095 Phase 3-γ — Toggle Reference locked flag.
+    /// Returns false if id missing.
+    #[wasm_bindgen(js_name = "setReferenceLocked")]
+    pub fn set_reference_locked(&mut self, id: u32, locked: bool) -> bool {
+        let rid = axia_core::ReferenceId::new(id);
+        self.scene.set_reference_locked(rid, locked)
+    }
+
+    /// ADR-095 Phase 3-γ — Reverse lookup: get the Reference ID owning
+    /// a given face. Returns -1 if face is not part of any Reference.
+    #[wasm_bindgen(js_name = "getFaceReferenceId")]
+    pub fn get_face_reference_id(&self, face_id: u32) -> i32 {
+        use axia_geo::FaceId;
+        let fid = FaceId::new(face_id);
+        match self.scene.face_to_reference.get(&fid) {
+            Some(rid) => rid.raw() as i32,
+            None => -1,
+        }
+    }
+
     /// Check whether an edge has an analytic curve attached.
     /// Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
     /// 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.

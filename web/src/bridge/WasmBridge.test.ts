@@ -1619,6 +1619,81 @@ describe('WasmBridge', () => {
       (bridge as any).engine = {};
       expect(bridge.getCylinderPathBDefault()).toBe(false);
     });
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-095 Phase 3-γ — Reference 시민권 bridge wrappers
+    // ────────────────────────────────────────────────────────────────
+
+    it('createReferenceConstructionLine forwards to engine and returns id', () => {
+      const fn = vi.fn(() => 42);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { createReferenceConstructionLine: fn };
+      const id = bridge.createReferenceConstructionLine('Center', [10, 20]);
+      expect(id).toBe(42);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('createReferenceConstructionLine throws when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.createReferenceConstructionLine('X', [1])).toThrow(/WASM endpoint missing/);
+    });
+
+    it('createReferenceImportedMesh propagates engine throw on R-B violation', () => {
+      const errFn = vi.fn(() => {
+        throw new Error('createReferenceImportedMesh: face owned by Xia');
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { createReferenceImportedMesh: errFn };
+      expect(() => bridge.createReferenceImportedMesh('M', [1], '/site.step'))
+        .toThrow(/owned by Xia/);
+    });
+
+    it('createReferencePointCloud forwards args + returns id', () => {
+      const fn = vi.fn(() => 5);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { createReferencePointCloud: fn };
+      expect(bridge.createReferencePointCloud('Scan', [1, 2, 3])).toBe(5);
+    });
+
+    it('getReference parses JSON from engine for ConstructionLine', () => {
+      const json =
+        '{"id":3,"name":"Axis","category":{"kind":"ConstructionLine","edge_ids":[7,8]},"visible":true,"locked":false}';
+      const fn = vi.fn(() => json);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getReferenceJson: fn };
+      const r = bridge.getReference(3);
+      expect(r).not.toBeNull();
+      expect(r!.id).toBe(3);
+      expect(r!.category).toEqual({ kind: 'ConstructionLine', edgeIds: [7, 8] });
+      expect(r!.visible).toBe(true);
+    });
+
+    it('getReference returns null when endpoint returns empty string', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getReferenceJson: vi.fn(() => '') };
+      expect(bridge.getReference(99)).toBeNull();
+    });
+
+    it('getReferenceIds returns empty when endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getReferenceIds()).toEqual([]);
+    });
+
+    it('deleteReference / setReferenceVisible / setReferenceLocked all return false when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.deleteReference(1)).toBe(false);
+      expect(bridge.setReferenceVisible(1, true)).toBe(false);
+      expect(bridge.setReferenceLocked(1, true)).toBe(false);
+    });
+
+    it('getFaceReferenceId returns -1 when endpoint missing (no Reference sentinel)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getFaceReferenceId(7)).toBe(-1);
+    });
   });
 
   // ════════════════════════════════════════════════════════════════════════

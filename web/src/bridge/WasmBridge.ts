@@ -440,6 +440,16 @@ type AxiaEngineExtended = AxiaEngine & {
   getFaceSurfaceOwnerId?(faceId: number): number;
   setCylinderPathBDefault?(on: boolean): void;
   getCylinderPathBDefault?(): boolean;
+  // ADR-095 Phase 3-γ — Reference citizenship
+  createReferenceConstructionLine?(name: string, edgeIds: Uint32Array): number;
+  createReferenceImportedMesh?(name: string, faceIds: Uint32Array, sourcePath?: string): number;
+  createReferencePointCloud?(name: string, vertIds: Uint32Array): number;
+  getReferenceIds?(): Uint32Array;
+  getReferenceJson?(id: number): string;
+  deleteReference?(id: number): boolean;
+  setReferenceVisible?(id: number, visible: boolean): boolean;
+  setReferenceLocked?(id: number, locked: boolean): boolean;
+  getFaceReferenceId?(faceId: number): number;
   // ADR-029 Phase B — Free-form curves
   setEdgeBezierCurve?(edgeId: number, controlPts: Float64Array): boolean;
   setEdgeBSplineCurve?(
@@ -1259,6 +1269,152 @@ export class WasmBridge {
     const fn = this.engine.getCylinderPathBDefault;
     if (!fn) return false;
     return fn.call(this.engine);
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) bridge
+  //
+  // 3 categories: ConstructionLine / ImportedMesh / PointCloud.
+  // Mutual exclusive geometry ownership 강제 — Form/Property 충돌 시
+  // strict throw (silent skip 차단).
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-095 Phase 3-γ — Create a ConstructionLine Reference.
+   *
+   * Returns the new ReferenceId on success. Throws if endpoint missing
+   * (feature gate) or R-B violation (edge already in Reference — engine
+   * propagates JS Error with rejection reason).
+   */
+  createReferenceConstructionLine(name: string, edgeIds: number[]): number {
+    if (!this.engine || !this.engine.createReferenceConstructionLine) {
+      throw new Error('createReferenceConstructionLine: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    return this.engine.createReferenceConstructionLine(name, Uint32Array.from(edgeIds));
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Create an ImportedMesh Reference.
+   * Throws on R-B violation (face owned by Form/Property).
+   */
+  createReferenceImportedMesh(
+    name: string, faceIds: number[], sourcePath?: string,
+  ): number {
+    if (!this.engine || !this.engine.createReferenceImportedMesh) {
+      throw new Error('createReferenceImportedMesh: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    return this.engine.createReferenceImportedMesh(
+      name, Uint32Array.from(faceIds), sourcePath,
+    );
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Create a PointCloud Reference.
+   * Throws on R-B violation.
+   */
+  createReferencePointCloud(name: string, vertIds: number[]): number {
+    if (!this.engine || !this.engine.createReferencePointCloud) {
+      throw new Error('createReferencePointCloud: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    return this.engine.createReferencePointCloud(name, Uint32Array.from(vertIds));
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — All currently-stored Reference IDs (sorted
+   * ascending). Returns empty array on missing endpoint.
+   */
+  getReferenceIds(): number[] {
+    if (!this.engine || !this.engine.getReferenceIds) return [];
+    return Array.from(this.engine.getReferenceIds());
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Read a Reference by id, parsed from JSON.
+   * Returns null if id missing or endpoint unavailable.
+   */
+  getReference(id: number): {
+    id: number;
+    name: string;
+    category:
+      | { kind: 'ConstructionLine'; edgeIds: number[] }
+      | { kind: 'ImportedMesh'; faceIds: number[]; sourcePath: string | null }
+      | { kind: 'PointCloud'; vertIds: number[] };
+    visible: boolean;
+    locked: boolean;
+  } | null {
+    if (!this.engine || !this.engine.getReferenceJson) return null;
+    const json = this.engine.getReferenceJson(id);
+    if (!json) return null;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any;
+      const cat = parsed.category;
+      let category;
+      if (cat.kind === 'ConstructionLine') {
+        category = { kind: 'ConstructionLine' as const, edgeIds: cat.edge_ids };
+      } else if (cat.kind === 'ImportedMesh') {
+        category = {
+          kind: 'ImportedMesh' as const,
+          faceIds: cat.face_ids,
+          sourcePath: cat.source_path,
+        };
+      } else if (cat.kind === 'PointCloud') {
+        category = { kind: 'PointCloud' as const, vertIds: cat.vert_ids };
+      } else {
+        return null;
+      }
+      return {
+        id: parsed.id,
+        name: parsed.name,
+        category,
+        visible: parsed.visible,
+        locked: parsed.locked,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Delete a Reference. Returns false on missing
+   * endpoint or non-existent id.
+   */
+  deleteReference(id: number): boolean {
+    if (!this.engine || !this.engine.deleteReference) return false;
+    this.markDirty();
+    return this.engine.deleteReference(id);
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Toggle Reference visibility. Returns false on
+   * missing endpoint or non-existent id.
+   */
+  setReferenceVisible(id: number, visible: boolean): boolean {
+    if (!this.engine || !this.engine.setReferenceVisible) return false;
+    this.markDirty();
+    return this.engine.setReferenceVisible(id, visible);
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Toggle Reference locked. Returns false on
+   * missing endpoint or non-existent id.
+   */
+  setReferenceLocked(id: number, locked: boolean): boolean {
+    if (!this.engine || !this.engine.setReferenceLocked) return false;
+    this.markDirty();
+    return this.engine.setReferenceLocked(id, locked);
+  }
+
+  /**
+   * ADR-095 Phase 3-γ — Reverse lookup: get Reference ID owning a face.
+   * Returns -1 if face is not part of any Reference (or endpoint missing).
+   */
+  getFaceReferenceId(faceId: number): number {
+    if (!this.engine || !this.engine.getFaceReferenceId) return -1;
+    return this.engine.getFaceReferenceId(faceId);
   }
 
   /**

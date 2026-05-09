@@ -639,6 +639,51 @@ fn shape_p4_mutators_use_transactions_readonly_skip() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM endpoints.
+// ════════════════════════════════════════════════════════════════════════
+
+/// Phase 3-γ #1 — All 9 Reference endpoints wired with correct js_name.
+#[test]
+fn adr095_phase3_gamma_endpoints_wired() {
+    let l = lib_src();
+    for (rust_name, js_name) in [
+        ("pub fn create_reference_construction_line", "createReferenceConstructionLine"),
+        ("pub fn create_reference_imported_mesh",     "createReferenceImportedMesh"),
+        ("pub fn create_reference_point_cloud",       "createReferencePointCloud"),
+        ("pub fn get_reference_ids",                  "getReferenceIds"),
+        ("pub fn get_reference_json",                 "getReferenceJson"),
+        ("pub fn delete_reference",                   "deleteReference"),
+        ("pub fn set_reference_visible",              "setReferenceVisible"),
+        ("pub fn set_reference_locked",               "setReferenceLocked"),
+        ("pub fn get_face_reference_id",              "getFaceReferenceId"),
+    ] {
+        assert!(l.contains(rust_name),
+            "ADR-095 Phase 3-γ: missing Rust function {}", rust_name);
+        let attr = format!("js_name = \"{}\"", js_name);
+        assert!(l.contains(&attr),
+            "ADR-095 Phase 3-γ: missing js_name attr {}", attr);
+    }
+}
+
+/// Phase 3-γ #2 — `create_reference_*` 3 categories all return
+/// `Result<u32, JsValue>` (strict throw on R-B violation).
+#[test]
+fn adr095_phase3_gamma_create_strict_throw_signatures() {
+    let l = lib_src();
+    for fn_name in [
+        "pub fn create_reference_construction_line",
+        "pub fn create_reference_imported_mesh",
+        "pub fn create_reference_point_cloud",
+    ] {
+        let idx = l.find(fn_name).expect(fn_name);
+        let body = char_safe_slice(&l, idx, 1500);
+        assert!(body.contains("-> Result<u32, JsValue>"),
+            "ADR-095 Phase 3-γ: {} must return Result<u32, JsValue> for \
+             strict throw on R-B violation", fn_name);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-093 D-γ — Cylinder side face owner-id WASM endpoints.
 // ════════════════════════════════════════════════════════════════════════
 
