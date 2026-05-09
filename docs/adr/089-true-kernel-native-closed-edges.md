@@ -1524,9 +1524,52 @@ closed NURBS 시민권. 안전한 완성도."
 ### A-Β-γ (본 commit)
 - **변경**: 본 §D `A-Β-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-Β track closure 완료. **ADR-089 closed-curve 시민권
-  완성** (Circle / Bezier / BSpline / NURBS 4 곡선 type 모두 first-class).
-  Arc / periodic knot vector 만 future ADR.
+
+---
+
+### A-μ-α (2026-05-08, snapshot legacy audit + version handshake amendment)
+
+**사용자 결재 (2026-05-08)**: "🅰 + 🅲 진입 — Legacy file load smoke
+audit + Snapshot version handshake 강화. Path B pre-trigger 준비."
+
+**현재 상태 진단** (사전조사 후):
+- `SNAPSHOT_VERSION = 2` 고정 since 2026-04-24
+- 7 sections 모두 length-prefix presence check 로 legacy compat 활성
+- ADR-089 의 closed-curve 변경은 모두 schema 호환 (값 변경, schema
+  동일) — 자동 backward compat
+- Edge.curve / Edge.curve_owner_id / Edge.class 모두 `#[serde(default)]`
+- **Forward-compat 부재**: V3+ file 의 silent garbage 가능성
+- **Test fixture 부재**: legacy file 의 회귀 자산 없음
+
+**Path Z 4-sub-step**:
+
+| Sub-step | 변경 | 회귀 |
+|---|---|---|
+| A-μ-α (본 amendment) | spec only | +0 |
+| A-μ-β | 🅲 version handshake 강화 (forward-compat reject + section presence) | +5 |
+| A-μ-γ | 🅰 legacy file load audit (synthesized fixtures + roundtrip) | +5 |
+| A-μ-δ | closure | +0 |
+
+**Lock-ins**:
+- **L-μ-1** **Forward-compat**: V > SNAPSHOT_VERSION 시 명시 error
+- **L-μ-2** **Section presence audit**: restore 가 load 한 section 정보
+  반환 (legacy file 식별 가능)
+- **L-μ-3** **Synthesized fixtures**: programmatic generation (cross-
+  platform binary stability 회피)
+- **L-μ-4** **Round-trip 검증**: 회귀 자산 일치
+- **L-μ-5** **ADR-089 closed-curve 검증**: 4 곡선 type closed face 의
+  snapshot round-trip 정합성
+- **L-μ-6** **Path B pre-trigger**: V3 schema bump 자연 가능
+
+**Non-goals**:
+- **N-μ-1** Migration utility — Path B trigger 시 별도
+- **N-μ-2** SNAPSHOT_VERSION bump (V3) — Path B trigger 시
+- **N-μ-3** 외부 .axia 코퍼스 회귀 — 사용자 제공 시 추가
+
+### A-μ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅰+🅲 진입 승인".
+- **변경**: 본 §D `A-μ-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
