@@ -263,7 +263,41 @@ export class SelectTool implements ITool {
         debugLog('[SelectTool] Double-click → face + adjacent edges', fid);
         this.ctx.selection.selectFaceWithEdges(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
       } else {
-        this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
+        // Single-click — ADR-093 D-δ surface_owner_id walk (B-MVP).
+        // LOCKED #15 ADR-037 P22.5 의 Face owner-id 자연 확장. Cylinder
+        // side 의 N quad faces 가 동일 surface_owner_id 공유 → 한 클릭
+        // 으로 group 전체 선택. None owner / fallback 시 기존 단일 face
+        // 동작 보존 (additive only per Lock-in D-D).
+        //
+        // Defensive: bridge mock in older test fixtures may lack the
+        // ADR-093 methods → fall through to legacy single-face select.
+        const ownerId = typeof this.ctx.bridge.getFaceSurfaceOwnerId === 'function'
+          ? this.ctx.bridge.getFaceSurfaceOwnerId(fid)
+          : -1;
+        if (ownerId >= 0
+            && typeof this.ctx.bridge.walkFaceOwnerSiblings === 'function') {
+          const groupFaces = this.ctx.bridge.walkFaceOwnerSiblings(fid);
+          if (groupFaces.length > 1) {
+            // Multi-face surface group: first face with caller's modifiers,
+            // remaining as additive (mirror ADR-088 curve_owner walk).
+            this.ctx.selection.handleClick(
+              groupFaces[0], e.shiftKey, e.ctrlKey, !!e.altKey,
+            );
+            for (let i = 1; i < groupFaces.length; i++) {
+              this.ctx.selection.handleClick(groupFaces[i], true, false, false);
+            }
+            debugLog(
+              `[SelectTool] ADR-093 surface_owner walk: ${groupFaces.length} faces selected (owner=${ownerId})`,
+            );
+          } else {
+            // Single-face group (degenerate / stale id) — fall back.
+            this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
+          }
+        } else {
+          // No owner_id (standalone face, e.g., DrawRect / non-cylinder)
+          // — direct selection (legacy behavior).
+          this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
+        }
       }
       return;
     }

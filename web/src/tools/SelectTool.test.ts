@@ -43,6 +43,9 @@ function mockToolContext() {
       // ADR-088 Phase 1 (S-δ) — default: no curve owner group (legacy behavior)
       getEdgeCurveOwnerId: vi.fn().mockReturnValue(-1),
       getEdgesByCurveOwner: vi.fn().mockReturnValue([]),
+      // ADR-093 D-δ — default: no surface owner group (legacy behavior)
+      getFaceSurfaceOwnerId: vi.fn().mockReturnValue(-1),
+      walkFaceOwnerSiblings: vi.fn().mockImplementation((fid: number) => [fid]),
     },
     getFaceId: vi.fn().mockReturnValue(5),
     faceMap: [0, 1, 2, 3],
@@ -531,6 +534,94 @@ describe('SelectTool', () => {
       // Defensive fall back to single edge.
       expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(10, false, false, false);
       expect(ctx.selection.handleEdgeClick).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-093 D-δ — surface_owner_id grouping for cylinder side faces.
+  // LOCKED #15 (ADR-037 P22.5) Face owner-id 자연 확장. ADR-088 의
+  // edge owner walk 패턴 답습.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-093 D-δ — surface_owner_id walk on single-click face', () => {
+    it('single-click on cylinder side face promotes to ALL group faces', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'face', hit: { faceIndex: 0 },
+      });
+      // getFaceId returns 5 (default mock); owner_id = 17, group of 22 sides.
+      ctx.bridge.getFaceSurfaceOwnerId.mockReturnValue(17);
+      ctx.bridge.walkFaceOwnerSiblings.mockReturnValue([5, 6, 7, 8, 9]);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // First call: caller's modifiers passed through (single, replace).
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false, false);
+      // Subsequent: additive (shift=true) — mirror ADR-088 edge walk.
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(6, true, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(7, true, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(8, true, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(9, true, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledTimes(5);
+
+      // Owner query was called with the picked face's id (5).
+      expect(ctx.bridge.getFaceSurfaceOwnerId).toHaveBeenCalledWith(5);
+      expect(ctx.bridge.walkFaceOwnerSiblings).toHaveBeenCalledWith(5);
+    });
+
+    it('single-click on standalone face (no group) → single face select (legacy)', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'face', hit: { faceIndex: 0 },
+      });
+      ctx.bridge.getFaceSurfaceOwnerId.mockReturnValue(-1); // no group
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // Direct single-face selection (legacy behavior preserved).
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.walkFaceOwnerSiblings).not.toHaveBeenCalled();
+    });
+
+    it('single-click with shift modifier → first face with shift, rest additive', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'face', hit: { faceIndex: 0 },
+      });
+      ctx.bridge.getFaceSurfaceOwnerId.mockReturnValue(7);
+      ctx.bridge.walkFaceOwnerSiblings.mockReturnValue([100, 101, 102]);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // First call gets shift=true (caller's intent).
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(100, true, false, false);
+      // Subsequent always additive (regardless of caller's modifiers).
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(101, true, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(102, true, false, false);
+    });
+
+    it('stale owner_id (group has only 1 face) → fall back to single face', () => {
+      ctx.viewport.pickEdgeOrFace.mockReturnValue({
+        type: 'face', hit: { faceIndex: 0 },
+      });
+      ctx.bridge.getFaceSurfaceOwnerId.mockReturnValue(99);
+      // walk returns [5] only (degenerate group / stale)
+      ctx.bridge.walkFaceOwnerSiblings.mockReturnValue([5]);
+
+      tool.onMouseDown(
+        { clientX: 100, clientY: 200, shiftKey: false, ctrlKey: false, altKey: false } as MouseEvent,
+        null,
+      );
+
+      // Defensive fall back to single face.
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledTimes(1);
     });
   });
 });

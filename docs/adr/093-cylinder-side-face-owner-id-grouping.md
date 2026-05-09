@@ -269,5 +269,39 @@ D-δ: SelectTool integration — single click promote / group click 일관 / Ins
   * 합계 **+6**, 절대 #[ignore] 금지 6/6 준수
 - **누적** (D-α ~ D-γ): axia-geo +8, axia-wasm +2, vitest +4 = **+14**.
 
-### D-δ ~ D-ε (예정)
-별도 sub-step 결재 시 commit 진행.
+### D-δ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인".
+- **변경**:
+  * `web/src/tools/SelectTool.ts::onMouseDown` — face single-click 분기
+    (clickCount === 1) 에 ADR-093 surface_owner walk 추가:
+    - `getFaceSurfaceOwnerId(fid) >= 0` 시 `walkFaceOwnerSiblings(fid)`
+      호출 → 첫 face 는 caller modifiers, 나머지는 additive (shift=true)
+    - ADR-088 curve_owner walk 패턴 답습
+    - **Defensive guard**: bridge mock 이 미구현 시 (`typeof !== 'function'`)
+      legacy 단일 face 동작 보존 (다른 테스트 fixtures 호환)
+    - Multi-click (double/triple) 분기는 변경 없음 — single-click 만
+      group promote 적용 (Lock-in D-D minimal scope)
+  * `web/src/tools/SelectTool.test.ts`:
+    - default mock 에 `getFaceSurfaceOwnerId: -1` + `walkFaceOwnerSiblings:
+      [fid]` 추가 (legacy 동작 보존)
+    - 4 신규 D-δ 테스트:
+      * single-click cylinder side → 5 group faces 모두 선택
+      * standalone face (no group) → 단일 face 만 (legacy)
+      * shift modifier → 첫 face shift, 나머지 additive
+      * stale owner_id (group=[fid] only) → 단일 face fallback
+- **회귀**:
+  * vitest SelectTool.test.ts 40 → 44 (+4)
+  * 합계 **+4**, 절대 #[ignore] 금지 4/4 준수
+  * 전체 vitest 1650 → 1654 (D-γ +4 + D-δ +4 = +8 total since D-α
+    baseline)
+- **누적 회귀** (D-α ~ D-δ): axia-geo +8, axia-wasm +2, vitest +8 =
+  **+18**, 절대 #[ignore] 금지 18/18 준수.
+- **사용자 facing 변화**:
+  * Cylinder 측면 click → 22 quad faces 일괄 선택 (사용자 intent: "측면
+    = 1 entity")
+  * 비-cylinder face click → 단일 face (기존 동작 보존)
+  * shift / ctrl / alt modifier 정합성 보존
+
+### D-ε (예정 — closure)
+LOCKED #35 amendment + ADR-090 §6.3 trigger 재평가 + 사용자 시연 게이트
++ 회고 commit.
