@@ -16,6 +16,10 @@ import {
 } from '../tools/MergeSettings';
 import { getAutoIntersect, setAutoIntersect } from '../tools/AutoIntersectSettings';
 import { getDrawCurveMode, setDrawCurveMode } from '../tools/DrawCurveSettings';
+import {
+  getAutoTopologyRecoveryMode,
+  setAutoTopologyRecoveryMode,
+} from '../tools/AutoTopologyRecoverySettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -131,6 +135,14 @@ export class SettingsPanel {
         <div class="sp-hint">DrawCircle: 24-segment polygon 대신 1 self-loop edge + AnalyticCurve::Circle 로 그리기 (ADR-089)</div>
       </div>
 
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-auto-topology-recovery" />
+          위상 손상 자동 복구 (실험)
+        </label>
+        <div class="sp-hint">토폴로지 변경 op 후 손상 감지 → 자동 복구. PartialFailure 시 사용자 다이얼로그 ([Undo]/[강등]/[수동수정]) (ADR-097 Phase 4)</div>
+      </div>
+
       <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
@@ -197,6 +209,12 @@ export class SettingsPanel {
       setDrawCurveMode(drawCurveCheck.checked);
     });
 
+    // ADR-097 T-ε — Auto topology recovery (Phase 4)
+    const autoRecoverCheck = panel.querySelector('#sp-auto-topology-recovery') as HTMLInputElement;
+    autoRecoverCheck.addEventListener('change', () => {
+      setAutoTopologyRecoveryMode(autoRecoverCheck.checked);
+    });
+
     return panel;
   }
 
@@ -240,6 +258,10 @@ export class SettingsPanel {
     // ADR-089 A-λ-β — 곡선 모드 (kernel-native)
     const drawCurveCheck = this.panel.querySelector('#sp-draw-curve-mode') as HTMLInputElement;
     drawCurveCheck.checked = getDrawCurveMode();
+
+    // ADR-097 T-ε — 자동 위상 복구
+    const autoRecoverCheck = this.panel.querySelector('#sp-auto-topology-recovery') as HTMLInputElement;
+    autoRecoverCheck.checked = getAutoTopologyRecoveryMode();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;

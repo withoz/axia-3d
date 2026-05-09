@@ -304,7 +304,39 @@ Mesh::attempt_auto_recovery(&mut self) -> RecoveryOutcome
     별도 모듈)
   * ADR-095 §E L3 — `humanizeDamageReport` 한국어 wording SSOT
 
-### T-ε ~ T-ζ (예정)
-별도 sub-step 결재 시 commit 진행. T-ε 는 Settings flag
-(`axia:auto-topology-recovery`) + main.ts wiring. T-ζ 는 Real
-Chromium 시연 + closure.
+### T-ε (본 commit)
+- **commit**: 본 commit (Settings flag + main.ts wiring)
+- **Settings module** (`web/src/tools/AutoTopologyRecoverySettings.ts`):
+  * `axia:auto-topology-recovery` localStorage key
+  * **Default OFF** (T-A=a — self-modifying op safety, ADR-094 default
+    ON 패턴과 다름. ADR-094 는 메모리 절감 시각 불변, ADR-097 은
+    토폴로지 변경 시각 가변)
+  * `getAutoTopologyRecoveryMode` / `setAutoTopologyRecoveryMode` /
+    `onAutoTopologyRecoveryModeChange` (AutoReferenceImportSettings
+    패턴 답습)
+  * Explicit ON preference 보존 (`localStorage 'true'`)
+- **main.ts wiring**: container `register('topologyRecovery', ...)`
+  서비스 — lazy import + flag check + bridge guard. Op-completion
+  사이트 또는 `window.__axia.get('topologyRecovery')` E2E 진입점.
+  Listener-reactive (live setSetting updates 즉시 반영).
+- **SettingsPanel UI** (`web/src/units/SettingsPanel.ts`):
+  * `#sp-auto-topology-recovery` 체크박스 + 한국어 설명 hint
+  * Default OFF 표시 (사용자 명시 활성)
+- **회귀 (Vitest)**:
+  * `AutoTopologyRecoverySettings.test.ts` — 5 tests (default OFF /
+    localStorage true / localStorage false / setMode persists /
+    listener fires-on-change)
+  * `SettingsPanel.test.ts` 영향 없음 (20 PASS unchanged)
+  * 합계 **+5**, 절대 #[ignore] 금지 5/5 준수.
+- **누적** (T-α ~ T-ε): axia-geo +11, axia-core +4, vitest +32 =
+  **+47**, 절대 #[ignore] 금지 47/47 준수.
+- **Lock-ins applied**:
+  * T-A=a — explicit opt-in default OFF (self-modifying safety)
+  * AutoReferenceImportSettings + CylinderPathBSettings 패턴 답습
+  * ServiceContainer SSOT 진입점 (window.__axia 단일 export)
+- **Full vitest sweep**: 109 files, **1729/1729 PASS** (1 skipped 무관).
+
+### T-ζ (예정)
+별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
+E2E) — Default OFF → 토글 → 손상 mesh 생성 → orchestrator 호출 →
+Recovered/PartialFailure 시각 검증.
