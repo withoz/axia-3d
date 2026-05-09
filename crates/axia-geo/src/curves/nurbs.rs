@@ -261,7 +261,7 @@ pub fn parameter_range(knots: &[f64], degree: usize, n_ctrl: usize) -> (f64, f64
 // Internal validation
 // ────────────────────────────────────────────────────────────────────────
 
-fn validate(
+pub fn validate(
     control_pts: &[DVec3],
     weights: &[f64],
     knots: &[f64],

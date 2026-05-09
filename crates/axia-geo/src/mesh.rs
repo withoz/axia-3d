@@ -2801,9 +2801,30 @@ impl Mesh {
                     );
                 }
             }
+            crate::curves::AnalyticCurve::NURBS { control_pts, weights, knots, degree } => {
+                // L-Β-1 — closure check (clamped knots case).
+                // L-Β-2 — weights validation via nurbs::validate.
+                if control_pts.len() < 2 {
+                    bail!("ADR-089 A-Β-β: NURBS needs ≥ 2 control points");
+                }
+                crate::curves::nurbs::validate(control_pts, weights, knots, *degree as usize)
+                    .map_err(|e| anyhow::anyhow!(
+                        "ADR-089 A-Β-β: NURBS validate failed: {}", e))?;
+                let p0 = control_pts[0];
+                let pn = control_pts[control_pts.len() - 1];
+                if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
+                    bail!(
+                        "ADR-089 A-Β-β: NURBS control points not closed \
+                         (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e}). \
+                         Periodic knot vector closed NURBS deferred to future ADR.",
+                        (p0 - pn).length(),
+                        crate::tolerances::EPSILON_LENGTH,
+                    );
+                }
+            }
             other => bail!(
-                "ADR-089 A-Α-β: closed NURBS / Arc curves deferred \
-                 to future ADR (got {:?}). Use Circle, closed Bezier, or closed BSpline.",
+                "ADR-089 A-Β-β: closed Arc curves deferred \
+                 to future ADR (got {:?}). Use Circle, closed Bezier, closed BSpline, or closed NURBS.",
                 std::mem::discriminant(other),
             ),
         }
@@ -2818,6 +2839,12 @@ impl Mesh {
                 bezier_best_fit_normal(control_pts)?
             }
             crate::curves::AnalyticCurve::BSpline { control_pts, .. } => {
+                bezier_best_fit_normal(control_pts)?
+            }
+            crate::curves::AnalyticCurve::NURBS { control_pts, .. } => {
+                // L-Β-3 — best-fit plane from control polygon (weights
+                // affect curve shape but not the plane that contains it,
+                // assuming control polygon is itself planar).
                 bezier_best_fit_normal(control_pts)?
             }
             _ => DVec3::Z, // unreachable per validation above
@@ -2887,16 +2914,18 @@ impl Mesh {
                 self.faces[face_id].set_surface(Some(plane));
             }
 
-            // ADR-089 A-ω-γ / A-Α-β — Plane surface attach for closed
-            // Bezier / BSpline (A-η-1 답습). origin = control points
-            // centroid, normal = best-fit plane normal, basis_u = first
-            // non-zero edge from centroid. u/v range = AABB extent ×1.5.
-            let bezier_or_bspline_pts: Option<&Vec<DVec3>> = match &curve {
+            // ADR-089 A-ω-γ / A-Α-β / A-Β-β — Plane surface attach
+            // for closed Bezier / BSpline / NURBS (A-η-1 답습). origin
+            // = control points centroid, normal = best-fit plane normal,
+            // basis_u = first non-zero edge from centroid. u/v range =
+            // AABB extent × 1.5.
+            let curve_control_pts: Option<&Vec<DVec3>> = match &curve {
                 crate::curves::AnalyticCurve::Bezier { control_pts } => Some(control_pts),
                 crate::curves::AnalyticCurve::BSpline { control_pts, .. } => Some(control_pts),
+                crate::curves::AnalyticCurve::NURBS { control_pts, .. } => Some(control_pts),
                 _ => None,
             };
-            if let Some(control_pts) = bezier_or_bspline_pts {
+            if let Some(control_pts) = curve_control_pts {
                 let n_pts = control_pts.len() as f64;
                 let centroid = control_pts.iter().fold(DVec3::ZERO, |acc, p| acc + *p) / n_pts;
                 // basis_u: first significant tangent from centroid.
@@ -4563,11 +4592,11 @@ impl Mesh {
                         stats.emitted += 1;
                         continue;
                     }
-                    // ADR-089 A-ω-δ / A-Α-β — closed Bezier / BSpline
-                    // render fast-path. Tessellate control points to
-                    // polyline → fan triangulate from centroid (analogous
-                    // to Circle path).
-                    let bezier_or_bspline_tess: Option<Vec<DVec3>> = match edge_ref.curve().cloned() {
+                    // ADR-089 A-ω-δ / A-Α-β / A-Β-β — closed Bezier /
+                    // BSpline / NURBS render fast-path. Tessellate control
+                    // points to polyline → fan triangulate from centroid
+                    // (analogous to Circle path).
+                    let curve_tess: Option<Vec<DVec3>> = match edge_ref.curve().cloned() {
                         Some(crate::curves::AnalyticCurve::Bezier { control_pts }) => {
                             crate::curves::bezier::tessellate(
                                 &control_pts, ANALYTIC_CHORD_TOL,
@@ -4581,9 +4610,17 @@ impl Mesh {
                                 ANALYTIC_CHORD_TOL,
                             ).ok()
                         }
+                        Some(crate::curves::AnalyticCurve::NURBS {
+                            control_pts, weights, knots, degree,
+                        }) => {
+                            crate::curves::nurbs::tessellate(
+                                &control_pts, &weights, &knots, degree as usize,
+                                ANALYTIC_CHORD_TOL,
+                            ).ok()
+                        }
                         _ => None,
                     };
-                    if let Some(pts) = bezier_or_bspline_tess
+                    if let Some(pts) = curve_tess
                     {
                         if pts.len() < 3 {
                             stats.outer_too_short += 1;
@@ -4957,8 +4994,8 @@ impl Mesh {
                     }
                     continue;
                 }
-                // ADR-089 A-ω-δ / A-Α-β — Bezier / BSpline closed
-                // self-loop wireframe.
+                // ADR-089 A-ω-δ / A-Α-β / A-Β-β — Bezier / BSpline /
+                // NURBS closed self-loop wireframe.
                 let curve_pts: Option<Vec<DVec3>> = match edge.curve().cloned() {
                     Some(crate::curves::AnalyticCurve::Bezier { control_pts }) => {
                         crate::curves::bezier::tessellate(&control_pts, 0.05).ok()
@@ -4966,6 +5003,13 @@ impl Mesh {
                     Some(crate::curves::AnalyticCurve::BSpline { control_pts, knots, degree }) => {
                         crate::curves::bspline::tessellate(
                             &control_pts, &knots, degree as usize, 0.05,
+                        ).ok()
+                    }
+                    Some(crate::curves::AnalyticCurve::NURBS {
+                        control_pts, weights, knots, degree,
+                    }) => {
+                        crate::curves::nurbs::tessellate(
+                            &control_pts, &weights, &knots, degree as usize, 0.05,
                         ).ok()
                     }
                     _ => None,
@@ -10585,9 +10629,74 @@ mod tests {
             "ADR-089 A-Α-β: open BSpline must be rejected");
     }
 
+    // A-Β-β: NURBS 시민권 활성 — A-Α 의 'nurbs_still_rejected' 의미 변경.
+
     #[test]
-    fn adr089_a_alpha_nurbs_still_rejected() {
-        // NURBS / Arc closed curves still deferred (future ADR).
+    fn adr089_a_beta_closed_nurbs_creates_self_loop_face() {
+        // Closed NURBS (control_pts[0] == control_pts[last] with clamped
+        // knots and uniform weights) → 1 anchor + 1 self-loop edge with
+        // NURBS curve + 1 face with Plane surface.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::NURBS {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0), // closure
+            ],
+            weights: vec![1.0, 1.0, 1.0, 1.0, 1.0],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("ADR-089 A-Β-β: closed NURBS must succeed");
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_faces, 1);
+        assert_eq!(active_edges, 1);
+        assert_eq!(active_verts, 1);
+        let edges_iter: Vec<EdgeId> = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).map(|(id, _)| id).collect();
+        let eid = edges_iter[0];
+        assert!(mesh.edges[eid].is_self_loop());
+        assert!(matches!(
+            mesh.edges[eid].curve(),
+            Some(crate::curves::AnalyticCurve::NURBS { .. })
+        ));
+        // Plane surface attached.
+        assert!(matches!(
+            mesh.faces[face].surface(),
+            Some(crate::surfaces::AnalyticSurface::Plane { .. })
+        ));
+    }
+
+    #[test]
+    fn adr089_a_beta_open_nurbs_rejected() {
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::NURBS {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                // No closure
+            ],
+            weights: vec![1.0, 1.0, 1.0, 1.0],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-Β-β: open NURBS must be rejected");
+    }
+
+    #[test]
+    fn adr089_a_beta_zero_weight_nurbs_rejected() {
+        // NURBS with zero weight → nurbs::validate rejects.
         let mut mesh = Mesh::new();
         let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
         let curve = crate::curves::AnalyticCurve::NURBS {
@@ -10598,13 +10707,28 @@ mod tests {
                 DVec3::new(0.0, 10.0, 0.0),
                 DVec3::new(0.0, 0.0, 0.0),
             ],
-            weights: vec![1.0, 1.0, 1.0, 1.0, 1.0],
+            weights: vec![1.0, 1.0, 0.0, 1.0, 1.0], // zero weight
             knots: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
             degree: 3,
         };
         let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
         assert!(result.is_err(),
-            "ADR-089 A-Α-β: NURBS still deferred (future ADR)");
+            "ADR-089 A-Β-β: zero weight must be rejected");
+    }
+
+    #[test]
+    fn adr089_a_beta_arcs_still_rejected() {
+        // Arc closed curves still deferred (Arc 본질상 closed 아님).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::Arc {
+            center: DVec3::ZERO, radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+            start_angle: 0.0, end_angle: std::f64::consts::PI,
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-Β-β: Arc still deferred");
     }
 
     #[test]
