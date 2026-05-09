@@ -2861,6 +2861,45 @@ impl Mesh {
                 self.faces[face_id].set_surface(Some(plane));
             }
 
+            // ADR-089 A-ω-γ — Plane surface attach for closed Bezier
+            // (A-η-1 답습). origin = control points centroid,
+            // normal = best-fit plane normal, basis_u = first non-zero
+            // edge from centroid. u/v range = AABB extent × 1.5.
+            if let crate::curves::AnalyticCurve::Bezier { control_pts } = &curve {
+                let n_pts = control_pts.len() as f64;
+                let centroid = control_pts.iter().fold(DVec3::ZERO, |acc, p| acc + *p) / n_pts;
+                // basis_u: first significant tangent from centroid.
+                let mut basis_u = DVec3::X;
+                for p in control_pts.iter() {
+                    let v = *p - centroid;
+                    // Project out the normal component to keep basis_u in plane.
+                    let v_in_plane = v - normal * v.dot(normal);
+                    if v_in_plane.length_squared() > 1e-12 {
+                        basis_u = v_in_plane.normalize();
+                        break;
+                    }
+                }
+                // AABB extent for u/v range.
+                let mut max_extent = 0.0_f64;
+                for p in control_pts.iter() {
+                    let d = (*p - centroid).length();
+                    if d > max_extent { max_extent = d; }
+                }
+                let plane_range = if max_extent > 1e-9 {
+                    (-max_extent * 1.5, max_extent * 1.5)
+                } else {
+                    (-1.0, 1.0)
+                };
+                let plane = crate::surfaces::AnalyticSurface::Plane {
+                    origin: centroid,
+                    normal,
+                    basis_u,
+                    u_range: plane_range,
+                    v_range: plane_range,
+                };
+                self.faces[face_id].set_surface(Some(plane));
+            }
+
             Ok(())
         })();
 

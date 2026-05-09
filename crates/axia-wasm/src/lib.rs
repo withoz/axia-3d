@@ -767,6 +767,45 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-089 A-ω-γ — Atomic closed Bezier creation with curve attach.
+    /// `control_pts` flat: 3·n floats. Last point must equal first
+    /// (within EPSILON_LENGTH) for closure check. Returns shape_id on
+    /// success, -1 on error.
+    #[wasm_bindgen(js_name = "drawClosedBezierAsCurve")]
+    pub fn draw_closed_bezier_as_curve(
+        &mut self,
+        control_pts_flat: Vec<f64>,
+    ) -> f64 {
+        if control_pts_flat.len() % 3 != 0 {
+            console_error!("[RUST] drawClosedBezierAsCurve: control_pts_flat length {} not multiple of 3",
+                control_pts_flat.len());
+            return -1.0;
+        }
+        let mut control_pts = Vec::with_capacity(control_pts_flat.len() / 3);
+        for chunk in control_pts_flat.chunks_exact(3) {
+            control_pts.push(DVec3::new(chunk[0], chunk[1], chunk[2]));
+        }
+        let cmd = Command::DrawClosedBezierAsCurve { control_pts };
+        let result = self.scene.execute(cmd);
+        match result {
+            axia_core::commands::CommandResult::ShapeCreated(shape_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                shape_id as f64
+            }
+            axia_core::commands::CommandResult::Error(e) => {
+                console_error!("[RUST] drawClosedBezierAsCurve ERROR: {}", e);
+                self.set_error(e);
+                self.invalidate_cache();
+                -1.0
+            }
+            _ => {
+                self.invalidate_cache();
+                -1.0
+            }
+        }
+    }
+
     // ========================================================================
     // ADR-028 Phase A — Analytic Edge Curve API
     // ========================================================================

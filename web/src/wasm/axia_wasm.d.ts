@@ -367,6 +367,13 @@ export class AxiaEngine {
      */
     drawCircleAsCurve(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number): number;
     /**
+     * ADR-089 A-ω-γ — Atomic closed Bezier creation with curve attach.
+     * `control_pts` flat: 3·n floats. Last point must equal first
+     * (within EPSILON_LENGTH) for closure check. Returns shape_id on
+     * success, -1 on error.
+     */
+    drawClosedBezierAsCurve(control_pts_flat: Float64Array): number;
+    /**
      * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
      * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
@@ -1640,6 +1647,7 @@ export interface InitOutput {
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_drawCircleAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
+    readonly axiaengine_drawClosedBezierAsCurve: (a: number, b: number, c: number) => number;
     readonly axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

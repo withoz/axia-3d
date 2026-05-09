@@ -188,6 +188,21 @@ pub enum Command {
         radius: f64,
     },
 
+    /// ADR-089 A-ω-γ — Atomic closed Bezier creation with curve promotion.
+    ///
+    /// Creates a kernel-native closed-curve face from a Bezier control
+    /// point loop (control_pts[0] ≈ control_pts[last]):
+    /// - 1 anchor vertex (control_pts[0])
+    /// - 1 self-loop edge with `AnalyticCurve::Bezier` curve
+    /// - 1 face with Plane surface attached (best-fit plane normal)
+    ///
+    /// Returns `CommandResult::ShapeCreated(ShapeId.raw())` on success.
+    /// Rejects open Bezier (cp[0] != cp[last]) or collinear control
+    /// points with `CommandResult::Error`.
+    DrawClosedBezierAsCurve {
+        control_pts: Vec<DVec3>,
+    },
+
     /// ADR-079 W-1 — Surface-native solid creation from a profile face.
     /// `create_solid` 의 architectural successor to mesh-era push_pull.
     /// Smart routing within `Extrude` mode based on profile surface kind

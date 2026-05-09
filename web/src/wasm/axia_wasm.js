@@ -1061,6 +1061,20 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-089 A-ω-γ — Atomic closed Bezier creation with curve attach.
+     * `control_pts` flat: 3·n floats. Last point must equal first
+     * (within EPSILON_LENGTH) for closure check. Returns shape_id on
+     * success, -1 on error.
+     * @param {Float64Array} control_pts_flat
+     * @returns {number}
+     */
+    drawClosedBezierAsCurve(control_pts_flat) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawClosedBezierAsCurve(this.__wbg_ptr, ptr0, len0);
+        return ret;
+    }
+    /**
      * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
      * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware

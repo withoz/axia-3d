@@ -705,6 +705,29 @@ export class WasmBridge {
     return fn.call(this.engine, cx, cy, cz, nx, ny, nz, radius);
   }
 
+  /**
+   * ADR-089 A-ω-γ — Atomic closed Bezier creation with curve attach.
+   *
+   * `controlPts` flat: 3·n floats. `controlPts[0..3]` and `controlPts
+   * [last 3]` must be approximately equal (closure check). Creates 1
+   * anchor + 1 self-loop edge with `AnalyticCurve::Bezier` + 1 face
+   * with Plane surface attached (best-fit plane normal).
+   *
+   * Returns shape_id on success, -1 on error.
+   */
+  drawClosedBezierAsCurve(
+    controlPts: Float64Array | number[],
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).drawClosedBezierAsCurve;
+    if (!fn) return -1;
+    this.markDirty();
+    const flat = controlPts instanceof Float64Array
+      ? controlPts : new Float64Array(controlPts);
+    return fn.call(this.engine, flat);
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // ADR-028 Phase A — Analytic Edge Curve API
   // ════════════════════════════════════════════════════════════════════════

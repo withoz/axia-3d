@@ -1156,6 +1156,9 @@ impl Scene {
             Command::DrawCircleAsCurve { center, normal, radius } => {
                 self.exec_draw_circle_as_curve(center, normal, radius)
             }
+            Command::DrawClosedBezierAsCurve { control_pts } => {
+                self.exec_draw_closed_bezier_as_curve(control_pts)
+            }
             Command::CreateSolid { face_id, mode } => {
                 self.exec_create_solid(face_id, mode)
             }
@@ -4268,6 +4271,61 @@ impl Scene {
         if let Some(shape) = self.shapes.get_mut(&shape_id) {
             shape.position = center;
             shape.surface_normal = Some(n_norm);
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        CommandResult::ShapeCreated(shape_id.raw())
+    }
+
+    /// ADR-089 A-ω-γ — Closed Bezier kernel-native creation.
+    fn exec_draw_closed_bezier_as_curve(
+        &mut self,
+        control_pts: Vec<DVec3>,
+    ) -> CommandResult {
+        if control_pts.len() < 3 {
+            return CommandResult::Error(format!(
+                "ADR-089 A-ω-γ: closed Bezier needs ≥ 3 control points (got {})",
+                control_pts.len()
+            ));
+        }
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        // Anchor vertex at first control point.
+        let anchor_pos = control_pts[0];
+        let anchor = self.mesh.add_vertex(anchor_pos);
+
+        let bezier = axia_geo::AnalyticCurve::Bezier {
+            control_pts: control_pts.clone(),
+        };
+        let face_id = match self.mesh.add_face_closed_curve(anchor, bezier, FORM_MATERIAL) {
+            Ok(fid) => fid,
+            Err(e) => {
+                self.transactions.cancel();
+                return CommandResult::Error(format!(
+                    "ADR-089 A-ω-γ add_face_closed_curve failed: {}",
+                    e,
+                ));
+            }
+        };
+
+        // Form-layer Shape registration (ADR-050 답습).
+        let shape_id = self.create_shape(
+            "Bezier Closed (kernel-native)".to_string(),
+            vec![face_id],
+        );
+        // Position = control points centroid.
+        let n_pts = control_pts.len() as f64;
+        let centroid = control_pts.iter().fold(DVec3::ZERO, |acc, p| acc + *p) / n_pts;
+        if let Some(shape) = self.shapes.get_mut(&shape_id) {
+            shape.position = centroid;
+            // Surface normal: read from face's attached Plane.
+            if let Some(axia_geo::AnalyticSurface::Plane { normal, .. }) = self.mesh.face_surface(face_id) {
+                shape.surface_normal = Some(*normal);
+            }
         }
 
         self.transactions.set_after_snapshot(self.scene_snapshot());
