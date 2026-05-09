@@ -1401,7 +1401,7 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
-### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-π closure, 2026-05-08)
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-χ closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
   메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
@@ -1438,7 +1438,34 @@
   - **A-π Path Z** (3 sub-step, default ON 전환): `93a567c` /
     `7ac0f72` / `23e3750`. ADR-049 P-5e-α / ADR-087 K-ε hotfix 답습
     패턴. localStorage 'false' 명시 OFF preference 보존
-- **5 lock-in 원칙 (canonical)**:
+  - **A-ρ Path A** (3 sub-step, render-only Cylinder uv-slice
+    smoothness): `bc70af1` / `58047c4` / `45476ff`. 사용자 통찰
+    "원통 옆면속에 폴리곤" 후 결재. DCEL polygon 보존, render path
+    가 surface metadata 기반 chord-tolerant tessellation 적용. 26594
+    → 778 tris (-97% per Cylinder face).
+  - **A-τ Path A** (3 sub-step, smooth-group edge hiding):
+    `c0d6745` / `98c83bd` / `5650b22`. 두 인접 face 가 같은 곡면
+    surface 인스턴스 (Cylinder/Sphere/Cone/Torus) 면 angle threshold
+    무시하고 edge hide. surfaces_in_same_smooth_group helper —
+    axis_origin/axis_dir/radius/ref_dir 4 fields 비교 (u_range/
+    v_range 제외). LOCKED #16 K-ε hotfix 답습.
+  - **A-υ Path A** (3 sub-step, leftover self-loop cleanup):
+    `42c8efb` / `4dfadd7` / `26f1fc9`. extrude_closed_curve_face_via_
+    tessellation 의 remove_face 직후 명시 self-loop edge cleanup +
+    isolated anchor vertex deactivate. 23 polyline overlap 제거.
+  - **A-φ Path A** (3 sub-step, Sphere/Cone/Torus uv-slice 일관성):
+    `a91497f` / `f39ad41` / `7a29340`. compute_uv_slice_for_quad_face
+    generic helper — 4 곡면 모두 dispatch. parametric inversion 4
+    formula (Cylinder atan2/dot, Sphere asin, Cone atan2/dot, Torus
+    radial+axial atan2). A-ρ inline 코드 → generic refactor (-75 LoC).
+  - **A-χ Path A** (3 sub-step, split surface inheritance):
+    `29cf2f9` / `faae3b0` + `b2ac1eb` / `58897cd`. 6 face split sites
+    (mesh.split_face / split_face_by_chain / split_face_case_b/c/d /
+    boolean.split_faces_by_intersections) 모두 parent surface clone
+    부여. Sphere×Sphere intersect 시연: 2236 face / 90% kind=0 →
+    568 face / **100% kind=Sphere**. Auto-intersect / Boolean /
+    Push-Pull split path 모두 metadata persistence 확보.
+- **10 lock-in 원칙 (canonical)**:
   - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
     Phase 2). 메타-원칙 #14 정합
   - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
@@ -1451,10 +1478,36 @@
   - L5: Backward compat — polygonal Circle (legacy 24-segment) 의
     회귀 자산 모두 PASS 유지. localStorage `axia:draw-curve-mode = 'false'`
     explicit OFF preference 영구 보존
+  - **L6 (A-ρ/φ)**: 곡면 face 의 render 는 surface metadata 기반
+    chord-tolerant uv-slice tessellation. DCEL polygon quad 보존,
+    visual smoothness 만 향상. compute_uv_slice_for_quad_face generic
+    helper — 4 곡면 (Cylinder/Sphere/Cone/Torus) 모두 dispatch.
+  - **L7 (A-τ)**: 두 인접 face 가 같은 곡면 surface (Cylinder/Sphere/
+    Cone/Torus) 면 edge wireframe 에서 hide. surfaces_in_same_smooth_
+    group 함수 (axis_origin/axis_dir/radius/ref_dir 비교, u_range/
+    v_range 제외). HARD flag override 보존.
+  - **L8 (A-υ)**: extrude_closed_curve_face_via_tessellation 의 remove_
+    face 직후 self-loop edge cleanup + isolated anchor vertex
+    deactivate. polyline overlap 제거 (시각 정합).
+  - **L9 (A-χ)**: 모든 face split site 가 parent surface clone 부여.
+    6 sites: mesh.split_face / split_face_by_chain / split_face_case_
+    b/c/d / boolean.split_faces_by_intersections. uv_range 풀 surface
+    보존 — A-ρ/A-φ uv-slice 가 boundary verts 로 sub-slice 자동 계산.
+    Auto-intersect / Boolean / Push-Pull 의 모든 split path 정합.
+  - **L10 (메타-원칙 #14 측면 시각 closure)**: A-ρ + A-τ + A-υ + A-φ
+    + A-χ 결합으로 Path A 의 visual quality 가 산업 CAD parity 도달.
+    DCEL polygon 유지, 시각만 매끈. Path B 는 future ADR scope.
 - **회귀 누적 (절대 #[ignore] 금지)**:
-  - axia-geo +35 (1123 → 1158, A-α ~ A-ι 누적)
+  - axia-geo +55 (1123 → 1178, A-α ~ A-χ 누적)
+    - A-α ~ A-ι: +35 (시민권 인프라 / face synthesis / Boolean /
+      Push-Pull / Render / Offset)
+    - A-ρ +4 (Cylinder uv-slice render)
+    - A-τ +4 (smooth-group edge hide)
+    - A-υ +3 (leftover cleanup)
+    - A-φ +6 (Sphere/Cone/Torus uv-slice)
+    - A-χ +3 (split surface inheritance)
   - vitest +7 (1622 → 1629, A-λ + A-π)
-  - **합계 +42**, 절대 #[ignore] 금지 42/42 준수
+  - **합계 +62**, 절대 #[ignore] 금지 62/62 준수
 - **사용자 facing 동작 (default ON 후)**:
   - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
   - PushPull → tessellate-extrude → Cylinder (Path A)
@@ -1471,6 +1524,25 @@
   - `adr089_a_kappa_closed_curve_edge_emits_polyline_segments`
   - `adr089_a_iota_closed_curve_offset_produces_self_loop`
   - `adr089_a_iota_polygonal_circle_unaffected_by_self_loop_path` (회귀 가드)
+  - **A-ρ**: `cylinder_quad_emits_sliced_tessellation`,
+    `cylinder_quad_normals_radial`,
+    `cylinder_quad_tessellation_within_quad_bounds`,
+    `polygonal_face_unaffected` (regression guard)
+  - **A-τ**: `smooth_group_cylinder_edge_hidden`,
+    `boundary_edge_still_drawn`, `polygonal_no_surface_unchanged`,
+    `smooth_group_helper_distinguishes_kinds`
+  - **A-υ**: `self_loop_edge_cleanup_after_extrude`,
+    `anchor_vertex_deactivated_if_isolated`,
+    `extrude_polygon_unaffected` (regression guard)
+  - **A-φ**: `sphere_quad_emits_sliced_tessellation`,
+    `sphere_quad_normals_radial`,
+    `cone_quad_emits_sliced_tessellation`,
+    `torus_quad_emits_sliced_tessellation`,
+    `uv_slice_helper_returns_none_for_plane`,
+    `uv_slice_returns_none_for_non_quad_face`
+  - **A-χ**: `split_face_propagates_surface_to_face_b`,
+    `split_face_no_surface_unchanged` (regression guard),
+    `split_propagates_cylinder_with_full_uv_range`
   - DrawCurveSettings.test.ts (6 tests)
   - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
 - **불변 (LOCKED 정책 정합)**:
