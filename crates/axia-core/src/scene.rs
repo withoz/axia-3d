@@ -1159,6 +1159,9 @@ impl Scene {
             Command::DrawClosedBezierAsCurve { control_pts } => {
                 self.exec_draw_closed_bezier_as_curve(control_pts)
             }
+            Command::DrawClosedBSplineAsCurve { control_pts, knots, degree } => {
+                self.exec_draw_closed_bspline_as_curve(control_pts, knots, degree)
+            }
             Command::CreateSolid { face_id, mode } => {
                 self.exec_create_solid(face_id, mode)
             }
@@ -4271,6 +4274,61 @@ impl Scene {
         if let Some(shape) = self.shapes.get_mut(&shape_id) {
             shape.position = center;
             shape.surface_normal = Some(n_norm);
+        }
+
+        self.transactions.set_after_snapshot(self.scene_snapshot());
+        self.transactions.commit();
+
+        CommandResult::ShapeCreated(shape_id.raw())
+    }
+
+    /// ADR-089 A-Α-γ — Closed BSpline kernel-native creation.
+    fn exec_draw_closed_bspline_as_curve(
+        &mut self,
+        control_pts: Vec<DVec3>,
+        knots: Vec<f64>,
+        degree: u32,
+    ) -> CommandResult {
+        if control_pts.len() < 3 {
+            return CommandResult::Error(format!(
+                "ADR-089 A-Α-γ: closed BSpline needs ≥ 3 control points (got {})",
+                control_pts.len()
+            ));
+        }
+
+        self.transactions.begin();
+        self.transactions.set_before_snapshot(self.scene_snapshot());
+
+        let anchor_pos = control_pts[0];
+        let anchor = self.mesh.add_vertex(anchor_pos);
+
+        let bspline = axia_geo::AnalyticCurve::BSpline {
+            control_pts: control_pts.clone(),
+            knots,
+            degree,
+        };
+        let face_id = match self.mesh.add_face_closed_curve(anchor, bspline, FORM_MATERIAL) {
+            Ok(fid) => fid,
+            Err(e) => {
+                self.transactions.cancel();
+                return CommandResult::Error(format!(
+                    "ADR-089 A-Α-γ add_face_closed_curve failed: {}",
+                    e,
+                ));
+            }
+        };
+
+        let shape_id = self.create_shape(
+            "BSpline Closed (kernel-native)".to_string(),
+            vec![face_id],
+        );
+        let n_pts = control_pts.len() as f64;
+        let centroid = control_pts.iter().fold(DVec3::ZERO, |acc, p| acc + *p) / n_pts;
+        if let Some(shape) = self.shapes.get_mut(&shape_id) {
+            shape.position = centroid;
+            if let Some(axia_geo::AnalyticSurface::Plane { normal, .. }) = self.mesh.face_surface(face_id) {
+                shape.surface_normal = Some(*normal);
+            }
         }
 
         self.transactions.set_after_snapshot(self.scene_snapshot());

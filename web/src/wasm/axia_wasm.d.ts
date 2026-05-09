@@ -367,6 +367,13 @@ export class AxiaEngine {
      */
     drawCircleAsCurve(cx: number, cy: number, cz: number, nx: number, ny: number, nz: number, radius: number): number;
     /**
+     * ADR-089 A-Α-γ — Atomic closed BSpline creation with curve attach.
+     * Caller passes flat control_pts (3·n floats), knots vector, and
+     * degree. control_pts[0] must equal control_pts[last] within
+     * EPSILON_LENGTH (clamped knots case). Returns shape_id, -1 on err.
+     */
+    drawClosedBSplineAsCurve(control_pts_flat: Float64Array, knots: Float64Array, degree: number): number;
+    /**
      * ADR-089 A-ω-γ — Atomic closed Bezier creation with curve attach.
      * `control_pts` flat: 3·n floats. Last point must equal first
      * (within EPSILON_LENGTH) for closure check. Returns shape_id on
@@ -1647,6 +1654,7 @@ export interface InitOutput {
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_drawCenterline: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly axiaengine_drawCircleAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
+    readonly axiaengine_drawClosedBSplineAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_drawClosedBezierAsCurve: (a: number, b: number, c: number) => number;
     readonly axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

@@ -1061,6 +1061,24 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-089 A-Α-γ — Atomic closed BSpline creation with curve attach.
+     * Caller passes flat control_pts (3·n floats), knots vector, and
+     * degree. control_pts[0] must equal control_pts[last] within
+     * EPSILON_LENGTH (clamped knots case). Returns shape_id, -1 on err.
+     * @param {Float64Array} control_pts_flat
+     * @param {Float64Array} knots
+     * @param {number} degree
+     * @returns {number}
+     */
+    drawClosedBSplineAsCurve(control_pts_flat, knots, degree) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(knots, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawClosedBSplineAsCurve(this.__wbg_ptr, ptr0, len0, ptr1, len1, degree);
+        return ret;
+    }
+    /**
      * ADR-089 A-ω-γ — Atomic closed Bezier creation with curve attach.
      * `control_pts` flat: 3·n floats. Last point must equal first
      * (within EPSILON_LENGTH) for closure check. Returns shape_id on

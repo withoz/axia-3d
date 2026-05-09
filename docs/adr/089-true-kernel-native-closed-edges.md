@@ -1376,10 +1376,60 @@ closed-curve 시민권 확장. 안전한 완성도 우선."
   sub-step (weights 처리 추가).
 - **N-Α-3** DrawBSplineTool UI 분기 — 별도 sub-step (A-Β).
 
-### A-Α-α (본 commit)
+### A-Α-α (commit `fd3f36c`)
 - **사용자 결재**: 2026-05-08, "🅰 자연 architectural 진행".
 - **변경**: 본 §D `A-Α-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-Α-β (commit `a70acf3`)
+- **변경**: `crates/axia-geo/src/mesh.rs` + `bspline.rs`:
+  * `add_face_closed_curve` BSpline match arm — closure check
+    (`|cp[0]-cp[last]| < EPSILON`) + `bspline::validate` 호출
+    (knots/degree validation).
+  * `bezier_best_fit_normal` 재사용 (Bezier/BSpline 공통 best-fit
+    plane).
+  * Plane attach 통합 (`bezier_or_bspline_pts` Option).
+  * Render fast-path 통합 (face fan + edge wireframe — bezier::
+    tessellate / bspline::tessellate dispatch).
+  * `bspline::validate` 가시성 `fn` → `pub fn`.
+- **회귀**: net +3 (axia-geo 1183 → 1186):
+  * `closed_bspline_creates_self_loop_face`
+  * `open_bspline_rejected`
+  * `nurbs_still_rejected` (Arc/NURBS deferred 보존)
+  * `invalid_knots_rejected` (knot validation 자연 활용)
+  * (A-ω 의 `bsplines_still_rejected` 는 의미 변경으로 대체)
+
+### A-Α-γ (browser real-runtime closure)
+- **변경**:
+  * `Command::DrawClosedBSplineAsCurve { control_pts, knots, degree }`
+  * `exec_draw_closed_bspline_as_curve` (axia-core scene)
+  * WASM `drawClosedBSplineAsCurve(Vec<f64>, Vec<f64>, u32)`
+  * TS `bridge.drawClosedBSplineAsCurve(controlPts, knots, degree)`
+  * export_baseline.txt entry 추가
+- **Browser smoke**:
+  * Closed BSpline (5 cp + clamped knots, degree 3) → shape 1,
+    1 vert/1 edge/1 face, kind=Plane (1), curveKind=BSpline (5) ✓
+  * Open BSpline → -1 (closure 거부) ✓
+- **회귀**: WASM/TS bridge passthrough, +0 (existing tests cover).
+
+**ADR-089 누적 트랙 (A-α ~ A-Α)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε ~ A-ι (시민권 인프라) | +35 | DCEL / face synth / Boolean / Push-Pull / Render / Offset |
+| A-ν / A-π (sweep + default ON) | +2 | 회귀 자산 + 자동 |
+| A-ρ / A-τ / A-υ / A-φ / A-χ (visual + metadata) | +20 | Path A 시각 closure |
+| A-ω + A-ψ (Bezier 시민권 + UI) | +8 | 다른 곡선 첫 확장 |
+| **A-Α (BSpline 시민권)** | **+3** | **NURBS 토대** |
+| **누적** | **axia-geo +63 / vitest +10 = +73** | **closed-curve 시민권 3 곡선 type 활성** |
+
+### A-Α-γ (본 commit)
+- **변경**: 본 §D `A-Α-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-Α track closure 완료. 후속 후보 — closed NURBS
+  시민권 (A-ω/A-Α 패턴 답습 + weights 처리), DrawBSplineTool UI 분기
+  (A-ψ 패턴 답습 — A-Β 트랙), LOCKED #35 갱신 (A-Α 추가),
+  Periodic knot vector closed BSpline (현 implementation 외 case).
 
 ---
 

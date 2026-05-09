@@ -728,6 +728,32 @@ export class WasmBridge {
     return fn.call(this.engine, flat);
   }
 
+  /**
+   * ADR-089 A-Α-γ — Atomic closed BSpline creation with curve attach.
+   *
+   * Caller passes flat control points + knots vector + degree.
+   * `controlPts[0]` and `controlPts[last]` must be approximately equal
+   * (clamped knots closure). Periodic knot vector deferred to future ADR.
+   *
+   * Returns shape_id on success, -1 on error.
+   */
+  drawClosedBSplineAsCurve(
+    controlPts: Float64Array | number[],
+    knots: Float64Array | number[],
+    degree: number,
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).drawClosedBSplineAsCurve;
+    if (!fn) return -1;
+    this.markDirty();
+    const ctrlFlat = controlPts instanceof Float64Array
+      ? controlPts : new Float64Array(controlPts);
+    const knotsFlat = knots instanceof Float64Array
+      ? knots : new Float64Array(knots);
+    return fn.call(this.engine, ctrlFlat, knotsFlat, degree);
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // ADR-028 Phase A — Analytic Edge Curve API
   // ════════════════════════════════════════════════════════════════════════

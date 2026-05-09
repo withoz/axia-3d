@@ -203,6 +203,16 @@ pub enum Command {
         control_pts: Vec<DVec3>,
     },
 
+    /// ADR-089 A-Α-γ — Atomic closed BSpline creation with curve attach.
+    /// Same pattern as DrawClosedBezierAsCurve. Caller responsible for
+    /// passing valid clamped-knots vector with control_pts[0] ≈
+    /// control_pts[last]. Returns ShapeCreated on success.
+    DrawClosedBSplineAsCurve {
+        control_pts: Vec<DVec3>,
+        knots: Vec<f64>,
+        degree: u32,
+    },
+
     /// ADR-079 W-1 — Surface-native solid creation from a profile face.
     /// `create_solid` 의 architectural successor to mesh-era push_pull.
     /// Smart routing within `Extrude` mode based on profile surface kind
