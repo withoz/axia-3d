@@ -21,9 +21,11 @@ pub mod surfaces;
 pub mod predicates;
 pub mod mesh_migration;
 pub mod p7_manifold;
+pub mod topology_damage;
 
 // Re-export main types
 pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, InvariantReport, ManifoldInfo};
+pub use topology_damage::{TopologyDamageKind, TopologyDamageReport};
 pub use entities::id::*;
 pub use entities::{Vertex, Edge, EdgeClass, HalfEdge, Face, LoopRef};
 pub use tolerances::*;

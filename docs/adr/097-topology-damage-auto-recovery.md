@@ -193,5 +193,35 @@ Mesh::attempt_auto_recovery(&mut self) -> RecoveryOutcome
 - **변경**: 본 ADR 작성. LOCKED #26 Phase 4 progress 갱신 anchor.
 - **회귀**: +0 (docs only).
 
-### T-β ~ T-ζ (예정)
+### T-β (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Detection layer 진입.
+- **변경**:
+  * `crates/axia-geo/src/topology_damage.rs` (신규):
+    - `TopologyDamageKind` enum 3 variants (BoundaryEdge / NonManifold
+      / Degenerate). 사건 4 (Orphan) 은 Scene context 필요 — T-γ
+      wrapper 에서 추가
+    - `TopologyDamageReport { damages, checked_faces, checked_edges }`
+      + `is_clean()` / `count_by_kind()` / `summary()` API
+  * `crates/axia-geo/src/lib.rs` — `pub mod topology_damage;` + re-export
+  * `crates/axia-geo/src/mesh.rs::Mesh::detect_topology_damage` 신규:
+    - Pass 1: degenerate face detection (NaN normal / zero magnitude)
+    - Pass 2: edge manifold detection (radial HE chain count):
+      * count == 1 → BoundaryEdge
+      * count >= 3 → NonManifold
+    - Read-only (state 변경 0)
+- **회귀** (axia-geo 1245 → 1252, +7):
+  * `detect_clean_mesh_returns_empty`
+  * `detect_single_face_has_boundary_edges` (4 BE)
+  * `detect_two_face_shared_edge_no_damage` (6 BE, 1 manifold edge)
+  * `summary_format` (사용자 facing 다이얼로그 prefix)
+  * `clean_mesh_summary_format`
+  * `damage_kinds_have_stable_labels` (telemetry)
+  * `inactive_face_skipped` (defensive)
+  * 합계 **+7**, 절대 #[ignore] 금지 7/7 준수
+- **누적** (T-α ~ T-β): axia-geo +7.
+- **Architectural 검증**: 새 알고리즘 발명 0 — 기존 Mesh 의 face /
+  edge / HE radial chain 구조만 활용. additive coexist 검증 (1252
+  axia-geo tests 전체 PASS, 245+ LOCKED 회귀 자산 영향 0).
+
+### T-γ ~ T-ζ (예정)
 별도 sub-step 결재 시 commit 진행.

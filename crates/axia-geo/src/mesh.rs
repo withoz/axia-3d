@@ -6507,6 +6507,126 @@ impl Mesh {
     //  Face Orientation Invariants (ADR-007)
     // ═══════════════════════════════════════════════════════════════
 
+    /// ADR-097 T-β — Topology damage detection (Phase 4).
+    ///
+    /// Q5 사건 2 (boundary edge / non-manifold) + 사건 3 (degenerate
+    /// face) 의 typed enumeration. dispatcher (T-γ) 가 본 결과를 패턴
+    /// 매치하여 알려진 recovery 자산을 호출.
+    ///
+    /// **사건 4 (Orphan)** 은 Scene context (face_to_xia / face_to_shape /
+    /// face_to_reference reverse 인덱스) 가 필요하므로 본 메서드에서
+    /// 미검출 — Scene-level wrapper (T-γ) 에서 추가.
+    ///
+    /// **Detection algorithm**:
+    /// - 각 active edge: radial HE chain 의 active+with-face HE 수
+    ///   카운트
+    ///   - count == 0: ignore (truly free edge / wire)
+    ///   - count == 1: BoundaryEdge { edge, incident face }
+    ///   - count == 2: OK (manifold)
+    ///   - count >= 3: NonManifold { edge, face_count }
+    /// - 각 active face: normal length 0 또는 NaN 검사 → Degenerate
+    ///
+    /// **State 변경 0** (read-only). Recovery 는 T-γ dispatcher.
+    pub fn detect_topology_damage(&self) -> crate::topology_damage::TopologyDamageReport {
+        use crate::topology_damage::{TopologyDamageKind, TopologyDamageReport};
+
+        let mut damages: Vec<TopologyDamageKind> = Vec::new();
+        let mut checked_faces = 0usize;
+        let mut checked_edges = 0usize;
+
+        // Pass 1: degenerate face detection (사건 3).
+        for (fid, face) in self.faces.iter() {
+            if !face.is_active() { continue; }
+            checked_faces += 1;
+
+            let n = face.normal();
+            // NaN 검사 (NaN != NaN — IEEE 754 정의).
+            #[allow(clippy::eq_op)]
+            let has_nan = n.x != n.x || n.y != n.y || n.z != n.z;
+            if has_nan {
+                damages.push(TopologyDamageKind::Degenerate {
+                    face_id: fid,
+                    reason: "NaN normal",
+                });
+                continue;
+            }
+            let mag2 = n.x * n.x + n.y * n.y + n.z * n.z;
+            if mag2 < 1e-20 {
+                damages.push(TopologyDamageKind::Degenerate {
+                    face_id: fid,
+                    reason: "zero normal",
+                });
+            }
+        }
+
+        // Pass 2: edge manifold detection (사건 2).
+        for (eid, edge) in self.edges.iter() {
+            if !edge.is_active() { continue; }
+            checked_edges += 1;
+
+            let any_he = edge.any_he();
+            if any_he.is_null() { continue; }
+
+            // Walk radial chain — count active HE with face.
+            let mut he_id = any_he;
+            let mut active_he_with_face_count = 0usize;
+            let mut first_incident_face: Option<crate::FaceId> = None;
+            let mut iter_safety = 0usize;
+            loop {
+                if iter_safety > 100 {
+                    // Defensive against corrupt radial chain.
+                    break;
+                }
+                iter_safety += 1;
+
+                let he = &self.hes[he_id];
+                if he.is_active() {
+                    let face_id = he.face();
+                    if !face_id.is_null() {
+                        if let Some(face) = self.faces.get(face_id) {
+                            if face.is_active() {
+                                active_he_with_face_count += 1;
+                                if first_incident_face.is_none() {
+                                    first_incident_face = Some(face_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let next_rad = he.next_rad();
+                if next_rad.is_null() || next_rad == any_he {
+                    break;
+                }
+                he_id = next_rad;
+            }
+
+            match active_he_with_face_count {
+                0 => { /* truly free edge — ignore */ }
+                1 => {
+                    damages.push(TopologyDamageKind::BoundaryEdge {
+                        edge_id: eid,
+                        incident_face: first_incident_face
+                            .unwrap_or(crate::FaceId::NULL),
+                    });
+                }
+                2 => { /* manifold — OK */ }
+                n => {
+                    damages.push(TopologyDamageKind::NonManifold {
+                        edge_id: eid,
+                        face_count: n,
+                    });
+                }
+            }
+        }
+
+        TopologyDamageReport {
+            damages,
+            checked_faces,
+            checked_edges,
+        }
+    }
+
     /// 전체 mesh의 face orientation invariants 검증 결과.
     ///
     /// 위반 사항이 있으면 `violations`에 Human-readable 메시지 열거.
@@ -12116,5 +12236,110 @@ mod tests {
         assert_eq!(mesh.face_boundary_loops(f).len(), 1);
         assert_eq!(mesh.faces[f].inners().len(), 0,
             "build_quad_face has no inners — legacy fallback len = 1");
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-097 T-β — Topology damage detection (Phase 4)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr097_t_beta_detect_clean_mesh_returns_empty() {
+        // Empty mesh — no damage.
+        let mesh = Mesh::new();
+        let report = mesh.detect_topology_damage();
+        assert!(report.is_clean());
+        assert_eq!(report.checked_faces, 0);
+        assert_eq!(report.checked_edges, 0);
+        assert_eq!(report.damages.len(), 0);
+    }
+
+    #[test]
+    fn adr097_t_beta_detect_single_face_has_boundary_edges() {
+        // Single quad face → 4 edges 가 모두 boundary (1 incident face).
+        // T-β 가 4 BoundaryEdge damage 검출 (사건 2).
+        let mut mesh = Mesh::new();
+        let _f = build_quad_face(&mut mesh);
+        let report = mesh.detect_topology_damage();
+        let (be, nm, dg) = report.count_by_kind();
+        assert_eq!(be, 4, "single quad → 4 boundary edges");
+        assert_eq!(nm, 0);
+        assert_eq!(dg, 0);
+    }
+
+    #[test]
+    fn adr097_t_beta_detect_two_face_shared_edge_no_damage() {
+        // 두 face 가 edge 1 개 공유 → 그 edge 는 manifold (2 face),
+        // 나머지 edges 는 boundary. 정확한 검증은 boundary count.
+        let mut mesh = Mesh::new();
+        // Face 1: 4-vert quad
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f1 = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        // Face 2: shares v1-v2 edge with face 1
+        let v4 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v5 = mesh.add_vertex(DVec3::new(2.0, 1.0, 0.0));
+        let _f2 = mesh.add_face(&[v1, v4, v5, v2], MaterialId::new(0)).unwrap();
+
+        let report = mesh.detect_topology_damage();
+        let (be, nm, dg) = report.count_by_kind();
+        // 7 edges total. 1 shared (manifold), 6 boundary. So 6 BE damages.
+        assert_eq!(be, 6, "two-face strip → 6 boundary edges, got {}", be);
+        assert_eq!(nm, 0, "no non-manifold");
+        assert_eq!(dg, 0, "no degenerate");
+    }
+
+    #[test]
+    fn adr097_t_beta_summary_format() {
+        // is_clean / count_by_kind / summary 의 사용자 facing format 검증.
+        let mut mesh = Mesh::new();
+        let _ = build_quad_face(&mut mesh);
+        let report = mesh.detect_topology_damage();
+        let s = report.summary();
+        assert!(s.contains("damages"));
+        assert!(s.contains("4 boundary edge"));
+    }
+
+    #[test]
+    fn adr097_t_beta_clean_mesh_summary_format() {
+        let mesh = Mesh::new();
+        let report = mesh.detect_topology_damage();
+        let s = report.summary();
+        assert!(s.contains("clean"));
+        assert!(s.contains("0 faces"));
+        assert!(s.contains("0 edges"));
+    }
+
+    #[test]
+    fn adr097_t_beta_damage_kinds_have_stable_labels() {
+        use crate::topology_damage::TopologyDamageKind;
+        let be = TopologyDamageKind::BoundaryEdge {
+            edge_id: crate::EdgeId::new(0),
+            incident_face: crate::FaceId::new(0),
+        };
+        let nm = TopologyDamageKind::NonManifold {
+            edge_id: crate::EdgeId::new(0),
+            face_count: 3,
+        };
+        let dg = TopologyDamageKind::Degenerate {
+            face_id: crate::FaceId::new(0),
+            reason: "test",
+        };
+        assert_eq!(be.label(), "BoundaryEdge");
+        assert_eq!(nm.label(), "NonManifold");
+        assert_eq!(dg.label(), "Degenerate");
+    }
+
+    #[test]
+    fn adr097_t_beta_inactive_face_skipped() {
+        // remove_face 후 inactive face 는 detect 에 포함 안 됨.
+        let mut mesh = Mesh::new();
+        let f = build_quad_face(&mut mesh);
+        mesh.remove_face(f).expect("remove OK");
+        let report = mesh.detect_topology_damage();
+        // face 는 inactive — checked_faces 0
+        assert_eq!(report.checked_faces, 0,
+            "inactive face must be skipped");
     }
 }
