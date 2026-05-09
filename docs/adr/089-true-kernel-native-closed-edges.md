@@ -1701,12 +1701,60 @@ round-trip audit + Memory audit. ADR-090 §6 의 정량 트리거 명시 부분
 | **A-Γ (Path B 트리거 정량화)** | **axia-geo +5** | **ADR-090 §6 데이터 anchor** |
 | **누적** | **axia-geo +71 / axia-core +9 / vitest +10 = +90** | **Path B 진입 결재 준비** |
 
-### A-Γ-γ (본 commit)
+### A-Γ-γ (commit `fbf3615`)
 - **변경**: 본 §D `A-Γ-β` + `A-Γ-γ` closure entry.
 - **회귀**: +0 (closure docs).
-- **다음 step**: A-Γ track closure 완료. Path B 진입 결재 시 audit
-  데이터 anchor 활용 가능. 후속 후보: LOCKED #35 갱신 (A-Γ 추가),
-  STEP export 구현 (Path B trigger 활성화), 다른 우선순위 ADR.
+
+---
+
+### A-Δ-α (2026-05-08, periodic knot vector closed BSpline/NURBS amendment)
+
+**사용자 결재 (2026-05-08)**: "🅰 자연 architectural completion —
+Periodic knot vector + Documentation consolidation. ADR-089 의 진정한
+마지막 closure (clamped 만 vs periodic 도)."
+
+**현재 상태 진단**:
+- A-Α/A-Β 가 closed BSpline/NURBS 시민권 활성 — 그러나 **clamped knots
+  case 만** (control_pts[0] ≈ control_pts[last]).
+- 산업 CAD 의 NURBS 표준은 **periodic knot vector** (uniform spacing,
+  not clamped) — 이 경우 control polygon 자체는 닫히지 않음.
+- ADR-089 의 closed-curve 시민권 의 마지막 deferred case.
+
+**Path Z 3-sub-step**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-Δ-α (본 amendment) | spec only | +0 |
+| A-Δ-β | is_periodic helpers + add_face_closed_curve extension + tests | +5 |
+| A-Δ-γ | closure | +0 |
+
+**Lock-ins**:
+- **L-Δ-1** **Periodic knot detection**: `bspline::is_periodic_knots`
+  / `nurbs::is_periodic_knots` 신규 — uniform spacing AND not clamped
+  (first/last degree+1 knots 가 모두 같지 않음) detect.
+- **L-Δ-2** **Dual closure type**: `add_face_closed_curve` 의 BSpline/
+  NURBS match arm 확장:
+  - **Type A (clamped)**: control_pts[0] ≈ control_pts[last] (기존)
+  - **Type B (periodic)**: uniform knots, control_pts 미닫힘 허용
+- **L-Δ-3** **Validation 우선순위**: Type B 시도 → 실패 시 Type A 시도
+  → 둘 다 실패 시 reject. 명시적 type 지정 unnecessary (자연 detect).
+- **L-Δ-4** **bspline::tessellate 호환성**: 이미 일반 knot vector 처리
+  → periodic knots 도 동작. validation pass 면 tessellate 도 pass.
+- **L-Δ-5** **Plane attach 동일**: control polygon best-fit plane —
+  Type A/B 동일 로직 (`bezier_best_fit_normal` 재사용).
+- **L-Δ-6** **WASM bridge unchanged**: `drawClosedBSplineAsCurve` /
+  `drawClosedNURBSAsCurve` 가 이미 knots/degree 받음 — caller 가
+  periodic knots 전달 가능.
+
+**Non-goals**:
+- **N-Δ-1** Periodic Bezier (Bezier 는 knot vector 없음 — 무관).
+- **N-Δ-2** WASM bridge 변경 (caller 가 periodic knots 전달하면 됨).
+- **N-Δ-3** Tool UI 변경 (DrawBSpline/NURBS Tool 미존재).
+
+### A-Δ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅰 진입 승인".
+- **변경**: 본 §D `A-Δ-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
