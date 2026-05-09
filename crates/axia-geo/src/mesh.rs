@@ -3403,6 +3403,10 @@ impl Mesh {
         // Save face properties
         let material = self.faces[face_id].material();
         let normal = self.faces[face_id].normal();
+        // ADR-089 A-χ-β — preserve parent's AnalyticSurface for the new
+        // sub-face (face_id retains its slot, only face_b is fresh).
+        // L-χ-1 / L-χ-3 / L-χ-5.
+        let parent_surface = self.faces[face_id].surface().cloned();
 
         let outer_start = self.faces[face_id].outer().start;
         let loop_hes = self.collect_loop_hes(outer_start)?;
@@ -3479,6 +3483,12 @@ impl Mesh {
             FACE_TOLERANCE,
             material,
         ));
+
+        // ADR-089 A-χ-β — propagate parent surface to face_b.
+        // (face_id keeps its slot + surface automatically.)
+        if let Some(ref s) = parent_surface {
+            self.faces[face_b].set_surface(Some(s.clone()));
+        }
 
         // Set face on he_v2v1
         self.hes[he_v2v1].set_face(face_b);
@@ -10205,6 +10215,94 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-χ-β: face split surface inheritance
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr089_a_chi_split_face_propagates_surface_to_face_b() {
+        // mesh.split_face direct DCEL surgery: face_id keeps slot,
+        // face_b is fresh. Both must carry the parent's surface.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        // Attach a Sphere surface (any curved kind).
+        let sph = crate::surfaces::AnalyticSurface::Sphere {
+            center: DVec3::new(0.5, 0.5, -10.0),
+            radius: 10.5,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        mesh.faces[face].set_surface(Some(sph));
+
+        let (face_a, face_b) = mesh.split_face(face, v0, v2).unwrap();
+        // Both must have Sphere surface attached.
+        let kind_a = mesh.faces[face_a].surface().map(|s| std::mem::discriminant(s));
+        let kind_b = mesh.faces[face_b].surface().map(|s| std::mem::discriminant(s));
+        assert!(kind_a.is_some() && kind_a == kind_b,
+            "ADR-089 A-χ-β: split_face must propagate surface to both sub-faces");
+        // face_a == face (same slot), face_b is new.
+        assert_eq!(face_a, face);
+    }
+
+    #[test]
+    fn adr089_a_chi_split_face_no_surface_unchanged() {
+        // Regression — face with no surface stays None on both sub-faces.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        // No surface attached.
+        let (face_a, face_b) = mesh.split_face(face, v0, v2).unwrap();
+        assert!(mesh.faces[face_a].surface().is_none());
+        assert!(mesh.faces[face_b].surface().is_none());
+    }
+
+    #[test]
+    fn adr089_a_chi_split_propagates_cylinder_with_full_uv_range() {
+        // After split, both sub-faces hold the SAME parent surface
+        // (full u_range/v_range). A-ρ uv-slice computes per-face slice
+        // from boundary verts. L-χ-3.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(0.0, 100.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 100.0, 200.0));
+        let v3 = mesh.add_vertex(DVec3::new(100.0, 0.0, 200.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let cyl = crate::surfaces::AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO, axis_dir: DVec3::Z,
+            radius: 100.0, ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 200.0),
+        };
+        mesh.faces[face].set_surface(Some(cyl.clone()));
+
+        // Add an interior vert and split via chain (skip — direct mesh.split_face)
+        let (fa, fb) = mesh.split_face(face, v0, v2).unwrap();
+        let sa = mesh.faces[fa].surface().cloned();
+        let sb = mesh.faces[fb].surface().cloned();
+        // Both have Cylinder with full uv_range preserved.
+        match sa {
+            Some(crate::surfaces::AnalyticSurface::Cylinder { u_range, .. }) => {
+                assert!((u_range.0 - 0.0).abs() < 1e-9);
+                assert!((u_range.1 - std::f64::consts::TAU).abs() < 1e-9);
+            }
+            _ => panic!("face_a missing Cylinder"),
+        }
+        match sb {
+            Some(crate::surfaces::AnalyticSurface::Cylinder { u_range, .. }) => {
+                assert!((u_range.0 - 0.0).abs() < 1e-9);
+                assert!((u_range.1 - std::f64::consts::TAU).abs() < 1e-9);
+            }
+            _ => panic!("face_b missing Cylinder"),
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────
