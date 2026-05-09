@@ -1586,6 +1586,39 @@ describe('WasmBridge', () => {
       (bridge as any).engine = {};
       expect(bridge.getFaceSurfaceOwnerId(7)).toBe(-1);
     });
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-094 B-η — Cylinder Path B default flag
+    // ────────────────────────────────────────────────────────────────
+
+    it('setCylinderPathBDefault forwards to engine', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setCylinderPathBDefault: fn };
+      bridge.setCylinderPathBDefault(true);
+      expect(fn).toHaveBeenCalledWith(true);
+      bridge.setCylinderPathBDefault(false);
+      expect(fn).toHaveBeenCalledWith(false);
+    });
+
+    it('setCylinderPathBDefault graceful no-op when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.setCylinderPathBDefault(true)).not.toThrow();
+    });
+
+    it('getCylinderPathBDefault returns engine value', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getCylinderPathBDefault: fn };
+      expect(bridge.getCylinderPathBDefault()).toBe(true);
+    });
+
+    it('getCylinderPathBDefault returns false when endpoint missing (legacy default)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getCylinderPathBDefault()).toBe(false);
+    });
   });
 
   // ════════════════════════════════════════════════════════════════════════

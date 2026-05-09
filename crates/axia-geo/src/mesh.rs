@@ -152,6 +152,27 @@ pub struct Mesh {
     #[serde(default)]
     next_surface_owner_id: u32,
 
+    /// ADR-094 B-η — Cylinder Path B-full default flag.
+    ///
+    /// `true` = `extrude_planar_cylinder` 의 closed-curve profile fast-
+    /// path routes to `extrude_cylinder_kernel_native` (Path B —
+    /// 3 face / 2 edge / 2 vert annulus topology, 산업 CAD parity).
+    /// `false` (default) = legacy Path A (`extrude_closed_curve_face_
+    /// via_tessellation`, 25 face / 70 edge / 46 vert polygon strip).
+    ///
+    /// **Engine default**: `false` (legacy) — preserves 245+ Path A
+    /// regression assets (ADR-089 closed-curve tests / ADR-092 Arc rim
+    /// tests / etc.). Production layer (WASM bridge / TS init) flips
+    /// to `true` based on user preference (localStorage `axia:
+    /// cylinder-path-b-mode`, ADR-049 P-5e-α 답습).
+    ///
+    /// **Polygonal profile (build_circle_face N≥3 verts)**: 영향 없음
+    /// (closed-curve fast-path 미진입).
+    ///
+    /// `serde(skip)` — runtime preference, snapshot 영향 0.
+    #[serde(skip, default)]
+    pub cylinder_path_b_default: bool,
+
     /// ADR-094 B-γ-prep — `FaceId → Vec<LoopRef>` map for multi-loop
     /// face schema (Path B-full B-β option, additive coexist phase).
     ///
@@ -423,6 +444,9 @@ impl Mesh {
             // 0 is reserved as null sentinel.
             face_to_surface_owner_id: FxHashMap::default(),
             next_surface_owner_id: 1,
+            // ADR-094 B-η — engine default = legacy Path A. Production
+            // layer flips to Path B via set_cylinder_path_b_default(true).
+            cylinder_path_b_default: false,
             // ADR-094 B-γ-prep — empty map, all faces use legacy
             // outer+inners until explicit set_face_boundary_loops call.
             face_to_boundary_loops: FxHashMap::default(),
@@ -653,6 +677,21 @@ impl Mesh {
         loops.push(face.outer());
         loops.extend_from_slice(face.inners());
         loops
+    }
+
+    /// ADR-094 B-η — Set the Path B cylinder default. See field doc on
+    /// `Mesh::cylinder_path_b_default` for semantics.
+    ///
+    /// Production layer should call this once at startup (after reading
+    /// localStorage `axia:cylinder-path-b-mode`). Test layer may toggle
+    /// per-test as needed.
+    pub fn set_cylinder_path_b_default(&mut self, on: bool) {
+        self.cylinder_path_b_default = on;
+    }
+
+    /// ADR-094 B-η — Read the Path B cylinder default flag.
+    pub fn cylinder_path_b_default(&self) -> bool {
+        self.cylinder_path_b_default
     }
 
     /// ADR-094 B-γ-prep — Distinguishes Path B multi-loop schema vs

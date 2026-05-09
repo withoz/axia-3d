@@ -438,6 +438,8 @@ type AxiaEngineExtended = AxiaEngine & {
   getEdgesByCurveOwner?(ownerId: number): Uint32Array;
   walkFaceOwnerSiblings?(faceId: number): Uint32Array;
   getFaceSurfaceOwnerId?(faceId: number): number;
+  setCylinderPathBDefault?(on: boolean): void;
+  getCylinderPathBDefault?(): boolean;
   // ADR-029 Phase B — Free-form curves
   setEdgeBezierCurve?(edgeId: number, controlPts: Float64Array): boolean;
   setEdgeBSplineCurve?(
@@ -1227,6 +1229,36 @@ export class WasmBridge {
     const fn = this.engine.getFaceSurfaceOwnerId;
     if (!fn) return -1;
     return fn.call(this.engine, faceId);
+  }
+
+  /**
+   * ADR-094 B-η — Set the Path B cylinder default.
+   *
+   * `true` = closed-curve cylinder profile produces 3 face / 2 edge /
+   * 2 vert annulus (산업 CAD parity, ~98% 메모리 절감).
+   * `false` = legacy Path A (25 face polygon strip).
+   *
+   * Call once at app init based on user preference (localStorage
+   * `axia:cylinder-path-b-mode`). ADR-049 P-5e-α 답습 패턴.
+   *
+   * Graceful no-op when WASM endpoint missing (legacy build).
+   */
+  setCylinderPathBDefault(on: boolean): void {
+    if (!this.engine) return;
+    const fn = this.engine.setCylinderPathBDefault;
+    if (!fn) return;
+    fn.call(this.engine, on);
+  }
+
+  /**
+   * ADR-094 B-η — Read the Path B cylinder default flag.
+   * Returns false on missing endpoint (legacy default).
+   */
+  getCylinderPathBDefault(): boolean {
+    if (!this.engine) return false;
+    const fn = this.engine.getCylinderPathBDefault;
+    if (!fn) return false;
+    return fn.call(this.engine);
   }
 
   /**

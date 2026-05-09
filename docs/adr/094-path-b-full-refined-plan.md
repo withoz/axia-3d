@@ -386,5 +386,54 @@ ADR-090 §4 의 위험 매트릭스 + 본 ADR 의 additive-first 전략으로 �
   * Path B 의 enabled-by-default 시점에서도 Boolean SSI 인프라 변경
     불필요 — 기존 surface conversion 한계만 별도 phase 진행
 
-### B-η ~ B-θ (예정)
-별도 sub-step 결재 시 commit 진행.
+### B-η (본 commit — architectural switch with safety nets)
+- **사용자 결재**: 2026-05-09, "승인" — 통합 + default flip 진입.
+- **사전 검토 architectural 정정**: 단순 default flip 시 ~10+ Path A
+  test 가 hardcode `side_faces.len() >= 8` 등으로 fail. 정정 전략:
+  **engine default OFF + production layer ON** (ADR-049 P-5e-α 답습).
+  - 회귀 자산 보존 (245+ Path A tests stay green with default OFF)
+  - Production (TS bridge / WASM init) 가 localStorage 기반으로 ON
+    flip → 사용자는 Path B 자동 사용
+- **변경**:
+  * `crates/axia-geo/src/mesh.rs`:
+    - `Mesh.cylinder_path_b_default: bool` (`#[serde(skip)]` runtime 만)
+    - `Mesh::set_cylinder_path_b_default(bool)` + getter
+  * `crates/axia-geo/src/operations/create_solid.rs::extrude_planar_
+    cylinder` line 399 dispatch — `cylinder_path_b_default` 검사 후
+    Path B (`extrude_cylinder_kernel_native`) 또는 Path A (legacy
+    `extrude_closed_curve_face_via_tessellation`) 라우팅
+  * `crates/axia-wasm/src/lib.rs` — `setCylinderPathBDefault(bool)` +
+    `getCylinderPathBDefault() -> bool` exports
+  * `crates/axia-wasm/tests/export_baseline.txt` — 2 entries 추가
+  * `web/src/bridge/WasmBridge.ts` — typed wrappers + interface
+  * `web/src/tools/CylinderPathBSettings.ts` (신규) — DrawCurveSettings
+    답습 패턴 (localStorage `axia:cylinder-path-b-mode`, default OFF,
+    explicit ON preference 보존)
+- **회귀** (axia-geo +7, axia-wasm +0/baseline 갱신, vitest +9):
+  * **axia-geo +7**:
+    - `engine_default_is_path_a_legacy` (architectural anchor — 회귀
+      자산 보존)
+    - `path_b_active_after_flag_flip` (3/2/2 face count via flip)
+    - `path_a_default_off_preserved` (default OFF behavior)
+    - `path_a_explicit_off_after_toggle` (bidirectional toggle)
+    - `polygonal_profile_unaffected_by_flag` (build_circle_face N≥3
+      verts → flag 영향 0, closed-curve fast-path 미진입)
+    - `path_b_invariants_pass` (verify_face_invariants smoke — 변형
+      P7/P11 정의는 별도 phase)
+    - `path_b_face_count_3_2_2_via_create_solid` (end-to-end 3/2/2
+      production flow anchor)
+  * **vitest +9**: CylinderPathBSettings 5 + WasmBridge 4 (set/get
+    forward + endpoint missing graceful)
+  * 합계 **+16**, 절대 #[ignore] 금지 16/16 준수
+- **누적 회귀** (B-α ~ B-η): axia-geo +30, axia-wasm baseline +2,
+  vitest +9. Total architectural sealing.
+- **Lessons applied**:
+  * ADR-049 P-5e-α — engine default + localStorage explicit OFF
+    preference (default flip 패턴)
+  * ADR-091 §E L1 — Mesh-level state (struct field 추가는 #[serde(skip)]
+    runtime only — bincode legacy 호환)
+  * ADR-093 §E L3 — defensive bridge guard (graceful no-op on missing
+    endpoint)
+
+### B-θ (예정 — 사용자 시연 + closure)
+LOCKED #35 amendment + 사용자 시연 게이트 + ADR-094 closure.

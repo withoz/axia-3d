@@ -1337,6 +1337,27 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-094 B-η — Set the Path B cylinder default.
+    ///
+    /// `true` = `create_solid` 의 closed-curve cylinder profile 이
+    /// kernel-native 3 face / 2 edge / 2 vert annulus topology 로
+    /// 생성 (산업 CAD parity, 메모리 ~98% 절감).
+    /// `false` = legacy Path A (25 face polygon strip).
+    ///
+    /// Production layer (TS bridge) calls this once at app init based
+    /// on localStorage `axia:cylinder-path-b-mode` preference. Tests
+    /// may toggle per-call.
+    #[wasm_bindgen(js_name = "setCylinderPathBDefault")]
+    pub fn set_cylinder_path_b_default(&mut self, on: bool) {
+        self.scene.mesh.set_cylinder_path_b_default(on);
+    }
+
+    /// ADR-094 B-η — Read the Path B cylinder default flag.
+    #[wasm_bindgen(js_name = "getCylinderPathBDefault")]
+    pub fn get_cylinder_path_b_default(&self) -> bool {
+        self.scene.mesh.cylinder_path_b_default()
+    }
+
     /// Check whether an edge has an analytic curve attached.
     /// Returns: 0 = none/straight, 1 = Line, 2 = Circle, 3 = Arc,
     /// 4 = Bezier, 5 = BSpline, 6 = NURBS. -1 if edge_id invalid.
