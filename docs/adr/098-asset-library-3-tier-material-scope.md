@@ -1,6 +1,6 @@
 # ADR-098: Asset Library 3-Tier Material Scope (Two-Layer Citizenship Phase 5-A)
 
-- **Status**: Proposed (S-α — spec only)
+- **Status**: Accepted (S-α ~ S-ζ all closed, 2026-05-10)
 - **Date**: 2026-05-09
 - **Anchor**: LOCKED #26 Phase 5 명시 약속 ("자산 라이브러리 3계층 +
   Layered material"), v3.2 §13. ADR-049 §2.2 §4 Q3 ("재질 없는 단계엔
@@ -343,7 +343,71 @@ Playwright +4. **합계 ~+40~50**, 절대 #[ignore] 금지.
   * ServiceContainer storage 의 함정 (ADR-097 §E L4) 답습 — register
     시 factory function 직접 등록 (wrapper 거치지 않음)
 
-### S-ζ (예정)
-별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
-E2E) — Default OFF / Explicit ON 보존 / 3-tier listing surface /
-add Project + remove User flows.
+### S-ζ (본 commit) — Real Chromium closure
+- **commit**: 본 commit
+- **production bundle 재빌드**: WASM 6 endpoints + main.ts
+  `assetLibraryPanel` service. `AssetLibraryPanel-{hash}.js` lazy
+  chunk 생성. Initial bundle 변동 minimal.
+- **Playwright spec** (`web/e2e/adr-098-demo.spec.ts`, 5 scenarios):
+  * Scenario 1 — Default OFF: localStorage 미설정 → flag = null
+  * Scenario 2 — Explicit ON preference 보존: localStorage 'true'
+    → page.reload 후 보존 (ADR-078 P-4 답습)
+  * Scenario 3 — Bridge surface: 6 endpoints production bundle 노출
+    (`listMaterialsByTier` / `getMaterialTier` / `addProjectMaterial`
+    / `addUserMaterial` / `removeUserMaterial` / `migrateLegacyMaterials`)
+  * Scenario 4 — 3-tier round-trip: System (12 built-ins immutable) +
+    add Project (id ≥ 100) + add User (id ≥ 100) → list reflects
+    insertion + getMaterialTier maps correctly
+  * Scenario 5 — S-G safety: User tier removable + System tier removal
+    rejected (12 built-ins preserved)
+- **회귀 (Real Chromium)**: Playwright +5 (production layer 검증).
+  Full Playwright sweep: **37/37 PASS** (1 skipped 무관, 32 → 37).
+  기존 ADR-075/077/078/091/094/096/097 E2E 무영향.
+- **누적 (S-α ~ S-ζ closure)**:
+  * axia-core +19 (S-β 14 + S-γ 5)
+  * axia-wasm +4 (S-γ 4 wiring tests)
+  * vitest +26 (S-δ 21: bridge 9 + panel 12; S-ε 5: settings)
+  * Playwright +5 (S-ζ Real Chromium)
+  * **합계 +54**, 절대 #[ignore] 금지 54/54 준수
+- **사용자 facing 변화 요약** (Phase 5-A closure):
+  * `MaterialLibrary` 가 3-Tier scope 인식 (System / Project / User)
+  * 12 built-in 재질 자동 System tier 분류 (immutable)
+  * 신규 재질 default Project tier (id ≥ 100 auto-jump)
+  * Project ↔ User tier 명시 이동 가능 (`set_tier`)
+  * AssetLibraryPanel UI (3 sections + add Project/User + S-G safe remove)
+  * `axia:asset-library-user-tier` localStorage flag (Default OFF)
+  * SettingsPanel 체크박스 "User 라이브러리 활성화 (실험)"
+  * `window.__axia.get('assetLibraryPanel')()` 진입점
+- **Phase 5-A 완료** — LOCKED #26 Phase 5 의 첫 단계 closure. 후속:
+  * **ADR-099 (Phase 5-B)** — Layered material (4 PBR channels)
+  * **ADR-100 (Phase 5-C)** — Material removal recovery (face → FORM
+    auto-demote, ADR-097 Orchestrator 답습)
+- **6-Layer Path Z atomic 패턴** (ADR-097 Phase 4 답습):
+  Engine truth (axia-core BTreeMap + Section 9) + Bridge (axia-wasm
+  6 endpoints) + UI (AssetLibraryPanel) + Settings flag + main.ts
+  wiring + Real Chromium E2E. ADR-091 6-layer + ADR-094 7-layer +
+  ADR-097 6-layer 누적 위에 적용.
+- **Lessons (canonical patterns, S-α ~ S-ζ 누적)**:
+  * **L1 (신규)** — HashMap → BTreeMap canonical for snapshot
+    determinism (S-γ 사후 정정). 향후 Scene-level Map 추가 시
+    BTreeMap 우선
+  * **L2 (사후 정정 정책)** — spec 의 "Scene 3 maps" 가 audit 결과
+    `MaterialLibrary.tier_index` parallel Map 으로 정정 (ADR-091 §E
+    L1 답습). 사용자 결재한 spec 보다 architectural truth (audit) 가
+    우선 — ADR §D 에 정정 명시
+  * **L3 (답습)** — Section additive + `#[serde(default)]` (ADR-091
+    §E L1)
+  * **L4 (답습)** — Legacy strip-test 누적 갱신 (ADR-091/095/098)
+  * **L5 (답습)** — Settings module 5-함수 surface canonical
+    (ADR-094/096/097)
+  * **L6 (답습)** — Default OFF for opt-in / self-modifying (ADR-097
+    T-ε)
+  * **L7 (답습)** — UI orchestration 분리 + graceful null + markDirty
+    (ADR-091 §E L4 + ADR-097 T-δ)
+
+## Phase 5-A closure → ADR-099 / ADR-100 후속 트랙
+
+본 ADR 으로 Two-Layer Citizenship Model 의 Phase 5 첫 단계 closure.
+3-Tier scope (System / Project / User) 의 6-layer atomic stack 모두
+활성. Phase 5-B (Layered material 4 PBR channels) 와 Phase 5-C
+(Material removal recovery) 는 별도 ADR-099 / ADR-100 트랙.

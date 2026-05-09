@@ -41,6 +41,43 @@ export class AxiaEngine {
         return ret >>> 0;
     }
     /**
+     * ADR-098 S-γ — Add a new material in Project tier.
+     *
+     * Input: simple JSON `{"name":"...","nameEn":"...","color":<u32>}`.
+     * Other physical/visual properties default to safe values; the UI
+     * can edit them via existing material edit endpoints.
+     * Returns the new MaterialId, or throws on parse error.
+     * @param {string} name
+     * @param {string} name_en
+     * @param {number} color
+     * @returns {number}
+     */
+    addProjectMaterial(name, name_en, color) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(name_en, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_addProjectMaterial(this.__wbg_ptr, ptr0, len0, ptr1, len1, color);
+        return ret >>> 0;
+    }
+    /**
+     * ADR-098 S-γ — Add a new material in User tier (opt-in library).
+     *
+     * Same shape as `addProjectMaterial` but scoped to User tier.
+     * @param {string} name
+     * @param {string} name_en
+     * @param {number} color
+     * @returns {number}
+     */
+    addUserMaterial(name, name_en, color) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(name_en, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_addUserMaterial(this.__wbg_ptr, ptr0, len0, ptr1, len1, color);
+        return ret >>> 0;
+    }
+    /**
      * 그룹에 face 추가
      * @param {number} group_id
      * @param {Uint32Array} face_ids
@@ -2210,6 +2247,17 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-098 S-γ — Get the tier of an existing material.
+     *
+     * Returns 0/1/2 (System/Project/User) or -1 if material missing.
+     * @param {number} material_id
+     * @returns {number}
+     */
+    getMaterialTier(material_id) {
+        const ret = wasm.axiaengine_getMaterialTier(this.__wbg_ptr, material_id);
+        return ret;
+    }
+    /**
      * ADR-047 R-track — non-manifold edge endpoints for rendering overlay.
      *
      * Returns `Float32Array` of `[x0,y0,z0, x1,y1,z1, ...]` line segments
@@ -3023,6 +3071,30 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-098 S-γ — List materials by tier.
+     *
+     * Returns JSON array of `{ id, name, nameEn, tier, color }` for the
+     * specified tier. Invalid tier → empty array.
+     * @param {number} tier
+     * @returns {string}
+     */
+    listMaterialsByTier(tier) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_listMaterialsByTier(retptr, this.__wbg_ptr, tier);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Loft N cross-sections into a continuous surface. `sections_flat` is
      * a flat f64 array containing every point of every section as xyz
      * triples; `section_size` says how many POINTS (not floats) are in
@@ -3187,6 +3259,19 @@ export class AxiaEngine {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
         }
+    }
+    /**
+     * ADR-098 S-γ — Force migration of legacy materials.
+     *
+     * Idempotent. Returns the count of newly classified materials.
+     * Snapshots imported via `importSnapshot` already auto-migrate;
+     * this endpoint is for explicit re-classification (e.g., after a
+     * legacy DXF/SKP import that creates raw materials).
+     * @returns {number}
+     */
+    migrateLegacyMaterials() {
+        const ret = wasm.axiaengine_migrateLegacyMaterials(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * Mirror the given faces across a plane. Returns the new FaceIds
@@ -3509,6 +3594,20 @@ export class AxiaEngine {
      */
     removeConstraint(id) {
         const ret = wasm.axiaengine_removeConstraint(this.__wbg_ptr, id);
+        return ret !== 0;
+    }
+    /**
+     * ADR-098 S-γ — Remove a User-tier material.
+     *
+     * System tier rejected (Material library `remove_material` Err →
+     * false). Project tier currently rejected at this surface (use
+     * `removeProjectMaterial` future ADR for cascade safety).
+     * Returns true on success, false otherwise.
+     * @param {number} material_id
+     * @returns {boolean}
+     */
+    removeUserMaterial(material_id) {
+        const ret = wasm.axiaengine_removeUserMaterial(this.__wbg_ptr, material_id);
         return ret !== 0;
     }
     /**

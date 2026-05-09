@@ -16,6 +16,21 @@ export class AxiaEngine {
      */
     addEdgeConstraint(kind: string, edge_a_v_a: number, edge_a_v_b: number, edge_b_v_a: number, edge_b_v_b: number): number;
     /**
+     * ADR-098 S-γ — Add a new material in Project tier.
+     *
+     * Input: simple JSON `{"name":"...","nameEn":"...","color":<u32>}`.
+     * Other physical/visual properties default to safe values; the UI
+     * can edit them via existing material edit endpoints.
+     * Returns the new MaterialId, or throws on parse error.
+     */
+    addProjectMaterial(name: string, name_en: string, color: number): number;
+    /**
+     * ADR-098 S-γ — Add a new material in User tier (opt-in library).
+     *
+     * Same shape as `addProjectMaterial` but scoped to User tier.
+     */
+    addUserMaterial(name: string, name_en: string, color: number): number;
+    /**
      * 그룹에 face 추가
      */
     add_faces_to_group(group_id: number, face_ids: Uint32Array): boolean;
@@ -848,6 +863,12 @@ export class AxiaEngine {
      */
     getLastExportSkipStats(): string;
     /**
+     * ADR-098 S-γ — Get the tier of an existing material.
+     *
+     * Returns 0/1/2 (System/Project/User) or -1 if material missing.
+     */
+    getMaterialTier(material_id: number): number;
+    /**
      * ADR-047 R-track — non-manifold edge endpoints for rendering overlay.
      *
      * Returns `Float32Array` of `[x0,y0,z0, x1,y1,z1, ...]` line segments
@@ -1097,6 +1118,13 @@ export class AxiaEngine {
      */
     listConstraints(): string;
     /**
+     * ADR-098 S-γ — List materials by tier.
+     *
+     * Returns JSON array of `{ id, name, nameEn, tier, color }` for the
+     * specified tier. Invalid tier → empty array.
+     */
+    listMaterialsByTier(tier: number): string;
+    /**
      * Loft N cross-sections into a continuous surface. `sections_flat` is
      * a flat f64 array containing every point of every section as xyz
      * triples; `section_size` says how many POINTS (not floats) are in
@@ -1171,6 +1199,15 @@ export class AxiaEngine {
      *      "driftMaxMm": F, "ok": true }`
      */
     migrateCurveSurfaceMandatory(): string;
+    /**
+     * ADR-098 S-γ — Force migration of legacy materials.
+     *
+     * Idempotent. Returns the count of newly classified materials.
+     * Snapshots imported via `importSnapshot` already auto-migrate;
+     * this endpoint is for explicit re-classification (e.g., after a
+     * legacy DXF/SKP import that creates raw materials).
+     */
+    migrateLegacyMaterials(): number;
     /**
      * Mirror the given faces across a plane. Returns the new FaceIds
      * in the same order as the input (empty vec on failure, with
@@ -1304,6 +1341,15 @@ export class AxiaEngine {
      * Remove a constraint by ID. Returns true on success.
      */
     removeConstraint(id: number): boolean;
+    /**
+     * ADR-098 S-γ — Remove a User-tier material.
+     *
+     * System tier rejected (Material library `remove_material` Err →
+     * false). Project tier currently rejected at this surface (use
+     * `removeProjectMaterial` future ADR for cascade safety).
+     * Returns true on success, false otherwise.
+     */
+    removeUserMaterial(material_id: number): boolean;
     /**
      * 그룹에서 face 제거
      */
@@ -1752,6 +1798,8 @@ export interface InitOutput {
     readonly __wbg_deltabuffers_free: (a: number, b: number) => void;
     readonly axiaengine_addDistanceConstraint: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_addEdgeConstraint: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
+    readonly axiaengine_addProjectMaterial: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly axiaengine_addUserMaterial: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_add_faces_to_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_allXiaIds: (a: number, b: number) => void;
     readonly axiaengine_analyzeMergeCandidates: (a: number, b: number, c: number, d: number) => void;
@@ -1861,6 +1909,7 @@ export interface InitOutput {
     readonly axiaengine_getIndicesLen: (a: number) => number;
     readonly axiaengine_getIndicesPtr: (a: number) => number;
     readonly axiaengine_getLastExportSkipStats: (a: number, b: number) => void;
+    readonly axiaengine_getMaterialTier: (a: number, b: number) => number;
     readonly axiaengine_getNonManifoldEdgeSegments: (a: number, b: number) => void;
     readonly axiaengine_getNormalsLen: (a: number) => number;
     readonly axiaengine_getNormalsPtr: (a: number) => number;
@@ -1908,6 +1957,7 @@ export interface InitOutput {
     readonly axiaengine_lastError: (a: number, b: number) => void;
     readonly axiaengine_lastMergeFailureReason: (a: number, b: number) => void;
     readonly axiaengine_listConstraints: (a: number, b: number) => void;
+    readonly axiaengine_listMaterialsByTier: (a: number, b: number, c: number) => void;
     readonly axiaengine_loftSections: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_make_component: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_maxConstraintResidual: (a: number) => number;
@@ -1918,6 +1968,7 @@ export interface InitOutput {
     readonly axiaengine_meshManifoldInfo: (a: number, b: number) => void;
     readonly axiaengine_meshVolume: (a: number) => number;
     readonly axiaengine_migrateCurveSurfaceMandatory: (a: number, b: number) => void;
+    readonly axiaengine_migrateLegacyMaterials: (a: number) => number;
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
@@ -1932,6 +1983,7 @@ export interface InitOutput {
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;
     readonly axiaengine_removeConstraint: (a: number, b: number) => number;
+    readonly axiaengine_removeUserMaterial: (a: number, b: number) => number;
     readonly axiaengine_remove_faces_from_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_remove_material: (a: number, b: number, c: number) => number;
     readonly axiaengine_rename_group: (a: number, b: number, c: number, d: number) => number;
