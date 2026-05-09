@@ -1426,10 +1426,57 @@ closed-curve 시민권 확장. 안전한 완성도 우선."
 ### A-Α-γ (본 commit)
 - **변경**: 본 §D `A-Α-γ` browser closure entry.
 - **회귀**: +0 (smoke verification).
-- **다음 step**: A-Α track closure 완료. 후속 후보 — closed NURBS
-  시민권 (A-ω/A-Α 패턴 답습 + weights 처리), DrawBSplineTool UI 분기
-  (A-ψ 패턴 답습 — A-Β 트랙), LOCKED #35 갱신 (A-Α 추가),
-  Periodic knot vector closed BSpline (현 implementation 외 case).
+
+---
+
+### A-Β-α (2026-05-08, closed NURBS 시민권 amendment)
+
+**사용자 결재 (2026-05-08)**: "🅱+🅲 진입 — LOCKED #35 갱신 후
+closed NURBS 시민권. 안전한 완성도."
+
+**현재 상태**:
+- A-Α 가 closed BSpline 시민권 활성. NURBS 는 deferred.
+- NURBS = rational BSpline (weights 추가) — A-Α 자연 일반화.
+
+**Path Z 3-sub-step (closed NURBS)**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-Β-α (본 amendment) | spec only | +0 |
+| A-Β-β | add_face_closed_curve NURBS acceptance + Plane attach + Render fast-path | +4 |
+| A-Β-γ | WASM bridge + closure | +0 |
+
+**Lock-ins**:
+- **L-Β-1** **Closure check (clamped knots)**: NURBS closure 판정도
+  `control_pts[0] ≈ control_pts[last]` (within EPSILON_LENGTH) — A-Α
+  답습. Periodic knot vector closed NURBS 는 future ADR.
+- **L-Β-2** **Weights validation**: `nurbs::validate` 위임 —
+  weights.len() == control_pts.len(), 모든 weights > 0.
+- **L-Β-3** **Plane normal**: `bezier_best_fit_normal(control_pts)`
+  재사용. **weights 무관** — control polygon best-fit plane 만 참조.
+  rational curve 의 평면성은 control polygon 의 평면성에 종속.
+- **L-Β-4** **Render fast-path**: `nurbs::tessellate(control_pts,
+  weights, knots, degree, chord_tol)` 사용. weights 처리 자동 (rational
+  evaluation).
+- **L-Β-5** **Plane attach**: A-η-1/A-ω/A-Α 답습 (centroid + normal
+  + AABB extent).
+- **L-Β-6** **`nurbs::validate` visibility**: BSpline 답습 — `fn
+  validate` → `pub fn validate` (cross-module access).
+- **L-Β-7** **Backward compat**: A-Α 의 `nurbs_still_rejected` test
+  의미 변경 → success path test 로 대체. 기존 NURBS 검증 자산
+  (validate_rejects_*) 모두 PASS 유지.
+
+**Non-goals**:
+- **N-Β-1** Periodic knot vector closed NURBS (future ADR).
+- **N-Β-2** DrawNURBSTool UI 분기 (NURBS 직접 그리기 도구 미존재 —
+  별도 design ADR).
+- **N-Β-3** Arc closed-curve 시민권 — Arc 는 본질상 closed 아님
+  (full circle = Circle).
+
+### A-Β-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅱+🅲 진입 승인".
+- **변경**: 본 §D `A-Β-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
