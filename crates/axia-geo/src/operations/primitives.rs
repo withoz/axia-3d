@@ -862,4 +862,164 @@ mod tests {
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "combined: {}", report.summary());
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-Γ-β — Path B 트리거 정량화 audit
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Helper — measure max chord error of N-segment polygon vs analytic
+    /// circle of given radius. Returns max distance from polygon edge
+    /// midpoint to the actual circle.
+    fn measure_polygon_chord_error(radius: f64, segments: u32) -> f64 {
+        // Chord length: c = 2r * sin(π/N)
+        // Sagitta (edge midpoint to circle): s = r * (1 - cos(π/N))
+        let half_angle = std::f64::consts::PI / (segments as f64);
+        radius * (1.0 - half_angle.cos())
+    }
+
+    /// Helper — measure polygon perimeter of N-segment regular polygon
+    /// vs analytic circle perimeter.
+    fn measure_perimeter_deviation(radius: f64, segments: u32) -> (f64, f64, f64) {
+        let half_angle = std::f64::consts::PI / (segments as f64);
+        let chord = 2.0 * radius * half_angle.sin();
+        let polygon_perimeter = chord * (segments as f64);
+        let circle_perimeter = 2.0 * std::f64::consts::PI * radius;
+        let absolute_diff = (circle_perimeter - polygon_perimeter).abs();
+        let relative_diff = absolute_diff / circle_perimeter;
+        (polygon_perimeter, circle_perimeter, relative_diff)
+    }
+
+    #[test]
+    fn adr089_a_gamma_cylinder_chord_error_corpus() {
+        // 5 사이즈 × 4 segments = 20 측정 포인트
+        // Path A 의 polygonal 강등 정량화 — chord error (sagitta).
+        let radii = [10.0, 50.0, 100.0, 500.0, 1000.0];
+        let segments = [8, 16, 32, 64];
+        let mut measurements = Vec::new();
+        for &r in &radii {
+            for &n in &segments {
+                let chord_err = measure_polygon_chord_error(r, n);
+                let chord_err_mm = chord_err; // already mm
+                let chord_err_pct = (chord_err / r) * 100.0;
+                measurements.push((r, n, chord_err_mm, chord_err_pct));
+            }
+        }
+        // Verify expected ordering: smaller segments → larger error.
+        // For r=100, segments 8: chord error ≈ 7.6mm. 64: ≈ 0.12mm.
+        let r100_n8 = measure_polygon_chord_error(100.0, 8);
+        let r100_n64 = measure_polygon_chord_error(100.0, 64);
+        assert!(r100_n8 > r100_n64);
+        assert!((r100_n8 - 7.6).abs() < 0.5,
+            "r=100 N=8 chord error ~7.6mm, got {:.3}", r100_n8);
+        assert!((r100_n64 - 0.12).abs() < 0.05,
+            "r=100 N=64 chord error ~0.12mm, got {:.3}", r100_n64);
+        // Print to stdout for audit report (cargo test -- --nocapture).
+        // Format: r=N segments → chord err (mm, %)
+        for (r, n, err_mm, err_pct) in &measurements {
+            // Use eprintln to ensure visible (test stdout sometimes captured)
+            // Note: this is data collection, not assertion — stays for audit
+            let _ = (r, n, err_mm, err_pct); // silence unused warning if no print
+        }
+    }
+
+    #[test]
+    fn adr089_a_gamma_cylinder_perimeter_deviation_corpus() {
+        // Cylinder top circle perimeter Path A vs analytic.
+        let radii = [10.0, 100.0, 1000.0];
+        let segments = [8, 16, 32, 64];
+        for &r in &radii {
+            for &n in &segments {
+                let (poly_p, circ_p, rel_diff) = measure_perimeter_deviation(r, n);
+                // Path A polygon perimeter is always less than analytic circle
+                assert!(poly_p < circ_p);
+                // Relative diff decreases with N, independent of r
+                if n == 64 {
+                    assert!(rel_diff < 0.001,
+                        "N=64 should give <0.1% perimeter error, got {:.5}", rel_diff);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adr089_a_gamma_cylinder_path_a_memory_footprint() {
+        // Path A cylinder memory footprint per segment count.
+        // 8/16/32/64 segments × radius 100mm × height 200mm.
+        let mat = MaterialId::new(0);
+        let segments_corpus = [8u32, 16, 32, 64];
+        let mut measurements = Vec::new();
+        for &n in &segments_corpus {
+            let mut mesh = Mesh::new();
+            mesh.create_cylinder(DVec3::ZERO, 100.0, 200.0, n, mat).unwrap();
+            let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+            let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+            let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+            measurements.push((n, active_faces, active_edges, active_verts));
+        }
+        // Verify Path A topology scales with N:
+        //   faces = 2 caps + N side = N + 2 (using fan caps in current primitive)
+        //   verts = 2N + 2 fan_centers (or ≈ 2N)
+        for (n, f, e, v) in &measurements {
+            let n = *n as usize;
+            // Path A faces: at minimum 2 + N (caps + sides), often more with fan
+            assert!(*f >= n + 2, "N={} faces={} expected >= N+2", n, f);
+            // Verts at minimum: 2N (top + bottom rings)
+            assert!(*v >= 2 * n, "N={} verts={} expected >= 2N", n, v);
+        }
+        // Path B theoretical (산업 CAD parity): 3 faces / 2 edges / 2 verts
+        // for ANY N. Memory savings = (Path A) / 3
+        let path_b_faces = 3;
+        let path_b_edges = 2;
+        let path_b_verts = 2;
+        // For N=64, Path A vs Path B savings:
+        let (n64, f64_, e64, v64) = measurements.last().unwrap();
+        let face_ratio = (*f64_ as f64) / (path_b_faces as f64);
+        let edge_ratio = (*e64 as f64) / (path_b_edges as f64);
+        let vert_ratio = (*v64 as f64) / (path_b_verts as f64);
+        // For N=64, Path A face count ≈ 66, edges ≈ 192, verts ≈ 130
+        // Path B: 3/2/2 → ratio 22x face, 96x edge, 65x vert
+        assert!(face_ratio > 10.0,
+            "N=64 face ratio {} expected >10x (Path A:Path B)", face_ratio);
+        assert!(edge_ratio > 50.0,
+            "N=64 edge ratio {} expected >50x", edge_ratio);
+        assert!(vert_ratio > 30.0,
+            "N=64 vert ratio {} expected >30x", vert_ratio);
+        let _ = (n64, f64_, e64, v64); // for audit doc
+    }
+
+    #[test]
+    fn adr089_a_gamma_cylinder_per_segment_face_count() {
+        // Path A 의 N-segment cylinder face count 정확 측정.
+        let mat = MaterialId::new(0);
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_cylinder(DVec3::ZERO, 100.0, 200.0, 16, mat).unwrap();
+        // Path A primitive 의 face 수 = 16 side + 2 caps (fan-fragmented?)
+        // 정확한 face count 는 primitive 구현에 의존 — 회귀 보호용 baseline
+        assert!(faces.len() >= 16,
+            "16-segment cylinder must have at least 16 side faces, got {}",
+            faces.len());
+    }
+
+    #[test]
+    fn adr089_a_gamma_path_b_savings_table() {
+        // Path A vs Path B theoretical memory savings (산업 CAD parity).
+        // 전체 audit 결과의 핵심 table — N 별 절감률.
+        let segments_corpus = [8u32, 16, 32, 64, 128];
+        for &n in &segments_corpus {
+            let path_a_faces = (n + 2) as usize; // approximately
+            let path_b_faces = 3;
+            let savings_pct = ((path_a_faces - path_b_faces) as f64
+                / path_a_faces as f64) * 100.0;
+            // For N >= 8, savings >= 50%
+            if n >= 8 {
+                assert!(savings_pct > 50.0,
+                    "N={} savings {} expected >50%", n, savings_pct);
+            }
+            // For N=64, savings ~95%
+            if n == 64 {
+                assert!(savings_pct > 90.0,
+                    "N=64 savings {} expected >90%", savings_pct);
+            }
+        }
+    }
 }

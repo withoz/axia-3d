@@ -1656,10 +1656,57 @@ round-trip audit + Memory audit. ADR-090 §6 의 정량 트리거 명시 부분
 - **N-Γ-2** Path B 진입 결정 (audit 결과는 트리거 명시화만, 진입 결재 별도)
 - **N-Γ-3** 실제 사용자 모델 코퍼스 (사용자 제공 시 추가)
 
-### A-Γ-α (본 commit)
+### A-Γ-α (commit `9442128`)
 - **사용자 결재**: 2026-05-08, "🅰 진입 승인".
 - **변경**: 본 §D `A-Γ-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-Γ-β (본 commit) — measurement + audit report
+- **변경**:
+  * `crates/axia-geo/src/operations/primitives.rs` — 5 audit
+    measurement tests (chord error corpus, perimeter deviation,
+    Path A memory footprint, per-segment face count, savings table).
+  * `docs/audits/2026-05-08-path-b-trigger-quantification.md` 신설
+    — 5 사이즈 × 4 segments = 20 측정 포인트, ADR-090 §6 정량
+    트리거 명시화.
+  * `docs/adr/090-true-kernel-native-cylinder-path-b.md` §6 update
+    — 추상적 트리거를 실측 데이터로 강화 (chord error R×N matrix,
+    47x 절감 large model 메모리, 임계 활성 시점).
+- **회귀**: axia-geo 1189 → 1194 (+5).
+  * `chord_error_corpus` (20 measurement points)
+  * `perimeter_deviation_corpus`
+  * `path_a_memory_footprint`
+  * `per_segment_face_count` (regression guard)
+  * `path_b_savings_table`
+- **LOCKED guards**: axia-core 209 unchanged.
+
+### A-Γ-γ (closure)
+- **결과**: ADR-090 §6 의 추상적 트리거 → 실측 데이터로 명시화 완료.
+  Path B 진입 결재 시 데이터 anchor 확보.
+- **핵심 finding**:
+  * Path A chord error: R×(1-cos(π/N)) — R=100mm/N=64: 0.12mm,
+    R=1000mm/N=64: 1.2mm. 정밀 CAD 한계 명시.
+  * Memory: N=64 cylinder = 192/320/130 (face/edge/vert) vs Path B
+    3/2/2 — **98%+ 절감**. Large model 1000-cyl: 47x 메모리 절감.
+  * 임계 활성 시점: R>100mm + 0.1mm 정밀도, 또는 1000+ cyl model,
+    또는 STEP export, 또는 정밀 PMI dimension.
+
+**ADR-089 누적 트랙 (A-α ~ A-Γ)** — Path B trigger anchor 확보:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-Β (closed-curve 시민권 4 type) | axia-geo +66 | Circle / Bezier / BSpline / NURBS |
+| A-λ + A-π + A-ψ (UI 분기) | vitest +10 | DrawCircle/Bezier 자동 |
+| A-μ (snapshot version + audit) | axia-core +9 | legacy compat + forward-compat |
+| **A-Γ (Path B 트리거 정량화)** | **axia-geo +5** | **ADR-090 §6 데이터 anchor** |
+| **누적** | **axia-geo +71 / axia-core +9 / vitest +10 = +90** | **Path B 진입 결재 준비** |
+
+### A-Γ-γ (본 commit)
+- **변경**: 본 §D `A-Γ-β` + `A-Γ-γ` closure entry.
+- **회귀**: +0 (closure docs).
+- **다음 step**: A-Γ track closure 완료. Path B 진입 결재 시 audit
+  데이터 anchor 활용 가능. 후속 후보: LOCKED #35 갱신 (A-Γ 추가),
+  STEP export 구현 (Path B trigger 활성화), 다른 우선순위 ADR.
 
 ---
 

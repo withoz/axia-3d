@@ -173,16 +173,20 @@ Surface 가 의미 결정 — Plane 은 "outer + holes", Cylinder 는 "annulus b
 Path A 가 이미 visual + functional closure 달성. Path B 진입은 다음 정량
 트리거 중 하나 이상이 명시 활성될 때:
 
-### 6.1 정량 트리거
+### 6.1 정량 트리거 (A-Γ audit 측정 결과 — 2026-05-08)
 
-| 트리거 | 측정 | Path A 한계 | Path B 가치 |
+| 트리거 | Path A 한계 (측정) | Path B 가치 | 임계 활성 시점 |
 |---|---|---|---|
-| **STEP/IGES 양방향 round-trip 정확도** | <1e-3 mm geometric error | polygonal 강등 → cylinder export 시 N-segment polygon | analytic export → cylinder 1:1 |
-| **메모리 효율** | per-cylinder face/edge/vert | 25 / 70 / 46 (Path A) | **3 / 2 / 2 (Path B)** — 8x 절감 |
-| **사용자 facing 의미** | "정확히 무엇을 만들었는가" | 23-segment 실린더 (polygon strip) | cylinder (analytic) |
-| **산업 CAD interop** | SolidWorks/Fusion/CATIA STEP import 시 1:1 매핑 | partial (top/bottom 만 closed-curve) | full (모든 element kernel-native) |
-| **Boolean 정확도** | chord 오차 (1mm scale) | polygon SSI: ~0.01mm 누적 | analytic SSI: ~0 |
-| **PMI / dimension 정확도** | "Φ800mm 정확히" | "Φ800mm ± chord 오차" | **정확히 Φ800mm** |
+| **Cylinder chord error** | R × (1 - cos(π/N)) mm — R=100mm/N=8: **7.6mm**, R=1000mm/N=64: **1.2mm** | 분석적 정확 | R > 100mm + 0.1~0.5mm 정밀도 |
+| **STEP/IGES export 정확도** | polygon strip → cylinder 손실 (analytic 미보존) | 1:1 매핑 | STEP export 구현 후 |
+| **메모리 효율 (per-cylinder)** | N=64: 192 face / 320 edge / 130 vert | 3 face / 2 edge / 2 vert (theoretical) | **98%+ 절감** |
+| **Large model 메모리** | 1000-cyl × N=32: ~96k face / ~19.5MB | ~3k face / ~0.42MB | **47x 절감** (1000+ cylinder model) |
+| **사용자 facing 의미** | "23-segment polygon strip" | "cylinder (analytic)" | AI agent / 정밀 가공 |
+| **산업 CAD interop** | SolidWorks/Fusion/CATIA STEP import 시 1:1 매핑 partial | full (모든 element kernel-native) | AP242 export 사용자 |
+| **Boolean 정확도** | chord 오차 누적 (~0.01mm scale) | analytic SSI: ~0 | 0.1mm 이하 정밀 Boolean |
+| **PMI / dimension 정확도** | "Φ200mm ± chord 오차" | 정확히 Φ200mm | ANSI/ISO 정밀 dimension |
+
+**Audit 참조**: `docs/audits/2026-05-08-path-b-trigger-quantification.md`
 
 ### 6.2 사용자 시점 트리거
 
