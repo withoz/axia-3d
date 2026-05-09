@@ -55,6 +55,7 @@ export const axiaengine_drawCenterline: (a: number, b: number, c: number, d: num
 export const axiaengine_drawCircleAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
 export const axiaengine_drawClosedBSplineAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const axiaengine_drawClosedBezierAsCurve: (a: number, b: number, c: number) => number;
+export const axiaengine_drawClosedNURBSAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
 export const axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

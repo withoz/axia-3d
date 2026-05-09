@@ -767,6 +767,49 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-089 A-Β-γ — Atomic closed NURBS creation with curve attach.
+    /// Rational extension of drawClosedBSplineAsCurve — adds weights.
+    /// All weights must be > 0. Caller passes flat control_pts (3·n
+    /// floats), weights vector, knots vector, and degree. control_pts
+    /// [0] ≈ control_pts[last] (clamped knots case). Returns shape_id.
+    #[wasm_bindgen(js_name = "drawClosedNURBSAsCurve")]
+    pub fn draw_closed_nurbs_as_curve(
+        &mut self,
+        control_pts_flat: Vec<f64>,
+        weights: Vec<f64>,
+        knots: Vec<f64>,
+        degree: u32,
+    ) -> f64 {
+        if control_pts_flat.len() % 3 != 0 {
+            console_error!("[RUST] drawClosedNURBSAsCurve: control_pts_flat length {} not multiple of 3",
+                control_pts_flat.len());
+            return -1.0;
+        }
+        let mut control_pts = Vec::with_capacity(control_pts_flat.len() / 3);
+        for chunk in control_pts_flat.chunks_exact(3) {
+            control_pts.push(DVec3::new(chunk[0], chunk[1], chunk[2]));
+        }
+        let cmd = Command::DrawClosedNURBSAsCurve { control_pts, weights, knots, degree };
+        let result = self.scene.execute(cmd);
+        match result {
+            axia_core::commands::CommandResult::ShapeCreated(shape_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                shape_id as f64
+            }
+            axia_core::commands::CommandResult::Error(e) => {
+                console_error!("[RUST] drawClosedNURBSAsCurve ERROR: {}", e);
+                self.set_error(e);
+                self.invalidate_cache();
+                -1.0
+            }
+            _ => {
+                self.invalidate_cache();
+                -1.0
+            }
+        }
+    }
+
     /// ADR-089 A-Α-γ — Atomic closed BSpline creation with curve attach.
     /// Caller passes flat control_pts (3·n floats), knots vector, and
     /// degree. control_pts[0] must equal control_pts[last] within

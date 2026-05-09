@@ -754,6 +754,31 @@ export class WasmBridge {
     return fn.call(this.engine, ctrlFlat, knotsFlat, degree);
   }
 
+  /**
+   * ADR-089 A-Β-γ — Atomic closed NURBS creation (rational BSpline +
+   * weights). All weights must be > 0. control_pts[0] ≈ control_pts
+   * [last] (clamped knots closure). Returns shape_id, -1 on error.
+   */
+  drawClosedNURBSAsCurve(
+    controlPts: Float64Array | number[],
+    weights: Float64Array | number[],
+    knots: Float64Array | number[],
+    degree: number,
+  ): number {
+    if (!this.engine) return -1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).drawClosedNURBSAsCurve;
+    if (!fn) return -1;
+    this.markDirty();
+    const ctrlFlat = controlPts instanceof Float64Array
+      ? controlPts : new Float64Array(controlPts);
+    const weightsFlat = weights instanceof Float64Array
+      ? weights : new Float64Array(weights);
+    const knotsFlat = knots instanceof Float64Array
+      ? knots : new Float64Array(knots);
+    return fn.call(this.engine, ctrlFlat, weightsFlat, knotsFlat, degree);
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // ADR-028 Phase A — Analytic Edge Curve API
   // ════════════════════════════════════════════════════════════════════════

@@ -213,6 +213,17 @@ pub enum Command {
         degree: u32,
     },
 
+    /// ADR-089 A-Β-γ — Atomic closed NURBS creation with curve attach.
+    /// Rational extension of DrawClosedBSplineAsCurve — adds `weights`.
+    /// All weights must be > 0. Caller responsible for clamped-knots
+    /// closure (control_pts[0] ≈ control_pts[last]). Returns ShapeCreated.
+    DrawClosedNURBSAsCurve {
+        control_pts: Vec<DVec3>,
+        weights: Vec<f64>,
+        knots: Vec<f64>,
+        degree: u32,
+    },
+
     /// ADR-079 W-1 — Surface-native solid creation from a profile face.
     /// `create_solid` 의 architectural successor to mesh-era push_pull.
     /// Smart routing within `Extrude` mode based on profile surface kind

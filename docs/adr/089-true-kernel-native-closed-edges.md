@@ -1473,10 +1473,60 @@ closed NURBS 시민권. 안전한 완성도."
 - **N-Β-3** Arc closed-curve 시민권 — Arc 는 본질상 closed 아님
   (full circle = Circle).
 
-### A-Β-α (본 commit)
+### A-Β-α (commit `9dae865`)
 - **사용자 결재**: 2026-05-08, "🅱+🅲 진입 승인".
 - **변경**: 본 §D `A-Β-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-Β-β (commit `09f14aa`)
+- **변경**:
+  * `crates/axia-geo/src/curves/nurbs.rs` — `validate` 가시성
+    `fn` → `pub fn`.
+  * `crates/axia-geo/src/mesh.rs add_face_closed_curve` — NURBS
+    match arm (closure check + nurbs::validate).
+  * Normal compute — `bezier_best_fit_normal` 재사용 (Bezier/BSpline/
+    NURBS 통합).
+  * Plane attach + Render fast-path — `curve_control_pts` Option
+    iterator 통합 (Bezier/BSpline/NURBS).
+  * Edge wireframe — NURBS dispatch 추가.
+- **회귀**: net +3 (axia-geo 1186 → 1189):
+  * `closed_nurbs_creates_self_loop_face`
+  * `open_nurbs_rejected`
+  * `zero_weight_nurbs_rejected`
+  * `arcs_still_rejected` (regression guard)
+  * (A-Α 의 `nurbs_still_rejected` 의미 변경으로 대체)
+
+### A-Β-γ (browser real-runtime closure)
+- **변경**:
+  * `Command::DrawClosedNURBSAsCurve` (control_pts + weights + knots
+    + degree)
+  * `exec_draw_closed_nurbs_as_curve` (axia-core scene)
+  * WASM `drawClosedNURBSAsCurve(Vec<f64>, Vec<f64>, Vec<f64>, u32)`
+  * TS `bridge.drawClosedNURBSAsCurve(controlPts, weights, knots, degree)`
+  * export_baseline.txt entry 추가
+- **Browser smoke**:
+  * Closed NURBS (5 cp + uniform weights + clamped knots + degree 3)
+    → 1 vert/1 edge/1 face, faceKind=Plane(1), curveKind=NURBS(6) ✓
+  * Open NURBS → -1 ✓
+  * Zero weight → -1 ✓
+- **회귀**: WASM/TS bridge passthrough, +0 (existing tests cover).
+
+**ADR-089 누적 트랙 (A-α ~ A-Β)** — closed-curve 시민권 4 곡선 type 활성:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ν (시민권 인프라 + visual closure) | +57 | DCEL / Boolean / Push-Pull / Render / metadata |
+| A-ω + A-ψ (closed Bezier) | +8 | Bezier 시민권 + UI 분기 |
+| A-Α (closed BSpline) | +3 | BSpline 시민권 |
+| **A-Β (closed NURBS)** | **+3** | **NURBS 시민권** |
+| **누적** | **axia-geo +66 / vitest +10 = +76** | **closed-curve 4 곡선 type 모두 활성** |
+
+### A-Β-γ (본 commit)
+- **변경**: 본 §D `A-Β-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-Β track closure 완료. **ADR-089 closed-curve 시민권
+  완성** (Circle / Bezier / BSpline / NURBS 4 곡선 type 모두 first-class).
+  Arc / periodic knot vector 만 future ADR.
 
 ---
 

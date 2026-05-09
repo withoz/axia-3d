@@ -381,6 +381,14 @@ export class AxiaEngine {
      */
     drawClosedBezierAsCurve(control_pts_flat: Float64Array): number;
     /**
+     * ADR-089 A-Β-γ — Atomic closed NURBS creation with curve attach.
+     * Rational extension of drawClosedBSplineAsCurve — adds weights.
+     * All weights must be > 0. Caller passes flat control_pts (3·n
+     * floats), weights vector, knots vector, and degree. control_pts
+     * [0] ≈ control_pts[last] (clamped knots case). Returns shape_id.
+     */
+    drawClosedNURBSAsCurve(control_pts_flat: Float64Array, weights: Float64Array, knots: Float64Array, degree: number): number;
+    /**
      * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
      * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
@@ -1656,6 +1664,7 @@ export interface InitOutput {
     readonly axiaengine_drawCircleAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
     readonly axiaengine_drawClosedBSplineAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_drawClosedBezierAsCurve: (a: number, b: number, c: number) => number;
+    readonly axiaengine_drawClosedNURBSAsCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
     readonly axiaengine_drawPolylineAsShape: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_draw_circle_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly axiaengine_draw_line_as_shape: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;

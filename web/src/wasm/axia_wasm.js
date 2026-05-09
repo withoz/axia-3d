@@ -1093,6 +1093,28 @@ export class AxiaEngine {
         return ret;
     }
     /**
+     * ADR-089 A-Β-γ — Atomic closed NURBS creation with curve attach.
+     * Rational extension of drawClosedBSplineAsCurve — adds weights.
+     * All weights must be > 0. Caller passes flat control_pts (3·n
+     * floats), weights vector, knots vector, and degree. control_pts
+     * [0] ≈ control_pts[last] (clamped knots case). Returns shape_id.
+     * @param {Float64Array} control_pts_flat
+     * @param {Float64Array} weights
+     * @param {Float64Array} knots
+     * @param {number} degree
+     * @returns {number}
+     */
+    drawClosedNURBSAsCurve(control_pts_flat, weights, knots, degree) {
+        const ptr0 = passArrayF64ToWasm0(control_pts_flat, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(weights, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayF64ToWasm0(knots, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_drawClosedNURBSAsCurve(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, degree);
+        return ret;
+    }
+    /**
      * ADR-087 K-ζ — Legacy `draw_line` / `draw_polyline` exports 폐기.
      * `drawLineAsShape` / `drawPolylineAsShape` 가 단일 entry.
      * ADR-087 K-γ — form-mode polyline. drawPolyline 의 kernel-aware
