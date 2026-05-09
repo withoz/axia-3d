@@ -1,6 +1,6 @@
-# ADR-092: Push-Pull Top Boundary Closed-Curve Preservation (Partial Path B Atomic)
+# ADR-092: Push-Pull Top Boundary Closed-Curve Preservation (Partial Path B Atomic) — **Accepted**
 
-- **Status**: Proposed (C-α spec only)
+- **Status**: Accepted (C-α ~ C-ε closure 2026-05-09)
 - **Date**: 2026-05-09
 - **Anchor**: 메타-원칙 #14 ("면은 닫힌 경계로부터 유도된다") + ADR-089
   closed-curve citizenship + ADR-090 Path B (deferred)
@@ -266,5 +266,75 @@ sample 검증 (top boundary 의 polyline 이 chord-tolerant smooth).
 - **누적 회귀** (C-α ~ C-δ): axia-geo +7, Playwright +2 = **+9**.
   절대 #[ignore] 금지 9/9 준수.
 
-### C-ε (예정 — closure)
-LOCKED #35 amendment + ADR-090 §6 trigger 갱신 + 회고 commit.
+### C-ε (본 commit — closure)
+- **사용자 결재**: 2026-05-09, "승인 진행".
+- **변경**:
+  * `CLAUDE.md` LOCKED #35 — ADR-092 closure entry (메타-원칙 #14 의
+    Push-Pull 통과 보존 + render path Arc fast-path 확장 가이드 + Path
+    B trigger 재평가 anchor).
+  * `docs/adr/090-true-kernel-native-cylinder-path-b.md` §6 — trigger
+    매트릭스 갱신 (결함 1 해결 후 결함 2 가 새로운 primary trigger).
+  * `docs/adr/README.md` — ADR-092 status `Proposed` → `Accepted`.
+  * 본 ADR-092 §E Lessons 추가.
+- **회귀**: +0 (docs only).
+
+## E. Lessons
+
+### L1 — 사전 검토 가치 재확인 (Path Z atomic)
+
+**관찰**: C-β 의 7 회귀가 Arc 부착 + manifold + translation 정합 등
+모든 architectural contract 를 PASS 했음에도, C-δ 단계의 real Chromium
+시연 검증에서 **render path Arc fast-path 미확장** gap 발견.
+
+**근본 원인**: ADR-089 A-κ 의 self-loop closed-curve fast-path (mesh.rs
+:4985+) 가 self-loop edges 만 처리. Push-Pull 결과의 top/bottom rim 은
+non-self-loop edges (N polygon edges with Arc 부착) 라서 동일 path
+미적용. Engine 이 정합 ↔ Render 가 정합 의 이중 layer 가 모두 필요.
+
+**향후 ADR 가이드** (canonical):
+- AnalyticCurve metadata 부착이 시각 효과를 가지려면 *engine 부착 +
+  render path 활용* 두 layer 모두 정합 필요.
+- 사전 검토 단계에서 "render path 가 이 metadata 를 활용하는 분기가
+  있는가?" 명시 점검 항목 추가.
+- C-β 같은 단일 layer 변경은 사용자 facing 결과 0 위험 — C-δ 의 real
+  runtime 게이트가 이를 catch 하는 architectural 안전망.
+
+### L2 — Self-loop vs non-self-loop edge fast-path 분리
+
+**관찰**: render path 가 self-loop edges (closed curves) 와 non-self-loop
+edges (regular topology) 를 별개 fast-path 로 처리. ADR-089 시점에는
+self-loop only 가 자연 — closed-curve face 가 1 self-loop edge 였음.
+ADR-092 가 처음으로 *non-self-loop edge with curve metadata* 를 도입
+(Push-Pull 결과 top/bottom rim) → 두 fast-path 일관성 통합 필요.
+
+**향후 ADR 가이드**:
+- Edge curve metadata 의 render path 처리는 self-loop / non-self-loop
+  공통 분기 통합 (or DRY 추출).
+- Bezier/BSpline/NURBS 의 non-self-loop case (예: trim curve segments)
+  도 동일 패턴 답습 필요 시 본 C-δ render fix 참조.
+
+### L3 — 메타-원칙 #14 의 다단 layer 적용
+
+**canonical**: "면은 닫힌 경계로부터 유도된다."
+
+**ADR-092 의 깊은 적용**:
+- Engine truth: Push-Pull 결과의 top boundary 가 closed Circle 로
+  *parameterized* (Arc curves on N polygon edges)
+- Render truth: 그 Arc parameterization 이 시각 단계까지 propagation
+  (chord-tolerant tessellation)
+- Boolean / Offset / Push-Pull again 활용: 후속 op 들이 Arc metadata
+  를 first-class 로 인식 (보너스 — L8 lock-in)
+
+**향후 ADR 가이드** — 메타-원칙 #14 정합 검증 시 단순 "engine 에 metadata
+부착" 으로는 부족. *engine + render + downstream ops* 의 3 layer
+모두 정합 확인 필요.
+
+### L4 — Path A 의 점진 Path B 화 패턴
+
+**관찰**: ADR-092 = ADR-090 Path B 의 partial atomic 추출. Side faces
+는 unchanged, top boundary 만 closed-curve metadata 부활. *결함 1
+해결 + 결함 2 잔존* 의 의도적 trade-off.
+
+**향후 ADR 가이드** — Multi-week atomic (Path B 같은) 진입 전, partial
+atomic 추출이 가능한지 사전 검토. 사용자 시연 결과에 따라 trigger 활성
+여부 결정. 본 C-α / C-δ 패턴이 Path B 결재 anchor 활용.

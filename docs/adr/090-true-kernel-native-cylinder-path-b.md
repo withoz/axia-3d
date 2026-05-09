@@ -193,10 +193,33 @@ Path A 가 이미 visual + functional closure 달성. Path B 진입은 다음 �
 - 사용자가 STEP 파일 export 후 다른 CAD 에서 정확도 손실 항의
 - AI agent (MCP 트랙) 가 cylinder 의 정확한 분석적 표현 요구
 - 메모리 사용량 audit — large model 에서 Path A 누적 비용 확인
-- 사용자 demo 에서 "이건 진짜 cylinder 가 아니라 polygon"
+- ~~사용자 demo 에서 "이건 진짜 cylinder 가 아니라 polygon"~~ — **ADR-092
+  로 partial 해결**: Top rim polygon 결함 (결함 1) closure (2026-05-09).
+- **NEW primary trigger (ADR-092 후 2026-05-09)**: 사용자가 cylinder 측면
+  hover 시 *전체 cylinder* 가 한 면으로 인식되어야 — 현재 Path A 에서는
+  N quads 중 1개 quad 만 선택됨 (결함 2 잔존).
 
-**현재 (2026-05-08) 상태**: 위 트리거 미명시. Path A 의 visual closure 가
-사용자 facing 만족. Path B 진입 ROI 불확실 → **deferred**.
+### 6.3 ADR-092 후 trigger 매트릭스 갱신 (2026-05-09)
+
+**해결된 trigger** (ADR-092 partial Path B atomic 으로 결함 1 closure):
+- ✅ Top rim polygon 시각 결함 — Arc curves 부착 + render path Arc fast-
+  path 확장 으로 매끈 ring
+- ✅ Boolean SSI 시 top edge 의 analytic 메타데이터 활용 — top Arc 가
+  ADR-064/066 NURBS dispatch 의 Circle 인식 path 통과
+- ✅ Offset (ADR-080) 의 top edge Plane Arc 자연 활성
+
+**잔존 trigger** (Path B 본격 활성 시 closure):
+- ❌ **결함 2** — Side hover/select 시 N quads 중 1개만 선택 (사용자
+  intent: "cylinder 측면 = 1개 entity")
+- ❌ Side faces 의 메모리 비용 — N quad faces 누적 (LOCKED #16 ADR-038
+  P23 의 surface metadata 본래 의도와 충돌)
+- ❌ STEP/IGES export 시 cylinder 정확 표현 — Path B 의 single
+  cylindrical face 가 자연 NURBS export 가능, Path A 는 polygon
+- ❌ Push-Pull again 시 측면이 N quads 로 누적 (cumulative cost)
+
+**현재 (2026-05-09) 상태**: ADR-092 가 결함 1 partial closure. **결함 2
+의 실 사용자 영향 측정** 이 다음 결재 anchor — 사용자 시연 결과에 따라
+Path B 진입 결재 활성.
 
 ---
 

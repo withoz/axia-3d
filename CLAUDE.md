@@ -1429,6 +1429,44 @@
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
 ### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Δ closure, 2026-05-09)
+- **ADR-092 amendment (2026-05-09)** — Push-Pull top boundary
+  closed-curve preservation (partial Path B atomic):
+  * **사용자 시연 회귀 trigger** ("현재 원에 대한 완벽한 처리가
+    안되고 있습니다") — DrawCircle → PushPull 시 top rim 이 polygon
+    으로 시각화. ADR-089 A-θ Path A 의 known limitation (closed-curve
+    metadata 가 Push-Pull 통과 시 영구 상실) 의 partial 해결.
+  * **C-β engine fix** — `extrude_closed_curve_face_via_tessellation`
+    의 step 8 추가: recurse 후 top face N edges 에 `AnalyticCurve::Arc`
+    부착 (translated center). DCEL topology unchanged — manifold-safe.
+  * **C-δ render path fix** — `export_edge_lines_with_map` 의
+    non-self-loop edges 분기에 Arc curve fast-path 추가. Self-loop only
+    였던 closed-curve fast-path (A-κ) 를 non-self-loop 까지 확장.
+    Push-Pull 결과 top/bottom rim 의 N Arc edges 가 chord-tolerant
+    tessellation 으로 매끈 ring 시각화.
+  * **회귀** axia-geo +7 (manifold + translation + radius + normal +
+    DCEL + recess + polygonal regression guard) + Playwright +2
+    (real Chromium top rim multi-segment 검증). 합계 **+9**, 절대
+    #[ignore] 금지 9/9 준수.
+  * **사용자 facing 변화**: DrawCircle → PushPull → top rim 매끈
+    ring (이전 polygon facets 사라짐). Side hover 는 여전히 N quads
+    중 1개 선택 (결함 2 — Path B trigger anchor).
+  * **메타-원칙 #14 의 깊은 적용** — engine truth + render truth +
+    downstream ops 활용 의 3 layer 모두 정합. Boolean / Offset /
+    Push-Pull again 시 top edge Arc metadata 가 first-class 로 인식
+    (ADR-064/066 NURBS dispatch + ADR-080 Offset Plane Arc 분기 보너스).
+  * **ADR-090 Path B trigger 재평가** — 결함 1 (top rim polygon)
+    해결로 ADR-090 §6 trigger 매트릭스 일부 무력화. 결함 2 (side
+    hover single quad / Boolean SSI 정밀도 측면 한계) 가 새로운
+    primary trigger. 사용자 시연 결과에 따라 Path B 결재 활성
+    여부 판단.
+  * **다음 ADR 가이드 (Lessons)**:
+    - L1 사전 검토 가치 재확인 (C-β engine fix 만으로는 사용자 facing
+      결과 0 — render path 누락 발견 가 C-δ 의 게이트 가치)
+    - L2 self-loop / non-self-loop edge fast-path 일관성 통합 필요
+    - L3 메타-원칙 #14 의 3-layer 정합 (engine + render + downstream)
+    - L4 Path A 의 점진 Path B 화 패턴 — partial atomic 추출 가능성
+      사전 검토
+
 - **A-Δ amendment (2026-05-09)** — Periodic knot vector closed BSpline /
   NURBS:
   * `bspline::is_periodic_knots(knots, degree)` + `nurbs::is_periodic_

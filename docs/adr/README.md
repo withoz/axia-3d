@@ -166,7 +166,7 @@ ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그�
 | [089](./089-true-kernel-native-closed-edges.md) | True Kernel-Native Closed Edges (Phase 2) | Accepted |
 | [090](./090-true-kernel-native-cylinder-path-b.md) | True Kernel-Native Cylinder (Path B, deferred) | Proposed |
 | [091](./091-material-removal-shape-demotion.md) | Material Removal → Shape 가역 강등 (Phase 2) | Accepted |
-| [092](./092-pushpull-top-boundary-closed-curve-preservation.md) | Push-Pull Top Boundary Closed-Curve Preservation (Partial Path B) | Proposed |
+| [092](./092-pushpull-top-boundary-closed-curve-preservation.md) | Push-Pull Top Boundary Closed-Curve Preservation (Partial Path B) | Accepted |
 
 ## 메타-원칙 (#1~#14)
 
