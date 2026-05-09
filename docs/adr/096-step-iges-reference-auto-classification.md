@@ -173,5 +173,39 @@ Scene.references[id] = Reference {
 - **변경**: 본 ADR 작성. ADR-095 §8 약속의 자연 이행 anchor.
 - **회귀**: +0 (docs only).
 
-### M-β ~ M-γ (예정)
+### M-β (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Implementation 진입.
+- **변경**:
+  * `web/src/tools/AutoReferenceImportSettings.ts` (신규) —
+    localStorage toggle (default ON, ADR-049 P-5e-α 답습):
+    - `getAutoReferenceImportMode() / setAutoReferenceImportMode()`
+    - `localStorage axia:auto-reference-import = 'false'` explicit OFF
+      preference 보존
+  * `web/src/citizenship/AutoReferenceImport.ts` (신규) — UI orchestration
+    helper:
+    - `autoRegisterImportAsReference(bridge, faceIds, fileName?, opts?)`
+    - File name → Reference name (file stem 추출 — `/path/to/site.step`
+      → `'site'`)
+    - sourcePath = file.name 그대로 전달
+    - graceful fallback (Settings OFF / empty / R-B violation /
+      endpoint missing — 4 case 한국어 변환, ADR-095 §E L3 답습)
+  * `web/src/import/FileImporter.ts` 통합 wiring:
+    - `injectIntoAxia` 후 `autoRegisterImportAsReference` 호출
+    - Settings flag 동적 import (ADR-094 답습 패턴)
+    - Toast success 메시지에 Reference 등록 정보 추가:
+      `'STEP import 완료: 12면 24엣지 · "site" Reference 등록 (12 면)'`
+- **회귀** (vitest +14):
+  * `AutoReferenceImportSettings.test.ts` (5 tests):
+    default ON / localStorage true/false / persist / listener change-only
+  * `AutoReferenceImport.test.ts` (9 tests):
+    success / Settings OFF / 빈 배열 / file stem 추출 4 case (linux/
+    windows/no-ext/none) / fallback name / R-B violation / endpoint
+    missing / sourcePath 전달
+  * 합계 **+14**, 절대 #[ignore] 금지 14/14 준수.
+- **누적** (M-α ~ M-β): vitest +14.
+- **위험 격리 검증**: 전체 vitest 1683 → 1697 (+14), 회귀 0.
+  FileImporter 통합 path 는 dynamic import + try/catch graceful —
+  기존 import 자체는 정상 진행 (M-L6).
+
+### M-γ (예정 — 사용자 시연 + closure)
 별도 sub-step 결재 시 commit 진행.

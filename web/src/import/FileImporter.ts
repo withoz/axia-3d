@@ -236,6 +236,10 @@ export class FileImporter {
       // 사용자 가 import 후 face 선택 / engine ops (offset / extrude /
       // push-pull / Boolean) 사용 가능. bridge 미가용 시 graceful skip.
       const injectWarnings: string[] = [];
+      // ADR-096 M-β — Auto-Reference 결과 (FileImporter scope-level
+      // 변수 — Toast 안내에서 활용).
+      let autoRegisterRefName: string | null = null;
+      let autoRegisterFaceCount = 0;
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const container = (window as any).__axia;
@@ -248,6 +252,30 @@ export class FileImporter {
             console.info(
               `[FileImporter] ADR-086 O-δ — ${injectResult.faceIndexToAxiaId.size} faces injected to axia DCEL`,
             );
+
+            // ADR-096 M-β — Import 결과를 자동 ImportedMesh Reference
+            // 시민으로 등록 (Settings ON 시). ADR-095 §1.2 의 architectural
+            // 자연 결합. Settings OFF / R-B violation 시 graceful skip.
+            try {
+              const { autoRegisterImportAsReference } =
+                await import('../citizenship/AutoReferenceImport');
+              const { getAutoReferenceImportMode } =
+                await import('../tools/AutoReferenceImportSettings');
+              const enabled = getAutoReferenceImportMode();
+              const faceIds = Array.from(injectResult.faceIndexToAxiaId.values());
+              const refResult = autoRegisterImportAsReference(
+                bridge, faceIds, file.name, { enabled },
+              );
+              if (refResult.ok) {
+                autoRegisterRefName = refResult.refName ?? null;
+                autoRegisterFaceCount = refResult.faceCount ?? 0;
+              } else if (refResult.reason && enabled) {
+                // Only push warning if Settings ON (OFF 시 silent skip).
+                injectWarnings.push(`auto-reference: ${refResult.reason}`);
+              }
+            } catch (e) {
+              injectWarnings.push(`auto-reference 모듈 로드 실패: ${String(e)}`);
+            }
           }
         }
       } catch (e) {
@@ -263,8 +291,12 @@ export class FileImporter {
         );
         console.warn('[FileImporter] STEP/IGES warnings:', allWarnings);
       } else {
+        // ADR-096 M-β — Reference 자동 등록 안내 (Settings ON + 성공 시).
+        const refSuffix = autoRegisterRefName
+          ? ` · "${autoRegisterRefName}" Reference 등록 (${autoRegisterFaceCount} 면)`
+          : '';
         Toast.success(
-          `${result.format.toUpperCase()} import 완료: ${result.faceCount}면 ${result.edgeCount}엣지`,
+          `${result.format.toUpperCase()} import 완료: ${result.faceCount}면 ${result.edgeCount}엣지${refSuffix}`,
           4000,
         );
       }
