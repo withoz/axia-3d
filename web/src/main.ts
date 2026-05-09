@@ -217,6 +217,36 @@ async function main() {
     () => import('./import/StepIgesImporter'),
   );
 
+  // ADR-098 S-ε — Asset Library Panel registration.
+  //   Lazy-imports panel + Settings flag. Host (e.g. menu / status bar)
+  //   can call window.__axia.get('assetLibraryPanel')() to toggle.
+  //   Panel itself renders all 3 tiers; the Settings flag governs
+  //   whether the User tier section is interactive (future host-side
+  //   filtering — MVP shows all sections).
+  const assetLibraryPanel = async () => {
+    const [{ AssetLibraryPanel }, { getAssetLibraryUserTierMode }] =
+      await Promise.all([
+        import('./ui/AssetLibraryPanel'),
+        import('./tools/AssetLibraryUserTierSettings'),
+      ]);
+    if (!bridge.isReady()) return null;
+    // Single-instance: cache on container key after first creation.
+    const existing = container.tryGet<{ panel: unknown; userTierEnabled: boolean }>(
+      '__assetLibraryPanelInstance' as never,
+    );
+    if (existing) return existing;
+    // Mount inside the standard right-side panel container if present,
+    // otherwise body fallback (test surface).
+    const host = document.getElementById('right-panel-container') ?? document.body;
+    const panel = new AssetLibraryPanel(host, bridge);
+    const instance = {
+      panel,
+      get userTierEnabled() { return getAssetLibraryUserTierMode(); },
+    };
+    return instance;
+  };
+  container.register('assetLibraryPanel', assetLibraryPanel);
+
   // ADR-097 T-ε — Topology recovery service (Phase 4 SSOT entry).
   //   Lazy-imports orchestrator + Settings flag; checks flag inside
   //   the closure so listeners stay reactive to live setSetting updates.

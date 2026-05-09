@@ -20,6 +20,10 @@ import {
   getAutoTopologyRecoveryMode,
   setAutoTopologyRecoveryMode,
 } from '../tools/AutoTopologyRecoverySettings';
+import {
+  getAssetLibraryUserTierMode,
+  setAssetLibraryUserTierMode,
+} from '../tools/AssetLibraryUserTierSettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -143,6 +147,14 @@ export class SettingsPanel {
         <div class="sp-hint">토폴로지 변경 op 후 손상 감지 → 자동 복구. PartialFailure 시 사용자 다이얼로그 ([Undo]/[강등]/[수동수정]) (ADR-097 Phase 4)</div>
       </div>
 
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-asset-library-user-tier" />
+          User 라이브러리 활성화 (실험)
+        </label>
+        <div class="sp-hint">자산 라이브러리 의 User tier (사용자 재사용 재질 모음) 활성. localStorage 보존, opt-in default OFF (ADR-098 Phase 5-A)</div>
+      </div>
+
       <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
@@ -215,6 +227,12 @@ export class SettingsPanel {
       setAutoTopologyRecoveryMode(autoRecoverCheck.checked);
     });
 
+    // ADR-098 S-ε — User tier asset library (Phase 5-A opt-in)
+    const userTierCheck = panel.querySelector('#sp-asset-library-user-tier') as HTMLInputElement;
+    userTierCheck.addEventListener('change', () => {
+      setAssetLibraryUserTierMode(userTierCheck.checked);
+    });
+
     return panel;
   }
 
@@ -262,6 +280,10 @@ export class SettingsPanel {
     // ADR-097 T-ε — 자동 위상 복구
     const autoRecoverCheck = this.panel.querySelector('#sp-auto-topology-recovery') as HTMLInputElement;
     autoRecoverCheck.checked = getAutoTopologyRecoveryMode();
+
+    // ADR-098 S-ε — User 라이브러리 활성화
+    const userTierCheck = this.panel.querySelector('#sp-asset-library-user-tier') as HTMLInputElement;
+    userTierCheck.checked = getAssetLibraryUserTierMode();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;

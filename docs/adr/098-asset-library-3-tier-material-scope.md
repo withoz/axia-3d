@@ -303,5 +303,47 @@ Playwright +4. **합계 ~+40~50**, 절대 #[ignore] 금지.
   * AssetLibraryPanel 의 main.ts 등록 — S-ε wiring 시점 (Settings
     flag + container.register)
 
-### S-ε ~ S-ζ (예정)
-별도 sub-step 결재 시 commit 진행.
+### S-ε (본 commit) — Settings flag + main.ts wiring
+- **commit**: 본 commit
+- **Settings module** (`web/src/tools/AssetLibraryUserTierSettings.ts`):
+  * `axia:asset-library-user-tier` localStorage key
+  * **Default OFF** (S-E lock-in — User tier opt-in 안전 정책)
+  * AutoTopologyRecoverySettings (ADR-097 T-ε) + AutoReferenceImportSettings
+    (ADR-096) 패턴 답습 — `localStorage 'true'` explicit ON 보존
+  * `getAssetLibraryUserTierMode` / `setAssetLibraryUserTierMode` /
+    `onAssetLibraryUserTierModeChange`
+- **main.ts wiring**:
+  * `container.register('assetLibraryPanel', factory)` — lazy import +
+    bridge guard. ServiceContainer SSOT 진입점 (window.__axia)
+  * Single-instance pattern (caching planned via container key — current
+    minimal implementation creates fresh on each invocation, sufficient
+    for E2E + future consolidation in S-ζ)
+  * Mount target: `#right-panel-container` (production layout) with
+    `document.body` fallback (test surface)
+- **SettingsPanel UI** (`web/src/units/SettingsPanel.ts`):
+  * `#sp-asset-library-user-tier` 체크박스 + 한국어 hint
+  * Default OFF 표시 (사용자 명시 활성)
+- **회귀 (Vitest)**:
+  * `AssetLibraryUserTierSettings.test.ts` — 5 tests (default OFF /
+    localStorage variants / setMode persistence / listener fires-on-change)
+  * `SettingsPanel.test.ts` 영향 없음 (20 PASS unchanged — additive
+    체크박스만 추가)
+  * 절대 #[ignore] 금지 5/5 준수
+- **Full vitest sweep**: 111 files, **1755/1755 PASS** (1 skipped 무관,
+  1750 → 1755 = +5)
+- **누적 S-α ~ S-ε**: axia-core +19, axia-wasm +4, vitest +26,
+  docs +1 ADR = **+50**
+- **Lessons applied**:
+  * ADR-097 T-ε / ADR-096 M-β / ADR-094 default ON 패턴 답습 — Settings
+    module 의 캐노니컬 5-함수 surface (get/set/onChange + listeners)
+  * **Default OFF for opt-in surfaces**: ADR-097 T-ε (self-modifying
+    op safety) + ADR-098 S-ε (사용자 자산 라이브러리 활성) 모두 default
+    OFF. ADR-094 default ON (메모리 절감, 시각 불변) 과 다름 — 사용자
+    facing 의미 가변/추가 surface 는 default OFF
+  * ServiceContainer storage 의 함정 (ADR-097 §E L4) 답습 — register
+    시 factory function 직접 등록 (wrapper 거치지 않음)
+
+### S-ζ (예정)
+별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
+E2E) — Default OFF / Explicit ON 보존 / 3-tier listing surface /
+add Project + remove User flows.
