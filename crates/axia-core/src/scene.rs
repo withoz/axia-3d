@@ -217,7 +217,97 @@ pub struct Scene {
     ///   carries `face_ids` already)
     /// - In-memory only — derived from Shape state
     pub face_to_shape: HashMap<FaceId, crate::ShapeId>,
+
+    /// ADR-095 Phase 3-β — Reference 시민 storage (Two-Layer Phase 3).
+    ///
+    /// Form/Property 두 layer 와 직교하는 third citizenship — 사용자
+    /// 의도 *수정 안 함* (build 대상 아님). 3 categories:
+    /// ConstructionLine / ImportedMesh / PointCloud.
+    ///
+    /// Mesh-level HashMap pattern (R-A, ADR-091 §E L1 canonical 답습) —
+    /// bincode legacy 호환 자연 보존.
+    ///
+    /// Invariants (R-B mutually exclusive):
+    /// - Geometry id (face/edge/vert) 가 Reference 에 등록된 경우 동시에
+    ///   `face_to_xia` / `face_to_shape` 등에 있을 수 없음. 신규 등록
+    ///   시 reverse 인덱스 검사 + 거부.
+    pub references: HashMap<crate::ReferenceId, crate::Reference>,
+
+    /// ADR-095 Phase 3-β — Counter for next `ReferenceId`. Starts at 1;
+    /// 0 reserved as null sentinel (ShapeId 답습).
+    next_reference_id: u32,
+
+    /// ADR-095 Phase 3-β — Reverse index: `FaceId → ReferenceId`.
+    /// Populated by `create_reference` for ImportedMesh category.
+    pub face_to_reference: HashMap<FaceId, crate::ReferenceId>,
+
+    /// ADR-095 Phase 3-β — Reverse index: `EdgeId → ReferenceId`.
+    /// Populated by `create_reference` for ConstructionLine category.
+    pub edge_to_reference: HashMap<axia_geo::EdgeId, crate::ReferenceId>,
+
+    /// ADR-095 Phase 3-β — Reverse index: `VertId → ReferenceId`.
+    /// Populated by `create_reference` for PointCloud category.
+    pub vert_to_reference: HashMap<axia_geo::VertId, crate::ReferenceId>,
 }
+
+/// ADR-095 Phase 3-β — `Scene::create_reference` 실패 사유.
+///
+/// Mutually exclusive geometry ownership invariant (R-B) 위반 시
+/// 반환. 실패 시 Reference 미생성, reverse 인덱스 변경 0 (atomic
+/// rollback).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReferenceCreateError {
+    /// 같은 edge_id 가 이미 다른 Reference 에 등록됨.
+    EdgeAlreadyReferenced {
+        edge_id: axia_geo::EdgeId,
+        existing_ref: crate::ReferenceId,
+    },
+    /// 같은 face_id 가 이미 다른 Reference 에 등록됨.
+    FaceAlreadyReferenced {
+        face_id: FaceId,
+        existing_ref: crate::ReferenceId,
+    },
+    /// face_id 가 Property 시민 (Xia) 에 소유됨 — Reference 등록 거부.
+    FaceOwnedByXia { face_id: FaceId },
+    /// face_id 가 Form 시민 (Shape) 에 소유됨 — Reference 등록 거부.
+    FaceOwnedByShape { face_id: FaceId },
+    /// 같은 vert_id 가 이미 다른 Reference 에 등록됨.
+    VertAlreadyReferenced {
+        vert_id: axia_geo::VertId,
+        existing_ref: crate::ReferenceId,
+    },
+}
+
+impl std::fmt::Display for ReferenceCreateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EdgeAlreadyReferenced { edge_id, existing_ref } => write!(
+                f, "edge {:?} already owned by Reference {:?}",
+                edge_id, existing_ref,
+            ),
+            Self::FaceAlreadyReferenced { face_id, existing_ref } => write!(
+                f, "face {:?} already owned by Reference {:?}",
+                face_id, existing_ref,
+            ),
+            Self::FaceOwnedByXia { face_id } => write!(
+                f, "face {:?} is owned by a Xia (Property citizen) — \
+                    cannot register as Reference",
+                face_id,
+            ),
+            Self::FaceOwnedByShape { face_id } => write!(
+                f, "face {:?} is owned by a Shape (Form citizen) — \
+                    cannot register as Reference",
+                face_id,
+            ),
+            Self::VertAlreadyReferenced { vert_id, existing_ref } => write!(
+                f, "vert {:?} already owned by Reference {:?}",
+                vert_id, existing_ref,
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReferenceCreateError {}
 
 impl Scene {
     pub fn new() -> Self {
@@ -238,6 +328,12 @@ impl Scene {
             shape_to_xia: HashMap::new(),
             face_to_shape: HashMap::new(),
             xia_to_original_shape: HashMap::new(),
+            // ADR-095 Phase 3-β — Reference citizenship (Two-Layer Phase 3).
+            references: HashMap::new(),
+            next_reference_id: 1,
+            face_to_reference: HashMap::new(),
+            edge_to_reference: HashMap::new(),
+            vert_to_reference: HashMap::new(),
         }
     }
 
@@ -573,6 +669,159 @@ impl Scene {
         self.shapes.clear();
         // ADR-079 W-1 — clean up reverse index.
         self.face_to_shape.clear();
+    }
+
+    // ════════════════════════════════════════════════
+    // ADR-095 Phase 3-β — Reference 시민권 CRUD API
+    //
+    // Two-Layer Citizenship Phase 3. Reference 시민은 Form (Shape) /
+    // Property (Xia) 와 직교 — 사용자 의도 *수정 안 함*. Mutually
+    // exclusive geometry ownership 강제 (R-B): 등록 시 face_to_xia /
+    // face_to_shape 충돌 검사.
+    // ════════════════════════════════════════════════
+
+    /// ADR-095 Phase 3-β — Reference 등록 실패 사유.
+    ///
+    /// `create_reference` 가 mutually exclusive geometry ownership
+    /// invariant 를 어긴 경우 반환. 실패 시 Reference 미생성, reverse
+    /// 인덱스 변경 0.
+    pub fn create_reference(
+        &mut self,
+        name: String,
+        category: crate::ReferenceCategory,
+    ) -> Result<crate::ReferenceId, ReferenceCreateError> {
+        // R-B mutually exclusive — 등록 직전 충돌 검사.
+        match &category {
+            crate::ReferenceCategory::ConstructionLine { edge_ids } => {
+                for &eid in edge_ids {
+                    if let Some(&existing) = self.edge_to_reference.get(&eid) {
+                        return Err(ReferenceCreateError::EdgeAlreadyReferenced {
+                            edge_id: eid, existing_ref: existing,
+                        });
+                    }
+                }
+            }
+            crate::ReferenceCategory::ImportedMesh { face_ids, .. } => {
+                for &fid in face_ids {
+                    if let Some(&existing) = self.face_to_reference.get(&fid) {
+                        return Err(ReferenceCreateError::FaceAlreadyReferenced {
+                            face_id: fid, existing_ref: existing,
+                        });
+                    }
+                    if self.face_to_xia.contains_key(&fid) {
+                        return Err(ReferenceCreateError::FaceOwnedByXia { face_id: fid });
+                    }
+                    if self.face_to_shape.contains_key(&fid) {
+                        return Err(ReferenceCreateError::FaceOwnedByShape { face_id: fid });
+                    }
+                }
+            }
+            crate::ReferenceCategory::PointCloud { vert_ids } => {
+                for &vid in vert_ids {
+                    if let Some(&existing) = self.vert_to_reference.get(&vid) {
+                        return Err(ReferenceCreateError::VertAlreadyReferenced {
+                            vert_id: vid, existing_ref: existing,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Allocate ID + insert.
+        let id = crate::ReferenceId::new(self.next_reference_id);
+        self.next_reference_id = self.next_reference_id.saturating_add(1);
+        let reference = crate::Reference::new(id, name, category.clone());
+
+        // Populate reverse indices.
+        match &category {
+            crate::ReferenceCategory::ConstructionLine { edge_ids } => {
+                for &eid in edge_ids {
+                    self.edge_to_reference.insert(eid, id);
+                }
+            }
+            crate::ReferenceCategory::ImportedMesh { face_ids, .. } => {
+                for &fid in face_ids {
+                    self.face_to_reference.insert(fid, id);
+                }
+            }
+            crate::ReferenceCategory::PointCloud { vert_ids } => {
+                for &vid in vert_ids {
+                    self.vert_to_reference.insert(vid, id);
+                }
+            }
+        }
+
+        self.references.insert(id, reference);
+        Ok(id)
+    }
+
+    /// ADR-095 Phase 3-β — Read access to a Reference by id.
+    pub fn get_reference(&self, id: crate::ReferenceId) -> Option<&crate::Reference> {
+        self.references.get(&id)
+    }
+
+    /// ADR-095 Phase 3-β — All currently-stored ReferenceIds, sorted
+    /// ascending. Used by future Inspector / WASM bridge enumeration.
+    pub fn list_reference_ids(&self) -> Vec<crate::ReferenceId> {
+        let mut ids: Vec<crate::ReferenceId> = self.references.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// ADR-095 Phase 3-β — Remove a Reference by id. Returns true if
+    /// removed. Reverse 인덱스도 정리.
+    pub fn delete_reference(&mut self, id: crate::ReferenceId) -> bool {
+        if let Some(reference) = self.references.remove(&id) {
+            // Clean up reverse indices.
+            match reference.category {
+                crate::ReferenceCategory::ConstructionLine { edge_ids } => {
+                    for eid in edge_ids {
+                        if self.edge_to_reference.get(&eid).copied() == Some(id) {
+                            self.edge_to_reference.remove(&eid);
+                        }
+                    }
+                }
+                crate::ReferenceCategory::ImportedMesh { face_ids, .. } => {
+                    for fid in face_ids {
+                        if self.face_to_reference.get(&fid).copied() == Some(id) {
+                            self.face_to_reference.remove(&fid);
+                        }
+                    }
+                }
+                crate::ReferenceCategory::PointCloud { vert_ids } => {
+                    for vid in vert_ids {
+                        if self.vert_to_reference.get(&vid).copied() == Some(id) {
+                            self.vert_to_reference.remove(&vid);
+                        }
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-095 Phase 3-β — Toggle Reference visibility flag.
+    /// Returns true if the Reference exists.
+    pub fn set_reference_visible(&mut self, id: crate::ReferenceId, visible: bool) -> bool {
+        if let Some(r) = self.references.get_mut(&id) {
+            r.visible = visible;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-095 Phase 3-β — Toggle Reference locked flag.
+    /// Returns true if the Reference exists.
+    pub fn set_reference_locked(&mut self, id: crate::ReferenceId, locked: bool) -> bool {
+        if let Some(r) = self.references.get_mut(&id) {
+            r.locked = locked;
+            true
+        } else {
+            false
+        }
     }
 
     // ════════════════════════════════════════════════
@@ -12636,5 +12885,220 @@ mod tests {
             .demote_xia_to_shape(bogus)
             .expect_err("missing xia must fail");
         assert_eq!(err, crate::promote::DemoteError::XiaNotFound);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // ADR-095 Phase 3-β — Reference 시민권 CRUD + invariants
+    // ─────────────────────────────────────────────────────────────────
+
+    fn build_construction_line_edges(scene: &mut Scene) -> Vec<axia_geo::EdgeId> {
+        let v1 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let (e1, _) = scene.mesh.add_edge(v1, v2).unwrap();
+        let (e2, _) = scene.mesh.add_edge(v2, v3).unwrap();
+        vec![e1, e2]
+    }
+
+    #[test]
+    fn adr095_phase3_create_reference_construction_line() {
+        let mut scene = Scene::new();
+        let edges = build_construction_line_edges(&mut scene);
+        let id = scene
+            .create_reference(
+                "Center axis".to_string(),
+                crate::ReferenceCategory::ConstructionLine { edge_ids: edges.clone() },
+            )
+            .expect("create OK");
+
+        let r = scene.get_reference(id).expect("Reference present");
+        assert_eq!(r.id, id);
+        assert_eq!(r.name, "Center axis");
+        assert!(r.visible);
+        assert!(!r.locked);
+        // Reverse index populated.
+        for &eid in &edges {
+            assert_eq!(scene.edge_to_reference.get(&eid).copied(), Some(id));
+        }
+    }
+
+    #[test]
+    fn adr095_phase3_create_reference_imported_mesh() {
+        let mut scene = Scene::new();
+        // 미연결 face 직접 생성 (Reference 용 — Form/Property 미소유).
+        let v0 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v0, v1, v2, v3], FORM_MATERIAL).unwrap();
+
+        let id = scene
+            .create_reference(
+                "Site model".to_string(),
+                crate::ReferenceCategory::ImportedMesh {
+                    face_ids: vec![face],
+                    source_path: Some("/path/to/site.step".to_string()),
+                },
+            )
+            .expect("create ImportedMesh OK");
+        assert_eq!(scene.face_to_reference.get(&face).copied(), Some(id));
+    }
+
+    #[test]
+    fn adr095_phase3_create_reference_point_cloud() {
+        let mut scene = Scene::new();
+        let v1 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let id = scene
+            .create_reference(
+                "Scan A".to_string(),
+                crate::ReferenceCategory::PointCloud { vert_ids: vec![v1, v2] },
+            )
+            .expect("create PointCloud OK");
+        assert_eq!(scene.vert_to_reference.get(&v1).copied(), Some(id));
+        assert_eq!(scene.vert_to_reference.get(&v2).copied(), Some(id));
+    }
+
+    #[test]
+    fn adr095_phase3_mutually_exclusive_face_owned_by_xia() {
+        // Xia 소유 face 를 ImportedMesh Reference 에 등록 시도 → 거부.
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let mat = MaterialId::new(7);
+        let promote_ok = scene.promote_shape_to_xia(shape_id, mat).unwrap();
+        let xia = scene.xias.get(&promote_ok.xia_id).unwrap();
+        let face_owned_by_xia = xia.face_ids[0];
+
+        let err = scene
+            .create_reference(
+                "Should reject".to_string(),
+                crate::ReferenceCategory::ImportedMesh {
+                    face_ids: vec![face_owned_by_xia],
+                    source_path: None,
+                },
+            )
+            .expect_err("face owned by Xia must reject Reference register");
+        match err {
+            crate::scene::ReferenceCreateError::FaceOwnedByXia { face_id } => {
+                assert_eq!(face_id, face_owned_by_xia);
+            }
+            other => panic!("expected FaceOwnedByXia, got {:?}", other),
+        }
+        // Atomic rollback — references / face_to_reference 변경 0.
+        assert!(scene.references.is_empty());
+        assert!(!scene.face_to_reference.contains_key(&face_owned_by_xia));
+    }
+
+    #[test]
+    fn adr095_phase3_mutually_exclusive_face_owned_by_shape() {
+        // Shape 소유 face 를 ImportedMesh Reference 에 등록 시도 → 거부.
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let face_owned_by_shape = scene.shapes.get(&shape_id).unwrap().face_ids[0];
+
+        let err = scene
+            .create_reference(
+                "Should reject".to_string(),
+                crate::ReferenceCategory::ImportedMesh {
+                    face_ids: vec![face_owned_by_shape],
+                    source_path: None,
+                },
+            )
+            .expect_err("face owned by Shape must reject");
+        match err {
+            crate::scene::ReferenceCreateError::FaceOwnedByShape { face_id } => {
+                assert_eq!(face_id, face_owned_by_shape);
+            }
+            other => panic!("expected FaceOwnedByShape, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn adr095_phase3_double_register_same_edge_rejected() {
+        let mut scene = Scene::new();
+        let edges = build_construction_line_edges(&mut scene);
+        let _ref1 = scene
+            .create_reference(
+                "First".into(),
+                crate::ReferenceCategory::ConstructionLine { edge_ids: edges.clone() },
+            )
+            .unwrap();
+        let err = scene
+            .create_reference(
+                "Second (overlap)".into(),
+                crate::ReferenceCategory::ConstructionLine { edge_ids: edges.clone() },
+            )
+            .expect_err("double-register must fail");
+        match err {
+            crate::scene::ReferenceCreateError::EdgeAlreadyReferenced { .. } => {}
+            other => panic!("expected EdgeAlreadyReferenced, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn adr095_phase3_delete_reference_cleans_reverse_indices() {
+        let mut scene = Scene::new();
+        let edges = build_construction_line_edges(&mut scene);
+        let id = scene
+            .create_reference(
+                "To delete".into(),
+                crate::ReferenceCategory::ConstructionLine { edge_ids: edges.clone() },
+            )
+            .unwrap();
+        assert!(scene.delete_reference(id));
+
+        // References + reverse 인덱스 모두 cleanup.
+        assert!(!scene.references.contains_key(&id));
+        for &eid in &edges {
+            assert!(!scene.edge_to_reference.contains_key(&eid));
+        }
+        // Re-register OK after delete (mutually exclusive 회복).
+        let id2 = scene
+            .create_reference(
+                "Re-create".into(),
+                crate::ReferenceCategory::ConstructionLine { edge_ids: edges.clone() },
+            )
+            .expect("re-create after delete OK");
+        assert_ne!(id, id2, "fresh ID after re-create");
+    }
+
+    #[test]
+    fn adr095_phase3_list_reference_ids_sorted() {
+        let mut scene = Scene::new();
+        let v1 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v2 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v3 = scene.mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let id1 = scene
+            .create_reference("R1".into(),
+                crate::ReferenceCategory::PointCloud { vert_ids: vec![v1] })
+            .unwrap();
+        let id2 = scene
+            .create_reference("R2".into(),
+                crate::ReferenceCategory::PointCloud { vert_ids: vec![v2] })
+            .unwrap();
+        let id3 = scene
+            .create_reference("R3".into(),
+                crate::ReferenceCategory::PointCloud { vert_ids: vec![v3] })
+            .unwrap();
+        let ids = scene.list_reference_ids();
+        assert_eq!(ids, vec![id1, id2, id3]);
+    }
+
+    #[test]
+    fn adr095_phase3_visibility_locked_toggles() {
+        let mut scene = Scene::new();
+        let v = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let id = scene
+            .create_reference("R".into(),
+                crate::ReferenceCategory::PointCloud { vert_ids: vec![v] })
+            .unwrap();
+        assert!(scene.set_reference_visible(id, false));
+        assert!(!scene.get_reference(id).unwrap().visible);
+        assert!(scene.set_reference_locked(id, true));
+        assert!(scene.get_reference(id).unwrap().locked);
+        // Bogus id → false.
+        let bogus = crate::ReferenceId::new(9999);
+        assert!(!scene.set_reference_visible(bogus, true));
+        assert!(!scene.set_reference_locked(bogus, true));
     }
 }

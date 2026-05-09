@@ -192,5 +192,53 @@ pub enum ReferenceCategory {
 - **변경**: 본 ADR 작성. LOCKED #26 Phase 3 progress 갱신 anchor.
 - **회귀**: +0 (docs only).
 
-### Phase 3-β ~ 3-ζ (예정)
+### Phase 3-β (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Rust core 진입.
+- **변경**:
+  * `crates/axia-core/src/reference.rs` (신규):
+    - `pub struct ReferenceId(u32)` newtype (XiaId/ShapeId 와 type-distinct,
+      ADR-050 §2.1.1 답습)
+    - `pub enum ReferenceCategory { ConstructionLine{edge_ids},
+      ImportedMesh{face_ids,source_path}, PointCloud{vert_ids} }`
+    - `pub struct Reference { id, name, category, visible, locked }`
+    - 4 unit tests (ReferenceId roundtrip / Reference::new defaults /
+      category labels / serde roundtrip — ADR-095 Phase 3-ε 준비)
+  * `crates/axia-core/src/lib.rs` — `pub mod reference;` + re-export
+  * `crates/axia-core/src/scene.rs`:
+    - `Scene.references: HashMap<ReferenceId, Reference>` (R-A,
+      Mesh-level map)
+    - `Scene.next_reference_id: u32` (start at 1)
+    - `Scene.face_to_reference / edge_to_reference / vert_to_reference`
+      (R-D, O(1) reverse 인덱스)
+    - `Scene::new()` 초기화
+    - `pub enum ReferenceCreateError` (5 variants — Edge/Face/Vert
+      Already / Face owned by Xia / Shape)
+    - CRUD API: `create_reference / get_reference /
+      list_reference_ids / delete_reference / set_reference_visible /
+      set_reference_locked`
+    - **R-B mutually exclusive enforcement**: create_reference 가 등록
+      직전 reverse 인덱스 + face_to_xia + face_to_shape 충돌 검사 +
+      atomic rollback 보장
+- **회귀** (axia-core 217 → 230, +13):
+  * **reference.rs unit tests +4**:
+    - `reference_id_roundtrip`
+    - `reference_new_starts_visible_unlocked`
+    - `category_label_3_categories`
+    - `reference_serde_roundtrip` (Phase 3-ε 준비)
+  * **scene.rs Reference tests +9**:
+    - `create_reference_construction_line`
+    - `create_reference_imported_mesh`
+    - `create_reference_point_cloud`
+    - `mutually_exclusive_face_owned_by_xia` (R-B critical anchor)
+    - `mutually_exclusive_face_owned_by_shape` (R-B critical anchor)
+    - `double_register_same_edge_rejected`
+    - `delete_reference_cleans_reverse_indices` (re-register 가능)
+    - `list_reference_ids_sorted`
+    - `visibility_locked_toggles`
+  * 합계 **+13**, 절대 #[ignore] 금지 13/13 준수.
+- **누적** (Phase 3-α ~ 3-β): axia-core +13.
+- **위험 격리 검증**: axia-core 230 + axia-geo 1245 모두 PASS. 245+
+  Form/Property 회귀 자산 영향 0 (additive coexist).
+
+### Phase 3-γ ~ 3-ζ (예정)
 별도 sub-step 결재 시 commit 진행.
