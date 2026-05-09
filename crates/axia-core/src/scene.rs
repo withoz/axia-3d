@@ -66,6 +66,8 @@ pub struct SnapshotSections {
     pub next_shape_id: bool,
     /// ADR-050 P-3 — shape_to_xia map (sub-section)
     pub shape_to_xia: bool,
+    /// ADR-091 D-ε — xia_to_original_shape map (sub-section 7d)
+    pub xia_to_original_shape: bool,
 }
 
 /// ADR-089 A-μ-β — Snapshot analysis result.
@@ -183,6 +185,24 @@ pub struct Scene {
     /// - In-memory only (P-2 atomic) — snapshot persistence in P-3
     pub shape_to_xia: HashMap<crate::ShapeId, XiaId>,
 
+    /// ADR-091 D-ε — Reverse linkage `XiaId → ShapeId` for promoted
+    /// Xias. Populated by `promote_shape_to_xia` and consumed by
+    /// `demote_xia_to_shape` to restore the original ShapeId on
+    /// round-trip (Lock-in D-D=b).
+    ///
+    /// Per ADR-050 P-2-d precedent: tracking lives on Scene (not on
+    /// Xia struct) to keep `Xia` bincode-compatible with existing
+    /// snapshots — bincode is positional and a new struct field
+    /// breaks legacy V2 deserialization. The map is persisted via
+    /// snapshot section 7 sub-section #4 (additive only).
+    ///
+    /// Invariants:
+    /// - Set only by `promote_shape_to_xia`
+    /// - Cleared by `demote_xia_to_shape` (one-way consumption per
+    ///   round-trip)
+    /// - Legacy V2 snapshots restore as empty (None default per Xia)
+    pub xia_to_original_shape: HashMap<XiaId, crate::ShapeId>,
+
     /// ADR-079 W-1 — Reverse index: `FaceId → ShapeId` for form-layer
     /// face ownership. Mirror of `face_to_xia` for the form citizenship
     /// layer. Updated by `create_shape` (registration) and
@@ -217,6 +237,7 @@ impl Scene {
             next_shape_id: 1,
             shape_to_xia: HashMap::new(),
             face_to_shape: HashMap::new(),
+            xia_to_original_shape: HashMap::new(),
         }
     }
 
@@ -259,6 +280,12 @@ impl Scene {
             eprintln!("[Scene] ShapeToXia serialize failed: {}", e);
             Vec::new()
         });
+        // ADR-091 D-ε — sub-section 7d (additive). Reverse linkage map
+        // for reversible Xia → Shape demotion.
+        let xia_to_original_shape_data = bincode::serialize(&self.xia_to_original_shape).unwrap_or_else(|e| {
+            eprintln!("[Scene] XiaToOriginalShape serialize failed: {}", e);
+            Vec::new()
+        });
         let next_xia = self.next_xia_id;
         let next_shape = self.next_shape_id;
 
@@ -269,10 +296,12 @@ impl Scene {
         // [shapes_len:u64][shapes_data]                 ← ADR-050 P-3 (additive)
         // [next_shape_id:u64]                           ← ADR-050 P-3 (additive)
         // [shape_to_xia_len:u64][shape_to_xia_data]     ← ADR-050 P-3 (additive)
+        // [xia_to_orig_shape_len:u64][xia_to_orig_shape_data] ← ADR-091 D-ε (additive)
         let mut buf = Vec::with_capacity(
             8 + mesh_data.len() + 8 + xia_data.len() + 8 + group_data.len() + 8
                 + 8 + constraints_data.len() + 8 + boolean_group_data.len()
-                + 8 + shapes_data.len() + 8 + 8 + shape_to_xia_data.len(),
+                + 8 + shapes_data.len() + 8 + 8 + shape_to_xia_data.len()
+                + 8 + xia_to_original_shape_data.len(),
         );
         buf.extend_from_slice(&(mesh_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&mesh_data);
@@ -293,6 +322,10 @@ impl Scene {
         buf.extend_from_slice(&(next_shape as u64).to_le_bytes());
         buf.extend_from_slice(&(shape_to_xia_data.len() as u64).to_le_bytes());
         buf.extend_from_slice(&shape_to_xia_data);
+        // ADR-091 D-ε — sub-section 7d (additive). Legacy V2 snapshots
+        // truncate before this section → restore reads None (empty map).
+        buf.extend_from_slice(&(xia_to_original_shape_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&xia_to_original_shape_data);
         buf
     }
 
@@ -423,11 +456,36 @@ impl Scene {
             }
         }
 
+        // 7d. ADR-091 D-ε — xia_to_original_shape (additive, backward-
+        //     compat). Legacy snapshots predating ADR-091 D-ε truncate
+        //     before this sub-section → restore as empty map.
+        let mut xia_to_orig_present = false;
+        if shapes_section_present && offset + 8 <= data.len() {
+            let xlen = read_len(data, &mut offset);
+            if xlen > 0 && offset + xlen <= data.len() {
+                if let Ok(restored) = bincode::deserialize::<HashMap<XiaId, crate::ShapeId>>(
+                    &data[offset..offset + xlen],
+                ) {
+                    self.xia_to_original_shape = restored;
+                    xia_to_orig_present = true;
+                }
+                offset += xlen;
+            } else if xlen == 0 {
+                self.xia_to_original_shape.clear();
+                xia_to_orig_present = true;
+            }
+        }
+        if !xia_to_orig_present {
+            // Legacy snapshot (pre-ADR-091 D-ε) — empty map.
+            self.xia_to_original_shape.clear();
+        }
+
         if !shapes_section_present {
             // Legacy snapshot (pre-ADR-050 P-3) — reset Shape state.
             self.shapes.clear();
             self.next_shape_id = 1;
             self.shape_to_xia.clear();
+            self.xia_to_original_shape.clear();
         }
 
         // 8. 역인덱스 재구축 (face_ids가 이제 직렬화되므로)
@@ -695,9 +753,11 @@ impl Scene {
         xia.position = position;
         xia.surface_normal = surface_normal;
         xia.material = material;
-        // ADR-091 D-β L4 — record source ShapeId for reversible demotion.
-        xia.original_shape_id = Some(shape_id);
         self.xias.insert(xia_id, xia);
+        // ADR-091 D-ε L4 — record source ShapeId on Scene-level map
+        // for reversible demotion (kept off Xia struct for bincode
+        // legacy compat, ADR-050 P-2-d precedent).
+        self.xia_to_original_shape.insert(xia_id, shape_id);
 
         // Reverse index: face → Xia (overwrite policy per P-2-f).
         for &fid in &face_ids {
@@ -725,7 +785,7 @@ impl Scene {
     /// citizenship-layer operation per Lock-in D-B=a.
     ///
     /// ShapeId restoration policy (Lock-in D-D=b):
-    /// - If `xia.original_shape_id == Some(sid)` AND `sid` is not
+    /// - If `xia_to_original_shape[xia_id] == Some(sid)` AND `sid` is not
     ///   already occupied → restore the original id (round-trip
     ///   preservation: `Shape → Xia → Shape` keeps the same id).
     /// - Otherwise → allocate a fresh ShapeId via `next_shape_id`.
@@ -765,7 +825,9 @@ impl Scene {
         let position = xia.position;
         let surface_normal = xia.surface_normal;
         let name = xia.name.clone();
-        let original_shape_id = xia.original_shape_id;
+        // ADR-091 D-ε — original_shape_id lives on Scene map (P-2-d
+        // precedent), not on Xia struct.
+        let original_shape_id = self.xia_to_original_shape.get(&xia_id).copied();
 
         // 4. D-D=b: ShapeId restoration policy.
         //
@@ -825,6 +887,10 @@ impl Scene {
         // 8. Cleanup shape_to_xia linkage (any Shape pointing at this
         //    Xia is now stale).
         self.shape_to_xia.retain(|_, &mut v| v != xia_id);
+
+        // 9. ADR-091 D-ε — Cleanup xia_to_original_shape (one-way
+        //    consumption per round-trip; re-promote will re-record).
+        self.xia_to_original_shape.remove(&xia_id);
 
         Ok(DemoteOk { shape_id, original_id_restored })
     }
@@ -5075,6 +5141,10 @@ impl Scene {
         }
         if let Some(len) = read_len(payload, &mut offset) {
             if offset + len <= payload.len() { sections.shape_to_xia = true; offset += len; }
+        }
+        // Sub-section 7d: xia_to_original_shape (ADR-091 D-ε)
+        if let Some(len) = read_len(payload, &mut offset) {
+            if offset + len <= payload.len() { sections.xia_to_original_shape = true; offset += len; }
         }
         Ok(SnapshotInfo { version, has_magic: true, sections, error: None })
     }
@@ -12448,9 +12518,9 @@ mod tests {
             .promote_shape_to_xia(shape_id, mat1)
             .expect("promote 1");
         let xia_id_1 = ok1.xia_id;
-        // Verify original_shape_id wired up.
-        let xia = scene.xias.get(&xia_id_1).unwrap();
-        assert_eq!(xia.original_shape_id, Some(shape_id));
+        // Verify original_shape_id recorded on Scene map (D-ε P-2-d).
+        assert_eq!(scene.xia_to_original_shape.get(&xia_id_1).copied(),
+                   Some(shape_id));
 
         // Clear material → demote
         if let Some(x) = scene.xias.get_mut(&xia_id_1) {
@@ -12463,15 +12533,99 @@ mod tests {
                    "demote must restore original ShapeId");
 
         // Cycle 2: re-promote with a different material — must succeed
-        // and produce a Xia whose original_shape_id is still the same.
+        // and produce a Xia whose original_shape_id (Scene map) is
+        // still the same.
         let mat2 = MaterialId::new(11);
         let ok2 = scene
             .promote_shape_to_xia(shape_id, mat2)
             .expect("promote 2 (after demote)");
         let xia2 = scene.xias.get(&ok2.xia_id).unwrap();
-        assert_eq!(xia2.original_shape_id, Some(shape_id),
+        assert_eq!(scene.xia_to_original_shape.get(&ok2.xia_id).copied(),
+                   Some(shape_id),
                    "re-promote keeps the round-trip ShapeId record");
         assert_eq!(xia2.material, mat2);
+    }
+
+    #[test]
+    fn adr091_d_epsilon_xia_to_original_shape_roundtrip_v2() {
+        // ADR-091 D-ε — Snapshot section 7d round-trip preserves the
+        // xia_to_original_shape map across export/import.
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let mat = MaterialId::new(7);
+        let ok = scene
+            .promote_shape_to_xia(shape_id, mat)
+            .expect("promote unit cube");
+
+        // Sanity: map populated by promote.
+        assert_eq!(scene.xia_to_original_shape.get(&ok.xia_id).copied(),
+                   Some(shape_id));
+
+        // Round-trip via versioned snapshot.
+        let bytes = scene.export_versioned_snapshot().expect("export v2");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import v2");
+
+        // Map preserved.
+        assert_eq!(restored.xia_to_original_shape.get(&ok.xia_id).copied(),
+                   Some(shape_id),
+                   "xia_to_original_shape must round-trip via section 7d");
+        // Demote on restored scene must restore the original ShapeId.
+        if let Some(x) = restored.xias.get_mut(&ok.xia_id) {
+            x.material = crate::FORM_MATERIAL;
+        }
+        let demote_ok = restored.demote_xia_to_shape(ok.xia_id)
+            .expect("demote on restored scene");
+        assert_eq!(demote_ok.shape_id, shape_id);
+        assert!(demote_ok.original_id_restored,
+                "restored scene must still be able to round-trip the ShapeId");
+    }
+
+    #[test]
+    fn adr091_d_epsilon_legacy_v2_without_section_7d_loads_empty_map() {
+        // ADR-091 D-ε — Legacy V2 snapshots that predate sub-section
+        // 7d must load with an empty xia_to_original_shape map (the
+        // backward-compat guarantee from §7d additive policy).
+        //
+        // We synthesize a "legacy" payload by stripping sub-section 7d
+        // from a fresh export (truncate before the trailing
+        // [xia_to_orig_len:u64][xia_to_orig_data] block).
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        scene.promote_shape_to_xia(shape_id, MaterialId::new(7)).unwrap();
+        let bytes = scene.export_versioned_snapshot().expect("export");
+
+        // The trailing sub-section is the last 8 bytes of length prefix
+        // + the bincode-serialized HashMap. We need the raw scene_snapshot
+        // (without AXIA + version + payload-len header) to compute the
+        // byte position of sub-section 7d.
+        //
+        // Easier: serialize again, then truncate by the size of the
+        // last bincode-serialized map. We know the map has 1 entry
+        // (XiaId u32 → ShapeId u32) — bincode stores HashMap as
+        // [u64 len][k][v]... so 1 entry ≈ 8 + 4 + 4 = 16 bytes.
+        // Plus 8 bytes for the section length prefix → ~24 bytes total.
+        //
+        // Build by re-exporting and stripping the last (8 + map_size)
+        // bytes. We compute map_size from a fresh bincode pass.
+        let map_data = bincode::serialize(&scene.xia_to_original_shape).unwrap();
+        let strip_len = 8 + map_data.len();
+        assert!(bytes.len() > strip_len);
+        let mut legacy = bytes.clone();
+        legacy.truncate(legacy.len() - strip_len);
+        // Patch the payload_len field (bytes 8..16) to reflect truncation.
+        // Header = AXIA (4) + version (4) = 8 bytes, then payload_len (8 bytes),
+        // then payload. New payload_len = legacy.len() - 16.
+        let new_payload_len = (legacy.len() - 16) as u64;
+        legacy[8..16].copy_from_slice(&new_payload_len.to_le_bytes());
+
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&legacy).expect("import legacy");
+        assert!(restored.xia_to_original_shape.is_empty(),
+                "legacy V2 without 7d must load with empty map");
+
+        // Other Shape state still preserved (sub-sections 7a/7b/7c).
+        assert_eq!(restored.shapes.len(), 1, "Shape count preserved");
     }
 
     #[test]

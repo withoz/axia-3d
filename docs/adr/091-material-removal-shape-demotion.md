@@ -231,5 +231,44 @@ D-ζ 단계: 실제 Chromium 재질 제거 → Shape badge → Undo 복원
   * 전체 vitest 1632 → 1646 (+14, D-γ +3 + D-δ +11) — XiaInspector.test
     2/2 회귀 자산 unchanged (Inspector wiring 변경에도 PASS 유지)
 
-### D-ε ~ D-η (예정)
+### D-ε (본 commit)
+- **사용자 결재**: 2026-05-09, "승인합니다".
+- **D-β 사후 정정** (architectural correctness): D-β 가 `Xia.original_shape_id`
+  필드 추가로 구현했으나, **bincode 가 positional encoding 이라 신규
+  필드 추가는 legacy V2 snapshot bincode roundtrip 을 깨는 위험** 발견.
+  ADR-050 P-2-d 의 명시적 lock-in ("tracking lives on Scene, not on Xia
+  struct ... to keep Xia bincode-compatible") 위반. D-ε 진입 시 즉시 정정:
+  * `Xia.original_shape_id` 필드 제거 (xia.rs)
+  * `Scene.xia_to_original_shape: HashMap<XiaId, ShapeId>` 신규 (P-2-d
+    precedent 답습)
+  * `promote_shape_to_xia` / `demote_xia_to_shape` 가 map 사용
+  * D-β 회귀 테스트 6건은 `xia.original_shape_id` → `scene.
+    xia_to_original_shape.get(&xid)` 로 자연 갱신 (semantic 동일)
+- **변경**:
+  * `crates/axia-core/src/xia.rs` — `original_shape_id` 필드 제거
+    (D-β 정정).
+  * `crates/axia-core/src/scene.rs`:
+    - `Scene.xia_to_original_shape: HashMap<XiaId, ShapeId>` 추가
+    - `Scene::new()` 초기화
+    - `promote_shape_to_xia` 가 map 에 기록
+    - `demote_xia_to_shape` 가 map 에서 읽고 cleanup (one-way 소비)
+    - `scene_snapshot` write 측 — sub-section 7d 추가
+      (`[xia_to_orig_len:u64][xia_to_orig_data]`)
+    - `restore_scene_snapshot` read 측 — sub-section 7d 처리,
+      legacy snapshot 부재 시 empty map default
+    - `analyze_snapshot` (A-μ) — sub-section 7d 인식 추가
+    - `SnapshotSections.xia_to_original_shape: bool` 필드
+- **회귀** (axia-core 215 → 217, +2):
+  * `adr091_d_epsilon_xia_to_original_shape_roundtrip_v2` — promote 후
+    snapshot export → import → 복원된 scene 에서 demote 가 ShapeId 정확
+    복원
+  * `adr091_d_epsilon_legacy_v2_without_section_7d_loads_empty_map` —
+    7d sub-section 이 없는 legacy V2 payload (truncated + payload_len
+    patched) 가 empty map 으로 graceful load. Shape state (sub-sections
+    7a/b/c) 는 보존
+  * 합계 **+2**, 절대 #[ignore] 금지 2/2 준수.
+- **누적 회귀** (D-α ~ D-ε): axia-core +8, axia-wasm +2, vitest +14 =
+  **+24** 전체. 절대 #[ignore] 금지 24/24 준수.
+
+### D-ζ ~ D-η (예정)
 별도 sub-step 결재 시 commit 진행.
