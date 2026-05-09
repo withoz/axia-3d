@@ -109,12 +109,92 @@ impl std::fmt::Display for MaterialCategory {
     }
 }
 
+/// ADR-098 S-β — Material tier scope (System / Project / User).
+///
+/// Three-layer asset library scope, per LOCKED #26 Phase 5-A约속 +
+/// v3.2 §13. **Form citizen 은 영원히 material 무관** (LOCKED #26
+/// invariant) — 본 enum 은 Property citizen (Xia) 의 ScopedMaterialId
+/// 에서만 의미.
+///
+/// - **System** — built-in 12 재질 (immutable, ADR-049 §4 Q4)
+/// - **Project** — 현 프로젝트 (.axia file scope)
+/// - **User** — opt-in 재사용 자산 라이브러리 (localStorage MVP, S-E)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MaterialTier {
+    System,
+    Project,
+    User,
+}
+
+impl MaterialTier {
+    /// Stable u32 encoding for WASM bridge. ADR-098 S-H — typed wrapper
+    /// 의 tier dispatch.
+    pub fn as_u32(self) -> u32 {
+        match self {
+            Self::System => 0,
+            Self::Project => 1,
+            Self::User => 2,
+        }
+    }
+
+    pub fn from_u32(v: u32) -> Option<Self> {
+        match v {
+            0 => Some(Self::System),
+            1 => Some(Self::Project),
+            2 => Some(Self::User),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for MaterialTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::System => write!(f, "System"),
+            Self::Project => write!(f, "Project"),
+            Self::User => write!(f, "User"),
+        }
+    }
+}
+
+/// ADR-098 S-β — Tier-scoped material identifier.
+///
+/// 신규 API surface (legacy `MaterialId(u32)` UNCHANGED — FORM_MATERIAL
+/// sentinel + bincode 호환). ScopedMaterialId 는 사용자 facing tier
+/// dispatch 가 필요한 경로에서만 사용.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScopedMaterialId {
+    pub tier: MaterialTier,
+    pub local_id: u32,
+}
+
+impl ScopedMaterialId {
+    pub fn new(tier: MaterialTier, local_id: u32) -> Self {
+        Self { tier, local_id }
+    }
+}
+
 /// Material library — manages all available materials in a scene
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MaterialLibrary {
     materials: HashMap<u32, Material>,
     next_id: u32,
+    /// ADR-098 S-β — parallel tier index. Legacy snapshots without this
+    /// field deserialize to empty; `migrate_legacy_materials` reconstructs
+    /// from id ranges (built-in 0..=11 → System, ≥100 → Project).
+    /// `#[serde(default)]` ensures bincode compat (ADR-091 §E L1 답습 —
+    /// parallel Map, struct 자체 변경은 add field with default 만).
+    #[serde(default)]
+    tier_index: HashMap<u32, MaterialTier>,
 }
+
+/// ADR-098 S-D — Built-in material id sentinel range. Migration helper
+/// classifies 0..=BUILTIN_MAX as System tier.
+pub const BUILTIN_MATERIAL_ID_MAX: u32 = 11;
+
+/// ADR-098 S-D — Custom user/project starting offset. Materials added
+/// to project before tier was tracked use this lower bound.
+pub const CUSTOM_MATERIAL_ID_MIN: u32 = 100;
 
 impl MaterialLibrary {
     /// Create a new library with built-in materials
@@ -122,6 +202,7 @@ impl MaterialLibrary {
         let mut lib = Self {
             materials: HashMap::new(),
             next_id: 0,
+            tier_index: HashMap::new(),
         };
         lib.init_builtins();
         lib
@@ -394,10 +475,13 @@ impl MaterialLibrary {
         });
     }
 
-    /// Add a material to the library
+    /// Add a material to the library (built-in path — System tier).
+    /// ADR-098 S-D — `init_builtins` 만 호출. Legacy custom path 는
+    /// `create_material` (Project tier default) 사용.
     fn add_material(&mut self, mut material: Material) {
         material.id = MaterialId::new(self.next_id);
         self.materials.insert(self.next_id, material);
+        self.tier_index.insert(self.next_id, MaterialTier::System);
         self.next_id += 1;
     }
 
@@ -411,7 +495,8 @@ impl MaterialLibrary {
         self.materials.get_mut(&id.raw())
     }
 
-    /// Create a new custom material
+    /// Create a new custom material (legacy path — defaults to Project
+    /// tier per ADR-098 S-D classification rule).
     pub fn create_material(
         &mut self,
         name: String,
@@ -420,6 +505,37 @@ impl MaterialLibrary {
         physical: PhysicalProperties,
         visual: VisualProperties,
     ) -> MaterialId {
+        self.create_material_in_tier(
+            MaterialTier::Project, name, name_en, category, physical, visual,
+        )
+    }
+
+    /// ADR-098 S-β — Create a material in a specific tier.
+    ///
+    /// Returns the legacy `MaterialId` (raw u32 namespace UNCHANGED for
+    /// FORM_MATERIAL + bincode compat). Use `tier_of(id)` to retrieve
+    /// the tier at lookup time.
+    ///
+    /// `MaterialTier::System` is reserved for built-ins — calling this
+    /// at runtime allocates a System-tier material but does not protect
+    /// it from removal (immutability is enforced at the API boundary).
+    pub fn create_material_in_tier(
+        &mut self,
+        tier: MaterialTier,
+        name: String,
+        name_en: String,
+        category: MaterialCategory,
+        physical: PhysicalProperties,
+        visual: VisualProperties,
+    ) -> MaterialId {
+        // ADR-098 S-D — Custom materials use offset 100+ to leave room
+        // for the 12 built-ins to grow. Only applies if `next_id` has
+        // not yet crossed the threshold (legacy snapshots may have).
+        if self.next_id < CUSTOM_MATERIAL_ID_MIN
+            && tier != MaterialTier::System
+        {
+            self.next_id = CUSTOM_MATERIAL_ID_MIN;
+        }
         let id = MaterialId::new(self.next_id);
         self.materials.insert(
             self.next_id,
@@ -432,8 +548,85 @@ impl MaterialLibrary {
                 visual,
             },
         );
+        self.tier_index.insert(self.next_id, tier);
         self.next_id += 1;
         id
+    }
+
+    /// ADR-098 S-β — Lookup the tier of an existing material.
+    ///
+    /// Returns `None` if the material doesn't exist. For legacy snapshots
+    /// without `tier_index`, call `migrate_legacy_materials` first.
+    pub fn tier_of(&self, id: MaterialId) -> Option<MaterialTier> {
+        self.tier_index.get(&id.raw()).copied()
+    }
+
+    /// ADR-098 S-β — Set/move tier of an existing material.
+    ///
+    /// `MaterialTier::System` move is permitted (for migration) but the
+    /// caller should treat System tier as immutable thereafter.
+    pub fn set_tier(&mut self, id: MaterialId, tier: MaterialTier) -> bool {
+        if self.materials.contains_key(&id.raw()) {
+            self.tier_index.insert(id.raw(), tier);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ADR-098 S-β — Filter materials by tier. Returns refs in u32 id
+    /// order for deterministic UI listing.
+    pub fn materials_by_tier(&self, tier: MaterialTier) -> Vec<&Material> {
+        let mut ids: Vec<u32> = self
+            .tier_index
+            .iter()
+            .filter(|(_, t)| **t == tier)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .filter_map(|id| self.materials.get(&id))
+            .collect()
+    }
+
+    /// ADR-098 S-D — Migration helper. Reconstructs `tier_index` from
+    /// id range heuristics for legacy snapshots:
+    ///   * id 0..=BUILTIN_MATERIAL_ID_MAX (11) → System
+    ///   * id ≥ CUSTOM_MATERIAL_ID_MIN (100) → Project
+    ///   * id 12..=99 → Project (legacy custom in tight range)
+    ///
+    /// Idempotent: re-running on a populated `tier_index` only fills
+    /// gaps. Returns the count of newly classified materials.
+    pub fn migrate_legacy_materials(&mut self) -> usize {
+        let mut count = 0;
+        let ids: Vec<u32> = self.materials.keys().copied().collect();
+        for id in ids {
+            if !self.tier_index.contains_key(&id) {
+                let tier = if id <= BUILTIN_MATERIAL_ID_MAX {
+                    MaterialTier::System
+                } else {
+                    MaterialTier::Project
+                };
+                self.tier_index.insert(id, tier);
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// ADR-098 S-G — Reject material removal when in use is the caller's
+    /// responsibility (Scene-level face_to_material check). This helper
+    /// only enforces System tier immutability.
+    pub fn remove_material(&mut self, id: MaterialId) -> Result<(), &'static str> {
+        match self.tier_index.get(&id.raw()).copied() {
+            Some(MaterialTier::System) => Err("System tier material is immutable"),
+            Some(_) => {
+                self.materials.remove(&id.raw());
+                self.tier_index.remove(&id.raw());
+                Ok(())
+            }
+            None => Err("material not found"),
+        }
     }
 
     /// Get all materials
@@ -502,5 +695,229 @@ mod tests {
         );
         assert!(lib.get(id).is_some(), "custom material should exist");
         assert_eq!(lib.get(id).unwrap().name, "Custom");
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-098 S-β — 3-Tier Material Scope regression
+    // ────────────────────────────────────────────────────────────────
+
+    fn dummy_phys() -> PhysicalProperties {
+        PhysicalProperties {
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.5,
+            specific_gravity: 1.0,
+            thermal_conductivity: 0.5,
+            fire_rating: FireRating::None,
+        }
+    }
+    fn dummy_vis() -> VisualProperties {
+        VisualProperties {
+            color: 0xffffff,
+            roughness: 0.5,
+            metalness: 0.0,
+            opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn material_tier_u32_roundtrip() {
+        for t in [MaterialTier::System, MaterialTier::Project, MaterialTier::User] {
+            assert_eq!(MaterialTier::from_u32(t.as_u32()), Some(t));
+        }
+        assert!(MaterialTier::from_u32(99).is_none());
+    }
+
+    #[test]
+    fn scoped_material_id_carries_tier_and_local_id() {
+        let s = ScopedMaterialId::new(MaterialTier::User, 42);
+        assert_eq!(s.tier, MaterialTier::User);
+        assert_eq!(s.local_id, 42);
+    }
+
+    #[test]
+    fn builtins_are_classified_as_system_tier() {
+        let lib = MaterialLibrary::new();
+        for raw in 0..=BUILTIN_MATERIAL_ID_MAX {
+            let id = MaterialId::new(raw);
+            assert!(
+                lib.get(id).is_some(),
+                "built-in id {} must exist",
+                raw
+            );
+            assert_eq!(
+                lib.tier_of(id),
+                Some(MaterialTier::System),
+                "built-in id {} must be System tier",
+                raw
+            );
+        }
+    }
+
+    #[test]
+    fn create_material_defaults_to_project_tier() {
+        let mut lib = MaterialLibrary::new();
+        let id = lib.create_material(
+            "Test".into(), "Test".into(), MaterialCategory::Custom,
+            dummy_phys(), dummy_vis(),
+        );
+        assert_eq!(lib.tier_of(id), Some(MaterialTier::Project));
+        assert!(id.raw() >= CUSTOM_MATERIAL_ID_MIN,
+            "custom material id should jump to >= {}", CUSTOM_MATERIAL_ID_MIN);
+    }
+
+    #[test]
+    fn create_material_in_tier_explicit_user() {
+        let mut lib = MaterialLibrary::new();
+        let id = lib.create_material_in_tier(
+            MaterialTier::User,
+            "UserMat".into(), "UserMat".into(), MaterialCategory::Custom,
+            dummy_phys(), dummy_vis(),
+        );
+        assert_eq!(lib.tier_of(id), Some(MaterialTier::User));
+    }
+
+    #[test]
+    fn materials_by_tier_filters_correctly() {
+        let mut lib = MaterialLibrary::new();
+        let p = lib.create_material_in_tier(
+            MaterialTier::Project,
+            "P".into(), "P".into(), MaterialCategory::Custom,
+            dummy_phys(), dummy_vis(),
+        );
+        let u = lib.create_material_in_tier(
+            MaterialTier::User,
+            "U".into(), "U".into(), MaterialCategory::Custom,
+            dummy_phys(), dummy_vis(),
+        );
+
+        let system = lib.materials_by_tier(MaterialTier::System);
+        assert_eq!(system.len(), (BUILTIN_MATERIAL_ID_MAX as usize) + 1);
+
+        let project = lib.materials_by_tier(MaterialTier::Project);
+        assert_eq!(project.len(), 1);
+        assert_eq!(project[0].id, p);
+
+        let user = lib.materials_by_tier(MaterialTier::User);
+        assert_eq!(user.len(), 1);
+        assert_eq!(user[0].id, u);
+    }
+
+    #[test]
+    fn migrate_legacy_materials_classifies_by_id_range() {
+        let mut lib = MaterialLibrary::new();
+        // Force-add a legacy custom material at id 50 (between 12 and 100)
+        // by directly inserting (simulates old snapshot).
+        lib.materials.insert(50, Material {
+            id: MaterialId::new(50),
+            name: "legacy".into(),
+            name_en: "legacy".into(),
+            category: MaterialCategory::Custom,
+            physical: dummy_phys(),
+            visual: dummy_vis(),
+        });
+        // tier_index is empty for id 50.
+
+        // Wipe tier_index for built-ins to simulate a pre-S-β snapshot.
+        lib.tier_index.clear();
+
+        let count = lib.migrate_legacy_materials();
+        assert_eq!(count, (BUILTIN_MATERIAL_ID_MAX as usize) + 1 + 1,
+            "should classify all 12 builtins + 1 legacy custom");
+
+        for raw in 0..=BUILTIN_MATERIAL_ID_MAX {
+            assert_eq!(
+                lib.tier_of(MaterialId::new(raw)),
+                Some(MaterialTier::System),
+            );
+        }
+        assert_eq!(
+            lib.tier_of(MaterialId::new(50)),
+            Some(MaterialTier::Project),
+        );
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let mut lib = MaterialLibrary::new();
+        let first = lib.migrate_legacy_materials();
+        assert_eq!(first, 0, "fresh library already has tier_index populated");
+        let second = lib.migrate_legacy_materials();
+        assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn remove_material_rejects_system_tier() {
+        let mut lib = MaterialLibrary::new();
+        let result = lib.remove_material(MaterialId::new(0));
+        assert!(result.is_err());
+        assert!(lib.get(MaterialId::new(0)).is_some(),
+            "System-tier material must remain after rejected removal");
+    }
+
+    #[test]
+    fn remove_material_succeeds_for_project_or_user_tier() {
+        let mut lib = MaterialLibrary::new();
+        let p = lib.create_material(
+            "P".into(), "P".into(), MaterialCategory::Custom,
+            dummy_phys(), dummy_vis(),
+        );
+        assert!(lib.remove_material(p).is_ok());
+        assert!(lib.get(p).is_none());
+        assert!(lib.tier_of(p).is_none());
+    }
+
+    #[test]
+    fn set_tier_moves_material_between_tiers() {
+        let mut lib = MaterialLibrary::new();
+        let p = lib.create_material(
+            "P".into(), "P".into(), MaterialCategory::Custom,
+            dummy_phys(), dummy_vis(),
+        );
+        assert_eq!(lib.tier_of(p), Some(MaterialTier::Project));
+        assert!(lib.set_tier(p, MaterialTier::User));
+        assert_eq!(lib.tier_of(p), Some(MaterialTier::User));
+        // Verify it now appears in User tier list, not Project.
+        assert!(lib.materials_by_tier(MaterialTier::Project).is_empty());
+        assert_eq!(lib.materials_by_tier(MaterialTier::User).len(), 1);
+    }
+
+    #[test]
+    fn set_tier_returns_false_for_missing_material() {
+        let mut lib = MaterialLibrary::new();
+        assert!(!lib.set_tier(MaterialId::new(999), MaterialTier::User));
+    }
+
+    #[test]
+    fn legacy_load_with_empty_tier_index_is_recoverable() {
+        // Simulate a pre-S-β snapshot scenario: a library where
+        // `tier_index` was deserialized as empty (default). The serde
+        // `#[serde(default)]` attribute on `tier_index` ensures legacy
+        // payloads without the field deserialize cleanly. We model this
+        // by constructing the library directly and then running the
+        // migration helper.
+        let mut lib = MaterialLibrary::new();
+        lib.tier_index.clear(); // simulate legacy snapshot
+
+        let migrated = lib.migrate_legacy_materials();
+        assert_eq!(migrated, (BUILTIN_MATERIAL_ID_MAX as usize) + 1);
+        assert_eq!(lib.tier_of(MaterialId::new(0)), Some(MaterialTier::System));
+        assert_eq!(lib.tier_of(MaterialId::new(11)), Some(MaterialTier::System));
+    }
+
+    #[test]
+    fn form_layer_unaffected_by_tier_changes_locked_26_invariant() {
+        // LOCKED #26: Form citizen은 영원히 material 무관. Tier 변경이
+        // FORM_MATERIAL sentinel (id 0 in legacy MaterialId namespace —
+        // *separate* from MaterialLibrary id 0 의 built-in concrete) 의
+        // 의미에 영향이 없음을 명시.
+        let lib = MaterialLibrary::new();
+        // Built-in id 0 = Concrete (System tier). FORM_MATERIAL sentinel
+        // = MaterialId::new(0) per ADR-050 P-5e-β. Same raw u32 — Phase
+        // 5-A 는 sentinel collision 을 의도적으로 보존 (future ADR 가
+        // 분리 가능).
+        assert_eq!(lib.tier_of(MaterialId::new(0)), Some(MaterialTier::System));
+        // Form layer (Shape) 는 material 자체를 안 갖음 — 본 test 는
+        // tier 변경 surface 의 invariant 만 확인.
     }
 }

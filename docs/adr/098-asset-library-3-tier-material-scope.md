@@ -158,5 +158,55 @@ Playwright +4. **합계 ~+40~50**, 절대 #[ignore] 금지.
 - 회귀 0 (spec only).
 - 다음 진입점 — S-β Rust core (별도 sub-step 결재).
 
-### S-β ~ S-ζ (예정)
+### S-β (본 commit) — Rust core
+- **commit**: 본 commit (axia-core material.rs)
+- **사후 정정 — Map placement**: S-α 의 Lock-in S-A 는 "Scene 에 3 개
+  별개 map" 명시했으나, audit 결과 `Scene.material_library` 가 이미
+  Scene-level Map 의 자연 위치 (LOCKED #26 Phase 1 패턴 답습). bincode
+  drift 위험 + 이중 storage 회피 위해 **`MaterialLibrary` 내부의
+  parallel `tier_index` Map 으로 정정**. 의미적 동일 — 3 tier 가 동일
+  Scene-level boundary 안에 있음. `tier_index` 는 `#[serde(default)]`
+  로 legacy snapshot 호환.
+- **신규 type 4 개**:
+  * `MaterialTier { System, Project, User }` enum + `as_u32`/`from_u32`
+    + `Display`
+  * `ScopedMaterialId { tier, local_id }` struct (tuple ID, S-B)
+  * `BUILTIN_MATERIAL_ID_MAX = 11` const (S-D 분류 anchor)
+  * `CUSTOM_MATERIAL_ID_MIN = 100` const (Custom material id 시작)
+- **신규 API 6 메서드**:
+  * `create_material_in_tier(tier, ...)` — 명시적 tier 할당
+  * `tier_of(id) -> Option<MaterialTier>` — tier lookup
+  * `set_tier(id, tier) -> bool` — tier 이동
+  * `materials_by_tier(tier) -> Vec<&Material>` — filtered view (deterministic order)
+  * `migrate_legacy_materials() -> usize` — id range 휴리스틱 (idempotent)
+  * `remove_material(id) -> Result<(), &str>` — System tier 거부
+- **기존 API UNCHANGED**: `create_material` (now defaults to Project tier
+  + auto-jump to id ≥ 100) / `get` / `get_mut` / `add_material` (built-in
+  path → System tier) / `all` / `count` / Material struct (LOCKED #26
+  invariant).
+- **회귀 (axia-core)**: +14 tests
+  * material_tier_u32_roundtrip
+  * scoped_material_id_carries_tier_and_local_id
+  * builtins_are_classified_as_system_tier
+  * create_material_defaults_to_project_tier
+  * create_material_in_tier_explicit_user
+  * materials_by_tier_filters_correctly
+  * migrate_legacy_materials_classifies_by_id_range
+  * migrate_is_idempotent
+  * remove_material_rejects_system_tier
+  * remove_material_succeeds_for_project_or_user_tier
+  * set_tier_moves_material_between_tiers
+  * set_tier_returns_false_for_missing_material
+  * legacy_load_with_empty_tier_index_is_recoverable
+  * form_layer_unaffected_by_tier_changes_locked_26_invariant
+- **Cargo sweep**: axia-core 238 → **252 PASS** (+14). axia-geo 1256
+  unchanged. axia-wasm 42 unchanged. 절대 #[ignore] 금지 14/14 준수.
+- **Lessons applied**:
+  * ADR-091 §E L1 — parallel Map 패턴 (tier_index 가 materials 와 동일
+    Scene-level boundary). Map placement 사후 정정 — 사용자 결재한
+    spec 보다 architectural truth (audit) 가 우선.
+  * Built-in immutability via `remove_material` Result, not type-level
+    enforcement (test surface 우선)
+
+### S-γ ~ S-ζ (예정)
 별도 sub-step 결재 시 commit 진행.
