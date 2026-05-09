@@ -726,10 +726,35 @@
     * **다음 ADR 가이드**: ADR-050 §E Lessons (Path Z 효율성 / FORM_MATERIAL
       sentinel / replace_last_after_snapshot UX / 명명 정합 / 점진 마이그
       레이션 / 3-layer 봉인) 참조
-  - **Phase 2** (ADR-091, D-α spec 진행 중 2026-05-09): 재질 제거 →
-    Shape 가역 강등 + 5초 알림 + Undo 영구 history (Q5 사건 1).
-    `Xia.original_shape_id` 추가 → promote→demote→promote 라운드트립
-    ID 보존
+  - **Phase 2** ✅ **완료 (2026-05-09)** — ADR-091 Path Z atomic 7
+    sub-step closure (D-α ~ D-η):
+    * **ADR-091** — Material 제거 (FORM_MATERIAL sentinel) → 자동
+      Shape 가역 강등 + Toast 5초 "되돌리기" 버튼 + 영구 Undo history
+      (Q5 사건 1). `Scene.xia_to_original_shape: HashMap<XiaId, ShapeId>`
+      신규 (P-2-d precedent — Xia struct 보존, bincode 호환 유지) →
+      promote→demote→promote 라운드트립 ID 보존.
+    * **회귀 누적**: axia-core +8, axia-wasm +2, vitest +14
+      (Toast +2 / MaterialRemovalDemote +9 / WasmBridge +3),
+      Playwright +2 (real Chromium). 합계 **+26** (절대 #[ignore]
+      금지 26/26 준수).
+    * **사용자 facing 변화**: Inspector 재질 dropdown "없음" 또는
+      "재질 해제" 버튼 → 자동 강등 + 5초 Toast → 클릭 한 번으로 Undo
+      복원. Inspector badge "XIA (특성)" → "형태 (Shape)" 자동 전환
+      (P-6 답습).
+    * **6-layer atomic 봉인**: Rust core (D-β/ε) + WASM bridge (D-γ)
+      + TS wrapper (D-γ) + UI integration (D-δ) + Snapshot section
+      7d (D-ε) + Real Chromium E2E (D-ζ). Path Z atomic 패턴의
+      6-layer 변형 (ADR-074 5-layer + ADR-078 5-layer 위에 확장).
+    * **D-β 사후 정정 (architectural correctness)**: D-β 의 초기
+      구현은 `Xia.original_shape_id: Option<ShapeId>` 필드 추가였으나
+      bincode positional encoding 한계로 legacy V2 snapshot
+      roundtrip 을 깰 위험 발견. ADR-050 P-2-d 명시적 lock-in
+      ("tracking lives on Scene, not on Xia") 답습으로 D-ε 진입 시
+      즉시 정정 — `Scene.xia_to_original_shape` map 으로 이동. 향후
+      ADR 가이드 — bincode 직렬화 struct 의 신규 필드는 **반드시
+      Scene-level map 으로 분리**.
+    * **다음 ADR 가이드**: ADR-091 §E Lessons (Path Z 효율성 / bincode
+      위험 / 6-layer 패턴 / 사전 검토 가치) 참조.
   - **Phase 3** (ADR-053 예정): Reference 시민권 분리 (Construction Line /
     Imported Mesh / Point Cloud)
   - **Phase 4** (ADR-054 예정): 위상 손상 자동 복구 + 실패 시 사용자 다이얼로그

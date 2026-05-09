@@ -1,10 +1,10 @@
-# ADR-091: Material Removal → Shape 가역 강등 (Phase 2)
+# ADR-091: Material Removal → Shape 가역 강등 (Phase 2) — **Accepted**
 
 > **Note**: CLAUDE.md LOCKED #26 의 "Phase 2 (ADR-052 예정)" 표기는
 > 작성 시점 placeholder. 실제 ADR 번호는 **091** (052 는 NURBS Kernel
 > Completion Roadmap 이 선점).
 
-- **Status**: Proposed (D-α spec only)
+- **Status**: Accepted (D-α ~ D-η closure 2026-05-09)
 - **Date**: 2026-05-09
 - **Supersedes**: 없음 (ADR-050 Phase 1 자연 연장)
 - **Related**: ADR-049 §4 Q5 사건 1, ADR-050 Phase 1, LOCKED #26
@@ -295,5 +295,84 @@ D-ζ 단계: 실제 Chromium 재질 제거 → Shape badge → Undo 복원
 - **누적 회귀** (D-α ~ D-ζ): axia-core +8, axia-wasm +2, vitest +14,
   Playwright +2 = **+26** 전체. 절대 #[ignore] 금지 26/26 준수.
 
-### D-η (예정 — closure)
-LOCKED #26 Phase 2 update + ADR §E Lessons (있을 시) + 회고 commit.
+### D-η (본 commit — closure)
+- **사용자 결재**: 2026-05-09, "승인합니다".
+- **변경**:
+  * `CLAUDE.md` LOCKED #26 — Phase 2 closure entry (D-α ~ D-η 누적
+    회귀 +26 + 6-layer atomic 봉인 명시 + D-β 사후 정정 가이드 +
+    Lessons 참조).
+  * `docs/adr/README.md` — ADR-091 status `Proposed` → `Accepted`.
+  * `docs/adr/091-material-removal-shape-demotion.md` — Status 갱신
+    + §E Lessons 추가.
+- **회귀**: +0 (docs only).
+
+## E. Lessons
+
+### L1 — bincode 신규 필드 위험 + Scene-level map precedent
+
+**발견**: D-β 의 초기 구현은 `Xia.original_shape_id: Option<ShapeId>`
+필드를 Xia struct 에 추가. 6 회귀 모두 PASS (fresh roundtrip 만 검증).
+D-ε 진입 사전 검토에서 발견 — bincode 는 positional encoding 이므로
+struct 신규 필드는 legacy V2 snapshot bincode roundtrip 을 깰 수 있음.
+`#[serde(default)]` 도 mid-stream 에서 쓸모 없음 (bincode 가 다음 필드
+바이트를 읽어버림).
+
+**정정**: ADR-050 P-2-d 의 명시적 lock-in ("tracking lives on Scene,
+not on Xia struct ... to keep Xia bincode-compatible") 답습으로
+D-ε 에서 즉시 정정 — `Scene.xia_to_original_shape: HashMap<XiaId,
+ShapeId>` map 으로 이동. Snapshot section 7d (additive) 로 영속화.
+
+**향후 ADR 가이드** (canonical):
+- bincode 로 직렬화되는 기존 struct 에 신규 필드 추가 **금지**.
+- 모든 신규 1:1/1:N 매핑은 `Scene.{key}_to_{value}: HashMap<...>` 로
+  추가 + snapshot section 7 sub-section 로 영속화 (additive).
+- legacy V2 snapshot 호환 — 서브-section 부재 시 empty map default.
+
+### L2 — Path Z atomic 의 사전 검토 가치
+
+**관찰**: D-β 의 architectural drift 가 D-ε 사전 검토 단계에서 발견됨.
+Path Z atomic decomposition 은 *각 sub-step 진입 직전* 의 사전 검토
+시 직전 sub-step 의 구현을 cross-validate 하는 자연 기회. D-β 만
+단독 land 했으면 production 까지 broken backward compat 가 누설됐을
+risk.
+
+**향후 ADR 가이드**:
+- Path Z atomic 의 매 sub-step 사전 검토 시 직전 sub-step 의 lock-in
+  정합 + 외부 invariant (bincode / serde / 다른 ADR LOCKED) 와의
+  cross-check 1회 강제.
+- 외부 architectural concern 발견 시 즉시 atomic 복구 (D-β → D-ε 의
+  통합 정정 패턴).
+
+### L3 — 6-layer atomic 패턴 (ADR-074/078 5-layer 위에 확장)
+
+ADR-074 = 5-layer (Model + UI + Routing + Functional E2E + Visual).
+ADR-078 = 5-layer persistence 변형 (Model + UI Runtime + Routing +
+Persistence + Bridge + E2E).
+
+ADR-091 = **6-layer atomic** (citizenship 변형):
+- L-1 Rust core (D-β: Scene-level API + Xia/Shape 시민권 변환)
+- L-2 Rust core 정정 (D-ε: bincode 정합 + Scene map 분리)
+- L-3 WASM bridge (D-γ: typed export + JSON contract + transaction)
+- L-4 TS wrapper (D-γ: typed wrapper + strict throw + endpoint gate)
+- L-5 UI integration (D-δ: 2 trigger points + Toast + Undo button)
+- L-6 Snapshot persistence (D-ε: section 7d additive + legacy 호환)
+- L-7 Real Chromium E2E (D-ζ: cross-runtime contract 봉인)
+
+**향후 ADR 가이드** — 시민권 변환 + persistence + UI 가 동시 변경되는
+모든 architectural 변화는 본 6-layer 패턴 답습.
+
+### L4 — UI orchestration 분리 가치
+
+**관찰**: D-δ 에서 inline 으로 XiaInspector 에 demote 로직을 넣지 않고
+별도 모듈 `web/src/citizenship/MaterialRemovalDemote.ts` 로 분리. 이로
+인해:
+- 2 trigger points (matSelect change "없음" + xi-assign-btn 해제) 의
+  SSOT 확보 — 미래 추가 trigger point 도 동일 helper 호출
+- jsdom 단위 회귀 9건이 가능 (Inspector DOM 의존성 없이 helper 호출
+  자체 검증)
+- helper 의 partial-failure 처리 (visited / demoted / errors 분리)
+  를 단위 테스트로 명시적 봉인
+
+**향후 ADR 가이드** — UI panel 에 새 시민권 변환을 추가할 때, **반드시
+별도 helper 모듈로 분리** + jsdom 단위 회귀로 SSOT 확보. Inline
+implementation 의 multi-trigger 정합 drift 차단.
