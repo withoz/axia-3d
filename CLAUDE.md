@@ -1401,7 +1401,7 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
-### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-μ closure, 2026-05-08)
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Γ closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
   메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
@@ -1524,7 +1524,20 @@
     ADR-089 A-ω Bezier 보존 roundtrip / V1 mesh-only legacy load.
     회귀 axia-core +9 (200 → 209). Path B (ADR-090) 진입 시 V3
     schema bump 자연 가능 (forward-compat 인프라 활성).
-- **15 lock-in 원칙 (canonical)**:
+  - **A-Γ 3-sub-step** (Path B trigger 정량화 audit): `9442128` /
+    `fbf3615`. **ADR-090 §6 데이터 anchor 확보**. 5 measurement
+    regression tests (chord_error_corpus 5×4=20 측정 / perimeter_
+    deviation_corpus / path_a_memory_footprint / per_segment_face_
+    count baseline / path_b_savings_table). `docs/audits/2026-05-08
+    -path-b-trigger-quantification.md` 신설 (5-section audit). ADR-
+    090 §6 추상적 트리거 → 실측 데이터로 강화 (chord error R×N
+    matrix, 47x 절감 large model, 임계 활성 시점). 핵심 finding:
+    R=100mm/N=64 → 0.12mm chord error, R=1000mm/N=64 → 1.2mm.
+    Memory: N=64 cylinder = 192/320/130 (Path A) vs 3/2/2 (Path B
+    theoretical) = **98%+ 절감**. Large model (1000-cyl × N=32) =
+    47x 메모리 절감. 회귀 axia-geo +5 (1189 → 1194). Path B 진입
+    결재 시 audit 데이터 anchor 활용 가능.
+- **16 lock-in 원칙 (canonical)**:
   - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
     Phase 2). 메타-원칙 #14 정합
   - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
@@ -1596,8 +1609,18 @@
     roundtrip / Bezier roundtrip / V1 mesh-only legacy. **Path B
     (ADR-090) pre-trigger 인프라 활성** — V3 schema bump 자연 가능.
     SNAPSHOT_VERSION = 2 고정 (Path B trigger 시 bump).
+  - **L16 (A-Γ Path B trigger 정량화 audit)**: ADR-090 §6 의 추상적
+    트리거를 **실측 데이터로 강화**. 5 measurement regression tests
+    (chord error 5×4=20 / perimeter / memory / per-segment baseline /
+    savings) + audit report (`docs/audits/2026-05-08-path-b-trigger-
+    quantification.md`). 핵심 측정값 봉인: chord error R×(1-cos(π/N)),
+    R=100/N=64 = 0.12mm, R=1000/N=64 = 1.2mm. Memory: N=64 cylinder
+    Path A 192/320/130 vs Path B 3/2/2 = **98%+ 절감**. Large model
+    (1000-cyl × N=32) = 47x 메모리. Path B 진입 결재 시 본 audit 의
+    데이터 anchor 활용 — 임계 활성 시점 명시 (R>100mm + 0.1mm 정밀도,
+    1000+ cyl model, STEP export 구현, 정밀 PMI dimension).
 - **회귀 누적 (절대 #[ignore] 금지)**:
-  - axia-geo +66 (1123 → 1189, A-α ~ A-Β 누적)
+  - axia-geo +71 (1123 → 1194, A-α ~ A-Γ 누적)
     - A-α ~ A-ι: +35 (시민권 인프라 / face synthesis / Boolean /
       Push-Pull / Render / Offset)
     - A-ρ +4 (Cylinder uv-slice render)
@@ -1608,13 +1631,14 @@
     - A-ω +5 (closed Bezier 시민권)
     - A-Α +3 (closed BSpline 시민권)
     - A-Β +3 (closed NURBS 시민권)
+    - A-Γ +5 (Path B trigger 정량화 audit)
   - axia-core +9 (200 → 209, A-μ 추가)
     - A-μ +9 (snapshot legacy audit + version handshake)
   - vitest +10 (1622 → 1632, A-λ + A-π + A-ψ)
     - A-λ +5 (DrawCurveSettings + DrawCircleTool)
     - A-π +2 (default ON)
     - A-ψ +3 (DrawBezierTool closure detection)
-  - **합계 +85**, 절대 #[ignore] 금지 85/85 준수
+  - **합계 +90**, 절대 #[ignore] 금지 90/90 준수
 - **사용자 facing 동작 (default ON 후)**:
   - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
   - PushPull → tessellate-extrude → Cylinder (Path A)
@@ -1671,6 +1695,12 @@
     `v2_roundtrip_preserves_closed_curve_face` (ADR-089 Circle),
     `v2_roundtrip_preserves_closed_bezier_face` (ADR-089 A-ω Bezier),
     `legacy_v1_synthesized_loads`
+  - **A-Γ** (axia-geo primitives::tests, 5 tests):
+    `cylinder_chord_error_corpus` (5×4=20 measurement points),
+    `cylinder_perimeter_deviation_corpus` (3×4 perimeter accuracy),
+    `cylinder_path_a_memory_footprint` (face/edge/vert count),
+    `cylinder_per_segment_face_count` (baseline regression guard),
+    `path_b_savings_table` (N별 Path A vs Path B 절감률)
   - DrawCurveSettings.test.ts (6 tests)
   - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
   - **A-ψ DrawBezierTool.test.ts** (3 tests):
