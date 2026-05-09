@@ -90,6 +90,16 @@ pub struct Xia {
     pub visible: bool,
     /// Selection state
     pub selected: bool,
+    /// ADR-091 D-β — Original ShapeId from which this Xia was promoted.
+    /// `Some(shape_id)` when this Xia was created via
+    /// `Scene::promote_shape_to_xia` — used by `Scene::demote_xia_to_shape`
+    /// to restore the original Shape ID (round-trip preservation,
+    /// Lock-in D-D=b). `None` for legacy Xias predating ADR-091 or
+    /// Xias created via direct construction (e.g., `exec_draw_*`
+    /// non-Shape paths).
+    /// `#[serde(default)]` ensures bincode legacy snapshot compatibility.
+    #[serde(default)]
+    pub original_shape_id: Option<crate::ShapeId>,
 }
 
 impl Xia {
@@ -104,6 +114,7 @@ impl Xia {
             standalone_edge_id: None,
             visible: true,
             selected: false,
+            original_shape_id: None,
         }
     }
 

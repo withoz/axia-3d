@@ -86,6 +86,58 @@ impl std::fmt::Display for PromoteError {
 
 impl std::error::Error for PromoteError {}
 
+/// ADR-091 D-β — Failure modes for `Scene::demote_xia_to_shape`.
+///
+/// Reverse of promotion: a Xia is demoted back to a Shape when its
+/// material reverts to `FORM_MATERIAL` (the form-layer sentinel).
+/// Demotion preserves topology (face_ids unchanged) and restores the
+/// original ShapeId when available (Lock-in D-D=b).
+#[derive(Clone, Debug, PartialEq)]
+pub enum DemoteError {
+    /// Xia id not present in the scene.
+    XiaNotFound,
+    /// Xia's current material is not the form-layer sentinel
+    /// (`FORM_MATERIAL`). ADR-091 D-A=a — demotion trigger requires
+    /// the user to have already cleared the material.
+    MaterialNotFormSentinel,
+    /// Restoration of `original_shape_id` would collide with an
+    /// already-present Shape (defensive — shouldn't happen in normal
+    /// flow because Phase 1 P-2-c preserves the Shape after promote,
+    /// but kept as a safety net).
+    ShapeIdConflict { existing: crate::ShapeId },
+}
+
+impl std::fmt::Display for DemoteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::XiaNotFound => write!(f, "XIA not found"),
+            Self::MaterialNotFormSentinel => write!(
+                f, "Xia material is not the form-layer sentinel \
+                    (FORM_MATERIAL); demotion requires the material \
+                    to be cleared first"
+            ),
+            Self::ShapeIdConflict { existing } => write!(
+                f, "Restoration of original ShapeId would collide with \
+                    an existing Shape ({:?})", existing
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DemoteError {}
+
+/// ADR-091 D-β — Successful demotion outcome. The Xia has been removed
+/// from `Scene.xias` and a Shape (with the same `face_ids`) is present
+/// in `Scene.shapes`. The returned `ShapeId` is either the original
+/// (if `original_shape_id` was Some) or a freshly-allocated id.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DemoteOk {
+    /// ShapeId of the resulting form-layer citizen.
+    pub shape_id: crate::ShapeId,
+    /// True iff the original ShapeId was restored (round-trip).
+    pub original_id_restored: bool,
+}
+
 /// Successful promotion outcome. The XIA's stored material has been
 /// updated and (if Phase 1.B has landed) `promoted` flag set.
 #[derive(Clone, Copy, Debug, PartialEq)]

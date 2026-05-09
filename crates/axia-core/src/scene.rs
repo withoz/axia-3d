@@ -695,6 +695,8 @@ impl Scene {
         xia.position = position;
         xia.surface_normal = surface_normal;
         xia.material = material;
+        // ADR-091 D-β L4 — record source ShapeId for reversible demotion.
+        xia.original_shape_id = Some(shape_id);
         self.xias.insert(xia_id, xia);
 
         // Reverse index: face → Xia (overwrite policy per P-2-f).
@@ -712,6 +714,119 @@ impl Scene {
         // to find the anchor.
 
         Ok(PromoteOk { xia_id, kind })
+    }
+
+    /// ADR-091 D-β — Demote a `Xia` (property layer) back to a `Shape`
+    /// (form layer) when its material reverts to the form-layer
+    /// sentinel (`FORM_MATERIAL`).
+    ///
+    /// Reversal of `promote_shape_to_xia`. Topology (face_ids /
+    /// standalone_edge / mesh) is unchanged — demotion is a pure
+    /// citizenship-layer operation per Lock-in D-B=a.
+    ///
+    /// ShapeId restoration policy (Lock-in D-D=b):
+    /// - If `xia.original_shape_id == Some(sid)` AND `sid` is not
+    ///   already occupied → restore the original id (round-trip
+    ///   preservation: `Shape → Xia → Shape` keeps the same id).
+    /// - Otherwise → allocate a fresh ShapeId via `next_shape_id`.
+    ///
+    /// Side effects:
+    /// - `Scene.xias[xia_id]` removed
+    /// - `Scene.shapes[shape_id]` inserted (or face_ids extended if
+    ///   the original Shape still exists from `promote_shape_to_xia`'s
+    ///   P-2-c "Shape preserved" policy)
+    /// - `Scene.face_to_xia` entries for these faces removed
+    /// - `Scene.face_to_shape` entries inserted
+    /// - `Scene.shape_to_xia` entry for the source Shape (if any)
+    ///   removed
+    ///
+    /// Errors:
+    /// - `DemoteError::XiaNotFound` — xia_id missing
+    /// - `DemoteError::MaterialNotFormSentinel` — material != FORM_MATERIAL
+    /// - `DemoteError::ShapeIdConflict` — defensive (shouldn't happen
+    ///   in normal flow — see DemoteError doc)
+    pub fn demote_xia_to_shape(
+        &mut self,
+        xia_id: XiaId,
+    ) -> Result<crate::promote::DemoteOk, crate::promote::DemoteError> {
+        use crate::promote::{DemoteError, DemoteOk};
+
+        // 1. Lookup
+        let xia = self.xias.get(&xia_id).ok_or(DemoteError::XiaNotFound)?;
+
+        // 2. D-A=a: trigger gate — material must be FORM_MATERIAL.
+        if xia.material != FORM_MATERIAL {
+            return Err(DemoteError::MaterialNotFormSentinel);
+        }
+
+        // 3. Snapshot fields before mutation (D-B=a: face_ids move).
+        let face_ids = xia.face_ids.clone();
+        let standalone = xia.standalone_edge_id;
+        let position = xia.position;
+        let surface_normal = xia.surface_normal;
+        let name = xia.name.clone();
+        let original_shape_id = xia.original_shape_id;
+
+        // 4. D-D=b: ShapeId restoration policy.
+        //
+        // Phase 1 P-2-c preserves the Shape after promote, so the
+        // original Shape *should* already exist. In that case we extend
+        // it with the (possibly mutated) face_ids rather than creating
+        // a new one. Otherwise (legacy Xia / direct construction) we
+        // allocate fresh.
+        let (shape_id, original_id_restored) = match original_shape_id {
+            Some(sid) if self.shapes.contains_key(&sid) => {
+                // Original Shape still present → re-use (extend faces).
+                (sid, true)
+            }
+            Some(sid) => {
+                // Original Shape was deleted but slot is free → restore.
+                let mut shape = crate::Shape::new(sid, name.clone());
+                shape.face_ids = face_ids.clone();
+                shape.standalone_edge_id = standalone;
+                shape.position = position;
+                shape.surface_normal = surface_normal;
+                self.shapes.insert(sid, shape);
+                (sid, true)
+            }
+            None => {
+                // Legacy / direct-construction Xia → fresh id.
+                let sid = crate::ShapeId::new(self.next_shape_id);
+                self.next_shape_id = self.next_shape_id.saturating_add(1);
+                let mut shape = crate::Shape::new(sid, name.clone());
+                shape.face_ids = face_ids.clone();
+                shape.standalone_edge_id = standalone;
+                shape.position = position;
+                shape.surface_normal = surface_normal;
+                self.shapes.insert(sid, shape);
+                (sid, false)
+            }
+        };
+
+        // 5. Sync face_ids onto the Shape (if it pre-existed and faces
+        //    were mutated since promote, e.g., by Boolean / Push-Pull).
+        //    L1 lock-in: order preserved (direct copy, not push).
+        if let Some(shape_mut) = self.shapes.get_mut(&shape_id) {
+            shape_mut.face_ids = face_ids.clone();
+            shape_mut.standalone_edge_id = standalone;
+        }
+
+        // 6. Remove Xia + face_to_xia entries.
+        self.xias.remove(&xia_id);
+        for fid in &face_ids {
+            self.face_to_xia.remove(fid);
+        }
+
+        // 7. Register face_to_shape for the form layer.
+        for fid in &face_ids {
+            self.face_to_shape.insert(*fid, shape_id);
+        }
+
+        // 8. Cleanup shape_to_xia linkage (any Shape pointing at this
+        //    Xia is now stale).
+        self.shape_to_xia.retain(|_, &mut v| v != xia_id);
+
+        Ok(DemoteOk { shape_id, original_id_restored })
     }
 
     /// Register face→XIA mapping in the reverse index
@@ -12223,5 +12338,149 @@ mod tests {
         assert_eq!(restored.mesh.face_count(), 1, "mesh face restored");
         assert!(restored.xias.is_empty(), "V1 has no XIAs");
         assert!(restored.shapes.is_empty(), "V1 has no Shapes (added in ADR-050)");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // ADR-091 D-β — Material removal → Shape demotion (Phase 2)
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Helper: promote a unit cube Shape to a Xia, then revert its
+    /// material to FORM_MATERIAL so it's eligible for demotion.
+    fn promote_then_clear_material(scene: &mut Scene)
+        -> (crate::ShapeId, XiaId)
+    {
+        let shape_id = build_shape_unit_cube(scene);
+        let mat = MaterialId::new(7);
+        let ok = scene
+            .promote_shape_to_xia(shape_id, mat)
+            .expect("promote unit cube");
+        // Simulate user clearing the material via Inspector.
+        if let Some(x) = scene.xias.get_mut(&ok.xia_id) {
+            x.material = crate::FORM_MATERIAL;
+        }
+        (shape_id, ok.xia_id)
+    }
+
+    #[test]
+    fn demote_with_form_material_succeeds() {
+        let mut scene = Scene::new();
+        let (orig_shape_id, xia_id) = promote_then_clear_material(&mut scene);
+        let face_count_before = scene.xias.get(&xia_id).unwrap().face_ids.len();
+
+        let ok = scene
+            .demote_xia_to_shape(xia_id)
+            .expect("demote with FORM_MATERIAL must succeed");
+
+        // Original ShapeId restored (P-2-c preserved the Shape).
+        assert_eq!(ok.shape_id, orig_shape_id);
+        assert!(ok.original_id_restored);
+
+        // Xia removed
+        assert!(!scene.xias.contains_key(&xia_id));
+
+        // Shape carries the same face_ids
+        let shape = scene.shapes.get(&orig_shape_id).expect("Shape present");
+        assert_eq!(shape.face_ids.len(), face_count_before);
+
+        // shape_to_xia cleaned
+        assert!(!scene.shape_to_xia.contains_key(&orig_shape_id));
+
+        // face_to_xia cleared, face_to_shape populated
+        for fid in &shape.face_ids {
+            assert!(!scene.face_to_xia.contains_key(fid),
+                    "face_to_xia must be cleared for face {:?}", fid);
+            assert_eq!(scene.face_to_shape.get(fid).copied(),
+                       Some(orig_shape_id),
+                       "face_to_shape must point at restored Shape");
+        }
+    }
+
+    #[test]
+    fn demote_with_real_material_rejected() {
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        let ok = scene
+            .promote_shape_to_xia(shape_id, MaterialId::new(7))
+            .expect("promote");
+        // Material is still real (== 7) — demotion must reject.
+        let err = scene
+            .demote_xia_to_shape(ok.xia_id)
+            .expect_err("real material must block demote");
+        assert_eq!(err, crate::promote::DemoteError::MaterialNotFormSentinel);
+        // Xia is still present (no side effects on rejection).
+        assert!(scene.xias.contains_key(&ok.xia_id));
+    }
+
+    #[test]
+    fn demote_preserves_face_order() {
+        let mut scene = Scene::new();
+        let (orig_shape_id, xia_id) = promote_then_clear_material(&mut scene);
+        // Snapshot face_ids in order.
+        let order_before = scene.xias.get(&xia_id).unwrap().face_ids.clone();
+        scene
+            .demote_xia_to_shape(xia_id)
+            .expect("demote");
+        let shape = scene.shapes.get(&orig_shape_id).expect("Shape");
+        assert_eq!(shape.face_ids, order_before,
+                   "face_ids order must be preserved through demote");
+    }
+
+    #[test]
+    fn demote_restores_original_shape_id() {
+        let mut scene = Scene::new();
+        let (orig_shape_id, xia_id) = promote_then_clear_material(&mut scene);
+        let ok = scene
+            .demote_xia_to_shape(xia_id)
+            .expect("demote");
+        // The DemoteOk record advertises restoration AND the same id.
+        assert!(ok.original_id_restored);
+        assert_eq!(ok.shape_id, orig_shape_id);
+    }
+
+    #[test]
+    fn promote_demote_promote_roundtrip_preserves_id() {
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+
+        // Cycle 1: promote
+        let mat1 = MaterialId::new(7);
+        let ok1 = scene
+            .promote_shape_to_xia(shape_id, mat1)
+            .expect("promote 1");
+        let xia_id_1 = ok1.xia_id;
+        // Verify original_shape_id wired up.
+        let xia = scene.xias.get(&xia_id_1).unwrap();
+        assert_eq!(xia.original_shape_id, Some(shape_id));
+
+        // Clear material → demote
+        if let Some(x) = scene.xias.get_mut(&xia_id_1) {
+            x.material = crate::FORM_MATERIAL;
+        }
+        let demote_ok = scene
+            .demote_xia_to_shape(xia_id_1)
+            .expect("demote");
+        assert_eq!(demote_ok.shape_id, shape_id,
+                   "demote must restore original ShapeId");
+
+        // Cycle 2: re-promote with a different material — must succeed
+        // and produce a Xia whose original_shape_id is still the same.
+        let mat2 = MaterialId::new(11);
+        let ok2 = scene
+            .promote_shape_to_xia(shape_id, mat2)
+            .expect("promote 2 (after demote)");
+        let xia2 = scene.xias.get(&ok2.xia_id).unwrap();
+        assert_eq!(xia2.original_shape_id, Some(shape_id),
+                   "re-promote keeps the round-trip ShapeId record");
+        assert_eq!(xia2.material, mat2);
+    }
+
+    #[test]
+    fn demote_xia_not_found() {
+        let mut scene = Scene::new();
+        let bogus = 9999;
+        let err = scene
+            .demote_xia_to_shape(bogus)
+            .expect_err("missing xia must fail");
+        assert_eq!(err, crate::promote::DemoteError::XiaNotFound);
     }
 }

@@ -147,5 +147,31 @@ D-ζ 단계: 실제 Chromium 재질 제거 → Shape badge → Undo 복원
   표시).
 - **회귀**: +0 (docs only).
 
-### D-β ~ D-η (예정)
+### D-β (본 commit)
+- **사용자 결재**: 2026-05-09, "진행" 승인.
+- **변경**:
+  * `crates/axia-core/src/xia.rs` — `Xia.original_shape_id:
+    Option<ShapeId>` 필드 추가 (`#[serde(default)]` legacy 호환).
+    `Xia::new` 에서 `None` 초기화.
+  * `crates/axia-core/src/promote.rs` — `DemoteError` enum 신규
+    (XiaNotFound / MaterialNotFormSentinel / ShapeIdConflict) +
+    `DemoteOk { shape_id, original_id_restored }` struct.
+  * `crates/axia-core/src/scene.rs`:
+    - `promote_shape_to_xia` — `xia.original_shape_id = Some(shape_id)`
+      기록 (D-D=b lock-in).
+    - `Scene::demote_xia_to_shape(xia_id) -> Result<DemoteOk, DemoteError>`
+      신규. 4-단계 검증 + ShapeId 복원 정책 (3 분기: pre-existing
+      Shape extend / deleted slot restore / fresh allocation) +
+      face_to_xia/face_to_shape 정합 + shape_to_xia cleanup.
+- **회귀**: axia-core 209 → **215** (+6, 절대 #[ignore] 금지 6/6
+  준수):
+  * `demote_with_form_material_succeeds`
+  * `demote_with_real_material_rejected` (no side effects on rejection
+    검증 포함)
+  * `demote_preserves_face_order` (L1 lock-in)
+  * `demote_restores_original_shape_id` (D-D=b)
+  * `promote_demote_promote_roundtrip_preserves_id` (가역 라운드트립)
+  * `demote_xia_not_found`
+
+### D-γ ~ D-η (예정)
 별도 sub-step 결재 시 commit 진행.
