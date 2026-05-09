@@ -1401,7 +1401,7 @@
   (initial bundle 0MB), ADR-026 P12 (Bridge SSOT cardinal plane),
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
-### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Β closure, 2026-05-08)
+### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-μ closure, 2026-05-08)
 - **사용자 통찰 (canonical, 2026-05-08)**:
   > "면은 닫힌 경계로부터 유도된다."
   메타-원칙 #14 의 깊은 실현 — closed edge cycle 이 자연 first-class
@@ -1510,7 +1510,21 @@
     zero weight 모두 -1 거부. **closed-curve 시민권 4 곡선 type
     모두 활성** (Circle / Bezier / BSpline / NURBS). Arc / periodic
     knot vector 만 future ADR.
-- **14 lock-in 원칙 (canonical)**:
+  - **A-μ 4-sub-step** (snapshot legacy audit + version handshake):
+    `53601d6` / `84ffab0` / `18ac932`. **Path B pre-trigger 준비**.
+    🅲 Version handshake 강화 — `import_versioned_snapshot` 의
+    `v > SNAPSHOT_VERSION` 분기 추가 (명시적 forward-compat reject,
+    silent garbage 차단). `analyze_snapshot` 신규 — read-only
+    inspection 으로 version + 7 section presence flags 반환.
+    `SnapshotInfo` / `SnapshotSections` struct 신규. 🅰 Legacy file
+    load audit — 9 regression tests (synthesized fixtures,
+    programmatic generation): full V2 / legacy headerless / short
+    data / V_too_new (V99) reject / corrupt magic fallback /
+    Shapes+Groups roundtrip / ADR-089 Circle 보존 roundtrip /
+    ADR-089 A-ω Bezier 보존 roundtrip / V1 mesh-only legacy load.
+    회귀 axia-core +9 (200 → 209). Path B (ADR-090) 진입 시 V3
+    schema bump 자연 가능 (forward-compat 인프라 활성).
+- **15 lock-in 원칙 (canonical)**:
   - L1: 모든 closed-curve = 1 anchor + 1 self-loop edge (DCEL canonical
     Phase 2). 메타-원칙 #14 정합
   - L2: AnalyticCurve = truth. polygonal tessellation 은 render/op 의
@@ -1573,6 +1587,15 @@
     / closed Bezier / closed BSpline / closed NURBS — 메타-원칙 #14
     의 진정한 architectural closure. 4 곡선 type 모두 1 anchor + 1
     self-loop edge + 1 face (Plane surface) canonical Phase 2 표현.
+  - **L15 (A-μ snapshot legacy audit + forward-compat)**: `import_
+    versioned_snapshot` 의 `v > SNAPSHOT_VERSION` 분기 — silent
+    garbage 차단 (forward-compat reject). `analyze_snapshot` /
+    `SnapshotInfo` / `SnapshotSections` — legacy file 식별 가능.
+    9 regression tests — full V2 / legacy headerless / short data /
+    V99 reject / corrupt magic / Shapes+Groups roundtrip / Circle
+    roundtrip / Bezier roundtrip / V1 mesh-only legacy. **Path B
+    (ADR-090) pre-trigger 인프라 활성** — V3 schema bump 자연 가능.
+    SNAPSHOT_VERSION = 2 고정 (Path B trigger 시 bump).
 - **회귀 누적 (절대 #[ignore] 금지)**:
   - axia-geo +66 (1123 → 1189, A-α ~ A-Β 누적)
     - A-α ~ A-ι: +35 (시민권 인프라 / face synthesis / Boolean /
@@ -1585,11 +1608,13 @@
     - A-ω +5 (closed Bezier 시민권)
     - A-Α +3 (closed BSpline 시민권)
     - A-Β +3 (closed NURBS 시민권)
+  - axia-core +9 (200 → 209, A-μ 추가)
+    - A-μ +9 (snapshot legacy audit + version handshake)
   - vitest +10 (1622 → 1632, A-λ + A-π + A-ψ)
     - A-λ +5 (DrawCurveSettings + DrawCircleTool)
     - A-π +2 (default ON)
     - A-ψ +3 (DrawBezierTool closure detection)
-  - **합계 +76**, 절대 #[ignore] 금지 76/76 준수
+  - **합계 +85**, 절대 #[ignore] 금지 85/85 준수
 - **사용자 facing 동작 (default ON 후)**:
   - DrawCircle 도구 → 자동 closed-curve face (1 vert / 1 edge / 1 face)
   - PushPull → tessellate-extrude → Cylinder (Path A)
@@ -1636,6 +1661,16 @@
     `open_nurbs_rejected`,
     `zero_weight_nurbs_rejected` (weight validation),
     `arcs_still_rejected` (Arc deferred guard)
+  - **A-μ** (axia-core scene::tests, 9 tests):
+    `analyze_full_v2_snapshot`,
+    `analyze_legacy_headerless_snapshot`,
+    `analyze_short_data`,
+    `v_too_new_rejected_with_clear_message` (forward-compat),
+    `corrupt_magic_falls_back_to_legacy`,
+    `v2_roundtrip_preserves_shapes_and_groups`,
+    `v2_roundtrip_preserves_closed_curve_face` (ADR-089 Circle),
+    `v2_roundtrip_preserves_closed_bezier_face` (ADR-089 A-ω Bezier),
+    `legacy_v1_synthesized_loads`
   - DrawCurveSettings.test.ts (6 tests)
   - DrawCircleTool.test.ts (10 tests, dual-mode coverage)
   - **A-ψ DrawBezierTool.test.ts** (3 tests):
