@@ -639,6 +639,49 @@ fn shape_p4_mutators_use_transactions_readonly_skip() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-091 D-γ — Material removal → Shape demotion WASM endpoint.
+// ════════════════════════════════════════════════════════════════════════
+
+/// D-γ #1 — `demoteXiaToShape` endpoint is wired with correct js_name
+/// and Result<String, JsValue> strict throw signature (DemoteOk JSON
+/// on success, JS Error on failure).
+#[test]
+fn adr091_d_gamma_demote_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn demote_xia_to_shape"),
+        "ADR-091 D-γ: missing Rust function demote_xia_to_shape");
+    assert!(l.contains("js_name = \"demoteXiaToShape\""),
+        "ADR-091 D-γ: missing js_name = \"demoteXiaToShape\"");
+    let idx = l.find("pub fn demote_xia_to_shape").expect("demote_xia_to_shape");
+    let body = char_safe_slice(&l, idx, 1500);
+    assert!(body.contains("-> Result<String, JsValue>"),
+        "ADR-091 D-γ: demoteXiaToShape must return Result<String, JsValue> \
+         (JSON on success, throw on error)");
+    // JSON return shape includes both fields per DemoteOk struct
+    // (source-level escaped form: `\"shape_id\":` and
+    // `\"original_id_restored\":`).
+    assert!(body.contains("shape_id"),
+        "ADR-091 D-γ: JSON return must include shape_id field");
+    assert!(body.contains("original_id_restored"),
+        "ADR-091 D-γ: JSON return must include original_id_restored field");
+}
+
+/// D-γ #2 — Demote endpoint wraps in a transaction (Undo restores
+/// the pre-demote state) and cancels on failure (no state change).
+#[test]
+fn adr091_d_gamma_demote_uses_transaction_with_cancel_on_error() {
+    let l = lib_src();
+    let idx = l.find("pub fn demote_xia_to_shape").expect("demote_xia_to_shape");
+    let body = char_safe_slice(&l, idx, 1500);
+    assert!(body.contains("transactions.begin"),
+        "D-γ: demote must begin transaction");
+    assert!(body.contains("transactions.commit"),
+        "D-γ: success path must commit transaction");
+    assert!(body.contains("transactions.cancel"),
+        "D-γ: failure path must cancel transaction (no side effects on rejection)");
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-050 P-5c — As-Shape Draw command WASM bridge invariants.
 //
 // Mirrors the source-inspection pattern of P-4. Tests verify wiring

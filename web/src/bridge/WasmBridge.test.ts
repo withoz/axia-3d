@@ -1520,6 +1520,40 @@ describe('WasmBridge', () => {
       expect(() => bridge.promoteShapeToXia(1, 1))
         .toThrow(/WASM endpoint missing/);
     });
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-091 D-γ — Material removal → Shape demotion bridge wrapper
+    // ────────────────────────────────────────────────────────────────
+
+    it('demoteXiaToShape parses JSON and returns typed result (D-γ success path)', () => {
+      const fn = vi.fn(() =>
+        '{"shape_id":42,"original_id_restored":true}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { demoteXiaToShape: fn };
+      const result = bridge.demoteXiaToShape(7);
+      expect(result).toEqual({ shapeId: 42, originalIdRestored: true });
+      expect(fn).toHaveBeenCalledWith(7);
+    });
+
+    it('demoteXiaToShape propagates engine throw (D-γ strict — silent skip 차단)', () => {
+      const errFn = vi.fn(() => {
+        throw new Error(
+          'demoteXiaToShape: Xia material is not the form-layer sentinel (FORM_MATERIAL)',
+        );
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { demoteXiaToShape: errFn };
+      expect(() => bridge.demoteXiaToShape(7))
+        .toThrow(/form-layer sentinel/);
+    });
+
+    it('demoteXiaToShape throws when WASM endpoint missing (feature gate)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.demoteXiaToShape(7))
+        .toThrow(/WASM endpoint missing/);
+    });
   });
 
   // ════════════════════════════════════════════════════════════════════════

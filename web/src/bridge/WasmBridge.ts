@@ -415,6 +415,7 @@ type AxiaEngineExtended = AxiaEngine & {
   deleteShape?(shapeId: number): boolean;
   clearShapes?(): void;
   promoteShapeToXia?(shapeId: number, materialId: number): number;
+  demoteXiaToShape?(xiaId: number): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1066,6 +1067,39 @@ export class WasmBridge {
     }
     this.markDirty();
     return this.engine.promoteShapeToXia(shapeId, materialId);
+  }
+
+  /**
+   * ADR-091 D-γ — Demote a Xia back to a Shape (form layer) when its
+   * material has been reverted to the form-layer sentinel
+   * (`FORM_MATERIAL`, MaterialId::new(0)).
+   *
+   * On success: returns `{ shapeId, originalIdRestored }` where
+   *   - `shapeId` is the resulting form-layer ID (original restored if
+   *     `originalIdRestored === true`, otherwise freshly allocated)
+   *   - `originalIdRestored` is true iff the Xia was originally
+   *     promoted from a Shape and that ShapeId was reused
+   *
+   * Throws (strict — D-γ lock-in answering D-A=a):
+   *   - WASM endpoint missing (legacy build) — feature gate, not
+   *     graceful no-op
+   *   - Xia not found
+   *   - Material is not the FORM_MATERIAL sentinel — caller must
+   *     clear the material first via Inspector
+   *
+   * Caller wraps in try/catch and surfaces DemoteError text to Toast.
+   */
+  demoteXiaToShape(xiaId: number): { shapeId: number; originalIdRestored: boolean } {
+    if (!this.engine || !this.engine.demoteXiaToShape) {
+      throw new Error('demoteXiaToShape: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    const json = this.engine.demoteXiaToShape(xiaId);
+    const parsed = JSON.parse(json) as { shape_id: number; original_id_restored: boolean };
+    return {
+      shapeId: parsed.shape_id,
+      originalIdRestored: parsed.original_id_restored,
+    };
   }
 
 

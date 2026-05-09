@@ -6780,6 +6780,51 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
+    /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
+    ///
+    /// On success: returns a JSON string
+    ///   `{ "shape_id": u32, "original_id_restored": bool }`
+    /// On failure: throws JS `Error` with the DemoteError message
+    /// (strict — silent skip 차단, ADR-091 D-γ lock-in 답습).
+    ///
+    /// Errors (matching `Scene::demote_xia_to_shape`):
+    /// - Xia not found
+    /// - Material is not the FORM_MATERIAL sentinel
+    /// - ShapeId conflict (defensive)
+    ///
+    /// Transaction-wrapped — Undo restores the pre-demote state
+    /// (Xia + shape_to_xia linkage preserved).
+    #[wasm_bindgen(js_name = "demoteXiaToShape")]
+    pub fn demote_xia_to_shape(
+        &mut self,
+        xia_id: u32,
+    ) -> Result<String, JsValue> {
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        match self.scene.demote_xia_to_shape(xia_id) {
+            Ok(ok) => {
+                self.scene
+                    .transactions
+                    .set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                let json = format!(
+                    "{{\"shape_id\":{},\"original_id_restored\":{}}}",
+                    ok.shape_id.raw(),
+                    ok.original_id_restored,
+                );
+                Ok(json)
+            }
+            Err(err) => {
+                self.scene.transactions.cancel();
+                Err(JsValue::from_str(&format!("demoteXiaToShape: {}", err)))
+            }
+        }
+    }
+
     /// ADR-060 Phase O Step 6 — Step 5 Fillet dispatch result as JSON.
     ///
     /// Routes through `Mesh::fillet_edge_dispatch` (§F + §E lock-ins).

@@ -173,5 +173,29 @@ D-ζ 단계: 실제 Chromium 재질 제거 → Shape badge → Undo 복원
   * `promote_demote_promote_roundtrip_preserves_id` (가역 라운드트립)
   * `demote_xia_not_found`
 
-### D-γ ~ D-η (예정)
+### D-γ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인합니다".
+- **변경**:
+  * `crates/axia-wasm/src/lib.rs` — `demoteXiaToShape(xia_id: u32) ->
+    Result<String, JsValue>` export. JSON 반환
+    `{"shape_id":<u32>,"original_id_restored":<bool>}`. Transaction
+    wrap (success commit / failure cancel — silent skip 차단).
+  * `crates/axia-wasm/tests/export_baseline.txt` — `demoteXiaToShape`
+    entry 추가 (alphabetical 위치 deleteShape 아래).
+  * `crates/axia-wasm/tests/step6_additive_only.rs` — 2 wiring tests:
+    `adr091_d_gamma_demote_endpoint_wired` (signature + JSON shape) +
+    `adr091_d_gamma_demote_uses_transaction_with_cancel_on_error`.
+  * `web/src/bridge/WasmBridge.ts`:
+    - `AxiaEngineExtended.demoteXiaToShape?(xiaId: number): string` 추가
+    - `WasmBridge.demoteXiaToShape(xiaId): { shapeId, originalIdRestored }`
+      typed wrapper. 미가용 endpoint / engine throw / FORM_MATERIAL
+      미충족 모두 throw (caller 가 try/catch 후 Toast).
+  * `web/src/bridge/WasmBridge.test.ts` — 3 wrapper tests:
+    JSON parse / engine throw 전파 / endpoint missing throw.
+- **회귀**:
+  * axia-wasm 34 → 36 (+2 wiring)
+  * vitest WasmBridge.test.ts 136 → 139 (+3 wrapper)
+  * 합계 **+5**, 절대 #[ignore] 금지 5/5 준수.
+
+### D-δ ~ D-η (예정)
 별도 sub-step 결재 시 commit 진행.
