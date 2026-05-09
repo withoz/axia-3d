@@ -515,6 +515,12 @@ impl Mesh {
                     let mat = self.faces.get(fid)
                         .map(|f| f.material())
                         .unwrap_or(material);
+                    // ADR-089 A-χ-β — capture parent surface for inheritance.
+                    // Auto-intersect splits faces; without this, sphere×sphere
+                    // intersection would lose all Sphere surface metadata on
+                    // sub-faces → A-ρ/A-φ/A-τ all skip them.
+                    let parent_surface = self.faces.get(fid)
+                        .and_then(|f| f.surface().cloned());
 
                     for sub_poly in &sub_polys {
                         // 2D → 3D 역투영
@@ -539,6 +545,10 @@ impl Mesh {
 
                         match self.add_face(&deduped, mat) {
                             Ok(new_fid) => {
+                                // ADR-089 A-χ-β — propagate parent surface.
+                                if let Some(ref s) = parent_surface {
+                                    self.faces[new_fid].set_surface(Some(s.clone()));
+                                }
                                 new_faces.push(new_fid);
                             }
                             Err(_) => {
