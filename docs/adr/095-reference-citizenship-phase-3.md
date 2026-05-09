@@ -276,5 +276,40 @@ pub enum ReferenceCategory {
 - **누적** (Phase 3-α ~ 3-γ): axia-core +13, axia-wasm baseline +9,
   vitest +9 = **+31**.
 
-### Phase 3-δ ~ 3-ζ (예정)
+### Phase 3-δ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — UI orchestration 진입.
+- **사전 검토 architectural 정정**: scope 를 *helper module + 단위
+  테스트* 로 한정 — Inspector / ContextMenu DOM 통합은 future
+  sub-step 또는 별도 ADR. 이유: ADR-091 §E L4 (UI orchestration 분리)
+  답습 — helper SSOT 가 다중 trigger point 보장 + jsdom 격리 단위
+  테스트 가능.
+- **변경**:
+  * `web/src/citizenship/MarkAsReference.ts` (신규):
+    - `markFacesAsReference(bridge, faceIds, name?, sourcePath?)` →
+      ImportedMesh
+    - `markEdgesAsReference(bridge, edgeIds, name?)` → ConstructionLine
+    - `markVertsAsReference(bridge, vertIds, name?)` → PointCloud
+    - `MarkResult { ok, refId?, reason? }` 반환 — Toast / UI 직접 활용
+    - `humanizeRBViolation()` — engine 메시지 → 사용자 facing 한국어
+      변환 (Xia owned / Shape owned / already Reference / endpoint
+      missing 4 가지)
+  * Default names: "Imported Mesh" / "Construction Line" / "Point Cloud"
+- **회귀** (vitest +11):
+  * `markFacesAsReference` 5 tests:
+    - 성공 시 refId 반환
+    - 빈 배열 → 거부
+    - R-B Xia owned → 한국어
+    - R-B Shape owned → 한국어
+    - endpoint missing → 새로고침 안내
+  * `markEdgesAsReference` 3 tests (성공 / 빈 배열 / 이미 Reference)
+  * `markVertsAsReference` 3 tests (성공 / default name / 빈 배열)
+  * 합계 **+11**, 절대 #[ignore] 금지 11/11 준수
+- **누적** (Phase 3-α ~ 3-δ): axia-core +13, axia-wasm baseline +9,
+  vitest +20 = **+42**.
+- **Out of scope (future)**:
+  * Inspector / ContextMenu UI 통합 — DOM-driven trigger
+  * "Promote Reference to Form" inverse 액션
+  * Render visual 구분 (작도선 dashed 등) — ADR-095 §8 참조
+
+### Phase 3-ε ~ 3-ζ (예정)
 별도 sub-step 결재 시 commit 진행.
