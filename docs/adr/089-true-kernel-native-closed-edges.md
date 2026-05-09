@@ -1174,10 +1174,79 @@ closed-curve 시민권 확장. 안전한 완성도 우선."
 - **N-ω-3** Closed Bezier 의 Boolean dispatch / Push-Pull 활성화 —
   A-η-1 P~lane attach 으로 이미 연결됨 (자동 동작).
 
-### A-ω-α (본 commit)
-- **사용자 결재**: 2026-05-08, "🅰 빠른 가치 옵션 진행".
+### A-ω-α (commit `e3c6126`)
+- **사용자 결재**: 2026-05-08, "🅰 빠른 가치 옵션 진행 (안전한 완성도)".
 - **변경**: 본 §D `A-ω-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-ω-β (commit `ae56b2b`)
+- **변경**: `crates/axia-geo/src/mesh.rs`:
+  * `add_face_closed_curve` 의 A-δ Circle-only 제약 해제.
+  * Bezier match arm 추가 — closure check (`|cp[0] - cp[last]| <
+    EPSILON_LENGTH`).
+  * `bezier_best_fit_normal` helper — 첫 비-collinear triplet 의
+    cross product 로 plane normal.
+  * BSpline / NURBS / Arc 는 future ADR (deferred).
+- **회귀**: axia-geo 1178 → 1183 (+5):
+  * `closed_bezier_creates_self_loop_face`
+  * `open_bezier_rejected`
+  * `collinear_bezier_rejected`
+  * `bsplines_still_rejected`
+  * `circle_path_unaffected` (regression guard)
+
+### A-ω-γ (commit `a97f079`)
+- **변경**:
+  * `Command::DrawClosedBezierAsCurve { control_pts: Vec<DVec3> }` 신규
+  * `exec_draw_closed_bezier_as_curve` (axia-core scene): anchor at
+    cp[0] + add_face_closed_curve + Shape registration + transaction
+  * WASM `drawClosedBezierAsCurve(Vec<f64>)` flat unflatten
+  * TS `bridge.drawClosedBezierAsCurve(Float64Array | number[])`
+  * `add_face_closed_curve` Plane attach 확장 — Bezier 도 best-fit
+    plane (centroid + normal + AABB extent u/v range).
+  * export_baseline.txt entry 추가.
+
+### A-ω-δ (commit `fc5c057`)
+
+**Render path 확장** — A-κ-β + edge wireframe 양쪽:
+- `export_buffers_inner`: closed Bezier face → bezier::tessellate
+  + fan triangulation from centroid + face normal 사용.
+- `export_edge_lines_with_map`: self-loop Bezier edge → bezier::
+  tessellate to N polyline → N-1 line segments. owner-ID uniformity.
+
+**Browser smoke 결과** (8-control-pt closed Bezier loop):
+- 1 vert / 1 edge / 1 face (canonical Phase 2) ✓
+- 152 triangles + 234 edge segments
+- 매끈한 closed Bezier outline + filled face 시각 ✓
+
+**ADR-089 누적 트랙 (A-α ~ A-ω)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| A-ρ Path A (face Cylinder smooth) | +4 | u-slice tessellation |
+| A-τ Path A (edge smooth-group) | +4 | vertical 분할선 hide |
+| A-υ Path A (leftover cleanup) | +3 | polyline overlap 제거 |
+| A-φ Path A (Sphere/Cone/Torus) | +6 | 4 곡면 일관성 |
+| A-χ Path A (split surface inherit) | +3 | 모든 split 후 surface 보존 |
+| **A-ω closed Bezier 시민권** | **+5** | **다른 곡선 시민권 첫 확장** |
+| **누적** | **axia-geo +60 / vitest +7 = +67** | **A-δ Circle-only 제약 해제** |
+
+### A-ω-δ (본 commit)
+- **변경**: 본 §D `A-ω-δ` closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-ω track closure 완료. ADR-089 의 "다른 곡선 시민권"
+  첫 확장 달성. 후속 후보 — closed BSpline / NURBS 시민권 (A-ω 패턴
+  답습 + periodic knot vector 처리), DrawBezierTool UI 분기 (closed
+  loop 자동 감지), A-θ Path B (DCEL 진정한 kernel-native cylinder),
+  Snapshot legacy migration (A-μ).
 
 ---
 
