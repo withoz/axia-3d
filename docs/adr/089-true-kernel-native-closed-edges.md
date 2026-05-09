@@ -1281,10 +1281,61 @@ closed-curve 시민권 확장. 안전한 완성도 우선."
 - **N-ψ-2** Visual snap to P0 — 사용자가 P3 를 P0 위에 정확히 놓아야
   closure 발동. snap-to-first-point UI hint 는 future sub-step.
 
-### A-ψ-α (본 commit)
+### A-ψ-α (commit `d43a4a1`)
 - **사용자 결재**: 2026-05-08, "DrawBezierTool UI 분기 진행".
 - **변경**: 본 §D `A-ψ-α` amendment.
 - **회귀**: +0 (docs only).
+
+### A-ψ-β (commit `cb3a368`)
+- **변경**: `web/src/tools/DrawBezierTool.ts`:
+  * `BEZIER_CLOSURE_EPSILON_MM = 1e-3` (ADR-026 P12 cardinal snap
+    range 답습).
+  * `commit()` 시 `getDrawCurveMode()` flag check + P0/P3 거리 비교.
+  * Closed branch → `drawClosedBezierAsCurve([P0, P1, P2, P3, P0])`
+    (5 control points, exact closure on engine side).
+  * Open branch → 기존 `drawBezierWithCurve` 답습.
+  * import: `getDrawCurveMode from './DrawCurveSettings'`.
+- **회귀**: vitest +3 (DrawBezierTool.test.ts 신규):
+  * `open_bezier_legacy_path`
+  * `closed_bezier_dispatched_to_drawClosedBezierAsCurve`
+  * `drawCurveMode_OFF_always_legacy`
+
+### A-ψ-γ (browser real-runtime closure)
+
+**Browser smoke 결과**:
+- `tool.commit()` with P3 == P0 → spy `drawClosedBezierAsCurve` 호출 ✓
+- `tool.commit()` with P3 far → spy `drawBezierWithCurve` 호출 ✓
+- 시각: 좌측 closed Bezier face filled, 우측 open Bezier wireframe ✓
+
+**ADR-089 누적 트랙 (A-α ~ A-ψ)**:
+
+| 트랙 | 회귀 | 가치 |
+|------|------|-----|
+| A-α ~ A-ε (시민권 인프라) | +22 | Edge schema / HE / API / dedup |
+| A-ζ (face synthesis) | +10 | LOCKED #1/#12 closed-curve aware |
+| A-η-1 (Boolean Plane attach) | +3 | NURBS dispatch |
+| A-θ Path A (Push-Pull) | +5 | Cylinder 자동 |
+| A-κ Path A (Render closed-curve) | +6 | viewport 시각 표시 |
+| A-λ (UI exposure) | +5 | DrawCircleTool 토글 |
+| A-ι Path A (Offset) | +4 | self-loop offset |
+| A-ν (regression sweep) | +0 | 2989/2989 PASS |
+| A-π (default ON) | +2 | 자동 kernel-native |
+| A-ρ Path A (face Cylinder smooth) | +4 | u-slice tessellation |
+| A-τ Path A (edge smooth-group) | +4 | vertical 분할선 hide |
+| A-υ Path A (leftover cleanup) | +3 | polyline overlap 제거 |
+| A-φ Path A (Sphere/Cone/Torus) | +6 | 4 곡면 일관성 |
+| A-χ Path A (split surface inherit) | +3 | 모든 split 후 surface 보존 |
+| A-ω closed Bezier 시민권 | +5 | 다른 곡선 시민권 첫 확장 |
+| **A-ψ DrawBezierTool UI 분기** | **+3** | **사용자 facing path 완성** |
+| **누적** | **axia-geo +60 / vitest +10 = +70** | **closed Bezier 사용자 facing 완성** |
+
+### A-ψ-γ (본 commit)
+- **변경**: 본 §D `A-ψ-γ` browser closure entry.
+- **회귀**: +0 (smoke verification).
+- **다음 step**: A-ψ track closure 완료. closed Bezier 사용자 facing
+  완성. 후속 후보 — closed BSpline/NURBS 시민권 확장, LOCKED #35
+  갱신 (A-ω + A-ψ 추가), A-θ Path B (DCEL 진정한 kernel-native
+  cylinder), Snapshot legacy migration (A-μ).
 
 ---
 
