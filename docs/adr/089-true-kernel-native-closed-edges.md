@@ -1605,12 +1605,61 @@ audit + Snapshot version handshake 강화. Path B pre-trigger 준비."
 | **A-μ (snapshot version + audit)** | **+9 axia-core** | **legacy compat + forward-compat reject** |
 | **누적** | **axia-geo +66 / axia-core +9 / vitest +10 = +85** | **production safety + Path B 준비** |
 
-### A-μ-δ (본 commit) — closure
+### A-μ-δ (commit `18ac932`) — closure
 - **변경**: 본 §D `A-μ-β/γ` closure entry.
 - **회귀**: +0 (closure docs).
-- **다음 step**: A-μ track closure 완료. Path B (ADR-090) 진입 시
-  V3 schema bump 자연 가능 (forward-compat 인프라 활성). 후속 후보:
-  LOCKED #35 갱신 (A-μ 추가), 다른 우선순위 ADR 트랙.
+
+---
+
+### A-Γ-α (2026-05-08, Path B 트리거 정량화 amendment)
+
+**사용자 결재 (2026-05-08)**: "🅰 Path B 트리거 정량화 진입 — STEP/IGES
+round-trip audit + Memory audit. ADR-090 §6 의 정량 트리거 명시 부분
+채움."
+
+**현재 상태 진단** (사전조사 후):
+- STEP **export 미구현** — ADR-081/082 는 OCCT.js import only
+- 따라서 full STEP/IGES round-trip 측정 불가 (현 시점)
+- **대체 측정 가능**:
+  1. Path A cylinder 의 geometric accuracy (analytic vs polygon strip)
+  2. Memory footprint (per-cylinder face/edge/vert count + bytes)
+  3. ADR-082 T-γ corpus 의 face count baseline
+
+**Path Z 3-sub-step**:
+
+| Sub-step | 변경 | 회귀 |
+|----------|-----|-----|
+| A-Γ-α (본 amendment) | spec only | +0 |
+| A-Γ-β | Cylinder accuracy + memory measurement (Rust) | +5 |
+| A-Γ-γ | Audit report doc + ADR-090 §6 update | +0 |
+
+**Lock-ins**:
+- **L-Γ-1** **Synthesized cylinder corpus**: programmatic generation
+  (R = [10, 100, 1000] mm × N = [8, 16, 32, 64] segments)
+- **L-Γ-2** **Geometric accuracy 측정**:
+  - Polygon vert deviation from analytic circle: max chord error
+  - Face area deviation: polygon area vs π·r·h
+  - Top circle perimeter deviation: polygon perimeter vs 2π·r
+- **L-Γ-3** **Memory footprint 측정**:
+  - per-cylinder face/edge/vert count
+  - estimated bytes (sizeof Face/Edge/Vertex × count)
+  - 비교: Path A (현재) vs Path B (이론적 산업 CAD parity)
+- **L-Γ-4** **Audit report**: `docs/audits/2026-05-08-path-b-trigger-
+  quantification.md` 신설 — 5 사이즈 × 4 segments = 20 측정 포인트
+- **L-Γ-5** **ADR-090 §6 update**: 측정 결과를 §6 정량 트리거 표에
+  추가 (현재 추상적 — 실제 숫자 명시)
+- **L-Γ-6** **STEP/IGES export 트리거 보존**: STEP export 구현 후
+  full round-trip audit 별도 sub-step (현 audit 의 보강)
+
+**Non-goals**:
+- **N-Γ-1** STEP/IGES full round-trip (export 미구현 — 별도 sub-step)
+- **N-Γ-2** Path B 진입 결정 (audit 결과는 트리거 명시화만, 진입 결재 별도)
+- **N-Γ-3** 실제 사용자 모델 코퍼스 (사용자 제공 시 추가)
+
+### A-Γ-α (본 commit)
+- **사용자 결재**: 2026-05-08, "🅰 진입 승인".
+- **변경**: 본 §D `A-Γ-α` amendment.
+- **회귀**: +0 (docs only).
 
 ---
 
