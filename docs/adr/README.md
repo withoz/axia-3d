@@ -168,7 +168,7 @@ ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그�
 | [091](./091-material-removal-shape-demotion.md) | Material Removal → Shape 가역 강등 (Phase 2) | Accepted |
 | [092](./092-pushpull-top-boundary-closed-curve-preservation.md) | Push-Pull Top Boundary Closed-Curve Preservation (Partial Path B) | Accepted |
 | [093](./093-cylinder-side-face-owner-id-grouping.md) | Cylinder Side Face Owner-ID Grouping (B-MVP — Path B Light) | Accepted |
-| [094](./094-path-b-full-refined-plan.md) | Path B-full Refined Plan (Multi-week Atomic Architectural Track) | Proposed |
+| [094](./094-path-b-full-refined-plan.md) | Path B-full Refined Plan (Multi-week Atomic Architectural Track) | Accepted |
 
 ## 메타-원칙 (#1~#14)
 

@@ -1429,6 +1429,51 @@
   ADR-082~086 (STEP/IGES face → engine ops first-class equality).
 
 ### 35. ADR-089 — True Kernel-Native Closed Edges (A-α ~ A-Δ closure, 2026-05-09)
+- **ADR-094 amendment (2026-05-09)** — Path B-full Refined Plan
+  closure (multi-week atomic architectural track):
+  * **사용자 시연 결재 (2026-05-09)**: ADR-093 closure 후 memory /
+    STEP / parity / Push-Pull 누적 잔존 trigger 4개 활성 → 🅺 path
+    의 두 번째 단계 (🅹 Path B-full) 진입.
+  * **🅺 Refined plan**: ADR-090 §5 원안 (8 sub-step / 3-5주) 을
+    ADR-091/092/093 lessons 적용으로 *additive-first* 위험 격리 +
+    multi-gate 결재 패턴으로 재정렬. 7 sub-step (B-α ~ B-θ) / 18-29일.
+  * **B-α** (refined plan spec) → **B-γ-prep** (Mesh.face_to_boundary_
+    loops Mesh-level map, ADR-091 §E L1 답습 + restore_snapshot 부산물
+    fix for ADR-088/093) → **B-δ-prep** (extrude_cylinder_kernel_native:
+    3 face / 2 edge / 2 vert annulus, 산업 CAD parity 첫 활성) →
+    **B-ζ-prep** (Render — *기존 framework 자연 처리*, zero-code-change)
+    → **B-ε-prep** (Boolean dispatch — surface-driven, *기존 framework
+    자연 처리*, zero-code-change) → **B-η** (architectural switch —
+    engine OFF + production ON via localStorage, 회귀 자산 보존) →
+    **B-θ** (real Chromium 시연 PASS).
+  * **사용자 시연 PASS** (real Chromium): Path A baseline 25/69/46 →
+    Path B 3/2/2 (88% face / 97% edge / 96% vert reduction). 시각
+    Path A 와 동일.
+  * **회귀** axia-geo +30 (B-γ-prep 8 + B-δ-prep 7 + B-ζ-prep 4 +
+    B-ε-prep 4 + B-η 7) + axia-wasm baseline +2 (B-η exports) +
+    vitest +9 (B-η 9: CylinderPathBSettings 5 + WasmBridge 4) +
+    Playwright +1 (B-θ demo). 합계 **+42**, 절대 #[ignore] 금지
+    42/42 준수.
+  * **사용자 facing 변화**:
+    - localStorage `axia:cylinder-path-b-mode = 'true'` 시 Cylinder
+      → Path B 자동 사용 (3 face / 2 edge / 2 vert)
+    - 비활성 (default OFF) 시 Path A 보존 (legacy 사용자 워크플로우)
+    - 시각 차이 0 (B-ζ-prep 자연 결합 — surface tessellation framework)
+  * **ADR-090 모든 trigger closure**: 결함 1 (ADR-092) + 결함 2
+    (ADR-093) + memory + export + parity + Push-Pull 누적 (ADR-094)
+  * **Lessons (canonical patterns)** — ADR-094 §E L1~L5:
+    - L1 Additive-first 위험 격리 (multi-week atomic 메타 패턴)
+    - L2 Mesh-level Map 깊은 적용 + restore_snapshot 부산물 fix
+    - L3 자연 결합 (existing framework + zero-code-change integration,
+      메타-원칙 #14 의 가장 깊은 실현)
+    - L4 Engine OFF + Production ON pattern (ADR-049 P-5e-α 답습)
+    - L5 산업 CAD parity 정량 측정 (95%+ memory reduction)
+  * **다음 ADR 가이드**: 모든 multi-week atomic 트랙은 본 ADR-094 의
+    refined plan 패턴 (additive prep + production flip) 답습 권장.
+    ADR-091/092/093 의 사전 검토 가치 + ADR-049 의 OFF-preserve
+    flip 패턴 + ADR-091 §E L1 의 Mesh-level map canonical 모두
+    cumulative 적용.
+
 - **ADR-093 amendment (2026-05-09)** — Cylinder Side Face Owner-ID
   Grouping (B-MVP — Path B Light, 🅺 path 첫 단계):
   * **사용자 시연 결함 2 trigger** ("옆면과 관련이 있을것 같으니 ...

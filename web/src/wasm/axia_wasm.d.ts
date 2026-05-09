@@ -639,6 +639,10 @@ export class AxiaEngine {
      */
     getCenterlineLines(): Float32Array;
     /**
+     * ADR-094 B-η — Read the Path B cylinder default flag.
+     */
+    getCylinderPathBDefault(): boolean;
+    /**
      * Export incremental geometry updates for dirty faces.
      *
      * Two modes:
@@ -1333,6 +1337,19 @@ export class AxiaEngine {
      */
     setConstraintActive(id: number, active: boolean): boolean;
     /**
+     * ADR-094 B-η — Set the Path B cylinder default.
+     *
+     * `true` = `create_solid` 의 closed-curve cylinder profile 이
+     * kernel-native 3 face / 2 edge / 2 vert annulus topology 로
+     * 생성 (산업 CAD parity, 메모리 ~98% 절감).
+     * `false` = legacy Path A (25 face polygon strip).
+     *
+     * Production layer (TS bridge) calls this once at app init based
+     * on localStorage `axia:cylinder-path-b-mode` preference. Tests
+     * may toggle per-call.
+     */
+    setCylinderPathBDefault(on: boolean): void;
+    /**
      * 엣지 가시성 임계 각도(도) 설정. 범위 [1.0, 89.0]로 clamp.
      * 변경 시 edge cache 무효화 → 다음 getEdgeLines 호출에 반영.
      * 작은 값: 모든 panel 경계가 보임 (건축/기계 CAD 선호).
@@ -1735,6 +1752,7 @@ export interface InitOutput {
     readonly axiaengine_getCacheStats: (a: number, b: number) => void;
     readonly axiaengine_getCacheVersion: (a: number) => number;
     readonly axiaengine_getCenterlineLines: (a: number, b: number) => void;
+    readonly axiaengine_getCylinderPathBDefault: (a: number) => number;
     readonly axiaengine_getDirtyFaceBuffers: (a: number) => number;
     readonly axiaengine_getDirtyFaceCount: (a: number) => number;
     readonly axiaengine_getEdgeCurveJson: (a: number, b: number, c: number) => void;
@@ -1839,6 +1857,7 @@ export interface InitOutput {
     readonly axiaengine_setAutoIntersectOnDraw: (a: number, b: number) => void;
     readonly axiaengine_setBooleanGroupTag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly axiaengine_setConstraintActive: (a: number, b: number, c: number) => number;
+    readonly axiaengine_setCylinderPathBDefault: (a: number, b: number) => void;
     readonly axiaengine_setEdgeAngleThreshold: (a: number, b: number) => void;
     readonly axiaengine_setEdgeArcCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly axiaengine_setEdgeBSplineCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;

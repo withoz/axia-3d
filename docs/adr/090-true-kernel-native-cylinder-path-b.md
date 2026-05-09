@@ -225,20 +225,33 @@ Path A 가 이미 visual + functional closure 달성. Path B 진입은 다음 �
   Chromium 시연 PASS. surface_owner_id grouping (Mesh-level HashMap) +
   SelectTool walk + Inspector "체적 면 그룹" 인식.
 
-**Path B-full 진입 결재 anchor (잔존 trigger)**:
-- ❌ **메모리 비용** — N quad faces 누적 (large model, 1000+ cylinder
-  scale)
-- ❌ **STEP/IGES export 정확도** — DCEL 자체가 polygon strip → analytic
-  cylinder export 손실
-- ❌ **산업 CAD parity** — single cylindrical face (annulus topology)
-  미달
-- ❌ **Push-Pull again 누적 비용** — multi-cylinder 합집합 시 quad
-  faces 합산
+**Path B-full 진입 결재 anchor (잔존 trigger)** — **ADR-094 으로 모두
+closure (2026-05-09)**:
+- ✅ **메모리 비용** — ADR-094 으로 closure (88% face / 97% edge / 96%
+  vert reduction, real Chromium 시연 PASS)
+- ✅ **STEP/IGES export 정확도** — ADR-094 으로 closure (annulus single
+  cylindrical face 자연 analytic export 가능 — 별도 export 트랙으로
+  활용 시 활성)
+- ✅ **산업 CAD parity** — ADR-094 으로 closure (Parasolid/ACIS/OCCT 와
+  동급 multi-loop face annulus topology)
+- ✅ **Push-Pull again 누적 비용** — ADR-094 으로 closure (single
+  cylindrical face 보존)
 
-**현재 (2026-05-09) 상태**: ADR-092 (결함 1 top rim) + ADR-093 (결함
-2 selection) closure. **사용자 시연 만족도** 가 Path B-full 결재
-trigger 의 핵심 지표 — selection 측면 만족 시 보류 유지 / memory
-parity export 등 추가 closure 필요 시 진입 활성.
+### 6.5 ADR-094 closure 후 trigger 매트릭스 final (2026-05-09)
+
+**모든 잔존 trigger closure**:
+- ✅ 결함 1 (top rim polygon) — ADR-092 (2026-05-09)
+- ✅ 결함 2 (side hover N quads) — ADR-093 (2026-05-09)
+- ✅ 메모리 비용 — ADR-094 B-η/θ (2026-05-09)
+- ✅ STEP/IGES export 정확도 — ADR-094 (export 별도 트랙에서 활용)
+- ✅ 산업 CAD parity — ADR-094 B-δ-prep (3 face / 2 edge / 2 vert)
+- ✅ Push-Pull again 누적 — ADR-094 (single face 보존)
+
+**현재 (2026-05-09) 상태**: ADR-090 의 모든 trigger closure. Path B
+인프라 활성. **Engine default OFF + Production ON via localStorage**
+(ADR-094 B-η, ADR-049 P-5e-α 답습) — 사용자 explicit ON 으로
+production-grade Path B 사용 가능. ADR-090 의 multi-week atomic
+spec 으로서의 역할 종료.
 
 ---
 

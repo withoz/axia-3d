@@ -1,6 +1,6 @@
-# ADR-094: Path B-full Refined Plan (Multi-week Atomic Architectural Track)
+# ADR-094: Path B-full Refined Plan (Multi-week Atomic Architectural Track) — **Accepted**
 
-- **Status**: Proposed (B-spec-refresh — refined plan only)
+- **Status**: Accepted (B-α ~ B-θ closure 2026-05-09)
 - **Date**: 2026-05-09
 - **Parent**: ADR-090 (True Kernel-Native Cylinder Path B, deferred)
 - **Sibling**: ADR-093 (B-MVP — Path B Light, B-MVP closure 2026-05-09)
@@ -435,5 +435,110 @@ ADR-090 §4 의 위험 매트릭스 + 본 ADR 의 additive-first 전략으로 �
   * ADR-093 §E L3 — defensive bridge guard (graceful no-op on missing
     endpoint)
 
-### B-θ (예정 — 사용자 시연 + closure)
-LOCKED #35 amendment + 사용자 시연 게이트 + ADR-094 closure.
+### B-θ (본 commit — 사용자 시연 + closure)
+- **사용자 결재**: 2026-05-09, "승인" — 사용자 시연 + closure.
+- **사용자 시연 PASS** (real Chromium, web/e2e/adr-094-demo.spec.ts):
+  - Path A baseline: 25 face / 69 edge / 46 vert
+  - Path B activated (`bridge.setCylinderPathBDefault(true)`):
+    **3 face / 2 edge / 2 vert** ✅
+  - Memory reduction: 88.0% face / 97.1% edge / 95.7% vert
+  - Render: Path B cylinder 가 시각적으로 Path A 와 동일 (B-ζ-prep
+    자연 결합 — 사용자 facing 차이 0)
+  - Screenshot: `web/demo-output/adr-094-cylinder-path-b.png`
+- **변경**:
+  * `web/e2e/adr-094-demo.spec.ts` (신규) — Real Chromium demo +
+    Path A/B 비교 측정
+  * `CLAUDE.md` LOCKED #35 — ADR-094 closure entry
+  * `docs/adr/090-true-kernel-native-cylinder-path-b.md` §6.4 — Path
+    B-full 활성화로 모든 잔존 trigger closure
+  * `docs/adr/README.md` — ADR-094 status `Proposed` → `Accepted`
+  * 본 ADR §E Lessons 추가
+- **회귀** (Playwright +1):
+  * `path_b_cylinder_3_2_2_architectural_anchor` — Path A baseline +
+    Path B 측정 + memory reduction + screenshot
+  * 합계 **+1**, 절대 #[ignore] 금지 1/1 준수
+- **누적 회귀** (B-α ~ B-θ): axia-geo +30, axia-wasm baseline +2,
+  vitest +9, Playwright +1 = **+42 total**.
+
+## E. Lessons
+
+### L1 — Additive-first 위험 격리 전략 success
+
+**관찰**: 5-step prep (B-γ/δ/ζ/ε prep) 가 모두 *coexist* 형태로 도입.
+245+ Path A 회귀 자산 영향 0 유지하며 Path B 인프라 점진 활성. B-η
+flip 도 *engine OFF + production ON* 로 회귀 자산 보존.
+
+**향후 ADR 가이드**:
+- Multi-week atomic 진입 시 *additive-first* 패턴 첫 번째 적용 사례.
+  ADR-091/092/093 의 Path Z atomic 위에 *prep + flip* 메타 패턴 추가.
+- Schema 변경 → 기존 schema 보존 + 새 schema 도입 (coexist) → flip
+  은 production layer 에서 (engine 은 fallback 보존)
+
+### L2 — Mesh-level Map (ADR-091 §E L1) 깊은 적용
+
+**관찰**: ADR-094 의 모든 새 데이터 (face_to_boundary_loops) 가 Mesh-
+level HashMap 으로 도입. Face struct UNCHANGED. Bincode legacy 호환
+자연 보존.
+
+**부산물 발견**: B-γ-prep 구현 중 ADR-088 (Edge.curve_owner_id) +
+ADR-093 (face_to_surface_owner_id) 가 `restore_snapshot` 에서 누락
+되어 있던 잠재 회귀 발견 + fix. 모든 Mesh-level maps round-trip 자연
+보장.
+
+**향후 ADR 가이드**:
+- 새 Mesh field 추가 시 항상 `restore_snapshot` 도 갱신 (체크리스트
+  추가)
+- ADR-088 의 Edge.curve_owner_id (struct field) 는 ADR-091 §E L1
+  *이전* 결정 — 향후 retroactive migration 별도 트랙
+
+### L3 — 자연 결합 (Existing framework 위 zero-code-change integration)
+
+**관찰**: B-ζ-prep (Render) 와 B-ε-prep (Boolean dispatch) 모두 *기존
+framework 가 자연 처리* — 추가 코드 변경 0. 5개월 누적 architectural
+quality 가 Path B annulus 와 자연 호환.
+
+| Layer | 자연 결합 anchor |
+|---|---|
+| Render | ADR-031 surface metadata + ADR-038 P23 surface-aware normals + ADR-089 A-ρ uv-slice (defensive None for non-quad) — full surface tessellation |
+| Boolean | ADR-064/066 NURBS dispatch 가 surface-driven (boundary-loop 무관) |
+
+**메타-원칙 #14 의 가장 깊은 실현**: "면은 닫힌 경계로부터 유도된다"
+— annulus = 2 closed boundaries (top + bot circles) → engine 자연
+derivation. 별도 분기 unnecessary.
+
+**향후 ADR 가이드**:
+- prep sub-step 진입 시 *기존 framework 검증* 먼저. 자연 결합 가능성
+  exploration 후 추가 코드 변경 결정. multi-week 일수 절감 + 회귀 부담
+  감소.
+
+### L4 — Engine OFF + Production ON pattern (ADR-049 P-5e-α 답습)
+
+**관찰**: B-η flip 시 *engine default OFF + production ON* 패턴이
+회귀 자산 보존 + 사용자 facing 가치 활성을 동시에 만족. ADR-049
+P-5e-α 의 default-mode-flag 패턴 답습.
+
+**향후 ADR 가이드**:
+- Multi-week atomic 의 default flip 은 *production layer 에서* 활성
+  (engine 은 legacy preserve)
+- localStorage explicit OFF preference 보존 (ADR-049 패턴)
+- Schema 변경 + flag dispatch 두 layer 분리
+
+### L5 — 산업 CAD parity 의 정량 측정
+
+**달성**: Path B kernel-native cylinder = 3 face / 2 edge / 2 vert.
+Path A 대비 face 88.0% / edge 97.1% / vert 95.7% reduction. ADR-090
+§1.2 architectural goal 의 실측 달성. 산업 CAD (Parasolid / ACIS /
+OCCT) 와 동급 multi-loop face annulus topology 활성.
+
+**ADR-090 잔존 trigger closure**:
+- ✅ 결함 1 (top rim polygon) — ADR-092 closure
+- ✅ 결함 2 (side hover N quads) — ADR-093 closure
+- ✅ **메모리 비용** — ADR-094 closure (95%+ reduction)
+- ✅ **STEP/IGES export 정확도** — ADR-094 closure (analytic single
+  cylindrical face 자연 export 가능 — 별도 트랙으로 export 구현 시
+  활성)
+- ✅ **산업 CAD parity** — ADR-094 closure (annulus topology)
+- ✅ **Push-Pull again 누적 비용** — ADR-094 closure (single face
+  보존)
+
+ADR-090 모든 잔존 trigger Path B-full 으로 closure.

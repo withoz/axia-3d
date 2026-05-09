@@ -1694,6 +1694,14 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-094 B-η — Read the Path B cylinder default flag.
+     * @returns {boolean}
+     */
+    getCylinderPathBDefault() {
+        const ret = wasm.axiaengine_getCylinderPathBDefault(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * Export incremental geometry updates for dirty faces.
      *
      * Two modes:
@@ -3593,6 +3601,22 @@ export class AxiaEngine {
     setConstraintActive(id, active) {
         const ret = wasm.axiaengine_setConstraintActive(this.__wbg_ptr, id, active);
         return ret !== 0;
+    }
+    /**
+     * ADR-094 B-η — Set the Path B cylinder default.
+     *
+     * `true` = `create_solid` 의 closed-curve cylinder profile 이
+     * kernel-native 3 face / 2 edge / 2 vert annulus topology 로
+     * 생성 (산업 CAD parity, 메모리 ~98% 절감).
+     * `false` = legacy Path A (25 face polygon strip).
+     *
+     * Production layer (TS bridge) calls this once at app init based
+     * on localStorage `axia:cylinder-path-b-mode` preference. Tests
+     * may toggle per-call.
+     * @param {boolean} on
+     */
+    setCylinderPathBDefault(on) {
+        wasm.axiaengine_setCylinderPathBDefault(this.__wbg_ptr, on);
     }
     /**
      * 엣지 가시성 임계 각도(도) 설정. 범위 [1.0, 89.0]로 clamp.
