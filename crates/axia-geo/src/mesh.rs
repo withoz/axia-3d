@@ -2757,23 +2757,43 @@ impl Mesh {
         }
 
         // Validate curve closed-ness.
-        // Pragmatic check: Circle (always closed), full Arc (start == end
-        // mod 2π), closed Bezier (control_pts[0] == control_pts[last]).
-        // For now, accept Circle unconditionally and reject others until
-        // A-η lifts curve-specific closed predicates.
+        // Pragmatic check: Circle (always closed), closed Bezier
+        // (control_pts[0] ≈ control_pts[last]), closed BSpline / NURBS
+        // (deferred to future ADR — periodic knot vectors more complex).
+        // ADR-089 A-ω-β extension lifts Circle-only restriction.
         match &curve {
             crate::curves::AnalyticCurve::Circle { .. } => { /* always closed */ }
+            crate::curves::AnalyticCurve::Bezier { control_pts } => {
+                // L-ω-1 — closure check.
+                if control_pts.len() < 2 {
+                    bail!("ADR-089 A-ω-β: Bezier needs ≥ 2 control points");
+                }
+                let p0 = control_pts[0];
+                let pn = control_pts[control_pts.len() - 1];
+                if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
+                    bail!(
+                        "ADR-089 A-ω-β: Bezier control points not closed \
+                         (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e})",
+                        (p0 - pn).length(),
+                        crate::tolerances::EPSILON_LENGTH,
+                    );
+                }
+            }
             other => bail!(
-                "ADR-089 A-δ: only Circle is supported in this commit \
-                 (got {:?}). Other closed curves (Bezier loop, BSpline loop, \
-                 NURBS loop) deferred to A-ι/A-η.",
+                "ADR-089 A-ω-β: closed BSpline / NURBS / Arc curves deferred \
+                 to future ADR (got {:?}). Use Circle or closed Bezier.",
                 std::mem::discriminant(other),
             ),
         }
 
-        // Compute face normal from the curve (Circle has explicit normal).
+        // Compute face normal from the curve.
+        // - Circle: explicit normal field.
+        // - Bezier: best-fit plane normal of control points (L-ω-2).
         let normal = match &curve {
             crate::curves::AnalyticCurve::Circle { normal, .. } => normal.normalize_or_zero(),
+            crate::curves::AnalyticCurve::Bezier { control_pts } => {
+                bezier_best_fit_normal(control_pts)?
+            }
             _ => DVec3::Z, // unreachable per validation above
         };
         if normal.length_squared() < 1e-12 {
@@ -6557,6 +6577,34 @@ impl Default for Mesh {
     }
 }
 
+/// ADR-089 A-ω-β — Best-fit plane normal of Bezier control points.
+///
+/// Used by `add_face_closed_curve` for closed Bezier loops to derive
+/// the face normal. Algorithm: pick first 3 non-collinear points and
+/// compute cross product. Returns Err for degenerate (all collinear)
+/// control point sets.
+fn bezier_best_fit_normal(control_pts: &[DVec3]) -> Result<DVec3> {
+    if control_pts.len() < 3 {
+        bail!(
+            "ADR-089 A-ω-β: Bezier needs ≥ 3 control points to define a plane (got {})",
+            control_pts.len()
+        );
+    }
+    let p0 = control_pts[0];
+    // Find first non-collinear triplet.
+    for i in 1..control_pts.len() {
+        for j in (i + 1)..control_pts.len() {
+            let v1 = control_pts[i] - p0;
+            let v2 = control_pts[j] - p0;
+            let n = v1.cross(v2);
+            if n.length_squared() > 1e-12 {
+                return Ok(n.normalize());
+            }
+        }
+    }
+    bail!("ADR-089 A-ω-β: Bezier control points are collinear, cannot derive plane normal");
+}
+
 /// ADR-089 A-φ-β — Compute uv-slice sub-surface for a 4-vert quad face
 /// on a curved analytic surface (Cylinder/Sphere/Cone/Torus).
 ///
@@ -10215,6 +10263,122 @@ mod tests {
         }
         assert_eq!(self_loop_count, 0,
             "ADR-089 A-γ L-α-1: polygon mesh must have 0 self-loop edges");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-ω-β: closed Bezier 시민권 확장
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr089_a_omega_closed_bezier_creates_self_loop_face() {
+        // A square-ish closed Bezier loop on z=0 plane.
+        // 4 control points: (0,0,0), (10,0,0), (10,10,0), (0,10,0), back to (0,0,0)
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0), // closure: back to first
+            ],
+        };
+        let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("ADR-089 A-ω-β: closed Bezier must succeed");
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_faces, 1);
+        assert_eq!(active_edges, 1);
+        assert_eq!(active_verts, 1);
+        // Edge must be self-loop with Bezier curve.
+        let edges_iter: Vec<EdgeId> = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).map(|(id, _)| id).collect();
+        let eid = edges_iter[0];
+        assert!(mesh.edges[eid].is_self_loop());
+        assert!(matches!(
+            mesh.edges[eid].curve(),
+            Some(crate::curves::AnalyticCurve::Bezier { .. })
+        ));
+        // Face normal should be ~+Z (square in z=0 plane).
+        let normal = mesh.faces[face].normal();
+        assert!((normal.z.abs() - 1.0).abs() < 1e-3,
+            "expected ~Z normal, got {:?}", normal);
+    }
+
+    #[test]
+    fn adr089_a_omega_open_bezier_rejected() {
+        // Bezier with cp[0] != cp[last] should be rejected as not-closed.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                // No closure
+            ],
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-ω-β: open Bezier must be rejected");
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("not closed") || err_msg.contains("closure"),
+            "error must mention closure: {}", err_msg);
+    }
+
+    #[test]
+    fn adr089_a_omega_collinear_bezier_rejected() {
+        // Collinear control points → no plane → bail.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(5.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0), // closure
+            ],
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-ω-β: collinear Bezier must be rejected (no plane)");
+    }
+
+    #[test]
+    fn adr089_a_omega_bsplines_still_rejected() {
+        // BSpline / NURBS / Arc closed curves are deferred to future ADR.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-ω-β: BSpline still deferred (future ADR)");
+    }
+
+    #[test]
+    fn adr089_a_omega_circle_path_unaffected() {
+        // Regression — Circle path still works (existing A-δ contract).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::Circle {
+            center: DVec3::ZERO, radius: 5.0,
+            normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("regression — Circle must still work");
+        assert!(mesh.faces[face].is_active());
     }
 
     // ────────────────────────────────────────────────────────────────────
