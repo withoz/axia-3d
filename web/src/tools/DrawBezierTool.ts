@@ -16,6 +16,11 @@ import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
 import { tessellateCurve, nextCurveId, BezierCurve } from '../curves/Curve';
 import { getCurveRegistry } from '../curves/CurveRegistry';
+import { getDrawCurveMode } from './DrawCurveSettings';
+
+/** ADR-089 A-ψ-β — closure detection threshold (mm). 1e-3 = ADR-026 P12
+ *  cardinal snap range. P3 가 P0 와 이 이내 거리이면 closed Bezier 로 처리. */
+const BEZIER_CLOSURE_EPSILON_MM = 1e-3;
 
 export class DrawBezierTool implements ITool {
   readonly name = 'bezier';
@@ -102,6 +107,38 @@ export class DrawBezierTool implements ITool {
 
   private commit(): void {
     if (this.points.length !== 4) return;
+
+    // ADR-089 A-ψ-β — closure auto-detection.
+    // L-ψ-1 / L-ψ-2 / L-ψ-3: drawCurveMode ON + P3 ≈ P0 → closed Bezier.
+    const p0 = this.points[0];
+    const p3 = this.points[3];
+    const closureGap = p0.distanceTo(p3);
+    const isClosed =
+      getDrawCurveMode() && closureGap < BEZIER_CLOSURE_EPSILON_MM;
+
+    if (isClosed) {
+      // Closed Bezier: forward to drawClosedBezierAsCurve with P0
+      // duplicated as last control point (ensures exact closure on
+      // engine side regardless of f32 drift).
+      const ctrlFlat = new Float64Array(5 * 3);
+      for (let i = 0; i < 4; i++) {
+        ctrlFlat[i * 3]     = this.points[i].x;
+        ctrlFlat[i * 3 + 1] = this.points[i].y;
+        ctrlFlat[i * 3 + 2] = this.points[i].z;
+      }
+      // Closure: cp[4] = cp[0] (exact)
+      ctrlFlat[12] = p0.x;
+      ctrlFlat[13] = p0.y;
+      ctrlFlat[14] = p0.z;
+      const ok = this.ctx.bridge.drawClosedBezierAsCurve(ctrlFlat);
+      this.ctx.syncMesh();
+      debugLog(
+        `[Bezier/Closed] gap=${closureGap.toExponential(2)}mm → ` +
+        `drawClosedBezierAsCurve (shapeId=${ok}, kernel-native closed loop)`
+      );
+      return;
+    }
+
     const curve: BezierCurve = {
       kind: 'bezier',
       id: nextCurveId(),
