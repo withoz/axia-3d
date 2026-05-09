@@ -1,0 +1,198 @@
+# ADR-093: Cylinder Side Face Owner-ID Grouping (B-MVP — Path B Light)
+
+- **Status**: Proposed (D-α spec only)
+- **Date**: 2026-05-09
+- **Anchor**: ADR-090 §6.3 결함 2 (Side hover/select N quads) — primary
+  trigger 활성. 사용자 결재 (2026-05-09) 로 🅺 path 의 첫 단계.
+- **Pattern reference**: ADR-088 (curve_owner_id grouping) — 동일
+  architecture 의 Face/surface 변형
+- **Sibling**: ADR-090 (Path B full — annulus DCEL, 4-6주 deferred)
+
+## 1. Context
+
+ADR-092 closure (2026-05-09) 후 결함 1 (top rim polygon) architectural
+closure. 잔존 결함 2 (side hover/select 시 N quads 중 1개만 선택)
+는 ADR-090 §6.3 의 새로운 primary trigger.
+
+ADR-090 Path B full (annulus DCEL `Face.boundary_loops` schema) 은
+4-6주 multi-week atomic. 결함 2 의 사용자 facing 가치 80% 가
+**selection layer** 에서 발현 — DCEL schema 변경 없이도 selection +
+group enforcement 만으로 사용자 인식 "측면 = 1 entity" 활성 가능.
+
+ADR-088 의 `Edge.curve_owner_id` 패턴이 동일 문제를 Edge 차원에서
+이미 closure (DrawCircle 의 N segments 통일 선택). Face 차원의 동일
+pattern 답습이 본 ADR.
+
+## 2. Decision
+
+**Cylinder side N quad faces 가 동일 `surface_owner_id` 공유**. SelectTool
+의 face click 결과를 walker 로 자동 promote → 같은 surface_owner_id
+가진 모든 active face 일괄 선택. DCEL schema 변경 없음 — Face struct
+에 `Option<u32>` 1 필드 추가 (`#[serde(default)]` legacy 호환).
+
+### 2.1 Lock-ins
+
+- **L1 — ID schema**: `Face.surface_owner_id: Option<u32>` (ADR-088
+  Edge.curve_owner_id 답습). `#[serde(default)]` ensures bincode legacy
+  snapshot 호환.
+- **L2 — Allocation**: `Mesh.next_surface_owner_id: u32` (sequential).
+  Cylinder 생성 시 N side faces 모두 동일 ID 부여. 미부여 (None) 면
+  레거시 polygon strip / non-cylinder 동작.
+- **L3 — Walker API**: `Mesh::walk_face_owner_siblings(face_id) ->
+  Vec<FaceId>` — 같은 surface_owner_id 가진 모든 active face 수집.
+  None ID 인 face 는 자기 자신만 반환.
+- **L4 — Allocation site**: `extrude_planar_cylinder` 가 N side faces
+  생성 직후 동일 owner_id 부여. `extrude_closed_curve_face_via_
+  tessellation` 의 recursion 후 자연 활성.
+- **L5 — Selection layer integration**: SelectTool 의 pickFace 결과를
+  walkOwnerSiblings 로 자동 promote. SelectionManager.selectFaces
+  가 group 단위로 입력.
+- **L6 — Boolean / Push-Pull / Offset**: 본 ADR scope 외 — Selection
+  only MVP. 후속 sub-step 또는 별도 ADR 진행.
+- **L7 — Render layer unchanged**: A-τ smooth-group hide 가 이미 visual
+  통합 처리. owner_id 는 selection 만 사용.
+- **L8 — Inspector display**: 그룹 인식 시 "Cylinder Side (22 faces)"
+  meta 표시 — UX nice-to-have, scope 마지막 sub-step (선택적).
+- **L9 — Path B-full 트리거 재평가 anchor**: 본 ADR closure 후 사용자
+  시연으로 결함 2 의 selection 측면 closure 만족도 측정. 만족 시
+  ADR-090 Path B-full 보류 유지, 불만족 시 진입 결재 활성.
+- **L10 — additive only (ADR-046 P31 #4)**: 메뉴/단축키/툴바 외부 ID
+  unchanged. SelectTool 의 동작은 *확장* (단일 face → group 자동 promote).
+
+### 2.2 Stack
+
+```
+사용자 측면 click (SelectTool)
+  ↓ pickFace → faceId
+walkFaceOwnerSiblings(faceId)         ← D-γ TS bridge
+  ↓
+WasmBridge.getFaceOwnerSiblings        ← D-γ typed wrapper
+  ↓
+walk_face_owner_siblings WASM export   ← D-γ
+  ↓
+Mesh::walk_face_owner_siblings         ← D-β core
+  ├─ get face.surface_owner_id
+  ├─ if None → return [face_id]
+  └─ if Some(id) → iterate active faces, collect those with same id
+  ↓
+SelectionManager.selectFaces(siblings)  ← D-δ
+  ↓
+Inspector / Toast 등 group 단위 인식
+```
+
+### 2.3 Decision Matrix (D-A ~ D-H)
+
+| ID | 결정 | 채택 |
+|----|------|------|
+| D-A | ID schema | `Face.surface_owner_id: Option<u32>` (ADR-088 답습) |
+| D-B | Allocation counter | `Mesh.next_surface_owner_id: u32` |
+| D-C | DCEL schema 변경 | minimum — 1 Option field add (#[serde(default)]) |
+| D-D | Selection enforcement | SelectTool pickFace 후 자동 walk + promote |
+| D-E | Boolean/Push-Pull/Offset | scope 외 — selection only MVP |
+| D-F | Allocation site | extrude_planar_cylinder N sides 직후 동일 ID |
+| D-G | Render layer | unchanged (A-τ smooth-group 답습) |
+| D-H | Inspector display | "Cylinder Side (N faces)" meta — 선택적 마지막 sub-step |
+
+## 3. Path Z Atomic Decomposition (5 sub-step)
+
+| sub-step | 영역 | 회귀 예상 |
+|---|---|---|
+| **D-α** | spec only (본 commit) | 0 |
+| **D-β** | Rust core — `Face.surface_owner_id` + `Mesh.next_surface_owner_id` + `walk_face_owner_siblings` API + `extrude_planar_cylinder` 통합 | axia-geo +6~8 |
+| **D-γ** | WASM bridge — `getFaceOwnerSiblings(faceId): Uint32Array` + TS bridge wrapper | axia-wasm +1~2, vitest +2~3 |
+| **D-δ** | SelectTool 통합 — pickFace 후 walkOwnerSiblings 자동 promote | vitest +3~4 |
+| **D-ε** | closure — LOCKED #35 amendment + ADR-090 §6.3 trigger 재평가 + 사용자 시연 게이트 | 0 |
+
+**누적 예상**: axia-geo +6~8, axia-wasm +1~2, vitest +5~7 = **+12~17**.
+절대 #[ignore] 금지 정책 준수.
+
+## 4. ADR-088 (curve_owner_id) 와의 비교
+
+| 측면 | ADR-088 (curve_owner_id) | ADR-093 (surface_owner_id) |
+|---|---|---|
+| Schema | `Edge.curve_owner_id: Option<u32>` | `Face.surface_owner_id: Option<u32>` |
+| Allocation | DrawCircle/Arc/Bezier/BSpline 시 1 ID | Cylinder 생성 시 N sides 동일 1 ID |
+| Walker | `walk_edge_owner_siblings` | `walk_face_owner_siblings` |
+| Selection | edge click → 같은 ID edge 들 일괄 | face click → 같은 ID face 들 일괄 |
+| 회귀 | +10 (axia-core 3 + axia-geo 3 + vitest 4) | +12~17 (예상) |
+| 일수 | 2일 (5-step Path Z) | 2-3일 (5-step Path Z) |
+| LOCKED #15 ADR-037 P22.5 정합 | ✅ direct | ✅ Face owner-id 자연 확장 |
+
+## 5. ADR-090 §6.3 trigger 매트릭스 갱신
+
+ADR-093 closure 후:
+
+**해결되는 잔존 trigger**:
+- ✅ **결함 2 의 selection 측면** — 사용자가 cylinder 측면 = 1 entity 인식
+
+**잔존 trigger** (ADR-090 Path B-full 트리거 anchor):
+- ❌ 메모리 비용 (N quad faces 누적, large model)
+- ❌ STEP/IGES export 정확도 (DCEL 자체가 polygon strip)
+- ❌ 산업 CAD parity (analytic cylindrical face)
+- ❌ Push-Pull again 시 측면 누적 (cumulative cost)
+
+**다음 결재 anchor**: 사용자 시연 후
+- 만족 ("측면 1 entity 인식 충분") → ADR-090 Path B-full 보류 유지
+- 불만족 ("memory / export / parity 추가 closure 필요") → ADR-090 Path
+  B-full 진입 결재 활성 (B-γ ~ B-θ, 4-6주)
+
+## 6. 위험 분석
+
+- **L1 (낮음)**: bincode 신규 필드 — `#[serde(default)]` + `Option<u32>`
+  추가는 ADR-091 §E L1 의 위험 카테고리 (bincode 신규 필드). **그러나
+  ADR-088 이 동일 패턴 (Edge.curve_owner_id) 으로 이미 검증** — bincode
+  legacy 호환성 PASS. surface_owner_id 도 동일 위험 프로파일.
+- **L2 (낮음)**: Walker 의 무한 루프 — face.surface_owner_id 가
+  None / 일치 안 함 시 자기 자신만 반환. iteration 단조 종료.
+- **L3 (낮음)**: Boolean / Push-Pull 후 owner_id 보존 — face split 시
+  parent owner_id inherit (LOCKED #35 L9 ADR-089 A-χ 답습 — surface
+  metadata inherit 의 일반 패턴).
+- **L4 (중간)**: SelectTool drag-select / shift-select 와 group selection
+  의 정합 — group 자동 promote 가 명시 click 만 적용 (drag 영역 안의
+  faces 는 개별 promote). UX 일관성 검증 필요 (D-δ).
+- **L5 (낮음)**: 사용자 시연 결과 trigger — 측면 1 entity 인식이 너무
+  강제적이라 사용자가 "1 quad 만 선택하고 싶다" 하면 modifier key (Alt)
+  로 group skip 옵션 — 후속 sub-step 또는 ADR-046 P31 #4 패턴.
+
+## 7. ADR-046 P31 정합
+
+- #1 (P1+P3 가치): ✅ — 사용자가 cylinder 측면 = 1 entity 직관 인식
+- #4 (additive only): ✅ — Face struct 에 Option 필드 추가, 기존 동작
+  unchanged. SelectTool 동작은 *확장* (단일 face 가 group 자동 promote).
+
+## 8. 회귀 방지 (절대 #[ignore] 금지)
+
+D-β 단계 신규:
+- `face_surface_owner_id_default_none`
+- `next_surface_owner_id_starts_at_1_and_increments`
+- `walk_face_owner_siblings_returns_self_for_none_id`
+- `walk_face_owner_siblings_collects_all_with_same_id`
+- `extrude_planar_cylinder_assigns_same_owner_id_to_n_sides`
+- `extrude_planar_cylinder_owner_id_unique_per_cylinder`
+- `face_split_inherits_surface_owner_id` (LOCKED #35 L9 cross-cut)
+
+D-γ: WASM endpoint wiring + TS wrapper graceful fallback.
+
+D-δ: SelectTool integration — single click promote / group click 일관 / Inspector group meta.
+
+## 9. Out of Scope
+
+- ADR-090 Path B-full (annulus DCEL `Face.boundary_loops` schema) —
+  본 ADR 의 Sibling, 별도 결재 시 진입.
+- Boolean / Push-Pull / Offset 의 group-aware semantics — 후속 sub-step
+  또는 별도 ADR.
+- Modifier key (Alt) 로 group skip 옵션 — 후속 sub-step 또는 ADR-046
+  P31 추가 사용자 토글.
+- Sphere / Cone / Torus side face owner_id grouping — 자연 확장 가능,
+  별도 sub-step 또는 ADR.
+
+## D. Acceptance Log
+
+### D-α (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — 🅺 path B-MVP 첫 단계.
+- **변경**: 본 ADR 작성. ADR-090 §6.3 trigger 의 결함 2 selection
+  측면 우선 closure 명시.
+- **회귀**: +0 (docs only).
+
+### D-β ~ D-ε (예정)
+별도 sub-step 결재 시 commit 진행.
