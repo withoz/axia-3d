@@ -672,6 +672,65 @@ fn adr097_t_delta_signatures_return_string_json() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-098 S-γ — Asset Library 3-Tier Material Scope WASM endpoints.
+// ════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn adr098_s_gamma_endpoints_wired() {
+    let l = lib_src();
+    for (rust_name, js_name) in [
+        ("pub fn list_materials_by_tier",  "listMaterialsByTier"),
+        ("pub fn get_material_tier",       "getMaterialTier"),
+        ("pub fn add_project_material",    "addProjectMaterial"),
+        ("pub fn add_user_material",       "addUserMaterial"),
+        ("pub fn remove_user_material",    "removeUserMaterial"),
+        ("pub fn migrate_legacy_materials","migrateLegacyMaterials"),
+    ] {
+        assert!(l.contains(rust_name),
+            "ADR-098 S-γ: missing Rust function {}", rust_name);
+        let attr = format!("js_name = \"{}\"", js_name);
+        assert!(l.contains(&attr),
+            "ADR-098 S-γ: missing js_name attr {}", attr);
+    }
+}
+
+#[test]
+fn adr098_s_gamma_list_returns_json_array() {
+    let l = lib_src();
+    let idx = l.find("pub fn list_materials_by_tier").expect("list fn");
+    let body = char_safe_slice(&l, idx, 1200);
+    assert!(body.contains("-> String"),
+        "list_materials_by_tier must return String");
+    assert!(body.contains("\"tier\":"),
+        "list_materials_by_tier JSON must include tier field");
+    assert!(body.contains("\"id\":"),
+        "list_materials_by_tier JSON must include id field");
+}
+
+#[test]
+fn adr098_s_gamma_get_tier_uses_minus_one_sentinel() {
+    let l = lib_src();
+    let idx = l.find("pub fn get_material_tier").expect("get_tier fn");
+    let body = char_safe_slice(&l, idx, 400);
+    assert!(body.contains("-1"),
+        "get_material_tier must return -1 sentinel for missing material");
+    assert!(body.contains("-> i32"),
+        "get_material_tier must return i32 (signed for sentinel)");
+}
+
+#[test]
+fn adr098_s_gamma_remove_user_only_blocks_other_tiers() {
+    let l = lib_src();
+    let idx = l.find("pub fn remove_user_material").expect("remove fn");
+    let body = char_safe_slice(&l, idx, 600);
+    // S-G safety: only User tier removable through this endpoint.
+    assert!(body.contains("MaterialTier::User"),
+        "remove_user_material must check User tier explicitly");
+    assert!(body.contains("-> bool"),
+        "remove_user_material must return bool");
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM endpoints.
 // ════════════════════════════════════════════════════════════════════════
 

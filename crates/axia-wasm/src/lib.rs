@@ -1448,6 +1448,142 @@ impl AxiaEngine {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ADR-098 S-γ — Asset Library 3-Tier Material Scope (Phase 5-A)
+    //
+    // 6 endpoints (additive — ADR-076 baseline guard PASS):
+    //   - listMaterialsByTier (tier u32 → JSON array)
+    //   - addProjectMaterial / addUserMaterial (JSON → MaterialId)
+    //   - removeUserMaterial (MaterialId → bool)
+    //   - getMaterialTier (MaterialId → tier u32, -1 sentinel)
+    //   - migrateLegacyMaterials (count migrated)
+    //
+    // Tier encoding (axia_core::MaterialTier::as_u32 답습):
+    //   0 = System (immutable), 1 = Project, 2 = User
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-098 S-γ — List materials by tier.
+    ///
+    /// Returns JSON array of `{ id, name, nameEn, tier, color }` for the
+    /// specified tier. Invalid tier → empty array.
+    #[wasm_bindgen(js_name = "listMaterialsByTier")]
+    pub fn list_materials_by_tier(&self, tier: u32) -> String {
+        use axia_core::material::MaterialTier;
+        let Some(t) = MaterialTier::from_u32(tier) else {
+            return "[]".to_string();
+        };
+        let mats = self.scene.material_library.materials_by_tier(t);
+        if mats.is_empty() {
+            return "[]".to_string();
+        }
+        let entries: Vec<String> = mats.iter()
+            .map(|m| {
+                let hex = format!("{:06x}", m.visual.color);
+                format!(
+                    r##"{{"id":{},"name":"{}","nameEn":"{}","tier":{},"color":"#{}"}}"##,
+                    m.id.raw(), m.name, m.name_en, t.as_u32(), hex
+                )
+            })
+            .collect();
+        format!("[{}]", entries.join(","))
+    }
+
+    /// ADR-098 S-γ — Get the tier of an existing material.
+    ///
+    /// Returns 0/1/2 (System/Project/User) or -1 if material missing.
+    #[wasm_bindgen(js_name = "getMaterialTier")]
+    pub fn get_material_tier(&self, material_id: u32) -> i32 {
+        use axia_geo::MaterialId;
+        match self.scene.material_library.tier_of(MaterialId::new(material_id)) {
+            Some(t) => t.as_u32() as i32,
+            None => -1,
+        }
+    }
+
+    /// ADR-098 S-γ — Add a new material in Project tier.
+    ///
+    /// Input: simple JSON `{"name":"...","nameEn":"...","color":<u32>}`.
+    /// Other physical/visual properties default to safe values; the UI
+    /// can edit them via existing material edit endpoints.
+    /// Returns the new MaterialId, or throws on parse error.
+    #[wasm_bindgen(js_name = "addProjectMaterial")]
+    pub fn add_project_material(&mut self, name: String, name_en: String, color: u32)
+        -> u32
+    {
+        use axia_core::material::{
+            MaterialTier, MaterialCategory, PhysicalProperties, VisualProperties,
+            FireRating,
+        };
+        let id = self.scene.material_library.create_material_in_tier(
+            MaterialTier::Project,
+            name, name_en, MaterialCategory::Custom,
+            PhysicalProperties {
+                density: 1000.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: FireRating::None,
+            },
+            VisualProperties {
+                color, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+            },
+        );
+        id.raw()
+    }
+
+    /// ADR-098 S-γ — Add a new material in User tier (opt-in library).
+    ///
+    /// Same shape as `addProjectMaterial` but scoped to User tier.
+    #[wasm_bindgen(js_name = "addUserMaterial")]
+    pub fn add_user_material(&mut self, name: String, name_en: String, color: u32)
+        -> u32
+    {
+        use axia_core::material::{
+            MaterialTier, MaterialCategory, PhysicalProperties, VisualProperties,
+            FireRating,
+        };
+        let id = self.scene.material_library.create_material_in_tier(
+            MaterialTier::User,
+            name, name_en, MaterialCategory::Custom,
+            PhysicalProperties {
+                density: 1000.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: FireRating::None,
+            },
+            VisualProperties {
+                color, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+            },
+        );
+        id.raw()
+    }
+
+    /// ADR-098 S-γ — Remove a User-tier material.
+    ///
+    /// System tier rejected (Material library `remove_material` Err →
+    /// false). Project tier currently rejected at this surface (use
+    /// `removeProjectMaterial` future ADR for cascade safety).
+    /// Returns true on success, false otherwise.
+    #[wasm_bindgen(js_name = "removeUserMaterial")]
+    pub fn remove_user_material(&mut self, material_id: u32) -> bool {
+        use axia_core::material::MaterialTier;
+        use axia_geo::MaterialId;
+        let id = MaterialId::new(material_id);
+        // Only allow removal if currently in User tier (S-G safety).
+        if self.scene.material_library.tier_of(id) != Some(MaterialTier::User) {
+            return false;
+        }
+        self.scene.material_library.remove_material(id).is_ok()
+    }
+
+    /// ADR-098 S-γ — Force migration of legacy materials.
+    ///
+    /// Idempotent. Returns the count of newly classified materials.
+    /// Snapshots imported via `importSnapshot` already auto-migrate;
+    /// this endpoint is for explicit re-classification (e.g., after a
+    /// legacy DXF/SKP import that creates raw materials).
+    #[wasm_bindgen(js_name = "migrateLegacyMaterials")]
+    pub fn migrate_legacy_materials(&mut self) -> u32 {
+        self.scene.material_library.migrate_legacy_materials() as u32
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM API
     //
     // 3 categories: ConstructionLine / ImportedMesh / PointCloud.

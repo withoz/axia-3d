@@ -4,7 +4,12 @@
 //! Materials define how geometry manifests in the physical world.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+// `BTreeMap` for materials + tier_index ensures deterministic bincode
+// serialization (HashMap iteration order is non-deterministic, breaking
+// snapshot byte-equality round-trips). ADR-098 S-γ — section 9 must be
+// stable for orphan_recovery::preview_leaves_scene_unchanged regression.
+#[allow(unused_imports)] use HashMap as _LegacyHashMap;
 use axia_geo::MaterialId;
 
 /// Fire resistance rating (minutes)
@@ -177,7 +182,10 @@ impl ScopedMaterialId {
 /// Material library — manages all available materials in a scene
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MaterialLibrary {
-    materials: HashMap<u32, Material>,
+    /// BTreeMap (NOT HashMap) for deterministic bincode serialization.
+    /// Snapshot byte-equality round-trip (orphan_recovery preview etc.)
+    /// requires stable iteration order. ADR-098 S-γ.
+    materials: BTreeMap<u32, Material>,
     next_id: u32,
     /// ADR-098 S-β — parallel tier index. Legacy snapshots without this
     /// field deserialize to empty; `migrate_legacy_materials` reconstructs
@@ -185,7 +193,7 @@ pub struct MaterialLibrary {
     /// `#[serde(default)]` ensures bincode compat (ADR-091 §E L1 답습 —
     /// parallel Map, struct 자체 변경은 add field with default 만).
     #[serde(default)]
-    tier_index: HashMap<u32, MaterialTier>,
+    tier_index: BTreeMap<u32, MaterialTier>,
 }
 
 /// ADR-098 S-D — Built-in material id sentinel range. Migration helper
@@ -200,9 +208,9 @@ impl MaterialLibrary {
     /// Create a new library with built-in materials
     pub fn new() -> Self {
         let mut lib = Self {
-            materials: HashMap::new(),
+            materials: BTreeMap::new(),
             next_id: 0,
-            tier_index: HashMap::new(),
+            tier_index: BTreeMap::new(),
         };
         lib.init_builtins();
         lib

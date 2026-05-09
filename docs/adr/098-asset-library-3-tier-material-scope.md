@@ -208,5 +208,53 @@ Playwright +4. **합계 ~+40~50**, 절대 #[ignore] 금지.
   * Built-in immutability via `remove_material` Result, not type-level
     enforcement (test surface 우선)
 
-### S-γ ~ S-ζ (예정)
+### S-γ (본 commit) — Snapshot section 9 + WASM bridge
+- **commit**: 본 commit
+- **사후 정정 — Map type**: `MaterialLibrary.materials` HashMap → BTreeMap.
+  bincode HashMap 직렬화는 iteration order 가 비결정적이라
+  orphan_recovery::preview_leaves_scene_unchanged byte-equality test
+  fail. BTreeMap 으로 deterministic 보장. `tier_index` 도 동시 BTreeMap.
+  Public API 영향 0 (private fields).
+- **Snapshot section 9 (additive)**:
+  * `Scene.scene_snapshot` 끝에 `[material_library_len:u64][material_library_data]`
+    추가 (legacy 호환 — 누락 시 default 12 built-ins 유지)
+  * `restore_scene_snapshot` — section 9 deserialize + 자동
+    `migrate_legacy_materials` 호출 (idempotent, ADR-098 S-D)
+  * `analyze_snapshot` — `SnapshotSections.material_library` 신규 flag
+  * 회귀 영향 — 기존 ADR-091 D-ε / ADR-095 Phase 3-ε strip-test 가
+    section 9 길이 추가 강제 (`adr091_d_epsilon_legacy_v2_without_section_7d_loads_empty_map`
+    의 strip_len 갱신)
+- **WASM bridge 6 endpoints** (additive — ADR-076 baseline guard PASS):
+  * `listMaterialsByTier(tier: u32) -> String` (JSON array,
+    `{id, name, nameEn, tier, color}`)
+  * `getMaterialTier(material_id: u32) -> i32` (-1 sentinel)
+  * `addProjectMaterial(name, name_en, color) -> u32`
+  * `addUserMaterial(name, name_en, color) -> u32`
+  * `removeUserMaterial(material_id: u32) -> bool` — User tier only
+    (S-G safety)
+  * `migrateLegacyMaterials() -> u32` — count migrated
+- **회귀 (axia-core)**: +5 tests
+  * adr098_section_9_material_library_round_trips
+  * adr098_section_9_legacy_snapshot_keeps_default_library
+  * adr098_section_9_analyze_snapshot_marks_section_present
+  * adr098_section_9_migration_runs_after_legacy_load
+  * adr098_section_9_form_layer_invariant_unchanged_locked_26
+- **회귀 (axia-wasm)**: +4 tests
+  * adr098_s_gamma_endpoints_wired (6 endpoint pin)
+  * adr098_s_gamma_list_returns_json_array (schema lock)
+  * adr098_s_gamma_get_tier_uses_minus_one_sentinel
+  * adr098_s_gamma_remove_user_only_blocks_other_tiers (S-G safety)
+- **export_baseline.txt** additive +6 (ADR-076 §C-amendment-1 정합).
+- **누적 S-α ~ S-γ**: axia-core +19, axia-wasm +4, docs +1 ADR =
+  **+23**, 절대 #[ignore] 금지 23/23 준수.
+- **Cargo sweep**: axia-core **257 PASS** (+5 from S-β), axia-geo
+  1256 unchanged, axia-wasm **46 PASS** (+4 from S-β baseline 42).
+- **Lessons applied**:
+  * ADR-091 §E L1 — section 9 additive, MaterialLibrary 내부 변경
+    (struct field 추가는 #[serde(default)] 만)
+  * **HashMap → BTreeMap canonical for snapshot determinism** (신규
+    lesson) — 향후 Scene 레벨 Map 추가 시 BTreeMap 우선
+  * Legacy strip-test 누적 갱신 패턴 (ADR-091/095/098 모두 동일)
+
+### S-δ ~ S-ζ (예정)
 별도 sub-step 결재 시 commit 진행.
