@@ -2781,46 +2781,59 @@ impl Mesh {
             }
             crate::curves::AnalyticCurve::BSpline { control_pts, knots, degree } => {
                 // L-Α-1 — closure check (clamped knots case).
-                // Periodic knot vector deferred to future ADR.
+                // L-Δ-2 — Type B (periodic knots) extension.
                 if control_pts.len() < 2 {
                     bail!("ADR-089 A-Α-β: BSpline needs ≥ 2 control points");
                 }
-                // Validate knots (delegates to bspline::validate).
                 crate::curves::bspline::validate(control_pts, knots, *degree as usize)
                     .map_err(|e| anyhow::anyhow!(
                         "ADR-089 A-Α-β: BSpline validate failed: {}", e))?;
-                let p0 = control_pts[0];
-                let pn = control_pts[control_pts.len() - 1];
-                if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
-                    bail!(
-                        "ADR-089 A-Α-β: BSpline control points not closed \
-                         (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e}). \
-                         Periodic knot vector closed BSpline deferred to future ADR.",
-                        (p0 - pn).length(),
-                        crate::tolerances::EPSILON_LENGTH,
-                    );
+                let is_periodic = crate::curves::bspline::is_periodic_knots(
+                    knots, *degree as usize);
+                if !is_periodic {
+                    // Type A: clamped — require closed control polygon.
+                    let p0 = control_pts[0];
+                    let pn = control_pts[control_pts.len() - 1];
+                    if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
+                        bail!(
+                            "ADR-089 A-Α-β: BSpline control points not closed \
+                             (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e}). \
+                             Use clamped knots + closed polygon, OR periodic knots \
+                             (uniform spacing, not clamped).",
+                            (p0 - pn).length(),
+                            crate::tolerances::EPSILON_LENGTH,
+                        );
+                    }
                 }
+                // Type B (periodic): no control point closure requirement —
+                // knot vector wrap provides closure via natural BSpline behavior.
             }
             crate::curves::AnalyticCurve::NURBS { control_pts, weights, knots, degree } => {
-                // L-Β-1 — closure check (clamped knots case).
-                // L-Β-2 — weights validation via nurbs::validate.
+                // L-Β-1 / L-Δ-2 — clamped + periodic dual closure.
                 if control_pts.len() < 2 {
                     bail!("ADR-089 A-Β-β: NURBS needs ≥ 2 control points");
                 }
                 crate::curves::nurbs::validate(control_pts, weights, knots, *degree as usize)
                     .map_err(|e| anyhow::anyhow!(
                         "ADR-089 A-Β-β: NURBS validate failed: {}", e))?;
-                let p0 = control_pts[0];
-                let pn = control_pts[control_pts.len() - 1];
-                if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
-                    bail!(
-                        "ADR-089 A-Β-β: NURBS control points not closed \
-                         (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e}). \
-                         Periodic knot vector closed NURBS deferred to future ADR.",
-                        (p0 - pn).length(),
-                        crate::tolerances::EPSILON_LENGTH,
-                    );
+                let is_periodic = crate::curves::nurbs::is_periodic_knots(
+                    knots, *degree as usize);
+                if !is_periodic {
+                    // Type A: clamped — require closed control polygon.
+                    let p0 = control_pts[0];
+                    let pn = control_pts[control_pts.len() - 1];
+                    if (p0 - pn).length() > crate::tolerances::EPSILON_LENGTH {
+                        bail!(
+                            "ADR-089 A-Β-β: NURBS control points not closed \
+                             (|cp[0] - cp[last]| = {:.3e} > EPSILON_LENGTH {:.3e}). \
+                             Use clamped knots + closed polygon, OR periodic knots \
+                             (uniform spacing, not clamped).",
+                            (p0 - pn).length(),
+                            crate::tolerances::EPSILON_LENGTH,
+                        );
+                    }
                 }
+                // Type B (periodic): no control point closure requirement.
             }
             other => bail!(
                 "ADR-089 A-Β-β: closed Arc curves deferred \
@@ -10763,6 +10776,104 @@ mod tests {
         let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
             .expect("regression — Circle must still work");
         assert!(mesh.faces[face].is_active());
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-089 A-Δ-β: periodic knot vector closed BSpline/NURBS
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr089_a_delta_is_periodic_knots_uniform_not_clamped() {
+        // Uniform spacing, no clamping → periodic.
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        assert!(crate::curves::bspline::is_periodic_knots(&knots, 3));
+    }
+
+    #[test]
+    fn adr089_a_delta_is_periodic_knots_clamped_rejected() {
+        // Clamped at start (first 4 knots all 0) → NOT periodic.
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        assert!(!crate::curves::bspline::is_periodic_knots(&knots, 3));
+    }
+
+    #[test]
+    fn adr089_a_delta_is_periodic_knots_non_uniform_rejected() {
+        // Non-uniform spacing → NOT periodic.
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 8.0, 9.0]; // gap at idx 3-4
+        assert!(!crate::curves::bspline::is_periodic_knots(&knots, 3));
+    }
+
+    #[test]
+    fn adr089_a_delta_periodic_bspline_open_polygon_accepted() {
+        // Periodic BSpline: control_pts NOT closed (cp[0] != cp[last])
+        // BUT uniform knots → should be accepted.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(-10.0, 0.0, 0.0),
+                DVec3::new(0.0, -10.0, 0.0),
+                // NO closure — cp[0] != cp[last]
+            ],
+            // Uniform knots (no clamping at ends).
+            // 4 control points + degree 3 + 1 = 8 knots, uniform spacing.
+            knots: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            degree: 3,
+        };
+        let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("ADR-089 A-Δ-β: periodic BSpline must be accepted");
+        // Face exists with Plane surface (best-fit from control polygon).
+        assert!(matches!(
+            mesh.faces[face].surface(),
+            Some(crate::surfaces::AnalyticSurface::Plane { .. })
+        ));
+    }
+
+    #[test]
+    fn adr089_a_delta_clamped_open_polygon_still_rejected() {
+        // Clamped + open polygon → still rejected (Type A semantics).
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                // No closure
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], // clamped
+            degree: 3,
+        };
+        let result = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0));
+        assert!(result.is_err(),
+            "ADR-089 A-Δ-β: clamped + open polygon must still be rejected");
+    }
+
+    #[test]
+    fn adr089_a_delta_periodic_nurbs_open_polygon_accepted() {
+        // Periodic NURBS: same as BSpline but with weights.
+        let mut mesh = Mesh::new();
+        let anchor = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::NURBS {
+            control_pts: vec![
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(-10.0, 0.0, 0.0),
+                DVec3::new(0.0, -10.0, 0.0),
+            ],
+            weights: vec![1.0, 1.0, 1.0, 1.0],
+            knots: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], // uniform/periodic
+            degree: 3,
+        };
+        let face = mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("ADR-089 A-Δ-β: periodic NURBS must be accepted");
+        assert!(matches!(
+            mesh.faces[face].surface(),
+            Some(crate::surfaces::AnalyticSurface::Plane { .. })
+        ));
     }
 
     // ────────────────────────────────────────────────────────────────────

@@ -261,6 +261,14 @@ pub fn parameter_range(knots: &[f64], degree: usize, n_ctrl: usize) -> (f64, f64
 // Internal validation
 // ────────────────────────────────────────────────────────────────────────
 
+/// ADR-089 A-Δ-β — Detect periodic NURBS knot vector.
+///
+/// NURBS periodicity is determined by knot vector alone (weights /
+/// control points 무관). Delegates to `bspline::is_periodic_knots`.
+pub fn is_periodic_knots(knots: &[f64], degree: usize) -> bool {
+    crate::curves::bspline::is_periodic_knots(knots, degree)
+}
+
 pub fn validate(
     control_pts: &[DVec3],
     weights: &[f64],

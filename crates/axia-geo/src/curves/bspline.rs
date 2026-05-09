@@ -284,6 +284,55 @@ pub fn extract_bezier_strips(
 // Internal helpers
 // ────────────────────────────────────────────────────────────────────────
 
+/// ADR-089 A-Δ-β — Detect periodic (non-clamped uniform) knot vector.
+///
+/// Returns `true` when the knot vector represents a periodic BSpline:
+/// - First (degree+1) knots are NOT all equal (not clamped at start)
+/// - Last (degree+1) knots are NOT all equal (not clamped at end)
+/// - Spacing between consecutive knots is uniform (within EPSILON)
+///
+/// Periodic BSplines naturally close (P at knots[degree] equals P at
+/// knots[n_ctrl]) regardless of control point repetition. Used by
+/// `add_face_closed_curve` to accept closed periodic BSplines whose
+/// control polygons are NOT closed.
+pub fn is_periodic_knots(knots: &[f64], degree: usize) -> bool {
+    if knots.len() < 2 * (degree + 1) {
+        return false;
+    }
+    let eps = 1e-9;
+    // Not clamped at start (first degree+1 knots not all equal).
+    let first = knots[0];
+    let mut start_clamped = true;
+    for i in 1..=degree {
+        if (knots[i] - first).abs() > eps {
+            start_clamped = false;
+            break;
+        }
+    }
+    if start_clamped { return false; }
+    // Not clamped at end (last degree+1 knots not all equal).
+    let n = knots.len() - 1;
+    let last = knots[n];
+    let mut end_clamped = true;
+    for i in 1..=degree {
+        if (knots[n - i] - last).abs() > eps {
+            end_clamped = false;
+            break;
+        }
+    }
+    if end_clamped { return false; }
+    // Uniform spacing.
+    let span = knots[1] - knots[0];
+    if span.abs() < eps { return false; }
+    for i in 2..knots.len() {
+        let d = knots[i] - knots[i - 1];
+        if (d - span).abs() > eps * span.abs().max(1.0) {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn validate(control_pts: &[DVec3], knots: &[f64], degree: usize) -> Result<()> {
     if degree == 0 {
         bail!("bspline: degree must be ≥ 1, got 0");
