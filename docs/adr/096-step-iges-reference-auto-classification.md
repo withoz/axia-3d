@@ -1,6 +1,6 @@
-# ADR-096: STEP/IGES Import — Reference Auto-Classification
+# ADR-096: STEP/IGES Import — Reference Auto-Classification — **Accepted**
 
-- **Status**: Proposed (M-α — spec only)
+- **Status**: Accepted (M-α ~ M-γ closure 2026-05-09)
 - **Date**: 2026-05-09
 - **Anchor**: ADR-095 §1.2 + §8 명시 약속 — "Import 결과를 자연
   Reference 분류 (ADR-081~086) — Phase 3 closure 후 retro-migration
@@ -207,5 +207,62 @@ Scene.references[id] = Reference {
   FileImporter 통합 path 는 dynamic import + try/catch graceful —
   기존 import 자체는 정상 진행 (M-L6).
 
-### M-γ (예정 — 사용자 시연 + closure)
-별도 sub-step 결재 시 commit 진행.
+### M-γ (본 commit — 사용자 시연 + closure)
+- **사용자 결재**: 2026-05-09, "승인" — 사용자 시연 + closure.
+- **사용자 시연 PASS** (real Chromium 3/3):
+  - Scenario 1: Default ON (localStorage 미설정 시 production-bundle
+    의 createReferenceImportedMesh 자동 활성, ImportedMesh 시민 생성)
+  - Scenario 2: Explicit OFF preference 보존 (localStorage `'false'`
+    유지)
+  - Scenario 3: Reference creation + Snapshot round-trip (M-L4 source
+    path + M-L5 file stem name 보존)
+- **변경**:
+  * `web/e2e/adr-096-demo.spec.ts` (신규) — Real Chromium 3 specs
+  * `docs/adr/096-*` Status `Proposed` → `Accepted` + §E Lessons
+- **회귀** (Playwright +3): 3 scenarios 모두 PASS.
+  합계 **+3**, 절대 #[ignore] 금지 3/3 준수.
+- **누적 회귀** (M-α ~ M-γ): vitest +14 + Playwright +3 = **+17**.
+
+## E. Lessons
+
+### L1 — ADR 명시 약속의 자연 이행
+
+**관찰**: ADR-095 §8 의 "STEP/IGES import retro-migration" 약속이
+Phase 3 closure 후 자연 이행 가능. ADR-095 §1.2 의 architectural
+natural 결합 항목이 후속 ADR (본 ADR) 의 anchor 가 됨.
+
+**향후 ADR 가이드** — Out of Scope 명시 (별도 ADR 후속) 가 향후 ADR
+의 자연 anchor + 약속 추적성 보장. Phase 3 closure 후 즉시 follow-up
+가능.
+
+### L2 — 짧은 atomic + 누적 architectural quality 자연 결합
+
+**관찰**: 5-day 추정 트랙이 2-day 로 단축. ADR-049 (Settings) +
+ADR-091 §E L4 (helper 분리) + ADR-095 (Reference WASM/TS) + ADR-094
+(dynamic import) 4 ADR 의 누적 자산이 자연 결합. 추가 코드 신규 ~ 250
+LoC, 전체 차지 14 + 3 = 17 회귀 (절대 #[ignore] 금지 100% 준수).
+
+**향후 ADR 가이드** — 5개월 누적 architectural quality 위에 짧은
+atomic 트랙은 점점 더 빠르게 진행 가능. ADR-094 §E L3 의 "자연 결합"
+패턴이 시간이 갈수록 강화.
+
+### L3 — 사용자 facing 한국어 변환의 일관성 (humanizeImportFailure)
+
+**관찰**: ADR-095 §E L3 의 humanizeRBViolation 패턴이 본 ADR 의
+humanizeImportFailure 에서 답습. 4 case (Xia owned / Shape owned /
+Reference owned / endpoint missing) 의 일관된 사용자 facing 메시지.
+
+**향후 ADR 가이드** — engine throw → 사용자 facing 변환은 helper
+모듈의 unique 책임. UI / Toast 가 직접 변환 안 함. SSOT 보장 +
+i18n 변경 시 single point.
+
+### L4 — Default ON 패턴의 누적 (3 ADR)
+
+ADR-049 P-5e-α (drawShapeMode) → ADR-094 (cylinderPathB) → ADR-096
+(autoReferenceImport). 3 ADR 모두 동일 패턴:
+- Engine default OFF (회귀 자산 보존)
+- Production layer Default ON (사용자 facing 가치 활성)
+- localStorage explicit OFF preference 보존
+
+**향후 ADR 가이드** — 새로운 사용자 facing default 도입 시 본 패턴
+canonical. main.ts init 의 wiring 도 동일 (AutoIntersect 패턴).
