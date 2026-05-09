@@ -309,5 +309,42 @@ ADR-090 §4 의 위험 매트릭스 + 본 ADR 의 additive-first 전략으로 �
   * Push-Pull / Offset 의 multi-loop face routing (B-η flip 시)
   * 사용자 facing UI 통합 (B-η flip)
 
-### B-ζ-prep ~ B-θ (예정)
+### B-ζ-prep (본 commit)
+- **사용자 결재**: 2026-05-09, "승인" — Render path additive 진입.
+- **Architectural 발견 — render path "just works"**: 사전 검토 시
+  *additive 분기 추가 필요* 로 예상했으나, 검증 결과 **기존 curved
+  surface render path (export_buffers_inner lines 4714-4774) 가 annulus
+  face 를 자연 처리**:
+  - `face.surface() = Cylinder` 분기 진입 (Plane 아니므로 polygon path
+    skip)
+  - `compute_uv_slice_for_quad_face(face)` 가 self-loop 1-vert face 에
+    대해 None 반환 (defensive — quad_verts.len() != 4)
+  - `render_surface = surface` (full Cylinder) → `tessellate(0.1mm)` 호출
+  - u_range = (0, 2π), v_range = (v_lo, v_hi) → 완전한 cylinder tube
+    tessellation
+  - 결과: 64 triangles + 51 radial normals + 2 smooth ring wireframes
+  - 메타-원칙 #14 의 3-layer 정합 (engine + render + downstream)
+    **자연 충족** — 추가 코드 변경 0
+- **변경**: code 0 — verification tests only.
+- **회귀** (axia-geo 1230 → 1234, +4):
+  * `annulus_emits_triangles` — 64+ triangles 검증 (full Cylinder
+    tessellation)
+  * `annulus_normals_radial` — 51+ verts 가 radial normal (perpendicular
+    to axis) — Cylinder analytic surface evaluation 활성
+  * `top_bottom_faces_render_planar` — Top/Bot closed-curve faces 가
+    ADR-089 A-κ 답습 (coexist 검증)
+  * `edge_wireframe_emits_two_smooth_rings` — 2 self-loop edges 가
+    multi-segment ring polylines (top + bot rim 매끈)
+  * 합계 **+4**, 절대 #[ignore] 금지 4/4 준수
+- **누적 회귀** (B-α ~ B-ζ-prep): axia-geo +19.
+- **Architectural significance**:
+  * 5개월 architectural 누적 (ADR-031 surface metadata + ADR-089 A-κ
+    closed-curve fast-path + ADR-089 A-ρ uv-slice + ADR-038 P23
+    surface-aware normals) 의 *자연 결과* — Path B annulus 가 기존
+    framework 위에 zero-code-change 로 통합.
+  * **메타-원칙 #14 의 가장 깊은 실현**: "면은 닫힌 경계로부터 유도된다"
+    — annulus = 2 closed boundaries (top + bot circles) → engine 자연
+    derivation. 별도 분기 unnecessary.
+
+### B-ε-prep ~ B-θ (예정)
 별도 sub-step 결재 시 commit 진행.

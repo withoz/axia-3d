@@ -5396,6 +5396,134 @@ mod tests {
             result.side_faces.len());
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-094 B-ζ-prep — Render path additive (annulus tessellation).
+    //
+    // Verifies that the existing curved-surface render path (mesh.rs
+    // export_buffers_inner lines 4714-4774) works for the annulus face
+    // *as-is* — full Cylinder surface tessellation with u_range
+    // (0, 2π) + v_range (v_lo, v_hi) produces a complete cylinder
+    // tube. compute_uv_slice_for_quad_face gracefully returns None
+    // for the 1-vert (self-loop) face, so the full surface renders.
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr094_b_zeta_prep_annulus_emits_triangles() {
+        // Render verification — annulus face must produce ≥ 2 triangles
+        // (a complete cylinder tube tessellated chord-tolerant) when
+        // export_buffers is called.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+        let annulus = result.side_faces[0];
+
+        let (_pos, _norm, indices, face_map, _pos_f64) = mesh
+            .export_buffers()
+            .expect("export_buffers OK");
+
+        // Triangles where face_map[tri] == annulus.raw().
+        let annulus_tri_count = face_map.iter()
+            .filter(|&&fid| fid == annulus.raw())
+            .count();
+        // Cylinder tessellation: chord_tol = 0.1mm, R=5 → ~23 segments
+        // around. With v slice ≥ 1, expect ≥ 32 triangles for the full
+        // tube (architectural floor — actual count is implementation-
+        // dependent on surface::tessellate).
+        assert!(annulus_tri_count >= 32,
+            "annulus must emit ≥ 32 triangles (full Cylinder tessellation), \
+             got {}", annulus_tri_count);
+        // Each tri uses 3 indices.
+        assert!(indices.len() >= annulus_tri_count * 3);
+    }
+
+    #[test]
+    fn adr094_b_zeta_prep_annulus_normals_radial() {
+        // Cylinder normals must be radial (perpendicular to axis).
+        // Each vertex normal should satisfy |n.dot(axis_dir)| < eps.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let _ = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+
+        let (positions, normals, _, _face_map, _) = mesh
+            .export_buffers()
+            .expect("export_buffers OK");
+
+        let n_verts = positions.len() / 3;
+        let mut radial_count = 0;
+        for i in 0..n_verts {
+            let nz = normals[i * 3 + 2]; // axis = +Z
+            // Radial normal: nz ≈ 0 (perpendicular to Z).
+            if nz.abs() < 0.05 {
+                radial_count += 1;
+            }
+        }
+        // The annulus contributes mostly radial normals; top/bottom
+        // contribute ±Z. Expect ≥ 32 verts with |nz| ≈ 0 (radial).
+        assert!(radial_count >= 32,
+            "annulus tessellation must produce ≥ 32 radial-normal \
+             vertices, got {}", radial_count);
+    }
+
+    #[test]
+    fn adr094_b_zeta_prep_top_bottom_faces_render_planar() {
+        // Top + bottom closed-curve faces must continue to render via
+        // ADR-089 A-κ closed-curve fast-path (analytic Plane, fan
+        // tessellation). Coexist with annulus.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+
+        let (_, _, _, face_map, _) = mesh
+            .export_buffers()
+            .expect("export_buffers OK");
+
+        // Both top + bottom faces must produce triangles.
+        let bot_tri = face_map.iter()
+            .filter(|&&fid| fid == result.profile_face.raw())
+            .count();
+        let top_tri = face_map.iter()
+            .filter(|&&fid| fid == result.top_face.raw())
+            .count();
+        assert!(bot_tri > 0, "bottom face must emit triangles");
+        assert!(top_tri > 0, "top face must emit triangles");
+    }
+
+    #[test]
+    fn adr094_b_zeta_prep_edge_wireframe_emits_two_smooth_rings() {
+        // Edge wireframe — top + bottom self-loop edges with Circle
+        // curves must render as smooth ring polylines (ADR-089 A-κ-β
+        // self-loop fast-path), giving 2 rings of multi-segment polylines.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let _ = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("create_solid OK");
+
+        let (lines, edge_map) = mesh.export_edge_lines_with_map(20.1);
+
+        // Group segments by EdgeId.
+        let mut seg_by_edge = std::collections::HashMap::new();
+        for &eid in &edge_map {
+            *seg_by_edge.entry(eid).or_insert(0) += 1;
+        }
+
+        // Multi-segment edges (≥ 2 segments) = Circle / Arc curves.
+        let multi: Vec<&i32> = seg_by_edge.values()
+            .filter(|&&c| c >= 2).collect();
+        // 2 self-loop edges (top + bot) — both should be multi-segment.
+        assert!(multi.len() >= 2,
+            "expect ≥ 2 multi-segment edges (top + bottom rings), got {}",
+            multi.len());
+        assert!(lines.len() >= 12,
+            "expect ≥ 2 rings worth of polyline segments");
+    }
+
     #[test]
     fn adr094_b_delta_prep_rejects_non_closed_curve_profile() {
         // B-δ-prep precondition: profile must be closed-curve. Polygonal
