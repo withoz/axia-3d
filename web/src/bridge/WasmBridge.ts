@@ -122,6 +122,29 @@ export interface OrphanRecoveryResult {
   error: string | null;
 }
 
+// ═══ ADR-098 S-γ 3-Tier Material types ═══════════════════════════════
+export type MaterialTier = 'System' | 'Project' | 'User';
+
+export interface ScopedMaterialInfo {
+  id: number;
+  name: string;
+  nameEn: string;
+  tier: MaterialTier;
+  color: string; // "#rrggbb"
+}
+
+const TIER_FROM_U32: Record<number, MaterialTier> = {
+  0: 'System',
+  1: 'Project',
+  2: 'User',
+};
+
+const TIER_TO_U32: Record<MaterialTier, number> = {
+  System: 0,
+  Project: 1,
+  User: 2,
+};
+
 // ═══ ADR-097 T-δ Topology Damage / Auto-Recovery types ═══════════════
 export type TopologyDamageKind =
   | { kind: 'BoundaryEdge'; edge_id: number; incident_face: number }
@@ -461,6 +484,13 @@ type AxiaEngineExtended = AxiaEngine & {
   // ADR-097 T-δ — Topology damage detection + recovery
   detectTopologyDamage?(): string;
   attemptAutoRecovery?(): string;
+  // ADR-098 S-γ — 3-Tier material scope
+  listMaterialsByTier?(tier: number): string;
+  getMaterialTier?(materialId: number): number;
+  addProjectMaterial?(name: string, nameEn: string, color: number): number;
+  addUserMaterial?(name: string, nameEn: string, color: number): number;
+  removeUserMaterial?(materialId: number): boolean;
+  migrateLegacyMaterials?(): number;
   // ADR-095 Phase 3-γ — Reference citizenship
   createReferenceConstructionLine?(name: string, edgeIds: Uint32Array): number;
   createReferenceImportedMesh?(name: string, faceIds: Uint32Array, sourcePath?: string): number;
@@ -4027,6 +4057,103 @@ export class WasmBridge {
       return this.engine.get_all_materials();
     } catch {
       return null;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-098 S-δ — 3-Tier material scope typed wrappers
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-098 S-γ — List materials in a specific tier.
+   * Returns parsed array; empty array on missing endpoint or invalid tier.
+   */
+  listMaterialsByTier(tier: MaterialTier): ScopedMaterialInfo[] {
+    if (!this.engine?.listMaterialsByTier) return [];
+    try {
+      const tierU32 = TIER_TO_U32[tier];
+      const json = this.engine.listMaterialsByTier(tierU32);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any[];
+      return parsed.map((m) => ({
+        id: m.id,
+        name: m.name,
+        nameEn: m.nameEn,
+        tier: TIER_FROM_U32[m.tier] ?? 'Project',
+        color: m.color,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * ADR-098 S-γ — Lookup tier of an existing material.
+   * Returns null when material missing or endpoint absent.
+   */
+  getMaterialTier(materialId: number): MaterialTier | null {
+    if (!this.engine?.getMaterialTier) return null;
+    try {
+      const v = this.engine.getMaterialTier(materialId);
+      if (v < 0) return null;
+      return TIER_FROM_U32[v] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-098 S-γ — Add a Project-tier material.
+   * Returns new MaterialId, or null on missing endpoint.
+   */
+  addProjectMaterial(name: string, nameEn: string, color: number): number | null {
+    if (!this.engine?.addProjectMaterial) return null;
+    this.markDirty();
+    try {
+      return this.engine.addProjectMaterial(name, nameEn, color);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-098 S-γ — Add a User-tier material (opt-in library).
+   * Returns new MaterialId, or null on missing endpoint.
+   */
+  addUserMaterial(name: string, nameEn: string, color: number): number | null {
+    if (!this.engine?.addUserMaterial) return null;
+    this.markDirty();
+    try {
+      return this.engine.addUserMaterial(name, nameEn, color);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-098 S-γ — Remove a User-tier material.
+   * S-G safety: only User tier removable through this endpoint.
+   */
+  removeUserMaterial(materialId: number): boolean {
+    if (!this.engine?.removeUserMaterial) return false;
+    this.markDirty();
+    try {
+      return this.engine.removeUserMaterial(materialId);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * ADR-098 S-γ — Force migration of legacy materials (id-range heuristic).
+   * Returns count migrated, or 0 on missing endpoint.
+   */
+  migrateLegacyMaterials(): number {
+    if (!this.engine?.migrateLegacyMaterials) return 0;
+    try {
+      return this.engine.migrateLegacyMaterials();
+    } catch {
+      return 0;
     }
   }
 

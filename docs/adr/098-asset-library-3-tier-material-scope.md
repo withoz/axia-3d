@@ -256,5 +256,52 @@ Playwright +4. **합계 ~+40~50**, 절대 #[ignore] 금지.
     lesson) — 향후 Scene 레벨 Map 추가 시 BTreeMap 우선
   * Legacy strip-test 누적 갱신 패턴 (ADR-091/095/098 모두 동일)
 
-### S-δ ~ S-ζ (예정)
+### S-δ (본 commit) — UI integration
+- **commit**: 본 commit
+- **TS bridge typed wrappers** (`web/src/bridge/WasmBridge.ts`):
+  * `MaterialTier` discriminated union ('System' | 'Project' | 'User')
+  * `ScopedMaterialInfo` interface
+  * 6 wrappers — `listMaterialsByTier` / `getMaterialTier` /
+    `addProjectMaterial` / `addUserMaterial` / `removeUserMaterial` /
+    `migrateLegacyMaterials`
+  * Graceful null/[] on missing endpoint (legacy build) + markDirty on
+    mutations (ADR-097 T-δ 답습)
+- **AssetLibraryPanel** (`web/src/ui/AssetLibraryPanel.ts`):
+  * 3 tier sections (System / Project / User) with material count
+  * Add buttons (Project / User) via prompt-based input (texture
+    upload 별도, ADR-099 territory)
+  * Remove button — User tier only (S-G safety lock)
+  * Click callback for host integration (Inspector dropdown wiring 별도)
+  * Inline CSS injection (single panel-styles `<style>` 요소)
+  * ComponentPanel 답습 패턴 — DOM 직접 구성, refresh-on-demand
+- **회귀 (Vitest jsdom)**: +21 tests
+  * `WasmBridge.test.ts` — 9 tests (listByTier/tier mapping/sentinels/
+    add/remove/migrate/graceful defaults)
+  * `AssetLibraryPanel.test.ts` — 12 tests (hidden default / show
+    triggers refresh / 3 sections / row swatch+label / S-G remove
+    only / +Project / +User / cancel / confirm true+false / row
+    click callback / toggle)
+  * 절대 #[ignore] 금지 21/21 준수
+- **Full vitest sweep**: 110 files, **1750/1750 PASS** (1 skipped 무관,
+  1729 → 1750 = +21)
+- **누적 S-α ~ S-δ**: axia-core +19, axia-wasm +4, vitest +21,
+  docs +1 ADR = **+44**
+- **Lessons applied**:
+  * ADR-097 T-δ 답습 — graceful null on missing endpoint + markDirty
+    on mutations
+  * ADR-091 §E L4 답습 — UI orchestration (panel = view layer, bridge
+    calls 직접 위임, host 가 뒤처리)
+  * ADR-046 P31 #4 — additive only (기존 Inspector dropdown UNCHANGED;
+    Inspector optgroup 확장은 별도 future)
+- **Out of scope (별도 sub-step / future)**:
+  * XiaInspector dropdown optgroup 확장 — 본 ADR 의 S-F 일부, panel
+    독립 활성으로 충분 (UI 진입점 분리 가능). Inspector 통합은 host
+    별 wiring + 기존 dropdown 보존 위해 future commit.
+  * Texture upload integration (TextureUploadDialog 기존 자산 활용은
+    ADR-099 Layered material 의 자연 anchor)
+  * Project ↔ User 이동 UI (현재는 add/remove 만)
+  * AssetLibraryPanel 의 main.ts 등록 — S-ε wiring 시점 (Settings
+    flag + container.register)
+
+### S-ε ~ S-ζ (예정)
 별도 sub-step 결재 시 commit 진행.

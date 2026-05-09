@@ -2100,4 +2100,89 @@ describe('WasmBridge', () => {
       expect(bridge.attemptAutoRecovery()).toBeNull();
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // ADR-098 S-δ — 3-Tier material scope typed wrappers
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('ADR-098 S-δ 3-tier material wrappers', () => {
+    let bridge: WasmBridge;
+
+    beforeEach(() => {
+      bridge = new WasmBridge();
+    });
+
+    it('listMaterialsByTier maps tier name → u32 and parses JSON', () => {
+      const fn = vi.fn(() =>
+        '[{"id":0,"name":"Concrete","nameEn":"Concrete","tier":0,"color":"#888888"}]',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { listMaterialsByTier: fn };
+      const list = bridge.listMaterialsByTier('System');
+      expect(fn).toHaveBeenCalledWith(0); // System → 0
+      expect(list).toHaveLength(1);
+      expect(list[0]).toMatchObject({ id: 0, tier: 'System', color: '#888888' });
+    });
+
+    it('listMaterialsByTier returns [] when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.listMaterialsByTier('User')).toEqual([]);
+    });
+
+    it('getMaterialTier maps -1 sentinel to null', () => {
+      const fn = vi.fn(() => -1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getMaterialTier: fn };
+      expect(bridge.getMaterialTier(999)).toBeNull();
+    });
+
+    it('getMaterialTier maps 0/1/2 to System/Project/User', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getMaterialTier: vi.fn((id: number) => id) };
+      expect(bridge.getMaterialTier(0)).toBe('System');
+      expect(bridge.getMaterialTier(1)).toBe('Project');
+      expect(bridge.getMaterialTier(2)).toBe('User');
+    });
+
+    it('addProjectMaterial returns id + markDirty triggered', () => {
+      const fn = vi.fn(() => 100);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { addProjectMaterial: fn };
+      const dirty = vi.spyOn(bridge, 'markDirty');
+      const id = bridge.addProjectMaterial('m', 'm', 0xff0000);
+      expect(id).toBe(100);
+      expect(fn).toHaveBeenCalledWith('m', 'm', 0xff0000);
+      expect(dirty).toHaveBeenCalled();
+    });
+
+    it('addUserMaterial returns id', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { addUserMaterial: vi.fn(() => 200) };
+      expect(bridge.addUserMaterial('u', 'u', 0x00ff00)).toBe(200);
+    });
+
+    it('removeUserMaterial returns boolean', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { removeUserMaterial: vi.fn(() => true) };
+      expect(bridge.removeUserMaterial(200)).toBe(true);
+    });
+
+    it('migrateLegacyMaterials returns count', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { migrateLegacyMaterials: vi.fn(() => 12) };
+      expect(bridge.migrateLegacyMaterials()).toBe(12);
+    });
+
+    it('all wrappers gracefully return safe defaults on missing endpoint', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.listMaterialsByTier('Project')).toEqual([]);
+      expect(bridge.getMaterialTier(0)).toBeNull();
+      expect(bridge.addProjectMaterial('a', 'a', 0)).toBeNull();
+      expect(bridge.addUserMaterial('a', 'a', 0)).toBeNull();
+      expect(bridge.removeUserMaterial(0)).toBe(false);
+      expect(bridge.migrateLegacyMaterials()).toBe(0);
+    });
+  });
 });
