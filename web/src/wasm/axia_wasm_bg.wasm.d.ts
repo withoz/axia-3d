@@ -48,6 +48,7 @@ export const axiaengine_deleteShape: (a: number, b: number) => number;
 export const axiaengine_delete_edge: (a: number, b: number) => number;
 export const axiaengine_delete_face: (a: number, b: number) => number;
 export const axiaengine_delete_group: (a: number, b: number) => number;
+export const axiaengine_demoteXiaToShape: (a: number, b: number, c: number) => void;
 export const axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
 export const axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;

@@ -958,6 +958,49 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-091 D-γ — Demote a Xia back to a Shape when its material has
+     * reverted to the form-layer sentinel (`FORM_MATERIAL`).
+     *
+     * On success: returns a JSON string
+     *   `{ "shape_id": u32, "original_id_restored": bool }`
+     * On failure: throws JS `Error` with the DemoteError message
+     * (strict — silent skip 차단, ADR-091 D-γ lock-in 답습).
+     *
+     * Errors (matching `Scene::demote_xia_to_shape`):
+     * - Xia not found
+     * - Material is not the FORM_MATERIAL sentinel
+     * - ShapeId conflict (defensive)
+     *
+     * Transaction-wrapped — Undo restores the pre-demote state
+     * (Xia + shape_to_xia linkage preserved).
+     * @param {number} xia_id
+     * @returns {string}
+     */
+    demoteXiaToShape(xia_id) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_demoteXiaToShape(retptr, this.__wbg_ptr, xia_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * ADR-032 P17 — Draw a tessellated arc and attach analytic Arc curves
      * to each segment edge in one atomic op.
      *

@@ -270,5 +270,30 @@ D-ζ 단계: 실제 Chromium 재질 제거 → Shape badge → Undo 복원
 - **누적 회귀** (D-α ~ D-ε): axia-core +8, axia-wasm +2, vitest +14 =
   **+24** 전체. 절대 #[ignore] 금지 24/24 준수.
 
-### D-ζ ~ D-η (예정)
-별도 sub-step 결재 시 commit 진행.
+### D-ζ (본 commit)
+- **사용자 결재**: 2026-05-09, "승인합니다".
+- **변경**:
+  * `web/e2e/adr-091-material-removal-demote.spec.ts` (신규):
+    Real Chromium round-trip 2 specs.
+    - **#1 demoteXiaToShape rejects unknown XiaId**: production-like
+      Vite preview 빌드에서 `bridge.demoteXiaToShape(99999)` →
+      "demoteXiaToShape: XIA not found" throw 검증. D-γ strict-throw
+      contract 의 cross-runtime 봉인.
+    - **#2 snapshot section 7d additive bytes round-trip**:
+      `bridge.exportSnapshot()` → `bridge.importSnapshot()` 동일 bytes
+      identity (face/vert/edge counts unchanged). D-ε section 7d 가
+      legacy V2 호환 + bincode 정합 한 번 더 봉인 (real bincode +
+      WASM 환경).
+  * 기존 ADR-075 `waitForBridgeReady` helper 재사용 — 새 fixture 0.
+- **회귀**:
+  * Playwright 19 → 21 (+2). 절대 #[ignore] 금지 2/2 준수.
+  * E2E 2/2 PASS in real Chromium (3.3s, fast — slow channel 불필요).
+- **Vite 재빌드 확인**: `npx vite build` 성공 (11.88s, initial bundle
+  warning 외 새 deviation 0). WASM `axia_wasm_bg.wasm` 재빌드 + 새
+  export `demoteXiaToShape` 가 production bundle 에 포함됨을 spec #1
+  의 throw 검증으로 확인.
+- **누적 회귀** (D-α ~ D-ζ): axia-core +8, axia-wasm +2, vitest +14,
+  Playwright +2 = **+26** 전체. 절대 #[ignore] 금지 26/26 준수.
+
+### D-η (예정 — closure)
+LOCKED #26 Phase 2 update + ADR §E Lessons (있을 시) + 회고 commit.

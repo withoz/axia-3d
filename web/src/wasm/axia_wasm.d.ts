@@ -321,6 +321,24 @@ export class AxiaEngine {
      */
     delete_group(group_id: number): boolean;
     /**
+     * ADR-091 D-γ — Demote a Xia back to a Shape when its material has
+     * reverted to the form-layer sentinel (`FORM_MATERIAL`).
+     *
+     * On success: returns a JSON string
+     *   `{ "shape_id": u32, "original_id_restored": bool }`
+     * On failure: throws JS `Error` with the DemoteError message
+     * (strict — silent skip 차단, ADR-091 D-γ lock-in 답습).
+     *
+     * Errors (matching `Scene::demote_xia_to_shape`):
+     * - Xia not found
+     * - Material is not the FORM_MATERIAL sentinel
+     * - ShapeId conflict (defensive)
+     *
+     * Transaction-wrapped — Undo restores the pre-demote state
+     * (Xia + shape_to_xia linkage preserved).
+     */
+    demoteXiaToShape(xia_id: number): string;
+    /**
      * ADR-032 P17 — Draw a tessellated arc and attach analytic Arc curves
      * to each segment edge in one atomic op.
      *
@@ -1657,6 +1675,7 @@ export interface InitOutput {
     readonly axiaengine_delete_edge: (a: number, b: number) => number;
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
+    readonly axiaengine_demoteXiaToShape: (a: number, b: number, c: number) => void;
     readonly axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly axiaengine_drawBezierWithCurve: (a: number, b: number, c: number, d: number) => number;
