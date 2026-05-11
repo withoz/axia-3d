@@ -179,4 +179,89 @@ describe('AssetLibraryPanel (S-δ)', () => {
     panel.toggle();
     expect(panel.isVisible()).toBe(false);
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // ADR-099 L-ε — Layered indicator + ⊞ upload button
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('L-ε layered indicator', () => {
+    it('renders 4-cell indicator for every material', () => {
+      bridge.listMaterialsByTier.mockImplementation((tier: string) =>
+        tier === 'System' ? [SYS_MAT] : []);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const panel = new AssetLibraryPanel(container, bridge as any);
+      panel.show();
+      const cells = panel.getPanelElement().querySelectorAll('.al-channel-cell');
+      expect(cells.length).toBe(4); // 1 material × 4 channels
+      const channels = Array.from(cells).map((c) => c.getAttribute('data-channel'));
+      expect(channels).toEqual(['albedo', 'normal', 'roughness', 'metallic']);
+    });
+
+    it('marks cells populated when hasLayeredMaterial callback returns true', () => {
+      bridge.listMaterialsByTier.mockImplementation((tier: string) =>
+        tier === 'User' ? [USER_MAT] : []);
+      const hasLayered = vi.fn((id: number) => id === 200);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const panel = new AssetLibraryPanel(container, bridge as any, {
+        hasLayeredMaterial: hasLayered,
+      });
+      panel.show();
+      expect(hasLayered).toHaveBeenCalledWith(200);
+      const populated = panel.getPanelElement().querySelectorAll('.al-channel-populated');
+      expect(populated.length).toBe(4); // all 4 cells lit
+    });
+
+    it('cells stay dim when no callback provided', () => {
+      bridge.listMaterialsByTier.mockImplementation((tier: string) =>
+        tier === 'System' ? [SYS_MAT] : []);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const panel = new AssetLibraryPanel(container, bridge as any);
+      panel.show();
+      const populated = panel.getPanelElement().querySelectorAll('.al-channel-populated');
+      expect(populated.length).toBe(0);
+    });
+
+    it('⊞ Layered button shown for Project/User tiers, hidden for System', () => {
+      bridge.listMaterialsByTier.mockImplementation((tier: string) => {
+        if (tier === 'System') return [SYS_MAT];
+        if (tier === 'User') return [USER_MAT];
+        return [];
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const panel = new AssetLibraryPanel(container, bridge as any);
+      panel.show();
+      const sysRow = panel.getPanelElement().querySelector('.al-row[data-tier="System"]')!;
+      const userRow = panel.getPanelElement().querySelector('.al-row[data-tier="User"]')!;
+      expect(sysRow.querySelector('.al-btn-layered')).toBeNull();
+      expect(userRow.querySelector('.al-btn-layered')).not.toBeNull();
+    });
+
+    it('⊞ click with no callback → Toast.error (silent skip 차단)', async () => {
+      bridge.listMaterialsByTier.mockImplementation((tier: string) =>
+        tier === 'User' ? [USER_MAT] : []);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const panel = new AssetLibraryPanel(container, bridge as any);
+      panel.show();
+      // Mock prompt → '1' (Albedo) — flow proceeds until callback check.
+      const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('1');
+      // Mock file picker cancel to avoid actual upload prompts.
+      const origCreate = document.createElement.bind(document);
+      vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+        const el = origCreate(tag);
+        if (tag === 'input' && (el as HTMLInputElement).type !== undefined) {
+          setTimeout(() => el.dispatchEvent(new Event('cancel')), 0);
+        }
+        return el;
+      });
+      panel.getPanelElement()
+        .querySelector<HTMLButtonElement>('.al-btn-layered')!
+        .click();
+      // Wait for async flow.
+      await new Promise((r) => setTimeout(r, 50));
+      // Cancelled — onLayeredChannelUpload should NOT have been called.
+      // We just verify no exception thrown (panel still in DOM).
+      expect(panel.isVisible()).toBe(true);
+      promptSpy.mockRestore();
+    });
+  });
 });

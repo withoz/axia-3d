@@ -391,6 +391,55 @@ Bridge TS wrappers + Real Chromium E2E
   * Async-first signature — `Promise<Result>` 단일 await 로 결정성
     + 테스트 가능성. `await` chain 없이 단일 호출
 
-### L-ε ~ L-η (예정, multi-week)
+### L-ε (본 commit) — UI integration
+- **commit**: 본 commit
+- **`LayeredMaterialDialog.ts`** (신규 single-channel upload helper):
+  * `openLayeredChannelDialog(channel)` → returns
+    `LayeredChannelUploadResult | null`. Per-channel atomic flow
+    (file pick → projection prompt → scale prompt → result).
+  * `parseProjectionInput` / `parseScaleInput` pure helpers
+    (testable, fallback semantics matching legacy TextureUploadDialog)
+  * Mirrors legacy `TextureUploadDialog` 패턴 — 1-tab default = single
+    Albedo call site, L-F lock-in 정합 (multi-tab modal 별도 future)
+- **`AssetLibraryPanel.ts` 확장**:
+  * `renderLayeredIndicator` — 4-cell `A`/`N`/`R`/`M` glyph indicator
+    per row. `al-channel-populated` class when host callback returns
+    true (binary lit/dim; per-channel detail은 future).
+  * `⊞ Layered` 버튼 — Project / User tier 만 (System 영구 immutable
+    per ADR-098 S-G analog). Click → channel pick prompt → delegates
+    to `openLayeredChannelDialog`.
+  * **Callback-based wiring** (no bridge dependency):
+    `hasLayeredMaterial?(id) → bool` + `onLayeredChannelUpload?(id,
+    channel, info) → bool` — host (main.ts in L-ζ) wires these to
+    bridge calls. **panel = pure view layer** (ADR-091 §E L4 답습).
+- **`MaterialLibrary.ts` 확장**: `LayeredChannels` interface + `aux`
+  field 자리에 `layered?: LayeredChannels` 추가 (L-δ commit 에서 이미
+  추가됨, L-ε 는 활용)
+- **Architecture lesson**: L-ε 의 panel/dialog 는 **bridge 의존 0**.
+  L-ζ 가 callback wiring 추가 sub-step — 명확한 atomic 분리.
+  ADR-097 / ADR-100 Recovery orchestrator 의 host-provided
+  `demoteResolver` 패턴 답습.
+- **회귀 (Vitest jsdom)**: +16 tests
+  * `LayeredMaterialDialog.test.ts` — 11 tests (parseProjectionInput
+    5 + parseScaleInput 4 + cancel-path 2 end-to-end)
+  * `AssetLibraryPanel.test.ts` extended — +5 tests (4-cell
+    indicator render / populated class on callback / dim without
+    callback / ⊞ button tier visibility / cancel safety)
+  * 절대 #[ignore] 금지 16/16 준수
+- **Full vitest sweep**: 116 files, **1819/1819 PASS** (1 skipped 무관,
+  1803 → 1819 = +16)
+- **누적 L-α ~ L-ε**: docs +1 ADR, axia-core +18, axia-wasm +5,
+  vitest +29 = **+52**
+- **Lessons applied**:
+  * Callback-based panel wiring — host injects bridge access via
+    callbacks, panel stays bridge-agnostic. ADR-091 §E L4 UI
+    orchestration 분리 **8번째 적용**
+  * Pure parsing helpers (`parseProjectionInput`, `parseScaleInput`) —
+    extracted from prompt-flow for deterministic unit coverage. E2E
+    full-flow는 L-η Playwright (Real Chromium 환경)
+  * Binary indicator MVP (모든 4 cell 동일 lit/dim) — per-channel
+    introspection은 R-γ JSON 으로 가능, future polish
+
+### L-ζ ~ L-η (예정, multi-week)
 별도 sub-step 결재 시 commit 진행. 각 sub-step standalone usable
 (atomic invariant).
