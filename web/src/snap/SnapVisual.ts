@@ -58,7 +58,7 @@ export class SnapVisual {
 
   /** Update the visual display for a snap point.
    *  Call every frame or on mousemove. */
-  update(snap: SnapPoint | null, camera?: THREE.Camera, extensionEdge?: { a: THREE.Vector3; b: THREE.Vector3 }) {
+  update(snap: SnapPoint | null, camera?: THREE.Camera, _extensionEdge?: { a: THREE.Vector3; b: THREE.Vector3 }) {
     this.clear();
     if (!snap || !snap.screenPos) return;
 
@@ -73,6 +73,14 @@ export class SnapVisual {
     // Draw extension guide line if applicable
     if (snap.type === 'extension' && snap.edgeRef && camera) {
       this.drawExtensionLine(snap, camera);
+    }
+
+    // A6: Guide dashed line for relational snaps (axis / parallel / perpendicular)
+    if (camera && snap.guideFrom && (
+      snap.type === 'axisX' || snap.type === 'axisY' || snap.type === 'axisZ' ||
+      snap.type === 'parallel' || snap.type === 'perpendicular'
+    )) {
+      this.drawRelationalGuide(snap, camera);
     }
 
     // Draw marker
@@ -121,7 +129,27 @@ export class SnapVisual {
       case 'extension':    this.drawExtensionMarker(x, y, s, color); break;
       case 'apparent':     this.drawApparent(x, y, s, color); break;
       case 'geometric':    this.drawGeometric(x, y, s, color); break;
+      case 'filledCircle': this.drawFilledCircle(x, y, s, color); break;
+      case 'onFace':       this.drawOnFace(x, y, s, color); break;
     }
+  }
+
+  /** ⊡ On Face — 사각형 + 중앙 점 (face 평면 hit 표시) */
+  private drawOnFace(x: number, y: number, s: number, color: string) {
+    const ctx = this.ctx;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    // 회전 45° 사각형 (기존 square/geometric과 구분)
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.strokeRect(-s * 0.8, -s * 0.8, s * 1.6, s * 1.6);
+    ctx.restore();
+    // 중심 점
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.8, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   /** ■ Endpoint — 빈 사각형 (AutoCAD 초록 사각형) */
@@ -270,6 +298,22 @@ export class SnapVisual {
     ctx.strokeRect(x - s, y - s, s * 2, s * 2);
   }
 
+  /** ● Filled Circle — 루프 닫기 (녹색 채운 원) */
+  private drawFilledCircle(x: number, y: number, s: number, color: string) {
+    const ctx = this.ctx;
+    // Outer glow ring
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, s + 2, 0, Math.PI * 2);
+    ctx.stroke();
+    // Filled inner circle
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, s * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   /** □· Geometric Center — 사각형 + 중심점 */
   private drawGeometric(x: number, y: number, s: number, color: string) {
     const ctx = this.ctx;
@@ -353,6 +397,33 @@ export class SnapVisual {
     ctx.moveTo(origin.x, origin.y);
     ctx.lineTo(snapLocal.x, snapLocal.y);
     ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  /**
+   * A6: Dashed guide from `snap.guideFrom` to `snap.position` for relational
+   * snaps (axis / parallel / perpendicular). Uses the marker color.
+   */
+  private drawRelationalGuide(snap: SnapPoint, camera: THREE.Camera) {
+    if (!snap.guideFrom || !snap.screenPos) return;
+    const ctx = this.ctx;
+    const rect = this.container.getBoundingClientRect();
+    const projFrom = snap.guideFrom.clone().project(camera);
+    if (projFrom.z < -1 || projFrom.z > 1) return;
+    const fromX = (projFrom.x * 0.5 + 0.5) * rect.width;
+    const fromY = (-projFrom.y * 0.5 + 0.5) * rect.height;
+    const toX = snap.screenPos.x - rect.left;
+    const toY = snap.screenPos.y - rect.top;
+    const color = SNAP_MARKERS[snap.type]?.color ?? '#FF3333';
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(fromX, fromY);
+    ctx.lineTo(toX, toY);
+    ctx.stroke();
+    ctx.restore();
     ctx.setLineDash([]);
   }
 

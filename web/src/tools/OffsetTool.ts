@@ -1,10 +1,90 @@
 /**
- * Offset Tool — CAD style offset (select object → click side → repeat)
+ * Offset Tool — Dimension-aware offset (ADR-080).
+ *
+ * Principle 1 (2026-04-24, face-only) was superseded by ADR-080 V-α:
+ * dimension-driven dispatch resolves the ambiguity between edge-offset
+ * and face-boundary-offset by routing on active selection's geometric
+ * dimension:
+ *  - Face selection (or no selection → click-to-pick) → existing
+ *    face-boundary offset (V-γ may switch to surface-normal in future).
+ *  - Edge selection → edge curve offset on host face's surface.
+ *    V-α placeholder: shows a Toast indicating V-β availability; the
+ *    Rust core (`Mesh::offset_edge` typed contract) lands in V-β.
+ *  - Mixed selection (edges + faces) → reject + Toast (force user to
+ *    pick one dimension).
  */
 
 import * as THREE from 'three';
 import { ITool, ToolContext } from './ITool';
 import { debugLog } from '../utils/debug';
+import { Toast } from '../ui/Toast';
+
+/**
+ * ADR-080 V-β-α-bridge — Aggregate per-reason failure counts into a
+ * single user-facing message. Forward-defer cases name the V-β-β /
+ * V-β-γ / V-δ scope explicitly so users know it's coming, not broken.
+ */
+function formatEdgeOffsetFailureToast(
+  reasonCount: Map<string, number>,
+  unsupportedKinds: Set<string>,
+): string | null {
+  if (reasonCount.size === 0) return null;
+  const parts: string[] = [];
+  for (const [reason, count] of reasonCount) {
+    switch (reason) {
+      case 'unsupported_surface':
+        parts.push(
+          `${count}개: 호스트 면 (${[...unsupportedKinds].join(',')}) — V-β-γ 에서 활성됩니다`,
+        );
+        break;
+      case 'unsupported_curve':
+        parts.push(
+          `${count}개: 곡선 종류 (${[...unsupportedKinds].join(',')}) — V-β-β 에서 활성됩니다`,
+        );
+        break;
+      case 'no_incident_face':
+        parts.push(`${count}개: 자유 와이어 — V-δ 에서 활성됩니다`);
+        break;
+      case 'ambiguous_host':
+        parts.push(`${count}개: 호스트 면이 모호합니다`);
+        break;
+      case 'multi_loop':
+        parts.push(`${count}개: hole 면 (multi-loop) 거부 (ADR-016)`);
+        break;
+      case 'degenerate_distance':
+        parts.push(`${count}개: 거리가 너무 작습니다`);
+        break;
+      case 'arc_plane_mismatch':
+        parts.push(`${count}개: arc 평면이 호스트 면과 일치하지 않습니다`);
+        break;
+      case 'radius_collapse':
+        parts.push(`${count}개: 반지름이 0 이하로 축소됩니다 (방향 반전 필요)`);
+        break;
+      case 'unsupported_curve_on_surface':
+        parts.push(
+          `${count}개: 곡선이 호스트 면 (${[...unsupportedKinds].join(',')}) 위에 자연스럽게 놓이지 않습니다`,
+        );
+        break;
+      case 'axial_out_of_range':
+        parts.push(`${count}개: 축 방향 위치가 호스트 범위를 벗어납니다`);
+        break;
+      case 'wire_not_planar':
+        parts.push(`${count}개: 자유 와이어가 평면이 아닙니다 (V-δ-β 명시 평면 필요)`);
+        break;
+      case 'no_reference_plane':
+        parts.push(
+          `${count}개: 기준 평면을 찾을 수 없습니다 (단일 엣지 또는 직선) — V-δ-β 활성 시 명시 평면 입력 가능`,
+        );
+        break;
+      case 'bridge_unavailable':
+        parts.push(`${count}개: WASM 미가용`);
+        break;
+      default:
+        parts.push(`${count}개: 기타 오류 (${reason})`);
+    }
+  }
+  return `엣지 offset 실패 — ${parts.join(' · ')}`;
+}
 
 export class OffsetTool implements ITool {
   readonly name = 'offset';
@@ -12,27 +92,67 @@ export class OffsetTool implements ITool {
   private ctx: ToolContext;
   private offsetPhase: 0 | 1 | 2 = 0;
   private offsetFaceId: number = -1;
-  private offsetEdgeId: number = -1;
   private offsetNormal: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
   private offsetHitPoint: THREE.Vector3 = new THREE.Vector3();
   private offsetGhost: THREE.Group | null = null;
   private offsetFaceVerts: THREE.Vector3[] = [];
   private lastOffsetDist: number = 0;
-  private offsetEdgeDir: THREE.Vector3 = new THREE.Vector3();
-  private offsetEdgeP0: THREE.Vector3 = new THREE.Vector3();
-  private offsetEdgeP1: THREE.Vector3 = new THREE.Vector3();
-  private offsetEdgeHighlight: THREE.Line | null = null;
   private offsetHoverHighlight: THREE.Line | null = null;
   private offsetCurrentSign: number = 1;
+  // ADR-080 V-α — Dimension dispatch state. Set on onActivate based on
+  // active selection. 'edge' / 'face' / null (= will be set on first
+  // face-pick click).
+  private dimMode: 'edge' | 'face' | null = null;
 
   constructor(ctx: ToolContext) {
     this.ctx = ctx;
   }
 
+  /** ADR-080 V-α — classify active selection's geometric dimension. */
+  private detectDimension(): 'edge' | 'face' | 'mixed' | 'none' {
+    const faces = this.ctx.getSelectedFaces();
+    const edges = this.ctx.selection.getSelectedEdges();
+    const hasFaces = faces.length > 0;
+    const hasEdges = edges.length > 0;
+    if (hasFaces && hasEdges) return 'mixed';
+    if (hasFaces) return 'face';
+    if (hasEdges) return 'edge';
+    return 'none';
+  }
+
   onActivate(): void {
     const canvas = this.ctx.viewport.renderer.domElement;
     canvas.style.cursor = 'none';
-    debugLog('[OffsetTool] Activated');
+
+    // ADR-080 V-α — Dimension dispatch on activation.
+    const dim = this.detectDimension();
+    if (dim === 'mixed') {
+      // L5 — Mixed selection rejected, force user to disambiguate.
+      Toast.warning(
+        '선과 면을 동시에 선택했습니다. Offset 명령은 한 차원만 사용합니다 (선 또는 면).',
+        3500,
+      );
+      this.ctx.selection.clearSelection();
+      this.dimMode = null;
+      debugLog('[OffsetTool] Activated; mixed selection rejected (ADR-080 L5)');
+    } else if (dim === 'edge') {
+      // L3 — Edge dimension routes to in-plane curve offset (V-β-α).
+      // V-β-α-bridge: actually performs Line-on-Plane offsets via
+      // `bridge.offsetEdgeOnHost`. Forward-defer reasons (Cylinder host,
+      // Arc curve, free wire, etc.) surface as reason-specific Toasts at
+      // VCB-apply time. No upfront placeholder Toast.
+      this.dimMode = 'edge';
+      debugLog('[OffsetTool] Activated; edge dimension (V-β-α)');
+    } else if (dim === 'face') {
+      // L4 — Face dimension. Existing behavior kept (V-γ may swap to
+      // surface-normal offset in a future ADR).
+      this.dimMode = 'face';
+      debugLog('[OffsetTool] Activated; face dimension');
+    } else {
+      // No selection — wait for click-to-pick (legacy Phase 0 path).
+      this.dimMode = null;
+      debugLog('[OffsetTool] Activated; awaiting face pick');
+    }
   }
 
   onDeactivate(): void {
@@ -41,57 +161,39 @@ export class OffsetTool implements ITool {
     this.cleanup();
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
+    // ADR-080 V-β-α-bridge — Edge dimension waits for VCB input (no face
+    // pick). Click on canvas does nothing in edge mode; user enters
+    // distance via VCB to apply, ESC to cancel.
+    if (this.dimMode === 'edge') {
+      Toast.info('엣지 offset: 거리(VCB)를 입력하세요. ESC 로 취소.', 2000);
+      return;
+    }
+
     if (this.offsetPhase === 0) {
-      // Phase 0 → 1: select object
-      const picked = this.pickOffsetTarget(e);
-      if (picked) {
+      // Phase 0 → 1: pick a face.
+      if (this.pickFaceTarget(e)) {
         this.offsetPhase = 1;
+        this.dimMode = 'face';
         this.removeOffsetHover();
-        debugLog('[Offset] Phase 1: object selected,',
-          picked.type === 'edge' ? 'edgeId=' + this.offsetEdgeId : 'faceId=' + this.offsetFaceId);
+        debugLog('[Offset] Phase 1: faceId=', this.offsetFaceId);
       }
     } else if (this.offsetPhase === 1) {
-      // Phase 1 → execute: determine direction (second click)
+      // Phase 1 → execute: direction from click.
       const clickPt = this.ctx.getGroundPoint(e);
       if (!clickPt) return;
 
-      let dist = 0;
+      let dist = this.offsetRayDist(e);
+      if (this.lastOffsetDist > 0) {
+        const sign = dist >= 0 ? 1 : -1;
+        dist = this.lastOffsetDist * sign;
+      }
 
-      if (this.offsetEdgeId >= 0) {
-        const midPt = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-        const clickDir = new THREE.Vector3().subVectors(clickPt, midPt);
-        const side = clickDir.dot(this.offsetEdgeDir) >= 0 ? 1 : -1;
-
-        if (this.lastOffsetDist > 0) {
-          dist = this.lastOffsetDist * side;
-        } else {
-          dist = clickDir.dot(this.offsetEdgeDir);
-        }
-
-        if (Math.abs(dist) > 0.1) {
-          const planeN: [number, number, number] = [
-            this.offsetNormal.x, this.offsetNormal.y, this.offsetNormal.z
-          ];
-          const result = this.ctx.bridge.offsetEdge(this.offsetEdgeId, dist, planeN);
-          if (result && result.ok) {
-            this.lastOffsetDist = Math.abs(dist);
-            debugLog('[Offset/Edge] Applied: dist=', dist.toFixed(1), 'newEdge=', result.newEdge);
-          }
-        }
-      } else if (this.offsetFaceId >= 0) {
-        dist = this.offsetRayDist(e);
-        if (this.lastOffsetDist > 0) {
-          const sign = dist >= 0 ? 1 : -1;
-          dist = this.lastOffsetDist * sign;
-        }
-
-        if (Math.abs(dist) > 0.1) {
-          const result = this.ctx.bridge.offsetFace(this.offsetFaceId, dist);
-          if (result && result.ok) {
-            this.lastOffsetDist = Math.abs(dist);
-            debugLog('[Offset/Face] Applied: dist=', dist.toFixed(1), 'innerFace=', result.innerFace);
-          }
+      if (Math.abs(dist) > 0.1 && this.offsetFaceId >= 0) {
+        const result = this.ctx.bridge.offsetFace(this.offsetFaceId, dist);
+        if (result && result.ok) {
+          this.lastOffsetDist = Math.abs(dist);
+          debugLog('[Offset/Face] Applied: dist=', dist.toFixed(1), 'innerFace=', result.innerFace);
         }
       }
 
@@ -100,7 +202,7 @@ export class OffsetTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     const pickBox = this.ctx.pickBox;
     if (pickBox) {
       pickBox.visible = true;
@@ -108,85 +210,39 @@ export class OffsetTool implements ITool {
     }
 
     if (this.offsetPhase === 0) {
-      // Phase 0: object hover highlight
-      const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-      if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-        const segIndex = Math.floor(edgeHit.index / 2);
-        this.showEdgeHover(segIndex);
+      // Hover: face highlight only (no edge picking).
+      const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
+      if (hit && hit.faceIndex != null && hit.faceIndex >= 0) {
+        // Viewport's built-in hover paints the face; we do nothing here.
       } else {
         this.removeOffsetHover();
       }
-    } else if (this.offsetPhase === 1) {
-      // Phase 1: direction preview + dimension display
-      if (this.offsetEdgeId >= 0) {
-        const groundPt = this.ctx.getGroundPoint(e);
-        if (groundPt) {
-          const midPt = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-          const clickDir = new THREE.Vector3().subVectors(groundPt, midPt);
-          const projDist = clickDir.dot(this.offsetEdgeDir);
+    } else if (this.offsetPhase === 1 && this.offsetFaceId >= 0) {
+      const dist = this.offsetRayDist(e);
+      if (Math.abs(dist) > 0.1) {
+        this.offsetCurrentSign = dist >= 0 ? 1 : -1;
+      }
+      const previewDist = this.lastOffsetDist > 0
+        ? this.lastOffsetDist * this.offsetCurrentSign
+        : dist;
+      this.updateOffsetGhost(previewDist);
 
-          if (Math.abs(projDist) > 0.1) {
-            this.offsetCurrentSign = projDist >= 0 ? 1 : -1;
-          }
-
-          let previewDist = this.lastOffsetDist > 0
-            ? this.lastOffsetDist * this.offsetCurrentSign
-            : projDist;
-
-          if (Math.abs(previewDist) > 0.1) {
-            const offset = this.offsetEdgeDir.clone().multiplyScalar(previewDist);
-            const prevP0 = this.offsetEdgeP0.clone().add(offset);
-            const prevP1 = this.offsetEdgeP1.clone().add(offset);
-
-            this.removeOffsetHover();
-            const geo = new THREE.BufferGeometry();
-            geo.setAttribute('position', new THREE.BufferAttribute(
-              new Float32Array([prevP0.x, prevP0.y, prevP0.z, prevP1.x, prevP1.y, prevP1.z]), 3
-            ));
-            const mat = new THREE.LineBasicMaterial({
-              color: 0xff9f43, linewidth: 2, depthTest: false,
-            });
-            this.offsetHoverHighlight = new THREE.Line(geo, mat);
-            this.offsetHoverHighlight.renderOrder = 998;
-            this.ctx.viewport.scene.add(this.offsetHoverHighlight);
-
-            const text = this.ctx.units.format(Math.abs(previewDist));
-            const midFrom = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-            const midTo = midFrom.clone().add(this.offsetEdgeDir.clone().multiplyScalar(previewDist));
-            this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-              { from: midFrom, to: midTo, text, color: '#ff9f43' },
-            ]);
-          }
-        }
-      } else if (this.offsetFaceId >= 0) {
-        const dist = this.offsetRayDist(e);
-        if (Math.abs(dist) > 0.1) {
-          this.offsetCurrentSign = dist >= 0 ? 1 : -1;
-        }
-        let previewDist = this.lastOffsetDist > 0
-          ? this.lastOffsetDist * this.offsetCurrentSign
-          : dist;
-        this.updateOffsetGhost(previewDist);
-
-        if (Math.abs(previewDist) > 0.1) {
-          const text = this.ctx.units.format(Math.abs(previewDist));
-          const label = previewDist >= 0 ? 'Inset' : 'Outset';
-          if (this.offsetFaceVerts.length >= 2) {
-            const midA = new THREE.Vector3().addVectors(
-              this.offsetFaceVerts[0], this.offsetFaceVerts[1]
-            ).multiplyScalar(0.5);
-            const edge = new THREE.Vector3().subVectors(
-              this.offsetFaceVerts[1], this.offsetFaceVerts[0]
-            );
-            const inward = new THREE.Vector3().crossVectors(edge, this.offsetNormal).normalize();
-            const midB = midA.clone().add(inward.multiplyScalar(previewDist));
-            this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
-              { from: midA, to: midB, text: `${label}: ${text}`, color: '#ff9f43' },
-            ]);
-          }
-        } else {
-          this.ctx.dimLabel.clear();
-        }
+      if (Math.abs(previewDist) > 0.1 && this.offsetFaceVerts.length >= 2) {
+        const text = this.ctx.units.format(Math.abs(previewDist));
+        const label = previewDist >= 0 ? 'Inset' : 'Outset';
+        const midA = new THREE.Vector3().addVectors(
+          this.offsetFaceVerts[0], this.offsetFaceVerts[1],
+        ).multiplyScalar(0.5);
+        const edge = new THREE.Vector3().subVectors(
+          this.offsetFaceVerts[1], this.offsetFaceVerts[0],
+        );
+        const inward = new THREE.Vector3().crossVectors(edge, this.offsetNormal).normalize();
+        const midB = midA.clone().add(inward.multiplyScalar(previewDist));
+        this.ctx.dimLabel.update(this.ctx.viewport.activeCamera, [
+          { from: midA, to: midB, text: `${label}: ${text}`, color: '#ff9f43' },
+        ]);
+      } else {
+        this.ctx.dimLabel.clear();
       }
     }
   }
@@ -198,26 +254,25 @@ export class OffsetTool implements ITool {
   }
 
   applyVCBValue(value: number): void {
+    // ADR-080 V-β-α-bridge — Edge dimension dispatch via Mesh::offset_edge_
+    // on_host_face. Forward-defer cases (Cylinder host, Arc curve, free wire,
+    // multi-loop, etc.) surface as reason-specific Toasts.
+    if (this.dimMode === 'edge') {
+      this.applyEdgeOffset(value);
+      this.ctx.dimLabel.clear();
+      this.resetOffsetState();
+      return;
+    }
+
     if (this.offsetPhase === 0) {
       this.lastOffsetDist = value;
       debugLog('[VCB/Offset] Distance set:', value);
-    } else if (this.offsetPhase === 1) {
+    } else if (this.offsetPhase === 1 && this.offsetFaceId >= 0) {
       const signedValue = value * this.offsetCurrentSign;
-      if (this.offsetEdgeId >= 0) {
-        const planeN: [number, number, number] = [
-          this.offsetNormal.x, this.offsetNormal.y, this.offsetNormal.z
-        ];
-        const result = this.ctx.bridge.offsetEdge(this.offsetEdgeId, signedValue, planeN);
-        if (result && result.ok) {
-          this.lastOffsetDist = value;
-          debugLog('[VCB/Offset/Edge] Applied:', signedValue, 'newEdge=', result.newEdge);
-        }
-      } else if (this.offsetFaceId >= 0) {
-        const result = this.ctx.bridge.offsetFace(this.offsetFaceId, signedValue);
-        if (result && result.ok) {
-          this.lastOffsetDist = value;
-          debugLog('[VCB/Offset/Face] Applied:', signedValue, 'innerFace=', result.innerFace);
-        }
+      const result = this.ctx.bridge.offsetFace(this.offsetFaceId, signedValue);
+      if (result && result.ok) {
+        this.lastOffsetDist = value;
+        debugLog('[VCB/Offset/Face] Applied:', signedValue, 'innerFace=', result.innerFace);
       }
       this.ctx.syncMesh();
       this.resetOffsetState();
@@ -236,15 +291,95 @@ export class OffsetTool implements ITool {
   private resetOffsetState(): void {
     this.offsetPhase = 0;
     this.offsetFaceId = -1;
-    this.offsetEdgeId = -1;
     this.offsetCurrentSign = 1;
+    this.dimMode = null;
     this.removeOffsetGhost();
-    this.removeEdgeHighlight();
     this.removeOffsetHover();
     this.ctx.selection.clearSelection();
   }
 
-  private pickOffsetTarget(e: MouseEvent): { type: 'face' | 'edge' } | null {
+  /**
+   * ADR-080 V-β-α-bridge — Edge mode VCB handler.
+   *
+   * Iterates over each selected edge, invokes `bridge.offsetEdgeOnHost`,
+   * and surfaces a reason-specific Toast for failed edges. On any
+   * success, syncs the mesh and reports the count.
+   */
+  private applyEdgeOffset(dist: number): void {
+    const edges = this.ctx.selection.getSelectedEdges();
+    if (edges.length === 0) {
+      Toast.info('Offset 적용할 엣지가 없습니다.', 2500);
+      return;
+    }
+
+    const distFmt = this.ctx.units.format(Math.abs(dist));
+    let successCount = 0;
+    const reasonCount = new Map<string, number>();
+    const unsupportedKinds = new Set<string>();
+
+    // ADR-080 V-δ-γ — Cascade fallback for free wire failures:
+    //   Layer 1: bridge.offsetEdgeOnHost (host face / V-δ-α wire planarity)
+    //   Layer 2: if active sketch session, retry with V-δ-β explicit plane
+    //   Layer 3 (deferred): ground plane (intentionally NOT default-on —
+    //                        user must explicitly opt in via sketch)
+    const sketch = this.ctx.getSketchInfo();
+    let sketchFallbackCount = 0;
+
+    for (const edgeId of edges) {
+      let r = this.ctx.bridge.offsetEdgeOnHost(edgeId, dist);
+      if (r.ok) {
+        successCount++;
+        continue;
+      }
+      // V-δ-γ Layer 2: free-wire-specific failures + active sketch →
+      // retry with caller-supplied plane.
+      const isFreeWireFailure =
+        r.reason === 'no_reference_plane' || r.reason === 'wire_not_planar';
+      if (isFreeWireFailure && sketch) {
+        const sr = this.ctx.bridge.offsetEdgeWithReferencePlane(
+          edgeId, dist,
+          [sketch.origin.x, sketch.origin.y, sketch.origin.z],
+          [sketch.normal.x, sketch.normal.y, sketch.normal.z],
+        );
+        if (sr.ok) {
+          successCount++;
+          sketchFallbackCount++;
+          continue;
+        }
+        r = sr; // record sketch-fallback failure reason for Toast
+      }
+      const key = r.reason;
+      reasonCount.set(key, (reasonCount.get(key) ?? 0) + 1);
+      if (r.reason === 'unsupported_surface' || r.reason === 'unsupported_curve') {
+        unsupportedKinds.add(r.kind);
+      } else if (r.reason === 'unsupported_curve_on_surface') {
+        unsupportedKinds.add(`${r.curveKind}@${r.surfaceKind}`);
+      }
+      debugLog('[OffsetTool] edge offset failed', { edgeId, ...r });
+    }
+
+    if (sketchFallbackCount > 0) {
+      debugLog('[OffsetTool] sketch fallback applied', { count: sketchFallbackCount });
+    }
+
+    if (successCount > 0) {
+      this.ctx.syncMesh();
+      Toast.success(
+        `엣지 offset (${distFmt}) — ${successCount}개 성공${
+          edges.length > successCount ? ` / ${edges.length - successCount}개 실패` : ''
+        }`,
+        2500,
+      );
+    }
+
+    // Surface a single reason-aggregated Toast for failed edges.
+    if (successCount < edges.length) {
+      const msg = formatEdgeOffsetFailureToast(reasonCount, unsupportedKinds);
+      if (msg) Toast.warning(msg, 4000);
+    }
+  }
+
+  private pickFaceTarget(e: MouseEvent): boolean {
     const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
     let rustFaceId = -1;
     let hitPoint: THREE.Vector3 | null = null;
@@ -265,42 +400,14 @@ export class OffsetTool implements ITool {
 
     if (rustFaceId >= 0 && hitPoint) {
       this.offsetFaceId = rustFaceId;
-      this.offsetEdgeId = -1;
       const normal = this.ctx.bridge.getFaceNormal(rustFaceId);
       this.offsetNormal = new THREE.Vector3(normal[0], normal[1], normal[2]);
       this.offsetHitPoint = hitPoint;
       this.createOffsetGhost(rustFaceId);
       this.ctx.selection.handleClick(rustFaceId, false, false);
-      return { type: 'face' };
+      return true;
     }
-
-    const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-    if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-      const segIndex = Math.floor(edgeHit.index / 2);
-      const edgeId = this.ctx.edgeMap[segIndex];
-      if (edgeId != null) {
-        this.offsetEdgeId = edgeId;
-        this.offsetFaceId = -1;
-        this.offsetNormal = new THREE.Vector3(0, 1, 0);
-
-        const edgeLines = this.ctx.bridge.getEdgeLines();
-        if (edgeLines) {
-          const base = segIndex * 6;
-          this.offsetEdgeP0 = new THREE.Vector3(edgeLines[base], edgeLines[base+1], edgeLines[base+2]);
-          this.offsetEdgeP1 = new THREE.Vector3(edgeLines[base+3], edgeLines[base+4], edgeLines[base+5]);
-          const edgeDir = new THREE.Vector3().subVectors(this.offsetEdgeP1, this.offsetEdgeP0).normalize();
-          this.offsetEdgeDir = new THREE.Vector3().crossVectors(edgeDir, this.offsetNormal).normalize();
-
-          const midPt = new THREE.Vector3().addVectors(this.offsetEdgeP0, this.offsetEdgeP1).multiplyScalar(0.5);
-          this.offsetHitPoint = midPt;
-
-          this.showEdgeSelected(this.offsetEdgeP0, this.offsetEdgeP1);
-        }
-        return { type: 'edge' };
-      }
-    }
-
-    return null;
+    return false;
   }
 
   private offsetRayDist(e: MouseEvent): number {
@@ -316,16 +423,10 @@ export class OffsetTool implements ITool {
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(this.offsetNormal, this.offsetHitPoint);
     const intersection = new THREE.Vector3();
     const hit = ray.ray.intersectPlane(plane, intersection);
-
     if (!hit) return 0;
 
     const diff = new THREE.Vector3().subVectors(intersection, this.offsetHitPoint);
     const absDist = diff.length();
-
-    if (this.offsetEdgeId >= 0 && this.offsetEdgeDir.lengthSq() > 0.001) {
-      const sign = diff.dot(this.offsetEdgeDir) >= 0 ? 1 : -1;
-      return absDist * sign;
-    }
 
     if (this.offsetFaceVerts.length >= 3) {
       const centroid = new THREE.Vector3();
@@ -337,13 +438,11 @@ export class OffsetTool implements ITool {
 
       return mouseToCentroid < hitToCentroid ? absDist : -absDist;
     }
-
     return absDist;
   }
 
   private createOffsetGhost(faceId: number): void {
     this.removeOffsetGhost();
-    this.removeEdgeHighlight();
     this.offsetFaceVerts = this.ctx.extractFaceBoundary(faceId);
     if (this.offsetFaceVerts.length < 3) return;
 
@@ -391,7 +490,7 @@ export class OffsetTool implements ITool {
       const clampedDist = Math.min(moveDist, absDist * 3);
 
       offsetVerts.push(
-        this.offsetFaceVerts[i].clone().add(bisector.multiplyScalar(clampedDist * direction))
+        this.offsetFaceVerts[i].clone().add(bisector.multiplyScalar(clampedDist * direction)),
       );
     }
 
@@ -465,15 +564,6 @@ export class OffsetTool implements ITool {
     this.offsetFaceVerts = [];
   }
 
-  private removeEdgeHighlight(): void {
-    if (this.offsetEdgeHighlight) {
-      this.offsetEdgeHighlight.geometry.dispose();
-      (this.offsetEdgeHighlight.material as THREE.Material).dispose();
-      this.ctx.viewport.scene.remove(this.offsetEdgeHighlight);
-      this.offsetEdgeHighlight = null;
-    }
-  }
-
   private removeOffsetHover(): void {
     if (this.offsetHoverHighlight) {
       this.offsetHoverHighlight.geometry.dispose();
@@ -481,42 +571,5 @@ export class OffsetTool implements ITool {
       this.ctx.viewport.scene.remove(this.offsetHoverHighlight);
       this.offsetHoverHighlight = null;
     }
-  }
-
-  private showEdgeHover(segIndex: number): void {
-    this.removeOffsetHover();
-    const edgeLines = this.ctx.bridge.getEdgeLines();
-    if (!edgeLines) return;
-
-    const base = segIndex * 6;
-    if (base + 5 >= edgeLines.length) return;
-
-    const p0x = edgeLines[base], p0y = edgeLines[base+1], p0z = edgeLines[base+2];
-    const p1x = edgeLines[base+3], p1y = edgeLines[base+4], p1z = edgeLines[base+5];
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(
-      new Float32Array([p0x, p0y, p0z, p1x, p1y, p1z]), 3
-    ));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0x00ffff, linewidth: 2, depthTest: false,
-    });
-    this.offsetHoverHighlight = new THREE.Line(geo, mat);
-    this.offsetHoverHighlight.renderOrder = 998;
-    this.ctx.viewport.scene.add(this.offsetHoverHighlight);
-  }
-
-  private showEdgeSelected(p0: THREE.Vector3, p1: THREE.Vector3): void {
-    this.removeEdgeHighlight();
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(
-      new Float32Array([p0.x, p0.y, p0.z, p1.x, p1.y, p1.z]), 3
-    ));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xffff00, linewidth: 3, depthTest: false,
-    });
-    this.offsetEdgeHighlight = new THREE.Line(geo, mat);
-    this.offsetEdgeHighlight.renderOrder = 999;
-    this.ctx.viewport.scene.add(this.offsetEdgeHighlight);
   }
 }

@@ -4,3 +4,8 @@ web/dist/assets/*.js
 *.log
 .DS_Store
 Thumbs.db
+
+# ADR-075 E4-1 — Playwright E2E artifacts
+/test-results/
+/playwright-report/
+/playwright/.cache/

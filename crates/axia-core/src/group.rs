@@ -29,13 +29,13 @@ use axia_geo::FaceId;
 // ════════════════════════════════════════════════════════════════
 
 /// 그룹 고유 식별자
-pub type GroupId = u64;
+pub type GroupId = u32;
 
 /// 컴포넌트 정의 고유 식별자
-pub type ComponentDefId = u64;
+pub type ComponentDefId = u32;
 
 /// 컴포넌트 인스턴스 고유 식별자
-pub type ComponentInstanceId = u64;
+pub type ComponentInstanceId = u32;
 
 // ════════════════════════════════════════════════════════════════
 // Transform3D
@@ -213,9 +213,9 @@ pub struct GroupManager {
     pub component_defs: HashMap<ComponentDefId, ComponentDef>,
     pub component_instances: HashMap<ComponentInstanceId, ComponentInstance>,
 
-    next_group_id: u64,
-    next_def_id: u64,
-    next_instance_id: u64,
+    next_group_id: u32,
+    next_def_id: u32,
+    next_instance_id: u32,
 
     /// face → group 역인덱스 (빠른 조회)
     #[serde(skip)]
@@ -252,7 +252,7 @@ impl GroupManager {
     /// 새 그룹 생성. face_ids를 그룹에 할당.
     pub fn create_group(&mut self, name: String, face_ids: Vec<FaceId>) -> GroupId {
         let id = self.next_group_id;
-        self.next_group_id += 1;
+        self.next_group_id = self.next_group_id.saturating_add(1);
 
         // 기존 그룹에서 이 face들 제거
         for &fid in &face_ids {
@@ -320,9 +320,10 @@ impl GroupManager {
                 }
             }
             // 현재 그룹에 추가 (중복 방지)
-            let group = self.groups.get_mut(&group_id).unwrap();
-            if !group.face_ids.contains(&fid) {
-                group.face_ids.push(fid);
+            if let Some(group) = self.groups.get_mut(&group_id) {
+                if !group.face_ids.contains(&fid) {
+                    group.face_ids.push(fid);
+                }
             }
             self.face_to_group.insert(fid.raw(), group_id);
         }
@@ -413,7 +414,7 @@ impl GroupManager {
         let group = self.groups.get_mut(&group_id)?;
 
         let def_id = self.next_def_id;
-        self.next_def_id += 1;
+        self.next_def_id = self.next_def_id.saturating_add(1);
 
         let def = ComponentDef::new(def_id, name, group.face_ids.clone());
         self.component_defs.insert(def_id, def);
@@ -436,7 +437,7 @@ impl GroupManager {
         def.instance_count += 1;
 
         let inst_id = self.next_instance_id;
-        self.next_instance_id += 1;
+        self.next_instance_id = self.next_instance_id.saturating_add(1);
 
         let mut inst = ComponentInstance::new(inst_id, def_id, name, face_ids);
         inst.transform = transform;
@@ -488,7 +489,7 @@ impl GroupManager {
     pub fn export_group_info(&self, group_id: GroupId) -> Option<String> {
         let group = self.groups.get(&group_id)?;
         let face_ids: Vec<u32> = group.face_ids.iter().map(|f| f.raw()).collect();
-        let children: Vec<u64> = group.children.clone();
+        let children: Vec<u32> = group.children.clone();
 
         Some(format!(
             r#"{{"id":{},"name":"{}","faceIds":{:?},"children":{:?},"visible":{},"locked":{},"parent":{},"isComponent":{}}}"#,

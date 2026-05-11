@@ -5,6 +5,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn(), debugWarn: vi.fn() }));
 
+vi.mock('../ui/Toast', () => ({
+  Toast: {
+    info: vi.fn(), warning: vi.fn(), error: vi.fn(), show: vi.fn(),
+    fromBridgeError: vi.fn(),
+  },
+}));
+
 vi.mock('../materials/MaterialLibrary', () => ({
   getMaterialLibrary: vi.fn(() => ({ syncFromRust: vi.fn() })),
 }));
@@ -100,6 +107,7 @@ vi.mock('../primitives/ConeTool', () => ({ ConeTool: vi.fn().mockImplementation(
 })) }));
 
 import { ToolManager } from './ToolManagerRefactored';
+import { getClipboard } from '../core/Clipboard';
 
 // ── Mock factories ──
 
@@ -110,7 +118,11 @@ function mockViewport() {
   return {
     container,
     scene: { add: vi.fn(), remove: vi.fn(), children: [] },
-    renderer: { domElement: canvas },
+    renderer: {
+      domElement: canvas,
+      getSize: (v: { x: number; y: number }) => { v.x = 1280; v.y = 720; return v; },
+    },
+    onResize: () => () => {},
     activeCamera: {
       isPerspectiveCamera: true,
       position: { x: 0, y: 10, z: 10 },
@@ -125,6 +137,11 @@ function mockViewport() {
     setViewMode: vi.fn(),
     resetCamera: vi.fn(),
     getStyleSettings: vi.fn().mockReturnValue({ gridVisible: true, axisVisible: true }),
+    onFrame: vi.fn(),
+    setSketchPlaneVisual: vi.fn(),
+    isProjectedShadowEnabled: vi.fn().mockReturnValue(false),
+    getSunTravelDirection: vi.fn().mockReturnValue({ x: -0.4, y: -0.8, z: -0.4 }),
+    updateProjectedShadow: vi.fn(),
   } as any;
 }
 
@@ -142,6 +159,7 @@ function mockBridge() {
       faceMap: new Uint32Array([1]),
     }),
     getEdgeLines: vi.fn().mockReturnValue(new Float32Array([0, 0, 0, 1, 0, 0])),
+    getSnapVerticesF64: vi.fn().mockReturnValue(null),
     getEdgeMap: vi.fn().mockReturnValue(new Uint32Array([1])),
     getDeltaBuffers: vi.fn().mockReturnValue(null),
     getStats: vi.fn().mockReturnValue({ verts: 3, faces: 1 }),
@@ -151,6 +169,23 @@ function mockBridge() {
     getGroupFaces: vi.fn().mockReturnValue(null),
     createGroup: vi.fn(),
     deleteGroup: vi.fn(),
+    countFreeEdges: vi.fn().mockReturnValue(0),
+    synthesizeFacesFromFreeEdges: vi.fn().mockReturnValue(0),
+    pushPull: vi.fn().mockReturnValue(true),
+    getCenterlineLines: vi.fn().mockReturnValue(null),
+    getFaceVolumeFlags: vi.fn().mockReturnValue(null),
+    // Default to Wall (true) so legacy tests that don't care about
+    // classification continue to exercise wall-path behavior.
+    isFaceInVolume: vi.fn().mockReturnValue(true),
+    drawCenterline: vi.fn().mockReturnValue(0),
+    edgeClass: vi.fn().mockReturnValue(0),
+    setEdgeClass: vi.fn().mockReturnValue(true),
+    arrayLinearFaces: vi.fn().mockReturnValue([]),
+    getPositionsF64: vi.fn().mockReturnValue(null),
+    getFaceVertices: vi.fn().mockReturnValue([]),
+    getVertexPos: vi.fn().mockReturnValue(null),
+    // ADR-038 P23.4 — analytic surface 여부 (mock: 모두 non-analytic)
+    faceHasAnalyticSurface: vi.fn().mockReturnValue(false),
   } as any;
 }
 
@@ -179,10 +214,11 @@ describe('ToolManager', () => {
       expect(tm.selection).toBeDefined();
     });
 
-    it('registers all 14 tools', () => {
+    it('registers all 15 tools', () => {
       const toolNames = [
         'select', 'line', 'rect', 'circle', 'pushpull',
         'move', 'rotate', 'scale', 'offset', 'erase',
+        'split',
         'group', 'sphere', 'cylinder', 'cone',
       ];
       for (const name of toolNames) {
@@ -224,6 +260,217 @@ describe('ToolManager', () => {
     });
   });
 
+  describe('sketch mode', () => {
+    it('enters/exits XZ sketch and flips isSketching flag', () => {
+      expect(tm.isSketching()).toBe(false);
+      tm.executeAction('sketch-start-xz');
+      expect(tm.isSketching()).toBe(true);
+      const info = tm.getSketchInfo();
+      expect(info?.label).toContain('XZ');
+      // XZ bottom plane: normal = +Y
+      expect(info?.normal.y).toBeCloseTo(1);
+      tm.executeAction('sketch-exit');
+      expect(tm.isSketching()).toBe(false);
+    });
+
+    it('sketch-start-xy uses +Z normal', () => {
+      tm.executeAction('sketch-start-xy');
+      expect(tm.getSketchInfo()?.normal.z).toBeCloseTo(1);
+    });
+
+    it('sketch-start-yz uses +X normal', () => {
+      tm.executeAction('sketch-start-yz');
+      expect(tm.getSketchInfo()?.normal.x).toBeCloseTo(1);
+    });
+
+    it('notifies viewport to show/hide plane visual', () => {
+      tm.executeAction('sketch-start-xz');
+      expect(viewport.setSketchPlaneVisual).toHaveBeenCalledWith(expect.objectContaining({
+        label: expect.stringContaining('XZ'),
+      }));
+      (viewport.setSketchPlaneVisual as any).mockClear();
+      tm.executeAction('sketch-exit');
+      expect(viewport.setSketchPlaneVisual).toHaveBeenCalledWith(null);
+    });
+
+    it('sketch-exit on inactive session is a no-op (no crash)', () => {
+      tm.executeAction('sketch-exit');
+      expect(tm.isSketching()).toBe(false);
+    });
+  });
+
+  describe('centerline / edge class conversion', () => {
+    it('convert-to-centerline with selected edges calls setEdgeClass(1) per edge', () => {
+      // Patch only the methods we need on the existing SelectionManager.
+      (tm.selection as any).getSelectedEdges = () => [10, 20, 30];
+      (bridge.setEdgeClass as any) = vi.fn().mockReturnValue(true);
+      tm.executeAction('convert-to-centerline');
+      expect(bridge.setEdgeClass).toHaveBeenCalledTimes(3);
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(10, 1);
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(20, 1);
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(30, 1);
+    });
+    it('convert-to-geometry uses class=0', () => {
+      (tm.selection as any).getSelectedEdges = () => [42];
+      (bridge.setEdgeClass as any) = vi.fn().mockReturnValue(true);
+      tm.executeAction('convert-to-geometry');
+      expect(bridge.setEdgeClass).toHaveBeenCalledWith(42, 0);
+    });
+    it('no-op + warning when nothing selected', () => {
+      (tm.selection as any).getSelectedEdges = () => [];
+      (bridge.setEdgeClass as any) = vi.fn();
+      tm.executeAction('convert-to-centerline');
+      expect(bridge.setEdgeClass).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('clipboard (Ctrl+C/X/V/D)', () => {
+    beforeEach(() => {
+      // Reset clipboard singleton between tests
+      // imported at top;
+      getClipboard().clear();
+    });
+
+    it('copy captures selected faces into clipboard', () => {
+      (tm.selection as any).getSelectedFaces = () => [10, 20];
+      (tm.selection as any).getSelectedEdges = () => [];
+      tm.executeAction('clipboard-copy');
+      // imported at top;
+      expect(getClipboard().get()?.ids).toEqual([10, 20]);
+    });
+
+    it('cut copies then calls batchDelete', () => {
+      (tm.selection as any).getSelectedFaces = () => [5];
+      (tm.selection as any).getSelectedEdges = () => [];
+      (bridge.batchDelete as any) = vi.fn().mockReturnValue(true);
+      tm.executeAction('clipboard-cut');
+      // imported at top;
+      expect(getClipboard().get()?.ids).toEqual([5]);
+      expect(bridge.batchDelete).toHaveBeenCalledWith([5], []);
+    });
+
+    it('paste without clipboard contents is a no-op', () => {
+      // imported at top;
+      getClipboard().clear();
+      (bridge.arrayLinearFaces as any) = vi.fn();
+      tm.executeAction('clipboard-paste');
+      expect(bridge.arrayLinearFaces).not.toHaveBeenCalled();
+    });
+
+    it('paste calls arrayLinearFaces with count=1 and default offset', () => {
+      // imported at top;
+      getClipboard().copy('faces', [7, 8]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([100, 101]);
+      tm.executeAction('clipboard-paste');
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([7, 8], 1, expect.any(Array));
+    });
+
+    it('paste invalidates snap cache (defensive — pasted faces must be snappable)', () => {
+      getClipboard().copy('faces', [1, 2]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([50, 51]);
+      const invalidateSpy = vi.spyOn(tm.snap, 'invalidateCache');
+      tm.executeAction('clipboard-paste');
+      expect(invalidateSpy).toHaveBeenCalled();
+    });
+
+    it('paste uses TINY offset (just above dedup threshold) so copies get distinct verts', () => {
+      // Zero offset would trigger Rust add_vertex dedup (1.5μm) → shared verts
+      // → DCEL topology break → original face can be replaced by invalid copy.
+      // Regression guard: make sure offset is > 0 and small enough to be invisible.
+      getClipboard().copy('faces', [1, 2]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([100, 101]);
+      tm.executeAction('clipboard-paste');
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith(
+        [1, 2], 1,
+        expect.arrayContaining([0.1, 0, 0.1]),
+      );
+      const callArgs = (bridge.arrayLinearFaces as any).mock.calls[0];
+      const offset = callArgs[2];
+      // offset must be non-zero to pass Rust ensure!
+      const mag = Math.hypot(offset[0], offset[1], offset[2]);
+      expect(mag).toBeGreaterThan(0);
+      // offset must be >> 1.5μm (SPATIAL_HASH_CELL * 1.5) to skip dedup
+      expect(mag).toBeGreaterThan(0.002);  // 2μm floor
+      // offset must be <= 1mm to be visually imperceptible
+      expect(mag).toBeLessThan(1);
+    });
+
+    it('paste enters move tool placement mode', () => {
+      getClipboard().copy('faces', [3]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([200]);
+      const moveTool = (tm as any).tools.get('move');
+      moveTool.startPlacement = vi.fn();
+      tm.executeAction('clipboard-paste');
+      // expects at least [faceIds] — refPoint may be undefined if no vertex data
+      expect(moveTool.startPlacement).toHaveBeenCalled();
+      const callArgs = (moveTool.startPlacement as any).mock.calls[0];
+      expect(callArgs[0]).toEqual([200]);
+      expect(tm.currentTool).toBe('move');
+    });
+
+    it('paste computes bbox min corner from face vertices and passes as refPoint', () => {
+      getClipboard().copy('faces', [3]);
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([200]);
+      // Mock face → vert → pos: one face with 4 verts forming a rectangle.
+      (bridge.getFaceVertices as any) = vi.fn().mockReturnValue([10, 11, 12, 13]);
+      const positions: Record<number, [number, number, number]> = {
+        10: [100, 0, 200],
+        11: [500, 0, 200],
+        12: [500, 0, 600],
+        13: [100, 0, 600],
+      };
+      (bridge.getVertexPos as any) = vi.fn((vid: number) => positions[vid] ?? null);
+      const moveTool = (tm as any).tools.get('move');
+      moveTool.startPlacement = vi.fn();
+      tm.executeAction('clipboard-paste');
+      const callArgs = (moveTool.startPlacement as any).mock.calls[0];
+      const refPoint = callArgs[1];
+      // bbox min corner from 4 verts = (100, 0, 200)
+      expect(refPoint).toBeDefined();
+      expect(refPoint.x).toBeCloseTo(100);
+      expect(refPoint.y).toBeCloseTo(0);
+      expect(refPoint.z).toBeCloseTo(200);
+    });
+
+    it('duplicate uses current selection (not clipboard)', () => {
+      (tm.selection as any).getSelectedFaces = () => [42];
+      (tm.selection as any).selectFaces = vi.fn();
+      (bridge.arrayLinearFaces as any) = vi.fn().mockReturnValue([200]);
+      tm.executeAction('duplicate');
+      expect(bridge.arrayLinearFaces).toHaveBeenCalledWith([42], 1, expect.any(Array));
+    });
+
+    it('copy with edge-only selection warns and does nothing', () => {
+      (tm.selection as any).getSelectedFaces = () => [];
+      (tm.selection as any).getSelectedEdges = () => [99];
+      // imported at top;
+      getClipboard().clear();
+      tm.executeAction('clipboard-copy');
+      expect(getClipboard().hasContents()).toBe(false);
+    });
+
+    it('sketch-exit without free edges skips synthesize and extrude', () => {
+      (bridge.countFreeEdges as any).mockReturnValue(0);
+      tm.executeAction('sketch-start-xz');
+      tm.executeAction('sketch-exit');
+      expect(bridge.synthesizeFacesFromFreeEdges).not.toHaveBeenCalled();
+      expect(bridge.pushPull).not.toHaveBeenCalled();
+    });
+
+    it('sketch-exit with free edges calls synthesize; pushPull only if user enters height', () => {
+      (bridge.countFreeEdges as any).mockReturnValue(4);
+      (bridge.synthesizeFacesFromFreeEdges as any).mockReturnValue(1);
+      // prompt: cancel → no pushPull
+      const origPrompt = globalThis.window?.prompt;
+      if (globalThis.window) globalThis.window.prompt = vi.fn().mockReturnValue(null);
+      tm.executeAction('sketch-start-xz');
+      tm.executeAction('sketch-exit');
+      expect(bridge.synthesizeFacesFromFreeEdges).toHaveBeenCalled();
+      expect(bridge.pushPull).not.toHaveBeenCalled();
+      if (globalThis.window && origPrompt) globalThis.window.prompt = origPrompt;
+    });
+  });
+
   describe('executeAction', () => {
     it('undo calls bridge.undo', () => {
       tm.executeAction('undo');
@@ -254,6 +501,239 @@ describe('ToolManager', () => {
       tm.executeAction('select-all');
       expect(spy).toHaveBeenCalled();
     });
+
+    // ── flip-faces 가드 회귀 방지 (2026-04-17) ──
+    describe('flip-faces action', () => {
+      it('flips faces when tool is idle and faces are selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5, 6]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).flipFaces = vi.fn().mockReturnValue(2);
+
+        tm.executeAction('flip-faces');
+        expect(bridge.flipFaces).toHaveBeenCalledWith([5, 6]);
+      });
+
+      it('does NOTHING when tool is busy (Push/Pull ghost, Line drawing, etc.)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).flipFaces = vi.fn().mockReturnValue(1);
+
+        tm.executeAction('flip-faces');
+        expect(bridge.flipFaces).not.toHaveBeenCalled();
+      });
+
+      it('warns when no faces are selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).flipFaces = vi.fn().mockReturnValue(0);
+
+        tm.executeAction('flip-faces');
+        expect(bridge.flipFaces).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── mirror-x/y/z action ──────────────────────────────────────
+    describe('mirror action', () => {
+      it('mirror-x calls mirrorFaces with YZ plane normal (1,0,0)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([7, 8]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([100, 101]);
+
+        tm.executeAction('mirror-x');
+        expect(bridge.mirrorFaces).toHaveBeenCalledWith([7, 8], 0, 0, 0, 1, 0, 0);
+      });
+
+      it('mirror-y uses XZ plane normal (0,1,0)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([200]);
+
+        tm.executeAction('mirror-y');
+        const args = (bridge.mirrorFaces as any).mock.calls[0];
+        expect(args[4]).toBe(0); expect(args[5]).toBe(1); expect(args[6]).toBe(0);
+      });
+
+      it('mirror-z uses XY plane normal (0,0,1)', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([200]);
+
+        tm.executeAction('mirror-z');
+        const args = (bridge.mirrorFaces as any).mock.calls[0];
+        expect(args[4]).toBe(0); expect(args[5]).toBe(0); expect(args[6]).toBe(1);
+      });
+
+      it('does nothing when no faces selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([]);
+
+        tm.executeAction('mirror-x');
+        expect(bridge.mirrorFaces).not.toHaveBeenCalled();
+      });
+
+      it('blocked when tool is busy', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([5]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).mirrorFaces = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('mirror-x');
+        expect(bridge.mirrorFaces).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── revolve-x/y/z action ──────────────────────────────────────
+    describe('revolve action', () => {
+      it('extracts chain from selected edges and calls revolveProfile', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10, 11]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).getEdgeEndpoints = vi.fn((eid: number) =>
+          eid === 10 ? [1, 2] : [2, 3]);
+        (bridge as any).getVertexPos = vi.fn((vid: number) =>
+          [[0, 0, 0], [1, 0, 0], [2, 0, 0]][vid - 1]);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([500, 501]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).toHaveBeenCalled();
+        const args = (bridge.revolveProfile as any).mock.calls[0];
+        // 3 points × 3 coords = 9 values
+        expect(args[0].length).toBe(9);
+        // Axis direction = +Y
+        expect(args[4]).toBe(0); expect(args[5]).toBe(1); expect(args[6]).toBe(0);
+        // Segments = 24 default
+        expect(args[7]).toBe(24);
+      });
+
+      it('warns when no edges selected', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).not.toHaveBeenCalled();
+      });
+
+      it('warns when edge selection is not a simple chain', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10, 11, 12]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        // Y-branch: vertex 2 has degree 3
+        (bridge as any).getEdgeEndpoints = vi.fn((eid: number) =>
+          eid === 10 ? [1, 2] : eid === 11 ? [2, 3] : [2, 4]);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).not.toHaveBeenCalled();
+      });
+
+      it('blocked when tool is busy', () => {
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([10]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).revolveProfile = vi.fn().mockReturnValue([100]);
+
+        tm.executeAction('revolve-y');
+        expect(bridge.revolveProfile).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── subdivide action ─────────────────────────────────────────
+    describe('subdivide action', () => {
+      it('calls bridge.subdivideCatmullClark and syncs on success', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).subdivideCatmullClark = vi.fn().mockReturnValue(48);
+        const syncSpy = vi.spyOn(tm, 'syncMesh').mockImplementation(() => {});
+
+        tm.executeAction('subdivide');
+        expect(bridge.subdivideCatmullClark).toHaveBeenCalled();
+        expect(syncSpy).toHaveBeenCalled();
+      });
+
+      it('shows error toast when bridge returns -1', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+        (bridge as any).subdivideCatmullClark = vi.fn().mockReturnValue(-1);
+        (bridge as any).lastError = vi.fn().mockReturnValue('some err');
+
+        tm.executeAction('subdivide');
+        expect(bridge.subdivideCatmullClark).toHaveBeenCalled();
+      });
+
+      it('blocked when tool is busy', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        (bridge as any).subdivideCatmullClark = vi.fn().mockReturnValue(48);
+
+        tm.executeAction('subdivide');
+        expect(bridge.subdivideCatmullClark).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── 파괴적/구조적 명령어 busy 가드 (2026-04-17) ──
+    describe('BUSY_BLOCKED_ACTIONS', () => {
+      it('delete blocks during busy tool', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([1, 2]);
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([]);
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+
+        tm.executeAction('delete');
+        expect(bridge.batchDelete).not.toHaveBeenCalled();
+      });
+
+      it('delete works when idle', () => {
+        vi.spyOn(tm.selection, 'getSelectedFaces').mockReturnValue([1, 2]);
+        vi.spyOn(tm.selection, 'getSelectedEdges').mockReturnValue([]);
+        vi.spyOn(tm.selection, 'clearSelection').mockImplementation(() => {});
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+
+        tm.executeAction('delete');
+        expect(bridge.batchDelete).toHaveBeenCalledWith([1, 2], []);
+      });
+
+      it('redo blocks during busy tool', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+
+        tm.executeAction('redo');
+        expect(bridge.redo).not.toHaveBeenCalled();
+      });
+
+      it('redo works when idle', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(false);
+
+        tm.executeAction('redo');
+        expect(bridge.redo).toHaveBeenCalled();
+      });
+
+      it('group blocks during busy tool', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        const spy = vi.spyOn(tm.selection, 'groupSelected').mockReturnValue(null);
+
+        tm.executeAction('group');
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('make-component blocks during busy tool', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        // make-component 내부 호출 어느 것이든 확인 — bridge.makeComponent 존재 가정
+        (bridge as any).makeComponent = vi.fn();
+
+        tm.executeAction('make-component');
+        expect((bridge as any).makeComponent).not.toHaveBeenCalled();
+      });
+
+      it('undo during busy tool cancels the tool (CAD 관례, not blocked)', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        const cancelSpy = vi.spyOn(tm, 'cancelCurrentTool').mockImplementation(() => {});
+
+        tm.executeAction('undo');
+        expect(cancelSpy).toHaveBeenCalled();
+        expect(bridge.undo).not.toHaveBeenCalled();
+      });
+
+      it('non-destructive actions (select-all, deselect, etc.) are NOT blocked by busy', () => {
+        vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
+        const spy = vi.spyOn(tm.selection, 'selectEverything').mockImplementation(() => {});
+
+        tm.executeAction('select-all');
+        expect(spy).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('syncMesh', () => {
@@ -266,13 +746,12 @@ describe('ToolManager', () => {
     it('handles null buffers gracefully', () => {
       bridge.getMeshBuffers.mockReturnValue(null);
       expect(() => tm.syncMesh()).not.toThrow();
-      expect(viewport.updateMesh).toHaveBeenCalledWith(
-        expect.any(Float32Array),
-        expect.any(Float32Array),
-        expect.any(Uint32Array),
-        expect.anything(),
-        expect.any(Uint32Array),
-      );
+      expect(viewport.updateMesh).toHaveBeenCalled();
+      // First 3 positional args must be the empty typed arrays
+      const call = (viewport.updateMesh as any).mock.calls[0];
+      expect(call[0]).toBeInstanceOf(Float32Array);
+      expect(call[1]).toBeInstanceOf(Float32Array);
+      expect(call[2]).toBeInstanceOf(Uint32Array);
     });
 
     it('updates stats after sync', () => {

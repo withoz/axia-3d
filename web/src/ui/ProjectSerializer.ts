@@ -45,6 +45,50 @@ export interface ProjectSerializerAPI {
 export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSerializerAPI {
   const { bridge, viewport, toolManager, units } = deps;
 
+  /**
+   * ADR-078 P-3 L1 — Save sync (push).
+   *
+   * Push SelectionManager.groupTags → Scene.boolean_group_tags via
+   * WasmBridge BEFORE exportSnapshot. Idempotent order:
+   *   1. clearBooleanGroupTags (drop any stale state from prior session)
+   *   2. setBooleanGroupTag(groupA, 'A') if non-empty
+   *   3. setBooleanGroupTag(groupB, 'B') if non-empty
+   *
+   * If both groups empty: clear-only (no set calls). Persistence layer
+   * truth source = SelectionManager (UI runtime).
+   *
+   * Bypasses SelectionManager.setGroupTag (selection-bound). The bridge
+   * has no selection constraint — Rust layer is a simple HashMap insert.
+   */
+  const pushGroupTagsToBridge = () => {
+    bridge.clearBooleanGroupTags();
+    const sel: any = (toolManager as any)?.selection;
+    if (!sel) return;
+    const groupA: number[] = sel.getGroupA?.() ?? [];
+    const groupB: number[] = sel.getGroupB?.() ?? [];
+    if (groupA.length > 0) bridge.setBooleanGroupTag(groupA, 'A');
+    if (groupB.length > 0) bridge.setBooleanGroupTag(groupB, 'B');
+  };
+
+  /**
+   * ADR-078 P-3 L2 — Load sync (pull).
+   *
+   * Pull Scene.boolean_group_tags → SelectionManager.groupTags via
+   * WasmBridge AFTER importSnapshot + syncMesh (face IDs stable).
+   * One restoreGroupTags call → one notifyChange emit → one V-2
+   * outline rebuild.
+   *
+   * SelectionManager.restoreGroupTags handles policy (P-3 L3):
+   * groupTags fully replaced + selection ∪ (A ∪ B) + 1 notifyChange.
+   */
+  const pullGroupTagsFromBridge = () => {
+    const sel: any = (toolManager as any)?.selection;
+    if (!sel || typeof sel.restoreGroupTags !== 'function') return;
+    const groupA = bridge.getBooleanGroupAFaces();
+    const groupB = bridge.getBooleanGroupBFaces();
+    sel.restoreGroupTags(groupA, groupB);
+  };
+
   /** WASM export 불가 시 fallback: 메시 버퍼를 직접 저장 */
   const saveFallback = () => {
     const buffers = bridge.getMeshBuffers();
@@ -84,6 +128,9 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
 
   /** .xia 프로젝트 파일 저장 */
   const saveProject = () => {
+    // ADR-078 P-3 — push group tags to bridge BEFORE exportSnapshot.
+    pushGroupTagsToBridge();
+
     const snapshot = bridge.exportSnapshot();
     if (!snapshot) {
       console.warn('[Save] WASM export_snapshot not available (WASM rebuild needed)');
@@ -122,8 +169,23 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.xia';
-    input.addEventListener('change', async () => {
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    // Cleanup helper — removes DOM element and listeners exactly once
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      input.removeEventListener('change', onChange);
+      input.removeEventListener('cancel', onCancel);
+      if (input.parentNode) input.parentNode.removeChild(input);
+    };
+
+    const onChange = async () => {
       const file = input.files?.[0];
+      cleanup();
+
       if (!file) return;
 
       try {
@@ -141,6 +203,8 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
           const ok = bridge.importSnapshot(data);
           if (ok) {
             toolManager.syncMesh();
+            // ADR-078 P-3 — pull group tags AFTER syncMesh (face IDs stable).
+            pullGroupTagsFromBridge();
             debugLog('[Open] Mesh restored from snapshot');
           } else {
             console.error('[Open] importSnapshot failed');
@@ -175,7 +239,14 @@ export function initProjectSerializer(deps: ProjectSerializerDeps): ProjectSeria
         console.error('[Open] Failed to load project:', e);
         alert('파일을 불러오는데 실패했습니다.');
       }
-    });
+    };
+
+    const onCancel = () => {
+      cleanup();
+    };
+
+    input.addEventListener('change', onChange);
+    input.addEventListener('cancel', onCancel);
     input.click();
   };
 

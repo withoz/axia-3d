@@ -1,0 +1,57 @@
+{
+  "name": "create-axia-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Scaffold a new AxiA 3D MCP server project (ADR-043)",
+  "license": "MIT",
+  "author": "WYKO <withoz1111@gmail.com>",
+  "homepage": "https://github.com/withoz/axia-3d#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/withoz/axia-3d.git",
+    "directory": "packages/create-axia-mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/withoz/axia-3d/issues"
+  },
+  "keywords": [
+    "axia-3d",
+    "cad",
+    "mcp",
+    "scaffold",
+    "create-app"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "create-axia-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src/template",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../axia-mcp-server/scripts/guard-publish.mjs && npm run build && npm test"
+  },
+  "dependencies": {
+    "kleur": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

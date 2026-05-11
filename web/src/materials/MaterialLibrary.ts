@@ -12,12 +12,18 @@
 //  기하 계층 상태 (Geometry Layer)
 // ═══════════════════════════════════════
 
+/**
+ * Geometry state — computed from owned geometry, not stored.
+ * Architecture Decision (2026-04-15):
+ *   Geometry Layer: Point → Edge → Face → Volume
+ *   Semantic Layer: Object (= XIA), Material, Group
+ * Material is a property of Object, not a state transition trigger.
+ */
 export enum GeometryState {
   Point  = 'point',   // 0D — 위치만, 치수 없음
-  Line   = 'line',    // 1D — 길이 L만, H=0
+  Edge   = 'edge',    // 1D — 길이 L만, H=0
   Face   = 'face',    // 2D — L×W, H=0
   Volume = 'volume',  // 3D — L×W×H, 부피 발생
-  Xia    = 'xia',     // 3D + Material — 물리적 실체
 }
 
 export interface GeometryStateInfo {
@@ -38,10 +44,10 @@ export const GEOMETRY_STATES: Record<GeometryState, GeometryStateInfo> = {
     color: '#888888',
     icon: '·',
   },
-  [GeometryState.Line]: {
-    state: GeometryState.Line,
+  [GeometryState.Edge]: {
+    state: GeometryState.Edge,
     label: '선',
-    labelEn: 'Line',
+    labelEn: 'Edge',
     description: '길이만 존재 (H=0)',
     color: '#ff9800',
     icon: '─',
@@ -58,17 +64,9 @@ export const GEOMETRY_STATES: Record<GeometryState, GeometryStateInfo> = {
     state: GeometryState.Volume,
     label: '체적',
     labelEn: 'Volume',
-    description: 'L × W × H (Appearance)',
+    description: 'L × W × H (3D solid)',
     color: '#9c27b0',
     icon: '⬡',
-  },
-  [GeometryState.Xia]: {
-    state: GeometryState.Xia,
-    label: 'XIA',
-    labelEn: 'XIA',
-    description: 'Volume + Material (물체)',
-    color: '#4caf50',
-    icon: '◆',
   },
 };
 
@@ -94,12 +92,66 @@ export interface PhysicalProperties {
   compressiveStrength?: number; // MPa — 압축강도 (향후 확장)
 }
 
+/** 텍스처 정보 (옵션) */
+export interface TextureInfo {
+  /** 이미지 데이터 URL (base64 PNG/JPEG) — 저장/로드 시 AXIA 파일에 포함 */
+  dataUrl: string;
+  /** UV projection 모드 */
+  projection: 'planar' | 'box' | 'cylindrical';
+  /** 월드 단위 당 반복 횟수 (예: 0.001 = 1000mm당 1타일) */
+  scale: number;
+  /** 투영 축 회전 (라디안, planar/box 전용) */
+  rotation?: number;
+  /** 사용자 표시명 (파일명 등) */
+  label?: string;
+}
+
+/**
+ * ADR-099 L-δ — TS counterpart of Rust `LayeredChannels`.
+ *
+ * 4 PBR channels (Lock-in L-A) — fixed slots, each optional. Mirrors
+ * Rust `crate::material::LayeredChannels` for snapshot round-trip
+ * (L-η Real Chromium). Channel naming canonical: 'albedo' | 'normal'
+ * | 'roughness' | 'metallic'.
+ *
+ * Coexists with legacy `AuxTextureInfo` (normal + roughness only).
+ * L-D migrate helper bridges single-texture → albedo on Rust side
+ * (`migrate_legacy_textures_to_layered`). UI (L-ε) and bridge wrappers
+ * (L-ζ) will use this interface canonically.
+ */
+export interface LayeredChannels {
+  albedo?: TextureInfo;
+  normal?: TextureInfo;
+  roughness?: TextureInfo;
+  metallic?: TextureInfo;
+}
+
+/** 추가 채널 텍스처 (PBR 보조 — 모두 옵션) */
+export interface AuxTextureInfo {
+  /** Normal map (tangent-space). Three.js MeshStandardMaterial.normalMap. */
+  normal?: TextureInfo;
+  /** Normal map intensity (default 1.0). Three.js normalScale.x/y. */
+  normalIntensity?: number;
+  /** Roughness map (greyscale; brighter = rougher). Multiplied by `roughness` field. */
+  roughness?: TextureInfo;
+}
+
 /** 시각적 속성 */
 export interface VisualProperties {
   color: number;              // hex color (0xRRGGBB)
   roughness: number;          // 0.0 ~ 1.0
   metalness: number;          // 0.0 ~ 1.0
   opacity: number;            // 0.0 ~ 1.0
+  texture?: TextureInfo;      // 옵션: 베이스 컬러 텍스처
+  /** 옵션: 노멀/러프니스 등 보조 PBR 채널 (2026-04-26 추가) */
+  aux?: AuxTextureInfo;
+  /**
+   * ADR-099 L-δ — Layered material 4 PBR channels (Phase 5-B).
+   * Mirrors Rust `VisualProperties.layered`. When present, the
+   * renderer's `applyLayeredChannels` path replaces the legacy
+   * `texture` + `aux` paths.
+   */
+  layered?: LayeredChannels;
 }
 
 /** Material 전체 정의 */
@@ -387,35 +439,23 @@ export class MaterialLibrary {
    * - 1면(평면) → Face
    * - 여러 면(열린) → Face group
    * - 닫힌 면 집합 → Volume
-   * - Volume + Material → XIA
+   * Material is a property of Object, not a state trigger.
    */
   determineState(info: {
     faceCount: number;
     edgeCount: number;
     isSolid: boolean;
     height: number;
-  }, faceIds: number[]): GeometryState {
+  }, _faceIds: number[]): GeometryState {
     if (info.faceCount === 0) {
-      return info.edgeCount > 0 ? GeometryState.Line : GeometryState.Point;
+      return info.edgeCount > 0 ? GeometryState.Edge : GeometryState.Point;
     }
 
-    // 단일 면 = Face
-    if (info.faceCount === 1) return GeometryState.Face;
+    // 1-2 faces = Face
+    if (info.faceCount <= 2) return GeometryState.Face;
 
-    // 높이 0 = 2D (Face)
-    if (info.height === 0) return GeometryState.Face;
-
-    // 3D: 높이 > 0 이고 면 4개 이상이면 Volume 판정
-    // (isSolid 체크는 push/pull DCEL 연결 누락으로 false가 될 수 있음 —
-    //  높이와 면 수로 Volume 인식)
-    if (info.faceCount >= 4 && info.height > 0) {
-      if (this.hasMaterial(faceIds)) {
-        return GeometryState.Xia;
-      }
-      return GeometryState.Volume;
-    }
-
-    return GeometryState.Face;
+    // 3+ faces = Volume (regardless of material)
+    return GeometryState.Volume;
   }
 
   // --- 변경 감지 ---

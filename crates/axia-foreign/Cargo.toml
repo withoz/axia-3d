@@ -1,0 +1,20 @@
+[package]
+name = "axia-foreign"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "STEP / IGES import/export — AXiA 자체 파서 spike (Phase G Stage 4-B, ADR-035 P20.2)"
+
+[lib]
+name = "axia_foreign"
+path = "src/lib.rs"
+
+[dependencies]
+# zero external deps 정책 (ADR-035 P20.2) — 외부 STEP/IGES 라이브러리 사용 금지.
+# AnalyticCurve / AnalyticSurface 매핑을 위해 axia-geo 만 의존.
+axia-geo.workspace = true
+glam.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true

@@ -5,7 +5,7 @@
  * Manages snap mode checkboxes, master toggle, marker size slider, and preview.
  */
 
-import { SnapManager } from '../snap/SnapManager';
+import { SnapManager, SnapType } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
 
 export interface OsnapPanelDeps {
@@ -32,7 +32,7 @@ export function initOsnapPanel(deps: OsnapPanelDeps): OsnapPanelAPI {
   // Sync HTML checked state to JS on app start
   modeChecks.forEach(cb => {
     const mode = cb.dataset.mode;
-    if (mode) snap.setMode(mode as any, cb.checked);
+    if (mode) snap.setMode(mode as SnapType, cb.checked);
   });
 
   // Open panel
@@ -40,7 +40,7 @@ export function initOsnapPanel(deps: OsnapPanelDeps): OsnapPanelAPI {
     if (masterCheck) masterCheck.checked = snap.enabled;
     modeChecks.forEach(cb => {
       const mode = cb.dataset.mode;
-      if (mode) cb.checked = snap.isActive(mode as any);
+      if (mode) cb.checked = snap.isActive(mode as SnapType);
     });
     // Remove DraggablePanelManager's state-hidden (has !important)
     osnapPanel.classList.remove('state-hidden');
@@ -58,7 +58,7 @@ export function initOsnapPanel(deps: OsnapPanelDeps): OsnapPanelAPI {
     snap.enabled = masterCheck?.checked ?? true;
     modeChecks.forEach(cb => {
       const mode = cb.dataset.mode;
-      if (mode) snap.setMode(mode as any, cb.checked);
+      if (mode) snap.setMode(mode as SnapType, cb.checked);
     });
     const slider = document.getElementById('osnap-size-slider') as HTMLInputElement;
     if (slider) {

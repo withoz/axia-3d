@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { Viewport } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
-import { SnapManager, SnapPoint } from '../snap/SnapManager';
+import { SnapManager } from '../snap/SnapManager';
 import { SnapVisual } from '../snap/SnapVisual';
 import { SelectionManager } from './SelectionManager';
 import { DimensionLabel } from '../ui/DimensionLabel';
@@ -63,6 +63,14 @@ export interface ToolContext {
    * Used by tools to intersect custom planes (e.g., drawing plane for Rect/Circle).
    */
   getRay: (e: MouseEvent) => THREE.Raycaster;
+
+  /**
+   * ADR-080 V-δ-γ — Active sketch session plane info, if any.
+   * Returns `null` when no sketch is active.
+   * Used by OffsetTool to provide a reference plane for free wire offset
+   * when V-δ-α (wire planarity) fails (single edge, collinear, non-planar).
+   */
+  getSketchInfo: () => { origin: THREE.Vector3; normal: THREE.Vector3 } | null;
 }
 
 /** Drawing plane information for Rect/Circle tools */
@@ -85,6 +93,14 @@ export interface ITool {
   /** Tool name (e.g., 'select', 'line', 'rect', 'circle', 'pushpull', 'move', 'rotate', 'scale', 'offset', 'erase') */
   readonly name: string;
 
+  /**
+   * Whether this tool wants snap computation on mousemove.
+   * Default: `true` (snap runs, point passed to onMouseMove is snap-adjusted).
+   * `false` = tool doesn't use snap (e.g. Select, Erase) — skip expensive
+   * findSnap traversal and clear SnapVisual markers for a clean UI.
+   */
+  readonly wantsSnap?: boolean;
+
   /** Called when tool becomes active (setTool was called) */
   onActivate?(): void;
 
@@ -103,12 +119,25 @@ export interface ITool {
   /** Called on keyboard key down (for axis lock, esc to cancel, etc.) */
   onKeyDown?(e: KeyboardEvent): void;
 
-  /** Apply VCB (Value Control Box) input — exact number from user or second dimension */
-  applyVCBValue?(value: number, value2?: number): void;
+  /** Apply VCB input. Optional 2~3 values (rect width/height, scale x/y/z, etc.) */
+  applyVCBValue?(value: number, value2?: number, value3?: number): void;
 
   /** Check if tool is in the middle of an operation (drawing, dragging, etc.) */
   isBusy(): boolean;
 
   /** Optional cleanup when tool is destroyed */
   cleanup?(): void;
+
+  /**
+   * ADR-047 P32 — Vertex positions to EXCLUDE from endpoint snap.
+   *
+   * Tools with chain-state (DrawLine pending polyline, DrawPolygon, etc.)
+   * return their pending vertices (excluding the auto-close start) so the
+   * SnapManager doesn't pull the cursor onto a vertex already in the chain
+   * — that would make the engine bail at face synthesis with a duplicate-
+   * vertex error.
+   *
+   * Returning `[]` or omitting the method = no exclusion (default).
+   */
+  getExcludedSnapPoints?(): THREE.Vector3[];
 }

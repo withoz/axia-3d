@@ -3,7 +3,6 @@
  * 2-click flow: Click #1 (anchor) → Sizing1 (radius) → Click #2 (complete)
  */
 
-import * as THREE from 'three';
 import { ToolContext } from '../tools/ITool';
 import { BasePrimitiveTool } from './BasePrimitiveTool';
 import { debugLog } from '../utils/debug';

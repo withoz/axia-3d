@@ -10,6 +10,7 @@ import { Viewport, ViewMode } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { debugLog } from '../utils/debug';
+import type { SnapType } from '../snap/SnapManager';
 
 export interface ContextMenuDeps {
   viewport: Viewport;
@@ -71,6 +72,47 @@ export function initContextMenu(deps: ContextMenuDeps): void {
     );
     if (groupSep) groupSep.style.display = anyGroupVisible ? '' : 'none';
 
+    // ── 면 반전 항목 — 선택된 face가 있을 때만 표시 ──
+    const faceItems = ctxMenu.querySelectorAll('.ctx-face-item');
+    faceItems.forEach(item => {
+      (item as HTMLElement).style.display = hasSelection ? '' : 'none';
+    });
+
+    // ── ADR-074 U-2 — Boolean Group A/B 항목 가시성 ──
+    // Set A / Set B: 선택된 face 가 1개 이상일 때 표시 (사용자가
+    //   현재 selection 을 group 으로 지정 가능).
+    // Clear groups: 어떤 group tag 라도 있을 때 표시 (지울 게 있어야
+    //   메뉴 항목이 의미 있음).
+    const boolGroupItems = ctxMenu.querySelectorAll('.ctx-bool-group-item');
+    boolGroupItems.forEach(item => {
+      (item as HTMLElement).style.display = hasSelection ? '' : 'none';
+    });
+    const boolGroupClearItems = ctxMenu.querySelectorAll('.ctx-bool-group-clear');
+    const sm = toolManager.selection as { hasAnyGroupTag?: () => boolean };
+    const showClear = typeof sm.hasAnyGroupTag === 'function' && sm.hasAnyGroupTag();
+    boolGroupClearItems.forEach(item => {
+      (item as HTMLElement).style.display = showClear ? '' : 'none';
+    });
+
+    // ── Edge constraint (2엣지) 항목 ──
+    const edgeItems = ctxMenu.querySelectorAll('.ctx-edge-item');
+    const selectedEdges = toolManager.selection.getSelectedEdges().length;
+    edgeItems.forEach(item => {
+      (item as HTMLElement).style.display = selectedEdges === 2 ? '' : 'none';
+    });
+
+    // ── 1엣지 전용 항목 (길이/중점 분할) ──
+    const edge1Items = ctxMenu.querySelectorAll('.ctx-edge1-item');
+    edge1Items.forEach(item => {
+      (item as HTMLElement).style.display = selectedEdges === 1 ? '' : 'none';
+    });
+
+    // ── 엣지 체인 전용 항목 (Revolve, 1개 이상) ──
+    const chainItems = ctxMenu.querySelectorAll('.ctx-edge-chain-item');
+    chainItems.forEach(item => {
+      (item as HTMLElement).style.display = selectedEdges >= 1 ? '' : 'none';
+    });
+
     // 화면 밖으로 나가지 않도록 위치 조정
     const menuW = 200, menuH = 400;
     const cx = Math.min(x, window.innerWidth - menuW);
@@ -98,9 +140,77 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'undo': toolManager.executeAction('undo'); break;
       case 'redo': toolManager.executeAction('redo'); break;
       case 'delete': toolManager.executeAction('delete'); break;
+      case 'flip-faces': toolManager.executeAction('flip-faces'); break;
+      case 'merge-faces': toolManager.executeAction('merge-faces'); break;
+      case 'merge-faces-geometric': toolManager.executeAction('merge-faces-geometric'); break;
+      case 'merge-xia-coplanar': toolManager.executeAction('merge-xia-coplanar'); break;
+      case 'merge-faces-force': toolManager.executeAction('merge-faces-force'); break;
+      case 'merge-as-hole': toolManager.executeAction('merge-as-hole'); break;
+      case 'mirror-x': toolManager.executeAction('mirror-x'); break;
+      case 'mirror-y': toolManager.executeAction('mirror-y'); break;
+      case 'mirror-z': toolManager.executeAction('mirror-z'); break;
+      case 'revolve-x': toolManager.executeAction('revolve-x'); break;
+      case 'revolve-y': toolManager.executeAction('revolve-y'); break;
+      case 'revolve-z': toolManager.executeAction('revolve-z'); break;
+      case 'fillet-edge': toolManager.executeAction('fillet-edge'); break;
+      case 'chamfer-edge': toolManager.executeAction('chamfer-edge'); break;
+      case 'array-linear': toolManager.executeAction('array-linear'); break;
+      case 'array-radial': toolManager.executeAction('array-radial'); break;
+      case 'thicken-faces': toolManager.executeAction('thicken-faces'); break;
+      case 'assign-quick-color': toolManager.executeAction('assign-quick-color'); break;
+      case 'convert-to-centerline': toolManager.executeAction('convert-to-centerline'); break;
+      case 'convert-to-geometry': toolManager.executeAction('convert-to-geometry'); break;
+      case 'bend-selection':  toolManager.executeAction('bend-selection'); break;
+      case 'twist-selection': toolManager.executeAction('twist-selection'); break;
+      case 'taper-selection': toolManager.executeAction('taper-selection'); break;
+      case 'constrain-parallel':
+      case 'constrain-perpendicular':
+      case 'constrain-collinear':
+      case 'constrain-edge-length':
+      case 'split-edge-midpoint':
+      case 'constrain-endpoint-distance':
+        toolManager.executeAction(action);
+        break;
+      // ── ADR-074 U-2 — Boolean Group A/B selection actions ──
+      // Direct SelectionManager calls (U-2-e=(b)) — bypasses
+      // ToolManager.executeAction since this is pure selection-state
+      // mutation, not an action that needs scene transaction wrapping.
+      case 'set-group-a': {
+        const faces = toolManager.selection.getSelectedFaces();
+        const sm = toolManager.selection as {
+          setGroupTag?: (faceIds: number[], group: 'A' | 'B') => void;
+        };
+        if (faces.length > 0 && typeof sm.setGroupTag === 'function') {
+          sm.setGroupTag(faces, 'A');
+          debugLog(`[BoolGroup] set Group A on ${faces.length} face(s)`);
+        }
+        break;
+      }
+      case 'set-group-b': {
+        const faces = toolManager.selection.getSelectedFaces();
+        const sm = toolManager.selection as {
+          setGroupTag?: (faceIds: number[], group: 'A' | 'B') => void;
+        };
+        if (faces.length > 0 && typeof sm.setGroupTag === 'function') {
+          sm.setGroupTag(faces, 'B');
+          debugLog(`[BoolGroup] set Group B on ${faces.length} face(s)`);
+        }
+        break;
+      }
+      case 'clear-group-tags': {
+        const sm = toolManager.selection as {
+          clearGroupTags?: () => void;
+        };
+        if (typeof sm.clearGroupTags === 'function') {
+          sm.clearGroupTags();
+          debugLog('[BoolGroup] cleared all group tags');
+        }
+        break;
+      }
       case 'select-all': toolManager.executeAction('select-all'); break;
       case 'select-same': toolManager.executeAction('select-same'); break;
       case 'deselect': toolManager.selection.clearSelection(); break;
+      case 'toggle-selection-dims': toolManager.executeAction('toggle-selection-dims'); break;
       // 그룹 / 컴포넌트
       case 'group': toolManager.executeAction('group'); break;
       case 'ungroup': toolManager.executeAction('ungroup'); break;
@@ -227,7 +337,7 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         openOsnapPanel?.();
       } else if (snapType) {
         debugLog('[OSNAP] Override snap:', snapType);
-        snapManager.setOverride(snapType);
+        snapManager.setOverride(snapType as SnapType);
       }
     });
   }

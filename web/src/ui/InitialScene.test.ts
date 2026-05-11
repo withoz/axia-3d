@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { loadInitialScene, InitialSceneDeps } from './InitialScene';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
@@ -7,10 +7,14 @@ function mockDeps(): InitialSceneDeps {
   return {
     bridge: {
       create_cylinder: vi.fn().mockReturnValue(0),
-      faceCount: vi.fn().mockReturnValue(1),
+      faceCount: vi.fn().mockReturnValue(0),
       drawRect: vi.fn().mockReturnValue(0),
+      drawCircle: vi.fn().mockReturnValue(0),
       pushPull: vi.fn(),
       create_sphere: vi.fn().mockReturnValue(1),
+      create_cone: vi.fn().mockReturnValue(2),
+      revolveProfile: vi.fn().mockReturnValue([3, 4, 5]),
+      sweepProfileAlongPath: vi.fn().mockReturnValue([6, 7, 8]),
     } as any,
     fileManager: {
       loadFromArrayBuffer: vi.fn().mockResolvedValue(true),
@@ -25,77 +29,40 @@ function mockDeps(): InitialSceneDeps {
 
 describe('InitialScene', () => {
   let deps: ReturnType<typeof mockDeps>;
-  let originalFetch: typeof globalThis.fetch;
 
   beforeEach(() => {
     deps = mockDeps();
-    originalFetch = globalThis.fetch;
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  describe('loadInitialScene - success', () => {
-    it('fetches xia file and loads via FileManager', async () => {
-      const mockBuffer = new ArrayBuffer(16);
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockBuffer),
-      });
-
+  describe('loadInitialScene', () => {
+    it('starts with empty scene (no geometry creation calls)', async () => {
       loadInitialScene(deps);
-      // Wait for async operations
-      await new Promise(r => setTimeout(r, 10));
+      await new Promise(r => setTimeout(r, 50));
 
-      expect(globalThis.fetch).toHaveBeenCalledWith('/assets/AXiA_Project_2026-04-13.xia');
-      expect(deps.fileManager.loadFromArrayBuffer).toHaveBeenCalled();
-      expect(deps.updateFileStatus).toHaveBeenCalledWith('test-project.xia');
-      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
-    });
-  });
-
-  describe('loadInitialScene - fetch failure', () => {
-    it('creates fallback shapes when fetch fails', async () => {
-      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
-
-      loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 10));
-
-      // Fallback: creates cylinder, box (drawRect + pushPull), sphere
-      expect(deps.bridge.create_cylinder).toHaveBeenCalled();
-      expect(deps.bridge.drawRect).toHaveBeenCalled();
-      expect(deps.bridge.pushPull).toHaveBeenCalled();
-      expect(deps.bridge.create_sphere).toHaveBeenCalled();
-      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect((deps.bridge.create_cylinder as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.create_cone as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.sweepProfileAlongPath as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.drawRect as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.drawCircle as any).mock.calls.length).toBe(0);
     });
 
-    it('creates fallback when response is not ok', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: false,
-      });
-
+    it('syncs the (empty) mesh once so viewport / BVH initialise cleanly', () => {
       loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 10));
-
-      expect(deps.bridge.drawRect).toHaveBeenCalled();
+      expect(deps.toolManager.syncMesh).toHaveBeenCalledTimes(1);
     });
-  });
 
-  describe('loadInitialScene - import failure', () => {
-    it('still syncs mesh when import returns false', async () => {
-      const mockBuffer = new ArrayBuffer(16);
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockBuffer),
-      });
-      (deps.fileManager.loadFromArrayBuffer as any).mockResolvedValue(false);
-
+    it('sets file status to untitled', () => {
       loadInitialScene(deps);
-      await new Promise(r => setTimeout(r, 10));
+      expect(deps.updateFileStatus).toHaveBeenCalledWith('untitled');
+    });
 
-      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
-      expect(deps.updateFileStatus).not.toHaveBeenCalled();
+    it('does not fetch .xia file (always starts fresh)', () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+      loadInitialScene(deps);
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });

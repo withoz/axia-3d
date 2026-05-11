@@ -8,6 +8,8 @@
 import { Viewport, ViewMode } from '../viewport/Viewport';
 import { ToolManager } from '../tools/ToolManagerRefactored';
 import { vcbTools } from './VCB';
+import { Toast } from './Toast';
+import { toggleShortcutHelp, closeShortcutHelpIfOpen } from './ShortcutHelpModal';
 
 export interface KeyboardShortcutsDeps {
   toolManager: ToolManager;
@@ -54,20 +56,116 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
     if (toolLabel) toolLabel.textContent = toolNames[tool] || tool;
   };
 
+  // ── Toolbar / tool-label 동기화 헬퍼 ──
+  const syncToolbarHighlight = (tool: string) => {
+    toolbar.querySelectorAll('.tool-btn').forEach(b => {
+      b.classList.toggle('active', (b as HTMLElement).dataset.tool === tool);
+    });
+  };
+
+  // ── 입력 요소 포커스 가드 (텍스트 입력 중 단축키 차단) ──
+  const isTypingInInput = (target: EventTarget | null): boolean => {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    const tag = el.tagName;
+    return (
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      (el as HTMLElement).isContentEditable === true
+    );
+  };
+
   // ── Main keyboard shortcuts (Section 5) ──
   window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement) return;
+    if (isTypingInInput(e.target)) return;
 
-    // Spacebar: 현재 도구 완료 (Line 종료 등 — CAD 스타일)
-    if (e.key === ' ' && toolManager.isToolBusy()) {
+    // Spacebar: SketchUp 스타일 — 진행 중이면 cancel, 이후 항상 Select 도구로 전환
+    // (CAD의 "cancel" 의미와 SketchUp의 "select tool" 의미를 통합)
+    if (e.key === ' ') {
       e.preventDefault();
-      toolManager.cancelCurrentTool();
+      if (toolManager.isToolBusy()) {
+        toolManager.cancelCurrentTool();
+      }
+      if (toolManager.currentTool !== 'select') {
+        toolManager.setTool('select');
+        syncToolbarHighlight('select');
+        updateToolLabel('select');
+      }
       return;
     }
 
     // Delete: 선택된 face 삭제
     if (e.key === 'Delete') {
       toolManager.executeAction('delete');
+      return;
+    }
+
+    // Shift+N: 면 반전 (플레인 N은 Cone 도구에 예약되어 있어 충돌 방지)
+    if ((e.key === 'N' || e.key === 'n') && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      toolManager.executeAction('flip-faces');
+      return;
+    }
+
+    // ── F1: 단축키 도움말 모달 토글 ──
+    if (e.key === 'F1') {
+      e.preventDefault();
+      toggleShortcutHelp();
+      return;
+    }
+
+    // ── F2: 선택된 XIA 이름 입력 필드로 포커스 ──
+    if (e.key === 'F2') {
+      e.preventDefault();
+      const nameInput = document.getElementById('xi-name') as HTMLInputElement | null;
+      if (nameInput && nameInput.offsetParent !== null) {
+        nameInput.focus();
+        nameInput.select();
+      } else {
+        Toast.info('XIA가 선택되지 않았습니다');
+      }
+      return;
+    }
+
+    // ── F4: 그리드 표시/숨김 ──
+    if (e.key === 'F4') {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.gridVisible;
+      viewport.setGridVisible(next);
+      document.getElementById('sb-fkey-grid')?.classList.toggle('on', next);
+      Toast.info(`그리드 ${next ? '표시' : '숨김'}`);
+      return;
+    }
+
+    // ── F5: 카메라 원점 복귀 (View Home) ──
+    if (e.key === 'F5') {
+      e.preventDefault();
+      viewport.resetCamera();
+      Toast.info('뷰 원점 복귀');
+      return;
+    }
+
+    // ── F6: 엣지 표시/숨김 ──
+    if (e.key === 'F6') {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.edgeVisible;
+      viewport.setEdgeStyle({ visible: next });
+      document.getElementById('sb-fkey-edge')?.classList.toggle('on', next);
+      Toast.info(`엣지 ${next ? '표시' : '숨김'}`);
+      return;
+    }
+
+    // ── F7: 축 표시/숨김 ──
+    if (e.key === 'F7') {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.axisVisible;
+      viewport.setAxisVisible(next);
+      document.getElementById('sb-fkey-axis')?.classList.toggle('on', next);
+      Toast.info(`축 ${next ? '표시' : '숨김'}`);
       return;
     }
 
@@ -85,11 +183,121 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // Backtick (`) = 그리드 표시/숨김 토글
+    if (e.key === '`' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      const s = viewport.getStyleSettings();
+      const next = !s.gridVisible;
+      viewport.setGridVisible(next);
+      Toast.info(`그리드 ${next ? '표시' : '숨김'}`);
+      return;
+    }
+
+    // B3: Tab = Tentative snap cycling (순회)
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const chosen = toolManager.snap.cycleTentative();
+      if (chosen) {
+        toolManager.snapVisual.update(chosen, toolManager.viewport.activeCamera);
+      }
+      return;
+    }
+
+    // B1: K = Inference Lock toggle (현재 스냅 고정/해제)
+    // (L은 Line tool, Shift는 다른 조합에 쓰이므로 K 단독 키로 예약)
+    if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      if (toolManager.snap.hasLockedInference()) {
+        toolManager.snap.clearLockedInference();
+      } else if (toolManager.snap.lastSnap) {
+        toolManager.snap.setLockedInference(toolManager.snap.lastSnap);
+      }
+      const statOsnap = document.getElementById('stat-osnap');
+      if (statOsnap) {
+        const locked = toolManager.snap.hasLockedInference();
+        const prev = statOsnap.textContent;
+        statOsnap.textContent = locked ? '🔒 LOCKED' : 'UNLOCK';
+        setTimeout(() => { statOsnap.textContent = prev; }, 800);
+      }
+      return;
+    }
+
+    // ADR-074 §E.5-4 — Boolean Group A/B 단축키 (Alt+A / Alt+B / Alt+0).
+    // Alt 조합으로 기존 단축키 충돌 회피 (Ctrl+A=Select All / 'b'=bottom-view 와 분리).
+    // 우클릭 메뉴 (ADR-074 U-2) 의 단축 진입점 — 파워유저 효율 향상.
+    // Per ADR-074 §E.5-4 closure:
+    //   Alt+A → Set Group A on current selection
+    //   Alt+B → Set Group B on current selection
+    //   Alt+0 → Clear all group tags
+    // 의존: toolManager.selection 의 setGroupTag / clearGroupTags
+    //   (legacy bridge 호환을 위한 typeof 가드).
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+      const sm = toolManager.selection as {
+        getSelectedFaces?: () => number[];
+        setGroupTag?: (faceIds: number[], group: 'A' | 'B') => void;
+        clearGroupTags?: () => void;
+      };
+      const lower = e.key.toLowerCase();
+      if (lower === 'a' || lower === 'b') {
+        if (typeof sm.setGroupTag === 'function' &&
+            typeof sm.getSelectedFaces === 'function') {
+          const faces = sm.getSelectedFaces();
+          if (faces.length > 0) {
+            e.preventDefault();
+            sm.setGroupTag(faces, lower === 'a' ? 'A' : 'B');
+            return;
+          }
+        }
+      } else if (lower === '0') {
+        if (typeof sm.clearGroupTags === 'function') {
+          e.preventDefault();
+          sm.clearGroupTags();
+          return;
+        }
+      }
+    }
+
+    // A5: Snap 타입별 단축 토글 (Alt + E/M/I/C/P/L/F/G)
+    // Alt 조합으로 기존 단축키(X, Y, Z, H, V 등)와 충돌 방지
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+      const map: Record<string, string> = {
+        'e': 'endpoint', 'm': 'midpoint', 'i': 'intersection',
+        'c': 'center',   'p': 'perpendicular',
+        'l': 'parallel', 'f': 'onFace',   'g': 'grid',
+        'x': 'extension','n': 'nearest',
+      };
+      const mode = map[e.key.toLowerCase()];
+      if (mode) {
+        e.preventDefault();
+        const active = toolManager.snap.toggleMode(mode as never);
+        // Mirror change to checkbox panel
+        const cb = document.querySelector<HTMLInputElement>(
+          `input[data-mode="${mode}"]`);
+        if (cb) cb.checked = active;
+        // Briefly flash status bar
+        const statOsnap = document.getElementById('stat-osnap');
+        if (statOsnap) {
+          const txt = `${mode} ${active ? 'ON' : 'OFF'}`;
+          const prev = statOsnap.textContent;
+          statOsnap.textContent = txt;
+          setTimeout(() => { statOsnap.textContent = prev; }, 800);
+        }
+        return;
+      }
+    }
+
     // 화살표 키: 축 잠금 (SketchUp 스타일)
     if (e.key === 'ArrowRight') { e.preventDefault(); toolManager.setAxisLock('x'); return; }
     if (e.key === 'ArrowUp')    { e.preventDefault(); toolManager.setAxisLock('y'); return; }
     if (e.key === 'ArrowLeft')  { e.preventDefault(); toolManager.setAxisLock('z'); return; }
     if (e.key === 'ArrowDown')  { e.preventDefault(); toolManager.setAxisLock(null); return; }
+
+    // Shift+S: 스케치 자동 평면 감지 (Phase 4).
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'S' || e.key === 's')) {
+      e.preventDefault();
+      toolManager.executeAction('sketch-start-auto');
+      return;
+    }
 
     // Ctrl+S: 저장
     if (e.ctrlKey && (e.key === 's' || e.key === 'S')) {
@@ -123,14 +331,49 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
-    if (e.ctrlKey && e.key === 'z') {
+    // Ctrl+M: 면 통합 (선택된 coplanar 인접 face를 하나로)
+    if (e.ctrlKey && (e.key === 'm' || e.key === 'M')) {
+      e.preventDefault();
+      toolManager.executeAction('merge-faces');
+      return;
+    }
+
+    // ── Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D — Windows 표준 클립보드 ──
+    // 입력 필드가 아닌 뷰포트 포커스에서만 동작 (isTypingInInput 가드 상단).
+    // 도구 작업 중(isBusy)이면 클립보드 조작도 차단 — 그리기 중 Ctrl+V가
+    // 예기치 않은 paste를 유발하는 것보다 명확한 "먼저 Esc"가 안전.
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
+        (e.key === 'c' || e.key === 'C' ||
+         e.key === 'x' || e.key === 'X' ||
+         e.key === 'v' || e.key === 'V' ||
+         e.key === 'd' || e.key === 'D')) {
+      e.preventDefault();
+      if (e.repeat) return;
+      if (toolManager.isToolBusy()) { return; }
+      const action = ({
+        c: 'clipboard-copy', C: 'clipboard-copy',
+        x: 'clipboard-cut',  X: 'clipboard-cut',
+        v: 'clipboard-paste', V: 'clipboard-paste',
+        d: 'duplicate',       D: 'duplicate',
+      } as Record<string, string>)[e.key];
+      if (action) toolManager.executeAction(action);
+      return;
+    }
+
+    // Windows 표준 Undo/Redo. case-insensitive 처리 + Ctrl+Shift+Z 도 Redo (Adobe 관습).
+    const isUndoKey = e.ctrlKey && !e.shiftKey && (e.key === 'z' || e.key === 'Z');
+    const isRedoKey = e.ctrlKey && (
+      (e.key === 'y' || e.key === 'Y') ||
+      (e.shiftKey && (e.key === 'z' || e.key === 'Z'))
+    );
+    if (isUndoKey) {
       e.preventDefault();
       if (e.repeat) return;
       if (!e.isTrusted) { console.warn('[Undo] blocked non-trusted event'); return; }
       toolManager.executeAction('undo');
       const undoBtn = toolbar.querySelector('[data-tool="undo"]');
       if (undoBtn) { undoBtn.classList.add('flash'); undoBtn.addEventListener('animationend', () => undoBtn.classList.remove('flash'), { once: true }); }
-    } else if (e.ctrlKey && e.key === 'y') {
+    } else if (isRedoKey) {
       e.preventDefault();
       if (e.repeat) return;
       if (!e.isTrusted) { console.warn('[Redo] blocked non-trusted event'); return; }
@@ -138,6 +381,8 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       const redoBtn = toolbar.querySelector('[data-tool="redo"]');
       if (redoBtn) { redoBtn.classList.add('flash'); redoBtn.addEventListener('animationend', () => redoBtn.classList.remove('flash'), { once: true }); }
     } else if (e.key === 'Escape') {
+      // Escape: 도움말 모달 우선 닫기
+      if (closeShortcutHelpIfOpen()) return;
       // Escape: 그룹 편집 모드 종료 → 3D 뷰 복귀 → Select 도구
       if (toolManager.selection.isInGroupEditMode()) {
         toolManager.selection.exitGroupEdit();
@@ -152,15 +397,14 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         if (toolLabel) toolLabel.textContent = '3D Perspective';
       } else {
         toolManager.setTool('select');
-        toolbar.querySelectorAll('.tool-btn').forEach(b => {
-          b.classList.toggle('active', (b as HTMLElement).dataset.tool === 'select');
-        });
+        syncToolbarHighlight('select');
       }
     } else if (e.shiftKey && !e.ctrlKey && !e.altKey) {
       // Shift 조합 단축키
       const shiftMap: Record<string, string> = {
         'L': 'polyline',
         'F': 'freehand',
+        'C': 'centerline',
       };
       const shiftTool = shiftMap[e.key];
       if (shiftTool) {
@@ -197,13 +441,13 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         's': 'scale', 'S': 'scale',
         'o': 'offset', 'O': 'offset',
         'e': 'erase', 'E': 'erase',
+        'x': 'split', 'X': 'split',
+        'u': 'measure', 'U': 'measure',
       };
       const tool = keyMap[e.key];
       if (tool) {
         toolManager.setTool(tool);
-        toolbar.querySelectorAll('.tool-btn').forEach(b => {
-          b.classList.toggle('active', (b as HTMLElement).dataset.tool === tool);
-        });
+        syncToolbarHighlight(tool);
         updateToolLabel(tool);
       }
     }

@@ -92,10 +92,20 @@ export class UnitSystem {
     return value * this.config.toMM;
   }
 
-  /** 내부값(mm)을 현재 단위 문자열로 포매팅 */
+  /** 내부값(mm)을 현재 단위 문자열로 포매팅.
+   *  2026-04-27: 천자리 콤마 추가 — "1,234.5678" 식. 사용자 요청. */
   format(mm: number, showUnit = true): string {
     const converted = this.fromInternal(mm);
-    const formatted = converted.toFixed(this._precision);
+    // 천자리 콤마 — 정수부에만 적용. toFixed 결과의 "1234567.890" 같은
+    //   문자열을 정수/소수부로 분리 후 정수부에 regex 로 콤마 삽입.
+    const fixed = converted.toFixed(this._precision);
+    const dot = fixed.indexOf('.');
+    const intPart = dot >= 0 ? fixed.slice(0, dot) : fixed;
+    const fracPart = dot >= 0 ? fixed.slice(dot) : '';
+    const sign = intPart.startsWith('-') ? '-' : '';
+    const absInt = sign ? intPart.slice(1) : intPart;
+    const withCommas = absInt.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const formatted = `${sign}${withCommas}${fracPart}`;
     return showUnit ? `${formatted} ${this.config.label}` : formatted;
   }
 

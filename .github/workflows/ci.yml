@@ -1,0 +1,138 @@
+# ADR-075 E4-6 + ADR-077 V-4 — CI for Rust tests + browser E2E.
+#
+# Drop-in alongside `build.yml` (which covers Vite build + vitest +
+# tsc). Existing build.yml UNCHANGED per ADR-075 §C lock-in #2 (drop-in
+# alongside). This file adds two NEW jobs that build.yml doesn't cover:
+#
+#   - rust-test : cargo test for axia-geo + axia-wasm (was: not run)
+#   - web-e2e   : Playwright Chromium E2E (functional + visual, was:
+#                 not run). Visual coverage added by ADR-077 V-4 —
+#                 `npx playwright test` 가 functional (e2e/*.spec.ts)
+#                 + visual (e2e/visual/*.visual.spec.ts) 모두 실행.
+#                 Linux baseline 생성 정책: web/e2e/visual/README.md.
+#
+# Per ADR-075 §B lock-ins (E4-6 atomic):
+# - E4-6-a GitHub Actions
+# - E4-6-b 3 jobs separation (this file = 2 jobs; build.yml's `test` =
+#   the third "web-test" / vitest job, already in place)
+# - E4-6-c PR + push to main + claude/** (build.yml pattern parity)
+# - E4-6-e ubuntu-latest only — atomic
+# - E4-6-f Rust caching via Swatinem/rust-cache@v2
+# - E4-6-g Node caching via setup-node
+# - E4-6-h WASM rebuild every run (truth = source, no artifact drift)
+# - E4-6-i Playwright `install --with-deps chromium`
+# - E4-6-j Parallel jobs (rust-test ⊥ web-e2e)
+# - E4-6-k Failure-only artifact upload (Playwright report)
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop, 'claude/**', 'feature/**']
+  pull_request:
+    branches: [main, develop]
+
+# Cancel stale runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ───────────────────────────────────────────────────────────────
+  # Rust tests — axia-geo + axia-wasm.
+  # build.yml does NOT run cargo test, only wasm-pack build.
+  # ───────────────────────────────────────────────────────────────
+  rust-test:
+    name: Rust tests (axia-geo + axia-wasm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-test
+          workspaces: |
+            crates/axia-geo
+            crates/axia-wasm
+
+      - name: cargo test -p axia-geo --lib
+        run: cargo test -p axia-geo --lib
+
+      - name: cargo test -p axia-wasm --tests
+        run: cargo test -p axia-wasm --tests
+
+  # ───────────────────────────────────────────────────────────────
+  # Browser E2E — Playwright Chromium round-trip.
+  # ADR-075 E4-1~E4-4 → 11 E2E tests (smoke + ADR-064 + ADR-066 + undo).
+  # ───────────────────────────────────────────────────────────────
+  web-e2e:
+    name: Web E2E (Playwright Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build (shared with build.yml WASM)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-wasm
+          workspaces: crates/axia-wasm
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: npm ci (web)
+        working-directory: ./web
+        run: npm ci
+
+      # E4-6-h — WASM rebuild every run (truth = source).
+      - name: Build WASM (release)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target web --out-dir ../../web/src/wasm
+
+      # Vite preview needs dist/ from `npm run build`.
+      - name: Build dist (vite + tsc)
+        working-directory: ./web
+        run: npm run build
+
+      # E4-6-i — Playwright Chromium only (atomic; multi-browser
+      # matrix is a future sub-step).
+      - name: Install Playwright Chromium
+        working-directory: ./web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        working-directory: ./web
+        run: npx playwright test
+
+      # E4-6-k — Failure-only artifact upload for debug.
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 14
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: web/test-results/
+          retention-days: 14

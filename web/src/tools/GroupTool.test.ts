@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import * as THREE from 'three';
 import { GroupTool } from './GroupTool';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
@@ -147,7 +146,7 @@ describe('GroupTool', () => {
       // faceMap[2] = 2
 
       tool.onMouseDown({ clientX: 100, clientY: 200, shiftKey: true, ctrlKey: false } as MouseEvent, null);
-      expect(ctx.selection.handleClick).toHaveBeenCalledWith(2, true, false);
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(2, true, false, false);
     });
 
     it('clears selection on empty space click', () => {

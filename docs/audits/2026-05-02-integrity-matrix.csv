@@ -1,0 +1,151 @@
+action_id,menu_path,keyboard,context_menu,tool_class,bridge_method,wasm_export,category,discoverability,status,notes
+array-linear,Modeling > Deformation > Array Linear,,선형 배열 복제,,arrayLinearFaces,arrayLinearFaces,array-mirror,3,OK,Wired through ToolManager.executeAction
+array-radial,Modeling > Deformation > Array Radial,,원형 배열 복제,,arrayRadialFaces,arrayRadialFaces,array-mirror,3,OK,
+assign-quick-color,Modeling > Organic > Quick Color,,색상 지정,,(MaterialLibrary),(none),material,3,OK,Bridge bypassed — uses MaterialLibrary callback
+bend-selection,Modeling > Deformation > Bend,,,,bendVerts+getFaceVertices+getEdgeEndpoints,bendVerts,transform,2,OK,
+bool-intersect,Modeling > Boolean > Intersect,,,,booleanOp,boolean_op,boolean,2,OK,Via BooleanHandler
+bool-subtract,Modeling > Boolean > Subtract,,,,booleanOp,boolean_op,boolean,2,OK,Via BooleanHandler
+bool-union,Modeling > Boolean > Union,,,,booleanOp,boolean_op,boolean,2,OK,Via BooleanHandler
+chamfer-edge,Modeling > Edge Tools > Chamfer,,엣지 모따기,,filletEdge,filletEdge,fillet-chamfer,3,OK,Reuses fillet with segments=1
+clash-clear,View > Analysis > Clash Clear,,,,(none),(none),debug,1,UI-ONLY,View overlay clearing
+clash-detect,View > Analysis > Clash Detection,,,,(ClashDetection),(none),debug,1,OK,Lazy import in MenuBar:473
+clipboard-copy,Edit > Copy,Ctrl+C,,,(Clipboard),(none),clipboard,2,OK,Pure JS clipboard
+clipboard-cut,Edit > Cut,Ctrl+X,,,batchDelete,batch_delete,clipboard,2,OK,Copy then delete
+clipboard-paste,Edit > Paste,Ctrl+V,,MoveTool,arrayLinearFaces+MoveTool.startPlacement,arrayLinearFaces,clipboard,2,OK,Chains to MoveTool
+constrain-collinear,,,엣지 동일 선상 정렬,,(ConstraintCommands),(none),constraint,1,OK,Via ConstraintCommands handler
+constrain-edge-length,,,엣지 길이 설정,,addDistanceConstraint,addDistanceConstraint,constraint,1,OK,
+constrain-endpoint-distance,,,끝점 거리 고정,,addDistanceConstraint,addDistanceConstraint,constraint,1,OK,
+constrain-parallel,,,엣지 평행 정렬,,(ConstraintCommands),(none),constraint,1,OK,Via ConstraintCommands handler
+constrain-perpendicular,,,엣지 수직 정렬,,(ConstraintCommands),(none),constraint,1,OK,Via ConstraintCommands handler
+convert-to-centerline,Modeling > Edge Tools > Centerline Convert,,중심선으로 변환,,setEdgeClass,setEdgeClass,edge-curve,3,OK,
+convert-to-geometry,Modeling > Edge Tools > Geometry Convert,,일반선으로 변환,,setEdgeClass,setEdgeClass,edge-curve,3,OK,
+delete,Edit > Delete,Del,삭제,,batchDelete+deleteFace+deleteEdge,batch_delete,topology,3,OK,Atomic batch with fallback
+deselect,Edit > Deselect,Esc,선택 해제,,(none),(none),selection,3,OK,Pure UI
+duplicate,Edit > Duplicate,Ctrl+D,,MoveTool,arrayLinearFaces+MoveTool.startPlacement,arrayLinearFaces,clipboard,2,OK,Chains to MoveTool
+export-dxf,File > Export > DXF,,,,(DxfWriter),(none),serialization,1,OK,TS-side writer (no WASM call)
+export-gltf,File > Export > glTF,,,,(GLTFExporter),(none),serialization,1,OK,Three.js exporter
+export-iges,File > Export > IGES (DISABLED),,,,(none),(none),serialization,1,PLACEHOLDER,Engine path missing
+export-obj,File > Export > OBJ,,,,(OBJExporter),(none),serialization,1,OK,Three.js exporter
+export-step,File > Export > STEP (DISABLED),,,,(none),(none),serialization,1,PLACEHOLDER,Engine path missing
+export-stl,File > Export > STL,,,,(STLExporter),(none),serialization,1,OK,Three.js exporter
+file-new,File > New,Ctrl+N,,,(reset state),(none),serialization,2,OK,
+file-open,File > Open,Ctrl+O,,,importSnapshot,import_snapshot,serialization,2,OK,
+file-save,File > Save,Ctrl+S,,,exportSnapshot,export_snapshot,serialization,2,OK,
+file-saveas,File > Save As,Ctrl+Shift+S,,,exportSnapshot,export_snapshot,serialization,2,OK,
+fillet-edge,Modeling > Edge Tools > Fillet,,엣지 모깎기,,filletEdge,filletEdge,fillet-chamfer,3,OK,segments=8 default
+flip-faces,Modeling > Organic > Flip Faces,Shift+N,면 반전,,flipFaces+isFaceInVolume,flipFaces,merge-flip,3,OK,Wall-only (Sheet skipped)
+format-osnap,Format > OSNAP Settings,F3,,,(OsnapPanel),(none),settings,2,OK,Toggles panel
+format-style,Format > Style,,,,(StylePanel),(none),settings,1,OK,Toggles panel
+format-units,Format > Units,,,,(SettingsPanel),(none),settings,1,OK,Toggles panel
+group,Modeling > Group > Group,Ctrl+G,그룹 만들기,GroupTool,createGroup OR (selection.groupSelected),create_group,group,3,OK,GroupTool primary path
+group-edit,,,그룹 편집,GroupTool,(GroupTool.enterGroupEdit),(none),group,1,OK,Context-only
+group-hide,,,그룹 숨기기,,toggleGroupVisibility,toggle_group_visibility,group,1,OK,
+group-lock,,,그룹 잠금,,toggleGroupLock,toggle_group_lock,group,1,OK,
+help-about,Help > About,,,,(none),(none),help,1,OK,Modal
+help-shortcuts,Help > Shortcuts,F1,,,(ShortcutHelpModal),(none),help,2,OK,
+import-3dm,File > Import > 3DM,,,,importSnapshot,import_snapshot,serialization,1,OK,Via FileImporter
+import-3ds,File > Import > 3DS,,,,(Three loader),(none),serialization,1,OK,
+import-all,File > Import > All Types,,,,(format detection),(varies),serialization,1,OK,Dispatcher
+import-dae,File > Import > DAE,,,,(Three ColladaLoader),(none),serialization,1,OK,
+import-dwg,File > Import > DWG,,,,import_dxf (via dwgdxf),import_dxf,serialization,1,OK,DWG→DXF pipeline
+import-dxf,File > Import > DXF,,,,import_dxf,import_dxf,serialization,1,OK,
+import-gltf,File > Import > glTF,,,,(GLTFLoader),(none),serialization,1,OK,
+import-iges,File > Import > IGES,,,,(StepIgesImporter scaffold),(scaffold),serialization,1,SCAFFOLD,Stage 4-A scaffolding only
+import-ifc,File > Import > IFC (DISABLED),,,,(none),(none),serialization,1,PLACEHOLDER,Not planned
+import-obj,File > Import > OBJ,,,,(Three OBJLoader),(none),serialization,1,OK,
+import-ply,File > Import > PLY,,,,(Three PLYLoader),(none),serialization,1,OK,
+import-skp,File > Import > SKP,,,,(JSZip+xml),(none),serialization,1,OK,Basic placeholder
+import-step,File > Import > STEP,,,,(StepIgesImporter scaffold),(scaffold),serialization,1,SCAFFOLD,Stage 4-A scaffolding only
+import-stl,File > Import > STL,,,,(Three STLLoader),(none),serialization,1,OK,
+intersect-with-model,Modeling > Boolean > Intersect with Model,,,,intersectWithModel,intersectWithModel,boolean,1,OK,SketchUp-style
+make-component,,,컴포넌트로 변환,,makeComponent,make_component,group,1,OK,Context-only
+measure-selection,Modeling > Measure > Measure Selection,,,,edgeLength+faceArea+meshVolume,edgeLength+faceArea+meshVolume,measurement,1,OK,Toast display
+mesh-repair,Modeling > Mesh Tools > Repair,,,,normalizeForImport+meshManifoldInfo,normalizeForImport,read,1,OK,4-step normalize
+merge-as-hole,,,수동 구멍,,(MergeActions.mergeAsHole),(varies),merge-flip,1,OK,Via MergeActions
+merge-faces,Modeling > Organic > Merge Faces,Ctrl+M,면 통합,,(MergeActions.mergeFaces),mergeFacesByEdge,merge-flip,3,OK,Via MergeActions
+merge-faces-force,,,강제 통합,,(MergeActions.mergeFacesForce),softenInternalEdges,merge-flip,1,OK,
+merge-faces-geometric,,,기하 병합,,(MergeActions.mergeFacesGeometric),mergeCoplanarFacesGeometric,merge-flip,1,OK,
+merge-xia-coplanar,,,XIA 내 coplanar 면,,(MergeActions.mergeXiaCoplanar),tryMergeAdjacentFaces,merge-flip,1,OK,
+mirror-x,Modeling > Deformation > Mirror XYZ,,미러 · YZ 평면,,mirrorFaces,mirrorFaces,transform,3,OK,
+mirror-y,Modeling > Deformation > Mirror XYZ,,미러 · XZ 평면,,mirrorFaces,mirrorFaces,transform,3,OK,
+mirror-z,Modeling > Deformation > Mirror XYZ,,미러 · XY 평면,,mirrorFaces,mirrorFaces,transform,3,OK,
+redo,Edit > Redo,Ctrl+Y,Redo,,redo,redo,undo-redo,3,OK,
+reference-image,View > Reference Image,,,,(ReferenceImage),(none),view,1,OK,
+revolve-x,Modeling > Deformation > Revolve XYZ,,Revolve · X축,,revolveProfile+getEdgeEndpoints,revolveProfile,transform,3,OK,
+revolve-y,Modeling > Deformation > Revolve XYZ,,Revolve · Y축,,revolveProfile,revolveProfile,transform,3,OK,
+revolve-z,Modeling > Deformation > Revolve XYZ,,Revolve · Z축,,revolveProfile,revolveProfile,transform,3,OK,
+section-off,View > Section Plane > Off,,,,(viewport API),(none),view,1,OK,Three.js clip plane
+section-x,View > Section Plane > X Axis,,,,(viewport API),(none),view,1,OK,
+section-y,View > Section Plane > Y Axis,,,,(viewport API),(none),view,1,OK,
+section-z,View > Section Plane > Z Axis,,,,(viewport API),(none),view,1,OK,
+select-all,Edit > Select All,Ctrl+A,모두 선택,,(none),(none),selection,3,OK,Pure UI
+select-same,,,동일요소 선택,,(none),(none),selection,1,OK,Pure UI context-only
+sketch-align-up,Modeling > Sketch > Camera Align,,,,(none),(none),sketch,1,OK,UI-only
+sketch-exit,Modeling > Sketch > Exit,,,,synthesizeFacesFromFreeEdges+pushPull,synthesizeFacesFromFreeEdges,sketch,1,OK,Auto-extrude prompt
+sketch-resume-last,Modeling > Sketch > Resume Last,,,,(localStorage),(none),sketch,1,OK,
+sketch-start-auto,Modeling > Sketch > Auto Plane,Shift+S,,,(heuristic),(none),sketch,2,OK,
+sketch-start-face,Modeling > Sketch > Face Plane,,,,getFaceVertices,getFaceVertices,sketch,1,OK,
+sketch-start-xy,Modeling > Sketch > XY Plane,,,,(none),(none),sketch,1,OK,
+sketch-start-xz,Modeling > Sketch > XZ Plane,,,,(none),(none),sketch,1,OK,
+sketch-start-yz,Modeling > Sketch > YZ Plane,,,,(none),(none),sketch,1,OK,
+solar-heatmap,View > Analysis > Solar Heatmap,,,,computeGroundProjectedShadows,computeGroundProjectedShadows,debug,1,OK,Phase 1 sun simulation
+solar-heatmap-off,View > Analysis > Solar Heatmap Off,,,,(none),(none),debug,1,OK,UI clear
+solidify,Modeling > Mesh Tools > Solidify,,,,meshManifoldInfo+synthesizeFacesFromFreeEdges,synthesizeFacesFromFreeEdges,topology,1,OK,
+split-edge-midpoint,,,엣지 중점 분할,,splitEdge+getEdgeEndpoints+getVertexPos,splitEdge,topology,1,OK,Context-only
+subdivide,Modeling > Organic > Subdivide,,,,subdivideCatmullClark,subdivideCatmullClark,topology,1,OK,
+synthesize-faces,Modeling > Mesh Tools > Synthesize,,,,synthesizeFacesFromFreeEdges+countFreeEdges,synthesizeFacesFromFreeEdges,topology,1,OK,Manual trigger
+taper-selection,Modeling > Deformation > Taper,,,,taperVerts+getFaceVertices+getEdgeEndpoints,taperVerts,transform,1,OK,
+thicken-faces,Modeling > Organic > Thicken,,두께 부여,,pushPull (per-face loop),push_pull,transform,3,OK,Sequential per-face
+toggle-selection-dims,,,치수 표시 ON/OFF,,(none),(none),selection,1,OK,Context-only UI toggle
+tool-arc,Draw > Arc,A,,DrawArcTool,(via tool),(none),draw,2,OK,
+tool-bezier,Draw > Bezier,,,DrawBezierTool,(via tool),(none),draw,1,OK,
+tool-box,Primitive > Box,,,BoxTool,create_box,create_box,draw,1,OK,
+tool-centerline,Draw > Centerline,Shift+C,,DrawCenterlineTool,drawCenterline,drawCenterline,draw,2,OK,
+tool-circle,Draw > Circle,C,,DrawCircleTool,drawCircle,draw_circle,draw,2,OK,
+tool-cone,Primitive > Cone,N,,ConeTool,create_cone,create_cone,draw,2,OK,
+tool-cylinder,Primitive > Cylinder,Y,,CylinderTool,create_cylinder,create_cylinder,draw,2,OK,
+tool-erase,Modeling > Modify > Erase,E,,EraseTool,batchEraseEdgesWithMerge+batchDelete,batchEraseEdgesWithMerge,topology,2,OK,
+tool-explode,Modeling > Group > Explode,,,,(SelectionManager),(none),group,1,OK,Local cache only
+tool-extend,Modeling > Edge Tools > Extend,,,,(none),(none),topology,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
+tool-freehand,Draw > Freehand,Shift+F,,DrawFreehandTool,(via tool),(none),draw,2,OK,
+tool-group,Modeling > Group > Group,,,GroupTool,createGroup,create_group,group,1,OK,Same as group action
+tool-line,Draw > Line,L,,DrawLineTool,drawLine,draw_line,draw,2,OK,
+tool-make-component,Modeling > Group > Make Component,,,,makeComponent,make_component,group,1,OK,
+tool-measure,Modeling > Measure > Measure Tool,U,,MeasureTool,(via tool),(none),measurement,2,OK,
+tool-move,Modeling > Modify > Move,M,,MoveTool,translateVerts+translate_faces,translateVerts,transform,2,OK,
+tool-offset,Modeling > Modify > Offset,O,,OffsetTool,offset_face+offset_edge,offset_face,transform,2,OK,
+tool-point,Draw > Point,,,(none),(none),(none),draw,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
+tool-polygon,Draw > Polygon,G,,DrawPolygonTool,(via tool),(none),draw,2,OK,
+tool-polyline,Draw > Polyline,Shift+L,,DrawLineTool (alias),drawPolyline,drawPolyline,draw,2,OK,
+tool-pushpull,Modeling > Deformation > Push/Pull,P,,PushPullTool,pushPull,push_pull,transform,2,OK,
+tool-rect,Draw > Rectangle,R,,DrawRectTool,drawRect,draw_rect,draw,2,OK,
+tool-rotate,Modeling > Modify > Rotate,Q,,RotateTool,rotateVerts+rotate_faces,rotateVerts,transform,2,OK,
+tool-scale,Modeling > Modify > Scale,S,,ScaleTool,scaleVerts+scale_faces,scaleVerts,transform,2,OK,
+tool-slice,Modeling > Boolean > Slice,,,SliceTool,sliceVolumeByPlane,sliceVolumeByPlane,topology,1,OK,
+tool-sphere,Primitive > Sphere,H,,SphereTool,create_sphere,create_sphere,draw,2,OK,
+tool-text3d,Draw > Text3D,,,(none),(none),(none),draw,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
+tool-trim,Modeling > Edge Tools > Trim,,,,(none),(none),topology,1,STUB,Tool unregistered — Toast warning shown post-2026-05-02 fix
+tool-ungroup,Modeling > Group > Ungroup,,,,(SelectionManager),(none),group,1,OK,Local cache
+twist-selection,Modeling > Deformation > Twist,,,,twistVertsDeform,twistVerts,transform,1,OK,
+undo,Edit > Undo,Ctrl+Z,Undo,,undo,undo,undo-redo,3,OK,Special busy handling
+ungroup,,Ctrl+Shift+G,그룹 해제,,(SelectionManager),(none),group,2,OK,Local cache
+upload-texture,Modeling > Organic > Upload Texture,,,,(TextureUploadDialog),(none),material,1,OK,
+view-3d,View > 3D,Num0,3D View,,(camera state),(none),view,3,OK,
+view-axis,View > Axis Toggle,,,,(viewport),(none),view,1,OK,
+view-back,View > Back,,Back View,,(camera state),(none),view,2,OK,
+view-bottom,View > Bottom,,,,(camera state),(none),view,1,OK,
+view-components,View > Components Panel,Shift+G,,,(ComponentPanel),(none),panel,2,OK,
+view-constraints,View > Constraints Panel,J,,,(ConstraintPanel),(none),panel,2,OK,
+view-front,View > Front,F,Front View,,(camera state),(none),view,3,OK,
+view-fur,View > Fur Shader,,,,(FurShell),(none),view,1,OK,
+view-grid,View > Grid Toggle,`,,,(viewport),(none),view,2,OK,
+view-history,View > History Panel,Shift+H,,,(HistoryPanel),(none),panel,2,OK,
+view-home,View > Home,H,,,(camera reset),(none),view,2,OK,
+view-left,View > Left,,,,(camera state),(none),view,1,OK,
+view-materials,View > Materials Panel,,,,(XiaInspector redirect),(none),panel,1,REDIRECT,Post ADR-045 PR-1; was MaterialPropertiesPanel
+view-right,View > Right,,Right View,,(camera state),(none),view,2,OK,
+view-scenes,View > Scenes,,,,(ScenesManager),(none),panel,1,OK,
+view-ssao,View > AO (SSAO),,,,(SSAO pass),(none),view,1,OK,
+view-sun-panel,View > Sun Panel,Shift+U,,,(SunPanel),(none),panel,2,OK,
+view-top,View > Top,T,Top View,,(camera state),(none),view,3,OK,
+view-xia-inspector,View > XIA Inspector,,,,(XiaInspector),(none),panel,1,OK,

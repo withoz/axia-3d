@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AXiA 3D</title>
+  <!-- Inline SVG favicon — eliminates the /favicon.ico 404 noise in console.
+       Uses a simple cube glyph in the AxiA accent color. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cstyle%3E.s%7Bfill:none;stroke:%2374c0fc;stroke-width:3;stroke-linejoin:round%7D%3C/style%3E%3Cpath class='s' d='M32 8 L56 20 V44 L32 56 L8 44 V20 Z'/%3E%3Cpath class='s' d='M32 8 V32 M8 20 L32 32 L56 20 M32 32 V56'/%3E%3C/svg%3E" />
   <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -24,7 +27,8 @@
       z-index: 9500;
       display: flex;
       align-items: center;
-      background: rgba(30, 30, 38, 0.95);
+      /* 기존 rgba(30,30,38,0.95)에서 RGB 10% 어둡게 (×0.9) */
+      background: rgba(30, 30, 37, 0.95);
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       padding: 0 4px;
       user-select: none;
@@ -53,14 +57,14 @@
       color: #fff;
     }
 
-    /* 드롭다운 메뉴 */
+    /* 드롭다운 메뉴 — menubar와 동일 비율로 10% 어둡게 */
     .menu-dropdown {
       display: none;
       position: absolute;
       top: 100%;
       left: 0;
       min-width: 220px;
-      background: rgba(40, 40, 48, 0.98);
+      background: rgba(40, 40, 47, 0.98);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 4px;
       padding: 4px 0;
@@ -73,12 +77,13 @@
     .menu-action {
       display: flex;
       align-items: center;
-      padding: 5px 14px;
+      padding: 5px 14px 5px 28px;  /* 2026-04-23: left 패딩 확보 → 토글 체크 자리 */
       font-size: 11px;
       color: rgba(255, 255, 255, 0.85);
       cursor: pointer;
       gap: 8px;
       transition: background 0.08s;
+      position: relative;
     }
     .menu-action:hover {
       background: rgba(58, 151, 255, 0.35);
@@ -86,6 +91,22 @@
     .menu-action.disabled {
       opacity: 0.35;
       pointer-events: none;
+    }
+    /* 토글 메뉴 항목의 ON 상태 — MenuBar.ts가 .toggle-on을 토글한다 */
+    .menu-action.toggle-on::before {
+      content: '✓';
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #7cb8ff;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .menu-action.toggle-on {
+      background: rgba(124, 184, 255, 0.08);
+      color: #fff;
     }
     .menu-action .mk {
       margin-left: auto;
@@ -137,6 +158,10 @@
       z-index: 5000;
       display: flex;
       align-items: center;
+      /* 좁은 화면 / 패널 열림 시 자동 줄바꿈 */
+      flex-wrap: wrap;
+      /* 패널이 열려도 반드시 여유 확보 (최대 95%) */
+      max-width: calc(100vw - 24px);
       background: rgba(0, 0, 0, 0.40);
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
@@ -145,6 +170,8 @@
       padding: 4px 5px;
       gap: 0;
       user-select: none;
+      justify-content: center;
+      row-gap: 4px;
     }
 
     .tool-btn {
@@ -182,9 +209,19 @@
       100% { background: transparent; }
     }
     .tool-btn svg {
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    /* 일부 아이콘은 fill 필요 (점 표시 등) — explicit 오버라이드 */
+    .tool-btn svg [data-fill="true"],
+    .tool-btn svg .filled {
       fill: currentColor;
+      stroke: none;
     }
     .tool-btn[title]:hover::after {
       content: attr(title);
@@ -208,6 +245,100 @@
       background: rgba(255, 255, 255, 0.15);
       margin: 0 4px;
       flex-shrink: 0;
+    }
+
+    /* ═══ Dropdown 도구 그룹 (메뉴 형식으로 변형 선택) ═══ */
+    .tool-dropdown {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .tool-dropdown-trigger {
+      width: 18px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.5);
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      border-radius: 4px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tool-dropdown-trigger:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+    .tool-dropdown-trigger svg {
+      width: 10px;
+      height: 10px;
+      fill: currentColor;
+    }
+    /* 드롭다운 패널 */
+    .tool-dropdown-panel {
+      display: none;
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      min-width: 180px;
+      background: rgba(40, 40, 48, 0.98);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 4px 0;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      z-index: 9999;
+    }
+    .tool-dropdown.open .tool-dropdown-panel {
+      display: block;
+    }
+    .tool-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px;
+      color: rgba(255, 255, 255, 0.85);
+      cursor: pointer;
+      font-size: 12px;
+      user-select: none;
+      transition: background 0.1s;
+    }
+    .tool-dropdown-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+    }
+    .tool-dropdown-item.active {
+      background: rgba(58, 151, 255, 0.25);
+      color: #fff;
+    }
+    .tool-dropdown-item .tdi-icon {
+      width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.75);
+    }
+    .tool-dropdown-item .tdi-icon svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+    .tool-dropdown-item .tdi-label { flex: 1; }
+    .tool-dropdown-item .tdi-key {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.35);
+      font-family: 'Consolas', monospace;
+      padding: 1px 5px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+    }
+    .tool-dropdown-sep {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      margin: 4px 6px;
     }
 
     .tool-group {
@@ -266,20 +397,34 @@
       flex-shrink: 0;
     }
 
-    /* ═══ KAYAC-style Bottom Status Bar (left half) ═══ */
-    #statusbar {
+    /* ═══ 하단 바 컨테이너 — 상태바 + 커맨드바를 한 줄로 붙여서 배치 ═══ */
+    #bottombar {
       position: absolute;
       bottom: 1px;
       left: 8px;
-      width: calc(50% - 16px);
+      right: 8px;
       height: 30px;
       display: flex;
+      align-items: stretch;
+      gap: 0;
+      z-index: 100;
+    }
+
+    /* ═══ KAYAC-style Bottom Status Bar ═══ */
+    #statusbar {
+      position: static;
+      flex: 0 0 auto;
+      /* 70% 까지 허용 — coords + F-keys 수용 */
+      max-width: 70%;
+      height: 30px;
+      display: inline-flex;
       align-items: center;
       padding: 0 12px;
-      gap: 16px;
-      background: rgba(0, 0, 0, 0.40);
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
+      gap: 6px;
+      /* menubar와 동일한 색상 */
+      background: rgba(30, 30, 37, 0.95);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
@@ -289,40 +434,207 @@
     }
     #statusbar .stat { color: rgba(255, 255, 255, 0.5); }
     #statusbar .stat b { color: rgba(66, 133, 244, 0.9); font-weight: 600; }
-    #statusbar .osnap-toggle {
-      cursor: pointer;
-      padding: 1px 6px;
-      border-radius: 3px;
-      transition: background 0.15s;
+
+    /* 스냅 상태 prefix — 비어 있어도 공간만 차지해 layout 유지 */
+    #statusbar .sb-snap {
+      font-family: 'Consolas', 'SF Mono', 'Menlo', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: #44ff88;
+      white-space: nowrap;
+      display: inline-block;
+      min-width: 0;
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    #statusbar .osnap-toggle:hover {
-      background: rgba(255, 255, 255, 0.1);
+    #statusbar .sb-snap:not(:empty) {
+      min-width: 110px;
+      margin-right: 6px;
     }
 
-    /* ═══ KAYAC-style Bottom Command Bar (right half) ═══ */
+    /* 좌표 (AutoCAD 스타일) — 고정 너비로 값 변해도 layout jitter 방지 */
+    #statusbar .sb-coords {
+      font-family: 'Consolas', 'SF Mono', 'Menlo', monospace;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.85);
+      white-space: nowrap;
+      /* 모든 숫자가 동일 너비 ('tabular nums') — 1234.5 vs 999.9 layout 동일 */
+      font-variant-numeric: tabular-nums;
+      /* 일반 좌표 수용 너비 (±99999.9999 × 3) */
+      min-width: 220px;
+      display: inline-block;
+      text-align: left;
+    }
+    #statusbar .sb-coords.snapped {
+      color: #44ff88;
+    }
+    #statusbar .sb-meta {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      white-space: nowrap;
+      min-width: 60px;
+    }
+
+    /* F-키 바 — 좌표 바로 옆에 붙여서 배치 */
+    #statusbar .sb-fkeys {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+      margin-left: 8px;
+      padding-left: 10px;
+      border-left: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    #statusbar .sb-fkey {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 26px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: rgba(255,255,255,0.6);
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      font-family: inherit;
+      line-height: 1;
+    }
+    #statusbar .sb-fkey:hover {
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+    }
+    #statusbar .sb-fkey .sb-ico {
+      font-size: 13px;
+      line-height: 1;
+    }
+    #statusbar .sb-fkey .sb-lbl {
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      opacity: 0.75;
+      margin-top: 1px;
+    }
+    /* 토글 ON 상태 — 파란 강조 */
+    #statusbar .sb-fkey.sb-toggle.on {
+      background: rgba(58, 151, 255, 0.25);
+      border-color: rgba(58, 151, 255, 0.5);
+      color: #9ac8ff;
+    }
+    #statusbar .sb-fkey.sb-toggle.on:hover {
+      background: rgba(58, 151, 255, 0.4);
+    }
+    /* 토글 OFF 상태 */
+    #statusbar .sb-fkey.sb-toggle:not(.on) {
+      color: rgba(255,255,255,0.35);
+    }
+    /* F2 비활성화 상태 (XIA 미선택) */
+    #statusbar .sb-fkey[data-action="rename"]:not(.enabled) {
+      opacity: 0.35;
+    }
+
+    /* ═══ KAYAC-style Bottom Command Bar (statusbar 바로 오른쪽에 붙음) ═══ */
     #commandbar {
-      position: absolute;
-      bottom: 1px;
-      left: calc(50% + 8px);
-      width: calc(50% - 16px);
+      position: static;
+      flex: 1 1 auto;
+      min-width: 0;
       height: 30px;
       display: flex;
       align-items: center;
       padding: 0 8px;
       gap: 6px;
-      background: rgba(0, 0, 0, 0.40);
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
+      /* menubar와 동일한 색상 — statusbar와 한 덩어리로 보임 */
+      background: rgba(30, 30, 37, 0.95);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-      z-index: 100;
       font-size: 12px;
+    }
+    /* 붙어 있는 경우: statusbar와 commandbar 사이 라운딩/경계 조정 */
+    #bottombar #statusbar {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: none;
+      margin-right: -1px; /* 1px 테두리 중복 제거 */
+    }
+    #bottombar #commandbar.attached {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
     }
     #commandbar .cmd-label {
       color: rgba(255, 255, 255, 0.4);
       font-size: 11px;
       white-space: nowrap;
+    }
+
+    /* 우측 유틸 바 (AutoCAD 스타일) */
+    #commandbar .cb-tools {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+      margin-left: auto;
+      padding-left: 8px;
+      border-left: 1px solid rgba(255,255,255,0.12);
+      flex: 0 0 auto;
+    }
+    /* 단위+정밀도 드롭다운 버튼 — statusbar 전체 높이(30px)에 맞춤 */
+    #commandbar .cb-unit {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      height: 30px;
+      padding: 0 10px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 4px;
+      color: rgba(255,255,255,0.85);
+      font-family: 'Consolas', 'SF Mono', monospace;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    #commandbar .cb-unit:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.25);
+    }
+    #commandbar .cb-unit #cb-unit-val {
+      color: #9ac8ff;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    #commandbar .cb-unit #cb-unit-lbl {
+      color: rgba(255,255,255,0.7);
+      font-size: 12px;
+    }
+    #commandbar .cb-unit .cb-chev {
+      font-size: 10px;
+      color: rgba(255,255,255,0.5);
+      margin-left: 2px;
+    }
+    /* 유틸 아이콘 버튼 — statusbar 전체 높이(30px)에 맞추고 글자도 12px */
+    #commandbar .cb-icon {
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: rgba(255,255,255,0.65);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    #commandbar .cb-icon:hover {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
     }
     #commandbar input {
       flex: 1;
@@ -413,6 +725,11 @@
       min-width: 28px;
       text-align: center;
     }
+    .sp-hint {
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 10px;
+      margin-top: 2px;
+    }
     .sp-unit-btns {
       display: flex;
       gap: 4px;
@@ -451,22 +768,46 @@
     }
 
     /* ═══ Dimension Labels (치수 표시) ═══ */
+    /* 2026-04-27 — 기술 도면 스타일:
+     *   · 테두리/배경 제거 (글자만 dim line 위에).
+     *   · 단일 색상 (dark) — 도면 표준.
+     *   · 작고 깔끔한 sans-serif. */
     .dim-label {
       position: absolute;
       transform: translate(-50%, -50%);
       background: transparent;
-      color: var(--dim-color, #4ac1ff);
-      font-size: 11px;
-      font-weight: 600;
-      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-      padding: 3px 8px;
-      border-radius: 4px;
-      border: 1px solid var(--dim-color, #4ac1ff);
+      color: var(--dim-color, #222e44);
+      font-size: 12px;
+      font-weight: 500;
+      font-family: 'Segoe UI', 'Arial', sans-serif;
+      padding: 0;
+      border-radius: 0;
+      border: none;
       white-space: nowrap;
       pointer-events: none;
-      letter-spacing: 0.3px;
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+      letter-spacing: 0.2px;
+      /* 흰 배경에서 또렷하게 — 가는 흰 stroke 로 테두리 효과 */
+      text-shadow:
+        -1px -1px 0 rgba(255,255,255,0.95),
+         1px -1px 0 rgba(255,255,255,0.95),
+        -1px  1px 0 rgba(255,255,255,0.95),
+         1px  1px 0 rgba(255,255,255,0.95);
       transition: opacity 0.15s ease;
+    }
+
+    /* Editable dim labels — visual feedback on hover */
+    .dim-label[style*="pointer-events: auto"]:hover {
+      background: rgba(30, 30, 50, 0.85);
+      box-shadow: 0 0 8px var(--dim-color, #4ac1ff);
+      transform: translate(-50%, -50%) scale(1.05);
+    }
+
+    /* Inline edit input */
+    .dim-edit-input {
+      box-shadow: 0 0 10px rgba(74, 193, 255, 0.5);
+    }
+    .dim-edit-input:focus {
+      box-shadow: 0 0 12px rgba(74, 193, 255, 0.7);
     }
 
     /* ═══ Tool label (current tool name, top-left) ═══ */
@@ -723,7 +1064,9 @@
     /* ═══ Style Side Panel ═══ */
     #style-panel {
       position: absolute;
-      top: 28px; right: 0; bottom: 0;
+      /* 28px = menubar height. 36px bottom = 30px status bar + 1px gap + 5px clearance.
+         사이드 패널이 상태바를 가리지 않도록. */
+      top: 28px; right: 0; bottom: 36px;
       width: 280px;
       z-index: 8000;
       background: rgba(22, 22, 30, 0.96);
@@ -930,10 +1273,12 @@
 
     /* Style panel toggle button in toolbar */
 
-    /* ═══ XIA Inspector Panel ═══ */
+    /* ═══ XIA Inspector Panel (특성바) ═══ */
     #xia-inspector {
       position: absolute;
-      top: 28px; left: 0; bottom: 0;
+      /* 28px = menubar 높이. 36px bottom = 30px 상태바 + 1px 간격 + 5px 여유.
+         특성바가 상태바를 가리지 않도록. */
+      top: 28px; left: 0; bottom: 36px;
       width: 320px;
       z-index: 8000;
       background: rgba(18, 18, 26, 0.97);
@@ -1091,16 +1436,13 @@
     .xi-step.passed .xi-step-dot {
       transform: scale(1.2);
     }
-    .xi-step[data-state="point"] .xi-step-dot  { background: #888888; }
+    /* Point/XIA 스타일은 HTML과 함께 제거 (ADR-002) */
     .xi-step[data-state="line"] .xi-step-dot   { background: #ff9800; }
     .xi-step[data-state="face"] .xi-step-dot   { background: #2196f3; }
     .xi-step[data-state="volume"] .xi-step-dot { background: #9c27b0; }
-    .xi-step[data-state="xia"] .xi-step-dot    { background: #4caf50; }
-    .xi-step.active[data-state="point"] .xi-step-dot  { box-shadow: 0 0 8px rgba(136, 136, 136, 0.6); }
     .xi-step.active[data-state="line"] .xi-step-dot   { box-shadow: 0 0 8px rgba(255, 152, 0, 0.6); }
     .xi-step.active[data-state="face"] .xi-step-dot   { box-shadow: 0 0 8px rgba(33, 150, 243, 0.6); }
     .xi-step.active[data-state="volume"] .xi-step-dot { box-shadow: 0 0 8px rgba(156, 39, 176, 0.6); }
-    .xi-step.active[data-state="xia"] .xi-step-dot    { box-shadow: 0 0 8px rgba(76, 175, 80, 0.6); }
     .xi-step-label {
       font-size: 9px;
       font-weight: 500;
@@ -1453,6 +1795,9 @@
               <div class="menu-action" data-action="export-dxf">DXF (.dxf)</div>
               <div class="menu-action" data-action="export-gltf">glTF (.glb)</div>
               <div class="menu-action" data-action="export-stl">STL (.stl)</div>
+              <div class="menu-sep"></div>
+              <div class="menu-action disabled" data-action="export-step">STEP (.step) — 준비중 (Stage 5)</div>
+              <div class="menu-action disabled" data-action="export-iges">IGES (.iges) — 준비중 (Stage 5)</div>
             </div>
           </div>
           <div class="menu-action menu-sub" data-action="file-import">가져오기
@@ -1465,9 +1810,14 @@
               <div class="menu-action" data-action="import-dae">COLLADA (.dae)</div>
               <div class="menu-action" data-action="import-ply">PLY (.ply)</div>
               <div class="menu-action" data-action="import-3ds">3DS (.3ds)</div>
+              <div class="menu-action" data-action="import-3dm">Rhino 3DM (.3dm)</div>
+              <div class="menu-action" data-action="import-skp">SketchUp (.skp)</div>
               <div class="menu-sep"></div>
               <div class="menu-action" data-action="import-dxf">DXF (.dxf)</div>
-              <div class="menu-action disabled" data-action="import-dwg">DWG (.dwg) — 준비중</div>
+              <div class="menu-action" data-action="import-dwg">DWG (.dwg)</div>
+              <div class="menu-sep"></div>
+              <div class="menu-action" data-action="import-step">STEP (.step, .stp) — 산업 CAD</div>
+              <div class="menu-action" data-action="import-iges">IGES (.iges, .igs) — 산업 CAD</div>
               <div class="menu-action disabled" data-action="import-ifc">IFC (.ifc) — 준비중</div>
             </div>
           </div>
@@ -1480,6 +1830,11 @@
           <div class="menu-action" data-action="undo">실행 취소<span class="mk">Ctrl+Z</span></div>
           <div class="menu-action" data-action="redo">다시 실행<span class="mk">Ctrl+Y</span></div>
           <div class="menu-sep"></div>
+          <div class="menu-action" data-action="clipboard-cut">잘라내기<span class="mk">Ctrl+X</span></div>
+          <div class="menu-action" data-action="clipboard-copy">복사<span class="mk">Ctrl+C</span></div>
+          <div class="menu-action" data-action="clipboard-paste">붙여넣기<span class="mk">Ctrl+V</span></div>
+          <div class="menu-action" data-action="duplicate">복제<span class="mk">Ctrl+D</span></div>
+          <div class="menu-sep"></div>
           <div class="menu-action" data-action="select-all">모두 선택<span class="mk">Ctrl+A</span></div>
           <div class="menu-action" data-action="deselect">선택 해제<span class="mk">Esc</span></div>
           <div class="menu-sep"></div>
@@ -1487,9 +1842,10 @@
         </div>
       </div>
 
-      <!-- 보기 -->
+      <!-- 보기 — 카메라 / 디스플레이 / 패널 (측정은 모델링 메뉴로 이동) -->
       <div class="menu-item" data-menu="view">보기
         <div class="menu-dropdown">
+          <!-- ── 카메라 뷰 ── -->
           <div class="menu-action" data-action="view-3d">3D 투시<span class="mk">Num 0</span></div>
           <div class="menu-action" data-action="view-top">위 (Top)<span class="mk">T</span></div>
           <div class="menu-action" data-action="view-front">앞 (Front)<span class="mk">F</span></div>
@@ -1500,8 +1856,38 @@
           <div class="menu-sep"></div>
           <div class="menu-action" data-action="view-home">원점 복귀<span class="mk">H</span></div>
           <div class="menu-sep"></div>
-          <div class="menu-action" data-action="view-grid">그리드 표시/숨기기</div>
+          <!-- ── 표시 요소 ── -->
+          <div class="menu-action" data-action="view-grid">그리드 표시/숨기기<span class="mk">`</span></div>
           <div class="menu-action" data-action="view-axis">축 표시/숨기기</div>
+          <div class="menu-action" data-action="reference-image">참조 이미지 불러오기…</div>
+          <div class="menu-sep"></div>
+          <!-- ── 디스플레이 효과 ── -->
+          <div class="menu-action" data-action="view-ssao">AO (주변광 차폐) 토글</div>
+          <div class="menu-action" data-action="view-shadow-pro">🏛️ 건축 그림자 토글</div>
+          <div class="menu-action" data-action="solar-heatmap">☀️ Solar Heatmap 생성 (일조 분석)…</div>
+          <div class="menu-action" data-action="solar-heatmap-off">☀️ Solar Heatmap 숨김</div>
+          <div class="menu-action" data-action="clash-detect">⚠️ 간섭 감지 (Clash Detection)</div>
+          <div class="menu-action" data-action="clash-clear">⚠️ 간섭 표시 해제</div>
+          <div class="menu-action" data-action="view-sun-panel">☀️ 태양 방향 패널<span class="mk">Shift+U</span></div>
+          <div class="menu-action" data-action="view-fur">털 쉐이더 토글 (Fur shell)</div>
+          <div class="menu-sep"></div>
+          <!-- ── 패널 ── -->
+          <div class="menu-action" data-action="view-history">🕒 작업 기록 패널 (Parametric)<span class="mk">Shift+H</span></div>
+          <div class="menu-action" data-action="view-capability-explorer">🧭 Capability Explorer (ADR-063)</div>
+          <div class="menu-action" data-action="view-invariant-verifier">🛡️ Invariant Verifier (ADR-068)</div>
+          <div class="menu-action" data-action="view-audit-log">📜 Audit Log Viewer (ADR-069)</div>
+          <div class="menu-action" data-action="view-analytic-hover-overlay">🔍 Analytic Hover Overlay (ADR-070)</div>
+          <div class="menu-action" data-action="view-scenes">🎬 Scenes (저장된 뷰)</div>
+          <div class="menu-action" data-action="view-components">📁 컴포넌트 / 그룹 패널<span class="mk">Shift+G</span></div>
+          <div class="menu-action" data-action="view-constraints">🔗 구속 조건 패널 (Constraints)<span class="mk">J</span></div>
+          <div class="menu-action" data-action="view-materials">🎨 재질 속성 패널 (Materials)</div>
+          <div class="menu-action" data-action="view-xia-inspector">🔍 XIA 인스펙터</div>
+          <div class="menu-sep"></div>
+          <!-- ── 섹션 평면 (건축 단면도) ── -->
+          <div class="menu-action" data-action="section-x">✂️ 섹션 평면 · X축 (좌우 단면)</div>
+          <div class="menu-action" data-action="section-y">✂️ 섹션 평면 · Y축 (수평 단면)</div>
+          <div class="menu-action" data-action="section-z">✂️ 섹션 평면 · Z축 (전후 단면)</div>
+          <div class="menu-action" data-action="section-off">✂️ 섹션 평면 해제</div>
         </div>
       </div>
 
@@ -1509,6 +1895,7 @@
       <div class="menu-item" data-menu="draw">그리기
         <div class="menu-dropdown">
           <div class="menu-action" data-action="tool-line">선 (Line)<span class="mk">L</span></div>
+          <div class="menu-action" data-action="tool-centerline">📐 중심선 (Centerline)<span class="mk">Shift+C</span></div>
           <div class="menu-action" data-action="tool-polyline">폴리선 (Polyline)<span class="mk">Shift+L</span></div>
           <div class="menu-action" data-action="tool-rect">사각형 (Rectangle)<span class="mk">R</span></div>
           <div class="menu-action" data-action="tool-polygon">다각형 (Polygon)<span class="mk">G</span></div>
@@ -1516,35 +1903,100 @@
           <div class="menu-action" data-action="tool-arc">호 (Arc)<span class="mk">A</span></div>
           <div class="menu-sep"></div>
           <div class="menu-action" data-action="tool-freehand">자유선 (Freehand)<span class="mk">Shift+F</span></div>
+          <div class="menu-action" data-action="tool-bezier">Bezier 곡선 (Cubic)</div>
           <div class="menu-action" data-action="tool-point">점 (Point)</div>
           <div class="menu-action" data-action="tool-text3d">3D 텍스트</div>
         </div>
       </div>
 
-      <!-- 수정 -->
-      <div class="menu-item" data-menu="modify">수정
+      <!-- 프리미티브 — 툴바 Primitive 그룹과 일치 -->
+      <div class="menu-item" data-menu="primitive">프리미티브
         <div class="menu-dropdown">
+          <div class="menu-action" data-action="tool-sphere">구 (Sphere)<span class="mk">H</span></div>
+          <div class="menu-action" data-action="tool-cylinder">원통 (Cylinder)<span class="mk">Y</span></div>
+          <div class="menu-action" data-action="tool-cone">원뿔 (Cone)<span class="mk">N</span></div>
+          <div class="menu-action" data-action="tool-box">박스 (Box)</div>
+        </div>
+      </div>
+
+      <!-- 모델링 — 툴바 Modeling+Organic+Utility 그룹과 일치. 섹션별 구분. -->
+      <div class="menu-item" data-menu="modeling">모델링
+        <div class="menu-dropdown">
+          <!-- ── 변형 (툴바 Modeling 그룹) ── -->
           <div class="menu-action" data-action="tool-pushpull">밀기/당기기 (Push/Pull)<span class="mk">P</span></div>
           <div class="menu-action" data-action="tool-move">이동 (Move)<span class="mk">M</span></div>
           <div class="menu-action" data-action="tool-rotate">회전 (Rotate)<span class="mk">Q</span></div>
           <div class="menu-action" data-action="tool-scale">크기 조정 (Scale)<span class="mk">S</span></div>
-          <div class="menu-sep"></div>
           <div class="menu-action" data-action="tool-offset">오프셋 (Offset)<span class="mk">O</span></div>
-          <div class="menu-action" data-action="tool-mirror">대칭 (Mirror)</div>
-          <div class="menu-action" data-action="tool-array">배열 (Array)</div>
+          <div class="menu-action" data-action="tool-erase">삭제 (Erase)<span class="mk">E</span></div>
           <div class="menu-sep"></div>
+
+          <!-- ── 복제·대칭·배열 (툴바 Organic 그룹 일부) ── -->
+          <div class="menu-action" data-action="mirror-x">대칭 · YZ 평면 (X 반전)</div>
+          <div class="menu-action" data-action="mirror-y">대칭 · XZ 평면 (Y 반전)</div>
+          <div class="menu-action" data-action="mirror-z">대칭 · XY 평면 (Z 반전)</div>
+          <div class="menu-action" data-action="array-linear">선형 배열 (Array Linear)…</div>
+          <div class="menu-action" data-action="array-radial">원형 배열 (Array Radial)…</div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 유기 변형 (툴바 Organic 그룹 일부) ── -->
+          <div class="menu-action" data-action="revolve-x">회전체 Revolve · X축</div>
+          <div class="menu-action" data-action="revolve-y">회전체 Revolve · Y축</div>
+          <div class="menu-action" data-action="revolve-z">회전체 Revolve · Z축</div>
+          <div class="menu-action" data-action="subdivide">매끄럽게 분할 (Subdivide)</div>
+          <div class="menu-action" data-action="thicken-faces">🧱 두께 부여 (Thicken/Shell)…</div>
+          <div class="menu-action" data-action="bend-selection">선택 구부리기 (Bend)…</div>
+          <div class="menu-action" data-action="twist-selection">선택 비틀기 (Twist)…</div>
+          <div class="menu-action" data-action="taper-selection">선택 테이퍼 (Taper)…</div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 엣지 편집 ── -->
           <div class="menu-action" data-action="tool-trim">자르기 (Trim)</div>
           <div class="menu-action" data-action="tool-extend">연장 (Extend)</div>
-          <div class="menu-action" data-action="tool-fillet">모깎기 (Fillet)</div>
-          <div class="menu-action" data-action="tool-chamfer">모따기 (Chamfer)</div>
+          <div class="menu-action" data-action="fillet-edge">엣지 모깎기 (Fillet)…</div>
+          <div class="menu-action" data-action="chamfer-edge">엣지 모따기 (Chamfer)…</div>
+          <div class="menu-action" data-action="convert-to-centerline">📐 선택 엣지 → 중심선 변환</div>
+          <div class="menu-action" data-action="convert-to-geometry">🔹 선택 엣지 → 일반선 변환</div>
+          <div class="menu-action" data-action="assign-quick-color">🎨 빠른 색상 지정 (Quick Color)…</div>
+          <div class="menu-action" data-action="upload-texture">🖼️ 텍스처 이미지 업로드…</div>
           <div class="menu-sep"></div>
+
+          <!-- ── Boolean ── -->
           <div class="menu-action" data-action="bool-union">합집합 (Union)</div>
           <div class="menu-action" data-action="bool-subtract">차집합 (Subtract)</div>
           <div class="menu-action" data-action="bool-intersect">교집합 (Intersect)</div>
+          <div class="menu-action" data-action="intersect-with-model">모델과 교차 (Intersect with Model)</div>
+          <div class="menu-action" data-action="tool-slice">🔪 평면으로 자르기 (Slice)</div>
           <div class="menu-sep"></div>
-          <div class="menu-action" data-action="tool-explode">분해 (Explode)</div>
+
+          <!-- ── 그룹 / 컴포넌트 ── -->
           <div class="menu-action" data-action="tool-group">그룹 (Group)<span class="mk">Ctrl+G</span></div>
           <div class="menu-action" data-action="tool-ungroup">그룹 해제 (Ungroup)<span class="mk">Ctrl+Shift+G</span></div>
+          <div class="menu-action" data-action="tool-make-component">컴포넌트로 변환</div>
+          <div class="menu-action" data-action="tool-explode">분해 (Explode)</div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 메시 도구 (툴바 Utility 그룹) ── -->
+          <div class="menu-action" data-action="synthesize-faces">자유 엣지 → 면 합성</div>
+          <div class="menu-action" data-action="resynthesize-faces">🔄 면 재합성 (닫힌 라인 cycle → face)</div>
+          <div class="menu-action" data-action="solidify">🧩 Solidify (열린 쉘 → 닫힌 솔리드)</div>
+          <div class="menu-action" data-action="mesh-repair">🩹 Mesh Repair (퇴화/와인딩/고립 정리)</div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 측정 ── -->
+          <div class="menu-action" data-action="measure-selection">선택 측정 (길이/면적/부피)</div>
+          <div class="menu-action" data-action="tool-measure">📏 측정 도구 (2점 거리 / 3점 각도)<span class="mk">U</span></div>
+          <div class="menu-sep"></div>
+
+          <!-- ── 스케치 모드 ── -->
+          <div class="menu-action" data-action="sketch-start-auto">✨ 스케치 시작 · 자동 평면 감지<span class="mk">⇧S</span></div>
+          <div class="menu-action" data-action="sketch-start-xz">✏️ 스케치 시작 · XZ 바닥 (평면도)</div>
+          <div class="menu-action" data-action="sketch-start-xy">✏️ 스케치 시작 · XY 정면 (입면도)</div>
+          <div class="menu-action" data-action="sketch-start-yz">✏️ 스케치 시작 · YZ 측면</div>
+          <div class="menu-action" data-action="sketch-start-face">✏️ 스케치 시작 · 선택 면</div>
+          <div class="menu-action" data-action="sketch-resume-last">↩ 스케치 재개 · 마지막 평면</div>
+          <div class="menu-action" data-action="sketch-align-up">↻ 스케치 up 카메라 정렬</div>
+          <div class="menu-action" data-action="sketch-exit">스케치 종료</div>
         </div>
       </div>
 
@@ -1576,55 +2028,507 @@
       <!-- Select/Transform group -->
       <div class="tool-group">
         <button class="tool-btn active" data-tool="select" title="Select (V)">
-          <svg viewBox="0 0 320 512"><path d="M0 55.2V426c0 12.2 9.9 22 22 22c6.3 0 12.4-2.7 16.6-7.5L121.2 346l58.1 116.3c7.9 15.8 27.1 22.2 42.9 14.3s22.2-27.1 14.3-42.9L178.3 316.2l85.7-1.5c12.2 0 22-9.9 22-22c0-6.3-2.7-12.4-7.5-16.6L38.6 7.5C34.4 2.7 28.3 0 22 0C9.9 0 0 9.9 0 55.2z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M5 3 L5 19 L9 15 L12 21 L14 20 L11 14 L16 14 Z"/></svg>
         </button>
       </div>
 
       <div class="tool-sep"></div>
 
-      <!-- Drawing group -->
+      <!-- Drawing group — 드롭다운 통합 -->
       <div class="tool-group">
-        <button class="tool-btn" data-tool="line" title="Line (L)">
-          <svg viewBox="0 0 512 512"><path d="M464 256A208 208 0 1 0 48 256a208 208 0 1 0 416 0zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z" fill="none" stroke="currentColor" stroke-width="40"/><line x1="120" y1="392" x2="392" y2="120" stroke="currentColor" stroke-width="32" stroke-linecap="round"/></svg>
-        </button>
+        <!-- 선 (Line 계열: Line / Freehand / Bezier) -->
+        <div class="tool-dropdown" data-group="line-family">
+          <button class="tool-btn" data-tool="line" title="Line (L)">
+            <svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5"/><circle cx="5" cy="19" r="1.4" class="filled"/><circle cx="19" cy="5" r="1.4" class="filled"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="line-family" title="선 종류 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="line">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5"/><circle cx="5" cy="19" r="1.4" class="filled"/><circle cx="19" cy="5" r="1.4" class="filled"/></svg></span>
+              <span class="tdi-label">선 (Line)</span>
+              <span class="tdi-key">L</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="centerline">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><line x1="5" y1="19" x2="19" y2="5" stroke-dasharray="3 2"/><circle cx="5" cy="19" r="1.2"/><circle cx="19" cy="5" r="1.2"/></svg></span>
+              <span class="tdi-label">📐 중심선 (Centerline)</span>
+              <span class="tdi-key">⇧C</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="freehand">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 17 Q 7 8 11 12 T 17 9 Q 20 5 22 13"/></svg></span>
+              <span class="tdi-label">자유선 (Freehand)</span>
+              <span class="tdi-key">⇧F</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="bezier">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 19 C 7 4, 17 4, 21 19"/><circle cx="3" cy="19" r="1.4" class="filled"/><circle cx="21" cy="19" r="1.4" class="filled"/></svg></span>
+              <span class="tdi-label">Bezier 곡선</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 사각형 (Rectangle) -->
         <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
-          <svg viewBox="0 0 448 512"><path d="M384 80c8.8 0 16 7.2 16 16V416c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V96c0-8.8 7.2-16 16-16H384zM64 32C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V96c0-35.3-28.7-64-64-64H64z"/></svg>
+          <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/></svg>
         </button>
-        <button class="tool-btn" data-tool="circle" title="Circle (C)">
-          <svg viewBox="0 0 512 512"><path d="M464 256A208 208 0 1 0 48 256a208 208 0 1 0 416 0zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"/></svg>
-        </button>
+
+        <!-- 원 / 호 (Circle family) -->
+        <div class="tool-dropdown" data-group="circle-family">
+          <button class="tool-btn" data-tool="circle" title="Circle (C)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="circle-family" title="원/호 종류 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="circle">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/></svg></span>
+              <span class="tdi-label">원 (Circle)</span>
+              <span class="tdi-key">C</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="arc">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 19 A 10 10 0 0 1 20 19"/></svg></span>
+              <span class="tdi-label">호 (3-point Arc)</span>
+              <span class="tdi-key">A</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="tool-sep"></div>
 
-      <!-- Modeling group -->
+      <!-- Modeling group — 프리미티브 + 편집 (드롭다운 통합) -->
       <div class="tool-group">
         <button class="tool-btn" data-tool="pushpull" title="Push/Pull (P)">
-          <svg viewBox="0 0 384 512"><path d="M214.6 41.4c-12.5-12.5-32.8-12.5-45.3 0l-160 160c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L160 141.2V448c0 17.7 14.3 32 32 32s32-14.3 32-32V141.2l105.4 105.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-160-160z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M6 21 L18 21 M12 17 L12 4 M8 8 L12 4 L16 8"/></svg>
         </button>
-        <button class="tool-btn" data-tool="sphere" title="Sphere (H)">
-          <svg viewBox="0 0 512 512"><circle cx="256" cy="256" r="200" fill="currentColor" opacity="0.6"/><circle cx="256" cy="256" r="200" fill="none" stroke="currentColor" stroke-width="20"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="cylinder" title="Cylinder (Y)">
-          <svg viewBox="0 0 512 512"><rect x="96" y="64" width="320" height="280" fill="none" stroke="currentColor" stroke-width="20"/><ellipse cx="256" cy="64" rx="160" ry="60" fill="none" stroke="currentColor" stroke-width="20"/><ellipse cx="256" cy="344" rx="160" ry="60" fill="none" stroke="currentColor" stroke-width="20" opacity="0.6"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="cone" title="Cone (N)">
-          <svg viewBox="0 0 512 512"><polygon points="256,64 96,344 416,344" fill="none" stroke="currentColor" stroke-width="20"/><line x1="96" y1="344" x2="416" y2="344" stroke="currentColor" stroke-width="20"/><ellipse cx="256" cy="344" rx="160" ry="60" fill="none" stroke="currentColor" stroke-width="20" opacity="0.6"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="move" title="Move (M)">
-          <svg viewBox="0 0 512 512"><path d="M278.6 9.4c-12.5-12.5-32.8-12.5-45.3 0l-64 64c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l9.4-9.4V224H109.3l9.4-9.4c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-64 64c-12.5 12.5-12.5 32.8 0 45.3l64 64c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-9.4-9.4H224v124.7l-9.4-9.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l64 64c12.5 12.5 32.8 12.5 45.3 0l64-64c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-9.4 9.4V288h124.7l-9.4 9.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l64-64c12.5-12.5 12.5-32.8 0-45.3l-64-64c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l9.4 9.4H288V109.3l9.4 9.4c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-64-64z"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="rotate" title="Rotate (Q)">
-          <svg viewBox="0 0 512 512"><path d="M142.9 142.9c62.2-62.2 162.7-62.2 224.9 0L320 192h128V64l-51.2 51.2c-81.2-81.2-212.9-81.2-294.2 0c-81.2 81.2-81.2 212.9 0 294.2c81.2 81.2 212.9 81.2 294.2 0c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0c-56.2 56.2-147.4 56.2-203.6 0s-56.2-147.4 0-203.6z"/></svg>
-        </button>
-        <button class="tool-btn" data-tool="scale" title="Scale (S)">
-          <svg viewBox="0 0 512 512"><path d="M344 0H488c13.3 0 24 10.7 24 24V168c0 9.7-5.8 18.5-14.8 22.2s-19.3 1.7-26.2-5.2l-39-39-87 87c-9.4 9.4-24.6 9.4-33.9 0l-24-24c-9.4-9.4-9.4-24.6 0-33.9l87-87L335 49c-6.9-6.9-8.9-17.2-5.2-26.2S334.3 0 344 0zM168 512H24c-13.3 0-24-10.7-24-24V344c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2l39 39 87-87c9.4-9.4 24.6-9.4 33.9 0l24 24c9.4 9.4 9.4 24.6 0 33.9l-87 87 39 39c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8z"/></svg>
-        </button>
+
+        <!-- 프리미티브 (Sphere / Cylinder / Cone) -->
+        <div class="tool-dropdown" data-group="primitive-family">
+          <button class="tool-btn" data-tool="sphere" title="Sphere (H)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="primitive-family" title="프리미티브 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="sphere">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/></svg></span>
+              <span class="tdi-label">구 (Sphere)</span>
+              <span class="tdi-key">H</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="cylinder">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="6" ry="2"/><path d="M6 5 L6 19 M18 5 L18 19"/><path d="M6 19 A 6 2 0 0 0 18 19"/></svg></span>
+              <span class="tdi-label">원통 (Cylinder)</span>
+              <span class="tdi-key">Y</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="cone">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L5 19 M12 3 L19 19"/><ellipse cx="12" cy="19" rx="7" ry="2"/></svg></span>
+              <span class="tdi-label">원뿔 (Cone)</span>
+              <span class="tdi-key">N</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 변형 (Move / Rotate / Scale) -->
+        <div class="tool-dropdown" data-group="transform-family">
+          <button class="tool-btn" data-tool="move" title="Move (M)">
+            <svg viewBox="0 0 24 24"><path d="M12 3 L12 21 M3 12 L21 12 M8 7 L12 3 L16 7 M8 17 L12 21 L16 17 M7 8 L3 12 L7 16 M17 8 L21 12 L17 16"/></svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="transform-family" title="변형 선택">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-tool="move">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L12 21 M3 12 L21 12 M8 7 L12 3 L16 7 M8 17 L12 21 L16 17 M7 8 L3 12 L7 16 M17 8 L21 12 L17 16"/></svg></span>
+              <span class="tdi-label">이동 (Move)</span>
+              <span class="tdi-key">M</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="rotate">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M21 12 A 9 9 0 1 1 12 3 L16 3 M16 3 L16 7"/></svg></span>
+              <span class="tdi-label">회전 (Rotate)</span>
+              <span class="tdi-key">Q</span>
+            </div>
+            <div class="tool-dropdown-item" data-tool="scale">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 20 L12 12 M4 20 L9 20 M4 20 L4 15 M20 4 L12 12 M20 4 L15 4 M20 4 L20 9"/></svg></span>
+              <span class="tdi-label">크기 (Scale)</span>
+              <span class="tdi-key">S</span>
+            </div>
+          </div>
+        </div>
+
         <button class="tool-btn" data-tool="offset" title="Offset (O)">
-          <svg viewBox="0 0 448 512"><path d="M64 32C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V96c0-35.3-28.7-64-64-64H64zm48 96h224c17.7 0 32 14.3 32 32V352c0 17.7-14.3 32-32 32H112c-17.7 0-32-14.3-32-32V160c0-17.7 14.3-32 32-32zm16 48V336H320V176H128z"/></svg>
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><rect x="8" y="8" width="8" height="8" rx="0.5"/></svg>
         </button>
         <button class="tool-btn" data-tool="erase" title="Erase (E)">
-          <svg viewBox="0 0 576 512"><path d="M290.7 57.4L57.4 290.7c-25 25-25 65.5 0 90.5l80 80c12 12 28.3 18.7 45.3 18.7H288h9.4H512c17.7 0 32-14.3 32-32s-14.3-32-32-32H387.9L518.6 284.7c25-25 25-65.5 0-90.5L381.3 57.4c-25-25-65.5-25-90.5 0zM297.4 182.6l-144 144c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l144-144c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M16 4 L20 8 L10 18 L6 18 L4 16 Z M10 18 L14 14 M6 18 L20 18"/></svg>
+        </button>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Organic modeling group — Mirror / Revolve / Subdivide (actions) -->
+      <!--
+        Icons share a minimal geometric vocabulary:
+          • dashed line       = symmetry / rotation axis
+          • solid shape       = source geometry
+          • outlined shape    = result / derived geometry
+          • small curved arrow = rotation (Revolve family)
+        All paths use stroke-width 2 + round caps via `.tool-btn svg`.
+      -->
+      <div class="tool-group">
+        <div class="tool-dropdown" data-group="organic-family">
+          <button class="tool-btn" data-action="subdivide" title="매끄럽게 분할 (Catmull-Clark)">
+            <!-- Subdivide: triangle split into 4 (classic subdivision glyph) -->
+            <svg viewBox="0 0 24 24">
+              <path d="M12 4 L20.66 19 L3.34 19 Z"/>
+              <path d="M7.67 11.5 L16.33 11.5 L12 19 Z"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="organic-family" title="유기 모델링 작업">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="subdivide">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <path d="M12 4 L20.66 19 L3.34 19 Z"/>
+                <path d="M7.67 11.5 L16.33 11.5 L12 19 Z"/>
+              </svg></span>
+              <span class="tdi-label">매끄럽게 분할 (Subdivide)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="mirror-x">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <path d="M12 3 L12 21" stroke-dasharray="2 2"/>
+                <path d="M12 6 L5 12 L12 18 Z" class="filled"/>
+                <path d="M12 6 L19 12 L12 18 Z"/>
+              </svg></span>
+              <span class="tdi-label">Mirror · YZ 평면 (X 반전)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="mirror-y">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <path d="M3 12 L21 12" stroke-dasharray="2 2"/>
+                <path d="M6 12 L12 5 L18 12 Z" class="filled"/>
+                <path d="M6 12 L12 19 L18 12 Z"/>
+              </svg></span>
+              <span class="tdi-label">Mirror · XZ 평면 (Y 반전)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="mirror-z">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <path d="M4 4 L20 20" stroke-dasharray="2 2"/>
+                <path d="M16 5 L19 5 L19 14 Z" class="filled"/>
+                <path d="M5 10 L5 19 L14 19 Z"/>
+              </svg></span>
+              <span class="tdi-label">Mirror · XY 평면 (Z 반전)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="revolve-x">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <path d="M3 12 L21 12" stroke-dasharray="2 2"/>
+                <path d="M8 12 Q 9 6, 12 6 Q 15 6, 16 12"/>
+                <path d="M15.5 14.5 A 3.5 2 0 0 1 8.5 14.5"/>
+                <path d="M8.5 14.5 L 10 14 M8.5 14.5 L 9.5 16"/>
+              </svg></span>
+              <span class="tdi-label">Revolve · X축 회전</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="revolve-y">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <path d="M12 3 L12 21" stroke-dasharray="2 2"/>
+                <path d="M12 8 Q 18 9, 18 12 Q 18 15, 12 16"/>
+                <path d="M9.5 15.5 A 2 3.5 0 0 0 9.5 8.5"/>
+                <path d="M9.5 8.5 L 8 9.5 M9.5 8.5 L 11 10"/>
+              </svg></span>
+              <span class="tdi-label">Revolve · Y축 회전</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="revolve-z">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="1.3" class="filled"/>
+                <path d="M18 12 A 6 6 0 1 1 12 6"/>
+                <path d="M12 6 L 10 4.5 M12 6 L 12 8.5"/>
+              </svg></span>
+              <span class="tdi-label">Revolve · Z축 회전</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="fillet-edge">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Right-angle corner with the inside filleted off -->
+                <path d="M5 5 L5 13 A 6 6 0 0 0 11 19 L19 19"/>
+                <path d="M5 19 L5 13" stroke-dasharray="2 2"/>
+                <path d="M11 19 L5 19" stroke-dasharray="2 2"/>
+              </svg></span>
+              <span class="tdi-label">엣지 모깎기 (Fillet)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="chamfer-edge">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Right-angle with a flat diagonal bevel -->
+                <path d="M5 5 L5 13 L11 19 L19 19"/>
+                <path d="M5 19 L5 13" stroke-dasharray="2 2"/>
+                <path d="M11 19 L5 19" stroke-dasharray="2 2"/>
+              </svg></span>
+              <span class="tdi-label">엣지 모따기 (Chamfer)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="bend-selection">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Bent rod -->
+                <path d="M4 18 L12 18 Q 20 18 20 10 L20 6"/>
+                <path d="M4 18 L4 6" stroke-dasharray="2 2"/>
+              </svg></span>
+              <span class="tdi-label">선택 구부리기 (Bend)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="twist-selection">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Twist spiral around vertical axis -->
+                <path d="M12 3 L12 21" stroke-dasharray="2 2"/>
+                <path d="M7 5 Q 17 9, 7 13 Q 17 17, 7 19"/>
+              </svg></span>
+              <span class="tdi-label">선택 비틀기 (Twist)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="taper-selection">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Tapered trapezoid -->
+                <path d="M4 4 L20 4 L15 20 L9 20 Z"/>
+                <path d="M12 4 L12 20" stroke-dasharray="2 2"/>
+              </svg></span>
+              <span class="tdi-label">선택 테이퍼 (Taper)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="thicken-faces">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Face + extruded slab behind -->
+                <rect x="7" y="7" width="12" height="12" rx="0.5"/>
+                <path d="M7 7 L4 4 L16 4 L19 7 M4 4 L4 16 L7 19 M16 4 L16 16 L19 19 L19 7"/>
+              </svg></span>
+              <span class="tdi-label">🧱 두께 부여 (Thicken/Shell)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="array-linear">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- 3 rectangles in a row -->
+                <rect x="2" y="8" width="5" height="8" rx="0.5"/>
+                <rect x="9.5" y="8" width="5" height="8" rx="0.5"/>
+                <rect x="17" y="8" width="5" height="8" rx="0.5"/>
+              </svg></span>
+              <span class="tdi-label">선형 배열 (Array)…</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="array-radial">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24">
+                <!-- Radial dots around center -->
+                <circle cx="12" cy="12" r="1" class="filled"/>
+                <circle cx="12" cy="4" r="1.5"/>
+                <circle cx="19" cy="8" r="1.5"/>
+                <circle cx="19" cy="16" r="1.5"/>
+                <circle cx="12" cy="20" r="1.5"/>
+                <circle cx="5" cy="16" r="1.5"/>
+                <circle cx="5" cy="8" r="1.5"/>
+              </svg></span>
+              <span class="tdi-label">원형 배열 (Radial)…</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Utility group — 분석 / 스케치 / 정리 (드롭다운 통합) -->
+      <div class="tool-group">
+        <!-- Measure (메인 버튼: 가장 자주 쓰는 인터랙티브 측정) -->
+        <button class="tool-btn" data-tool="measure" title="Measure Tool (U)">
+          <svg viewBox="0 0 24 24">
+            <!-- Ruler / measure tape -->
+            <rect x="3" y="9" width="18" height="6" rx="0.5"/>
+            <path d="M7 9 L7 12 M10 9 L10 13 M13 9 L13 12 M16 9 L16 13 M19 9 L19 12"/>
+          </svg>
+        </button>
+
+        <!-- Sketch Mode 드롭다운 -->
+        <div class="tool-dropdown" data-group="sketch-family">
+          <button class="tool-btn" data-action="sketch-start-xz" title="스케치 시작 · XZ 바닥 (평면도)">
+            <svg viewBox="0 0 24 24">
+              <!-- Pencil + plane -->
+              <path d="M3 20 L21 20" stroke-dasharray="2 2"/>
+              <path d="M4 17 L14 7 L17 10 L7 20 L4 20 L4 17 Z" class="filled"/>
+              <path d="M14 7 L17 4 L20 7 L17 10"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="sketch-family" title="스케치 옵션">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="sketch-start-xz">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 18 L21 18" stroke-dasharray="2 2"/><rect x="6" y="10" width="12" height="8" rx="0.5"/></svg></span>
+              <span class="tdi-label">✏️ XZ 바닥 (평면도)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="sketch-start-xy">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M3 21 L3 3" stroke-dasharray="2 2"/><rect x="6" y="6" width="12" height="12" rx="0.5"/></svg></span>
+              <span class="tdi-label">✏️ XY 정면 (입면도)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="sketch-start-yz">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 3 L12 21" stroke-dasharray="2 2"/><rect x="5" y="6" width="14" height="12" rx="0.5" transform="skewX(-15)"/></svg></span>
+              <span class="tdi-label">✏️ YZ 측면</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="sketch-start-face">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 16 L12 8 L20 16 L12 22 Z"/><circle cx="12" cy="15" r="2" class="filled"/></svg></span>
+              <span class="tdi-label">✏️ 선택 면에서 스케치</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="sketch-exit">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M6 6 L18 18 M18 6 L6 18"/></svg></span>
+              <span class="tdi-label">스케치 종료 → 3D 변환</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mesh utility (Solidify / Mesh Repair / Synthesize) -->
+        <div class="tool-dropdown" data-group="mesh-util-family">
+          <button class="tool-btn" data-action="solidify" title="Solidify (열린 쉘 → 닫힌 솔리드)">
+            <svg viewBox="0 0 24 24">
+              <!-- Open shell becoming closed cube -->
+              <path d="M5 7 L5 19 L13 19 L13 7 Z M5 7 L9 3 L17 3 L13 7"/>
+              <path d="M13 19 L17 15 L17 3 M13 7 L17 3" stroke-dasharray="2 2"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="mesh-util-family" title="메시 유틸리티">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="solidify">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M5 7 L5 19 L13 19 L13 7 Z M5 7 L9 3 L17 3 L13 7"/><path d="M13 19 L17 15 L17 3 M13 7 L17 3" stroke-dasharray="2 2"/></svg></span>
+              <span class="tdi-label">🧩 Solidify (열린 쉘 → 솔리드)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="mesh-repair">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M6 18 L18 6 M10 6 L18 6 L18 14 M4 12 L10 18"/><circle cx="6" cy="18" r="1.2" class="filled"/></svg></span>
+              <span class="tdi-label">🩹 Mesh Repair (퇴화/와인딩/고립 정리)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="synthesize-faces">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M4 4 L20 4 L20 20 L4 20 Z"/><circle cx="4" cy="4" r="1.3" class="filled"/><circle cx="20" cy="4" r="1.3" class="filled"/><circle cx="20" cy="20" r="1.3" class="filled"/><circle cx="4" cy="20" r="1.3" class="filled"/></svg></span>
+              <span class="tdi-label">자유 엣지 → 면 합성</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Boolean group — Union / Subtract / Intersect (메뉴 모델링 > Boolean과 일치) -->
+      <div class="tool-group">
+        <div class="tool-dropdown" data-group="boolean-family">
+          <button class="tool-btn" data-action="bool-union" title="합집합 (Union)">
+            <svg viewBox="0 0 24 24">
+              <!-- Two overlapping circles filled as union -->
+              <path d="M9 7 A 6 6 0 1 0 9 17 A 6 6 0 0 0 15 17 A 6 6 0 1 0 15 7 A 6 6 0 0 0 9 7 Z"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="boolean-family" title="Boolean 연산">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="bool-union">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M9 7 A 6 6 0 1 0 9 17 A 6 6 0 0 0 15 17 A 6 6 0 1 0 15 7 A 6 6 0 0 0 9 7 Z"/></svg></span>
+              <span class="tdi-label">합집합 (Union)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="bool-subtract">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6" stroke-dasharray="2 2"/></svg></span>
+              <span class="tdi-label">차집합 (Subtract)</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-item" data-action="bool-intersect">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/><path d="M12 7 A 6 6 0 0 1 12 17 A 6 6 0 0 1 12 7 Z" class="filled"/></svg></span>
+              <span class="tdi-label">교집합 (Intersect)</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Group / Component — Ctrl+G / Ctrl+Shift+G (메뉴 모델링 > 그룹과 일치) -->
+      <div class="tool-group">
+        <div class="tool-dropdown" data-group="group-family">
+          <button class="tool-btn" data-action="group" title="그룹 만들기 (Ctrl+G)">
+            <svg viewBox="0 0 24 24">
+              <!-- Bracket-enclosed stack -->
+              <path d="M5 5 L3 5 L3 19 L5 19 M19 5 L21 5 L21 19 L19 19"/>
+              <rect x="7" y="8" width="10" height="8" rx="0.5"/>
+            </svg>
+          </button>
+          <button class="tool-dropdown-trigger" data-for="group-family" title="그룹 / 컴포넌트">
+            <svg viewBox="0 0 12 12"><path d="M2 4 L6 8 L10 4"/></svg>
+          </button>
+          <div class="tool-dropdown-panel">
+            <div class="tool-dropdown-item active" data-action="group">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M5 5 L3 5 L3 19 L5 19 M19 5 L21 5 L21 19 L19 19"/><rect x="7" y="8" width="10" height="8" rx="0.5"/></svg></span>
+              <span class="tdi-label">그룹 (Group)</span>
+              <span class="tdi-key">Ctrl+G</span>
+            </div>
+            <div class="tool-dropdown-item" data-action="ungroup">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M5 5 L3 5 L3 19 L5 19 M19 5 L21 5 L21 19 L19 19" stroke-dasharray="2 2"/><rect x="7" y="8" width="10" height="8" rx="0.5"/></svg></span>
+              <span class="tdi-label">그룹 해제 (Ungroup)</span>
+              <span class="tdi-key">⇧Ctrl+G</span>
+            </div>
+            <div class="tool-dropdown-item" data-action="make-component">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/><circle cx="5" cy="5" r="1.5" class="filled"/><circle cx="19" cy="5" r="1.5" class="filled"/><circle cx="5" cy="19" r="1.5" class="filled"/><circle cx="19" cy="19" r="1.5" class="filled"/></svg></span>
+              <span class="tdi-label">컴포넌트로 변환</span>
+              <span class="tdi-key"></span>
+            </div>
+            <div class="tool-dropdown-sep"></div>
+            <div class="tool-dropdown-item" data-action="tool-explode">
+              <span class="tdi-icon"><svg viewBox="0 0 24 24"><path d="M12 12 L4 4 M12 12 L20 4 M12 12 L20 20 M12 12 L4 20"/><rect x="10" y="10" width="4" height="4"/></svg></span>
+              <span class="tdi-label">분해 (Explode)</span>
+              <span class="tdi-key"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Display toggles — 그리드 / AO / 건축 그림자 (메뉴와 동일 상태 공유) -->
+      <div class="tool-group">
+        <button class="tool-btn toggle-btn" data-toggle="grid" title="그리드 표시/숨기기 (`)">
+          <!-- Hash grid icon -->
+          <svg viewBox="0 0 24 24">
+            <path d="M3 9 L21 9 M3 15 L21 15 M9 3 L9 21 M15 3 L15 21"/>
+          </svg>
+        </button>
+        <button class="tool-btn toggle-btn" data-toggle="ssao" title="AO (주변광 차폐) 토글">
+          <!-- Sphere with soft shadow underside -->
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="11" r="7"/>
+            <path d="M6 17 Q 12 20 18 17" stroke-dasharray="2 2"/>
+          </svg>
+        </button>
+        <button class="tool-btn toggle-btn" data-toggle="shadow" title="건축 그림자 토글">
+          <!-- Box + cast shadow -->
+          <svg viewBox="0 0 24 24">
+            <rect x="5" y="5" width="10" height="10"/>
+            <path d="M11 15 L19 19 L19 21 L11 17 Z" class="filled"/>
+          </svg>
         </button>
       </div>
 
@@ -1633,10 +2537,10 @@
       <!-- Undo/Redo group -->
       <div class="tool-group">
         <button class="tool-btn" data-tool="undo" title="Undo (Ctrl+Z)">
-          <svg viewBox="0 0 512 512"><path d="M125.7 160H176c17.7 0 32 14.3 32 32s-14.3 32-32 32H48c-17.7 0-32-14.3-32-32V64c0-17.7 14.3-32 32-32s32 14.3 32 32v51.2L97.6 97.6c87.5-87.5 229.3-87.5 316.8 0s87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3s-163.8-62.5-226.3 0L125.7 160z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M4 10 L9 10 A 6 6 0 0 1 21 10 L21 14 M4 10 L8 6 M4 10 L8 14"/></svg>
         </button>
         <button class="tool-btn" data-tool="redo" title="Redo (Ctrl+Y)">
-          <svg viewBox="0 0 512 512"><path d="M386.3 160H336c-17.7 0-32 14.3-32 32s14.3 32 32 32H464c17.7 0 32-14.3 32-32V64c0-17.7-14.3-32-32-32s-32 14.3-32 32v51.2l-17.6-17.6c-87.5-87.5-229.3-87.5-316.8 0s-87.5 229.3 0 316.8s229.3 87.5 316.8 0c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0c-62.5 62.5-163.8 62.5-226.3 0s-62.5-163.8 0-226.3s163.8-62.5 226.3 0L386.3 160z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M20 10 L15 10 A 6 6 0 0 0 3 10 L3 14 M20 10 L16 6 M20 10 L16 14"/></svg>
         </button>
       </div>
 
@@ -1686,8 +2590,50 @@
       <div class="ctx-item" data-action="select-all">모두 선택 <span class="ctx-key">Ctrl+A</span></div>
       <div class="ctx-item" data-action="select-same">동일요소 선택</div>
       <div class="ctx-item" data-action="deselect">선택 해제 <span class="ctx-key">Esc</span></div>
+      <div class="ctx-item" data-action="toggle-selection-dims">📏 치수 표시 ON/OFF</div>
       <div class="ctx-sep"></div>
       <div class="ctx-item" data-action="delete">삭제 <span class="ctx-key">Del</span></div>
+      <!-- 면 반전 (선택된 면 있을 때만 표시) -->
+      <div class="ctx-item ctx-face-item" data-action="flip-faces">면 반전 <span class="ctx-key">Shift+N</span></div>
+      <!-- 면 통합 (인접 coplanar face 합치기) -->
+      <div class="ctx-item ctx-face-item" data-action="merge-faces">면 통합 <span class="ctx-key">Ctrl+M</span></div>
+      <div class="ctx-item ctx-face-item" data-action="merge-faces-geometric">🧲 기하 병합 (크기 달라도 OK, 2면 선택)</div>
+      <div class="ctx-item ctx-face-item" data-action="merge-xia-coplanar">XIA 내 Coplanar 면 일괄 통합</div>
+      <div class="ctx-item ctx-face-item" data-action="merge-faces-force">🫧 강제 통합 (비평면, 내부 엣지 숨김)</div>
+      <div class="ctx-item ctx-face-item" data-action="merge-as-hole">🕳 수동: 내부 면을 구멍으로 (레거시 · 신규 그리기는 자동)</div>
+      <!-- ADR-074 U-2 — Boolean Group A/B selection (E.3 트랙) -->
+      <!-- selection 있을 때 set A/B; group tag 있을 때 clear -->
+      <!-- ADR-074 §E.5-4 단축키 (Alt+A / Alt+B / Alt+0) — KeyboardShortcuts 통합 -->
+      <div class="ctx-item ctx-bool-group-item" data-action="set-group-a">ⓐ Boolean Group A 지정 <span class="ctx-key">Alt+A</span></div>
+      <div class="ctx-item ctx-bool-group-item" data-action="set-group-b">ⓑ Boolean Group B 지정 <span class="ctx-key">Alt+B</span></div>
+      <div class="ctx-item ctx-bool-group-clear" data-action="clear-group-tags">🗑 Boolean Group 해제 <span class="ctx-key">Alt+0</span></div>
+      <!-- 빠른 색상 — 선택된 면에 즉석 색상 할당 -->
+      <div class="ctx-item ctx-face-item" data-action="assign-quick-color">🎨 색상 지정… (Quick Color)</div>
+      <!-- Array — 선택한 면을 선형 배열로 복제 -->
+      <div class="ctx-item ctx-face-item" data-action="thicken-faces">🧱 두께 부여 (Shell/Thicken)…</div>
+      <div class="ctx-item ctx-face-item" data-action="array-linear">선형 배열 복제 (Array)…</div>
+      <div class="ctx-item ctx-face-item" data-action="array-radial">원형 배열 복제 (Radial)…</div>
+      <!-- Mirror — world plane 기준 미러링 -->
+      <div class="ctx-item ctx-face-item" data-action="mirror-x">미러 · YZ 평면 (X 반전)</div>
+      <div class="ctx-item ctx-face-item" data-action="mirror-y">미러 · XZ 평면 (Y 반전)</div>
+      <div class="ctx-item ctx-face-item" data-action="mirror-z">미러 · XY 평면 (Z 반전)</div>
+      <!-- Revolve — 선택된 엣지 체인을 축 중심으로 회전 -->
+      <div class="ctx-item ctx-edge-chain-item" data-action="revolve-x">Revolve · X축</div>
+      <div class="ctx-item ctx-edge-chain-item" data-action="revolve-y">Revolve · Y축</div>
+      <div class="ctx-item ctx-edge-chain-item" data-action="revolve-z">Revolve · Z축</div>
+      <!-- EdgeClass 전환 (선택된 엣지가 하나 이상일 때 표시 가능) -->
+      <div class="ctx-item ctx-edge-chain-item" data-action="convert-to-centerline">📐 중심선으로 변환</div>
+      <div class="ctx-item ctx-edge-chain-item" data-action="convert-to-geometry">🔹 일반선으로 변환</div>
+      <!-- Constraint Solver Level 1 (2개 엣지 선택 시) -->
+      <div class="ctx-item ctx-edge-item" data-action="constrain-parallel">엣지 평행 정렬</div>
+      <div class="ctx-item ctx-edge-item" data-action="constrain-perpendicular">엣지 수직 정렬</div>
+      <div class="ctx-item ctx-edge-item" data-action="constrain-collinear">엣지 동일 선상 정렬</div>
+      <div class="ctx-item ctx-edge-item" data-action="constrain-endpoint-distance">끝점 거리 고정…</div>
+      <!-- 1개 엣지 선택 시 -->
+      <div class="ctx-item ctx-edge1-item" data-action="constrain-edge-length">엣지 길이 설정…</div>
+      <div class="ctx-item ctx-edge1-item" data-action="split-edge-midpoint">엣지 중점 분할</div>
+      <div class="ctx-item ctx-edge1-item" data-action="fillet-edge">엣지 모깎기 (Fillet)…</div>
+      <div class="ctx-item ctx-edge1-item" data-action="chamfer-edge">엣지 모따기 (Chamfer)…</div>
       <div class="ctx-sep"></div>
       <!-- 그룹 / 컴포넌트 -->
       <div class="ctx-item ctx-group-item" data-action="group">그룹 만들기 <span class="ctx-key">Ctrl+G</span></div>
@@ -1737,23 +2683,67 @@
     </div>
 
     <!-- KAYAC-style bottom status bar (left half) -->
+    <div id="bottombar">
     <div id="statusbar">
-      <span class="stat">Verts: <b id="stat-verts">0</b></span>
-      <span class="stat">Faces: <b id="stat-faces">0</b></span>
+      <!-- 좌표 (AutoCAD 스타일) — snap prefix는 별도 고정폭 span으로 분리 -->
+      <span class="sb-snap" id="sb-snap"></span>
+      <span class="sb-coords" id="sb-coords">—, —, —</span>
+      <span class="sb-meta" id="sb-meta">· mm · 4</span>
+
+      <!-- 숨겨진 레거시 표시 (XIA Inspector / toolbar가 대신 표시) -->
       <span class="stat" id="stat-sel-wrap" style="display:none">Selected: <b id="stat-selected" style="color:#2196f3">0</b></span>
-      <span class="stat">Tool: <b id="stat-tool">Select</b></span>
-      <span class="stat">Unit: <b id="stat-unit">mm</b></span>
-      <span class="stat">Prec: <b id="stat-prec">4</b></span>
-      <span class="stat osnap-toggle" id="osnap-toggle" title="Object Snap (F3)">
-        OSNAP: <b id="stat-osnap" style="color:#44ff88;">ON</b>
+
+      <!-- F-키 토글·액션 바 (우측 정렬) -->
+      <div class="sb-fkeys">
+        <button class="sb-fkey" data-fkey="F1" data-action="help"
+                title="도움말 (F1)"><span class="sb-ico">?</span><span class="sb-lbl">F1</span></button>
+        <button class="sb-fkey" data-fkey="F2" data-action="rename"
+                title="XIA 이름 변경 (F2)"><span class="sb-ico">✎</span><span class="sb-lbl">F2</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F3" data-action="osnap" id="sb-fkey-osnap"
+                title="Object Snap (F3)"><span class="sb-ico">⎕</span><span class="sb-lbl">F3</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F4" data-action="grid" id="sb-fkey-grid"
+                title="그리드 (F4)"><span class="sb-ico">⊞</span><span class="sb-lbl">F4</span></button>
+        <button class="sb-fkey" data-fkey="F5" data-action="home"
+                title="뷰 원점 복귀 (F5)"><span class="sb-ico">⌂</span><span class="sb-lbl">F5</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F6" data-action="edge" id="sb-fkey-edge"
+                title="엣지 (F6)"><span class="sb-ico">▦</span><span class="sb-lbl">F6</span></button>
+        <button class="sb-fkey sb-toggle on" data-fkey="F7" data-action="axis" id="sb-fkey-axis"
+                title="축 (F7)"><span class="sb-ico">✛</span><span class="sb-lbl">F7</span></button>
+        <!-- Sketch Mode 배지 — enterSketch/exitSketch에서 display 토글 -->
+        <span id="sb-sketch-badge"
+              style="display:none; margin-left:12px; padding:3px 10px;
+                     background:#ffa500; color:#fff; border-radius:12px;
+                     font-size:11px; font-weight:600;
+                     box-shadow:0 0 8px rgba(255,165,0,0.5);"
+              title="스케치 모드 활성 — 모든 드로잉이 평면에 고정됩니다">✏️</span>
+      </div>
+
+      <!-- 백워드 호환용 숨김 요소들 -->
+      <span style="display:none">
+        <b id="stat-verts">0</b><b id="stat-faces">0</b>
+        <b id="stat-tool">Select</b><b id="stat-unit">mm</b><b id="stat-prec">4</b>
+        <b id="stat-osnap">ON</b>
       </span>
     </div>
 
-    <!-- KAYAC-style bottom command bar (right half) -->
-    <div id="commandbar">
+    <!-- KAYAC-style bottom command bar (statusbar 바로 옆에 붙음) -->
+    <div id="commandbar" class="attached">
       <span class="cmd-label" id="cmd-label">치수:</span>
       <input type="text" id="cmd-input" placeholder="숫자 입력 후 Enter..." />
+
+      <!-- 우측 유틸 아이콘 바 (AutoCAD 스타일) -->
+      <div class="cb-tools">
+        <button class="cb-unit" id="cb-unit-btn" title="단위 / 정밀도">
+          <span id="cb-unit-val">0.0000</span>
+          <span id="cb-unit-lbl">mm</span>
+          <span class="cb-chev">▾</span>
+        </button>
+        <button class="cb-icon" id="cb-settings" title="설정 (Settings)">⚙</button>
+        <button class="cb-icon" id="cb-fullscreen" title="전체 화면 (Fullscreen)">⤢</button>
+        <button class="cb-icon" id="cb-menu" title="메뉴">≡</button>
+      </div>
     </div>
+    </div><!-- /#bottombar -->
 
     <!-- ═══ XIA Inspector Panel (left side) ═══ -->
     <div id="xia-inspector">
@@ -1778,18 +2768,20 @@
       <div class="xi-body">
         <!-- ═══ 속성 탭 ═══ -->
         <div class="xi-tab-content active" id="xi-tab-props">
-          <!-- 기하 상태 인디케이터 (항상 표시) -->
+          <!--
+            기하 차원 인디케이터 (항상 표시).
+            Point / XIA 슬롯은 의도적으로 제거:
+              - Point: 독립 객체로서의 점은 엔진에 존재하지 않음 (Drawing 중간 상태)
+              - XIA: XIA는 "차원 단계"가 아니라 "의미 분류" — 차원 축에 넣으면 범주 오류.
+            자세한 이유는 ADR-002 참조.
+          -->
           <div class="xi-state-row">
             <div class="xi-state-steps" id="xi-state-steps">
-              <div class="xi-step" data-state="point"><span class="xi-step-dot"></span><span class="xi-step-label">Point</span></div>
-              <div class="xi-step-line"></div>
               <div class="xi-step" data-state="line"><span class="xi-step-dot"></span><span class="xi-step-label">Line</span></div>
               <div class="xi-step-line"></div>
               <div class="xi-step" data-state="face"><span class="xi-step-dot"></span><span class="xi-step-label">Face</span></div>
               <div class="xi-step-line"></div>
               <div class="xi-step" data-state="volume"><span class="xi-step-dot"></span><span class="xi-step-label">Volume</span></div>
-              <div class="xi-step-line xi-step-line-mat"></div>
-              <div class="xi-step" data-state="xia"><span class="xi-step-dot"></span><span class="xi-step-label">XIA</span></div>
             </div>
           </div>
 
@@ -1860,23 +2852,23 @@
 
             <div class="xi-divider"></div>
 
-            <!-- 물리적 속성 (Material → XIA) -->
+            <!-- 물리적 속성 (ADR-050 P-6 — 형태 Shape → 재질 부여 → XIA 특성) -->
             <div class="xi-section" id="xi-physical-section">
               <div class="xi-section-head">
                 <span class="xi-section-title">&#9660; 물리적 속성</span>
-                <span class="xi-section-badge" id="xi-phys-badge">Appearance</span>
+                <span class="xi-section-badge" id="xi-phys-badge">형태 (Shape)</span>
               </div>
 
               <!-- 재질 미부여 상태 안내 -->
               <div class="xi-material-hint" id="xi-material-hint">
-                재질을 부여하면 이 객체는 <strong>XIA(물체)</strong>가 됩니다
+                재질을 부여하면 이 객체는 <strong>XIA (특성)</strong>로 승격됩니다
               </div>
 
               <div class="xi-prop-row">
                 <span class="xi-prop-label">재질</span>
                 <div style="flex:1; display:flex; gap:4px; align-items:center;">
                   <select class="xi-prop-value" id="xi-material" style="cursor:pointer; flex:1;">
-                    <option value="">— 없음 (Appearance) —</option>
+                    <option value="">— 없음 (형태 Shape) —</option>
                   </select>
                   <button class="xi-assign-btn" id="xi-assign-btn" title="재질 부여/해제">&#9674;</button>
                 </div>
@@ -2018,12 +3010,17 @@
           <div class="sty-section-title">엣지 스타일</div>
           <div class="sty-row">
             <span class="sty-label">색상</span>
-            <div class="sty-color-pick"><input type="color" id="sty-edge-color" value="#333366"></div>
+            <div class="sty-color-pick"><input type="color" id="sty-edge-color" value="#1a1a2e"></div>
           </div>
           <div class="sty-row">
             <span class="sty-label">두께</span>
-            <input type="range" class="sty-slider" id="sty-edge-width" min="1" max="5" value="1" step="0.5">
-            <span class="sty-val" id="sty-edge-width-val">1</span>
+            <input type="range" class="sty-slider" id="sty-edge-width" min="1" max="5" value="1.0" step="0.5">
+            <span class="sty-val" id="sty-edge-width-val">1.0</span>
+          </div>
+          <div class="sty-row">
+            <span class="sty-label" title="인접 면 각도 임계 (도). 작을수록 panel 경계 더 많이 표시. 건축=10°, 기계=20°, 캐릭터=30°">각도 임계</span>
+            <input type="range" class="sty-slider" id="sty-edge-angle" min="1" max="60" value="20" step="1">
+            <span class="sty-val" id="sty-edge-angle-val">20°</span>
           </div>
           <label class="sty-toggle">
             <input type="checkbox" id="sty-edge-visible" checked>
@@ -2075,26 +3072,27 @@
 
         <!-- 스냅 모드 그리드 (2열, AutoCAD/ZWCAD 스타일) -->
         <div class="osnap-grid">
+          <!-- S1 fix: 미구현 모드(insertion/node/from/mid2p/tempTrack) 체크박스 제거.
+               이전에는 체크해도 findSnap에 분기가 없어 아무 동작 없음. -->
           <label class="osnap-mode"><input type="checkbox" data-mode="endpoint" checked><span class="osnap-icon">&#9632;</span><span class="osnap-name">끝점(E)</span></label>
-          <label class="osnap-mode"><input type="checkbox" data-mode="insertion"><span class="osnap-icon">&#8862;</span><span class="osnap-name">삽입점(S)</span></label>
+          <label class="osnap-mode"><input type="checkbox" data-mode="midpoint" checked><span class="osnap-icon">&#9650;</span><span class="osnap-name">중간점(M)</span></label>
 
-          <label class="osnap-mode"><input type="checkbox" data-mode="midpoint"><span class="osnap-icon">&#9650;</span><span class="osnap-name">중간점(M)</span></label>
           <label class="osnap-mode"><input type="checkbox" data-mode="perpendicular" checked><span class="osnap-icon">&#8869;</span><span class="osnap-name">수직(U)</span></label>
-
           <label class="osnap-mode"><input type="checkbox" data-mode="center" checked><span class="osnap-icon">&#9675;</span><span class="osnap-name">중앙(C)</span></label>
+
           <label class="osnap-mode"><input type="checkbox" data-mode="tangent"><span class="osnap-icon">&#9678;</span><span class="osnap-name">접점(N)</span></label>
-
           <label class="osnap-mode"><input type="checkbox" data-mode="geometric"><span class="osnap-icon">&#9633;</span><span class="osnap-name">기하학적 중심(G)</span></label>
-          <label class="osnap-mode"><input type="checkbox" data-mode="nearest"><span class="osnap-icon">&times;</span><span class="osnap-name">근처점(R)</span></label>
 
-          <label class="osnap-mode"><input type="checkbox" data-mode="node"><span class="osnap-icon">&#9679;</span><span class="osnap-name">노드(D)</span></label>
-          <label class="osnap-mode"><input type="checkbox" data-mode="parallel"><span class="osnap-icon">//</span><span class="osnap-name">평행(L)</span></label>
+          <label class="osnap-mode"><input type="checkbox" data-mode="nearest"><span class="osnap-icon">&times;</span><span class="osnap-name">근처점(R)</span></label>
+          <label class="osnap-mode"><input type="checkbox" data-mode="parallel" checked><span class="osnap-icon">//</span><span class="osnap-name">평행(L)</span></label>
 
           <label class="osnap-mode"><input type="checkbox" data-mode="quadrant"><span class="osnap-icon">&#9671;</span><span class="osnap-name">사분점(Q)</span></label>
           <label class="osnap-mode"><input type="checkbox" data-mode="intersection" checked><span class="osnap-icon">&times;</span><span class="osnap-name">교차점(I)</span></label>
 
-          <label class="osnap-mode"><input type="checkbox" data-mode="extension"><span class="osnap-icon">&#8230;</span><span class="osnap-name">연장(X)</span></label>
+          <label class="osnap-mode"><input type="checkbox" data-mode="extension" checked><span class="osnap-icon">&#8230;</span><span class="osnap-name">연장(X)</span></label>
           <label class="osnap-mode"><input type="checkbox" data-mode="apparent"><span class="osnap-icon">&times;</span><span class="osnap-name">가상 교차점(A)</span></label>
+
+          <label class="osnap-mode"><input type="checkbox" data-mode="onFace" checked><span class="osnap-icon">&#8865;</span><span class="osnap-name">면 위(F)</span></label>
         </div>
 
         <!-- 스냅 표시 크기 조절 (ZWCAD Smartsnap 스타일) -->

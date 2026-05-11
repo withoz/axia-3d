@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "axia-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "3002"],
+      "port": 3002,
+      "cwd": "web"
+    }
+  ]
+}

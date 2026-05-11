@@ -73,8 +73,14 @@ function mockDeps(): StylePanelDeps {
 
 describe('StylePanel', () => {
   describe('STYLE_PRESETS', () => {
-    it('has 9 presets', () => {
-      expect(STYLE_PRESETS).toHaveLength(9);
+    it('has 11 presets (9 original + 2 architectural)', () => {
+      expect(STYLE_PRESETS).toHaveLength(11);
+    });
+
+    it('includes architectural presets', () => {
+      const names = STYLE_PRESETS.map(p => p.name);
+      expect(names).toContain('건축 분위기');
+      expect(names).toContain('야외 매스');
     });
 
     it('all presets have required properties', () => {

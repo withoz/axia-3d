@@ -1,0 +1,67 @@
+{
+  "name": "@axia/mcp-server",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AxiA 3D MCP Surface — Capability-Sandboxed AI bridge (ADR-041)",
+  "license": "MIT",
+  "author": "WYKO <withoz1111@gmail.com>",
+  "homepage": "https://github.com/withoz/axia-3d#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/withoz/axia-3d.git",
+    "directory": "packages/axia-mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/withoz/axia-3d/issues"
+  },
+  "keywords": [
+    "axia-3d",
+    "cad",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "anthropic",
+    "ai-cad"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "axia-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "scripts/check-wasm.mjs",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check:wasm": "node scripts/check-wasm.mjs",
+    "check:schema-pin": "node scripts/verify-schema-pin.mjs",
+    "postinstall": "node scripts/check-wasm.mjs",
+    "prepublishOnly": "node scripts/guard-publish.mjs && npm run build && npm test && npm run check:schema-pin"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "semver": "^7.6.3",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/semver": "^7.5.8",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

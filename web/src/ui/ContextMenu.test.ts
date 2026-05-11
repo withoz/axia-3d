@@ -18,6 +18,10 @@ function createDOM(): void {
       <div class="ctx-item ctx-group-item" data-action="group-lock">Lock</div>
       <div class="ctx-item ctx-group-item" data-action="group-hide">Hide</div>
       <div class="ctx-group-sep"></div>
+      <!-- ADR-074 U-2 — Boolean Group A/B selection items -->
+      <div class="ctx-item ctx-bool-group-item" data-action="set-group-a">Set Group A</div>
+      <div class="ctx-item ctx-bool-group-item" data-action="set-group-b">Set Group B</div>
+      <div class="ctx-item ctx-bool-group-clear" data-action="clear-group-tags">Clear Group Tags</div>
       <div class="ctx-item" data-action="view-top">Top</div>
       <div class="ctx-item" data-action="view-front">Front</div>
       <div class="ctx-item" data-action="view-3d">3D</div>
@@ -62,6 +66,10 @@ function mockDeps(): ContextMenuDeps {
         isInGroupEditMode: vi.fn().mockReturnValue(false),
         clearSelection: vi.fn(),
         enterGroupEdit: vi.fn(),
+        // ADR-074 U-2 — Boolean Group selection methods
+        setGroupTag: vi.fn(),
+        clearGroupTags: vi.fn(),
+        hasAnyGroupTag: vi.fn().mockReturnValue(false),
       },
     } as any,
     viewModeBar: null,
@@ -212,6 +220,69 @@ describe('ContextMenu', () => {
       const item = snapSub.querySelector('[data-snap="settings"]') as HTMLElement;
       item.click();
       expect(deps.openOsnapPanel).toHaveBeenCalled();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-074 U-2 — Boolean Group A/B selection ContextMenu actions.
+  // Per ADR-074 §B U-2-e=(b) — direct SelectionManager calls (bypass
+  // ToolManager.executeAction) since this is pure selection-state mutation.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-074 U-2 Boolean Group A/B actions', () => {
+    it('set-group-a calls selection.setGroupTag with selected faces and "A"', () => {
+      // Arrange — selection has 3 faces.
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20, 30]);
+
+      const item = document.querySelector(
+        '[data-action="set-group-a"]',
+      ) as HTMLElement;
+      item.click();
+
+      // Direct SelectionManager call (NOT toolManager.executeAction).
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .toHaveBeenCalledWith([10, 20, 30], 'A');
+      // executeAction NOT called for this action.
+      expect(deps.toolManager.executeAction).not.toHaveBeenCalled();
+    });
+
+    it('set-group-b calls selection.setGroupTag with selected faces and "B"', () => {
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([5, 15]);
+
+      const item = document.querySelector(
+        '[data-action="set-group-b"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .toHaveBeenCalledWith([5, 15], 'B');
+      expect(deps.toolManager.executeAction).not.toHaveBeenCalled();
+    });
+
+    it('clear-group-tags calls selection.clearGroupTags', () => {
+      const item = document.querySelector(
+        '[data-action="clear-group-tags"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect((deps.toolManager.selection as any).clearGroupTags)
+        .toHaveBeenCalled();
+      expect(deps.toolManager.executeAction).not.toHaveBeenCalled();
+    });
+
+    it('set-group-a is no-op when selection is empty', () => {
+      // Empty selection → setGroupTag must NOT be called (defensive).
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([]);
+
+      const item = document.querySelector(
+        '[data-action="set-group-a"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect((deps.toolManager.selection as any).setGroupTag)
+        .not.toHaveBeenCalled();
     });
   });
 });

@@ -9,7 +9,6 @@ use anyhow::Result;
 use std::io::Cursor;
 
 use crate::scene::Scene;
-use crate::xia::XiaState;
 use axia_geo::{MaterialId, FaceId};
 
 /// DXF 가져오기 결과 통계
@@ -53,7 +52,7 @@ impl Scene {
         let mut cursor = Cursor::new(data);
         let drawing = dxf::Drawing::load(&mut cursor)?;
         let mut stats = DxfImportStats::default();
-        let mat = self.default_material;
+        let mat = crate::FORM_MATERIAL;
 
         self.transactions.begin();
         self.transactions.set_before_snapshot(self.scene_snapshot());
@@ -73,8 +72,8 @@ impl Scene {
                 .filter(|k| !faces_before.contains(k))
                 .collect();
             if !new_faces.is_empty() {
-                let state = if new_faces.len() >= 3 { XiaState::Volume } else { XiaState::Face };
-                self.create_xia_with_faces(entity_name, state, entity_position, new_faces);
+                // State is computed from face_ids.len() — no explicit state needed
+                self.create_xia_with_faces(entity_name, entity_position, new_faces);
             }
         }
 

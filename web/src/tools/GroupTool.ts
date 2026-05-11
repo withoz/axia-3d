@@ -36,7 +36,7 @@ export class GroupTool implements ITool {
     this.busy = false;
   }
 
-  onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseDown(e: MouseEvent, _point: THREE.Vector3 | null): void {
     // 그룹 편집 모드에서의 클릭 처리
     if (this.ctx.selection.isInGroupEditMode()) {
       const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
@@ -61,11 +61,11 @@ export class GroupTool implements ITool {
       if (fid >= 0) {
         // 그룹에 속한 face 클릭 → 그룹 전체 선택
         const groupId = this.ctx.selection.getGroupId(fid);
-        if (groupId !== undefined && !e.shiftKey && !e.ctrlKey) {
+        if (groupId !== undefined && !e.shiftKey && !e.ctrlKey && !e.altKey) {
           this.ctx.selection.selectGroup(groupId);
           Toast.info(`Group-${groupId} 선택됨 — 더블클릭으로 편집`);
         } else {
-          this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey);
+          this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey, !!e.altKey);
         }
       }
     } else {
@@ -73,7 +73,7 @@ export class GroupTool implements ITool {
     }
   }
 
-  onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
+  onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
     // hover highlight
     const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
     if (hit && hit.faceIndex != null) {

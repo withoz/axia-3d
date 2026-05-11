@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import { ITool, ToolContext, DrawPlaneInfo } from './ITool';
 import { debugLog } from '../utils/debug';
+import { getDrawCurveMode } from './DrawCurveSettings';
 
 /** Max distance from center to prevent runaway geometry when ray grazes the plane */
 const MAX_DRAW_DISTANCE = 50000;
@@ -50,6 +51,15 @@ export class DrawCircleTool implements ITool {
       this.plane = this.ctx.getDrawPlane(e);
       this.circleCenter = point.clone();
 
+      // 2026-04-28 — 바닥면 (default cardinal plane) 에서 z/y/x 좌표 정확히 0.
+      //   Mouse picking 의 ray-plane intersection ε 오차 흡수.
+      if (!this.plane.onFace) {
+        const n = this.plane.normal;
+        if (Math.abs(n.x) > 0.999) this.circleCenter.x = 0;
+        else if (Math.abs(n.y) > 0.999) this.circleCenter.y = 0;
+        else if (Math.abs(n.z) > 0.999) this.circleCenter.z = 0;
+      }
+
       // Build Three.js Plane from normal + coplanar point for future ray intersections
       this.drawPlane3 = new THREE.Plane().setFromNormalAndCoplanarPoint(
         this.plane.normal, this.circleCenter,
@@ -67,12 +77,25 @@ export class DrawCircleTool implements ITool {
       const radius = this.circleCenter.distanceTo(planePoint);
       if (radius > 1) {
         const n = this.plane.normal;
-        this.ctx.bridge.drawCircle(
-          this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-          n.x, n.y, n.z,
-          radius, 24,
-        );
-        debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
+        // ADR-089 A-λ-β — DrawCurveSettings flag check.
+        // Curve mode (opt-in): kernel-native closed-curve face
+        // (1 vert + 1 self-loop edge with AnalyticCurve::Circle).
+        // Legacy mode (default): 24-segment polygon Shape (ADR-087 K-ε).
+        if (getDrawCurveMode()) {
+          this.ctx.bridge.drawCircleAsCurve(
+            this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+            n.x, n.y, n.z,
+            radius,
+          );
+          debugLog(`[Circle/Curve] Kernel-native R=${radius.toFixed(2)} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+        } else {
+          this.ctx.bridge.drawCircleAsShape(
+            this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+            n.x, n.y, n.z,
+            radius, 24,
+          );
+          debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
+        }
         this.ctx.syncMesh();
       }
       this.cleanup();
@@ -120,12 +143,22 @@ export class DrawCircleTool implements ITool {
     };
 
     const n = plane.normal;
-    this.ctx.bridge.drawCircle(
-      this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
-      n.x, n.y, n.z,
-      value, 24,
-    );
-    debugLog(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    // ADR-089 A-λ-β — DrawCurveSettings flag check (VCB path).
+    if (getDrawCurveMode()) {
+      this.ctx.bridge.drawCircleAsCurve(
+        this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+        n.x, n.y, n.z,
+        value,
+      );
+      debugLog(`[VCB/Circle/Curve] Kernel-native R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    } else {
+      this.ctx.bridge.drawCircleAsShape(
+        this.circleCenter.x, this.circleCenter.y, this.circleCenter.z,
+        n.x, n.y, n.z,
+        value, 24,
+      );
+      debugLog(`[VCB/Circle] R=${value} on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)})`);
+    }
     this.cleanup();
     this.ctx.syncMesh();
   }
@@ -158,22 +191,31 @@ export class DrawCircleTool implements ITool {
     // First check snap — if there's a snap point, project it onto the plane
     const rawPt = this.ctx.get3DPoint(e);
     const snapped = this.ctx.getSnappedPoint(e, rawPt);
+    let result: THREE.Vector3 | null = null;
     if (snapped) {
-      return this.projectOntoPlane(snapped);
+      result = this.projectOntoPlane(snapped);
+    } else {
+      // No snap — intersect camera ray with drawing plane
+      const ray = this.ctx.getRay(e);
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(this.drawPlane3, target);
+      if (!hit) return null;
+      const dist = target.distanceTo(this.circleCenter);
+      if (dist > MAX_DRAW_DISTANCE) return null;
+      result = target;
     }
+    if (!result) return null;
 
-    // No snap — intersect camera ray with drawing plane
-    const ray = this.ctx.getRay(e);
-    const target = new THREE.Vector3();
-    const hit = ray.ray.intersectPlane(this.drawPlane3, target);
-
-    if (!hit) return null; // Ray parallel to plane
-
-    // Guard against grazing angles producing points far away
-    const dist = target.distanceTo(this.circleCenter);
-    if (dist > MAX_DRAW_DISTANCE) return null;
-
-    return target;
+    // 2026-04-29 — 사용자 요청: 바닥면 cardinal plane 에서 normal-axis 좌표를
+    //   circleCenter 의 같은 좌표 (정확히 0) 로 강제. f32 ray-plane intersection
+    //   ε 오차 차단.
+    if (this.plane && !this.plane.onFace) {
+      const n = this.plane.normal;
+      if (Math.abs(n.x) > 0.999) result.x = this.circleCenter.x;
+      else if (Math.abs(n.y) > 0.999) result.y = this.circleCenter.y;
+      else if (Math.abs(n.z) > 0.999) result.z = this.circleCenter.z;
+    }
+    return result;
   }
 
   /**

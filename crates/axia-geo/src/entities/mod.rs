@@ -14,9 +14,9 @@ pub mod id;
 mod flags;
 
 pub use vertex::Vertex;
-pub use edge::Edge;
+pub use edge::{Edge, EdgeClass, PolylineCacheEntry};
 pub use half_edge::{HalfEdge, HeFlags};
-pub use face::{Face, LoopRef};
+pub use face::{Face, LoopRef, NormalCacheEntry};
 pub use shell::Shell;
 pub use id::*;
 pub use flags::SharedFlags;

@@ -9,26 +9,53 @@
  */
 
 import { UnitSystem, UnitType } from './UnitSystem';
+import {
+  getMergeTolerance, setMergeTolerance,
+  getRespectMaterial, setRespectMaterial,
+  MERGE_TOL_MAX,
+} from '../tools/MergeSettings';
+import { getAutoIntersect, setAutoIntersect } from '../tools/AutoIntersectSettings';
+import { getDrawCurveMode, setDrawCurveMode } from '../tools/DrawCurveSettings';
+import {
+  getAutoTopologyRecoveryMode,
+  setAutoTopologyRecoveryMode,
+} from '../tools/AutoTopologyRecoverySettings';
+import {
+  getAssetLibraryUserTierMode,
+  setAssetLibraryUserTierMode,
+} from '../tools/AssetLibraryUserTierSettings';
+import {
+  getAutoMaterialRecoveryMode,
+  setAutoMaterialRecoveryMode,
+} from '../tools/AutoMaterialRecoverySettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
   private isOpen = false;
+  private readonly _onMouseDown: (e: MouseEvent) => void;
 
   constructor(private units: UnitSystem) {
     this.panel = this.createPanel();
     document.body.appendChild(this.panel);
 
-    // 패널 밖 클릭 시 닫기
-    document.addEventListener('mousedown', (e) => {
+    // 패널 밖 클릭 시 닫기 (named reference for cleanup)
+    this._onMouseDown = (e: MouseEvent) => {
       if (this.isOpen &&
           !this.panel.contains(e.target as Node) &&
           !(e.target as HTMLElement).closest('#settings-btn')) {
         this.close();
       }
-    });
+    };
+    document.addEventListener('mousedown', this._onMouseDown);
 
     // 단위 변경 시 UI 갱신
     units.onChange(() => this.updateDisplay());
+  }
+
+  /** Remove DOM and listeners (defensive cleanup) */
+  dispose() {
+    document.removeEventListener('mousedown', this._onMouseDown);
+    this.panel.remove();
   }
 
   toggle() {
@@ -83,6 +110,64 @@ export class SettingsPanel {
       </div>
 
       <div class="sp-divider"></div>
+
+      <div class="sp-section">
+        <label class="sp-label">면 병합 허용 각도</label>
+        <div class="sp-row">
+          <input type="range" id="sp-merge-tol" min="0" max="${MERGE_TOL_MAX}" step="0.1" />
+          <span id="sp-merge-tol-val" class="sp-value"></span>
+        </div>
+        <div class="sp-hint">작은 값(0.5°)은 CAD-grade · 큰 값은 관대한 병합</div>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-merge-respect-mat" />
+          재질 경계 존중 (다른 재질은 병합 안 함)
+        </label>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-auto-intersect" />
+          그릴 때 자동 교차 (Auto-intersect on draw)
+        </label>
+        <div class="sp-hint">새 면이 기존 면과 3D 교차하면 edge 로 자동 분할 (SketchUp 스타일)</div>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-draw-curve-mode" />
+          곡선 모드 (실험) — kernel-native 닫힌 곡선
+        </label>
+        <div class="sp-hint">DrawCircle: 24-segment polygon 대신 1 self-loop edge + AnalyticCurve::Circle 로 그리기 (ADR-089)</div>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-auto-topology-recovery" />
+          위상 손상 자동 복구 (실험)
+        </label>
+        <div class="sp-hint">토폴로지 변경 op 후 손상 감지 → 자동 복구. PartialFailure 시 사용자 다이얼로그 ([Undo]/[강등]/[수동수정]) (ADR-097 Phase 4)</div>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-asset-library-user-tier" />
+          User 라이브러리 활성화 (실험)
+        </label>
+        <div class="sp-hint">자산 라이브러리 의 User tier (사용자 재사용 재질 모음) 활성. localStorage 보존, opt-in default OFF (ADR-098 Phase 5-A)</div>
+      </div>
+
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-auto-material-recovery" />
+          재질 삭제 자동 복구 (실험)
+        </label>
+        <div class="sp-hint">Material 제거 시 owning Xia 의 자동 복구 (auto-demote → fallback Concrete). PartialFailure 시 사용자 다이얼로그 ([Undo]/[강등]/[수동수정]) (ADR-100 Phase 5-C)</div>
+      </div>
+
+      <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
 
@@ -121,6 +206,51 @@ export class SettingsPanel {
       }
     });
 
+    // 병합 허용 각도
+    const tolSlider = panel.querySelector('#sp-merge-tol') as HTMLInputElement;
+    const tolVal = panel.querySelector('#sp-merge-tol-val')!;
+    tolSlider.addEventListener('input', () => {
+      const v = parseFloat(tolSlider.value);
+      setMergeTolerance(v);
+      tolVal.textContent = `${v.toFixed(1)}°`;
+    });
+
+    // 재질 경계 존중
+    const matCheck = panel.querySelector('#sp-merge-respect-mat') as HTMLInputElement;
+    matCheck.addEventListener('change', () => {
+      setRespectMaterial(matCheck.checked);
+    });
+
+    // Auto-intersect on draw
+    const autoIntCheck = panel.querySelector('#sp-auto-intersect') as HTMLInputElement;
+    autoIntCheck.addEventListener('change', () => {
+      setAutoIntersect(autoIntCheck.checked);
+    });
+
+    // ADR-089 A-λ-β — Draw curve mode (kernel-native closed-curve)
+    const drawCurveCheck = panel.querySelector('#sp-draw-curve-mode') as HTMLInputElement;
+    drawCurveCheck.addEventListener('change', () => {
+      setDrawCurveMode(drawCurveCheck.checked);
+    });
+
+    // ADR-097 T-ε — Auto topology recovery (Phase 4)
+    const autoRecoverCheck = panel.querySelector('#sp-auto-topology-recovery') as HTMLInputElement;
+    autoRecoverCheck.addEventListener('change', () => {
+      setAutoTopologyRecoveryMode(autoRecoverCheck.checked);
+    });
+
+    // ADR-098 S-ε — User tier asset library (Phase 5-A opt-in)
+    const userTierCheck = panel.querySelector('#sp-asset-library-user-tier') as HTMLInputElement;
+    userTierCheck.addEventListener('change', () => {
+      setAssetLibraryUserTierMode(userTierCheck.checked);
+    });
+
+    // ADR-100 R-ε — Auto material recovery (Phase 5-C)
+    const autoMaterialRecoverCheck = panel.querySelector('#sp-auto-material-recovery') as HTMLInputElement;
+    autoMaterialRecoverCheck.addEventListener('change', () => {
+      setAutoMaterialRecoveryMode(autoMaterialRecoverCheck.checked);
+    });
+
     return panel;
   }
 
@@ -145,6 +275,37 @@ export class SettingsPanel {
     const snapUnit = this.panel.querySelector('#sp-snap-unit')!;
     snapInput.value = this.units.fromInternal(this.units.snapInterval).toFixed(this.units.precision);
     snapUnit.textContent = this.units.config.label;
+
+    // 병합 각도
+    const tolSlider = this.panel.querySelector('#sp-merge-tol') as HTMLInputElement;
+    const tolVal = this.panel.querySelector('#sp-merge-tol-val')!;
+    const tol = getMergeTolerance();
+    tolSlider.value = String(tol);
+    tolVal.textContent = `${tol.toFixed(1)}°`;
+
+    // 재질 존중
+    const matCheck = this.panel.querySelector('#sp-merge-respect-mat') as HTMLInputElement;
+    matCheck.checked = getRespectMaterial();
+
+    // 자동 교차
+    const autoIntCheck = this.panel.querySelector('#sp-auto-intersect') as HTMLInputElement;
+    autoIntCheck.checked = getAutoIntersect();
+
+    // ADR-089 A-λ-β — 곡선 모드 (kernel-native)
+    const drawCurveCheck = this.panel.querySelector('#sp-draw-curve-mode') as HTMLInputElement;
+    drawCurveCheck.checked = getDrawCurveMode();
+
+    // ADR-097 T-ε — 자동 위상 복구
+    const autoRecoverCheck = this.panel.querySelector('#sp-auto-topology-recovery') as HTMLInputElement;
+    autoRecoverCheck.checked = getAutoTopologyRecoveryMode();
+
+    // ADR-098 S-ε — User 라이브러리 활성화
+    const userTierCheck = this.panel.querySelector('#sp-asset-library-user-tier') as HTMLInputElement;
+    userTierCheck.checked = getAssetLibraryUserTierMode();
+
+    // ADR-100 R-ε — 자동 재질 복구
+    const autoMaterialRecoverCheck = this.panel.querySelector('#sp-auto-material-recovery') as HTMLInputElement;
+    autoMaterialRecoverCheck.checked = getAutoMaterialRecoveryMode();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;

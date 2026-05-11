@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       drawRect: vi.fn().mockReturnValue(0),
+      drawRectAsShape: vi.fn().mockReturnValue(0),
     },
     viewport: {
       scene: { add: vi.fn(), remove: vi.fn() },
@@ -95,6 +96,18 @@ describe('DrawRectTool', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
       tool.cleanup();
       expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-087 K-ε — kernel-aware drawRectAsShape only path.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-087 K-ε kernel-aware dispatch', () => {
+    it('VCB path always calls bridge.drawRectAsShape (Plane attach)', () => {
+      tool.applyVCBValue(100, 200);
+
+      expect(ctx.bridge.drawRectAsShape).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawRect).not.toHaveBeenCalled();
     });
   });
 });

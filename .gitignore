@@ -11,6 +11,26 @@ web/dist/
 
 # WASM binary (wasm-pack으로 재생성, 용량 큼)
 web/src/wasm/*.wasm
+
+# Node WASM target (ADR-041 — wasm-pack --target nodejs 산출물, 재빌드 가능)
+packages/axia-wasm-node/dist/
+
+# MCP server build artifacts (ADR-041)
+packages/axia-mcp-server/dist/
+packages/axia-mcp-server/node_modules/
+
+# create-axia-mcp scaffold build artifacts (ADR-043)
+packages/create-axia-mcp/dist/
+packages/create-axia-mcp/node_modules/
+
+# action catalog build artifacts (ADR-045 D1)
+packages/axia-action-catalog/dist/
+packages/axia-action-catalog/node_modules/
+
+# Node
+web/node_modules/
+
+# Build output assets (재빌드 가능, 용량 큼)
 web/dist/assets/*.js
 web/dist/assets/*.wasm
 web/dist/assets/*.css

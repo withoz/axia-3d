@@ -8,6 +8,7 @@ export class Vector2 {
   constructor(x = 0, y = 0) { this.x = x; this.y = y; }
   set(x: number, y: number) { this.x = x; this.y = y; return this; }
   copy(v: Vector2) { this.x = v.x; this.y = v.y; return this; }
+  clone() { return new Vector2(this.x, this.y); }
   length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
   normalize() { const l = this.length() || 1; this.x /= l; this.y /= l; return this; }
   distanceTo(v: Vector2) { return Math.hypot(this.x - v.x, this.y - v.y); }
@@ -39,10 +40,44 @@ export class Vector3 {
   length() { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); }
   normalize() { const l = this.length() || 1; return this.multiplyScalar(1 / l); }
   distanceTo(v: Vector3) { return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z); }
+  distanceToSquared(v: Vector3) { const dx = this.x - v.x, dy = this.y - v.y, dz = this.z - v.z; return dx*dx + dy*dy + dz*dz; }
   addScaledVector(v: Vector3, s: number) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
   setFromMatrixColumn(_matrix: any, _index: number) { return this; }
   project(_camera: any) { return this; }
   toArray() { return [this.x, this.y, this.z]; }
+}
+
+// Phase I — Curve 지원 (CatmullRomCurve3 최소 구현: 선형 보간 approximation)
+export class CatmullRomCurve3 {
+  points: Vector3[];
+  closed: boolean;
+  constructor(points: Vector3[] = [], closed = false, _curveType = 'centripetal', _tension = 0.5) {
+    this.points = points;
+    this.closed = closed;
+  }
+  getPoints(divisions: number): Vector3[] {
+    // Test용 최소 구현 — 실제 Catmull-Rom 보간 대신 piecewise linear
+    const n = this.points.length;
+    if (n === 0) return [];
+    if (n === 1) return [this.points[0].clone()];
+    const result: Vector3[] = [];
+    const steps = Math.max(divisions, n);
+    const lastIdx = this.closed ? n : n - 1;
+    for (let i = 0; i <= steps; i++) {
+      const u = (i / steps) * lastIdx;
+      const k = Math.min(Math.floor(u), lastIdx - 1);
+      const t = u - k;
+      const a = this.points[k];
+      const b = this.points[(k + 1) % n];
+      const p = new Vector3(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+      );
+      result.push(p);
+    }
+    return result;
+  }
 }
 
 export class Plane {
@@ -66,8 +101,16 @@ export class Raycaster {
 
 export class Color {
   r: number; g: number; b: number;
-  constructor(c?: string | number) { this.r = 0; this.g = 0; this.b = 0; if (c) this.set(c); }
-  set(_c: any) { return this; }
+  private _hex = 0;
+  constructor(c?: string | number) { this.r = 0; this.g = 0; this.b = 0; if (c !== undefined) this.set(c); }
+  set(c: any) {
+    if (typeof c === 'number') { this._hex = c; this.r = ((c >> 16) & 0xff) / 255; this.g = ((c >> 8) & 0xff) / 255; this.b = (c & 0xff) / 255; }
+    return this;
+  }
+  setHex(h: number) { return this.set(h); }
+  setRGB(r: number, g: number, b: number) { this.r = r; this.g = g; this.b = b; this._hex = (Math.round(r*255)<<16)|(Math.round(g*255)<<8)|Math.round(b*255); return this; }
+  getHex() { return this._hex; }
+  copy(c: Color) { this.r = c.r; this.g = c.g; this.b = c.b; this._hex = c._hex; return this; }
 }
 
 export class BufferGeometry {
@@ -77,7 +120,19 @@ export class BufferGeometry {
   setIndex(index: any) { this.index = index; }
   dispose() {}
   computeVertexNormals() {}
+  computeBoundingSphere() {}
+  computeBoundingBox() {}
   setFromPoints(_points: any[]) { return this; }
+}
+
+export class PlaneGeometry extends BufferGeometry {
+  constructor(_w?: number, _h?: number) { super(); }
+}
+
+export class Quaternion {
+  x = 0; y = 0; z = 0; w = 1;
+  setFromUnitVectors(_a: any, _b: any) { return this; }
+  copy(q: Quaternion) { this.x = q.x; this.y = q.y; this.z = q.z; this.w = q.w; return this; }
 }
 
 export class BufferAttribute {
@@ -87,9 +142,37 @@ export class BufferAttribute {
 }
 
 export class Material { dispose() {} }
-export class MeshStandardMaterial extends Material { color = new Color(); }
-export class MeshBasicMaterial extends Material { color = new Color(); }
-export class LineBasicMaterial extends Material { color = new Color(); }
+export class MeshStandardMaterial extends Material {
+  color = new Color();
+  constructor(opts: any = {}) { super(); if (opts.color !== undefined) this.color.set(opts.color); }
+}
+export class MeshBasicMaterial extends Material {
+  color = new Color();
+  side: any; transparent = false; opacity = 1;
+  depthTest = true; depthWrite = true;
+  constructor(opts: any = {}) {
+    super();
+    if (opts.color !== undefined) this.color.set(opts.color);
+    if (opts.side !== undefined) this.side = opts.side;
+    if (opts.transparent !== undefined) this.transparent = opts.transparent;
+    if (opts.opacity !== undefined) this.opacity = opts.opacity;
+    if (opts.depthTest !== undefined) this.depthTest = opts.depthTest;
+    if (opts.depthWrite !== undefined) this.depthWrite = opts.depthWrite;
+  }
+}
+export class LineBasicMaterial extends Material {
+  color = new Color();
+  transparent = false; opacity = 1;
+  depthTest = true; depthWrite = true;
+  constructor(opts: any = {}) {
+    super();
+    if (opts.color !== undefined) this.color.set(opts.color);
+    if (opts.transparent !== undefined) this.transparent = opts.transparent;
+    if (opts.opacity !== undefined) this.opacity = opts.opacity;
+    if (opts.depthTest !== undefined) this.depthTest = opts.depthTest;
+    if (opts.depthWrite !== undefined) this.depthWrite = opts.depthWrite;
+  }
+}
 export class PointsMaterial extends Material { color = new Color(); size = 1; }
 
 export class Object3D {
@@ -100,7 +183,14 @@ export class Object3D {
   position = new Vector3();
   rotation = { x: 0, y: 0, z: 0 };
   scale = new Vector3(1, 1, 1);
-  add(child: Object3D) { this.children.push(child); child.parent = this; }
+  quaternion = new Quaternion();
+  renderOrder = 0;
+  add(...children: Object3D[]) {
+    for (const child of children) {
+      this.children.push(child);
+      child.parent = this;
+    }
+  }
   remove(child: Object3D) {
     const i = this.children.indexOf(child);
     if (i >= 0) { this.children.splice(i, 1); child.parent = null; }
@@ -108,6 +198,22 @@ export class Object3D {
   traverse(callback: (obj: Object3D) => void) {
     callback(this);
     this.children.forEach(c => c.traverse(callback));
+  }
+  clone(recursive = true): Object3D {
+    const c = new (this.constructor as any)();
+    c.name = (this as any).name;
+    c.visible = this.visible;
+    c.userData = JSON.parse(JSON.stringify(this.userData ?? {}));
+    c.position = new Vector3(this.position.x, this.position.y, this.position.z);
+    c.scale = new Vector3(this.scale.x, this.scale.y, this.scale.z);
+    c.rotation = { x: this.rotation.x, y: this.rotation.y, z: this.rotation.z };
+    if (recursive) {
+      for (const child of this.children) {
+        const cc = (child as any).clone ? (child as any).clone(true) : child;
+        c.add(cc);
+      }
+    }
+    return c;
   }
 }
 
@@ -179,3 +285,10 @@ export const DoubleSide = 2;
 export const FrontSide = 0;
 export const BackSide = 1;
 export const AdditiveBlending = 2;
+
+// ADR-099 L-δ — Color space constants for LayeredMaterialBinding.
+// Real Three.js uses string literal sentinels ('srgb', '') — keep
+// values inspectable by tests.
+export const SRGBColorSpace = 'srgb';
+export const NoColorSpace = '';
+export const LinearSRGBColorSpace = 'srgb-linear';

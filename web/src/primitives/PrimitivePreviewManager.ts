@@ -98,7 +98,7 @@ export class PrimitivePreviewManager {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const line = new THREE.LineSegments(geometry, this.radiusCircleMaterial);
     this.scene.add(line);
-    this.session.preview.radiusCircle = line as any; // Type assertion needed
+    this.session.preview.radiusCircle = line;
   }
 
   /**
@@ -134,7 +134,7 @@ export class PrimitivePreviewManager {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const line = new THREE.Line(geometry, this.axisLineMaterial);
     this.scene.add(line);
-    this.session.preview.heightAxis = line as any; // Type assertion needed
+    this.session.preview.heightAxis = line;
   }
 
   /**

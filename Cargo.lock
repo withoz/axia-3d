@@ -38,6 +38,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "axia-foreign"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axia-geo",
+ "glam",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "axia-geo"
 version = "0.1.0"
 dependencies = [
@@ -48,8 +59,10 @@ dependencies = [
  "bytemuck",
  "earcutr",
  "glam",
+ "robust",
  "rustc-hash",
  "serde",
+ "serde_json",
  "smallvec",
  "thiserror",
 ]
@@ -75,6 +88,7 @@ dependencies = [
  "glam",
  "js-sys",
  "serde",
+ "serde_json",
  "uuid",
  "wasm-bindgen",
  "web-sys",
@@ -538,6 +552,12 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "robust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
 name = "rustc-hash"

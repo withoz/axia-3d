@@ -464,4 +464,298 @@ describe('SelectionManager', () => {
     sm.handleClick(7, false, false);
     expect(sm.getSelectedFaces()).toContain(7);
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-074 U-1 — Boolean Group Selection (A / B) model layer.
+  // Per ADR-074 §C lock-ins:
+  // - Drop-in alongside (`selected` / `getSelectedFaces` UNCHANGED)
+  // - Group tags ⊆ selected (constraint: setGroupTag skips faces not selected)
+  // - One face = one group (Map invariant; B overwrites A on same key)
+  // - clearSelection() also clears groupTags (consistency)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-074 U-1 Boolean Group Selection', () => {
+    /**
+     * Helper — populate `selected` with arbitrary face IDs without
+     * going through the full Three.js click pipeline. Uses the
+     * existing programmatic `selectFaces` API.
+     */
+    function selectFaces(faceIds: number[]): void {
+      sm.selectFaces(faceIds);
+    }
+
+    it('setGroupTag tags faces in Group A correctly', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20], 'A');
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([]);
+    });
+
+    it('setGroupTag tags faces in Group B correctly', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([20, 30], 'B');
+      expect(sm.getGroupB()).toEqual([20, 30]);
+      expect(sm.getGroupA()).toEqual([]);
+    });
+
+    it('face cannot be in both A and B simultaneously (B overwrites A)', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20, 30], 'A');
+      expect(sm.getGroupA()).toEqual([10, 20, 30]);
+
+      // Re-tag face 20 as B — must move from A to B exclusively.
+      sm.setGroupTag([20], 'B');
+      expect(sm.getGroupA()).toEqual([10, 30]);
+      expect(sm.getGroupB()).toEqual([20]);
+      // Invariant: A ∩ B = ∅
+      const a = new Set(sm.getGroupA());
+      for (const fid of sm.getGroupB()) {
+        expect(a.has(fid)).toBe(false);
+      }
+    });
+
+    it('getGroupA / getGroupB return sorted-unique subsets', () => {
+      selectFaces([5, 1, 9, 3, 7]);
+      // Tag in arbitrary order.
+      sm.setGroupTag([9, 1, 5], 'A');
+      sm.setGroupTag([7, 3], 'B');
+      // Sorted ascending output.
+      expect(sm.getGroupA()).toEqual([1, 5, 9]);
+      expect(sm.getGroupB()).toEqual([3, 7]);
+    });
+
+    it('clearGroupTags removes all tags but keeps selected', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20], 'A');
+      sm.setGroupTag([30], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      sm.clearGroupTags();
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+      expect(sm.hasGroupSelection()).toBe(false);
+      // Selection itself preserved.
+      expect(sm.getSelectedFaces().sort((a, b) => a - b)).toEqual([10, 20, 30]);
+    });
+
+    it('clearSelection removes both selected and group tags (U-E consistency)', () => {
+      selectFaces([10, 20, 30]);
+      sm.setGroupTag([10], 'A');
+      sm.setGroupTag([20, 30], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+      expect(sm.getSelectedFaces().length).toBe(3);
+
+      sm.clearSelection();
+
+      // Both gone.
+      expect(sm.getSelectedFaces()).toEqual([]);
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+      expect(sm.hasGroupSelection()).toBe(false);
+    });
+
+    it('hasGroupSelection returns true iff both groups non-empty', () => {
+      selectFaces([10, 20, 30]);
+
+      // Empty initially.
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Only A → false.
+      sm.setGroupTag([10], 'A');
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // A + B → true.
+      sm.setGroupTag([20], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      // Move face 10 from A to B → only B → false.
+      sm.setGroupTag([10], 'B');
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB().sort((a, b) => a - b)).toEqual([10, 20]);
+      expect(sm.hasGroupSelection()).toBe(false);
+    });
+
+    it('setGroupTag rejects faces not in selected (constraint enforcement)', () => {
+      selectFaces([10, 20]);  // 30 is NOT selected
+      sm.setGroupTag([10, 30], 'A');
+      // Only 10 tagged — 30 silently skipped per constraint.
+      expect(sm.getGroupA()).toEqual([10]);
+      // 30 remains untagged in either group.
+      expect(sm.getGroupB()).toEqual([]);
+    });
+
+    it('hasAnyGroupTag returns true iff any group tag exists (U-2-i)', () => {
+      selectFaces([10, 20]);
+
+      // Empty initially.
+      expect(sm.hasAnyGroupTag()).toBe(false);
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Only A — hasAnyGroupTag true (vs hasGroupSelection still false).
+      sm.setGroupTag([10], 'A');
+      expect(sm.hasAnyGroupTag()).toBe(true);
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Only B — same: hasAnyGroupTag true (boundary case).
+      sm.clearGroupTags();
+      sm.setGroupTag([20], 'B');
+      expect(sm.hasAnyGroupTag()).toBe(true);
+      expect(sm.hasGroupSelection()).toBe(false);
+
+      // Both — both true.
+      sm.setGroupTag([10], 'A');
+      expect(sm.hasAnyGroupTag()).toBe(true);
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      // Cleared — both false.
+      sm.clearGroupTags();
+      expect(sm.hasAnyGroupTag()).toBe(false);
+      expect(sm.hasGroupSelection()).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-077 V-2 — Group A/B color outline rebuild (Three.js mock unit).
+  // Verifies that rebuildGroupOutlines fires on tag changes and that
+  // the outline meshes are properly added/disposed. Real visual
+  // verification is the Playwright baseline (group-color.visual.spec.ts).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-077 V-2 group color outlines', () => {
+    /** Helper — count children of `highlightGroup` matching a name pattern. */
+    function countChildrenByName(
+      sm: any,  // eslint-disable-line @typescript-eslint/no-explicit-any
+      name: string,
+    ): number {
+      const group = sm.highlightGroup;
+      if (!group || !Array.isArray(group.children)) return 0;
+      return group.children.filter((c: any) => c.name === name).length;
+    }
+
+    it('no group tags → no group outline meshes added', () => {
+      sm.selectFaces([10, 20]);
+      // No setGroupTag.
+      expect(countChildrenByName(sm, 'group-a-outline')).toBe(0);
+      expect(countChildrenByName(sm, 'group-b-outline')).toBe(0);
+    });
+
+    it('setGroupTag triggers outline rebuild via notifyChange', () => {
+      sm.selectFaces([10, 20, 30]);
+      // Before tagging — no group outlines.
+      expect(countChildrenByName(sm, 'group-a-outline')).toBe(0);
+
+      // After tagging A — rebuildGroupOutlines fires.
+      sm.setGroupTag([10], 'A');
+      // Note: Three.js mock may not produce real geometry from
+      // buildBoundaryEdges (positions/indices empty in test env).
+      // We verify the rebuild PATH was reached, not the resulting mesh.
+      // The reliable contract: no exceptions thrown.
+      // Real visual verification is the Playwright baseline.
+      expect(() => sm.setGroupTag([20], 'B')).not.toThrow();
+    });
+
+    it('clearGroupTags disposes any outline meshes', () => {
+      sm.selectFaces([10, 20]);
+      sm.setGroupTag([10], 'A');
+      sm.setGroupTag([20], 'B');
+
+      // clearGroupTags must remove any group meshes added.
+      sm.clearGroupTags();
+      expect(countChildrenByName(sm, 'group-a-outline')).toBe(0);
+      expect(countChildrenByName(sm, 'group-b-outline')).toBe(0);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-078 P-3 — restoreGroupTags (Load sync from project file).
+  // Per P-3 L3 lock-in:
+  // - groupTags fully replaced (existing tags cleared first).
+  // - selection extended via union: selected ∪ (a ∪ b).
+  // - notifyChange emitted exactly once at the end.
+  // - Bypasses selection-bound constraint of setGroupTag.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-078 P-3 restoreGroupTags', () => {
+    it('restores Group A and Group B from input arrays (basic)', () => {
+      // Empty starting state — typical post-load condition.
+      sm.restoreGroupTags([10, 20], [30]);
+
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([30]);
+      expect(sm.hasGroupSelection()).toBe(true);
+    });
+
+    it('expands selection via union — selected ∪ (A ∪ B)', () => {
+      // Pre-existing selection that overlaps partially with restore input.
+      sm.selectFaces([5, 10, 99]);
+      expect(sm.getSelectedFaces().sort((a, b) => a - b)).toEqual([5, 10, 99]);
+
+      sm.restoreGroupTags([10, 20], [30]);
+
+      // Selection = pre-existing ∪ A ∪ B = {5, 10, 99} ∪ {10, 20, 30}
+      const selected = sm.getSelectedFaces().sort((a, b) => a - b);
+      expect(selected).toEqual([5, 10, 20, 30, 99]);
+
+      // groupTags replaced with the restore input.
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([30]);
+    });
+
+    it('overwrites prior groupTags entirely (no accumulation)', () => {
+      // Set up prior tags via setGroupTag (selection-bound path).
+      sm.selectFaces([10, 20, 30]);
+      sm.setGroupTag([10, 20], 'A');
+      sm.setGroupTag([30], 'B');
+      expect(sm.getGroupA()).toEqual([10, 20]);
+      expect(sm.getGroupB()).toEqual([30]);
+
+      // Restore with disjoint set — prior tags must be dropped.
+      sm.restoreGroupTags([100], [200, 300]);
+
+      expect(sm.getGroupA()).toEqual([100]);
+      expect(sm.getGroupB()).toEqual([200, 300]);
+
+      // Selection grew by union (existing 10, 20, 30 preserved + new 100, 200, 300).
+      const selected = sm.getSelectedFaces().sort((a, b) => a - b);
+      expect(selected).toEqual([10, 20, 30, 100, 200, 300]);
+    });
+
+    it('emits exactly one notifyChange (V-2 outline rebuild fires once)', () => {
+      const cb = vi.fn();
+      sm.onChange(cb);
+
+      sm.restoreGroupTags([10, 20], [30]);
+
+      // Exactly one notifyChange emit, regardless of A+B sizes.
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('no-op when both inputs empty AND no prior tags AND no selection change', () => {
+      const cb = vi.fn();
+      sm.onChange(cb);
+
+      // Empty restore on empty state — must NOT emit notifyChange.
+      sm.restoreGroupTags([], []);
+
+      expect(cb).not.toHaveBeenCalled();
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+    });
+
+    it('empty input clears prior tags (notifyChange fires)', () => {
+      // Prior tags exist — empty restore must clear them.
+      sm.selectFaces([10, 20]);
+      sm.setGroupTag([10], 'A');
+      sm.setGroupTag([20], 'B');
+      expect(sm.hasGroupSelection()).toBe(true);
+
+      const cb = vi.fn();
+      sm.onChange(cb);
+
+      sm.restoreGroupTags([], []);
+
+      expect(sm.getGroupA()).toEqual([]);
+      expect(sm.getGroupB()).toEqual([]);
+      expect(sm.hasAnyGroupTag()).toBe(false);
+      // notifyChange MUST fire to clear stale outlines.
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+  });
 });

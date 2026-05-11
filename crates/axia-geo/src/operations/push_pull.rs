@@ -110,7 +110,7 @@ fn is_move_only_inner(mesh: &Mesh, face_id: FaceId, collect_debug: bool) -> Move
     };
     dbg_push!("face_normal=({:.4},{:.4},{:.4})", face_normal.x, face_normal.y, face_normal.z);
 
-    // 2. face의 경계 edge와 정점 수집
+    // 2. face의 경계 edge와 정점 수집 (Phase F: inner loops 포함)
     let face_hes = match mesh.collect_loop_hes(outer_start) {
         Ok(h) => h,
         Err(e) => {
@@ -124,7 +124,18 @@ fn is_move_only_inner(mesh: &Mesh, face_id: FaceId, collect_debug: bool) -> Move
         face_edges.insert(mesh.hes[he_id].edge());
         face_verts.insert(mesh.hes[he_id].dst());
     }
-    dbg_push!("face_edges={} face_verts={}", face_edges.len(), face_verts.len());
+    // inner loops: hole 경계도 face의 일부로 처리
+    for inner in mesh.faces[face_id].inners() {
+        if inner.start.is_null() { continue; }
+        if let Ok(inner_hes) = mesh.collect_loop_hes(inner.start) {
+            for &he_id in &inner_hes {
+                face_edges.insert(mesh.hes[he_id].edge());
+                face_verts.insert(mesh.hes[he_id].dst());
+            }
+        }
+    }
+    dbg_push!("face_edges={} face_verts={} (incl {} inner loops)",
+        face_edges.len(), face_verts.len(), mesh.faces[face_id].inners().len());
 
     // 3. 모든 edge를 탐색하여 face 정점에 연결되었지만 face 경계가 아닌 edge 찾기
     let mut non_face_edges: Vec<EdgeId> = Vec::new();
@@ -190,12 +201,40 @@ impl Mesh {
     ///
     /// - MoveOnly 모드: 정점 이동만 (벽이 자동 변형)
     /// - CreateFace 모드: 측면 생성 → coplanar 병합 → 원본 삭제
+    ///
+    /// # **Deprecated since ADR-079 W-4** (2026-05-06)
+    ///
+    /// ADR-079 W 트랙 (W-1 Box → W-2 Cylinder + smooth-group offset →
+    /// W-4 Revolve) 이 surface-aware `Mesh::create_solid` 으로 superseded
+    /// 했다. 신규 코드는 `Mesh::create_solid(face_id, mode, material)` 사용을
+    /// 권장한다.
+    ///
+    /// 본 method 는 ADR-079 Q3 lock-in (`SolidError::NotYetSupported` 시
+    /// `Scene::exec_create_solid` 가 자동 fallback) 의 backing 으로 보존.
+    /// 직접 호출은 ADR-079 W 트랙 외 케이스 (legacy callers, Q3 fallback)
+    /// 에 한정.
+    ///
+    /// 후속 ADR (W-4-γ 잠재 sub-atomic) 에서 텔레메트리 후 `#[deprecated]`
+    /// Rust attribute 격상 검토. 현재는 comment + debug_log only.
     pub fn push_pull(
         &mut self,
         face_id: FaceId,
         dist: f64,
         material: MaterialId,
     ) -> Result<PushPullResult> {
+        // ADR-079 W-4-β — Deprecation marker (comment-only per §W4-G-(a)).
+        // Direct callers from outside axia-geo: prefer Mesh::create_solid.
+        // Internal callers (Scene::exec_create_solid Q3 fallback) preserved.
+
+        // ─── Geometric Validity Guard (ADR-003) ─────────────────────────
+        // NaN/Inf 입력 차단 — WASM 바인딩 실수 등으로 들어올 수 있음
+        ensure!(
+            dist.is_finite(),
+            "push_pull distance must be finite, got {}",
+            dist
+        );
+
+        // dist == 0은 no-op (유효한 호출로 처리)
         if dist == 0.0 {
             return Ok(PushPullResult {
                 base_face: face_id,
@@ -208,16 +247,68 @@ impl Mesh {
             });
         }
 
+        // |dist| < EPSILON_LENGTH: degenerate 기하 생성 거부
+        ensure!(
+            dist.abs() >= crate::tolerances::EPSILON_LENGTH,
+            "push_pull distance {} below EPSILON_LENGTH ({}) — would create degenerate geometry (ADR-003)",
+            dist,
+            crate::tolerances::EPSILON_LENGTH
+        );
+
         ensure!(self.faces.contains(face_id), "Face {:?} not found", face_id);
 
         // Fast path: 디버그 문자열 할당 없이 모드 판정
         let move_only = is_move_only(self, face_id);
         let mode = if move_only { PushPullMode::MoveOnly } else { PushPullMode::CreateFace };
 
+        // Capture base face's surface BEFORE the operation (for translation)
+        let base_surface = self.faces.get(face_id)
+            .and_then(|f| f.surface().cloned());
+        let base_normal = self.faces.get(face_id)
+            .map(|f| f.normal())
+            .unwrap_or(DVec3::Z);
+
         let mut result = match mode {
             PushPullMode::MoveOnly => self.push_pull_move_only(face_id, dist)?,
             PushPullMode::CreateFace => self.push_pull_create_face(face_id, dist, material)?,
         };
+
+        // ─── ADR-060 Phase O Step 3 — BRep extrusion surfaces ───
+        //
+        // Per ADR-060 §B (drop-in alongside) — existing push_pull logic
+        // UNCHANGED above. This block runs after and only ATTACHES surfaces
+        // to the newly created faces (top + side walls). Existing 865
+        // regressions preserved (no behavioral change for callers that
+        // ignore surface).
+        //
+        // Per §E lock-in semantics:
+        //   Top face   → translated copy of base surface (if any)
+        //                else synthesized Plane via Phase N
+        //   Side walls → fresh Plane (perpendicular to base normal +
+        //                tangent to side edge)
+        self.adr_060_step3_attach_brep_surfaces(
+            &result, dist, base_surface, base_normal,
+        );
+
+        // ─── ADR-067 Step 1 — Auto-merge after push_pull commit ────
+        //
+        // §A drop-in alongside lock-in: existing push_pull behavior
+        // unchanged (above). This pass collapses adjacent coplanar
+        // faces in the result (top + sides) using the same merge
+        // routine boolean operations use, so users see clean topology
+        // without manual merge.
+        //
+        // §D #2 lock-in: only CreateFace mode (MoveOnly creates 0 new
+        // faces — auto-merge is a no-op there).
+        //
+        // §D #5 lock-in: PushPullResult.top_face / side_faces are
+        // updated to reflect merged ids so callers always see valid ids.
+        if mode == PushPullMode::CreateFace {
+            self.adr_067_step1_auto_merge_result(&mut result);
+        }
+
+        // ADR-007 — 연산 후 invariants 재확인 (debug build only)
+        self.debug_verify_invariants();
 
         // 디버그 정보는 최소한만 기록
         let mut debug = Vec::with_capacity(1 + result.split_debug.len());
@@ -225,6 +316,138 @@ impl Mesh {
         debug.extend(result.split_debug.drain(..));
         result.split_debug = debug;
         Ok(result)
+    }
+
+    /// ADR-067 Step 1 — Auto-merge result faces after push_pull commit.
+    ///
+    /// Reuses `Mesh::merge_coplanar_result_faces` (boolean.rs, pub(crate)
+    /// per ADR-067 §D #4 lock-in). After the merge, walks the result
+    /// list to identify which faces still exist and updates
+    /// `PushPullResult.top_face` / `side_faces` accordingly.
+    ///
+    /// If a face was merged AWAY (its id is no longer active), it's
+    /// removed from `side_faces`. If `top_face` itself was merged, the
+    /// new top face id (the surviving merge target) replaces it.
+    fn adr_067_step1_auto_merge_result(&mut self, result: &mut PushPullResult) {
+        // Collect input ids in a stable order — top first, then sides.
+        let mut input_ids: Vec<FaceId> = Vec::with_capacity(1 + result.side_faces.len());
+        input_ids.push(result.top_face);
+        input_ids.extend(result.side_faces.iter().copied());
+
+        // Run the shared merge routine. Returns the surviving face ids
+        // post-merge (may be a strict subset of inputs).
+        let surviving = self.merge_coplanar_result_faces(&input_ids);
+
+        // Map back: the first surviving face that contains/replaces
+        // top_face is the new top. The rest become side_faces.
+        // Since merge_coplanar_result_faces dedups + filters inactive,
+        // we can simply scan the survivors.
+        if surviving.is_empty() {
+            // Pathological — nothing survived. Leave result unchanged
+            // (debug invariants will catch this in tests).
+            return;
+        }
+
+        // Heuristic: the top face's id is preserved if active; else
+        // pick the first surviving id as the new top.
+        let new_top = if self.faces.get(result.top_face).map(|f| f.is_active()).unwrap_or(false) {
+            result.top_face
+        } else {
+            surviving[0]
+        };
+        result.top_face = new_top;
+
+        // Side faces = surviving minus new_top, in original order
+        // (preserved by merge_coplanar_result_faces' iteration order).
+        let mut new_sides = Vec::with_capacity(surviving.len().saturating_sub(1));
+        for fid in surviving {
+            if fid != new_top {
+                new_sides.push(fid);
+            }
+        }
+        result.side_faces = new_sides;
+    }
+
+    /// ADR-060 Phase O Step 3 — Attach BRep surfaces to push_pull result.
+    ///
+    /// Per §B drop-in alongside lock-in: existing push_pull logic is
+    /// untouched. This post-pass only sets `face.surface` on:
+    ///   - top face: translated base surface (if any) or synthesized Plane
+    ///   - side walls: fresh Plane (Newell normal of outer loop)
+    ///
+    /// Side edges already inherit Line curves automatically via
+    /// `Edge::curve_mandatory()` (Phase N synthesizer). No action needed.
+    fn adr_060_step3_attach_brep_surfaces(
+        &mut self,
+        result: &PushPullResult,
+        dist: f64,
+        base_surface: Option<crate::surfaces::AnalyticSurface>,
+        base_normal: DVec3,
+    ) {
+        use glam::DMat4;
+        use crate::curves::synthesize::synthesize_plane_surface;
+
+        // ── Top face surface ─────────────────────────────────────
+        // If base had a surface, translate it by (dist * base_normal).
+        // Otherwise synthesize Plane from top face's outer loop.
+        if result.top_face != result.base_face
+            && self.faces.contains(result.top_face)
+            && self.faces[result.top_face].is_active()
+        {
+            let new_top_surface = match base_surface {
+                Some(s) => {
+                    let m = DMat4::from_translation(base_normal * dist);
+                    s.transform(&m).ok()
+                        .or_else(|| {
+                            // Phase H transform failed (rare) — synthesize fallback
+                            self.synthesize_plane_for_face(result.top_face)
+                        })
+                }
+                None => self.synthesize_plane_for_face(result.top_face),
+            };
+            if let Some(surf) = new_top_surface {
+                self.faces[result.top_face].set_surface(Some(surf));
+            }
+        }
+
+        // ── Side wall surfaces ───────────────────────────────────
+        // Each side wall is a quad/rect — synthesize Plane from its
+        // outer-loop vertex positions (Phase N synthesizer).
+        for &side_fid in &result.side_faces {
+            if !self.faces.contains(side_fid)
+                || !self.faces[side_fid].is_active()
+            {
+                continue;
+            }
+            // Skip if surface already attached (avoid clobbering)
+            if self.faces[side_fid].surface().is_some() { continue; }
+
+            if let Some(surf) = self.synthesize_plane_for_face(side_fid) {
+                self.faces[side_fid].set_surface(Some(surf));
+            }
+        }
+
+        // Side edges: Phase N's curve_mandatory() will synthesize Line
+        // on demand for any new edges without explicit curve. No
+        // action needed here.
+        let _ = synthesize_plane_surface; // keep import alive
+    }
+
+    /// Helper — synthesize a Plane surface for a face by collecting its
+    /// outer-loop vertex positions and calling Phase N's synthesizer.
+    /// Returns None if loop collection fails.
+    fn synthesize_plane_for_face(
+        &self, fid: FaceId,
+    ) -> Option<crate::surfaces::AnalyticSurface> {
+        use crate::curves::synthesize::synthesize_plane_surface;
+        let face = self.faces.get(fid)?;
+        let loop_start = face.outer().start;
+        let verts = self.collect_loop_verts(loop_start).ok()?;
+        let positions: Vec<DVec3> = verts.iter()
+            .filter_map(|v| self.vertex_pos(*v).ok())
+            .collect();
+        if positions.len() < 3 { return None; }
+        Some(synthesize_plane_surface(&positions))
     }
 
     // ============================================================================
@@ -482,8 +705,19 @@ impl Mesh {
         };
         let offset = normal * dist;
 
-        // 정점 이동 (AixxiA: vert.set_d_pos(d_pos + d_delta))
-        for &vid in &boundary {
+        // Phase F — inner loop(구멍) 정점도 함께 수집 (중복 제거)
+        let inner_refs: Vec<LoopRef> = self.faces[face_id].inners().to_vec();
+        let mut all_verts: std::collections::HashSet<VertId> =
+            boundary.iter().copied().collect();
+        for ir in &inner_refs {
+            if ir.start.is_null() { continue; }
+            if let Ok(vs) = self.collect_loop_verts(ir.start) {
+                for v in vs { all_verts.insert(v); }
+            }
+        }
+
+        // 정점 이동 (outer + inner 모두 동일 offset)
+        for &vid in &all_verts {
             let old_pos = self.vertex_pos(vid)?;
             let new_pos = old_pos + offset;
             self.verts[vid].set_pos(new_pos);
@@ -502,7 +736,10 @@ impl Mesh {
             new_verts: Vec::new(),
             base_removed: false,
             adjacent_splits: 0,
-            split_debug: vec!["MoveOnly: vertices moved".into()],
+            split_debug: vec![format!(
+                "MoveOnly: {} verts moved (outer {}, inners {})",
+                all_verts.len(), boundary.len(), inner_refs.len()
+            )],
         })
     }
 
@@ -520,7 +757,7 @@ impl Mesh {
         dist: f64,
         material: MaterialId,
     ) -> Result<PushPullResult> {
-        // ─── 1. 기존 face의 모든 정점 수집 ─────────────────
+        // ─── 1. 기존 face의 outer 경계 수집 ─────────────────
         let outer_start = self.faces[face_id].outer().start;
         let boundary = self.collect_loop_verts(outer_start)?;
         ensure!(boundary.len() >= 3, "Face needs at least 3 verts");
@@ -531,18 +768,45 @@ impl Mesh {
         };
         let offset = normal * dist;
 
-        // ─── 2. 오프셋 정점 생성 ────────────────────────────
+        // Phase F — inner loops (구멍) 수집
+        // Each inner: CW winding relative to face normal (DCEL convention).
+        let inner_refs: Vec<LoopRef> = self.faces[face_id].inners().to_vec();
+        let mut inner_boundaries: Vec<Vec<VertId>> = Vec::new();
+        for ir in &inner_refs {
+            if ir.start.is_null() { continue; }
+            if let Ok(vs) = self.collect_loop_verts(ir.start) {
+                if vs.len() >= 3 { inner_boundaries.push(vs); }
+            }
+        }
+
+        // ─── 2. 오프셋 정점 생성 (outer + inners) ──────────
         let mut new_verts = Vec::with_capacity(boundary.len());
         for &vid in &boundary {
             let pos = self.vertex_pos(vid)?;
             new_verts.push(self.add_vertex(pos + offset));
         }
+        // 각 inner loop마다 새 정점 배열
+        let mut new_inner_verts: Vec<Vec<VertId>> = Vec::with_capacity(inner_boundaries.len());
+        for ib in &inner_boundaries {
+            let mut nvs = Vec::with_capacity(ib.len());
+            for &vid in ib {
+                let pos = self.vertex_pos(vid)?;
+                nvs.push(self.add_vertex(pos + offset));
+            }
+            new_inner_verts.push(nvs);
+        }
 
-        // ─── 3. 상단 face 생성 (새 정점들로) ─────────────────
-        let top_face = self.add_face(&new_verts, material)?;
+        // ─── 3. 상단 face 생성 — 구멍 있으면 add_face_with_holes ──
+        let top_face = if new_inner_verts.is_empty() {
+            self.add_face(&new_verts, material)?
+        } else {
+            let hole_slices: Vec<&[VertId]> =
+                new_inner_verts.iter().map(|v| v.as_slice()).collect();
+            self.add_face_with_holes(&new_verts, &hole_slices, material)?
+        };
         let mut new_face_ids: Vec<FaceId> = vec![top_face];
 
-        // ─── 4. 측면 face들 생성 ────────────────────────────
+        // ─── 4. 외벽 생성 (outer loop) ──────────────────────
         //   AixxiA 원본: [old_i, old_next, new_next, new_i]
         let n = boundary.len();
         let mut side_faces = Vec::with_capacity(n);
@@ -557,6 +821,29 @@ impl Mesh {
             let sf = self.add_face(&quad, material)?;
             side_faces.push(sf);
             new_face_ids.push(sf);
+        }
+
+        // ─── 4b. 내벽 생성 (각 inner loop — hole의 wall) ───
+        // Inner loop은 DCEL 상 CW (face normal 기준). Outer loop과 같은 공식으로
+        // quad를 만들면 결과 winding이 outer와 자연히 반대 → normal이 반대 방향.
+        // 이것이 정확히 원하는 동작: outer wall normal이 solid 바깥,
+        // inner wall normal은 hole 바깥(= solid 쪽이 아닌 hole 내부 쪽) = 정면이
+        // hole에서 바라볼 때 우리를 향함 → 렌더 시 hole 내벽이 보임.
+        for (ib_idx, ib) in inner_boundaries.iter().enumerate() {
+            let nvs = &new_inner_verts[ib_idx];
+            let m = ib.len();
+            for i in 0..m {
+                let next_i = (i + 1) % m;
+                let quad = vec![
+                    ib[i],
+                    ib[next_i],
+                    nvs[next_i],
+                    nvs[i],
+                ];
+                let sf = self.add_face(&quad, material)?;
+                side_faces.push(sf);
+                new_face_ids.push(sf);
+            }
         }
 
         // ─── 5. coplanar 인접면 병합 (AixxiA 핵심 로직 그대로) ──
@@ -614,12 +901,21 @@ impl Mesh {
             }
         }
 
-        // ─── 6. 솔리드 방식: 원본 face 유지 (바닥면 닫힘) ──
-        //   스케치업 방식은 원본 삭제했지만, 솔리드 방식은 유지하여
-        //   닫힌 형태의 매스(closed solid)를 만든다.
-        //   원본 face는 바닥면으로 남아있음.
-        //   노말은 원래 방향 유지 (push/pull 방향 계산에 사용되므로 반전 금지)
-        //   → BackSide 렌더링에 vertexColors 적용으로 아래에서도 재질 색상 표시
+        // ─── 6. 솔리드 방식: 원본 face 유지 + ADR-007 outward 정렬 ──
+        //   원본 face는 바닥면으로 남아 closed solid 완성.
+        //   (이전 주석: "노말은 원래 방향 유지" — push/pull 방향 계산은 이미
+        //    사용됐으므로 더 이상 유지 필요 없음.)
+        //   ADR-007 원칙 1: 외부=Front — push/pull 방향의 반대가 base의 outward.
+        //   따라서 base face를 flip해 normal이 -offset 방향을 향하게.
+        if self.faces.contains(face_id) {
+            let base_n = self.faces[face_id].normal();
+            let offset_n = offset.normalize_or_zero();
+            // 원본 face의 normal이 push 방향과 같다면 (내부 향함) flip
+            // push 방향의 반대가 바닥에서 본 outward
+            if base_n.dot(offset_n) > 0.0 {
+                let _ = self.flip_face_safe(face_id);
+            }
+        }
 
         // top_face가 merge로 인해 사라졌을 수 있으므로 최종 face에서 찾기
         let actual_top = if self.faces.contains(top_face) {
@@ -863,5 +1159,508 @@ mod tests {
 
         let r = m.push_pull(f, 0.1, mat);
         assert!(r.is_ok(), "should handle tiny faces");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Geometric Validity Guards (ADR-003)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn pushpull_rejects_nan_distance() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(f, f64::NAN, mat);
+        assert!(r.is_err(), "NaN distance must be rejected");
+        assert!(
+            r.unwrap_err().to_string().contains("finite"),
+            "error message should mention finite"
+        );
+    }
+
+    #[test]
+    fn pushpull_rejects_infinity_distance() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        assert!(m.push_pull(f, f64::INFINITY, mat).is_err());
+        assert!(m.push_pull(f, f64::NEG_INFINITY, mat).is_err());
+    }
+
+    #[test]
+    fn pushpull_accepts_exactly_zero_as_noop() {
+        // dist == 0.0은 no-op으로 유효 처리 (거부 아님)
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let faces_before = m.face_count();
+
+        let r = m.push_pull(f, 0.0, mat);
+        assert!(r.is_ok(), "zero distance should be no-op, not error");
+        assert_eq!(m.face_count(), faces_before, "zero dist should not change mesh");
+    }
+
+    #[test]
+    fn pushpull_rejects_subepsilon_distance() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        // EPSILON_LENGTH의 절반 → degenerate, 거부되어야 함
+        let r = m.push_pull(f, EPSILON_LENGTH * 0.5, mat);
+        assert!(r.is_err(), "sub-epsilon distance must be rejected");
+        let msg = r.unwrap_err().to_string();
+        assert!(
+            msg.contains("degenerate") || msg.contains("EPSILON"),
+            "error message should mention degenerate/EPSILON, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn pushpull_rejects_negative_subepsilon() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        // 음수도 절댓값 기준 — push와 pull 모두 차단
+        let r = m.push_pull(f, -EPSILON_LENGTH * 0.5, mat);
+        assert!(r.is_err(), "sub-epsilon negative distance must be rejected");
+    }
+
+    #[test]
+    fn pushpull_accepts_exactly_epsilon() {
+        use crate::tolerances::EPSILON_LENGTH;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        // EPSILON_LENGTH와 동일 → 경계값, 허용
+        let r = m.push_pull(f, EPSILON_LENGTH, mat);
+        assert!(r.is_ok(), "exactly epsilon distance should be accepted");
+    }
+
+    // ─── Phase F: Push/Pull with holes ─────────────────────
+    #[test]
+    fn pushpull_base_and_top_face_outward() {
+        // ADR-007 원칙 1: 외부=Front. Push/Pull 후 base와 top face 모두
+        // solid 바깥쪽으로 normal이 향해야 함.
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let initial_normal = m.faces[f].normal();
+        // push_pull은 face normal 방향으로 dist 만큼 extrude
+        // 결과: top face는 initial_normal 방향, base는 반대 방향이 outward
+        let result = m.push_pull(f, 10.0, mat).unwrap();
+
+        let base_normal = m.faces[result.base_face].normal();
+        let top_normal = m.faces[result.top_face].normal();
+
+        // base의 outward = push 방향의 반대
+        let base_outward_expected = -initial_normal;
+        assert!(base_normal.dot(base_outward_expected) > 0.9,
+            "base face normal {:?} should be outward (expected ~{:?})",
+            base_normal, base_outward_expected);
+
+        // top의 outward = push 방향
+        assert!(top_normal.dot(initial_normal) > 0.9,
+            "top face normal {:?} should be outward (expected ~{:?})",
+            top_normal, initial_normal);
+    }
+
+    // ADR-007: Invariants 유지 검증 (Phase G)
+    #[test]
+    fn pushpull_invariants_after_push() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let _ = m.push_pull(f, 50.0, mat).unwrap();
+        let report = m.verify_face_invariants();
+        assert!(report.is_valid(),
+            "push_pull broke invariants:\n{}", report.summary());
+    }
+
+    #[test]
+    fn pushpull_invariants_after_negative_push() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+        let _ = m.push_pull(f, 50.0, mat).unwrap();
+        // box의 top을 찾아 negative push (MoveOnly 경로)
+        let faces: Vec<_> = m.faces.iter()
+            .filter(|(_, face)| face.is_active() && face.normal().y > 0.9)
+            .map(|(id, _)| id).collect();
+        if let Some(&top) = faces.first() {
+            let _ = m.push_pull(top, -20.0, mat);
+        }
+        let report = m.verify_face_invariants();
+        assert!(report.is_valid(),
+            "negative push broke invariants:\n{}", report.summary());
+    }
+
+    #[test]
+    fn pushpull_face_with_hole_create_inner_walls() {
+        // 바닥 사각형에 구멍 뚫고 push → 창문 달린 벽
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // outer 200×200
+        let o0 = mesh.add_vertex(DVec3::new(-100.0, 0.0, -100.0));
+        let o1 = mesh.add_vertex(DVec3::new( 100.0, 0.0, -100.0));
+        let o2 = mesh.add_vertex(DVec3::new( 100.0, 0.0,  100.0));
+        let o3 = mesh.add_vertex(DVec3::new(-100.0, 0.0,  100.0));
+        // hole 40×40 (CW winding from above = reversed relative to outer CCW)
+        let h0 = mesh.add_vertex(DVec3::new(-20.0, 0.0, -20.0));
+        let h1 = mesh.add_vertex(DVec3::new(-20.0, 0.0,  20.0));
+        let h2 = mesh.add_vertex(DVec3::new( 20.0, 0.0,  20.0));
+        let h3 = mesh.add_vertex(DVec3::new( 20.0, 0.0, -20.0));
+
+        let f = mesh.add_face_with_holes(
+            &[o0, o1, o2, o3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+        let base_faces = mesh.face_count();
+        assert_eq!(base_faces, 1);
+
+        // push up 50
+        let result = mesh.push_pull(f, 50.0, mat).unwrap();
+
+        // 최소 생성: 1 top + 4 outer walls + 4 inner walls (+ 원본 유지)
+        // merge로 일부 합쳐질 수 있으나 최소 개수는 많아야 함
+        assert!(
+            mesh.face_count() >= 6,
+            "pushed face with hole should create walls inside + outside (got {} faces)",
+            mesh.face_count()
+        );
+        // 결과의 side_faces 수 >= 8 (outer 4 + inner 4)
+        assert!(
+            result.side_faces.len() >= 8,
+            "must create walls for outer AND inner loop (got {})",
+            result.side_faces.len()
+        );
+    }
+
+    #[test]
+    fn pushpull_move_only_preserves_hole() {
+        // Box top을 push/pull하는 경우 — 구멍 정점도 함께 이동
+        // Box geometry에 구멍 있는 top face 구성은 복잡하므로,
+        // 직접 MoveOnly-like 테스트: 면 정점이 모두 이동되었는지 확인
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let o = [
+            mesh.add_vertex(DVec3::new(-10.0, 0.0, -10.0)),
+            mesh.add_vertex(DVec3::new( 10.0, 0.0, -10.0)),
+            mesh.add_vertex(DVec3::new( 10.0, 0.0,  10.0)),
+            mesh.add_vertex(DVec3::new(-10.0, 0.0,  10.0)),
+        ];
+        let h = [
+            mesh.add_vertex(DVec3::new(-2.0, 0.0, -2.0)),
+            mesh.add_vertex(DVec3::new(-2.0, 0.0,  2.0)),
+            mesh.add_vertex(DVec3::new( 2.0, 0.0,  2.0)),
+            mesh.add_vertex(DVec3::new( 2.0, 0.0, -2.0)),
+        ];
+        let f = mesh.add_face_with_holes(&o, &[&h], mat).unwrap();
+
+        // 이 구성은 홀 연결 edge가 없어 CreateFace mode
+        let _ = mesh.push_pull(f, 10.0, mat).unwrap();
+
+        // 원본 hole 정점들은 여전히 y=0에 있어야 함 (원본 유지 방식)
+        for &v in &h {
+            let pos = mesh.vertex_pos(v).unwrap();
+            assert!((pos.y - 0.0).abs() < 1e-6, "original hole vert should remain at y=0");
+        }
+    }
+
+    // ── ADR-060 Phase O Step 3 — push_pull BRep extrusion ──
+
+    use crate::surfaces::AnalyticSurface;
+
+    /// ADR-060 §B Step 3 #1 — Side walls receive Plane surface after push_pull.
+    #[test]
+    fn adr_060_step3_side_walls_get_plane_surface() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // 4 side walls created — each should have Plane surface attached
+        assert_eq!(r.side_faces.len(), 4, "expected 4 side walls");
+        for &fid in &r.side_faces {
+            let surface = m.faces[fid].surface();
+            assert!(surface.is_some(),
+                "side wall {:?} should have Plane surface attached", fid);
+            assert!(matches!(surface, Some(AnalyticSurface::Plane { .. })),
+                "side wall surface should be Plane variant");
+        }
+    }
+
+    /// ADR-060 §B Step 3 #2 — Top face receives Plane surface (synthesized
+    /// when base had none).
+    #[test]
+    fn adr_060_step3_top_face_synthesizes_plane_when_base_curveless() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        // Note: base has no surface attached
+        assert!(m.faces[base].surface().is_none());
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        let top_surface = m.faces[r.top_face].surface();
+        assert!(top_surface.is_some(),
+            "top face should have synthesized Plane surface");
+        match top_surface {
+            Some(AnalyticSurface::Plane { origin, .. }) => {
+                // Ground rect (XZ plane, CCW from below) has normal -Y;
+                // push 3 units along normal → top at y = -3.
+                assert!((origin.y - (-3.0)).abs() < 1e-6,
+                    "top Plane origin should be at y=-3 (push along -Y normal), got {:?}", origin);
+            }
+            other => panic!("expected Plane, got {:?}", other),
+        }
+    }
+
+    /// ADR-060 §B Step 3 #3 — Top face translates base surface when
+    /// base had explicit Plane attached.
+    #[test]
+    fn adr_060_step3_top_face_translates_base_surface() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        // Manually attach a Plane surface to base.
+        // NOTE: Step 3 translates by face.normal() (mesh-computed),
+        // NOT by attached surface's normal. Ground rect normal = -Y.
+        let attached_normal = DVec3::Y;  // arbitrary attached label
+        m.faces[base].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::new(2.0, 0.0, 2.0),
+            normal: attached_normal,
+            basis_u: DVec3::X,
+            u_range: (-1e6, 1e6), v_range: (-1e6, 1e6),
+        }));
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // Top should have Plane translated by 3 * face.normal() (= -Y)
+        // → origin (2, 0, 2) + (0, -3, 0) = (2, -3, 2).
+        // attached_normal stays preserved (Phase H translation preserves normal).
+        match m.faces[r.top_face].surface() {
+            Some(AnalyticSurface::Plane { origin, normal, .. }) => {
+                assert!((*origin - DVec3::new(2.0, -3.0, 2.0)).length() < 1e-6,
+                    "top Plane origin = base + 3*face.normal (=-Y), got {:?}", origin);
+                assert!((*normal - attached_normal).length() < 1e-9,
+                    "attached normal preserved through translation");
+            }
+            other => panic!("expected translated Plane, got {:?}", other),
+        }
+    }
+
+    /// ADR-060 §B Step 3 #4 — Side edges have curve_mandatory() returning Line
+    /// (mesh-relative — no explicit set required).
+    #[test]
+    fn adr_060_step3_side_edges_curve_mandatory_is_line() {
+        use crate::curves::AnalyticCurve;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // Walk side wall edges — each should have Line via curve_mandatory()
+        let mut line_edge_count = 0;
+        for &fid in &r.side_faces {
+            let outer_start = m.faces[fid].outer().start;
+            let edges = m.collect_loop_hes(outer_start).unwrap();
+            for he in edges {
+                let eid = m.hes[he].edge();
+                let curve = m.edges[eid].curve_mandatory();
+                if matches!(curve, AnalyticCurve::Line { .. }) {
+                    line_edge_count += 1;
+                }
+            }
+        }
+        assert!(line_edge_count > 0,
+            "side wall edges should have Line via curve_mandatory");
+    }
+
+    /// ADR-060 §B Step 3 #5 — Negative push (push inward) preserves sign convention.
+    #[test]
+    fn adr_060_step3_negative_push_translates_top_correctly() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        m.faces[base].set_surface(Some(AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Y,  // base normal +Y
+            basis_u: DVec3::X,
+            u_range: (-1e6, 1e6), v_range: (-1e6, 1e6),
+        }));
+
+        // Negative dist — push_pull may behave differently per mode.
+        // We only verify it doesn't panic and result is valid.
+        let r = m.push_pull(base, -2.0, mat).unwrap();
+        assert!(m.faces.contains(r.top_face));
+
+        // Top face surface should exist
+        assert!(m.faces[r.top_face].surface().is_some(),
+            "top face surface should be attached even for negative push");
+    }
+
+    /// ADR-060 §B Step 3 #6 — Zero distance is no-op (no surface modification).
+    #[test]
+    fn adr_060_step3_zero_distance_no_op() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        let face_count_before = m.face_count();
+
+        let r = m.push_pull(base, 0.0, mat).unwrap();
+
+        assert_eq!(m.face_count(), face_count_before);
+        assert_eq!(r.base_face, r.top_face, "no extrusion → top == base");
+        assert!(r.side_faces.is_empty());
+    }
+
+    /// ADR-060 §B Step 3 #7 — Existing 865 corpus regression: face_count
+    /// preserved, push_pull behavior 0 change for callers that ignore surface.
+    #[test]
+    fn adr_060_step3_existing_box_face_count_unchanged() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+        // Existing test (push_flat_creates_box) expects 6 faces — preserved
+        assert_eq!(m.face_count(), 6,
+            "Step 3 surface attachment must not change face count");
+        assert!(!r.base_removed);
+    }
+
+    /// ADR-060 §B Step 3 #8 — Side wall Plane normal is reasonable
+    /// (perpendicular to push direction).
+    #[test]
+    fn adr_060_step3_side_wall_normals_perpendicular_to_push() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        // Ground rect's normal is +Y (push direction)
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        for &fid in &r.side_faces {
+            match m.faces[fid].surface() {
+                Some(AnalyticSurface::Plane { normal, .. }) => {
+                    // Side wall normal should be perpendicular to push direction (+Y)
+                    let dot = normal.dot(DVec3::Y).abs();
+                    assert!(dot < 0.1,
+                        "side wall normal should be ⊥ to +Y, dot = {}", dot);
+                }
+                other => panic!("side wall {:?} expected Plane, got {:?}", fid, other),
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-067 Step 1 — Auto-merge after push_pull commit
+    //
+    // 4 regression invariants (none #[ignore], §X.5 #6 strict):
+    //   1. auto_merge_preserves_non_coplanar_geometry
+    //   2. auto_merge_disabled_for_move_only_mode
+    //   3. auto_merge_returns_updated_face_ids_in_result
+    //   4. auto_merge_drop_in_alongside_no_regression_existing_box
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-067 Step 1 invariant — Box push_pull (no coplanar neighbor)
+    /// produces correct geometry (top + 4 sides). Auto-merge of an
+    /// isolated box should be a NO-OP (no adjacent coplanar faces to
+    /// collapse) — face count and IDs remain.
+    #[test]
+    fn auto_merge_preserves_non_coplanar_geometry() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 3.0, mat).unwrap();
+
+        // Top + 4 sides (no merge candidates — base is isolated).
+        assert_eq!(r.side_faces.len(), 4,
+            "isolated box push_pull should produce 4 sides (no merge)");
+        assert!(m.faces[r.top_face].is_active(),
+            "top face must remain active");
+        for &sid in &r.side_faces {
+            assert!(m.faces[sid].is_active(),
+                "side face {:?} must remain active", sid);
+        }
+    }
+
+    /// ADR-067 §D #2 lock-in — MoveOnly mode does NOT trigger auto-merge.
+    ///
+    /// After creating a box, push_pull on the top face uses MoveOnly mode
+    /// (no new face creation). Auto-merge gate must short-circuit and
+    /// preserve the existing 6-face box.
+    #[test]
+    fn auto_merge_disabled_for_move_only_mode() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+        let r1 = m.push_pull(base, 3.0, mat).unwrap();
+
+        let face_count_before = m.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(face_count_before, 6, "box should have 6 faces");
+
+        // Push top up — MoveOnly path.
+        let r2 = m.push_pull(r1.top_face, 2.0, mat).unwrap();
+
+        let face_count_after = m.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(face_count_after, 6,
+            "MoveOnly mode must preserve face count (auto-merge skipped)");
+        // Top + 0 new sides (MoveOnly doesn't create sides).
+        assert!(r2.side_faces.is_empty(),
+            "MoveOnly mode must not produce new side faces");
+        assert!(m.faces[r2.top_face].is_active());
+    }
+
+    /// ADR-067 §D #5 lock-in — `PushPullResult.top_face` and `side_faces`
+    /// always contain ACTIVE face IDs after auto-merge. No stale IDs.
+    #[test]
+    fn auto_merge_returns_updated_face_ids_in_result() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let base = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(base, 2.5, mat).unwrap();
+
+        // Every id in the result must be an active face.
+        assert!(m.faces.get(r.top_face).map(|f| f.is_active()).unwrap_or(false),
+            "PushPullResult.top_face {:?} must be active post auto-merge", r.top_face);
+        for &sid in &r.side_faces {
+            assert!(m.faces.get(sid).map(|f| f.is_active()).unwrap_or(false),
+                "PushPullResult.side_faces[{:?}] must be active post auto-merge", sid);
+        }
+    }
+
+    /// ADR-067 §D #4 — drop-in alongside: existing box push_pull
+    /// behavior unchanged. This test mirrors the pre-Step-1 expectation
+    /// from `push_flat_creates_box` and ensures auto-merge integration
+    /// did NOT alter the canonical box construction.
+    #[test]
+    fn auto_merge_drop_in_alongside_no_regression_existing_box() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let f = make_ground_rect(&mut m, mat);
+
+        let r = m.push_pull(f, 3.0, mat).unwrap();
+
+        // Canonical box: 6 faces (top + 4 sides + base preserved).
+        let active_face_count = m.faces.iter().filter(|(_, fc)| fc.is_active()).count();
+        assert_eq!(active_face_count, 6,
+            "canonical push_pull box must have 6 active faces (auto-merge no-op)");
+        // PushPullResult invariants intact.
+        assert_ne!(r.top_face, f, "top face is a new id, distinct from base");
+        assert_eq!(r.side_faces.len(), 4);
+        assert!(!r.base_removed, "base face is preserved (closed solid)");
     }
 }

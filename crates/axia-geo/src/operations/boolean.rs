@@ -49,7 +49,6 @@ struct SolidData {
 
 struct FaceTriangles {
     face_id: FaceId,
-    #[allow(dead_code)] // find_intersections에서 사용 (현재 비활성 경로)
     tris: Vec<(DVec3, DVec3, DVec3)>,
 }
 
@@ -68,6 +67,20 @@ impl Mesh {
     ) -> Result<BooleanResult> {
         let mut debug = Vec::new();
 
+        // Phase F — Boolean 연산은 fan triangulation 사용 (convex face 가정).
+        // 구멍(inner loops) 있는 face는 잘못된 결과 생성 → 명확히 거부.
+        // 미래 작업: constrained Delaunay로 hole-aware triangulation.
+        for &fid in faces_a.iter().chain(faces_b.iter()) {
+            if let Some(face) = self.faces.get(fid) {
+                if !face.inners().is_empty() {
+                    anyhow::bail!(
+                        "boolean: face {:?} has {} hole(s) — multi-loop boolean not yet supported",
+                        fid, face.inners().len()
+                    );
+                }
+            }
+        }
+
         // ── Stage 0: 솔리드 데이터 준비 ──────────────
         let solid_a = self.prepare_solid(faces_a)?;
         let solid_b = self.prepare_solid(faces_b)?;
@@ -78,12 +91,11 @@ impl Mesh {
         ));
 
         // ── Stage 0.5: 공면 face 감지 ─────────────────
-        let (coplanar_intersections, mut intersections) =
-            self.detect_coplanar_faces(&solid_a, &solid_b);
+        let coplanar_intersections = self.detect_coplanar_faces(&solid_a, &solid_b);
+        let coplanar_count = coplanar_intersections.len();
 
         // ── Stage 1: 교차선 수집 ─────────────────────
-        let coplanar_count = coplanar_intersections.len();
-        intersections.extend(coplanar_intersections);
+        let intersections: Vec<IntersectionSegment> = coplanar_intersections;
         debug.push(format!("Intersections found: {} (including {} coplanar)",
             intersections.len(), coplanar_count));
 
@@ -174,11 +186,82 @@ impl Mesh {
             new_vert_count,
         ));
 
+        // ADR-007 — boolean 후 invariants 검증
+        self.debug_verify_invariants();
+
         Ok(BooleanResult {
             faces: merged_faces,
             new_verts: new_vert_count,
             debug,
         })
+    }
+
+    /// "Intersect with Model" — 선택된 face들과 나머지 active face 사이의
+    /// 교차선을 edge로 구성 (Boolean solid 판정 없이 순수 topology split).
+    ///
+    /// SketchUp 의 "Intersect Faces with Model" 에 해당. 선택한 face 가
+    /// 다른 face 와 3D 상에서 교차하면, 양쪽 면을 교차선 기준으로 분할해
+    /// 새 edge 를 생성한다. inside/outside 분류는 수행하지 않는다 — 모든
+    /// sub-face 를 유지.
+    ///
+    /// 인자:
+    ///   `selected`: 교차 검사 대상 face 집합
+    ///   `material`: 새 sub-face 에 할당할 material
+    ///
+    /// 반환: 분할 후 전체 sub-face 집합 (selected + rest of scene)
+    pub fn intersect_faces_with_model(
+        &mut self,
+        selected: &[FaceId],
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build "other" face set = all active faces not in selected.
+        use std::collections::HashSet;
+        let selected_set: HashSet<FaceId> = selected.iter().copied().collect();
+        let others: Vec<FaceId> = self.faces.iter()
+            .filter(|(fid, f)| f.is_active() && !selected_set.contains(fid))
+            .map(|(fid, _)| fid)
+            .collect();
+
+        if others.is_empty() {
+            return Ok(selected.to_vec());
+        }
+
+        // Active-only check: reject faces with holes (same as Boolean).
+        for &fid in selected.iter().chain(others.iter()) {
+            if let Some(face) = self.faces.get(fid) {
+                if !face.inners().is_empty() {
+                    anyhow::bail!(
+                        "intersect_faces_with_model: face {:?} has {} hole(s) — not yet supported",
+                        fid, face.inners().len()
+                    );
+                }
+            }
+        }
+
+        let solid_sel = self.prepare_solid(selected)?;
+        let solid_oth = self.prepare_solid(&others)?;
+
+        let intersections = self.find_intersections(&solid_sel, &solid_oth);
+        if intersections.is_empty() {
+            // 교차 없음 — scene 변화 없음
+            return Ok(selected.to_vec());
+        }
+
+        let split_sel = self.split_faces_by_intersections(&solid_sel, &intersections, material);
+        let split_oth = self.split_faces_by_intersections(&solid_oth, &intersections, material);
+
+        let mut result: Vec<FaceId> = Vec::new();
+        for v in split_sel.values() { result.extend(v.iter().copied()); }
+        for v in split_oth.values() { result.extend(v.iter().copied()); }
+
+        // ADR-007 — invariants 검증 (debug mode)
+        self.debug_verify_invariants();
+
+        Ok(result)
     }
 
     /// 솔리드 데이터 준비: face → 삼각형 변환
@@ -225,7 +308,6 @@ impl Mesh {
     }
 
     /// Stage 1: 두 솔리드 간 교차선 수집
-    #[allow(dead_code)] // 향후 Boolean 교차선 기반 분할 시 사용 예정
     fn find_intersections(
         &self,
         solid_a: &SolidData,
@@ -433,6 +515,12 @@ impl Mesh {
                     let mat = self.faces.get(fid)
                         .map(|f| f.material())
                         .unwrap_or(material);
+                    // ADR-089 A-χ-β — capture parent surface for inheritance.
+                    // Auto-intersect splits faces; without this, sphere×sphere
+                    // intersection would lose all Sphere surface metadata on
+                    // sub-faces → A-ρ/A-φ/A-τ all skip them.
+                    let parent_surface = self.faces.get(fid)
+                        .and_then(|f| f.surface().cloned());
 
                     for sub_poly in &sub_polys {
                         // 2D → 3D 역투영
@@ -457,6 +545,10 @@ impl Mesh {
 
                         match self.add_face(&deduped, mat) {
                             Ok(new_fid) => {
+                                // ADR-089 A-χ-β — propagate parent surface.
+                                if let Some(ref s) = parent_surface {
+                                    self.faces[new_fid].set_surface(Some(s.clone()));
+                                }
                                 new_faces.push(new_fid);
                             }
                             Err(_) => {
@@ -487,13 +579,17 @@ impl Mesh {
     /// ── Stage 0.5: 공면 face 감지 ────────────────────
     /// A와 B의 두 solids에서 같은 평면에 있는 face 쌍을 찾아서
     /// pseudo-intersection을 생성해 face split을 유도
+    ///
+    /// G-3 fix: 반환 타입을 단순화 — 이전엔 `(coplanar_segs, regular_segs)` 튜플을
+    /// 반환했으나 `drain`으로 모두 regular에 옮긴 뒤 빈 coplanar를 반환하여
+    /// 호출자의 debug log가 항상 "0 coplanar"로 찍히는 버그가 있었음.
+    /// 이제는 공면 세그먼트만 단일 벡터로 반환.
     fn detect_coplanar_faces(
         &self,
         solid_a: &SolidData,
         solid_b: &SolidData,
-    ) -> (Vec<IntersectionSegment>, Vec<IntersectionSegment>) {
+    ) -> Vec<IntersectionSegment> {
         let mut coplanar_segs = Vec::new();
-        let mut regular_segs = Vec::new();
 
         for &fid_a in &solid_a.face_ids {
             let face_a = match self.faces.get(fid_a) {
@@ -546,17 +642,15 @@ impl Mesh {
             }
         }
 
-        // 겹치는 것 제거 후 반환
-        for seg in coplanar_segs.drain(..) {
-            regular_segs.push(seg);
-        }
-
-        (coplanar_segs, regular_segs)
+        coplanar_segs
     }
 
     /// ── Stage 6: 공면 face 병합 ───────────────────
-    /// Boolean 결과에서 인접한 공면 face들을 병합하여 unnecessary edge 제거
-    fn merge_coplanar_result_faces(&mut self, result_faces: &[FaceId]) -> Vec<FaceId> {
+    /// Boolean 결과에서 인접한 공면 face들을 병합하여 unnecessary edge 제거.
+    ///
+    /// **ADR-067 Step 1**: pub(crate) 승격 — push_pull 의 auto-merge
+    /// 단계에서 동일 코드 재사용 (드롭-in alongside, 재구현 금지).
+    pub(crate) fn merge_coplanar_result_faces(&mut self, result_faces: &[FaceId]) -> Vec<FaceId> {
         // mesh의 기존 merge_faces_by_edge 활용
         // 결과 face들에 대해 merge pass 실행
         let mut current_faces = result_faces.to_vec();
@@ -590,8 +684,14 @@ impl Mesh {
                         if fa.is_active() && fb.is_active() {
                             let na = fa.normal();
                             let nb = fb.normal();
-                            if (na.dot(nb).abs() - 1.0).abs() < 1e-6 {
-                                // 공면이므로 공유 edge를 찾아서 merge 시도
+                            // G-2 fix: 법선 평행 체크 + 점-평면 거리 체크 (are_faces_coplanar_strict)
+                            // 이전엔 법선만 비교하여 "같은 방향, 다른 높이"인 평행 면도
+                            // 공면으로 오판 → merge_faces_by_edge가 degenerate face 생성 위험.
+                            let parallel = (na.dot(nb).abs() - 1.0).abs() < 1e-6;
+                            let coplanar = parallel
+                                && self.are_faces_coplanar_strict(fid_a, fid_b).unwrap_or(false);
+                            if coplanar {
+                                // 공유 edge를 찾아서 merge 시도
                                 if let Some(shared_edge) = self.find_shared_edge_between_faces(fid_a, fid_b) {
                                     let _ = self.merge_faces_by_edge(shared_edge);
                                 }
@@ -1226,6 +1326,69 @@ mod tests {
         let result = mesh.boolean(&a, &b, BoolOp::Intersect, mat).unwrap();
         // Intersection은 smaller box의 경계를 포함해야 함
         assert!(!result.faces.is_empty(), "intersection should produce faces");
+    }
+
+    #[test]
+    fn boolean_rejects_face_with_hole() {
+        // Phase G가 hole-aware split_face_by_line을 추가한 뒤에도, Boolean은
+        // constrained Delaunay triangulation을 갖지 않는 한 hole 있는 face를
+        // 안전하게 다룰 수 없다. 명시적 거부 + 유용한 에러 메시지를 유지하는
+        // regression test.
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+
+        // Solid A: 6개 face의 cube
+        let a = make_box(&mut mesh, DVec3::ZERO, DVec3::splat(4.0), mat);
+
+        // Solid B: hole 있는 단일 face (quad + 중앙 사각형 hole)
+        let v0 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(14.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(14.0, 4.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(10.0, 4.0, 0.0));
+        // Hole은 CW (outer와 반대 winding)
+        let h0 = mesh.add_vertex(DVec3::new(11.0, 1.0, 0.0));
+        let h1 = mesh.add_vertex(DVec3::new(11.0, 3.0, 0.0));
+        let h2 = mesh.add_vertex(DVec3::new(13.0, 3.0, 0.0));
+        let h3 = mesh.add_vertex(DVec3::new(13.0, 1.0, 0.0));
+        let b_face = mesh.add_face_with_holes(
+            &[v0, v1, v2, v3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+
+        let result = mesh.boolean(&a, &[b_face], BoolOp::Union, mat);
+        assert!(result.is_err(), "boolean must reject hole-containing face");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("hole"),
+            "error message should mention 'hole': got {}", err_msg);
+    }
+
+    #[test]
+    fn boolean_rejects_hole_in_either_operand() {
+        // Symmetric: hole이 A, B 어느 쪽에 있어도 거부되어야 함.
+        let mut mesh = Mesh::default();
+        let mat = MaterialId::new(0);
+
+        // Solid B: 정상 cube
+        let b = make_box(&mut mesh, DVec3::new(10.0, 0.0, 0.0), DVec3::new(14.0, 4.0, 4.0), mat);
+
+        // A: hole face
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(4.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(4.0, 4.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 4.0, 0.0));
+        let h0 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let h1 = mesh.add_vertex(DVec3::new(1.0, 3.0, 0.0));
+        let h2 = mesh.add_vertex(DVec3::new(3.0, 3.0, 0.0));
+        let h3 = mesh.add_vertex(DVec3::new(3.0, 1.0, 0.0));
+        let a_face = mesh.add_face_with_holes(
+            &[v0, v1, v2, v3],
+            &[&[h0, h1, h2, h3]],
+            mat,
+        ).unwrap();
+
+        let result = mesh.boolean(&[a_face], &b, BoolOp::Subtract, mat);
+        assert!(result.is_err(), "hole in A must also be rejected");
     }
 
     #[test]

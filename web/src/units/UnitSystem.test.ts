@@ -3,7 +3,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { UnitSystem } from './UnitSystem';
-import type { UnitType } from './UnitSystem';
 
 // Mock localStorage (jsdom provides it, but ensure clean state)
 beforeEach(() => {
@@ -85,6 +84,13 @@ describe('UnitSystem', () => {
     it('formats in different units', () => {
       units.unit = 'cm';
       expect(units.format(100)).toBe('10.0000 cm');
+    });
+
+    it('inserts thousand separators (regression: 2026-04-27)', () => {
+      // 1,234.5678 mm — 정수부에만 콤마, 소수부 그대로.
+      expect(units.format(1234.5678)).toBe('1,234.5678 mm');
+      expect(units.format(1234567.89, false)).toBe('1,234,567.8900');
+      expect(units.format(-9876.54, false)).toBe('-9,876.5400');
     });
   });
 

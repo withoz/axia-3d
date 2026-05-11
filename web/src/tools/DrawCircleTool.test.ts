@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       drawCircle: vi.fn().mockReturnValue(0),
+      drawCircleAsShape: vi.fn().mockReturnValue(0),
     },
     viewport: {
       scene: { add: vi.fn(), remove: vi.fn() },
@@ -94,6 +95,39 @@ describe('DrawCircleTool', () => {
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3());
       tool.cleanup();
       expect(tool.isBusy()).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-087 K-ε / ADR-089 A-π-β — VCB dispatch (default ON, explicit OFF preserved)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-089 A-π-β VCB dispatch (default ON)', () => {
+    beforeEach(() => {
+      // Provide both kernel-aware methods on bridge mock
+      ctx.bridge.drawCircleAsCurve = vi.fn().mockReturnValue(0);
+    });
+
+    it('VCB default path calls bridge.drawCircleAsCurve (kernel-native)', async () => {
+      const { setDrawCurveMode } = await import('./DrawCurveSettings');
+      setDrawCurveMode(true); // explicit ON (default after A-π-β)
+
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.drawCircleAsCurve).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawCircleAsShape).not.toHaveBeenCalled();
+    });
+
+    it('VCB explicit OFF path calls bridge.drawCircleAsShape (legacy ADR-087 K-ε)', async () => {
+      const { setDrawCurveMode } = await import('./DrawCurveSettings');
+      setDrawCurveMode(false); // L-π-2 — explicit OFF preference
+
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.drawCircleAsShape).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.drawCircleAsCurve).not.toHaveBeenCalled();
+      expect(ctx.bridge.drawCircle).not.toHaveBeenCalled();
     });
   });
 });

@@ -9,15 +9,29 @@
 //! - `mesh` — The central Mesh struct combining all entities
 //! - `operations/` — High-level geometry operations (Draw, Push/Pull)
 //! - `tolerances` — Numerical precision constants
+//! - `curves/` — Analytic edge curve primitives (Phase A — ADR-028)
 
 pub mod entities;
 pub mod storage;
 pub mod mesh;
 pub mod operations;
 pub mod tolerances;
+pub mod curves;
+pub mod surfaces;
+pub mod predicates;
+pub mod mesh_migration;
+pub mod p7_manifold;
+pub mod topology_damage;
 
 // Re-export main types
-pub use mesh::Mesh;
+pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, InvariantReport, ManifoldInfo};
+pub use topology_damage::{TopologyDamageKind, TopologyDamageReport, RecoveryOutcome};
 pub use entities::id::*;
-pub use entities::{Vertex, Edge, HalfEdge, Face, LoopRef};
+pub use entities::{Vertex, Edge, EdgeClass, HalfEdge, Face, LoopRef};
 pub use tolerances::*;
+pub use curves::{AnalyticCurve, CurveOps};
+pub use surfaces::{AnalyticSurface, SurfaceOps, SurfaceTessellation};
+pub use p7_manifold::{verify_p7_manifold, P7ManifoldReport, P7Violation};
+pub use operations::create_solid::{
+    classify_boundary, BoundaryKind, CreateSolidMode, CreateSolidResult, SolidError, SolidKind,
+};

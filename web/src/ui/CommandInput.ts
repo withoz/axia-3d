@@ -7,7 +7,8 @@ import { debugLog } from '../utils/debug';
 
 export interface CommandHandler {
   name: string;
-  aliases: string[];
+  /** Optional — 없으면 primary name만 등록 */
+  aliases?: string[];
   execute: (args: string[]) => void;
   help: string;
 }
@@ -177,9 +178,12 @@ export class CommandInput {
 
   registerHandler(handler: CommandHandler): void {
     this.handlers.set(handler.name.toLowerCase(), handler);
-    handler.aliases.forEach((alias) => {
-      this.handlers.set(alias.toLowerCase(), handler);
-    });
+    // aliases는 optional — 없으면 skip
+    if (Array.isArray(handler.aliases)) {
+      handler.aliases.forEach((alias) => {
+        this.handlers.set(alias.toLowerCase(), handler);
+      });
+    }
     debugLog(`[CommandInput] Registered: ${handler.name}`);
   }
 

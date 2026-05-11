@@ -7,7 +7,8 @@ export class PickBox {
   private container: HTMLElement;
   private circle: HTMLDivElement;
   private _visible: boolean = false;
-  private _size: number = 11;
+  // 원의 효과적 반지름 = 5 (stroke 1.5px 중심선 기준). Erase SVG 커서와 동일.
+  private _size: number = 12;
 
   constructor(container: HTMLElement) {
     this.container = container;

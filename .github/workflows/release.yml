@@ -1,0 +1,158 @@
+name: Release (ADR-044)
+
+# Triggered by push of `release/v*` tags OR manual workflow_dispatch.
+# Publishes:
+#   - axia-wasm           (wasm-pack-generated, scoped)
+#   - @axia/mcp-server
+#   - create-axia-mcp
+#
+# All three publishes use --provenance (npm supply-chain attestation,
+# requires GitHub Actions OIDC `id-token: write`).
+#
+# Pre-flight: verify-schema-pin.mjs guarantees lockstep semver and
+# schema_version compatibility (ADR-044 P29.2).
+#
+# IMPORTANT: This workflow is wired but `npm publish` is GATED by
+# the "publish" input (default: false). A real release requires
+# explicit input + a valid `NPM_TOKEN` secret in repo settings.
+
+on:
+  push:
+    tags:
+      - 'release/v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm? (false = dry-run only)'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+# OIDC token for npm provenance attestation.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight — schema-pin + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: |
+          if ! command -v wasm-pack &>/dev/null; then
+            cargo install wasm-pack --version 0.14.0
+          fi
+
+      - name: Build axia-wasm (Node target)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target nodejs --out-dir ../../packages/axia-wasm-node/dist
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install — axia-mcp-server
+        working-directory: packages/axia-mcp-server
+        run: npm ci
+
+      - name: Install — create-axia-mcp
+        working-directory: packages/create-axia-mcp
+        run: npm ci
+
+      - name: Schema-pin verification (ADR-044 P29.2)
+        run: node packages/axia-mcp-server/scripts/verify-schema-pin.mjs
+
+      - name: Tests — axia-mcp-server
+        working-directory: packages/axia-mcp-server
+        run: npm test
+
+      - name: Tests — create-axia-mcp
+        working-directory: packages/create-axia-mcp
+        run: npm test
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: preflight
+    # Only publish when:
+    #   - tag push, OR
+    #   - workflow_dispatch with publish=true
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: |
+          if ! command -v wasm-pack &>/dev/null; then
+            cargo install wasm-pack --version 0.14.0
+          fi
+
+      - name: Build axia-wasm (Node target)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target nodejs --out-dir ../../packages/axia-wasm-node/dist
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install — axia-mcp-server
+        working-directory: packages/axia-mcp-server
+        run: npm ci
+
+      - name: Install — create-axia-mcp
+        working-directory: packages/create-axia-mcp
+        run: npm ci
+
+      - name: Build — axia-mcp-server
+        working-directory: packages/axia-mcp-server
+        run: npm run build
+
+      - name: Build — create-axia-mcp
+        working-directory: packages/create-axia-mcp
+        run: npm run build
+
+      # ADR-044 P29.3 — `--access public` required for scoped packages.
+      # P29.6 — provenance via `id-token: write` permission above.
+      - name: Publish — axia-wasm-node
+        working-directory: packages/axia-wasm-node/dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Publish — @axia/mcp-server
+        working-directory: packages/axia-mcp-server
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Publish — create-axia-mcp
+        working-directory: packages/create-axia-mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance

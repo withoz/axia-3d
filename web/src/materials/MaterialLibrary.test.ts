@@ -4,7 +4,6 @@ import {
   getMaterialLibrary,
   GeometryState,
   Material,
-  MaterialCategory,
 } from './MaterialLibrary';
 
 describe('MaterialLibrary', () => {
@@ -166,14 +165,14 @@ describe('MaterialLibrary', () => {
       expect(state).toBe(GeometryState.Point);
     });
 
-    it('should return Line for zero faces but with edges', () => {
+    it('should return Edge for zero faces but with edges', () => {
       const state = lib.determineState({ faceCount: 0, edgeCount: 3, isSolid: false, height: 0 }, []);
-      expect(state).toBe(GeometryState.Line);
+      expect(state).toBe(GeometryState.Edge);
     });
 
-    it('should return Line for single edge', () => {
+    it('should return Edge for single edge', () => {
       const state = lib.determineState({ faceCount: 0, edgeCount: 1, isSolid: false, height: 0 }, []);
-      expect(state).toBe(GeometryState.Line);
+      expect(state).toBe(GeometryState.Edge);
     });
 
     it('should return Face for 2D geometry', () => {
@@ -181,26 +180,20 @@ describe('MaterialLibrary', () => {
       expect(state).toBe(GeometryState.Face);
     });
 
-    it('should return Volume for open 3D geometry with height', () => {
+    it('should return Face for 2 faces', () => {
+      const state = lib.determineState({ faceCount: 2, edgeCount: 5, isSolid: false, height: 0 }, [1, 2]);
+      expect(state).toBe(GeometryState.Face);
+    });
+
+    it('should return Volume for 3+ faces', () => {
       const state = lib.determineState({ faceCount: 5, edgeCount: 8, isSolid: false, height: 100 }, [1, 2, 3, 4, 5]);
       expect(state).toBe(GeometryState.Volume);
     });
 
-    it('should return Volume for solid without material', () => {
-      const state = lib.determineState({ faceCount: 6, edgeCount: 12, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
-      expect(state).toBe(GeometryState.Volume);
-    });
-
-    it('should return Xia for solid with material', () => {
+    it('should return Volume regardless of material (material is property, not state)', () => {
       lib.assignToFaces([1, 2, 3, 4, 5, 6], 'steel');
       const state = lib.determineState({ faceCount: 6, edgeCount: 12, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
-      expect(state).toBe(GeometryState.Xia);
-    });
-
-    it('should return Xia only if some face has material', () => {
-      lib.assignToFaces([1, 2], 'wood');
-      const state = lib.determineState({ faceCount: 6, edgeCount: 12, isSolid: true, height: 100 }, [1, 2, 3, 4, 5, 6]);
-      expect(state).toBe(GeometryState.Xia);
+      expect(state).toBe(GeometryState.Volume);
     });
   });
 
@@ -337,6 +330,32 @@ describe('MaterialLibrary', () => {
 
       expect(lib2.getMaterialForFace(10)?.name).toBe('콘크리트');
       expect(lib2.getMaterialForFace(11)?.name).toBe('목재');
+    });
+
+    it('custom material with texture survives JSON roundtrip', () => {
+      // Data URL for 1×1 transparent PNG (well-formed, tiny)
+      const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      lib.addCustom({
+        id: 'custom-tex-1', rustId: 9001,
+        name: '텍스처재질', nameEn: 'Textured',
+        category: 'custom',
+        physical: { density: 1000, friction: 0.5, restitution: 0.2, specificGravity: 1.0, thermalConductivity: 0.5, fireRating: 'incombustible' },
+        visual: {
+          color: 0xffffff, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+          texture: { dataUrl: tinyPng, projection: 'box', scale: 0.002, rotation: Math.PI / 4, label: 'test.png' },
+        },
+      });
+      const json = JSON.parse(JSON.stringify(lib.toJSON())); // full JSON roundtrip
+      const lib2 = new MaterialLibrary();
+      lib2.fromJSON(json);
+      const restored = lib2.get('custom-tex-1');
+      expect(restored).toBeDefined();
+      expect(restored!.visual.texture).toBeDefined();
+      expect(restored!.visual.texture!.dataUrl).toBe(tinyPng);
+      expect(restored!.visual.texture!.projection).toBe('box');
+      expect(restored!.visual.texture!.scale).toBeCloseTo(0.002, 6);
+      expect(restored!.visual.texture!.rotation).toBeCloseTo(Math.PI / 4, 4);
+      expect(restored!.visual.texture!.label).toBe('test.png');
     });
   });
 });

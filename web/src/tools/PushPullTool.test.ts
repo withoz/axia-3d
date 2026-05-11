@@ -8,6 +8,7 @@ function mockToolContext() {
   return {
     bridge: {
       pushPull: vi.fn().mockReturnValue(true),
+      createSolidExtrude: vi.fn().mockReturnValue(true),
       facesCentroid: vi.fn().mockReturnValue(new THREE.Vector3(0, 5, 0)),
       getFaceNormal: vi.fn().mockReturnValue(new Float32Array([0, 1, 0])),
       engine: {
@@ -30,9 +31,17 @@ function mockToolContext() {
       handleClick: vi.fn(),
       clearSelection: vi.fn(),
       getSmoothGroup: vi.fn().mockReturnValue([]),
+      selectFaces: vi.fn(),
     },
     syncMesh: vi.fn(),
     dimLabel: { update: vi.fn(), clear: vi.fn() },
+    snap: {
+      findAlignedDistance: vi.fn().mockReturnValue(null),
+    },
+    snapVisual: {
+      update: vi.fn(),
+      clear: vi.fn(),
+    },
     units: { format: vi.fn().mockReturnValue('10.0 mm') },
     getFaceId: vi.fn().mockReturnValue(-1),
     getSelectedFaces: vi.fn().mockReturnValue([]),
@@ -141,7 +150,8 @@ describe('PushPullTool', () => {
 
       tool.applyVCBValue(100);
 
-      expect(ctx.bridge.pushPull).toHaveBeenCalledWith(5, 100);
+      // ADR-087 K-ε — kernel-aware createSolidExtrude only path.
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledWith(5, 100);
       expect(ctx.syncMesh).toHaveBeenCalled();
     });
 
@@ -149,7 +159,7 @@ describe('PushPullTool', () => {
       ctx.getSelectedFaces.mockReturnValue([]);
 
       tool.applyVCBValue(100);
-      expect(ctx.bridge.pushPull).not.toHaveBeenCalled();
+      expect(ctx.bridge.createSolidExtrude).not.toHaveBeenCalled();
     });
 
     it('cleans up after VCB apply', () => {
@@ -181,6 +191,33 @@ describe('PushPullTool', () => {
     it('does nothing when not active', () => {
       tool.onMouseMove({ clientX: 200, clientY: 200 } as MouseEvent, null);
       // Should not throw
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-087 K-ε — kernel-aware createSolidExtrude only path (Q3 fallback
+  // to push_pull is now Rust-side, not exposed to TS).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-087 K-ε kernel-aware dispatch', () => {
+    it('always calls bridge.createSolidExtrude (single face)', () => {
+      ctx.getSelectedFaces.mockReturnValue([7]);
+      tool.applyVCBValue(150);
+
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledWith(7, 150);
+      expect(ctx.bridge.pushPull).not.toHaveBeenCalled();
+    });
+
+    it('smooth group fallback → createSolidExtrude per-face', () => {
+      // Force smooth-group fallback path: seamless returns false.
+      ctx.bridge.engine.push_pull_smooth_group_seamless.mockReturnValue(false);
+
+      ctx.getSelectedFaces.mockReturnValue([3]);
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledTimes(1);
+      expect(ctx.bridge.createSolidExtrude).toHaveBeenCalledWith(3, 50);
+      expect(ctx.bridge.pushPull).not.toHaveBeenCalled();
     });
   });
 });

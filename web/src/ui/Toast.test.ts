@@ -110,4 +110,66 @@ describe('Toast', () => {
       expect(() => Toast.success('No init')).not.toThrow();
     });
   });
+
+  describe('fromBridgeError()', () => {
+    beforeEach(() => { Toast.init(container); });
+
+    it('surfaces the bridge lastError when present', () => {
+      const bridge = { lastError: () => 'face 5 not coplanar (tol 0.5°)' };
+      Toast.fromBridgeError(bridge, '병합 실패');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('face 5 not coplanar');
+      // Fallback should NOT appear when engine populated an error.
+      expect(cont.textContent).not.toContain('병합 실패');
+    });
+
+    it('falls back to the provided message when lastError is empty', () => {
+      const bridge = { lastError: () => '' };
+      Toast.fromBridgeError(bridge, '폴백 메시지');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('폴백 메시지');
+    });
+
+    it('treats whitespace-only lastError as empty', () => {
+      const bridge = { lastError: () => '   \t\n  ' };
+      Toast.fromBridgeError(bridge, '폴백');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('폴백');
+    });
+
+    it('uses warning severity when requested', () => {
+      const bridge = { lastError: () => 'minor issue' };
+      Toast.fromBridgeError(bridge, 'ignored', 'warning');
+      const cont = container.querySelector('#axia-toast-container')!;
+      expect(cont.textContent).toContain('minor issue');
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // ADR-091 D-δ — Optional action button ("되돌리기")
+  // ────────────────────────────────────────────────────────────────────
+  describe('infoWithAction (ADR-091 D-δ)', () => {
+    beforeEach(() => { Toast.init(container); });
+
+    it('renders an inline button with the supplied label', () => {
+      Toast.infoWithAction('재질 제거됨', { label: '되돌리기', onClick: () => {} });
+      const cont = container.querySelector('#axia-toast-container')!;
+      const btn = cont.querySelector('button');
+      expect(btn).not.toBeNull();
+      expect(btn!.textContent).toBe('되돌리기');
+    });
+
+    it('invokes onClick exactly once and dismisses on action click', () => {
+      const onClick = vi.fn();
+      Toast.infoWithAction('재질 제거됨', { label: '되돌리기', onClick });
+      const cont = container.querySelector('#axia-toast-container')!;
+      const btn = cont.querySelector('button')!;
+      btn.click();
+      // Re-clicking after the first click should not re-invoke (toast
+      // is being removed asynchronously, but the guard inside the
+      // handler prevents double-invoke regardless).
+      btn.click();
+      expect(onClick).toHaveBeenCalledTimes(1);
+    });
+  });
 });

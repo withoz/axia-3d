@@ -163,7 +163,8 @@ export class OffsetSessionManager {
         this.ctx.syncMesh();
       }
     } else {
-      const ok = this.ctx.bridge.pushPull(faceIds[0], distance);
+      // ADR-087 K-ζ — kernel-aware createSolidExtrude only.
+      const ok = this.ctx.bridge.createSolidExtrude(faceIds[0], distance);
       if (ok) {
         this.ctx.syncMesh();
       }

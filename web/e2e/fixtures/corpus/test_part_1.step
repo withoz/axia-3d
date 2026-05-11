@@ -1,0 +1,86 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('AXiA T-delta minimal corpus - single planar quad face'),'2;1');
+FILE_NAME('test_part_1.step','2026-05-08T00:00:00',('AXiA'),('AXiA'),'AXiA','AXiA','');
+FILE_SCHEMA(('CONFIG_CONTROL_DESIGN { 1 0 10303 203 1 1 4 4}'));
+ENDSEC;
+DATA;
+/* Application + product structure */
+#1=APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',1994,#2);
+#2=APPLICATION_CONTEXT('configuration controlled 3D designs of mechanical parts and assemblies');
+#3=PRODUCT_CONTEXT('',#2,'mechanical');
+#4=PRODUCT('PT1','PT1','',(#3));
+#5=PRODUCT_DEFINITION_FORMATION('','',#4);
+#6=PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');
+#7=PRODUCT_DEFINITION('','',#5,#6);
+#8=PRODUCT_DEFINITION_SHAPE('','',#7);
+#9=SHAPE_DEFINITION_REPRESENTATION(#8,#10);
+
+/* Shape representation - manifold surface (open shell) */
+#10=MANIFOLD_SURFACE_SHAPE_REPRESENTATION('',(#11,#12),#13);
+#11=AXIS2_PLACEMENT_3D('',#100,#101,#102);
+#100=CARTESIAN_POINT('',(0.,0.,0.));
+#101=DIRECTION('',(0.,0.,1.));
+#102=DIRECTION('',(1.,0.,0.));
+
+/* Open shell with single planar quad face */
+#12=SHELL_BASED_SURFACE_MODEL('',(#20));
+#20=OPEN_SHELL('',(#21));
+#21=ADVANCED_FACE('',(#30),#22,.T.);
+
+/* Plane surface (face support) */
+#22=PLANE('',#23);
+#23=AXIS2_PLACEMENT_3D('',#24,#25,#26);
+#24=CARTESIAN_POINT('',(0.,0.,0.));
+#25=DIRECTION('',(0.,0.,1.));
+#26=DIRECTION('',(1.,0.,0.));
+
+/* Outer boundary loop */
+#30=FACE_OUTER_BOUND('',#31,.T.);
+#31=EDGE_LOOP('',(#40,#41,#42,#43));
+
+/* Oriented edges */
+#40=ORIENTED_EDGE('',*,*,#60,.T.);
+#41=ORIENTED_EDGE('',*,*,#61,.T.);
+#42=ORIENTED_EDGE('',*,*,#62,.T.);
+#43=ORIENTED_EDGE('',*,*,#63,.T.);
+
+/* Edge curves: from-vertex, to-vertex, line, sense */
+#60=EDGE_CURVE('',#50,#51,#80,.T.);
+#61=EDGE_CURVE('',#51,#52,#81,.T.);
+#62=EDGE_CURVE('',#52,#53,#82,.T.);
+#63=EDGE_CURVE('',#53,#50,#83,.T.);
+
+/* Vertices */
+#50=VERTEX_POINT('',#54);
+#51=VERTEX_POINT('',#55);
+#52=VERTEX_POINT('',#56);
+#53=VERTEX_POINT('',#57);
+#54=CARTESIAN_POINT('',(0.,0.,0.));
+#55=CARTESIAN_POINT('',(10.,0.,0.));
+#56=CARTESIAN_POINT('',(10.,10.,0.));
+#57=CARTESIAN_POINT('',(0.,10.,0.));
+
+/* Lines for edges */
+#80=LINE('',#54,#84);
+#81=LINE('',#55,#85);
+#82=LINE('',#56,#86);
+#83=LINE('',#57,#87);
+#84=VECTOR('',#94,1.);
+#85=VECTOR('',#95,1.);
+#86=VECTOR('',#96,1.);
+#87=VECTOR('',#97,1.);
+#94=DIRECTION('',(1.,0.,0.));
+#95=DIRECTION('',(0.,1.,0.));
+#96=DIRECTION('',(-1.,0.,0.));
+#97=DIRECTION('',(0.,-1.,0.));
+
+/* Geometric representation context (units, tolerance) */
+#13=(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#16)) GLOBAL_UNIT_ASSIGNED_CONTEXT((#17,#18,#19)) REPRESENTATION_CONTEXT('',''));
+#16=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.0001),#17,'distance_accuracy_value','tolerance');
+#17=(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.));
+#18=(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.));
+#19=(NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT());
+
+ENDSEC;
+END-ISO-10303-21;

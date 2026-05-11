@@ -52,9 +52,9 @@ describe('PickBox', () => {
       pickBox.visible = true;
       pickBox.update(100, 200);
       const circle = container.firstElementChild as HTMLElement;
-      // Default size is 11, half is 5
-      expect(circle.style.left).toBe('95px');
-      expect(circle.style.top).toBe('195px');
+      // Default size is 12, floor(12/2) = 6 → half offset
+      expect(circle.style.left).toBe('94px');
+      expect(circle.style.top).toBe('194px');
     });
 
     it('does nothing when not visible', () => {

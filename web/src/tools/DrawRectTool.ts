@@ -50,6 +50,21 @@ export class DrawRectTool implements ITool {
       this.plane = this.ctx.getDrawPlane(e);
       this.rectStart = point.clone();
 
+      // 2026-04-28 — 사용자 요청: 바닥면에 그릴 때 z=0 정확히.
+      //   Default cardinal plane (onFace=false) 인 경우 picked point 의
+      //   normal-axis 좌표를 정확히 0 으로 snap.
+      //   - 3D/Top/Bottom 뷰: floor = Three.js y=0 (= 사용자 z=0)
+      //   - Front/Back 뷰: wall = Three.js z=0 (= 사용자 y=0)
+      //   - Right/Left 뷰: wall = Three.js x=0
+      //   Mouse picking 의 ray-plane intersection 정밀도 한계로 ε 오차가
+      //   있으면 모든 후속 RECT 가 ε 만큼 떨어진 위치에 그려짐.
+      if (!this.plane.onFace) {
+        const n = this.plane.normal;
+        if (Math.abs(n.x) > 0.999) this.rectStart.x = 0;
+        else if (Math.abs(n.y) > 0.999) this.rectStart.y = 0;
+        else if (Math.abs(n.z) > 0.999) this.rectStart.z = 0;
+      }
+
       // Build Three.js Plane from normal + coplanar point for future ray intersections
       this.drawPlane3 = new THREE.Plane().setFromNormalAndCoplanarPoint(
         this.plane.normal, this.rectStart,
@@ -71,7 +86,8 @@ export class DrawRectTool implements ITool {
         const n = this.plane.normal;
         const u = this.plane.up;
 
-        this.ctx.bridge.drawRect(
+        // ADR-087 K-ε — kernel-aware drawRectAsShape only path.
+        this.ctx.bridge.drawRectAsShape(
           center.x, center.y, center.z,
           n.x, n.y, n.z,
           u.x, u.y, u.z,
@@ -134,7 +150,8 @@ export class DrawRectTool implements ITool {
       .addScaledVector(plane.right, w / 2)
       .addScaledVector(plane.up, h / 2);
 
-    this.ctx.bridge.drawRect(
+    // ADR-087 K-ε — kernel-aware drawRectAsShape only path.
+    this.ctx.bridge.drawRectAsShape(
       center.x, center.y, center.z,
       plane.normal.x, plane.normal.y, plane.normal.z,
       plane.up.x, plane.up.y, plane.up.z,
@@ -173,23 +190,34 @@ export class DrawRectTool implements ITool {
     // First check snap — if there's a snap point, project it onto the plane
     const rawPt = this.ctx.get3DPoint(e);
     const snapped = this.ctx.getSnappedPoint(e, rawPt);
+    let result: THREE.Vector3 | null = null;
     if (snapped) {
-      // Project snap point onto drawing plane
-      return this.projectOntoPlane(snapped);
+      result = this.projectOntoPlane(snapped);
+    } else {
+      // No snap — intersect camera ray with drawing plane
+      const ray = this.ctx.getRay(e);
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(this.drawPlane3, target);
+      if (!hit) return null; // Ray parallel to plane
+      // Guard against grazing angles producing points far away
+      const dist = target.distanceTo(this.rectStart);
+      if (dist > MAX_DRAW_DISTANCE) return null;
+      result = target;
     }
+    if (!result) return null;
 
-    // No snap — intersect camera ray with drawing plane
-    const ray = this.ctx.getRay(e);
-    const target = new THREE.Vector3();
-    const hit = ray.ray.intersectPlane(this.drawPlane3, target);
-
-    if (!hit) return null; // Ray parallel to plane
-
-    // Guard against grazing angles producing points far away
-    const dist = target.distanceTo(this.rectStart);
-    if (dist > MAX_DRAW_DISTANCE) return null;
-
-    return target;
+    // 2026-04-29 — 사용자 요청: 바닥면 (default cardinal plane) 에서 그릴 때
+    //   ray-plane intersection 의 f32 정밀도 한계로 ε 오차가 발생할 수 있음.
+    //   첫 클릭 (rectStart) 은 이미 axis=0 으로 snap 됐고 plane 이 그 점을
+    //   지나가므로, 결과 point 의 normal-axis 좌표를 rectStart 의 같은 좌표
+    //   (정확히 0) 로 강제. mouse picking ε 오차 → 엔진 단계 z 정밀도 손실 차단.
+    if (this.plane && !this.plane.onFace) {
+      const n = this.plane.normal;
+      if (Math.abs(n.x) > 0.999) result.x = this.rectStart.x;
+      else if (Math.abs(n.y) > 0.999) result.y = this.rectStart.y;
+      else if (Math.abs(n.z) > 0.999) result.z = this.rectStart.z;
+    }
+    return result;
   }
 
   /**

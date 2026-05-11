@@ -2,7 +2,10 @@ name: Build AXiA 3D
 
 on:
   push:
-    branches: [ main, develop ]
+    # 2026-04-23: claude/** 와 feature/** 를 추가해 피처 브랜치에서도 typecheck
+    # 돌게 함. 이전엔 main/develop 에서만 돌아 claude/zealous-boyd에 TS 에러
+    # 17개가 누적된 뒤 merge 직전에야 발견됨.
+    branches: [ main, develop, 'claude/**', 'feature/**' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -38,9 +41,11 @@ jobs:
         working-directory: ./web
         run: npm ci
 
-      - name: Run TypeScript compiler
+      - name: Run TypeScript typecheck (strict)
         working-directory: ./web
-        run: npx tsc --noEmit --skipLibCheck
+        # 2026-04-23: npm run typecheck 사용 (tsconfig strict:true 유지).
+        # tsc 에러 발생 시 build 실패 → main merge 불가.
+        run: npm run typecheck
 
       - name: Build with Vite
         working-directory: ./web
@@ -70,9 +75,11 @@ jobs:
         working-directory: ./web
         run: npm ci
 
-      - name: Run tests (skip on Node 22.x due to WASM timing)
+      - name: Run tests
         working-directory: ./web
-        run: npm run test || echo "Tests skipped due to WASM async timing"
+        # 2026-04-23: `|| echo skipped` 제거 — 테스트 실패가 CI 실패로 이어지게.
+        # WASM timing 이슈는 mocks/three.ts + wasm/axia_wasm.ts 스텁으로 해결됨.
+        run: npm run test
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4

@@ -11,7 +11,16 @@ function mockDeps(): CommandRegistryDeps {
       printError: vi.fn(),
     } as any,
     bridge: {
-      drawLine: vi.fn(),
+      drawLineAsShape: vi.fn(),
+      normalizeForImport: vi.fn().mockReturnValue({
+        degenerateRemoved: 0, windingFlipped: 0, normalsRecomputed: 0,
+        isolatedVertsRemoved: 0, remainingViolations: 0,
+      }),
+      countFreeEdges: vi.fn().mockReturnValue(0),
+      synthesizeFacesFromFreeEdges: vi.fn().mockReturnValue(0),
+      verifyInvariants: vi.fn().mockReturnValue({
+        checkedFaces: 0, valid: true, violationCount: 0, violations: [],
+      }),
     } as any,
     toolManager: {
       setTool: vi.fn(),
@@ -29,12 +38,21 @@ describe('CommandRegistry', () => {
   });
 
   describe('initCommandRegistry', () => {
-    it('registers line and help handlers', () => {
-      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(2);
+    it('registers all Phase H+I + prior handlers', () => {
+      expect(deps.commandInput.registerHandler).toHaveBeenCalledTimes(11);
       const calls = (deps.commandInput.registerHandler as any).mock.calls;
       const names = calls.map((c: any) => c[0].name);
       expect(names).toContain('line');
+      expect(names).toContain('curves');
+      expect(names).toContain('clearcurves');
+      expect(names).toContain('mergetol');
+      expect(names).toContain('mergemat');
+      expect(names).toContain('cadmode');
+      expect(names).toContain('normalize');
+      expect(names).toContain('synthfaces');
+      expect(names).toContain('verify');
       expect(names).toContain('help');
+      expect(names).toContain('repair');
     });
   });
 
@@ -70,7 +88,7 @@ describe('CommandRegistry', () => {
 
     it('coordinate args → draws line via bridge', () => {
       lineHandler.execute(['0,0,0', '10,20,30']);
-      expect(deps.bridge.drawLine).toHaveBeenCalledWith(0, 0, 0, 10, 20, 30);
+      expect(deps.bridge.drawLineAsShape).toHaveBeenCalledWith(0, 0, 0, 10, 20, 30, 0, 0, 0);
       expect(deps.toolManager.syncMesh).toHaveBeenCalled();
     });
 

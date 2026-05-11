@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { SettingsPanel } from './SettingsPanel';
 import { UnitSystem } from './UnitSystem';
 
@@ -166,6 +166,18 @@ describe('SettingsPanel', () => {
       // After unit change, the info should reflect the new unit
       const info = document.getElementById('sp-info')!;
       expect(info.textContent).toContain('in');
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-087 K-ε — Draw Shape Mode flag deprecated. Kernel-aware path is
+  // the only path now (no toggle in SettingsPanel).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-087 K-ε — DrawShapeMode toggle removed', () => {
+    it('SettingsPanel no longer renders sp-draw-shape-mode checkbox', () => {
+      panel.open();
+      const checkbox = document.getElementById('sp-draw-shape-mode');
+      expect(checkbox).toBeNull();
     });
   });
 });

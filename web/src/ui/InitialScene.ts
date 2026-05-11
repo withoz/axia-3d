@@ -1,9 +1,10 @@
 /**
- * Initial Scene Loader — fetch .xia project file on startup
+ * Initial Scene Loader — startup hook.
  *
- * Extracted from main.ts (section 4-0, lines 174-268).
- * Uses FileManager.loadFromArrayBuffer() to eliminate duplicate binary parsing.
- * Falls back to creating default shapes (box + cylinder + sphere) if fetch fails.
+ * 2026-04-27: 빈 씬으로 시작 (도형 없음).
+ *   이전엔 고양이 데모 씬을 매번 만들었으나, 사용자가 항상 깨끗한 캔버스를
+ *   원하므로 default geometry 생성을 제거. 파일을 열거나 도구로 그리기 전까지
+ *   씬은 비어 있다.
  */
 
 import { WasmBridge } from '../bridge/WasmBridge';
@@ -20,48 +21,13 @@ export interface InitialSceneDeps {
 }
 
 export function loadInitialScene(deps: InitialSceneDeps): void {
-  const { bridge, fileManager, toolManager, updateFileStatus } = deps;
+  const { toolManager, updateFileStatus } = deps;
 
-  debugLog('[Init] Loading initial scene from saved project...');
+  debugLog('[Init] Starting with empty scene (no default geometry)');
+  updateFileStatus('untitled');
+  void deps.bridge;        // suppress unused — 이후 도구 사용 시 활성
+  void deps.fileManager;   // suppress unused — save/load 경로에서 사용
 
-  fetch('/assets/AXiA_Project_2026-04-13.xia')
-    .then(response => {
-      if (!response.ok) throw new Error('Failed to load initial scene file');
-      return response.arrayBuffer();
-    })
-    .then(async (arrayBuffer) => {
-      const fileData = new Uint8Array(arrayBuffer);
-      debugLog(`[Init] Initial scene file loaded: ${fileData.length} bytes`);
-
-      // FileManager의 파싱 로직 재사용 (중복 제거)
-      const success = await fileManager.loadFromArrayBuffer(fileData);
-
-      if (success) {
-        updateFileStatus(fileManager.getCurrentFileName());
-        debugLog('[Init] Initial scene loaded successfully');
-      } else {
-        console.error('[Init] Failed to import snapshot');
-      }
-
-      // 메시 동기화
-      toolManager.syncMesh();
-    })
-    .catch(err => {
-      console.error('[Init] Failed to load initial scene:', err);
-      debugLog('[Init] Creating fallback scene with default shapes...');
-
-      // Fallback: 기본 도형 생성 (파일 로드 실패 시)
-      try {
-        const cylinderId = bridge.create_cylinder?.(-12000, 3000, 0, 5000, 8000, 24);
-        const expectedFaceId = bridge.faceCount();
-        const boxId = bridge.drawRect(0, 0, 0, 0, 1, 0, 0, 0, 1, 10000, 8000);
-        if (boxId >= 0) {
-          bridge.pushPull(expectedFaceId, 10000);
-        }
-        const sphereId = bridge.create_sphere?.(12000, 3500, 0, 5000, 24, 16);
-        toolManager.syncMesh();
-      } catch (e) {
-        console.error('[Init] Fallback scene creation failed:', e);
-      }
-    });
+  // 빈 씬이라도 syncMesh 한 번 돌려서 viewport / BVH / telemetry 초기 상태 정합.
+  toolManager.syncMesh();
 }
