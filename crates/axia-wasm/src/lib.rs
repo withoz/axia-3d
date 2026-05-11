@@ -1584,6 +1584,117 @@ impl AxiaEngine {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ADR-100 R-γ — Material Removal Recovery (Phase 5-C) WASM API
+    //
+    // 3 endpoints (additive — ADR-076 baseline guard PASS):
+    //   - detectOrphanMaterialAssignments — read-only JSON report
+    //   - attemptMaterialRemovalRecovery  — 3-tier cascade outcome JSON
+    //   - removeProjectMaterial           — remove + auto-recovery
+    //
+    // ADR-097 T-δ JSON shape 답습 — kind discriminator + named fields.
+    // Format!-based serialization (no serde_json dep, consistent with
+    // existing material/recovery surfaces).
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-100 R-γ — Detect orphan material assignments.
+    ///
+    /// Returns JSON:
+    ///   `{ "affectedXias": [{ "xiaId": N, "staleMaterialId": M,
+    ///                         "faceCount": K }, ...] }`
+    /// Empty array → clean scene.
+    #[wasm_bindgen(js_name = "detectOrphanMaterialAssignments")]
+    pub fn detect_orphan_material_assignments(&self) -> String {
+        let report = self.scene.detect_orphan_material_assignments();
+        if report.affected_xias.is_empty() {
+            return "{\"affectedXias\":[]}".to_string();
+        }
+        let entries: Vec<String> = report.affected_xias.iter()
+            .map(|e| format!(
+                "{{\"xiaId\":{},\"staleMaterialId\":{},\"faceCount\":{}}}",
+                e.xia_id, e.stale_material_id, e.face_count,
+            ))
+            .collect();
+        format!("{{\"affectedXias\":[{}]}}", entries.join(","))
+    }
+
+    /// ADR-100 R-γ — Attempt material removal recovery (3-tier cascade).
+    ///
+    /// Returns JSON union (ADR-097 T-δ shape 답습):
+    ///   `{ "kind": "NoOp" }`
+    ///   `{ "kind": "Recovered", "affectedXias": N, "facesDemoted": K,
+    ///      "facesFallback": F }`
+    ///   `{ "kind": "PartialFailure", "affectedXias": N,
+    ///      "remainingOrphans": R }`
+    ///
+    /// Mutates scene state (Pass 1 demote + Pass 2 fallback). Caller
+    /// wraps in transaction; recovery is idempotent (second call on a
+    /// clean scene returns NoOp).
+    #[wasm_bindgen(js_name = "attemptMaterialRemovalRecovery")]
+    pub fn attempt_material_removal_recovery(&mut self) -> String {
+        use axia_core::MaterialRecoveryOutcome;
+        let outcome = self.scene.attempt_material_removal_recovery();
+        match outcome {
+            MaterialRecoveryOutcome::NoOp => {
+                "{\"kind\":\"NoOp\"}".to_string()
+            }
+            MaterialRecoveryOutcome::Recovered {
+                affected_xias, faces_demoted, faces_fallback,
+            } => format!(
+                "{{\"kind\":\"Recovered\",\"affectedXias\":{},\"facesDemoted\":{},\"facesFallback\":{}}}",
+                affected_xias, faces_demoted, faces_fallback,
+            ),
+            MaterialRecoveryOutcome::PartialFailure {
+                affected_xias, remaining_orphans,
+            } => format!(
+                "{{\"kind\":\"PartialFailure\",\"affectedXias\":{},\"remainingOrphans\":{}}}",
+                affected_xias, remaining_orphans,
+            ),
+        }
+    }
+
+    /// ADR-100 R-γ — Remove a Project-tier material with auto-recovery.
+    ///
+    /// Returns JSON `{ "ok": bool, "removedId": N, "recovery": {...} }`
+    /// where `recovery` matches the union from `attemptMaterialRemovalRecovery`.
+    /// On error: `{ "ok": false, "error": "..." }`.
+    ///
+    /// System tier always rejected (R-D safety, ADR-098 S-G 답습).
+    #[wasm_bindgen(js_name = "removeProjectMaterial")]
+    pub fn remove_project_material(&mut self, material_id: u32) -> String {
+        use axia_geo::MaterialId;
+        use axia_core::MaterialRecoveryOutcome;
+        let id = MaterialId::new(material_id);
+        match self.scene.remove_project_material_with_recovery(id) {
+            Ok(out) => {
+                let recovery_json = match out.recovery {
+                    MaterialRecoveryOutcome::NoOp => {
+                        "{\"kind\":\"NoOp\"}".to_string()
+                    }
+                    MaterialRecoveryOutcome::Recovered {
+                        affected_xias, faces_demoted, faces_fallback,
+                    } => format!(
+                        "{{\"kind\":\"Recovered\",\"affectedXias\":{},\"facesDemoted\":{},\"facesFallback\":{}}}",
+                        affected_xias, faces_demoted, faces_fallback,
+                    ),
+                    MaterialRecoveryOutcome::PartialFailure {
+                        affected_xias, remaining_orphans,
+                    } => format!(
+                        "{{\"kind\":\"PartialFailure\",\"affectedXias\":{},\"remainingOrphans\":{}}}",
+                        affected_xias, remaining_orphans,
+                    ),
+                };
+                format!(
+                    "{{\"ok\":true,\"removedId\":{},\"recovery\":{}}}",
+                    out.removed_id, recovery_json,
+                )
+            }
+            Err(e) => format!(
+                "{{\"ok\":false,\"error\":\"{}\"}}", e,
+            ),
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM API
     //
     // 3 categories: ConstructionLine / ImportedMesh / PointCloud.

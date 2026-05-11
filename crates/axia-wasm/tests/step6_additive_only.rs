@@ -719,6 +719,53 @@ fn adr098_s_gamma_get_tier_uses_minus_one_sentinel() {
 }
 
 #[test]
+fn adr100_r_gamma_endpoints_wired() {
+    let l = lib_src();
+    for (rust_name, js_name) in [
+        ("pub fn detect_orphan_material_assignments",  "detectOrphanMaterialAssignments"),
+        ("pub fn attempt_material_removal_recovery",   "attemptMaterialRemovalRecovery"),
+        ("pub fn remove_project_material",             "removeProjectMaterial"),
+    ] {
+        assert!(l.contains(rust_name),
+            "ADR-100 R-γ: missing Rust function {}", rust_name);
+        let attr = format!("js_name = \"{}\"", js_name);
+        assert!(l.contains(&attr),
+            "ADR-100 R-γ: missing js_name attr {}", attr);
+    }
+}
+
+#[test]
+fn adr100_r_gamma_recovery_json_uses_kind_discriminator() {
+    let l = lib_src();
+    let idx = l.find("pub fn attempt_material_removal_recovery").expect("recovery fn");
+    let body = char_safe_slice(&l, idx, 1500);
+    // ADR-097 T-δ shape 답습 — kind discriminator on all 3 variants.
+    // Source contains escaped JSON (\"kind\":\"NoOp\"), so search uses
+    // the variant name with the closing escape sequence.
+    assert!(body.contains("NoOp\\\""),
+        "attempt_material_removal_recovery must emit NoOp kind");
+    assert!(body.contains("Recovered\\\""),
+        "attempt_material_removal_recovery must emit Recovered kind");
+    assert!(body.contains("PartialFailure\\\""),
+        "attempt_material_removal_recovery must emit PartialFailure kind");
+}
+
+#[test]
+fn adr100_r_gamma_remove_project_returns_ok_envelope() {
+    let l = lib_src();
+    let idx = l.find("pub fn remove_project_material").expect("remove fn");
+    let body = char_safe_slice(&l, idx, 2000);
+    // ok envelope + error envelope (silent skip 차단). Source has
+    // escaped quotes — check for the unique key strings.
+    assert!(body.contains("ok\\\":true"),
+        "remove_project_material must emit ok:true on success");
+    assert!(body.contains("ok\\\":false"),
+        "remove_project_material must emit ok:false on error");
+    assert!(body.contains("removedId\\\":"),
+        "success JSON must include removedId");
+}
+
+#[test]
 fn adr098_s_gamma_remove_user_only_blocks_other_tiers() {
     let l = lib_src();
     let idx = l.find("pub fn remove_user_material").expect("remove fn");

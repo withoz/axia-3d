@@ -216,9 +216,42 @@ multi-week atomic 별도 세션.
     ADR-091/098 BTreeMap 패턴과 비슷한 결정성 보장 (R-β 는 ephemeral
     Vec 이지만 사용자 facing 의 순서 일관성 동일 가치)
 
-### R-γ ~ R-ζ (예정)
-별도 sub-step 결재 시 commit 진행. R-γ 는 WASM bridge 3 endpoints
-(`detectOrphanMaterialAssignments` / `attemptMaterialRemovalRecovery`
-/ `removeProjectMaterial`), R-δ 는 TS Dialog + Orchestrator (ADR-097
-helper 답습), R-ε 는 Settings flag + main.ts wiring, R-ζ 는 Real
-Chromium 시연 + closure.
+### R-γ (본 commit) — WASM bridge 3 endpoints
+- **commit**: 본 commit (axia-wasm + axia-core lib re-exports)
+- **신규 axia-core re-exports** (`lib.rs`): `OrphanMaterialReport` /
+  `OrphanMaterialEntry` / `MaterialRecoveryOutcome` /
+  `MaterialRemovalOutcome` → axia-wasm 직접 import 가능
+- **WASM 3 endpoints** (additive — ADR-076 baseline guard PASS):
+  * `detectOrphanMaterialAssignments() -> String` (JSON
+    `{"affectedXias":[{xiaId, staleMaterialId, faceCount},...]}`)
+  * `attemptMaterialRemovalRecovery() -> String` (JSON union ADR-097
+    T-δ shape 답습 — `NoOp` / `Recovered` / `PartialFailure`)
+  * `removeProjectMaterial(material_id) -> String` (JSON envelope —
+    `{ok, removedId, recovery}` on success / `{ok:false, error}` on
+    failure)
+- **export_baseline.txt** additive +3 (ADR-076 §C-amendment-1 정합).
+- **회귀 (axia-wasm)**: +3 tests
+  * adr100_r_gamma_endpoints_wired (3 endpoint pin — js_name +
+    Rust function names)
+  * adr100_r_gamma_recovery_json_uses_kind_discriminator (ADR-097
+    T-δ shape lock — NoOp / Recovered / PartialFailure variants)
+  * adr100_r_gamma_remove_project_returns_ok_envelope (silent skip
+    차단 — both `ok:true` and `ok:false` paths emit envelope, includes
+    `removedId`)
+- **Cargo sweep**: axia-wasm 46 → **49 PASS** (+3), axia-core 267
+  unchanged, axia-geo 1256 unchanged. 절대 #[ignore] 금지 3/3 준수.
+- **누적 R-α ~ R-γ**: docs +1 ADR, axia-core +10, axia-wasm +3 =
+  **+13**, 절대 #[ignore] 금지 13/13 준수.
+- **Lessons applied**:
+  * ADR-097 T-δ JSON shape 1:1 mirror — `{kind: ...}` discriminator
+    union 패턴, AI agent / 사용자 모두 일관 학습
+  * `format!`-based serialization (no serde_json dep) — ADR-098 S-γ
+    list_materials_by_tier / ADR-097 attempt_auto_recovery 와 일관.
+    Recovery 자산 inventory 정신 (ADR-097 §E L5 답습)
+  * ok envelope on convenience entry — silent skip 차단 (`removeProjectMaterial`
+    이 `Result<&str, &str>` error 도 사용자 facing 으로 명시)
+
+### R-δ ~ R-ζ (예정)
+별도 sub-step 결재 시 commit 진행. R-δ 는 TS Dialog + Orchestrator
+(ADR-097 helper 답습), R-ε 는 Settings flag + main.ts wiring, R-ζ 는
+Real Chromium 시연 + closure.
