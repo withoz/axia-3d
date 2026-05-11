@@ -440,6 +440,60 @@ Bridge TS wrappers + Real Chromium E2E
   * Binary indicator MVP (모든 4 cell 동일 lit/dim) — per-channel
     introspection은 R-γ JSON 으로 가능, future polish
 
-### L-ζ ~ L-η (예정, multi-week)
-별도 sub-step 결재 시 commit 진행. 각 sub-step standalone usable
-(atomic invariant).
+### L-ζ (본 commit) — Bridge TS wrappers + main.ts wiring
+- **commit**: 본 commit
+- **TS bridge typed wrappers** (`web/src/bridge/WasmBridge.ts`):
+  * `AxiaEngineExtended` interface 확장 — 5 L-γ endpoints typed
+    declaration (additive, ADR-097 T-δ 답습 패턴)
+  * `getLayeredChannels(materialId): LayeredChannels | null` —
+    null on `hasLayered:false`, parsed shape on populated. Engine
+    `rotation/label = null` → TS `undefined` (ergonomic optional)
+  * `setLayeredChannel(materialId, channel, info)` — flattens
+    `TextureInfo` to WASM signature. Projection u32 mapping
+    (planar=0, box=1, cylindrical=2). NaN sentinel for missing
+    rotation, empty string for missing label
+  * `clearLayeredChannel(materialId, channel)` — markDirty before
+    delegate
+  * `migrateLegacyTextureToLayered()` — count
+  * `hasLayeredMaterial(materialId)` — boolean
+  * Graceful safe defaults (null/false/0) on missing endpoint
+- **main.ts wiring**:
+  * AssetLibraryPanel callbacks 에 bridge 메서드 wire:
+    `hasLayeredMaterial: (id) => bridge.hasLayeredMaterial(id)` +
+    `onLayeredChannelUpload: (id, channel, info) =>
+     bridge.setLayeredChannel(id, channel, info)`
+  * L-ε callback-based design 의 자연 closure — panel/bridge 의 분리
+    유지하면서 production layer 에서 connect
+- **회귀 (Vitest jsdom)**: +9 tests
+  * `WasmBridge.test.ts` — 9 tests:
+    - getLayeredChannels null for hasLayered:false
+    - getLayeredChannels parses populated channels (null → undefined)
+    - setLayeredChannel flattens TextureInfo
+    - setLayeredChannel uses NaN/empty string sentinels
+    - setLayeredChannel maps cylindrical → 2 (projection enum)
+    - clearLayeredChannel + markDirty
+    - migrateLegacyTextureToLayered count
+    - hasLayeredMaterial boolean
+    - all wrappers graceful safe defaults on missing endpoint
+  * 절대 #[ignore] 금지 9/9 준수
+- **Full vitest sweep**: 116 files, **1828/1828 PASS** (1 skipped 무관,
+  1819 → 1828 = +9)
+- **누적 L-α ~ L-ζ**: docs +1 ADR, axia-core +18, axia-wasm +5,
+  vitest +38 = **+61**
+- **Lessons applied**:
+  * Engine ↔ TS shape ergonomic mapping — engine `null` → TS
+    `undefined`, NaN/empty-string sentinel for `Option<T>` flatten.
+    ADR-098 S-γ + ADR-100 R-δ 답습
+  * Callback wiring at main.ts boundary — panel/bridge 분리 유지
+    (ADR-091 §E L4 답습 **9번째 적용**)
+  * Discriminated-union return types — `LayeredChannels | null` vs
+    `MaterialRemovalResult` ok-envelope — both express absence
+    explicitly (silent skip 차단)
+  * Markdirty placement — only on mutations (set/clear), read paths
+    skip (ADR-097 T-δ 답습)
+
+### L-η (예정, multi-week)
+별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
+E2E) — 4-channel upload visual + snapshot round-trip + visual
+regression baseline (ADR-077 V-2 답습). L-η closure 시 ADR-099 본체
++ LOCKED #26 완전 closure.

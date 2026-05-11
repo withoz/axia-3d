@@ -2284,4 +2284,117 @@ describe('WasmBridge', () => {
       expect(bridge.removeProjectMaterial(0)).toBeNull();
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // ADR-099 L-ζ — Layered Material 4-PBR Channels typed wrappers
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('ADR-099 L-ζ layered material wrappers', () => {
+    let bridge: WasmBridge;
+
+    beforeEach(() => {
+      bridge = new WasmBridge();
+    });
+
+    it('getLayeredChannels returns null for hasLayered:false', () => {
+      const fn = vi.fn(() => '{"hasLayered":false}');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getLayeredChannels: fn };
+      expect(bridge.getLayeredChannels(100)).toBeNull();
+    });
+
+    it('getLayeredChannels parses populated channels', () => {
+      const json = JSON.stringify({
+        hasLayered: true,
+        channels: {
+          albedo: { dataUrl: 'd:a', projection: 'planar', scale: 0.001, rotation: null, label: 'a.png' },
+          normal: null,
+          roughness: null,
+          metallic: null,
+        },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getLayeredChannels: vi.fn(() => json) };
+      const r = bridge.getLayeredChannels(100);
+      expect(r).not.toBeNull();
+      expect(r!.albedo).toMatchObject({
+        dataUrl: 'd:a', projection: 'planar', scale: 0.001, label: 'a.png',
+      });
+      expect(r!.albedo!.rotation).toBeUndefined();
+      expect(r!.normal).toBeUndefined();
+      expect(r!.roughness).toBeUndefined();
+      expect(r!.metallic).toBeUndefined();
+    });
+
+    it('setLayeredChannel flattens TextureInfo to WASM signature', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setLayeredChannel: fn };
+      const ok = bridge.setLayeredChannel(100, 'normal', {
+        dataUrl: 'd:n', projection: 'box', scale: 0.002,
+        rotation: 1.5708, label: 'n.png',
+      });
+      expect(ok).toBe(true);
+      expect(fn).toHaveBeenCalledWith(
+        100, 'normal', 'd:n', 1 /* projection box */, 0.002, 1.5708, 'n.png',
+      );
+    });
+
+    it('setLayeredChannel uses NaN sentinel for missing rotation + empty string for label', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setLayeredChannel: fn };
+      bridge.setLayeredChannel(50, 'albedo', {
+        dataUrl: 'd:a', projection: 'planar', scale: 0.001,
+      });
+      const call = fn.mock.calls[0];
+      expect(call[3]).toBe(0); // projection planar = 0
+      expect(Number.isNaN(call[5] as number)).toBe(true); // rotation NaN
+      expect(call[6]).toBe(''); // label empty
+    });
+
+    it('setLayeredChannel maps cylindrical projection to 2', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setLayeredChannel: fn };
+      bridge.setLayeredChannel(50, 'roughness', {
+        dataUrl: 'd', projection: 'cylindrical', scale: 0.001,
+      });
+      expect(fn.mock.calls[0][3]).toBe(2);
+    });
+
+    it('clearLayeredChannel calls engine + markDirty', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { clearLayeredChannel: fn };
+      const spy = vi.spyOn(bridge, 'markDirty');
+      expect(bridge.clearLayeredChannel(100, 'normal')).toBe(true);
+      expect(fn).toHaveBeenCalledWith(100, 'normal');
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('migrateLegacyTextureToLayered returns count', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { migrateLegacyTextureToLayered: vi.fn(() => 3) };
+      expect(bridge.migrateLegacyTextureToLayered()).toBe(3);
+    });
+
+    it('hasLayeredMaterial returns boolean', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { hasLayeredMaterial: vi.fn(() => true) };
+      expect(bridge.hasLayeredMaterial(100)).toBe(true);
+    });
+
+    it('all L-ζ wrappers gracefully return safe defaults on missing endpoint', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getLayeredChannels(0)).toBeNull();
+      expect(bridge.setLayeredChannel(0, 'albedo', {
+        dataUrl: 'd', projection: 'planar', scale: 0.001,
+      })).toBe(false);
+      expect(bridge.clearLayeredChannel(0, 'albedo')).toBe(false);
+      expect(bridge.migrateLegacyTextureToLayered()).toBe(0);
+      expect(bridge.hasLayeredMaterial(0)).toBe(false);
+    });
+  });
 });

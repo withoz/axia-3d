@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import init, { AxiaEngine } from '../wasm/axia_wasm';
 import { Toast } from '../ui/Toast';
 import { debugLog } from '../utils/debug';
+import type { LayeredChannels, TextureInfo } from '../materials/MaterialLibrary';
+import type { LayeredChannelName } from '../viewport/LayeredMaterialBinding';
 
 // ════════════════════════════════════════════════════════════════════════
 // ADR-026 P12 — Cardinal Plane SSOT (Single Source of Truth)
@@ -515,6 +517,20 @@ type AxiaEngineExtended = AxiaEngine & {
   detectOrphanMaterialAssignments?(): string;
   attemptMaterialRemovalRecovery?(): string;
   removeProjectMaterial?(materialId: number): string;
+  // ADR-099 L-γ — Layered material 4-PBR channels
+  getLayeredChannels?(materialId: number): string;
+  setLayeredChannel?(
+    materialId: number,
+    channel: string,
+    dataUrl: string,
+    projection: number,
+    scale: number,
+    rotationOrNan: number,
+    label: string,
+  ): boolean;
+  clearLayeredChannel?(materialId: number, channel: string): boolean;
+  migrateLegacyTextureToLayered?(): number;
+  hasLayeredMaterial?(materialId: number): boolean;
   // ADR-095 Phase 3-γ — Reference citizenship
   createReferenceConstructionLine?(name: string, edgeIds: Uint32Array): number;
   createReferenceImportedMesh?(name: string, faceIds: Uint32Array, sourcePath?: string): number;
@@ -4255,6 +4271,121 @@ export class WasmBridge {
       return { ok: false, error: parsed.error ?? 'unknown' };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-099 L-ζ — Layered Material 4-PBR Channels typed wrappers
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-099 L-γ — Read layered channels of a material.
+   * Returns:
+   *   - `null` on endpoint missing or material missing (engine returns
+   *     `{hasLayered:false}` which we surface as `null` for ergonomic
+   *     caller flow — match the Rust `Option<LayeredChannels>` shape).
+   *   - Parsed `LayeredChannels` interface when populated.
+   */
+  getLayeredChannels(materialId: number): LayeredChannels | null {
+    if (!this.engine?.getLayeredChannels) return null;
+    try {
+      const json = this.engine.getLayeredChannels(materialId);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any;
+      if (!parsed.hasLayered) return null;
+      // Engine emits per-channel `{ dataUrl, projection, scale, rotation,
+      // label }` (rotation/label may be null). Convert null → undefined
+      // for TS optional ergonomics.
+      const toInfo = (ch: unknown): TextureInfo | undefined => {
+        if (!ch || typeof ch !== 'object') return undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const c = ch as any;
+        return {
+          dataUrl: c.dataUrl,
+          projection: c.projection,
+          scale: c.scale,
+          rotation: c.rotation ?? undefined,
+          label: c.label ?? undefined,
+        };
+      };
+      const channels = parsed.channels ?? {};
+      return {
+        albedo: toInfo(channels.albedo),
+        normal: toInfo(channels.normal),
+        roughness: toInfo(channels.roughness),
+        metallic: toInfo(channels.metallic),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-099 L-γ — Set one channel of a material's layered payload.
+   * Caller passes a `TextureInfo` — wrapper flattens to the WASM
+   * signature (NaN sentinel for None rotation, empty string for None
+   * label). Returns true on success, false on validation error.
+   */
+  setLayeredChannel(
+    materialId: number,
+    channel: LayeredChannelName,
+    info: TextureInfo,
+  ): boolean {
+    if (!this.engine?.setLayeredChannel) return false;
+    this.markDirty();
+    const projectionU32 =
+      info.projection === 'box' ? 1 :
+      info.projection === 'cylindrical' ? 2 : 0;
+    try {
+      return this.engine.setLayeredChannel(
+        materialId, channel, info.dataUrl,
+        projectionU32, info.scale,
+        info.rotation ?? NaN,
+        info.label ?? '',
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * ADR-099 L-γ — Clear one channel of a material's layered payload.
+   * Idempotent — clearing the last populated channel resets the
+   * `layered` wrapper to None on engine side.
+   */
+  clearLayeredChannel(materialId: number, channel: LayeredChannelName): boolean {
+    if (!this.engine?.clearLayeredChannel) return false;
+    this.markDirty();
+    try {
+      return this.engine.clearLayeredChannel(materialId, channel);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * ADR-099 L-γ — Bulk normalize empty layered payloads.
+   * Returns count migrated, or 0 on missing endpoint.
+   */
+  migrateLegacyTextureToLayered(): number {
+    if (!this.engine?.migrateLegacyTextureToLayered) return 0;
+    try {
+      return this.engine.migrateLegacyTextureToLayered();
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * ADR-099 L-γ — Quick existence check. True iff material has at
+   * least one populated layered channel.
+   */
+  hasLayeredMaterial(materialId: number): boolean {
+    if (!this.engine?.hasLayeredMaterial) return false;
+    try {
+      return this.engine.hasLayeredMaterial(materialId);
+    } catch {
+      return false;
     }
   }
 

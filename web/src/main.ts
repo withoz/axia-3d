@@ -238,7 +238,14 @@ async function main() {
     // Mount inside the standard right-side panel container if present,
     // otherwise body fallback (test surface).
     const host = document.getElementById('right-panel-container') ?? document.body;
-    const panel = new AssetLibraryPanel(host, bridge);
+    // ADR-099 L-ζ — Wire layered channel callbacks to bridge.
+    //   Panel stays bridge-agnostic; main.ts injects via callbacks
+    //   (ADR-091 §E L4 UI orchestration 분리 패턴).
+    const panel = new AssetLibraryPanel(host, bridge, {
+      hasLayeredMaterial: (id) => bridge.hasLayeredMaterial(id),
+      onLayeredChannelUpload: (id, channel, info) =>
+        bridge.setLayeredChannel(id, channel, info),
+    });
     const instance = {
       panel,
       get userTierEnabled() { return getAssetLibraryUserTierMode(); },
