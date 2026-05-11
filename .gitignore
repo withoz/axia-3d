@@ -1,6 +1,13 @@
-# Rust
-/target/
-**/*.rs.bk
+# Dependencies
+node_modules/
+web/node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+target/
+web/dist/
 
 # WASM binary (wasm-pack으로 재생성, 용량 큼)
 web/src/wasm/*.wasm
@@ -27,9 +34,19 @@ web/node_modules/
 web/dist/assets/*.js
 web/dist/assets/*.wasm
 web/dist/assets/*.css
+*.wasm
 
-# Backup folders
+# Backup folders (로컬 백업, GitHub에 불필요)
 backup_*/
+backups/
+
+# Rust
+Cargo.lock
+**/*.rs.bk
+
+# Environment
+.env
+.env.local
 
 # IDE
 .vscode/
@@ -49,10 +66,8 @@ npm-debug.log*
 # Misc
 *.tmp
 *.bak
-
-# Large backup files
 *.tar.gz
-backups/
-node_modules/
-dist/
 
+# Claude
+.claudeignore
+.claude/worktrees/
