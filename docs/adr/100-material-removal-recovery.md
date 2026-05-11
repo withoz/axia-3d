@@ -251,7 +251,58 @@ multi-week atomic 별도 세션.
   * ok envelope on convenience entry — silent skip 차단 (`removeProjectMaterial`
     이 `Result<&str, &str>` error 도 사용자 facing 으로 명시)
 
-### R-δ ~ R-ζ (예정)
-별도 sub-step 결재 시 commit 진행. R-δ 는 TS Dialog + Orchestrator
-(ADR-097 helper 답습), R-ε 는 Settings flag + main.ts wiring, R-ζ 는
-Real Chromium 시연 + closure.
+### R-δ (본 commit) — TS wrappers + Dialog + Orchestrator
+- **commit**: 본 commit
+- **TS bridge typed wrappers** (`web/src/bridge/WasmBridge.ts`):
+  * `OrphanMaterialEntry` / `OrphanMaterialReport` / `MaterialRecoveryOutcome`
+    discriminated union (NoOp/Recovered/PartialFailure) /
+    `MaterialRemovalResult` ok-envelope union
+  * 3 wrappers — `detectOrphanMaterialAssignments` /
+    `attemptMaterialRemovalRecovery` / `removeProjectMaterial`
+  * Graceful null on missing endpoint + markDirty on mutations
+    (ADR-097 T-δ 답습)
+- **MaterialRemovalRecoveryDialog** (`web/src/citizenship/MaterialRemovalRecoveryDialog.ts`):
+  * ADR-097 `TopologyRecoveryDialog` **1:1 mirror** — 3-option modal
+    ([Undo] / [강등] / [수동수정])
+  * Dialog id `axia-material-recovery-dialog` (distinct from topology)
+  * Title "재질 손상 자동 복구 실패" (material-layer 변형 only)
+  * Backdrop click + ESC dismiss → 'manual'
+  * Single-instance guard + jsdom-testable pure DOM
+- **MaterialRemovalRecoveryOrchestrator** (`web/src/citizenship/MaterialRemovalRecoveryOrchestrator.ts`):
+  * ADR-097 `TopologyRecoveryOrchestrator` **1:1 mirror** — 5-stage
+    flow (detect → recover → escalate)
+  * `humanizeOrphanReport` SSOT (ADR-095 §E L3 humanize 패턴 답습)
+    — "Xia N개 / 면 M개 재질 부재" Korean wording
+  * `MaterialRecoveryOrchestratorResult` 6 statuses (clean / recovered
+    / undone / demoted / manual / unavailable)
+  * `MaterialDemoteResolver` caller hook for [강등] 버튼
+- **회귀 (Vitest jsdom)**: +30 tests
+  * `WasmBridge.test.ts` — 9 tests (detect / recover variants / remove
+    ok-envelope success+error / markDirty / graceful defaults)
+  * `MaterialRemovalRecoveryDialog.test.ts` — 10 tests (render /
+    title differ from topology / 3 buttons / ESC / backdrop / cleanup
+    / single-instance / enableDemote=false)
+  * `MaterialRemovalRecoveryOrchestrator.test.ts` — 11 tests
+    (humanize 2 + 9 flow paths: unavailable / clean / recovered /
+    partial+undo / partial+manual / demote+resolver / demote without
+    resolver / unavailable on attemptRecovery null / NoOp engine
+    defensive)
+  * 절대 #[ignore] 금지 30/30 준수
+- **Full vitest sweep**: 113 files, **1785/1785 PASS** (1 skipped 무관,
+  1755 → 1785 = +30)
+- **누적 R-α ~ R-δ**: docs +1 ADR, axia-core +10, axia-wasm +3,
+  vitest +30 = **+43**
+- **Lessons applied**:
+  * ADR-097 helpers **1:1 mirror** — 새 패턴 0, AI agent / 사용자 모두
+    학습 효율 (canonical 5-layer atomic stack 의 5번째 layer 완성)
+  * ADR-095 §E L3 humanize at boundary (`humanizeOrphanReport` Korean
+    SSOT)
+  * ok-envelope wrapper (silent skip 차단) — bridge 의 R-γ
+    `removeProjectMaterial` JSON 을 typed union 으로 보존
+  * 6-status orchestrator result (ADR-097 5-status 위에 'demoted'
+    추가) — material-layer 의 demote 가 명시적 user action
+
+### R-ε ~ R-ζ (예정)
+별도 sub-step 결재 시 commit 진행. R-ε 는 Settings flag + main.ts
+wiring (`AutoMaterialRecoverySettings.ts`, ADR-097 T-ε 답습), R-ζ 는
+Real Chromium 시연 + ADR-100 closure.

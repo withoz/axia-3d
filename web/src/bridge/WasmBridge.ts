@@ -122,6 +122,26 @@ export interface OrphanRecoveryResult {
   error: string | null;
 }
 
+// ═══ ADR-100 R-δ Material Removal Recovery types ═════════════════════
+export interface OrphanMaterialEntry {
+  xiaId: number;
+  staleMaterialId: number;
+  faceCount: number;
+}
+
+export interface OrphanMaterialReport {
+  affectedXias: OrphanMaterialEntry[];
+}
+
+export type MaterialRecoveryOutcome =
+  | { kind: 'NoOp' }
+  | { kind: 'Recovered'; affectedXias: number; facesDemoted: number; facesFallback: number }
+  | { kind: 'PartialFailure'; affectedXias: number; remainingOrphans: number };
+
+export type MaterialRemovalResult =
+  | { ok: true; removedId: number; recovery: MaterialRecoveryOutcome }
+  | { ok: false; error: string };
+
 // ═══ ADR-098 S-γ 3-Tier Material types ═══════════════════════════════
 export type MaterialTier = 'System' | 'Project' | 'User';
 
@@ -491,6 +511,10 @@ type AxiaEngineExtended = AxiaEngine & {
   addUserMaterial?(name: string, nameEn: string, color: number): number;
   removeUserMaterial?(materialId: number): boolean;
   migrateLegacyMaterials?(): number;
+  // ADR-100 R-γ — Material removal recovery
+  detectOrphanMaterialAssignments?(): string;
+  attemptMaterialRemovalRecovery?(): string;
+  removeProjectMaterial?(materialId: number): string;
   // ADR-095 Phase 3-γ — Reference citizenship
   createReferenceConstructionLine?(name: string, edgeIds: Uint32Array): number;
   createReferenceImportedMesh?(name: string, faceIds: Uint32Array, sourcePath?: string): number;
@@ -4154,6 +4178,83 @@ export class WasmBridge {
       return this.engine.migrateLegacyMaterials();
     } catch {
       return 0;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-100 R-δ — Material Removal Recovery typed wrappers
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * ADR-100 R-γ — Detect orphan material assignments.
+   * Returns null on missing endpoint.
+   */
+  detectOrphanMaterialAssignments(): OrphanMaterialReport | null {
+    if (!this.engine?.detectOrphanMaterialAssignments) return null;
+    try {
+      const json = this.engine.detectOrphanMaterialAssignments();
+      return JSON.parse(json) as OrphanMaterialReport;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-100 R-γ — Attempt material removal recovery (3-tier cascade).
+   * Returns null on missing endpoint; markDirty on call (mutates scene).
+   */
+  attemptMaterialRemovalRecovery(): MaterialRecoveryOutcome | null {
+    if (!this.engine?.attemptMaterialRemovalRecovery) return null;
+    this.markDirty();
+    try {
+      const json = this.engine.attemptMaterialRemovalRecovery();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any;
+      switch (parsed.kind) {
+        case 'NoOp':
+          return { kind: 'NoOp' };
+        case 'Recovered':
+          return {
+            kind: 'Recovered',
+            affectedXias: parsed.affectedXias,
+            facesDemoted: parsed.facesDemoted,
+            facesFallback: parsed.facesFallback,
+          };
+        case 'PartialFailure':
+          return {
+            kind: 'PartialFailure',
+            affectedXias: parsed.affectedXias,
+            remainingOrphans: parsed.remainingOrphans,
+          };
+        default:
+          return null;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-100 R-γ — Remove a Project-tier material with auto-recovery.
+   * Returns null on missing endpoint, ok-envelope on success/error.
+   */
+  removeProjectMaterial(materialId: number): MaterialRemovalResult | null {
+    if (!this.engine?.removeProjectMaterial) return null;
+    this.markDirty();
+    try {
+      const json = this.engine.removeProjectMaterial(materialId);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(json) as any;
+      if (parsed.ok === true) {
+        return {
+          ok: true,
+          removedId: parsed.removedId,
+          recovery: parsed.recovery as MaterialRecoveryOutcome,
+        };
+      }
+      return { ok: false, error: parsed.error ?? 'unknown' };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 

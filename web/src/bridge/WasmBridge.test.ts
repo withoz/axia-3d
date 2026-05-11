@@ -2185,4 +2185,103 @@ describe('WasmBridge', () => {
       expect(bridge.migrateLegacyMaterials()).toBe(0);
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // ADR-100 R-δ — Material Removal Recovery typed wrappers
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('ADR-100 R-δ material removal recovery wrappers', () => {
+    let bridge: WasmBridge;
+
+    beforeEach(() => {
+      bridge = new WasmBridge();
+    });
+
+    it('detectOrphanMaterialAssignments parses JSON report', () => {
+      const fn = vi.fn(() =>
+        '{"affectedXias":[{"xiaId":5,"staleMaterialId":100,"faceCount":3}]}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { detectOrphanMaterialAssignments: fn };
+      const r = bridge.detectOrphanMaterialAssignments();
+      expect(r?.affectedXias).toHaveLength(1);
+      expect(r?.affectedXias[0]).toMatchObject({
+        xiaId: 5, staleMaterialId: 100, faceCount: 3,
+      });
+    });
+
+    it('detectOrphanMaterialAssignments returns null on missing endpoint', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.detectOrphanMaterialAssignments()).toBeNull();
+    });
+
+    it('attemptMaterialRemovalRecovery parses NoOp', () => {
+      const fn = vi.fn(() => '{"kind":"NoOp"}');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptMaterialRemovalRecovery: fn };
+      expect(bridge.attemptMaterialRemovalRecovery()).toEqual({ kind: 'NoOp' });
+    });
+
+    it('attemptMaterialRemovalRecovery parses Recovered', () => {
+      const fn = vi.fn(() =>
+        '{"kind":"Recovered","affectedXias":2,"facesDemoted":4,"facesFallback":0}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptMaterialRemovalRecovery: fn };
+      expect(bridge.attemptMaterialRemovalRecovery()).toEqual({
+        kind: 'Recovered', affectedXias: 2, facesDemoted: 4, facesFallback: 0,
+      });
+    });
+
+    it('attemptMaterialRemovalRecovery parses PartialFailure', () => {
+      const fn = vi.fn(() =>
+        '{"kind":"PartialFailure","affectedXias":2,"remainingOrphans":1}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptMaterialRemovalRecovery: fn };
+      expect(bridge.attemptMaterialRemovalRecovery()).toEqual({
+        kind: 'PartialFailure', affectedXias: 2, remainingOrphans: 1,
+      });
+    });
+
+    it('attemptMaterialRemovalRecovery markDirty triggers cache invalidation', () => {
+      const fn = vi.fn(() => '{"kind":"NoOp"}');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { attemptMaterialRemovalRecovery: fn };
+      const spy = vi.spyOn(bridge, 'markDirty');
+      bridge.attemptMaterialRemovalRecovery();
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('removeProjectMaterial parses ok envelope success', () => {
+      const fn = vi.fn(() =>
+        '{"ok":true,"removedId":100,"recovery":{"kind":"NoOp"}}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { removeProjectMaterial: fn };
+      const r = bridge.removeProjectMaterial(100);
+      expect(r).toEqual({
+        ok: true, removedId: 100, recovery: { kind: 'NoOp' },
+      });
+    });
+
+    it('removeProjectMaterial parses ok envelope error', () => {
+      const fn = vi.fn(() =>
+        '{"ok":false,"error":"System tier material is immutable"}',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { removeProjectMaterial: fn };
+      const r = bridge.removeProjectMaterial(0);
+      expect(r).toEqual({ ok: false, error: 'System tier material is immutable' });
+    });
+
+    it('all R-δ wrappers gracefully return safe defaults on missing endpoint', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.detectOrphanMaterialAssignments()).toBeNull();
+      expect(bridge.attemptMaterialRemovalRecovery()).toBeNull();
+      expect(bridge.removeProjectMaterial(0)).toBeNull();
+    });
+  });
 });
