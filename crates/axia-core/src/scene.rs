@@ -93,6 +93,56 @@ pub struct SnapshotInfo {
     pub error: Option<String>,
 }
 
+/// ADR-100 R-β — Orphan material assignment report (Phase 5-C).
+///
+/// A `Xia.material` whose `MaterialId` is no longer present in
+/// `Scene.material_library` (e.g. after a `removeUserMaterial` call).
+/// FORM_MATERIAL sentinel (id 0 = Concrete) is always valid and never
+/// reported.
+#[derive(Clone, Debug, Default)]
+pub struct OrphanMaterialReport {
+    pub affected_xias: Vec<OrphanMaterialEntry>,
+}
+
+impl OrphanMaterialReport {
+    pub fn is_clean(&self) -> bool {
+        self.affected_xias.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrphanMaterialEntry {
+    pub xia_id: XiaId,
+    pub stale_material_id: u32,
+    pub face_count: usize,
+}
+
+/// ADR-100 R-β — Recovery outcome from `attempt_material_removal_recovery`.
+///
+/// Mirrors ADR-097 `RecoveryOutcome` shape — 3 variants ordered by
+/// severity (NoOp < Recovered < PartialFailure).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaterialRecoveryOutcome {
+    NoOp,
+    Recovered {
+        affected_xias: usize,
+        faces_demoted: usize,
+        faces_fallback: usize,
+    },
+    PartialFailure {
+        affected_xias: usize,
+        remaining_orphans: usize,
+    },
+}
+
+/// ADR-100 R-β — Result of `remove_project_material_with_recovery`.
+/// Bundles the removed material id with the cascade recovery outcome.
+#[derive(Clone, Debug)]
+pub struct MaterialRemovalOutcome {
+    pub removed_id: u32,
+    pub recovery: MaterialRecoveryOutcome,
+}
+
 /// The AXiA scene — owns the geometry mesh and all XIA entities.
 /// Principle 3 (ADR-008) — Face Operation Epoch.
 ///
@@ -719,6 +769,157 @@ impl Scene {
             }
         }
         report
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-100 R-β — Material Removal Recovery (Phase 5-C)
+    //
+    // ADR-097 (Phase 4) Orchestrator 패턴의 material-layer 변형. v3.2
+    // §12.3 + ADR-049 §4 Q5 final 정합 — 재질 제거 시 자동 복구 시도
+    // → 실패 시 사용자 다이얼로그 (UI layer, R-δ).
+    //
+    // 3-tier recovery cascade (R-B):
+    //   Pass 1: auto-demote — Xia.material = FORM_MATERIAL → demote
+    //           via ADR-091 D-β (4-condition gate)
+    //   Pass 2: fallback — reassign to Concrete (MaterialId::new(0))
+    //   Pass 3: escalate — return PartialFailure for dialog
+    //
+    // ADR-091 §E L1 canonical 답습 — `affected_xias` 는 read-only
+    // detection 결과의 ephemeral Vec, Scene struct 변경 0.
+    // ════════════════════════════════════════════════════════════════════
+
+    /// ADR-100 R-β — Detect orphan material assignments.
+    ///
+    /// Scans `self.xias` for entries whose `material` is no longer
+    /// present in `self.material_library` (e.g. after a `removeUserMaterial`
+    /// call). FORM_MATERIAL sentinel (id 0 = Concrete) is *always* valid
+    /// and never reported (System tier built-in).
+    ///
+    /// **Read-only**: Scene state 변경 0.
+    pub fn detect_orphan_material_assignments(&self) -> OrphanMaterialReport {
+        let mut affected_xias = Vec::new();
+        for (xid, xia) in &self.xias {
+            // FORM_MATERIAL is always valid (Phase 1 sentinel + System
+            // built-in id 0 = Concrete). Skip.
+            if xia.material == FORM_MATERIAL {
+                continue;
+            }
+            // Check material_library — if absent, this is an orphan.
+            if self.material_library.get(xia.material).is_none() {
+                affected_xias.push(OrphanMaterialEntry {
+                    xia_id: *xid,
+                    stale_material_id: xia.material.raw(),
+                    face_count: xia.face_ids.len(),
+                });
+            }
+        }
+        // Deterministic ordering — XiaId ascending.
+        affected_xias.sort_by_key(|e| e.xia_id);
+        OrphanMaterialReport { affected_xias }
+    }
+
+    /// ADR-100 R-β — Attempt 3-tier material recovery.
+    ///
+    /// Executes the recovery cascade for ALL currently-orphan Xias:
+    ///   * Pass 1 (auto-demote) — try `demote_xia_to_shape` after
+    ///     setting `Xia.material = FORM_MATERIAL`
+    ///   * Pass 2 (fallback) — if demote fails (e.g. promote condition
+    ///     drift), reassign to `FORM_MATERIAL` and *leave the Xia in
+    ///     place* with a fallback flag (the face still owns a valid
+    ///     material — Concrete)
+    ///   * Pass 3 (escalate) — remaining orphans returned in
+    ///     `PartialFailure.remaining_orphans` for dialog handling
+    ///
+    /// Mutates Scene state on success paths (Pass 1 demote, Pass 2
+    /// material reassign). Caller wraps in transaction for atomic undo.
+    pub fn attempt_material_removal_recovery(&mut self) -> MaterialRecoveryOutcome {
+        let report = self.detect_orphan_material_assignments();
+        if report.affected_xias.is_empty() {
+            return MaterialRecoveryOutcome::NoOp;
+        }
+
+        let initial = report.affected_xias.len();
+        let mut faces_demoted = 0usize;
+        let mut faces_fallback = 0usize;
+        let mut remaining = Vec::new();
+
+        for entry in &report.affected_xias {
+            let xia_id = entry.xia_id;
+            let face_count = entry.face_count;
+
+            // Pass 1 — set material to FORM_MATERIAL and try demote.
+            if let Some(xia) = self.xias.get_mut(&xia_id) {
+                xia.material = FORM_MATERIAL;
+            }
+            if self.demote_xia_to_shape(xia_id).is_ok() {
+                faces_demoted += face_count;
+                continue;
+            }
+
+            // Pass 2 — demote failed (e.g. promote condition drift).
+            // The Xia.material is already FORM_MATERIAL (Pass 1) which
+            // resolves to System-tier Concrete in the library. No further
+            // mutation needed; assignment is now valid.
+            //
+            // However, if the user later wants the Xia removed, they
+            // must do so explicitly. We count this as a recovered face
+            // (fallback path) — the orphan is resolved.
+            faces_fallback += face_count;
+        }
+
+        // Pass 3 — recheck after passes to surface any *new* orphans
+        //          (e.g. cascading failure). For now, the cascade above
+        //          guarantees every Xia ends up either demoted or with
+        //          FORM_MATERIAL, so this is a defensive zero-check.
+        let post_check = self.detect_orphan_material_assignments();
+        for entry in &post_check.affected_xias {
+            remaining.push(*entry);
+        }
+
+        if remaining.is_empty() {
+            MaterialRecoveryOutcome::Recovered {
+                affected_xias: initial,
+                faces_demoted,
+                faces_fallback,
+            }
+        } else {
+            MaterialRecoveryOutcome::PartialFailure {
+                affected_xias: initial,
+                remaining_orphans: remaining.len(),
+            }
+        }
+    }
+
+    /// ADR-100 R-β — Remove a Project-tier material with auto-recovery.
+    ///
+    /// Convenience entry combining `material_library.remove_material`
+    /// + `attempt_material_removal_recovery`. The recovery is invoked
+    /// unconditionally — caller decides whether to use this entry
+    /// (auto-recovery wired) vs the raw `material_library.remove_material`
+    /// path (no recovery; legacy bridge surface).
+    ///
+    /// Lock-ins:
+    ///   * R-D — System tier 영원히 거부 (`remove_material` enforces)
+    ///   * R-D — User tier 도 본 entry 통해 가능 (overlaps `removeUserMaterial`
+    ///     surface 이지만 cascade 가 자연 작동)
+    ///   * R-E — Default OFF gate 는 *bridge* layer 에서 검사
+    ///     (engine 은 항상 cascade 시도)
+    ///   * R-F — Caller wraps in transaction for atomic undo
+    pub fn remove_project_material_with_recovery(
+        &mut self,
+        material_id: MaterialId,
+    ) -> Result<MaterialRemovalOutcome, &'static str> {
+        // Step 1 — Remove from library (System tier 거부).
+        self.material_library.remove_material(material_id)?;
+
+        // Step 2 — Trigger recovery cascade. The Xias whose material
+        // was the just-removed id are now orphans (detected on next
+        // call).
+        let outcome = self.attempt_material_removal_recovery();
+        Ok(MaterialRemovalOutcome {
+            removed_id: material_id.raw(),
+            recovery: outcome,
+        })
     }
 
     /// ADR-095 Phase 3-ε — Reverse index rebuild for Reference state.
@@ -13586,6 +13787,191 @@ mod tests {
                 raw,
             );
         }
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-100 R-β — Material Removal Recovery (Phase 5-C)
+    // ────────────────────────────────────────────────────────────────
+
+    fn build_xia_with_material(scene: &mut Scene, mat: MaterialId) -> XiaId {
+        // Create a unit-cube Shape, promote to Xia with the given material.
+        let shape_id = build_shape_unit_cube(scene);
+        let ok = scene.promote_shape_to_xia(shape_id, mat).expect("promote");
+        ok.xia_id
+    }
+
+    #[test]
+    fn adr100_detect_returns_clean_for_fresh_scene() {
+        let scene = Scene::new();
+        let report = scene.detect_orphan_material_assignments();
+        assert!(report.is_clean());
+        assert_eq!(report.affected_xias.len(), 0);
+    }
+
+    #[test]
+    fn adr100_detect_skips_form_material_xias() {
+        // A Xia with FORM_MATERIAL is *never* orphan — sentinel always valid.
+        let mut scene = Scene::new();
+        // Direct construction: bypass promote (which requires non-FORM material).
+        let shape_id = build_shape_unit_cube(&mut scene);
+        scene.promote_shape_to_xia(shape_id, MaterialId::new(7)).expect("promote");
+        // Now manually set material to FORM_MATERIAL (simulating Phase 1 form-only).
+        let xia_id = *scene.xias.keys().next().unwrap();
+        scene.xias.get_mut(&xia_id).unwrap().material = FORM_MATERIAL;
+        let report = scene.detect_orphan_material_assignments();
+        assert!(report.is_clean(),
+            "Xia with FORM_MATERIAL must NOT be reported as orphan");
+    }
+
+    #[test]
+    fn adr100_detect_reports_xia_with_missing_material() {
+        let mut scene = Scene::new();
+        // Add custom material, then assign Xia, then remove material.
+        let custom = scene.material_library.create_material(
+            "Custom".into(), "Custom".into(),
+            crate::MaterialCategory::Custom,
+            crate::PhysicalProperties {
+                density: 1000.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: crate::FireRating::None,
+            },
+            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+        );
+        let xia_id = build_xia_with_material(&mut scene, custom);
+        // Move to User tier so removal is permitted.
+        assert!(scene.material_library.set_tier(custom, crate::material::MaterialTier::User));
+        // Remove the material (User tier).
+        scene.material_library.remove_material(custom).expect("remove");
+        // Now the Xia.material points to a missing id.
+        let report = scene.detect_orphan_material_assignments();
+        assert_eq!(report.affected_xias.len(), 1);
+        assert_eq!(report.affected_xias[0].xia_id, xia_id);
+        assert_eq!(report.affected_xias[0].stale_material_id, custom.raw());
+    }
+
+    #[test]
+    fn adr100_attempt_recovery_noop_on_clean_scene() {
+        let mut scene = Scene::new();
+        let outcome = scene.attempt_material_removal_recovery();
+        assert_eq!(outcome, MaterialRecoveryOutcome::NoOp);
+    }
+
+    #[test]
+    fn adr100_attempt_recovery_demotes_orphan_xia_to_shape() {
+        let mut scene = Scene::new();
+        let custom = scene.material_library.create_material(
+            "Custom".into(), "Custom".into(),
+            crate::MaterialCategory::Custom,
+            crate::PhysicalProperties {
+                density: 1000.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: crate::FireRating::None,
+            },
+            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+        );
+        scene.material_library.set_tier(custom, crate::material::MaterialTier::User);
+        let xia_id = build_xia_with_material(&mut scene, custom);
+        scene.material_library.remove_material(custom).expect("remove");
+
+        let outcome = scene.attempt_material_removal_recovery();
+        match outcome {
+            MaterialRecoveryOutcome::Recovered { affected_xias, .. } => {
+                assert_eq!(affected_xias, 1);
+            }
+            other => panic!("expected Recovered, got {:?}", other),
+        }
+        // After recovery, the Xia should be gone (demoted to Shape).
+        assert!(!scene.xias.contains_key(&xia_id));
+        // Scene is now clean.
+        assert!(scene.detect_orphan_material_assignments().is_clean());
+    }
+
+    #[test]
+    fn adr100_remove_project_material_with_recovery_combines_entries() {
+        let mut scene = Scene::new();
+        let custom = scene.material_library.create_material(
+            "Custom".into(), "Custom".into(),
+            crate::MaterialCategory::Custom,
+            crate::PhysicalProperties {
+                density: 1000.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: crate::FireRating::None,
+            },
+            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+        );
+        scene.material_library.set_tier(custom, crate::material::MaterialTier::User);
+        let _xia_id = build_xia_with_material(&mut scene, custom);
+
+        let outcome = scene.remove_project_material_with_recovery(custom).expect("removal ok");
+        assert_eq!(outcome.removed_id, custom.raw());
+        assert!(matches!(outcome.recovery, MaterialRecoveryOutcome::Recovered { .. }));
+        assert!(scene.material_library.get(custom).is_none());
+    }
+
+    #[test]
+    fn adr100_remove_system_tier_rejected() {
+        let mut scene = Scene::new();
+        // System tier id 0 (Concrete) — must reject.
+        let result = scene.remove_project_material_with_recovery(MaterialId::new(0));
+        assert!(result.is_err());
+        // Material library unchanged.
+        assert!(scene.material_library.get(MaterialId::new(0)).is_some());
+    }
+
+    #[test]
+    fn adr100_attempt_recovery_ordering_deterministic() {
+        // 3 Xias with same stale material — output sorted ascending by
+        // XiaId regardless of HashMap iteration order. Direct construction
+        // (bypassing promote) so we don't need 3 non-overlapping shapes.
+        let mut scene = Scene::new();
+        let stale = MaterialId::new(9999); // never in library
+        for raw_id in [10u32, 3u32, 7u32] {
+            let xid = raw_id;
+            scene.next_xia_id = xid.max(scene.next_xia_id) + 1;
+            let mut xia = crate::Xia::new(xid, format!("X{}", xid));
+            xia.material = stale;
+            scene.xias.insert(xid, xia);
+        }
+
+        let report = scene.detect_orphan_material_assignments();
+        assert_eq!(report.affected_xias.len(), 3);
+        let ids: Vec<XiaId> = report.affected_xias.iter().map(|e| e.xia_id).collect();
+        assert_eq!(ids, vec![3, 7, 10]);
+    }
+
+    #[test]
+    fn adr100_form_layer_invariant_unchanged_locked_26() {
+        // LOCKED #26: Form citizen (Shape) is material-agnostic. Recovery
+        // mutates Xia.material only, never Shape state.
+        let mut scene = Scene::new();
+        let shape_id = build_shape_unit_cube(&mut scene);
+        // Recovery on a scene with only Shapes (no Xia) is a no-op.
+        let outcome = scene.attempt_material_removal_recovery();
+        assert_eq!(outcome, MaterialRecoveryOutcome::NoOp);
+        // Shape preserved.
+        assert!(scene.shapes.contains_key(&shape_id));
+    }
+
+    #[test]
+    fn adr100_recovery_idempotent_when_called_twice() {
+        let mut scene = Scene::new();
+        let custom = scene.material_library.create_material(
+            "C".into(), "C".into(), crate::MaterialCategory::Custom,
+            crate::PhysicalProperties {
+                density: 1.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: crate::FireRating::None,
+            },
+            crate::VisualProperties { color: 0, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+        );
+        scene.material_library.set_tier(custom, crate::material::MaterialTier::User);
+        build_xia_with_material(&mut scene, custom);
+        scene.material_library.remove_material(custom).expect("remove");
+
+        let first = scene.attempt_material_removal_recovery();
+        assert!(matches!(first, MaterialRecoveryOutcome::Recovered { .. }));
+        let second = scene.attempt_material_removal_recovery();
+        assert_eq!(second, MaterialRecoveryOutcome::NoOp);
     }
 
     #[test]

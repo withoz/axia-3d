@@ -167,5 +167,58 @@ multi-week atomic 별도 세션.
 - 회귀 0 (spec only).
 - 다음 진입점 — R-β Rust core (별도 sub-step 결재).
 
-### R-β ~ R-ζ (예정)
-별도 sub-step 결재 시 commit 진행.
+### R-β (본 commit) — Rust core
+- **commit**: 본 commit (axia-core)
+- **신규 type 4 개** (`scene.rs` 위쪽 public types 영역):
+  * `OrphanMaterialReport { affected_xias: Vec<OrphanMaterialEntry> }`
+    + `is_clean()` helper
+  * `OrphanMaterialEntry { xia_id, stale_material_id, face_count }`
+  * `MaterialRecoveryOutcome` enum 3 variants — `NoOp` /
+    `Recovered { affected_xias, faces_demoted, faces_fallback }` /
+    `PartialFailure { affected_xias, remaining_orphans }` (ADR-097
+    `RecoveryOutcome` shape 직접 mirror)
+  * `MaterialRemovalOutcome { removed_id, recovery }`
+- **신규 Scene 메서드 3 개**:
+  * `Scene::detect_orphan_material_assignments() -> OrphanMaterialReport`
+    — read-only, FORM_MATERIAL sentinel skip, deterministic XiaId 정렬
+  * `Scene::attempt_material_removal_recovery() -> MaterialRecoveryOutcome`
+    — 3-tier cascade (Pass 1 auto-demote via ADR-091 D-β / Pass 2
+    fallback FORM_MATERIAL / Pass 3 escalate)
+  * `Scene::remove_project_material_with_recovery(material_id)
+    -> Result<MaterialRemovalOutcome, &'static str>` — convenience
+    entry (remove + cascade)
+- **ADR-091 D-β `demote_xia_to_shape` 직접 재사용** — 새 Rust API 0,
+  ADR-097 §B-T-A SSOT 정신 일관 (Recovery 자산 inventory 5개월 누적
+  활용, ADR-097 §E L5 답습)
+- **회귀 (axia-core)**: +10 tests
+  * adr100_detect_returns_clean_for_fresh_scene
+  * adr100_detect_skips_form_material_xias (LOCKED #26 sentinel guard)
+  * adr100_detect_reports_xia_with_missing_material
+  * adr100_attempt_recovery_noop_on_clean_scene
+  * adr100_attempt_recovery_demotes_orphan_xia_to_shape (Pass 1 happy path)
+  * adr100_remove_project_material_with_recovery_combines_entries
+  * adr100_remove_system_tier_rejected (R-D safety)
+  * adr100_attempt_recovery_ordering_deterministic (sort by XiaId)
+  * adr100_form_layer_invariant_unchanged_locked_26 (LOCKED #26 guard)
+  * adr100_recovery_idempotent_when_called_twice
+- **Cargo sweep**: axia-core 257 → **267 PASS** (+10), axia-geo 1256
+  unchanged, axia-wasm 0 unchanged (R-γ 에서 추가). 절대 #[ignore]
+  금지 10/10 준수.
+- **누적 R-α ~ R-β**: docs +1 ADR, axia-core +10 = **+10** (절대
+  #[ignore] 금지 10/10).
+- **Lessons applied**:
+  * ADR-091 D-β `demote_xia_to_shape` 직접 재사용 — 새 API 0 정신
+  * ADR-097 `RecoveryOutcome` enum shape mirror — naming + structure
+    1:1, AI agent / 사용자 모두 패턴 학습 효율
+  * LOCKED #26 P-5e-β FORM_MATERIAL sentinel 보존 — Pass 1 cascade
+    의 trigger gate 로 활용 (ADR-091 D-A=a 정합)
+  * Deterministic ordering via `sort_by_key(|e| e.xia_id)` —
+    ADR-091/098 BTreeMap 패턴과 비슷한 결정성 보장 (R-β 는 ephemeral
+    Vec 이지만 사용자 facing 의 순서 일관성 동일 가치)
+
+### R-γ ~ R-ζ (예정)
+별도 sub-step 결재 시 commit 진행. R-γ 는 WASM bridge 3 endpoints
+(`detectOrphanMaterialAssignments` / `attemptMaterialRemovalRecovery`
+/ `removeProjectMaterial`), R-δ 는 TS Dialog + Orchestrator (ADR-097
+helper 답습), R-ε 는 Settings flag + main.ts wiring, R-ζ 는 Real
+Chromium 시연 + closure.
