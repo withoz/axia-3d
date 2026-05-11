@@ -813,6 +813,22 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-099 L-γ — Clear one channel of a material's layered payload.
+     *
+     * If clearing the last channel leaves all 4 as None, the `layered`
+     * field is also reset to None (idempotent normalization).
+     * Returns true on success, false on material/channel missing.
+     * @param {number} material_id
+     * @param {string} channel
+     * @returns {boolean}
+     */
+    clearLayeredChannel(material_id, channel) {
+        const ptr0 = passStringToWasm0(channel, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_clearLayeredChannel(this.__wbg_ptr, material_id, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
      * ADR-050 P-4 — Clear all Shapes. Transaction-wrapped.
      */
     clearShapes() {
@@ -2303,6 +2319,34 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-099 L-γ — Read layered channels of a material as JSON.
+     *
+     * Returns:
+     *   - `"{\"hasLayered\":false}"` if material missing or layered=None
+     *   - `"{\"hasLayered\":true,\"channels\":{...}}"` with per-channel
+     *     info (each: `{ "dataUrl": ..., "projection": "planar"|"box"|
+     *     "cylindrical", "scale": ..., "rotation": <num|null>,
+     *     "label": <str|null> }`)
+     * @param {number} material_id
+     * @returns {string}
+     */
+    getLayeredChannels(material_id) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_getLayeredChannels(retptr, this.__wbg_ptr, material_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * ADR-098 S-γ — Get the tier of an existing material.
      *
      * Returns 0/1/2 (System/Project/User) or -1 if material missing.
@@ -2908,6 +2952,19 @@ export class AxiaEngine {
         return ret !== 0;
     }
     /**
+     * ADR-099 L-γ — Quick existence check.
+     *
+     * Returns true iff the material exists AND has `layered.Some(_)`
+     * with at least one populated channel. False on material missing
+     * or `layered=None` or empty `LayeredChannels`.
+     * @param {number} material_id
+     * @returns {boolean}
+     */
+    hasLayeredMaterial(material_id) {
+        const ret = wasm.axiaengine_hasLayeredMaterial(this.__wbg_ptr, material_id);
+        return ret !== 0;
+    }
+    /**
      * DXF 파일 바이트를 파싱하여 DCEL 메시로 가져오기
      * 반환: JSON 문자열 (통계 정보)
      * @param {Uint8Array} data
@@ -3327,6 +3384,17 @@ export class AxiaEngine {
      */
     migrateLegacyMaterials() {
         const ret = wasm.axiaengine_migrateLegacyMaterials(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * ADR-099 L-γ — Bulk normalize empty layered payloads.
+     *
+     * Idempotent. Returns the count of materials whose empty
+     * `LayeredChannels` was stripped to None. ADR-098 S-D pattern.
+     * @returns {number}
+     */
+    migrateLegacyTextureToLayered() {
+        const ret = wasm.axiaengine_migrateLegacyTextureToLayered(this.__wbg_ptr);
         return ret >>> 0;
     }
     /**
@@ -4255,6 +4323,41 @@ export class AxiaEngine {
      */
     setFaceSurfaceTorus(face_id, cx, cy, cz, ax, ay, az, rx, ry, rz, major_radius, minor_radius, u_min, u_max, v_min, v_max) {
         const ret = wasm.axiaengine_setFaceSurfaceTorus(this.__wbg_ptr, face_id, cx, cy, cz, ax, ay, az, rx, ry, rz, major_radius, minor_radius, u_min, u_max, v_min, v_max);
+        return ret !== 0;
+    }
+    /**
+     * ADR-099 L-γ — Set one channel of a material's layered payload.
+     *
+     * Flat-parameter signature (avoids JSON parsing in Rust). Channel
+     * name must be one of "albedo" | "normal" | "roughness" |
+     * "metallic". Projection u32: 0=planar, 1=box, 2=cylindrical.
+     * `rotation_or_nan = f64::NAN` → None; `label.is_empty()` → None.
+     *
+     * Returns true on success, false on:
+     *   - material missing
+     *   - invalid channel name
+     *   - invalid projection u32
+     *   - validate() failure (empty dataUrl, non-positive scale)
+     *
+     * Creates `layered = Some(LayeredChannels::default())` on the first
+     * call if currently None.
+     * @param {number} material_id
+     * @param {string} channel
+     * @param {string} data_url
+     * @param {number} projection
+     * @param {number} scale
+     * @param {number} rotation_or_nan
+     * @param {string} label
+     * @returns {boolean}
+     */
+    setLayeredChannel(material_id, channel, data_url, projection, scale, rotation_or_nan, label) {
+        const ptr0 = passStringToWasm0(channel, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(data_url, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(label, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.axiaengine_setLayeredChannel(this.__wbg_ptr, material_id, ptr0, len0, ptr1, len1, projection, scale, rotation_or_nan, ptr2, len2);
         return ret !== 0;
     }
     /**

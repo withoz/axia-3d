@@ -253,6 +253,14 @@ export class AxiaEngine {
      */
     clearFaceSurface(face_id: number): boolean;
     /**
+     * ADR-099 L-γ — Clear one channel of a material's layered payload.
+     *
+     * If clearing the last channel leaves all 4 as None, the `layered`
+     * field is also reset to None (idempotent normalization).
+     * Returns true on success, false on material/channel missing.
+     */
+    clearLayeredChannel(material_id: number, channel: string): boolean;
+    /**
      * ADR-050 P-4 — Clear all Shapes. Transaction-wrapped.
      */
     clearShapes(): void;
@@ -887,6 +895,17 @@ export class AxiaEngine {
      */
     getLastExportSkipStats(): string;
     /**
+     * ADR-099 L-γ — Read layered channels of a material as JSON.
+     *
+     * Returns:
+     *   - `"{\"hasLayered\":false}"` if material missing or layered=None
+     *   - `"{\"hasLayered\":true,\"channels\":{...}}"` with per-channel
+     *     info (each: `{ "dataUrl": ..., "projection": "planar"|"box"|
+     *     "cylindrical", "scale": ..., "rotation": <num|null>,
+     *     "label": <str|null> }`)
+     */
+    getLayeredChannels(material_id: number): string;
+    /**
      * ADR-098 S-γ — Get the tier of an existing material.
      *
      * Returns 0/1/2 (System/Project/User) or -1 if material missing.
@@ -1065,6 +1084,14 @@ export class AxiaEngine {
      */
     hasBooleanGroupSelection(): boolean;
     /**
+     * ADR-099 L-γ — Quick existence check.
+     *
+     * Returns true iff the material exists AND has `layered.Some(_)`
+     * with at least one populated channel. False on material missing
+     * or `layered=None` or empty `LayeredChannels`.
+     */
+    hasLayeredMaterial(material_id: number): boolean;
+    /**
      * DXF 파일 바이트를 파싱하여 DCEL 메시로 가져오기
      * 반환: JSON 문자열 (통계 정보)
      */
@@ -1232,6 +1259,13 @@ export class AxiaEngine {
      * legacy DXF/SKP import that creates raw materials).
      */
     migrateLegacyMaterials(): number;
+    /**
+     * ADR-099 L-γ — Bulk normalize empty layered payloads.
+     *
+     * Idempotent. Returns the count of materials whose empty
+     * `LayeredChannels` was stripped to None. ADR-098 S-D pattern.
+     */
+    migrateLegacyTextureToLayered(): number;
     /**
      * Mirror the given faces across a plane. Returns the new FaceIds
      * in the same order as the input (empty vec on failure, with
@@ -1584,6 +1618,24 @@ export class AxiaEngine {
      */
     setFaceSurfaceTorus(face_id: number, cx: number, cy: number, cz: number, ax: number, ay: number, az: number, rx: number, ry: number, rz: number, major_radius: number, minor_radius: number, u_min: number, u_max: number, v_min: number, v_max: number): boolean;
     /**
+     * ADR-099 L-γ — Set one channel of a material's layered payload.
+     *
+     * Flat-parameter signature (avoids JSON parsing in Rust). Channel
+     * name must be one of "albedo" | "normal" | "roughness" |
+     * "metallic". Projection u32: 0=planar, 1=box, 2=cylindrical.
+     * `rotation_or_nan = f64::NAN` → None; `label.is_empty()` → None.
+     *
+     * Returns true on success, false on:
+     *   - material missing
+     *   - invalid channel name
+     *   - invalid projection u32
+     *   - validate() failure (empty dataUrl, non-positive scale)
+     *
+     * Creates `layered = Some(LayeredChannels::default())` on the first
+     * call if currently None.
+     */
+    setLayeredChannel(material_id: number, channel: string, data_url: string, projection: number, scale: number, rotation_or_nan: number, label: string): boolean;
+    /**
      * ADR-095 Phase 3-γ — Toggle Reference locked flag.
      * Returns false if id missing.
      */
@@ -1862,6 +1914,7 @@ export interface InitOutput {
     readonly axiaengine_clearBooleanGroupTags: (a: number) => void;
     readonly axiaengine_clearEdgeCurve: (a: number, b: number) => number;
     readonly axiaengine_clearFaceSurface: (a: number, b: number) => number;
+    readonly axiaengine_clearLayeredChannel: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_clearShapes: (a: number) => void;
     readonly axiaengine_collectEdgeChain: (a: number, b: number, c: number) => void;
     readonly axiaengine_computeGroundProjectedShadows: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1945,6 +1998,7 @@ export interface InitOutput {
     readonly axiaengine_getIndicesLen: (a: number) => number;
     readonly axiaengine_getIndicesPtr: (a: number) => number;
     readonly axiaengine_getLastExportSkipStats: (a: number, b: number) => void;
+    readonly axiaengine_getLayeredChannels: (a: number, b: number, c: number) => void;
     readonly axiaengine_getMaterialTier: (a: number, b: number) => number;
     readonly axiaengine_getNonManifoldEdgeSegments: (a: number, b: number) => void;
     readonly axiaengine_getNormalsLen: (a: number) => number;
@@ -1982,6 +2036,7 @@ export interface InitOutput {
     readonly axiaengine_group_count: (a: number) => number;
     readonly axiaengine_hasAnyBooleanGroupTag: (a: number) => number;
     readonly axiaengine_hasBooleanGroupSelection: (a: number) => number;
+    readonly axiaengine_hasLayeredMaterial: (a: number, b: number) => number;
     readonly axiaengine_import_dxf: (a: number, b: number, c: number, d: number) => void;
     readonly axiaengine_import_snapshot: (a: number, b: number, c: number) => number;
     readonly axiaengine_injectExternalFaceNoSurface: (a: number, b: number, c: number) => number;
@@ -2005,6 +2060,7 @@ export interface InitOutput {
     readonly axiaengine_meshVolume: (a: number) => number;
     readonly axiaengine_migrateCurveSurfaceMandatory: (a: number, b: number) => void;
     readonly axiaengine_migrateLegacyMaterials: (a: number) => number;
+    readonly axiaengine_migrateLegacyTextureToLayered: (a: number) => number;
     readonly axiaengine_mirrorFaces: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly axiaengine_new: () => number;
     readonly axiaengine_normalizeForImport: (a: number, b: number, c: number, d: number) => void;
@@ -2050,6 +2106,7 @@ export interface InitOutput {
     readonly axiaengine_setFaceSurfacePlane: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
     readonly axiaengine_setFaceSurfaceSphere: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly axiaengine_setFaceSurfaceTorus: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => number;
+    readonly axiaengine_setLayeredChannel: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly axiaengine_setReferenceLocked: (a: number, b: number, c: number) => number;
     readonly axiaengine_setReferenceVisible: (a: number, b: number, c: number) => number;
     readonly axiaengine_set_group_parent: (a: number, b: number, c: number) => number;

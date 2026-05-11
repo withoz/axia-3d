@@ -1,6 +1,6 @@
 # ADR-099: Layered Material 4-PBR Channels (Two-Layer Citizenship Phase 5-B)
 
-- **Status**: Proposed (L-α — spec only)
+- **Status**: Accepted (L-α ~ L-η all closed, 2026-05-10) — **LOCKED #26 완전 closure**
 - **Date**: 2026-05-10
 - **Anchor**: LOCKED #26 Phase 5 약속 ("자산 라이브러리 3계층 +
   Layered material") + v3.2 §13 main promise. **본 ADR 완료 시
@@ -492,8 +492,94 @@ Bridge TS wrappers + Real Chromium E2E
   * Markdirty placement — only on mutations (set/clear), read paths
     skip (ADR-097 T-δ 답습)
 
-### L-η (예정, multi-week)
-별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
-E2E) — 4-channel upload visual + snapshot round-trip + visual
-regression baseline (ADR-077 V-2 답습). L-η closure 시 ADR-099 본체
-+ LOCKED #26 완전 closure.
+### L-η (본 commit) — Real Chromium closure + LOCKED #26 완전 closure
+- **commit**: 본 commit (Playwright E2E + ADR-099 closure +
+  LOCKED #26 5-Phase 완전 closure)
+- **production bundle 재빌드**: WASM 5 L-γ endpoints + AssetLibraryPanel
+  callback wiring (L-ζ main.ts) + LayeredMaterialBinding utility 모두
+  production layer 노출
+- **Playwright spec** (`web/e2e/adr-099-demo.spec.ts`, 5 scenarios):
+  * Scenario 1 — Bridge surface: 5 endpoints production bundle 노출
+    (getLayeredChannels / setLayeredChannel / clearLayeredChannel /
+    migrateLegacyTextureToLayered / hasLayeredMaterial)
+  * Scenario 2 — Set/Get round-trip: addProjectMaterial → setLayered
+    Channel(albedo) → hasLayered=true → getLayeredChannels parses
+    dataUrl + projection + label. normal/roughness/metallic undefined
+  * Scenario 3 — Clear normalization: 마지막 채널 clear →
+    hasLayered=false + getLayeredChannels returns null (engine 의
+    idempotent normalize 정합)
+  * Scenario 4 — Multi-channel: 4 채널 (albedo planar / normal box /
+    roughness cylindrical / metallic planar) 모두 set → has=true →
+    get all 4 with correct dataUrl + projection enum mapping
+  * Scenario 5 — Migrate idempotent: fresh scene → first=0, second=0
+- **회귀 (Real Chromium)**: Playwright +5 (production layer 검증).
+  Full Playwright sweep: **47/47 PASS** (1 skipped 무관, 42 → 47).
+  기존 ADR-075/077/078/091/094/096/097/098/100 E2E 무영향.
+- **누적 (L-α ~ L-η closure)**:
+  * docs +1 ADR (L-α)
+  * axia-core +18 (L-β 14 + L-γ 4)
+  * axia-wasm +5 (L-γ wiring)
+  * vitest +38 (L-δ 13 + L-ε 16 + L-ζ 9)
+  * Playwright +5 (L-η Real Chromium)
+  * **합계 +66**, 절대 #[ignore] 금지 66/66 준수
+- **사용자 facing 변화 요약** (Phase 5-B closure):
+  * `VisualProperties.layered: Option<LayeredChannels>` — 4 PBR
+    channel storage
+  * `TextureProjection` enum 3-variant + `TextureChannelInfo` struct
+  * 5 WASM endpoints + 5 TS bridge wrappers
+  * `LayeredMaterialBinding.ts` Three.js 4-map binding utility
+  * `LayeredMaterialDialog.ts` per-channel upload helper
+  * `AssetLibraryPanel` 4-cell A/N/R/M indicator + ⊞ Layered button
+  * `MaterialLibrary` migrate + validate helpers
+- **6-Layer Atomic Stack 실제 검증** (L-α 명시한 evolution pattern):
+  Engine (axia-core 4 types + helpers) + Snapshot section 9 자연 확장
+  + Bridge (axia-wasm 5 endpoints) + Render (LayeredMaterialBinding
+  utility) + UI (AssetLibraryPanel + LayeredMaterialDialog) + Bridge
+  TS wrappers + main.ts wiring + Real Chromium E2E. ADR-097/100
+  5-layer Recovery 위에 Render layer 추가된 6-layer pattern 완성.
+
+## LOCKED #26 5-Phase 완전 closure
+
+본 ADR-099 L-η closure 시점으로 LOCKED #26 Two-Layer Citizenship
+Model 5-Phase 로드맵 모두 완료:
+- Phase 1 (ADR-050 + ADR-051) — Shape/Xia type split ✅
+- Phase 2 (ADR-091) — Material removal demote ✅
+- Phase 3 (ADR-095 + ADR-096) — Reference citizenship ✅
+- Phase 4 (ADR-097) — Topology damage auto-recovery ✅
+- Phase 5-A (ADR-098) — Asset library 3-tier material scope ✅
+- Phase 5-C (ADR-100) — Material removal recovery ✅
+- **Phase 5-B (본 ADR-099) — Layered material 4-PBR channels ✅**
+
+**Two-Layer Citizenship Model 의미적 완성** — v3.2 §13 main promise
+정합, LOCKED #26 모든 약속 closure.
+
+## Pattern Evolution Lessons (canonical, L-α ~ L-η 누적)
+
+ADR-097/100 5-layer Recovery 1:1 mirror 가 *reproducibility 증명*
+이었다면, ADR-099 6-layer Feature 추가는 *evolution 증명*. Render
+layer 의 자연 삽입은 5-layer pattern 의 *generalization*:
+
+1. **L1 (canonical)** — bincode skip_serializing_if 함정 영구 박멸
+   (L-β/L-γ 사후 정정 누적). 향후 모든 bincode struct Option 필드는
+   `#[serde(default)]` 만, `skip_serializing_if` 금지
+2. **L2 (canonical)** — Mesh/Scene-level Map 통한 additive persistence
+   (ADR-091 §E L1 **6번째 일관 적용**). VisualProperties.layered 는
+   Material struct 의 자연 위치 — 외부 Map 회피
+3. **L3 (canonical)** — Pure utility extraction (LayeredMaterialBinding)
+   — Viewport 의 DOM 코드에서 logic 분리, structural typing 으로
+   jsdom 테스트 가능 (ADR-091 §E L4 **9번째 적용** with L-ε callback
+   wiring)
+4. **L4 (canonical)** — Color space policy explicit (Three.js docs
+   정합, albedo sRGB vs data maps linear)
+5. **L5 (canonical)** — Failure isolation (per-channel `{applied,
+   failures}` ok-envelope, ADR-097 답습)
+6. **L6 (canonical)** — Engine ↔ TS ergonomic mapping (null →
+   undefined, NaN/empty string sentinel for Option flatten,
+   ADR-098/100 답습)
+7. **L7 (canonical)** — Callback wiring at main.ts boundary —
+   panel/bridge 분리 유지 (ADR-091 §E L4 9번째 적용)
+8. **L8 (canonical)** — Discriminated-union return types — silent
+   skip 차단
+9. **L9 (canonical)** — Pattern evolution: ADR-097/100 1:1 mirror
+   reproducibility 가능성 증명 + ADR-099 6-layer feature evolution
+   가능성 증명. 향후 ADR 은 둘 중 적합한 패턴 선택 가능
