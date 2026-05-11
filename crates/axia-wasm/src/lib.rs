@@ -1522,7 +1522,7 @@ impl AxiaEngine {
                 fire_rating: FireRating::None,
             },
             VisualProperties {
-                color, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                color, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None,
             },
         );
         id.raw()
@@ -1548,7 +1548,7 @@ impl AxiaEngine {
                 fire_rating: FireRating::None,
             },
             VisualProperties {
-                color, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                color, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None,
             },
         );
         id.raw()

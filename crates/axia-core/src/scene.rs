@@ -13694,7 +13694,7 @@ mod tests {
                 specific_gravity: 1.0, thermal_conductivity: 0.5,
                 fire_rating: FireRating::None,
             },
-            VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+            VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None },
         );
         // Move one to User tier.
         let user_id = scene.material_library.create_material_in_tier(
@@ -13705,7 +13705,7 @@ mod tests {
                 specific_gravity: 0.5, thermal_conductivity: 0.3,
                 fire_rating: FireRating::None,
             },
-            VisualProperties { color: 0x00ff00, roughness: 0.6, metalness: 0.0, opacity: 1.0 },
+            VisualProperties { color: 0x00ff00, roughness: 0.6, metalness: 0.0, opacity: 1.0, layered: None },
         );
 
         let bytes = scene.export_versioned_snapshot().expect("export");
@@ -13835,7 +13835,7 @@ mod tests {
                 specific_gravity: 1.0, thermal_conductivity: 0.5,
                 fire_rating: crate::FireRating::None,
             },
-            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None },
         );
         let xia_id = build_xia_with_material(&mut scene, custom);
         // Move to User tier so removal is permitted.
@@ -13867,7 +13867,7 @@ mod tests {
                 specific_gravity: 1.0, thermal_conductivity: 0.5,
                 fire_rating: crate::FireRating::None,
             },
-            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None },
         );
         scene.material_library.set_tier(custom, crate::material::MaterialTier::User);
         let xia_id = build_xia_with_material(&mut scene, custom);
@@ -13897,7 +13897,7 @@ mod tests {
                 specific_gravity: 1.0, thermal_conductivity: 0.5,
                 fire_rating: crate::FireRating::None,
             },
-            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+            crate::VisualProperties { color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None },
         );
         scene.material_library.set_tier(custom, crate::material::MaterialTier::User);
         let _xia_id = build_xia_with_material(&mut scene, custom);
@@ -13962,7 +13962,7 @@ mod tests {
                 specific_gravity: 1.0, thermal_conductivity: 0.5,
                 fire_rating: crate::FireRating::None,
             },
-            crate::VisualProperties { color: 0, roughness: 0.5, metalness: 0.0, opacity: 1.0 },
+            crate::VisualProperties { color: 0, roughness: 0.5, metalness: 0.0, opacity: 1.0, layered: None },
         );
         scene.material_library.set_tier(custom, crate::material::MaterialTier::User);
         build_xia_with_material(&mut scene, custom);

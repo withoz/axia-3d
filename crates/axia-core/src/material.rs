@@ -36,6 +36,136 @@ pub struct PhysicalProperties {
     pub fire_rating: FireRating,
 }
 
+/// ADR-099 L-β — UV projection mode for a texture channel.
+///
+/// Mirrors TS `TextureInfo.projection` union: 'planar' | 'box' |
+/// 'cylindrical'. Stored as enum for type-safety; serialized as
+/// lowercase string for TS interop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureProjection {
+    Planar,
+    Box,
+    Cylindrical,
+}
+
+impl Default for TextureProjection {
+    fn default() -> Self { Self::Planar }
+}
+
+/// ADR-099 L-β — A single texture channel payload.
+///
+/// Mirrors TS `TextureInfo` (web/src/materials/MaterialLibrary.ts).
+/// Stored as base64 dataUrl for direct .axia file embedding (no
+/// external file refs — keeps snapshot self-contained, consistent
+/// with ADR-098 S-γ section 9 policy).
+///
+/// Fields parallel TS shape for snapshot round-trip (L-η).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TextureChannelInfo {
+    /// base64 dataUrl (PNG/JPEG/etc) — included in snapshot section 9.
+    #[serde(rename = "dataUrl")]
+    pub data_url: String,
+    /// UV projection mode.
+    #[serde(default)]
+    pub projection: TextureProjection,
+    /// World-units-per-tile (e.g. 0.001 = 1m per tile).
+    pub scale: f64,
+    /// Optional projection-axis rotation (radians, planar/box only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f64>,
+    /// Optional display label (filename etc).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl TextureChannelInfo {
+    /// Construct a new channel with the minimum required fields.
+    /// `rotation` and `label` default to `None`; `projection` to Planar.
+    pub fn new(data_url: String, scale: f64) -> Self {
+        Self {
+            data_url,
+            projection: TextureProjection::default(),
+            scale,
+            rotation: None,
+            label: None,
+        }
+    }
+
+    /// L-B validation — dataUrl must be non-empty and scale > 0.
+    /// Returns Ok on valid, Err with a short reason otherwise.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.data_url.is_empty() {
+            return Err("dataUrl is empty");
+        }
+        if !(self.scale > 0.0) || !self.scale.is_finite() {
+            return Err("scale must be > 0 and finite");
+        }
+        Ok(())
+    }
+}
+
+/// ADR-099 L-β — Layered PBR channels (Phase 5-B).
+///
+/// 4 fixed channels per Lock-in L-A (PBR standard: Disney BRDF +
+/// Three.js MeshStandardMaterial). Each channel is optional — a
+/// material may use any subset (e.g. albedo only = current behavior,
+/// albedo + normal = bump-mapped, all 4 = full PBR).
+///
+/// Mirrored on TS side as `LayeredChannels` (L-ζ bridge wrappers).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LayeredChannels {
+    /// Base color (a.k.a. diffuse) — Three.js `material.map`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub albedo: Option<TextureChannelInfo>,
+    /// Tangent-space normal map — Three.js `material.normalMap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<TextureChannelInfo>,
+    /// Greyscale roughness map — Three.js `material.roughnessMap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<TextureChannelInfo>,
+    /// Greyscale metallic map — Three.js `material.metalnessMap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<TextureChannelInfo>,
+}
+
+impl LayeredChannels {
+    /// True iff at least one channel is populated.
+    pub fn has_any_channel(&self) -> bool {
+        self.albedo.is_some()
+            || self.normal.is_some()
+            || self.roughness.is_some()
+            || self.metallic.is_some()
+    }
+
+    /// Count of populated channels (0..=4).
+    pub fn channel_count(&self) -> usize {
+        [&self.albedo, &self.normal, &self.roughness, &self.metallic]
+            .iter()
+            .filter(|c| c.is_some())
+            .count()
+    }
+
+    /// L-B validation — every populated channel must validate. Returns
+    /// the FIRST error encountered (with channel name prefix) or Ok if
+    /// all channels validate.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, ch) in [
+            ("albedo", &self.albedo),
+            ("normal", &self.normal),
+            ("roughness", &self.roughness),
+            ("metallic", &self.metallic),
+        ] {
+            if let Some(info) = ch {
+                if let Err(e) = info.validate() {
+                    return Err(format!("{}: {}", name, e));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Visual/rendering material properties
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisualProperties {
@@ -47,6 +177,19 @@ pub struct VisualProperties {
     pub metalness: f64,
     /// Opacity (0.0 = transparent, 1.0 = opaque)
     pub opacity: f64,
+    /// ADR-099 L-β — 4 PBR channels (Phase 5-B). `None` for legacy
+    /// snapshots / scalar-only materials. `#[serde(default)]` ensures
+    /// bincode compat (ADR-091 §E L1 canonical 6번째 적용).
+    ///
+    /// NOTE: `skip_serializing_if` is intentionally NOT applied here.
+    /// bincode is a positional format — omitting a field at
+    /// serialization time causes EOF during deserialization of the
+    /// SAME version. The Option tag byte (1 byte for None) is cheap.
+    /// Legacy snapshots predating L-β load through ADR-098 S-γ
+    /// section 9 fallback (entire material_library reverts to Scene::
+    /// new default → all materials have layered=None automatically).
+    #[serde(default)]
+    pub layered: Option<LayeredChannels>,
 }
 
 impl VisualProperties {
@@ -236,7 +379,7 @@ impl MaterialLibrary {
                 color: 0xB0B0B0,
                 roughness: 0.85,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -258,7 +401,7 @@ impl MaterialLibrary {
                 color: 0x6E6E6E,
                 roughness: 0.3,
                 metalness: 1.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -280,7 +423,7 @@ impl MaterialLibrary {
                 color: 0x8B4513,
                 roughness: 0.6,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -302,7 +445,7 @@ impl MaterialLibrary {
                 color: 0xE8F4F8,
                 roughness: 0.1,
                 metalness: 0.0,
-                opacity: 0.3,
+                opacity: 0.3, layered: None,
             },
         });
 
@@ -324,7 +467,7 @@ impl MaterialLibrary {
                 color: 0xC85A54,
                 roughness: 0.8,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -346,7 +489,7 @@ impl MaterialLibrary {
                 color: 0xD3D3D3,
                 roughness: 0.25,
                 metalness: 0.9,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -368,7 +511,7 @@ impl MaterialLibrary {
                 color: 0x9A9A9A,
                 roughness: 0.9,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -390,7 +533,7 @@ impl MaterialLibrary {
                 color: 0xF5F5DC,
                 roughness: 0.95,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -412,7 +555,7 @@ impl MaterialLibrary {
                 color: 0xFFE4B5,
                 roughness: 0.8,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -434,7 +577,7 @@ impl MaterialLibrary {
                 color: 0x4A90E2,
                 roughness: 0.2,
                 metalness: 0.0,
-                opacity: 0.5,
+                opacity: 0.5, layered: None,
             },
         });
 
@@ -456,7 +599,7 @@ impl MaterialLibrary {
                 color: 0x8B7355,
                 roughness: 0.9,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
 
@@ -478,7 +621,7 @@ impl MaterialLibrary {
                 color: 0xD2B48C,
                 roughness: 0.7,
                 metalness: 0.0,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         });
     }
@@ -622,6 +765,46 @@ impl MaterialLibrary {
         count
     }
 
+    /// ADR-099 L-D — Migrate legacy single-texture VisualProperties to
+    /// the new `layered.albedo` slot. Idempotent.
+    ///
+    /// Current axia-core `VisualProperties` has no direct `texture`
+    /// field (texture state currently lives on the TS side). The
+    /// helper therefore has no Rust-side legacy data to migrate
+    /// today — it remains as a future-proof normalizer that strips
+    /// empty `LayeredChannels` payloads (every channel `None`).
+    /// Future sub-step (L-γ bridge) will populate from TS state.
+    ///
+    /// Returns the count of materials normalized. ADR-098 S-D pattern
+    /// 답습 — idempotent + monotonic.
+    pub fn migrate_legacy_textures_to_layered(&mut self) -> usize {
+        let mut count = 0;
+        for material in self.materials.values_mut() {
+            if let Some(ref layered) = material.visual.layered {
+                if !layered.has_any_channel() {
+                    material.visual.layered = None;
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// ADR-099 L-β — Bulk validation of all materials' layered channels.
+    /// Returns `Err((material_id, reason))` on the first invalid
+    /// channel. Caller may use this as a strict gate before snapshot
+    /// export.
+    pub fn validate_layered_channels(&self) -> Result<(), (MaterialId, String)> {
+        for (raw_id, material) in &self.materials {
+            if let Some(ref layered) = material.visual.layered {
+                if let Err(e) = layered.validate() {
+                    return Err((MaterialId::new(*raw_id), e));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// ADR-098 S-G — Reject material removal when in use is the caller's
     /// responsibility (Scene-level face_to_material check). This helper
     /// only enforces System tier immutability.
@@ -671,7 +854,7 @@ mod tests {
             color: 0xFF8040,
             roughness: 0.5,
             metalness: 0.0,
-            opacity: 1.0,
+            opacity: 1.0, layered: None,
         };
         let (r, g, b) = visual.rgb();
         assert_eq!(r, 0xFF);
@@ -698,7 +881,7 @@ mod tests {
                 color: 0x123456,
                 roughness: 0.5,
                 metalness: 0.5,
-                opacity: 1.0,
+                opacity: 1.0, layered: None,
             },
         );
         assert!(lib.get(id).is_some(), "custom material should exist");
@@ -724,7 +907,7 @@ mod tests {
             color: 0xffffff,
             roughness: 0.5,
             metalness: 0.0,
-            opacity: 1.0,
+            opacity: 1.0, layered: None,
         }
     }
 
@@ -927,5 +1110,174 @@ mod tests {
         assert_eq!(lib.tier_of(MaterialId::new(0)), Some(MaterialTier::System));
         // Form layer (Shape) 는 material 자체를 안 갖음 — 본 test 는
         // tier 변경 surface 의 invariant 만 확인.
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-099 L-β — Layered Material (Phase 5-B) regression
+    // ────────────────────────────────────────────────────────────────
+
+    fn dummy_channel(label: &str) -> TextureChannelInfo {
+        TextureChannelInfo {
+            data_url: format!("data:image/png;base64,{}", label),
+            projection: TextureProjection::Planar,
+            scale: 0.001,
+            rotation: None,
+            label: Some(label.to_string()),
+        }
+    }
+
+    #[test]
+    fn texture_projection_default_is_planar() {
+        assert_eq!(TextureProjection::default(), TextureProjection::Planar);
+    }
+
+    #[test]
+    fn texture_channel_info_validate_accepts_minimal() {
+        let info = TextureChannelInfo::new("data:image/png;base64,AAAA".into(), 0.001);
+        assert!(info.validate().is_ok());
+    }
+
+    #[test]
+    fn texture_channel_info_validate_rejects_empty_dataurl() {
+        let info = TextureChannelInfo::new(String::new(), 0.001);
+        assert!(info.validate().is_err());
+    }
+
+    #[test]
+    fn texture_channel_info_validate_rejects_nonpositive_scale() {
+        let mut info = TextureChannelInfo::new("data:image/png;base64,X".into(), 0.0);
+        assert!(info.validate().is_err());
+        info.scale = -1.0;
+        assert!(info.validate().is_err());
+        info.scale = f64::NAN;
+        assert!(info.validate().is_err());
+    }
+
+    #[test]
+    fn layered_channels_default_is_all_none() {
+        let l = LayeredChannels::default();
+        assert!(!l.has_any_channel());
+        assert_eq!(l.channel_count(), 0);
+    }
+
+    #[test]
+    fn layered_channels_count_and_has_any_track_population() {
+        let mut l = LayeredChannels::default();
+        l.albedo = Some(dummy_channel("albedo"));
+        assert!(l.has_any_channel());
+        assert_eq!(l.channel_count(), 1);
+        l.normal = Some(dummy_channel("normal"));
+        l.roughness = Some(dummy_channel("roughness"));
+        l.metallic = Some(dummy_channel("metallic"));
+        assert_eq!(l.channel_count(), 4);
+    }
+
+    #[test]
+    fn layered_channels_validate_emits_first_channel_error() {
+        let mut l = LayeredChannels::default();
+        l.albedo = Some(dummy_channel("albedo"));
+        // Inject an invalid normal channel.
+        l.normal = Some(TextureChannelInfo::new(String::new(), 0.001));
+        let err = l.validate().expect_err("should fail");
+        assert!(err.starts_with("normal: "), "got {}", err);
+    }
+
+    #[test]
+    fn visual_properties_layered_default_is_none() {
+        // L-B canonical — default VisualProperties has no layered channels.
+        let v = VisualProperties {
+            color: 0xffffff, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+            layered: None,
+        };
+        assert!(v.layered.is_none());
+    }
+
+    #[test]
+    fn visual_properties_bincode_roundtrip_with_legacy_payload() {
+        // L-B canonical — bincode legacy payload (no `layered` field
+        // in the encoded form) deserializes via #[serde(default)] to
+        // None. We construct a "legacy" VisualProperties by serializing
+        // a struct that excludes the layered field via the
+        // skip_serializing_if attribute (None values are not encoded).
+        let legacy = VisualProperties {
+            color: 0xffffff, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+            layered: None,
+        };
+        let bytes = bincode::serialize(&legacy).expect("serialize");
+        let decoded: VisualProperties = bincode::deserialize(&bytes).expect("deserialize");
+        assert!(decoded.layered.is_none());
+        assert_eq!(decoded.color, 0xffffff);
+    }
+
+    #[test]
+    fn material_library_migrate_legacy_textures_is_idempotent() {
+        let mut lib = MaterialLibrary::new();
+        let first = lib.migrate_legacy_textures_to_layered();
+        assert_eq!(first, 0, "fresh library has no layered channels");
+        let second = lib.migrate_legacy_textures_to_layered();
+        assert_eq!(second, 0, "second run also a no-op");
+    }
+
+    #[test]
+    fn material_library_migrate_strips_empty_layered_payloads() {
+        let mut lib = MaterialLibrary::new();
+        let id = lib.create_material(
+            "Test".into(), "Test".into(), MaterialCategory::Custom,
+            PhysicalProperties {
+                density: 1.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: FireRating::None,
+            },
+            VisualProperties {
+                color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                layered: Some(LayeredChannels::default()), // all None — empty
+            },
+        );
+        let count = lib.migrate_legacy_textures_to_layered();
+        assert_eq!(count, 1, "empty layered should be normalized to None");
+        assert!(lib.get(id).unwrap().visual.layered.is_none());
+    }
+
+    #[test]
+    fn material_library_validate_layered_returns_ok_for_clean_library() {
+        let lib = MaterialLibrary::new();
+        assert!(lib.validate_layered_channels().is_ok());
+    }
+
+    #[test]
+    fn material_library_validate_layered_emits_material_id_with_error() {
+        let mut lib = MaterialLibrary::new();
+        let id = lib.create_material(
+            "Bad".into(), "Bad".into(), MaterialCategory::Custom,
+            PhysicalProperties {
+                density: 1.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: FireRating::None,
+            },
+            VisualProperties {
+                color: 0, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                layered: Some(LayeredChannels {
+                    albedo: Some(TextureChannelInfo::new(String::new(), 0.001)),
+                    ..Default::default()
+                }),
+            },
+        );
+        let err = lib.validate_layered_channels().expect_err("invalid albedo");
+        assert_eq!(err.0, id);
+        assert!(err.1.starts_with("albedo: "));
+    }
+
+    #[test]
+    fn locked_26_form_layer_unaffected_by_layered_extension() {
+        // LOCKED #26: Form citizen (Shape) is material-agnostic.
+        // VisualProperties.layered 추가가 Shape lifecycle 에 영향이
+        // 없음을 명시 — material 만 mutate.
+        let lib = MaterialLibrary::new();
+        // System tier built-ins all have layered = None by default.
+        for raw in 0..=BUILTIN_MATERIAL_ID_MAX {
+            let m = lib.get(MaterialId::new(raw)).unwrap();
+            assert!(m.visual.layered.is_none(),
+                "built-in {} must have layered=None (Form-agnostic anchor)", raw);
+        }
     }
 }

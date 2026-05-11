@@ -214,6 +214,71 @@ Bridge TS wrappers + Real Chromium E2E
 - 회귀 0 (spec only).
 - 다음 진입점 — L-β Rust core (별도 세션, multi-week 첫 단계).
 
-### L-β ~ L-η (예정, multi-week)
+### L-β (본 commit) — Rust core
+- **commit**: 본 commit (axia-core)
+- **신규 type 3 개**:
+  * `TextureProjection` enum — Planar / Box / Cylindrical
+    (`#[serde(rename_all = "lowercase")]` for TS interop)
+  * `TextureChannelInfo` — Rust counterpart of TS `TextureInfo`
+    (dataUrl + projection + scale + optional rotation + optional label)
+    + `new()` factory + `validate()` (non-empty dataUrl + positive scale)
+  * `LayeredChannels` — 4 Option<TextureChannelInfo> (albedo / normal
+    / roughness / metallic) + `has_any_channel()` + `channel_count()`
+    + `validate()` (per-channel, first-error)
+- **VisualProperties 확장**: `layered: Option<LayeredChannels>` —
+  ADR-091 §E L1 canonical **6번째 일관 적용** (additive only +
+  `#[serde(default)]`)
+- **사후 정정 — bincode 호환성 정밀화**: 초안에 `#[serde(default,
+  skip_serializing_if = "Option::is_none")]` 적용했으나 bincode 의
+  positional encoding 에서 `skip_serializing_if` 가 EOF 를 유발
+  (test `visual_properties_bincode_roundtrip_with_legacy_payload`
+  fail). 정정: `#[serde(default)]` 만 유지 (Option tag 1 byte 영구
+  포함). Legacy snapshot 호환은 ADR-098 S-γ section 9 fallback 으로
+  보장 (entire material_library 가 Scene::new 으로 fallback). **신규
+  Lesson** — bincode positional 의 `skip_serializing_if` 함정.
+- **MaterialLibrary 신규 helper 2개**:
+  * `migrate_legacy_textures_to_layered() -> usize` — idempotent +
+    monotonic counter (ADR-098 S-D 패턴 답습). 현재 axia-core 에
+    legacy texture field 가 없어 empty layered payload normalization
+    만 수행 — L-γ TS bridge wiring 시 본격 활용
+  * `validate_layered_channels() -> Result<(), (MaterialId, String)>`
+    — snapshot export 전 strict gate
+- **24+ VisualProperties construction sites 일괄 패치**: material.rs
+  의 12 built-ins + scene.rs 의 6 test sites + axia-wasm 의 2 sites
+  모두 `layered: None,` 추가. Python regex sed 로 일괄 자동 적용
+  (수동 편집 위험 회피)
+- **회귀 (axia-core)**: +14 tests
+  * texture_projection_default_is_planar
+  * texture_channel_info_validate_accepts_minimal
+  * texture_channel_info_validate_rejects_empty_dataurl
+  * texture_channel_info_validate_rejects_nonpositive_scale (3 cases)
+  * layered_channels_default_is_all_none
+  * layered_channels_count_and_has_any_track_population
+  * layered_channels_validate_emits_first_channel_error
+  * visual_properties_layered_default_is_none
+  * visual_properties_bincode_roundtrip_with_legacy_payload (bincode
+    함정 회귀 차단)
+  * material_library_migrate_legacy_textures_is_idempotent
+  * material_library_migrate_strips_empty_layered_payloads
+  * material_library_validate_layered_returns_ok_for_clean_library
+  * material_library_validate_layered_emits_material_id_with_error
+  * locked_26_form_layer_unaffected_by_layered_extension (LOCKED #26 guard)
+- **Cargo sweep**: axia-core 267 → **281 PASS** (+14). axia-geo 1256
+  unchanged. axia-wasm 49 PASS unchanged (2 VisualProperties sites
+  patched to compile). 절대 #[ignore] 금지 14/14 준수.
+- **누적 L-α ~ L-β**: docs +1 ADR, axia-core +14 = **+14**
+- **Lessons applied**:
+  * ADR-091 §E L1 canonical **6번째 적용** — additive only +
+    `#[serde(default)]`
+  * **신규 Lesson** — bincode positional 의 `skip_serializing_if`
+    함정 (EOF 유발). 향후 bincode struct 에 Option 필드 추가 시
+    `skip_serializing_if` 금지, default 만 사용
+  * Python regex sed 일괄 패치 — 24+ site 의 struct 변경 시 수동
+    편집 위험 회피 (ADR-087 K-ζ 답습 — sed + cargo catch)
+  * Validation helper bulk + per-instance 분리 — `TextureChannelInfo::
+    validate` (single) + `LayeredChannels::validate` (4-channel) +
+    `MaterialLibrary::validate_layered_channels` (entire library)
+
+### L-γ ~ L-η (예정, multi-week)
 별도 sub-step 결재 시 commit 진행. 각 sub-step standalone usable
 (atomic invariant).
