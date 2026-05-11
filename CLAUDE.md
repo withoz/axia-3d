@@ -1965,6 +1965,151 @@
   (Kernel-Native Command Suite Reset — directly preceding ADR), ADR-088
   (curve_owner_id grouping). LOCKED #1, #5, #12, #15, #16, #26, #34.
 
+### 36. ADR-097 — Topology Damage Auto-Recovery (Phase 4 closure, 2026-05-09)
+
+**LOCKED #26 Phase 4 closure**. v3.2 §12.3 + ADR-049 §4 Q5 final 정합.
+
+- **canonical anchor**: 토폴로지 변경 op 후 손상 자동 복구 시도 →
+  실패 시 사용자 다이얼로그 ([Undo] / [강등] / [수동수정])
+- **Path Z atomic 6 sub-step** (T-α ~ T-ζ closure)
+- **5-Layer Atomic Stack 첫 정착**: Engine (axia-geo damage detection +
+  recovery) + Scene context (axia-core orphan) + Bridge (axia-wasm 2
+  endpoints) + UI orchestration (TopologyRecoveryDialog +
+  TopologyRecoveryOrchestrator) + Settings flag (`axia:auto-topology-
+  recovery`, Default OFF) + Real Chromium E2E (Playwright 4 scenarios)
+- **canonical lessons (5)**:
+  - L1 UI orchestration 분리 (Dialog + Orchestrator 별도 모듈) — ADR-091
+    §E L4 답습
+  - L2 humanize at boundary (`humanizeDamageReport` Korean SSOT) —
+    ADR-095 §E L3 답습
+  - L3 Default OFF for self-modifying ops (메모리/시각 무관 변경
+    default ON vs material-mutation default OFF 분기)
+  - L4 ServiceContainer storage 함정 (factory wrapper 부적합 → 직접
+    instance 등록)
+  - L5 Recovery 자산 inventory 활용 — 5개월 누적 자산 (`verify_face_
+    invariants` / `repair_non_manifold_edges` / `deactivate_empty_emit_
+    faces` / `orphan_recovery`) 모두 활용, 새 알고리즘 0
+- **회귀 누적 (T-α ~ T-ζ)**: axia-geo +11, axia-core +4, vitest +32,
+  Playwright +4 = **+51** (절대 #[ignore] 금지 51/51 준수)
+
+### 37. ADR-098 — Asset Library 3-Tier Material Scope (Phase 5-A closure, 2026-05-09)
+
+**LOCKED #26 Phase 5-A closure**. v3.2 §13 first piece — 자산 라이브러리
+3계층 (System / Project / User).
+
+- **Path Z atomic 6 sub-step** (S-α ~ S-ζ closure)
+- **6-Layer Atomic Stack**: Engine (axia-core MaterialTier enum +
+  ScopedMaterialId + parallel `tier_index` Map) + Snapshot section 9
+  (additive, ADR-091 §E L1 6번째 적용) + Bridge (axia-wasm 6 endpoints)
+  + UI (AssetLibraryPanel 신규) + Settings flag (`axia:asset-library-
+  user-tier`, Default OFF — User tier opt-in) + main.ts wiring + Real
+  Chromium E2E (Playwright 5 scenarios)
+- **사후 정정** (canonical):
+  - S-α spec `Scene 3 maps` → audit 결과 `MaterialLibrary.tier_index`
+    parallel Map (bincode drift 회피, ADR-091 §E L1 답습). **L2 lesson
+    명시**: spec 보다 audit 우선 (architectural truth)
+  - HashMap → BTreeMap canonical for snapshot determinism (orphan_
+    recovery byte-equality 회귀 차단). **L1 lesson 신규**
+- **canonical lessons (7)**: L1 BTreeMap determinism / L2 사후 정정
+  정책 / L3 section additive / L4 legacy strip-test 누적 갱신 / L5
+  Settings module 5-함수 surface canonical / L6 Default OFF for opt-
+  in / L7 UI orchestration 분리
+- **회귀 누적 (S-α ~ S-ζ)**: axia-core +19, axia-wasm +4, vitest +26,
+  Playwright +5 = **+54** (절대 #[ignore] 금지 54/54 준수)
+
+### 38. ADR-100 — Material Removal Recovery (Phase 5-C closure, 2026-05-09)
+
+**LOCKED #26 Phase 5-C closure**. v3.2 §12.3 의 material-layer 변형 —
+재질 제거 시 owning Xia 자동 복구 (auto-demote → fallback Concrete →
+escalate dialog).
+
+- **Path Z atomic 6 sub-step** (R-α ~ R-ζ closure)
+- **ADR-097 5-Layer Atomic Stack 1:1 mirror** (canonical pattern
+  reproducibility 증명):
+  - Engine truth (axia-core 4 types + 3 methods)
+  - Bridge (axia-wasm 3 endpoints)
+  - UI orchestration (MaterialRemovalRecoveryDialog + Orchestrator —
+    ADR-097 helpers 1:1 mirror)
+  - Settings flag (`axia:auto-material-recovery`, Default OFF)
+  - main.ts wiring (lazy + bridge guard)
+  - Real Chromium E2E (Playwright 5 scenarios)
+- **canonical lessons (7)**:
+  - L1 ADR-097 5-layer **1:1 mirror** 가능성 증명 (새 패턴 0)
+  - L2 ADR-091 D-β `demote_xia_to_shape` 직접 재사용 (자산 inventory)
+  - L3 `RecoveryOutcome` enum shape mirror (engine + bridge + TS union)
+  - L4 Settings module 5-함수 surface **5번째 일관 적용**
+  - L5 Default OFF for self-modifying ops
+  - L6 ok-envelope union (silent skip 차단)
+  - L7 humanize at boundary (ADR-095 §E L3 답습)
+- **회귀 누적 (R-α ~ R-ζ)**: docs +1, axia-core +10, axia-wasm +3,
+  vitest +35, Playwright +5 = **+53** (절대 #[ignore] 금지 53/53 준수)
+
+### 39. ADR-099 — Layered Material 4-PBR Channels (Phase 5-B closure, 2026-05-10) — LOCKED #26 완전 closure 🎉
+
+**LOCKED #26 Phase 5-B closure → 5-Phase 로드맵 완전 closure**. v3.2
+§13 main promise — Layered material (albedo + normal + roughness +
+metallic 4 PBR channels).
+
+- **Path Z atomic 7 sub-step** (L-α ~ L-η closure, multi-week)
+- **6-Layer Atomic Stack** (ADR-097/100 5-layer Recovery pattern 위에
+  Render layer 추가된 evolution):
+  - Engine (axia-core: TextureProjection enum + TextureChannelInfo +
+    LayeredChannels + VisualProperties.layered 확장)
+  - Snapshot section 9 자연 확장 (ADR-098 활용)
+  - Bridge (axia-wasm 5 endpoints)
+  - **Render (LayeredMaterialBinding utility 신규 — Three.js 4-map
+    binding, sRGB / NoColorSpace policy)**
+  - UI (AssetLibraryPanel 4-cell indicator + LayeredMaterialDialog
+    per-channel upload)
+  - Bridge TS wrappers + main.ts wiring (callback pattern)
+  - Real Chromium E2E (Playwright 5 scenarios)
+- **사후 정정** (bincode 함정 완전 박멸):
+  - L-β: `VisualProperties.layered` 의 `skip_serializing_if` 제거
+  - L-γ: `LayeredChannels` 내부 4 채널 + `TextureChannelInfo.rotation`/
+    `label` 의 `skip_serializing_if` 모두 제거. `material_partial_
+    layered_bincode_roundtrip` regression guard 로 영구 차단
+- **canonical lessons (9, L-α ~ L-η 누적)**:
+  - L1 **bincode `skip_serializing_if` 함정 영구 박멸** — 모든 bincode
+    struct Option 필드는 `#[serde(default)]` only
+  - L2 ADR-091 §E L1 canonical **6번째 일관 적용** (additive +
+    `#[serde(default)]`)
+  - L3 Pure utility extraction — ADR-091 §E L4 **9번째 적용** with
+    callback wiring
+  - L4 Color space policy explicit (Three.js docs — albedo sRGB vs
+    data maps linear)
+  - L5 Failure isolation — per-channel `{applied, failures}` ok-envelope
+  - L6 Engine ↔ TS ergonomic mapping (null → undefined, NaN/empty
+    string sentinels)
+  - L7 Callback wiring at main.ts boundary (panel/bridge 분리 유지)
+  - L8 Discriminated-union return types (silent skip 차단)
+  - L9 **Pattern evolution proof** — ADR-097/100 의 5-layer 1:1 mirror
+    reproducibility + ADR-099 6-layer feature evolution 두 패턴 모두
+    reproducible. 향후 ADR 적합 패턴 선택 가능
+- **회귀 누적 (L-α ~ L-η)**: docs +1, axia-core +18, axia-wasm +5,
+  vitest +38, Playwright +5 = **+66** (절대 #[ignore] 금지 66/66 준수)
+
+### 🎉 LOCKED #26 Two-Layer Citizenship Model 5-Phase 완전 closure (2026-05-10)
+
+본 ADR-099 L-η closure 시점으로 LOCKED #26 5-Phase 로드맵 모든 약속
+정합 — Two-Layer Citizenship Model 의미적 완성:
+- Phase 1 (ADR-050 + ADR-051) — Shape/Xia type split ✅
+- Phase 2 (ADR-091) — Material removal demote ✅
+- Phase 3 (ADR-095 + ADR-096) — Reference citizenship ✅
+- Phase 4 (ADR-097) — Topology damage auto-recovery ✅
+- Phase 5-A (ADR-098) — Asset library 3-tier material scope ✅
+- Phase 5-C (ADR-100) — Material removal recovery ✅
+- Phase 5-B (ADR-099) — Layered material 4-PBR channels ✅
+
+**총 7 ADRs 누적**: 050+051 / 091 / 095+096 / 097 / 098 / 099 / 100.
+
+**v3.2 §12-§13 main promises 모두 정합**:
+- §12.3 (위상 손상 자동 복구): ADR-097 ✅
+- §12.3 (재질 손상 자동 복구): ADR-100 ✅
+- §13 (자산 라이브러리 3계층): ADR-098 ✅
+- §13 (Layered material): ADR-099 ✅
+
+**자세한 회고는 `docs/retro/2026-05-locked-26-closure.md` 참조**.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
