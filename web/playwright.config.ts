@@ -35,6 +35,10 @@ export default defineConfig({
     toHaveScreenshot: {
       maxDiffPixelRatio: 0.01,
       animations: 'disabled',
+      // 2026-05-11 hardening: Linux CI WASM boot + Three.js initial
+      // frame stabilization can exceed 5s default. Bump to 15s so
+      // first-run baseline generation succeeds on slower CI hosts.
+      timeout: 15_000,
     },
   },
   use: {
