@@ -247,6 +247,23 @@ async function main() {
   };
   container.register('assetLibraryPanel', assetLibraryPanel);
 
+  // ADR-100 R-ε — Material recovery service (Phase 5-C SSOT entry).
+  //   Lazy-imports orchestrator + Settings flag. ADR-097 T-ε 답습 —
+  //   1:1 mirror pattern (different localStorage key + orchestrator
+  //   module). Call from material-removal sites or window.__axia
+  //   for E2E.
+  const materialRecovery = async () => {
+    const [{ attemptMaterialRecoveryWithDialog }, { getAutoMaterialRecoveryMode }] =
+      await Promise.all([
+        import('./citizenship/MaterialRemovalRecoveryOrchestrator'),
+        import('./tools/AutoMaterialRecoverySettings'),
+      ]);
+    if (!getAutoMaterialRecoveryMode()) return { skipped: true } as const;
+    if (!bridge.isReady()) return { skipped: true } as const;
+    return attemptMaterialRecoveryWithDialog(bridge);
+  };
+  container.register('materialRecovery', materialRecovery);
+
   // ADR-097 T-ε — Topology recovery service (Phase 4 SSOT entry).
   //   Lazy-imports orchestrator + Settings flag; checks flag inside
   //   the closure so listeners stay reactive to live setSetting updates.

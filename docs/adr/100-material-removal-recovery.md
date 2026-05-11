@@ -302,7 +302,44 @@ multi-week atomic 별도 세션.
   * 6-status orchestrator result (ADR-097 5-status 위에 'demoted'
     추가) — material-layer 의 demote 가 명시적 user action
 
-### R-ε ~ R-ζ (예정)
-별도 sub-step 결재 시 commit 진행. R-ε 는 Settings flag + main.ts
-wiring (`AutoMaterialRecoverySettings.ts`, ADR-097 T-ε 답습), R-ζ 는
-Real Chromium 시연 + ADR-100 closure.
+### R-ε (본 commit) — Settings flag + main.ts wiring
+- **commit**: 본 commit
+- **Settings module** (`web/src/tools/AutoMaterialRecoverySettings.ts`):
+  * `axia:auto-material-recovery` localStorage key
+  * **Default OFF** (R-E lock-in — self-modifying op safety,
+    ADR-097 T-ε 답습)
+  * AutoTopologyRecoverySettings (ADR-097 T-ε) **1:1 mirror** —
+    `getAutoMaterialRecoveryMode` / `setAutoMaterialRecoveryMode` /
+    `onAutoMaterialRecoveryModeChange`
+- **main.ts wiring**:
+  * `container.register('materialRecovery', factory)` — lazy import +
+    bridge guard + flag check. ADR-097 T-ε `topologyRecovery` 패턴
+    **1:1 mirror**
+  * `window.__axia.get('materialRecovery')()` 진입점 (E2E + future
+    material-removal sites)
+- **SettingsPanel UI** (`web/src/units/SettingsPanel.ts`):
+  * `#sp-auto-material-recovery` 체크박스 + 한국어 hint
+  * "재질 삭제 자동 복구 (실험)" — Default OFF 명시
+- **회귀 (Vitest)**:
+  * `AutoMaterialRecoverySettings.test.ts` — 5 tests (default OFF /
+    localStorage variants / setMode persistence / listener change)
+  * `SettingsPanel.test.ts` 영향 없음 (20 PASS unchanged — additive
+    체크박스만 추가)
+  * 절대 #[ignore] 금지 5/5 준수
+- **Full vitest sweep**: 114 files, **1790/1790 PASS** (1 skipped 무관,
+  1785 → 1790 = +5)
+- **누적 R-α ~ R-ε**: docs +1 ADR, axia-core +10, axia-wasm +3,
+  vitest +35 = **+48**
+- **Lessons applied**:
+  * ADR-097 T-ε / ADR-098 S-ε / ADR-096 M-β / ADR-094 default ON
+    패턴 **누적 답습** — Settings module 5-함수 surface canonical
+    (5번째 일관 적용 → AI agent / 사용자 모두 패턴 학습 완료)
+  * Default OFF for opt-in surfaces (ADR-097 T-ε 정합 — 메모리/시각
+    무관 변경 default ON vs material-mutation default OFF 의 명확
+    분기)
+  * ServiceContainer factory direct register (ADR-097 §E L4 답습)
+
+### R-ζ (예정)
+별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
+E2E) — Default OFF / Explicit ON 보존 / bridge surface (3 endpoints)
+/ recovery cascade round-trip / S-G safety + R-ζ closure.

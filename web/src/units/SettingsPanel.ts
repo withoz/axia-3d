@@ -24,6 +24,10 @@ import {
   getAssetLibraryUserTierMode,
   setAssetLibraryUserTierMode,
 } from '../tools/AssetLibraryUserTierSettings';
+import {
+  getAutoMaterialRecoveryMode,
+  setAutoMaterialRecoveryMode,
+} from '../tools/AutoMaterialRecoverySettings';
 
 export class SettingsPanel {
   private panel: HTMLElement;
@@ -155,6 +159,14 @@ export class SettingsPanel {
         <div class="sp-hint">자산 라이브러리 의 User tier (사용자 재사용 재질 모음) 활성. localStorage 보존, opt-in default OFF (ADR-098 Phase 5-A)</div>
       </div>
 
+      <div class="sp-section">
+        <label class="sp-label">
+          <input type="checkbox" id="sp-auto-material-recovery" />
+          재질 삭제 자동 복구 (실험)
+        </label>
+        <div class="sp-hint">Material 제거 시 owning Xia 의 자동 복구 (auto-demote → fallback Concrete). PartialFailure 시 사용자 다이얼로그 ([Undo]/[강등]/[수동수정]) (ADR-100 Phase 5-C)</div>
+      </div>
+
       <div class="sp-divider"></div>
       <div class="sp-info" id="sp-info"></div>
     `;
@@ -233,6 +245,12 @@ export class SettingsPanel {
       setAssetLibraryUserTierMode(userTierCheck.checked);
     });
 
+    // ADR-100 R-ε — Auto material recovery (Phase 5-C)
+    const autoMaterialRecoverCheck = panel.querySelector('#sp-auto-material-recovery') as HTMLInputElement;
+    autoMaterialRecoverCheck.addEventListener('change', () => {
+      setAutoMaterialRecoveryMode(autoMaterialRecoverCheck.checked);
+    });
+
     return panel;
   }
 
@@ -284,6 +302,10 @@ export class SettingsPanel {
     // ADR-098 S-ε — User 라이브러리 활성화
     const userTierCheck = this.panel.querySelector('#sp-asset-library-user-tier') as HTMLInputElement;
     userTierCheck.checked = getAssetLibraryUserTierMode();
+
+    // ADR-100 R-ε — 자동 재질 복구
+    const autoMaterialRecoverCheck = this.panel.querySelector('#sp-auto-material-recovery') as HTMLInputElement;
+    autoMaterialRecoverCheck.checked = getAutoMaterialRecoveryMode();
 
     // 정보
     const info = this.panel.querySelector('#sp-info')!;
