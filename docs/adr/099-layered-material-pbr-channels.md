@@ -339,6 +339,58 @@ Bridge TS wrappers + Real Chromium E2E
   * Idempotent normalization (clear + migrate) — ADR-098 S-D pattern
     6번째 일관 적용
 
-### L-δ ~ L-η (예정, multi-week)
+### L-δ (본 commit) — Render pipeline (Three.js)
+- **commit**: 본 commit (web/src/viewport + materials + mocks)
+- **TS LayeredChannels interface** (`web/src/materials/MaterialLibrary.ts`):
+  * 4-channel mirror of Rust `LayeredChannels` (albedo / normal /
+    roughness / metallic, all optional `TextureInfo`)
+  * Coexists with legacy `TextureInfo` (single base) + `AuxTextureInfo`
+    (normal + roughness only)
+  * `VisualProperties.layered?: LayeredChannels` additive — legacy
+    `texture` + `aux` fields UNCHANGED (L-ζ migration 별도 sub-step)
+- **`LayeredMaterialBinding.ts` 유틸리티** (신규):
+  * `applyLayeredChannels(target, layered, cache)` → 4-map async bind
+  * `clearLayeredChannels(target)` → all-slot reset (sync, idempotent)
+  * `hasAnyLayeredChannel(layered)` → predicate (Rust mirror)
+  * **L-E color space 정합**: albedo → `SRGBColorSpace`, 나머지 3 →
+    `NoColorSpace` (linear, data maps standard)
+  * **Failure isolation**: 한 channel 실패가 다른 channel binding 차단
+    안 함. `LayeredBindingResult { applied, failures }` per-channel
+    surface
+  * Structural typing — `LayeredBindingTarget` / `TextureCacheLike`
+    interfaces (Three.js DOM 의존 없음, jsdom 테스트 가능)
+  * Async-friendly — `Promise<LayeredBindingResult>` 단일 await 로
+    결정적 ordering
+- **Three.js mock 확장**: `SRGBColorSpace` / `NoColorSpace` /
+  `LinearSRGBColorSpace` 상수 추가 (실제 Three.js literal string
+  sentinel 미러)
+- **Viewport.ts 영향 0**: 기존 `applyTextureAsync` / `applyAuxTextures
+  Async` 경로 UNCHANGED. 새 utility 는 standalone — L-ε UI / L-ζ
+  bridge 가 wiring 시점 결정
+- **회귀 (Vitest jsdom)**: +13 tests
+  * `hasAnyLayeredChannel` 3 (empty / albedo only / metallic only)
+  * `applyLayeredChannels` 7 (4-channel bind / partial subset /
+    no-op empty / sync cache hit / L-E color space verification /
+    failure isolation / all-fail needsUpdate=false)
+  * `clearLayeredChannels` 3 (all populated / no-op all null /
+    partial clear)
+  * 절대 #[ignore] 금지 13/13 준수
+- **Full vitest sweep**: 115 files, **1803/1803 PASS** (1 skipped 무관,
+  1790 → 1803 = +13)
+- **누적 L-α ~ L-δ**: docs +1 ADR, axia-core +18, axia-wasm +5,
+  vitest +13 = **+36**
+- **Lessons applied**:
+  * Pure utility extraction — Viewport.ts 의 거대 DOM 코드에서 logic
+    을 분리, structural typing 으로 jsdom 테스트 가능 (ADR-091 §E L4
+    UI orchestration 분리 패턴 7번째 적용)
+  * Color space policy explicit — albedo sRGB vs data maps linear
+    (Three.js docs 정합). Mock 에 colorSpace 상수 추가로 회귀 가드
+  * Failure isolation — Per-channel `{applied, failures}` result.
+    한 channel 실패가 caller 의 다른 channel binding 차단 안 함.
+    silent skip 차단 (ADR-097 ok-envelope 답습)
+  * Async-first signature — `Promise<Result>` 단일 await 로 결정성
+    + 테스트 가능성. `await` chain 없이 단일 호출
+
+### L-ε ~ L-η (예정, multi-week)
 별도 sub-step 결재 시 commit 진행. 각 sub-step standalone usable
 (atomic invariant).

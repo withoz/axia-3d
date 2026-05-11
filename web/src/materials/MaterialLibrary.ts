@@ -106,6 +106,26 @@ export interface TextureInfo {
   label?: string;
 }
 
+/**
+ * ADR-099 L-δ — TS counterpart of Rust `LayeredChannels`.
+ *
+ * 4 PBR channels (Lock-in L-A) — fixed slots, each optional. Mirrors
+ * Rust `crate::material::LayeredChannels` for snapshot round-trip
+ * (L-η Real Chromium). Channel naming canonical: 'albedo' | 'normal'
+ * | 'roughness' | 'metallic'.
+ *
+ * Coexists with legacy `AuxTextureInfo` (normal + roughness only).
+ * L-D migrate helper bridges single-texture → albedo on Rust side
+ * (`migrate_legacy_textures_to_layered`). UI (L-ε) and bridge wrappers
+ * (L-ζ) will use this interface canonically.
+ */
+export interface LayeredChannels {
+  albedo?: TextureInfo;
+  normal?: TextureInfo;
+  roughness?: TextureInfo;
+  metallic?: TextureInfo;
+}
+
 /** 추가 채널 텍스처 (PBR 보조 — 모두 옵션) */
 export interface AuxTextureInfo {
   /** Normal map (tangent-space). Three.js MeshStandardMaterial.normalMap. */
@@ -125,6 +145,13 @@ export interface VisualProperties {
   texture?: TextureInfo;      // 옵션: 베이스 컬러 텍스처
   /** 옵션: 노멀/러프니스 등 보조 PBR 채널 (2026-04-26 추가) */
   aux?: AuxTextureInfo;
+  /**
+   * ADR-099 L-δ — Layered material 4 PBR channels (Phase 5-B).
+   * Mirrors Rust `VisualProperties.layered`. When present, the
+   * renderer's `applyLayeredChannels` path replaces the legacy
+   * `texture` + `aux` paths.
+   */
+  layered?: LayeredChannels;
 }
 
 /** Material 전체 정의 */

@@ -285,3 +285,10 @@ export const DoubleSide = 2;
 export const FrontSide = 0;
 export const BackSide = 1;
 export const AdditiveBlending = 2;
+
+// ADR-099 L-δ — Color space constants for LayeredMaterialBinding.
+// Real Three.js uses string literal sentinels ('srgb', '') — keep
+// values inspectable by tests.
+export const SRGBColorSpace = 'srgb';
+export const NoColorSpace = '';
+export const LinearSRGBColorSpace = 'srgb-linear';
