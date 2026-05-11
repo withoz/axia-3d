@@ -111,6 +111,21 @@ export class AxiaEngine {
      */
     attemptAutoRecovery(): string;
     /**
+     * ADR-100 R-γ — Attempt material removal recovery (3-tier cascade).
+     *
+     * Returns JSON union (ADR-097 T-δ shape 답습):
+     *   `{ "kind": "NoOp" }`
+     *   `{ "kind": "Recovered", "affectedXias": N, "facesDemoted": K,
+     *      "facesFallback": F }`
+     *   `{ "kind": "PartialFailure", "affectedXias": N,
+     *      "remainingOrphans": R }`
+     *
+     * Mutates scene state (Pass 1 demote + Pass 2 fallback). Caller
+     * wraps in transaction; recovery is idempotent (second call on a
+     * clean scene returns NoOp).
+     */
+    attemptMaterialRemovalRecovery(): string;
+    /**
      * New variant: merge failure falls back to SOFT edge (hidden, topology
      * preserved) instead of destroying the adjacent faces. Recommended
      * default for interactive Erase tool.
@@ -394,6 +409,15 @@ export class AxiaEngine {
      * (Xia + shape_to_xia linkage preserved).
      */
     demoteXiaToShape(xia_id: number): string;
+    /**
+     * ADR-100 R-γ — Detect orphan material assignments.
+     *
+     * Returns JSON:
+     *   `{ "affectedXias": [{ "xiaId": N, "staleMaterialId": M,
+     *                         "faceCount": K }, ...] }`
+     * Empty array → clean scene.
+     */
+    detectOrphanMaterialAssignments(): string;
     /**
      * ADR-097 T-γ — Detect topology damage (Phase 4).
      *
@@ -1342,6 +1366,16 @@ export class AxiaEngine {
      */
     removeConstraint(id: number): boolean;
     /**
+     * ADR-100 R-γ — Remove a Project-tier material with auto-recovery.
+     *
+     * Returns JSON `{ "ok": bool, "removedId": N, "recovery": {...} }`
+     * where `recovery` matches the union from `attemptMaterialRemovalRecovery`.
+     * On error: `{ "ok": false, "error": "..." }`.
+     *
+     * System tier always rejected (R-D safety, ADR-098 S-G 답습).
+     */
+    removeProjectMaterial(material_id: number): string;
+    /**
      * ADR-098 S-γ — Remove a User-tier material.
      *
      * System tier rejected (Material library `remove_material` Err →
@@ -1814,6 +1848,7 @@ export interface InitOutput {
     readonly axiaengine_attachFaceSurfaceSphereValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly axiaengine_attachFaceSurfaceTorusValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
     readonly axiaengine_attemptAutoRecovery: (a: number, b: number) => void;
+    readonly axiaengine_attemptMaterialRemovalRecovery: (a: number, b: number) => void;
     readonly axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -1849,6 +1884,7 @@ export interface InitOutput {
     readonly axiaengine_delete_face: (a: number, b: number) => number;
     readonly axiaengine_delete_group: (a: number, b: number) => number;
     readonly axiaengine_demoteXiaToShape: (a: number, b: number, c: number) => void;
+    readonly axiaengine_detectOrphanMaterialAssignments: (a: number, b: number) => void;
     readonly axiaengine_detectTopologyDamage: (a: number, b: number) => void;
     readonly axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
@@ -1983,6 +2019,7 @@ export interface InitOutput {
     readonly axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_redo: (a: number) => number;
     readonly axiaengine_removeConstraint: (a: number, b: number) => number;
+    readonly axiaengine_removeProjectMaterial: (a: number, b: number, c: number) => void;
     readonly axiaengine_removeUserMaterial: (a: number, b: number) => number;
     readonly axiaengine_remove_faces_from_group: (a: number, b: number, c: number, d: number) => number;
     readonly axiaengine_remove_material: (a: number, b: number, c: number) => number;

@@ -1,6 +1,6 @@
 # ADR-100: Material Removal Recovery (Two-Layer Citizenship Phase 5-C)
 
-- **Status**: Proposed (R-α — spec only)
+- **Status**: Accepted (R-α ~ R-ζ all closed, 2026-05-10)
 - **Date**: 2026-05-10
 - **Anchor**: LOCKED #26 Phase 5 약속 ("자산 라이브러리 3계층 +
   Layered material") + v3.2 §12.3 (material 삭제 시 자연 복구 →
@@ -339,7 +339,80 @@ multi-week atomic 별도 세션.
     분기)
   * ServiceContainer factory direct register (ADR-097 §E L4 답습)
 
-### R-ζ (예정)
-별도 sub-step 결재 시 commit 진행. Real Chromium 시연 (Playwright
-E2E) — Default OFF / Explicit ON 보존 / bridge surface (3 endpoints)
-/ recovery cascade round-trip / S-G safety + R-ζ closure.
+### R-ζ (본 commit) — Real Chromium closure
+- **commit**: 본 commit (Playwright E2E + ADR-100 closure)
+- **production bundle 재빌드**: WASM 3 endpoints + main.ts
+  `materialRecovery` service + `MaterialRemovalRecoveryOrchestrator`
+  lazy chunk
+- **Playwright spec** (`web/e2e/adr-100-demo.spec.ts`, 5 scenarios):
+  * Scenario 1 — Default OFF: localStorage 미설정 → orchestrator
+    `{ skipped: true }`
+  * Scenario 2 — Explicit ON 보존: localStorage 'true' →
+    page.reload 후 보존 → orchestrator runs → status 'clean' (clean
+    scene NoOp)
+  * Scenario 3 — Bridge surface: 3 endpoints production bundle 노출
+    (`detectOrphanMaterialAssignments` / `attemptMaterialRemovalRecovery`
+    / `removeProjectMaterial`). Clean scene → empty affectedXias +
+    NoOp recovery
+  * Scenario 4 — R-D safety: System tier removal (id 0) → ok envelope
+    `{ok: false, error: "System..."}`. 12 built-ins preserved
+  * Scenario 5 — Add Project mat + remove (no Xia assigned) → ok
+    envelope success + NoOp recovery (no orphans to recover)
+- **회귀 (Real Chromium)**: Playwright +5 (production layer 검증).
+  Full Playwright sweep: **42/42 PASS** (1 skipped 무관, 37 → 42).
+  기존 ADR-075/077/078/091/094/096/097/098 E2E 무영향.
+- **누적 (R-α ~ R-ζ closure)**:
+  * docs +1 ADR (R-α)
+  * axia-core +10 (R-β)
+  * axia-wasm +3 (R-γ)
+  * vitest +35 (R-δ 30: bridge 9 + dialog 10 + orchestrator 11;
+    R-ε 5: settings)
+  * Playwright +5 (R-ζ Real Chromium)
+  * **합계 +53**, 절대 #[ignore] 금지 53/53 준수
+- **사용자 facing 변화 요약** (Phase 5-C closure):
+  * `removeProjectMaterial(id)` bridge endpoint — Project tier 재질
+    삭제 + 자동 복구 cascade
+  * `attemptMaterialRecoveryWithDialog` orchestrator — `[Undo] /
+    [강등] / [수동수정]` 다이얼로그 (ADR-097 1:1 mirror)
+  * `axia:auto-material-recovery` localStorage flag (Default OFF)
+  * SettingsPanel 체크박스 "재질 삭제 자동 복구 (실험)"
+  * `window.__axia.get('materialRecovery')()` 진입점
+- **5-Layer Path Z atomic stack 1:1 mirror** (ADR-097 Phase 4 답습):
+  Engine truth (axia-core 4 types + 3 methods) + Bridge (axia-wasm 3
+  endpoints) + UI orchestration (Dialog + Orchestrator) + Settings
+  flag + main.ts wiring + Real Chromium E2E. ADR-097 5-layer 와 1:1
+  mirror — 새 패턴 0, **canonical pattern reproducibility 의 가장
+  강한 증명**.
+- **Lessons (R-α ~ R-ζ canonical patterns)**:
+  * **L1 (canonical)** — ADR-097 5-layer **1:1 mirror** 가능성 증명
+    (engine + bridge + UI Dialog + Orchestrator + Settings + E2E 모두
+    구조 동일). 새 패턴 0, 향후 *similar 5-layer atomic stack* (예:
+    Phase 5-B Layered material recovery) 도 본 ADR 패턴 답습 가능
+  * **L2 (canonical)** — ADR-091 D-β `demote_xia_to_shape` 직접 재사용
+    (Recovery 자산 inventory 5개월 누적 활용, ADR-097 §E L5 정신)
+  * **L3 (canonical)** — ADR-097 `RecoveryOutcome` enum shape mirror
+    (NoOp/Recovered/PartialFailure) — engine + bridge + TS union 모두
+    동일 shape. AI agent / 사용자 모두 일관 학습
+  * **L4 (canonical)** — Settings module 5-함수 surface **5번째 일관
+    적용** (ADR-094/096/097/098/100) — 패턴 확정
+  * **L5 (canonical)** — Default OFF for self-modifying ops
+    (메모리/시각 무관 변경 default ON vs material-mutation default
+    OFF 의 분기 명확)
+  * **L6 (canonical)** — ok-envelope union (silent skip 차단) — 사용자
+    facing error 명시
+  * **L7 (canonical)** — `humanize at boundary` (ADR-095 §E L3 답습)
+    Korean wording SSOT in Orchestrator
+
+## Phase 5-C closure → ADR-099 (Phase 5-B) 만 남음
+
+본 ADR 으로 LOCKED #26 Phase 5-C 완료. 5-Phase 로드맵 진행 상황:
+- Phase 1 (ADR-050+051) ✅
+- Phase 2 (ADR-091) ✅
+- Phase 3 (ADR-095+096) ✅
+- Phase 4 (ADR-097) ✅
+- Phase 5-A (ADR-098) ✅
+- **Phase 5-C (ADR-100) ✅ 본 closure**
+- Phase 5-B (ADR-099 — Layered material 4 PBR channels) ⏸
+  multi-week atomic 별도 세션
+
+Phase 5-B 완료 시 LOCKED #26 Two-Layer Citizenship Model **완전 closure**.

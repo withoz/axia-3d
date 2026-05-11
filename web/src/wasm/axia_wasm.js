@@ -470,6 +470,37 @@ export class AxiaEngine {
         }
     }
     /**
+     * ADR-100 R-γ — Attempt material removal recovery (3-tier cascade).
+     *
+     * Returns JSON union (ADR-097 T-δ shape 답습):
+     *   `{ "kind": "NoOp" }`
+     *   `{ "kind": "Recovered", "affectedXias": N, "facesDemoted": K,
+     *      "facesFallback": F }`
+     *   `{ "kind": "PartialFailure", "affectedXias": N,
+     *      "remainingOrphans": R }`
+     *
+     * Mutates scene state (Pass 1 demote + Pass 2 fallback). Caller
+     * wraps in transaction; recovery is idempotent (second call on a
+     * clean scene returns NoOp).
+     * @returns {string}
+     */
+    attemptMaterialRemovalRecovery() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_attemptMaterialRemovalRecovery(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * New variant: merge failure falls back to SOFT edge (hidden, topology
      * preserved) instead of destroying the adjacent faces. Recommended
      * default for interactive Erase tool.
@@ -1163,6 +1194,31 @@ export class AxiaEngine {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
             wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * ADR-100 R-γ — Detect orphan material assignments.
+     *
+     * Returns JSON:
+     *   `{ "affectedXias": [{ "xiaId": N, "staleMaterialId": M,
+     *                         "faceCount": K }, ...] }`
+     * Empty array → clean scene.
+     * @returns {string}
+     */
+    detectOrphanMaterialAssignments() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_detectOrphanMaterialAssignments(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
         }
     }
     /**
@@ -3595,6 +3651,33 @@ export class AxiaEngine {
     removeConstraint(id) {
         const ret = wasm.axiaengine_removeConstraint(this.__wbg_ptr, id);
         return ret !== 0;
+    }
+    /**
+     * ADR-100 R-γ — Remove a Project-tier material with auto-recovery.
+     *
+     * Returns JSON `{ "ok": bool, "removedId": N, "recovery": {...} }`
+     * where `recovery` matches the union from `attemptMaterialRemovalRecovery`.
+     * On error: `{ "ok": false, "error": "..." }`.
+     *
+     * System tier always rejected (R-D safety, ADR-098 S-G 답습).
+     * @param {number} material_id
+     * @returns {string}
+     */
+    removeProjectMaterial(material_id) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.axiaengine_removeProjectMaterial(retptr, this.__wbg_ptr, material_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * ADR-098 S-γ — Remove a User-tier material.

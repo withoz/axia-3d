@@ -21,6 +21,7 @@ export const axiaengine_attachFaceSurfacePlaneValidated: (a: number, b: number, 
 export const axiaengine_attachFaceSurfaceSphereValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
 export const axiaengine_attachFaceSurfaceTorusValidated: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
 export const axiaengine_attemptAutoRecovery: (a: number, b: number) => void;
+export const axiaengine_attemptMaterialRemovalRecovery: (a: number, b: number) => void;
 export const axiaengine_batchEraseEdgesSoftFallback: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batchEraseEdgesWithMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const axiaengine_batch_delete: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -56,6 +57,7 @@ export const axiaengine_delete_edge: (a: number, b: number) => number;
 export const axiaengine_delete_face: (a: number, b: number) => number;
 export const axiaengine_delete_group: (a: number, b: number) => number;
 export const axiaengine_demoteXiaToShape: (a: number, b: number, c: number) => void;
+export const axiaengine_detectOrphanMaterialAssignments: (a: number, b: number) => void;
 export const axiaengine_detectTopologyDamage: (a: number, b: number) => void;
 export const axiaengine_drawArcWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
 export const axiaengine_drawBSplineWithCurve: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
@@ -190,6 +192,7 @@ export const axiaengine_promoteShapeToXia: (a: number, b: number, c: number, d: 
 export const axiaengine_push_pull_smooth_group_seamless: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_redo: (a: number) => number;
 export const axiaengine_removeConstraint: (a: number, b: number) => number;
+export const axiaengine_removeProjectMaterial: (a: number, b: number, c: number) => void;
 export const axiaengine_removeUserMaterial: (a: number, b: number) => number;
 export const axiaengine_remove_faces_from_group: (a: number, b: number, c: number, d: number) => number;
 export const axiaengine_remove_material: (a: number, b: number, c: number) => number;
