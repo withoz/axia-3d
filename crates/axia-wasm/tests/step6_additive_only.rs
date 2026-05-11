@@ -765,6 +765,88 @@ fn adr100_r_gamma_remove_project_returns_ok_envelope() {
         "success JSON must include removedId");
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// ADR-099 L-γ — Layered Material 4-PBR Channels (Phase 5-B) WASM endpoints.
+// ════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn adr099_l_gamma_endpoints_wired() {
+    let l = lib_src();
+    for (rust_name, js_name) in [
+        ("pub fn get_layered_channels",            "getLayeredChannels"),
+        ("pub fn set_layered_channel",             "setLayeredChannel"),
+        ("pub fn clear_layered_channel",           "clearLayeredChannel"),
+        ("pub fn migrate_legacy_texture_to_layered","migrateLegacyTextureToLayered"),
+        ("pub fn has_layered_material",            "hasLayeredMaterial"),
+    ] {
+        assert!(l.contains(rust_name),
+            "ADR-099 L-γ: missing Rust function {}", rust_name);
+        let attr = format!("js_name = \"{}\"", js_name);
+        assert!(l.contains(&attr),
+            "ADR-099 L-γ: missing js_name attr {}", attr);
+    }
+}
+
+#[test]
+fn adr099_l_gamma_get_emits_has_layered_field() {
+    let l = lib_src();
+    let idx = l.find("pub fn get_layered_channels").expect("get fn");
+    let body = char_safe_slice(&l, idx, 2500);
+    // Schema lock — both shapes (hasLayered:false / hasLayered:true)
+    // must be present. Source has two literal styles: the false branch
+    // uses regular string ("\"hasLayered\":false") and the true branch
+    // uses a raw string ("hasLayered":true). Search for the unescaped
+    // key in both cases by substring.
+    assert!(body.contains("hasLayered"),
+        "get_layered_channels must reference hasLayered key");
+    assert!(body.contains(":false"),
+        "get_layered_channels must emit :false branch");
+    assert!(body.contains(":true"),
+        "get_layered_channels must emit :true branch");
+    assert!(body.contains("channels"),
+        "get_layered_channels true-branch must include channels object");
+}
+
+#[test]
+fn adr099_l_gamma_set_channel_uses_flat_signature() {
+    let l = lib_src();
+    let idx = l.find("pub fn set_layered_channel").expect("set fn");
+    let body = char_safe_slice(&l, idx, 1500);
+    // L-G flat signature lock — primitive types only (no JSON parsing).
+    assert!(body.contains("channel: String"),
+        "set must accept channel name as String");
+    assert!(body.contains("projection: u32"),
+        "set must accept projection as u32 (0=planar, 1=box, 2=cylindrical)");
+    assert!(body.contains("rotation_or_nan: f64"),
+        "set must accept rotation as f64 (NaN = None sentinel)");
+    assert!(body.contains("-> bool"),
+        "set must return bool (success / silent reject)");
+}
+
+#[test]
+fn adr099_l_gamma_clear_normalizes_empty_layered() {
+    let l = lib_src();
+    let idx = l.find("pub fn clear_layered_channel").expect("clear fn");
+    let body = char_safe_slice(&l, idx, 1200);
+    // L-D idempotent normalization — empty layered → None.
+    assert!(body.contains("has_any_channel"),
+        "clear must check has_any_channel for normalization");
+    assert!(body.contains("layered = None")
+        || body.contains("layered=None"),
+        "clear must reset layered to None when all channels empty");
+}
+
+#[test]
+fn adr099_l_gamma_has_layered_quick_check_returns_bool() {
+    let l = lib_src();
+    let idx = l.find("pub fn has_layered_material").expect("has fn");
+    let body = char_safe_slice(&l, idx, 600);
+    assert!(body.contains("-> bool"),
+        "has_layered_material must return bool");
+    assert!(body.contains("has_any_channel"),
+        "has_layered_material must consult has_any_channel (empty != Some)");
+}
+
 #[test]
 fn adr098_s_gamma_remove_user_only_blocks_other_tiers() {
     let l = lib_src();

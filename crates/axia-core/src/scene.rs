@@ -712,15 +712,29 @@ impl Scene {
         if offset + 8 <= data.len() {
             let mlen = read_len(data, &mut offset);
             if mlen > 0 && offset + mlen <= data.len() {
-                if let Ok(restored) = bincode::deserialize::<crate::material::MaterialLibrary>(
+                // ADR-099 L-β/L-γ lesson — bincode deserialize failure
+                // here means a struct field was added with `skip_serializing_if`
+                // (omits bytes) but deserialize expects positional layout.
+                // Always log; ignore-and-keep-default would silently drop
+                // the user's material library on schema drift.
+                match bincode::deserialize::<crate::material::MaterialLibrary>(
                     &data[offset..offset + mlen],
                 ) {
-                    self.material_library = restored;
-                    // Auto-migrate legacy materials (idempotent if already
-                    // tagged). ADR-098 S-D — id-range heuristic classifies
-                    // any material missing tier_index.
-                    self.material_library.migrate_legacy_materials();
-                    material_library_section_present = true;
+                    Ok(restored) => {
+                        self.material_library = restored;
+                        // Auto-migrate legacy materials (idempotent if already
+                        // tagged). ADR-098 S-D — id-range heuristic classifies
+                        // any material missing tier_index.
+                        self.material_library.migrate_legacy_materials();
+                        material_library_section_present = true;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[Scene] section 9 material_library deserialize failed: {} \
+                             (mlen={}). Keeping default library (12 built-ins).",
+                            e, mlen,
+                        );
+                    }
                 }
                 offset += mlen;
             } else if mlen == 0 {
@@ -13972,6 +13986,149 @@ mod tests {
         assert!(matches!(first, MaterialRecoveryOutcome::Recovered { .. }));
         let second = scene.attempt_material_removal_recovery();
         assert_eq!(second, MaterialRecoveryOutcome::NoOp);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-099 L-γ — Snapshot section 9 layered roundtrip (Phase 5-B)
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr099_section_9_layered_channels_round_trip() {
+        use crate::material::{
+            LayeredChannels, TextureChannelInfo, TextureProjection,
+            MaterialCategory, MaterialTier, PhysicalProperties, VisualProperties,
+            FireRating,
+        };
+        let mut scene = Scene::new();
+        let mat_id = scene.material_library.create_material_in_tier(
+            MaterialTier::Project,
+            "Layered".into(), "Layered".into(), MaterialCategory::Custom,
+            PhysicalProperties {
+                density: 1000.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: FireRating::None,
+            },
+            VisualProperties {
+                color: 0x808080, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                layered: Some(LayeredChannels {
+                    albedo: Some(TextureChannelInfo {
+                        data_url: "data:image/png;base64,ALBEDO".into(),
+                        projection: TextureProjection::Planar,
+                        scale: 0.001,
+                        rotation: None,
+                        label: Some("brick_albedo.png".into()),
+                    }),
+                    normal: Some(TextureChannelInfo {
+                        data_url: "data:image/png;base64,NORMAL".into(),
+                        projection: TextureProjection::Box,
+                        scale: 0.002,
+                        rotation: Some(1.5708),
+                        label: None,
+                    }),
+                    roughness: Some(TextureChannelInfo::new(
+                        "data:image/png;base64,ROUGH".into(), 0.001,
+                    )),
+                    metallic: Some(TextureChannelInfo::new(
+                        "data:image/png;base64,METAL".into(), 0.001,
+                    )),
+                }),
+            },
+        );
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+
+        let m = restored.material_library.get(mat_id).expect("material");
+        let layered = m.visual.layered.as_ref().expect("layered preserved");
+        assert_eq!(layered.channel_count(), 4);
+
+        let albedo = layered.albedo.as_ref().unwrap();
+        assert_eq!(albedo.data_url, "data:image/png;base64,ALBEDO");
+        assert_eq!(albedo.projection, TextureProjection::Planar);
+        assert_eq!(albedo.scale, 0.001);
+        assert!(albedo.rotation.is_none());
+        assert_eq!(albedo.label.as_deref(), Some("brick_albedo.png"));
+
+        let normal = layered.normal.as_ref().unwrap();
+        assert_eq!(normal.projection, TextureProjection::Box);
+        assert_eq!(normal.rotation, Some(1.5708));
+        assert!(normal.label.is_none());
+
+        // LOCKED #26 guard: built-ins still have layered = None.
+        for raw in 0..=crate::material::BUILTIN_MATERIAL_ID_MAX {
+            assert!(restored.material_library.get(MaterialId::new(raw))
+                .unwrap().visual.layered.is_none(),
+                "built-in id {} must retain layered=None across snapshot", raw);
+        }
+    }
+
+    #[test]
+    fn adr099_section_9_legacy_material_without_layered_roundtrips() {
+        // Material with layered=None roundtrips cleanly through
+        // section 9 — exercises the #[serde(default)] path under
+        // bincode (no skip_serializing_if, see ADR-099 L-β 사후 정정).
+        let mut scene = Scene::new();
+        let mat_id = scene.material_library.create_material(
+            "Plain".into(), "Plain".into(),
+            crate::MaterialCategory::Custom,
+            crate::PhysicalProperties {
+                density: 1.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: crate::FireRating::None,
+            },
+            crate::VisualProperties {
+                color: 0xff0000, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                layered: None,
+            },
+        );
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+        assert!(restored.material_library.get(mat_id)
+            .unwrap().visual.layered.is_none());
+    }
+
+    #[test]
+    fn adr099_section_9_partial_layered_round_trip() {
+        // Albedo-only (no normal/roughness/metallic) — verifies the
+        // partial-population path. channel_count == 1.
+        use crate::material::{LayeredChannels, TextureChannelInfo, MaterialTier};
+        let mut scene = Scene::new();
+        let mat_id = scene.material_library.create_material_in_tier(
+            MaterialTier::Project,
+            "Albedo".into(), "Albedo".into(), crate::MaterialCategory::Custom,
+            crate::PhysicalProperties {
+                density: 1.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: crate::FireRating::None,
+            },
+            crate::VisualProperties {
+                color: 0, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                layered: Some(LayeredChannels {
+                    albedo: Some(TextureChannelInfo::new("data:_,ABC".into(), 0.001)),
+                    normal: None,
+                    roughness: None,
+                    metallic: None,
+                }),
+            },
+        );
+        // Pre-roundtrip sanity: the just-created material exists.
+        assert!(scene.material_library.get(mat_id).is_some(),
+            "pre-roundtrip: material must exist");
+
+        let bytes = scene.export_versioned_snapshot().expect("export");
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("import");
+        let restored_material = restored.material_library.get(mat_id)
+            .expect("partial: material missing after restore");
+        let layered = restored_material.visual.layered.as_ref()
+            .expect("partial: layered field missing after restore");
+        assert_eq!(layered.channel_count(), 1);
+        assert!(layered.albedo.is_some());
+        assert!(layered.normal.is_none());
+        assert!(layered.roughness.is_none());
+        assert!(layered.metallic.is_none());
     }
 
     #[test]

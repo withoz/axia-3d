@@ -72,10 +72,12 @@ pub struct TextureChannelInfo {
     /// World-units-per-tile (e.g. 0.001 = 1m per tile).
     pub scale: f64,
     /// Optional projection-axis rotation (radians, planar/box only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// NOTE: NO `skip_serializing_if` — bincode positional EOF safety
+    /// (see ADR-099 L-β 사후 정정).
+    #[serde(default)]
     pub rotation: Option<f64>,
-    /// Optional display label (filename etc).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional display label (filename etc). Same bincode safety.
+    #[serde(default)]
     pub label: Option<String>,
 }
 
@@ -116,16 +118,18 @@ impl TextureChannelInfo {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LayeredChannels {
     /// Base color (a.k.a. diffuse) — Three.js `material.map`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub albedo: Option<TextureChannelInfo>,
     /// Tangent-space normal map — Three.js `material.normalMap`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// NO `skip_serializing_if` — bincode positional EOF safety
+    /// (ADR-099 L-β 사후 정정 답습).
+    #[serde(default)]
     pub normal: Option<TextureChannelInfo>,
     /// Greyscale roughness map — Three.js `material.roughnessMap`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub roughness: Option<TextureChannelInfo>,
     /// Greyscale metallic map — Three.js `material.metalnessMap`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub metallic: Option<TextureChannelInfo>,
 }
 
@@ -1265,6 +1269,41 @@ mod tests {
         let err = lib.validate_layered_channels().expect_err("invalid albedo");
         assert_eq!(err.0, id);
         assert!(err.1.starts_with("albedo: "));
+    }
+
+    #[test]
+    fn material_partial_layered_bincode_roundtrip() {
+        // ADR-099 L-γ — Direct bincode roundtrip regression guard for
+        // partial layered payload (albedo Some, others None). Catches
+        // any future re-introduction of `skip_serializing_if` on
+        // `Option<TextureChannelInfo>` fields (ADR-099 L-β 사후 정정
+        // bincode positional EOF lesson).
+        let m = Material {
+            id: MaterialId::new(100),
+            name: "A".into(),
+            name_en: "A".into(),
+            category: MaterialCategory::Custom,
+            physical: PhysicalProperties {
+                density: 1.0, friction: 0.5, restitution: 0.5,
+                specific_gravity: 1.0, thermal_conductivity: 0.5,
+                fire_rating: FireRating::None,
+            },
+            visual: VisualProperties {
+                color: 0, roughness: 0.5, metalness: 0.0, opacity: 1.0,
+                layered: Some(LayeredChannels {
+                    albedo: Some(TextureChannelInfo::new("data:_,ABC".into(), 0.001)),
+                    normal: None, roughness: None, metallic: None,
+                }),
+            },
+        };
+        let bytes = bincode::serialize(&m).expect("serialize");
+        let decoded: Material = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(decoded.id.raw(), 100);
+        let l = decoded.visual.layered.as_ref().expect("layered preserved");
+        assert!(l.albedo.is_some());
+        assert!(l.normal.is_none());
+        assert!(l.roughness.is_none());
+        assert!(l.metallic.is_none());
     }
 
     #[test]

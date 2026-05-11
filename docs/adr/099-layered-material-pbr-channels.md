@@ -279,6 +279,66 @@ Bridge TS wrappers + Real Chromium E2E
     validate` (single) + `LayeredChannels::validate` (4-channel) +
     `MaterialLibrary::validate_layered_channels` (entire library)
 
-### L-γ ~ L-η (예정, multi-week)
+### L-γ (본 commit) — Snapshot section 9 자연 확장 + WASM bridge
+- **commit**: 본 commit (axia-core + axia-wasm)
+- **사후 정정 — L-β bincode 함정 완전 박멸**: L-β commit 에서
+  VisualProperties.layered 의 `skip_serializing_if` 만 제거했으나
+  `LayeredChannels` 내부 4 채널 (`normal` / `roughness` / `metallic`)
+  과 `TextureChannelInfo.rotation` / `label` 에 동일 attribute 가 남아
+  있어 partial layered roundtrip fail. 모든 Option<T> 필드에서
+  `skip_serializing_if` 일괄 제거 — bincode positional EOF 영구 차단.
+  새 회귀 `material_partial_layered_bincode_roundtrip` 가 regression
+  guard.
+- **axia-core lib re-exports**: `TextureProjection` / `TextureChannelInfo`
+  / `LayeredChannels` → axia-wasm 직접 import 가능
+- **Snapshot section 9 자연 확장** (ADR-098 S-γ activate):
+  * material_library 전체 직렬화에 VisualProperties.layered 자동 포함
+  * Legacy snapshot (pre-L-β) → ADR-098 S-γ section 9 fallback (entire
+    library 가 Scene::new default 로 복귀, 모든 material 의 layered=
+    None)
+  * **Defensive deserialize logging** — silent failure 방지, eprintln
+    on schema drift (사용자 데이터 손실 조기 감지)
+- **WASM 5 endpoints** (additive — ADR-076 baseline guard PASS):
+  * `getLayeredChannels(material_id) -> String` (JSON `{ hasLayered,
+    channels? }` per-channel info)
+  * `setLayeredChannel(material_id, channel, data_url, projection: u32,
+    scale, rotation_or_nan, label) -> bool` (flat signature — primitive
+    types only, NaN sentinel for None rotation, empty string for None
+    label)
+  * `clearLayeredChannel(material_id, channel) -> bool` (idempotent
+    normalization — empty layered → None)
+  * `migrateLegacyTextureToLayered() -> u32` (count migrated)
+  * `hasLayeredMaterial(material_id) -> bool` (quick existence check)
+- **export_baseline.txt** additive +5 (ADR-076 §C-amendment-1 정합).
+- **회귀 (axia-core)**: +4 tests
+  * adr099_section_9_layered_channels_round_trip (4 channels full)
+  * adr099_section_9_legacy_material_without_layered_roundtrips
+  * adr099_section_9_partial_layered_round_trip (sub-set 1 channel,
+    bincode EOF regression guard)
+  * material_partial_layered_bincode_roundtrip (direct Material
+    bincode regression — fastest failure signal)
+- **회귀 (axia-wasm)**: +5 tests
+  * adr099_l_gamma_endpoints_wired (5 endpoint pin)
+  * adr099_l_gamma_get_emits_has_layered_field (schema lock)
+  * adr099_l_gamma_set_channel_uses_flat_signature (L-G primitive
+    types only)
+  * adr099_l_gamma_clear_normalizes_empty_layered (L-D idempotent)
+  * adr099_l_gamma_has_layered_quick_check_returns_bool
+- **Cargo sweep**: axia-core 281 → **285** (+4), axia-wasm 49 → **54**
+  (+5). axia-geo 1256 unchanged. 절대 #[ignore] 금지 9/9 준수.
+- **누적 L-α ~ L-γ**: docs +1 ADR, axia-core +18 (L-β 14 + L-γ 4),
+  axia-wasm +5 = **+23**.
+- **Lessons applied**:
+  * **L-β 사후 정정 완전 박멸** — 모든 bincode struct Option 필드는
+    `#[serde(default)]` 만 (skip_serializing_if 금지). 재발 방지 위해
+    direct Material bincode regression guard 명시 추가
+  * Flat primitive signature for WASM (NaN / empty string sentinel) —
+    JSON parsing in Rust 회피 (no serde_json dep, ADR-098 S-γ 답습)
+  * Defensive deserialize logging — silent failure 차단 (사용자
+    데이터 손실 조기 감지)
+  * Idempotent normalization (clear + migrate) — ADR-098 S-D pattern
+    6번째 일관 적용
+
+### L-δ ~ L-η (예정, multi-week)
 별도 sub-step 결재 시 commit 진행. 각 sub-step standalone usable
 (atomic invariant).

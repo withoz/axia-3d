@@ -1695,6 +1695,201 @@ impl AxiaEngine {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ADR-099 L-γ — Layered Material 4-PBR Channels (Phase 5-B) WASM API
+    //
+    // 5 endpoints (additive — ADR-076 baseline guard PASS):
+    //   - getLayeredChannels   — read-only JSON (per-channel info)
+    //   - setLayeredChannel    — set one of 4 channels (flat params)
+    //   - clearLayeredChannel  — remove one channel (None)
+    //   - migrateLegacyTextureToLayered — bulk normalizer
+    //   - hasLayeredMaterial   — quick existence check
+    //
+    // Channel naming convention: "albedo" | "normal" | "roughness" |
+    // "metallic" (lowercase, matches TextureProjection serde). Projection
+    // encoded as u32 (0=planar, 1=box, 2=cylindrical) to avoid string
+    // round-trip in hot paths. rotation: f64::NAN = None; label: empty
+    // string = None.
+    //
+    // markDirty NOT triggered — visual-only mutation; mesh buffers
+    // unchanged. Renderer refreshes by polling material library.
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-099 L-γ — Read layered channels of a material as JSON.
+    ///
+    /// Returns:
+    ///   - `"{\"hasLayered\":false}"` if material missing or layered=None
+    ///   - `"{\"hasLayered\":true,\"channels\":{...}}"` with per-channel
+    ///     info (each: `{ "dataUrl": ..., "projection": "planar"|"box"|
+    ///     "cylindrical", "scale": ..., "rotation": <num|null>,
+    ///     "label": <str|null> }`)
+    #[wasm_bindgen(js_name = "getLayeredChannels")]
+    pub fn get_layered_channels(&self, material_id: u32) -> String {
+        use axia_geo::MaterialId;
+        use axia_core::TextureChannelInfo;
+        let id = MaterialId::new(material_id);
+        let material = match self.scene.material_library.get(id) {
+            Some(m) => m,
+            None => return "{\"hasLayered\":false}".to_string(),
+        };
+        let layered = match &material.visual.layered {
+            Some(l) => l,
+            None => return "{\"hasLayered\":false}".to_string(),
+        };
+        let channel_json = |ch: &Option<TextureChannelInfo>| -> String {
+            match ch {
+                None => "null".to_string(),
+                Some(c) => {
+                    let projection_str = match c.projection {
+                        axia_core::TextureProjection::Planar => "planar",
+                        axia_core::TextureProjection::Box => "box",
+                        axia_core::TextureProjection::Cylindrical => "cylindrical",
+                    };
+                    let rotation = match c.rotation {
+                        Some(r) => format!("{}", r),
+                        None => "null".to_string(),
+                    };
+                    let label = match &c.label {
+                        Some(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                        None => "null".to_string(),
+                    };
+                    // dataUrl may contain quotes — escape minimally.
+                    let data_url_esc = c.data_url.replace('"', "\\\"");
+                    format!(
+                        r#"{{"dataUrl":"{}","projection":"{}","scale":{},"rotation":{},"label":{}}}"#,
+                        data_url_esc, projection_str, c.scale, rotation, label,
+                    )
+                }
+            }
+        };
+        format!(
+            r#"{{"hasLayered":true,"channels":{{"albedo":{},"normal":{},"roughness":{},"metallic":{}}}}}"#,
+            channel_json(&layered.albedo),
+            channel_json(&layered.normal),
+            channel_json(&layered.roughness),
+            channel_json(&layered.metallic),
+        )
+    }
+
+    /// ADR-099 L-γ — Set one channel of a material's layered payload.
+    ///
+    /// Flat-parameter signature (avoids JSON parsing in Rust). Channel
+    /// name must be one of "albedo" | "normal" | "roughness" |
+    /// "metallic". Projection u32: 0=planar, 1=box, 2=cylindrical.
+    /// `rotation_or_nan = f64::NAN` → None; `label.is_empty()` → None.
+    ///
+    /// Returns true on success, false on:
+    ///   - material missing
+    ///   - invalid channel name
+    ///   - invalid projection u32
+    ///   - validate() failure (empty dataUrl, non-positive scale)
+    ///
+    /// Creates `layered = Some(LayeredChannels::default())` on the first
+    /// call if currently None.
+    #[wasm_bindgen(js_name = "setLayeredChannel")]
+    pub fn set_layered_channel(
+        &mut self,
+        material_id: u32,
+        channel: String,
+        data_url: String,
+        projection: u32,
+        scale: f64,
+        rotation_or_nan: f64,
+        label: String,
+    ) -> bool {
+        use axia_geo::MaterialId;
+        use axia_core::{TextureChannelInfo, TextureProjection};
+        let id = MaterialId::new(material_id);
+        let material = match self.scene.material_library.get_mut(id) {
+            Some(m) => m,
+            None => return false,
+        };
+        let proj = match projection {
+            0 => TextureProjection::Planar,
+            1 => TextureProjection::Box,
+            2 => TextureProjection::Cylindrical,
+            _ => return false,
+        };
+        let info = TextureChannelInfo {
+            data_url,
+            projection: proj,
+            scale,
+            rotation: if rotation_or_nan.is_nan() { None } else { Some(rotation_or_nan) },
+            label: if label.is_empty() { None } else { Some(label) },
+        };
+        if info.validate().is_err() {
+            return false;
+        }
+        if material.visual.layered.is_none() {
+            material.visual.layered = Some(Default::default());
+        }
+        let layered = material.visual.layered.as_mut().unwrap();
+        match channel.as_str() {
+            "albedo" => layered.albedo = Some(info),
+            "normal" => layered.normal = Some(info),
+            "roughness" => layered.roughness = Some(info),
+            "metallic" => layered.metallic = Some(info),
+            _ => return false,
+        }
+        true
+    }
+
+    /// ADR-099 L-γ — Clear one channel of a material's layered payload.
+    ///
+    /// If clearing the last channel leaves all 4 as None, the `layered`
+    /// field is also reset to None (idempotent normalization).
+    /// Returns true on success, false on material/channel missing.
+    #[wasm_bindgen(js_name = "clearLayeredChannel")]
+    pub fn clear_layered_channel(&mut self, material_id: u32, channel: String) -> bool {
+        use axia_geo::MaterialId;
+        let id = MaterialId::new(material_id);
+        let material = match self.scene.material_library.get_mut(id) {
+            Some(m) => m,
+            None => return false,
+        };
+        let layered = match material.visual.layered.as_mut() {
+            Some(l) => l,
+            None => return false,
+        };
+        match channel.as_str() {
+            "albedo" => layered.albedo = None,
+            "normal" => layered.normal = None,
+            "roughness" => layered.roughness = None,
+            "metallic" => layered.metallic = None,
+            _ => return false,
+        }
+        // Normalize: if all 4 channels None, drop the layered wrapper.
+        if !layered.has_any_channel() {
+            material.visual.layered = None;
+        }
+        true
+    }
+
+    /// ADR-099 L-γ — Bulk normalize empty layered payloads.
+    ///
+    /// Idempotent. Returns the count of materials whose empty
+    /// `LayeredChannels` was stripped to None. ADR-098 S-D pattern.
+    #[wasm_bindgen(js_name = "migrateLegacyTextureToLayered")]
+    pub fn migrate_legacy_texture_to_layered(&mut self) -> u32 {
+        self.scene.material_library
+            .migrate_legacy_textures_to_layered() as u32
+    }
+
+    /// ADR-099 L-γ — Quick existence check.
+    ///
+    /// Returns true iff the material exists AND has `layered.Some(_)`
+    /// with at least one populated channel. False on material missing
+    /// or `layered=None` or empty `LayeredChannels`.
+    #[wasm_bindgen(js_name = "hasLayeredMaterial")]
+    pub fn has_layered_material(&self, material_id: u32) -> bool {
+        use axia_geo::MaterialId;
+        let id = MaterialId::new(material_id);
+        self.scene.material_library.get(id)
+            .and_then(|m| m.visual.layered.as_ref())
+            .map(|l| l.has_any_channel())
+            .unwrap_or(false)
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ADR-095 Phase 3-γ — Reference 시민권 (Two-Layer Phase 3) WASM API
     //
     // 3 categories: ConstructionLine / ImportedMesh / PointCloud.

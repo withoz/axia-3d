@@ -34,5 +34,10 @@ pub use scene::{
     MaterialRecoveryOutcome, MaterialRemovalOutcome,
 };
 pub use group::{GroupManager, GroupId, ComponentDefId, ComponentInstanceId, Transform3D};
-pub use material::{Material, MaterialLibrary, MaterialCategory, PhysicalProperties, VisualProperties, FireRating};
+pub use material::{
+    Material, MaterialLibrary, MaterialCategory, PhysicalProperties, VisualProperties,
+    FireRating,
+    // ADR-099 L-β
+    TextureProjection, TextureChannelInfo, LayeredChannels,
+};
 pub use constraint::{Constraint, ConstraintGraph, ConstraintId, ConstraintKind, ConstraintRef, SolverResult};
