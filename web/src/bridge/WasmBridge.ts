@@ -1848,7 +1848,10 @@ export class WasmBridge {
     // WASM signature: (positions, ox, oy, oz, nx, ny, nz, ux, uy, uz)
     // wasm-bindgen Float64Array 인자는 first positional — rest 는 numbers
     // 우회: spread 형태로 호출 (wasm-bindgen 의 ...args[number] 시그니처 답습)
-    return (fn as (
+    // ADR-099 follow-up: TS strict-mode cast safety — `as unknown` first
+    // (wasm-bindgen `(...args: number[]) => number` ↔ our typed signature
+    // don't overlap directly, but the runtime call IS the typed signature).
+    return (fn as unknown as (
       pts: Float64Array,
       ox: number, oy: number, oz: number,
       nx: number, ny: number, nz: number,
