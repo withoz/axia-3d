@@ -25,14 +25,15 @@ import {
   stopViewportRenderLoop,
 } from '../helpers/boolean-fixtures';
 
-// 2026-05-11 SKIP (entire describe) — Linux baselines (chromium-linux.png)
-// not yet committed. Local development on Windows generates -win32.png
-// baselines but those don't satisfy Linux CI. Until per-OS baseline
-// generation workflow exists (V-3 multi-OS spec, ADR-077 future
-// sub-step), suite is skipped to keep CI green.
-// To re-enable: run `npx playwright test --update-snapshots` on Linux
-// (Docker or CI), commit the -linux.png baselines, remove this skip.
-test.describe.skip('ADR-077 V-2 — Group A/B color outline visuals', () => {
+// 2026-05-12 RE-ENABLED — Linux baselines for all 3 scenarios
+// (`group-a-only`, `group-b-only`, `group-a-and-b` × `-chromium-linux.png`)
+// committed via `Update Visual Baselines (Linux)` workflow run #2 (artifact
+// `visual-baselines-linux`). Generation requires `viewport.stop()` before
+// `toHaveScreenshot` to halt Three.js rAF (see fix/visual-baseline-render-stop,
+// merged PR #11). V-3 multi-OS matrix (macOS/Windows baselines) remains a
+// follow-up; trigger `Update Visual Baselines (Linux)` workflow on demand
+// to regenerate when ADR-074 group color visuals change.
+test.describe('ADR-077 V-2 — Group A/B color outline visuals', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBridgeReady(page);
