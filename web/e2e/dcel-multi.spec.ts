@@ -103,15 +103,12 @@ test.describe('ADR-075 E4-3 — multi-face DCEL Boolean E2E', () => {
     expect(result.allRemovedFaces).toEqual([]);
   });
 
-  // 2026-05-11 SKIP — ADR-087 K-δ activated automatic Plane surface
-  // attachment for all drawRectAsShape-created faces (LOCKED #34).
-  // The `withSurfaces: false` option on setupNPlaneFaces no longer
-  // produces surface-free faces; the kernel-native command suite
-  // unconditionally attaches Plane analytics. Y-E ineligibility path
-  // is still valid at engine level (Mesh fallback when surfaces are
-  // explicitly cleared) — needs a separate fixture that clears
-  // surfaces post-creation. Tracked as follow-up to ADR-087 K-η.
-  test.skip('Y-E ineligibility (no surfaces) routes to Mesh path', async ({ page }) => {
+  // 2026-05-12 RE-ENABLED — ADR-087 K-δ surface auto-attach
+  // post-attach mitigation: setupNPlaneFaces(withSurfaces:false) now
+  // explicitly calls `bridge.clearFaceSurface(faceId)` after the
+  // auto-attached Plane, restoring the original Y-E contract.
+  // See boolean-fixtures.ts comment for full rationale.
+  test('Y-E ineligibility (no surfaces) routes to Mesh path', async ({ page }) => {
     const { faces } = await setupNPlaneFaces(page, {
       count: 4,
       withSurfaces: false,  // Y-E strict — must reject upfront
