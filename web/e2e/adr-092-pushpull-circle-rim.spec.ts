@@ -37,100 +37,159 @@ test.describe('ADR-092 C-δ — Push-Pull Circle rim preservation', () => {
     await waitForBridgeReady(page);
   });
 
-  // 2026-05-11 SKIP — ADR-092 C-β top-rim Arc preservation regression.
-  // Locally + CI both report only 2 multi-segment edges (bottom rim
-  // only) rather than the expected 2N (bottom + top). Push-Pull top
-  // edges are NOT receiving Arc curve metadata as ADR-092 §C-β
-  // specified. Engine-side regression — needs separate investigation
-  // (extrude_closed_curve_face_via_tessellation step 8 attachment
-  // logic). Out of CI hygiene scope (PR #7+). Tracked as ADR-092
-  // follow-up.
-  test.skip('top rim has Arc curves after Push-Pull on closed-curve Circle', async ({ page }) => {
+  // 2026-05-12 RE-ENABLED via parallel Path A / Path B coverage —
+  // see commit fix/adr-092-test-path-b-aware. The original SKIP
+  // assumed legacy Path A topology (N polygon rim edges with Arc),
+  // but ADR-094 B-η (2026-05-09) flipped production default to
+  // Path B (kernel-native annulus — top + bottom are single
+  // self-loop closed-curve edges). Both paths produce visually
+  // smooth rims (A-κ render fast-path tessellates Circle/Arc to
+  // chord-tolerant segments); they just count differently in
+  // `getEdgeMap()`. The two tests below cover both contracts.
+
+  /**
+   * Path A (legacy tessellate-then-extrude, `cylinder_path_b_default = false`):
+   *
+   * After `extrude_closed_curve_face_via_tessellation` runs, the
+   * solid has:
+   *   - Bottom polygonal face — N rim edges, each with `AnalyticCurve::Arc`
+   *     (attached at step 6 of the function)
+   *   - Top polygonal face — N rim edges, each with `AnalyticCurve::Arc`
+   *     (attached at step 8 — ADR-092 C-β fix)
+   *   - N side quad faces sharing rim edges
+   *
+   * Render path (A-κ) tessellates each Arc-attached edge to multiple
+   * segments → 2N multi-segment EdgeIds. For radius 5 with
+   * chord_tol = 0.05 mm, N ≥ 8, so assert `multiSegmentEdges ≥ 16`.
+   *
+   * This is the explicit-OFF path users hit via
+   * `localStorage 'axia:cylinder-path-b-mode' = 'false'`.
+   */
+  test('Path A (legacy tessellate) — top + bottom rims attach Arc to N polygon edges (≥ 2N total)', async ({ page }) => {
     const result = await page.evaluate(() => {
       const w = window as unknown as AxiaWindow;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const bridge = w.__axia!.get<any>('bridge');
 
-      // 1. DrawCircle in closed-curve mode (ADR-089 default ON post-A-π).
-      //    drawCircleAsCurve(cx, cy, cz, nx, ny, nz, radius) — returns
-      //    ShapeId (form-layer per LOCKED #26 P-5e-α).
-      const shapeId = bridge.drawCircleAsCurve(
-        0, 0, 0,        // center
-        0, 0, 1,        // normal +Z
-        5,              // radius
-      );
-      if (shapeId == null || shapeId < 0) {
-        return { ok: false, reason: 'drawCircleAsCurve failed', drawResult: shapeId };
-      }
+      // Force Path A for this test (production default is Path B).
+      // setCylinderPathBDefault is the same hook main.ts uses, so
+      // the engine routes createSolidExtrude → Path A consistently.
+      bridge.setCylinderPathBDefault(false);
 
-      // Resolve Shape → first face ID.
+      const shapeId = bridge.drawCircleAsCurve(0, 0, 0, 0, 0, 1, 5);
+      if (shapeId == null || shapeId < 0) {
+        return { ok: false, reason: 'drawCircleAsCurve failed' };
+      }
       const faceIds: number[] = bridge.getShapeFaceIds(shapeId);
       if (!faceIds || faceIds.length === 0) {
-        return { ok: false, reason: 'no faces from Shape', shapeId };
+        return { ok: false, reason: 'no faces from Shape' };
       }
       const profileFaceId = faceIds[0];
 
-      // Capture pre-Push-Pull edge segment count for sanity.
-      const edgeMapPre: Uint32Array = bridge.getEdgeMap();
-      const totalSegmentsPre = edgeMapPre ? edgeMapPre.length : 0;
-
-      // 2. Push-Pull (extrude) via typed bridge wrapper.
       const pushPullOk = bridge.createSolidExtrude(profileFaceId, 10.0);
       if (!pushPullOk) {
         return { ok: false, reason: 'createSolidExtrude returned false' };
       }
 
-      // 3. Capture post-Push-Pull edge map and group segments by EdgeId.
       const edgeMap: Uint32Array = bridge.getEdgeMap();
       if (!edgeMap || edgeMap.length === 0) {
         return { ok: false, reason: 'edgeMap empty post Push-Pull' };
       }
-
       const segCountByEdgeId = new Map<number, number>();
       for (let i = 0; i < edgeMap.length; i++) {
         const eid = edgeMap[i];
         segCountByEdgeId.set(eid, (segCountByEdgeId.get(eid) ?? 0) + 1);
       }
-
-      // 4. Count edges with multi-segment rendering (= Arc curves).
-      //    Single-segment edges = straight Line edges (no curve attached).
       let multiSegmentEdges = 0;
-      let singleSegmentEdges = 0;
-      for (const count of segCountByEdgeId.values()) {
-        if (count >= 2) multiSegmentEdges++;
-        else singleSegmentEdges++;
+      for (const c of segCountByEdgeId.values()) {
+        if (c >= 2) multiSegmentEdges++;
       }
-
-      const totalEdges = segCountByEdgeId.size;
-
       return {
         ok: true,
-        totalSegmentsPre,
         totalSegmentsPost: edgeMap.length,
-        totalEdges,
+        totalEdges: segCountByEdgeId.size,
         multiSegmentEdges,
-        singleSegmentEdges,
       };
     });
 
     if (!result.ok) {
       throw new Error(`Test setup failed: ${(result as { reason?: string }).reason}`);
     }
-
-    // ADR-092 C-β contract:
-    // - Bottom face has N Arc edges (existing — ADR-089 step 6)
-    // - Top face has N Arc edges (NEW — C-β)
-    // - Side N quad faces have 4 edges each: 2 vertical (Line) + 1 bottom
-    //   (shared with bottom face Arc) + 1 top (shared with top face Arc)
-    //
-    // After C-β: 2N edges have Arc (bottom + top rim) — multi-segment in render.
-    // Pre-C-β: only N edges had Arc (bottom rim only) — multi-segment count ≈ N.
-    //
-    // For default Circle (radius 5, chord_tol = 5/100 = 0.05mm), N is computed
-    // by segment_count_for_arc and is ≥ 8. Conservatively assert ≥ 16 multi-
-    // segment edges (proves both bottom + top are smooth).
     expect(result.ok).toBe(true);
+    // Both rims smooth = ≥ 2N multi-segment EdgeIds. N ≥ 8 for r=5.
     expect(result.multiSegmentEdges).toBeGreaterThanOrEqual(16);
+  });
+
+  /**
+   * Path B (kernel-native annulus, current production default):
+   *
+   * After `extrude_cylinder_kernel_native` runs, the solid has just
+   * 3 faces + 2 edges + 2 verts (산업 CAD parity, ADR-094 §1):
+   *   - Top face — 1 self-loop edge with `AnalyticCurve::Circle`
+   *   - Bottom face — 1 self-loop edge with `AnalyticCurve::Circle`
+   *   - 1 annulus side face
+   *
+   * Render path (A-κ) tessellates each closed-curve self-loop edge
+   * to N chord-tolerant segments → exactly 2 multi-segment EdgeIds
+   * (1 top + 1 bottom), and the *segments* per rim count toward the
+   * N-segment chord budget. So we assert:
+   *   - `multiSegmentEdges === 2` (1 top + 1 bottom)
+   *   - `totalSegmentsPost >= 2 * 8` (each rim ≥ 8 segments for r=5)
+   */
+  test('Path B (kernel-native, production default) — top + bottom self-loop edges render as 2 smooth rings', async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const w = window as unknown as AxiaWindow;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bridge = w.__axia!.get<any>('bridge');
+
+      // Path B is the production default; assert it explicitly so the
+      // test is robust if main.ts init order changes.
+      bridge.setCylinderPathBDefault(true);
+
+      const shapeId = bridge.drawCircleAsCurve(0, 0, 0, 0, 0, 1, 5);
+      if (shapeId == null || shapeId < 0) {
+        return { ok: false, reason: 'drawCircleAsCurve failed' };
+      }
+      const faceIds: number[] = bridge.getShapeFaceIds(shapeId);
+      if (!faceIds || faceIds.length === 0) {
+        return { ok: false, reason: 'no faces from Shape' };
+      }
+      const profileFaceId = faceIds[0];
+
+      const pushPullOk = bridge.createSolidExtrude(profileFaceId, 10.0);
+      if (!pushPullOk) {
+        return { ok: false, reason: 'createSolidExtrude returned false' };
+      }
+
+      const edgeMap: Uint32Array = bridge.getEdgeMap();
+      if (!edgeMap || edgeMap.length === 0) {
+        return { ok: false, reason: 'edgeMap empty post Push-Pull' };
+      }
+      const segCountByEdgeId = new Map<number, number>();
+      for (let i = 0; i < edgeMap.length; i++) {
+        const eid = edgeMap[i];
+        segCountByEdgeId.set(eid, (segCountByEdgeId.get(eid) ?? 0) + 1);
+      }
+      const multiSegmentSegCounts = [...segCountByEdgeId.values()].filter(c => c >= 2);
+      const rimSegmentSum = multiSegmentSegCounts.reduce((a, b) => a + b, 0);
+      return {
+        ok: true,
+        totalSegmentsPost: edgeMap.length,
+        totalEdges: segCountByEdgeId.size,
+        multiSegmentEdges: multiSegmentSegCounts.length,
+        rimSegmentSum,
+      };
+    });
+
+    if (!result.ok) {
+      throw new Error(`Test setup failed: ${(result as { reason?: string }).reason}`);
+    }
+    expect(result.ok).toBe(true);
+    // 2 = 1 top self-loop + 1 bottom self-loop (each contributes 1 EdgeId).
+    expect(result.multiSegmentEdges).toBe(2);
+    // Each rim tessellates to ≥ 8 segments for r=5 (chord_tol = r/100 = 0.05 mm
+    // → segment_count_for_arc enforces min 8). Two rims = ≥ 16 segments.
+    expect(result.rimSegmentSum).toBeGreaterThanOrEqual(16);
   });
 
   test('Arc-attached top edges produce visibly smoother polyline than straight lines', async ({ page }) => {
