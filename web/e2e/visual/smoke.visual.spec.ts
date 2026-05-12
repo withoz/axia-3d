@@ -16,7 +16,7 @@
  *   PR 리뷰: baseline PNG 의 git diff 검토 필수.
  */
 import { test, expect } from '@playwright/test';
-import { waitForBridgeReady } from '../helpers/boolean-fixtures';
+import { waitForBridgeReady, stopViewportRenderLoop } from '../helpers/boolean-fixtures';
 
 // 2026-05-11 SKIP — Linux baseline (chromium-linux.png) not committed.
 // See group-color.visual.spec.ts comment for rationale. Re-enable
@@ -28,6 +28,11 @@ test.describe.skip('ADR-077 V-1 — Visual regression smoke', () => {
     // WASM 부팅 후 Three.js 첫 frame rendering 안정화 대기.
     // 500ms 는 경험적 — too short 시 partial render, too long 시 CI 시간 낭비.
     await page.waitForTimeout(500);
+
+    // ADR-077 V-3 — halt Three.js rAF before snapshot so toHaveScreenshot
+    // stability check converges (continuous WebGL render = perpetual
+    // per-frame jitter → 5 s timeout, see fix/visual-baseline-render-stop).
+    await stopViewportRenderLoop(page);
 
     // Per V-D: 1% pixel ratio threshold (config 에 설정됨).
     // 첫 run 시 baseline 자동 생성 (--update-snapshots).

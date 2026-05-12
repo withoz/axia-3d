@@ -115,6 +115,31 @@ export async function waitForBridgeReady(page: Page): Promise<void> {
   );
 }
 
+/**
+ * ADR-077 V-3 helper — halt the Three.js rAF render loop before a visual
+ * snapshot. Playwright's `toHaveScreenshot` (and `--update-snapshots`)
+ * requires two consecutive screenshots to match within a pixel threshold
+ * before it writes the baseline. A continuously rendering WebGL canvas
+ * never stabilizes within the default 5 s timeout (per-frame jitter from
+ * AA / SSAO / dithering), so the assertion times out indefinitely.
+ *
+ * Calling `viewport.stop()` cancels the `requestAnimationFrame` chain
+ * (Viewport.ts:3164) but leaves the last rendered frame on the canvas,
+ * which is what we want to snapshot. Safe to call multiple times.
+ */
+export async function stopViewportRenderLoop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    try {
+      const v = w.__axia?.get?.('viewport');
+      v?.stop?.();
+    } catch {
+      // viewport not yet registered or already stopped — no-op
+    }
+  });
+}
+
 // ADR-076 Step 2 — Removed: invokeBooleanDispatchDcel (single-face
 // helper). Bridge.booleanDispatchDcel and the underlying WASM export
 // were sunset in ADR-076 Step 2. Multi (invokeBooleanDispatchDcelMulti

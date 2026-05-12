@@ -22,6 +22,7 @@ import {
   setupNPlaneFaces,
   setupGroupedSelection,
   waitForBridgeReady,
+  stopViewportRenderLoop,
 } from '../helpers/boolean-fixtures';
 
 // 2026-05-11 SKIP (entire describe) — Linux baselines (chromium-linux.png)
@@ -49,6 +50,8 @@ test.describe.skip('ADR-077 V-2 — Group A/B color outline visuals', () => {
       groupB: [],
     });
     await page.waitForTimeout(500);  // rendering 안정화 (V-1 패턴)
+    // ADR-077 V-3 — see smoke.visual.spec.ts for rationale.
+    await stopViewportRenderLoop(page);
     await expect(page).toHaveScreenshot('group-a-only.png');
   });
 
@@ -64,6 +67,7 @@ test.describe.skip('ADR-077 V-2 — Group A/B color outline visuals', () => {
       groupB: [faces[2], faces[3]],
     });
     await page.waitForTimeout(500);
+    await stopViewportRenderLoop(page);
     await expect(page).toHaveScreenshot('group-b-only.png');
   });
 
@@ -79,6 +83,7 @@ test.describe.skip('ADR-077 V-2 — Group A/B color outline visuals', () => {
       groupB: [faces[2], faces[3]],
     });
     await page.waitForTimeout(500);
+    await stopViewportRenderLoop(page);
     await expect(page).toHaveScreenshot('group-a-and-b.png');
   });
 });
