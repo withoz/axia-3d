@@ -61,6 +61,8 @@ export async function setupTwoPlaneFaces(
       const faceA = faceIdsA[0];
       const faceB = faceIdsB[0];
 
+      // ADR-087 K-δ semantics — drawRectAsShape AUTO-attaches a Plane
+      // surface (LOCKED #34). See setupNPlaneFaces for full rationale.
       if (withSurfaces) {
         // setFaceSurfacePlane: (faceId, ox, oy, oz, nx, ny, nz,
         //                      ux, uy, uz, u_min, u_max, v_min, v_max)
@@ -80,6 +82,10 @@ export async function setupTwoPlaneFaces(
           -5, 5,
           -5, 5,
         );
+      } else {
+        // ADR-087 K-δ post-attach mitigation — explicit clear.
+        bridge.clearFaceSurface(faceA);
+        bridge.clearFaceSurface(faceB);
       }
       return { faceA, faceB };
     },
@@ -150,6 +156,17 @@ export async function setupNPlaneFaces(
           throw new Error(`drawRectAsShape Shape ${shape} produced no faces (i=${i})`);
         }
         const faceId = ids[0];
+        // ADR-087 K-δ semantics — drawRectAsShape AUTO-attaches a Plane
+        // surface (LOCKED #34). To preserve the legacy `withSurfaces`
+        // contract:
+        //   - withSurfaces:true → keep the auto-attached Plane (the
+        //     explicit setFaceSurfacePlane re-attach below is harmless
+        //     redundancy; it overrides u/v ranges to match test
+        //     expectations).
+        //   - withSurfaces:false → CLEAR the auto-attached Plane so
+        //     `Face.surface = None`. This is what enables Y-E ineligibility
+        //     (Mesh fallback) testing — without this clear, every face
+        //     would be NURBS-eligible.
         if (withSurfaces) {
           bridge.engine.setFaceSurfacePlane(
             faceId,
@@ -159,6 +176,9 @@ export async function setupNPlaneFaces(
             -5, 5,          // u_range
             -5, 5,          // v_range
           );
+        } else {
+          // ADR-087 K-δ post-attach mitigation — explicit clear.
+          bridge.clearFaceSurface(faceId);
         }
         faces.push(faceId);
       }
