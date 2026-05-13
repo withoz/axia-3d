@@ -1,6 +1,9 @@
 // Tier 1 — draw_line: straight line between two points on a draw plane.
+//
+// ADR-087 K-ζ + ADR-050 migration (2026-05-12) — lines are now created
+// as form-layer Shapes by default (`draw_line_as_shape`).
 import { z } from 'zod';
-import { Vec3, XiaId } from '../schema.js';
+import { Vec3, ShapeId } from '../schema.js';
 import type { CapabilityHandler } from './types.js';
 
 const InputSchema = z.object({
@@ -12,7 +15,7 @@ const InputSchema = z.object({
   ).default([0, 0, 1]),
 });
 
-const OutputSchema = z.object({ xia_id: XiaId });
+const OutputSchema = z.object({ shape_id: ShapeId });
 
 type Input = z.infer<typeof InputSchema>;
 type Output = z.infer<typeof OutputSchema>;
@@ -22,14 +25,15 @@ export const drawLineCapability: CapabilityHandler<Input, Output> = {
   tier: 1,
   description:
     'Draw a straight line segment from `start` to `end`. Returns the new ' +
-    "XIA's owner ID. ADR-019 P4: an edge added on an existing face whose " +
-    'endpoints lie on the same boundary loop will auto-split that face.',
+    "form-layer Shape's owner ID. ADR-019 P4: an edge added on an existing " +
+    'face whose endpoints lie on the same boundary loop will auto-split ' +
+    'that face. Use `promote_shape_to_xia` to attach a material (ADR-050).',
   inputSchema: InputSchema,
   handler: ({ engine }, input) => {
     const [x0, y0, z0] = input.start;
     const [x1, y1, z1] = input.end;
     const [nx, ny, nz] = input.plane_normal;
-    const xia_id = engine.draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz);
-    return { xia_id };
+    const shape_id = engine.draw_line_as_shape(x0, y0, z0, x1, y1, z1, nx, ny, nz);
+    return { shape_id };
   },
 };

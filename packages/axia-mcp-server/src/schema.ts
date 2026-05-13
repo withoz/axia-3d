@@ -19,6 +19,8 @@ export const OwnerId = z
 // Alias descriptions intentionally retain the "Owner ID" sentinel so the
 // surface-drift scan can distinguish them from hand-rolled int fields.
 export const XiaId = OwnerId.describe('Owner ID — XiaId (semantic Object/XIA identifier)');
+/** ADR-050 — form-layer Shape owner (rect/circle/line draws default to Shapes). */
+export const ShapeId = OwnerId.describe('Owner ID — ShapeId (form-layer Shape identifier, ADR-050)');
 export const FaceId = OwnerId.describe('Owner ID — FaceId (Pick→Promote semantic face identifier)');
 export const EdgeId = OwnerId.describe('Owner ID — EdgeId (Pick→Promote semantic edge identifier)');
 export const VertexId = OwnerId.describe('Owner ID — VertexId (semantic vertex identifier)');

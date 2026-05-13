@@ -1,6 +1,9 @@
 // Tier 1 — draw_circle: parametric circle on an arbitrary plane.
+//
+// ADR-087 K-ζ + ADR-050 migration (2026-05-12) — circles are now created
+// as form-layer Shapes by default (`draw_circle_as_shape`).
 import { z } from 'zod';
-import { Vec3, XiaId } from '../schema.js';
+import { Vec3, ShapeId } from '../schema.js';
 import type { CapabilityHandler } from './types.js';
 
 const InputSchema = z.object({
@@ -20,7 +23,7 @@ const InputSchema = z.object({
     ),
 });
 
-const OutputSchema = z.object({ xia_id: XiaId });
+const OutputSchema = z.object({ shape_id: ShapeId });
 
 type Input = z.infer<typeof InputSchema>;
 type Output = z.infer<typeof OutputSchema>;
@@ -30,18 +33,19 @@ export const drawCircleCapability: CapabilityHandler<Input, Output> = {
   tier: 1,
   description:
     'Draw a planar circle of given radius at center, oriented by normal. ' +
-    "Returns the new XIA's owner ID. Underlying geometry is an analytic " +
-    'circle (ADR-028); `segments` only affects render tessellation.',
+    "Returns the new form-layer Shape's owner ID. Underlying geometry is " +
+    'an analytic circle (ADR-028); `segments` only affects render ' +
+    'tessellation. Use `promote_shape_to_xia` to attach a material (ADR-050).',
   inputSchema: InputSchema,
   handler: ({ engine }, input) => {
     const [cx, cy, cz] = input.center;
     const [nx, ny, nz] = input.normal;
-    const xia_id = engine.draw_circle(
+    const shape_id = engine.draw_circle_as_shape(
       cx, cy, cz,
       nx, ny, nz,
       input.radius,
       input.segments,
     );
-    return { xia_id };
+    return { shape_id };
   },
 };

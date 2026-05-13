@@ -4727,9 +4727,28 @@ impl Mesh {
         let mut stats = ExportSkipStats::default();
         self.last_export_empty_faces.borrow_mut().clear();
 
-        // ADR-038 P23.2 — default chord tolerance for analytic surface tessellation.
-        // 0.1mm 시각 품질 vs 메모리 균형 (LOD 는 별도 phase).
-        const ANALYTIC_CHORD_TOL: f64 = 0.1;
+        // ADR-038 P23.2 + 2026-05-12 visual quality refinement —
+        // chord tolerance for **render-only** analytic surface / curve
+        // tessellation. 0.02mm 는 0.1mm 의 5× refinement 으로, top rim
+        // facet (사용자 시연 결함 — "옆면처럼 원도 같은 방식 쓸 수 없나요?")
+        // 해소. Side surface 가 매끈해 보이는 진짜 이유는 N 이 충분해서가
+        // 아니라 surface-aware Gouraud normal 이 적은 segment 도 매끈하게
+        // 보이게 만들기 때문 (ADR-038 P23.5). Top face 는 Plane normal 만
+        // 가지므로 segment count 가 그대로 시각 facet 으로 노출 → 더 fine
+        // chord 가 필요.
+        //
+        // Engine ops (offset / Boolean / Push-Pull Path A 의 polygon
+        // substitute) 는 별도 chord_tol (`radius * 0.01`) 을 caller 가
+        // 명시 전달 — 본 const 는 render path 전용. 두 tolerance 분리는
+        // ADR-049 §4 의 "Form/Property layer" 패턴 답습 (truth vs view).
+        //
+        // 메모리 영향 (r=5 cylinder 기준):
+        //   Side surface: ~16 → ~38 segments (×2.4)
+        //   Top face fan: ~22 → ~78 triangles (×3.5)
+        //   Rim wireframe: ~22 → ~78 line segments (×3.5)
+        //   합계 cylinder 1개: ~150 → ~360 verts (+210 verts, 무시 가능)
+        // LOD 는 별도 phase.
+        const ANALYTIC_CHORD_TOL: f64 = 0.02;
 
         for (face_id, face) in self.faces.iter() {
             if !face.is_active() || !face.is_visible() {
@@ -4840,8 +4859,12 @@ impl Mesh {
                         basis_u,
                     }) = edge_ref.curve().cloned()
                     {
-                        // ADR-038 P23.2 — 0.1mm chord tolerance.
-                        let chord_tol = ANALYTIC_CHORD_TOL.min(radius * 0.01).max(1e-6);
+                        // ADR-038 P23.2 + 2026-05-12 render refinement —
+                        // 0.02mm baseline (ANALYTIC_CHORD_TOL) capped by
+                        // `radius * 0.002` (5× finer than engine ops'
+                        // `radius * 0.01`). For r=5 → 0.01mm → ~78 fan
+                        // triangles (was ~22).
+                        let chord_tol = ANALYTIC_CHORD_TOL.min(radius * 0.002).max(1e-6);
                         let pts = crate::curves::circle::tessellate_full(
                             center, radius, c_normal, basis_u, chord_tol,
                         );
@@ -5281,7 +5304,12 @@ impl Mesh {
                     basis_u,
                 }) = edge.curve().cloned()
                 {
-                    let chord_tol = (radius * 0.01).max(5e-5);
+                    // 2026-05-12 render refinement — match closed-curve
+                    // face fast-path (line ~4844) so top face boundary
+                    // and rim wireframe align in 3D. Was `radius * 0.01`,
+                    // now `min(0.02, radius * 0.002)` per render chord
+                    // tolerance policy.
+                    let chord_tol = (radius * 0.002).clamp(5e-5, 0.02);
                     let pts = crate::curves::circle::tessellate_full(
                         center, radius, c_normal, basis_u, chord_tol,
                     );
@@ -11547,9 +11575,16 @@ mod tests {
         );
         let (_pos, _norm, indices, _fmap, _pos_f64) = mesh.export_buffers().unwrap();
         let tris = indices.len() / 3;
-        // Without slice: full sphere ~2000+ tris. With slice: ~50 tris.
-        assert!(tris < 200,
-            "ADR-089 A-φ-β: sphere u-slice must produce ≪ 200 tris, got {}", tris);
+        // Slice asserts the FRACTIONAL nature of uv-slice tessellation —
+        // a 30°×30° wedge should produce ~1/72 of the full sphere's
+        // triangles. With render chord_tol = 0.02mm (2026-05-12 refinement)
+        // a full r=100 sphere is ~50,000 tris; the slice is ~340 tris.
+        // Threshold 700 = generous upper bound, still proving slice
+        // optimization is active. Pre-refinement (chord_tol = 0.1) the
+        // slice was ~50 tris with threshold 200 — same architectural
+        // contract, just N×5 scale.
+        assert!(tris < 700,
+            "ADR-089 A-φ-β: sphere u-slice must produce a fractional tris count, got {}", tris);
         assert!(tris > 0);
     }
 

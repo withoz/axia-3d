@@ -9,8 +9,8 @@ import type { EngineInstance } from '../src/capabilities/types.js';
 
 function mockEngine(overrides: Partial<EngineInstance> = {}): EngineInstance {
   return {
-    draw_rect: () => 1,
-    push_pull: () => true,
+    draw_rect_as_shape: () => 1,
+    create_solid_extrude: () => true,
     exportSnapshotStrict: () => new Uint8Array([0x41, 0x58, 0x69, 0x41]), // "AXiA"
     ...overrides,
   };
@@ -20,8 +20,8 @@ const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
 
 describe('ADR-041 — capability dispatcher', () => {
   describe('Tier 1 — draw_rect (constructive, default-on)', () => {
-    it('returns xia_id from engine', async () => {
-      const engine = mockEngine({ draw_rect: () => 42 });
+    it('returns shape_id from engine', async () => {
+      const engine = mockEngine({ draw_rect_as_shape: () => 42 });
       const sink = new MemoryAuditSink();
       const result = await dispatch(
         'draw_rect',
@@ -33,7 +33,7 @@ describe('ADR-041 — capability dispatcher', () => {
         { engine, auditSink: sink, client: 'test', versions: VERSIONS },
       );
       expect(result.capability).toBe('draw_rect');
-      expect(result.output).toEqual({ xia_id: 42 });
+      expect(result.output).toEqual({ shape_id: 42 });
       // P26.7 — Tier 1 is NOT audited
       expect(sink.entries).toHaveLength(0);
     });
@@ -41,7 +41,7 @@ describe('ADR-041 — capability dispatcher', () => {
     it('applies default normal/up when omitted', async () => {
       let captured: number[] = [];
       const engine = mockEngine({
-        draw_rect: (...args: number[]) => {
+        draw_rect_as_shape: (...args: number[]) => {
           captured = args;
           return 1;
         },
@@ -89,7 +89,7 @@ describe('ADR-041 — capability dispatcher', () => {
 
     it('allowed with enabled_tiers=[0,1,2], records audit entry', async () => {
       const sink = new MemoryAuditSink();
-      const engine = mockEngine({ push_pull: () => true });
+      const engine = mockEngine({ create_solid_extrude: () => true });
       const result = await dispatch(
         'push_pull',
         { face_id: 7, distance: 25 },
@@ -117,7 +117,7 @@ describe('ADR-041 — capability dispatcher', () => {
     it('engine error still produces audit entry with result=error', async () => {
       const sink = new MemoryAuditSink();
       const engine = mockEngine({
-        push_pull: () => {
+        create_solid_extrude: () => {
           throw new Error('FaceId 99 not found');
         },
       });

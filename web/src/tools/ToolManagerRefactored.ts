@@ -3415,21 +3415,47 @@ export class ToolManager {
           this.selection.clearHover();
           const segIndex = Math.floor(picked.hit.index / 2);
           // ADR-088 Phase 1 (S-ζ hotfix) — curve_owner_id walk for hover.
-          // LOCKED #15 P22.5: Circle 의 N segments 가 logical 1 entity →
-          // hover 시 전체 그룹 highlight (S-δ 의 click 동작과 정합).
+          // LOCKED #15 P22.5: 같은 EdgeId 의 N segments 가 logical 1 entity →
+          // hover 시 전체 highlight (S-δ 의 click 동작과 정합).
+          //
+          // Two grouping mechanisms (2026-05-12 unified):
+          //   1. ADR-088 curve_owner_id — N distinct EdgeIds with one owner
+          //      (e.g., DrawCircle polygonal mode pre-Path B).
+          //   2. Self-loop closed-curve edge — 1 EdgeId with N rendered
+          //      segments (Path B closed-curve face, ADR-089 A-κ).
+          //
+          // Both produce a multi-segment group sharing logical identity.
+          // Mechanism 2 was previously missed because `getEdgeCurveOwnerId`
+          // returns -1 for self-loop edges (no owner needed since the edge
+          // is already a single entity). Fallback: collect all segIndices
+          // where edgeMap[i] === edgeId. Works for both Path B closed-curve
+          // and any single-EdgeId multi-segment case (chord polyline of any
+          // analytic curve attached via `set_curve`).
           const edgeMap = this.selection.getEdgeMap?.() ?? null;
           let groupIndices: number[] | null = null;
           if (edgeMap && segIndex >= 0 && segIndex < edgeMap.length) {
             const edgeId = edgeMap[segIndex];
             const ownerId = this.bridge.getEdgeCurveOwnerId(edgeId);
             if (ownerId >= 0) {
+              // Mechanism 1 — curve_owner group across multiple EdgeIds.
               const groupEdges = new Set(this.bridge.getEdgesByCurveOwner(ownerId));
               if (groupEdges.size > 1) {
-                // Map group edges back to seg indices in edgeMap.
                 groupIndices = [];
                 for (let i = 0; i < edgeMap.length; i++) {
                   if (groupEdges.has(edgeMap[i])) groupIndices.push(i);
                 }
+              }
+            }
+            // Mechanism 2 — single EdgeId, multiple segments (self-loop
+            // closed-curve). Activates when mechanism 1 didn't produce a
+            // group OR produced a single-edge group.
+            if (!groupIndices) {
+              const sameEdgeIndices: number[] = [];
+              for (let i = 0; i < edgeMap.length; i++) {
+                if (edgeMap[i] === edgeId) sameEdgeIndices.push(i);
+              }
+              if (sameEdgeIndices.length > 1) {
+                groupIndices = sameEdgeIndices;
               }
             }
           }
