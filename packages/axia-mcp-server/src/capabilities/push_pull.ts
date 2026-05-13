@@ -1,4 +1,10 @@
 // Tier 2 — push_pull: extrude or inset a face along its normal.
+//
+// ADR-087 K-ζ + ADR-079 W-1-β migration (2026-05-12) — the legacy
+// `engine.push_pull` was removed in favour of `create_solid_extrude`,
+// the surface-native solid extrusion entry. The MCP capability name
+// `push_pull` is preserved (UI / audit stability); only the underlying
+// engine method changed.
 import { z } from 'zod';
 import { FaceId } from '../schema.js';
 import type { CapabilityHandler } from './types.js';
@@ -29,7 +35,7 @@ export const pushPullCapability: CapabilityHandler<Input, Output> = {
     'coplanar adjacent walls automatically.',
   inputSchema: InputSchema,
   handler: ({ engine }, input) => {
-    const success = engine.push_pull(input.face_id, input.distance);
+    const success = engine.create_solid_extrude(input.face_id, input.distance);
     return { success };
   },
 };

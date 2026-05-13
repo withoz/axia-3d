@@ -7,9 +7,18 @@ import type { Tier } from '../tiers.js';
  * Kept as an interface so test mocks can implement only what they need.
  *
  * Method names match the WASM bindings exactly (snake_case from Rust).
+ *
+ * ADR-087 K-ζ + ADR-050 migration (2026-05-13) — the legacy XiaId
+ * producers (`draw_rect` / `draw_circle` / `draw_line`) and the legacy
+ * `push_pull` were deleted from WASM. The three draws return form-layer
+ * ShapeIds via the `_as_shape` variants; Push/Pull is now reached via
+ * the surface-native `create_solid_extrude` (ADR-079 W-1-β). The MCP
+ * capability *names* (`draw_rect`, `push_pull`, …) are unchanged for
+ * UI / audit stability.
  */
 export interface EngineInstance {
-  draw_rect(
+  /** ADR-050 P-5c — draw a rectangle as a form-layer Shape. Returns ShapeId. */
+  draw_rect_as_shape(
     cx: number,
     cy: number,
     cz: number,
@@ -22,7 +31,8 @@ export interface EngineInstance {
     width: number,
     height: number,
   ): number;
-  draw_circle(
+  /** ADR-050 P-5c — draw a circle as a form-layer Shape. Returns ShapeId. */
+  draw_circle_as_shape(
     cx: number,
     cy: number,
     cz: number,
@@ -32,7 +42,8 @@ export interface EngineInstance {
     radius: number,
     segments: number,
   ): number;
-  draw_line(
+  /** ADR-050 P-5c — draw a line as a form-layer Shape. Returns ShapeId. */
+  draw_line_as_shape(
     x0: number,
     y0: number,
     z0: number,
@@ -43,7 +54,8 @@ export interface EngineInstance {
     ny: number,
     nz: number,
   ): number;
-  push_pull(face_id_raw: number, dist: number): boolean;
+  /** ADR-079 W-1-β — surface-native solid extrusion (replaces legacy push_pull). */
+  create_solid_extrude(face_id_raw: number, dist: number): boolean;
   exportSnapshotStrict(): Uint8Array;
   /** ADR-041 P26.1 Tier 0 — list all XiaId in scene (sorted ascending). */
   allXiaIds(): Uint32Array;

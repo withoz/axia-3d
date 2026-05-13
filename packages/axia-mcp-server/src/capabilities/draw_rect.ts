@@ -1,7 +1,14 @@
 // Tier 1 — draw_rect: parametric rectangle on an arbitrary plane.
-// Returns the XiaId (Object ID) created by the engine.
+//
+// Returns the ShapeId (form-layer owner) created by the engine.
+//
+// ADR-087 K-ζ + ADR-050 P-5e-α migration (2026-05-12) — the legacy
+// XiaId-returning `engine.draw_rect` was removed; rectangles are now
+// created as form-layer Shapes by default (`draw_rect_as_shape`).
+// To promote a Shape to a Xia (property-layer with material), use a
+// separate `promote_shape_to_xia` capability (future Tier 2 entry).
 import { z } from 'zod';
-import { Vec3, XiaId } from '../schema.js';
+import { Vec3, ShapeId } from '../schema.js';
 import type { CapabilityHandler } from './types.js';
 
 const InputSchema = z.object({
@@ -21,7 +28,7 @@ const InputSchema = z.object({
 });
 
 const OutputSchema = z.object({
-  xia_id: XiaId,
+  shape_id: ShapeId,
 });
 
 type Input = z.infer<typeof InputSchema>;
@@ -32,14 +39,18 @@ export const drawRectCapability: CapabilityHandler<Input, Output> = {
   tier: 1,
   description:
     'Draw a planar rectangle of given width × height at center, oriented by ' +
-    "(normal, up). Returns the new XIA's owner ID. Coordinates that lie on a " +
-    'cardinal plane to within 1e-3 mm are snapped exactly to that plane (ADR-026 P12).',
+    "(normal, up). Returns the new form-layer Shape's owner ID. Coordinates " +
+    'that lie on a cardinal plane to within 1e-3 mm are snapped exactly to ' +
+    'that plane (ADR-026 P12). Use `promote_shape_to_xia` to attach a ' +
+    'material and gain property-layer (Xia) status (ADR-050).',
   inputSchema: InputSchema,
   handler: ({ engine }, input) => {
     const [cx, cy, cz] = input.center;
     const [nx, ny, nz] = input.normal;
     const [ux, uy, uz] = input.up;
-    const xia_id = engine.draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, input.width, input.height);
-    return { xia_id };
+    const shape_id = engine.draw_rect_as_shape(
+      cx, cy, cz, nx, ny, nz, ux, uy, uz, input.width, input.height,
+    );
+    return { shape_id };
   },
 };

@@ -22,7 +22,10 @@ async function loadEngine(): Promise<EngineInstance> {
 const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
 
 describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
-  it('draw_rect → real engine returns positive XiaId', async () => {
+  it('draw_rect → real engine returns positive ShapeId', async () => {
+    // ADR-050 P-5e-α migration — draw_rect now creates a form-layer
+    // Shape (not a Xia). Returned ID is a ShapeId; promotion to Xia
+    // (via `promote_shape_to_xia` capability) is a separate Tier 2 op.
     const engine = await loadEngine();
     const result = await dispatch(
       'draw_rect',
@@ -35,9 +38,9 @@ describe.skipIf(!wasmBuilt)('ADR-041 — end-to-end with real WASM', () => {
       },
       { engine, client: 'e2e', versions: VERSIONS },
     );
-    const out = result.output as { xia_id: number };
-    expect(out.xia_id).toBeGreaterThan(0);
-    expect(Number.isInteger(out.xia_id)).toBe(true);
+    const out = result.output as { shape_id: number };
+    expect(out.shape_id).toBeGreaterThan(0);
+    expect(Number.isInteger(out.shape_id)).toBe(true);
   });
 
   it('mcp_latency_budget — Tier 1 draw_rect e2e under 33ms median', async () => {
