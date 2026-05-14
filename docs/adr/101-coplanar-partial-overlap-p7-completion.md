@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **In Progress** — Phase A landed (PR #25) / B-1 decision landed (PR #26) / B-2 primitive landed (PR #27) / B-3 lens semantics + B-3a utility landed (본 amendment) |
+| Status | **In Progress** — Phase A landed (PR #25) / B-1 decision (PR #26) / B-2 primitive (PR #27) / B-3a utility (PR #28) / B-3b MVP DCEL wiring (RECT × RECT, 본 amendment) / B-3c Path B circle deferred |
 | Date | 2026-05-14 |
 | Supersedes | — |
 | Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
@@ -272,3 +272,89 @@ material 모호성 / T2 3-way overlap / T3 명시적 Manual Split 도구) 중
   B-3b/B-4 의 risk 격리
 - LOCKED #26 Phase 1 (Form/Property layer) — Option (c) 보류 anchor
 - ADR-022 P9 (small-face promote pattern) — Option (b) 의 inspiration
+
+---
+
+## Amendment 4 — Phase B-3b MVP (RECT × RECT) + B-3c deferral (2026-05-14)
+
+### B-3a completion log
+
+- **B-3a** `polygon_difference_walking` pure 2D utility landed (PR #28
+  `d91528b`)
+- 7 회귀 (1272 → 1279), algorithm core 검증 완료
+- Splice 방향 fix lesson: `i_from` backwards (B-interior side), 아닌
+  `i_to` backwards (A-corner side)
+
+### B-3b implementation (this amendment)
+
+- `Mesh::auto_intersect_coplanar(face_a, face_b, material) -> Result<Option<AutoIntersectResult>>`
+- `AutoIntersectResult { face_a_only, face_b_only, lens }` 신규 struct
+- Algorithm:
+  1. Polygonize Path B closed-curve Circle (Phase A helper)
+  2. Call `coplanar_intersection_segments` (B-2)
+  3. No partial overlap → `Ok(None)`
+  4. Compute A\lens + B\lens via `polygon_difference_walking` (B-3a)
+  5. Reverse face_b's 2D if anti-parallel normal (CW → CCW)
+  6. Snapshot parent surface metadata
+  7. `remove_face × 2` + `add_face × 3` rebuild
+  8. Surface inheritance (parent → all 3 sub-faces)
+- 6 lock-ins L-B3b-1 ~ L-B3b-6
+- 6 회귀 (1279 → 1286):
+  - `two_rects_partial_overlap_creates_3_faces` (happy path)
+  - `disjoint_no_op` + `containment_no_op` (Ok(None), no mutation)
+  - `surface_inheritance` (Plane → all 3 sub-faces)
+  - `verify_face_invariants_post_split` (manifold guard)
+  - `inactive_input_errors` + `second_call_rejects_non_convex_results`
+
+### B-3c deferral — Path B Circle × Circle (canonical user trigger)
+
+**Finding (debugging)**: Path B closed-curve circles polygonize correctly,
+but the rebuild pattern (`remove_face` × 2 → `add_face` × 3) leaves orphan
+edges in the mesh that get reused via spatial-hash dedup (`add_vertex`
+LOCKED #5 tolerance). The reused edges' free HEs are then claimed by
+multiple new faces, producing **non-manifold edges shared by 3 active
+faces** (verify_face_invariants violation).
+
+**RECT × RECT canonical case works** because A's and B's polygonized
+verts don't significantly coincide (only at lens corners, ε-distance).
+
+**Root cause hypothesis**: After `remove_face`, the original face's
+boundary edges remain in the mesh with `face=NULL` HEs (free). When
+`add_face` for 3 new faces reuses these edges via `make_loop` →
+`find_halfedge`, in some configurations 3 of the new faces all want to
+go in the *same direction* on a shared edge, triggering pass 2
+(non-manifold HE pair creation).
+
+**B-3c scope (next PR)**:
+- Add explicit orphan-edge cleanup after `remove_face` (deactivate edges
+  with all HEs face=NULL).
+- OR add `add_face_fresh` variant that bypasses spatial-hash dedup and
+  creates fresh vertices.
+- Re-enable Path B Circle × Circle test (`path_b_circles_polygonize_and_split`)
+- ~6 회귀 추가 (B-3c).
+
+This deferral preserves the user-facing trigger for ADR-101 §2 ("두 원
+partial overlap"). B-3c is required before B-4 (caller wiring) can deliver
+the user-visible value.
+
+### B-3b ↔ B-3c sub-step split rationale
+
+ADR-094 §E L1 (additive-first risk isolation + multi-gate atomic) — by
+landing B-3b as RECT-only MVP, we:
+- Verify the algorithm core (B-2 + B-3a + DCEL surgery) is sound
+- Prove surface inheritance + manifold invariants work
+- Isolate the orphan-edge cleanup as a separable concern (B-3c)
+- Each PR remains atomic + reviewable
+
+### Updated B sub-step roadmap
+
+| Sub-step | Status | Scope |
+|---|---|---|
+| B-1 | ✅ PR #26 | Algorithm decision (Sutherland-Hodgman MVP) |
+| B-2 | ✅ PR #27 | `coplanar_intersection_segments` primitive |
+| B-3a | ✅ PR #28 | `polygon_difference_walking` pure 2D utility |
+| **B-3b** | ✅ **본 amendment** | `Mesh::auto_intersect_coplanar` RECT MVP |
+| B-3c | 🔄 next PR | Orphan-edge cleanup → Path B Circle × Circle |
+| B-4 | 🔄 after B-3c | Caller wiring (auto_intersect_on_draw) |
+| B-5 | 🔄 | 회귀 sweep matrix (+16 tests) |
+| B-6 | 🔄 | 사용자 시연 + closure |
