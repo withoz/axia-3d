@@ -14425,6 +14425,37 @@ mod tests {
             "flag off → no auto-split, 2 overlapping circles, got {}", active);
     }
 
+    /// Mirror of the browser scenario: drawCircleAsShape × 2 (NOT
+    /// legacy Command::DrawCircle). The browser path goes through
+    /// `exec_draw_circle_as_shape` → `exec_draw_circle` → intersect_faces_
+    /// inner. This test verifies the AsShape variant ALSO triggers
+    /// auto-split, mirroring the browser fixture.
+    #[test]
+    fn adr101_b4_two_circles_as_shape_partial_overlap_auto_splits() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            radius: 5.0,
+            segments: 32,
+        });
+        let after_a = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(after_a, 1, "after Circle A: 1 active face");
+
+        scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::new(6.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            radius: 5.0,
+            segments: 32,
+        });
+        let after_b = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(after_b, 3,
+            "drawCircleAsShape × 2 partial overlap → 3 sub-faces, got {}",
+            after_b);
+    }
+
     /// Two coplanar Circle × Circle partial overlap → 3 sub-faces
     /// automatically (the ADR-101 §2 user-facing canonical trigger).
     #[test]
