@@ -9,7 +9,14 @@ out/
 target/
 web/dist/
 
-# WASM binary (wasm-pack으로 재생성, 용량 큼)
+# WASM artifacts (wasm-pack 산출물, 매번 재생성 가능 — LOCKED #40 follow-up).
+# Was tracked previously; untracked here so binary cannot desync from
+# `crates/axia-geo` / `crates/axia-wasm` source. `web/scripts/ensure-wasm.mjs`
+# (postinstall hook) rebuilds these on dev clone; CI rebuilds explicitly.
+web/src/wasm/axia_wasm.d.ts
+web/src/wasm/axia_wasm.js
+web/src/wasm/axia_wasm_bg.wasm
+web/src/wasm/axia_wasm_bg.wasm.d.ts
 web/src/wasm/*.wasm
 
 # Node WASM target (ADR-041 — wasm-pack --target nodejs 산출물, 재빌드 가능)
