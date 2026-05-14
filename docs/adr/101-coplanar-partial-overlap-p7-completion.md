@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **In Progress** — Phase A landed (PR #25, 2026-05-14) / B-1 algorithm decision landed (본 amendment) |
+| Status | **In Progress** — Phase A landed (PR #25) / B-1 decision landed (PR #26) / B-2 primitive landed (PR #27) / B-3 lens semantics + B-3a utility landed (본 amendment) |
 | Date | 2026-05-14 |
 | Supersedes | — |
 | Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
@@ -166,3 +166,109 @@ ADR-021 P7 의 자연 확장 — 사용자가 두 원 (또는 두 사각형) 을
 - ADR-046 P31 #1 ("가볍게" — over-engineering 회피) — Vatti 기각 근거
 - ADR-016 Q2 (multi-loop face 도구 정책) — convex-only 정합
 - ADR-091 §E L1 (Mesh-level Map canonical) — Phase B-3 의 sub-face 등록 시 답습
+
+---
+
+## Amendment 3 — Phase B-2 완료 + B-3 lens semantics 결정 + B-3 sub-step split (2026-05-14)
+
+### B-2 completion log
+
+- **B-2** `coplanar_intersection_segments(mesh, face_a, face_b)` pure
+  function landed (PR #27 `4df7142`)
+- 7 lock-ins L-B2-1 ~ L-B2-7 (convex enforcement / coplanarity ε / anti-
+  parallel normals / endpoint filter / deterministic sort / polygonal-input
+  assumption / explicit errors)
+- 회귀 +9 (1263 → 1272), 절대 #[ignore] 금지 9/9 준수
+- Architectural win: 기존 `polygon_geom::sutherland_hodgman` + `PlaneBasis`
+  재사용 — Phase B-1 결정 (Sutherland-Hodgman MVP) 가치 실증
+
+### B-3 lens region 표현 결정 (canonical lock-in)
+
+본 amendment 의 핵심 — ADR-101 §B-1 L-B1-4 의 *원안* ("lens 영역 sub-face
+양 face 모두에 등록") **수정**.
+
+#### 후보 3 옵션 trade-off (사전 검토 2026-05-14)
+
+| Option | 설명 | Manifold | XIA inheritance |
+|---|---|---|---|
+| (a) Manifold-coincident sub-faces | 양 face 의 sub-face 로 동시 등록 (원안) | **위반** (한 edge 4 HE) | 자연 (양쪽) |
+| **(b) Single promoted lens face** | face_a 의 sub-face 로 promote, face_b 는 분할만 | **보장** | 비대칭 (deterministic min-ID) |
+| (c) XOR fragmentation (neutral form Shape) | lens = LOCKED #26 form-layer Shape, 사용자 명시 promote | 보장 | 사용자 결재 |
+
+#### 채택: **Option (b)** — Single promoted lens face
+
+**근거**:
+
+1. **Manifold-safe** — LOCKED #1/#7/#16/#26 + ADR-007 / ADR-021 P7 /
+   ADR-051 `verify_p7_manifold` 모두 자연 정합
+2. **ADR-022 P9 promote 패턴 답습** — vertex-shared pinch 의 small-face
+   promote 패턴이 이미 정착
+3. **메타-원칙 #5** ("명확하면 자동, 모호하면 명시 동의") — 현재 trigger
+   시나리오 (같은 평면, 동일/유사 재질) 는 *명확*. 사용자 결재 불필요
+4. **그리기 순서 무관성** (LOCKED #1 P7 신규 원칙) — XIA inheritance =
+   `min(face_a_id, face_b_id).xia` deterministic
+5. **YAGNI** — Option (c) 의 multi-material 모호성 trigger 는 현재 부재.
+   미래 별도 ADR (Lens Identity Refinement) 으로 격리.
+
+**Option (a) 기각**: manifold 위반 → 후속 ops (Boolean / Offset / Push-
+Pull) 모두 모호 + `verify_p7_manifold` P7-M1 violation.
+
+**Option (c) 보류**: ADR-102 (가칭, future) 의 trigger 3건 (T1 multi-
+material 모호성 / T2 3-way overlap / T3 명시적 Manual Split 도구) 중
+하나 활성 시 진행.
+
+#### Lock-ins L-B1-4-revised (Option (b) 답습)
+
+- **L-B1-4 (revised)**: Lens 영역은 **face_a 의 sub-face 로만 promote**
+  (face_b 는 lens 영역을 제외한 부분만 유지). face_a / face_b 의 결정
+  순서는 `min(face_a_id, face_b_id)` deterministic.
+- **L-B1-4a**: XIA inheritance — `min(face_a_id, face_b_id).xia` 가 lens
+  의 XIA. ADR-101 §B-1 L-B1-1 의 LOCKED #3 ("sub-face = 원본 XIA
+  inherit") 답습, 모호성은 deterministic min 으로 해소.
+- **L-B1-4b**: Surface metadata — parent face_a 의 surface (Plane 등)
+  를 lens + face_a_only + face_b_only 모두 inherit (LOCKED #9 A-χ 답습).
+
+### B-3 sub-step split (Path Z atomic)
+
+다음 sub-step 으로 분할 — risk 격리 + 사용자 결재 단위 명시:
+
+| Sub-step | Scope | LoC 추정 | 회귀 | Caller |
+|---|---|---|---|---|
+| **B-3a** (이 amendment) | `polygon_difference_walking` pure 2D utility — Greiner-Hormann style boundary walking, A \ lens 또는 B \ lens 단일 closed polygon 반환 | ~150 | ~6 | 없음 (B-3b wire-up) |
+| **B-3b** (별도 PR) | `Mesh::auto_intersect_coplanar` — polygonize + B-2 + B-3a + remove_face + add_face × 3 + surface/XIA inherit | ~80 | ~6 | 없음 (B-4 wire-up) |
+| **B-4** (별도 PR) | Caller wiring — `intersect_faces_with_model` 또는 `auto_intersect_on_draw` coplanar branch | ~50 | ~3 | 사용자 |
+| **B-5** (별도 PR) | 회귀 sweep — RECT×RECT 7 + Circle×Circle 5 + RECT×Circle mixed 3 + non-convex reject 1 + invariants | ~0 | +16 | 자동 |
+| **B-6** (별도 PR) | 사용자 시연 + closure docs | ~0 | 0 | 사용자 |
+
+#### B-3a Lock-ins (이 amendment)
+
+- **L-B3a-1** Pure 2D function — no DCEL, no FaceId. Input 2D polygon
+  arrays only.
+- **L-B3a-2** Convex × convex 2-crossing partial overlap 만 지원. 다른
+  case (no overlap / containment / multi-crossing) → `Err` (silent skip
+  차단).
+- **L-B3a-3** Result polygon **may be non-convex** (crescent / L-shape).
+  DCEL 은 non-convex face 허용 (ADR-021 P7 의 closed boundary = face
+  원칙).
+- **L-B3a-4** CCW orientation 유지 (caller 의 후속 add_face 가 정합).
+- **L-B3a-5** Algorithm: walk base polygon with crossings inserted,
+  collect "outside lens" arc + reverse-walk lens "inside base" arc.
+- **L-B3a-6** Deterministic + idempotent (같은 input → 같은 output).
+
+### B-3a 회귀 매트릭스 (~6 tests)
+
+- `b3a_partial_overlap_two_rects_returns_l_shape` — happy path
+- `b3a_two_circles_returns_crescent` — non-convex result
+- `b3a_no_crossings_errors` — disjoint / containment
+- `b3a_three_or_more_crossings_errors` — non-convex 입력 (현재 미지원)
+- `b3a_ccw_orientation_preserved` — winding 정합
+- `b3a_idempotent_same_input_same_output` — deterministic guard
+
+### B-3a Cross-link
+
+- ADR-091 §E L4 (pure utility extraction) — B-3a 가 B-3b 의 pure
+  primitive prerequisite
+- ADR-094 §E L1 (additive-first) — DCEL mutation 없는 utility 가
+  B-3b/B-4 의 risk 격리
+- LOCKED #26 Phase 1 (Form/Property layer) — Option (c) 보류 anchor
+- ADR-022 P9 (small-face promote pattern) — Option (b) 의 inspiration

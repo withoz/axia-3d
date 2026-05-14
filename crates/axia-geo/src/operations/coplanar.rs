@@ -300,6 +300,281 @@ fn segment_segment_intersect_2d(
     Some((pt, ta, tb))
 }
 
+// ─── B-3a: polygon_difference_walking (pure 2D utility) ──────────────
+
+/// ADR-101 §B-3a pure 2D utility — boundary walking for `base \ lens`.
+///
+/// Computes a single closed CCW polygon representing the difference
+/// `base_polygon \ lens_polygon` for the convex × convex partial-overlap
+/// case (exactly 2 boundary crossings).
+///
+/// The result is **may be non-convex** (typical case: crescent for two
+/// overlapping circles, L-shape for two overlapping squares). DCEL allows
+/// non-convex faces per ADR-021 P7 (closed boundary = face).
+///
+/// # Inputs
+///
+/// - `base_polygon` — CCW 2D vertex list of the polygon being cut.
+/// - `lens_polygon` — CCW 2D vertex list of the A ∩ B intersection.
+/// - `crossings` — boundary crossings between base and lens, as
+///   `(base_edge_index, t_on_base_edge, crossing_point_2d)`. Must contain
+///   exactly 2 entries.
+///
+/// # Errors
+///
+/// - `polygon_difference_walking: requires exactly 2 crossings, got N`
+/// - `polygon_difference_walking: lens has fewer than 3 vertices`
+/// - `polygon_difference_walking: base polygon has fewer than 3 vertices`
+/// - `polygon_difference_walking: lens does not start/end at the supplied crossings`
+///
+/// # Algorithm
+///
+/// 1. Insert the 2 crossings into `base_polygon`'s vertex list at the
+///    correct (edge_index, t) positions → `base_with_crossings`.
+/// 2. Classify each base vertex as inside / outside lens (crossings are
+///    on boundary — treat as "switch point").
+/// 3. Walk `base_with_crossings` in CCW order. Collect vertices that lie
+///    outside the lens (including the 2 crossings as switch points).
+/// 4. When we hit the first crossing while building the outside arc,
+///    splice in the **reverse** of the lens boundary between the 2
+///    crossings (i.e., the lens vertices that are NOT crossings, which
+///    by construction lie inside `base_polygon`).
+/// 5. Return the concatenated polygon.
+///
+/// # Lock-ins (ADR-101 §B-3a)
+///
+/// - L-B3a-1 Pure 2D — no DCEL, no FaceId
+/// - L-B3a-2 Convex × convex 2-crossing only — other cases → Err
+/// - L-B3a-3 Result may be non-convex (acceptable per ADR-021 P7)
+/// - L-B3a-4 CCW orientation preserved
+/// - L-B3a-5 Walking algorithm — base outside arc + reverse lens inside arc
+/// - L-B3a-6 Deterministic + idempotent
+pub fn polygon_difference_walking(
+    base_polygon: &[(f64, f64)],
+    lens_polygon: &[(f64, f64)],
+    crossings: &[(usize, f64, (f64, f64))],
+) -> Result<Vec<(f64, f64)>> {
+    if crossings.len() != 2 {
+        bail!(
+            "polygon_difference_walking: requires exactly 2 crossings, got {}",
+            crossings.len()
+        );
+    }
+    if base_polygon.len() < 3 {
+        bail!("polygon_difference_walking: base polygon has fewer than 3 vertices");
+    }
+    if lens_polygon.len() < 3 {
+        bail!("polygon_difference_walking: lens has fewer than 3 vertices");
+    }
+
+    // ── Step 1: build `base_with_crossings` and remember crossing positions ──
+    let n_base = base_polygon.len();
+    let mut on_edge: Vec<Vec<(f64, (f64, f64))>> = vec![Vec::new(); n_base];
+    for &(edge_idx, t, pt) in crossings {
+        if edge_idx >= n_base {
+            bail!(
+                "polygon_difference_walking: crossing edge_index {} out of range (n_base={})",
+                edge_idx, n_base
+            );
+        }
+        on_edge[edge_idx].push((t, pt));
+    }
+    for edge_pts in on_edge.iter_mut() {
+        edge_pts.sort_by(|(ta, _), (tb, _)| ta.partial_cmp(tb).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // base_with_crossings: Vec<(point, is_crossing)>
+    let mut base_with_crossings: Vec<((f64, f64), bool)> =
+        Vec::with_capacity(n_base + 2);
+    for i in 0..n_base {
+        base_with_crossings.push((base_polygon[i], false));
+        for &(_, pt) in &on_edge[i] {
+            base_with_crossings.push((pt, true));
+        }
+    }
+
+    // Locate the 2 crossing indices in `base_with_crossings`.
+    let crossing_positions: Vec<usize> = base_with_crossings
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &(_, is_xing))| if is_xing { Some(i) } else { None })
+        .collect();
+    if crossing_positions.len() != 2 {
+        bail!(
+            "polygon_difference_walking: internal error — expected 2 crossings in walk, got {}",
+            crossing_positions.len()
+        );
+    }
+    let cross_pos_1 = crossing_positions[0];
+    let cross_pos_2 = crossing_positions[1];
+
+    // ── Step 2: classify base vertices as inside/outside lens. Crossings
+    //   are treated as on-boundary (switch points).
+    let is_inside_lens = |pt: (f64, f64)| -> bool {
+        point_in_polygon_2d_strict(pt, lens_polygon)
+    };
+
+    // Find a starting index that is clearly OUTSIDE the lens (i.e., not a
+    // crossing and not inside). For convex × convex partial overlap, at
+    // least one base vertex is outside the lens.
+    let n_bwx = base_with_crossings.len();
+    let start_idx = (0..n_bwx)
+        .find(|&i| {
+            let (pt, is_xing) = base_with_crossings[i];
+            !is_xing && !is_inside_lens(pt)
+        })
+        .ok_or_else(|| anyhow::anyhow!(
+            "polygon_difference_walking: no base vertex outside lens — \
+             input may be containment rather than partial overlap"
+        ))?;
+
+    // ── Step 3: walk base CCW from `start_idx`, building the outside arc.
+    //   When we hit a crossing, we transition: outside → inside (skip
+    //   base verts) until next crossing, then back to outside.
+    //
+    //   We also need to splice the lens "inside-base" arc into the
+    //   result, going from the second crossing back to the first
+    //   (i.e., REVERSE lens direction).
+    let mut result: Vec<(f64, f64)> = Vec::new();
+    let mut inside_lens = false;
+    let mut crossing_seen: Option<(f64, f64)> = None;  // last crossing point
+
+    for k in 0..n_bwx {
+        let idx = (start_idx + k) % n_bwx;
+        let (pt, is_xing) = base_with_crossings[idx];
+
+        if is_xing {
+            if !inside_lens {
+                // OUTSIDE → INSIDE. Push entry crossing; remember it.
+                result.push(pt);
+                crossing_seen = Some(pt);
+                inside_lens = true;
+            } else {
+                // INSIDE → OUTSIDE. We've reached the exit crossing.
+                // Splice the lens "interior" arc (the part inside `base`)
+                // BEFORE pushing the exit crossing, so the polygon walks
+                // in correct CCW order:
+                //   ... entry_xing → (interior lens verts) → exit_xing → ...
+                let first_xing = crossing_seen
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "polygon_difference_walking: internal — second crossing without first"
+                    ))?;
+                splice_interior_lens_arc(
+                    lens_polygon,
+                    first_xing,
+                    pt,
+                    &mut result,
+                )?;
+                result.push(pt);
+                inside_lens = false;
+                crossing_seen = None;
+            }
+        } else if !inside_lens {
+            result.push(pt);
+        }
+        // else: inside_lens && !is_xing → skip (this base vert is inside lens)
+    }
+
+    if result.len() < 3 {
+        bail!(
+            "polygon_difference_walking: result polygon has fewer than 3 vertices ({})",
+            result.len()
+        );
+    }
+
+    // Final dedup pass (numerical noise).
+    let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(result.len());
+    for p in &result {
+        if let Some(last) = dedup.last() {
+            let dx = p.0 - last.0;
+            let dy = p.1 - last.1;
+            if dx.abs() < DEDUP_EPS_2D && dy.abs() < DEDUP_EPS_2D { continue; }
+        }
+        dedup.push(*p);
+    }
+    if dedup.len() >= 2 {
+        let first = dedup[0];
+        let last = *dedup.last().unwrap();
+        if (first.0 - last.0).abs() < DEDUP_EPS_2D
+            && (first.1 - last.1).abs() < DEDUP_EPS_2D
+        {
+            dedup.pop();
+        }
+    }
+    if dedup.len() < 3 {
+        bail!(
+            "polygon_difference_walking: dedup'd result has fewer than 3 vertices"
+        );
+    }
+
+    Ok(dedup)
+}
+
+/// Find the two indices of `lens_polygon` matching `from` (entry crossing)
+/// and `to` (exit crossing) within `match_eps`, then append the *interior*
+/// lens vertices walked from `from` BACKWARDS to `to` (exclusive of both
+/// endpoints).
+///
+/// The "interior" arc is the half of the lens boundary that lies INSIDE
+/// the `base_polygon` — i.e., the half that does NOT coincide with the
+/// base's boundary between the two crossings.
+///
+/// For CCW lens with CCW base and entry < exit (in lens index order along
+/// the "base-side" of lens), the interior arc is the OTHER half: walk
+/// from `i_from` backwards (decrementing) until reaching `i_to`.
+fn splice_interior_lens_arc(
+    lens_polygon: &[(f64, f64)],
+    from: (f64, f64),
+    to: (f64, f64),
+    out: &mut Vec<(f64, f64)>,
+) -> Result<()> {
+    let n = lens_polygon.len();
+    let match_eps = 1e-6_f64;
+    let find_idx = |pt: (f64, f64)| -> Option<usize> {
+        lens_polygon.iter().position(|q| {
+            (q.0 - pt.0).abs() < match_eps && (q.1 - pt.1).abs() < match_eps
+        })
+    };
+    let i_from = find_idx(from).ok_or_else(|| anyhow::anyhow!(
+        "polygon_difference_walking: crossing point {:?} not found in lens",
+        from
+    ))?;
+    let i_to = find_idx(to).ok_or_else(|| anyhow::anyhow!(
+        "polygon_difference_walking: crossing point {:?} not found in lens",
+        to
+    ))?;
+    // Walk lens from i_from BACKWARDS to i_to, exclusive of both endpoints.
+    // This traverses the "interior" half of lens — the part inside base.
+    let mut i = (i_from + n - 1) % n;
+    while i != i_to {
+        out.push(lens_polygon[i]);
+        i = (i + n - 1) % n;
+    }
+    Ok(())
+}
+
+/// Strict 2D point-in-polygon test using winding-number method.
+/// Returns true if `pt` is strictly inside `polygon` (boundary excluded).
+fn point_in_polygon_2d_strict(pt: (f64, f64), polygon: &[(f64, f64)]) -> bool {
+    let n = polygon.len();
+    if n < 3 { return false; }
+    let mut sum = 0.0_f64;
+    for i in 0..n {
+        let (ax, ay) = polygon[i];
+        let (bx, by) = polygon[(i + 1) % n];
+        let ux = ax - pt.0; let uy = ay - pt.1;
+        let vx = bx - pt.0; let vy = by - pt.1;
+        let ulen = (ux * ux + uy * uy).sqrt();
+        let vlen = (vx * vx + vy * vy).sqrt();
+        if ulen < 1e-9 || vlen < 1e-9 { return false; } // pt on a vertex → boundary
+        let cross = ux * vy - uy * vx;
+        let dot = ux * vx + uy * vy;
+        let ang = cross.atan2(dot);
+        sum += ang;
+    }
+    (sum.abs() - std::f64::consts::TAU).abs() < 1e-3
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -526,5 +801,163 @@ mod tests {
         let msg = format!("{}", err);
         assert!(msg.contains("inactive") || msg.contains("not found"),
             "got error: {}", msg);
+    }
+
+    // ── B-3a tests: polygon_difference_walking ────────────────────────
+
+    /// Returns CCW signed area; negative means CW.
+    fn signed_area_2d(poly: &[(f64, f64)]) -> f64 {
+        let n = poly.len();
+        if n < 3 { return 0.0; }
+        let mut a = 0.0;
+        for i in 0..n {
+            let (x1, y1) = poly[i];
+            let (x2, y2) = poly[(i + 1) % n];
+            a += x1 * y2 - x2 * y1;
+        }
+        a * 0.5
+    }
+
+    /// Two squares partial overlap → A \ lens is an L-shape (non-convex).
+    ///
+    /// A = [(0,0), (10,0), (10,10), (0,10)]  (CCW)
+    /// B = [(5,5), (15,5), (15,15), (5,15)]  (CCW)
+    /// Lens = [(10,5), (10,10), (5,10), (5,5)]  (CCW)
+    /// Crossings on A:
+    ///   - (10, 5) on A's edge 1 (right) at t=0.5
+    ///   - (5, 10) on A's edge 2 (top) at t=0.5
+    /// A \ lens = L-shape with 6 vertices:
+    ///   [(0,0), (10,0), (10,5), (5,5), (5,10), (0,10)]
+    #[test]
+    fn adr101_phase_b3a_partial_overlap_two_rects_returns_l_shape() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let lens = vec![(10.0, 5.0), (10.0, 10.0), (5.0, 10.0), (5.0, 5.0)];
+        let crossings = vec![
+            (1usize, 0.5, (10.0, 5.0)),
+            (2usize, 0.5, (5.0, 10.0)),
+        ];
+        let result = polygon_difference_walking(&a, &lens, &crossings)
+            .expect("OK");
+        assert_eq!(result.len(), 6,
+            "L-shape should have 6 vertices, got {}: {:?}",
+            result.len(), result);
+        // All 6 expected points present (in some rotation).
+        let expected = [
+            (0.0, 0.0), (10.0, 0.0), (10.0, 5.0),
+            (5.0, 5.0), (5.0, 10.0), (0.0, 10.0),
+        ];
+        for ep in &expected {
+            assert!(result.iter().any(|p| (p.0 - ep.0).abs() < 1e-6 && (p.1 - ep.1).abs() < 1e-6),
+                "expected vertex {:?} missing from result {:?}", ep, result);
+        }
+    }
+
+    /// Result polygon must have CCW orientation (positive signed area).
+    /// ADR-101 §B-3a L-B3a-4.
+    #[test]
+    fn adr101_phase_b3a_ccw_orientation_preserved() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let lens = vec![(10.0, 5.0), (10.0, 10.0), (5.0, 10.0), (5.0, 5.0)];
+        let crossings = vec![
+            (1usize, 0.5, (10.0, 5.0)),
+            (2usize, 0.5, (5.0, 10.0)),
+        ];
+        let result = polygon_difference_walking(&a, &lens, &crossings).expect("OK");
+        let area = signed_area_2d(&result);
+        assert!(area > 0.0, "result must be CCW (positive area), got {}", area);
+        // Expected area: A=100, lens=25, A\lens=75
+        assert!((area - 75.0).abs() < 1e-6,
+            "L-shape area should be 75.0, got {}", area);
+    }
+
+    /// Wrong number of crossings → explicit error (silent skip 차단,
+    /// ADR-101 §B-3a L-B3a-2).
+    #[test]
+    fn adr101_phase_b3a_zero_crossings_errors() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let lens = vec![(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 3.0)];
+        let crossings: Vec<(usize, f64, (f64, f64))> = vec![];
+        let err = polygon_difference_walking(&a, &lens, &crossings)
+            .expect_err("0 crossings should error");
+        assert!(format!("{}", err).contains("exactly 2 crossings"));
+    }
+
+    #[test]
+    fn adr101_phase_b3a_four_crossings_errors() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let lens = vec![(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0)];
+        // Fake 4 crossings — non-convex / multi-crossing case unsupported.
+        let crossings = vec![
+            (0usize, 0.3, (3.0, 0.0)),
+            (1usize, 0.3, (10.0, 3.0)),
+            (2usize, 0.3, (7.0, 10.0)),
+            (3usize, 0.3, (0.0, 7.0)),
+        ];
+        let err = polygon_difference_walking(&a, &lens, &crossings)
+            .expect_err("4 crossings should error");
+        assert!(format!("{}", err).contains("exactly 2 crossings"));
+    }
+
+    /// Idempotent: same input → byte-identical output.
+    /// ADR-101 §B-3a L-B3a-6.
+    #[test]
+    fn adr101_phase_b3a_idempotent_same_input_same_output() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let lens = vec![(10.0, 5.0), (10.0, 10.0), (5.0, 10.0), (5.0, 5.0)];
+        let crossings = vec![
+            (1usize, 0.5, (10.0, 5.0)),
+            (2usize, 0.5, (5.0, 10.0)),
+        ];
+        let r1 = polygon_difference_walking(&a, &lens, &crossings).expect("OK");
+        let r2 = polygon_difference_walking(&a, &lens, &crossings).expect("OK");
+        let r3 = polygon_difference_walking(&a, &lens, &crossings).expect("OK");
+        assert_eq!(r1, r2);
+        assert_eq!(r2, r3);
+    }
+
+    /// Crescent-shaped result: A is a wide rect, lens is a smaller rect
+    /// poking in from one side, A \ lens is a U-shape (non-convex).
+    ///
+    /// A = [(0,0), (10,0), (10,10), (0,10)]  (CCW)
+    /// B (lens donor) = [(3,7), (7,7), (7,15), (3,15)]
+    /// Lens = [(7,7), (3,7), (3,10), (7,10)]  but reordered CCW =
+    ///   [(3,7), (7,7), (7,10), (3,10)]
+    /// Crossings on A:
+    ///   - (3,10) on A's edge 2 (top) at t = (10-3)/10 = 0.7
+    ///   - (7,10) on A's edge 2 (top) at t = (10-7)/10 = 0.3
+    /// A \ lens = U-shape with 8 vertices:
+    ///   [(0,0), (10,0), (10,10), (7,10), (7,7), (3,7), (3,10), (0,10)]
+    #[test]
+    fn adr101_phase_b3a_u_shape_two_crossings_on_same_edge() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let lens = vec![(3.0, 7.0), (7.0, 7.0), (7.0, 10.0), (3.0, 10.0)];
+        let crossings = vec![
+            (2usize, 0.3, (7.0, 10.0)),  // A's edge 2 goes (10,10)→(0,10), t=0.3 → (7,10)
+            (2usize, 0.7, (3.0, 10.0)),  // t=0.7 → (3,10)
+        ];
+        let result = polygon_difference_walking(&a, &lens, &crossings)
+            .expect("OK");
+        // U-shape should have 8 vertices.
+        assert_eq!(result.len(), 8,
+            "U-shape should have 8 vertices, got {}: {:?}",
+            result.len(), result);
+        // Area: A=100, lens=12, A\lens=88
+        let area = signed_area_2d(&result);
+        assert!((area - 88.0).abs() < 1e-6,
+            "U-shape area should be 88.0, got {}", area);
+    }
+
+    /// Degenerate input: base polygon < 3 verts.
+    #[test]
+    fn adr101_phase_b3a_degenerate_base_errors() {
+        let a = vec![(0.0, 0.0), (10.0, 0.0)];
+        let lens = vec![(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)];
+        let crossings = vec![
+            (0usize, 0.3, (3.0, 0.0)),
+            (0usize, 0.7, (7.0, 0.0)),
+        ];
+        let err = polygon_difference_walking(&a, &lens, &crossings)
+            .expect_err("base < 3 verts should error");
+        assert!(format!("{}", err).contains("base polygon"));
     }
 }
