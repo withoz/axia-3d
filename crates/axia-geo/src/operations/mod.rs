@@ -8,6 +8,7 @@ pub mod push_pull;
 pub mod create_solid;
 pub mod boolean_geo;
 pub mod boolean;
+pub mod coplanar;
 pub mod boolean_dispatch;
 pub mod boolean_nurbs_dcel;
 pub mod transform;

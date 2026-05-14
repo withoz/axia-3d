@@ -166,6 +166,7 @@ pub fn point_in_polygon_winding(
 /// 공면 polygon 용 2D projection 기저.
 /// poly 의 첫 edge 방향을 e1, normal × e1 을 e2 로 설정.
 /// `project`(p) 로 2D 좌표, `lift`(x,y) 로 3D 복원.
+#[derive(Debug, Clone, Copy)]
 pub struct PlaneBasis {
     pub origin: DVec3,
     pub e1: DVec3,
