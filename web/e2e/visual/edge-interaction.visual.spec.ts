@@ -31,7 +31,7 @@ import {
 
 // 2026-05-14 SKIP — see cylinder.visual.spec.ts for the re-enable
 // procedure (Update Visual Baselines Linux workflow_dispatch).
-test.describe.skip('LOCKED #40 — Multi-segment edge hover unification visual contract', () => {
+test.describe('LOCKED #40 — Multi-segment edge hover unification visual contract', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBridgeReady(page);

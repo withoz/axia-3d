@@ -45,7 +45,7 @@ import {
 // the `*-chromium-linux.png` artifacts and they are committed in the
 // follow-up step of this same PR. See web/e2e/visual/README.md for the
 // canonical procedure.
-test.describe.skip('LOCKED #40 — Cylinder rim chord_tol visual contract', () => {
+test.describe('LOCKED #40 — Cylinder rim chord_tol visual contract', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBridgeReady(page);
