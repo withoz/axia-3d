@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed** (draft — sub-step roadmap pending sign-off) |
+| Status | **In Progress** — Phase A landed (PR #25, 2026-05-14) / B-1 algorithm decision landed (본 amendment) |
 | Date | 2026-05-14 |
 | Supersedes | — |
 | Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
@@ -99,3 +99,70 @@ ADR-021 P7 의 자연 확장 — 사용자가 두 원 (또는 두 사각형) 을
 - ADR-089 — closed-curve face Path B (lens 영역의 polygonal substitution 의존)
 - ADR-094 — Path B production default (현재 회귀 trigger condition)
 - LOCKED #40 — render chord_tol (Phase D visual baseline 인프라)
+
+---
+
+## Amendment 1 — Phase A 완료 (2026-05-14, PR #25 `de868ba`)
+
+- **Phase A-α** spec 결재 — 본 ADR §4 Phase A table
+- **Phase A-β/γ** `Mesh::polygonize_closed_curve_face(face_id, material) -> Result<Option<FaceId>>` 추출
+  - Source: `extrude_closed_curve_face_via_tessellation` step 4-6 + ADR-089 A-υ-β cleanup pattern
+  - Engine chord_tol `(radius * 0.01).max(1e-6)` (LOCKED #40 L1)
+  - Surface inheritance (Plane attach 보존)
+  - Anchor + self-loop edge cleanup (isolated anchor deactivate)
+- **회귀 +7** (절대 #[ignore] 금지 7/7): happy path / polygonal no-op / non-Circle self-loop no-op / surface inheritance / anchor deactivation / verify_face_invariants() / inactive face error
+- **Full axia-geo: 1263/1263 PASS** (1256 baseline + 7 new)
+- **Phase A-δ** PR #25 merged to main, CI green (`rust-test` + `web-e2e` + `Build` + `Deploy` + `MCP`)
+- **Additive only** — caller 미연결, Phase B-2 의 첫 caller 가 활용 예정
+
+## Amendment 2 — Phase B-1 알고리즘 결정 (2026-05-14, 본 commit)
+
+### B-1.1 알고리즘 후보 trade-off
+
+| Algorithm | Convex 제약 | LoC (예상) | Degenerate 처리 | Multi-hole | License/구현 |
+|---|---|---|---|---|---|
+| **Sutherland-Hodgman** | Subject + clip 모두 **convex** | ~80 | 단순 (vertex classification) | ❌ | Public domain, 단일 함수 |
+| **Weiler-Atherton** | Subject 비-convex 허용 | ~250 | Coincident edge 별도 처리 필요 | ✅ (hole as inner loop) | Public domain, 그래프 traversal |
+| **Vatti** | 일반 (self-intersect 포함) | ~600 | 강건 (scanline + AET) | ✅ | LGPL Clipper2 의 알고리즘 base, 자체 구현 시 PD |
+
+### B-1.2 결정: **Sutherland-Hodgman MVP** (option (a))
+
+**Lock-ins**:
+
+- **L-B1-1 Convex-only MVP**: ADR-101 §5 의 "Non-convex polygon clipping out of scope" 명시 정합. 현재 user-facing trigger 시나리오 (RECT × RECT, Circle × Circle, RECT × Circle mixed) 가 모두 convex (Circle 의 polygonized N-gon 은 convex N-gon).
+- **L-B1-2 Subject + clip 모두 convex 강제**: 비-convex face (multi-hole / dent 등) 시 Phase B 가 skip + warning. ADR-016 Q2 의 multi-loop face 제약 (Push/Pull / Boolean / Offset / hole boundary fillet 거부) 와 정합 — 같은 face 분류는 같은 정책.
+- **L-B1-3 Plane coplanarity tolerance**: 두 face 의 normal dot product ≥ 0.9999 + plane offset ≤ 1.5μm (LOCKED #5 spatial-hash dedup tolerance) 일 때만 coplanar 판정. ε 누설 차단.
+- **L-B1-4 결과 3 sub-face**: A only / B only / A ∩ B (lens). Lens 영역 sub-face 는 양 face 의 sub-face 로 동시 등록 (LOCKED #3 답습 — 원본 XIA inheritance).
+- **L-B1-5 Phase A 첫 caller**: Phase B-3 에서 `polygonize_closed_curve_face` 를 양 operand 에 호출 → 두 polygonal face 로 변환 후 clipping. Circle / Bezier closed curve 모두 동일 경로.
+- **L-B1-6 Future ADR (별도 트랙)**: Weiler-Atherton 또는 Vatti 로 algorithm upgrade 가 필요해지는 trigger (non-convex face / multi-hole / 3-way overlap) 는 별도 ADR. 본 ADR Phase B 의 sweep 매트릭스 안에서 발견되면 ADR-101 amendment 가 아닌 *별도 ADR 신설*.
+- **L-B1-7 회귀 가드 (Phase B-5)**: 비-convex 입력 시 `Err(MeshOpError::CoplanarClippingRequiresConvex)` 명시 반환 — silent skip 차단. 회귀 자산 1건으로 강제.
+
+### B-1.3 후보 기각 사유
+
+- **Weiler-Atherton 기각**: non-convex 지원이 현재 트리거 시나리오에 불필요. ~3× LoC + degenerate (coincident edge / vertex-on-edge) 별도 처리 → MVP scope 부적합. Phase B 의 risk 격리 원칙 (additive + multi-gate 결재 — ADR-094 §E L1 답습) 위반.
+- **Vatti 기각**: scanline + AET 일반성은 mesh-era 의 mature 솔루션 (Clipper2 등) 의 가치이지만, axia-geo 의 face partition 정책 (LOCKED #1 P7 / LOCKED #12 P11) 위에서는 over-engineering. ADR-046 P31 #1 ("가볍게") 정합. 미래 STEP/IGES import 의 self-intersecting profile 처리 시 재검토 가능.
+
+### B-1.4 Phase B 후속 sub-step (B-2 ~ B-6)
+
+- **B-2**: `coplanar_intersection_segments(face_a, face_b) -> Result<Vec<Segment>>` 신규 (boundary intersection points + segment chains, Sutherland-Hodgman 의 vertex classification + intersection 단계만 추출). caller-side polygonization 가정 (B-3 가 wire-up).
+- **B-3**: `split_faces_by_intersections` 가 coplanar segment 도 처리하도록 확장. `polygonize_closed_curve_face` 첫 호출 site.
+- **B-4**: Lens 영역 sub-face 생성 + 양 face 의 sub-face 로 등록 (LOCKED #3 XIA inheritance 답습).
+- **B-5**: 회귀 자산 매트릭스 (RECT×RECT 7 case + Circle×Circle 5 case + RECT×Circle mixed 3 case + non-convex reject 1 case + 3-way overlap deferred guard 1 case).
+- **B-6**: 사용자 시연 + closure (실제 두 원 그리기 → 자동 3 sub-face).
+
+### B-1.5 회귀 영향 예측 (재확인)
+
+- 기존 회귀 자산 **변경 0** (B-2 ~ B-4 additive)
+- 새 회귀 자산 **+17** (B-5 매트릭스)
+- 사용자 facing: 두 원 / 두 사각형 / mixed partial overlap → 자동 3 sub-face
+
+### B-1.6 코드 변경 0
+
+본 amendment 는 **algorithm 결정 + lock-in 만**. 구현 코드 변경 0. Phase B-2 ~ B-6 별도 PR, 각 sub-step 사용자 결재.
+
+## Amendment 1+2 Cross-link
+
+- ADR-094 §E L1 (additive-first + multi-gate atomic) — Phase B 의 sweep 매트릭스 정책 anchor
+- ADR-046 P31 #1 ("가볍게" — over-engineering 회피) — Vatti 기각 근거
+- ADR-016 Q2 (multi-loop face 도구 정책) — convex-only 정합
+- ADR-091 §E L1 (Mesh-level Map canonical) — Phase B-3 의 sub-face 등록 시 답습
