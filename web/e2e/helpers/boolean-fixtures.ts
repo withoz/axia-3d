@@ -562,3 +562,183 @@ export async function readSelectionGroups(
     };
   });
 }
+
+/**
+ * Build a cylinder via the ADR-089 Path B kernel-native flow:
+ *
+ *   `drawCircleAsCurve` (closed-curve face, 1 anchor + 1 self-loop edge)
+ *   → `createSolidExtrude` (Path B annulus topology: 3 face / 2 edge / 2 vert)
+ *
+ * This is the exact codepath that exercises LOCKED #40's render
+ * chord_tol on both the top/bottom rims (closed-curve face fast-path)
+ * and the side surface (Cylinder uv-slice). Visual specs that compare
+ * pixels against a baseline will detect any regression of
+ * `ANALYTIC_CHORD_TOL` (0.1 → 0.02 type changes), top-rim Arc curve
+ * attachment, or surface-aware Gouraud shading.
+ *
+ * Geometry defaults to radius 1000mm + height 2000mm, centered at origin,
+ * normal +Z. Override via opts for stress scenarios.
+ *
+ * Returns the resolved face IDs so tests can target hover / selection
+ * on a specific rim edge.
+ */
+export interface CylinderHandle {
+  shapeId: number;
+  profileFaceId: number;
+  /** Face IDs for top / bottom / annulus side, in DCEL order. */
+  faceIds: number[];
+  /** Edge ID of the top rim self-loop (Path B). */
+  topRimEdgeId: number;
+  /** Edge ID of the bottom rim self-loop (Path B). */
+  bottomRimEdgeId: number;
+}
+
+export async function setupCylinder(
+  page: Page,
+  opts: { radius?: number; height?: number } = {},
+): Promise<CylinderHandle> {
+  const radius = opts.radius ?? 1000;
+  const height = opts.height ?? 2000;
+  return await page.evaluate(
+    ({ radius, height }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const bridge = w.__axia.get('bridge');
+
+      // ADR-089 A-π Path B default — drawCircleAsCurve creates a
+      // closed-curve face. createSolidExtrude routes via Path B
+      // (kernel-native annulus) when `cylinder_path_b_default` is true,
+      // which it is in production (ADR-094 B-η).
+      const shapeId: number = bridge.drawCircleAsCurve(
+        0, 0, 0,
+        0, 0, 1,
+        radius,
+      );
+      if (shapeId == null || shapeId < 0) {
+        throw new Error(`drawCircleAsCurve failed: ${shapeId}`);
+      }
+      const profileFaceIds: number[] = bridge.getShapeFaceIds(shapeId);
+      if (!profileFaceIds || profileFaceIds.length === 0) {
+        throw new Error(`Shape ${shapeId} produced no faces`);
+      }
+      const profileFaceId: number = profileFaceIds[0];
+
+      const ok: boolean = bridge.createSolidExtrude(profileFaceId, height);
+      if (!ok) {
+        throw new Error(
+          `createSolidExtrude(${profileFaceId}, ${height}) returned false`,
+        );
+      }
+
+      // Read back the solid's face IDs. Path B produces 3 faces; Path A
+      // produces many more. We accept either; the caller uses faceIds[0]
+      // / faceIds[1] for rim hover regardless of topology.
+      const afterFaces: number[] = bridge.getShapeFaceIds(shapeId);
+
+      // Find rim edges — self-loop edges with a Circle curve attached.
+      // These are unique to Path B; Path A has N polygon edges per rim.
+      // Returning -1 lets the test decide whether the assertion is
+      // path-conditional.
+      const edgeMap: Uint32Array = bridge.getEdgeMap();
+      const edgeOwnerCounts = new Map<number, number>();
+      for (let i = 0; i < edgeMap.length; i++) {
+        const eid = edgeMap[i];
+        edgeOwnerCounts.set(eid, (edgeOwnerCounts.get(eid) ?? 0) + 1);
+      }
+      const multiSegmentEdges = [...edgeOwnerCounts.entries()]
+        .filter(([_, count]) => count >= 2)
+        .map(([eid]) => eid)
+        .sort((a, b) => a - b);
+
+      // Heuristic: in Path B, the two multi-segment edges are top and
+      // bottom rims. Lower-numbered = bottom (created earlier in extrude).
+      const bottomRimEdgeId = multiSegmentEdges[0] ?? -1;
+      const topRimEdgeId = multiSegmentEdges[1] ?? -1;
+
+      return {
+        shapeId,
+        profileFaceId,
+        faceIds: afterFaces,
+        topRimEdgeId,
+        bottomRimEdgeId,
+      };
+    },
+    { radius, height },
+  );
+}
+
+/**
+ * Switch the viewport to one of the canonical view modes — deterministic
+ * camera state for reproducible screenshots. Without this, the default
+ * orbital state is implementation-defined and could drift between
+ * sessions, causing spurious visual diffs.
+ *
+ * Valid modes: `'3d' | 'top' | 'bottom' | 'front' | 'back' | 'right' | 'left'`.
+ */
+export async function setViewportMode(
+  page: Page,
+  mode: '3d' | 'top' | 'bottom' | 'front' | 'back' | 'right' | 'left',
+): Promise<void> {
+  await page.evaluate((mode) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const viewport = w.__axia?.get?.('viewport');
+    if (viewport && typeof viewport.setViewMode === 'function') {
+      viewport.setViewMode(mode);
+    }
+  }, mode);
+}
+
+/**
+ * Programmatically hover over an edge by simulating a mouse move at the
+ * screen position corresponding to its midpoint. The visual specs use
+ * this to capture the unified hover highlight (all segments of one
+ * Edge ID drawn in HOVER_COLOR — ADR-088 + LOCKED #40 L3).
+ *
+ * Returns the screen-space [x, y] hovered (for screenshot positioning).
+ */
+export async function hoverOverEdge(
+  page: Page,
+  edgeId: number,
+): Promise<[number, number] | null> {
+  return await page.evaluate((edgeId) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const bridge = w.__axia.get('bridge');
+    const lines: Float32Array = bridge.getEdgeLines();
+    const edgeMap: Uint32Array = bridge.getEdgeMap();
+    // Find first segment of edgeId in edgeMap, compute its midpoint in
+    // world coordinates, project to screen.
+    let segIdx = -1;
+    for (let i = 0; i < edgeMap.length; i++) {
+      if (edgeMap[i] === edgeId) { segIdx = i; break; }
+    }
+    if (segIdx < 0) return null;
+    const base = segIdx * 6;
+    const mx = (lines[base] + lines[base + 3]) / 2;
+    const my = (lines[base + 1] + lines[base + 4]) / 2;
+    const mz = (lines[base + 2] + lines[base + 5]) / 2;
+    const viewport = w.__axia?.get?.('viewport');
+    if (!viewport) return null;
+    const cam = viewport.activeCamera;
+    // THREE.js Vector3 is not globally exposed in the bundled app;
+    // clone the camera's position vector (which IS a THREE.Vector3)
+    // and overwrite its coords. The `.project(cam)` call then maps
+    // world coords to NDC space [-1, +1].
+    const vec = cam.position.clone();
+    vec.set(mx, my, mz);
+    vec.project(cam);
+    const rect = viewport.renderer.domElement.getBoundingClientRect();
+    const x = ((vec.x + 1) / 2) * rect.width + rect.left;
+    const y = ((1 - vec.y) / 2) * rect.height + rect.top;
+    return [x, y];
+  }, edgeId).then(async (screenXY) => {
+    if (screenXY) {
+      await page.mouse.move(screenXY[0], screenXY[1]);
+      // Allow hover state to propagate (mousemove → pickEdgeOrFace →
+      // setEdgeHoverGroup → rebuildEdgeHoverLine).
+      await page.waitForTimeout(50);
+    }
+    return screenXY;
+  });
+}
