@@ -64,12 +64,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── 2026-05-14 (LOCKED #40 follow-up, PRs #18/#19/#20) ─────────
+      # The `web/src/wasm/axia_wasm.{js,d.ts}` wasm-pack outputs are no
+      # longer tracked in git (PR #18). `WasmBridge.ts` imports from
+      # `../wasm/axia_wasm`, and Vite's import-analysis fails to
+      # resolve the relative path at test-transform time even when
+      # `vi.mock(...)` would replace the module at runtime — relative
+      # specifiers bypass alias resolution entirely.
+      #
+      # Earlier attempt (PR #19) committed a `.ts` stub at the resolved
+      # path. That fixed the test job but broke `tsc --noEmit` in the
+      # build job: TypeScript prefers `.ts` over `.d.ts`, so the stub's
+      # incomplete surface displaced the real generated types. The stub
+      # was reverted.
+      #
+      # The principled fix is to give the test job the same Rust
+      # toolchain as the build/ci jobs. wasm-pack output is then
+      # produced from source the same way it is everywhere else, so
+      # `WasmBridge.ts` resolves correctly and `vi.mock(...)` works as
+      # intended.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build (shared with build job)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-wasm
+          workspaces: crates/axia-wasm
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           cache: 'npm'
           cache-dependency-path: 'web/package-lock.json'
+
+      # Build WASM from source BEFORE `npm ci` so the postinstall hook
+      # (ensure-wasm.mjs) sees an existing artifact and exits silently.
+      - name: Build WASM (release)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target web --out-dir ../../web/src/wasm
 
       - name: Install dependencies
         working-directory: ./web
@@ -78,7 +115,6 @@ jobs:
       - name: Run tests
         working-directory: ./web
         # 2026-04-23: `|| echo skipped` 제거 — 테스트 실패가 CI 실패로 이어지게.
-        # WASM timing 이슈는 mocks/three.ts + wasm/axia_wasm.ts 스텁으로 해결됨.
         run: npm run test
 
       - name: Upload coverage
