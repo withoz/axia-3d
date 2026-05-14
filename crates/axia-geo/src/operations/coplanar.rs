@@ -29,7 +29,7 @@ use glam::DVec3;
 use anyhow::{Result, bail};
 
 use crate::mesh::Mesh;
-use crate::FaceId;
+use crate::{FaceId, VertId};
 use super::polygon_geom::{PlaneBasis, face_unit_normal, sutherland_hodgman};
 
 /// Two coplanar normals must agree within ~0.81° (cos ≥ 0.9999).
@@ -217,6 +217,197 @@ pub fn coplanar_intersection_segments(
     }
 
     Ok(CoplanarIntersection { plane, lens_polygon, crossings })
+}
+
+// ─── B-3b: auto_intersect_coplanar (DCEL surgery) ─────────────────────
+
+/// Result of `auto_intersect_coplanar` — three new face IDs replacing the
+/// two original input faces. ADR-101 §B-3 lens semantics — Option (b).
+#[derive(Debug, Clone, Copy)]
+pub struct AutoIntersectResult {
+    /// face_a's region minus the lens — may be non-convex.
+    pub face_a_only: FaceId,
+    /// face_b's region minus the lens — may be non-convex.
+    pub face_b_only: FaceId,
+    /// A ∩ B lens region — promoted as a standalone face.
+    pub lens: FaceId,
+}
+
+/// ADR-101 §B-3b — Coplanar partial-overlap auto-intersect.
+///
+/// Splits two coplanar convex faces with partial overlap into three
+/// sub-faces (face_a_only / face_b_only / lens) per ADR-101 §B-3 Option
+/// (b) "Single promoted lens face" semantics.
+///
+/// # Behavior
+///
+/// - Path B closed-curve Circle faces are auto-polygonized first
+///   (Phase A `polygonize_closed_curve_face` helper, L-B3b-1).
+/// - If no partial overlap (disjoint or full containment) → returns
+///   `Ok(None)` without DCEL mutation (L-B3b-5, silent skip 차단 only
+///   for actual errors).
+/// - Original `face_a` and `face_b` are deactivated; three new faces
+///   are created via remove + add rebuild pattern (L-B3b-2).
+/// - All three new sub-faces inherit `face_a`'s surface metadata
+///   (LOCKED #9 A-χ answer pattern, L-B3b-3).
+/// - XIA inheritance is a Scene-layer concern — Mesh layer only returns
+///   the three new FaceIds. Caller is responsible for `min(face_a_id,
+///   face_b_id).xia` assignment per ADR-101 L-B1-4a.
+///
+/// # Errors
+///
+/// - Inherits all errors from `coplanar_intersection_segments`
+///   (not-coplanar, non-convex, inactive face, etc.).
+/// - `polygon_difference_walking` failures (degenerate input, etc.).
+///
+/// # Lock-ins (ADR-101 §B-3b)
+///
+/// - L-B3b-1 Path B closed-curve auto-polygonize *call* before intersection
+///   (helper available; full Path B manifold support deferred to B-3c —
+///   spatial-hash dedup interaction with leftover orphan edges)
+/// - L-B3b-2 Rebuild via remove_face × 2 + add_face × 3
+/// - L-B3b-3 Surface metadata inheritance (parent → all 3 sub-faces)
+/// - L-B3b-4 XIA inheritance deferred to Scene-layer caller
+/// - L-B3b-5 No overlap → `Ok(None)`, no mutation
+/// - L-B3b-6 `verify_face_invariants()` 회귀 강제 (manifold guard)
+///
+/// # B-3b scope (MVP)
+///
+/// **In-scope**: Polygonal × polygonal coplanar partial overlap (RECT ×
+/// RECT canonical). Verified manifold-safe.
+///
+/// **Deferred to B-3c**: Path B closed-curve face × Path B closed-curve
+/// face. The polygonize call happens correctly but `remove_face` leaves
+/// orphan edges in the spatial-hash dedup table that interact with the
+/// rebuild pattern, producing non-manifold edges shared by 3 active faces.
+/// B-3c will add explicit orphan-edge cleanup after `remove_face`.
+///
+/// # Cross-link
+///
+/// ADR-101 §B-3 (Option (b) decision), ADR-021 P7 (closed boundary =
+/// face), ADR-022 P9 (small-face promote pattern), Phase A (Path B
+/// polygonize helper), Phase B-2 (`coplanar_intersection_segments`),
+/// Phase B-3a (`polygon_difference_walking`).
+pub fn auto_intersect_coplanar(
+    mesh: &mut Mesh,
+    face_a_input: FaceId,
+    face_b_input: FaceId,
+    material: crate::MaterialId,
+) -> Result<Option<AutoIntersectResult>> {
+    // Step 0: Polygonize Path B closed-curve Circle faces (L-B3b-1).
+    // Helper returns Some(new_fid) if conversion happened, None for
+    // already-polygonal faces.
+    let face_a = mesh
+        .polygonize_closed_curve_face(face_a_input, material)?
+        .unwrap_or(face_a_input);
+    let face_b = mesh
+        .polygonize_closed_curve_face(face_b_input, material)?
+        .unwrap_or(face_b_input);
+
+    // Step 1: Compute intersection (read-only).
+    let inter = coplanar_intersection_segments(mesh, face_a, face_b)?;
+
+    // Step 2: No partial overlap → no-op (L-B3b-5).
+    // Partial overlap is characterized by EXACTLY 2 boundary crossings
+    // and a non-empty lens polygon. Disjoint (0 crossings, empty lens),
+    // containment (0 crossings, full A or B lens), and degenerate
+    // touching (1+ crossings but degenerate lens) all return Ok(None).
+    if inter.crossings.len() != 2 || inter.lens_polygon.is_empty() {
+        return Ok(None);
+    }
+
+    let plane = inter.plane;
+    let lens_3d = inter.lens_polygon;
+    let lens_2d: Vec<(f64, f64)> = lens_3d.iter().map(|p| plane.project(*p)).collect();
+
+    // Step 3: Collect 2D boundaries.
+    let poly_a_3d = collect_face_boundary(mesh, face_a)?;
+    let poly_b_3d = collect_face_boundary(mesh, face_b)?;
+    let poly_a_2d: Vec<(f64, f64)> = poly_a_3d.iter().map(|p| plane.project(*p)).collect();
+    let poly_b_2d_raw: Vec<(f64, f64)> = poly_b_3d.iter().map(|p| plane.project(*p)).collect();
+
+    // face_b may be CW in the basis (anti-parallel normal vs face_a) —
+    // polygon_difference_walking requires CCW input. Reverse if needed
+    // and adjust crossing edge indices accordingly.
+    let area_b = polygon_signed_area_2d(&poly_b_2d_raw);
+    let b_reversed = area_b < 0.0;
+    let poly_b_2d: Vec<(f64, f64)> = if b_reversed {
+        poly_b_2d_raw.iter().rev().copied().collect()
+    } else {
+        poly_b_2d_raw
+    };
+    let n_b = poly_b_2d.len();
+
+    // Step 4: Build crossings arrays for each face's polygon_difference
+    //         walking call.
+    let crossings_a: Vec<(usize, f64, (f64, f64))> = inter
+        .crossings
+        .iter()
+        .map(|c| (c.face_a_edge, c.face_a_t, plane.project(c.point)))
+        .collect();
+
+    let crossings_b: Vec<(usize, f64, (f64, f64))> = inter
+        .crossings
+        .iter()
+        .map(|c| {
+            if b_reversed {
+                // Reversed b: original edge `e` ↔ new edge `(n - 2 - e) mod n`,
+                //             t `tb` ↔ `1 - tb`.
+                let new_edge = (n_b + n_b - 2 - c.face_b_edge) % n_b;
+                (new_edge, 1.0 - c.face_b_t, plane.project(c.point))
+            } else {
+                (c.face_b_edge, c.face_b_t, plane.project(c.point))
+            }
+        })
+        .collect();
+
+    // Step 5: Compute A \ lens and B \ lens via boundary walking.
+    let a_only_2d = polygon_difference_walking(&poly_a_2d, &lens_2d, &crossings_a)?;
+    let b_only_2d = polygon_difference_walking(&poly_b_2d, &lens_2d, &crossings_b)?;
+
+    // Step 6: Lift back to 3D world coords.
+    let a_only_3d: Vec<DVec3> = a_only_2d.iter().map(|(x, y)| plane.lift(*x, *y)).collect();
+    let b_only_3d: Vec<DVec3> = b_only_2d.iter().map(|(x, y)| plane.lift(*x, *y)).collect();
+
+    // Step 7: Snapshot parent surface metadata (L-B3b-3). Both faces
+    //         should share the same surface (Plane) — we use face_a's
+    //         as the canonical source per ADR-101 L-B1-4.
+    let surface_inherit = mesh
+        .faces
+        .get(face_a)
+        .and_then(|f| f.surface().cloned());
+
+    // Step 8: Deactivate originals.
+    mesh.remove_face(face_a)?;
+    mesh.remove_face(face_b)?;
+
+    // Step 9: Build new faces (L-B3b-2 rebuild pattern).
+    let a_only_vids: Vec<VertId> = a_only_3d.iter().map(|p| mesh.add_vertex(*p)).collect();
+    let b_only_vids: Vec<VertId> = b_only_3d.iter().map(|p| mesh.add_vertex(*p)).collect();
+    let lens_vids: Vec<VertId> = lens_3d.iter().map(|p| mesh.add_vertex(*p)).collect();
+
+    let face_a_only = mesh.add_face(&a_only_vids, material)?;
+    let face_b_only = mesh.add_face(&b_only_vids, material)?;
+    let lens = mesh.add_face(&lens_vids, material)?;
+
+    // Step 10: Surface inheritance (L-B3b-3).
+    if let Some(surf) = surface_inherit {
+        if let Some(f) = mesh.faces.get_mut(face_a_only) {
+            f.set_surface(Some(surf.clone()));
+        }
+        if let Some(f) = mesh.faces.get_mut(face_b_only) {
+            f.set_surface(Some(surf.clone()));
+        }
+        if let Some(f) = mesh.faces.get_mut(lens) {
+            f.set_surface(Some(surf));
+        }
+    }
+
+    Ok(Some(AutoIntersectResult {
+        face_a_only,
+        face_b_only,
+        lens,
+    }))
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -959,5 +1150,192 @@ mod tests {
         let err = polygon_difference_walking(&a, &lens, &crossings)
             .expect_err("base < 3 verts should error");
         assert!(format!("{}", err).contains("base polygon"));
+    }
+
+    // ── B-3b tests: auto_intersect_coplanar ──────────────────────────
+
+    /// Happy path: two coplanar RECTs with partial overlap → 3 sub-faces.
+    ///
+    /// A = [0,0]–[10,10], B = [5,5]–[15,15]. Lens = [5,5]–[10,10].
+    /// Expected: 3 new faces (face_a_only L-shape, face_b_only L-shape,
+    /// lens square).
+    #[test]
+    fn adr101_phase_b3b_two_rects_partial_overlap_creates_3_faces() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        let active_before = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_before, 2);
+
+        let result = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK")
+            .expect("partial overlap should produce result");
+
+        // 3 new faces are active; originals are inactive.
+        let active_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after, 3,
+            "exactly 3 active faces after split, got {}", active_after);
+        assert!(mesh.faces.get(a).map(|f| !f.is_active()).unwrap_or(true),
+            "original face_a should be inactive");
+        assert!(mesh.faces.get(b).map(|f| !f.is_active()).unwrap_or(true),
+            "original face_b should be inactive");
+
+        // Each new FaceId must be distinct.
+        assert_ne!(result.face_a_only, result.face_b_only);
+        assert_ne!(result.face_a_only, result.lens);
+        assert_ne!(result.face_b_only, result.lens);
+
+        // Lens face has 4 vertices (the [5,5]-[10,10] square).
+        let lens_boundary = collect_face_boundary(&mesh, result.lens).unwrap();
+        assert_eq!(lens_boundary.len(), 4,
+            "lens should be a quad, got {} verts", lens_boundary.len());
+
+        // A_only and B_only are L-shapes (6 verts each).
+        let a_only_boundary = collect_face_boundary(&mesh, result.face_a_only).unwrap();
+        let b_only_boundary = collect_face_boundary(&mesh, result.face_b_only).unwrap();
+        assert_eq!(a_only_boundary.len(), 6, "face_a_only should be L-shape (6 verts)");
+        assert_eq!(b_only_boundary.len(), 6, "face_b_only should be L-shape (6 verts)");
+    }
+
+    /// Disjoint faces → Ok(None), no mutation.
+    #[test]
+    fn adr101_phase_b3b_disjoint_no_op() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(1.0, 0.0), xy(1.0, 1.0), xy(0.0, 1.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(6.0, 5.0), xy(6.0, 6.0), xy(5.0, 6.0),
+        ]);
+        let active_before = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let result = auto_intersect_coplanar(&mut mesh, a, b, mat).expect("OK");
+        assert!(result.is_none(), "disjoint → None");
+        let active_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_before, active_after, "no mutation on disjoint");
+        assert!(mesh.faces.get(a).map(|f| f.is_active()).unwrap_or(false));
+        assert!(mesh.faces.get(b).map(|f| f.is_active()).unwrap_or(false));
+    }
+
+    /// Containment (A ⊂ B) → Ok(None) (0 boundary crossings).
+    #[test]
+    fn adr101_phase_b3b_containment_no_op() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let inner = add_quad(&mut mesh, [
+            xy(2.0, 2.0), xy(3.0, 2.0), xy(3.0, 3.0), xy(2.0, 3.0),
+        ]);
+        let outer = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let result = auto_intersect_coplanar(&mut mesh, inner, outer, mat).expect("OK");
+        assert!(result.is_none(), "containment → None (no boundary crossings)");
+        assert!(mesh.faces.get(inner).map(|f| f.is_active()).unwrap_or(false));
+        assert!(mesh.faces.get(outer).map(|f| f.is_active()).unwrap_or(false));
+    }
+
+    /// Surface inheritance: all 3 new sub-faces inherit parent's surface
+    /// (L-B3b-3, LOCKED #9 A-χ pattern).
+    #[test]
+    fn adr101_phase_b3b_surface_inheritance() {
+        use crate::surfaces::{AnalyticSurface};
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        // Attach Plane surface to face_a (parent of inheritance).
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            basis_u: DVec3::new(1.0, 0.0, 0.0),
+            u_range: (-100.0, 100.0),
+            v_range: (-100.0, 100.0),
+        };
+        mesh.faces.get_mut(a).unwrap().set_surface(Some(plane.clone()));
+
+        let result = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK").expect("partial overlap");
+
+        // All 3 sub-faces must have a Plane surface attached.
+        for fid in [result.face_a_only, result.face_b_only, result.lens] {
+            let surf = mesh.faces.get(fid).and_then(|f| f.surface().cloned());
+            match surf {
+                Some(AnalyticSurface::Plane { .. }) => {},
+                other => panic!("face {:?} expected Plane surface, got {:?}", fid, other),
+            }
+        }
+    }
+
+    /// Manifold invariant: post-split mesh must pass verify_face_invariants
+    /// (L-B3b-6).
+    #[test]
+    fn adr101_phase_b3b_verify_face_invariants_post_split() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK").expect("partial overlap");
+
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-split mesh must satisfy face invariants — got {:?}",
+            report.violations);
+    }
+
+    /// Inactive face input → error (silent skip 차단).
+    #[test]
+    fn adr101_phase_b3b_inactive_input_errors() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        mesh.remove_face(b).expect("deactivate b");
+        let err = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect_err("inactive face should error");
+        let msg = format!("{}", err);
+        assert!(msg.contains("inactive") || msg.contains("not found"),
+            "got error: {}", msg);
+    }
+
+    /// Second call after split: face_a_only / face_b_only are non-convex
+    /// L-shapes from the previous split. Per ADR-101 §B-1 L-B1-1/L-B1-2
+    /// (convex-only enforcement), the second call must error (silent
+    /// skip 차단).
+    #[test]
+    fn adr101_phase_b3b_second_call_rejects_non_convex_results() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        let r1 = auto_intersect_coplanar(&mut mesh, a, b, mat).unwrap().unwrap();
+        // Second call: face_a_only is an L-shape (non-convex). Convex-only
+        // enforcement (L-B1-1/2) must reject explicitly.
+        let err = auto_intersect_coplanar(&mut mesh, r1.face_a_only, r1.face_b_only, mat)
+            .expect_err("non-convex L-shape must be rejected");
+        let msg = format!("{}", err);
+        assert!(msg.contains("non-convex"),
+            "expected non-convex error, got: {}", msg);
     }
 }
