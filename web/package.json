@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/ensure-wasm.mjs",
     "dev": "vite",
     "build": "tsc && vite build --emptyOutDir false",
     "build:wasm": "npm run wasm:build && npm run wasm:verify",

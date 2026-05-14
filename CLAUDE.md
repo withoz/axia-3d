@@ -2281,21 +2281,40 @@ Semantic Layer (의미):       Object(=XIA), Material, Group
 
 ## 빌드 방법
 
-### 원-스텝 (권장, 2026-04-24~)
+### 신규 dev 클론 (2026-05-14~)
 ```bash
-cd web
-npm run build        # WASM build + verify + vite build
-npm run build:wasm   # WASM만 (verify 포함)
-npm run verify:wasm  # 산출물 무결성 검사만
+git clone <repo>
+cd <repo>/web
+npm install   # postinstall 의 ensure-wasm.mjs 가 자동으로
+              # `wasm-pack build --target web` 실행 (없으면 안내 출력 후 통과)
+npm run dev   # Vite dev server
 ```
 
-### 수동 (디버깅 / CI 분리 시)
+`web/src/wasm/` 는 더 이상 git 에 tracked 되지 않습니다 (LOCKED #40 follow-up
+2026-05-14 정책). 산출물이 source 와 desync 되어 발생하던 회귀를 architectural
+fix — wasm-pack 산출은 매번 source 에서 재생성됩니다.
+
+### 명시적 재빌드 (`mesh.rs` / `lib.rs` 수정 후)
 ```bash
-# WASM 빌드 (Rust 툴체인 필요)
+cd web
+npm run build:wasm   # WASM 만 재빌드 (verify 포함)
+npm run wasm:verify  # 산출물 무결성 검사만
+```
+
+### Production / CI build
+```bash
+cd web
+npm run build        # tsc + vite build → web/dist/
+```
+WASM 은 `postinstall` 또는 명시적 `build:wasm` 으로 사전 빌드되어 있어야 함.
+CI workflow (`build.yml` / `ci.yml` / `deploy.yml` / `mcp.yml`) 는 setup
+순서상 자동 해결됨.
+
+### 수동 (디버깅 시)
+```bash
 cd crates/axia-wasm
 wasm-pack build --target web --out-dir ../../web/src/wasm
 
-# 프론트엔드 빌드
 cd web
 npx vite build --emptyOutDir false
 ```
@@ -2435,10 +2454,17 @@ interface GroupInfo {
 5. **MeshBasicMaterial + FrontSide + 투명** → 매끈하고 깨끗 → 최종 채택
 
 ## 주의사항
+- **2026-05-14 업데이트** (LOCKED #40 follow-up): `web/src/wasm/` 가 더 이상
+  git 에 tracked 되지 않음. `npm install` 의 `postinstall` (ensure-wasm.mjs) 가
+  artifact 부재 시 자동 빌드. `mesh.rs` / `lib.rs` 수정 후에는 `npm run build:wasm`
+  으로 명시 재빌드 (postinstall 은 idempotent — 이미 존재하는 artifact 는 재빌드
+  안 함).
 - **2026-04-24 업데이트**: 이전 경고 ("axia_wasm.js 수동 수정", "JSDoc `*/` 수동 추가") 는 현재 wasm-pack 0.14+ 기준 **더 이상 필요 없음**. `npm run build:wasm`이 자동 처리.
-- `npm run build` 를 쓰면 WASM 빌드 + verify + vite build가 한 번에 됨. 중간에 실패하면 `npm run verify:wasm`으로 산출물 검사.
+- `npm run build` 는 tsc + vite build만 — WASM 은 사전에 빌드되어 있어야 함
+  (CI / postinstall 가 처리).
 - 빌드 시 `--emptyOutDir false` 필수 (권한 오류 방지) — npm script가 자동 적용.
-- Rust 툴체인이 없는 환경에서는 WASM 재빌드 불가 → JS/TS만 수정 가능.
+- Rust 툴체인이 없는 환경에서는 WASM 재빌드 불가 → ensure-wasm.mjs 가 안내
+  메시지 출력 후 non-fatal exit (JS/TS만 수정 시 영향 없음).
 
 ## 완료된 기능
 - Draw 도구 (Line, Rect, Circle)
