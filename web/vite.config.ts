@@ -37,6 +37,30 @@ function opencascadeWasmAsUrl(): Plugin {
 
 export default defineConfig({
   plugins: [opencascadeWasmAsUrl(), wasm()],
+  /**
+   * 2026-05-14 — Relative base for multi-host deployment.
+   *
+   * The same dist/ ships to two hosts:
+   *   1. https://withoz.github.io/axia-3d/   (GitHub Pages, subpath)
+   *   2. https://aixxia.kr/                  (custom domain, apex)
+   *
+   * Default Vite `base: '/'` produces absolute asset URLs like
+   * `/assets/index-XXX.js`, which resolve to:
+   *   - GitHub Pages: `withoz.github.io/assets/index-XXX.js` → 404
+   *     (assets actually live at `/axia-3d/assets/...`)
+   *   - aixxia.kr   : `aixxia.kr/assets/...` → OK
+   *
+   * Setting `base: './'` emits relative URLs (`./assets/index-XXX.js`),
+   * which resolve correctly against whatever base path the page is
+   * served from. This is the canonical "deploy-anywhere" setting for
+   * SPAs that need to work at multiple roots without rebuilding.
+   *
+   * Trade-off: dynamic imports inside the code that compute URLs by
+   * hand must use `import.meta.env.BASE_URL` rather than hard-coded
+   * `/...` prefixes. Existing code uses Vite's standard import paths,
+   * which are unaffected.
+   */
+  base: './',
   server: {
     port: 3000,
     open: true,
