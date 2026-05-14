@@ -8,8 +8,8 @@
  * Three scenarios:
  *   1. RECT × RECT partial overlap → 3 sub-faces (canonical user trigger)
  *   2. drawCircleAsShape × 2 partial overlap → 3 sub-faces
- *   3. drawCircleAsCurve × 2 (Path B) → NO auto-split (B-4 MVP guard;
- *      B-4b will lift this restriction with a non-destructive pre-check)
+ *   3. drawCircleAsCurve × 2 (Path B) → auto-split 3 sub-faces
+ *      (B-4b non-destructive pre-check activates Path B at first-class)
  *
  * NOTE: Playwright uses `npm run preview` (production build) per
  * `playwright.config.ts`. Re-build prod bundle (`npm run build`) AFTER
@@ -104,7 +104,7 @@ test.describe('ADR-101 B-6 — User demo verification', () => {
     });
   });
 
-  test('Scenario 3: drawCircleAsCurve × 2 (Path B) → NO auto-split', async ({ page }) => {
+  test('Scenario 3: drawCircleAsCurve × 2 (Path B) → 3 sub-faces (B-4b)', async ({ page }) => {
     const result = await page.evaluate((args) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const bridge = (window as any).__axia.get('bridge');
@@ -130,7 +130,8 @@ test.describe('ADR-101 B-6 — User demo verification', () => {
       test.skip(true, 'drawCircleAsCurve unavailable in this build');
       return;
     }
-    // L-B4-6 MVP scope guard: Path B circles NOT auto-split.
-    expect(result.deltaB).toBe(2);
+    // ADR-101 §B-4b — non-destructive pre-check activates Path B circles
+    // as first-class inputs. Partial overlap → auto 3 sub-faces.
+    expect(result.deltaB).toBe(3);
   });
 });

@@ -195,7 +195,7 @@ test.describe('ADR-101 B-6 — Visual demo (Claude direct test)', () => {
     });
   });
 
-  test('Circle × Circle (Path B — B-4 MVP guard, NO split) → 2 faces (top view)', async ({ page }) => {
+  test('Circle × Circle (Path B — B-4b activated) → 3 sub-faces (top view)', async ({ page }) => {
     const result = await page.evaluate((args) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const w = window as any;
@@ -224,8 +224,9 @@ test.describe('ADR-101 B-6 — Visual demo (Claude direct test)', () => {
       test.skip(true, 'drawCircleAsCurve not available');
       return;
     }
-    // L-B4-6 MVP scope guard: Path B circles NOT auto-split.
-    expect(result.delta).toBe(2);
+    // ADR-101 §B-4b — non-destructive pre-check activates Path B as
+    // first-class input. Path B × Path B partial overlap → 3 sub-faces.
+    expect(result.delta).toBe(3);
 
     await hideUIChrome(page); await fitCamera(page, { x: 3000, y: 0, z: 0 }, 25000, 'top');
     await page.waitForTimeout(800);
