@@ -262,25 +262,17 @@ pub struct AutoIntersectResult {
 ///
 /// # Lock-ins (ADR-101 §B-3b)
 ///
-/// - L-B3b-1 Path B closed-curve auto-polygonize *call* before intersection
-///   (helper available; full Path B manifold support deferred to B-3c —
-///   spatial-hash dedup interaction with leftover orphan edges)
-/// - L-B3b-2 Rebuild via remove_face × 2 + add_face × 3
+/// - L-B3b-1 Path B closed-curve auto-polygonize before intersection
+///   (Phase A helper). Path B Circle × Circle activated by B-3c
+///   orphan-edge cleanup (step 8.5 below).
+/// - L-B3b-2 Rebuild via remove_face × 2 + cleanup orphan edges (B-3c)
+///   + add_face × 3.
 /// - L-B3b-3 Surface metadata inheritance (parent → all 3 sub-faces)
 /// - L-B3b-4 XIA inheritance deferred to Scene-layer caller
 /// - L-B3b-5 No overlap → `Ok(None)`, no mutation
 /// - L-B3b-6 `verify_face_invariants()` 회귀 강제 (manifold guard)
-///
-/// # B-3b scope (MVP)
-///
-/// **In-scope**: Polygonal × polygonal coplanar partial overlap (RECT ×
-/// RECT canonical). Verified manifold-safe.
-///
-/// **Deferred to B-3c**: Path B closed-curve face × Path B closed-curve
-/// face. The polygonize call happens correctly but `remove_face` leaves
-/// orphan edges in the spatial-hash dedup table that interact with the
-/// rebuild pattern, producing non-manifold edges shared by 3 active faces.
-/// B-3c will add explicit orphan-edge cleanup after `remove_face`.
+/// - L-B3c-* See `Mesh::cleanup_orphan_boundary_edges` docs for the
+///   orphan-cleanup lock-ins.
 ///
 /// # Cross-link
 ///
@@ -377,9 +369,29 @@ pub fn auto_intersect_coplanar(
         .get(face_a)
         .and_then(|f| f.surface().cloned());
 
+    // Step 7.5 (B-3c L-B3c-5): snapshot boundary vert lists BEFORE
+    //         removing the faces, for orphan-edge cleanup step 8.5.
+    let face_a_boundary_verts: Vec<VertId> = {
+        let outer_start = mesh.faces[face_a].outer().start;
+        mesh.collect_loop_verts(outer_start)?
+    };
+    let face_b_boundary_verts: Vec<VertId> = {
+        let outer_start = mesh.faces[face_b].outer().start;
+        mesh.collect_loop_verts(outer_start)?
+    };
+
     // Step 8: Deactivate originals.
     mesh.remove_face(face_a)?;
     mesh.remove_face(face_b)?;
+
+    // Step 8.5 (B-3c): cleanup orphan boundary edges left over by
+    //         remove_face. Without this, the subsequent add_face × 3
+    //         can reuse free HEs in conflicting directions, producing
+    //         non-manifold edges (shared by 3 active faces).
+    let _orphans_removed = mesh.cleanup_orphan_boundary_edges(&[
+        face_a_boundary_verts.as_slice(),
+        face_b_boundary_verts.as_slice(),
+    ]);
 
     // Step 9: Build new faces (L-B3b-2 rebuild pattern).
     let a_only_vids: Vec<VertId> = a_only_3d.iter().map(|p| mesh.add_vertex(*p)).collect();
@@ -605,17 +617,37 @@ pub fn polygon_difference_walking(
         point_in_polygon_2d_strict(pt, lens_polygon)
     };
 
-    // Find a starting index that is clearly OUTSIDE the lens (i.e., not a
-    // crossing and not inside). For convex × convex partial overlap, at
-    // least one base vertex is outside the lens.
+    // Find a starting index that is *clearly* OUTSIDE the lens — i.e.,
+    // not a crossing, not strictly inside lens, AND not coincident with
+    // any lens boundary vertex (within match_eps).
+    //
+    // Without the lens-vertex exclusion, when the base polygon's vertices
+    // include arc points that lie ON the lens boundary (e.g., circle ∩
+    // circle case where polygonized arc verts coincide with lens-side-arc
+    // verts), the start algorithm picks a base vert that sits ON lens.
+    // The walk then mis-classifies it as "outside" and traces back across
+    // the lens-side arc, producing a degenerate polygon with ~0 area.
+    //
+    // This bug was masked in the RECT × RECT case because lens corners
+    // (5,5), (10,10) appear on A's/B's boundary BETWEEN the 2 crossings —
+    // so the state-tracking flag (`inside_lens=true`) correctly skips
+    // them. For Circle × Circle, the on-lens base verts span a much
+    // larger arc, and the start algorithm picks one of them by accident.
+    const LENS_VERT_MATCH_EPS: f64 = 1e-6;
+    let on_lens_vertex = |pt: (f64, f64)| -> bool {
+        lens_polygon.iter().any(|q| {
+            (q.0 - pt.0).abs() < LENS_VERT_MATCH_EPS
+                && (q.1 - pt.1).abs() < LENS_VERT_MATCH_EPS
+        })
+    };
     let n_bwx = base_with_crossings.len();
     let start_idx = (0..n_bwx)
         .find(|&i| {
             let (pt, is_xing) = base_with_crossings[i];
-            !is_xing && !is_inside_lens(pt)
+            !is_xing && !is_inside_lens(pt) && !on_lens_vertex(pt)
         })
         .ok_or_else(|| anyhow::anyhow!(
-            "polygon_difference_walking: no base vertex outside lens — \
+            "polygon_difference_walking: no base vertex strictly outside lens — \
              input may be containment rather than partial overlap"
         ))?;
 
@@ -1313,6 +1345,138 @@ mod tests {
         let msg = format!("{}", err);
         assert!(msg.contains("inactive") || msg.contains("not found"),
             "got error: {}", msg);
+    }
+
+    // ── B-3c tests: Path B Circle × Circle + cleanup helper ──────────
+
+    /// B-3c: Path B Circle × Circle partial overlap → 3 sub-faces,
+    /// manifold-safe. Was deferred from B-3b due to orphan-edge issue.
+    #[test]
+    fn adr101_phase_b3c_path_b_circles_polygonize_and_split() {
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let center_a = DVec3::ZERO;
+        let center_b = DVec3::new(6.0, 0.0, 0.0);
+        let radius = 5.0;
+        let normal = DVec3::new(0.0, 0.0, 1.0);
+        let basis_u = DVec3::new(1.0, 0.0, 0.0);
+
+        let circle_a_curve = AnalyticCurve::Circle {
+            center: center_a, radius, normal, basis_u,
+        };
+        let circle_b_curve = AnalyticCurve::Circle {
+            center: center_b, radius, normal, basis_u,
+        };
+        let v_a = mesh.add_vertex(center_a + basis_u * radius);
+        let v_b = mesh.add_vertex(center_b + basis_u * radius);
+        let face_a = mesh.add_face_closed_curve(v_a, circle_a_curve, mat)
+            .expect("add Path B circle A");
+        let face_b = mesh.add_face_closed_curve(v_b, circle_b_curve, mat)
+            .expect("add Path B circle B");
+
+        let result = auto_intersect_coplanar(&mut mesh, face_a, face_b, mat)
+            .expect("OK")
+            .expect("two overlapping circles must produce result");
+
+        // 3 active faces after split.
+        let active_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after, 3,
+            "two circles partial overlap → 3 sub-faces, got {} active",
+            active_after);
+
+        // Lens has ≥ 4 verts (mix of arc verts + 2 crossings).
+        let lens_boundary = collect_face_boundary(&mesh, result.lens).unwrap();
+        assert!(lens_boundary.len() >= 4,
+            "circle lens should have ≥4 boundary verts, got {}",
+            lens_boundary.len());
+
+        // Manifold invariants preserved (the B-3c primary success criterion).
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-split circle-circle mesh must satisfy invariants — got {:?}",
+            report.violations);
+    }
+
+    /// B-3c: cleanup_orphan_boundary_edges removes orphan edges + deactivates
+    /// isolated verts. Direct unit test of the helper.
+    #[test]
+    fn adr101_phase_b3c_cleanup_orphan_boundary_edges_unit() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(xy(0.0, 0.0));
+        let v1 = mesh.add_vertex(xy(1.0, 0.0));
+        let v2 = mesh.add_vertex(xy(1.0, 1.0));
+        let v3 = mesh.add_vertex(xy(0.0, 1.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+
+        // Before remove_face: 4 edges all have face-bearing HEs.
+        let edges_before = mesh.edges.iter()
+            .filter(|(eid, _)| {
+                let any = mesh.edges[*eid].any_he();
+                !any.is_null() && mesh.hes.contains(any)
+            })
+            .count();
+        assert_eq!(edges_before, 4);
+
+        // Remove face, then cleanup.
+        mesh.remove_face(face).expect("remove");
+        let removed = mesh.cleanup_orphan_boundary_edges(&[&[v0, v1, v2, v3]]);
+        assert_eq!(removed, 4, "all 4 orphan edges should be cleaned, got {}", removed);
+
+        // After cleanup, all 4 verts are isolated → deactivated.
+        for v in [v0, v1, v2, v3] {
+            assert!(!mesh.verts[v].is_active(),
+                "isolated vert {:?} should be deactivated", v);
+        }
+    }
+
+    /// B-3c: cleanup is idempotent — second call with same args returns 0
+    /// (L-B3c-3).
+    #[test]
+    fn adr101_phase_b3c_cleanup_is_idempotent() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(xy(0.0, 0.0));
+        let v1 = mesh.add_vertex(xy(1.0, 0.0));
+        let v2 = mesh.add_vertex(xy(1.0, 1.0));
+        let v3 = mesh.add_vertex(xy(0.0, 1.0));
+        let face = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        mesh.remove_face(face).expect("remove");
+
+        let first = mesh.cleanup_orphan_boundary_edges(&[&[v0, v1, v2, v3]]);
+        let second = mesh.cleanup_orphan_boundary_edges(&[&[v0, v1, v2, v3]]);
+        assert!(first > 0, "first cleanup should remove something");
+        assert_eq!(second, 0, "second cleanup should find nothing");
+    }
+
+    /// B-3c: cleanup must NOT touch edges that still have an active
+    /// face-bearing HE (scope L-B3c-2: all-free predicate).
+    #[test]
+    fn adr101_phase_b3c_cleanup_preserves_shared_edges() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(xy(0.0, 0.0));
+        let v1 = mesh.add_vertex(xy(2.0, 0.0));
+        let v2 = mesh.add_vertex(xy(2.0, 2.0));
+        let v3 = mesh.add_vertex(xy(0.0, 2.0));
+        let v4 = mesh.add_vertex(xy(4.0, 0.0));
+        let v5 = mesh.add_vertex(xy(4.0, 2.0));
+        // face_a uses edges v0-v1, v1-v2, v2-v3, v3-v0.
+        let face_a = mesh.add_face(&[v0, v1, v2, v3], mat).unwrap();
+        // face_b shares edge v1-v2 with face_a (adjacent).
+        let face_b = mesh.add_face(&[v1, v4, v5, v2], mat).unwrap();
+
+        // Remove only face_a. Edge v1-v2 still belongs to face_b → not orphan.
+        mesh.remove_face(face_a).expect("remove face_a");
+        let removed = mesh.cleanup_orphan_boundary_edges(&[&[v0, v1, v2, v3]]);
+        // Edges v0-v1, v2-v3, v3-v0 are orphan (3 edges). Edge v1-v2 has
+        // face_b's HE still active.
+        assert_eq!(removed, 3, "3 orphan edges expected, got {}", removed);
+        assert!(mesh.find_edge(v1, v2).is_some(),
+            "shared edge v1-v2 must be preserved (face_b still uses it)");
+        let _ = face_b;
     }
 
     /// Second call after split: face_a_only / face_b_only are non-convex
