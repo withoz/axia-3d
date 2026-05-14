@@ -74,17 +74,35 @@ jobs:
         working-directory: ./web
         run: npx playwright install --with-deps chromium
 
-      # Temporarily un-skip the visual specs so --update-snapshots fires.
-      # We only flip `test.describe.skip` → `test.describe` for the run;
-      # the file change is NOT committed — the artifact is the only output.
+      # Temporarily un-skip every visual spec so --update-snapshots
+      # fires for all of them, regardless of when each was added.
+      # The flip is `test.describe.skip` → `test.describe`, in place;
+      # the file change is NOT committed — the artifact is the only
+      # output of this workflow.
+      #
+      # Glob (`e2e/visual/*.visual.spec.ts`) catches future specs
+      # automatically. Previously this step hard-coded two filenames
+      # and silently missed any spec added later (caught when 🅑 Phase
+      # 3 ran and produced 0 baselines for cylinder + edge-interaction
+      # specs — fixed 2026-05-14).
       - name: Un-skip visual specs (in-place, run-only)
         working-directory: ./web
         run: |
-          sed -i "s/test\.describe\.skip(/test.describe(/g" e2e/visual/group-color.visual.spec.ts e2e/visual/smoke.visual.spec.ts
-          echo "--- group-color.visual.spec.ts ---"
-          grep -n "test\.describe" e2e/visual/group-color.visual.spec.ts || true
-          echo "--- smoke.visual.spec.ts ---"
-          grep -n "test\.describe" e2e/visual/smoke.visual.spec.ts || true
+          shopt -s nullglob
+          specs=(e2e/visual/*.visual.spec.ts)
+          if [ ${#specs[@]} -eq 0 ]; then
+            echo "::warning::No visual specs found at e2e/visual/*.visual.spec.ts"
+            exit 0
+          fi
+          echo "Found ${#specs[@]} visual spec(s):"
+          for f in "${specs[@]}"; do echo "  - $f"; done
+          sed -i "s/test\.describe\.skip(/test.describe(/g" "${specs[@]}"
+          echo ""
+          echo "--- After un-skip ---"
+          for f in "${specs[@]}"; do
+            echo "[$f]"
+            grep -n "test\.describe" "$f" || true
+          done
 
       # First pass generates baselines (exits 0 even if no prior baseline).
       - name: Generate baselines (playwright test --update-snapshots)
