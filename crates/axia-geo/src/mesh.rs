@@ -3276,6 +3276,143 @@ impl Mesh {
         }
     }
 
+    /// Polygonize a Path B closed-curve face (1 anchor + 1 self-loop edge
+    /// with `AnalyticCurve::Circle`) in place. Returns the new polygonal
+    /// face ID on conversion; returns `None` if the input face is already
+    /// polygonal or has a non-Circle closed curve (Bezier / BSpline /
+    /// NURBS — deferred to future ADR).
+    ///
+    /// ADR-021 P7 + ADR-101 Phase A infrastructure: prerequisite for
+    /// Phase B (coplanar polygon clipping) to operate on closed-curve
+    /// faces. The closed-curve self-loop has a 1-vertex boundary that
+    /// breaks polygon-based intersection algorithms (`positions.len() < 3`
+    /// short-circuit in `prepare_solid` / `split_faces_by_intersections`,
+    /// `operations/boolean.rs`).
+    ///
+    /// Behaviour:
+    ///   - Tessellates the Circle to N points at engine chord tolerance
+    ///     (`radius * 0.01` — LOCKED #40 L1 engine-ops policy, same as
+    ///     `extrude_closed_curve_face_via_tessellation`).
+    ///   - Removes the original closed-curve face.
+    ///   - Cleans up the orphan self-loop edge.
+    ///   - Deactivates the anchor vertex if no other edges reference it
+    ///     (preserves it if it's still in use elsewhere).
+    ///   - Creates a new N-vertex polygonal face with the same material.
+    ///   - Inherits the original face's `surface` (typically Plane) onto
+    ///     the substitute so `face_to_xia` + analytic surface lookups
+    ///     stay coherent.
+    ///
+    /// Note: This is a **destructive in-place rewrite** of the DCEL.
+    /// Callers must update any external references (`face_to_xia`,
+    /// selection sets, etc.) to the new face ID.
+    pub fn polygonize_closed_curve_face(
+        &mut self,
+        face_id: FaceId,
+        material: MaterialId,
+    ) -> Result<Option<FaceId>> {
+        // 0. Detect closed-curve shape — extract Circle params.
+        //    Cloning the curve releases the immutable borrow before we
+        //    mutate later.
+        let (anchor_vid, self_loop_edge_id, center, radius, normal, basis_u, surface_clone) = {
+            let face = match self.faces.get(face_id) {
+                Some(f) if f.is_active() => f,
+                Some(_) => bail!(
+                    "polygonize_closed_curve_face: face {:?} is inactive",
+                    face_id,
+                ),
+                None => bail!(
+                    "polygonize_closed_curve_face: face {:?} not found",
+                    face_id,
+                ),
+            };
+
+            let outer_start = face.outer().start;
+            if outer_start.is_null() {
+                return Ok(None);
+            }
+
+            // Boundary loop with >1 vertex → already polygonal, no-op.
+            let boundary_verts = self.collect_loop_verts(outer_start)?;
+            if boundary_verts.len() != 1 {
+                return Ok(None);
+            }
+
+            // Inspect the outer edge.
+            let edge_id = self.hes[outer_start].edge();
+            let edge = match self.edges.get(edge_id) {
+                Some(e) if e.is_self_loop() => e,
+                _ => return Ok(None),
+            };
+            let curve = match edge.curve() {
+                Some(c) => c.clone(),
+                None => return Ok(None),
+            };
+
+            // Circle-only for ADR-101 Phase A scope. Bezier / BSpline /
+            // NURBS closed curves are out of scope (the lens region of
+            // overlap between two NURBS-class curves needs SSI which is
+            // a separate ADR cross-cut).
+            let (c, r, n, u) = match curve {
+                crate::curves::AnalyticCurve::Circle {
+                    center, radius, normal, basis_u,
+                } => (center, radius, normal, basis_u),
+                _ => return Ok(None),
+            };
+
+            let anchor = edge.v_small();
+            let surface_clone = face.surface().cloned();
+            (anchor, edge_id, c, r, n, u, surface_clone)
+        };
+
+        // 1. Tessellate at engine chord tolerance (LOCKED #40 L1).
+        let chord_tol = (radius * 0.01).max(1e-6);
+        let pts = crate::curves::circle::tessellate_full(
+            center, radius, normal, basis_u, chord_tol,
+        );
+        if pts.len() < 4 {
+            // Degenerate tessellation (chord_tol too large vs radius,
+            // or radius near zero). Return None — the face stays
+            // closed-curve and the caller proceeds as if no-op.
+            return Ok(None);
+        }
+        // tessellate_full returns N+1 closed points (last duplicates
+        // first); drop the duplicate so add_face sees N unique vertices.
+        let unique_pts = &pts[..pts.len() - 1];
+        let tess_verts: Vec<VertId> =
+            unique_pts.iter().map(|p| self.add_vertex(*p)).collect();
+
+        // 2. Remove the original closed-curve face. The self-loop edge
+        //    + anchor remain in the DCEL until we clean them up below.
+        self.remove_face(face_id)?;
+
+        // 3. Cleanup orphan self-loop edge + anchor vertex — pattern
+        //    from `extrude_closed_curve_face_via_tessellation` step 3b
+        //    (ADR-089 A-υ-β). Without this the dangling self-loop still
+        //    renders as a chord polyline overlapping the new polygon.
+        if self.edges.contains(self_loop_edge_id)
+            && self.edges[self_loop_edge_id].is_active()
+        {
+            let _ = self.remove_edge_and_halfedges(self_loop_edge_id);
+        }
+        if self.verts.contains(anchor_vid) && self.verts[anchor_vid].is_active() {
+            if self.verts[anchor_vid].outgoing().is_none() {
+                self.verts[anchor_vid].set_active(false);
+            }
+        }
+
+        // 4. Create polygonal substitute with the same material.
+        let substituted = self.add_face(&tess_verts, material)?;
+
+        // 5. Inherit the original face's surface so face_to_xia +
+        //    analytic surface lookups stay coherent across the rewrite.
+        if let (Some(surface), Some(face_mut)) =
+            (surface_clone, self.faces.get_mut(substituted))
+        {
+            face_mut.set_surface(Some(surface));
+        }
+        Ok(Some(substituted))
+    }
+
     /// Rollback a partially-constructed face after `add_face_with_holes` failure.
     ///
     /// Steps:
@@ -12538,5 +12675,219 @@ mod tests {
         // face 는 inactive — checked_faces 0
         assert_eq!(report.checked_faces, 0,
             "inactive face must be skipped");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-101 Phase A — polygonize_closed_curve_face regressions
+    // ════════════════════════════════════════════════════════════════
+
+    /// Build a Path B Circle face at the given center / radius.
+    fn build_circle_face(
+        mesh: &mut Mesh,
+        center: DVec3,
+        radius: f64,
+    ) -> FaceId {
+        let mat = MaterialId::new(0);
+        let anchor = mesh.add_vertex(center);
+        let circle = crate::curves::AnalyticCurve::Circle {
+            center,
+            radius,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        mesh.add_face_closed_curve(anchor, circle, mat)
+            .expect("Circle face creation")
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_circle_face_happy_path() {
+        // Circle r=5 → polygonize → Some(new_fid). The new face must be
+        // a polygonal N-vert face with N >= 8 (chord_tol radius/100
+        // floor enforced by segment_count_for_arc).
+        let mut mesh = Mesh::new();
+        let circle = build_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let mat = MaterialId::new(0);
+
+        let result = mesh.polygonize_closed_curve_face(circle, mat)
+            .expect("polygonize must not error on valid Circle face");
+        let new_fid = result.expect("Circle must polygonize → Some(new_fid)");
+
+        // Original face is removed (inactive).
+        assert!(
+            !mesh.faces.get(circle)
+                .map(|f| f.is_active())
+                .unwrap_or(false),
+            "original closed-curve face must be inactive after polygonize",
+        );
+
+        // New face is active and polygonal (N >= 8 boundary verts).
+        let new_face = mesh.faces.get(new_fid)
+            .expect("new face must exist");
+        assert!(new_face.is_active(), "new polygon face must be active");
+        let new_loop = mesh.collect_loop_verts(new_face.outer().start)
+            .expect("new face must have a valid outer loop");
+        assert!(
+            new_loop.len() >= 8,
+            "polygonized circle must have >= 8 chord segments (got {})",
+            new_loop.len(),
+        );
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_noop_for_polygonal_face() {
+        // Rect (4-vert polygon) → returns Ok(None), unchanged.
+        let mut mesh = Mesh::new();
+        let rect = build_quad_face(&mut mesh);
+        let mat = MaterialId::new(0);
+        let before_active = mesh.faces[rect].is_active();
+
+        let result = mesh.polygonize_closed_curve_face(rect, mat)
+            .expect("polygonize must not error on polygonal face");
+        assert!(
+            result.is_none(),
+            "polygonal face must return None (was Some({:?}))",
+            result,
+        );
+        assert_eq!(
+            mesh.faces[rect].is_active(),
+            before_active,
+            "polygonal face must be untouched (still active)",
+        );
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_noop_for_non_circle_self_loop() {
+        // Closed Bezier face → Ok(None). The Bezier face must remain
+        // intact; ADR-101 Phase A only handles Circle.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let anchor = mesh.add_vertex(DVec3::ZERO);
+        // Trivial closed Bezier — 3 control points forming a triangle
+        // with cp[0] == cp[last] (closure requirement).
+        let bez = crate::curves::AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
+                DVec3::new(0.5, 1.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+        };
+        let bezier_face = mesh.add_face_closed_curve(anchor, bez, mat)
+            .expect("Bezier closed face creation");
+        let before_active = mesh.faces[bezier_face].is_active();
+
+        let result = mesh.polygonize_closed_curve_face(bezier_face, mat)
+            .expect("polygonize must not error on Bezier face");
+        assert!(
+            result.is_none(),
+            "Bezier closed curve must return None (deferred — Phase A is Circle-only)",
+        );
+        assert_eq!(
+            mesh.faces[bezier_face].is_active(),
+            before_active,
+            "Bezier face must be untouched",
+        );
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_surface_inheritance() {
+        // Circle with Plane surface attached → new polygon inherits
+        // the same Plane variant.
+        let mut mesh = Mesh::new();
+        let circle = build_circle_face(&mut mesh, DVec3::ZERO, 3.0);
+        let plane = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-1e6, 1e6),
+            v_range: (-1e6, 1e6),
+        };
+        mesh.faces.get_mut(circle)
+            .expect("circle face exists")
+            .set_surface(Some(plane));
+
+        let mat = MaterialId::new(0);
+        let new_fid = mesh.polygonize_closed_curve_face(circle, mat)
+            .expect("polygonize OK")
+            .expect("Circle must polygonize");
+
+        let new_face = mesh.faces.get(new_fid)
+            .expect("new face exists");
+        assert!(
+            matches!(
+                new_face.surface(),
+                Some(crate::surfaces::AnalyticSurface::Plane { .. }),
+            ),
+            "Plane surface must be inherited onto the polygonized face",
+        );
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_anchor_deactivated_if_isolated() {
+        // The Circle's anchor vertex has no other edges → must be
+        // deactivated after polygonization so it doesn't render as a
+        // stray dot at the center.
+        let mut mesh = Mesh::new();
+        let circle = build_circle_face(&mut mesh, DVec3::ZERO, 2.0);
+        let mat = MaterialId::new(0);
+
+        // Pre-polygonize: locate the anchor (the single boundary vert).
+        let anchor = {
+            let face = mesh.faces.get(circle).unwrap();
+            let loop_verts = mesh.collect_loop_verts(face.outer().start)
+                .unwrap();
+            assert_eq!(
+                loop_verts.len(), 1,
+                "Path B Circle has a 1-vert boundary loop",
+            );
+            loop_verts[0]
+        };
+
+        let _ = mesh.polygonize_closed_curve_face(circle, mat)
+            .expect("polygonize OK")
+            .expect("must polygonize");
+
+        // Anchor should be inactive — it has no other outgoing edges.
+        assert!(
+            !mesh.verts[anchor].is_active(),
+            "isolated anchor must be deactivated post-polygonize",
+        );
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_invariants_preserved() {
+        // After polygonize the mesh must pass face invariants — no
+        // degenerate normals, no orphan HEs, no non-manifold edges
+        // introduced by the rewrite.
+        let mut mesh = Mesh::new();
+        let circle = build_circle_face(&mut mesh, DVec3::ZERO, 4.0);
+        let mat = MaterialId::new(0);
+        let _ = mesh.polygonize_closed_curve_face(circle, mat)
+            .expect("polygonize OK")
+            .expect("must polygonize");
+
+        let report = mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "post-polygonize mesh must satisfy face invariants — got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn adr101_phase_a_polygonize_inactive_face_errors() {
+        // Passing an inactive face_id must error — not silent no-op,
+        // because that hides programming errors at the caller.
+        let mut mesh = Mesh::new();
+        let circle = build_circle_face(&mut mesh, DVec3::ZERO, 2.0);
+        mesh.remove_face(circle).expect("manual remove for test");
+        let mat = MaterialId::new(0);
+
+        let result = mesh.polygonize_closed_curve_face(circle, mat);
+        assert!(
+            result.is_err(),
+            "polygonize on inactive face must error, got {:?}",
+            result,
+        );
     }
 }
