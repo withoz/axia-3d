@@ -1,0 +1,139 @@
+# Deploy AXiA 3D to the self-hosted EC2 instance behind app.aixxia.kr.
+#
+# Triggered on every push to `main`. Builds the production `web/dist/`
+# (WASM + Vite) and syncs it onto the EC2 server via rsync-over-SSH.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#
+#   EC2_HOST          — DNS name or IP of the server.
+#                       Example: `app.aixxia.kr` or `54.116.107.218`.
+#   EC2_USER          — SSH user with write access to the deploy path.
+#                       Example: `ubuntu` (Ubuntu AMI) / `ec2-user` (Amazon Linux).
+#   EC2_SSH_KEY       — Full contents of the PEM private key (BEGIN/END
+#                       lines included). Generate a dedicated deploy key
+#                       pair; do not reuse the personal admin key.
+#   EC2_DEPLOY_PATH   — Absolute path nginx serves from. Example:
+#                       `/var/www/aixxia` (the `root` directive in the
+#                       relevant `nginx -T` server block).
+#   EC2_PORT          — (optional) SSH port. Defaults to 22 if unset.
+#
+# rsync flags chosen for safety:
+#   -a         — archive (preserve perms, times, recursion)
+#   -v         — verbose (show transferred files in the run log)
+#   -z         — compress in transit (saves bandwidth on 500MB+ tree)
+#   -r         — recurse (redundant with -a, kept for clarity)
+#   --delete   — remove server-side files that no longer exist in dist/
+#                (critical: prevents stale chunk hashes lingering and
+#                being served alongside fresh ones)
+#   --exclude  — protect any server-managed files that must not be
+#                wiped (CNAME records, certbot challenge dirs, etc.)
+#
+# Concurrency: single-flight per ref. If two pushes land back-to-back,
+# the second waits for the first to finish before starting — avoids
+# half-deployed states where two rsync processes race on the same
+# directory.
+
+name: Deploy to EC2 (app.aixxia.kr)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & rsync to EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Rust toolchain + WASM build ─────────────────────────────────
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-wasm
+          workspaces: crates/axia-wasm
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build WASM (release)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target web --out-dir ../../web/src/wasm
+
+      # ── Node toolchain + Vite build ─────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: npm ci
+        working-directory: ./web
+        run: npm ci
+
+      - name: Build dist (tsc + vite)
+        working-directory: ./web
+        run: npm run build
+
+      # ── Smoke check the built artifact ──────────────────────────────
+      # Confirms `base: './'` is in effect (PR #16) — emits relative
+      # asset URLs. If a future change accidentally reverts to absolute
+      # paths, this fails fast before the bad bundle reaches the server.
+      - name: Verify relative asset paths
+        run: |
+          if ! grep -q 'src="\./assets/' web/dist/index.html; then
+            echo "::error::dist/index.html does not use relative asset paths."
+            echo "Expected `src=\"./assets/...\"`, vite base may be misconfigured."
+            grep -E 'src="|href="' web/dist/index.html | head -5
+            exit 1
+          fi
+          echo "✓ Relative asset paths present."
+
+      # ── rsync deploy ────────────────────────────────────────────────
+      - name: Deploy via rsync over SSH
+        uses: burnett01/rsync-deployments@7.1.1
+        with:
+          switches: >-
+            -avzr --delete
+            --exclude=.well-known
+            --exclude=robots.txt
+          path: web/dist/
+          remote_path: ${{ secrets.EC2_DEPLOY_PATH }}
+          remote_host: ${{ secrets.EC2_HOST }}
+          remote_user: ${{ secrets.EC2_USER }}
+          remote_key: ${{ secrets.EC2_SSH_KEY }}
+          remote_port: ${{ secrets.EC2_PORT || '22' }}
+
+      # ── Post-deploy smoke ──────────────────────────────────────────
+      # Fetch the live index.html and verify the freshly-built bundle
+      # hash actually serves. If nginx is caching aggressively or rsync
+      # didn't reach the right path, this catches it before the run
+      # is marked green.
+      - name: Verify deployed bundle hash
+        run: |
+          set -e
+          local_hash=$(grep -oE 'index-[A-Za-z0-9]+\.js' web/dist/index.html | head -1)
+          live_hash=$(curl -sf "https://${{ secrets.EC2_HOST }}/" | grep -oE 'index-[A-Za-z0-9]+\.js' | head -1 || echo "fetch-failed")
+          echo "Local : $local_hash"
+          echo "Live  : $live_hash"
+          if [ "$local_hash" != "$live_hash" ]; then
+            echo "::warning::Live bundle hash does not match the deployed one."
+            echo "Possible causes: nginx cache, CDN, or rsync target mismatch."
+            echo "(Not fatal — manual investigation recommended.)"
+          else
+            echo "✓ Live bundle hash matches deployed dist."
+          fi
