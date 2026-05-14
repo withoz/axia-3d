@@ -742,3 +742,87 @@ export async function hoverOverEdge(
     return screenXY;
   });
 }
+
+/**
+ * Build a sphere primitive via the `create_sphere` bridge entry.
+ *
+ * Visual regression coverage for analytic Sphere surface tessellation:
+ * the renderer's uv-slice + analytic normal pipeline produces a smooth
+ * Gouraud-shaded ball. Any regression of `ANALYTIC_CHORD_TOL` (LOCKED
+ * #40) or `SurfaceOps::tessellate` for Sphere would shift pixels on
+ * the curved silhouette and fail the baseline diff.
+ *
+ * Defaults: r=1000mm, 32×16 segments — same magnitude as setupCylinder
+ * so the sphere reads at a similar screen-space scale at the default
+ * camera distance.
+ */
+export interface SphereHandle {
+  xiaId: number;
+  faceIds: number[];
+}
+
+export async function setupSphere(
+  page: Page,
+  opts: { radius?: number; uSegments?: number; vSegments?: number } = {},
+): Promise<SphereHandle> {
+  const radius = opts.radius ?? 1000;
+  const u = opts.uSegments ?? 32;
+  const v = opts.vSegments ?? 16;
+  return await page.evaluate(
+    ({ radius, u, v }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const bridge = w.__axia.get('bridge');
+      const xiaId: number = bridge.create_sphere(0, 0, 0, radius, u, v);
+      if (xiaId == null || xiaId < 0) {
+        throw new Error(`create_sphere failed: ${xiaId}`);
+      }
+      const faceIds: number[] = bridge.getXiaFaceIds
+        ? bridge.getXiaFaceIds(xiaId)
+        : [];
+      return { xiaId, faceIds };
+    },
+    { radius, u, v },
+  );
+}
+
+/**
+ * Build a cone primitive via the `create_cone` bridge entry.
+ *
+ * Visual regression coverage for analytic Cone surface tessellation
+ * AND the bottom rim's chord polygon — the cone exercises a different
+ * slant of the same `tessellate_face_surface` + uv-slice machinery
+ * that drives Cylinder, so a regression that hits one usually hits
+ * the other.
+ *
+ * Defaults: r=1000mm, h=2000mm, 32 rim segments.
+ */
+export interface ConeHandle {
+  xiaId: number;
+  faceIds: number[];
+}
+
+export async function setupCone(
+  page: Page,
+  opts: { radius?: number; height?: number; segments?: number } = {},
+): Promise<ConeHandle> {
+  const radius = opts.radius ?? 1000;
+  const height = opts.height ?? 2000;
+  const segments = opts.segments ?? 32;
+  return await page.evaluate(
+    ({ radius, height, segments }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const bridge = w.__axia.get('bridge');
+      const xiaId: number = bridge.create_cone(0, 0, 0, radius, height, segments);
+      if (xiaId == null || xiaId < 0) {
+        throw new Error(`create_cone failed: ${xiaId}`);
+      }
+      const faceIds: number[] = bridge.getXiaFaceIds
+        ? bridge.getXiaFaceIds(xiaId)
+        : [];
+      return { xiaId, faceIds };
+    },
+    { radius, height, segments },
+  );
+}
