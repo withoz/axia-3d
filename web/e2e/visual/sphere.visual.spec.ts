@@ -37,7 +37,7 @@ import {
 // `Update Visual Baselines (Linux)` workflow_dispatch run produces
 // `sphere-default-3d-chromium-linux.png` and it is committed in the
 // follow-up step of this same PR.
-test.describe.skip('LOCKED #40 — Sphere surface tessellation visual contract', () => {
+test.describe('LOCKED #40 — Sphere surface tessellation visual contract', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBridgeReady(page);

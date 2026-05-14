@@ -34,7 +34,7 @@ import {
 // 2026-05-14 SKIP — baselines not yet generated. Re-enable after the
 // `Update Visual Baselines (Linux)` workflow_dispatch run produces
 // the `cone-*-chromium-linux.png` artifacts.
-test.describe.skip('LOCKED #40 — Cone primitive visual contract', () => {
+test.describe('LOCKED #40 — Cone primitive visual contract', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBridgeReady(page);
