@@ -1834,6 +1834,32 @@ impl Scene {
     /// intersect 에서 draw 의 기존 transaction 안에 병합). 사용자는 일반적
     /// 으로 `intersect_faces_with_scene` 를 쓰면 된다.
     pub fn intersect_faces_inner(&mut self, face_ids: &[FaceId]) -> anyhow::Result<usize> {
+        // Local helper — see B-4 MVP scope guard below.
+        fn is_path_b_closed_curve(mesh: &Mesh, fid: FaceId) -> bool {
+            let face = match mesh.faces.get(fid) {
+                Some(f) if f.is_active() => f,
+                _ => return false,
+            };
+            let outer_start = face.outer().start;
+            if outer_start.is_null() { return false; }
+            // Path B canonical form: 1 boundary vert + 1 self-loop edge.
+            let verts = match mesh.collect_loop_verts(outer_start) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            if verts.len() != 1 { return false; }
+            let edge_id = mesh.hes[outer_start].edge();
+            mesh.edges.get(edge_id).map(|e| e.is_self_loop()).unwrap_or(false)
+        }
+        // Shadow the outer function body to use the helper.
+        Self::intersect_faces_inner_impl(self, face_ids, is_path_b_closed_curve)
+    }
+
+    fn intersect_faces_inner_impl(
+        &mut self,
+        face_ids: &[FaceId],
+        is_path_b_closed_curve: fn(&Mesh, FaceId) -> bool,
+    ) -> anyhow::Result<usize> {
         if face_ids.is_empty() { return Ok(0); }
 
         // 원본 face 의 XIA 매핑 보존 (분할 후 승계용)
@@ -1905,8 +1931,128 @@ impl Scene {
             }
         }
 
+        // ── ADR-101 §B-4 — Coplanar partial-overlap auto-split ──
+        //
+        // The 3D triangle-triangle pipeline above does NOT handle coplanar
+        // face pairs (coplanar triangles produce no 3D intersection — ADR-
+        // 101 §3 architectural limitation). For ADR-101 §2 canonical user
+        // trigger ("두 원 partial overlap → 3 sub-face"), scan each just-
+        // drawn face against existing actives and call auto_intersect_
+        // coplanar on matching convex coplanar pairs.
+        //
+        // Lock-ins (ADR-101 §B-4):
+        //   L-B4-1 New-face-only entry point (intersect_faces_inner is
+        //          called by Draw commands; Push/Pull etc. unaffected
+        //          unless caller opts in).
+        //   L-B4-2 N×M scan over face_ids × others (fine for typical 2D
+        //          sketching, N,M ≤ 100). Optimization deferred.
+        //   L-B4-3 First match per face_id only (no cascading).
+        //   L-B4-4 Silent skip on Err (non-coplanar / non-convex pairs
+        //          are common — they are NOT errors, just no-op for
+        //          coplanar handling).
+        //   L-B4-5 XIA inheritance per ADR-101 L-B1-4a (deterministic
+        //          min-FaceId for lens).
+        let mut b4_split_count = 0usize;
+        for &fid in face_ids {
+            if !self.mesh.faces.contains(fid) || !self.mesh.faces[fid].is_active() {
+                continue;
+            }
+            // Snapshot candidate face IDs (avoid borrow checker conflict
+            // with the mutating `auto_intersect_coplanar` call).
+            let candidates: Vec<FaceId> = self
+                .mesh
+                .faces
+                .iter()
+                .filter(|(other_id, face)| {
+                    face.is_active() && *other_id != fid && !face_ids.contains(other_id)
+                })
+                .map(|(id, _)| id)
+                .collect();
+
+            for other_fid in candidates {
+                if !self.mesh.faces.contains(fid) || !self.mesh.faces[fid].is_active() {
+                    break;
+                }
+                if !self.mesh.faces.contains(other_fid)
+                    || !self.mesh.faces[other_fid].is_active()
+                {
+                    continue;
+                }
+
+                // ── B-4 MVP scope guard ──
+                //
+                // `auto_intersect_coplanar` calls `polygonize_closed_curve_
+                // face` *speculatively* (before confirming partial overlap),
+                // which destructively converts Path B closed-curve faces
+                // (1 anchor + 1 self-loop edge) to polygonal even when no
+                // overlap exists. To preserve the kernel-native Path B
+                // representation (LOCKED #34 K-ε, ADR-089), B-4 MVP skips
+                // any pair where either face is Path B closed-curve. Path
+                // B circle × circle auto-intersect is deferred to B-4b,
+                // which will add a non-destructive pre-check (AABB +
+                // analytic curve overlap test).
+                if is_path_b_closed_curve(&self.mesh, fid)
+                    || is_path_b_closed_curve(&self.mesh, other_fid)
+                {
+                    continue;
+                }
+
+                // Snapshot XIA links BEFORE the call — auto_intersect_
+                // coplanar removes the originals.
+                let xia_a = self.face_to_xia.get(&fid).copied();
+                let xia_b = self.face_to_xia.get(&other_fid).copied();
+
+                match axia_geo::operations::coplanar::auto_intersect_coplanar(
+                    &mut self.mesh,
+                    fid,
+                    other_fid,
+                    FORM_MATERIAL,
+                ) {
+                    Ok(Some(split)) => {
+                        // Unregister originals' XIA links.
+                        self.unregister_face_from_xia(fid);
+                        self.unregister_face_from_xia(other_fid);
+
+                        // ADR-101 L-B1-4a (revised): deterministic min-
+                        // FaceId for lens XIA inheritance.
+                        let lens_xia = if fid.raw() < other_fid.raw() { xia_a } else { xia_b };
+
+                        if let Some(x) = xia_a {
+                            self.register_faces_to_xia(x, &[split.face_a_only]);
+                            if let Some(xia) = self.xias.get_mut(&x) {
+                                if !xia.face_ids.contains(&split.face_a_only) {
+                                    xia.face_ids.push(split.face_a_only);
+                                }
+                            }
+                        }
+                        if let Some(x) = xia_b {
+                            self.register_faces_to_xia(x, &[split.face_b_only]);
+                            if let Some(xia) = self.xias.get_mut(&x) {
+                                if !xia.face_ids.contains(&split.face_b_only) {
+                                    xia.face_ids.push(split.face_b_only);
+                                }
+                            }
+                        }
+                        if let Some(x) = lens_xia {
+                            self.register_faces_to_xia(x, &[split.lens]);
+                            if let Some(xia) = self.xias.get_mut(&x) {
+                                if !xia.face_ids.contains(&split.lens) {
+                                    xia.face_ids.push(split.lens);
+                                }
+                            }
+                        }
+
+                        b4_split_count += 3;
+                        break; // L-B4-3 first match per fid
+                    }
+                    Ok(None) => continue, // no partial overlap (disjoint / containment)
+                    Err(_) => continue,   // L-B4-4 silent skip (non-coplanar / non-convex)
+                }
+            }
+        }
+
         // 모든 활성 face 수 반환 (호출자 디버그용)
-        Ok(result_faces.len())
+        Ok(result_faces.len() + b4_split_count)
     }
 
     /// Compute the set of boundary edges for a XIA (from its face_ids).
@@ -14129,6 +14275,185 @@ mod tests {
         assert!(layered.normal.is_none());
         assert!(layered.roughness.is_none());
         assert!(layered.metallic.is_none());
+    }
+
+    // ── ADR-101 §B-4 — Auto-intersect on draw (coplanar partial overlap) ──
+
+    /// Two coplanar partial-overlapping RECTs drawn sequentially → 3
+    /// sub-faces automatically (no explicit auto_intersect_coplanar call).
+    /// The user-facing trigger of ADR-101 §2.
+    #[test]
+    fn adr101_b4_two_rects_partial_overlap_auto_splits() {
+        let mut scene = Scene::new();
+        // Disable other auto-cleanup that might interfere with the test.
+        // (auto_intersect_on_draw is default true.)
+        assert!(scene.auto_intersect_on_draw, "default ON");
+
+        // Draw rect A: center (5, 5), 10×10 → footprint [0,0]–[10,10].
+        let result_a = scene.execute(Command::DrawRect {
+            center: DVec3::new(5.0, 5.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            up: DVec3::new(0.0, 1.0, 0.0),
+            width: 10.0,
+            height: 10.0,
+        });
+        let xia_a = match result_a {
+            CommandResult::EntityCreated(id) => id,
+            other => panic!("DrawRect A: expected EntityCreated, got {:?}", other),
+        };
+
+        let active_after_a = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after_a, 1, "after rect A: 1 active face");
+
+        // Draw rect B: center (10, 10), 10×10 → footprint [5,5]–[15,15].
+        // Partial overlap with rect A → lens region [5,5]–[10,10].
+        let result_b = scene.execute(Command::DrawRect {
+            center: DVec3::new(10.0, 10.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            up: DVec3::new(0.0, 1.0, 0.0),
+            width: 10.0,
+            height: 10.0,
+        });
+        let xia_b = match result_b {
+            CommandResult::EntityCreated(id) => id,
+            other => panic!("DrawRect B: expected EntityCreated, got {:?}", other),
+        };
+
+        // After auto-intersect: 3 active faces (face_a_only L-shape +
+        // face_b_only L-shape + lens square).
+        let active_after_b = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after_b, 3,
+            "ADR-101 §2 trigger: 3 sub-faces expected, got {}", active_after_b);
+
+        // Both XIAs still alive — XIA inheritance to the sub-faces.
+        assert!(scene.xias.contains_key(&xia_a));
+        assert!(scene.xias.contains_key(&xia_b));
+
+        // Manifold invariants preserved.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-auto-split mesh must satisfy invariants — got {:?}",
+            report.violations);
+    }
+
+    /// Two disjoint coplanar RECTs → NO auto-split. Both retain their
+    /// face. L-B4-3 no-op for disjoint.
+    #[test]
+    fn adr101_b4_disjoint_rects_no_split() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            up: DVec3::new(0.0, 1.0, 0.0),
+            width: 2.0,
+            height: 2.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(10.0, 10.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            up: DVec3::new(0.0, 1.0, 0.0),
+            width: 2.0,
+            height: 2.0,
+        });
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active, 2, "disjoint → no split, 2 active faces");
+    }
+
+    /// Non-coplanar RECTs (perpendicular planes) → NO coplanar split.
+    /// L-B4-4 silent skip for non-coplanar.
+    #[test]
+    fn adr101_b4_non_coplanar_rects_no_split() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0), // XY plane
+            up: DVec3::new(0.0, 1.0, 0.0),
+            width: 10.0,
+            height: 10.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(0.0, 0.0, 5.0),
+            normal: DVec3::new(1.0, 0.0, 0.0), // YZ plane (perpendicular)
+            up: DVec3::new(0.0, 1.0, 0.0),
+            width: 10.0,
+            height: 10.0,
+        });
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        // Non-coplanar pair → coplanar handler skips. May or may not
+        // produce splits via 3D triangle-triangle, but neither face
+        // should be split by COPLANAR handler. Just verify it doesn't
+        // crash + invariants preserved.
+        assert!(active >= 1);
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "non-coplanar mesh must satisfy invariants — got {:?}",
+            report.violations);
+    }
+
+    /// auto_intersect_on_draw flag = false → coplanar branch skipped.
+    /// Uses circles because RECT × RECT partial overlap would be split
+    /// by face synthesis postprocess (P7 closed-cycle detection) even
+    /// without auto_intersect — circles' polygonized boundaries don't
+    /// spatial-dedup with each other, so they ONLY get split via the
+    /// B-4 coplanar pipeline.
+    #[test]
+    fn adr101_b4_disabled_flag_skips_split() {
+        let mut scene = Scene::new();
+        scene.auto_intersect_on_draw = false; // disable
+
+        scene.execute(Command::DrawCircle {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            radius: 5.0,
+            segments: 32,
+        });
+        scene.execute(Command::DrawCircle {
+            center: DVec3::new(6.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            radius: 5.0,
+            segments: 32,
+        });
+        // With flag off, no auto-intersect is run. The 2 circles remain
+        // as 2 separate (overlapping) faces.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active, 2,
+            "flag off → no auto-split, 2 overlapping circles, got {}", active);
+    }
+
+    /// Two coplanar Circle × Circle partial overlap → 3 sub-faces
+    /// automatically (the ADR-101 §2 user-facing canonical trigger).
+    #[test]
+    fn adr101_b4_two_circles_partial_overlap_auto_splits() {
+        let mut scene = Scene::new();
+        // Circle A: center origin, radius 5, 32 segments (polygonized).
+        scene.execute(Command::DrawCircle {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            radius: 5.0,
+            segments: 32,
+        });
+        // Circle B: center (6, 0), radius 5 → partial overlap, lens
+        // exists.
+        scene.execute(Command::DrawCircle {
+            center: DVec3::new(6.0, 0.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            radius: 5.0,
+            segments: 32,
+        });
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active, 3,
+            "two circles partial overlap → 3 sub-faces, got {}", active);
+
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-auto-split circle mesh must satisfy invariants — got {:?}",
+            report.violations);
     }
 
     #[test]

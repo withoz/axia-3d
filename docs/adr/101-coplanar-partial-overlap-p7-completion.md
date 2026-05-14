@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **In Progress** — Phase A landed (PR #25) / B-1 decision (PR #26) / B-2 primitive (PR #27) / B-3a utility (PR #28) / B-3b MVP RECT (PR #29) / B-3c orphan cleanup + Path B Circle × Circle activated (본 amendment) |
+| Status | **User-facing trigger ACTIVE (polygonal-only)** — Phase A (PR #25) / B-1 (#26) / B-2 (#27) / B-3a (#28) / B-3b (#29) / B-3c (#30) / B-4 MVP Scene wiring (본 amendment, Path B circle deferred to B-4b) |
 | Date | 2026-05-14 |
 | Supersedes | — |
 | Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
@@ -428,3 +428,101 @@ Total area `A + B − lens = 78.5 + 78.5 − 21.79 = 135.21` matches `A\lens + B
 - **L2 Algorithm gaps surface in non-canonical input** — RECT test passed because it had a structurally simpler relationship between base verts and lens verts. Circle test exposed the "base vert on lens boundary" case naturally.
 - **L3 Pure utility extraction enables targeted fixes** (ADR-091 §E L4) — B-3a's `polygon_difference_walking` being a pure function meant the start_idx fix was local + immediately testable in isolation.
 - **L4 Debug output guides root cause** — single `eprintln!` of polygon signed areas revealed `a_only = -0.000000` instantly, pointing to a degenerate-polygon source.
+
+---
+
+## Amendment 6 — Phase B-4 MVP: Auto-intersect on Draw (Scene wiring, 2026-05-14)
+
+### B-4 implementation summary
+
+**Scene-layer auto-trigger** — `Scene::intersect_faces_inner` extended with coplanar partial-overlap branch. The existing 3D triangle-triangle pipeline (ADR-101 §3 limitation: coplanar pairs produce no 3D intersection) is now followed by a coplanar scan that calls `auto_intersect_coplanar` on each matching pair.
+
+### Wiring
+
+`Scene::exec_draw_*` already called `intersect_faces_inner(&face_ids)` when `auto_intersect_on_draw=true` (default). No new exec entry points; the change is purely additive inside `intersect_faces_inner`.
+
+```
+exec_draw_rect / circle / line (or AsShape variants)
+  → check auto_intersect_on_draw flag
+  → if true: intersect_faces_inner(&face_ids)
+              ├─ XIA backup snapshot
+              ├─ Existing 3D pipeline (intersect_faces_with_model)
+              ├─ Existing XIA inheritance for 3D split results
+              └─ NEW: coplanar scan (B-4)
+                   for fid in face_ids:
+                     for other_fid in active_others (NOT in face_ids):
+                       if either is Path B closed-curve → skip (deferred to B-4b)
+                       try auto_intersect_coplanar(fid, other_fid)
+                       Ok(Some(split)) → XIA inheritance + break
+                       Ok(None) → no overlap, continue
+                       Err(_) → silent skip (non-coplanar/non-convex)
+```
+
+### Lock-ins (canonical for B-4)
+
+- **L-B4-1** Entry point = `intersect_faces_inner` only (called by Draw via existing flag). Push/Pull / Boolean / Erase unaffected unless they call this method.
+- **L-B4-2** N×M scan over `face_ids × others`. Fine for typical 2D sketching (N,M ≤ 100). Optimization deferred.
+- **L-B4-3** First match per `face_id` (no cascading). After first coplanar split, move to next `face_id`.
+- **L-B4-4** Silent skip on `Err` from `auto_intersect_coplanar` — non-coplanar / non-convex inputs are NOT errors here, just no-op.
+- **L-B4-5** XIA inheritance per ADR-101 L-B1-4a:
+  - `face_a_only` inherits `face_a.xia`
+  - `face_b_only` inherits `face_b.xia`
+  - `lens` inherits `min(face_a_id, face_b_id).xia` (deterministic — order-independent under undo/redo)
+- **L-B4-6 (MVP scope guard)** Path B closed-curve faces (1 anchor + 1 self-loop edge with `AnalyticCurve::Circle`) are SKIPPED in B-4 MVP. Reason: `auto_intersect_coplanar` calls `polygonize_closed_curve_face` speculatively (before confirming partial overlap), which destructively converts Path B → polygonal even for disjoint pairs. Activated in B-4b with a non-destructive pre-check.
+
+### Lesson — speculative mutation side-effect (canonical)
+
+The pre-existing test `adr089_a_zeta_4_kernel_native_and_legacy_coexist` regressed after B-4 wiring. Trigger:
+
+1. User draws kernel-native circle A at (20, 0, 0) radius 3 (1 self-loop edge).
+2. User draws legacy polygonized circle B at origin radius 5 (24 segments).
+3. B-4 scan tries `auto_intersect_coplanar(A, B)`.
+4. `auto_intersect_coplanar` step 0 polygonizes BOTH A and B (Phase A helper).
+5. `coplanar_intersection_segments` returns 0 crossings (disjoint at distance 20).
+6. `auto_intersect_coplanar` returns `Ok(None)`.
+7. **But A is now polygonal** — the self-loop edge is destroyed.
+
+**Resolution (B-4 MVP)**: scope guard `is_path_b_closed_curve(fid)` skip — preserves kernel-native invariant.
+
+**Resolution (B-4b future)**: lift the polygonization side-effect out of `auto_intersect_coplanar` by adding a non-destructive pre-check (AABB overlap test using AnalyticCurve metadata before any mutation).
+
+### Canonical generalization
+
+Algorithms that perform speculative mutation followed by a "did it apply?" check leak side-effects in the no-op case. The discipline: **check first, mutate second**. Future ADR-101 work on Path B integration must apply this principle.
+
+### 회귀 누적
+
+- axia-core: 285 → **290 PASS** (+5, 절대 #[ignore] 금지 5/5 준수)
+  - `two_rects_partial_overlap_auto_splits` (ADR-101 §2 user trigger, RECT version)
+  - `two_circles_partial_overlap_auto_splits` (Circle via Command::DrawCircle legacy polygonized — NOT Path B, so B-4 MVP scope applies)
+  - `disjoint_rects_no_split` (Ok(None) → no mutation)
+  - `non_coplanar_rects_no_split` (silent skip)
+  - `disabled_flag_skips_split` (auto_intersect_on_draw=false guard)
+- axia-geo: 1290 PASS (no changes)
+- 0 regression on baseline
+
+### User-facing state
+
+**Working (B-4 MVP)**:
+- DrawRectAsShape × DrawRectAsShape partial overlap → auto 3 sub-faces ✓
+- Command::DrawCircle (legacy polygonized) × DrawCircle partial overlap → auto 3 sub-faces ✓
+- Disjoint / containment / non-coplanar / non-convex → silent no-op ✓
+- `auto_intersect_on_draw=false` → coplanar scan skipped ✓
+- Manifold invariants preserved ✓
+
+**Deferred (B-4b)**:
+- DrawCircleAsCurve (kernel-native Path B circle) — requires non-destructive pre-check.
+
+### Updated B sub-step roadmap
+
+| Sub-step | Status | Scope |
+|---|---|---|
+| B-1 | ✅ PR #26 | Algorithm decision |
+| B-2 | ✅ PR #27 | `coplanar_intersection_segments` |
+| B-3a | ✅ PR #28 | `polygon_difference_walking` |
+| B-3b | ✅ PR #29 | `auto_intersect_coplanar` RECT MVP |
+| B-3c | ✅ PR #30 | Orphan cleanup + Path B circle (engine layer) |
+| **B-4** | ✅ **본 amendment** | Scene wiring (polygonal MVP) |
+| B-4b | 🔄 next | Non-destructive pre-check → Path B at Scene layer |
+| B-5 | 🔄 | 회귀 sweep matrix (+16 tests) |
+| B-6 | 🔄 | 사용자 시연 + closure |
