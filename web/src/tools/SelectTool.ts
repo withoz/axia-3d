@@ -33,58 +33,91 @@ export class SelectTool implements ITool {
   }
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
-    // Face/Edge selection (click on object)
-    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
+    // ── 우선순위: Vertex (가장 작은 타겟, 가장 정확) → Edge → Face ──
+    // CAD UX 정합. 화면에서 큰 면이 항상 작은 점을 가리는 기존 거꾸로된
+    // 우선순위 (face → edge, vertex 없음) 를 reverse.
+    //
+    // Vertex pick 은 화면 좌표 ~10px threshold 안에서 가장 가까운 mesh
+    // vertex 를 찾고, 그 vertex 가 속한 한 face 를 선택 (handleClick).
+    // 새 vertex 선택 entity 는 만들지 않고 Quick fix 로 face 선택을 대체.
 
+    // 1순위: Vertex
+    const buffers = this.ctx.bridge.getMeshBuffers();
+    if (buffers && buffers.positions.length > 0 && buffers.indices.length > 0) {
+      const vHit = this.ctx.viewport.pickVertex(
+        e.clientX, e.clientY,
+        buffers.positions, buffers.indices,
+      );
+      if (vHit) {
+        const fid = this.ctx.getFaceId(vHit.faceIndex);
+        debugLog('[HIT vertex]', 'faceId=', fid, 'pos=', vHit.position);
+        // Vertex hit 도 multi-click counter 갱신 (face 와 통일)
+        this.applyFaceClick(fid, e.shiftKey, e.ctrlKey);
+        return;
+      }
+    }
+
+    // 2순위: Edge
+    const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
+    if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
+      const segIndex = Math.floor(edgeHit.index / 2);
+      const edgeId = this.ctx.edgeMap[segIndex];
+      if (edgeId != null) {
+        debugLog('[HIT edge]', 'edgeId=', edgeId);
+        this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey);
+        // Edge hit 은 face multi-click counter 리셋
+        this.clickCount = 0;
+        this.lastClickFaceId = -1;
+        return;
+      }
+    }
+
+    // 3순위: Face (raycast)
+    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
     if (hit && hit.faceIndex != null && hit.faceIndex !== undefined) {
       const fid = this.ctx.getFaceId(hit.faceIndex);
-      debugLog('[HIT] faceId=', fid, 'triIndex=', hit.faceIndex);
+      debugLog('[HIT face]', 'faceId=', fid, 'triIndex=', hit.faceIndex);
+      this.applyFaceClick(fid, e.shiftKey, e.ctrlKey);
+      return;
+    }
 
-      // ── Multi-click detection ──
-      if (fid === this.lastClickFaceId) {
-        this.clickCount++;
-      } else {
-        this.clickCount = 1;
-        this.lastClickFaceId = fid;
-      }
+    // 모두 miss → drag-select 시작 + multi-click 리셋
+    this.clickCount = 0;
+    this.lastClickFaceId = -1;
+    this.dragSelectStart = { x: e.clientX, y: e.clientY };
+    this.isDragSelecting = false;
+  }
 
-      if (this.clickTimer) clearTimeout(this.clickTimer);
-      this.clickTimer = setTimeout(() => {
-        this.clickCount = 0;
-        this.lastClickFaceId = -1;
-      }, this.MULTI_CLICK_DELAY);
-
-      if (this.clickCount >= 3) {
-        // ── Triple-click: 연결된 전체 면 선택 (SketchUp 스타일) ──
-        debugLog('[SelectTool] Triple-click → selectAll from face', fid);
-        this.ctx.selection.selectAll(fid);
-        this.clickCount = 0;
-        this.lastClickFaceId = -1;
-      } else if (this.clickCount === 2) {
-        // ── Double-click: face + 인접 edge 선택 ──
-        debugLog('[SelectTool] Double-click → face + adjacent edges', fid);
-        this.ctx.selection.handleClick(fid, false, false);
-        this.ctx.selection.selectAdjacentEdges(fid);
-      } else {
-        // ── Single-click ──
-        this.ctx.selection.handleClick(fid, e.shiftKey, e.ctrlKey);
-      }
+  /** Face 선택 + multi-click (single / double / triple) 처리 — vertex /
+   *  face hit 양쪽 경로에서 공유. */
+  private applyFaceClick(fid: number, shift: boolean, ctrl: boolean): void {
+    if (fid === this.lastClickFaceId) {
+      this.clickCount++;
     } else {
-      // Face miss → try edge
-      const edgeHit = this.ctx.viewport.pickEdge(e.clientX, e.clientY);
-      if (edgeHit && edgeHit.index != null && this.ctx.edgeMap) {
-        const segIndex = Math.floor(edgeHit.index / 2);
-        const edgeId = this.ctx.edgeMap[segIndex];
-        if (edgeId != null) {
-          this.ctx.selection.handleEdgeClick(edgeId, e.shiftKey, e.ctrlKey);
-        }
-      } else {
-        // Empty space → start drag-select + reset multi-click
-        this.clickCount = 0;
-        this.lastClickFaceId = -1;
-        this.dragSelectStart = { x: e.clientX, y: e.clientY };
-        this.isDragSelecting = false;
-      }
+      this.clickCount = 1;
+      this.lastClickFaceId = fid;
+    }
+
+    if (this.clickTimer) clearTimeout(this.clickTimer);
+    this.clickTimer = setTimeout(() => {
+      this.clickCount = 0;
+      this.lastClickFaceId = -1;
+    }, this.MULTI_CLICK_DELAY);
+
+    if (this.clickCount >= 3) {
+      // ── Triple-click: 연결된 전체 면 선택 (SketchUp 스타일) ──
+      debugLog('[SelectTool] Triple-click → selectAll from face', fid);
+      this.ctx.selection.selectAll(fid);
+      this.clickCount = 0;
+      this.lastClickFaceId = -1;
+    } else if (this.clickCount === 2) {
+      // ── Double-click: face + 인접 edge 선택 ──
+      debugLog('[SelectTool] Double-click → face + adjacent edges', fid);
+      this.ctx.selection.handleClick(fid, false, false);
+      this.ctx.selection.selectAdjacentEdges(fid);
+    } else {
+      // ── Single-click ──
+      this.ctx.selection.handleClick(fid, shift, ctrl);
     }
   }
 

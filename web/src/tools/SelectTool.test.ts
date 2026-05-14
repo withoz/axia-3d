@@ -15,6 +15,7 @@ function mockToolContext() {
     viewport: {
       pick: vi.fn().mockReturnValue(null),
       pickEdge: vi.fn().mockReturnValue(null),
+      pickVertex: vi.fn().mockReturnValue(null),
       container,
       activeCamera: new THREE.PerspectiveCamera(),
       renderer: {
@@ -164,6 +165,106 @@ describe('SelectTool', () => {
 
     it('deactivate cleans up', () => {
       expect(() => tool.onDeactivate()).not.toThrow();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Pick priority — Quick fix (vertex → edge → face)
+  // CAD UX 정합: 점이 가장 작은 타겟이지만 가장 정확하므로 1순위.
+  // 면 / edge 가 vertex 영역을 가려서는 안 됨.
+  // ────────────────────────────────────────────────────────────────────
+
+  describe('pick priority — vertex first', () => {
+    function setupBuffers() {
+      ctx.bridge.getMeshBuffers.mockReturnValue({
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        normals: new Float32Array(9),
+        indices: new Uint32Array([0, 1, 2]),
+        faceMap: new Uint32Array([0]),
+      });
+    }
+
+    it('vertex hit pre-empts face hit (vertex 우선)', () => {
+      setupBuffers();
+      // vertex pick succeeds at faceIndex 0
+      ctx.viewport.pickVertex.mockReturnValue({
+        position: new THREE.Vector3(0, 0, 0),
+        faceIndex: 0,
+      });
+      // face pick would also succeed (different faceIndex), but should NOT be called
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 99 });
+      ctx.getFaceId.mockImplementation((idx: number) => idx + 100); // distinguishable
+
+      tool.onMouseDown(
+        { clientX: 50, clientY: 50, shiftKey: false, ctrlKey: false } as MouseEvent,
+        null,
+      );
+
+      // vertex.faceIndex=0 → faceId=100, NOT face.faceIndex=99 → faceId=199
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(100, false, false);
+      expect(ctx.viewport.pickVertex).toHaveBeenCalled();
+      expect(ctx.viewport.pickEdge).not.toHaveBeenCalled();
+      expect(ctx.viewport.pick).not.toHaveBeenCalled();
+    });
+
+    it('vertex miss → edge tried next', () => {
+      setupBuffers();
+      ctx.viewport.pickVertex.mockReturnValue(null);
+      ctx.viewport.pickEdge.mockReturnValue({ index: 2 }); // segment 1 → edgeMap[1]=20
+
+      tool.onMouseDown(
+        { clientX: 50, clientY: 50, shiftKey: false, ctrlKey: false } as MouseEvent,
+        null,
+      );
+
+      expect(ctx.viewport.pickVertex).toHaveBeenCalled();
+      expect(ctx.selection.handleEdgeClick).toHaveBeenCalledWith(20, false, false);
+      expect(ctx.viewport.pick).not.toHaveBeenCalled();
+    });
+
+    it('vertex + edge miss → face tried last', () => {
+      setupBuffers();
+      ctx.viewport.pickVertex.mockReturnValue(null);
+      ctx.viewport.pickEdge.mockReturnValue(null);
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 7 });
+
+      tool.onMouseDown(
+        { clientX: 50, clientY: 50, shiftKey: false, ctrlKey: false } as MouseEvent,
+        null,
+      );
+
+      expect(ctx.viewport.pickVertex).toHaveBeenCalled();
+      expect(ctx.viewport.pickEdge).toHaveBeenCalled();
+      expect(ctx.viewport.pick).toHaveBeenCalled();
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false);
+    });
+
+    it('null buffers skips vertex pick (graceful fallback)', () => {
+      // buffers = null → pickVertex 호출 자체 skip
+      ctx.bridge.getMeshBuffers.mockReturnValue(null);
+      ctx.viewport.pick.mockReturnValue({ faceIndex: 2 });
+
+      tool.onMouseDown(
+        { clientX: 50, clientY: 50, shiftKey: false, ctrlKey: false } as MouseEvent,
+        null,
+      );
+
+      expect(ctx.viewport.pickVertex).not.toHaveBeenCalled();
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, false, false);
+    });
+
+    it('vertex hit propagates shift/ctrl modifiers', () => {
+      setupBuffers();
+      ctx.viewport.pickVertex.mockReturnValue({
+        position: new THREE.Vector3(0, 0, 0),
+        faceIndex: 0,
+      });
+
+      tool.onMouseDown(
+        { clientX: 50, clientY: 50, shiftKey: true, ctrlKey: true } as MouseEvent,
+        null,
+      );
+      expect(ctx.selection.handleClick).toHaveBeenCalledWith(5, true, true);
     });
   });
 });

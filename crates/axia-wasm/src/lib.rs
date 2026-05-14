@@ -489,6 +489,16 @@ impl AxiaEngine {
     /// Push/Pull a face along its normal.
     /// dist > 0 = extrude outward (face kept)
     /// dist < 0 = recess inward  (face removed)
+    /// Drawing 직후 auto-intersect 수행 여부 설정 (기본 true).
+    pub fn set_auto_intersect_on_draw(&mut self, on: bool) {
+        self.scene.auto_intersect_on_draw = on;
+    }
+
+    /// 현재 auto_intersect_on_draw 설정 조회.
+    pub fn get_auto_intersect_on_draw(&self) -> bool {
+        self.scene.auto_intersect_on_draw
+    }
+
     pub fn push_pull(
         &mut self,
         face_id_raw: u32,

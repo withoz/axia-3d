@@ -6,6 +6,7 @@ pub mod draw;
 pub mod orient;
 pub mod push_pull;
 pub mod boolean_geo;
+pub mod auto_intersect;
 pub mod boolean;
 pub mod transform;
 pub mod offset;

@@ -1036,6 +1036,88 @@ export class Viewport {
     return frontHit || hits[0];
   }
 
+  /** Vertex pick — screen-space proximity to mesh vertices.
+   *
+   *  CAD/SketchUp UX 정합: 점은 화면에서 가장 작은 타겟이지만 가장 정확하므로
+   *  Select / Snap 우선순위에서 1 등이어야 한다. 본 메서드는 mesh 의 모든
+   *  **고유 vertex 위치** 를 화면 좌표로 투영해 클릭 위치와 가장 가까운
+   *  vertex 를 threshold 안에서 찾는다.
+   *
+   *  Threshold (px): 카메라 거리에 무관한 고정 ~10px (화면 픽셀). pickEdge
+   *  의 dynamic threshold 와 달리 vertex 는 단일 점이라 시각적 hit 영역도
+   *  화면 단위로 일정해야 자연스럽다.
+   *
+   *  반환:
+   *  - `null` — threshold 안에 vertex 없음
+   *  - `{ position, faceIndex }` — 가장 가까운 vertex 의 3D 좌표 +
+   *    그 vertex 가 속한 한 face 의 triangle index (SelectTool 이
+   *    `getFaceId(faceIndex)` 로 face id 를 얻어 handleClick 에 넘긴다).
+   *
+   *  내부 구현:
+   *  - mesh buffers 의 indices 를 순회하며 각 삼각형의 3 vertex 를 모두 검사
+   *  - 같은 좌표의 vertex 가 여러 face 에 공유돼도 첫 번째 face 의
+   *    triangle index 를 반환 (선택 우선순위 결정론적)
+   *  - 거리 비교는 2D screen distance squared (sqrt 회피)
+   */
+  pickVertex(
+    screenX: number,
+    screenY: number,
+    positions: Float32Array,
+    indices: Uint32Array,
+    thresholdPx: number = 10,
+  ): { position: THREE.Vector3; faceIndex: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const mouseX = screenX - rect.left;
+    const mouseY = screenY - rect.top;
+    const cam = this.activeCamera as THREE.PerspectiveCamera;
+
+    // 화면 단위 → NDC scale (≈1px = 2/width NDC)
+    const thresholdSq = thresholdPx * thresholdPx;
+
+    let bestDistSq = Infinity;
+    let bestVertIdx = -1;
+    let bestFaceIndex = -1;
+
+    const v = new THREE.Vector3();
+
+    for (let tri = 0; tri * 3 + 2 < indices.length; tri++) {
+      const base = tri * 3;
+      for (let j = 0; j < 3; j++) {
+        const vidx = indices[base + j];
+        const pBase = vidx * 3;
+        if (pBase + 2 >= positions.length) continue;
+        v.set(positions[pBase], positions[pBase + 1], positions[pBase + 2]);
+
+        // World → NDC → screen pixel
+        const proj = v.clone().project(cam);
+        if (proj.z < -1 || proj.z > 1) continue; // outside frustum
+        const sx = (proj.x * 0.5 + 0.5) * rect.width;
+        const sy = (-proj.y * 0.5 + 0.5) * rect.height;
+
+        const dx = sx - mouseX;
+        const dy = sy - mouseY;
+        const distSq = dx * dx + dy * dy;
+
+        if (distSq < bestDistSq && distSq <= thresholdSq) {
+          bestDistSq = distSq;
+          bestVertIdx = vidx;
+          bestFaceIndex = tri;
+        }
+      }
+    }
+
+    if (bestVertIdx < 0) return null;
+    const pBase = bestVertIdx * 3;
+    return {
+      position: new THREE.Vector3(
+        positions[pBase],
+        positions[pBase + 1],
+        positions[pBase + 2],
+      ),
+      faceIndex: bestFaceIndex,
+    };
+  }
+
   /** Perform a raycast pick on wireframe edges (LineSegments).
    *  Returns the intersection with `index` = line segment index (for edge map lookup).
    *  Threshold is automatically computed from camera distance for consistent screen-space feel. */

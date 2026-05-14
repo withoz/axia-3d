@@ -37,6 +37,9 @@ pub struct Scene {
     pub default_material: MaterialId,
     /// Group / Component manager
     pub groups: GroupManager,
+    /// Auto-intersect on draw — drawing 직후 coplanar containment
+    /// 감지해 hole 주입. 기본 true.
+    pub auto_intersect_on_draw: bool,
 }
 
 impl Scene {
@@ -50,6 +53,7 @@ impl Scene {
             material_library: MaterialLibrary::new(),
             default_material: MaterialId::new(0),
             groups: GroupManager::new(),
+            auto_intersect_on_draw: true,
         }
     }
 
@@ -458,6 +462,10 @@ impl Scene {
 
         match self.mesh.draw_rectangle(center, normal, up, width, height, self.default_material) {
             Ok((face_id, _verts)) => {
+                // Auto-intersect on draw — coplanar containment 감지
+                if self.auto_intersect_on_draw {
+                    let _ = self.mesh.auto_intersect_face(face_id);
+                }
                 let xia_id = self.create_xia("Rectangle".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.state = XiaState::Face;
@@ -489,6 +497,9 @@ impl Scene {
 
         match self.mesh.draw_circle(center, normal, radius, segments, self.default_material) {
             Ok((face_id, _verts)) => {
+                if self.auto_intersect_on_draw {
+                    let _ = self.mesh.auto_intersect_face(face_id);
+                }
                 let xia_id = self.create_xia("Circle".to_string());
                 if let Some(xia) = self.xias.get_mut(&xia_id) {
                     xia.state = XiaState::Face;
