@@ -526,3 +526,134 @@ Algorithms that perform speculative mutation followed by a "did it apply?" check
 | B-4b | 🔄 next | Non-destructive pre-check → Path B at Scene layer |
 | B-5 | 🔄 | 회귀 sweep matrix (+16 tests) |
 | B-6 | 🔄 | 사용자 시연 + closure |
+
+---
+
+## Amendment 7 — Phase B-4b: Non-destructive pre-check → Path B activated (2026-05-14)
+
+### B-4b 결정 anchor (canonical lesson)
+
+ADR-101 Amendment 6 의 lesson "speculative mutation side-effect" 를 직접 해소. **"check first, mutate second"** principle 의 architectural 적용.
+
+### Algorithm change
+
+```
+auto_intersect_coplanar(mesh, face_a, face_b, material):
+
+  // ── BEFORE (B-3b/B-4 MVP) ──
+  1. polygonize(face_a)            ← destructive! Path B → polygonal
+  2. polygonize(face_b)            ← destructive!
+  3. coplanar_intersection_segments → may return Ok(None) for disjoint
+  4. if no overlap → return Ok(None) ← side-effect already happened
+
+  // ── AFTER (B-4b) ──
+  1. face_world_aabb(face_a)       ← non-destructive
+  2. face_world_aabb(face_b)       ← non-destructive
+  3. AABB overlap check            ← cheap, no mutation
+  4. coplanarity pre-check         ← normal dot + plane offset, no mutation
+  5. If any pre-check fails → Ok(None), zero mutation
+  6. ONLY NOW: polygonize(face_a), polygonize(face_b)
+  7. coplanar_intersection_segments + full algorithm
+```
+
+### `face_world_aabb` 동작 (Path B-aware)
+
+```rust
+fn face_world_aabb(mesh: &Mesh, face_id: FaceId) -> Option<Aabb3> {
+    let face = mesh.faces.get(face_id)?;
+    let verts = mesh.collect_loop_verts(face.outer().start).ok()?;
+
+    if verts.len() == 1 {
+        // Path B closed-curve: 1 anchor + 1 self-loop edge with curve.
+        // Extract AABB from AnalyticCurve metadata (no polygonization!).
+        let edge_id = mesh.hes[face.outer().start].edge();
+        let curve = mesh.edges.get(edge_id)?.curve()?;
+        match curve {
+            Circle { center, radius, normal, basis_u } => {
+                // Cardinal samples in the curve's plane.
+                let basis_v = normal.cross(*basis_u).normalize_or_zero();
+                aabb_of([
+                    center + basis_u * radius,
+                    center - basis_u * radius,
+                    center + basis_v * radius,
+                    center - basis_v * radius,
+                ])
+            }
+            // Bezier/BSpline/NURBS loops: use control points (conservative).
+            Bezier { control_points } |
+            BSpline { control_points, .. } |
+            NURBS { control_points, .. } => aabb_of(control_points),
+            _ => None,
+        }
+    } else {
+        // Polygonal face: AABB from boundary vert positions.
+        aabb_of(verts.iter().map(|v| mesh.verts[v].pos()))
+    }
+}
+```
+
+### `face_world_normal` 동작 (pre-check 용)
+
+```rust
+fn face_world_normal(mesh: &Mesh, face_id: FaceId) -> Option<DVec3> {
+    let face = mesh.faces.get(face_id)?;
+    let verts = mesh.collect_loop_verts(face.outer().start).ok()?;
+
+    if verts.len() == 1 {
+        // Path B: AnalyticCurve::Circle.normal directly.
+        let edge_id = mesh.hes[face.outer().start].edge();
+        match mesh.edges.get(edge_id)?.curve()? {
+            Circle { normal, .. } | Arc { normal, .. } => Some(*normal),
+            _ => face.surface().and_then(|s| match s {
+                Plane { normal, .. } => Some(*normal),
+                _ => None,
+            }),
+        }
+    } else {
+        // Polygonal: Newell's method on boundary verts.
+        let positions: Vec<DVec3> = verts.iter().map(|v| mesh.verts[v].pos()).collect();
+        face_unit_normal(&positions)
+    }
+}
+```
+
+### Lock-ins (canonical for B-4b)
+
+- **L-B4b-1** AABB pre-check 가 polygonize 호출 *전* 위치 — "check first, mutate second" canonical.
+- **L-B4b-2** Path B closed-curve: AABB / normal 모두 `AnalyticCurve` metadata 에서 직접 추출 (no polygonization, no side-effect).
+- **L-B4b-3** AABB 만으로는 false-positive 가능 — coplanarity check 도 pre-check phase 에 추가.
+- **L-B4b-4** Path B MVP guard (`is_path_b_closed_curve` in scene.rs) **제거** — pre-check 가 그 역할 흡수.
+- **L-B4b-5** 기존 RECT × RECT / Legacy Circle 회귀 무손상 (B-3b/B-3c/B-4 회귀 자산 전부 PASS 유지).
+- **L-B4b-6** Path B Circle × Path B Circle → 자동 3 sub-face 분할 활성 (ADR-101 §2 canonical user trigger 완전 만족).
+- **L-B4b-7** `curve_mandatory()` API 부분 활용 — Path B 의 self-loop edge metadata 접근 (ADR-059 P-N Step 3 답습).
+
+### Hybrid 패러다임 정합
+
+B-4b 는 ADR-028 Phase A 의 hybrid Edge 구조 (`curve: Option<AnalyticCurve>`) 를 *진정한 first-class citizen* 으로 활용하는 첫 사용자-facing op:
+
+| 측면 | B-4 MVP | B-4b |
+|---|---|---|
+| Edge curve 활용 | 무시 (polygonize 가 destroy) | AABB / normal 추출 source |
+| Path B 시민권 | guard 로 skip | 1급 입력 |
+| 메모리 효율 | polygonize → 32 verts 생성 | curve metadata 만으로 판정 (0 verts) |
+| 사용자 시연 | RECT only | RECT + Legacy + **Path B** |
+
+### 회귀 영향 예측
+
+- 기존 회귀 자산 **변경 0** (additive only)
+- 새 회귀 자산 **+4 ~ +6**:
+  - `face_world_aabb_polygonal` (unit, polygonal face)
+  - `face_world_aabb_path_b_circle` (unit, Path B Circle face)
+  - `face_world_normal_path_b_circle` (unit)
+  - `auto_intersect_path_b_circle_pair_splits` (integration)
+  - `auto_intersect_path_b_disjoint_no_mutation` (regression guard — disjoint pair leaves Path B intact)
+- Scene layer:
+  - `adr101_b4_two_path_b_circles_auto_split` (E2E flip from B-4 MVP "2 faces" to "3 faces")
+
+### Cross-link
+
+- ADR-028 Phase A (hybrid Edge with `curve: Option<AnalyticCurve>`) — B-4b 가 진정한 활용
+- ADR-059 Phase N Step 3 (`curve_mandatory()` API) — 미래 NURBS-aware ops 의 prerequisite
+- ADR-089 Phase 2 (self-loop edge 시민권) — Path B canonical form
+- ADR-101 Amendment 6 (canonical lesson "speculative mutation side-effect") — 본 amendment 가 해소
+- LOCKED #14 메타-원칙 #14 — "면은 닫힌 경계로부터 유도된다" 의 첫 사용자-facing op 활용

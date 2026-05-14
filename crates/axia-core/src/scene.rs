@@ -1834,32 +1834,6 @@ impl Scene {
     /// intersect 에서 draw 의 기존 transaction 안에 병합). 사용자는 일반적
     /// 으로 `intersect_faces_with_scene` 를 쓰면 된다.
     pub fn intersect_faces_inner(&mut self, face_ids: &[FaceId]) -> anyhow::Result<usize> {
-        // Local helper — see B-4 MVP scope guard below.
-        fn is_path_b_closed_curve(mesh: &Mesh, fid: FaceId) -> bool {
-            let face = match mesh.faces.get(fid) {
-                Some(f) if f.is_active() => f,
-                _ => return false,
-            };
-            let outer_start = face.outer().start;
-            if outer_start.is_null() { return false; }
-            // Path B canonical form: 1 boundary vert + 1 self-loop edge.
-            let verts = match mesh.collect_loop_verts(outer_start) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if verts.len() != 1 { return false; }
-            let edge_id = mesh.hes[outer_start].edge();
-            mesh.edges.get(edge_id).map(|e| e.is_self_loop()).unwrap_or(false)
-        }
-        // Shadow the outer function body to use the helper.
-        Self::intersect_faces_inner_impl(self, face_ids, is_path_b_closed_curve)
-    }
-
-    fn intersect_faces_inner_impl(
-        &mut self,
-        face_ids: &[FaceId],
-        is_path_b_closed_curve: fn(&Mesh, FaceId) -> bool,
-    ) -> anyhow::Result<usize> {
         if face_ids.is_empty() { return Ok(0); }
 
         // 원본 face 의 XIA 매핑 보존 (분할 후 승계용)
@@ -1979,23 +1953,12 @@ impl Scene {
                     continue;
                 }
 
-                // ── B-4 MVP scope guard ──
-                //
-                // `auto_intersect_coplanar` calls `polygonize_closed_curve_
-                // face` *speculatively* (before confirming partial overlap),
-                // which destructively converts Path B closed-curve faces
-                // (1 anchor + 1 self-loop edge) to polygonal even when no
-                // overlap exists. To preserve the kernel-native Path B
-                // representation (LOCKED #34 K-ε, ADR-089), B-4 MVP skips
-                // any pair where either face is Path B closed-curve. Path
-                // B circle × circle auto-intersect is deferred to B-4b,
-                // which will add a non-destructive pre-check (AABB +
-                // analytic curve overlap test).
-                if is_path_b_closed_curve(&self.mesh, fid)
-                    || is_path_b_closed_curve(&self.mesh, other_fid)
-                {
-                    continue;
-                }
+                // B-4b: MVP scope guard removed. `auto_intersect_coplanar`
+                // now performs non-destructive AABB + coplanarity pre-checks
+                // before polygonizing Path B closed-curve faces (ADR-101
+                // Amendment 7). Path B circles are first-class inputs —
+                // disjoint pairs leave them intact, partial-overlap pairs
+                // get auto-split.
 
                 // Snapshot XIA links BEFORE the call — auto_intersect_
                 // coplanar removes the originals.
@@ -5266,6 +5229,14 @@ impl Scene {
         if let Some(shape) = self.shapes.get_mut(&shape_id) {
             shape.position = center;
             shape.surface_normal = Some(n_norm);
+        }
+
+        // ADR-101 §B-4b — auto-intersect on Path B Circle draws.
+        // intersect_faces_inner does non-destructive AABB + coplanarity
+        // pre-checks (Amendment 7), so disjoint pairs leave the kernel-
+        // native form intact; partial-overlap pairs auto-split.
+        if self.auto_intersect_on_draw {
+            let _ = self.intersect_faces_inner(&[face_id]);
         }
 
         self.transactions.set_after_snapshot(self.scene_snapshot());
@@ -14454,6 +14425,80 @@ mod tests {
         assert_eq!(after_b, 3,
             "drawCircleAsShape × 2 partial overlap → 3 sub-faces, got {}",
             after_b);
+    }
+
+    /// ADR-101 §B-4b — Path B Circle × Path B Circle (DrawCircleAsCurve)
+    /// partial overlap → 3 sub-faces automatically. B-4 MVP scope guard
+    /// REMOVED by B-4b's non-destructive pre-check.
+    #[test]
+    fn adr101_b4b_two_path_b_circles_partial_overlap_auto_splits() {
+        let mut scene = Scene::new();
+        // DrawCircleAsCurve = Path B (kernel-native, 1 anchor + 1 self-loop).
+        let r1 = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 5.0,
+        });
+        assert!(matches!(r1, CommandResult::ShapeCreated(_)),
+            "DrawCircleAsCurve A succeeds, got {:?}", r1);
+        let after_a = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(after_a, 1, "after Path B A: 1 active face");
+
+        let r2 = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(6.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 5.0,
+        });
+        assert!(matches!(r2, CommandResult::ShapeCreated(_)),
+            "DrawCircleAsCurve B succeeds, got {:?}", r2);
+
+        // B-4b: Path B × Path B partial overlap → auto 3 sub-faces.
+        // (B-4 MVP would have returned 2 due to is_path_b_closed_curve guard.)
+        let after_b = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(after_b, 3,
+            "Path B × Path B partial overlap → 3 sub-faces (B-4b activation), got {}",
+            after_b);
+
+        // Manifold invariants preserved.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-split Path B mesh must satisfy invariants — got {:?}",
+            report.violations);
+    }
+
+    /// ADR-101 §B-4b regression — disjoint Path B circles must NOT mutate.
+    /// Kernel-native form preserved (the regression that the B-4 MVP scope
+    /// guard protected against, now handled by AABB pre-check).
+    #[test]
+    fn adr101_b4b_disjoint_path_b_circles_preserve_kernel_native() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 5.0,
+        });
+        // Circle B far away — AABBs disjoint, pre-check short-circuits.
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(100.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 5.0,
+        });
+
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active, 2, "disjoint Path B circles → 2 separate faces");
+
+        // CRITICAL: both faces still Path B (1 boundary vert, self-loop edge).
+        // If pre-check is destructive, this fails.
+        for (fid, _) in scene.mesh.faces.iter().filter(|(_, f)| f.is_active()) {
+            let outer_start = scene.mesh.faces[fid].outer().start;
+            let verts = scene.mesh.collect_loop_verts(outer_start).expect("collect");
+            assert_eq!(verts.len(), 1,
+                "Path B face {:?} must remain 1-vert (no speculative polygonization)",
+                fid);
+        }
     }
 
     /// Two coplanar Circle × Circle partial overlap → 3 sub-faces

@@ -286,9 +286,52 @@ pub fn auto_intersect_coplanar(
     face_b_input: FaceId,
     material: crate::MaterialId,
 ) -> Result<Option<AutoIntersectResult>> {
-    // Step 0: Polygonize Path B closed-curve Circle faces (L-B3b-1).
-    // Helper returns Some(new_fid) if conversion happened, None for
-    // already-polygonal faces.
+    // ── B-4b PRE-CHECK (non-destructive) ──
+    //
+    // ADR-101 Amendment 7 canonical "check first, mutate second":
+    // before polygonizing Path B closed-curve faces (destructive),
+    // perform cheap non-destructive checks that can short-circuit for
+    // disjoint / non-coplanar pairs. This preserves Path B's kernel-
+    // native representation when no auto-split is needed.
+    //
+    // L-B4b-1: pre-check ordering — AABB → coplanarity → polygonize.
+    // L-B4b-2: Path B AABB / normal extracted from AnalyticCurve metadata.
+
+    // AABB overlap. If disjoint, return Ok(None) immediately — no mutation.
+    let aabb_a = face_world_aabb(mesh, face_a_input);
+    let aabb_b = face_world_aabb(mesh, face_b_input);
+    if let (Some(a), Some(b)) = (aabb_a, aabb_b) {
+        if !aabb_overlaps(&a, &b, COPLANARITY_OFFSET_TOL) {
+            return Ok(None);
+        }
+    }
+    // (If either AABB is None — degenerate face — fall through to the
+    // existing path which will return Err/None at the right step.)
+
+    // Coplanarity pre-check (normal + plane offset). Skip polygonization
+    // for clearly non-coplanar pairs.
+    if let (Some(na), Some(nb)) = (
+        face_world_normal(mesh, face_a_input),
+        face_world_normal(mesh, face_b_input),
+    ) {
+        let dot = na.dot(nb).abs();
+        if dot < COPLANARITY_NORMAL_DOT_MIN {
+            return Ok(None);
+        }
+        if let (Some(pa), Some(pb)) = (
+            face_anchor_position(mesh, face_a_input),
+            face_anchor_position(mesh, face_b_input),
+        ) {
+            let offset = (pb - pa).dot(na).abs();
+            if offset > COPLANARITY_OFFSET_TOL {
+                return Ok(None);
+            }
+        }
+    }
+
+    // Step 0: NOW polygonize Path B closed-curve Circle faces (L-B3b-1).
+    // The pre-checks above ensured we only mutate when intersection is
+    // genuinely plausible.
     let face_a = mesh
         .polygonize_closed_curve_face(face_a_input, material)?
         .unwrap_or(face_a_input);
@@ -420,6 +463,182 @@ pub fn auto_intersect_coplanar(
         face_b_only,
         lens,
     }))
+}
+
+// ─── B-4b: Non-destructive pre-check helpers ─────────────────────────
+
+/// Axis-aligned bounding box in 3D world space.
+#[derive(Debug, Clone, Copy)]
+pub struct Aabb3 {
+    pub min: DVec3,
+    pub max: DVec3,
+}
+
+impl Aabb3 {
+    fn from_points<'a>(points: impl IntoIterator<Item = &'a DVec3>) -> Option<Self> {
+        let mut iter = points.into_iter();
+        let first = iter.next()?;
+        let mut min = *first;
+        let mut max = *first;
+        for p in iter {
+            min.x = min.x.min(p.x);
+            min.y = min.y.min(p.y);
+            min.z = min.z.min(p.z);
+            max.x = max.x.max(p.x);
+            max.y = max.y.max(p.y);
+            max.z = max.z.max(p.z);
+        }
+        Some(Aabb3 { min, max })
+    }
+}
+
+/// True if two AABBs overlap (touching counts as overlap within `eps`).
+fn aabb_overlaps(a: &Aabb3, b: &Aabb3, eps: f64) -> bool {
+    a.min.x <= b.max.x + eps && a.max.x >= b.min.x - eps
+        && a.min.y <= b.max.y + eps && a.max.y >= b.min.y - eps
+        && a.min.z <= b.max.z + eps && a.max.z >= b.min.z - eps
+}
+
+/// ADR-101 §B-4b — Non-destructive AABB extraction.
+///
+/// Returns the world-space AABB of a face WITHOUT polygonizing Path B
+/// closed-curve faces. For:
+///   - Polygonal face: AABB of boundary vertex positions.
+///   - Path B Circle: cardinal samples in the curve's plane (4 points).
+///   - Path B Bezier / BSpline / NURBS loop: control-points AABB
+///     (conservative; control polygon bounds the curve).
+///   - Path B Arc: best-effort cardinal sample (full circle AABB if range
+///     ≥ 2π, else 8-sample chord polyline).
+///   - Other / degenerate: `None`.
+pub fn face_world_aabb(mesh: &Mesh, face_id: FaceId) -> Option<Aabb3> {
+    let face = mesh.faces.get(face_id)?;
+    if !face.is_active() { return None; }
+    let outer_start = face.outer().start;
+    if outer_start.is_null() { return None; }
+    let verts = mesh.collect_loop_verts(outer_start).ok()?;
+
+    if verts.len() == 1 {
+        // Path B closed-curve face — peek at the self-loop edge's curve.
+        let edge_id = mesh.hes[outer_start].edge();
+        let edge = mesh.edges.get(edge_id)?;
+        let curve = edge.curve()?;
+        match curve {
+            crate::curves::AnalyticCurve::Circle { center, radius, normal, basis_u } => {
+                let basis_v = normal.cross(*basis_u).normalize_or_zero();
+                let r = *radius;
+                let pts = [
+                    *center + *basis_u * r,
+                    *center - *basis_u * r,
+                    *center + basis_v * r,
+                    *center - basis_v * r,
+                ];
+                Aabb3::from_points(pts.iter())
+            }
+            crate::curves::AnalyticCurve::Arc {
+                center, radius, normal, basis_u, start_angle, end_angle,
+            } => {
+                // Best-effort: 8 chord samples between start and end.
+                let basis_v = normal.cross(*basis_u).normalize_or_zero();
+                let mut pts = Vec::with_capacity(9);
+                for i in 0..=8 {
+                    let t = i as f64 / 8.0;
+                    let theta = start_angle + (end_angle - start_angle) * t;
+                    pts.push(
+                        *center + *basis_u * (radius * theta.cos())
+                                + basis_v * (radius * theta.sin())
+                    );
+                }
+                Aabb3::from_points(pts.iter())
+            }
+            crate::curves::AnalyticCurve::Bezier { control_pts }
+            | crate::curves::AnalyticCurve::BSpline { control_pts, .. }
+            | crate::curves::AnalyticCurve::NURBS { control_pts, .. } => {
+                Aabb3::from_points(control_pts.iter())
+            }
+            _ => None,
+        }
+    } else {
+        // Polygonal face: AABB from boundary vertex positions.
+        let positions: Vec<DVec3> = verts
+            .iter()
+            .map(|&v| mesh.verts.get(v).map(|x| x.pos()).unwrap_or(DVec3::ZERO))
+            .collect();
+        Aabb3::from_points(positions.iter())
+    }
+}
+
+/// ADR-101 §B-4b — Non-destructive face normal.
+///
+/// For polygonal face: Newell's method on boundary verts.
+/// For Path B closed-curve face: `AnalyticCurve::Circle.normal` (or
+///   `Arc.normal`) directly. Falls back to `Face.surface` Plane normal
+///   if the curve doesn't carry a normal.
+pub fn face_world_normal(mesh: &Mesh, face_id: FaceId) -> Option<DVec3> {
+    let face = mesh.faces.get(face_id)?;
+    if !face.is_active() { return None; }
+    let outer_start = face.outer().start;
+    if outer_start.is_null() { return None; }
+    let verts = mesh.collect_loop_verts(outer_start).ok()?;
+
+    if verts.len() == 1 {
+        // Path B: read normal from AnalyticCurve metadata.
+        let edge_id = mesh.hes[outer_start].edge();
+        let edge = mesh.edges.get(edge_id)?;
+        if let Some(curve) = edge.curve() {
+            match curve {
+                crate::curves::AnalyticCurve::Circle { normal, .. }
+                | crate::curves::AnalyticCurve::Arc { normal, .. } => {
+                    return Some(*normal);
+                }
+                _ => {}
+            }
+        }
+        // Bezier/BSpline/NURBS loops — derive normal from control points
+        // (best-fit plane). Try the existing helper.
+        if let Some(curve) = edge.curve() {
+            let cp_opt = match curve {
+                crate::curves::AnalyticCurve::Bezier { control_pts } => Some(control_pts),
+                crate::curves::AnalyticCurve::BSpline { control_pts, .. } => Some(control_pts),
+                crate::curves::AnalyticCurve::NURBS { control_pts, .. } => Some(control_pts),
+                _ => None,
+            };
+            if let Some(cp) = cp_opt {
+                if cp.len() >= 3 {
+                    // Newell on control polygon — gives best-fit plane normal.
+                    let mut n = DVec3::ZERO;
+                    for i in 0..cp.len() {
+                        n += cp[i].cross(cp[(i + 1) % cp.len()]);
+                    }
+                    let len = n.length();
+                    if len > 1e-10 { return Some(n / len); }
+                }
+            }
+        }
+        // Fallback: Face.surface Plane normal.
+        face.surface().and_then(|s| match s {
+            crate::surfaces::AnalyticSurface::Plane { normal, .. } => Some(*normal),
+            _ => None,
+        })
+    } else {
+        // Polygonal: Newell.
+        let positions: Vec<DVec3> = verts
+            .iter()
+            .map(|&v| mesh.verts.get(v).map(|x| x.pos()).unwrap_or(DVec3::ZERO))
+            .collect();
+        crate::operations::polygon_geom::face_unit_normal(&positions)
+    }
+}
+
+/// ADR-101 §B-4b — Non-destructive anchor position for plane-offset check.
+/// Returns the first boundary vertex's world position.
+pub fn face_anchor_position(mesh: &Mesh, face_id: FaceId) -> Option<DVec3> {
+    let face = mesh.faces.get(face_id)?;
+    if !face.is_active() { return None; }
+    let outer_start = face.outer().start;
+    if outer_start.is_null() { return None; }
+    let verts = mesh.collect_loop_verts(outer_start).ok()?;
+    let first = *verts.first()?;
+    mesh.verts.get(first).map(|v| v.pos())
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -1501,5 +1720,207 @@ mod tests {
         let msg = format!("{}", err);
         assert!(msg.contains("non-convex"),
             "expected non-convex error, got: {}", msg);
+    }
+
+    // ── B-4b tests: non-destructive pre-check + Path B activation ────
+
+    /// AABB extraction works for polygonal face.
+    #[test]
+    fn adr101_phase_b4b_face_world_aabb_polygonal() {
+        let mut mesh = Mesh::new();
+        let f = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 5.0), xy(0.0, 5.0),
+        ]);
+        let aabb = face_world_aabb(&mesh, f).expect("polygonal AABB");
+        assert!((aabb.min.x - 0.0).abs() < 1e-9);
+        assert!((aabb.min.y - 0.0).abs() < 1e-9);
+        assert!((aabb.max.x - 10.0).abs() < 1e-9);
+        assert!((aabb.max.y - 5.0).abs() < 1e-9);
+    }
+
+    /// AABB extraction works for Path B Circle WITHOUT polygonization.
+    /// Critical: the face must remain Path B (1 boundary vert) after the
+    /// call — proves the pre-check is non-destructive.
+    #[test]
+    fn adr101_phase_b4b_face_world_aabb_path_b_circle_non_destructive() {
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let center = DVec3::ZERO;
+        let radius = 5.0;
+        let normal = DVec3::new(0.0, 0.0, 1.0);
+        let basis_u = DVec3::new(1.0, 0.0, 0.0);
+        let v = mesh.add_vertex(center + basis_u * radius);
+        let fid = mesh.add_face_closed_curve(
+            v,
+            AnalyticCurve::Circle { center, radius, normal, basis_u },
+            mat,
+        ).expect("add path B circle");
+
+        let aabb = face_world_aabb(&mesh, fid).expect("Path B AABB");
+        assert!((aabb.min.x - (-5.0)).abs() < 1e-9);
+        assert!((aabb.max.x - 5.0).abs() < 1e-9);
+        assert!((aabb.min.y - (-5.0)).abs() < 1e-9);
+        assert!((aabb.max.y - 5.0).abs() < 1e-9);
+
+        // Non-destructive: face still has 1 boundary vert (Path B form).
+        let outer_start = mesh.faces[fid].outer().start;
+        let verts = mesh.collect_loop_verts(outer_start).expect("collect");
+        assert_eq!(verts.len(), 1, "Path B face must remain 1-vert after AABB query");
+    }
+
+    /// Normal extraction returns curve.normal directly for Path B Circle.
+    #[test]
+    fn adr101_phase_b4b_face_world_normal_path_b_circle() {
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let normal = DVec3::new(0.0, 0.0, 1.0);
+        let basis_u = DVec3::new(1.0, 0.0, 0.0);
+        let v = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let fid = mesh.add_face_closed_curve(
+            v,
+            AnalyticCurve::Circle {
+                center: DVec3::ZERO, radius: 5.0, normal, basis_u,
+            },
+            mat,
+        ).expect("add path B circle");
+
+        let n = face_world_normal(&mesh, fid).expect("normal");
+        assert!((n - normal).length() < 1e-9);
+    }
+
+    /// Disjoint Path B circles → Ok(None), NO mutation. Critical
+    /// regression for L-B4b-2: the kernel-native form must survive the
+    /// no-op case.
+    #[test]
+    fn adr101_phase_b4b_disjoint_path_b_circles_no_mutation() {
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let normal = DVec3::new(0.0, 0.0, 1.0);
+        let basis_u = DVec3::new(1.0, 0.0, 0.0);
+
+        let va = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let fa = mesh.add_face_closed_curve(
+            va,
+            AnalyticCurve::Circle {
+                center: DVec3::ZERO, radius: 3.0, normal, basis_u,
+            },
+            mat,
+        ).expect("circle A");
+
+        // Circle B far away — AABBs disjoint.
+        let vb = mesh.add_vertex(DVec3::new(105.0, 0.0, 0.0));
+        let fb = mesh.add_face_closed_curve(
+            vb,
+            AnalyticCurve::Circle {
+                center: DVec3::new(100.0, 0.0, 0.0), radius: 3.0, normal, basis_u,
+            },
+            mat,
+        ).expect("circle B");
+
+        let active_before = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        let result = auto_intersect_coplanar(&mut mesh, fa, fb, mat).expect("OK");
+        assert!(result.is_none(), "disjoint → None");
+
+        // CRITICAL: Path B form preserved. Both faces still 1 boundary
+        // vert (self-loop edge). No polygonization happened.
+        let active_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_before, active_after);
+
+        let verts_a = mesh.collect_loop_verts(mesh.faces[fa].outer().start).expect("a");
+        let verts_b = mesh.collect_loop_verts(mesh.faces[fb].outer().start).expect("b");
+        assert_eq!(verts_a.len(), 1, "Path B face A intact");
+        assert_eq!(verts_b.len(), 1, "Path B face B intact");
+    }
+
+    /// Non-coplanar Path B circles → Ok(None), NO mutation.
+    #[test]
+    fn adr101_phase_b4b_non_coplanar_path_b_circles_no_mutation() {
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let va = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let fa = mesh.add_face_closed_curve(
+            va,
+            AnalyticCurve::Circle {
+                center: DVec3::ZERO,
+                radius: 5.0,
+                normal: DVec3::new(0.0, 0.0, 1.0),  // XY plane
+                basis_u: DVec3::new(1.0, 0.0, 0.0),
+            },
+            mat,
+        ).expect("circle A");
+
+        // Circle B on YZ plane (perpendicular) but bounding boxes overlap.
+        let vb = mesh.add_vertex(DVec3::new(0.0, 5.0, 0.0));
+        let fb = mesh.add_face_closed_curve(
+            vb,
+            AnalyticCurve::Circle {
+                center: DVec3::ZERO,
+                radius: 5.0,
+                normal: DVec3::new(1.0, 0.0, 0.0),  // YZ plane — perpendicular!
+                basis_u: DVec3::new(0.0, 1.0, 0.0),
+            },
+            mat,
+        ).expect("circle B");
+
+        let result = auto_intersect_coplanar(&mut mesh, fa, fb, mat).expect("OK");
+        assert!(result.is_none(), "non-coplanar → None");
+
+        // Path B form preserved.
+        let verts_a = mesh.collect_loop_verts(mesh.faces[fa].outer().start).expect("a");
+        let verts_b = mesh.collect_loop_verts(mesh.faces[fb].outer().start).expect("b");
+        assert_eq!(verts_a.len(), 1);
+        assert_eq!(verts_b.len(), 1);
+    }
+
+    /// Path B Circle × Path B Circle partial overlap → 3 sub-faces
+    /// (L-B4b-6: ADR-101 §2 canonical user trigger fully active).
+    #[test]
+    fn adr101_phase_b4b_path_b_circles_partial_overlap_auto_splits() {
+        use crate::curves::AnalyticCurve;
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let normal = DVec3::new(0.0, 0.0, 1.0);
+        let basis_u = DVec3::new(1.0, 0.0, 0.0);
+
+        // Circle A: center (0,0), radius 5
+        let va = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let fa = mesh.add_face_closed_curve(
+            va,
+            AnalyticCurve::Circle {
+                center: DVec3::ZERO, radius: 5.0, normal, basis_u,
+            },
+            mat,
+        ).expect("circle A");
+
+        // Circle B: center (6,0), radius 5 — AABBs overlap, coplanar, partial overlap.
+        let vb = mesh.add_vertex(DVec3::new(11.0, 0.0, 0.0));
+        let fb = mesh.add_face_closed_curve(
+            vb,
+            AnalyticCurve::Circle {
+                center: DVec3::new(6.0, 0.0, 0.0), radius: 5.0, normal, basis_u,
+            },
+            mat,
+        ).expect("circle B");
+
+        let result = auto_intersect_coplanar(&mut mesh, fa, fb, mat)
+            .expect("OK")
+            .expect("Path B partial overlap MUST produce split");
+
+        let active = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active, 3,
+            "Path B × Path B partial overlap → 3 sub-faces, got {}", active);
+
+        // Manifold invariants preserved (regression guard for L-B4b-5).
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-split Path B mesh must satisfy invariants — got {:?}",
+            report.violations);
+
+        let _ = result;
     }
 }
