@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **In Progress** — Phase A landed (PR #25) / B-1 decision (PR #26) / B-2 primitive (PR #27) / B-3a utility (PR #28) / B-3b MVP DCEL wiring (RECT × RECT, 본 amendment) / B-3c Path B circle deferred |
+| Status | **In Progress** — Phase A landed (PR #25) / B-1 decision (PR #26) / B-2 primitive (PR #27) / B-3a utility (PR #28) / B-3b MVP RECT (PR #29) / B-3c orphan cleanup + Path B Circle × Circle activated (본 amendment) |
 | Date | 2026-05-14 |
 | Supersedes | — |
 | Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
@@ -353,8 +353,78 @@ landing B-3b as RECT-only MVP, we:
 | B-1 | ✅ PR #26 | Algorithm decision (Sutherland-Hodgman MVP) |
 | B-2 | ✅ PR #27 | `coplanar_intersection_segments` primitive |
 | B-3a | ✅ PR #28 | `polygon_difference_walking` pure 2D utility |
-| **B-3b** | ✅ **본 amendment** | `Mesh::auto_intersect_coplanar` RECT MVP |
-| B-3c | 🔄 next PR | Orphan-edge cleanup → Path B Circle × Circle |
-| B-4 | 🔄 after B-3c | Caller wiring (auto_intersect_on_draw) |
+| B-3b | ✅ PR #29 | `Mesh::auto_intersect_coplanar` RECT MVP |
+| **B-3c** | ✅ **본 amendment** | Orphan cleanup + Path B Circle × Circle activated |
+| B-4 | 🔄 next PR | Caller wiring (auto_intersect_on_draw) |
 | B-5 | 🔄 | 회귀 sweep matrix (+16 tests) |
 | B-6 | 🔄 | 사용자 시연 + closure |
+
+---
+
+## Amendment 5 — Phase B-3c: Orphan-edge cleanup + Path B Circle × Circle (2026-05-14)
+
+### B-3c implementation summary
+
+**Two-layer fix**:
+
+1. **`Mesh::cleanup_orphan_boundary_edges(boundary_verts_lists: &[&[VertId]])`** — new public helper. After `remove_face × N`, walks each pair of consecutive verts in supplied boundary lists, finds the edge, and if **all** HEs on that edge have `face = NULL`, removes the edge via `remove_edge_and_halfedges` (proper v_ring splicing + outgoing repoint). Isolated verts post-removal are deactivated.
+
+2. **`polygon_difference_walking` start_idx fix** — new exclusion: a base vertex coincident with any lens vertex (within `match_eps`) is NOT a valid start point. Previously the algorithm picked any base vert that returned false for strict point-in-lens (which includes lens-boundary verts), causing degenerate output for circle case where many polygonized arc verts lie ON lens boundary.
+
+### Root cause analysis (canonical lesson)
+
+Initial assumption (in B-3b deferral): orphan edges left by `remove_face` interact with spatial-hash dedup → 3 active faces share edges. Cleanup helper would fix this.
+
+**Reality**: cleanup helper is correct + needed, BUT it was a **secondary issue**. The primary failure was in `polygon_difference_walking` (B-3a's start_idx logic):
+
+For Path B Circle × Circle, the polygonized A circle has many verts on the *lens-side arc* (these ARE lens vertices via sutherland_hodgman). The original start algorithm:
+
+```rust
+.find(|&i| !is_xing && !is_inside_lens(pt))
+```
+
+`is_inside_lens` uses winding-number with **boundary excluded**. So lens-vertex base points return false → qualify as start. The algorithm starts the walk *on the lens boundary*, mis-traces the lens-side arc, produces a near-zero-area degenerate polygon.
+
+RECT × RECT was unaffected because its lens-coincident base verts (e.g., (10,10) for A=[0..10]², lens=[5..10]²) appear *between* the 2 crossings — the state-tracking flag `inside_lens=true` correctly skips them.
+
+**Fix**: explicit `on_lens_vertex` exclusion in start_idx — only pick base verts that are *strictly outside* lens (not on its boundary).
+
+This bug was *hidden by* the orphan-edge symptom in B-3b's investigation, because the wrong winding caused non-manifold edges (3-face sharing). The error message ("face FaceId(4): cached normal opposite to winding") was the smoking gun that pointed to winding, not orphans.
+
+### Lock-ins (canonical for B-3c)
+
+- **L-B3c-1** Cleanup scope: only edges between consecutive verts in supplied boundary lists. Other orphan edges elsewhere in the mesh are NOT touched.
+- **L-B3c-2** All-free predicate: edge removed only if EVERY HE in radial chain has `face = NULL`.
+- **L-B3c-3** Idempotent: second call with same args finds nothing.
+- **L-B3c-4** Vertex cleanup: post-edge-removal, isolated verts deactivated.
+- **L-B3c-5** Existing `remove_face` semantics UNCHANGED — additive helper.
+- **L-B3c-6** (B-3a fix) start_idx exclusion: base verts coincident with lens verts cannot be start points. Algorithm rejects "containment-like" case explicitly.
+
+### Algorithm correctness (post-fix)
+
+For two-circle test (r=5 each, centers (0,0) and (6,0)):
+
+| Polygon | Vert count | Signed area (2D) |
+|---|---:|---:|
+| A (polygonized) | 22 | ~78.5 (π·5²) |
+| B (polygonized) | 22 | ~78.5 |
+| lens (Sutherland-Hodgman) | 15 | 21.79 |
+| **A \ lens** (after fix) | **24** | **55.78** (78.5 − 21.79 ≈ 56.7 ✓) |
+| **B \ lens** | **26** | **55.78** |
+
+Total area `A + B − lens = 78.5 + 78.5 − 21.79 = 135.21` matches `A\lens + B\lens + lens = 55.78 + 55.78 + 21.79 = 133.35` (within polygonization chord error). Manifold invariants PASS.
+
+### 회귀 누적
+
+- axia-geo lib: 1286 → **1290 PASS** (+4, 절대 #[ignore] 금지 4/4 준수)
+  - `path_b_circles_polygonize_and_split` (Path B integration)
+  - `cleanup_orphan_boundary_edges_unit` (helper direct)
+  - `cleanup_is_idempotent` (L-B3c-3 guard)
+  - `cleanup_preserves_shared_edges` (L-B3c-2 scope guard)
+
+### Lessons (canonical patterns)
+
+- **L1 Initial bug analysis can mislead** — the orphan-edge fix was necessary but not sufficient. Always verify the symptom maps to the root cause by checking *all* the failure signals (face winding error came BEFORE the edge errors in the report).
+- **L2 Algorithm gaps surface in non-canonical input** — RECT test passed because it had a structurally simpler relationship between base verts and lens verts. Circle test exposed the "base vert on lens boundary" case naturally.
+- **L3 Pure utility extraction enables targeted fixes** (ADR-091 §E L4) — B-3a's `polygon_difference_walking` being a pure function meant the start_idx fix was local + immediately testable in isolation.
+- **L4 Debug output guides root cause** — single `eprintln!` of polygon signed areas revealed `a_only = -0.000000` instantly, pointing to a degenerate-polygon source.

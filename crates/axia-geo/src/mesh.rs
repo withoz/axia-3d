@@ -3619,6 +3619,125 @@ impl Mesh {
         Ok(())
     }
 
+    /// ADR-101 §B-3c — Cleanup orphan boundary edges after `remove_face`.
+    ///
+    /// Walks each pair of consecutive vertices in each `boundary_verts_list`
+    /// (caller pre-snapshots removed face boundaries), finds the edge
+    /// between them, and if **all** of the edge's half-edges have
+    /// `face = NULL` (i.e., no other face still uses the edge), removes
+    /// the edge + its HE pair via `remove_edge_and_halfedges` (which
+    /// performs proper v_ring splicing and vertex outgoing repoint).
+    ///
+    /// After edge cleanup, any vertex from the lists whose `outgoing` is
+    /// now `None` is deactivated (isolated vertex cleanup).
+    ///
+    /// # Use case
+    ///
+    /// After `remove_face × N`, the boundary edges remain in the mesh
+    /// with HEs `face = NULL` (free). For rebuild patterns that
+    /// subsequently call `add_face × M` reusing some of these edges via
+    /// spatial-hash dedup (LOCKED #5), the leftover orphan edges that
+    /// are NOT reused by the new faces would otherwise persist as
+    /// dangling state. Worse, in some configurations multiple new faces
+    /// can claim the same edge in conflicting directions, producing
+    /// non-manifold edges with 3+ active face-bearing HEs.
+    ///
+    /// `cleanup_orphan_boundary_edges` is the canonical cleanup step
+    /// between "remove originals" and "add new faces" in rebuild
+    /// patterns.
+    ///
+    /// # Returns
+    ///
+    /// Number of edges actually removed (orphans deactivated). 0 if no
+    /// orphans were found (e.g., all boundary edges still have at least
+    /// one active face-bearing HE).
+    ///
+    /// # Lock-ins (ADR-101 §B-3c)
+    ///
+    /// - L-B3c-1 Scope: only edges between consecutive verts in the
+    ///   supplied boundary lists are considered. Other orphan edges
+    ///   elsewhere in the mesh are NOT touched.
+    /// - L-B3c-2 All-free predicate: an edge is removed only if EVERY
+    ///   HE in its radial chain has `face = NULL`.
+    /// - L-B3c-3 Idempotent: calling twice in a row with the same
+    ///   boundary lists is safe (second call finds nothing to remove).
+    /// - L-B3c-4 Vertex cleanup: post-edge-removal, isolated verts
+    ///   (no `outgoing`) are deactivated.
+    /// - L-B3c-5 Existing `remove_face` semantics UNCHANGED — this is
+    ///   an additive helper, callable independently.
+    pub fn cleanup_orphan_boundary_edges(
+        &mut self,
+        boundary_verts_lists: &[&[VertId]],
+    ) -> usize {
+        use rustc_hash::FxHashSet;
+
+        let mut to_remove: FxHashSet<EdgeId> = FxHashSet::default();
+
+        for verts in boundary_verts_lists {
+            let n = verts.len();
+            if n < 2 { continue; }
+            for i in 0..n {
+                let va = verts[i];
+                let vb = verts[(i + 1) % n];
+                if va == vb { continue; }
+                let eid = match self.find_edge(va, vb) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                if to_remove.contains(&eid) { continue; }
+                if !self.edges.contains(eid) { continue; }
+                let any_he = self.edges[eid].any_he();
+                if any_he.is_null() {
+                    to_remove.insert(eid);
+                    continue;
+                }
+                // Walk the radial chain; if EVERY HE has face=NULL,
+                // the edge is orphan.
+                let mut all_free = true;
+                let mut he_id = any_he;
+                let mut guard = 0usize;
+                loop {
+                    if !self.hes.contains(he_id) {
+                        all_free = false;
+                        break;
+                    }
+                    if !self.hes[he_id].face().is_null() {
+                        all_free = false;
+                        break;
+                    }
+                    he_id = self.hes[he_id].next_rad();
+                    if he_id == any_he { break; }
+                    guard += 1;
+                    if guard > 10_000 {
+                        all_free = false;
+                        break;
+                    }
+                }
+                if all_free {
+                    to_remove.insert(eid);
+                }
+            }
+        }
+
+        let count = to_remove.len();
+        for eid in to_remove {
+            let _ = self.remove_edge_and_halfedges(eid);
+        }
+
+        // L-B3c-4: deactivate isolated verts.
+        for verts in boundary_verts_lists {
+            for &v in *verts {
+                if self.verts.contains(v) && self.verts[v].is_active()
+                    && self.verts[v].outgoing().is_none()
+                {
+                    self.verts[v].set_active(false);
+                }
+            }
+        }
+
+        count
+    }
+
     // ========================================================================
     // Edge splitting
     // ========================================================================
