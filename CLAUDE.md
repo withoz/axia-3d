@@ -2110,6 +2110,105 @@ metallic 4 PBR channels).
 
 **자세한 회고는 `docs/retro/2026-05-locked-26-closure.md` 참조**.
 
+### 40. Render Chord Tolerance + Hover Group Unification (2026-05-14)
+
+**사용자 통찰 (canonical)**:
+> "옆면처럼 원도 같은 방식 쓸 수 없나요?"
+> (cylinder side 가 매끈한 패턴을 top rim 에도 적용)
+
+**핵심 발견 (initial diagnosis 정정)**:
+옆면이 매끈한 진짜 이유는 N segments 가 충분해서가 아니라 **ADR-038 P23.5
+surface-aware Gouraud normal** 이 chord 경계마다 normal 을 부드럽게 보간
+→ 16 segments 도 매끈한 silhouette 생성. Top rim Plane face 는 uniform
+normal (정확함 — flat cap) 이라 Gouraud smoothing 안 받음 → chord 가 그대로
+visual facet 으로 노출. **Fix scope: shading 변경 아닌 chord_tol 자체를
+5× finer**.
+
+**Lock-ins**:
+
+- **L1 Render-only chord_tol 분리**: `export_buffers_inner` 내부
+  `ANALYTIC_CHORD_TOL = 0.02` (5× finer than legacy 0.1). Engine ops
+  chord_tol (`radius * 0.01`, offset/Boolean/Push-Pull Path A polygon
+  substitute 의 caller 지정값) **분리 보존**. 두 tolerance 분리는 ADR-049
+  §4 의 "truth vs view" 패턴 답습 (Form/Property layer 정합).
+
+- **L2 Closed-curve render path 일관성**: 두 site 모두 동일 formula:
+  - 닫힌 곡선 face fast-path (`mesh.rs:~4844`):
+    `ANALYTIC_CHORD_TOL.min(radius * 0.002).max(1e-6)`
+  - 닫힌 곡선 edge wireframe (`mesh.rs:~5284`):
+    `(radius * 0.002).clamp(5e-5, 0.02)`
+  - 결과: face boundary 와 wireframe 의 chord 위치 align → seam 없음.
+
+- **L3 Multi-segment edge hover 통합** (`ToolManagerRefactored.ts`
+  mousemove 분기):
+  - Mechanism 1 — ADR-088 `curve_owner_id` walk (multi-EdgeId group, 예:
+    polygonal DrawCircle pre-Path B)
+  - Mechanism 2 — Self-loop EdgeId 의 multi-segment fallback (Path B
+    closed-curve face, ADR-089 A-κ): `edgeMap` 에서 `edgeMap[i] === edgeId`
+    인 모든 segIndex 수집 → `setEdgeHoverGroup(...)` 호출
+  - 두 mechanism 모두 미적용 시 `setEdgeHover(segIndex)` (단일 segment)
+    fallback 유지
+  - LOCKED #15 ADR-037 P22.5 "Edge.curve = Some(...) N segments 모두 동일
+    EdgeId 로 promote" 자연 연장 — selection/hover 양쪽 정합.
+
+- **L4 MCP surface — ADR-087 K-ζ + ADR-050 정합**:
+  - `packages/axia-mcp-server` 의 capability handler 는 `_as_shape` /
+    `create_solid_extrude` API **만** 호출:
+    * `draw_rect` → `engine.draw_rect_as_shape`
+    * `draw_circle` → `engine.draw_circle_as_shape`
+    * `draw_line` → `engine.draw_line_as_shape`
+    * `push_pull` → `engine.create_solid_extrude`
+  - 응답 field: draw_* capabilities 는 `shape_id` (이전 `xia_id` — ADR-050
+    form-layer 정합). `list_xias` 는 `xia_id` 유지 (property-layer 정합).
+  - Schema: `ShapeId` zod alias 추가 (OwnerId sentinel 보존, P26.3).
+  - 미래 `promote_shape_to_xia` capability 가 form → property promotion
+    의 명시적 entry — 별도 ADR.
+  - **회귀 가드**: `EngineInstance` interface (`types.ts`) 가 legacy
+    method 시그니처를 미포함 → TS compile-time 으로 회귀 차단.
+
+- **L5 사용자 통찰 보존**:
+  - "옆면처럼 원도 같은 방식 쓸 수 없나요?" — Plane face 는 Gouraud
+    smoothing 없으므로 chord_tol 자체 finer (단순 N 증가가 아닌 시각
+    ergonomics)
+  - 향후 시각 quality 변경 시 본 통찰의 "shading vs chord_tol" 구분 유지.
+
+- **L6 Visual baseline 정책** (ADR-077 V-3 자연 확장):
+  - chord_tol 또는 hover 변경 시 영향받는 시각 시나리오만 재생성.
+  - 영향 0 인 시나리오 (Plane-only 등) 는 byte-identical 보존.
+  - 본 LOCKED 의 검증 — workflow run #3 결과: 기존 4 baselines 모두
+    byte-identical (chord_tol 변경이 Circle/Arc 없는 scenario 에 0 영향)
+    → architectural backward-compat 증명.
+
+- **L7 회귀 검증 매트릭스**:
+  - axia-geo: **1256** PASS (sphere u-slice threshold 200 → 700, 동일
+    architectural contract 다른 absolute scale)
+  - axia-wasm: **54** PASS
+  - vitest (TS): ToolManagerRefactored.test 82 + HoverPickPromote.test 13
+    + 본 PR 추가 MCP migration 회귀
+  - MCP server (axia-mcp-server): **163/163** PASS (이전 1 pre-existing
+    fail 해소)
+  - 절대 #[ignore] 금지 준수.
+
+**메모리 영향** (r=5 cylinder, Path B):
+- Side surface: ~16 → ~38 tris (×2.4)
+- Top face fan: ~22 → ~78 tris (×3.5)
+- Rim wireframe: ~22 → ~78 segs (×3.5)
+- 합계 cylinder 1개: ~150 → ~360 verts (+210 verts, 무시 가능).
+- LOD 는 별도 phase (트리거 미정).
+
+**관련 commits / PRs**:
+- `0c119e4` — chord_tol refinement (mesh.rs ANALYTIC_CHORD_TOL 0.1→0.02)
+- `c62bbfd` — hover unification (ToolManagerRefactored.ts Mechanism 2)
+- `b5bf85c` — MCP legacy API migration (4 capabilities + 7 tests)
+- PR #14 (merged `98958ed`) — 위 3 commit 통합 PR
+
+**Cross-link**: ADR-038 P23.5 (surface-aware normals), ADR-049 §4
+(Form/Property layer truth vs view), ADR-050 P-5c (As-Shape draw API),
+ADR-077 V-3 (visual baseline workflow), ADR-087 K-ζ (legacy WASM
+deletion), ADR-088 (curve_owner_id), ADR-089 A-κ (closed-curve face
+render fast-path), LOCKED #15 (P22.5 owner-ID uniformity), LOCKED #16
+(P23 surface-aware normals).
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
