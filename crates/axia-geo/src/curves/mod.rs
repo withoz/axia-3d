@@ -105,6 +105,49 @@ pub enum AnalyticCurve {
     },
 }
 
+impl AnalyticCurve {
+    /// ADR-103-ε-2 — Migrate world-space DVec3 fields from Y-up to Z-up.
+    /// `(x, y, z) → (x, -z, y)`. +90° rotation around +X axis.
+    ///
+    /// **Scope**: positions (center, control points) + direction vectors
+    /// (normal, basis_u). Angles (start_angle, end_angle) and knots
+    /// preserved as numeric values — they live in the curve's local
+    /// parameter space defined by (normal, basis_u).
+    ///
+    /// `Line` variant has no DVec3 fields — its endpoints reference mesh
+    /// vertices which are rotated separately by `Mesh::migrate_y_up_to_z_up`.
+    pub fn migrate_y_up_to_z_up(&mut self) {
+        // Inline rotation to avoid cross-module import.
+        let rotate = |v: glam::DVec3| -> glam::DVec3 {
+            glam::DVec3::new(v.x, -v.z, v.y)
+        };
+        match self {
+            AnalyticCurve::Line { .. } => {
+                // VertId-only — verts rotated by mesh layer.
+            }
+            AnalyticCurve::Circle { center, normal, basis_u, .. } => {
+                *center = rotate(*center);
+                *normal = rotate(*normal);
+                *basis_u = rotate(*basis_u);
+            }
+            AnalyticCurve::Arc { center, normal, basis_u, .. } => {
+                *center = rotate(*center);
+                *normal = rotate(*normal);
+                *basis_u = rotate(*basis_u);
+            }
+            AnalyticCurve::Bezier { control_pts } => {
+                for p in control_pts { *p = rotate(*p); }
+            }
+            AnalyticCurve::BSpline { control_pts, .. } => {
+                for p in control_pts { *p = rotate(*p); }
+            }
+            AnalyticCurve::NURBS { control_pts, .. } => {
+                for p in control_pts { *p = rotate(*p); }
+            }
+        }
+    }
+}
+
 /// Operations common to all curve variants.
 pub trait CurveOps {
     /// Evaluate the curve at parameter `t`.
@@ -318,5 +361,60 @@ mod tests {
         };
         let len = c.arc_length(&mesh).unwrap();
         assert!((len - 4.0 * std::f64::consts::PI).abs() < 1e-9);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-103-ε-2 — AnalyticCurve Y-up → Z-up rotation
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr103_epsilon2_circle_migrates_center_normal_basis_u() {
+        // Y-up "horizontal" circle on XZ plane: normal=Y, basis_u=X
+        let mut c = AnalyticCurve::Circle {
+            center: DVec3::new(0.0, 5.0, 0.0),  // elevated 5 in Y-up
+            radius: 3.0,
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+        };
+        c.migrate_y_up_to_z_up();
+        if let AnalyticCurve::Circle { center, normal, basis_u, radius } = &c {
+            // (0,5,0) → (0,0,5) — elevated in Z-up
+            assert!((*center - DVec3::new(0.0, 0.0, 5.0)).length() < 1e-9);
+            // Y → Z (now horizontal in Z-up = on XY plane)
+            assert!((*normal - DVec3::Z).length() < 1e-9);
+            // X unchanged
+            assert!((*basis_u - DVec3::X).length() < 1e-9);
+            // radius unchanged
+            assert_eq!(*radius, 3.0);
+        } else { panic!("expected Circle"); }
+    }
+
+    #[test]
+    fn adr103_epsilon2_line_migration_is_no_op() {
+        // Line stores VertId only — rotation handled by Mesh vertex pass.
+        let mut c = AnalyticCurve::Line {
+            start: VertId::default(),
+            end: VertId::default(),
+        };
+        c.migrate_y_up_to_z_up();
+        // No DVec3 to verify; just ensure no panic and variant unchanged.
+        assert!(matches!(c, AnalyticCurve::Line { .. }));
+    }
+
+    #[test]
+    fn adr103_epsilon2_bezier_migrates_all_control_points() {
+        let mut c = AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::ZERO,
+                DVec3::Y,                       // (0,1,0) → (0,0,1)
+                DVec3::new(1.0, 1.0, 1.0),      // (1,1,1) → (1,-1,1)
+            ],
+        };
+        c.migrate_y_up_to_z_up();
+        if let AnalyticCurve::Bezier { control_pts } = &c {
+            assert!((control_pts[0] - DVec3::ZERO).length() < 1e-9);
+            assert!((control_pts[1] - DVec3::Z).length() < 1e-9);
+            assert!((control_pts[2] - DVec3::new(1.0, -1.0, 1.0)).length() < 1e-9);
+        } else { panic!("expected Bezier"); }
     }
 }
