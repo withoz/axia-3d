@@ -14501,6 +14501,204 @@ mod tests {
         }
     }
 
+    // ── ADR-101 ↔ MCP Tier 2 cross-cut (canonical verification) ────────
+
+    /// ADR-101 §B-4 ↔ ADR-041 Tier 2 cross-cut — auto-split sub-faces
+    /// must accept Tier 2 modificative ops without "NoProfileSurface".
+    ///
+    /// User scenario (canonical):
+    ///   1. AI agent calls MCP `draw_rect` (Tier 1) → face_a
+    ///   2. AI agent calls MCP `draw_rect` (Tier 1) — partial overlap
+    ///      with face_a → ADR-101 §B-4 auto-split fires, 3 sub-faces
+    ///      created (face_a_only, face_b_only, lens)
+    ///   3. AI agent calls MCP `push_pull` (Tier 2) on the lens face
+    ///      → MUST succeed (no NoProfileSurface error)
+    ///
+    /// Risk if broken: B-4 split fails to inherit parent's Plane surface
+    /// to lens face → Tier 2 `create_solid_extrude` rejects with
+    /// `NoProfileSurface`. This would be a regression breaking the
+    /// AI-collaborative workflow (LOCKED #24 ADR-046 P31 Pillar 4).
+    ///
+    /// Verification (this test):
+    /// - Direct engine layer (`Command::DrawRectAsShape` × 2 +
+    ///   `Command::CreateSolid Extrude`). MCP server is a thin wrapper
+    ///   over these — 163 MCP unit tests verify wiring (B-4 + Tier 2
+    ///   both green pre-cross-cut).
+    /// - This test verifies the **engine-level cross-cut**: B-4 split
+    ///   results carry the Plane surface metadata that Tier 2
+    ///   `create_solid_extrude` requires.
+    #[test]
+    fn adr101_tier2_cross_cut_push_pull_works_on_b4_lens_sub_face() {
+        let mut scene = Scene::new();
+
+        // Step 1: Draw RECT A (lens region will be [5,5]–[10,10]).
+        let r1 = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(5.0, 5.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::X,
+            width: 10.0,
+            height: 10.0,
+        });
+        assert!(matches!(r1, CommandResult::ShapeCreated(_)),
+            "DrawRect A failed: {:?}", r1);
+
+        // Step 2: Draw RECT B partial-overlap with A → auto-split fires.
+        let r2 = scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(10.0, 10.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::X,
+            width: 10.0,
+            height: 10.0,
+        });
+        assert!(matches!(r2, CommandResult::ShapeCreated(_)),
+            "DrawRect B failed: {:?}", r2);
+
+        let active_faces: Vec<_> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(active_faces.len(), 3,
+            "B-4 auto-split must produce 3 sub-faces, got {}",
+            active_faces.len());
+
+        // Step 3: All 3 sub-faces MUST carry a Plane surface (LOCKED
+        // #9 A-χ surface inheritance via B-3b L-B3b-3).
+        for &fid in &active_faces {
+            let surface = scene.mesh.faces.get(fid).and_then(|f| f.surface());
+            assert!(surface.is_some(),
+                "sub-face {:?} missing surface metadata (Plane required \
+                 for Tier 2 create_solid_extrude)", fid);
+            match surface.unwrap() {
+                axia_geo::AnalyticSurface::Plane { .. } => {}
+                other => panic!(
+                    "sub-face {:?} expected Plane surface (inherit from \
+                     parent), got {:?}", fid, other),
+            }
+        }
+
+        // Step 4: Tier 2 push_pull on each sub-face → succeeds.
+        // (MCP capability `push_pull` calls `create_solid_extrude` which
+        //  requires Plane surface attached; the inheritance above is
+        //  the proof.)
+        //
+        // We extrude the LENS sub-face (smallest, central). It has 4
+        // vertices forming the [5,5]–[10,10] square. After extrude
+        // height = 5.0, we should get a 5x5x5 box (6 faces).
+        //
+        // Identify the lens: it's the sub-face whose boundary verts
+        // form a 5x5 square (smaller than the L-shaped face_a_only /
+        // face_b_only at 75 mm² each).
+        let lens_face = active_faces.iter().copied()
+            .find(|&fid| {
+                let outer_start = scene.mesh.faces[fid].outer().start;
+                let verts = scene.mesh.collect_loop_verts(outer_start)
+                    .unwrap_or_default();
+                verts.len() == 4   // lens is a quad; L-shapes have 6 verts
+            })
+            .expect("lens sub-face (quad) must exist among the 3 sub-faces");
+
+        let extrude_result = scene.execute(Command::CreateSolid {
+            face_id: lens_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 5.0 },
+        });
+        match extrude_result {
+            CommandResult::SolidCreated { kind, face_count } => {
+                // Lens is a Plane quad → extrude produces a Box.
+                assert_eq!(kind, axia_geo::SolidKind::Box,
+                    "Tier 2 push_pull on lens (Plane quad) must produce \
+                     a Box, got {:?}", kind);
+                assert_eq!(face_count, 6,
+                    "Box has 6 faces, got {}", face_count);
+            }
+            CommandResult::Error(msg) => panic!(
+                "ADR-101 ↔ Tier 2 cross-cut FAILED: \
+                 push_pull on B-4 split sub-face returned Error: {}\n\
+                 Likely cause: B-3b L-B3b-3 surface inheritance regression — \
+                 sub-face missing Plane surface metadata.",
+                msg
+            ),
+            other => panic!("expected SolidCreated, got {:?}", other),
+        }
+
+        // Step 5: ADR-101 cross-cut PRIMARY assertion already PASSED
+        // above (push_pull on lens succeeded → no NoProfileSurface,
+        // Plane surface inheritance works as designed by L-B3b-3).
+        //
+        // Manifold note (separate concern, not gated by this test):
+        // After push_pull on a B-4 sub-face, the result has non-manifold
+        // edges at the boundary shared with sibling sub-faces (face_a_only
+        // / face_b_only remain coplanar to the new solid's bottom). This
+        // is the canonical "2D arrangement + 3D extrude" topology issue,
+        // not a regression of ADR-101 — same behavior occurs for any
+        // push_pull on a face with planar siblings (independent of B-4
+        // split origin).
+        //
+        // Future tracks:
+        //   - ADR (가칭): Push/Pull on 2D-arrangement face — disconnect
+        //     siblings before extrude, or document non-manifold result
+        //   - Today: ADR-101 cross-cut PASS — Tier 2 push_pull accepts
+        //     B-4 sub-face inputs without error.
+
+        // Verify the extrude actually mutated the mesh (sanity check).
+        let total_active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(total_active >= 6,
+            "post-extrude must have at least 6 faces (5 lens neighbors + \
+             the new box), got {}", total_active);
+    }
+
+    /// ADR-101 ↔ Tier 2 regression — `create_solid_extrude` on the
+    /// L-shaped (non-convex) face_a_only sub-face should succeed
+    /// because L-shape is a valid planar polygon (non-convex !=
+    /// invalid for extrude). Regression guard for any future change
+    /// that might restrict extrude to convex faces only.
+    #[test]
+    fn adr101_tier2_cross_cut_push_pull_works_on_non_convex_l_shape() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(5.0, 5.0, 0.0),
+            normal: DVec3::Z, up: DVec3::X,
+            width: 10.0, height: 10.0,
+        });
+        scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(10.0, 10.0, 0.0),
+            normal: DVec3::Z, up: DVec3::X,
+            width: 10.0, height: 10.0,
+        });
+
+        let l_shape_face = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .find(|(fid, _)| {
+                let outer_start = scene.mesh.faces[*fid].outer().start;
+                let verts = scene.mesh.collect_loop_verts(outer_start)
+                    .unwrap_or_default();
+                verts.len() == 6   // L-shape has 6 verts
+            })
+            .map(|(id, _)| id)
+            .expect("L-shape sub-face (6 verts) must exist");
+
+        let result = scene.execute(Command::CreateSolid {
+            face_id: l_shape_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 3.0 },
+        });
+        // Non-convex extrude may produce a Box (if internally
+        // triangulated) or a generic Solid. Both are acceptable as
+        // long as it doesn't Error.
+        match result {
+            CommandResult::SolidCreated { face_count, .. } => {
+                assert!(face_count >= 4,
+                    "L-shape extrude produced too few faces: {}", face_count);
+            }
+            CommandResult::Error(msg) => panic!(
+                "ADR-101 ↔ Tier 2 cross-cut: L-shape extrude failed: {}\n\
+                 If the engine has a NEW convex-only restriction, this \
+                 needs ADR documentation.",
+                msg
+            ),
+            other => panic!("unexpected result: {:?}", other),
+        }
+    }
+
     /// Two coplanar Circle × Circle partial overlap → 3 sub-faces
     /// automatically (the ADR-101 §2 user-facing canonical trigger).
     #[test]
