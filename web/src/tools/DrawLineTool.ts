@@ -715,16 +715,21 @@ export class DrawLineTool implements ITool {
       debugLog('[Line] Drawing plane locked from face pick, normal=',
         worldNormal.toArray().map(v => v.toFixed(3)));
     } else {
-      // Fall back to view-based workplane through the computed click point
+      // Fall back to view-based workplane through the computed click point.
+      // ADR-103-δ-1 (Z-up):
+      //   3d/top/bottom default = XY ground (Z=0), normal +Z
+      //   front/back = XZ wall (Y=0), normal +Y
+      //   right/left = YZ wall (X=0), normal +X
       const vm = (this.ctx.viewport as { viewMode?: string }).viewMode ?? '3d';
       let normal: THREE.Vector3;
       switch (vm) {
-        case 'front': case 'back':  normal = new THREE.Vector3(0, 0, 1); break;
+        case 'front': case 'back':  normal = new THREE.Vector3(0, 1, 0); break;
         case 'right': case 'left':  normal = new THREE.Vector3(1, 0, 0); break;
-        default:                    normal = new THREE.Vector3(0, 1, 0); break;
+        default:                    normal = new THREE.Vector3(0, 0, 1); break;
       }
       const pt = this.ctx.get3DPoint(e) ?? new THREE.Vector3();
-      // 2026-04-28 — 바닥면 (default cardinal plane) 좌표 정확히 0 으로 snap.
+      // ADR-103-δ-1 — cardinal plane snap (좌표 정확히 0 으로). 어떤 cardinal
+      // normal 이라도 동일 자동 처리 (axis 무관).
       if (Math.abs(normal.x) > 0.999) pt.x = 0;
       else if (Math.abs(normal.y) > 0.999) pt.y = 0;
       else if (Math.abs(normal.z) > 0.999) pt.z = 0;
