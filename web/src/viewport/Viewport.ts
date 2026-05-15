@@ -168,13 +168,22 @@ export class Viewport {
   // 2026-04-23: 기본 ON — "건축 그림자"(Projected Planar + MinEquation 균일
   // blending)를 default로 채택. 사용자는 메뉴 "보기 → 건축 그림자"로 토글.
   private _projectedShadowEnabled: boolean = true;
-  // ADR-103-ζ-shadow: Z-up sun travel direction. Y-up 시대 default
-  // (-0.408, -0.816, -0.408) 의 큰 컴포넌트 (-0.816) 가 Y (= sky 반대)
-  // 였음. Z-up 정합: 큰 -컴포넌트 = Z (= sky 반대 = ground 향함).
-  // (x, y, z)_yup → (x, -z, y)_zup 회전: (-0.408, -0.816, -0.408) →
-  // (-0.408, 0.408, -0.816). 의미: sun travel 가 south-east 방향 +
-  // 강한 -Z (지면 향함).
-  private _sunTravel = new THREE.Vector3(-0.408, 0.408, -0.816);
+  // ADR-103-ζ-shadow + post-merge fix: Z-up sun travel direction must
+  // match dirLight.position (Three.js VSM shadow source).
+  //
+  // dirLight.position = (8000, 10000, 15000) (set later in init) → sun
+  // position at +X+Y+Z octant (right-back-above). Sun travel direction
+  // = -normalize(position) = approximately (-0.41, -0.51, -0.76).
+  //
+  // 이전 commit `b2c8305` 에서 ε 회전 formula `(x, y, z) → (x, -z, y)`
+  // 를 sun_travel direction vector 에 잘못 적용해 Y component sign 이
+  // dirLight position 과 불일치 (VSM shadow vs projected shadow 방향
+  // 평행 안 됨). Direct Y↔Z swap 으로 정정.
+  //
+  // Sun travel: 사용자 facing default — 카메라 (+X+Y+Z) 가까운 octant
+  // 에서 빛 들어와 반대쪽 (-X-Y-Z) 방향으로 진행 → ground 에 shadow
+  // cast.
+  private _sunTravel = new THREE.Vector3(-0.408, -0.508, -0.760);
 
   // ═══ Directional light (Phase 2 VSM) ═══
   // castShadow은 기본 false, setProjectedShadowEnabled(true) 시 켜짐.
