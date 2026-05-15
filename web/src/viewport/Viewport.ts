@@ -393,11 +393,11 @@ export class Viewport {
   /** X, Y 축 연장선 (양방향 ±500m, 바닥면 축) */
   private createAxisLines() {
     const length = 100000000; // 100km
-    // CAD 규약: X=red(바닥), Y=green(바닥), Z=blue(위쪽)
-    // Three.js 매핑: X→X, Y→Three.js Z, Z→Three.js Y
+    // ADR-103 (Z-up): X=red(오른쪽), Y=green(깊이/forward), Z=blue(위쪽)
+    // Three.js 매핑 = engine 매핑 = identity. X→X, Y→Y, Z→Z.
     const axisLines: [number[], THREE.ColorRepresentation][] = [
-      [[0,0,0, length,0,0], 0xff4444],  // X = red (오른쪽, Three.js X)
-      [[0,0,0, 0,0,-length], 0x44cc44],  // Y = green (깊이, Three.js -Z)
+      [[0,0,0, length,0,0], 0xff4444],  // X = red (오른쪽)
+      [[0,0,0, 0,length,0], 0x44cc44],  // Y = green (깊이/forward, ADR-103 Z-up)
     ];
     for (const [pts, color] of axisLines) {
       const geo = new LineGeometry();
@@ -428,12 +428,12 @@ export class Viewport {
     const headLen  = 0.25;
     const headW    = 0.1;
 
-    // CAD 규약: X=red(오른쪽), Y=green(깊이), Z=blue(위쪽)
-    // Three.js 매핑: X→(1,0,0), Y→(0,0,1), Z→(0,1,0)
+    // ADR-103 (Z-up): X=red(오른쪽), Y=green(깊이), Z=blue(위쪽).
+    // Three.js 매핑 = engine 매핑 = identity (no axis swap).
     const axesDef: { dir: THREE.Vector3; color: number; label: string }[] = [
       { dir: new THREE.Vector3(1, 0, 0), color: 0xff4444, label: 'X' },
-      { dir: new THREE.Vector3(0, 0, -1), color: 0x44cc44, label: 'Y' },
-      { dir: new THREE.Vector3(0, 1, 0), color: 0x4488ff, label: 'Z' },
+      { dir: new THREE.Vector3(0, 1, 0), color: 0x44cc44, label: 'Y' },
+      { dir: new THREE.Vector3(0, 0, 1), color: 0x4488ff, label: 'Z' },
     ];
 
     for (const { dir, color, label } of axesDef) {
@@ -592,8 +592,9 @@ export class Viewport {
     });
 
     const plane = new THREE.Mesh(geo, mat);
-    plane.rotation.x = -Math.PI / 2;  // XZ plane (y=0)
-    plane.position.y = 0;
+    // ADR-103 (Z-up): PlaneGeometry 의 default 평면 = XY (Three.js local).
+    // 별도 회전 없이 그대로 사용 → 월드 좌표상 XY 평면 (Z=0, ground).
+    plane.position.set(0, 0, 0);
     plane.renderOrder = -10;            // mesh 뒤에
     plane.frustumCulled = false;        // 항상 그리기
     plane.userData.noPick = true;
@@ -848,14 +849,13 @@ export class Viewport {
     this._viewMode = mode;
 
     if (mode === '3d') {
-      // ADR-103-γ (Z-up): 그리드 기본 평면 = XY (Z=0 ground).
-      // 기존 InfiniteGrid 가 XZ 평면 위에 그려지므로 X축 -90° 회전으로
-      // XY 평면 정합 (Industry CAD parity).
-      this.infiniteGrid.rotation.set(-Math.PI / 2, 0, 0);
+      // ADR-103 (Z-up): InfiniteGrid 의 PlaneGeometry 가 XY native →
+      // gridGroup rotation = identity. axisLines 도 native (+X red /
+      // +Y green) 이므로 identity 회전.
+      this.infiniteGrid.rotation.set(0, 0, 0);
       this.infiniteGrid.position.set(0, 0, 0);
-      const groundRot = new THREE.Euler(-Math.PI / 2, 0, 0);
       for (const al of this.axisLines) {
-        al.rotation.copy(groundRot);
+        al.rotation.set(0, 0, 0);
         al.position.set(0, 0, 0);
       }
       this.updateCameraFromSpherical();
@@ -906,30 +906,31 @@ export class Viewport {
 
       cam.lookAt(this.orbitTarget);
 
-      // ADR-103-γ (Z-up): 기본 그리드 = XY 평면 (Z=0).
-      // top/bottom 에서 평면이 화면에 정합되어 보임.
-      // front/back/right/left 는 XZ/YZ wall 로 회전.
-      this.infiniteGrid.rotation.set(-Math.PI / 2, 0, 0);
+      // ADR-103 (Z-up): grid PlaneGeometry 는 XY native.
+      // top/bottom: identity (XY ground 표시).
+      // front/back: X축 +π/2 회전 → XZ wall (Y=0).
+      // right/left: Y축 -π/2 회전 → YZ wall (X=0).
+      this.infiniteGrid.rotation.set(0, 0, 0);
       this.infiniteGrid.position.set(0, 0, 0);
-      const axisRot = new THREE.Euler(-Math.PI / 2, 0, 0); // default = XY ground
+      const axisRot = new THREE.Euler(0, 0, 0);
       switch (mode) {
         case 'top':
         case 'bottom':
-          // XY 평면: 기본 회전 (-π/2 around X) — already set
-          this.infiniteGrid.rotation.set(-Math.PI / 2, 0, 0);
-          axisRot.set(-Math.PI / 2, 0, 0);
-          break;
-        case 'front':
-        case 'back':
-          // XZ 평면 (Y=0): grid 가 화면과 평행하려면 identity
+          // XY ground — identity
           this.infiniteGrid.rotation.set(0, 0, 0);
           axisRot.set(0, 0, 0);
           break;
+        case 'front':
+        case 'back':
+          // XZ wall (Y=0): X축 +π/2 회전
+          this.infiniteGrid.rotation.set(Math.PI / 2, 0, 0);
+          axisRot.set(Math.PI / 2, 0, 0);
+          break;
         case 'right':
         case 'left':
-          // YZ 평면 (X=0): Y축 기준 -90° 회전 (Y forward → X forward 화면)
-          this.infiniteGrid.rotation.set(0, -Math.PI / 2, 0);
-          axisRot.set(0, -Math.PI / 2, 0);
+          // YZ wall (X=0): Y축 +π/2 회전
+          this.infiniteGrid.rotation.set(0, Math.PI / 2, 0);
+          axisRot.set(0, Math.PI / 2, 0);
           break;
       }
       for (const al of this.axisLines) {
