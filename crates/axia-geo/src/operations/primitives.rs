@@ -18,8 +18,10 @@ impl Mesh {
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
         let mut faces = Vec::new();
-        let up = DVec3::Y;
-        let arbitrary = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
+        // ADR-103-β-1 (Z-up migration): cylinder default axis = +Z.
+        // Industry CAD parity (SketchUp / Fusion / SolidWorks).
+        let up = DVec3::Z;
+        let arbitrary = if up.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
         let radial = up.cross(arbitrary).normalize();
         let tangent = up.cross(radial).normalize();
 
@@ -131,9 +133,14 @@ impl Mesh {
         depth: f64,
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
+        // ADR-103-β-1 (Z-up migration): parameter semantics 정렬
+        //   - width  → X (left/right)
+        //   - depth  → Y (front/back, away from viewer)
+        //   - height → Z (down/up)
+        // Industry CAD parity (SketchUp/Fusion/SolidWorks: Z-up + X-right).
         let hx = width  * 0.5;
-        let hy = height * 0.5;
-        let hz = depth  * 0.5;
+        let hy = depth  * 0.5;   // Y-axis half-extent = depth (forward)
+        let hz = height * 0.5;   // Z-axis half-extent = height (up)
 
         // 8 corners — naming: x{0|1}y{0|1}z{0|1}
         // 0 = -half, 1 = +half along that axis.
@@ -148,15 +155,18 @@ impl Mesh {
 
         // Right-hand rule winding: outward normal points away from box
         // interior. Each face uses ONLY the four corners on its plane.
+        // ADR-103-β-1 (Z-up): face label semantics:
+        //   index 0 = Bottom (-Z), 1 = Top (+Z), 2 = Front (-Y),
+        //   3 = Back (+Y), 4 = Right (+X), 5 = Left (-X).
         let mut faces = Vec::with_capacity(6);
-        // Bottom (Y=-hy, normal -Y) verts where y bit = 0
-        faces.push(self.add_face(&[v000, v100, v101, v001], material)?);
-        // Top (Y=+hy, normal +Y) verts where y bit = 1
-        faces.push(self.add_face(&[v010, v011, v111, v110], material)?);
-        // Front (Z=+hz, normal +Z) verts where z bit = 1
-        faces.push(self.add_face(&[v001, v101, v111, v011], material)?);
-        // Back (Z=-hz, normal -Z) verts where z bit = 0
+        // Bottom (Z=-hz, normal -Z) verts where z bit = 0
         faces.push(self.add_face(&[v000, v010, v110, v100], material)?);
+        // Top (Z=+hz, normal +Z) verts where z bit = 1
+        faces.push(self.add_face(&[v001, v101, v111, v011], material)?);
+        // Front (Y=-hy, normal -Y) verts where y bit = 0
+        faces.push(self.add_face(&[v000, v100, v101, v001], material)?);
+        // Back (Y=+hy, normal +Y) verts where y bit = 1
+        faces.push(self.add_face(&[v010, v011, v111, v110], material)?);
         // Right (X=+hx, normal +X) verts where x bit = 1
         faces.push(self.add_face(&[v100, v110, v111, v101], material)?);
         // Left (X=-hx, normal -X) verts where x bit = 0
@@ -167,19 +177,20 @@ impl Mesh {
         // any box face as profile. Mirrors ADR-032 P17 cylinder/cone caps.
         // Each face's plane: origin = face center, normal = outward axis,
         // basis_u = perpendicular axis. Order matches faces[] above.
+        // ADR-103-β-1 (Z-up): normal axes remapped per face label semantics.
         let face_planes: [(DVec3, DVec3, DVec3); 6] = [
-            // Bottom (face 0): origin (cx, cy-hy, cz), normal -Y, basis +X
-            (center + DVec3::new(0.0, -hy, 0.0), -DVec3::Y, DVec3::X),
-            // Top (face 1): origin (cx, cy+hy, cz), normal +Y, basis +X
-            (center + DVec3::new(0.0,  hy, 0.0),  DVec3::Y, DVec3::X),
-            // Front (face 2): origin (cx, cy, cz+hz), normal +Z, basis +X
-            (center + DVec3::new(0.0, 0.0,  hz),  DVec3::Z, DVec3::X),
-            // Back (face 3): origin (cx, cy, cz-hz), normal -Z, basis +X
+            // Bottom (face 0): origin (cx, cy, cz-hz), normal -Z, basis +X
             (center + DVec3::new(0.0, 0.0, -hz), -DVec3::Z, DVec3::X),
-            // Right (face 4): origin (cx+hx, cy, cz), normal +X, basis +Y
-            (center + DVec3::new( hx, 0.0, 0.0),  DVec3::X, DVec3::Y),
-            // Left (face 5): origin (cx-hx, cy, cz), normal -X, basis +Y
-            (center + DVec3::new(-hx, 0.0, 0.0), -DVec3::X, DVec3::Y),
+            // Top (face 1): origin (cx, cy, cz+hz), normal +Z, basis +X
+            (center + DVec3::new(0.0, 0.0,  hz),  DVec3::Z, DVec3::X),
+            // Front (face 2): origin (cx, cy-hy, cz), normal -Y, basis +X
+            (center + DVec3::new(0.0, -hy, 0.0), -DVec3::Y, DVec3::X),
+            // Back (face 3): origin (cx, cy+hy, cz), normal +Y, basis +X
+            (center + DVec3::new(0.0,  hy, 0.0),  DVec3::Y, DVec3::X),
+            // Right (face 4): origin (cx+hx, cy, cz), normal +X, basis +Z
+            (center + DVec3::new( hx, 0.0, 0.0),  DVec3::X, DVec3::Z),
+            // Left (face 5): origin (cx-hx, cy, cz), normal -X, basis +Z
+            (center + DVec3::new(-hx, 0.0, 0.0), -DVec3::X, DVec3::Z),
         ];
         let max_extent = hx.max(hy).max(hz) * 1.5;
         let plane_range = (-max_extent, max_extent);
@@ -231,8 +242,9 @@ impl Mesh {
         }
 
         let mut faces = Vec::new();
-        let up = DVec3::Y;
-        let arbitrary = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
+        // ADR-103-β-1 (Z-up migration): cone default axis = +Z.
+        let up = DVec3::Z;
+        let arbitrary = if up.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
         let radial = up.cross(arbitrary).normalize();
         let tangent = up.cross(radial).normalize();
 
@@ -354,21 +366,22 @@ impl Mesh {
 
         let mut faces = Vec::new();
 
-        // 극점 단일 정점
-        let pole_n = self.add_vertex(center + DVec3::new(0.0, radius, 0.0));
-        let pole_s = self.add_vertex(center + DVec3::new(0.0, -radius, 0.0));
+        // ADR-103-β-1 (Z-up): poles on +Z / -Z axis (industry CAD parity).
+        let pole_n = self.add_vertex(center + DVec3::new(0.0, 0.0,  radius));
+        let pole_s = self.add_vertex(center + DVec3::new(0.0, 0.0, -radius));
 
         // 중간 링: v = 1..v_segments-1 (남북극 제외)
+        // theta ∈ [0, π] = polar angle from +Z (north pole).
         let mut rings: Vec<Vec<VertId>> = Vec::with_capacity((v_segments - 1) as usize);
         for v in 1..v_segments {
             let theta = std::f64::consts::PI * (v as f64) / (v_segments as f64);
-            let y = radius * theta.cos();
+            let z = radius * theta.cos();   // ADR-103-β-1: latitude on Z axis
             let r = radius * theta.sin();
             let mut ring = Vec::with_capacity(u_segments as usize);
             for u in 0..u_segments {
                 let phi = 2.0 * std::f64::consts::PI * (u as f64) / (u_segments as f64);
                 let x = r * phi.cos();
-                let z = r * phi.sin();
+                let y = r * phi.sin();      // ADR-103-β-1: ring in XY plane
                 ring.push(self.add_vertex(center + DVec3::new(x, y, z)));
             }
             rings.push(ring);
@@ -391,16 +404,16 @@ impl Mesh {
         let theta_for_v = |v: u32| std::f64::consts::PI * (v as f64) / (v_segments as f64);
         let lat_for_v = |v: u32| std::f64::consts::FRAC_PI_2 - theta_for_v(v);
 
-        // 북극 cap — 삼각형 fan (winding: pole, next, u → outward +Y)
-        // u→next가 구의 측면에서 CCW이지만, pole 중심의 fan에서는 반대로
-        // 돌려야 normal이 +Y (바깥쪽)로 향함.
+        // ADR-103-β-1 (Z-up): phi 가 +Z 에서 본 CCW 방향이라 winding 이
+        // Y-up 시점과 반대 — fan 의 next_u/u 순서를 swap 해서 outward +Z.
+        // 북극 cap — 삼각형 fan (winding: pole, u, next → outward +Z)
         if let Some(first_ring) = rings.first() {
             for u in 0..u_segments {
                 let next_u = (u + 1) % u_segments;
                 let tri = vec![
                     pole_n,
-                    first_ring[next_u as usize],
                     first_ring[u as usize],
+                    first_ring[next_u as usize],
                 ];
                 let f = self.add_face(&tri, material)?;
                 let u_min = two_pi * (u as f64) / (u_segments as f64);
@@ -420,11 +433,13 @@ impl Mesh {
         for v in 0..(rings.len().saturating_sub(1)) {
             for u in 0..u_segments {
                 let next_u = (u + 1) % u_segments;
+                // ADR-103-β-1 (Z-up): phi CCW from +Z view → reverse
+                // quad winding for outward radial normal.
                 let quad = vec![
                     rings[v][u as usize],
-                    rings[v][next_u as usize],
-                    rings[v + 1][next_u as usize],
                     rings[v + 1][u as usize],
+                    rings[v + 1][next_u as usize],
+                    rings[v][next_u as usize],
                 ];
                 let f = self.add_face(&quad, material)?;
                 let u_min = two_pi * (u as f64) / (u_segments as f64);
@@ -444,14 +459,14 @@ impl Mesh {
             }
         }
 
-        // 남극 cap — 삼각형 fan (winding: u, next, pole → outward -Y)
-        // 북극과 대칭: 바깥쪽 normal이 -Y 향하도록 순서 설정.
+        // 남극 cap — 삼각형 fan (winding: next, u, pole → outward -Z)
+        // ADR-103-β-1 (Z-up): symmetry to north cap — swap u/next.
         if let Some(last_ring) = rings.last() {
             for u in 0..u_segments {
                 let next_u = (u + 1) % u_segments;
                 let tri = vec![
-                    last_ring[u as usize],
                     last_ring[next_u as usize],
+                    last_ring[u as usize],
                     pole_s,
                 ];
                 let f = self.add_face(&tri, material)?;
@@ -613,10 +628,11 @@ mod tests {
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let faces = mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
-        // Order from create_box: Bottom, Top, Front, Back, Right, Left.
+        // ADR-103-β-1 (Z-up): face label semantics —
+        //   Bottom (-Z), Top (+Z), Front (-Y), Back (+Y), Right (+X), Left (-X).
         let expected_normals = [
-            -DVec3::Y, DVec3::Y,  // Bottom, Top
-            DVec3::Z, -DVec3::Z,  // Front, Back
+            -DVec3::Z, DVec3::Z,  // Bottom, Top
+            -DVec3::Y, DVec3::Y,  // Front, Back
             DVec3::X, -DVec3::X,  // Right, Left
         ];
         for (i, &fid) in faces.iter().enumerate() {
@@ -732,8 +748,9 @@ mod tests {
         // True cone: v_min = 0 (apex), v_max = height (base).
         let p_apex = surf.evaluate(0.0, v_min);
         let p_base = surf.evaluate(0.0, v_max);
-        let r_apex = ((p_apex.x).powi(2) + (p_apex.z).powi(2)).sqrt();
-        let r_base = ((p_base.x).powi(2) + (p_base.z).powi(2)).sqrt();
+        // ADR-103-β-1 (Z-up): cone axis = +Z → radial extent = X-Y plane.
+        let r_apex = ((p_apex.x).powi(2) + (p_apex.y).powi(2)).sqrt();
+        let r_base = ((p_base.x).powi(2) + (p_base.y).powi(2)).sqrt();
         assert!(
             r_apex < 1e-3,
             "ADR-087 K-η: Cone apex (v={v_min}) radius should be 0, got {r_apex}",
@@ -780,8 +797,8 @@ mod tests {
         let segments = 16u32;
         let height = 100.0;
         let faces = mesh.create_cone(DVec3::ZERO, 50.0, height, segments, mat).unwrap();
-        // Find vertex at expected apex position (0, height, 0).
-        let apex_pos = DVec3::new(0.0, height, 0.0);
+        // ADR-103-β-1 (Z-up): apex now at (0, 0, height).
+        let apex_pos = DVec3::new(0.0, 0.0, height);
         let mut apex_count = 0;
         for (_, vert) in mesh.verts.iter().filter(|(_, v)| v.is_active()) {
             if (vert.pos() - apex_pos).length() < 1e-6 {
@@ -818,32 +835,32 @@ mod tests {
 
     #[test]
     fn sphere_poles_face_outward() {
-        // 북극 cap은 +Y, 남극 cap은 -Y 방향 normal 향해야 함
+        // ADR-103-β-1 (Z-up): 북극 cap = +Z, 남극 cap = -Z outward.
         let mut mesh = Mesh::new();
         let mat = MaterialId::new(0);
         let faces = mesh.create_sphere(DVec3::ZERO, 100.0, 16, 8, mat).unwrap();
 
-        // 극점 인근 face 판단: face의 평균 y가 매우 높거나 매우 낮은 것들
+        // 극점 인근 face 판단: face의 평균 z가 매우 높거나 매우 낮은 것들
         let mut pole_n_count = 0;
         let mut pole_s_count = 0;
         for fid in &faces {
             let start = mesh.faces[*fid].outer().start;
             let verts = mesh.collect_loop_verts(start).unwrap();
-            let mut avg_y = 0.0;
+            let mut avg_z = 0.0;
             for v in &verts {
-                avg_y += mesh.vertex_pos(*v).unwrap().y;
+                avg_z += mesh.vertex_pos(*v).unwrap().z;
             }
-            avg_y /= verts.len() as f64;
+            avg_z /= verts.len() as f64;
             let normal = mesh.faces[*fid].normal();
-            if avg_y > 80.0 {
-                // 북극 근처 — normal.y > 0 이어야 outward
-                assert!(normal.y > 0.0,
-                    "north cap face {:?} normal.y={} (expect >0)", fid, normal.y);
+            if avg_z > 80.0 {
+                // 북극 근처 — normal.z > 0 이어야 outward
+                assert!(normal.z > 0.0,
+                    "north cap face {:?} normal.z={} (expect >0)", fid, normal.z);
                 pole_n_count += 1;
-            } else if avg_y < -80.0 {
-                // 남극 근처 — normal.y < 0 이어야 outward
-                assert!(normal.y < 0.0,
-                    "south cap face {:?} normal.y={} (expect <0)", fid, normal.y);
+            } else if avg_z < -80.0 {
+                // 남극 근처 — normal.z < 0 이어야 outward
+                assert!(normal.z < 0.0,
+                    "south cap face {:?} normal.z={} (expect <0)", fid, normal.z);
                 pole_s_count += 1;
             }
         }
@@ -861,6 +878,136 @@ mod tests {
         mesh.create_sphere(DVec3::new(200.0, 0.0, 0.0), 50.0, 20, 14, mat).unwrap();
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "combined: {}", report.summary());
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-103-β-1 — Z-up coordinate migration regression suite
+    //
+    // Industry CAD parity (SketchUp / Fusion / SolidWorks): X=right,
+    // Y=depth (forward), Z=up. The 5 primitive constructors now place
+    // their "up" axis along +Z. These tests pin that decision.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr103_beta1_cylinder_axis_is_z_up() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let height = 50.0;
+        let _ = mesh.create_cylinder(DVec3::ZERO, 10.0, height, 12, mat).unwrap();
+        // Top ring verts must be at z = height, x/y in radial plane.
+        let top_z_count = mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()
+                && (v.pos().z - height).abs() < 1e-6
+                && v.pos().z > height - 1.0)
+            .count();
+        assert!(top_z_count >= 12,
+            "ADR-103-β-1: cylinder top ring must be on +Z plane (height={}), \
+             found {} verts there", height, top_z_count);
+    }
+
+    #[test]
+    fn adr103_beta1_cone_apex_on_positive_z() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let height = 60.0;
+        let _ = mesh.create_cone(DVec3::ZERO, 30.0, height, 12, mat).unwrap();
+        // Apex single vertex at (0, 0, height).
+        let apex_z = mesh.verts.iter()
+            .filter_map(|(_, v)| if v.is_active() { Some(v.pos().z) } else { None })
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!((apex_z - height).abs() < 1e-6,
+            "ADR-103-β-1: cone apex must be on +Z (expected z={}, got max z={})",
+            height, apex_z);
+    }
+
+    #[test]
+    fn adr103_beta1_box_top_face_normal_is_plus_z() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_box(DVec3::ZERO, 10.0, 10.0, 10.0, mat).unwrap();
+        // Face order: [Bottom, Top, Front, Back, Right, Left].
+        let top_normal = mesh.faces[faces[1]].normal();
+        assert!((top_normal - DVec3::Z).length() < 1e-6,
+            "ADR-103-β-1: box top face (index 1) must have +Z outward normal, \
+             got {:?}", top_normal);
+        let bottom_normal = mesh.faces[faces[0]].normal();
+        assert!((bottom_normal - (-DVec3::Z)).length() < 1e-6,
+            "ADR-103-β-1: box bottom face (index 0) must have -Z outward normal, \
+             got {:?}", bottom_normal);
+    }
+
+    #[test]
+    fn adr103_beta1_box_height_param_extends_along_z() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // width=2, height=20 (large), depth=4 → Z-extent must be 20, Y-extent 4.
+        let _ = mesh.create_box(DVec3::ZERO, 2.0, 20.0, 4.0, mat).unwrap();
+        let mut max_z = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for (_, v) in mesh.verts.iter().filter(|(_, vt)| vt.is_active()) {
+            max_z = max_z.max(v.pos().z);
+            max_y = max_y.max(v.pos().y);
+        }
+        assert!((max_z - 10.0).abs() < 1e-6,
+            "ADR-103-β-1: box `height` param must extend along Z (expected \
+             max z = 10, got {})", max_z);
+        assert!((max_y - 2.0).abs() < 1e-6,
+            "ADR-103-β-1: box `depth` param must extend along Y (expected \
+             max y = 2, got {})", max_y);
+    }
+
+    #[test]
+    fn adr103_beta1_sphere_north_pole_on_positive_z() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let radius = 30.0;
+        let _ = mesh.create_sphere(DVec3::ZERO, radius, 12, 8, mat).unwrap();
+        // North pole = single vertex at (0, 0, +radius).
+        let n_pole_z = mesh.verts.iter()
+            .filter_map(|(_, v)| if v.is_active() { Some(v.pos().z) } else { None })
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!((n_pole_z - radius).abs() < 1e-6,
+            "ADR-103-β-1: sphere north pole must be on +Z (expected z={}, \
+             got max z={})", radius, n_pole_z);
+        let s_pole_z = mesh.verts.iter()
+            .filter_map(|(_, v)| if v.is_active() { Some(v.pos().z) } else { None })
+            .fold(f64::INFINITY, f64::min);
+        assert!((s_pole_z + radius).abs() < 1e-6,
+            "ADR-103-β-1: sphere south pole must be on -Z (expected z={}, \
+             got min z={})", -radius, s_pole_z);
+    }
+
+    #[test]
+    fn adr103_beta1_cylinder_surface_axis_dir_is_plus_z() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 5.0, 20.0, 12, mat).unwrap();
+        // Side face (faces[2..]): AnalyticSurface::Cylinder.axis_dir = +Z.
+        let side_face = faces[2];
+        let surf = mesh.face_surface(side_face).expect("cylinder side surface");
+        if let AnalyticSurface::Cylinder { axis_dir, .. } = surf {
+            assert!((*axis_dir - DVec3::Z).length() < 1e-6,
+                "ADR-103-β-1: cylinder analytic axis_dir must be +Z, got {:?}",
+                axis_dir);
+        } else {
+            panic!("expected Cylinder surface, got {:?}", surf);
+        }
+    }
+
+    #[test]
+    fn adr103_beta1_all_primitives_invariants_pass() {
+        // 사용자 시연 시나리오: 4 primitive 가 Z-up 으로 동시 생성 시 invariants
+        // 모두 통과. ADR-007 winding + manifold 정합.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_box(DVec3::new(-100.0, 0.0, 0.0), 20.0, 20.0, 20.0, mat).unwrap();
+        mesh.create_cylinder(DVec3::new(-50.0, 0.0, 0.0), 10.0, 30.0, 16, mat).unwrap();
+        mesh.create_cone(DVec3::new(0.0, 0.0, 0.0), 12.0, 40.0, 16, mat).unwrap();
+        mesh.create_sphere(DVec3::new(50.0, 0.0, 0.0), 15.0, 16, 12, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-103-β-1: 4-primitive Z-up scene must pass all invariants; \
+             got: {}", report.summary());
     }
 
     // ────────────────────────────────────────────────────────────────────
