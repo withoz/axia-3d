@@ -2392,8 +2392,9 @@ export class ToolManager {
 
   /** Get the drawing plane normal based on current view mode.
    *  - Sketch mode ACTIVE → the sketch plane (overrides view mode)
-   *  - 3d / top / bottom → Y=0 plane (XZ ground)
-   *  - front / back → Z=0 plane (XY wall)
+   *  ADR-103-δ-1 (Z-up):
+   *  - 3d / top / bottom → Z=0 plane (XY ground)
+   *  - front / back → Y=0 plane (XZ wall)
    *  - right / left → X=0 plane (YZ wall)
    */
   private getWorkPlane(): THREE.Plane {
@@ -2406,12 +2407,14 @@ export class ToolManager {
     switch (vm) {
       case 'front':
       case 'back':
-        return new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // Z=0
+        // ADR-103-δ-1 (Z-up): XZ wall = Y=0 plane.
+        return new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
       case 'right':
       case 'left':
         return new THREE.Plane(new THREE.Vector3(1, 0, 0), 0); // X=0
       default: // '3d', 'top', 'bottom'
-        return new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // Y=0
+        // ADR-103-δ-1 (Z-up): XY ground = Z=0 plane.
+        return new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
     }
   }
 

@@ -138,9 +138,10 @@ export class DrawRectTool implements ITool {
     const w = value;
     const h = value2 != null ? value2 : value;
     const origin = this.rectStart || new THREE.Vector3(0, 0, 0);
+    // ADR-103-δ-1 (Z-up): fallback plane = XY ground (Z=0), normal +Z.
     const plane = this.plane || {
-      normal: new THREE.Vector3(0, 1, 0),
-      up: new THREE.Vector3(0, 0, 1),
+      normal: new THREE.Vector3(0, 0, 1),
+      up: new THREE.Vector3(0, 1, 0),
       right: new THREE.Vector3(1, 0, 0),
       onFace: false,
     };

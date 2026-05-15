@@ -135,9 +135,10 @@ export class DrawCircleTool implements ITool {
   applyVCBValue(value: number): void {
     if (!this.circleCenter) return;
 
+    // ADR-103-δ-1 (Z-up): fallback plane = XY ground (Z=0), normal +Z.
     const plane = this.plane || {
-      normal: new THREE.Vector3(0, 1, 0),
-      up: new THREE.Vector3(0, 0, 1),
+      normal: new THREE.Vector3(0, 0, 1),
+      up: new THREE.Vector3(0, 1, 0),
       right: new THREE.Vector3(1, 0, 0),
       onFace: false,
     };
