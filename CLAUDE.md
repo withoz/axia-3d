@@ -2415,6 +2415,114 @@ guarantee.
 - ADR-101 §B-3b L-B3b-3 — surface inheritance 답습
 - ADR-101 cross-cut finding (2026-05-15) — 본 ADR trigger
 
+### 43. ADR-103 Z-up Coordinate Migration (Engine + Viewport, 2026-05-15) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-15)**:
+> "지금 문제는 기능 부족이 아니라 '틀린 좌표계 위에서 CAD 커널이
+> 돌아가고 있는 문제' 이며, 이를 해결하려면 반드시 엔진 Z-up (B)
+> 전환이 선행되어야 한다."
+
+AxiA 의 5개월간 implicit Y-up convention 을 명시적 Z-up 으로 마이
+그레이션. ADR-049 LOCKED #26 의 5개월 implicit → explicit 결재 패턴
+답습. P1 페르소나 (건축/디자인) CAD parity (SketchUp / Fusion /
+SolidWorks) 의 *first-impression* 신뢰성 unlock + boundary epsilon
+누적 영구 종료.
+
+**절대 우선순위 (canonical, 변경 불가)**:
+```
+1. ADR-103 Z-up (선행 조건)
+2. Path B (Sphere/Cone/Torus 확장)
+3. STEP timing 단축
+4. NURBS-aware coplanar intersect
+```
+
+Path B 를 Z-up 보다 먼저 진행하면 *틀린 좌표계 위에서 확장* → bug
+증폭. 이 인과는 모든 후속 architectural ADR 의 anchor.
+
+**6 PR sequence (main 진입)**:
+- PR #42 Amendment 1 (audit + 5-split) — `159b8bd`
+- PR #43 β-1 (5 primitive Z-up engine) — `34a2fa3`
+- PR #44 Amendment 2 (4-split + β-2 audit) — `7abf618`
+- PR #45 γ (Viewport camera + grid + 6 view modes) — `bd70d16`
+- PR #46 γ-fix #1 (axis lines + arrows + grid double-rotation) — `95d2417`
+- PR #47 ζ (DXF identity + Y-up mesh inverse + shadow Z-up) — `86a08ea`
+
+**4 post-merge hotfix (사용자 시연 트리거)**:
+- #1 axis + grid double-rotation (`fb51b00`, in #46)
+- #2 orbit theta sign — Z-up CCW around +Z (open)
+- #3 shadow Z-up — sun/dirLight/Receiver::ground (`b2c8305`, in #47)
+- #4 mouse pick work plane — XY ground (Z=0) (open)
+
+**5 stacked PR (ζ 이후 merge 예정)**:
+- δ-1 drawing plane + primitive defaults
+- δ-2 BoxTool deep Z-up rewrite
+- orbit theta sign hotfix
+- ε-1 Snapshot V2→V3 vertex pos migration
+- ε-2 AnalyticSurface/Curve axis rotation
+- mouse pick work plane fix
+
+**Lock-ins (10개, canonical for ADR-103)**:
+- L-103-1 절대 우선순위 (Z-up 선행, 변경 불가)
+- L-103-2 Engine + Viewport 동시 flip (Option A/C 거부, Option B
+  full flip 채택)
+- L-103-3 Snapshot V2 → V3 load-time auto-rotate (사용자 facing
+  disruption 0)
+- L-103-4 Boundary I/O identity (DXF/STEP/IGES) + Y-up mesh inverse
+  (OBJ/STL/glTF +90° around +X)
+- L-103-5 Fixture 일괄 갱신 — initial sed-able assumption audit 후
+  semantic 분류 (Amendment 1/2)
+- L-103-6 Visual baseline regenerate (ADR-077 V-4 follow-up 트랙)
+- L-103-7 사용자 시연 게이트 필수 (4 post-merge hotfix evidence)
+- L-103-8 ADR-026 P12 SSOT 보존 (cardinal plane snap 좌표계 무관)
+- L-103-9 ADR-046 P31 #4 additive only (사용자 facing API 변경 0)
+- L-103-10 절대 #[ignore] 금지
+
+**누적 회귀**: +17 신규 (β-1 +7, ε-1 +3, ε-2 +7), 0 regression.
+axia-geo 1315 / axia-core 296 / vitest 1828 PASS. 절대 #[ignore]
+금지 17/17 준수.
+
+**사용자 facing 매트릭스** (Before → After):
+- Engine primitive height: Y → **Z**
+- Viewport camera up: Y → **Z**
+- Grid: XZ plane (Y=0) → **XY ground (Z=0)**
+- Drawing plane (3d default): XZ ground → **XY ground**
+- BoxTool 3-click extrude: Y → **Z**
+- Orbit drag: drag right → scene left → **drag right → scene right**
+- Shadow ground: XZ → **XY**
+- Sun az/el: Y-up → **Z-up CAD (north=+Y, up=+Z)**
+- Snapshot: V2 → **V3** (V2 load auto-rotates)
+- DXF/DWG import: `(x,z,-y)` → **identity**
+- OBJ/STL/glTF import: identity → **+90° around +X**
+- Mouse pick (3d): Y=0 plane → **Z=0 plane**
+
+**Lessons (canonical for future architectural ADRs)** — ADR-103 §11.7:
+- **L1 사전 결재 절대 우선순위 강제** — 사용자 canonical anchor 가
+  순서를 명시 → 잘못된 priority 회피
+- **L2 audit-first vs sed assumption** — spec α-1 sed-able 가정 →
+  Amendment 1/2 사후 정정 (production / test 분리 자산 발견)
+- **L3 5개월 production / test 분리 자산** — β-2 production scope
+  = ∅, axis-agnostic algorithm 모범
+- **L4 시연 게이트의 architectural 가치** — 4 post-merge hotfix 모두
+  사용자 시연 후 발견 (test 만으로는 가시화 불가능, ADR-087 K-ζ
+  canonical 답습)
+- **L5 atomic stacked PR pattern** — δ-1/δ-2/orbit/ε-1/ε-2/mouse
+  pick 5 stacked PR 의 PR queue 관리 canonical
+
+**Cross-link**:
+- ADR-049 LOCKED #26 (5개월 implicit → explicit pattern anchor)
+- ADR-091 §E L1 (snapshot schema migration canonical)
+- ADR-077 V-4 (visual baseline regenerate procedure, η deferred)
+- ADR-046 P31 #4 (additive only)
+- ADR-026 P12 (cardinal plane SSOT, 좌표계 무관)
+- ADR-036 P21.6 (STEP round-trip 1e-3 mm — boundary identity 후
+  tolerance 여유 확대)
+- ADR-035 P20.A (STEP AP242 primary)
+- ADR-079, ADR-080 (engine layer Z-up site)
+- ADR-081 W-η (STEP/IGES boundary)
+- ADR-087 K-ζ (사용자 시연 게이트 canonical)
+- ADR-094 §E L1 (additive-first + multi-gate atomic)
+- LOCKED #1, #5, #7, #26, #40, #41, #42 (좌표계 무관 정합 자동)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
