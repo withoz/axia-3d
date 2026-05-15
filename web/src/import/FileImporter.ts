@@ -413,6 +413,10 @@ export class FileImporter {
       obj.remove(child);
       group.add(child);
     }
+    // ADR-103-ζ (Z-up): OBJ is Y-up convention by industry standard. Apply
+    // +90° rotation around +X to map Y-up source → Z-up engine.
+    // (x, y, z)_yup → (x, -z, y)_zup
+    group.rotateX(Math.PI / 2);
     return group;
   }
 
@@ -426,6 +430,8 @@ export class FileImporter {
     const group = new THREE.Group();
     group.name = `import-stl-${name}`;
     group.add(mesh);
+    // ADR-103-ζ (Z-up): STL is Y-up convention typically. Rotate to Z-up.
+    group.rotateX(Math.PI / 2);
     return group;
   }
 
@@ -445,6 +451,8 @@ export class FileImporter {
             gltf.scene.remove(child);
             group.add(child);
           }
+          // ADR-103-ζ (Z-up): glTF Khronos standard = Y-up. Rotate to Z-up.
+          group.rotateX(Math.PI / 2);
           resolve(group);
         },
         (err) => reject(err),

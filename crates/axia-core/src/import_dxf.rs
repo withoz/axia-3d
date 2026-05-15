@@ -40,10 +40,13 @@ impl std::fmt::Display for DxfImportStats {
     }
 }
 
-/// DXF 좌표 → AXiA 좌표 변환 (Z-up → Y-up)
+/// DXF 좌표 → AXiA 좌표 변환.
+/// ADR-103-ζ (Z-up): AXiA 가 DXF 와 동일 Z-up convention 으로 마이그레이션됨.
+/// 이전: `(x, z, -y)` 회전 (Z-up → Y-up). 이후: identity (no rotation).
+/// DXF 와 AXiA 모두 X=right, Y=forward, Z=up → 직접 매핑.
 #[inline]
 fn cv(x: f64, y: f64, z: f64) -> DVec3 {
-    DVec3::new(x, z, -y)
+    DVec3::new(x, y, z)
 }
 
 impl Scene {
