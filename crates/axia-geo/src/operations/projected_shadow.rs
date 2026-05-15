@@ -80,17 +80,18 @@ struct Receiver {
 }
 
 impl Receiver {
-    /// Ground (y=0) infinite receiver.
+    /// Ground (z=0) infinite receiver — ADR-103-ζ Z-up convention.
+    /// Normal = +Z (sky), u = +X (east), v = +Y (north).
     fn ground() -> Self {
         Self {
             origin: DVec3::ZERO,
-            normal: DVec3::new(0.0, 1.0, 0.0),
+            normal: DVec3::new(0.0, 0.0, 1.0),
             u: DVec3::new(1.0, 0.0, 0.0),
-            v: DVec3::new(0.0, 0.0, 1.0),
+            v: DVec3::new(0.0, 1.0, 0.0),
             outline_2d: Vec::new(),
             holes_2d: Vec::new(),
             xz_aabb: None,           // infinite
-            y_range: (0.0, 0.0),
+            y_range: (0.0, 0.0),     // semantic = ground-axis (Z) range
         }
     }
 
@@ -112,7 +113,9 @@ impl Mesh {
     /// its receiver plane along normal by RECV_EPS (0.5mm) for z-fight.
     pub fn compute_ground_projected_shadows(&self, sun_dir: DVec3) -> Vec<f32> {
         let mut out = Vec::new();
-        if sun_dir.y > -1e-4 {
+        // ADR-103-ζ Z-up: sun must travel downward (sun_dir.z < 0) to cast
+        // shadows onto the +Z facing ground.
+        if sun_dir.z > -1e-4 {
             return out;
         }
 
@@ -155,9 +158,10 @@ impl Mesh {
                 .collect();
             if verts_3d.len() < 3 { continue; }
 
-            // Reject near-ground faces — ground receiver already handles them.
-            let max_y = verts_3d.iter().map(|v| v.y).fold(f64::NEG_INFINITY, f64::max);
-            if max_y < 1.0 { continue; }
+            // ADR-103-ζ Z-up: reject near-ground (z<1.0) faces — ground
+            // receiver already handles them.
+            let max_z = verts_3d.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+            if max_z < 1.0 { continue; }
 
             // Plane origin = centroid; normal = face.normal().
             let origin = verts_3d.iter().copied().sum::<DVec3>() / (verts_3d.len() as f64);
@@ -198,20 +202,22 @@ impl Mesh {
                 holes_2d.push(h2d);
             }
 
-            // World-space XZ AABB + y range for fast caster-receiver pair rejection.
+            // ADR-103-ζ Z-up: ground plane = XY, vertical axis = Z.
+            // `xz_aabb` 필드 이름 보존 — semantically = "ground-plane AABB".
+            // `y_range` 필드 이름 보존 — semantically = "vertical (Z) range".
             let mut min_x =  f64::INFINITY; let mut max_x = f64::NEG_INFINITY;
-            let mut min_z =  f64::INFINITY; let mut max_z = f64::NEG_INFINITY;
-            let mut min_y =  f64::INFINITY; let mut max_y_local = f64::NEG_INFINITY;
+            let mut min_g_v = f64::INFINITY; let mut max_g_v = f64::NEG_INFINITY; // Y (ground forward)
+            let mut min_z =  f64::INFINITY; let mut max_z = f64::NEG_INFINITY;     // Z (vertical)
             for p in &verts_3d {
                 if p.x < min_x { min_x = p.x; } if p.x > max_x { max_x = p.x; }
+                if p.y < min_g_v { min_g_v = p.y; } if p.y > max_g_v { max_g_v = p.y; }
                 if p.z < min_z { min_z = p.z; } if p.z > max_z { max_z = p.z; }
-                if p.y < min_y { min_y = p.y; } if p.y > max_y_local { max_y_local = p.y; }
             }
 
             receivers.push(Receiver {
                 origin, normal: n, u, v, outline_2d, holes_2d,
-                xz_aabb: Some((min_x, min_z, max_x, max_z)),
-                y_range: (min_y, max_y_local),
+                xz_aabb: Some((min_x, min_g_v, max_x, max_g_v)),  // (x0, y0, x1, y1) ground-plane AABB
+                y_range: (min_z, max_z),                          // vertical (Z) range
             });
         }
 
@@ -232,38 +238,34 @@ impl Mesh {
                 .collect();
             if caster_3d.len() < 3 { continue; }
 
-            // ─── Phase 2.7 — caster's shadow XZ bbox for O(N log N) pruning.
-            // Project each caster vertex to y=0 along sun_dir (approx), take
-            // the union of that and the caster's own XZ bbox as a conservative
-            // footprint. A receiver whose XZ AABB does not overlap this bbox
-            // can never receive any part of this caster's shadow.
+            // ADR-103-ζ Z-up — Phase 2.7 caster's shadow XY bbox for
+            // O(N log N) pruning. Project each caster vertex to z=0 along
+            // sun_dir, take the union of that and the caster's own XY bbox
+            // as a conservative footprint.
             let mut c_min_x = f64::INFINITY; let mut c_max_x = f64::NEG_INFINITY;
-            let mut c_min_z = f64::INFINITY; let mut c_max_z = f64::NEG_INFINITY;
-            let mut c_max_y = f64::NEG_INFINITY;
+            let mut c_min_g = f64::INFINITY; let mut c_max_g = f64::NEG_INFINITY; // Y axis on ground
+            let mut c_max_v = f64::NEG_INFINITY;                                   // Z (vertical) max
             for p in &caster_3d {
                 if p.x < c_min_x { c_min_x = p.x; } if p.x > c_max_x { c_max_x = p.x; }
-                if p.z < c_min_z { c_min_z = p.z; } if p.z > c_max_z { c_max_z = p.z; }
-                if p.y > c_max_y { c_max_y = p.y; }
-                // 투영 포인트(y=0)도 XZ bbox에 포함 — conservative.
-                if sun_dir.y.abs() > 1e-6 {
-                    let t = -p.y / sun_dir.y;
+                if p.y < c_min_g { c_min_g = p.y; } if p.y > c_max_g { c_max_g = p.y; }
+                if p.z > c_max_v { c_max_v = p.z; }
+                // 투영 포인트(z=0)도 XY bbox에 포함 — conservative.
+                if sun_dir.z.abs() > 1e-6 {
+                    let t = -p.z / sun_dir.z;
                     let px = p.x + sun_dir.x * t;
-                    let pz = p.z + sun_dir.z * t;
+                    let pg = p.y + sun_dir.y * t;
                     if px < c_min_x { c_min_x = px; } if px > c_max_x { c_max_x = px; }
-                    if pz < c_min_z { c_min_z = pz; } if pz > c_max_z { c_max_z = pz; }
+                    if pg < c_min_g { c_min_g = pg; } if pg > c_max_g { c_max_g = pg; }
                 }
             }
 
             for recv in &receivers {
-                // Phase 2.7 — early reject: non-ground receivers with no XZ
-                // overlap with the caster's shadow footprint can be skipped
-                // before any projection/clip math.
-                if let Some((rx0, rz0, rx1, rz1)) = recv.xz_aabb {
+                // ADR-103-ζ Z-up — Phase 2.7 early reject: XY AABB overlap.
+                if let Some((rx0, rg0, rx1, rg1)) = recv.xz_aabb {
                     if rx1 < c_min_x || rx0 > c_max_x { continue; }
-                    if rz1 < c_min_z || rz0 > c_max_z { continue; }
-                    // Also skip receivers entirely above the caster's highest
-                    // vertex (caster can't cast upward).
-                    if recv.y_range.0 >= c_max_y - 0.1 { continue; }
+                    if rg1 < c_min_g || rg0 > c_max_g { continue; }
+                    // Skip receivers entirely above the caster's highest vertex.
+                    if recv.y_range.0 >= c_max_v - 0.1 { continue; }
                 }
                 // Sun must hit the receiver plane from the lit side.
                 let denom = sun_dir.dot(recv.normal);
@@ -568,34 +570,34 @@ mod tests {
 
     #[test]
     fn sun_from_above_projects_top_face_onto_ground() {
+        // ADR-103-ζ Z-up: top face at z=1000, CCW from +Z view → normal +Z.
         let mut mesh = Mesh::new();
-        let v0 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
-        let v1 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let v1 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
         let v2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 1000.0));
-        let v3 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        // Phase 2.5a: caster also gets projected to its OWN face's plane
-        // filtered out (max_signed<0.5), so only ground receives.
-        // 4-vertex polygon → 2 triangles → 18 floats.
         assert_eq!(tris.len(), 18);
         for i in 0..6 {
-            let y = tris[i * 3 + 1];
-            assert!(y > 0.0 && y < 1.0, "y near 0.5 (ground+RECV_EPS), got {y}");
+            let z = tris[i * 3 + 2];
+            assert!(z > 0.0 && z < 1.0, "z near 0.5 (ground+RECV_EPS), got {z}");
         }
     }
 
     #[test]
     fn sun_with_lateral_offset_shifts_projection() {
         let mut mesh = Mesh::new();
-        let v0 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
-        let v1 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
+        // CCW from +Z → normal +Z.
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let v1 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
         let v2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 1000.0));
-        let v3 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
 
-        let sun_dir = DVec3::new(-1.0, -1.0, 0.0).normalize();
+        // ADR-103-ζ Z-up: sun comes from +X side going down (-X, -Z).
+        let sun_dir = DVec3::new(-1.0, 0.0, -1.0).normalize();
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         assert!(!tris.is_empty());
         let sum_x: f32 = (0..(tris.len() / 9))
@@ -606,27 +608,28 @@ mod tests {
 
     #[test]
     fn vertical_face_not_projected() {
-        // Normal on +X, not sun-facing under sun=(0,-1,0).
+        // ADR-103-ζ Z-up: vertical face on YZ plane (normal +X), sun -Z.
         let mut mesh = Mesh::new();
-        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0,    0.0));
         let v1 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
         let v2 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
-        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0,    1000.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         assert!(tris.is_empty());
     }
 
     #[test]
     fn ground_level_face_skipped() {
+        // ADR-103-ζ Z-up: face on ground plane z=0 → skipped.
         let mut mesh = Mesh::new();
-        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
-        let v1 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
-        let v2 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 1000.0));
-        let v3 = mesh.add_vertex(DVec3::new(0.0, 0.0, 1000.0));
+        let v0 = mesh.add_vertex(DVec3::new(0.0,    0.0,    0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1000.0, 0.0,    0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0,    1000.0, 0.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         assert!(tris.is_empty());
     }
@@ -658,67 +661,72 @@ mod tests {
 
     #[test]
     fn shadow_on_top_of_box_clips_correctly() {
+        // ADR-103-ζ Z-up: box top z=500 / caster z=1500, both CCW from +Z.
         let mut mesh = Mesh::new();
-        let t0 = mesh.add_vertex(DVec3::new(0.0,    500.0, 0.0));
-        let t1 = mesh.add_vertex(DVec3::new(0.0,    500.0, 1000.0));
-        let t2 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 1000.0));
-        let t3 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 0.0));
+        let t0 = mesh.add_vertex(DVec3::new(0.0,    0.0,    500.0));
+        let t1 = mesh.add_vertex(DVec3::new(1000.0, 0.0,    500.0));
+        let t2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 500.0));
+        let t3 = mesh.add_vertex(DVec3::new(0.0,    1000.0, 500.0));
         mesh.add_face_with_holes(&[t0, t1, t2, t3], &[], MaterialId::new(0)).unwrap();
 
-        let c0 = mesh.add_vertex(DVec3::new(400.0, 1500.0, 400.0));
-        let c1 = mesh.add_vertex(DVec3::new(400.0, 1500.0, 600.0));
-        let c2 = mesh.add_vertex(DVec3::new(600.0, 1500.0, 600.0));
-        let c3 = mesh.add_vertex(DVec3::new(600.0, 1500.0, 400.0));
+        let c0 = mesh.add_vertex(DVec3::new(400.0, 400.0, 1500.0));
+        let c1 = mesh.add_vertex(DVec3::new(600.0, 400.0, 1500.0));
+        let c2 = mesh.add_vertex(DVec3::new(600.0, 600.0, 1500.0));
+        let c3 = mesh.add_vertex(DVec3::new(400.0, 600.0, 1500.0));
         mesh.add_face_with_holes(&[c0, c1, c2, c3], &[], MaterialId::new(0)).unwrap();
 
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         assert!(!tris.is_empty());
-        let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
-        let has_ground = ys.iter().any(|y| (y - 0.5).abs() < 0.01);
-        let has_box_top = ys.iter().any(|y| (y - 500.5).abs() < 0.01);
+        let zs: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 2]).collect();
+        let has_ground = zs.iter().any(|z| (z - 0.5).abs() < 0.01);
+        let has_box_top = zs.iter().any(|z| (z - 500.5).abs() < 0.01);
         assert!(has_ground);
         assert!(has_box_top);
     }
 
     #[test]
     fn vertical_sunfacing_wall_connects_base_to_shadow() {
+        // ADR-103-ζ Z-up: wall on XZ plane (y=0), CCW from -Y → normal -Y.
         let mut mesh = Mesh::new();
-        let v0 = mesh.add_vertex(DVec3::new(0.0,     0.0,   0.0));
-        let v1 = mesh.add_vertex(DVec3::new(0.0,     500.0, 0.0));
-        let v2 = mesh.add_vertex(DVec3::new(1000.0,  500.0, 0.0));
-        let v3 = mesh.add_vertex(DVec3::new(1000.0,  0.0,   0.0));
+        let v0 = mesh.add_vertex(DVec3::new(0.0,    0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1000.0, 0.0, 500.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0,    0.0, 500.0));
         mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
 
-        let sun_dir = DVec3::new(0.0, -1.0, 1.0).normalize();
+        // Sun from -Y direction, slightly downward (-Y, -Z).
+        let sun_dir = DVec3::new(0.0, 1.0, -1.0).normalize();
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         assert!(!tris.is_empty());
-        let zs: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 2]).collect();
-        let has_near_base = zs.iter().any(|&z| z.abs() < 10.0);
-        let has_far_offset = zs.iter().any(|&z| z > 100.0);
+        // Shadow extends along +Y on ground (z=0). Check Y range of triangle verts.
+        let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
+        let has_near_base = ys.iter().any(|&y| y.abs() < 10.0);
+        let has_far_offset = ys.iter().any(|&y| y > 100.0);
         assert!(has_near_base);
         assert!(has_far_offset);
     }
 
     #[test]
     fn caster_below_box_top_does_not_project_onto_box_top() {
+        // ADR-103-ζ Z-up: box top at z=500, caster below at z=200.
         let mut mesh = Mesh::new();
-        let t0 = mesh.add_vertex(DVec3::new(0.0,    500.0, 0.0));
-        let t1 = mesh.add_vertex(DVec3::new(0.0,    500.0, 1000.0));
-        let t2 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 1000.0));
-        let t3 = mesh.add_vertex(DVec3::new(1000.0, 500.0, 0.0));
+        let t0 = mesh.add_vertex(DVec3::new(0.0,    0.0,    500.0));
+        let t1 = mesh.add_vertex(DVec3::new(0.0,    1000.0, 500.0));
+        let t2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 500.0));
+        let t3 = mesh.add_vertex(DVec3::new(1000.0, 0.0,    500.0));
         mesh.add_face_with_holes(&[t0, t1, t2, t3], &[], MaterialId::new(0)).unwrap();
 
-        let c0 = mesh.add_vertex(DVec3::new(2000.0, 200.0, 2000.0));
-        let c1 = mesh.add_vertex(DVec3::new(2000.0, 200.0, 2200.0));
-        let c2 = mesh.add_vertex(DVec3::new(2200.0, 200.0, 2200.0));
-        let c3 = mesh.add_vertex(DVec3::new(2200.0, 200.0, 2000.0));
+        let c0 = mesh.add_vertex(DVec3::new(2000.0, 2000.0, 200.0));
+        let c1 = mesh.add_vertex(DVec3::new(2000.0, 2200.0, 200.0));
+        let c2 = mesh.add_vertex(DVec3::new(2200.0, 2200.0, 200.0));
+        let c3 = mesh.add_vertex(DVec3::new(2200.0, 2000.0, 200.0));
         mesh.add_face_with_holes(&[c0, c1, c2, c3], &[], MaterialId::new(0)).unwrap();
 
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
-        assert!(!ys.iter().any(|y| (y - 500.5).abs() < 0.01));
+        let zs: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 2]).collect();
+        assert!(!zs.iter().any(|z| (z - 500.5).abs() < 0.01));
     }
 
     #[test]
@@ -757,23 +765,19 @@ mod tests {
 
     #[test]
     fn receiver_with_hole_does_not_catch_shadow_in_hole() {
-        // Phase 2.5b: receiver(floor) with a square hole. Caster shadow lands
-        // entirely inside the hole → result should have no receiver triangles
-        // at the floor's y level.
+        // ADR-103-ζ Z-up: floor at z=100 (above ground threshold) with hole.
         let mut mesh = Mesh::new();
 
-        // Floor at y=0 (we need y > 1 to be picked as a receiver, so floor at
-        // y=100 instead of ground).
-        let f0 = mesh.add_vertex(DVec3::new(-2000.0, 100.0, -2000.0));
-        let f1 = mesh.add_vertex(DVec3::new(-2000.0, 100.0,  2000.0));
-        let f2 = mesh.add_vertex(DVec3::new( 2000.0, 100.0,  2000.0));
-        let f3 = mesh.add_vertex(DVec3::new( 2000.0, 100.0, -2000.0));
-        // Hole in middle — 600x600 square.
-        let h0 = mesh.add_vertex(DVec3::new(-300.0, 100.0, -300.0));
-        let h1 = mesh.add_vertex(DVec3::new( 300.0, 100.0, -300.0));
-        let h2 = mesh.add_vertex(DVec3::new( 300.0, 100.0,  300.0));
-        let h3 = mesh.add_vertex(DVec3::new(-300.0, 100.0,  300.0));
-        // Face with outer CCW (+Y normal) + inner CW hole.
+        // Floor on XY plane at z=100 with hole in middle.
+        let f0 = mesh.add_vertex(DVec3::new(-2000.0, -2000.0, 100.0));
+        let f1 = mesh.add_vertex(DVec3::new( 2000.0, -2000.0, 100.0));
+        let f2 = mesh.add_vertex(DVec3::new( 2000.0,  2000.0, 100.0));
+        let f3 = mesh.add_vertex(DVec3::new(-2000.0,  2000.0, 100.0));
+        // Hole in middle — 600x600 square (CW when viewed from +Z).
+        let h0 = mesh.add_vertex(DVec3::new(-300.0, -300.0, 100.0));
+        let h1 = mesh.add_vertex(DVec3::new(-300.0,  300.0, 100.0));
+        let h2 = mesh.add_vertex(DVec3::new( 300.0,  300.0, 100.0));
+        let h3 = mesh.add_vertex(DVec3::new( 300.0, -300.0, 100.0));
         let hole: [VertId; 4] = [h0, h1, h2, h3];
         mesh.add_face_with_holes(
             &[f0, f1, f2, f3],
@@ -781,59 +785,54 @@ mod tests {
             MaterialId::new(0),
         ).unwrap();
 
-        // Small caster directly above the hole.
-        let c0 = mesh.add_vertex(DVec3::new(-100.0, 2000.0, -100.0));
-        let c1 = mesh.add_vertex(DVec3::new(-100.0, 2000.0,  100.0));
-        let c2 = mesh.add_vertex(DVec3::new( 100.0, 2000.0,  100.0));
-        let c3 = mesh.add_vertex(DVec3::new( 100.0, 2000.0, -100.0));
+        // Small caster directly above the hole at z=2000.
+        let c0 = mesh.add_vertex(DVec3::new(-100.0, -100.0, 2000.0));
+        let c1 = mesh.add_vertex(DVec3::new( 100.0, -100.0, 2000.0));
+        let c2 = mesh.add_vertex(DVec3::new( 100.0,  100.0, 2000.0));
+        let c3 = mesh.add_vertex(DVec3::new(-100.0,  100.0, 2000.0));
         mesh.add_face_with_holes(&[c0, c1, c2, c3], &[], MaterialId::new(0)).unwrap();
 
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
-        // Triangles at floor-level y (~100.5) must be empty: caster shadow
-        // fully sits inside the hole → discarded.
+        // Triangles at floor-level z (~100.5) must be empty.
         let floor_tris = (0..tris.len() / 9).filter(|i| {
-            let y0 = tris[i * 9 + 1];
-            let y1 = tris[i * 9 + 4];
-            let y2 = tris[i * 9 + 7];
-            (y0 - 100.5).abs() < 0.1 && (y1 - 100.5).abs() < 0.1 && (y2 - 100.5).abs() < 0.1
+            let z0 = tris[i * 9 + 2];
+            let z1 = tris[i * 9 + 5];
+            let z2 = tris[i * 9 + 8];
+            (z0 - 100.5).abs() < 0.1 && (z1 - 100.5).abs() < 0.1 && (z2 - 100.5).abs() < 0.1
         }).count();
         assert_eq!(floor_tris, 0, "caster shadow over hole should punch through receiver");
-        // But ground shadow (y≈0.5) must still exist (caster still shadows ground).
+        // Ground shadow (z≈0.5) must still exist.
         let ground_tris = (0..tris.len() / 9).filter(|i| {
-            let y0 = tris[i * 9 + 1];
-            (y0 - 0.5).abs() < 0.1
+            let z0 = tris[i * 9 + 2];
+            (z0 - 0.5).abs() < 0.1
         }).count();
         assert!(ground_tris > 0, "caster must still cast onto ground through the hole");
     }
 
     #[test]
     fn tilted_ramp_receives_shadow() {
-        // Phase 2.5a: 45° 기울어진 램프가 receiver로 작동해야 함.
-        // 램프: 한쪽 끝 y=0, 반대쪽 끝 y=1000. 작은 caster를 램프 위로 띄움.
+        // ADR-103-ζ Z-up: 45° 기울어진 램프 — 한쪽 끝 z=0, 반대쪽 끝 z=1000.
         let mut mesh = Mesh::new();
-        // Ramp corners (view from above, ramp rises +X direction).
-        // CCW from above for +Y upward-tilted plane:
         let r0 = mesh.add_vertex(DVec3::new(0.0,    0.0,    0.0));
-        let r1 = mesh.add_vertex(DVec3::new(0.0,    0.0,    2000.0));
-        let r2 = mesh.add_vertex(DVec3::new(2000.0, 1000.0, 2000.0));
-        let r3 = mesh.add_vertex(DVec3::new(2000.0, 1000.0, 0.0));
+        let r1 = mesh.add_vertex(DVec3::new(2000.0, 0.0,    1000.0));
+        let r2 = mesh.add_vertex(DVec3::new(2000.0, 2000.0, 1000.0));
+        let r3 = mesh.add_vertex(DVec3::new(0.0,    2000.0, 0.0));
         mesh.add_face_with_holes(&[r0, r1, r2, r3], &[], MaterialId::new(0)).unwrap();
 
-        // Caster above ramp center, small square.
-        let c0 = mesh.add_vertex(DVec3::new(800.0,  2000.0, 800.0));
-        let c1 = mesh.add_vertex(DVec3::new(800.0,  2000.0, 1200.0));
-        let c2 = mesh.add_vertex(DVec3::new(1200.0, 2000.0, 1200.0));
-        let c3 = mesh.add_vertex(DVec3::new(1200.0, 2000.0, 800.0));
+        // Caster above ramp center.
+        let c0 = mesh.add_vertex(DVec3::new(800.0,  800.0,  2000.0));
+        let c1 = mesh.add_vertex(DVec3::new(1200.0, 800.0,  2000.0));
+        let c2 = mesh.add_vertex(DVec3::new(1200.0, 1200.0, 2000.0));
+        let c3 = mesh.add_vertex(DVec3::new(800.0,  1200.0, 2000.0));
         mesh.add_face_with_holes(&[c0, c1, c2, c3], &[], MaterialId::new(0)).unwrap();
 
-        let sun_dir = DVec3::new(0.0, -1.0, 0.0);
+        let sun_dir = DVec3::new(0.0, 0.0, -1.0);
         let tris = mesh.compute_ground_projected_shadows(sun_dir);
         assert!(!tris.is_empty());
-        // Some triangles should land on the ramp (y between 0.5 and 1000.5),
-        // not only on the ground (y ≈ 0.5).
-        let ys: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 1]).collect();
-        let has_ramp = ys.iter().any(|&y| y > 10.0);
-        assert!(has_ramp, "tilted ramp must catch some shadow (expected y > 10), got ys={ys:?}");
+        // Some triangles should land on the ramp (z between 0.5 and 1000.5).
+        let zs: Vec<f32> = (0..tris.len() / 3).map(|i| tris[i * 3 + 2]).collect();
+        let has_ramp = zs.iter().any(|&z| z > 10.0);
+        assert!(has_ramp, "tilted ramp must catch some shadow (expected z > 10), got zs={zs:?}");
     }
 }

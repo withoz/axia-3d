@@ -168,7 +168,13 @@ export class Viewport {
   // 2026-04-23: 기본 ON — "건축 그림자"(Projected Planar + MinEquation 균일
   // blending)를 default로 채택. 사용자는 메뉴 "보기 → 건축 그림자"로 토글.
   private _projectedShadowEnabled: boolean = true;
-  private _sunTravel = new THREE.Vector3(-0.408, -0.816, -0.408);
+  // ADR-103-ζ-shadow: Z-up sun travel direction. Y-up 시대 default
+  // (-0.408, -0.816, -0.408) 의 큰 컴포넌트 (-0.816) 가 Y (= sky 반대)
+  // 였음. Z-up 정합: 큰 -컴포넌트 = Z (= sky 반대 = ground 향함).
+  // (x, y, z)_yup → (x, -z, y)_zup 회전: (-0.408, -0.816, -0.408) →
+  // (-0.408, 0.408, -0.816). 의미: sun travel 가 south-east 방향 +
+  // 강한 -Z (지면 향함).
+  private _sunTravel = new THREE.Vector3(-0.408, 0.408, -0.816);
 
   // ═══ Directional light (Phase 2 VSM) ═══
   // castShadow은 기본 false, setProjectedShadowEnabled(true) 시 켜짐.
@@ -315,7 +321,10 @@ export class Viewport {
     //   bias 0            — VSM에 불필요
     // shadowMap.enabled 토글은 setProjectedShadowEnabled에 연동.
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
-    dirLight.position.set(8000, 15000, 10000);
+    // ADR-103-ζ-shadow: Z-up sky light. Y-up 시대 (8k, 15k, 10k) 에서
+    // Y=15k 가 sky 였음. Z-up 정합: Z=15k 가 sky. Y/Z swap.
+    // 광원 방향: 동(+X) + 북(+Y) + 하늘(+Z) 옥탄트, sky 방향 강조.
+    dirLight.position.set(8000, 10000, 15000);
     dirLight.castShadow = true;
     const shadow = dirLight.shadow;
     // Phase 1 tune (2026-04-25):
@@ -342,7 +351,9 @@ export class Viewport {
     // 2026-04-23 Phase 2.4.2 — 0.4 → 0.1. anti-sun 면을 너무 밝혀서 form
     //   shading을 흐릿하게 만들던 주범. 0.1로 내려 윤곽만 살짝 구분.
     const backLight = new THREE.DirectionalLight(0xffffff, 0.1);
-    backLight.position.set(-6000, 4000, -8000);
+    // ADR-103-ζ-shadow: Z-up back/fill light. Y-up (-6k, 4k, -8k) → Z-up
+    // (-6k, -8k, 4k). 반대쪽 (서/남) 위 방향 from anti-key 광원.
+    backLight.position.set(-6000, -8000, 4000);
     this.scene.add(backLight);
 
     // Subtle sky/ground tint on top of IBL — keeps the under-belly of
@@ -2981,10 +2992,11 @@ export class Viewport {
     } else {
       this._projectedShadow.geometry = geo;
     }
+    // ADR-103-ζ-shadow: Z-up ground = Z=0 plane.
     // 2026-04-23 Phase 2.4 — Rust가 이미 각 receiver 평면 + RECV_EPS(0.5mm) 로
-    //   벡터 buffer에 y값을 기록. 여기서 추가 position.y 오프셋은 불필요하며
-    //   오히려 per-receiver 위치를 망가뜨림 (ground=0.5, box top=500.5 그대로 유지해야 함).
-    this._projectedShadow.position.y = 0;
+    //   벡터 buffer에 z값을 기록 (Z-up 마이그레이션 후). 여기서 추가 position
+    //   오프셋은 불필요 — per-receiver z 그대로 유지.
+    this._projectedShadow.position.set(0, 0, 0);
     this._projectedShadow.visible = true;
   }
 
@@ -3015,14 +3027,15 @@ export class Viewport {
     const el = Math.max(1, Math.min(89, elevationDeg));  // 지평선 아래/천정 정방향 금지
     const azRad = (az * Math.PI) / 180;
     const elRad = (el * Math.PI) / 180;
-    // 천구상 sun 위치 (단위벡터) → 거리 20000mm로 scale.
-    //   x = sin(az) * cos(el)  (동서)
-    //   y = sin(el)            (상승각)
-    //   z = -cos(az) * cos(el) (-Z = 북)
+    // ADR-103-ζ-shadow: Z-up 천구상 sun 위치 — 거리 20000mm scale.
+    //   az=0 → +Y (북) | az=90° → +X (동) | el=90° → +Z (천정)
+    //   x = sin(az) * cos(el)  (동서, +X = 동)
+    //   y = cos(az) * cos(el)  (북남, +Y = 북, ADR-103 Z-up)
+    //   z = sin(el)            (상승각, +Z = 위)
     const dist = 20000;
     const sx = Math.sin(azRad) * Math.cos(elRad) * dist;
-    const sy = Math.sin(elRad) * dist;
-    const sz = -Math.cos(azRad) * Math.cos(elRad) * dist;
+    const sy = Math.cos(azRad) * Math.cos(elRad) * dist;
+    const sz = Math.sin(elRad) * dist;
     if (this._dirLight) {
       this._dirLight.position.set(sx, sy, sz);
       this._dirLight.target.position.set(0, 0, 0);
@@ -3037,12 +3050,14 @@ export class Viewport {
 
   /** 현재 sun azimuth/elevation 조회 (SunPanel 초기값 복원용). */
   getSunAzimuthElevation(): { azimuth: number; elevation: number } {
-    // sun travel에서 역산. travel = -sun_pos_unit.
+    // ADR-103-ζ-shadow: Z-up sun position 역산.
+    // travel = -sun_pos_unit → sun_pos_unit = -travel.
     const t = this._sunTravel;
-    // sun position unit vector = (-t.x, -t.y, -t.z)
     const sx = -t.x, sy = -t.y, sz = -t.z;
-    const el = Math.asin(Math.max(-1, Math.min(1, sy))) * 180 / Math.PI;
-    const az = Math.atan2(sx, -sz) * 180 / Math.PI;
+    // elevation = asin(sz) (Z-axis is up).
+    // azimuth = atan2(east, north) = atan2(sx, sy) where +Y = north.
+    const el = Math.asin(Math.max(-1, Math.min(1, sz))) * 180 / Math.PI;
+    const az = Math.atan2(sx, sy) * 180 / Math.PI;
     return {
       azimuth: (az + 360) % 360,
       elevation: el,
