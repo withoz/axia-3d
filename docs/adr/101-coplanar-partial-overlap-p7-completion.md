@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **User-facing trigger ACTIVE (polygonal-only)** — Phase A (PR #25) / B-1 (#26) / B-2 (#27) / B-3a (#28) / B-3b (#29) / B-3c (#30) / B-4 MVP Scene wiring (본 amendment, Path B circle deferred to B-4b) |
+| Status | **✅ Closed (2026-05-15)** — Phase A/B-1/B-2/B-3a/B-3b/B-3c/B-4 MVP/B-6/B-4b all merged (9 PRs). §2 canonical user trigger fully active across all 3 Draw entry points (RECT / Legacy Circle / Path B Circle). B-5 sweep matrix deferred — current coverage (Rust unit 8 + Playwright E2E 7) suffices. See Amendment 8 for closure summary. |
 | Date | 2026-05-14 |
 | Supersedes | — |
 | Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
@@ -657,3 +657,98 @@ B-4b 는 ADR-028 Phase A 의 hybrid Edge 구조 (`curve: Option<AnalyticCurve>`)
 - ADR-089 Phase 2 (self-loop edge 시민권) — Path B canonical form
 - ADR-101 Amendment 6 (canonical lesson "speculative mutation side-effect") — 본 amendment 가 해소
 - LOCKED #14 메타-원칙 #14 — "면은 닫힌 경계로부터 유도된다" 의 첫 사용자-facing op 활용
+
+---
+
+## Amendment 8 — Full Closure (2026-05-15) ✅
+
+ADR-101 의 모든 약속 달성. §2 canonical user trigger 가 **3 Draw entry 모두 완전 활성** — RECT × RECT, Legacy Circle × Legacy Circle, Path B Circle × Path B Circle 모든 case 에서 partial overlap 시 자동 3 sub-face 분할.
+
+### 9 PR closure log
+
+| PR | Phase | Commit | 핵심 contribution |
+|---|---|---|---|
+| #25 | Phase A | `de868ba` | `polygonize_closed_curve_face` helper — Path B → polygonal substitute |
+| #26 | B-1 | `d08ffc0` | Sutherland-Hodgman MVP algorithm decision + 7 lock-ins |
+| #27 | B-2 | `4df7142` | `coplanar_intersection_segments` primitive (read-only) |
+| #28 | B-3a | `d91528b` | `polygon_difference_walking` pure 2D utility (B-3a start_idx fix lesson) |
+| #29 | B-3b MVP | `8898467` | `Mesh::auto_intersect_coplanar` (RECT MVP, Path B deferred) |
+| #30 | B-3c | `ca8ffb6` | `cleanup_orphan_boundary_edges` + start_idx fix → Path B engine layer |
+| #31 | B-4 MVP | `73c004e` | `Scene::intersect_faces_inner` 확장 — Draw 자동 trigger (polygonal only) |
+| #33 | B-6 | `5c6ee4b` | E2E verification (engine 3 + visual 4 scenarios) + canonical lessons |
+| **#32** | **B-4b** | **`046973a`** | **Non-destructive AABB+coplanarity pre-check → Path B activated** |
+
+### 회귀 누적 (closure 시점)
+
+| Crate | Before (ADR-101 시작) | After | Δ |
+|---|---:|---:|---:|
+| axia-core | 209 | **293 PASS** | +84 |
+| axia-geo | 1256 | **1296 PASS** | +40 |
+| Playwright E2E | 15 | **74 passed + 1 skipped** | +7 new B-6 specs |
+| 절대 #[ignore] 금지 | 100% | **100%** | 유지 |
+
+### Hybrid 패러다임 first-class 활성 — canonical lesson
+
+B-4b 는 ADR-028 Phase A 의 hybrid Edge struct (`curve: Option<AnalyticCurve>`) 를 **사용자-facing op 로 처음 활성** 한 사례:
+
+| 측면 | B-4 MVP (Path B skipped) | B-4b (Path B 1급) |
+|---|---|---|
+| `Edge.curve` 활용 | 무시 (polygonize 가 destroy) | `face_world_aabb` / `face_world_normal` 의 source |
+| Path B status | scope guard 로 skip | first-class input |
+| 메모리 효율 | 32 verts 즉시 생성 (speculative) | 0 verts in pre-check phase |
+| 사용자 trigger | RECT only | RECT + Legacy + Path B |
+
+향후 모든 hybrid-aware op (Boolean / Push-Pull / Offset NURBS variants) 가 본 B-4b 패턴 답습 가능:
+1. AABB pre-check via `Edge.curve` metadata
+2. Coplanarity / normal check via curve.normal
+3. Only mutate after pre-check passes
+
+### Canonical lessons (보존)
+
+| Lesson | Source amendment | 핵심 |
+|---|---|---|
+| L1 — "check first, mutate second" | Amendment 6 → 7 진화 | speculative mutation 의 side-effect leak 차단 |
+| L2 — `dist/` staleness in Playwright | Amendment 5 (B-6) | `npm run preview` 가 production build 서빙. WASM rebuild 후 `npm run build` 필수 |
+| L3 — AxiA Y-up coordinate convention | B-6 visual demo | `setViewMode('top')` 가 -Y 축 down, normal +Y face 가 floor |
+| L4 — Default camera radius 60000mm | B-6 visual demo | 작은 geometry 는 `setCameraState({radius, target})` 으로 fit 필수 |
+| L5 — Algorithm gaps in non-canonical input | B-3c start_idx fix | RECT 만 통과한 알고리즘이 Circle 에서 실패 발견 가능 |
+| L6 — Pure utility extraction (ADR-091 §E L4) | B-3a / B-4b helpers | 함수 분리가 target fix 가능하게 만듦 |
+| L7 — Multi-week atomic decomposition (ADR-094 §E L1) | 전 시리즈 | additive-first risk 격리 + multi-gate 결재 |
+
+### B-5 sweep matrix deferred (rationale)
+
+ADR-101 §4 의 Phase C-1 ~ C-4 (B-5 sweep 매트릭스 +15~20 회귀) 는 다음 이유로 deferred:
+
+1. **Coverage 충분**: 현재 회귀 자산 (Rust unit 8 + E2E 7) 이 canonical case 매트릭스 (RECT × RECT / Circle × Circle Legacy / Path B × Path B / disjoint / containment / non-coplanar / non-convex / inactive) 모두 cover.
+2. **사용자 facing 가치 활성**: B-6 E2E 가 real Chromium round-trip 으로 user trigger 검증. B-5 추가 회귀 자산은 보험성 (사용자 가치 0).
+3. **YAGNI**: ADR-046 P31 #1 ("가볍게") 정합. Future ADR 에서 발견되는 edge case 가 등장하면 그 시점에 추가 가능.
+
+### Out-of-scope (deferred to future ADRs)
+
+ADR-101 §5 의 out-of-scope 항목 (변경 없음):
+
+- **Non-convex polygon clipping** — Weiler-Atherton / Vatti 필요 시 별도 ADR
+- **3-way 동시 overlap** (A ∩ B ∩ C 분할) — Phase C-4 future
+- **NURBS-aware coplanar intersect** (현재 polygonize 후 clip → 향후 직접 NURBS SSI) — ADR-027/064 cross-cut, 별도 ADR
+- **Lens identity refinement** (multi-material overlap UX) — ADR-102 (가칭) trigger 시 진행
+- **Snapshot serialization** — auto-split 결과는 일반 mesh 처럼 직렬화 가능 (additive)
+
+### Cross-link (final)
+
+- LOCKED #1 ADR-021 P7 (canonical anchor) — 본 ADR 의 *완전한* 의미 활성
+- ADR-022 P9 (vertex-shared pinch promote) — Option (b) lens promote 패턴 inspiration
+- ADR-028 Phase A (hybrid Edge) — B-4b 의 first-class 사용
+- ADR-059 P-N Step 3 (`curve_mandatory()`) — future NURBS-aware migration anchor
+- ADR-061 §B (`curve_version`, `polyline_cache`) — hover Newton 인프라
+- ADR-064/066 (NURBS Boolean DCEL) — future NURBS-direct intersect path
+- ADR-089 (Path B closed-curve face) — Path B canonical form, B-4b 가 직접 활용
+- ADR-094 §E L1 (additive-first + multi-gate atomic) — 본 9 PR 시리즈 답습
+- ADR-091 §E L4 (pure utility extraction) — B-3a / B-4b helpers
+- LOCKED #14 메타-원칙 #14 (면은 닫힌 경계로부터 유도된다) — 본 ADR 의 deepest realization
+
+### Closure 의 사용자 facing 의미
+
+ADR-101 §2 시연 (2026-05-14):
+> "사용자가 두 원 (반지름 5, center distance 4 — lens region 존재) 을 그렸을 때 분할 안 됨"
+
+→ **2026-05-15 closure**: 두 원 (Path B 또는 Legacy 또는 RECT) 어느 방식으로 그려도 partial overlap 시 자동 3 sub-face. ADR-021 P7 "닫힌 엣지에는 면이 생성되어야 한다" 의 가장 강한 의미 (coplanar partial overlap → 3 sub-face) 가 사용자 시연 가능.
