@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed** (α — spec only, β-η implementation gated by ADR-102 ε closure) |
+| Status | **Proposed (Amendment 1, 2026-05-15)** — Audit complete (§2.5 정정 + §4 Phase β 5-split). Phase β-1 진입 결재 완료. |
 | Date | 2026-05-15 |
 | Supersedes | — (5개월 누적 implicit Y-up 정책의 명시 결재) |
 | Related | ADR-021 P7, ADR-026 P12, ADR-035 P20 (STEP/IGES), ADR-036 P21 (round-trip 1e-3 mm), ADR-046 P31, ADR-049 P-5e-α (default-OFF flip pattern), ADR-077 V-4 (visual baseline regen), ADR-081 W-η (STEP/IGES import boundary), ADR-091 §E L1 (snapshot schema canonical), LOCKED #5 (1.5μm spatial-hash), LOCKED #7 (cardinal plane SSOT), LOCKED #41 (ADR-101 closure), LOCKED #26 (Two-Layer Citizenship Phase 1) |
@@ -76,15 +76,35 @@ ADR-049 LOCKED #26 의 *5개월 implicit → explicit* 결재 패턴 답습. Axi
 | `Mesh.verts[i].pos: DVec3` | Y-up 좌표 |
 | `AnalyticSurface::Cylinder { axis_dir }` | 일반적으로 `DVec3::Y` (caller 결정) |
 
-### 2.5 Test fixture (정량)
+### 2.5 Audit 정정 (Amendment 1, 2026-05-15)
 
-- axia-geo: ~150 site 에 hardcoded `DVec3::Y` / `(0.0, 1.0, 0.0)` 등 Y-up 좌표
-- axia-core: ~50 site
-- axia-wasm: ~20 site
-- web vitest: ~30 site
-- Playwright visual baselines: 4 (LOCKED #40 matrix) + ADR-074 group A/B + Torus 추가
+**초안 α-1 estimate (~250-300 site) 가 2.3x 부족**. 실측 (commit `eb343f4` main 기준):
 
-**총 ~250-300 fixture site 갱신 필요**. sed-able 패턴 + cargo check 가이드.
+| Layer | `DVec3::Y` sites | 비고 |
+|---|---|---|
+| **axia-core/scene.rs** | **184** | scene/Xia/Shape/WorkPlane construction + 160 개 `up: DVec3::Y` |
+| axia-geo (operations) | ~80 | offset/fillet/draw/revolve/sweep 등 algorithm + test |
+| axia-geo (surfaces) | ~45 | ssi/analytic, surface ops |
+| axia-geo (curves) | ~10 | math primitives |
+| axia-geo (entities/mesh) | ~10 | core |
+| axia-wasm / axia-transaction | ~30 | bridge + tests |
+| **합계** | **~352** | **across 47 files** |
+
+추가 패턴:
+- `up: DVec3::Y` semantic "world up" **160 sites in scene.rs alone**
+- `(0.0, 1.0, 0.0)` Y-coordinate literals 다수 (위와 일부 overlap)
+- 알고리즘 내부 `let arbitrary = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };` 패턴 — *axis-agnostic* (의미 무관)
+
+**핵심 발견 — sed-able 아님**:
+
+ADR-103-α 의 L-103-5 가 "sed-able 패턴 + cargo check 반복" 으로 가정했으나 site 별 semantic 분류 필요:
+
+1. "World-up convention" → 의미 변경 (Y → Z)
+2. "Arbitrary perpendicular axis seed" → 의미 무관 (Y 그대로 OK)
+3. "Test fixture coordinate" → semantic Y↔Z swap (vertex 위치 회전)
+4. "Algorithm-internal math hint" → 의미 무관
+
+→ **시간 estimate 정정**: spec α-1 의 β phase 3-4 일 → **실측 1-2 주 atomic (5 sub-step 분할 권장)**.
 
 ---
 
@@ -144,14 +164,24 @@ LOCKED 정책 / ADR 어디에도 Y-up vs Z-up 결정이 *명시적으로 정당�
 | α-1 | spec ADR (본 PR) — 7-layer roadmap + lock-in | 작성 중 |
 | α-2 | 사용자 결재 확인 + LOCKED #43 prep | spec PR merge 시 |
 
-### Phase β — Rust primitive defaults
+### Phase β — Rust primitive defaults (Amendment 1: 5-split atomic)
 
-| Step | 작업 |
-|---|---|
-| β-1 | `Mesh::create_box`: `hy` semantic 보존 (height=Z), face order Bottom -Z / Top +Z / Front -Y / Back +Y / Right +X / Left -X |
-| β-2 | `Mesh::create_cylinder/cone/sphere/torus`: default `up = DVec3::Z` |
-| β-3 | `AnalyticSurface::Plane/Cylinder/Cone/Torus` constructor 호출 sites — caller 가 `DVec3::Y` 넘기는 곳 일괄 변경 |
-| β-4 | axia-geo / axia-core / axia-wasm 회귀 자산 갱신 (~200 site, sed + cargo check) |
+**Amendment 1 정정**: 초안 4-step → 실측 audit 후 **5 sub-step atomic 분할**. 각 sub-step 별 commit + PR + 회귀 검증. ADR-102 5 sub-step atomic 패턴 답습.
+
+| Step | scope | 회귀 estimate | 결재 게이트 |
+|---|---|---|---|
+| **β-1** | `Mesh::create_box/cylinder/cone/sphere/torus` default axis (primitive constructor) — 9 site (`primitives.rs`) | +5-10 신규 회귀 (Z-up 정합 검증) | 명시 결재 |
+| **β-2** | `AnalyticSurface::Cylinder/Cone/Torus` constructor 호출 site 일괄 변경 — primitives.rs face_planes / sphere axis 등 | ~50 site, β-1 closure 후 | 명시 결재 |
+| **β-3** | axia-geo test fixture Y↔Z swap (operations / surfaces / curves 의 ~135 site) | sed + 분류 + cargo check | β-2 closure 후 |
+| **β-4** | axia-core scene.rs (184 sites, 가장 큼) | 184 site 분류 + 회귀 갱신 | β-3 closure 후 |
+| **β-5** | axia-wasm bridge + tests (~30 site) + 잔여 정리 | 30 site | β-4 closure 후 |
+
+**β phase 총 기간**: 1-2주 atomic (실측 estimate). 초안 3-4 일 estimate 정정.
+
+**β-1 의 cardinal 의미** — 사용자 시연 가능:
+- β-1 closure 시점에 새 cylinder / box / cone / sphere / torus 가 *Z-up 으로* 그려짐
+- 기존 Y-up snapshot 은 호환 (ε snapshot v6→v7 까지는 load 시 자동 회전 안 됨 — β phase 는 *새 생성* 만 Z-up)
+- visual 시연 가능 (사용자 결재 가치)
 
 ### Phase γ — Viewport (Three.js)
 
@@ -211,20 +241,20 @@ LOCKED 정책 / ADR 어디에도 Y-up vs Z-up 결정이 *명시적으로 정당�
 | θ-3 | CLAUDE.md 의 implicit Y-up 잔존 참조 갱신 |
 | θ-4 | 다음 ADR 가이드 — primitive constructor 작성 시 default `DVec3::Z` 답습 강제 |
 
-### Phase 총 기간
+### Phase 총 기간 (Amendment 1 정정)
 
-| Phase | 기간 |
-|---|---|
-| α (spec) | 2일 |
-| β (Rust primitive) | 3-4일 |
-| γ (Viewport) | 2-3일 |
-| δ (Drawing plane) | 2일 |
-| ε (Snapshot) | 3-4일 |
-| ζ (Boundary I/O) | 2-3일 |
-| η (Visual baseline + 시연) | 2-3일 |
-| θ (Closure) | 1-2일 |
+| Phase | 초안 estimate | Amendment 1 정정 |
+|---|---|---|
+| α (spec + Amendment 1) | 2일 | ✅ 완료 |
+| **β (Rust primitive — 5 sub-step)** | 3-4일 | **1-2주 atomic** |
+| γ (Viewport) | 2-3일 | 2-3일 |
+| δ (Drawing plane) | 2일 | 2일 |
+| ε (Snapshot v6→v7) | 3-4일 | 3-4일 |
+| ζ (Boundary I/O) | 2-3일 | 2-3일 |
+| η (Visual baseline + 시연) | 2-3일 | 2-3일 |
+| θ (Closure) | 1-2일 | 1-2일 |
 
-**총 17-22일 (3-4주 atomic)**. ADR-049 LOCKED #26 5-Phase closure (7 ADRs / 14주) 와 비교 시 단일 ADR 의 multi-week atomic.
+**Amendment 1 총 estimate: 22-29일 (4-5주 atomic)**. 초안 17-22일 (3-4주) 의 1.3x. β phase 가 가장 큰 단일 변경 (~352 site 분류 + 회귀 갱신).
 
 ---
 
