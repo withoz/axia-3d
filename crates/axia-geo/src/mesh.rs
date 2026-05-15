@@ -3337,6 +3337,185 @@ impl Mesh {
         }
     }
 
+    /// ADR-104 β-1-β-1 (Amendment 2 Q1=(b) 2-hemisphere) — Kernel-native
+    /// sphere creation (Path B).
+    ///
+    /// Creates a sphere with **2 hemisphere faces** joined at the equator
+    /// (1 self-loop edge with `AnalyticCurve::Circle`). 99%+ memory
+    /// reduction vs Path A polygonal sphere (Default N=24, M=12 → 289
+    /// face / 561 edge / 290 vert ⇒ 2 / 1 / 1).
+    ///
+    /// # Canonical structure (Z-up, LOCKED #43 정합)
+    ///
+    /// - 1 equator anchor vertex at `center + (radius, 0, 0)` (Z-up)
+    /// - 1 self-loop edge `e_eq` with `AnalyticCurve::Circle`:
+    ///   - center, radius, normal = `+Z`, basis_u = `+X`
+    ///   - has 2 half-edges via `create_halfedge_pair` (HE-fwd ↔ HE-bwd
+    ///     via `next_rad`)
+    /// - 2 hemisphere faces:
+    ///   - **North**: outer loop = HE-fwd (self-loop), surface =
+    ///     `Sphere { u_range: (0, τ), v_range: (0, π/2) }`
+    ///   - **South**: outer loop = HE-bwd (self-loop, twin of HE-fwd),
+    ///     surface = `Sphere { u_range: (0, τ), v_range: (-π/2, 0) }`
+    ///
+    /// # Lock-ins (ADR-104 Amendment 2)
+    ///
+    /// - **L-104-Q1-1** 위상 정합: 적도 = real Jordan curve, sphere 를
+    ///   정확히 2 영역으로 분할
+    /// - **L-104-Q1-2** ADR-021 P7 strict: closed edge cycle divides face
+    /// - **L-104-Q1-3** ADR-094 답습: 단일 closed curve 가 surface 를
+    ///   2 face 로 분할 (annulus 패턴 1:1 mirror)
+    /// - **L-104-Q1-4** Memory unlock: 2/1/1 vs Path A 289/561/290 = 99%+
+    /// - **L-104-Q1-5** 메타-원칙 #14: 면 = 닫힌 경계의 byproduct
+    ///
+    /// # Returns
+    /// `Result<Vec<FaceId>>` — `[north_hemisphere_id, south_hemisphere_id]`.
+    ///
+    /// # Errors
+    /// - `radius <= 0` → bail
+    /// - DCEL wiring 실패 → partial rollback + bail
+    pub fn create_sphere_kernel_native(
+        &mut self,
+        center: DVec3,
+        radius: f64,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        if radius <= 0.0 {
+            bail!(
+                "ADR-104 β-1-β-1: sphere radius must be positive (got {})",
+                radius,
+            );
+        }
+        if !center.is_finite() {
+            bail!("ADR-104 β-1-β-1: sphere center must be finite");
+        }
+
+        // Z-up canonical (LOCKED #43): equator on z = center.z plane,
+        // normal = +Z, basis_u = +X.
+        let normal = DVec3::Z;
+        let basis_u = DVec3::X;
+        let equator_anchor_pos = center + basis_u * radius;
+
+        // Snapshot for rollback.
+        let edges_before: FxHashSet<EdgeId> = self.edges.iter().map(|(id, _)| id).collect();
+        let hes_before: FxHashSet<HeId> = self.hes.iter().map(|(id, _)| id).collect();
+        let verts_before: FxHashSet<VertId> = self.verts.iter().map(|(id, _)| id).collect();
+
+        // Create anchor vertex (uses LOCKED #5 spatial-hash dedup).
+        let anchor = self.add_vertex(equator_anchor_pos);
+
+        // Equator Circle curve.
+        let equator_curve = crate::curves::AnalyticCurve::Circle {
+            center,
+            radius,
+            normal,
+            basis_u,
+        };
+
+        // Build the structure inside a closure for clean rollback on error.
+        let build_result: Result<(FaceId, FaceId)> = (|| {
+            // 1. Self-loop equator edge with curve attached.
+            let (eid, _) = self.add_edge(anchor, anchor)?;
+            self.edges[eid].set_curve(Some(equator_curve.clone()));
+
+            // 2. Get HE-fwd + HE-bwd (twin pair).
+            let he_fwd = self.edges[eid].any_he();
+            if he_fwd.is_null() {
+                bail!(
+                    "ADR-104 β-1-β-1: self-loop edge {:?} has no half-edge",
+                    eid,
+                );
+            }
+            let he_bwd = self.hes[he_fwd].next_rad();
+            if he_bwd.is_null() || he_bwd == he_fwd {
+                bail!(
+                    "ADR-104 β-1-β-1: equator self-loop edge {:?} has \
+                     degenerate radial chain — cannot locate twin HE",
+                    eid,
+                );
+            }
+
+            // 3. Create north hemisphere face (outer normal = +Z up).
+            let north_face = self.faces.insert(Face::new(
+                LoopRef::default(),
+                DVec3::Z, // legacy field; canonical truth is AnalyticSurface
+                FACE_TOLERANCE,
+                material,
+            ));
+
+            // Wire HE-fwd as north face's outer self-loop.
+            self.hes[he_fwd].set_next(he_fwd);
+            self.hes[he_fwd].set_prev(he_fwd);
+            self.hes[he_fwd].set_face(north_face);
+            self.hes[he_fwd].set_outer(true);
+            self.faces[north_face].set_outer(LoopRef::new(he_fwd, true));
+
+            // North hemisphere surface: v ∈ [0, π/2] (latitude 0 → north pole).
+            let north_sphere = crate::surfaces::AnalyticSurface::Sphere {
+                center,
+                radius,
+                u_range: (0.0, std::f64::consts::TAU),
+                v_range: (0.0, std::f64::consts::FRAC_PI_2),
+            };
+            self.faces[north_face].set_surface(Some(north_sphere));
+
+            // 4. Create south hemisphere face (outer normal = -Z down).
+            let south_face = self.faces.insert(Face::new(
+                LoopRef::default(),
+                DVec3::NEG_Z,
+                FACE_TOLERANCE,
+                material,
+            ));
+
+            // Wire HE-bwd (twin) as south face's outer self-loop.
+            self.hes[he_bwd].set_next(he_bwd);
+            self.hes[he_bwd].set_prev(he_bwd);
+            self.hes[he_bwd].set_face(south_face);
+            self.hes[he_bwd].set_outer(true);
+            self.faces[south_face].set_outer(LoopRef::new(he_bwd, true));
+
+            // South hemisphere surface: v ∈ [-π/2, 0] (south pole → latitude 0).
+            let south_sphere = crate::surfaces::AnalyticSurface::Sphere {
+                center,
+                radius,
+                u_range: (0.0, std::f64::consts::TAU),
+                v_range: (-std::f64::consts::FRAC_PI_2, 0.0),
+            };
+            self.faces[south_face].set_surface(Some(south_sphere));
+
+            Ok((north_face, south_face))
+        })();
+
+        match build_result {
+            Ok((north_face, south_face)) => Ok(vec![north_face, south_face]),
+            Err(e) => {
+                // Rollback: remove any new faces, edges, hes, verts.
+                let edges_after: Vec<EdgeId> = self.edges.iter()
+                    .filter(|(id, _)| !edges_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for eid in edges_after {
+                    self.edges.remove(eid);
+                }
+                let hes_after: Vec<HeId> = self.hes.iter()
+                    .filter(|(id, _)| !hes_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for hid in hes_after {
+                    self.hes.remove(hid);
+                }
+                let verts_after: Vec<VertId> = self.verts.iter()
+                    .filter(|(id, _)| !verts_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for vid in verts_after {
+                    self.verts.remove(vid);
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Polygonize a Path B closed-curve face (1 anchor + 1 self-loop edge
     /// with `AnalyticCurve::Circle`) in place. Returns the new polygonal
     /// face ID on conversion; returns `None` if the input face is already
@@ -13069,5 +13248,235 @@ mod tests {
             "polygonize on inactive face must error, got {:?}",
             result,
         );
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-104 β-1-β-1 — Sphere Path B kernel-native (Amendment 2 Q1=(b))
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr104_sphere_kernel_native_face_count_2() {
+        // Amendment 2 Q1=(b) canonical: 2 hemisphere faces.
+        let mut mesh = Mesh::new();
+        let result = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        assert_eq!(result.len(), 2,
+            "Path B sphere = 2 hemisphere faces [north, south]");
+
+        let active_faces = mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_faces, 2,
+            "Path B sphere = 2 active faces (north + south)");
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_equator_anchor_vertex_count_1() {
+        // 1 equator anchor vertex (Z-up canonical at center + radius·basis_u).
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        let active_verts = mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_verts, 1,
+            "Path B sphere = 1 equator anchor vertex (Z-up canonical)");
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_equator_self_loop_edge() {
+        // 1 self-loop edge with AnalyticCurve::Circle on equator.
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        let active_edges: Vec<EdgeId> = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(active_edges.len(), 1,
+            "Path B sphere = 1 equator edge");
+
+        let eid = active_edges[0];
+        assert!(mesh.edges[eid].is_self_loop(),
+            "equator edge must be self-loop");
+
+        let curve = mesh.edges[eid].curve()
+            .expect("equator edge must have AnalyticCurve attached");
+        match curve {
+            crate::curves::AnalyticCurve::Circle { center, radius, normal, .. } => {
+                assert!((*center - DVec3::ZERO).length() < 1e-9,
+                    "equator Circle center matches sphere center");
+                assert!((*radius - 5.0).abs() < 1e-9,
+                    "equator Circle radius matches sphere radius");
+                assert!((*normal - DVec3::Z).length() < 1e-9,
+                    "equator Circle normal = +Z (Z-up canonical)");
+            }
+            other => panic!("equator curve must be Circle, got {:?}",
+                std::mem::discriminant(other)),
+        }
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_surface_attached_both_hemispheres() {
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+        let north = faces[0];
+        let south = faces[1];
+
+        match mesh.faces[north].surface() {
+            Some(crate::surfaces::AnalyticSurface::Sphere { v_range, .. }) => {
+                assert!(v_range.0.abs() < 1e-9,
+                    "north v_range.0 = 0 (equator)");
+                assert!((v_range.1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+                    "north v_range.1 = π/2 (north pole)");
+            }
+            other => panic!("north must have Sphere surface, got {:?}",
+                other.map(|s| s.kind_label())),
+        }
+
+        match mesh.faces[south].surface() {
+            Some(crate::surfaces::AnalyticSurface::Sphere { v_range, .. }) => {
+                assert!((v_range.0 + std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+                    "south v_range.0 = -π/2 (south pole)");
+                assert!(v_range.1.abs() < 1e-9,
+                    "south v_range.1 = 0 (equator)");
+            }
+            other => panic!("south must have Sphere surface, got {:?}",
+                other.map(|s| s.kind_label())),
+        }
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_uv_range_v_subset_canonical() {
+        // u_range = (0, τ) full longitude for both hemispheres.
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 3.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        for fid in faces.iter() {
+            if let Some(crate::surfaces::AnalyticSurface::Sphere { u_range, .. })
+                = mesh.faces[*fid].surface()
+            {
+                assert!(u_range.0.abs() < 1e-9,
+                    "u_range.0 = 0 for face {:?}", fid);
+                assert!((u_range.1 - std::f64::consts::TAU).abs() < 1e-9,
+                    "u_range.1 = τ for face {:?}", fid);
+            } else {
+                panic!("face {:?} must have Sphere surface", fid);
+            }
+        }
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_invariants_pass() {
+        // Post-creation mesh must satisfy ADR-007 invariants (manifold).
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-creation sphere must satisfy face invariants — got {:?}",
+            report.violations);
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_adr094_pattern_mirror() {
+        // ADR-094 답습 패턴: 단일 closed curve 가 surface 를 N face 로
+        // 분할. Cylinder: 3 face / 2 edge (top/bot rim) / 2 vert.
+        // Sphere: 2 face / 1 edge (equator) / 1 vert.
+        // 동일 architectural pattern, 다른 face count (sphere 의 적도가
+        // sphere 를 2 영역으로 분할, cylinder 의 2 rim 이 cylinder 를
+        // 3 영역으로 분할).
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        let active_faces = mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        let active_edges = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        let active_verts = mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        assert_eq!((active_faces, active_edges, active_verts), (2, 1, 1),
+            "Sphere Path B canonical = 2 face / 1 edge / 1 vert");
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_rejects_zero_radius() {
+        let mut mesh = Mesh::new();
+        let result = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 0.0, MaterialId::new(0),
+        );
+        assert!(result.is_err(), "zero radius must error");
+
+        // Rollback: no leaked active state.
+        let active_verts = mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        let active_faces = mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_verts, 0, "rollback must remove anchor vertex");
+        assert_eq!(active_faces, 0, "rollback must remove any partial faces");
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_rejects_negative_radius() {
+        let mut mesh = Mesh::new();
+        let result = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, -1.0, MaterialId::new(0),
+        );
+        assert!(result.is_err(), "negative radius must error");
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_zup_canonical_anchor_position() {
+        // LOCKED #43 정합: equator anchor at center + (radius, 0, 0).
+        let mut mesh = Mesh::new();
+        let center = DVec3::new(10.0, 20.0, 30.0);
+        let radius = 7.0;
+        let _ = mesh.create_sphere_kernel_native(
+            center, radius, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        let active_vert_ids: Vec<VertId> = mesh.verts.iter()
+            .filter(|(_, v)| v.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(active_vert_ids.len(), 1);
+        let anchor_pos = mesh.vertex_pos(active_vert_ids[0]).unwrap();
+        let expected = center + DVec3::new(radius, 0.0, 0.0);
+        assert!((anchor_pos - expected).length() < 1e-9,
+            "equator anchor at center + (radius, 0, 0) Z-up canonical, got {:?}",
+            anchor_pos);
+    }
+
+    #[test]
+    fn adr104_sphere_kernel_native_memory_reduction_vs_path_a() {
+        // ADR-094 §1 + ADR-104 Amendment 2 §13.1 정량:
+        // Path A (N=24, M=12) = 289 face / 561 edge / 290 vert
+        // Path B = 2 face / 1 edge / 1 vert
+        // → 99%+ reduction
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).expect("kernel-native sphere OK");
+
+        let path_b_total = mesh.faces.iter().filter(|(_, f)| f.is_active()).count()
+            + mesh.edges.iter().filter(|(_, e)| e.is_active()).count()
+            + mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        let path_a_total: usize = 289 + 561 + 290;
+        let reduction = 1.0 - (path_b_total as f64 / path_a_total as f64);
+        assert!(reduction > 0.99,
+            "Path B memory reduction must be > 99% (got {:.4}, path_b_total={}, path_a_total={})",
+            reduction, path_b_total, path_a_total);
     }
 }
