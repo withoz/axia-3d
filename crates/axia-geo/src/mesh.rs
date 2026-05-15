@@ -814,7 +814,8 @@ impl Mesh {
         }
     }
 
-    /// ADR-103-ε — Migrate vertex positions from Y-up to Z-up coordinates.
+    /// ADR-103-ε — Migrate vertex positions, attached surfaces, and curves
+    /// from Y-up to Z-up coordinates.
     ///
     /// Applies a +90° rotation around the +X axis to every active vertex:
     ///   `(x, y, z) → (x, -z, y)`
@@ -823,34 +824,54 @@ impl Mesh {
     /// viewer" — becomes a Z-up vertex (1, -3, 2) — meaning "1 right, -3
     /// forward (away from viewer toward -Y), 2 up". Industry CAD parity.
     ///
-    /// After mutating vertex positions, the spatial hash is rebuilt and
-    /// cached face normals invalidated. Caller should subsequently invoke
-    /// `reconcile_face_normals` so that cached normals match the new
-    /// vertex winding.
+    /// After mutating vertex positions:
+    ///   1. The spatial hash is rebuilt.
+    ///   2. Cached face normals are invalidated.
+    ///   3. **ADR-103-ε-2** — Each active face's attached `AnalyticSurface`
+    ///      is migrated (positions + direction vectors). Each active edge's
+    ///      attached `AnalyticCurve` is migrated similarly.
+    /// Caller should subsequently invoke `reconcile_face_normals` so that
+    /// cached normals match the new vertex winding.
     ///
-    /// **Scope (ADR-103-ε-1 minimum)**: vertex positions only.
-    /// `AnalyticSurface::Cylinder/Cone/Torus` axis_dir / Plane normal /
-    /// `AnalyticCurve::Circle/Arc/etc.` direction vectors are *not yet*
-    /// rotated in this sub-step — they are deferred to ε-2 (separate
-    /// commit) because they require schema-aware traversal. For V2 (Y-up)
-    /// load + ε-1 only, faces with attached AnalyticSurface may show
-    /// stale axis vectors until ε-2 lands.
+    /// **Scope**:
+    /// - vertex positions (ε-1)
+    /// - `AnalyticSurface` 7 variants (Plane/Cylinder/Sphere/Cone/Torus/
+    ///   Bezier/B-spline/NURBS — ε-2)
+    /// - `AnalyticCurve` 5 variants with DVec3 fields (Circle/Arc/Bezier/
+    ///   BSpline/NURBS — ε-2). `Line` is rotated implicitly via its vert
+    ///   endpoints.
     ///
     /// Idempotent guard: this method assumes the mesh is currently in Y-up
     /// state; calling twice produces incorrect (rotated 180°) coordinates.
     /// Caller must track and only invoke during V2→V3 migration.
     pub fn migrate_y_up_to_z_up(&mut self) {
+        // 1. Vertex positions.
         for (_, vert) in self.verts.iter_mut() {
             if !vert.is_active() { continue; }
             let p = vert.pos();
             let new_p = DVec3::new(p.x, -p.z, p.y);
             vert.set_pos(new_p);
         }
-        // Spatial hash positions are now stale — rebuild.
+        // 2. Spatial hash positions are now stale — rebuild.
         self.rebuild_spatial_hash();
-        // Face cached normals invalidated by vertex movement.
-        for (_, face) in self.faces.iter() {
+        // 3. Face cached normals invalidated by vertex movement + attached
+        //    surface migration (ADR-103-ε-2).
+        for (_, face) in self.faces.iter_mut() {
             face.invalidate_normal_cache();
+            // Take ownership of surface, migrate, put back.
+            if let Some(mut surf) = face.surface().cloned() {
+                surf.migrate_y_up_to_z_up();
+                face.set_surface(Some(surf));
+            }
+        }
+        // 4. Edge attached curves (ADR-103-ε-2). Line variant has only
+        //    VertId references — rotated via mesh vertex pass above.
+        for (_, edge) in self.edges.iter_mut() {
+            if !edge.is_active() { continue; }
+            if let Some(mut curve) = edge.curve().cloned() {
+                curve.migrate_y_up_to_z_up();
+                edge.set_curve(Some(curve));
+            }
         }
     }
 

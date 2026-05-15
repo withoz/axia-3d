@@ -144,6 +144,75 @@ pub enum AnalyticSurface {
     },
 }
 
+/// ADR-103-ε-2 — Rotate a DVec3 from Y-up to Z-up convention.
+/// `(x, y, z) → (x, -z, y)`. +90° rotation around +X axis.
+#[inline]
+fn rotate_y_to_z(v: DVec3) -> DVec3 {
+    DVec3::new(v.x, -v.z, v.y)
+}
+
+impl AnalyticSurface {
+    /// ADR-103-ε-2 — Migrate all world-space DVec3 fields (positions +
+    /// direction vectors) from Y-up to Z-up coordinate convention. Used
+    /// by `Scene::import_versioned_snapshot` V2 → V3 path so attached
+    /// surfaces remain visually consistent with the rotated mesh.
+    ///
+    /// **Scope**: position fields (origin/center/apex/axis_origin) and
+    /// direction fields (normal/axis_dir/ref_dir/basis_u) of all primitive
+    /// variants. Control grids of NURBS-class variants
+    /// (BezierPatch/BSplineSurface/NURBSSurface) are rotated point-wise.
+    /// 2D trim loops on NURBSSurface live in (u, v) parameter space and
+    /// are *not* rotated.
+    ///
+    /// Sphere's u/v range is preserved as numeric values; semantically a
+    /// V2 sphere's "north cap (v near π/2)" is +Y polar after rotation
+    /// becomes "+Z polar" which is consistent with Z-up engine convention
+    /// — no rotation needed for the parameterization itself.
+    pub fn migrate_y_up_to_z_up(&mut self) {
+        match self {
+            AnalyticSurface::Plane { origin, normal, basis_u, .. } => {
+                *origin = rotate_y_to_z(*origin);
+                *normal = rotate_y_to_z(*normal);
+                *basis_u = rotate_y_to_z(*basis_u);
+            }
+            AnalyticSurface::Cylinder { axis_origin, axis_dir, ref_dir, .. } => {
+                *axis_origin = rotate_y_to_z(*axis_origin);
+                *axis_dir = rotate_y_to_z(*axis_dir);
+                *ref_dir = rotate_y_to_z(*ref_dir);
+            }
+            AnalyticSurface::Sphere { center, .. } => {
+                *center = rotate_y_to_z(*center);
+            }
+            AnalyticSurface::Cone { apex, axis_dir, ref_dir, .. } => {
+                *apex = rotate_y_to_z(*apex);
+                *axis_dir = rotate_y_to_z(*axis_dir);
+                *ref_dir = rotate_y_to_z(*ref_dir);
+            }
+            AnalyticSurface::Torus { center, axis_dir, ref_dir, .. } => {
+                *center = rotate_y_to_z(*center);
+                *axis_dir = rotate_y_to_z(*axis_dir);
+                *ref_dir = rotate_y_to_z(*ref_dir);
+            }
+            AnalyticSurface::BezierPatch { ctrl_grid } => {
+                for row in ctrl_grid {
+                    for p in row { *p = rotate_y_to_z(*p); }
+                }
+            }
+            AnalyticSurface::BSplineSurface { ctrl_grid, .. } => {
+                for row in ctrl_grid {
+                    for p in row { *p = rotate_y_to_z(*p); }
+                }
+            }
+            AnalyticSurface::NURBSSurface { ctrl_grid, .. } => {
+                for row in ctrl_grid {
+                    for p in row { *p = rotate_y_to_z(*p); }
+                }
+                // 2D trim_loops are in parameter space — no world rotation.
+            }
+        }
+    }
+}
+
 /// Result of surface tessellation — triangle mesh with UV coordinates.
 #[derive(Clone, Debug)]
 pub struct SurfaceTessellation {
@@ -846,5 +915,77 @@ mod tests {
         };
         assert!(nrb.unsigned_distance_to(DVec3::ZERO).is_none(),
             "NURBSSurface must return None per Path Z pilot");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-103-ε-2 — AnalyticSurface Y-up → Z-up rotation
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr103_epsilon2_plane_migrates_origin_normal_basis_u() {
+        let mut surf = AnalyticSurface::Plane {
+            origin: DVec3::new(1.0, 2.0, 3.0),
+            normal: DVec3::Y,
+            basis_u: DVec3::X,
+            u_range: (-10.0, 10.0),
+            v_range: (-10.0, 10.0),
+        };
+        surf.migrate_y_up_to_z_up();
+        // (1, 2, 3) → (1, -3, 2). Y → Z (because (0,1,0) → (0,0,1)). X unchanged.
+        if let AnalyticSurface::Plane { origin, normal, basis_u, .. } = &surf {
+            assert!((*origin - DVec3::new(1.0, -3.0, 2.0)).length() < 1e-9);
+            assert!((*normal - DVec3::Z).length() < 1e-9, "Y → Z");
+            assert!((*basis_u - DVec3::X).length() < 1e-9, "X unchanged");
+        } else { panic!("expected Plane"); }
+    }
+
+    #[test]
+    fn adr103_epsilon2_cylinder_migrates_axis_dir() {
+        let mut surf = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Y,   // Y-up canonical "vertical cylinder"
+            radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, 6.283185),
+            v_range: (0.0, 10.0),
+        };
+        surf.migrate_y_up_to_z_up();
+        if let AnalyticSurface::Cylinder { axis_dir, ref_dir, .. } = &surf {
+            assert!((*axis_dir - DVec3::Z).length() < 1e-9,
+                "Y-up cylinder axis Y → Z-up axis Z");
+            assert!((*ref_dir - DVec3::X).length() < 1e-9, "ref_dir X unchanged");
+        } else { panic!("expected Cylinder"); }
+    }
+
+    #[test]
+    fn adr103_epsilon2_sphere_migrates_center_only() {
+        let mut surf = AnalyticSurface::Sphere {
+            center: DVec3::new(0.0, 10.0, 0.0),  // Y-up "elevated" sphere
+            radius: 5.0,
+            u_range: (0.0, 6.283185),
+            v_range: (-1.570796, 1.570796),
+        };
+        surf.migrate_y_up_to_z_up();
+        if let AnalyticSurface::Sphere { center, .. } = &surf {
+            // (0, 10, 0) → (0, 0, 10) — Y-up "elevated" → Z-up "elevated"
+            assert!((*center - DVec3::new(0.0, 0.0, 10.0)).length() < 1e-9);
+        } else { panic!("expected Sphere"); }
+    }
+
+    #[test]
+    fn adr103_epsilon2_bezier_patch_migrates_all_control_points() {
+        let mut surf = AnalyticSurface::BezierPatch {
+            ctrl_grid: vec![
+                vec![DVec3::ZERO, DVec3::Y],
+                vec![DVec3::X, DVec3::new(1.0, 1.0, 0.0)],
+            ],
+        };
+        surf.migrate_y_up_to_z_up();
+        if let AnalyticSurface::BezierPatch { ctrl_grid } = &surf {
+            // (0,1,0) → (0,0,1)
+            assert!((ctrl_grid[0][1] - DVec3::Z).length() < 1e-9);
+            // (1,1,0) → (1,0,1)
+            assert!((ctrl_grid[1][1] - DVec3::new(1.0, 0.0, 1.0)).length() < 1e-9);
+        } else { panic!("expected BezierPatch"); }
     }
 }
