@@ -692,7 +692,17 @@ export class Viewport {
       this.lastMouse.set(e.clientX, e.clientY);
 
       if (this.isOrbiting) {
-        this.spherical.theta -= dx * 0.01;
+        // ADR-103 (Z-up orbit): rotation axis = +Z (world vertical).
+        //   - dx (horizontal drag) → Δθ azimuth around +Z (turntable spin).
+        //   - dy (vertical drag)   → Δφ polar tilt (camera up/down).
+        //
+        // Z-up Spherical formula in updateCameraFromSpherical:
+        //   x = r·sin(φ)·cos(θ)  y = r·sin(φ)·sin(θ)  z = r·cos(φ)
+        //
+        // θ 변화 시 x/y 변화, z 고정 → 순수 Z축 orbit.
+        // 부호: drag RIGHT (dx>0) → θ 증가 → camera CCW around +Z (from
+        // above) → scene 시점에서 RIGHT 회전 (SketchUp/Fusion 관습).
+        this.spherical.theta += dx * 0.01;
         this.spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01,
           this.spherical.phi - dy * 0.01));
         this.updateCameraFromSpherical();
