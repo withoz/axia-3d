@@ -3,12 +3,15 @@
  *
  *   Click 1: anchor corner on the ground (or detected plane)
  *   Click 2: opposite ground corner — defines width × depth rectangle
- *   Click 3: top corner — defines height (Y in world up axis)
+ *   Click 3: top corner — defines height (Z in world up axis, ADR-103 Z-up)
  *
  * Mouse-move shows live preview between clicks. Esc cancels.
  *
  * Auto-intersect on draw fires inside the WASM `create_box` call when
  * the user has it enabled (Settings → "그릴 때 자동 교차").
+ *
+ * ADR-103-δ-2: rectangle on XY ground plane (Z=const), height extrudes
+ * along +Z. Industry CAD parity (SketchUp / Fusion / SolidWorks).
  */
 
 import * as THREE from 'three';
@@ -62,9 +65,10 @@ export class BoxTool implements ITool {
       debugLog('[Box] click 1 — corner1', this.corner1.toArray());
     } else if (this.phase === 'awaiting_corner2') {
       if (!this.corner1 || !point) return;
-      // Snap corner2 to same Y as corner1 (rectangle is on a horizontal plane).
+      // ADR-103-δ-2 (Z-up): snap corner2 to same Z as corner1
+      // (rectangle on horizontal XY ground plane).
       const c2 = point.clone();
-      c2.y = this.corner1.y;
+      c2.z = this.corner1.z;
       // If the user clicked exactly on corner1 (degenerate), bail.
       if (this.corner1.distanceTo(c2) < 0.5) {
         Toast.warning('박스의 가로/세로 코너를 다른 위치에 클릭하세요');
@@ -90,13 +94,14 @@ export class BoxTool implements ITool {
   onMouseMove(e: MouseEvent, point: THREE.Vector3 | null): void {
     if (this.phase === 'awaiting_corner2' && this.corner1 && point) {
       const c2 = point.clone();
-      c2.y = this.corner1.y;
+      // ADR-103-δ-2 (Z-up): rect on XY plane, Z fixed.
+      c2.z = this.corner1.z;
       this.updateRectPreview(this.corner1, c2);
     } else if (this.phase === 'awaiting_height' && this.corner1 && this.corner2) {
-      // ground point.y = corner1.y 이므로 그것만으론 height 변화 없음.
-      // 마우스 → 카메라 ray 를 사각형 중심을 지나는 수직선(world Y 축)에
-      // 투영해 Y(=height) 도출. 직관적: cursor 가 화면에서 위로 가면 box
-      // 가 위로 자라남.
+      // ADR-103-δ-2 (Z-up): ground point.z = corner1.z 이므로 그것만으론
+      // height 변화 없음. 마우스 → 카메라 ray 를 사각형 중심을 지나는
+      // 수직선(world Z 축)에 투영해 Z(=height) 도출. cursor 가 화면에서
+      // 위로 가면 box 가 위로 자라남.
       const h = this.heightFromCursor(e);
       this.updateBoxPreview(this.corner1, this.corner2, h);
     }
@@ -104,7 +109,7 @@ export class BoxTool implements ITool {
 
   /** Phase 3 — derive box height from cursor screen position by
    *  projecting the camera ray onto the vertical line through the
-   *  rectangle's center. Returns world-Y delta from corner1. */
+   *  rectangle's center. Returns world-Z delta from corner1 (ADR-103-δ-2). */
   private heightFromCursor(e: MouseEvent): number {
     if (!this.corner1 || !this.corner2) return 0;
     const viewport = this.ctx.viewport;
@@ -120,11 +125,13 @@ export class BoxTool implements ITool {
       .normalize();
     const rayOrigin = camera.position.clone();
 
-    // Vertical line through rectangle center (world Y axis at midpoint).
+    // ADR-103-δ-2 (Z-up): vertical line through rectangle center (world
+    // Z axis at midpoint). lineDir = +Z, lineOrigin uses corner1.z as
+    // ground level.
     const cx = (this.corner1.x + this.corner2.x) * 0.5;
-    const cz = (this.corner1.z + this.corner2.z) * 0.5;
-    const lineOrigin = new THREE.Vector3(cx, this.corner1.y, cz);
-    const lineDir = new THREE.Vector3(0, 1, 0);
+    const cy = (this.corner1.y + this.corner2.y) * 0.5;
+    const lineOrigin = new THREE.Vector3(cx, cy, this.corner1.z);
+    const lineDir = new THREE.Vector3(0, 0, 1);
 
     // Closest point on the line to the ray (skew-line-distance closed form).
     //   p1 = rayOrigin, d1 = rayDir
@@ -139,7 +146,7 @@ export class BoxTool implements ITool {
     const denom = a * c - b * b;
     if (Math.abs(denom) < 1e-6) return 0; // ray parallel to line — no height change
     const t2 = (a * e2 - b * d) / denom;
-    return t2; // Y delta from corner1.y along world Y
+    return t2; // Z delta from corner1.z along world Z (ADR-103-δ-2)
   }
 
   onKeyDown(e: KeyboardEvent): void {
@@ -160,22 +167,23 @@ export class BoxTool implements ITool {
 
   private commit(height: number): void {
     if (!this.corner1 || !this.corner2) return;
+    // ADR-103-δ-2 (Z-up): rectangle spans XY plane, height extrudes +Z.
     const minX = Math.min(this.corner1.x, this.corner2.x);
     const maxX = Math.max(this.corner1.x, this.corner2.x);
-    const minZ = Math.min(this.corner1.z, this.corner2.z);
-    const maxZ = Math.max(this.corner1.z, this.corner2.z);
-    const w = maxX - minX;
-    const d = maxZ - minZ;
+    const minY = Math.min(this.corner1.y, this.corner2.y);
+    const maxY = Math.max(this.corner1.y, this.corner2.y);
+    const w = maxX - minX;      // X extent = width
+    const d = maxY - minY;      // Y extent = depth
     const absH = Math.abs(height);
     if (w < 0.5 || d < 0.5 || absH < 0.5) {
       Toast.warning(`박스 크기가 너무 작습니다 (${w.toFixed(1)} × ${d.toFixed(1)} × ${absH.toFixed(1)})`);
       return;
     }
     const cx = (minX + maxX) * 0.5;
-    // Signed height: negative grows the box downward from corner1.
-    const cy = this.corner1.y + height * 0.5;
-    const cz = (minZ + maxZ) * 0.5;
-    const h = absH;
+    const cy = (minY + maxY) * 0.5;
+    // Signed height: negative grows the box downward (-Z) from corner1.
+    const cz = this.corner1.z + height * 0.5;
+    const h = absH;             // Z extent = height
 
     debugLog(`[Box] commit center=(${cx},${cy},${cz}) size=${w}×${h}×${d}`);
 
@@ -190,14 +198,15 @@ export class BoxTool implements ITool {
   }
 
   private updateRectPreview(c1: THREE.Vector3, c2: THREE.Vector3): void {
+    // ADR-103-δ-2 (Z-up): rect on XY plane (z=const).
     const minX = Math.min(c1.x, c2.x), maxX = Math.max(c1.x, c2.x);
-    const minZ = Math.min(c1.z, c2.z), maxZ = Math.max(c1.z, c2.z);
-    const y = c1.y;
+    const minY = Math.min(c1.y, c2.y), maxY = Math.max(c1.y, c2.y);
+    const z = c1.z;
     const verts = new Float32Array([
-      minX, y, minZ,
-      maxX, y, minZ,
-      maxX, y, maxZ,
-      minX, y, maxZ,
+      minX, minY, z,
+      maxX, minY, z,
+      maxX, maxY, z,
+      minX, maxY, z,
     ]);
     const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
     if (!this.rectPreview) {
@@ -227,12 +236,13 @@ export class BoxTool implements ITool {
   }
 
   private updateBoxPreview(c1: THREE.Vector3, c2: THREE.Vector3, h: number): void {
+    // ADR-103-δ-2 (Z-up): rect spans XY (z=const), height extrudes ±Z.
     const minX = Math.min(c1.x, c2.x), maxX = Math.max(c1.x, c2.x);
-    const minZ = Math.min(c1.z, c2.z), maxZ = Math.max(c1.z, c2.z);
-    const y0 = c1.y;
-    const y1 = c1.y + h;
-    // Rebuild as BoxGeometry sized to dims.
-    const w = maxX - minX, d = maxZ - minZ;
+    const minY = Math.min(c1.y, c2.y), maxY = Math.max(c1.y, c2.y);
+    const z0 = c1.z;
+    const z1 = c1.z + h;
+    // Rebuild as BoxGeometry sized to dims (Three.js local: X=w, Y=d, Z=|h|).
+    const w = maxX - minX, d = maxY - minY;
     if (this.boxPreview) {
       this.ctx.viewport.scene.remove(this.boxPreview);
       this.boxPreview.geometry.dispose();
@@ -241,12 +251,16 @@ export class BoxTool implements ITool {
       this.ctx.viewport.scene.remove(this.boxOutline);
       this.boxOutline.geometry.dispose();
     }
-    const geo = new THREE.BoxGeometry(w, Math.abs(h), d);
+    const geo = new THREE.BoxGeometry(w, d, Math.abs(h));
     const mat = new THREE.MeshBasicMaterial({
       color: PREVIEW_COLOR, transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthWrite: false,
     });
     this.boxPreview = new THREE.Mesh(geo, mat);
-    this.boxPreview.position.set((minX + maxX) / 2, (y0 + y1) / 2, (minZ + maxZ) / 2);
+    this.boxPreview.position.set(
+      (minX + maxX) / 2,
+      (minY + maxY) / 2,
+      (z0 + z1) / 2,
+    );
     this.ctx.viewport.scene.add(this.boxPreview);
 
     const edges = new THREE.EdgesGeometry(geo);
