@@ -691,7 +691,13 @@ export class Viewport {
       this.lastMouse.set(e.clientX, e.clientY);
 
       if (this.isOrbiting) {
-        this.spherical.theta -= dx * 0.01;
+        // ADR-103 (Z-up orbit): Spherical 의 θ 가 +Z polar 기준 CCW
+        // around +Z (viewed from above). Y-up 시대에는 +Y polar 기준
+        // 이라 `theta -= dx` 가 자연스러웠으나, Z-up 좌표계 전환 후
+        // 부호 반전. drag right → scene right (SketchUp/Fusion 관습).
+        this.spherical.theta += dx * 0.01;
+        // φ 는 Z-up 에서도 동일 의미 (drag down → 카메라 위로, 장면을
+        // 더 위에서 내려다봄).
         this.spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01,
           this.spherical.phi - dy * 0.01));
         this.updateCameraFromSpherical();
