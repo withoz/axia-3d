@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed (Amendment 1, 2026-05-15)** — Q1-Q5 사전 결재 default 응답 + β-1 (Sphere) sub-step decomposition. β-1 진입 사용자 명시 결재 대기. |
+| Status | **Proposed (Amendment 2, 2026-05-15)** — Q1 revision: (c) seam edge → **(b) 2-hemisphere** (manifold + ADR-021 P7 strict 정합). 메타-원칙 #14 (face derives from closed boundary) 정합. β-1-β (engine 본체) 진입 사용자 명시 결재 대기. |
 | Date | 2026-05-15 |
 | Supersedes | — |
 | Related | ADR-027 (NURBS Kernel kickoff), ADR-031 (Phase D — Sphere/Cone/Torus analytic), ADR-032 (P17 primitive Path B activation), ADR-079 (Create Solid surface-native), ADR-080 (Offset dimension-aware), ADR-089 (Phase 2 closed-curve face), ADR-094 (Cylinder Path B-full canonical), LOCKED #1 (P7 manifold), LOCKED #26 (Two-Layer Citizenship), LOCKED #41 (ADR-101 closure), LOCKED #42 (ADR-102 closure), LOCKED #43 (ADR-103 Z-up closure) |
@@ -418,3 +418,138 @@ impl Mesh {
 → **β-1 총 1-1.5주 atomic** (ADR-094 답습).
 
 β-2 (Cone) + β-3 (Torus) 동일 estimate → ADR-104 전체 **3-5주 atomic** (§7 답습).
+
+---
+
+## 13. Amendment 2 — Q1 Revision: (c) seam edge → (b) 2-hemisphere (2026-05-15)
+
+Amendment 1 §9.1 의 Q1 default 가 **위상적 misapplication** 으로 판정되어 revision. ADR 불변 정책 (메타-원칙 #10) 정합 — Amendment 1 history 보존, Amendment 2 가 supersede.
+
+### 13.1 Revision 근거
+
+| 항목 | (c) seam edge (Amendment 1) | (b) 2-hemisphere (Amendment 2, 채택) |
+|---|---|---|
+| **위상** | Sphere = S² (closed manifold, no boundary). Self-loop seam 은 parameter-space 절단일 뿐 실제 manifold 절단 아님 | 적도 closed edge = real Jordan curve in surface, sphere 를 두 영역 (북반구 / 남반구) 으로 분할 |
+| **ADR-021 P7** | "closed edge cycle divides face" — 단일 self-loop seam 이 S² 표면을 두 영역으로 분할하지 않음 (Jordan curve theorem 은 평면에서만) | 적도 closed edge 가 sphere 를 정확히 2 영역으로 분할 — strict 정합 |
+| **ADR-007 manifold** | 2 isolated pole verts (HE endpoint 아닌 vertex) → invariant 위반 | 각 edge 가 정확히 2 face-bearing HE — clean manifold |
+| **ADR-089 답습** | ADR-089 self-loop 는 *planar polygon* boundary (Jordan curve in plane). Sphere seam 은 S² topology — misapplication | ADR-094 Cylinder Path B-full 의 *annulus topology* (3 face / 2 edge / 2 vert) 답습 — *동일 surface manifold split* 패턴 |
+| **메타-원칙 #14** | "면은 닫힌 경계로부터 유도된다" — sphere 의 닫힌 경계는 적도 (S² 의 nontrivial cycle). Seam 은 경계 아님 | 적도가 자연 boundary, 면 2개 자연 유도 |
+| **Memory** | 1 face + 0 edges + 2 verts (이론) | 2 face + N 적도 edges + N 적도 verts |
+| **Memory vs Path A 289 face** | 99.7% reduction (이론) | **99.0%+ reduction** (실제 measurement, 충분히 큰 unlock) |
+| **Engine API** | `Result<FaceId>` | `Result<Vec<FaceId>>` ([north_hemi_id, south_hemi_id]) |
+
+### 13.2 채택 사항 (Q1=(b) 2-hemisphere)
+
+**Sphere Path B canonical representation**:
+
+- **2 face**:
+  - North hemisphere face: `AnalyticSurface::Sphere` with `uv_range_v ∈ [0, π/2]` (북반구)
+  - South hemisphere face: `AnalyticSurface::Sphere` with `uv_range_v ∈ [-π/2, 0]` (남반구)
+- **1 equator edge** (closed circular loop):
+  - `AnalyticCurve::Circle` with `center, radius, normal = +Z` (ADR-089 closed-curve self-loop on equator vertex)
+  - 또는 N polyline edges (chord-tolerant, ADR-031 Phase D infra 활용)
+  - **Lock-in**: ADR-089 self-loop variant 채택 (1 anchor vertex on equator + 1 self-loop edge with Circle curve)
+- **1 equator anchor vertex** (e.g., `(radius, 0, 0)` — Z-up canonical, ADR-103-ε)
+- **0 pole vertices** (sphere 의 pole 은 surface evaluate 의 degenerate point, DCEL vertex 아님 — render 가 `tessellate_face_surface` 의 v-range subset 으로 자동 처리)
+
+### 13.3 ADR-094 답습 패턴
+
+ADR-094 Cylinder Path B-full canonical:
+
+- Cylinder = 3 face (top disk + side annulus + bottom disk) / 2 edge (top/bottom rim) / 2 vert (rim anchors)
+- 95% memory reduction vs Path A 25/69/46
+
+Sphere Path B (Q1=(b) 채택):
+
+- Sphere = 2 face (north + south hemisphere) / 1 edge (equator) / 1 vert (equator anchor)
+- 99%+ memory reduction vs Path A 289/561/290
+
+→ 동일 architectural 패턴 (single closed curve divides surface into 2 face). Cylinder 가 *두 rim* 으로 *3 face* (top/side/bottom), Sphere 는 *한 적도* 로 *2 face* (north/south). ADR-094 5-Layer Atomic Stack 패턴 1:1 mirror 가능.
+
+### 13.4 β-1-β Engine API 갱신
+
+```rust
+impl Mesh {
+    /// ADR-104 β-1 (Amendment 2) — Kernel-native sphere creation (Path B,
+    /// 2-hemisphere canonical).
+    ///
+    /// Creates a sphere with 2 hemisphere faces joined at equator.
+    /// 99%+ memory reduction vs Path A polygonal sphere.
+    ///
+    /// # Lock-ins (ADR-104 Amendment 2 Q1=(b))
+    /// - 2 hemisphere faces with `AnalyticSurface::Sphere`:
+    ///   - North: `uv_range_v ∈ [0, π/2]`
+    ///   - South: `uv_range_v ∈ [-π/2, 0]`
+    /// - 1 equator anchor vertex (radius * ref_dir, Z-up canonical)
+    /// - 1 self-loop edge with `AnalyticCurve::Circle` (center=sphere center,
+    ///   radius=sphere radius, normal=+Z)
+    /// - ADR-021 P7 strict: equator divides sphere into 2 manifold regions
+    /// - ADR-007 manifold: each HE pair has exactly 2 face-bearing HEs
+    /// - Tessellate via existing `tessellate_face_surface` with v-range subset
+    ///
+    /// # Returns
+    /// `Result<Vec<FaceId>>` — `[north_hemisphere, south_hemisphere]`
+    pub fn create_sphere_kernel_native(
+        &mut self,
+        center: DVec3,
+        radius: f64,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> { /* ... */ }
+}
+```
+
+### 13.5 회귀 자산 갱신 (Amendment 2)
+
+β-1-β 회귀 자산 변경 (절대 #[ignore] 금지):
+
+- `adr104_sphere_kernel_native_face_count_2` (1 → 2, hemisphere count)
+- `adr104_sphere_kernel_native_equator_anchor_vertex_count_1`
+- `adr104_sphere_kernel_native_equator_self_loop_edge` (Circle curve attached)
+- `adr104_sphere_kernel_native_invariants_pass` (ADR-007 manifold + ADR-021 P7)
+- `adr104_sphere_kernel_native_surface_attached_both_hemispheres`
+- `adr104_sphere_kernel_native_uv_range_v_subset` (north: [0, π/2], south: [-π/2, 0])
+- `adr104_sphere_kernel_native_memory_reduction_corpus` (vs Path A 289/561/290 baseline)
+- `adr104_sphere_kernel_native_adr021_p7_equator_divides_strict`
+- `adr104_sphere_kernel_native_adr094_pattern_mirror` (cylinder annulus 답습 검증)
+
+### 13.6 Q2 / Q3 영향 평가 (deferred)
+
+Q2 (Cone apex singularity) 와 Q3 (Torus periodic) 도 (b) 답습 가능성 사전 검토:
+
+- **Q2 Cone**: apex 는 degenerate parameter point — 현재 Amendment 1 default (NURBS degenerate edge) 유지 가능. β-2 진입 시 재평가.
+- **Q3 Torus**: u/v 모두 periodic — 2-seam (Amendment 1 default) vs 4-piece split. β-3 진입 시 재평가.
+
+본 Amendment 2 는 **Q1 만 revision**, Q2/Q3 는 β-2/β-3 진입 시 별도 Amendment 결재.
+
+### 13.7 Lock-ins (Amendment 2)
+
+- **L-104-Q1-1** (위상 정합): Sphere Path B = 2 hemisphere face joined at equator. (c) seam edge approach 폐기.
+- **L-104-Q1-2** (ADR-021 P7 strict): equator closed edge cycle 이 face 분할 boundary. Self-loop seam 의 *parameter-space* 절단 misapplication 영구 차단.
+- **L-104-Q1-3** (ADR-094 답습): Cylinder 의 3-face annulus 패턴 1:1 mirror. 단일 closed curve 가 surface 를 N face 로 분할하는 architectural 패턴 일반화.
+- **L-104-Q1-4** (Memory unlock 보존): 99%+ reduction 유지 (실제 measurement 가 1 face 이론값보다 N edges 추가 — 큰 model 에서 무시 가능).
+- **L-104-Q1-5** (Amendment 1 history 보존): 메타-원칙 #10 정합. Amendment 1 §9.1 의 (c) seam edge 결정 이력 보존, Amendment 2 가 supersede.
+
+### 13.8 β-1-β 진입 unblock
+
+본 Amendment 2 merge 후 β-1-β (engine 본체) 즉시 진입 가능. 사용자 별도 결재 불필요 (Amendment 2 가 default 결재 자체).
+
+**β-1-β atomic merge 강제** (사용자 directive 2026-05-15 정합):
+- Engine `create_sphere_kernel_native` + AnalyticSurface uv_range subset + equator edge + WASM bridge + TS wrapper + render verification → **단일 PR atomic** (좌표계/시민권 의미 atomic 정책 답습)
+- 중간 상태 (engine 만 / WASM 만 / render 만) 미허용
+
+---
+
+## 14. β-1-β 진입 트리거 (Amendment 2 후)
+
+Amendment 2 merge 후 β-1-β atomic PR 작성:
+
+1. `Mesh::create_sphere_kernel_native` Rust 본체
+2. `AnalyticSurface::Sphere` uv_range subset 검증
+3. WASM bridge `createSphereKernelNative` + TS wrapper
+4. Mesh-level Map `face_to_boundary_loops` 자연 확장
+5. Render `tessellate_face_surface` v-range subset 검증
+6. 회귀 자산 +9 (Amendment 2 §13.5)
+
+**예상 회귀**: axia-geo +9 (sphere kernel-native) + axia-wasm +2 (bridge) + vitest +3 (TS wrapper) = **+14 atomic**
+
+**예상 기간**: 2-3일 (engine + WASM + TS + render 단일 PR atomic)
