@@ -2877,6 +2877,64 @@ impl AxiaEngine {
         }
     }
 
+    /// Create a torus primitive (genus-1 closed manifold, no poles).
+    /// Returns a face ID from the torus for Push/Pull operations.
+    ///
+    /// LOCKED #40 visual baseline support — final piece of the 4-primitive
+    /// matrix (Cylinder / Sphere / Cone / Torus).
+    pub fn create_torus(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        ax: f64, ay: f64, az: f64,
+        major_radius: f64,
+        minor_radius: f64,
+        u_segments: u32,
+        v_segments: u32,
+    ) -> f64 {
+        let position = DVec3::new(cx, cy, cz);
+        let axis = DVec3::new(ax, ay, az);
+        self.scene.transactions.begin();
+        let before = self.scene.scene_snapshot();
+        self.scene.transactions.set_before_snapshot(before);
+        match self.scene.mesh.create_torus(
+            position,
+            axis,
+            major_radius,
+            minor_radius,
+            u_segments,
+            v_segments,
+            axia_core::FORM_MATERIAL,
+        ) {
+            Ok(faces) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                let xia_id = self.scene.create_xia_with_faces(
+                    "Torus".to_string(),
+                    position,
+                    faces.clone(),
+                );
+                if self.scene.auto_intersect_on_draw {
+                    let _ = self.scene.intersect_faces_inner(&faces);
+                }
+                let after = self.scene.scene_snapshot();
+                self.scene.transactions.set_after_snapshot(after);
+                self.scene.transactions.commit();
+                if let Some(&first_face) = faces.first() {
+                    debug_log!("[RUST] create_torus: faces={} first_id={} xia={}",
+                        faces.len(), first_face.raw(), xia_id);
+                    first_face.raw() as f64
+                } else {
+                    -1.0
+                }
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] create_torus error: {}", e);
+                -1.0
+            }
+        }
+    }
+
     // ========================================================================
     // XIA → Face ID lookup
     // ========================================================================

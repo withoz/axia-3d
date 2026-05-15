@@ -588,6 +588,12 @@ type AxiaEngineExtended = AxiaEngine & {
   create_cylinder?(cx: number, cy: number, cz: number, radius: number, height: number, segments: number): number;
   create_cone?(cx: number, cy: number, cz: number, radius: number, height: number, segments: number): number;
   create_sphere?(cx: number, cy: number, cz: number, radius: number, u_segments: number, v_segments: number): number;
+  create_torus?(
+    cx: number, cy: number, cz: number,
+    ax: number, ay: number, az: number,
+    major_radius: number, minor_radius: number,
+    u_segments: number, v_segments: number,
+  ): number;
   create_box?(cx: number, cy: number, cz: number, width: number, height: number, depth: number): number;
   // Delta Buffer Export
   getDirtyFaceBuffers?(): WasmDeltaBuffers | undefined;
@@ -4524,6 +4530,33 @@ export class WasmBridge {
       return this.engine.create_sphere(cx, cy, cz, radius, u_segments, v_segments);
     } catch (e) {
       console.error('[WasmBridge] create_sphere failed:', e);
+      return -1;
+    }
+  }
+
+  /** Create a torus primitive (genus-1 closed manifold, no poles).
+   *  Returns a face ID for Push/Pull operations. Auto-intersects with the
+   *  rest of the scene when auto_intersect_on_draw is enabled.
+   *
+   *  Completes the LOCKED #40 4-primitive matrix (Cylinder/Sphere/Cone/Torus).
+   *  Each quad face carries `AnalyticSurface::Torus { ... }` for kernel-aware
+   *  ops + smooth Gouraud shading via ADR-038 P23.5. */
+  create_torus(
+    cx: number, cy: number, cz: number,
+    ax: number, ay: number, az: number,
+    major_radius: number, minor_radius: number,
+    u_segments: number, v_segments: number,
+  ): number {
+    if (!this.engine?.create_torus) return -1;
+    this.markDirty();
+    try {
+      return this.engine.create_torus(
+        cx, cy, cz, ax, ay, az,
+        major_radius, minor_radius,
+        u_segments, v_segments,
+      );
+    } catch (e) {
+      console.error('[WasmBridge] create_torus failed:', e);
       return -1;
     }
   }

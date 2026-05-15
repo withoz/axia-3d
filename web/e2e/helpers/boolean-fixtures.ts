@@ -826,3 +826,59 @@ export async function setupCone(
     { radius, height, segments },
   );
 }
+
+/**
+ * Build a torus primitive via the `create_torus` bridge entry.
+ *
+ * Completes the LOCKED #40 4-primitive matrix
+ * (Cylinder / Sphere / Cone / Torus). Torus exercises:
+ *
+ *   - Genus-1 closed manifold topology (no pole singularity; both u
+ *     and v are periodic, unlike Sphere's poles).
+ *   - `AnalyticSurface::Torus` tessellation + per-vertex analytic
+ *     normal (ADR-038 P23.5) — both major-ring and tube-ring
+ *     curvature must shade smoothly under Gouraud.
+ *
+ * Defaults: R=1000mm major, r=250mm minor, 32×16 segments. Axis = +Y
+ * (AxiA Y-up convention).
+ */
+export interface TorusHandle {
+  xiaId: number;
+  faceIds: number[];
+}
+
+export async function setupTorus(
+  page: Page,
+  opts: {
+    majorRadius?: number;
+    minorRadius?: number;
+    uSegments?: number;
+    vSegments?: number;
+  } = {},
+): Promise<TorusHandle> {
+  const majorRadius = opts.majorRadius ?? 1000;
+  const minorRadius = opts.minorRadius ?? 250;
+  const u = opts.uSegments ?? 32;
+  const v = opts.vSegments ?? 16;
+  return await page.evaluate(
+    ({ majorRadius, minorRadius, u, v }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const bridge = w.__axia.get('bridge');
+      const xiaId: number = bridge.create_torus(
+        0, 0, 0,            // center
+        0, 1, 0,            // axis +Y (AxiA Y-up)
+        majorRadius, minorRadius,
+        u, v,
+      );
+      if (xiaId == null || xiaId < 0) {
+        throw new Error(`create_torus failed: ${xiaId}`);
+      }
+      const faceIds: number[] = bridge.getXiaFaceIds
+        ? bridge.getXiaFaceIds(xiaId)
+        : [];
+      return { xiaId, faceIds };
+    },
+    { majorRadius, minorRadius, u, v },
+  );
+}

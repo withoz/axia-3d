@@ -480,6 +480,166 @@ impl Mesh {
 
         Ok(faces)
     }
+
+    /// Create a torus primitive — analytic surface attached for kernel-aware
+    /// ops + smooth-shaded rendering (LOCKED #40 ADR-038 P23.5).
+    ///
+    /// # Parameters
+    ///
+    /// - `center` — torus center (donut hole midpoint)
+    /// - `axis_dir` — symmetry axis (usually `+Y` for AxiA's Y-up convention)
+    /// - `major_radius` `R` — distance from center to tube ring center
+    /// - `minor_radius` `r` — tube cross-section radius
+    /// - `u_segments` — divisions around the major ring (longitude). ≥ 3.
+    /// - `v_segments` — divisions around the tube cross-section (latitude). ≥ 3.
+    /// - `material`
+    ///
+    /// # Topology
+    ///
+    /// `u_segments × v_segments` quad grid. Both u and v are periodic (no
+    /// pole singularity unlike Sphere), so the mesh is genus-1 closed
+    /// manifold with `4·u·v` half-edges and `u·v` faces.
+    ///
+    /// # Parameterization
+    ///
+    /// ```text
+    /// P(u, v) = center
+    ///         + (R + r·cos(v)) · (cos(u)·ref + sin(u)·perp)
+    ///         + r·sin(v) · axis
+    /// ```
+    ///
+    /// where `ref/perp` are an orthonormal basis perpendicular to `axis`.
+    ///
+    /// Each quad face is tagged with `AnalyticSurface::Torus { ... }` with
+    /// the `u_range × v_range` matching its parameter cell — Boolean /
+    /// Push-Pull / Offset NURBS-aware ops can recover exact geometry.
+    ///
+    /// # Render
+    ///
+    /// LOCKED #40 ADR-038 P23.5 — `tessellate_face_surface` uses analytic
+    /// evaluate + per-vertex analytic normal for smooth Gouraud shading.
+    ///
+    /// # Cross-link
+    ///
+    /// ADR-031 (Surface primitives), ADR-032 P17 (analytic surface attach
+    /// to primitives), LOCKED #40 (render chord_tol + smooth normal).
+    pub fn create_torus(
+        &mut self,
+        center: DVec3,
+        axis_dir: DVec3,
+        major_radius: f64,
+        minor_radius: f64,
+        u_segments: u32,
+        v_segments: u32,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        if u_segments < 3 || v_segments < 3 {
+            anyhow::bail!(
+                "create_torus: need u_segments >= 3 AND v_segments >= 3 (got {}, {})",
+                u_segments, v_segments
+            );
+        }
+        if major_radius <= 0.0 {
+            anyhow::bail!("create_torus: major_radius must be > 0 (got {})", major_radius);
+        }
+        if minor_radius <= 0.0 {
+            anyhow::bail!("create_torus: minor_radius must be > 0 (got {})", minor_radius);
+        }
+        if minor_radius >= major_radius {
+            // Self-intersecting "horn torus" or "spindle torus" — DCEL
+            // can technically support, but the resulting mesh has
+            // ambiguous inside/outside. Reject for MVP — caller must
+            // pick a strictly thin torus.
+            anyhow::bail!(
+                "create_torus: minor_radius ({}) must be < major_radius ({}) — \
+                 horn/spindle torus self-intersecting topology not supported",
+                minor_radius, major_radius
+            );
+        }
+        let axis = axis_dir.normalize_or_zero();
+        if axis.length_squared() < 1e-12 {
+            anyhow::bail!("create_torus: axis_dir must be non-zero");
+        }
+
+        // Build orthonormal basis perpendicular to `axis`. We use the same
+        // helper that `AnalyticSurface::Torus::evaluate` uses, ensuring the
+        // mesh vertices align with the analytic surface parameterization.
+        let ref_dir = crate::surfaces::orthonormal_ref(axis, DVec3::X);
+        let perp = axis.cross(ref_dir).normalize_or_zero();
+        if perp.length_squared() < 0.5 {
+            anyhow::bail!("create_torus: could not build orthonormal basis");
+        }
+
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let u_step = two_pi / (u_segments as f64);
+        let v_step = two_pi / (v_segments as f64);
+
+        let pos = |u_idx: u32, v_idx: u32| -> DVec3 {
+            let u = (u_idx as f64) * u_step;
+            let v = (v_idx as f64) * v_step;
+            let radial = ref_dir * u.cos() + perp * u.sin();
+            center
+                + radial * (major_radius + minor_radius * v.cos())
+                + axis * (minor_radius * v.sin())
+        };
+
+        // ── (1) vertex grid (u_segments × v_segments, both periodic) ──
+        let mut verts: Vec<Vec<VertId>> = Vec::with_capacity(u_segments as usize);
+        for u_idx in 0..u_segments {
+            let mut row = Vec::with_capacity(v_segments as usize);
+            for v_idx in 0..v_segments {
+                row.push(self.add_vertex(pos(u_idx, v_idx)));
+            }
+            verts.push(row);
+        }
+
+        // ── (2) quad faces — wrap both directions (periodic) ──
+        let mut faces = Vec::with_capacity((u_segments * v_segments) as usize);
+        for u_idx in 0..u_segments {
+            for v_idx in 0..v_segments {
+                let u_next = (u_idx + 1) % u_segments;
+                let v_next = (v_idx + 1) % v_segments;
+
+                // Quad winding: outward normal = radial·cos(v) + axis·sin(v).
+                // For CCW-from-outside, walk: (u,v) → (u+1,v) → (u+1,v+1) → (u,v+1).
+                let quad = vec![
+                    verts[u_idx as usize][v_idx as usize],
+                    verts[u_next as usize][v_idx as usize],
+                    verts[u_next as usize][v_next as usize],
+                    verts[u_idx as usize][v_next as usize],
+                ];
+                let fid = self.add_face(&quad, material)?;
+
+                let u_min = (u_idx as f64) * u_step;
+                let u_max = ((u_idx + 1) as f64) * u_step;
+                let v_min = (v_idx as f64) * v_step;
+                let v_max = ((v_idx + 1) as f64) * v_step;
+
+                let surface = AnalyticSurface::Torus {
+                    center,
+                    axis_dir: axis,
+                    ref_dir,
+                    major_radius,
+                    minor_radius,
+                    u_range: (u_min, u_max),
+                    v_range: (v_min, v_max),
+                };
+                if let Some(face_ref) = self.faces.get_mut(fid) {
+                    face_ref.set_surface(Some(surface));
+                }
+                faces.push(fid);
+            }
+        }
+
+        // LOCKED #40 ADR-038 P23.5 — mark all quad faces as outer-soft so
+        // that smooth Gouraud + chord_tol tessellation applies (mirrors
+        // Sphere/Cylinder/Cone primitives).
+        for &fid in &faces {
+            self.mark_face_outer_soft(fid)?;
+        }
+
+        Ok(faces)
+    }
 }
 
 #[cfg(test)]
@@ -1020,6 +1180,118 @@ mod tests {
                 assert!(savings_pct > 90.0,
                     "N=64 savings {} expected >90%", savings_pct);
             }
+        }
+    }
+
+    // ── Torus primitive (LOCKED #40 visual baseline support) ──────────
+
+    #[test]
+    fn torus_face_count_matches_u_times_v() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_torus(
+            DVec3::ZERO, DVec3::Y, 1000.0, 250.0, 32, 16, mat,
+        ).expect("create_torus");
+        assert_eq!(faces.len(), 32 * 16, "u_segs × v_segs quads expected");
+    }
+
+    #[test]
+    fn torus_invariants_pass() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        mesh.create_torus(DVec3::ZERO, DVec3::Y, 1000.0, 250.0, 16, 8, mat)
+            .expect("create_torus");
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "torus: {}", report.summary());
+    }
+
+    #[test]
+    fn torus_is_closed_manifold() {
+        // Torus = genus-1 closed surface — every edge shared by exactly
+        // 2 faces (no boundary, no non-manifold).
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_torus(DVec3::ZERO, DVec3::Y, 500.0, 100.0, 12, 8, mat)
+            .expect("create_torus");
+        let info = mesh.face_set_manifold_info(&faces);
+        assert_eq!(info.boundary_edge_count, 0,
+            "torus must be closed manifold (boundary edges expected 0, got {})",
+            info.boundary_edge_count);
+        assert_eq!(info.non_manifold_edge_count, 0,
+            "torus must have no non-manifold edges (got {})",
+            info.non_manifold_edge_count);
+    }
+
+    #[test]
+    fn torus_faces_have_torus_surface_attached() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_torus(
+            DVec3::ZERO, DVec3::Y, 1000.0, 250.0, 8, 6, mat,
+        ).expect("create_torus");
+        let mut torus_count = 0;
+        for &fid in &faces {
+            match mesh.face_surface(fid) {
+                Some(AnalyticSurface::Torus { major_radius, minor_radius, .. }) => {
+                    assert!((major_radius - 1000.0).abs() < 1e-9);
+                    assert!((minor_radius - 250.0).abs() < 1e-9);
+                    torus_count += 1;
+                }
+                other => panic!("face {:?} expected Torus surface, got {:?}", fid, other),
+            }
+        }
+        assert_eq!(torus_count, faces.len(),
+            "all torus faces must carry Torus AnalyticSurface");
+    }
+
+    #[test]
+    fn torus_rejects_degenerate_inputs() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // u_segments < 3
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::Y, 1000.0, 250.0, 2, 8, mat).is_err());
+        // v_segments < 3
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::Y, 1000.0, 250.0, 8, 2, mat).is_err());
+        // major_radius <= 0
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::Y, 0.0, 250.0, 8, 8, mat).is_err());
+        // minor_radius <= 0
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::Y, 1000.0, 0.0, 8, 8, mat).is_err());
+        // minor >= major (self-intersecting horn/spindle)
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::Y, 100.0, 100.0, 8, 8, mat).is_err());
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::Y, 100.0, 200.0, 8, 8, mat).is_err());
+        // zero axis
+        assert!(mesh.create_torus(DVec3::ZERO, DVec3::ZERO, 1000.0, 250.0, 8, 8, mat).is_err());
+    }
+
+    #[test]
+    fn torus_vertex_positions_match_analytic_evaluate() {
+        // Mesh vertices must lie EXACTLY on the analytic surface (the
+        // same parameterization both produce — critical for LOCKED #40
+        // surface-aware tessellation accuracy).
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let center = DVec3::new(100.0, 50.0, -30.0);
+        let axis = DVec3::Y;
+        let major = 500.0;
+        let minor = 120.0;
+        let faces = mesh.create_torus(center, axis, major, minor, 16, 8, mat)
+            .expect("create_torus");
+
+        // Sample the first face's outer corners and verify they lie on
+        // the analytic surface.
+        let outer_start = mesh.faces[faces[0]].outer().start;
+        let verts = mesh.collect_loop_verts(outer_start).expect("collect");
+        for &v in &verts {
+            let p = mesh.verts[v].pos();
+            // For a torus surface point, (distance from axis - major)²
+            //   + axial_offset² = minor²
+            let radial = p - center;
+            let axial = radial.dot(axis);
+            let in_plane = (radial - axis * axial).length();
+            let residual = (in_plane - major).powi(2) + axial.powi(2);
+            assert!((residual - minor.powi(2)).abs() < 1e-6,
+                "vertex {:?} not on torus surface: residual={}, expected minor²={}",
+                p, residual, minor.powi(2));
         }
     }
 }
