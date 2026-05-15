@@ -97,8 +97,12 @@ impl Mesh {
         let outer_verts = self.collect_loop_verts(face.outer().start)
             .map_err(|e| anyhow::anyhow!(
                 "ADR-102 α-2: face {:?} boundary corrupted: {}", face_id, e))?;
+        // ADR-089 Phase 2 kernel-native closed-curve face (1 anchor +
+        // 1 self-loop edge) has < 3 outer verts. By construction, a
+        // self-loop edge cannot be shared with a polygon-sibling face
+        // → no cleave required. Return empty siblings (hot path).
         if outer_verts.len() < 3 {
-            bail!("ADR-102 α-2: face {:?} outer loop has <3 verts", face_id);
+            return Ok(Vec::new());
         }
         let src_normal = face.normal();
         if src_normal.length_squared() < 1e-12 {
