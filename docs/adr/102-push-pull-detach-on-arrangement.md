@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed** (α — spec only, sub-step roadmap pending sign-off) |
+| Status | **✅ Closed (2026-05-15)** — Phase α/β/γ/δ/ε all atomic-merged. See §D Acceptance Log. |
 | Date | 2026-05-15 |
 | Supersedes | — |
 | Related | ADR-007 (Face orientation policy), ADR-016 Q2 (multi-loop face restrictions), ADR-021 P7 (closed edge cycle divides face), ADR-022 P9 (vertex-shared pinch promote), ADR-079 (Create Solid surface-native), ADR-101 (Coplanar partial overlap auto-intersect), LOCKED #1 P7 manifold, LOCKED #41 ADR-101 closure |
@@ -177,3 +177,121 @@ ADR-101 의 9 PR atomic 패턴 답습 가능:
 - ADR-101 §B-3b L-B3b-3 (surface inheritance) — cleave 결과 surface metadata 복제 정합
 - ADR-101 cross-cut finding (2026-05-15) — 본 ADR 의 trigger
 - LOCKED #5 (1.5μm spatial-hash) — coplanarity tolerance
+- LOCKED #42 (2026-05-15) — ADR-102 closure entry (CLAUDE.md)
+
+---
+
+## D. Acceptance Log (Amendment 1, 2026-05-15)
+
+Path Z atomic 5 sub-step closure. ADR-101 의 9 PR atomic 패턴 답습.
+
+| Sub-step | Branch | Commit | scope | 회귀 |
+|---|---|---|---|---|
+| α | `docs/adr-102-push-pull-detach` | `04be1b9` | spec ADR + 5 sub-step roadmap + 8 lock-ins | docs only |
+| β | `feat/adr-102-cleave-helper` | `81cfe4f` | `collect_coplanar_siblings` + `cleave_face_from_siblings` helpers (axia-geo `operations::cleave`) | axia-geo +4 |
+| γ | `feat/adr-102-gamma-wire-extrude` | `219ba37` | `create_solid_extrude` pre-step wiring + closed-curve hot-path fix | axia-geo +2 |
+| δ | `feat/adr-102-delta-regression-sweep` | `d437d2d` | Full regression sweep (6 신규 + canonical δ-4 manifold finding 해소 evidence) | axia-geo +6 |
+| ε | `docs/adr-102-epsilon-closure` | (본 commit) | Closure docs + LOCKED #42 entry | docs only |
+
+**합계**: **axia-geo 1296 → 1308 PASS (+12, 절대 #[ignore] 금지 12/12 준수)**. 0 regression.
+
+### D.1 PR 시퀀스 (모두 main 진입)
+
+- PR #36 (α spec) — `f651a22`
+- PR #37 (β cleave helper) — `187862e`
+- PR #38 (γ wiring) — `a7115e1`
+- PR # (δ sweep) — pending
+- PR # (ε closure, 본 PR) — pending
+
+### D.2 Canonical evidence (δ-4)
+
+ADR-102 의 trigger 였던 ADR-101 cross-cut finding (2026-05-15) 의 *직접 회귀*:
+
+**Test**: `adr101_b4_lens_push_pull_manifold_safe_after_cleave`
+
+**Pre-ADR-102**:
+```
+B-4 lens scenario:
+  Step 1: DrawRectAsShape × 2 partial overlap → 3 sub-faces
+  Step 2: create_solid_extrude on lens (distance=1.0) → SolidCreated ✓
+  Step 3: verify_face_invariants → FAIL
+    - edge EdgeId(6): shared by 3 active faces
+    - edge EdgeId(10): shared by 3 active faces
+    - edge EdgeId(13): shared by 3 active faces
+    - edge EdgeId(5): shared by 3 active faces
+```
+
+**Post-ADR-102 γ wiring**:
+```
+B-4 lens scenario:
+  Step 1: same
+  Step 2: create_solid_extrude on lens →
+    pre-step: collect_coplanar_siblings(lens) → [face_a_only, face_b_only]
+    pre-step: cleave_face_from_siblings(lens, &siblings) → new_lens_id
+    extrude(new_lens_id, distance=1.0) → SolidCreated ✓
+  Step 3: face_set_manifold_info(all_active).non_manifold_edge_count == 0 ✓
+```
+
+→ **canonical 해소** — `non_manifold_edge_count == 0` 명시 검증 자산.
+
+## E. Lessons (canonical for future ADRs)
+
+본 ADR 의 5 sub-step atomic 진행에서 추출한 lesson — 향후 manifold /
+hybrid-aware ADR 가이드:
+
+### E.L1 — `Result.new_face_id` 의미적 invalidation
+
+`cleave_face_from_siblings` 의 결과는 **원본 `face_id` 가 invalid** 임을
+명시. 후속 op (이 ADR 의 case: `create_solid_extrude` 내부 surface fetch +
+boundary classify) 는 *반드시* `new_face_id` 사용. γ wiring 의 `let
+profile_face = { ... cleave.new_face_id ... };` shadow pattern 이
+canonical.
+
+향후 *destructive helper* 작성 시: 결과 struct 가 *대체 id* 를 carry —
+caller 가 silent 으로 stale id 사용 못 하게.
+
+### E.L2 — Closed-curve face 의 architectural isolation
+
+ADR-089 Phase 2 kernel-native closed-curve face (1 anchor + 1 self-loop
+edge) 는 polygon-sibling 과 *정의상* 공유 불가. β 의 `outer_verts.len()
+< 3` 검사가 *kernel-native legitimate state* 를 reject 하던 함정 →
+γ-fix 로 빈 Vec hot-path 추가.
+
+향후 polygon-assumption helper 작성 시 *closed-curve hot-path 명시
+검토 강제*. ADR-089 시민권 활성 후 모든 mesh-era helper 가 같은 footgun
+가능성.
+
+### E.L3 — 사용자 시연 게이트의 architectural 가치
+
+ADR-087 K-ζ canonical 답습: ADR-101 cross-cut 회귀 작성 도중 *시연
+시점 manifold violation 발견* (test 만으로는 architectural 회귀 보장 불가).
+ADR-102 가 그 결과의 *명시 해결 트랙*.
+
+향후 architectural ADR 의 ζ-step 사용자 시연 필수 (ADR-094 §E L1
+답습).
+
+### E.L4 — Atomic 5 sub-step 의 *문서 → 코드 → 검증 → 회고* 분리
+
+α (spec) → β (helper) → γ (wiring) → δ (sweep) → ε (closure docs) 의
+5 단계가 ADR-101 9 PR 보다 짧지만 architectural 완결성 동일. *manifest
+trigger* 가 단일 finding 인 경우 5 단계가 ideal scope.
+
+### E.L5 — Pure helper extraction (cleave) → consumer 가 적용 결정
+
+β 가 `Mesh::collect_coplanar_siblings` + `cleave_face_from_siblings` 를
+*helper only* 로 제공. γ 만 `create_solid_extrude` 에서 호출. 다른 ops
+(Boolean / Offset / Move) 는 L-102-4 (Extrude-only trigger) 로 명시
+제외.
+
+향후 Boolean / Offset 에서도 cleave 가 필요한 use case 발견되면 *동일
+helper 활용* — additive 확장 (ADR-091 §E L4 pure utility extraction
+canonical 답습, 본 ADR 이 9번째 적용).
+
+### E.L6 — ADR-091 §E L1 의 *시민권 분리* 가 cleave 의 architectural 안전 보장
+
+`cleave_face_from_siblings` 가 새 verts (`add_vertex_force_new`) +
+새 face (`add_face_with_holes`) 만 사용. struct field 추가 0, snapshot
+schema 변경 0. β-1 의 `set_face_surface` + `set_curve` + `set_edge_
+curve_owner_id` 도 모두 기존 setter — *additive only*. ADR-091 §E L1
+의 10번째 적용 (Mesh-level state, struct field 0).
+
