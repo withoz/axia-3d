@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed (α — spec only, sub-step roadmap pending sign-off)** |
+| Status | **Proposed (Amendment 1, 2026-05-15)** — Q1-Q5 사전 결재 default 응답 + β-1 (Sphere) sub-step decomposition. β-1 진입 사용자 명시 결재 대기. |
 | Date | 2026-05-15 |
 | Supersedes | — |
 | Related | ADR-027 (NURBS Kernel kickoff), ADR-031 (Phase D — Sphere/Cone/Torus analytic), ADR-032 (P17 primitive Path B activation), ADR-079 (Create Solid surface-native), ADR-080 (Offset dimension-aware), ADR-089 (Phase 2 closed-curve face), ADR-094 (Cylinder Path B-full canonical), LOCKED #1 (P7 manifold), LOCKED #26 (Two-Layer Citizenship), LOCKED #41 (ADR-101 closure), LOCKED #42 (ADR-102 closure), LOCKED #43 (ADR-103 Z-up closure) |
@@ -213,3 +213,208 @@ Cone / Torus 유사 매트릭스. ADR-094 의 95%+ reduction 자연 답습.
 - **LOCKED #1 ADR-021 P7** — manifold rule
 - **LOCKED #26** — Two-Layer Citizenship (Sphere/Cone/Torus 모두 Shape/Xia 시민권 적용)
 - **LOCKED #41/42/43** — ADR-101/102/103 closure 답습 cumulative
+
+---
+
+## 9. Amendment 1 — Q1-Q5 default answers + β-1 sub-step decomposition (2026-05-15)
+
+§7 의 5 결재 사항 (Q1-Q5) 에 대한 **default answer** + β-1 (Sphere Path B) **sub-step decomposition** 명시. 사용자가 default 와 다른 결정을 원할 시 본 PR 검토 시 정정. default 채택 시 별도 결재 없이 β-1-α 진입.
+
+### 9.1 Q1 — Sphere boundary 표현
+
+**Default: (c) seam edge** (ADR-089 closed-curve self-loop 답습).
+
+- 1 anchor vertex (north pole at +Z·radius)
+- 1 self-loop edge with `AnalyticCurve` = none (parameter-space seam, no curve metadata)
+- 1 face with `AnalyticSurface::Sphere` attached
+- 추가 vertex: 1 south pole vertex (-Z·radius), 0 edges (manifold via face's analytic surface)
+
+**왜 (c)**:
+- ADR-021 P7 (closed edge cycle divides face) 정합 — self-loop edge 가 boundary
+- ADR-089 Phase 2 의 *kernel-native canonical* 1-anchor + 1-self-loop pattern 자연 확장
+- Render path 의 `tessellate_face_surface` 가 ADR-031 Phase D 의 sphere chord-tolerant tessellation 자동 활용
+- Sphere 의 closed manifold 위상 보존 (north + south pole = 2 isolated verts, surface 의 *poles* 표현)
+
+**Reject 이유**:
+- (a) no-boundary: ADR-021 P7 explicit violation, manifold invariant 위반
+- (b) 4-piece split: 4 face × 4 boundary edges = 16 edges/4 faces — Path A 보다 더 복잡, memory unlock 손실
+
+### 9.2 Q2 — Cone apex singularity
+
+**Default: NURBS degenerate parameter edge** (kernel-native).
+
+- 1 base disk face (Plane, polygonal — 기존 Path A 답습)
+- 1 cone side face with `AnalyticSurface::Cone` attached
+  - boundary: base circle (N polyline edges OR ADR-089 self-loop with `AnalyticCurve::Circle`)
+  - apex: parameter space v=0 (degenerate — `evaluate(u, 0) = apex` for all u)
+- 1 apex vertex (degenerate boundary point)
+
+**왜 NURBS degenerate**:
+- `AnalyticSurface::Cone` 의 parameter range `v ∈ [0, height]` 에서 v=0 = apex (rolling u sweep collapses to point)
+- DCEL 측면: apex 는 face boundary 의 *isolated point* 가 아닌, parameter space 의 degenerate edge
+- Memory: 2 face + 1 apex + N base ring (vs Path A 25 face) — 92% reduction
+- Render: `tessellate_face_surface` 의 chord-tolerant 가 apex 근처 narrow triangle 자동 처리
+
+**Reject 이유**:
+- triangle fan: 25 triangles 그대로 = Path A 와 동일, kernel-native unlock 손실
+
+### 9.3 Q3 — Torus u/v periodic
+
+**Default: single face with 2 seam edges** (axial + meridional).
+
+- 1 surface face with `AnalyticSurface::Torus` attached
+- 2 seam edges (ADR-089 self-loop variant — *parameter space seam*):
+  - axial seam: u=0 → u=2π (major direction closure)
+  - meridional seam: v=0 → v=2π (minor direction closure)
+- 1 vertex at (u=0, v=0) — intersection of two seams
+- 0 polygon ring verts (모두 surface evaluate 로)
+
+**왜 2-seam**:
+- u, v 모두 periodic — 두 seam 모두 명시
+- ADR-021 P7 manifold 정합 (각 seam 이 boundary)
+- Render `tessellate_face_surface` 의 torus chord-tolerant 자동 활용
+- Memory: 1 face + 2 edges + 1 vert (vs Path A 289 face) — 99.7% reduction
+
+**Reject 이유**:
+- single face (no seam): ADR-021 P7 boundary requirement 위반 가능
+- 4-piece split: 복잡, memory unlock 손실
+
+### 9.4 Q4 — 사용자 시연 ζ-step timing
+
+**Default: ε (production flip) **전** 시연 게이트** (ADR-094 B-θ 답습).
+
+- β-1 closure (engine OFF, opt-in localStorage flag 활성) 후
+- ε (production ON default) 진입 전
+- 사용자가 localStorage flag 명시 활성 후 Real Chromium 시연 PASS 검증
+
+### 9.5 Q5 — Path A → Path B migration UX
+
+**Default: engine default OFF + production localStorage ON + V3 snapshot 호환**.
+
+ADR-094 + ADR-103-ε-1 답습:
+
+- Engine `Mesh::cylinder_path_b_default = false` 답습 (회귀 자산 보존)
+- Production layer: `main.ts` 가 `localStorage` 에서 default ON 활성
+  - `axia:sphere-path-b-mode = 'true'` (default ON)
+  - `axia:cone-path-b-mode = 'true'`
+  - `axia:torus-path-b-mode = 'true'`
+- Legacy preference: `'false'` 명시 OFF 시 Path A 보존 (ADR-094 답습)
+- V3 snapshot 으로 저장 (이미 ADR-103-ε 활성) — Path B 결과 자동 직렬화
+- V2 snapshot load: Path A 그대로 로드 (마이그레이션 trigger 안 함, 사용자 명시 후 재생성)
+
+---
+
+## 10. β-1 sub-step decomposition (Sphere Path B)
+
+ADR-094 의 7 sub-step Path Z atomic 답습. β-1 sub-step (β-1-α ~ β-1-η):
+
+| Sub-step | scope | 회귀 estimate | dependency |
+|---|---|---|---|
+| **β-1-α** | spec sub-PR + Q1-Q5 결재 lock-in | docs only | 본 PR |
+| **β-1-β** | Engine `Mesh::create_sphere_kernel_native` (Path B 본체) | +5-8 axia-geo (face count + boundary + invariant) | β-1-α |
+| **β-1-γ** | Mesh-level Map `face_to_boundary_loops` 자연 확장 (B-γ-prep 답습) | +2 axia-geo | β-1-β |
+| **β-1-δ** | WASM bridge `createSphereKernelNative` + TS wrapper | axia-wasm +2, vitest +3 | β-1-γ |
+| **β-1-ε** | Render zero-code-change 확인 + tessellate_face_surface verification | axia-geo +2 (regression guard) | β-1-δ |
+| **β-1-ζ** | localStorage `axia:sphere-path-b-mode` flag + production default ON | vitest +3, main.ts wiring | β-1-ε |
+| **β-1-η** | Real Chromium 시연 (Playwright slow channel) + closure docs | Playwright +1, docs | β-1-ζ |
+
+### 10.1 β-1-β API design (Sphere Path B engine 본체)
+
+```rust
+impl Mesh {
+    /// ADR-104 β-1 — Kernel-native sphere creation (Path B).
+    ///
+    /// Creates a sphere with 1 surface face + 2 pole verts + 1 self-loop
+    /// seam edge. 99.7% memory reduction vs Path A polygonal sphere.
+    ///
+    /// # Lock-ins (ADR-104 Amendment 1 Q1=(c))
+    /// - 1 anchor vertex at +Z·radius (north pole)
+    /// - 1 south pole vertex at -Z·radius
+    /// - 1 self-loop edge (parameter-space seam, no AnalyticCurve metadata)
+    /// - 1 face with AnalyticSurface::Sphere attached (chord-tolerant tessellation
+    ///   via existing `tessellate_face_surface`)
+    ///
+    /// # Returns
+    /// `Result<FaceId>` — the single Sphere surface face id.
+    pub fn create_sphere_kernel_native(
+        &mut self,
+        center: DVec3,
+        radius: f64,
+        material: MaterialId,
+    ) -> Result<FaceId> { /* ... */ }
+
+    /// ADR-104 β-1-ζ — Default flag for new sphere creation.
+    /// `true` → kernel-native (Path B), `false` → polygonal (Path A).
+    /// Engine default: `false`. Production caller (main.ts) sets via
+    /// localStorage `axia:sphere-path-b-mode`.
+    #[serde(skip, default)]
+    pub sphere_path_b_default: bool,
+}
+```
+
+### 10.2 회귀 자산 강제 (절대 #[ignore] 금지)
+
+각 sub-step 별 회귀 자산:
+
+- β-1-β: `adr104_sphere_kernel_native_face_count_1` + `adr104_sphere_kernel_native_2_pole_verts` + `adr104_sphere_kernel_native_invariants_pass` + `adr104_sphere_kernel_native_surface_attached` + `adr104_sphere_kernel_native_memory_reduction_corpus`
+- β-1-γ: face_to_boundary_loops 자연 정합 검증
+- β-1-δ: TS wrapper round-trip
+- β-1-ε: tessellate_face_surface chord-tolerant verification
+- β-1-ζ: localStorage round-trip + default ON preference
+- β-1-η: real Chromium memory metric capture
+
+---
+
+## 11. β-2 / β-3 sub-step decomposition (간략)
+
+Cone (β-2) 와 Torus (β-3) 도 β-1 패턴 답습 (각각 7 sub-step). 상세는 β-1 closure 후 별도 Amendment.
+
+### 11.1 β-2 Cone Path B API draft
+
+```rust
+impl Mesh {
+    pub fn create_cone_kernel_native(
+        &mut self,
+        center: DVec3,
+        radius: f64,    // base radius
+        height: f64,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>>;  // [base_disk, cone_side]
+}
+```
+
+### 11.2 β-3 Torus Path B API draft
+
+```rust
+impl Mesh {
+    pub fn create_torus_kernel_native(
+        &mut self,
+        center: DVec3,
+        major_radius: f64,
+        minor_radius: f64,
+        material: MaterialId,
+    ) -> Result<FaceId>;  // single torus surface
+}
+```
+
+---
+
+## 12. β-1 진입 결재 트리거
+
+**default Q1-Q5 채택 + β-1-α (sub-step decomposition spec) merge 후 β-1-β (engine 본체) 즉시 진입**.
+
+사용자가 default 와 다른 결정을 원할 시 본 PR 검토 시 정정 — Amendment 1 → Amendment 2 sequential evolution 패턴 (ADR-103 답습).
+
+### 12.1 β-1 총 기간 estimate
+
+- β-1-α (spec) : 1일 ✅ 완료 (본 PR)
+- β-1-β (engine) : 2-3일
+- β-1-γ (Mesh-level Map) : 1일
+- β-1-δ (WASM bridge + TS) : 1일
+- β-1-ε (Render verification) : 1일
+- β-1-ζ (localStorage flag + production ON) : 1일
+- β-1-η (시연 + closure) : 1일
+
+→ **β-1 총 1-1.5주 atomic** (ADR-094 답습).
+
+β-2 (Cone) + β-3 (Torus) 동일 estimate → ADR-104 전체 **3-5주 atomic** (§7 답습).
