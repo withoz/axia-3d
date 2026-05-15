@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed (Amendment 1, 2026-05-15)** — Audit complete (§2.5 정정 + §4 Phase β 5-split). Phase β-1 진입 결재 완료. |
+| Status | **Proposed (Amendment 2, 2026-05-15)** — β-1 commit `4bde9ee` 완료 + β-2 audit-only closure (production scope = ∅). Amendment 1 (audit + 5-split) 의 sequential evolution → §4 Phase β **4-split** 으로 정정. |
 | Date | 2026-05-15 |
 | Supersedes | — (5개월 누적 implicit Y-up 정책의 명시 결재) |
 | Related | ADR-021 P7, ADR-026 P12, ADR-035 P20 (STEP/IGES), ADR-036 P21 (round-trip 1e-3 mm), ADR-046 P31, ADR-049 P-5e-α (default-OFF flip pattern), ADR-077 V-4 (visual baseline regen), ADR-081 W-η (STEP/IGES import boundary), ADR-091 §E L1 (snapshot schema canonical), LOCKED #5 (1.5μm spatial-hash), LOCKED #7 (cardinal plane SSOT), LOCKED #41 (ADR-101 closure), LOCKED #26 (Two-Layer Citizenship Phase 1) |
@@ -164,21 +164,41 @@ LOCKED 정책 / ADR 어디에도 Y-up vs Z-up 결정이 *명시적으로 정당�
 | α-1 | spec ADR (본 PR) — 7-layer roadmap + lock-in | 작성 중 |
 | α-2 | 사용자 결재 확인 + LOCKED #43 prep | spec PR merge 시 |
 
-### Phase β — Rust primitive defaults (Amendment 1: 5-split atomic)
+### Phase β — Rust primitive defaults (Amendment 2: 4-split 정정)
 
-**Amendment 1 정정**: 초안 4-step → 실측 audit 후 **5 sub-step atomic 분할**. 각 sub-step 별 commit + PR + 회귀 검증. ADR-102 5 sub-step atomic 패턴 답습.
+**Amendment 1 (5-split, 2026-05-15) → Amendment 2 (4-split, 2026-05-15)** sequential evolution. β-2 audit 결과 production code 의 `AnalyticSurface::Cylinder/Cone/Torus` constructor 호출은 *모두 β-1 의 caller chain 으로 transitively migration 완료*. β-2 의 독립 scope = ∅ → audit-only closure.
 
-| Step | scope | 회귀 estimate | 결재 게이트 |
-|---|---|---|---|
-| **β-1** | `Mesh::create_box/cylinder/cone/sphere/torus` default axis (primitive constructor) — 9 site (`primitives.rs`) | +5-10 신규 회귀 (Z-up 정합 검증) | 명시 결재 |
-| **β-2** | `AnalyticSurface::Cylinder/Cone/Torus` constructor 호출 site 일괄 변경 — primitives.rs face_planes / sphere axis 등 | ~50 site, β-1 closure 후 | 명시 결재 |
-| **β-3** | axia-geo test fixture Y↔Z swap (operations / surfaces / curves 의 ~135 site) | sed + 분류 + cargo check | β-2 closure 후 |
-| **β-4** | axia-core scene.rs (184 sites, 가장 큼) | 184 site 분류 + 회귀 갱신 | β-3 closure 후 |
-| **β-5** | axia-wasm bridge + tests (~30 site) + 잔여 정리 | 30 site | β-4 closure 후 |
+| Step | scope | 상태 |
+|---|---|---|
+| **β-1** | 5 primitive constructor (`create_box/cylinder/cone/sphere/torus`) defaults — Y-up → Z-up | ✅ commit `4bde9ee` (+7 회귀, 0 regression) |
+| **β-2 (audit-only)** | `AnalyticSurface::*` constructor 호출 sites audit | ✅ closure (production = ∅, test = β-3 흡수) |
+| **β-3** | axia-geo test fixture Y↔Z swap (~135 site, 분류 + cargo check) | 결재 대기 |
+| **β-4** | axia-core scene.rs (184 sites + 160 `up: DVec3::Y` patterns) | 결재 대기 |
+| **β-5** | axia-wasm bridge + tests (~30 site) + 잔여 정리 | 결재 대기 |
 
-**β phase 총 기간**: 1-2주 atomic (실측 estimate). 초안 3-4 일 estimate 정정.
+### β-2 audit 정량 (2026-05-15)
 
-**β-1 의 cardinal 의미** — 사용자 시연 가능:
+| Pattern | Sites | Production / Test 분류 |
+|---|---|---|
+| `axis_dir: DVec3::Y` | 6 | **0 production / 6 test** (모두 Revolve mode test — β-3) |
+| `normal: DVec3::Y` (Plane) | 17 | **0 production / 17 test** (mesh/boolean/draft/merge test fixtures — β-3) |
+| Production `AnalyticSurface::Cylinder/Cone` attach (hardcoded Y axis) | 0 | β-1 caller chain 으로 transitively 자동 migration 완료 |
+
+**핵심 발견 (Amendment 2)**: 5개월간의 production / test 분리가 architectural 정합. Production code 는 *caller-supplied axis* 만 사용 (axis-agnostic), Y-up bias 는 모두 test fixture 에 격리. ADR-046 P31 #4 (additive only) 의 implicit 실증.
+
+### β phase 총 기간 (Amendment 1 → Amendment 2)
+
+| Phase | Amendment 1 estimate | Amendment 2 정정 |
+|---|---|---|
+| β-1 | 3-4일 | ✅ 1일 (실제 완료, commit `4bde9ee`) |
+| **β-2** | 1-2일 | **✅ audit-only 마무리 (production = ∅)** |
+| β-3 (test fixture) | 1주 | 1주 |
+| β-4 (scene.rs) | 1주 | 1주 |
+| β-5 (axia-wasm) | 2-3일 | 2-3일 |
+
+β phase 총: **1-2주 atomic** (Amendment 2 단축 effect, β-2 흡수로 +2-3일 절감).
+
+**β-1 의 cardinal 의미 — 사용자 시연 가능** (β-1 closure 후 보존):
 - β-1 closure 시점에 새 cylinder / box / cone / sphere / torus 가 *Z-up 으로* 그려짐
 - 기존 Y-up snapshot 은 호환 (ε snapshot v6→v7 까지는 load 시 자동 회전 안 됨 — β phase 는 *새 생성* 만 Z-up)
 - visual 시연 가능 (사용자 결재 가치)
