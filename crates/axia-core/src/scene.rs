@@ -20,7 +20,10 @@ use crate::constraint::ConstraintGraph;
 //   2 = full scene_snapshot (mesh + xias + groups + next_xia_id + constraints)
 //       Added 2026-04-24 to stop XIAs from vanishing on save/load and leaving
 //       every face an orphan after reload.
-const SNAPSHOT_VERSION: u32 = 2;
+//   3 = Z-up coordinates. ADR-103-ε bumped 2026-05-15. V2 (Y-up) load applies
+//       (x, y, z) → (x, -z, y) rotation to vertex positions on import.
+//       Payload schema identical to V2 (no struct change). Industry CAD parity.
+const SNAPSHOT_VERSION: u32 = 3;
 
 /// Magic bytes for .axia file identification
 const AXIA_MAGIC: [u8; 4] = [b'A', b'X', b'I', b'A'];
@@ -5710,21 +5713,41 @@ impl Scene {
 
                 Ok(())
             }
-            2 => {
-                // V2 — full scene snapshot (mesh + xias + groups + next_xia_id
-                // + constraints). `restore_scene_snapshot` rebuilds the
-                // face_to_xia reverse index on its own.
+            2 | 3 => {
+                // V2 — full scene snapshot, Y-up coordinates (legacy).
+                // V3 — full scene snapshot, Z-up coordinates (ADR-103-ε).
+                //
+                // Payload schema is identical. V2 path applies Y↔Z migration
+                // after restore to bring legacy files into the engine's
+                // Z-up coordinate space.
+                //
+                // `restore_scene_snapshot` rebuilds face_to_xia reverse index.
                 if data.len() < 16 {
-                    anyhow::bail!("V2 snapshot truncated (missing length prefix)");
+                    anyhow::bail!("V{} snapshot truncated (missing length prefix)", version);
                 }
                 let payload_len = u64::from_le_bytes(
                     data[8..16].try_into().map_err(|_| anyhow::anyhow!("length parse"))?
                 ) as usize;
                 if data.len() < 16 + payload_len {
-                    anyhow::bail!("V2 snapshot data is truncated");
+                    anyhow::bail!("V{} snapshot data is truncated", version);
                 }
                 let payload = &data[16..16+payload_len];
                 self.restore_scene_snapshot(payload);
+
+                // ADR-103-ε: V2 (Y-up legacy) → Z-up coordinate migration.
+                // Apply (x, y, z) → (x, -z, y) rotation around +X axis to
+                // every active vertex. Z-up convention: physical "up" that
+                // was Y component in V2 becomes Z component in V3.
+                // V3 files have native Z-up coords → no migration needed.
+                if version == 2 {
+                    self.mesh.migrate_y_up_to_z_up();
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[ADR-103-ε] V2 (Y-up) snapshot migrated to Z-up: {} verts rotated.",
+                        self.mesh.verts.iter().filter(|(_, v)| v.is_active()).count(),
+                    );
+                }
+
                 // ADR-007 Rev 2 Phase B-4 — Post-import: reconcile
                 //   cached normals to match winding, then verify with
                 //   the Rev 2 (sheet-aware) reporter.
@@ -5797,7 +5820,7 @@ impl Scene {
                 error: None,
             });
         }
-        if version != 2 {
+        if version != 2 && version != 3 {
             return Ok(SnapshotInfo {
                 version,
                 has_magic: true,
@@ -5808,7 +5831,7 @@ impl Scene {
                 )),
             });
         }
-        // V2 — analyze section presence by walking length-prefixed sections.
+        // V2/V3 — analyze section presence by walking length-prefixed sections.
         if data.len() < 16 {
             return Ok(SnapshotInfo {
                 version,
@@ -6028,16 +6051,16 @@ mod tests {
         let orig_orphans = orig_face_count - scene_a.face_to_xia.len();
         assert!(orig_xia_count >= 3, "expected ≥3 XIAs, got {}", orig_xia_count);
 
-        // Round-trip.
-        let bytes = scene_a.export_versioned_snapshot().expect("export v2");
+        // Round-trip (ADR-103-ε: V3 Z-up after version bump).
+        let bytes = scene_a.export_versioned_snapshot().expect("export v3");
         assert_eq!(&bytes[0..4], &AXIA_MAGIC, "magic header");
         assert_eq!(
             u32::from_le_bytes([bytes[4],bytes[5],bytes[6],bytes[7]]),
-            2, "written version must be 2",
+            3, "written version must be 3 (ADR-103-ε Z-up)",
         );
 
         let mut scene_b = Scene::default();
-        scene_b.import_versioned_snapshot(&bytes).expect("import v2");
+        scene_b.import_versioned_snapshot(&bytes).expect("import v3");
 
         // Topology preserved.
         assert_eq!(scene_b.mesh.face_count(), orig_face_count,
@@ -12993,13 +13016,14 @@ mod tests {
 
     #[test]
     fn adr089_a_mu_analyze_full_v2_snapshot() {
-        // Current build saves V2 with all 7 sections present.
+        // ADR-103-ε: current build saves V3 (Z-up). Section presence
+        // semantics 동일 — version 만 정정.
         let mut scene = Scene::new();
         scene.create_shape("test".to_string(), vec![]);
         let bytes = scene.export_versioned_snapshot().expect("export");
         let info = Scene::analyze_snapshot(&bytes).expect("analyze");
         assert!(info.has_magic);
-        assert_eq!(info.version, 2);
+        assert_eq!(info.version, 3);
         assert!(info.sections.mesh, "mesh section present");
         assert!(info.sections.shapes, "ADR-050 Shapes section present");
         assert!(info.sections.boolean_group_tags, "ADR-078 Boolean section present");
@@ -14548,5 +14572,101 @@ mod tests {
             assert!(!restored.face_to_xia.contains_key(fid),
                 "Form-layer Shape face must NOT have Xia owner (LOCKED #26)");
         }
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-103-ε — Snapshot V2 (Y-up legacy) → V3 (Z-up) migration
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Helper — synthesize a minimal V2 (Y-up) snapshot with a single
+    /// vertex at a known position, so the V2→V3 migration can be exercised
+    /// without depending on a real file fixture.
+    fn synthesize_v2_snapshot_with_vertex(pos: glam::DVec3) -> Vec<u8> {
+        // Build a Scene with one vertex at `pos`.
+        let mut scene = Scene::new();
+        scene.mesh.add_vertex(pos);
+        // Export current snapshot (will be V3 since SNAPSHOT_VERSION = 3).
+        let mut bytes = scene.export_versioned_snapshot().expect("export");
+        // Patch the version byte (offset 4..8) to 2 so the import path
+        // takes the V2 (Y-up) branch and applies migration.
+        bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn adr103_epsilon_v2_load_applies_y_up_to_z_up_rotation() {
+        // Y-up vertex (1, 2, 3): "1 right, 2 up, 3 toward viewer".
+        // ADR-103-ε migration formula: (x, y, z) → (x, -z, y).
+        // Expected Z-up: (1, -3, 2) = "1 right, -3 forward (back from
+        // viewer toward -Y), 2 up".
+        let y_up_pos = glam::DVec3::new(1.0, 2.0, 3.0);
+        let bytes = synthesize_v2_snapshot_with_vertex(y_up_pos);
+
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("V2 import + migrate");
+
+        // The single active vertex should now be at (1, -3, 2).
+        let active_verts: Vec<glam::DVec3> = restored.mesh.verts.iter()
+            .filter_map(|(_, v)| if v.is_active() { Some(v.pos()) } else { None })
+            .collect();
+        assert_eq!(active_verts.len(), 1, "single migrated vertex");
+        let p = active_verts[0];
+        assert!((p - glam::DVec3::new(1.0, -3.0, 2.0)).length() < 1e-9,
+            "ADR-103-ε: V2 (Y-up) load must rotate (1,2,3) → (1,-3,2); got {:?}",
+            p);
+    }
+
+    #[test]
+    fn adr103_epsilon_v3_load_identity_no_migration() {
+        // V3 (Z-up native) file → load preserves coordinates exactly.
+        let z_up_pos = glam::DVec3::new(1.0, 2.0, 3.0);
+        let mut scene = Scene::new();
+        scene.mesh.add_vertex(z_up_pos);
+        let bytes = scene.export_versioned_snapshot().expect("export V3");
+        // Verify written version = 3.
+        assert_eq!(
+            u32::from_le_bytes([bytes[4],bytes[5],bytes[6],bytes[7]]),
+            SNAPSHOT_VERSION,
+            "default export version = current SNAPSHOT_VERSION",
+        );
+
+        let mut restored = Scene::new();
+        restored.import_versioned_snapshot(&bytes).expect("V3 import");
+        let active_verts: Vec<glam::DVec3> = restored.mesh.verts.iter()
+            .filter_map(|(_, v)| if v.is_active() { Some(v.pos()) } else { None })
+            .collect();
+        assert_eq!(active_verts.len(), 1);
+        // V3 load = identity (no rotation).
+        assert!((active_verts[0] - z_up_pos).length() < 1e-9,
+            "ADR-103-ε: V3 load must NOT rotate; got {:?}", active_verts[0]);
+    }
+
+    #[test]
+    fn adr103_epsilon_migration_helper_idempotency_guard() {
+        // Direct test of `Mesh::migrate_y_up_to_z_up` — verify rotation
+        // formula on multiple vertices.
+        let mut scene = Scene::new();
+        scene.mesh.add_vertex(glam::DVec3::new(0.0, 1.0, 0.0));  // +Y (Y-up "up")
+        scene.mesh.add_vertex(glam::DVec3::new(0.0, 0.0, 1.0));  // +Z (Y-up "toward viewer")
+        scene.mesh.add_vertex(glam::DVec3::new(1.0, 0.0, 0.0));  // +X (unchanged)
+
+        scene.mesh.migrate_y_up_to_z_up();
+
+        let active: Vec<glam::DVec3> = scene.mesh.verts.iter()
+            .filter_map(|(_, v)| if v.is_active() { Some(v.pos()) } else { None })
+            .collect();
+        assert_eq!(active.len(), 3);
+        // (0, 1, 0) → (0, -0, 1) = (0, 0, 1) — "up" in both spaces
+        assert!(active.iter().any(|p|
+            (*p - glam::DVec3::new(0.0, 0.0, 1.0)).length() < 1e-9),
+            "(0,1,0) Y-up must map to (0,0,1) Z-up; got {:?}", active);
+        // (0, 0, 1) → (0, -1, 0) — Y-up forward becomes -Y (Z-up backward)
+        assert!(active.iter().any(|p|
+            (*p - glam::DVec3::new(0.0, -1.0, 0.0)).length() < 1e-9),
+            "(0,0,1) Y-up must map to (0,-1,0) Z-up; got {:?}", active);
+        // (1, 0, 0) → (1, 0, 0) — X axis unchanged
+        assert!(active.iter().any(|p|
+            (*p - glam::DVec3::new(1.0, 0.0, 0.0)).length() < 1e-9),
+            "(1,0,0) X-axis must be unchanged; got {:?}", active);
     }
 }

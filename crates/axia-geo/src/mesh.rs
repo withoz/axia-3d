@@ -814,6 +814,46 @@ impl Mesh {
         }
     }
 
+    /// ADR-103-ε — Migrate vertex positions from Y-up to Z-up coordinates.
+    ///
+    /// Applies a +90° rotation around the +X axis to every active vertex:
+    ///   `(x, y, z) → (x, -z, y)`
+    ///
+    /// Semantics: a Y-up vertex (1, 2, 3) — meaning "1 right, 2 up, 3 toward
+    /// viewer" — becomes a Z-up vertex (1, -3, 2) — meaning "1 right, -3
+    /// forward (away from viewer toward -Y), 2 up". Industry CAD parity.
+    ///
+    /// After mutating vertex positions, the spatial hash is rebuilt and
+    /// cached face normals invalidated. Caller should subsequently invoke
+    /// `reconcile_face_normals` so that cached normals match the new
+    /// vertex winding.
+    ///
+    /// **Scope (ADR-103-ε-1 minimum)**: vertex positions only.
+    /// `AnalyticSurface::Cylinder/Cone/Torus` axis_dir / Plane normal /
+    /// `AnalyticCurve::Circle/Arc/etc.` direction vectors are *not yet*
+    /// rotated in this sub-step — they are deferred to ε-2 (separate
+    /// commit) because they require schema-aware traversal. For V2 (Y-up)
+    /// load + ε-1 only, faces with attached AnalyticSurface may show
+    /// stale axis vectors until ε-2 lands.
+    ///
+    /// Idempotent guard: this method assumes the mesh is currently in Y-up
+    /// state; calling twice produces incorrect (rotated 180°) coordinates.
+    /// Caller must track and only invoke during V2→V3 migration.
+    pub fn migrate_y_up_to_z_up(&mut self) {
+        for (_, vert) in self.verts.iter_mut() {
+            if !vert.is_active() { continue; }
+            let p = vert.pos();
+            let new_p = DVec3::new(p.x, -p.z, p.y);
+            vert.set_pos(new_p);
+        }
+        // Spatial hash positions are now stale — rebuild.
+        self.rebuild_spatial_hash();
+        // Face cached normals invalidated by vertex movement.
+        for (_, face) in self.faces.iter() {
+            face.invalidate_normal_cache();
+        }
+    }
+
     /// Get vertex position.
     pub fn vertex_pos(&self, id: VertId) -> Result<DVec3> {
         self.verts
