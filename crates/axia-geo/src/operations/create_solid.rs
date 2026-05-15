@@ -144,6 +144,43 @@ impl Mesh {
                     return Err(SolidError::DegenerateDistance { dist: distance }.into());
                 }
 
+                // ─── ADR-102 γ — Detach-on-Arrangement pre-step ──────
+                //
+                // If the profile face has coplanar adjacent siblings
+                // (e.g., ADR-101 §B-3b auto-intersect sub-faces, or
+                // any manually-drawn coplanar arrangement), cleave the
+                // source face's outer boundary from siblings *before*
+                // extrusion. This reconciles LOCKED #1 P7 manifold
+                // rules with NURBS-era hybrid infrastructure:
+                //
+                // - Without cleave: bottom of resulting solid (= source
+                //   face) shares boundary edges with siblings AND with
+                //   the new side walls → 3+ face-bearing HEs per shared
+                //   edge → non-manifold.
+                // - With cleave: source-face boundary verts are
+                //   duplicated (sibling verts UNCHANGED — L-102-1) so
+                //   the new source has zero edge-sharing with siblings.
+                //
+                // L-102-4: Extrude-only trigger. Revolve / Sweep / Loft
+                //          are NOT affected (different geometry origin;
+                //          out of scope of ADR-102).
+                // L-102-6: Cleave + extrude are a single transaction —
+                //          the caller (Scene::exec_create_solid) wraps
+                //          this entire create_solid call in one Undo
+                //          step.
+                let profile_face = {
+                    let siblings = self.collect_coplanar_siblings(profile_face)
+                        .map_err(|e| SolidError::BoundaryCollection(e.to_string()))?;
+                    if siblings.is_empty() {
+                        // Hot path: isolated face Push/Pull — no cleave.
+                        profile_face
+                    } else {
+                        let cleave = self.cleave_face_from_siblings(profile_face, &siblings)
+                            .map_err(|e| SolidError::BoundaryCollection(e.to_string()))?;
+                        cleave.new_face_id
+                    }
+                };
+
                 let surface = self
                     .faces
                     .get(profile_face)
@@ -5940,5 +5977,105 @@ mod tests {
         assert!(result.is_err(), "zero-distance must error");
         // Profile face should still be intact (no premature mutation).
         assert!(mesh.faces.contains(profile));
+    }
+
+    // ─── ADR-102 γ — Detach-on-Arrangement wiring regressions ────────
+    //
+    // These verify that `create_solid_extrude` invokes the β-1 cleave
+    // helpers in the right cases:
+    //   1) Isolated face → no-op cleave (existing behavior preserved)
+    //   2) Coplanar T-junction sibling → cleave first, then extrude
+    //   3) ADR-101 B-4 lens scenario → manifold-safe result
+
+    /// Helper: build two adjacent unit squares sharing edge x=1, both
+    /// on z=0 plane (CCW from +Z view). Returns (face_a, face_b).
+    fn build_two_adjacent_squares(mesh: &mut Mesh) -> (FaceId, FaceId) {
+        let mat = MaterialId::new(0);
+        // Square A: (0,0)-(1,1)
+        let a00 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let a10 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let a11 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let a01 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face_a = mesh.add_face(&[a00, a10, a11, a01], mat).unwrap();
+        // Square B: (1,0)-(2,1), shares edge a10-a11
+        let b10 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let b11 = mesh.add_vertex(DVec3::new(2.0, 1.0, 0.0));
+        // add_vertex de-dups at (1,0,0) and (1,1,0) → reuses a10, a11.
+        let face_b = mesh.add_face(&[a10, b10, b11, a11], mat).unwrap();
+        // Attach Plane surface to both (truth source for extrude routing).
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 2.0),
+            v_range: (0.0, 1.0),
+        };
+        mesh.faces[face_a].set_surface(Some(plane.clone()));
+        mesh.faces[face_b].set_surface(Some(plane));
+        (face_a, face_b)
+    }
+
+    #[test]
+    fn adr102_gamma_create_solid_extrude_isolated_face_no_cleave() {
+        // Regression guard — ADR-102 γ wiring must be transparent for
+        // isolated faces. Same expectations as before-γ behavior.
+        let mut mesh = Mesh::new();
+        let profile = build_unit_square_plane_face(&mut mesh);
+        let face_count_before = mesh.face_count();
+
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 1.0 },
+            MaterialId::new(0),
+        ).expect("isolated face extrude OK");
+
+        assert_eq!(result.solid_kind, SolidKind::Box);
+        // ADR-102 L-102-4 hot path: no-op cleave preserves original id.
+        assert_eq!(result.profile_face, profile,
+            "isolated face must NOT be cleaved (no-op)");
+        assert_eq!(result.side_faces.len(), 4);
+        assert_eq!(mesh.face_count(), face_count_before + 5);
+    }
+
+    #[test]
+    fn adr102_gamma_create_solid_extrude_with_sibling_cleaves_first() {
+        // Two coplanar adjacent squares. Push/Pull on A should:
+        //   1) Auto-cleave A's outer boundary from B (β-1)
+        //   2) Then extrude — A becomes a Box
+        //   3) B remains a 1-face sheet, unchanged
+        let mut mesh = Mesh::new();
+        let (face_a, face_b) = build_two_adjacent_squares(&mut mesh);
+        let b_verts_before = mesh.collect_loop_verts(
+            mesh.faces[face_b].outer().start).unwrap();
+
+        let result = mesh.create_solid(
+            face_a,
+            CreateSolidMode::Extrude { distance: 1.0 },
+            MaterialId::new(0),
+        ).expect("adjacent face extrude OK");
+
+        // Cleave happened — the new profile_face id differs from face_a.
+        assert_ne!(result.profile_face, face_a,
+            "ADR-102 γ: coplanar sibling triggers cleave");
+
+        // Sibling B is unchanged (L-102-1 source-side only).
+        assert!(mesh.faces[face_b].is_active(),
+            "sibling B must still be active");
+        let b_verts_after = mesh.collect_loop_verts(
+            mesh.faces[face_b].outer().start).unwrap();
+        assert_eq!(b_verts_before, b_verts_after,
+            "sibling B's boundary verts unchanged");
+
+        // The resulting solid + sibling must be manifold-safe — no edge
+        // is shared by ≥3 active faces.
+        let mut all_active: Vec<FaceId> = Vec::new();
+        for (fid, f) in mesh.faces.iter() {
+            if f.is_active() { all_active.push(fid); }
+        }
+        let info = mesh.face_set_manifold_info(&all_active);
+        assert_eq!(info.non_manifold_edge_count, 0,
+            "ADR-102 L-102-3: post-cleave mesh must have 0 non-manifold \
+             edges; got {} (info = {:?})",
+            info.non_manifold_edge_count, info);
     }
 }
