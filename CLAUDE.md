@@ -2328,6 +2328,93 @@ Playwright E2E `web/e2e/adr-101-b6-*.spec.ts` 7 회귀 (3 engine + 4 visual).
 - ADR-094 §E L1 (additive-first + multi-gate atomic) — 본 9 PR 시리즈 답습
 - LOCKED #40 (render chord_tol) — Phase D visual baseline 인프라 활용
 
+### 42. ADR-102 Push/Pull Detach-on-Arrangement (Manifold Reconciliation, 2026-05-15) ✅
+
+**Canonical anchor (사용자 통찰, 2026-05-15)**:
+> "Push/Pull 한 face 가 인접 coplanar sibling 과 공유한 boundary 를
+> cleave 한 후 extrude 해야 한다. 그렇지 않으면 결과 솔리드의 bottom 이
+> sibling 과 manifold-coincident 가 돼 LOCKED #1 P7 manifold rule 을
+> 위반한다."
+
+ADR-101 §B-3b closure 직후 (2026-05-15) Tier 2 cross-cut 검증 도중
+발견된 manifold finding 의 architectural 해결. ADR-047 D-A note
+(2026-05-02) 의 *deferred deeper refactor* 정상화. Mesh-era 정책
+(LOCKED #1 P7 stacked-inner 허용) ↔ NURBS-era hybrid 인프라 (ADR-101
+auto-intersect 3 sub-face) 정합.
+
+**5 PR Path Z atomic closure (5 시간 내, 2026-05-15)**:
+- PR #36 α — spec ADR-102 + 5 sub-step roadmap (`04be1b9`)
+- PR #37 β — `collect_coplanar_siblings` + `cleave_face_from_siblings`
+  helpers (`81cfe4f`, axia-geo +4)
+- PR #38 γ — `create_solid_extrude` pre-step wiring + closed-curve
+  hot-path fix (`219ba37`, axia-geo +2)
+- PR # δ — Full regression sweep (`d437d2d`, axia-geo +6, canonical
+  manifold-finding-resolved evidence)
+- PR # ε — Closure docs + LOCKED #42 entry (본 entry)
+
+**누적 회귀**: axia-geo 1296 → **1308 PASS (+12, 0 regression, 절대
+#[ignore] 금지 12/12 준수)**.
+
+**8 Lock-ins (canonical for hybrid-aware ops)**:
+- **L-102-1** Source-side cleave only — sibling face 의 outer/inner
+  loops 무손상 (boundary verts / HEs / curve metadata / surface 모두
+  보존)
+- **L-102-2** Coplanarity tolerance — `COPLANARITY_NORMAL_DOT_MIN`
+  (0.9999) AND `COPLANARITY_OFFSET_TOL` (1.5μm, LOCKED #5 답습)
+- **L-102-3** Edge cleave manifold safe — cleave 후 새 source face
+  의 모든 boundary edge 가 *해당 face 만* incident. 기존 shared edge
+  는 sibling 의 boundary 로 남음 (manifold safe)
+- **L-102-4** Extrude-only trigger — `create_solid_extrude` 의 pre-
+  step *만* cleave 호출. Boolean / Offset / Move 영향 0 (additive)
+- **L-102-5** Curve metadata inherit — 새 boundary edges 가 원본
+  `Edge.curve` clone + *새* `curve_owner_id` 할당 (group separation,
+  ADR-088 답습)
+- **L-102-6** Transaction 단일 entry — cleave + extrude 가 단일 Undo
+  step (Scene-layer `TransactionManager` 가 wrap, ADR-049 P-5e-γ
+  collapse 답습)
+- **L-102-7** 회귀 자산 강제 — δ-1 ~ δ-8 모두 절대 #[ignore] 금지.
+  δ-4 (`adr101_b4_lens_push_pull_manifold_safe_after_cleave`) 가
+  canonical evidence (non_manifold_edge_count == 0)
+- **L-102-8** ADR-016 Q2 정합 — hole boundary face Push/Pull 거부
+  정책 변경 없음. 본 ADR 은 outer boundary 만 대상
+
+**Canonical evidence (δ-4)** — pre-ADR-102 시 B-4 lens Push/Pull 에서
+4 non-manifold edges (lens boundary × 3 face-bearing HE) → γ wiring
+후 **0 non-manifold edges** 명시 검증. test 자산이 architectural
+guarantee.
+
+**Lessons (canonical for future ADRs)** — ADR-102 §E:
+- **E.L1** `Result.new_face_id` 의미적 invalidation — destructive
+  helper 결과의 *대체 id* carry, caller shadow pattern 강제
+- **E.L2** Closed-curve face architectural isolation — ADR-089
+  Phase 2 kernel-native (1 anchor + 1 self-loop) 가 polygon-assumption
+  helper 에서 hot-path 필요
+- **E.L3** 사용자 시연 게이트의 architectural 가치 — ADR-087 K-ζ
+  / ADR-094 §E L1 답습
+- **E.L4** Atomic 5 sub-step (α/β/γ/δ/ε) 의 *문서 → 코드 → 검증 →
+  회고* 분리 — 단일 finding trigger 의 ideal scope
+- **E.L5** Pure helper extraction (cleave) + consumer 가 적용 결정
+  — ADR-091 §E L4 pure utility extraction canonical 9번째 적용
+- **E.L6** ADR-091 §E L1 (struct field 추가 0, snapshot schema 변경
+  0) 10번째 적용 — additive only
+
+**Cross-link**:
+- LOCKED #1 ADR-021 P7 — manifold anchor (본 ADR 이 위상 측면 보강)
+- LOCKED #5 — 1.5μm spatial-hash, coplanarity tolerance source
+- LOCKED #41 — ADR-101 closure (cross-cut trigger source)
+- ADR-007 Invariant 2 — winding + manifold, cleave 후 보존
+- ADR-016 Q2 — hole boundary policy 변경 없음
+- ADR-022 P9 — vertex-shared pinch promote (small-face 분리 inspiration)
+- ADR-046 P31 #4 — additive only (사용자 facing API 무변경)
+- ADR-049 P-5e-γ — transaction collapse 답습
+- ADR-079 — `create_solid` surface-native (extrude entry point)
+- ADR-088 — `curve_owner_id` group separation 답습
+- ADR-089 Phase 2 — closed-curve kernel-native isolation
+- ADR-091 §E L1, §E L4 — additive + pure helper canonical
+- ADR-094 §E L1 — additive-first + multi-gate atomic
+- ADR-101 §B-3b L-B3b-3 — surface inheritance 답습
+- ADR-101 cross-cut finding (2026-05-15) — 본 ADR trigger
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
