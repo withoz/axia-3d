@@ -2209,6 +2209,125 @@ deletion), ADR-088 (curve_owner_id), ADR-089 A-κ (closed-curve face
 render fast-path), LOCKED #15 (P22.5 owner-ID uniformity), LOCKED #16
 (P23 surface-aware normals).
 
+### 41. ADR-101 Coplanar Partial Overlap Auto-Intersect (P7 Completion, 2026-05-15) ✅
+
+**Canonical anchor (사용자 통찰, 2026-05-14)**:
+> "닫힌 엣지에는 면이 생성되어야 한다. 두 닫힌 엣지가 겹치면 세 면으로
+> 나뉘어야 한다."
+
+LOCKED #1 ADR-021 P7 의 가장 강한 의미 (coplanar partial overlap →
+자동 3 sub-face) 가 **사용자 시연 가능** 으로 활성. 9 PR atomic
+시리즈로 24시간 내 완성 (2026-05-14 ~ 2026-05-15).
+
+**사용자 facing trigger 완전 활성**:
+- DrawRectAsShape × 2 partial overlap → 자동 3 sub-face
+- DrawCircleAsShape × 2 (Legacy polygonized) → 자동 3 sub-face
+- DrawCircleAsCurve × 2 (Path B kernel-native) → 자동 3 sub-face
+
+**9 PR 시리즈 (canonical commit log)**:
+- PR #25 Phase A — `polygonize_closed_curve_face` helper (`de868ba`)
+- PR #26 B-1 — Sutherland-Hodgman MVP algorithm decision (`d08ffc0`)
+- PR #27 B-2 — `coplanar_intersection_segments` primitive (`4df7142`)
+- PR #28 B-3a — `polygon_difference_walking` pure 2D utility (`d91528b`)
+- PR #29 B-3b MVP — `Mesh::auto_intersect_coplanar` (RECT MVP, `8898467`)
+- PR #30 B-3c — `cleanup_orphan_boundary_edges` + start_idx fix (`ca8ffb6`)
+- PR #31 B-4 MVP — Scene wiring (Draw 자동 trigger, `73c004e`)
+- PR #33 B-6 — E2E verification (engine + visual, `5c6ee4b`)
+- PR #32 B-4b — Non-destructive pre-check + Path B 활성 (`046973a`)
+- PR #34 Amendment 8 — Full closure docs (pending merge)
+
+**Lock-ins (canonical for future hybrid-aware ops)**:
+
+- **L1 — "Check first, mutate second" canonical** (Amendment 6 → 7
+  evolution): 알고리즘이 speculative mutation + "did it apply?" check
+  패턴을 쓰면 no-op case 에서 side-effect 누설. B-4b 가 AABB +
+  coplanarity pre-check 를 polygonize 호출 *전* 위치시켜 해소. 향후
+  모든 hybrid-aware op (Boolean / Push-Pull NURBS / Offset NURBS) 답습.
+- **L2 — Hybrid Edge struct first-class 활성**: ADR-028 Phase A 의
+  `Edge.curve: Option<AnalyticCurve>` 를 user-facing op 로 처음 사용.
+  Path B Circle (1 anchor + 1 self-loop edge with `Circle{...}`) 의
+  AABB / normal 을 polygonization 없이 metadata 에서 직접 추출.
+  메모리 효율 (B-4 MVP 32 verts vs B-4b 0 verts pre-check phase).
+- **L3 — `auto_intersect_coplanar` public API** (axia-geo
+  `operations/coplanar.rs`):
+  - `face_world_aabb(mesh, face_id) -> Option<Aabb3>` — non-destructive
+  - `face_world_normal(mesh, face_id) -> Option<DVec3>` — non-destructive
+  - `face_anchor_position(mesh, face_id) -> Option<DVec3>`
+  - `coplanar_intersection_segments(...)` — read-only primitive
+  - `polygon_difference_walking(...)` — pure 2D utility
+  - `auto_intersect_coplanar(...)` — DCEL surgery wiring
+- **L4 — Scene wiring at `intersect_faces_inner`**: 기존 3D triangle-
+  triangle pipeline 뒤에 coplanar scan branch 추가. `auto_intersect_
+  on_draw` flag (default true, localStorage 보존) 가 그대로 활용 — 새
+  exec entry 없음.
+- **L5 — XIA inheritance deterministic**: lens face 가 `min(face_a_id,
+  face_b_id).xia` 로 inherit. 그리기 순서 무관성 (LOCKED #1 P7) 답습.
+  face_a_only ← face_a.xia, face_b_only ← face_b.xia.
+- **L6 — Out-of-scope deferred** (ADR-101 §5 변경 없음):
+  - Non-convex polygon clipping (Weiler-Atherton / Vatti) — 별도 ADR
+  - 3-way overlap (A ∩ B ∩ C) — Phase C-4 future
+  - NURBS-direct coplanar intersect (현재 polygonize 후 clip → 향후
+    direct AnalyticCurve SSI via ADR-027/064 cross-cut) — 별도 ADR
+  - Multi-material overlap UX (lens identity refinement) — ADR-102
+    가칭, future trigger 시 진행
+
+**Canonical lessons (7개) — 보존**:
+- L1 — "Check first, mutate second" (Amendment 6 → 7)
+- L2 — Playwright `dist/` staleness — `npm run preview` 가 production
+  build 서빙. WASM rebuild 후 `npm run build` 필수. **세션 canonical**.
+- L3 — AxiA viewport Y-up — `setViewMode('top')` 가 -Y 축 down.
+- L4 — Default camera radius 60000mm — `setCameraState({radius, target})`
+  로 fit 필수.
+- L5 — Algorithm gaps in non-canonical input — RECT 만 통과한 알고리즘이
+  Circle 에서 실패 발견 가능 (B-3c start_idx fix).
+- L6 — Pure utility extraction (ADR-091 §E L4) — 함수 분리가 target
+  fix 가능하게 만듦 (B-3a / B-4b helpers).
+- L7 — Multi-week atomic decomposition (ADR-094 §E L1) — additive-first
+  risk 격리 + multi-gate 결재 (본 9 PR 시리즈 정합).
+
+**회귀 누적**:
+- axia-core: 209 → **293 PASS** (+84)
+- axia-geo: 1256 → **1296 PASS** (+40)
+- Playwright E2E: 15 → **74 + 1 skipped** (+7 new B-6 specs)
+- 절대 #[ignore] 금지 100% 준수
+
+**회귀 자산 (LOCKED — 변경 시 새 ADR 필요)**:
+axia-geo `operations::coplanar::tests` 16 회귀 (B-2 9 + B-3a 7 + B-3b
+6 + B-3c 4 + B-4b 6 = engine layer 회귀 자산):
+- `adr101_phase_b2_partial_overlap_returns_lens_and_2_crossings`
+- `adr101_phase_b3a_partial_overlap_two_rects_returns_l_shape`
+- `adr101_phase_b3b_two_rects_partial_overlap_creates_3_faces`
+- `adr101_phase_b3c_path_b_circles_polygonize_and_split`
+- `adr101_phase_b4b_face_world_aabb_path_b_circle_non_destructive`
+- `adr101_phase_b4b_disjoint_path_b_circles_no_mutation`
+- `adr101_phase_b4b_path_b_circles_partial_overlap_auto_splits`
+- (and 9 more)
+
+axia-core `scene::tests` 7 회귀:
+- `adr101_b4_two_rects_partial_overlap_auto_splits`
+- `adr101_b4_two_circles_partial_overlap_auto_splits`
+- `adr101_b4_two_circles_as_shape_partial_overlap_auto_splits`
+- `adr101_b4b_two_path_b_circles_partial_overlap_auto_splits`
+- `adr101_b4b_disjoint_path_b_circles_preserve_kernel_native`
+- `adr101_b4_disjoint_rects_no_split`
+- `adr101_b4_disabled_flag_skips_split`
+
+Playwright E2E `web/e2e/adr-101-b6-*.spec.ts` 7 회귀 (3 engine + 4 visual).
+
+**Cross-link**:
+- LOCKED #1 ADR-021 P7 (canonical anchor) — 본 정책으로 *완전한* 의미 활성
+- LOCKED #14 메타-원칙 #14 ("면은 닫힌 경계로부터 유도된다") — deepest realization
+- ADR-022 P9 (vertex-shared pinch promote) — Option (b) lens promote inspiration
+- ADR-028 Phase A (hybrid Edge) — B-4b first-class 활용
+- ADR-059 P-N Step 3 (`curve_mandatory()`) — future NURBS-aware migration anchor
+- ADR-061 §B (curve_version, polyline_cache) — hover Newton 인프라
+- ADR-064/066 (NURBS Boolean DCEL) — future NURBS-direct intersect path
+- ADR-077 V-3 (visual baseline workflow) — B-6 visual demo 인프라
+- ADR-089 (Path B closed-curve face) — Path B canonical form, B-4b 직접 활용
+- ADR-091 §E L4 (pure utility extraction) — B-3a / B-4b helpers
+- ADR-094 §E L1 (additive-first + multi-gate atomic) — 본 9 PR 시리즈 답습
+- LOCKED #40 (render chord_tol) — Phase D visual baseline 인프라 활용
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
