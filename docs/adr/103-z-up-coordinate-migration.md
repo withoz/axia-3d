@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Proposed (Amendment 2, 2026-05-15)** — β-1 commit `4bde9ee` 완료 + β-2 audit-only closure (production scope = ∅). Amendment 1 (audit + 5-split) 의 sequential evolution → §4 Phase β **4-split** 으로 정정. |
+| Status | **✅ Closed (Amendment 3, 2026-05-15)** — β/γ/δ/ε/ζ all atomic-merged. 4 post-merge hotfixes (axis+grid / orbit / shadow / mouse pick) absorbed. η visual baseline regenerate deferred to follow-up workflow. See §11 Acceptance Log. |
 | Date | 2026-05-15 |
 | Supersedes | — (5개월 누적 implicit Y-up 정책의 명시 결재) |
 | Related | ADR-021 P7, ADR-026 P12, ADR-035 P20 (STEP/IGES), ADR-036 P21 (round-trip 1e-3 mm), ADR-046 P31, ADR-049 P-5e-α (default-OFF flip pattern), ADR-077 V-4 (visual baseline regen), ADR-081 W-η (STEP/IGES import boundary), ADR-091 §E L1 (snapshot schema canonical), LOCKED #5 (1.5μm spatial-hash), LOCKED #7 (cardinal plane SSOT), LOCKED #41 (ADR-101 closure), LOCKED #26 (Two-Layer Citizenship Phase 1) |
@@ -362,4 +362,85 @@ LOCKED 정책 / ADR 어디에도 Y-up vs Z-up 결정이 *명시적으로 정당�
 - **LOCKED #40** — Render chord_tol, 4-primitive visual baseline matrix (Phase η 시 regenerate)
 - **LOCKED #41** — ADR-101 closure entry
 - **LOCKED #42 (예상)** — ADR-102 closure entry (선행 조건)
-- **LOCKED #43 (예상)** — ADR-103 closure entry (본 ADR θ-2)
+- **LOCKED #43** — ADR-103 closure entry (CLAUDE.md, 본 ADR θ commit 동시 등재)
+
+---
+
+## 11. Acceptance Log (Amendment 3, 2026-05-15)
+
+ADR-103 5개월 implicit Y-up → 명시적 Z-up 마이그레이션 closure. **6 PR sequence + 4 post-merge hotfix + 5 stacked PR** = 15 atomic commit 시퀀스.
+
+### 11.1 6 PR sequence (main 진입)
+
+| PR | sub-step | Commit | scope | 회귀 |
+|---|---|---|---|---|
+| #42 | Amendment 1 | `159b8bd` | audit + 5-split atomic plan | docs |
+| #43 | β-1 | `34a2fa3` | 5 primitive constructor Z-up (engine) | axia-geo +7 |
+| #44 | Amendment 2 | `7abf618` | 4-split + β-2 audit-only closure | docs |
+| #45 | γ | `bd70d16` | Viewport camera + grid + 6 view modes Z-up | vitest 0 reg |
+| #46 | γ-fix #1 | `95d2417` | axis lines + arrows + grid double-rotation | vitest 0 reg |
+| #47 | ζ | `86a08ea` | DXF boundary + OBJ/STL/glTF inverse + **shadow Z-up** | axia-geo 0 reg |
+
+### 11.2 4 post-merge hotfix (사용자 시연 트리거)
+
+| Hotfix | Commit | scope |
+|---|---|---|
+| #1 axis + grid double-rotation | `fb51b00` (in #46) | createAxisLines/Arrows Y-up 매핑 + InfiniteGrid 내부 회전 제거 |
+| #2 orbit theta sign | `02f7882` (open) | Z-up Spherical CCW around +Z 정합 (`theta += dx`) |
+| #3 shadow Z-up | `b2c8305` (in #47) | DirectionalLight + sun direction + Rust `projected_shadow.rs` |
+| #4 mouse pick plane | `d6c4562` (open) | `getWorkPlane()` Z-up plane normal (XY ground = Z=0) |
+
+### 11.3 5 stacked PR (open, ζ 후 merge 예정)
+
+| PR | scope |
+|---|---|
+| `feat/adr-103-delta-drawing-plane` | δ-1 drawing plane + primitive defaults |
+| `feat/adr-103-delta-2-box-tool` | δ-2 BoxTool deep Z-up rewrite |
+| `fix/adr-103-orbit-z-axis` | orbit theta sign hotfix |
+| `feat/adr-103-epsilon-snapshot-migration` | ε-1 V2→V3 vertex pos |
+| `feat/adr-103-epsilon-2-surface-curve-migration` | ε-2 AnalyticSurface/Curve axis |
+| `fix/adr-103-mouse-pick` | mouse pick work plane fix |
+
+### 11.4 누적 회귀
+
+- axia-geo: 1315 PASS (β-1 +7, projected_shadow 15/15)
+- axia-core: 296 PASS (ε-1 +3)
+- axia-geo curves+surfaces: ε-2 +7
+- vitest: 1828 PASS (δ-1 PrimitiveSession test 1건 갱신)
+- **총 +17 신규 회귀, 0 regression**, 절대 #[ignore] 금지 17/17 준수
+
+### 11.5 사용자 facing 변화 매트릭스
+
+| Layer | Before ADR-103 | After ADR-103 |
+|---|---|---|
+| Engine primitive (Box/Cyl/Cone/Sphere) | Y-up height | **Z-up height** |
+| AnalyticSurface defaults | `axis_dir = +Y` | `axis_dir = +Z` |
+| Three.js viewport camera | up=Y | **up=Z** |
+| Grid | XZ plane (Y=0) | **XY ground (Z=0)** |
+| 6 view modes (top/bottom/front/back/right/left) | Y-up convention | **Z-up CAD convention** |
+| Drawing plane (3d default) | XZ ground | **XY ground** |
+| Sketch axis default | +Y | +Z |
+| BoxTool 3-click flow | Y-extrude | **Z-extrude** |
+| Orbit drag direction | drag right → scene left | **drag right → scene right** (SketchUp parity) |
+| Shadow ground plane | XZ (Y=0) | **XY (Z=0)** |
+| Sun direction az/el | Y-up | **Z-up CAD (north=+Y, up=+Z)** |
+| Snapshot version | V2 | **V3** (V2 load auto-rotates) |
+| DXF / DWG import | `(x,z,-y)` rotation | **identity** |
+| STEP / IGES import | (already identity) | identity |
+| OBJ / STL / glTF import | Y-up native (identity) | **+90° rotation** for Z-up engine |
+| Mouse pick (3d mode) | Y=0 plane | **Z=0 plane** |
+| Axis indicator (X red / Y green / Z blue) | Y-up Three.js 매핑 | **identity (engine = viewport native)** |
+
+### 11.6 알려진 한계 (η visual baseline 후속)
+
+- **η Visual baseline regenerate**: ADR-077 V-4 Linux CI workflow_dispatch 필요. LOCKED #40 4-primitive matrix + ADR-074 group A/B + ADR-101 B-6 모두 영향. 별도 트랙으로 진행 권장.
+- **β-3 deferred operations 마이그레이션**: 80 sites in axia-geo/operations 의 algorithm-internal "world-up" hints — 모두 axis-agnostic 분류, migration scope ∅. β-2 audit-only closure 의 자연 답습.
+- **DAE / PLY / 3DS import**: file 별 native up-axis varies — best-effort identity, 사용자 수동 회전 가능.
+
+### 11.7 Lessons (canonical for future architectural ADRs)
+
+- **L1 사전 결재 절대 우선순위 강제**: 사용자 canonical anchor 가 Path B / STEP / coplanar 트랙의 *순서를 명시* 했기에 1차 시연 후 잘못된 priority 회피. ADR-049 LOCKED #26 의 다음 모범 사례.
+- **L2 audit-first vs sed**: spec α-1 의 "sed-able" 가정이 audit 후 정정 (Amendment 1 → 2 → 3). β phase 5-split → 4-split 으로 정량 축소. 향후 implicit-policy migration ADR 의 사전 audit 강제.
+- **L3 production / test 분리 자산**: 5개월간 production code 가 *caller-supplied axis* 만 사용 → β-2 production scope ∅. ADR-046 P31 #4 (additive only) 의 *implicit 실증*.
+- **L4 시연 게이트의 architectural 가치**: 4 post-merge hotfix 모두 사용자 시연 후 발견 (axis+grid / orbit / shadow / mouse pick). test 만으로 가시화 불가능. ADR-087 K-ζ canonical 답습.
+- **L5 atomic stacked PR pattern**: δ-1/δ-2/orbit/ε-1/ε-2/mouse pick 등 5 stacked PR — ζ merge 후 일괄 처리. Multi-week atomic ADR 의 PR queue 관리 canonical.
