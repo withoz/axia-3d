@@ -277,12 +277,14 @@ export class Viewport {
     this.updateBackground();
 
     // ── Camera (AixxiA style) ──
+    // ADR-103-γ (Z-up): camera up = +Z (industry CAD parity).
     this.camera = new THREE.PerspectiveCamera(
       50,
       container.clientWidth / container.clientHeight,
       1,
       1000000000,
     );
+    this.camera.up.set(0, 0, 1);
     this.updateCameraFromSpherical();
 
     // ── Orthographic Camera (2D 뷰용) ──
@@ -804,8 +806,24 @@ export class Viewport {
   }
 
   private updateCameraFromSpherical() {
-    const pos = new THREE.Vector3().setFromSpherical(this.spherical);
+    // ADR-103-γ (Z-up): Spherical 의 phi/theta 를 *+Z polar* 기준으로 해석.
+    //   x = r · sin(phi) · cos(theta)
+    //   y = r · sin(phi) · sin(theta)
+    //   z = r · cos(phi)
+    // phi = 0 → camera at +Z (north pole, "위"), phi = π/2 → equator (XY plane).
+    // 기본값 spherical(60000, π/4, π/4) → camera 가 (30k, 30k, 42k) 근처
+    // 에서 origin 을 바라봄 — CAD isometric view.
+    const r = this.spherical.radius;
+    const phi = this.spherical.phi;
+    const theta = this.spherical.theta;
+    const s = Math.sin(phi);
+    const pos = new THREE.Vector3(
+      r * s * Math.cos(theta),
+      r * s * Math.sin(theta),
+      r * Math.cos(phi),
+    );
     this.camera.position.copy(pos.add(this.orbitTarget));
+    this.camera.up.set(0, 0, 1);
     this.camera.lookAt(this.orbitTarget);
     this.updateAxisScale();
   }
@@ -830,11 +848,14 @@ export class Viewport {
     this._viewMode = mode;
 
     if (mode === '3d') {
-      // 3D perspective 복원 — 그리드+축을 XZ 바닥면(Y=0)으로 리셋
-      this.infiniteGrid.rotation.set(0, 0, 0);
+      // ADR-103-γ (Z-up): 그리드 기본 평면 = XY (Z=0 ground).
+      // 기존 InfiniteGrid 가 XZ 평면 위에 그려지므로 X축 -90° 회전으로
+      // XY 평면 정합 (Industry CAD parity).
+      this.infiniteGrid.rotation.set(-Math.PI / 2, 0, 0);
       this.infiniteGrid.position.set(0, 0, 0);
+      const groundRot = new THREE.Euler(-Math.PI / 2, 0, 0);
       for (const al of this.axisLines) {
-        al.rotation.set(0, 0, 0);
+        al.rotation.copy(groundRot);
         al.position.set(0, 0, 0);
       }
       this.updateCameraFromSpherical();
@@ -852,54 +873,64 @@ export class Viewport {
       const fovRad = (this.camera.fov * Math.PI) / 180;
       this.orthoZoom = this.spherical.radius * Math.tan(fovRad / 2);
 
+      // ADR-103-γ (Z-up): 6 view mode 좌표계 재매핑.
+      // CAD 관습: top 은 XY 평면 (Z=0) 을 +Z 에서 내려다봄. front 는
+      // XZ 평면 (Y=0) 을 -Y 에서 +Y 방향 (즉 카메라가 -Y 위치에서
+      // origin 을 보며 +Y 방향 응시). right 는 YZ 평면 (X=0).
       switch (mode) {
-        case 'top':    // Numpad 7 — 위에서 내려다봄
-          cam.position.set(this.orbitTarget.x, this.orbitTarget.y + dist, this.orbitTarget.z);
-          cam.up.set(0, 0, -1);
-          break;
-        case 'bottom': // Ctrl+Numpad 7 — 아래에서 올려다봄
-          cam.position.set(this.orbitTarget.x, this.orbitTarget.y - dist, this.orbitTarget.z);
-          cam.up.set(0, 0, 1);
-          break;
-        case 'front':  // Numpad 1 — 정면 (X축이 오른쪽)
+        case 'top':    // Numpad 7 — XY 평면 위 (+Z 에서 내려다봄)
           cam.position.set(this.orbitTarget.x, this.orbitTarget.y, this.orbitTarget.z + dist);
           cam.up.set(0, 1, 0);
           break;
-        case 'back':   // Ctrl+Numpad 1 — 후면
+        case 'bottom': // Ctrl+Numpad 7 — XY 평면 아래 (-Z 에서 올려다봄)
           cam.position.set(this.orbitTarget.x, this.orbitTarget.y, this.orbitTarget.z - dist);
-          cam.up.set(0, 1, 0);
+          cam.up.set(0, -1, 0);
           break;
-        case 'right':  // Numpad 3 — 우측면
+        case 'front':  // Numpad 1 — XZ wall (camera at -Y, looking +Y)
+          cam.position.set(this.orbitTarget.x, this.orbitTarget.y - dist, this.orbitTarget.z);
+          cam.up.set(0, 0, 1);
+          break;
+        case 'back':   // Ctrl+Numpad 1 — XZ wall (camera at +Y, looking -Y)
+          cam.position.set(this.orbitTarget.x, this.orbitTarget.y + dist, this.orbitTarget.z);
+          cam.up.set(0, 0, 1);
+          break;
+        case 'right':  // Numpad 3 — YZ wall (camera at +X)
           cam.position.set(this.orbitTarget.x + dist, this.orbitTarget.y, this.orbitTarget.z);
-          cam.up.set(0, 1, 0);
+          cam.up.set(0, 0, 1);
           break;
-        case 'left':   // Ctrl+Numpad 3 — 좌측면
+        case 'left':   // Ctrl+Numpad 3 — YZ wall (camera at -X)
           cam.position.set(this.orbitTarget.x - dist, this.orbitTarget.y, this.orbitTarget.z);
-          cam.up.set(0, 1, 0);
+          cam.up.set(0, 0, 1);
           break;
       }
 
       cam.lookAt(this.orbitTarget);
 
-      // 그리드+축 연장선을 현재 뷰의 작업 평면에 맞게 회전
-      // 기본 그리드: XZ 평면 (Y=0) — top/bottom에서 그대로 보임
-      this.infiniteGrid.rotation.set(0, 0, 0);
+      // ADR-103-γ (Z-up): 기본 그리드 = XY 평면 (Z=0).
+      // top/bottom 에서 평면이 화면에 정합되어 보임.
+      // front/back/right/left 는 XZ/YZ wall 로 회전.
+      this.infiniteGrid.rotation.set(-Math.PI / 2, 0, 0);
       this.infiniteGrid.position.set(0, 0, 0);
-      const axisRot = new THREE.Euler(0, 0, 0);
+      const axisRot = new THREE.Euler(-Math.PI / 2, 0, 0); // default = XY ground
       switch (mode) {
+        case 'top':
+        case 'bottom':
+          // XY 평면: 기본 회전 (-π/2 around X) — already set
+          this.infiniteGrid.rotation.set(-Math.PI / 2, 0, 0);
+          axisRot.set(-Math.PI / 2, 0, 0);
+          break;
         case 'front':
         case 'back':
-          // XZ → XY 평면 (Z=0): X축 기준 -90° 회전
-          this.infiniteGrid.rotation.x = -Math.PI / 2;
-          axisRot.x = -Math.PI / 2;
+          // XZ 평면 (Y=0): grid 가 화면과 평행하려면 identity
+          this.infiniteGrid.rotation.set(0, 0, 0);
+          axisRot.set(0, 0, 0);
           break;
         case 'right':
         case 'left':
-          // XZ → YZ 평면 (X=0): Z축 기준 90° 회전
-          this.infiniteGrid.rotation.z = Math.PI / 2;
-          axisRot.z = Math.PI / 2;
+          // YZ 평면 (X=0): Y축 기준 -90° 회전 (Y forward → X forward 화면)
+          this.infiniteGrid.rotation.set(0, -Math.PI / 2, 0);
+          axisRot.set(0, -Math.PI / 2, 0);
           break;
-        // top/bottom: 기본 XZ 평면 그대로
       }
       for (const al of this.axisLines) {
         al.rotation.copy(axisRot);
