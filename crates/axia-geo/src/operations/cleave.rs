@@ -467,4 +467,253 @@ mod tests {
         assert_eq!(info.non_manifold_edge_count, 0,
             "cleaved face pair must have zero non-manifold edges");
     }
+
+    // ── ADR-102 Phase δ — Regression sweep (full matrix) ─────────────
+    //
+    // δ-3 ~ δ-8: complete the spec §4 Phase δ regression matrix.
+    // δ-1 + δ-2 + δ-5 (partial) covered by the tests above (β).
+    // δ-8 (single-Undo) is a Scene-layer concern (TransactionManager
+    // wraps the entire `Scene::exec_create_solid` call — ADR-049
+    // P-5e-γ pattern); not duplicated here.
+
+    /// δ-3 — ADR-101 B-4 lens scenario.
+    ///
+    /// Build via `auto_intersect_coplanar` (the actual trigger) — two
+    /// partially overlapping squares → 3 sub-faces (face_a_only,
+    /// face_b_only, lens). Then cleave the lens from its two siblings.
+    #[test]
+    fn cleave_b4_lens_sub_face_separates_from_two_siblings() {
+        use crate::operations::coplanar::auto_intersect_coplanar;
+
+        let mut mesh = Mesh::default();
+        // Two squares partially overlapping in z=0 plane:
+        //   A: (0,0)-(2,2)   B: (1,1)-(3,3) → lens at (1,1)-(2,2)
+        let a = unit_square_at(&mut mesh, 0.0, 0.0, 0.0, 2.0, 2.0);
+        let b = unit_square_at(&mut mesh, 0.0, 1.0, 1.0, 3.0, 3.0);
+
+        let result = auto_intersect_coplanar(&mut mesh, a, b, MaterialId::default())
+            .expect("auto_intersect_coplanar OK")
+            .expect("partial overlap must produce 3 sub-faces");
+
+        // lens has 2 coplanar siblings: face_a_only AND face_b_only.
+        let siblings = mesh.collect_coplanar_siblings(result.lens).unwrap();
+        assert_eq!(siblings.len(), 2,
+            "ADR-101 B-4 lens must have exactly 2 coplanar siblings; got {:?}",
+            siblings);
+        assert!(siblings.contains(&result.face_a_only),
+            "siblings must include face_a_only");
+        assert!(siblings.contains(&result.face_b_only),
+            "siblings must include face_b_only");
+
+        // Snapshot sibling vert sets before cleave.
+        let a_only_verts_before: FxHashSet<VertId> = mesh.collect_loop_verts(
+            mesh.faces[result.face_a_only].outer().start).unwrap()
+            .into_iter().collect();
+        let b_only_verts_before: FxHashSet<VertId> = mesh.collect_loop_verts(
+            mesh.faces[result.face_b_only].outer().start).unwrap()
+            .into_iter().collect();
+
+        let cleave = mesh.cleave_face_from_siblings(result.lens, &siblings).unwrap();
+
+        // Both siblings must remain active + have UNCHANGED boundary verts.
+        assert!(mesh.faces[result.face_a_only].is_active(),
+            "face_a_only must remain active after cleave");
+        assert!(mesh.faces[result.face_b_only].is_active(),
+            "face_b_only must remain active after cleave");
+        let a_only_verts_after: FxHashSet<VertId> = mesh.collect_loop_verts(
+            mesh.faces[result.face_a_only].outer().start).unwrap()
+            .into_iter().collect();
+        let b_only_verts_after: FxHashSet<VertId> = mesh.collect_loop_verts(
+            mesh.faces[result.face_b_only].outer().start).unwrap()
+            .into_iter().collect();
+        assert_eq!(a_only_verts_before, a_only_verts_after,
+            "L-102-1: face_a_only sibling verts UNCHANGED");
+        assert_eq!(b_only_verts_before, b_only_verts_after,
+            "L-102-1: face_b_only sibling verts UNCHANGED");
+
+        // New lens verts must be disjoint from both siblings.
+        let new_lens_verts: FxHashSet<VertId> = mesh.collect_loop_verts(
+            mesh.faces[cleave.new_face_id].outer().start).unwrap()
+            .into_iter().collect();
+        for v in &new_lens_verts {
+            assert!(!a_only_verts_after.contains(v),
+                "new lens vert {:?} must NOT overlap face_a_only", v);
+            assert!(!b_only_verts_after.contains(v),
+                "new lens vert {:?} must NOT overlap face_b_only", v);
+        }
+    }
+
+    /// δ-4 — ADR-101 B-4 lens Push/Pull manifold safety after cleave.
+    ///
+    /// This is the **canonical regression** that motivated ADR-102:
+    /// `create_solid_extrude` on a B-4 lens sub-face previously produced
+    /// 4 non-manifold edges (lens boundary shared by 3 face-bearing HEs:
+    /// lens + side wall + sibling). With γ wiring, the cleave pre-step
+    /// resolves this finding.
+    #[test]
+    fn adr101_b4_lens_push_pull_manifold_safe_after_cleave() {
+        use crate::operations::coplanar::auto_intersect_coplanar;
+        use crate::operations::create_solid::{CreateSolidMode};
+        use crate::surfaces::AnalyticSurface;
+
+        let mut mesh = Mesh::default();
+        let a = unit_square_at(&mut mesh, 0.0, 0.0, 0.0, 2.0, 2.0);
+        let b = unit_square_at(&mut mesh, 0.0, 1.0, 1.0, 3.0, 3.0);
+
+        // Attach Plane surface to both (required for create_solid routing).
+        let plane = AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 3.0),
+            v_range: (0.0, 3.0),
+        };
+        mesh.faces[a].set_surface(Some(plane.clone()));
+        mesh.faces[b].set_surface(Some(plane.clone()));
+
+        let result = auto_intersect_coplanar(&mut mesh, a, b, MaterialId::default())
+            .unwrap().expect("B-4 lens produced");
+
+        // B-3b L-B3b-3: lens inherits Plane surface from parent (face_a).
+        assert!(matches!(mesh.faces[result.lens].surface(),
+            Some(AnalyticSurface::Plane { .. })),
+            "lens must inherit Plane surface from parent (ADR-101 L-B3b-3)");
+
+        // Push/Pull on lens (height = 1.0). γ wiring auto-cleaves first.
+        let _solid = mesh.create_solid(
+            result.lens,
+            CreateSolidMode::Extrude { distance: 1.0 },
+            MaterialId::default(),
+        ).expect("ADR-102 γ: cleave + extrude on B-4 lens succeeds");
+
+        // CANONICAL: post-extrude mesh must have 0 non-manifold edges.
+        // Before ADR-102: 4 edges shared by 3 face-bearing HEs (lens +
+        // sibling + side wall). After γ cleave: lens is decoupled from
+        // sibs → 0 non-manifold.
+        let all_active: Vec<FaceId> = mesh.faces.iter()
+            .filter_map(|(fid, f)| if f.is_active() { Some(fid) } else { None })
+            .collect();
+        let info = mesh.face_set_manifold_info(&all_active);
+        assert_eq!(info.non_manifold_edge_count, 0,
+            "ADR-102 L-102-3 canonical: B-4 lens Push/Pull post-cleave \
+             must have 0 non-manifold edges; got {} (info = {:?})",
+            info.non_manifold_edge_count, info);
+    }
+
+    /// δ-5 — Sibling boundary preservation (stronger version of β).
+    ///
+    /// Verifies that *every* sibling face's boundary edge list is
+    /// byte-identical before and after cleave (not just vert set).
+    #[test]
+    fn cleave_preserves_sibling_boundary_edges() {
+        let mut mesh = Mesh::default();
+        let a = unit_square_at(&mut mesh, 0.0, 0.0, 0.0, 1.0, 1.0);
+        let b = unit_square_at(&mut mesh, 0.0, 1.0, 0.0, 2.0, 1.0);
+        let siblings = mesh.collect_coplanar_siblings(a).unwrap();
+
+        let b_edges_before = mesh.face_outer_edges(b).unwrap();
+
+        let _ = mesh.cleave_face_from_siblings(a, &siblings).unwrap();
+
+        let b_edges_after = mesh.face_outer_edges(b).unwrap();
+        assert_eq!(b_edges_before, b_edges_after,
+            "L-102-1 strict: sibling B's outer edge list must be \
+             byte-identical pre- and post-cleave");
+    }
+
+    /// δ-6 — Curve metadata inheritance.
+    ///
+    /// Attach an analytic Line curve to one boundary edge of the
+    /// source face before cleave. After cleave, the corresponding new
+    /// edge must carry the same `AnalyticCurve` and a fresh
+    /// `curve_owner_id` (group separation per L-102-5).
+    #[test]
+    fn cleave_preserves_curve_metadata() {
+        use crate::curves::AnalyticCurve;
+
+        let mut mesh = Mesh::default();
+        let a = unit_square_at(&mut mesh, 0.0, 0.0, 0.0, 1.0, 1.0);
+        let _b = unit_square_at(&mut mesh, 0.0, 1.0, 0.0, 2.0, 1.0);
+
+        // Decorate a's first outer edge with a Line curve + owner_id.
+        let a_edges = mesh.face_outer_edges(a).unwrap();
+        let owner_pre = mesh.next_curve_owner_id();
+        let edge0 = &mesh.edges[a_edges[0]];
+        let line_curve = AnalyticCurve::Line {
+            start: edge0.v_small(),
+            end:   edge0.v_large(),
+        };
+        mesh.edges[a_edges[0]].set_curve(Some(line_curve.clone()));
+        mesh.set_edge_curve_owner_id(a_edges[0], Some(owner_pre));
+
+        let siblings = mesh.collect_coplanar_siblings(a).unwrap();
+        let result = mesh.cleave_face_from_siblings(a, &siblings).unwrap();
+
+        // New face's first edge must carry the same curve variant
+        // (Line) and a *new* owner_id (group separation).
+        let new_edges = mesh.face_outer_edges(result.new_face_id).unwrap();
+        assert_eq!(new_edges.len(), 4);
+
+        // Find which new edge corresponds to the old [v0 → v1] edge —
+        // it's the one between new_verts[0] and new_verts[1].
+        // (collect_loop_verts returns verts in next() walk order, so
+        // edge i is between v[i] and v[(i+1) % n] — but starting offset
+        // is not guaranteed. Instead, scan all new edges for a Line
+        // curve.)
+        let line_carriers: Vec<_> = new_edges.iter()
+            .filter(|&&e| matches!(
+                mesh.edge_curve(e), Some(AnalyticCurve::Line { .. })))
+            .collect();
+        assert_eq!(line_carriers.len(), 1,
+            "exactly one new edge must inherit the Line curve");
+
+        let new_owner = mesh.edge_curve_owner_id(*line_carriers[0])
+            .expect("inherited edge must have owner_id");
+        assert_ne!(new_owner, owner_pre,
+            "L-102-5 group separation: new owner_id ({}) must differ \
+             from pre-cleave owner_id ({})", new_owner, owner_pre);
+    }
+
+    /// δ-7 — Face invariants preserved post-cleave.
+    ///
+    /// Verifies `verify_face_invariants()` reports 0 violations after a
+    /// cleave operation. Covers I1-I5 (null loop / normal / inner /
+    /// HE membership / non-manifold).
+    #[test]
+    fn cleave_invariants_preserved() {
+        let mut mesh = Mesh::default();
+        let a = unit_square_at(&mut mesh, 0.0, 0.0, 0.0, 1.0, 1.0);
+        let _b = unit_square_at(&mut mesh, 0.0, 1.0, 0.0, 2.0, 1.0);
+        let siblings = mesh.collect_coplanar_siblings(a).unwrap();
+        let _result = mesh.cleave_face_from_siblings(a, &siblings).unwrap();
+
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "ADR-102 L-102-3 + ADR-007 invariants: cleave must \
+             preserve all face invariants; got violations: {:?}", report);
+    }
+
+    /// δ-8 — Multiple-cleave idempotence guard.
+    ///
+    /// After a cleave separates source from siblings, a second call to
+    /// `collect_coplanar_siblings` on the new source face must return
+    /// an empty list (no remaining adjacency). Validates that cleave
+    /// is a *fixed point* — Push/Pull → cleave → no further work.
+    #[test]
+    fn cleave_is_fixed_point_no_residual_siblings() {
+        let mut mesh = Mesh::default();
+        let a = unit_square_at(&mut mesh, 0.0, 0.0, 0.0, 1.0, 1.0);
+        let _b = unit_square_at(&mut mesh, 0.0, 1.0, 0.0, 2.0, 1.0);
+        let siblings1 = mesh.collect_coplanar_siblings(a).unwrap();
+        assert_eq!(siblings1.len(), 1);
+
+        let result = mesh.cleave_face_from_siblings(a, &siblings1).unwrap();
+
+        // Critical: post-cleave the new source face has ZERO coplanar
+        // siblings (cleave is a fixed point — repeated call no-op).
+        let siblings2 = mesh.collect_coplanar_siblings(result.new_face_id).unwrap();
+        assert!(siblings2.is_empty(),
+            "L-102-3: cleave is fixed-point — new source must have 0 \
+             coplanar siblings; got {:?}", siblings2);
+    }
 }
