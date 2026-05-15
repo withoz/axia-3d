@@ -26,9 +26,11 @@ describe('PrimitiveSession', () => {
       expect(session.params.height).toBe(0);
     });
 
-    it('defaults axis to world up', () => {
+    it('defaults axis to world up (ADR-103-δ: +Z)', () => {
       const session = new PrimitiveSession('sphere');
-      expect(session.axis.y).toBe(1);
+      expect(session.axis.z).toBe(1);
+      expect(session.axis.x).toBe(0);
+      expect(session.axis.y).toBe(0);
     });
   });
 

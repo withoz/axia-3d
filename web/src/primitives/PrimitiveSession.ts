@@ -41,7 +41,7 @@ export class PrimitiveSession {
 
   // === Geometry ===
   anchor: THREE.Vector3 | null = null;      // First click position (base center)
-  axis: THREE.Vector3 = new THREE.Vector3(0, 1, 0); // Height direction (default: world up)
+  axis: THREE.Vector3 = new THREE.Vector3(0, 0, 1); // Height direction (default: world up)
 
   // === Parameters (SSOT) ===
   params: PrimitiveParams = {
@@ -155,7 +155,7 @@ export class PrimitiveSession {
   reset(): void {
     this.state = 'idle';
     this.anchor = null;
-    this.axis = new THREE.Vector3(0, 1, 0);
+    this.axis = new THREE.Vector3(0, 0, 1);
     this.params = { radius: 0, height: 0, topRadius: 0 };
     this.preview = {};
     this.inputLock = false;

@@ -133,7 +133,8 @@ export abstract class BasePrimitiveTool implements ITool {
    * Default: world up. Override in subclass for face-based axis.
    */
   protected getAxisAtPoint(_point: THREE.Vector3): THREE.Vector3 {
-    return new THREE.Vector3(0, 1, 0); // World up
+    // ADR-103-δ (Z-up): world-up axis = +Z (industry CAD parity).
+    return new THREE.Vector3(0, 0, 1);
   }
 
   /**

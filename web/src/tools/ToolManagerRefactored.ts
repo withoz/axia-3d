@@ -2695,7 +2695,12 @@ export class ToolManager {
   /**
    * Detect drawing plane from mouse position.
    * If cursor is on an existing face → use that face's DCEL normal.
-   * If cursor is on empty space → use default ground plane (Y-up).
+   * If cursor is on empty space → use default ground plane.
+   *
+   * ADR-103-δ (Z-up): default plane mapping per view mode —
+   *   3d/top/bottom → XY ground (Z=0), normal +Z, up +Y
+   *   front/back    → XZ wall (Y=0), normal +Y, up +Z
+   *   right/left    → YZ wall (X=0), normal +X, up +Z
    */
   private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
     // Sketch mode: lock to the sketch plane irrespective of cursor face hit.
@@ -2705,35 +2710,35 @@ export class ToolManager {
       const right = new THREE.Vector3().crossVectors(up, normal).normalize();
       return { normal, up, right, onFace: false };
     }
-    // View-mode-adaptive default drawing plane
+    // View-mode-adaptive default drawing plane (ADR-103-δ Z-up)
     const vm = this.viewport.viewMode;
     let defaultPlane: DrawPlaneInfo;
     switch (vm) {
       case 'front':
       case 'back':
-        // Z=0 plane (XY wall) — normal=(0,0,1), up=(0,1,0), right=(1,0,0)
+        // XZ wall (Y=0): normal=+Y, up=+Z, right=+X
         defaultPlane = {
-          normal: new THREE.Vector3(0, 0, 1),
-          up: new THREE.Vector3(0, 1, 0),
+          normal: new THREE.Vector3(0, 1, 0),
+          up: new THREE.Vector3(0, 0, 1),
           right: new THREE.Vector3(1, 0, 0),
           onFace: false,
         };
         break;
       case 'right':
       case 'left':
-        // X=0 plane (YZ wall) — normal=(1,0,0), up=(0,1,0), right=(0,0,-1)
+        // YZ wall (X=0): normal=+X, up=+Z, right=+Y
         defaultPlane = {
           normal: new THREE.Vector3(1, 0, 0),
-          up: new THREE.Vector3(0, 1, 0),
-          right: new THREE.Vector3(0, 0, -1),
+          up: new THREE.Vector3(0, 0, 1),
+          right: new THREE.Vector3(0, 1, 0),
           onFace: false,
         };
         break;
       default: // '3d', 'top', 'bottom'
-        // Y=0 plane (XZ ground) — normal=(0,1,0), up=(0,0,-1), right=(1,0,0)
+        // ADR-103-δ (Z-up): XY ground (Z=0) — normal=+Z, up=+Y, right=+X
         defaultPlane = {
-          normal: new THREE.Vector3(0, 1, 0),
-          up: new THREE.Vector3(0, 0, -1),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
           right: new THREE.Vector3(1, 0, 0),
           onFace: false,
         };
