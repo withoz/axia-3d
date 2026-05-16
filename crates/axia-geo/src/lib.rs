@@ -23,6 +23,7 @@ pub mod mesh_migration;
 pub mod mesh_invariants;
 pub mod mesh_export;
 pub mod mesh_path_b;
+pub mod mesh_owner_ids;
 pub mod p7_manifold;
 pub mod topology_damage;
 
