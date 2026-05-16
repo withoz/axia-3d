@@ -53,15 +53,7 @@ fn main() {
         );
     }
 
-    // ── 2) Projected shadow performance ─────────────────────────────
-    println!("\n[2] Projected shadow (sun_dir=(0,-1,0)):");
-    for &n in &[100usize, 1_000, 5_000] {
-        let mesh = build_quad_grid(n);
-        bench(
-            &format!("  shadow compute (N={})", n), 3,
-            || { let _ = mesh.compute_ground_projected_shadows(DVec3::new(0.0, -1.0, 0.0)); },
-        );
-    }
+    // ── 2) (Projected shadow benchmark removed — shadow system deferred to future ADR-106) ──
 
     // ── 3) Boolean operation performance ────────────────────────────
     println!("\n[3] Sutherland-Hodgman clip (500x500 면 vs 400x400 면):");

@@ -57,7 +57,7 @@ export type BudgetKey =
   | 'syncMesh.snapSchedule'   // scheduleSnapRefresh enqueue (≠ rebuild)
   // ── syncMesh sub-steps (Sprint 3 추가 측정) ──
   | 'syncMesh.stats'          // viewport.setStats (DOM update)
-  | 'syncMesh.shadow'         // computeGroundProjectedShadows + updateProjectedShadow
+  // syncMesh.shadow removed 2026-05-16 (shadow system → ADR-106)
   // ── viewport.updateMesh 내부 분해 (Sprint 4 §3) ──
   | 'updateMesh.dispose'      // 이전 mesh dispose
   | 'updateMesh.geometry'     // BufferGeometry + setAttribute
@@ -96,7 +96,7 @@ export const BUDGETS: Record<BudgetKey, number> = {
   'syncMesh.selection':     6,
   'syncMesh.snapSchedule':  3,
   'syncMesh.stats':         2,
-  'syncMesh.shadow':       16,  // 가장 무거울 가능성 — frame budget 의 절반 허용
+  // 'syncMesh.shadow' budget removed 2026-05-16 (shadow system → ADR-106)
   // updateMesh sub-steps — 합쳐서 syncMesh.fullUpdate budget(16ms) 안.
   'updateMesh.dispose':     3,
   'updateMesh.geometry':    8,

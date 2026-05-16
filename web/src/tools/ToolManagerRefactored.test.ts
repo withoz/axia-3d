@@ -139,9 +139,7 @@ function mockViewport() {
     getStyleSettings: vi.fn().mockReturnValue({ gridVisible: true, axisVisible: true }),
     onFrame: vi.fn(),
     setSketchPlaneVisual: vi.fn(),
-    isProjectedShadowEnabled: vi.fn().mockReturnValue(false),
-    getSunTravelDirection: vi.fn().mockReturnValue({ x: -0.4, y: -0.8, z: -0.4 }),
-    updateProjectedShadow: vi.fn(),
+    // Shadow mocks removed 2026-05-16 (shadow system → ADR-106)
   } as any;
 }
 
