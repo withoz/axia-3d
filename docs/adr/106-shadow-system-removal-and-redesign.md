@@ -4,8 +4,17 @@
 |---|---|
 | Status | **Accepted (2026-05-16)** — Removal complete. Redesign deferred to future ADR amendment. |
 | Date | 2026-05-16 |
-| Supersedes | LOCKED #43 #3 (Shadow direction, ADR-103-ζ shadow), Amendment 3 의 ζ-shadow section, `_sunTravel` post-merge hotfix (commit `0f993f6`) |
-| Related | ADR-103 (Z-up Migration), LOCKED #43, ADR-018 (Uniform Surface Render), ADR-007 (Face Orientation) |
+| Supersedes | LOCKED #43 #3 (Shadow direction, ADR-103-ζ shadow), Amendment 3 의 ζ-shadow section, `_sunTravel` post-merge hotfix (commit `0f993f6`), ADR-060 §D additive-only baseline (single export deletion 예외 — ADR-076 §C-amendment-1 답습) |
+| Related | ADR-103 (Z-up Migration), LOCKED #43, ADR-018 (Uniform Surface Render), ADR-007 (Face Orientation), ADR-060 §D, ADR-076 §C-amendment-1 |
+
+## §C-amendment-1 — ADR-060 additive-only baseline 예외 (2026-05-16)
+
+본 ADR 은 ADR-076 §C-amendment-1 의 cleanup deletion 패턴 답습 — ADR-060 §D "additive-only baseline" 정책의 **두 번째 deletion 예외**.
+
+- 제거된 export: `computeGroundProjectedShadows` (1건)
+- 근거: shadow system 의 fundamental misfit 판정 (canonical user 결재). 재구성 시 새 endpoint name 으로 진입 권장 (legacy name 재사용 금지)
+- `crates/axia-wasm/tests/export_baseline.txt` 에서 해당 line 제거
+- 향후 cleanup ADR 동일 policy 적용 — 명시적 예외 + baseline update 필수
 
 ---
 
