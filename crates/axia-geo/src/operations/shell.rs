@@ -16,7 +16,6 @@
 //!   (silent wrong-result 차단 per ADR-057 §2.4 lock-in)
 
 use anyhow::{bail, Result};
-use glam::DVec3;
 
 use crate::surfaces::AnalyticSurface;
 use super::fillet_brep::FilletTolerance;
@@ -302,6 +301,7 @@ fn detect_inner_collisions(faces: &[AnalyticSurface], _tol: f64) -> Vec<(usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
 
     fn box_6_planes() -> Vec<AnalyticSurface> {
         // Unit cube at origin, 6 outward-pointing planes

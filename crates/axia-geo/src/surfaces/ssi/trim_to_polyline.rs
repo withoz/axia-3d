@@ -42,7 +42,7 @@ pub const DISJOINT_POLYLINE_LEN: usize = 0;
 pub fn sample_trim_curve_2d(curve: &TrimCurve2D, chord_tol: f64) -> Vec<[f64; 2]> {
     match curve {
         TrimCurve2D::Line { a, b } => vec![*a, *b],
-        TrimCurve2D::Arc { center, radius, start_angle, end_angle } => {
+        TrimCurve2D::Arc { center: _, radius, start_angle, end_angle } => {
             // Sagitta-based segment count: 2 * r * (1 - cos(theta/2)) ≤ chord_tol
             let span = (end_angle - start_angle).abs();
             let r = radius.max(1e-9);

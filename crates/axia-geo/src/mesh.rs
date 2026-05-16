@@ -2217,7 +2217,7 @@ impl Mesh {
             face_info.push((centroid, area));
         }
 
-        let point_in_poly_2d = |px: f64, py: f64, poly: &[(f64, f64)]| -> bool {
+        let _point_in_poly_2d = |px: f64, py: f64, poly: &[(f64, f64)]| -> bool {
             let mut inside = false;
             let n = poly.len();
             if n < 3 { return false; }
@@ -2282,8 +2282,8 @@ impl Mesh {
                 if y > max_y { max_y = y; }
             }
             // 5% expansion — δ
-            let dx = (max_x - min_x).max(1e-3) * 0.05;
-            let dy = (max_y - min_y).max(1e-3) * 0.05;
+            let _dx = (max_x - min_x).max(1e-3) * 0.05;
+            let _dy = (max_y - min_y).max(1e-3) * 0.05;
 
             // (B) Local-containment / all-edges-free check (ADR-008 Axiom 7).
             // The cycle must be entirely on completely-free edges. Mixed
@@ -2344,7 +2344,9 @@ impl Mesh {
             poly_2d: Vec<(f64, f64)>,
             centroid_3d: DVec3,
             origin: DVec3,
+            #[allow(dead_code)] // preserved for projection debugging
             e1: DVec3,
+            #[allow(dead_code)] // preserved for projection debugging
             e2: DVec3,
             normal: DVec3,
         }
@@ -2391,7 +2393,7 @@ impl Mesh {
             });
         }
 
-        let point_in = |x: f64, y: f64, poly: &[(f64, f64)]| -> bool {
+        let _point_in = |x: f64, y: f64, poly: &[(f64, f64)]| -> bool {
             let mut inside = false;
             let n = poly.len();
             if n < 3 { return false; }
@@ -4918,6 +4920,10 @@ impl Mesh {
     /// CAD boundary walk: build free-edge adjacency at each vertex on-the-fly
     /// and walk through degree-2 vertices to find the shortest closed loop
     /// containing the new edge. O(L) where L = loop length.
+    ///
+    /// Preserved for potential debug/research use. Production path uses
+    /// the `_excluding` variant for ADR-021 P7 exclusion semantics.
+    #[allow(dead_code)]
     fn detect_loop_by_chain_walk(
         &self,
         v0: VertId,
@@ -4969,6 +4975,8 @@ impl Mesh {
     }
 
     /// Legacy BFS-based loop detection on free-edge adjacency.
+    /// Preserved for fallback / research; production uses `_excluding` variant.
+    #[allow(dead_code)]
     fn detect_loop_by_bfs(
         &self,
         v0: VertId,

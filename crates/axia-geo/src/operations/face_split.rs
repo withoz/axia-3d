@@ -347,7 +347,7 @@ pub fn split_face_by_line(
     let v1 = realize_boundary_point(mesh, &split_v1_final, &mut new_verts, &mut new_edges, &mut debug)?;
 
     // After v1's edge split, v2's edge_id might be stale — re-resolve if needed
-    let split_v2_resolved = if let BoundaryPoint::OnEdge { edge_id, position, t } = &split_v2_final {
+    let split_v2_resolved = if let BoundaryPoint::OnEdge { edge_id, position, t: _ } = &split_v2_final {
         if !mesh.edges[*edge_id].is_active() {
             // The edge was split by v1 — find which new edge contains this position
             debug.push(format!("  v2's edge {} was split, re-resolving...", edge_id.raw()));
@@ -771,6 +771,8 @@ enum HoleClassification {
     /// Both endpoints inside the same hole — reject (zero-length cut in void).
     InsideBoth,
     /// Unusual geometric configuration we don't handle.
+    /// Reserved for future Phase G expansion.
+    #[allow(dead_code)]
     Ambiguous(String),
 }
 
@@ -894,7 +896,7 @@ fn split_face_case_b(
     let b_pos = mesh.vertex_pos(outer_b)?;
     let cut_dir = b_pos - a_pos;
     let cut_len_sq = cut_dir.length_squared().max(1e-12);
-    let t_for_pos = |p: DVec3| ((p - a_pos).dot(cut_dir) / cut_len_sq);
+    let t_for_pos = |p: DVec3| (p - a_pos).dot(cut_dir) / cut_len_sq;
 
     let mut crossed: Vec<CrossedHole> = Vec::with_capacity(crossed_indices.len());
     for &saved_idx in crossed_indices {
@@ -1259,7 +1261,7 @@ fn split_face_case_c(
 
     // ── Preserve other (untouched) holes as inners on the new face ─────
     let mut other_holes: Vec<Vec<VertId>> = Vec::new();
-    for (i, hole) in saved_holes.iter().enumerate() {
+    for (i, _hole) in saved_holes.iter().enumerate() {
         if i == hole_idx { continue; }
         let start = mesh.faces[face_id].inners()[i].start;
         other_holes.push(mesh.collect_loop_verts(start)?);

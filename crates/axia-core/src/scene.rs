@@ -2709,7 +2709,7 @@ impl Scene {
             mesh.collect_non_manifold_edges().len()
         };
         let mut last_nm = count_nm(&self.mesh);
-        let mut trace_step = |name: &str, mesh: &axia_geo::Mesh, last: &mut usize| {
+        let trace_step = |name: &str, mesh: &axia_geo::Mesh, last: &mut usize| {
             let now = count_nm(mesh);
             let delta = now as i64 - *last as i64;
             if trace_p7 || delta > 0 {
@@ -4342,8 +4342,6 @@ impl Scene {
         //   through draw_line → synthesize, so their shared corners are
         //   guaranteed to dedup through the same code path as LINE.
 
-        use anyhow::Result;
-
         // Compute 4 corners. Mirrors the coordinate system used by the
         //   original draw_rectangle: u = up.normalize(), v = n × u.
         let n_norm = if normal.length_squared() > 1e-12 {
@@ -5920,7 +5918,8 @@ impl Scene {
         }
         // Section 9: Material library (ADR-098 S-γ)
         if let Some(len) = read_len(payload, &mut offset) {
-            if offset + len <= payload.len() { sections.material_library = true; offset += len; }
+            // Last section — offset increment retained for future section additions.
+            if offset + len <= payload.len() { sections.material_library = true; let _ = offset + len; }
         }
         Ok(SnapshotInfo { version, has_magic: true, sections, error: None })
     }

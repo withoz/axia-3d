@@ -827,8 +827,8 @@ pub fn polygon_difference_walking(
             crossing_positions.len()
         );
     }
-    let cross_pos_1 = crossing_positions[0];
-    let cross_pos_2 = crossing_positions[1];
+    let _cross_pos_1 = crossing_positions[0];
+    let _cross_pos_2 = crossing_positions[1];
 
     // ── Step 2: classify base vertices as inside/outside lens. Crossings
     //   are treated as on-boundary (switch points).

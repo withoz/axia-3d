@@ -18,8 +18,6 @@
 //! moves can desync curves. Drift sanity catches stale curves and
 //! demotes them to safe Line defaults.
 
-use glam::DVec3;
-
 use crate::curves::CurveOps;
 use crate::mesh::Mesh;
 
@@ -165,6 +163,7 @@ fn curve_drifts_from_endpoints(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
     use crate::curves::AnalyticCurve;
     use crate::curves::synthesize::synthesize_line_curve;
 

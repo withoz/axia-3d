@@ -165,7 +165,7 @@ impl Mesh {
         m: &glam::DMat4,
     ) {
         use std::collections::HashSet;
-        use crate::curves::{AnalyticCurve, CurveOps};
+        use crate::curves::AnalyticCurve;
 
         let moved_set: HashSet<VertId> = vert_ids.iter().copied().collect();
 

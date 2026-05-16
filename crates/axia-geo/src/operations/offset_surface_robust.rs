@@ -9,7 +9,6 @@
 //!   - Identity short-circuit for zero distance
 
 use anyhow::{bail, Result};
-use glam::DVec3;
 
 use crate::surfaces::AnalyticSurface;
 use super::fillet_brep::FilletTolerance;
@@ -162,6 +161,7 @@ fn _phantom_bail_user() -> Result<()> { bail!("phantom"); }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
 
     /// ADR-057 §2.7 Step 6 #23 — Planar surface offset translates origin.
     #[test]
