@@ -200,16 +200,16 @@ impl Mesh {
             if k == 0 { p1_a }
             else if k == segments { p2_a }
             else {
-                let θ = dir_sign * step * k as f64;
-                center_a + rotate_axis(r_start_a, arc_axis, θ)
+                let theta = dir_sign * step * k as f64;
+                center_a + rotate_axis(r_start_a, arc_axis, theta)
             }
         }).collect();
         let arc_b_pts: Vec<DVec3> = (0..=segments).map(|k| {
             if k == 0 { p1_b }
             else if k == segments { p2_b }
             else {
-                let θ = dir_sign * step * k as f64;
-                center_b + rotate_axis(r_start_b, arc_axis, θ)
+                let theta = dir_sign * step * k as f64;
+                center_b + rotate_axis(r_start_b, arc_axis, theta)
             }
         }).collect();
 

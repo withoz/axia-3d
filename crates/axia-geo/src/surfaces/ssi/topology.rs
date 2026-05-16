@@ -16,8 +16,6 @@
 //!   as separate chains.
 //! - Self-intersecting curves yield one chain that crosses itself.
 
-use glam::DVec3;
-
 use super::SurfaceIntersection;
 use super::newton::RefinementResult;
 
@@ -123,6 +121,7 @@ fn dedup(mut candidates: Vec<RefinementResult>, tol: f64) -> Vec<RefinementResul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
 
     fn make_cand(p: DVec3, residual: f64) -> RefinementResult {
         RefinementResult {

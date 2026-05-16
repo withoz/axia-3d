@@ -1307,6 +1307,11 @@ impl Mesh {
     ///
     /// Other curves (Line/None, Bezier/etc) → `UnsupportedCurveOnSurface`.
     /// Self-intersecting torus (R ≤ r) → reject as degenerate.
+    ///
+    /// Mathematical notation preserved: `theta_M` (major angle),
+    /// `theta_m` (minor angle), `tM_sign`, `dp_dtM`, `delta_tM`,
+    /// `new_tM` — uppercase M/m distinguishes major vs minor circle.
+    #[allow(non_snake_case)]
     fn offset_edge_on_torus(
         &mut self,
         edge_id: EdgeId,
@@ -2041,16 +2046,16 @@ fn surfaces_equivalent(
                     center: ca,
                     axis_dir: ad_a,
                     ref_dir: rd_a,
-                    major_radius: Ra,
-                    minor_radius: ra,
+                    major_radius: major_a,
+                    minor_radius: minor_a,
                     ..
                 },
                 AnalyticSurface::Torus {
                     center: cb,
                     axis_dir: ad_b,
                     ref_dir: rd_b,
-                    major_radius: Rb,
-                    minor_radius: rb,
+                    major_radius: major_b,
+                    minor_radius: minor_b,
                     ..
                 },
             ) => {
@@ -2059,8 +2064,8 @@ fn surfaces_equivalent(
                     ad_a.normalize_or_zero().dot(ad_b.normalize_or_zero()).abs() > 0.999;
                 let ref_match =
                     rd_a.normalize_or_zero().dot(rd_b.normalize_or_zero()).abs() > 0.999;
-                let major_match = (Ra - Rb).abs() < tol;
-                let minor_match = (ra - rb).abs() < tol;
+                let major_match = (major_a - major_b).abs() < tol;
+                let minor_match = (minor_a - minor_b).abs() < tol;
                 center_match && axis_match && ref_match && major_match && minor_match
             }
             (

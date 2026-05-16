@@ -11,7 +11,7 @@ use axia_core::commands::Command;
 use axia_core::commands::CommandResult;
 use axia_geo::{FaceId, EdgeId, VertId, HeId};
 use axia_geo::operations::boolean::BoolOp;
-use axia_core::constraint::{Constraint, ConstraintKind, ConstraintRef, resolve_constraint, resolve_all, resolve_iterative, max_residual};
+use axia_core::constraint::{ConstraintKind, ConstraintRef, resolve_constraint, resolve_all, resolve_iterative, max_residual};
 use axia_core::orphan_recovery::RecoveryPlan;
 
 mod step6_json;
@@ -345,6 +345,7 @@ impl AxiaEngine {
     }
 
     /// 성공 시 에러 상태 clear (다음 실패까지 빈 문자열 유지)
+    #[allow(dead_code)] // preserved for future op-level error clearing
     fn clear_error(&mut self) {
         self.last_error.clear();
     }
@@ -421,6 +422,7 @@ impl AxiaEngine {
 
     /// Mark specific face IDs as dirty for delta updates.
     /// Called after operations that modify specific faces (translate/rotate/scale).
+    #[allow(dead_code)] // preserved for delta-buffer pipeline (Phase 1)
     fn mark_faces_dirty(&mut self, face_ids: &[u32]) {
         for &fid in face_ids {
             self.dirty_faces.insert(fid);

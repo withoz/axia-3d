@@ -103,7 +103,7 @@ impl Mesh {
     ) -> Result<SliceResult> {
         // ── 0. Validate ──────────────────────────────────────────────────
         ensure!(!face_ids.is_empty(), "slice_volume_by_plane: empty face set");
-        let face_set: FxHashSet<FaceId> = face_ids.iter().copied().collect();
+        let _face_set: FxHashSet<FaceId> = face_ids.iter().copied().collect();
         for &fid in face_ids {
             let face = self.faces.get(fid)
                 .ok_or_else(|| anyhow::anyhow!("slice: face {:?} not found", fid))?;

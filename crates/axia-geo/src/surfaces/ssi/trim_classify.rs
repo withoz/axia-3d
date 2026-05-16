@@ -12,7 +12,7 @@
 //! Phase J Step 5's `nurbs_boolean_v2` will overwrite based on the tree).
 
 use super::super::trim::TrimLoop;
-use super::trim_geom::{point_in_trim_loop, trim_loop_bbox, trim_loop_signed_area, DEFAULT_CHORD_TOL};
+use super::trim_geom::{point_in_trim_loop, trim_loop_signed_area, DEFAULT_CHORD_TOL};
 
 /// One node in the containment tree.
 #[derive(Clone, Debug)]

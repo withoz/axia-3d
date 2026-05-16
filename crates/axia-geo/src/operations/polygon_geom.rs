@@ -372,7 +372,7 @@ pub fn convex_union_2d(a: &[(f64, f64)], b: &[(f64, f64)]) -> Option<Vec<(f64, f
     let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(points.len());
     for p in points {
         if let Some(last) = dedup.last() {
-            if ((p.0 - last.0).abs() < 1e-6 && (p.1 - last.1).abs() < 1e-6) { continue; }
+            if (p.0 - last.0).abs() < 1e-6 && (p.1 - last.1).abs() < 1e-6 { continue; }
         }
         dedup.push(p);
     }
@@ -448,7 +448,7 @@ pub fn convex_difference_2d(a: &[(f64, f64)], b: &[(f64, f64)]) -> Option<Vec<(f
     let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(points.len());
     for p in points {
         if let Some(last) = dedup.last() {
-            if ((p.0 - last.0).abs() < 1e-6 && (p.1 - last.1).abs() < 1e-6) { continue; }
+            if (p.0 - last.0).abs() < 1e-6 && (p.1 - last.1).abs() < 1e-6 { continue; }
         }
         dedup.push(p);
     }

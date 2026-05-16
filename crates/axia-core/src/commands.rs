@@ -8,7 +8,6 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use axia_geo::{FaceId, MaterialId};
-use axia_geo::AnalyticCurve;
 use crate::xia::XiaId;
 use crate::group::{GroupId, ComponentDefId};
 use crate::material::{PhysicalProperties, VisualProperties, MaterialCategory};

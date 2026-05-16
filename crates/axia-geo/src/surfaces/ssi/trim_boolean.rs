@@ -310,7 +310,7 @@ fn arc_arc(
         let hi = ea.min(eb);
         if hi <= lo + tol { return Vec::new(); }
         let mid_angle = (lo + hi) * 0.5;
-        let p = [ca[0] + ra * mid_angle.cos(), ca[1] + ra * mid_angle.sin()];
+        let _p = [ca[0] + ra * mid_angle.cos(), ca[1] + ra * mid_angle.sin()];
         // Map angles back to per-arc parameters
         let t_a_start = arc_param_for_angle(lo, sa, ea);
         let t_a_end   = arc_param_for_angle(hi, sa, ea);
@@ -462,7 +462,7 @@ fn make_intersection(point: [f64; 2], t_line: f64, t_arc: f64,
 // Step 4 Robustness).
 
 use super::super::trim::TrimLoop;
-use super::trim_geom::{point_in_trim_loop, tessellate_loop, trim_loop_signed_area};
+use super::trim_geom::tessellate_loop;
 
 /// Boolean operation on two trim loops in the same UV space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

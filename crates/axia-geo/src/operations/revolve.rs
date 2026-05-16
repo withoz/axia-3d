@@ -22,7 +22,7 @@
 //! the spatial-hash dedup bug that polar singularities caused in the
 //! sphere primitive (ADR-007).
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use glam::DVec3;
 
 use crate::entities::*;

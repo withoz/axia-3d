@@ -8,8 +8,8 @@
 use anyhow::{bail, Result};
 use glam::DVec3;
 
-use crate::curves::knot::{insert_knot_bspline, refine_knots_bspline,
-                           insert_knot_nurbs, refine_knots_nurbs};
+use crate::curves::knot::{insert_knot_bspline,
+                           insert_knot_nurbs};
 
 // ────────────────────────────────────────────────────────────────────
 // B-spline surface knot insert (u direction)

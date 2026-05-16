@@ -15,7 +15,7 @@
 //!   driven solely by edge-count + face-id ordering. Caller code with
 //!   XIA awareness (Scene) should prefer XIA-grouped repair.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{FaceId, EdgeId, VertId};

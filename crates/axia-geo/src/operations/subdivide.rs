@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use glam::DVec3;
 
 use crate::entities::*;

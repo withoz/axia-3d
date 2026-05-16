@@ -170,7 +170,7 @@ pub fn sweep_surface_1_rail(
         }
     }
 
-    let knots_v = vec![0.0; n_v_samples + 2]; // placeholder
+    let _knots_v = vec![0.0; n_v_samples + 2]; // placeholder
     let knots_v = knots_v_for_sweep(n_v_samples);
     Ok((grid, profile_knots.to_vec(), knots_v, profile_degree, 1))
 }
