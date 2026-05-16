@@ -891,6 +891,12 @@ loop {
 - **Visual baseline (LOCKED #40 / ADR-077) 의 lens shared edges 색상** — 별도 visual baseline 확장
 - **Lens 내부 분할 라인의 사용자 highlight UX** (선택 시 강조 색) — 별도 ADR
 - **3-way overlap edge contract** — ADR-101 §5 의 future trigger
+- **결함 D — Mixed case vertex-on-corner degeneracy (canonical, 사용자 시연 evidence 2026-05-16)**:
+  - 사용자 미리보기 시연에서 발견 — `drawRectAsShape` (10×10 @ center (5,5)) + `drawCircleAsShape` (r=5 @ center (10,5), 32 segs) partial overlap 시 `auto_intersect_coplanar` 가 split 발동 안 함 (afterA=1, afterB=2, expected 3).
+  - **Root cause audit (test diagnostic evidence)**: `coplanar_intersection_segments` 의 crossings count = 0 (lens detected size=17, but boundary crossings missed). CIRCLE polygon 의 cardinal vertices (theta = π/2 → (10, 10), theta = 3π/2 → (10, 0)) 가 RECT corner 와 정확히 일치 → vertex-on-corner incidence 가 edge-edge cross 로 count 안 됨.
+  - **Non-degenerate verification**: center 를 (10.5, 5.5) 로 offset 한 case 는 정상 3 sub-faces split (Amendment 9 보너스 회귀 `adr101_amendment9_rect_x_circle_mixed_non_degenerate_splits` 봉인).
+  - **ADR-101 B-1 lock-in trade-off**: Sutherland-Hodgman MVP convex 가정의 known boundary degeneracy. ADR-101 §5 의 "Non-convex polygon clipping — Weiler-Atherton / Vatti 필요 시 별도 ADR" 영역.
+  - **별도 ADR (가칭 ADR-101-D 또는 ADR-103+)**: Algorithm-level fix — vertex-on-edge fallback 또는 robust polygon clipping (Vatti) 또는 epsilon-perturbation. 본 Amendment scope 외.
 
 ### A9.9 Path Z atomic plan (ζ-1 ~ ζ-5)
 

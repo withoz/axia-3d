@@ -2109,6 +2109,84 @@ mod tests {
         assert_eq!(lines.len() % 6, 0, "lines buffer must be multiple of 6");
     }
 
+    /// ADR-101 Amendment 9 보너스 — RECT × CIRCLE polygon mixed case 회귀.
+    ///
+    /// **Context (사용자 시연 2026-05-16, ζ-audit)**:
+    /// ADR-101 §3.2 매트릭스 의 "C-3 RECT × Circle mixed → 3 sub-face"
+    /// (B-5 sweep matrix deferred 안 묶임) 의 명시 회귀 자산 누락 발견.
+    /// 미리보기 실시연 결과 *non-degenerate* mixed case 는 정상 split.
+    ///
+    /// **Non-degenerate vs degenerate (canonical 분리 evidence)**:
+    /// - **본 test (non-degenerate)**: CIRCLE center (10.5, 5.5) — RECT corner
+    ///   와 cardinal axis alignment 없음 → 3 sub-faces 정상 split.
+    /// - **Degenerate boundary case (별도 ADR 후속 트랙)**: CIRCLE center
+    ///   (10, 5) — RECT corner (10, 10) / (10, 0) 와 CIRCLE polygon 의
+    ///   cardinal vertex (theta=π/2, 3π/2) 정확 일치. `coplanar_intersection_
+    ///   segments` 의 crossings = 0 (lens detected but boundary cross missed).
+    ///   ADR-101 B-1 lock-in Sutherland-Hodgman MVP convex 가정의 known
+    ///   boundary degeneracy. 해결 시 Weiler-Atherton / Vatti 또는 vertex-
+    ///   on-edge fallback 필요 — 별도 ADR (ADR-101 §5 Out-of-scope 후속).
+    ///
+    /// Lock-in: 본 회귀 자산이 mixed case 의 *non-degenerate* path 봉인.
+    /// Degenerate fix 시 본 test 는 그대로 PASS + 새 degenerate test 추가.
+    #[test]
+    fn adr101_amendment9_rect_x_circle_mixed_non_degenerate_splits() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // RECT_A: x ∈ [0,10], y ∈ [0,10]
+        let rect_a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+
+        // CIRCLE_B polygonized (32 segs) — center (10.5, 5.5), radius 5.
+        // Non-degenerate: cardinal vertices (theta=π/2 → (10.5, 10.5),
+        // theta=3π/2 → (10.5, 0.5)) NOT aligned with RECT corners. Partial
+        // overlap region: roughly x ∈ [5.5, 10], y ∈ [0.5, 10].
+        let n_segs = 32;
+        let (cx, cy, r) = (10.5f64, 5.5f64, 5.0f64);
+        let circle_verts: Vec<DVec3> = (0..n_segs).map(|i| {
+            let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n_segs as f64);
+            DVec3::new(cx + r * theta.cos(), cy + r * theta.sin(), 0.0)
+        }).collect();
+        let cids: Vec<_> = circle_verts.iter().map(|p| mesh.add_vertex(*p)).collect();
+        let circle_b = mesh.add_face(&cids, mat).expect("add circle face");
+
+        let active_before = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_before, 2);
+
+        let result = auto_intersect_coplanar(&mut mesh, rect_a, circle_b, mat)
+            .expect("OK")
+            .expect("non-degenerate partial overlap MUST split (RECT × CIRCLE mixed)");
+
+        // 3 active sub-faces post-split (canonical ADR-101 §B-3b expectation).
+        let active_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after, 3,
+            "expected 3 active faces post-split, got {}", active_after);
+
+        // Lens HARD flag (Amendment 9 cross-check) — meta-원칙 #15 정합
+        // 도 mixed case 에서 정합.
+        let lens_outer_start = mesh.faces[result.lens].outer().start;
+        let mut he_id = lens_outer_start;
+        let mut all_hard = true;
+        loop {
+            if !mesh.hes[he_id].flags().contains(HeFlags::HARD) {
+                all_hard = false;
+                break;
+            }
+            he_id = mesh.hes[he_id].next();
+            if he_id == lens_outer_start { break; }
+        }
+        assert!(all_hard,
+            "lens outer boundary HEs MUST be HARD (Amendment 9 mixed case enforcement)");
+
+        // Invariants preserved.
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-split mesh must satisfy invariants — got {:?}",
+            report.violations);
+    }
+
     /// Regression guard — fix MUST NOT increase orphan_count or break
     /// face invariants.
     #[test]

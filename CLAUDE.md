@@ -2363,13 +2363,14 @@ architectural fix + §3.2 매트릭스 정정.
 | boolean.split_faces_by_intersections | ❌ | 별도 PR 권장 |
 
 - **A9.5 회귀 누적 (Amendment 9)**:
-  - axia-geo `operations::coplanar::tests` (+4): `adr101_amendment9_lens_
+  - axia-geo `operations::coplanar::tests` (+5): `adr101_amendment9_lens_
     outer_boundary_hes_hard` / `adr101_amendment9_external_boundary_
     unaffected` (scope creep 차단) / `adr101_amendment9_export_emits_
     lens_shared_edges` (wireframe visible) / `adr101_amendment9_
-    invariants_preserved`
-  - 전체 axia-geo: 1318 → **1322 PASS**. axia-core ADR-101 8 PASS 유지.
-  - 절대 #[ignore] 금지 4/4 준수.
+    invariants_preserved` / `adr101_amendment9_rect_x_circle_mixed_
+    non_degenerate_splits` (보너스 — mixed case non-degenerate path 봉인)
+  - 전체 axia-geo: 1318 → **1323 PASS**. axia-core ADR-101 8 PASS 유지.
+  - 절대 #[ignore] 금지 5/5 준수.
 
 - **A9.6 메타-원칙 #15 (사용자 결재 2026-05-16, canonical)**:
   > "동일한 분할 연산은 동일한 topological contract — 빠르고, 신속하고,
@@ -2388,11 +2389,20 @@ architectural fix + §3.2 매트릭스 정정.
   - Visual baseline (LOCKED #40 / ADR-077) 의 lens shared edges 색상 —
     별도 visual baseline 확장
   - Lens 내부 분할 라인의 사용자 highlight UX — 별도 ADR
+  - **결함 D — Mixed case vertex-on-corner degeneracy** (canonical,
+    사용자 시연 evidence 2026-05-16): RECT × CIRCLE 의 cardinal
+    alignment 시 `coplanar_intersection_segments` crossings=0 (lens
+    detected but boundary cross missed). ADR-101 B-1 Sutherland-Hodgman
+    MVP convex 가정의 known boundary degeneracy. Non-degenerate path
+    는 정상 동작 (보너스 회귀 봉인). Algorithm-level fix (Weiler-
+    Atherton / Vatti / vertex-on-edge fallback) 별도 ADR.
 
 - **Amendment 9 PR sequence**:
   - ζ-1 (a01b2e4) — Amendment 9 spec docs
   - ζ-2+ζ-3 (a980e3f) — engine fix + cross-cut audit + 4 회귀
-  - ζ-5 (본 commit) — CLAUDE.md LOCKED #41 + 메타-원칙 #15 등재
+  - ζ-5 (113f2db) — CLAUDE.md LOCKED #41 + 메타-원칙 #15 등재
+  - ζ-3-bonus (본 commit) — mixed case non-degenerate 회귀 +1 + 결함 D
+    Out-of-scope 명시
 
 ### 42. ADR-102 Push/Pull Detach-on-Arrangement (Manifold Reconciliation, 2026-05-15) ✅
 
