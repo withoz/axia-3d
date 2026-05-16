@@ -62,7 +62,7 @@ fn duplicate_vertex_in_face_is_handled() {
 
 #[test]
 fn build_1000_quad_scene_completes() {
-    // 1000개 독립 quad face 생성 후 shadow 계산 — 성능/메모리 sanity.
+    // 1000개 독립 quad face 생성 — 성능/메모리 sanity.
     let start = std::time::Instant::now();
     let mut mesh = Mesh::new();
 
@@ -81,20 +81,7 @@ fn build_1000_quad_scene_completes() {
 
     // 1000 face < 1초 예상. CI 느린 환경 고려 5초 한도.
     assert!(build_elapsed.as_secs() < 5, "1000 face build too slow: {:?}", build_elapsed);
-
-    // 그림자 계산 성능 — 1 receiver (ground) + 1000 caster.
-    let shadow_start = std::time::Instant::now();
-    let tris = mesh.compute_ground_projected_shadows(DVec3::new(0.0, -1.0, 0.0));
-    let shadow_elapsed = shadow_start.elapsed();
-
-    assert!(tris.len() > 0, "1000 face scene must produce some shadow");
-    assert!(
-        shadow_elapsed.as_secs() < 5,
-        "shadow computation too slow: {:?}",
-        shadow_elapsed,
-    );
-
-    println!("Build 1000 quads: {:?}; shadow: {:?}", build_elapsed, shadow_elapsed);
+    println!("Build 1000 quads: {:?}", build_elapsed);
 }
 
 #[test]
@@ -114,35 +101,7 @@ fn deep_undo_does_not_leak() {
     // 그냥 panic 없이 끝나면 통과.
 }
 
-// ─── Category 3: Shadow pipeline extremes ─────────────────────────
-
-#[test]
-fn shadow_with_sun_below_horizon_is_empty() {
-    let mut mesh = Mesh::new();
-    let v0 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
-    let v1 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
-    let v2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 1000.0));
-    let v3 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
-    mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-
-    // Sun traveling upward (y > 0) → no shadow cast onto ground.
-    let tris = mesh.compute_ground_projected_shadows(DVec3::new(0.0, 1.0, 0.0));
-    assert!(tris.is_empty(), "sun above horizon must produce no shadow");
-}
-
-#[test]
-fn shadow_with_horizontal_sun_is_empty() {
-    // Sun parallel to ground (sun_dir.y == 0) — undefined / infinite shadow.
-    let mut mesh = Mesh::new();
-    let v0 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
-    let v1 = mesh.add_vertex(DVec3::new(0.0, 1000.0, 1000.0));
-    let v2 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 1000.0));
-    let v3 = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
-    mesh.add_face_with_holes(&[v0, v1, v2, v3], &[], MaterialId::new(0)).unwrap();
-
-    let tris = mesh.compute_ground_projected_shadows(DVec3::new(1.0, 0.0, 0.0));
-    assert!(tris.is_empty(), "horizontal sun must be rejected");
-}
+// ─── Category 3: (removed — shadow system deferred to future ADR-106) ────
 
 // ─── Category 4: Boundary coordinate magnitudes ─────────────────
 

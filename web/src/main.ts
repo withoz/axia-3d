@@ -21,7 +21,6 @@ import { InvariantVerifierPanel } from './ui/InvariantVerifierPanel';
 import { AuditLogViewerPanel } from './ui/AuditLogViewerPanel';
 import { getAuditLog } from './core/AuditLog';
 import { AnalyticHoverOverlay } from './core/AnalyticHoverOverlay';
-import { SunPanel } from './ui/SunPanel';
 import { ConstraintVisual } from './ui/ConstraintVisual';
 import { FileManager } from './file/FileManager';
 import { MaterialLibrary } from './materials/MaterialLibrary';
@@ -825,24 +824,7 @@ async function main() {
     });
   }
 
-  // ═══ 14b. Sun Panel (Phase 2 — 태양 방향 제어) ═══
-  {
-    const sunPanel = new SunPanel(viewportEl, {
-      viewport,
-      onSunChange: () => toolManager.syncMesh(),
-    });
-    (window as unknown as { __axia_sunPanel?: SunPanel })
-      .__axia_sunPanel = sunPanel;
-
-    // 키보드 Shift+U → Sun Panel 토글 (U alone은 Measure Tool)
-    window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      if ((e.key === 'u' || e.key === 'U') && e.shiftKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        sunPanel.toggle();
-      }
-    });
-  }
+  // ═══ 14b. (Sun Panel removed 2026-05-16 — shadow system deferred) ═══
 
   // ═══ 15. Constraint Visual (3D 뷰포트 제약 인디케이터) ═══
   {
@@ -892,7 +874,7 @@ async function main() {
 /** Phase 1 + Phase 2 — 툴바 버튼이 실제 상태(켜짐/꺼짐)를 시각적으로 반영하게
  *  묶어주는 배선. 패널 세 개는 MutationObserver, display 토글 세 개는 클릭
  *  리스너 + 초기 동기화로 처리. */
-function wireToolbarToggleState(viewport: Viewport, toolManager: ToolManager): void {
+function wireToolbarToggleState(viewport: Viewport, _toolManager: ToolManager): void {
   // ── Phase 1: 패널 버튼 3개 ──
   const panelBindings: Array<{ btnId: string; panelId: string; isOpen: (p: HTMLElement) => boolean }> = [
     { btnId: 'inspector-btn', panelId: 'xia-inspector', isOpen: (p) => p.classList.contains('open') },
@@ -930,15 +912,7 @@ function wireToolbarToggleState(viewport: Viewport, toolManager: ToolManager): v
       get: () => viewport.isSsaoEnabled(),
       set: (v) => viewport.setSsaoEnabled(v),
     },
-    {
-      key: 'shadow',
-      get: () => viewport.isProjectedShadowEnabled(),
-      set: (v) => {
-        viewport.setProjectedShadowEnabled(v);
-        // 그림자 켤 때 즉시 geometry 계산 필요 (MenuBar와 동일한 흐름).
-        if (v) toolManager.syncMesh();
-      },
-    },
+    // Shadow toggle removed 2026-05-16 — shadow system deferred to ADR-106.
   ];
   for (const { key, get, set } of displayToggles) {
     const btn = document.querySelector(`.toggle-btn[data-toggle="${key}"]`) as HTMLElement | null;

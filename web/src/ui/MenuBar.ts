@@ -111,7 +111,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
       'view-grid': viewport.infiniteGrid?.visible ?? true,
       'view-axis': viewport.axisGroup?.visible ?? true,
       'view-ssao': viewport.isSsaoEnabled?.() ?? false,
-      'view-shadow-pro': viewport.isProjectedShadowEnabled?.() ?? false,
+      // 'view-shadow-pro': removed 2026-05-16 (shadow system deferred to ADR-106)
       'view-fur': viewport.isFurEnabled?.() ?? false,
       'view-sun-panel': isPanelOpen('__axia_sunPanel'),
       'view-history': isPanelOpen('__axia_historyPanel'),
@@ -340,19 +340,7 @@ export function initMenuBar(deps: MenuBarDeps): void {
         Toast.info(`털 쉐이더 ${next ? '켜짐 (24 shell, 드로우콜 증가 주의)' : '꺼짐'}`);
         break;
       }
-      case 'view-shadow-pro': {
-        const next = !viewport.isProjectedShadowEnabled();
-        viewport.setProjectedShadowEnabled(next);
-        if (next) {
-          // 즉시 projected shadow 계산을 위해 syncMesh 트리거
-          toolManager.syncMesh();
-        }
-        Toast.info(
-          `건축 그림자 (Projected + VSM) ${next ? '켜짐 — 매스 silhouette + 곡면 subtle 음영' : '꺼짐'}`,
-          3000,
-        );
-        break;
-      }
+      // case 'view-shadow-pro': removed 2026-05-16 — shadow system deferred to ADR-106
       case 'view-sun-panel': {
         const sp = (window as unknown as { __axia_sunPanel?: { toggle(): void } }).__axia_sunPanel;
         sp?.toggle();
@@ -552,41 +540,8 @@ export function initMenuBar(deps: MenuBarDeps): void {
         Toast.info('간섭 표시 해제');
         break;
       }
-      case 'solar-heatmap': {
-        // 1회성 lazy init + generate.
-        const dateStr = prompt('기준 날짜 (YYYY-MM-DD)', new Date().toISOString().slice(0, 10));
-        if (!dateStr) break;
-        const latStr = prompt('위도 (도)', '37.5665');
-        if (!latStr) break;
-        const lonStr = prompt('경도 (도)', '126.978');
-        if (!lonStr) break;
-        Toast.info('Solar heatmap 계산 중… (12 시간대 샘플)', 3000);
-        (async () => {
-          const { SolarHeatmap } = await import('../viewport/SolarHeatmap');
-          const hm = new SolarHeatmap(viewport, bridge);
-          await hm.generate({
-            resolution: 60,
-            sizeMM: 30000,
-            timeSamples: 12,
-            lat: parseFloat(latStr),
-            lon: parseFloat(lonStr),
-            dateISO: dateStr,
-          });
-          // 전역 참조 — 재사용 / 숨김
-          (window as unknown as { __axia_heatmap?: typeof hm }).__axia_heatmap = hm;
-          Toast.info('Solar heatmap 생성 완료', 2500);
-        })().catch((err) => {
-          console.error('[Heatmap] error:', err);
-          alert('Heatmap 생성 실패: ' + err);
-        });
-        break;
-      }
-      case 'solar-heatmap-off': {
-        const hm = (window as unknown as { __axia_heatmap?: { remove(): void } }).__axia_heatmap;
-        hm?.remove();
-        Toast.info('Solar heatmap 숨김');
-        break;
-      }
+      // case 'solar-heatmap' / 'solar-heatmap-off': removed 2026-05-16
+      // (shadow system 의존 — ADR-106 redesign 시 재구성)
       case 'upload-texture': {
         const selected = toolManager.selection.getSelectedFaces();
         import('./TextureUploadDialog').then(({ openTextureUploadDialog }) => {

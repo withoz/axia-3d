@@ -2010,25 +2010,8 @@ export class ToolManager {
     this.viewport.setStats(stats.verts, stats.faces);
     recordStep('syncMesh.stats', performance.now() - tStats0);
 
-    // ━━━ Projected shadow update — Sprint 3 §1 fix ━━━
-    // Sprint 3 telemetry 가 syncMesh.shadow 를 31ms 의 dominator 로
-    //   격리. compute + mesh update 가 무거우므로 FrameScheduler 로
-    //   다음 frame 에 batch 처리 → syncMesh 자체는 즉각 정상화.
-    //   동일 key 는 자동 dedup (latest wins) — 연속 syncMesh 시 마지막
-    //   요청만 실행되므로 비용 ↓.
-    if (this.viewport.isProjectedShadowEnabled()) {
-      frameScheduler.schedule('syncMesh.shadow', () => {
-        const sun = this.viewport.getSunTravelDirection();
-        const tris = this.bridge.computeGroundProjectedShadows(sun.x, sun.y, sun.z);
-        this.viewport.updateProjectedShadow(tris);
-      });
-    } else {
-      // Disabled 상태에서는 viewport.updateProjectedShadow(null) 가
-      //   기존 그림자 메시를 정리한다. 가볍지만 일관성 위해 같이 schedule.
-      frameScheduler.schedule('syncMesh.shadow', () => {
-        this.viewport.updateProjectedShadow(null);
-      });
-    }
+    // Projected shadow update block removed 2026-05-16 — shadow system
+    // deferred to ADR-106 redesign.
   }
 
   private getSnappedPoint(e: MouseEvent, rawGroundPoint: THREE.Vector3 | null, consumeOverride = false): THREE.Vector3 | null {

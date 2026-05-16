@@ -163,39 +163,14 @@ export class Viewport {
   private _fur: FurShell | null = null;
   private _furEnabled: boolean = false;
 
-  // ═══ Projected shadow (SketchUp-style matrix projection) ═══
-  private _projectedShadow: THREE.Mesh | null = null;
-  // 2026-04-23: 기본 ON — "건축 그림자"(Projected Planar + MinEquation 균일
-  // blending)를 default로 채택. 사용자는 메뉴 "보기 → 건축 그림자"로 토글.
-  private _projectedShadowEnabled: boolean = true;
-  // ADR-103-ζ-shadow + post-merge fix: Z-up sun travel direction must
-  // match dirLight.position (Three.js VSM shadow source).
+  // ═══ Shadow system — removed 2026-05-16 ═══
+  // 그림자 시스템은 ADR-103-ζ shadow + 4 hotfix 누적 후 부정확 system
+  // 으로 판정되어 전체 제거. 향후 별도 ADR (가칭 ADR-106) 에서 새 시스템
+  // 으로 재구성. _projectedShadow / _sunTravel / _dirLight / VSM /
+  // _dynamicShadowFit / castShadow / receiveShadow 모두 폐기.
   //
-  // dirLight.position = (8000, 10000, 15000) (set later in init) → sun
-  // position at +X+Y+Z octant (right-back-above). Sun travel direction
-  // = -normalize(position) = approximately (-0.41, -0.51, -0.76).
-  //
-  // 이전 commit `b2c8305` 에서 ε 회전 formula `(x, y, z) → (x, -z, y)`
-  // 를 sun_travel direction vector 에 잘못 적용해 Y component sign 이
-  // dirLight position 과 불일치 (VSM shadow vs projected shadow 방향
-  // 평행 안 됨). Direct Y↔Z swap 으로 정정.
-  //
-  // Sun travel: 사용자 facing default — 카메라 (+X+Y+Z) 가까운 octant
-  // 에서 빛 들어와 반대쪽 (-X-Y-Z) 방향으로 진행 → ground 에 shadow
-  // cast.
-  private _sunTravel = new THREE.Vector3(-0.408, -0.508, -0.760);
-
-  // ═══ Directional light (Phase 2 VSM) ═══
-  // castShadow은 기본 false, setProjectedShadowEnabled(true) 시 켜짐.
-  // VSM shadow는 Projected와 함께 "건축 모드" 일괄 관리.
-  private _dirLight: THREE.DirectionalLight | null = null;
-  /** Shadow Phase 2 — dynamic frustum fit (2026-04-26).
-   *  When `true`, every frame the dir-light shadow camera is resized to
-   *  cover only the geometry within the current view, dramatically
-   *  improving texel-per-meter density when zoomed-in on detail. Static
-   *  fallback (Phase 1) used otherwise. Texel-snap stabilises edges so
-   *  panning doesn't shimmer the shadow boundary. */
-  private _dynamicShadowFit: boolean = true;
+  // 잔존하는 일반 조명 (AmbientLight + DirectionalLight without castShadow
+  // + HemisphereLight + IBL) 은 유지 — shading 만 담당.
 
   // ═══ Sketch plane visual (Tier 3A) ═══
   // Tinted translucent plane + border to show which plane sketching locks to.
@@ -261,20 +236,8 @@ export class Viewport {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    // 2026-04-22: shadow 기본 off.
-    // 2048×2048 shadow map 위 ±20000mm 영역 → texel 19.5mm.
-    // 이 해상도가 ground에 떨어지면 shadow acne (수평 scanline) 발생.
-    // CAD 작업에서는 그림자 자체가 불필요한 사실감이며 artifact 원인이므로
-    // 기본 비활성. 설정 내부 구성은 유지되어 필요 시 enabled=true로 즉시 복구.
-    // 2026-04-23 Phase 2: VSM 보조 레이어 재도입.
-    // Projected Shadow가 flat receiver만 처리 → 곡면(cat body 등)은 공백.
-    // VSM은 low-res + low-opacity로만 설정해 "은은한 환경 음영" 역할:
-    //   · scanline artifact가 나와도 subtle하므로 체감 안 됨
-    //   · Projected의 sharp silhouette이 primary visual 담당
-    //   · VSM은 곡면 위 공간감만 추가
-    // 2026-04-23: 기본 ON — 건축 그림자가 default. _projectedShadowEnabled와 동기화.
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.VSMShadowMap;
+    // Shadow system 제거 (2026-05-16) — shadowMap 비활성.
+    this.renderer.shadowMap.enabled = false;
     // ACESFilmic gives PBR materials a natural photographic look under IBL;
     // the previous NoToneMapping clipped highlights whenever roughness was
     // low. Exposure 1.0 is the neutral baseline.
@@ -320,39 +283,10 @@ export class Viewport {
     const ambient = new THREE.AmbientLight(0x303030, 0.3);
     this.scene.add(ambient);
 
-    // Key light — casts the main shadow.
-    // DirectionalLight — 조명 + VSM shadow source (Phase 2).
-    // VSM 설정은 "subtle 보조"용이므로 파라미터 보수적:
-    //   mapSize 1024      — 낮은 해상도로도 VSM은 smooth
-    //   frustum ±15000    — 건축 scene 규모
-    //   radius 12         — 자연스러운 blur
-    //   blurSamples 17    — moment blur 샘플
-    //   bias 0            — VSM에 불필요
-    // shadowMap.enabled 토글은 setProjectedShadowEnabled에 연동.
+    // Key light — DirectionalLight (조명 only, shadow casting 제거 2026-05-16).
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
-    // ADR-103-ζ-shadow: Z-up sky light. Y-up 시대 (8k, 15k, 10k) 에서
-    // Y=15k 가 sky 였음. Z-up 정합: Z=15k 가 sky. Y/Z swap.
-    // 광원 방향: 동(+X) + 북(+Y) + 하늘(+Z) 옥탄트, sky 방향 강조.
+    // Z-up sky light: 동(+X) + 북(+Y) + 하늘(+Z) octant.
     dirLight.position.set(8000, 10000, 15000);
-    dirLight.castShadow = true;
-    const shadow = dirLight.shadow;
-    // Phase 1 tune (2026-04-25):
-    //   mapSize 1024→2048 : texel 29mm → 14.6mm (50% ↓). +12MB 메모리,
-    //     shadow pass 4×. 건축 스케일에서 계단 artifact 대폭 감소.
-    //   bias/normalBias   : acne 제거 (박스 측면 얇은 줄무늬).
-    //   radius/blur 완화  : VSM band 완화 대신 slight crisper edge.
-    shadow.mapSize.set(2048, 2048);
-    shadow.camera.left   = -15000;
-    shadow.camera.right  =  15000;
-    shadow.camera.top    =  15000;
-    shadow.camera.bottom = -15000;
-    shadow.camera.near   = 100;
-    shadow.camera.far    = 60000;
-    shadow.bias          = -0.0002;
-    shadow.normalBias    = 1.5;
-    shadow.radius        = 8;
-    shadow.blurSamples   = 12;
-    this._dirLight = dirLight;
     this.scene.add(dirLight);
 
     // Back/fill light — no shadow (performance; two shadow-casting lights
@@ -1151,13 +1085,7 @@ export class Viewport {
 
       const frontMesh = new THREE.Mesh(geometry, frontMat);
       frontMesh.name = 'front-mesh';
-      // ADR-007 Rev 2 Shadow Phase 3 (B): Sheet 면은 양면 동등 평면이라
-      //   VSM 자체 그림자가 의미 없는 데다 flat surface 위에 noisy band
-      //   를 뿌려 미관을 해친다. 그래서 frontMesh 의 castShadow 는 OFF
-      //   로 두고, 별도의 invisible "wall-only shadow caster" 가 wall
-      //   삼각형만 그림자 맵에 기여하도록 분리.
-      frontMesh.castShadow = false;
-      frontMesh.receiveShadow = true;
+      // Shadow system removed (2026-05-16) — castShadow/receiveShadow 미설정.
       this.meshGroup.add(frontMesh);
 
       // ── Store reference for color updates ──
@@ -1188,11 +1116,7 @@ export class Viewport {
       //   각각 cloned geometry 가 wall 또는 sheet 삼각형 indices 만 포함.
       //   position/normal 은 원본과 공유. frontMesh 는 모든 삼각형 단일 색.
       //
-      // Single-sided (CAD) 모드: back-mesh 통째 skip → wall-only shadow caster
-      //   도 만들어지지 않음. frontMesh.castShadow = true 로 fallback.
-      if (this._singleSidedRender) {
-        frontMesh.castShadow = true;
-      }
+      // Single-sided (CAD) 모드: back-mesh 통째 skip.
       if (!this._singleSidedRender) {
         const wallIndices: number[] = [];
         const sheetIndices: number[] = [];
@@ -1242,29 +1166,7 @@ export class Viewport {
           const wallBackMesh = new THREE.Mesh(wallBackGeo, cyanMat);
           wallBackMesh.name = 'back-mesh-wall';
           this.meshGroup.add(wallBackMesh);
-
-          // Phase 3 — invisible wall-only shadow caster.
-          //   Geometry shares attributes with frontMesh (no extra GPU
-          //   memory beyond the index buffer). Casts shadows but never
-          //   rendered itself, so we use a cheap depth material via
-          //   visible=false. Sheets are excluded from this caster, so
-          //   they don't pollute VSM with noisy band artefacts on flat
-          //   coplanar faces.
-          const shadowGeo = new THREE.BufferGeometry();
-          shadowGeo.setAttribute('position', geometry.getAttribute('position'));
-          shadowGeo.setAttribute('normal', geometry.getAttribute('normal'));
-          shadowGeo.setIndex(wallIndices);
-          const shadowMat = new THREE.MeshBasicMaterial({ visible: false });
-          const wallShadowCaster = new THREE.Mesh(shadowGeo, shadowMat);
-          wallShadowCaster.name = 'wall-shadow-caster';
-          wallShadowCaster.castShadow = true;
-          wallShadowCaster.receiveShadow = false;
-          // ✱ 2026-04-27 — pick() 가 invisible mesh 를 제외하지 않는
-          //   raycaster 동작 때문에 같은 wall geometry 가 frontMesh 와
-          //   동일 distance hit → 사용자가 클릭한 면이 비결정적으로 선택됨.
-          //   noPick 협약 + 이름 기반 제외 둘 다 적용.
-          wallShadowCaster.userData.noPick = true;
-          this.meshGroup.add(wallShadowCaster);
+          // Shadow system removed (2026-05-16) — wall-shadow-caster 폐기.
         }
 
         if (sheetIndices.length > 0) {
@@ -2763,111 +2665,9 @@ export class Viewport {
     this._onFrameCallbacks.push(cb);
   }
 
-  /** Toggle dynamic shadow frustum fit (Shadow Phase 2). */
-  setDynamicShadowFit(enabled: boolean): void {
-    this._dynamicShadowFit = enabled;
-    if (!enabled && this._dirLight) {
-      // Restore Phase 1 static frustum.
-      const s = this._dirLight.shadow;
-      s.camera.left = -15000; s.camera.right = 15000;
-      s.camera.top = 15000;   s.camera.bottom = -15000;
-      s.camera.near = 100;    s.camera.far = 60000;
-      s.camera.updateProjectionMatrix();
-    }
-  }
-
-  /** Recompute the directional light's shadow frustum each frame so it
-   *  hugs the visible scene. Called from animate() when the toggle is
-   *  on (default).
-   *
-   *  Strategy:
-   *    - Light-space bbox of all active mesh AABBs (in light-view coords).
-   *    - Pad slightly so geometry near the edge isn't clipped.
-   *    - Texel-snap left/bottom to integer texels so the shadow doesn't
-   *      crawl across surfaces during camera pan ("shadow shimmering").
-   *
-   *  No-op when the dir light has no castShadow or when the scene is
-   *  empty. */
-  private _updateDynamicShadowFrustum(): void {
-    if (!this._dynamicShadowFit) return;
-    const dl = this._dirLight;
-    if (!dl || !dl.castShadow) return;
-
-    // Build light-view basis (z = -light direction, x/y orthonormal).
-    const lightDir = dl.position.clone().sub(dl.target.position).normalize();
-    if (lightDir.lengthSq() < 1e-6) return;
-    const upGuess = Math.abs(lightDir.y) > 0.99 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const right = new THREE.Vector3().crossVectors(upGuess, lightDir).normalize();
-    const up = new THREE.Vector3().crossVectors(lightDir, right).normalize();
-
-    // Walk active meshes; project their AABB corners into light-view
-    //   coords and accumulate min/max per axis.
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    const tmp = new THREE.Vector3();
-    let foundAny = false;
-    this.scene.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh)) return;
-      if (!obj.visible || !obj.castShadow) return;
-      const geo = obj.geometry as THREE.BufferGeometry;
-      if (!geo.boundingBox) geo.computeBoundingBox();
-      const bb = geo.boundingBox;
-      if (!bb) return;
-      // 8 AABB corners in object space
-      for (let i = 0; i < 8; i++) {
-        tmp.set(
-          (i & 1) ? bb.max.x : bb.min.x,
-          (i & 2) ? bb.max.y : bb.min.y,
-          (i & 4) ? bb.max.z : bb.min.z,
-        );
-        tmp.applyMatrix4(obj.matrixWorld);
-        // Project onto light basis
-        const lx = tmp.dot(right);
-        const ly = tmp.dot(up);
-        const lz = tmp.dot(lightDir);
-        if (lx < minX) minX = lx;
-        if (lx > maxX) maxX = lx;
-        if (ly < minY) minY = ly;
-        if (ly > maxY) maxY = ly;
-        if (lz < minZ) minZ = lz;
-        if (lz > maxZ) maxZ = lz;
-        foundAny = true;
-      }
-    });
-    if (!foundAny) return;
-
-    // Pad the box a bit so anti-aliased silhouettes don't clip.
-    const padXY = Math.max(50, (maxX - minX) * 0.05);
-    const padZ = Math.max(50, (maxZ - minZ) * 0.05);
-    minX -= padXY; maxX += padXY;
-    minY -= padXY; maxY += padXY;
-    minZ -= padZ;  maxZ += padZ;
-
-    // Texel-snap: round left/bottom to whole texels so silhouettes
-    //   don't wobble between frames as the camera pans.
-    const s = dl.shadow;
-    const mapSize = s.mapSize.x;
-    if (mapSize > 0) {
-      const tx = (maxX - minX) / mapSize;
-      const ty = (maxY - minY) / mapSize;
-      if (tx > 0) {
-        minX = Math.floor(minX / tx) * tx;
-        maxX = minX + tx * mapSize;
-      }
-      if (ty > 0) {
-        minY = Math.floor(minY / ty) * ty;
-        maxY = minY + ty * mapSize;
-      }
-    }
-
-    s.camera.left = minX; s.camera.right = maxX;
-    s.camera.bottom = minY; s.camera.top = maxY;
-    // light-view Z grows opposite to lightDir; remap to near/far.
-    s.camera.near = Math.max(1, -maxZ);
-    s.camera.far = Math.max(s.camera.near + 100, -minZ);
-    s.camera.updateProjectionMatrix();
-  }
+  // Shadow system removed (2026-05-16) — setDynamicShadowFit /
+  // _updateDynamicShadowFrustum 폐기. 향후 새 shadow system 진입 시
+  // ADR-106 기반 재설계.
 
   start() {
     // Build the post-processing composer on first start if SSAO is on
@@ -2884,9 +2684,6 @@ export class Viewport {
       const w = window as unknown as { __AXIA_TELEMETRY_FRAME_START?: () => void };
       w.__AXIA_TELEMETRY_FRAME_START?.();
       for (const cb of this._onFrameCallbacks) cb();
-      // Shadow Phase 2 — refit the directional light frustum to the
-      //   visible scene each frame (texel-snapped to avoid shimmer).
-      this._updateDynamicShadowFrustum();
       if (this._ssaoEnabled && this._composer) {
         // Keep the SSAO pass's camera in sync with the active camera —
         // we switch between perspective and orthographic on view-mode
@@ -2921,157 +2718,12 @@ export class Viewport {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Projected shadow (SketchUp-style)
+  //  Shadow system — removed 2026-05-16
   // ═══════════════════════════════════════════════════════
-
-  /** Projected shadow on/off 토글 (+ VSM 보조 레이어 연동).
-   *  Rust-side projection이 필요하므로 활성화 시 caller가 syncMesh로
-   *  trigger해 updateProjectedShadow()가 호출되도록 해야 함 (ToolManager에서
-   *  이미 보장). Phase 2: VSM shadow map도 같이 on/off해 곡면 subtle 음영 추가. */
-  setProjectedShadowEnabled(enabled: boolean): void {
-    this._projectedShadowEnabled = enabled;
-    if (this._projectedShadow) this._projectedShadow.visible = enabled;
-    // VSM 보조 layer 연동 — renderer 레벨에서 shadow pass 토글.
-    this.renderer.shadowMap.enabled = enabled;
-    this.renderer.shadowMap.needsUpdate = true;
-    // Material 재컴파일 (shadow uniform 반영)
-    this.scene.traverse((obj) => {
-      if ((obj as THREE.Mesh).material) {
-        const m = (obj as THREE.Mesh).material;
-        if (Array.isArray(m)) m.forEach(mm => { mm.needsUpdate = true; });
-        else m.needsUpdate = true;
-      }
-    });
-  }
-
-  isProjectedShadowEnabled(): boolean {
-    return this._projectedShadowEnabled;
-  }
-
-  /** ToolManager.syncMesh에서 projected shadow geometry 재계산 시 호출.
-   *  Rust WASM에서 triangle buffer 받아 BufferGeometry로 렌더.
-   *  enabled=false면 기존 mesh 숨기기만 하고 작업 skip (성능). */
-  updateProjectedShadow(triangleBuffer: Float32Array | null): void {
-    if (!this._projectedShadowEnabled) {
-      if (this._projectedShadow) this._projectedShadow.visible = false;
-      return;
-    }
-    // Dispose existing geometry (매 update마다 새로 빌드)
-    if (this._projectedShadow) {
-      this._projectedShadow.geometry.dispose();
-    }
-    if (!triangleBuffer || triangleBuffer.length === 0) {
-      // Nothing to project (empty scene or sun direction invalid)
-      if (this._projectedShadow) this._projectedShadow.visible = false;
-      return;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(triangleBuffer, 3));
-    geo.computeBoundingSphere();
-    if (!this._projectedShadow) {
-      // 2026-04-23 Phase 2.3: MinEquation 블렌딩으로 중첩 균일화.
-      // 표준 alpha blending은 1-(1-α)^N으로 겹칠수록 어두워져서 띠 그라데이션 발생.
-      // MinEquation: result = min(src*srcF, dst*dstF). srcF=One, dstF=One이면
-      // 픽셀별로 min(shadowColor, bgColor). 처음 그림자 0.72, 같은 자리에 또 그려도
-      // min(0.72, 0.72) = 0.72로 균일 유지. fan triangulation 자기중첩/인접 건물
-      // 중첩 모두 자동 해결. opacity 파라미터는 MinEquation에서 의미 없음 —
-      // 어둠의 정도는 color 값(0.72)으로 직접 제어.
-      const mat = new THREE.MeshBasicMaterial({
-        // 2026-04-23 Phase 2.4.2 — 0x909090 → 0x707070. MinEquation은
-        //   min(shadow, bg)이므로 대비는 "배경색 - shadow색"으로 결정됨.
-        //   박스 top(PBR로 밝게 렌더, ≈200)에서 shadow 144는 차이 56으로 옅고,
-        //   지면(≈224)에서 차이 80으로 강하게 드러나 불균일. 112로 낮추면
-        //   박스 top에서 88, 지면에서 112 → 양쪽 다 뚜렷.
-        color: 0x707070,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        blending: THREE.CustomBlending,
-        blendEquation: THREE.MinEquation,
-        blendSrc: THREE.OneFactor,
-        blendDst: THREE.OneFactor,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,  // 살짝 앞쪽 — ground plane 위에 확실히
-      });
-      this._projectedShadow = new THREE.Mesh(geo, mat);
-      this._projectedShadow.name = 'projected-shadow';
-      this._projectedShadow.renderOrder = -4;  // mesh 아래에서 먼저 그려짐
-      this._projectedShadow.userData.noPick = true;
-      this.scene.add(this._projectedShadow);
-    } else {
-      this._projectedShadow.geometry = geo;
-    }
-    // ADR-103-ζ-shadow: Z-up ground = Z=0 plane.
-    // 2026-04-23 Phase 2.4 — Rust가 이미 각 receiver 평면 + RECV_EPS(0.5mm) 로
-    //   벡터 buffer에 z값을 기록 (Z-up 마이그레이션 후). 여기서 추가 position
-    //   오프셋은 불필요 — per-receiver z 그대로 유지.
-    this._projectedShadow.position.set(0, 0, 0);
-    this._projectedShadow.visible = true;
-  }
-
-  /** 현재 sun travel 방향 조회 (projected shadow compute에 전달). */
-  getSunTravelDirection(): THREE.Vector3 {
-    return this._sunTravel.clone();
-  }
-
-  /**
-   * Sun 방향 설정 — azimuth/elevation 각도(도) 기준.
-   *
-   *   azimuth   — 북(0°)에서 시계방향. 동=90°, 남=180°, 서=270°.
-   *               Three.js 좌표: +Z가 "앞", +X가 오른쪽. 통상 건축에선
-   *               북=−Z 라고 가정. 본 함수도 그 규약 따름.
-   *   elevation — 수평선(0°)에서 천정(90°)으로.
-   *
-   * 내부 처리:
-   *   · sun position (DirectionalLight) 위치 = 천구상 방향의 scaled 점
-   *   · sun travel direction = -light direction (빛이 가는 방향)
-   *   · 두 값 모두 업데이트 + renderer shadow camera refresh
-   *
-   * 호출 후 caller는 syncMesh()를 트리거해 projected shadow 재계산해야 함
-   * (SunPanel 등 UI가 담당).
-   */
-  setSunDirection(azimuthDeg: number, elevationDeg: number): void {
-    // clamp
-    const az = azimuthDeg;
-    const el = Math.max(1, Math.min(89, elevationDeg));  // 지평선 아래/천정 정방향 금지
-    const azRad = (az * Math.PI) / 180;
-    const elRad = (el * Math.PI) / 180;
-    // ADR-103-ζ-shadow: Z-up 천구상 sun 위치 — 거리 20000mm scale.
-    //   az=0 → +Y (북) | az=90° → +X (동) | el=90° → +Z (천정)
-    //   x = sin(az) * cos(el)  (동서, +X = 동)
-    //   y = cos(az) * cos(el)  (북남, +Y = 북, ADR-103 Z-up)
-    //   z = sin(el)            (상승각, +Z = 위)
-    const dist = 20000;
-    const sx = Math.sin(azRad) * Math.cos(elRad) * dist;
-    const sy = Math.cos(azRad) * Math.cos(elRad) * dist;
-    const sz = Math.sin(elRad) * dist;
-    if (this._dirLight) {
-      this._dirLight.position.set(sx, sy, sz);
-      this._dirLight.target.position.set(0, 0, 0);
-      // Shadow camera frustum은 world-origin 중심 고정 — 태양 방향만 바뀜.
-    }
-    // Sun travel direction (빛이 scene으로 가는 방향) = -normalize(light position)
-    const mag = Math.sqrt(sx * sx + sy * sy + sz * sz);
-    if (mag > 1e-6) {
-      this._sunTravel.set(-sx / mag, -sy / mag, -sz / mag);
-    }
-  }
-
-  /** 현재 sun azimuth/elevation 조회 (SunPanel 초기값 복원용). */
-  getSunAzimuthElevation(): { azimuth: number; elevation: number } {
-    // ADR-103-ζ-shadow: Z-up sun position 역산.
-    // travel = -sun_pos_unit → sun_pos_unit = -travel.
-    const t = this._sunTravel;
-    const sx = -t.x, sy = -t.y, sz = -t.z;
-    // elevation = asin(sz) (Z-axis is up).
-    // azimuth = atan2(east, north) = atan2(sx, sy) where +Y = north.
-    const el = Math.asin(Math.max(-1, Math.min(1, sz))) * 180 / Math.PI;
-    const az = Math.atan2(sx, sy) * 180 / Math.PI;
-    return {
-      azimuth: (az + 360) % 360,
-      elevation: el,
-    };
-  }
+  // setProjectedShadowEnabled / isProjectedShadowEnabled /
+  // updateProjectedShadow / getSunTravelDirection / setSunDirection /
+  // getSunAzimuthElevation 폐기. 향후 새 system 진입 시 ADR-106 기반
+  // 재설계.
 
   /**
    * Toggle the shell-technique fur overlay on the main mesh. Off by

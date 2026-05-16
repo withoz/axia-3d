@@ -45,7 +45,7 @@ export class ClashDetection {
     this.viewport.meshGroup?.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
       if (obj.userData.noPick) return;
-      if (obj.name === 'projected-shadow' || obj.name === 'solar-heatmap') return;
+      // projected-shadow / solar-heatmap removed 2026-05-16 (shadow → ADR-106)
       obj.geometry.computeBoundingBox();
       const bb = obj.geometry.boundingBox;
       if (!bb) return;
