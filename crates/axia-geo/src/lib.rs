@@ -22,6 +22,7 @@ pub mod predicates;
 pub mod mesh_migration;
 pub mod mesh_invariants;
 pub mod mesh_export;
+pub mod mesh_path_b;
 pub mod p7_manifold;
 pub mod topology_damage;
 
