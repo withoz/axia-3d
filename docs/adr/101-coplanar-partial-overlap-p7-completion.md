@@ -812,15 +812,23 @@ ADR-101 §2 시연 (2026-05-14):
 - Render path (`export_edge_lines_with_map`) 의 coplanar hide 정책 (LOCKED #16 K-ε hotfix) 과 split 의도의 충돌은 split-side 의 HARD flag 부여로 명시 해소.
 - "빠르고 신속하고 정확" — 추가 분기 / lookup 없이 flag 1 bit 로 정확한 동작 보장 (`force_hard` fast-path in `mesh.rs:5359`).
 
-**적용 사례 (cross-check, ζ-3 audit 대상)**:
-| 함수 | HARD flag 부여 | 상태 |
-|---|---|---|
-| `Mesh::split_face` | ✅ 명시 | canonical, ADR-101 의 모델 |
-| `Mesh::split_face_by_chain` | (ζ-3 audit) | unknown |
-| `auto_intersect_coplanar` | ❌ 결함 C | **ζ-2 fix** |
-| `polygonize_closed_curve_face` | ❌ (substitute, split 아님) | 정합 (out of contract) |
-| `Mesh::boolean.split_faces_by_intersections` | (ζ-3 audit) | unknown |
-| `face_split.rs::split_face_case_b/c/d` | (ζ-3 audit) | unknown |
+**적용 사례 (cross-check, ζ-3 audit 결과 2026-05-16)**:
+
+| 함수 | HARD flag 부여 | 메타-원칙 #15 정합 | 상태 |
+|---|---|---|---|
+| `Mesh::split_face` (mesh.rs:4068-4069) | ✅ 명시 (`set_flags(HeFlags::HARD)`) | ✅ canonical model | reference |
+| `Mesh::polygonize_closed_curve_face` (mesh.rs:3308) | ❌ (substitute, split 아님) | ✅ out of contract (의도) | 정합 |
+| `auto_intersect_coplanar` (coplanar.rs:444+Step 10.5) | ✅ Amendment 9 부여 | ✅ **fix 완료** | **ζ-2 closure** |
+| `Mesh::split_face_by_chain` (face_split.rs:514) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `split_face_case_b` (face_split.rs:868) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `split_face_case_c` (face_split.rs:1162) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `split_face_case_d` (face_split.rs:1397) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `boolean.rs::split_faces_by_intersections` (boolean.rs:446) | ❌ `add_face` 만 호출 | ⚠️ **위반** | 별도 PR 권장 |
+
+**audit 결정 (사용자 결재 기다림)**:
+- 본 Amendment 9 scope = `auto_intersect_coplanar` 만 fix (사용자 결재 zeta-1)
+- 잔존 4 함수 (split_face_by_chain / case_b/c/d / split_faces_by_intersections) 의 HARD 미부여는 **별도 PR / 별도 ADR** 권장
+- 근거: Amendment 9 의 atomic 범위 + 각 함수의 실제 사용자 시연 결함 우선순위 별개
 
 향후 모든 split-type 함수 신설 / 수정 시 본 메타-원칙 #15 정합 강제. 회귀 테스트로 enforce.
 
