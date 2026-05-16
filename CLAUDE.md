@@ -2328,6 +2328,72 @@ Playwright E2E `web/e2e/adr-101-b6-*.spec.ts` 7 회귀 (3 engine + 4 visual).
 - ADR-094 §E L1 (additive-first + multi-gate atomic) — 본 9 PR 시리즈 답습
 - LOCKED #40 (render chord_tol) — Phase D visual baseline 인프라 활용
 
+**Amendment 9 — 결함 C fix + §3.2 매트릭스 정정 (2026-05-16)**
+
+Closure 후 추가 사용자 시연 audit 으로 발견된 render edge hide 결함의
+architectural fix + §3.2 매트릭스 정정.
+
+- **A9.1 §3.2 매트릭스 정정 (canonical)**:
+  - "Containment ✅ Hole injection" → "❌ 자동 hole injection 비활성"
+    (LOCKED #1 ADR-015 B1 auto hole-promote 비활성 정책 정합)
+  - "RECT × RECT ✅ 보임" 의미 정정 — 외부 boundary 만 visible, lens
+    내부 분할 라인은 RECT × CIRCLE / CIRCLE × CIRCLE 과 동일하게 hide
+
+- **A9.2 결함 C 진짜 메커니즘**:
+  - `auto_intersect_coplanar` (coplanar.rs:444+10.5) 의 `remove_face × 2
+    + add_face × 3` 가 새 boundary HEs 를 `flags = clear` 로 생성
+  - Render `export_edge_lines_with_map` (mesh.rs:5384-5404) 의 angle
+    coplanar test: Plane × Plane → dot=1.0 < cos(20.1°)=0.939 → hide
+  - Contract 불일치: `Mesh::split_face` (mesh.rs:4068-4069) 는 HARD 명시
+    부여, `auto_intersect_coplanar` 는 미부여
+
+- **A9.3 Fix (Step 10.5 신설)** — lens outer boundary HEs (radial twin
+  포함) HARD flag 부여. `set_flags(flags() | HARD)` 안전 OR 패턴
+  (mesh.rs:2541 답습).
+
+- **A9.4 Cross-cut audit inventory (메타-원칙 #15 정합)**:
+
+| 함수 | HARD 부여 | 상태 |
+|---|---|---|
+| Mesh::split_face | ✅ canonical | reference |
+| Mesh::polygonize_closed_curve_face | ❌ (substitute, split 아님) | 정합 (의도) |
+| auto_intersect_coplanar | ✅ Amendment 9 | **fix 완료** |
+| Mesh::split_face_by_chain | ❌ | 별도 PR 권장 |
+| split_face_case_b/c/d | ❌ | 별도 PR 권장 |
+| boolean.split_faces_by_intersections | ❌ | 별도 PR 권장 |
+
+- **A9.5 회귀 누적 (Amendment 9)**:
+  - axia-geo `operations::coplanar::tests` (+4): `adr101_amendment9_lens_
+    outer_boundary_hes_hard` / `adr101_amendment9_external_boundary_
+    unaffected` (scope creep 차단) / `adr101_amendment9_export_emits_
+    lens_shared_edges` (wireframe visible) / `adr101_amendment9_
+    invariants_preserved`
+  - 전체 axia-geo: 1318 → **1322 PASS**. axia-core ADR-101 8 PASS 유지.
+  - 절대 #[ignore] 금지 4/4 준수.
+
+- **A9.6 메타-원칙 #15 (사용자 결재 2026-05-16, canonical)**:
+  > "동일한 분할 연산은 동일한 topological contract — 빠르고, 신속하고,
+  > 정확하게."
+
+  모든 split-type 함수가 split-induced edges 에 HARD flag 부여 동일
+  contract 강제. Render path 의 coplanar hide 정책 (LOCKED #16 K-ε
+  hotfix) 과 split 의도의 충돌은 split-side 의 HARD 부여로 명시 해소.
+  추가 분기 / lookup 없이 flag 1 bit 로 정확한 동작 보장 (force_hard
+  fast-path, mesh.rs:5359).
+
+- **A9.7 Out-of-scope (deferred)**:
+  - ζ-3 cross-cut audit 의 잔존 4 함수 (split_face_by_chain / case_b/c/d
+    / split_faces_by_intersections) — 별도 PR 권장
+  - ζ-4 Playwright B-6 visual demo 의 visible assert — 선택 사항
+  - Visual baseline (LOCKED #40 / ADR-077) 의 lens shared edges 색상 —
+    별도 visual baseline 확장
+  - Lens 내부 분할 라인의 사용자 highlight UX — 별도 ADR
+
+- **Amendment 9 PR sequence**:
+  - ζ-1 (a01b2e4) — Amendment 9 spec docs
+  - ζ-2+ζ-3 (a980e3f) — engine fix + cross-cut audit + 4 회귀
+  - ζ-5 (본 commit) — CLAUDE.md LOCKED #41 + 메타-원칙 #15 등재
+
 ### 42. ADR-102 Push/Pull Detach-on-Arrangement (Manifold Reconciliation, 2026-05-15) ✅
 
 **Canonical anchor (사용자 통찰, 2026-05-15)**:
@@ -3348,9 +3414,9 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - Fillet 3-way corner (같은 vertex 공유 다중 엣지) 미해결 — 별도 작업
 - STEP/IGES OCCT.js 통합 미구현 — 10MB+ 번들 검토 필요
 
-## 메타-원칙 (#1~#14, ADR-087 까지 통과)
+## 메타-원칙 (#1~#15, ADR-101 Amendment 9 까지 통과)
 
-설계 결정 시 참조하는 14개 메타-원칙. 자세한 출처는
+설계 결정 시 참조하는 15개 메타-원칙. 자세한 출처는
 `docs/adr/README.md` 참조.
 
 | # | 원칙 | 축 |
@@ -3369,6 +3435,7 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 | 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
 | 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
 | 14 | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) | 기하 본질 |
+| 15 | **동일 분할 = 동일 topological contract — 빠르고 신속하고 정확하게** (Same split = same topo contract: fast, swift, accurate) | 분할 정합 |
 
 ### 메타-원칙 #14 — 면은 닫힌 경계로부터 유도된다
 
@@ -3409,6 +3476,66 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
   approximation 의존, kernel-aware ops 차단, selection unification
   실패 등.
 - 답이 No 면 거부 또는 새 ADR 필요.
+
+### 메타-원칙 #15 — 동일 분할 = 동일 topological contract
+
+**Canonical statement (사용자 결재, 2026-05-16, ADR-101 Amendment 9)**:
+> "동일한 분할 연산은 동일한 topological contract — 빠르고, 신속하고,
+> 정확하게."
+> ("Same split op = same topological contract — fast, swift, accurate.")
+
+**의미**:
+- 모든 split-type 함수 (`Mesh::split_face` / `split_face_by_chain` /
+  `split_face_case_b/c/d` / `auto_intersect_coplanar` / Boolean
+  `split_faces_by_intersections` / 향후 새 split 함수) 는 split-induced
+  edges 에 **`HeFlags::HARD` flag 부여** 라는 동일 topological contract
+  를 준수해야.
+- Render path (`export_edge_lines_with_map`, mesh.rs:5384-5404) 의
+  coplanar Plane edge hide 정책 (LOCKED #16 K-ε hotfix) 과 split 의 분할
+  의도의 충돌은 **split-side 의 HARD flag 부여** 로 명시 해소. Render
+  path 의 정책 자체는 보존 — smooth surface 가시화 목적.
+- **"빠르고 신속하고 정확"**: 추가 분기 / lookup 없이 flag 1 bit 로
+  정확한 동작 보장 (`force_hard` fast-path, mesh.rs:5359). Performance
+  + correctness 동시.
+
+**Contract enforcement 패턴** (canonical reference, mesh.rs:4068-4069):
+```rust
+// split 후 (face wiring 완료 후) — 두 twin HE 모두 HARD.
+self.hes[he_v1v2].set_flags(HeFlags::HARD);
+self.hes[he_v2v1].set_flags(HeFlags::HARD);
+```
+
+안전 OR 패턴 (기존 flags 보존, mesh.rs:2541 답습):
+```rust
+let cur = mesh.hes[he_id].flags();
+mesh.hes[he_id].set_flags(cur | HeFlags::HARD);
+```
+
+**적용 사례 (ADR-101 Amendment 9 audit, 2026-05-16)**:
+| 함수 | HARD 부여 | 정합 |
+|---|---|---|
+| `Mesh::split_face` | ✅ canonical | reference |
+| `Mesh::polygonize_closed_curve_face` | ❌ (substitute, split 아님) | 정합 (의도) |
+| `auto_intersect_coplanar` | ✅ Amendment 9 | **fix 완료** |
+| `Mesh::split_face_by_chain` | ❌ | 별도 PR |
+| `split_face_case_b/c/d` | ❌ | 별도 PR |
+| `boolean.split_faces_by_intersections` | ❌ | 별도 PR |
+
+**가이드 (향후 ADR / 코드 결정 시)**:
+- 새 split-type 함수 신설 / 기존 split 함수 수정 시 **HARD flag 부여
+  여부 명시 검증** (회귀 테스트 강제).
+- 어떤 edges 가 HARD 부여 받는지 정책 명확 — split-induced (face 분할
+  결과 생성된 새 edge) vs 외부 boundary (face_normals.len()==1 자동
+  draw) 구분.
+- "이 split 함수가 LOCKED #16 의 coplanar hide 와 충돌하는가?" 가
+  체크리스트 질문 — Yes 면 HARD 부여 의무.
+- Substitute 함수 (split 아닌 face 교체 — e.g., polygonize_closed_curve_
+  face) 는 out of contract — 별개 정책.
+
+**적용 사례 (역사적 맥락)**:
+- ADR-101 Amendment 9: 결함 C (render edge hide) 의 architectural root
+  은 `Mesh::split_face` ↔ `auto_intersect_coplanar` 의 contract 불일치
+- 향후 모든 split-type 함수 신설 / 수정 시 본 원칙 정합 강제
 
 ## Session 2026-04-28 완료 내역 (11 commits — RECT 면 합성 정책 정비)
 
