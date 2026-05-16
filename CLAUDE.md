@@ -2523,6 +2523,77 @@ axia-geo 1315 / axia-core 296 / vitest 1828 PASS. 절대 #[ignore]
 - ADR-094 §E L1 (additive-first + multi-gate atomic)
 - LOCKED #1, #5, #7, #26, #40, #41, #42 (좌표계 무관 정합 자동)
 
+### 44. Complete Meaning per Merge (2026-05-16)
+
+**Canonical anchor (사용자, 2026-05-16)**:
+> "커널에서 중요한 건 merge 횟수가 아니라 **각 merge 가 complete
+> meaning 을 가지는가**입니다."
+
+LOCKED #43 ADR-103 의 사용자 directive ("좌표계 의미가 깨지는
+중간 상태 절대 허용 안 됨") 가 **semantic atomicity** 의미로 정착.
+*workflow atomicity* (작은 변경 마다 PR) 로 확장 적용한 패턴은
+폐기.
+
+#### 의사결정 매트릭스
+
+| 변경 단위 | 기준 | PR? |
+|---|---|---|
+| Complete semantic unit (ADR closure, atomic stack, cleanup pass) | 의미 완결 | ✅ |
+| Partial semantic unit (ε-1 단독 like, half-cleanup) | 중간 상태 위반 risk | ❌ |
+| Cleanup batch (모든 crate warnings, 모든 dead code) | 의미 완결 (single pass) | ✅ |
+| Cleanup fragment (1 crate 만, 1 file 만) | 의미 partial | ❌ |
+| Documentation only complete | 의미 완결 | ✅ (작은 변경도 OK) |
+| Trivial docs typo | 의미 완결 (single fix) | main 직접 commit OK |
+| Hotfix complete | 의미 완결 | ✅ |
+| Multi-feature 묶음 (서로 무관) | 의미 분산 | ❌ 분리 |
+
+#### 핵심 원칙
+
+1. **Semantic atomicity = anchor** — workflow atomicity 가 아닌
+   *의미* 의 완결성.
+2. **Merge 횟수는 free variable** — 의미 단위에 따라 결정.
+3. **Branch 수 ≠ 안전성** — branch 많은 것 자체 문제 아님.
+   문제는 *완결되지 않은 의미* 가 main 에 진입.
+4. **main 은 항상 complete state** — partial merge 시 invariant
+   위반 (LOCKED #43 PR #51 ε-1 단독 merge case 답습 — 즉시
+   PR #52 ε-1+ε-2 atomic 으로 복원).
+
+#### Lock-ins (canonical)
+
+- **L-44-1** Semantic completeness 가 분할 기준 — 작업량 / 시간 /
+  변경 양 아님
+- **L-44-2** ADR closure = 1 complete meaning (multi-PR 가능 — 각
+  PR 이 *자체* complete sub-meaning, atomic stack 패턴 답습)
+- **L-44-3** Cleanup pass = 1 complete meaning (warnings 153 → 0
+  전체 통합 PR — partial cleanup PR 거부)
+- **L-44-4** Hotfix = 1 complete meaning (사용자 시연 후 발견된
+  구체적 결함의 *완전* 해결, partial fix 거부)
+- **L-44-5** Trivial docs typo / formatting → main 직접 commit
+  OK (CI는 main 에서도 작동, branch 불필요)
+- **L-44-6** Branch lifecycle = 의미 진행 중 동안만. 의미 완결 →
+  merge → branch 삭제. *진행 중 abandoned* branch 폐기 정책 적용.
+
+#### 회귀 사례 (이미 발생, 학습)
+
+- **PR #51 ε-1 단독 merge** (LOCKED #43 #43 회고) — vertex Z-up +
+  surface Y-up 중간 상태 → 즉시 PR #52 atomic 으로 복원. 본
+  LOCKED 의 *원인 사례*.
+
+#### 적용
+
+- LOCKED #43 의 atomic directive → semantic 의미로 명확화
+- 향후 모든 변경 의사결정 anchor (Tier 2 / fusion / 모든 후속 ADR)
+- 메타-원칙 #10 (ADR 불변) 정합 — ADR 변경 시 새 ADR + Superseded,
+  본 LOCKED 도 동일
+
+#### Cross-link
+
+- LOCKED #43 ADR-103-ε atomic directive (canonical anchor source)
+- 메타-원칙 #10 (ADR 불변)
+- ADR-094 §E L1 (additive-first + multi-gate atomic — atomic stack
+  패턴의 multi-PR 활용 예)
+- ADR-076 §C-amendment-1 (cleanup deletion — complete pass 예)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
