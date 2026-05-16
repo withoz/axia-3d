@@ -2396,6 +2396,11 @@ architectural fix + §3.2 매트릭스 정정.
     MVP convex 가정의 known boundary degeneracy. Non-degenerate path
     는 정상 동작 (보너스 회귀 봉인). Algorithm-level fix (Weiler-
     Atherton / Vatti / vertex-on-edge fallback) 별도 ADR.
+    **✨ 자연 해소 — ADR-107 (PR #65)**: 2026-05-16 audit (D2) 에서
+    `drawCircleAsCurve` (Path B) 사용 시 동일 trigger → split=3 ✅
+    확정. Path B chord_tol-driven sampling 이 cardinal alignment
+    회피. ADR-107 ζ-β engine dispatch 후 자동 해소 → 별도 algorithm-
+    level fix ADR 불필요.
 
 - **Amendment 9 PR sequence**:
   - ζ-1 (a01b2e4) — Amendment 9 spec docs

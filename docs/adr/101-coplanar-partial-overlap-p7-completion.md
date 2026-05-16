@@ -897,6 +897,7 @@ loop {
   - **Non-degenerate verification**: center 를 (10.5, 5.5) 로 offset 한 case 는 정상 3 sub-faces split (Amendment 9 보너스 회귀 `adr101_amendment9_rect_x_circle_mixed_non_degenerate_splits` 봉인).
   - **ADR-101 B-1 lock-in trade-off**: Sutherland-Hodgman MVP convex 가정의 known boundary degeneracy. ADR-101 §5 의 "Non-convex polygon clipping — Weiler-Atherton / Vatti 필요 시 별도 ADR" 영역.
   - **별도 ADR (가칭 ADR-101-D 또는 ADR-103+)**: Algorithm-level fix — vertex-on-edge fallback 또는 robust polygon clipping (Vatti) 또는 epsilon-perturbation. 본 Amendment scope 외.
+  - **✨ 자연 해소 evidence — ADR-107 (PR #65)** (2026-05-16 audit, 사용자 결재 (ν) 후 미리보기 환경 직접 측정): `drawCircleAsCurve` (Path B canonical, ADR-089) 사용 시 동일 trigger (center=(10,5)) → **split=3 ✅** (D2 audit). Path B 의 `auto_intersect_coplanar` 진입 시 `polygonize_closed_curve_face` 가 chord_tol-driven sampling 으로 polygonize → 32-segs cardinal alignment 회피 → vertex-on-corner degeneracy 차단. ADR-107 ζ-β engine dispatch (`drawCircleAsShape` → `drawCircleAsCurve` 자동 변환) 후 사용자 시연 시 결함 D **자동 해소**. 별도 algorithm-level fix ADR 불필요. Cross-link: [ADR-107 §7.1](107-as-shape-path-b-unification.md).
 
 ### A9.9 Path Z atomic plan (ζ-1 ~ ζ-5)
 
