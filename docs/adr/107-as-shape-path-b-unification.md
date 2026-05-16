@@ -143,6 +143,40 @@ ADR-094 Path B-full default ON (2026-05-09) 으로 cylinder = 3 faces / 2 edges 
 - **ADR-101 Amendment 9 결함 D evidence (vertex-on-corner degeneracy)**: Path B 사용 시 vertex-on-corner case 자체 사라짐 (1 self-loop) — **결함 D 자연 해소 가능성**. ζ-ζ 시연으로 검증.
 - **사용자 facing 변화**: 사용자 시각 일관 (모든 Circle = canonical Path B smooth). 메모리 97% 절감 (LOCKED #35). 사용자 체감 변화 0 ~ positive.
 
+### 7.1 ADR-101 §A9.8 결함 D — Path B 자연 해소 CONFIRMED (2026-05-16 audit evidence)
+
+**Audit context**: ADR-101 Amendment 9 PR #64 (2026-05-16) 의 §A9.8 의 "결함 D — Mixed case vertex-on-corner degeneracy" 가 본 ADR-107 trigger evidence 로 검증됨. 사용자 결재 (ν) 후 미리보기 환경 (port 3002, Path B default ON) 에서 reproduce + Path B 적용 결과 직접 측정.
+
+**Audit 매트릭스 (3 scenario)**:
+
+| Test | Tool | Stats | Split Δ | 결과 |
+|---|---|---|---|---|
+| **D1** (결함 D reproduce) | `drawCircleAsShape` (Path A, center=(10,5), 32 segs) | 36e / 34v / **2f** | **+2** ❌ | vertex-on-corner degenerate skip — ADR-101 §A9.8 결함 D 확정 |
+| **D2** (ADR-107 trigger 검증) | **`drawCircleAsCurve` (Path B)** same center=(10,5) | 31e / 56v / **3f** | **+3** ✅ | **결함 D 자연 해소** ✨ |
+| **D3** (sanity control) | Path B × Path B Circle | 50e / 94v / 3f | +3 ✅ | canonical |
+
+**자연 해소 메커니즘 (D2 분석)**:
+1. `bridge.drawCircleAsCurve` → Layer B canonical (1 self-loop edge + Circle curve)
+2. `intersect_faces_inner` 호출 시 `auto_intersect_coplanar` 가 `polygonize_closed_curve_face` 사전 호출
+3. polygonize 시 **chord_tol-driven sampling** — N segments 가 32 고정이 아닌 dynamic
+4. → CIRCLE polygon 의 cardinal vertices 가 RECT corner 와 정확 일치하지 않음 (degenerate boundary 회피)
+5. → `coplanar_intersection_segments` crossings = 2 정상 검출 → 3 sub-faces
+
+**의의**:
+- ADR-107 ζ-β engine dispatch 후 사용자 시연 시 결함 D 자동 해소 — Algorithm-level fix (Weiler-Atherton / Vatti / vertex-on-edge fallback) **별도 ADR 불필요**.
+- ADR-101 §A9.8 의 "결함 D 별도 ADR (가칭 ADR-101-D 또는 ADR-103+)" deferred 트랙이 ADR-107 으로 **사실상 closed**.
+- canonical Path B 의 chord_tol-driven sampling 이 degenerate case 회피 — 사용자 코드 변경 없이 자연 효과.
+
+**Cross-link**:
+- ADR-101 PR #64 §A9.8 결함 D — origin
+- ADR-101 §A9.6 메타-원칙 #15 — "동일 분할 = 동일 topological contract — 빠르고, 신속하고, 정확하게" 의 layer 일관성 확장
+- 본 ADR §4 Decision (L3) — `*AsShape` → Path B 통합 의 자연 effect
+
+**Known boundary (보너스 발견, canonical 보존)**:
+- D2 의 결과 edges (`curveKind=-1`, all straight line) — Path B circle 이 split 과정에서 polygonize 되어 boundary curve metadata 손실
+- → canonical 의도 ("Path B = 1 self-loop boundary 유지") 가 split 후 보존되지 않음
+- → 별도 architectural concern (NURBS-direct coplanar intersect, ADR-101 Amendment 8 §5 Out-of-scope #3 영역). 본 ADR scope 외, future ADR.
+
 ## 8. Acceptance criteria (ζ-α 시점)
 
 본 commit (ζ-α) 가 만족해야:
