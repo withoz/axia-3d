@@ -2630,6 +2630,9 @@ impl Mesh {
             };
             if verts.len() < 3 { continue; }
 
+            // Capture face normal for L3 strict orthogonality check.
+            let face_normal = face.normal();
+
             let mut arc_params: Option<(DVec3, f64, DVec3, DVec3)> = None;
             for i in 0..verts.len() {
                 let v1 = verts[i];
@@ -2645,6 +2648,23 @@ impl Mesh {
                 }
             }
             let Some((center, radius, normal, basis_u)) = arc_params else { continue };
+
+            // L3 strict — face must be cylindrical SIDE (face.normal ⊥
+            // cylinder axis). cap face has face.normal ‖ cylinder axis
+            // (skip — Plane). chord side has face.normal ⊥ axis but its
+            // boundary has no Arc → already filtered above (arc_params is None).
+            //
+            // axis = Arc.normal (cylinder axis direction). Side face's
+            // normal radiates outward from axis → perpendicular.
+            let normal_norm_check = normal.normalize_or_zero();
+            if normal_norm_check.length_squared() < 1e-12 { continue; }
+            let face_normal_norm = face_normal.normalize_or_zero();
+            if face_normal_norm.length_squared() < 1e-12 { continue; }
+            let face_axis_dot = face_normal_norm.dot(normal_norm_check).abs();
+            if face_axis_dot > 0.1 {
+                // face.normal nearly parallel to cylinder axis → cap face, skip.
+                continue;
+            }
 
             // Verify extrude axis is parallel to Arc normal (cylinder axis).
             let normal_norm = normal.normalize_or_zero();
