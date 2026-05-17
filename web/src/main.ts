@@ -147,6 +147,24 @@ async function main() {
     debugLog('WASM engine ready');
   }
 
+  // ADR-118 γ-7 (γ-4 component) — STEP/IGES engine pre-warm 활성 (사용자
+  // 결재 2026-05-17). Background OCCT init 으로 사용자 Import 클릭 시
+  // wait 시간 perceived 0s. Default ON, localStorage `'false'` 명시 opt-
+  // out. requestIdleCallback (5s timeout fallback setTimeout 2s) 으로
+  // initial render 영향 0.
+  //
+  // ADR-082 Drift #5 (180s+ wait) 의 perceived 본질 해소 — pre-warm
+  // 완료 후 사용자 Import 클릭 시 즉시 응답. ADR-085 Toast progress 도
+  // background init 도중 자동 표시 (사용자 인지 가능).
+  //
+  // Cross-link: ADR-118 (architectural spec), ADR-082 Drift #5,
+  // ADR-085 (perception 보존), LOCKED #43 priority #3.
+  import('./import/StepIgesPrewarm').then(({ prewarmStepIgesEngine }) => {
+    prewarmStepIgesEngine();
+  }).catch((e) => {
+    debugLog('[main] StepIgesPrewarm import failed (graceful):', e);
+  });
+
   // 2. Initialize viewport (always required)
   const viewportEl = document.getElementById('viewport');
   if (!viewportEl) throw new Error('Missing #viewport element');
