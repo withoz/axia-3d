@@ -2215,9 +2215,23 @@ export class WasmBridge {
   }
 
   /** Get hard edge line segments from DCEL topology.
-   *  Coplanar edges (angle ≤ 15°) are automatically hidden.
+   *  Coplanar edges (angle ≤ EDGE_VISIBILITY_ANGLE_DEG) are automatically
+   *  hidden. ADR-038 P23 / LOCKED #16 / LOCKED #40 §L7 smooth-group hide
+   *  도 적용 — 두 인접 face 가 같은 곡면 surface 인스턴스 (Cylinder /
+   *  Sphere / Cone / Torus) 면 angle threshold 무시하고 edge hide.
+   *
    *  Returns flat [x0,y0,z0, x1,y1,z1, ...] for THREE.LineSegments.
-   *  Returns null if WASM doesn't have this method yet (graceful fallback). */
+   *
+   *  Return value semantics (ADR-112 β-c, 사용자 결재 2026-05-17):
+   *    - `Float32Array` (non-empty)  — engine produced visible edges
+   *    - `Float32Array(0)` (length 0) — engine 명시 empty (smooth-group
+   *      hide 의 의도된 결과, e.g. sphere-only scene). Viewport 는 빈
+   *      edges 로 정상 처리하고 EdgesGeometry fallback 금지.
+   *    - `null` — engine 미사용 (WASM 미빌드, legacy fallback,
+   *      throw). Viewport 가 EdgesGeometry fallback 으로 재계산.
+   *
+   *  사후 차이의 가치: sphere-only scene 의 edges sub-step 비용
+   *  584ms → ~0ms (5-sphere 기준, 메타-원칙 #11 Heavy 500ms budget 정합). */
   getEdgeLines(): Float32Array | null {
     if (!this.engine) return null;
     if (!this.bufferCache.dirty && this.bufferCache.edgeLines) {
@@ -2225,13 +2239,15 @@ export class WasmBridge {
     }
     try {
       const lines = this.engine.get_edge_lines?.();
-      if (lines && lines.length > 0) {
-        this.bufferCache.edgeLines = lines;
-        return lines;
+      if (lines === undefined || lines === null) {
+        // WASM doesn't expose get_edge_lines — legacy fallback
+        return null;
       }
-      return null;
+      // engine 명시 결과 — empty 도 valid (smooth-group hide 의도)
+      this.bufferCache.edgeLines = lines;
+      return lines;
     } catch {
-      return null; // WASM not rebuilt yet — fallback to EdgesGeometry
+      return null; // WASM throw — fallback to EdgesGeometry
     }
   }
 

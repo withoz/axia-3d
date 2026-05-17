@@ -1203,18 +1203,40 @@ export class Viewport {
       //   그리므로 모든 각도에서 연속된 선으로 렌더. 과거 artifact 재발
       //   방지: polygonOffset 로 face 보다 약간 앞으로, depthWrite 유지,
       //   transparent:false, worldUnits:false (픽셀 굵기 고정).
+      //
+      // ── β-c (ADR-112, 사용자 결재 2026-05-17): 3-way fallback policy ──
+      //
+      // edgeLines === null         → engine 미사용 (legacy WASM / mock /
+      //                              throw) → EdgesGeometry fallback
+      //                              (느림 ~3.6 ms / 1K tris)
+      // edgeLines.length > 0       → engine 가시 edges → DCEL render
+      // edgeLines.length === 0     → engine 명시 empty (smooth-group hide
+      //                              의도된 결과, LOCKED #40 §L7) →
+      //                              edges 없이 정상 paint. EdgesGeometry
+      //                              fallback 호출 금지.
+      //
+      // 측정 evidence: sphere-only 5개 scene 의 edges sub-step 비용
+      //   584ms → ~0ms (메타-원칙 #11 Heavy 500ms budget 정합 회복).
+      // LOCKED #40 §L7 의 architectural decision 이 시각 layer 까지
+      //   명시적으로 전달 — engine 의 의도된 empty 결과를 cache 단계의
+      //   null-coalesce 으로 폐기하던 회귀 차단.
       const tEdges0 = performance.now();
-      if (edgeLines && edgeLines.length > 0) {
-        const geo = new LineSegmentsGeometry();
-        geo.setPositions(edgeLines);
-        const mat = this._makeMeshEdgeMaterial();
-        const obj = new LineSegments2(geo, mat);
-        obj.name = 'dcel-edges';
-        obj.visible = this._edgeVisible;
-        obj.renderOrder = 1;
-        this._meshEdgeMaterials.push(mat);
-        this.meshGroup.add(obj);
+      if (edgeLines !== null && edgeLines !== undefined) {
+        // engine 명시 결과 (empty 가능) — DCEL path
+        if (edgeLines.length > 0) {
+          const geo = new LineSegmentsGeometry();
+          geo.setPositions(edgeLines);
+          const mat = this._makeMeshEdgeMaterial();
+          const obj = new LineSegments2(geo, mat);
+          obj.name = 'dcel-edges';
+          obj.visible = this._edgeVisible;
+          obj.renderOrder = 1;
+          this._meshEdgeMaterials.push(mat);
+          this.meshGroup.add(obj);
+        }
+        // length === 0 → 의도된 empty (smooth-group hide), no-op
       } else {
+        // engine 미사용 (WASM 미빌드 / mock / throw) → EdgesGeometry 재계산
         const edgesGeo = new THREE.EdgesGeometry(geometry, 30);
         const positions = edgesGeo.getAttribute('position');
         const arr = new Float32Array(positions.count * 3);
