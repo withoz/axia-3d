@@ -752,3 +752,76 @@ ADR-101 §2 시연 (2026-05-14):
 > "사용자가 두 원 (반지름 5, center distance 4 — lens region 존재) 을 그렸을 때 분할 안 됨"
 
 → **2026-05-15 closure**: 두 원 (Path B 또는 Legacy 또는 RECT) 어느 방식으로 그려도 partial overlap 시 자동 3 sub-face. ADR-021 P7 "닫힌 엣지에는 면이 생성되어야 한다" 의 가장 강한 의미 (coplanar partial overlap → 3 sub-face) 가 사용자 시연 가능.
+
+---
+
+## Amendment 10 — 메타-원칙 #15 Cross-cut HARD Flag Enforcement (2026-05-16)
+
+**Status**: ✅ Closed (engine fix + helper API + 3 회귀, base = origin/main)
+**Trigger**: ADR-101 Amendment 9 (PR #64) 의 §A9.4 cross-cut audit inventory — 메타-원칙 #15 위반 4 함수 (`split_face_by_chain` / `split_face_case_b/c/d` / `boolean.split_faces_by_intersections`) HARD flag 미부여 발견. 본 Amendment 10 으로 strict enforcement.
+
+### A10.1 canonical anchor (메타-원칙 #15)
+
+> **"동일한 분할 연산은 동일한 topological contract — 빠르고, 신속하고, 정확하게."**
+> (canonical, 사용자 결재 2026-05-16, ADR-101 Amendment 9 §A9.6)
+
+모든 split-type 함수 (= `Mesh::split_face` / `split_face_by_chain` / `split_face_case_b/c/d` / `auto_intersect_coplanar` / `boolean.split_faces_by_intersections`) 가 split-induced edges 에 `HeFlags::HARD` 부여 동일 contract. Render path (`export_edge_lines_with_map` mesh.rs:5384-5404) 의 coplanar Plane edge hide (LOCKED #16 K-ε hotfix) 와 split 의도의 충돌은 split-side 의 HARD 부여로 명시 해소.
+
+### A10.2 Helper API (canonical, mesh.rs)
+
+본 Amendment 가 추가한 2개 public helper — 향후 모든 split-type 함수의 reference pattern.
+
+**`Mesh::mark_chain_edges_hard(&mut self, chain: &[VertId])`** (mesh.rs:2557):
+- `chain.windows(2)` 으로 pair iterator
+- 각 pair 의 `find_edge(v0, v1)` 결과 EdgeId 에 HARD 부여
+- 모든 radial twin HEs 일괄 (mesh.rs:5364-5378 패턴 답습)
+- 안전 OR 패턴 (`set_flags(flags() | HARD)`, mesh.rs:2541 답습)
+
+**`Mesh::mark_edges_hard(&mut self, edges: &[EdgeId])`**:
+- explicit EdgeId list 직접 입력 (chain 만들기 어려운 case_b/c/d/boolean 용)
+
+**`Mesh::mark_single_edge_hard` (private)** — 두 public helper 의 공통 internal.
+
+### A10.3 Cross-cut fix (4 함수 + 1 reference)
+
+| 함수 | Fix 위치 | Helper 사용 | 회귀 |
+|---|---|---|---|
+| `Mesh::split_face` (mesh.rs:3817) | 변경 없음 (canonical reference, 이미 정합) | inline (line 4068-4069) | 기존 회귀 유지 |
+| `Mesh::split_face_by_chain` (face_split.rs:514) | line 748 직후 추가 | `mark_chain_edges_hard(chain_verts)` | **`adr101_amendment10_split_face_by_chain_marks_hard`** |
+| `split_face_case_b` (face_split.rs:868) | new_edges build 직후 추가 | `mark_edges_hard(&new_edges)` | (cross-cut helper coverage) |
+| `split_face_case_c` (face_split.rs:1162) | new_edges push 직후 추가 | `mark_edges_hard(&new_edges)` | (cross-cut helper coverage) |
+| `split_face_case_d` (face_split.rs:1397) | new_edges push 직후 추가 | `mark_edges_hard(&new_edges)` | (cross-cut helper coverage) |
+| `boolean.split_faces_by_intersections` (boolean.rs:446) | remove_face 직후, `find_shared_edge_between_faces` cartesian | `mark_edges_hard(&shared_edges)` | (cross-cut helper coverage) |
+
+### A10.4 회귀 누적 (+3 axia-geo)
+
+- `adr101_amendment10_helper_mark_chain_edges_hard` — helper 단위, chain edges HARD 부여 + scope creep 차단 (untouched edges 미부여)
+- `adr101_amendment10_helper_mark_edges_hard` — helper 단위, explicit EdgeId list 입력
+- `adr101_amendment10_split_face_by_chain_marks_hard` — integration, diagonal chain split → chain edge HARD
+
+axia-geo: 1318 → **1321 PASS**. axia-core: 296 유지 (영향 없음 — additive only). 절대 #[ignore] 금지 3/3 준수.
+
+### A10.5 Lock-ins (L-A10-1 ~ L-A10-6)
+
+- **L-A10-1** Helper canonical pattern — 향후 모든 split-type 함수 신설 / 수정 시 `mark_chain_edges_hard` 또는 `mark_edges_hard` 호출 강제
+- **L-A10-2** Safe OR pattern — `set_flags(flags() | HARD)` 으로 기존 flags 보존 (mesh.rs:2541 답습)
+- **L-A10-3** Radial twin walk — manifold 가정 보장 안 함, full radial chain enumeration (mesh.rs:5364-5378)
+- **L-A10-4** Additive only — 기존 회귀 자산 0 변경 (axia-geo 1318 그대로 유지), 새 회귀 +3
+- **L-A10-5** Boolean split = shared edges only — 외부 boundary 는 face_normals.len()==1 → 자동 draw (HARD 부여 불필요, scope 정확)
+- **L-A10-6** `Mesh::split_face` canonical reference — 변경 없음, 이미 메타-원칙 #15 정합 (mesh.rs:4068-4069)
+
+### A10.6 Out-of-scope (deferred)
+
+- **새 split-type 함수 추가 시 enforcement**: 향후 ADR / Amendment 가 새 split 함수 추가 시 본 helper 호출 강제 — 개별 ADR scope 외, 메타-원칙 #15 강제로 cover
+- **Visual baseline (LOCKED #40 / ADR-077) 의 split shared edges 시각**: 별도 visual baseline 확장
+- **Boolean intersection 의 chain edges 정확 식별** (현재 shared edges between new_faces 만 — non-shared cut edge 처리 future trigger)
+- **HARD flag 의 SOFT toggle UI**: future user-facing UX (e.g., merge sub-faces 의도 시 HARD 제거) — 별도 ADR
+
+### A10.7 Cross-link
+
+- **ADR-101 Amendment 9 (PR #64) §A9.4 cross-cut audit inventory** — 본 Amendment 10 의 trigger (위반 4 함수 발견)
+- **ADR-101 Amendment 9 §A9.6 메타-원칙 #15** — 본 Amendment 의 canonical anchor
+- **`Mesh::split_face` (mesh.rs:4068-4069)** — canonical reference, 모든 split-type 함수의 모범
+- **LOCKED #16 (ADR-038 K-ε hotfix)** — coplanar Plane edge hide 정책 (보존). split 의도와의 충돌은 HARD 부여로 명시 해소
+- **메타-원칙 #14** — "면은 닫힌 경계로부터 유도된다" — split-induced edges 가 새 face boundary 의 일부, 시각 일관성 강제
+- **LOCKED #1 / #12** — face 합성 / 분할 정책 유지 (additive only, 영향 0)
