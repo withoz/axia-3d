@@ -2742,6 +2742,82 @@ defer 검증 / latest-wins dedup / `{indirect:true}` 보존 / dispose guard
 - PR #73 β (Lazy syncMesh via RAF — 답습 패턴 직계 source)
 - LOCKED #40 (render chord_tol — baseline 보존)
 
+### 46. ADR-112 Edges Empty 명시 처리 / EdgesGeometry Fallback Null Only (β-c closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "승인합니다" — β-c 묶음 (β-a + β-b) 진행. LOCKED #44 "Complete
+> Meaning per Merge" 정합으로 single PR 의미 단위 완결.
+
+ADR-111 α (BVH defer) closure 후 사용자 결재 ζ (α 시연 + β audit) 의
+β audit 결과 — *다음* 가장 큰 비용 발견. `engine.get_edge_lines()` 의
+명시 empty 결과 (smooth-group hide, LOCKED #40 §L7) 가 cache layer 의
+null-coalesce 으로 폐기되어 `THREE.EdgesGeometry(geometry, 30)` fallback
+(584ms @ 5-sphere) 으로 잘못 라우팅되는 회귀 차단.
+
+**Lock-ins (8개, canonical for engine→view layer semantic preservation)**:
+- L-112-1 `Float32Array(0)` 통과 (β-a — WasmBridge.getEdgeLines empty
+  → null-coalesce 제거)
+- L-112-2 Viewport 3-way edges fallback policy (β-b — null/undefined =
+  fallback / length>0 = DCEL / length===0 = no-op)
+- L-112-3 LOCKED #40 §L7 의 architectural decision 시각 layer 전달
+- L-112-4 Legacy fallback 보존 (graceful — WASM 미빌드 / mock / throw)
+- L-112-5 ADR-038 P23 / LOCKED #40 §L7 회귀 0
+- L-112-6 Caching invariant 유지 (empty Float32Array 도 truthy cache hit)
+- L-112-7 ADR-046 P31 #4 additive only (API surface UNCHANGED)
+- L-112-8 메타-원칙 #11 정합 (syncMesh 33ms budget — 5-sphere 713ms →
+  35ms = 95% 감소)
+
+**측정 매트릭스 (sphere-only scene)**:
+
+| Spheres | tris | edgesMs before | edgesMs after | totalSyncMs before | totalSyncMs after |
+|---|---|---|---|---|---|
+| 1 | 32K | 78 ms | **0 ms** | 90 ms | **12 ms** |
+| 2 | 64K | 287 ms | **0 ms** | 305 ms | **15 ms** |
+| 3 | 96K | 310 ms | **0 ms** | 333 ms | **22 ms** |
+| 4 | 129K | 461 ms | **0 ms** | 489 ms | **31 ms** |
+| **5** | 161K | **584 ms** | **0 ms** | **713 ms** | **35 ms** |
+
+**→ 5-sphere 기준 syncMesh 20× faster** (713ms → 35ms). 메타-원칙 #11
+syncMesh 33ms budget 거의 도달.
+
+**회귀 누적 (β-c-3 ~ β-c-6)**: vitest **+13** (WasmBridge +5 β-c +
+Viewport.edges-policy +8). 합계 1838 → **1851 PASS**, 절대 #[ignore]
+금지 13/13 준수.
+
+**Lessons (canonical for cross-layer semantic preservation ADRs)** —
+ADR-112 §6:
+- L1 Empty 와 null 의 의미 분리 (architectural correctness) — "function
+  의 empty result" 와 "function 미실행" 은 의미적으로 다름. cache layer
+  의 null-coalesce 가 두 의미 통합하면서 architectural information 손실
+  회귀.
+- L2 α 의 evidence 가 β 의 anchor (Path Z atomic 답습) — "측정 → fix
+  → 측정 → 다음 fix" atomic 체인이 각 step 의 architectural correctness
+  확보. 큰 cost 흡수 시 다음 가장 큰 cost 자연 노출 → atomic 분리.
+- L3 LOCKED 정책의 cross-layer 정합 강제 — LOCKED #40 §L7 (engine
+  smooth-group hide) 의 architectural decision 이 cache layer 의 null-
+  coalesce 에서 무력화되던 회귀 발견. LOCKED 정책의 architectural decision
+  은 모든 layer 에서 보존되는지 별도 audit 권장.
+- L4 Complete Meaning per Merge (LOCKED #44) 정합 패턴 — β-a + β-b 가
+  같은 의미 단위 (edges fallback policy) → 1 PR. 둘 중 1개만 merge 시
+  invariant violation. LOCKED #44 의 의미 단위 분할 기준 정확 적용.
+
+**후속 트랙 (모두 별도 ADR)**:
+- γ — `bridgeQueries` + `fullUpdate` 나머지 sub-step 정리 (잔존 35ms
+  → 33ms budget 완전 정합)
+- δ — ADR-111 β (Delta-buffer extension to primitives, multi-week
+  atomic)
+- ε — Engine `get_edge_lines` ok-envelope (architectural cleanup,
+  Rust `Result<Vec<f32>, EdgeError>` enum 분리)
+
+**Cross-link**:
+- ADR-111 α (BVH defer — 직계 trigger source)
+- LOCKED #40 §L7 (smooth-group hide architectural decision)
+- LOCKED #44 (Complete Meaning per Merge — β-a + β-b 묶음 정합)
+- ADR-038 P23 (surface-aware normals — smooth-group source)
+- 메타-원칙 #11 (Latency Budget First — syncMesh 33ms)
+- 메타-원칙 #6 (Preventive over Curative — 측정 우선)
+- ADR-046 P31 #4 (additive only — API surface UNCHANGED)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

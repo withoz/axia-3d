@@ -835,6 +835,75 @@ describe('WasmBridge', () => {
     });
   });
 
+  // ── β-c (ADR-112, 사용자 결재 2026-05-17) ──
+  // empty edges from engine 이 의도된 결과 (smooth-group hide, LOCKED #40
+  // §L7) 임을 명시 처리. 이전엔 empty array → null → EdgesGeometry
+  // fallback (584ms @ 5-sphere) 회귀. 본 패치: empty → Float32Array(0)
+  // 그대로 통과시켜 Viewport 가 빈 edges 로 정상 처리.
+  describe('β-c — getEdgeLines empty handling (ADR-112)', () => {
+    // Override get_edge_lines DIRECTLY on bridge.engine instance — because
+    // MockAxiaEngine.constructor copies mockEngine props at instantiation,
+    // reassigning mockEngine.get_edge_lines AFTER construction does NOT
+    // affect the bridge's engine reference.
+    let origGetEdgeLines: any;
+    beforeEach(() => {
+      origGetEdgeLines = (bridge as any).engine.get_edge_lines;
+      // Clear cache so fresh fetch
+      (bridge as any).bufferCache.dirty = true;
+      (bridge as any).bufferCache.edgeLines = null;
+    });
+    afterEach(() => {
+      (bridge as any).engine.get_edge_lines = origGetEdgeLines;
+    });
+
+    it('engine 명시 empty (length 0) → Float32Array(0) 반환 (NOT null)', () => {
+      (bridge as any).engine.get_edge_lines = vi.fn().mockReturnValue(new Float32Array(0));
+      const lines = bridge.getEdgeLines();
+      expect(lines).toBeInstanceOf(Float32Array);
+      expect(lines).not.toBeNull();
+      expect(lines!.length).toBe(0);
+    });
+
+    it('engine 미사용 (undefined) → null 반환 (legacy fallback)', () => {
+      (bridge as any).engine.get_edge_lines = undefined;
+      const lines = bridge.getEdgeLines();
+      expect(lines).toBeNull();
+    });
+
+    it('engine throw → null 반환 (graceful)', () => {
+      (bridge as any).engine.get_edge_lines = vi.fn().mockImplementation(() => {
+        throw new Error('WASM mismatch');
+      });
+      const lines = bridge.getEdgeLines();
+      expect(lines).toBeNull();
+    });
+
+    it('engine non-empty → Float32Array 통과', () => {
+      const data = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]);
+      (bridge as any).engine.get_edge_lines = vi.fn().mockReturnValue(data);
+      const lines = bridge.getEdgeLines();
+      expect(lines).toBeInstanceOf(Float32Array);
+      expect(lines!.length).toBe(12);
+      expect(Array.from(lines!)).toEqual(Array.from(data));
+    });
+
+    it('cache: dirty=false 후 두 번째 호출이 cache hit (engine 0회 추가 호출)', () => {
+      const spy = vi.fn().mockReturnValue(new Float32Array(0));
+      (bridge as any).engine.get_edge_lines = spy;
+      // First call: dirty=true → fetch → cache stored
+      const a = bridge.getEdgeLines();
+      expect(spy).toHaveBeenCalledTimes(1);
+      // Now mark cache as clean (mimics what getMeshBuffers does)
+      (bridge as any).bufferCache.dirty = false;
+      // Second call: dirty=false AND cache truthy → cache hit
+      const b = bridge.getEdgeLines();
+      // empty Float32Array 도 truthy → cache 정상 활용
+      expect(b).toBe(a);
+      // engine 추가 호출 0
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('snapshot', () => {
     it('exportSnapshot returns Uint8Array', () => {
       const data = bridge.exportSnapshot();
