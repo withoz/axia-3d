@@ -5530,11 +5530,31 @@ impl Scene {
 
                 if is_not_yet_supported {
                     if let Some(dist) = fallback_dist {
+                        // ADR-109 π-β — capture profile normal BEFORE
+                        // fallback (push_pull may deactivate base face).
+                        let profile_normal = self.mesh.faces.get(face_id)
+                            .map(|f| f.normal())
+                            .unwrap_or(DVec3::Z);
+
                         // Cancel current transaction (no state change yet)
                         // and route to exec_push_pull which manages its
                         // own transaction.
                         self.transactions.cancel();
-                        return self.exec_push_pull(face_id, dist);
+                        let result = self.exec_push_pull(face_id, dist);
+
+                        // ADR-109 π-β — Post-process: promote Cylinder
+                        // surface to Arc-extrude side faces. Mixed boundary
+                        // (Arc + chord) fallback path 의 자연 enforcement.
+                        // 사용자 시연 "원통과 반원통 성질이 다름" root cause fix.
+                        let extrude_axis = profile_normal * dist.signum();
+                        let candidates: Vec<axia_geo::FaceId> = self.mesh.faces.iter()
+                            .filter(|(_, f)| f.is_active())
+                            .map(|(id, _)| id)
+                            .collect();
+                        let _promoted = self.mesh
+                            .promote_arc_side_faces_to_cylinder(&candidates, extrude_axis);
+
+                        return result;
                     }
                 }
 
@@ -12635,6 +12655,157 @@ mod tests {
                 other
             ),
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-109 π-β — Arc Extrusion → Cylinder Surface Promotion
+    //
+    // Mixed boundary (Arc + chord) extrude 의 Q3 fallback (legacy push_pull)
+    // 후 post-process 가 Arc side faces 에 Cylinder surface 부여 검증.
+    //
+    // 사용자 시연 evidence (2026-05-16): 반원통 (Arc + chord + extrude)
+    // 결과 16 quad sides 모두 Plane → "원통과 반원통 성질이 다름" 결함.
+    // 본 회귀 자산이 Cylinder surface 부여 후 smooth-group hide 자연 정합
+    // 검증.
+    // ════════════════════════════════════════════════════════════════════
+
+    // Helper — build half-cylinder profile (Arc + chord) + Plane surface.
+    fn build_adr109_half_cylinder_profile(scene: &mut Scene) -> axia_geo::FaceId {
+        let mat = MaterialId::new(0);
+        // 16-segment half-circle on XY plane (normal +Z), radius=5, center=origin.
+        // Arc: theta 0 → π. Chord: (-5, 0, 0) → (5, 0, 0).
+        let n_segs = 16;
+        let radius = 5.0;
+        let mut verts = Vec::new();
+        for i in 0..=n_segs {
+            let theta = (i as f64) * std::f64::consts::PI / (n_segs as f64);
+            let x = radius * theta.cos();
+            let y = radius * theta.sin();
+            verts.push(scene.mesh.add_vertex(DVec3::new(x, y, 0.0)));
+        }
+        // build face (CCW): all verts in order (arc + implicit chord on close)
+        let face = scene.mesh.add_face(&verts, mat).expect("half-cyl face");
+        // attach Plane surface
+        scene.mesh.faces[face].set_surface(Some(axia_geo::AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-radius, radius),
+            v_range: (-radius, radius),
+        }));
+        // attach Arc curves to all arc segments (Layer H Hybrid — N polygon
+        // edges with Arc curve metadata). Chord edge (verts[n_segs] → verts[0])
+        // remains None.
+        for i in 0..n_segs {
+            let v_a = verts[i];
+            let v_b = verts[i + 1];
+            if let Some(eid) = scene.mesh.find_edge(v_a, v_b) {
+                if let Some(edge) = scene.mesh.edges.get_mut(eid) {
+                    let theta_a = (i as f64) * std::f64::consts::PI / (n_segs as f64);
+                    let theta_b = ((i + 1) as f64) * std::f64::consts::PI / (n_segs as f64);
+                    edge.set_curve(Some(axia_geo::AnalyticCurve::Arc {
+                        center: DVec3::ZERO,
+                        radius,
+                        normal: DVec3::Z,
+                        basis_u: DVec3::X,
+                        start_angle: theta_a,
+                        end_angle: theta_b,
+                    }));
+                }
+            }
+        }
+        face
+    }
+
+    /// Core regression — half-cylinder extrude promotes Cylinder surface to
+    /// Arc side faces.
+    #[test]
+    fn adr109_pi_beta_arc_extrude_promotes_cylinder() {
+        use axia_geo::AnalyticSurface;
+        let mut scene = Scene::new();
+        let profile = build_adr109_half_cylinder_profile(&mut scene);
+
+        // Extrude — Q3 fallback path (Mixed boundary → legacy push_pull +
+        // ADR-109 π-β post-process).
+        let result = scene.execute(Command::CreateSolid {
+            face_id: profile,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 8.0 },
+        });
+        // Q3 fallback returns PushPullDone, not SolidCreated.
+        assert!(matches!(result,
+            CommandResult::PushPullDone { .. } | CommandResult::SolidCreated { .. }
+        ), "expected PushPullDone (Q3 fallback) or SolidCreated, got {:?}", result);
+
+        // Count Cylinder-surface faces — ADR-109 post-process must promote
+        // ≥1 face (16 Arc side faces).
+        let cylinder_face_count = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .filter(|(_, f)| matches!(f.surface(), Some(AnalyticSurface::Cylinder { .. })))
+            .count();
+        assert!(cylinder_face_count >= 1,
+            "ADR-109 π-β: at least 1 Cylinder surface face after Arc extrude post-process, got {}",
+            cylinder_face_count);
+    }
+
+    /// Regression guard — full Path B cylinder unchanged (already has
+    /// Cylinder via canonical path, post-process L1 scope 정확).
+    #[test]
+    fn adr109_pi_beta_full_cylinder_unchanged() {
+        use axia_geo::AnalyticSurface;
+        let mut scene = Scene::new();
+        // drawCircleAsCurve → Path B canonical
+        let _ = scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 5.0,
+        });
+        // Find the closed-curve face (first active face)
+        let circle_face = scene.mesh.faces.iter()
+            .find(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .expect("circle face");
+
+        let _ = scene.execute(Command::CreateSolid {
+            face_id: circle_face,
+            mode: axia_geo::CreateSolidMode::Extrude { distance: 8.0 },
+        });
+
+        // Full cylinder via Path A or Path B — both must have ≥1 Cylinder
+        // surface face (Path A = N quad sides all Cylinder, Path B = 1
+        // single Cylinder side). 본 test 는 ADR-109 post-process 가 기존
+        // Cylinder canonical 흐름을 흔들지 않음 검증 (regression guard).
+        let cylinder_count = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .filter(|(_, f)| matches!(f.surface(), Some(AnalyticSurface::Cylinder { .. })))
+            .count();
+        assert!(cylinder_count >= 1,
+            "Full cylinder (Path A or B) must have ≥1 Cylinder side face, got {}",
+            cylinder_count);
+    }
+
+    /// Helper visibility — Mesh::promote_arc_side_faces_to_cylinder
+    /// direct unit (axis parallel check guards non-Arc faces).
+    #[test]
+    fn adr109_pi_beta_helper_skips_non_arc_faces() {
+        use axia_geo::AnalyticSurface;
+        let mut scene = Scene::new();
+        let mat = MaterialId::new(0);
+        // Plain square (no Arc curve attached).
+        let v00 = scene.mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v10 = scene.mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v11 = scene.mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v01 = scene.mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let face = scene.mesh.add_face(&[v00, v10, v11, v01], mat).expect("face");
+
+        // Call helper directly — face has no Arc boundary → no promotion.
+        let promoted = scene.mesh.promote_arc_side_faces_to_cylinder(
+            &[face],
+            DVec3::Z,
+        );
+        assert_eq!(promoted, 0,
+            "Helper must skip non-Arc faces (L3 scope, chord/Line side faces unchanged)");
+        assert!(scene.mesh.faces[face].surface().is_none(),
+            "Non-Arc face surface unchanged");
     }
 
     // ════════════════════════════════════════════════════════════════════
