@@ -140,3 +140,48 @@ describe('ADR-082 C-γ — opencascade.js wrapper drift discovery', () => {
     expect(importerSrc).toContain('ADR-082 C-γ wrapper drift #1 fix');
   });
 });
+
+describe('ADR-121 α — Finding #2 fix (사용자 시연 evidence 2026-05-17)', () => {
+  // Critical finding from user demo (PR #82 post-merge):
+  //   [18:31:37] Assertion failed: bad export type for `_ZTI13TDF_Attribute`: undefined
+  //   [18:31:37] Unhandled promise: abort(...)
+  //
+  // Root cause: `TDF_Attribute` (TKLCAF) 가 ocVisualApplication 에만 포함,
+  // 우리 libs 에 미로딩. ocDataExchangeBase 의 XCAF (Extended CAF for STEP
+  // color/layer) 가 TDF_Attribute 참조 시 fail.
+  //
+  // Fix: libs 에 mod.ocVisualApplication 추가.
+
+  it('libs 에 ocVisualApplication 포함 (TDF_Attribute 의존성 해결)', () => {
+    const importerSrc = readFileSync(
+      resolve('src/import/StepIgesImporter.ts'),
+      'utf-8',
+    );
+    // libs array 에 ocVisualApplication 명시 포함
+    expect(importerSrc).toContain('mod.ocVisualApplication');
+    // Fix 주석 명시 (LOCKED 거버넌스)
+    expect(importerSrc).toContain('ADR-121');
+  });
+
+  it('libs 4 base + ocVisualApplication 5개 (lib 추가 후 5 lib 정합)', () => {
+    const importerSrc = readFileSync(
+      resolve('src/import/StepIgesImporter.ts'),
+      'utf-8',
+    );
+    // 5 libs 모두 present
+    expect(importerSrc).toContain('mod.ocCore');
+    expect(importerSrc).toContain('mod.ocModelingAlgorithms');
+    expect(importerSrc).toContain('mod.ocDataExchangeBase');
+    expect(importerSrc).toContain('mod.ocDataExchangeExtra');
+    expect(importerSrc).toContain('mod.ocVisualApplication');
+  });
+
+  it('Finding #2 root cause comment 명시 (TDF_Attribute / TKLCAF)', () => {
+    const importerSrc = readFileSync(
+      resolve('src/import/StepIgesImporter.ts'),
+      'utf-8',
+    );
+    expect(importerSrc).toContain('TDF_Attribute');
+    expect(importerSrc).toContain('TKLCAF');
+  });
+});

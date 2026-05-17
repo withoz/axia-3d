@@ -3324,6 +3324,90 @@ bundle 0MB 증가 strict 유지).
 - LOCKED #43 priority #3 (STEP timing 단축) — 첫 sub-step closure
 - LOCKED #44 (Complete Meaning per Merge — α/β atomic separation)
 
+### 53. ADR-121 STEP pre-warm lib fix + Path B analytic face area (γ findings closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 시연 evidence, 2026-05-17)**:
+> "추천: γ (α + β 묶음) 으로 승인합니다"
+
+ADR-087 K-ζ canonical 사용자 시연 게이트가 11+ PR architectural closure
+후 **2개 실제 findings 발견** — pre-warm silent failure (Critical) +
+Path B face area UX bug. 즉시 atomic closure (γ bundle).
+
+**α — Finding #2 (Critical, production-blocking)**:
+- Error: `Assertion failed: bad export type for _ZTI13TDF_Attribute: undefined`
+- Root cause: `ocVisualApplication` (TKLCAF 포함) lib 누락
+- Fix: libs array 에 `mod.ocVisualApplication` 추가 (1 line)
+- Impact: ADR-119 γ-7 pre-warm silent failure 해소, STEP import
+  production-ready
+
+**β — Finding #1 (UX completeness)**:
+- Bug: XIA Inspector "면적 0.0 m²" — Path B sphere face area = 0
+- Root cause: `Mesh::face_area` polygon-only (Newell 미충족 for 1-vertex
+  boundary). Path B = 1 anchor + 1 self-loop → polygon path fail.
+- Fix: `face_area` polygon-first + `analytic_face_area` fallback (5
+  AnalyticSurface variants: Plane / Cylinder / Sphere / Cone / Torus)
+- Verification: 4πr² (sphere) / 2πr·h (cylinder) / 4π²Rr (torus)
+  closed-form 일치 (1-5% 정확도)
+
+**Lock-ins (10개)**:
+- L-121-α-1~3 ocVisualApplication 추가 + source-level regression test
+  + ADR-119 silent failure 해소
+- L-121-β-1~4 polygon-first + analytic-fallback 패턴, 5 variants
+  명시, polygon regression guard, closed-form verification
+- L-121-1 ADR-087 K-ζ canonical 시연 게이트 가치 정량 증명
+- L-121-2 ADR-046 P31 #4 additive only (face_area signature UNCHANGED)
+- L-121-3 ADR-035 P20.C #2 (visualApplication lazy chunk)
+
+**Analytic area formulas (β 신규)**:
+
+| Surface | Formula |
+|---|---|
+| Plane | `u_extent × v_extent` |
+| Cylinder | `radius × u_extent × v_extent` (lateral) |
+| Sphere | `r² × u_extent × \|sin(v_max) - sin(v_min)\|` (latitude band) |
+| Cone | `u_extent × tan(α) × (v_max² - v_min²) / 2` (from apex) |
+| Torus | `R·r·u·v + r²·u·\|sin(v_max) - sin(v_min)\|` (first-order) |
+
+**회귀 누적**: axia-geo **+6** (β area tests) + vitest **+3** (α libs
+verification). 합계 **+9**, 절대 #[ignore] 금지 9/9 준수. axia-geo
+1386 → **1392 PASS**, vitest 1905 → **1908 PASS**.
+
+**사용자 facing 변화**:
+- STEP/IGES Import: silent failure → production-ready (180s+ wait 후
+  실 import 동작)
+- XIA Inspector area display: 0.0 m² → 정확한 analytic value (sphere
+  r=5 → 314.16 m², cylinder side r=5 h=10 → 314.16 m², 등)
+
+**Lessons (canonical)**:
+- L1 사용자 시연 게이트 architectural value 정량 증명 — 11+ PR closure
+  후 1분 시연이 2 findings 발견 (Test 자산만으로 회귀 보장 불가
+  canonical evidence)
+- L2 Polygon-first + analytic-fallback pattern (Path B 자연 지원, 다른
+  polygon-based functions 동일 패턴 확장 가능 — perimeter / centroid /
+  bbox)
+- L3 Vendor lib symbol-level audit 가치 — source-level regression test
+  가 minimum guard (opencascade.js / rhino3dm / three.js upgrade 시
+  필수)
+- L4 γ 묶음 (Critical + UX) atomic closure — *trigger 동일성* +
+  *user-facing 의미* 가 묶음 결정 기준
+
+**후속 트랙 (별도 ADR per LOCKED #44)**:
+- γ NURBS-class surfaces analytic area (BezierPatch / BSpline / NURBS /
+  RectangularTrimmed — numerical integration)
+- δ XIA Inspector area display 정밀도 (소수점 / 단위 변환 UX)
+- ε ADR-120 priority #4 진입 결재 (G / D / A / E path 선택)
+
+**Cross-link**:
+- ADR-087 K-ζ canonical — 본 ADR trigger pattern
+- ADR-119 γ-7 STEP pre-warm — α silent failure hotfix
+- ADR-082 C-ε wrapper drift series — α 는 #4 의 자연 후속
+- ADR-031 Phase D (AnalyticSurface infra) — β analytic_face_area source
+- ADR-104 family (Path B primitives) — β actual carrier
+- ADR-035 P20.C #2 (initial bundle 0MB strict)
+- ADR-046 P31 #4 (additive only)
+- LOCKED #43 priority #3 (STEP timing) — α 는 #3 의 hotfix
+- LOCKED #44 (Complete Meaning per Merge — γ 묶음)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

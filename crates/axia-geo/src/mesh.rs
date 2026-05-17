@@ -6273,6 +6273,27 @@ impl Mesh {
         total / 6.0
     }
 
+    /// Compute face area (polygon Newell + ADR-121 β analytic fallback).
+    ///
+    /// **ADR-121 β fix (사용자 시연 evidence 2026-05-17)**: Path B
+    /// faces (1 anchor + 1 self-loop edge with `AnalyticCurve`) 는
+    /// outer loop verts 가 1개 → Newell formula 미충족 → area = 0
+    /// (XIA Inspector "면적 0.0 m²" 사용자 facing bug).
+    ///
+    /// 본 fix: face 가 `AnalyticSurface` 부여된 경우, surface kind +
+    /// uv_range 로 analytic 면적 계산. polygon path fallback 유지.
+    ///
+    /// Analytic formulas:
+    /// - Plane: u_extent × v_extent (rectangular range)
+    /// - Cylinder: radius × u_extent × v_extent (lateral, annulus)
+    /// - Sphere: radius² × u_extent × (sin(v_max) - sin(v_min))
+    ///   (latitude-band area)
+    /// - Cone (apex degenerate): u_extent × tan(α) × v_max² / 2
+    ///   (lateral, from apex)
+    /// - Torus: R × r × u_extent × v_extent (first-order approximation)
+    ///
+    /// Cross-link: ADR-104 family (Path B primitives), ADR-031 Phase D
+    /// (AnalyticSurface infra), ADR-121 (Finding #1 closure).
     pub fn face_area(&self, face_id: FaceId) -> f64 {
         let f = match self.faces.get(face_id) {
             Some(f) if f.is_active() => f,
@@ -6284,9 +6305,67 @@ impl Mesh {
             Ok(v) => v,
             Err(_) => return 0.0,
         };
-        match self.newell_raw(&verts) {
-            Some(n) => n.length() * 0.5,
-            None => 0.0,
+
+        // Try polygon Newell first (≥3 verts).
+        if verts.len() >= 3 {
+            if let Some(n) = self.newell_raw(&verts) {
+                return n.length() * 0.5;
+            }
+        }
+
+        // ADR-121 β — analytic fallback for Path B faces (self-loop
+        // boundary, verts.len() < 3).
+        if let Some(surface) = f.surface() {
+            return Self::analytic_face_area(surface);
+        }
+
+        0.0
+    }
+
+    /// ADR-121 β — Compute analytic area from `AnalyticSurface` variant
+    /// using uv_range parameters. Independent helper for testability.
+    fn analytic_face_area(surface: &crate::surfaces::AnalyticSurface) -> f64 {
+        use crate::surfaces::AnalyticSurface;
+        match surface {
+            AnalyticSurface::Plane { u_range, v_range, .. } => {
+                let du = (u_range.1 - u_range.0).abs();
+                let dv = (v_range.1 - v_range.0).abs();
+                du * dv
+            }
+            AnalyticSurface::Cylinder { radius, u_range, v_range, .. } => {
+                // Lateral area of cylinder section: radius × u_extent (arc length) × height
+                let du = (u_range.1 - u_range.0).abs();
+                let dv = (v_range.1 - v_range.0).abs();
+                radius * du * dv
+            }
+            AnalyticSurface::Sphere { radius, u_range, v_range, .. } => {
+                // Sphere area latitude band: ∫∫ r² cos(v) du dv
+                //   = r² × u_extent × (sin(v_max) - sin(v_min))
+                let du = (u_range.1 - u_range.0).abs();
+                let dv_sin = v_range.1.sin() - v_range.0.sin();
+                radius * radius * du * dv_sin.abs()
+            }
+            AnalyticSurface::Cone { half_angle, u_range, v_range, .. } => {
+                // Cone lateral area from apex (v=0): ∫∫ |v| tan(α) du dv
+                //   = u_extent × tan(α) × (v_max² - v_min²) / 2
+                let du = (u_range.1 - u_range.0).abs();
+                let v0 = v_range.0;
+                let v1 = v_range.1;
+                let v_sq_diff = (v1 * v1 - v0 * v0).abs();
+                du * half_angle.tan() * v_sq_diff * 0.5
+            }
+            AnalyticSurface::Torus { major_radius, minor_radius, u_range, v_range, .. } => {
+                // Torus area first-order: ∫∫ (R + r·cos(v)) · r du dv
+                //   = R·r·u·v + r²·u·(sin(v_max) - sin(v_min))
+                let du = (u_range.1 - u_range.0).abs();
+                let dv = (v_range.1 - v_range.0).abs();
+                let dv_sin = v_range.1.sin() - v_range.0.sin();
+                major_radius * minor_radius * du * dv
+                    + minor_radius * minor_radius * du * dv_sin.abs()
+            }
+            // BezierPatch / BSplineSurface / NURBSSurface / RectangularTrimmedSurface:
+            // analytic area requires numerical integration. Defer to future ADR.
+            _ => 0.0,
         }
     }
 
@@ -8367,6 +8446,110 @@ mod tests {
         let fid = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
         let area = mesh.face_area(fid);
         assert!((area - 6.0).abs() < 1e-9, "expected area 6.0 got {}", area);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  ADR-121 β — Path B analytic surface face area
+    //  사용자 시연 evidence (2026-05-17): XIA Inspector 면적 0.0 m² bug
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr121_path_b_sphere_face_area_non_zero() {
+        // Sphere Path B = 2 hemisphere faces. Each face must have area > 0
+        // (regression from 사용자 시연 — 면적 0.0 m² fix).
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, 5.0, MaterialId::new(0),
+        ).unwrap();
+        assert_eq!(faces.len(), 2);
+
+        for &fid in &faces {
+            let area = mesh.face_area(fid);
+            assert!(area > 0.0,
+                "Path B sphere hemisphere face {:?} area must be > 0 (got {})",
+                fid, area);
+        }
+    }
+
+    #[test]
+    fn adr121_path_b_sphere_total_area_matches_analytic() {
+        // 2 hemispheres = full sphere area = 4πr²
+        let r = 5.0;
+        let expected_full = 4.0 * std::f64::consts::PI * r * r;
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_sphere_kernel_native(
+            DVec3::ZERO, r, MaterialId::new(0),
+        ).unwrap();
+        let total: f64 = faces.iter().map(|&f| mesh.face_area(f)).sum();
+        // Allow 1% tolerance for analytic integration accuracy
+        let rel_err = (total - expected_full).abs() / expected_full;
+        assert!(rel_err < 0.01,
+            "Sphere total area = 4πr² = {}, got {} (rel err {:.4})",
+            expected_full, total, rel_err);
+    }
+
+    #[test]
+    fn adr121_path_b_cone_side_face_area_non_zero() {
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).unwrap();
+        // faces[0] = base disk (Plane), faces[1] = cone side (Cone)
+        let side_area = mesh.face_area(faces[1]);
+        assert!(side_area > 0.0,
+            "Path B cone side face area must be > 0 (got {})", side_area);
+    }
+
+    #[test]
+    fn adr121_path_b_torus_face_area_non_zero() {
+        let mut mesh = Mesh::new();
+        let face_id = mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 3.0, MaterialId::new(0),
+        ).unwrap();
+        let area = mesh.face_area(face_id);
+        assert!(area > 0.0,
+            "Path B torus face area must be > 0 (got {})", area);
+
+        // Torus surface area first-order = 4π² × R × r
+        let expected = 4.0 * std::f64::consts::PI * std::f64::consts::PI * 10.0 * 3.0;
+        let rel_err = (area - expected).abs() / expected;
+        // First-order approximation tolerance
+        assert!(rel_err < 0.05,
+            "Torus area ~ 4π²Rr = {}, got {} (rel err {:.4})",
+            expected, area, rel_err);
+    }
+
+    #[test]
+    fn adr121_polygon_face_area_unchanged() {
+        // Regression: polygon face Newell path unchanged.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(2.0, 3.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 3.0, 0.0));
+        let fid = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let area = mesh.face_area(fid);
+        assert!((area - 6.0).abs() < 1e-9,
+            "polygon Newell path unchanged (expected 6.0, got {})", area);
+    }
+
+    #[test]
+    fn adr121_path_b_cylinder_side_area_matches_analytic() {
+        // Cylinder Path B side face = 2πr × height (lateral annulus).
+        let mut mesh = Mesh::new();
+        mesh.set_cylinder_path_b_default(true);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, MaterialId::new(0))
+            .unwrap();
+        // faces[0] = base, faces[1] = top, faces[2] = side annulus
+        let side_area = mesh.face_area(faces[2]);
+        assert!(side_area > 0.0,
+            "Path B cylinder side area must be > 0 (got {})", side_area);
+        // Expected: 2πr × h = 2π × 5 × 10 = 100π
+        let expected = 2.0 * std::f64::consts::PI * 5.0 * 10.0;
+        let rel_err = (side_area - expected).abs() / expected;
+        assert!(rel_err < 0.01,
+            "Cylinder side area = 2πr·h = {}, got {} (rel err {:.4})",
+            expected, side_area, rel_err);
     }
 
     #[test]
