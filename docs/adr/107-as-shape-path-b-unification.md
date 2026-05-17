@@ -88,8 +88,8 @@ ADR-094 Path B-full default ON (2026-05-09) 으로 cylinder = 3 faces / 2 edges 
 ### 4.2 7 lock-in 원칙 (canonical)
 
 - **L1 — Backward compat API**: `drawCircleAsShape(...)` signature 보존. internal dispatch 만 변경. 기존 caller (TS / WASM bridge / DrawCircleTool) UNCHANGED.
-- **L2 — `segments` 파라미터 의미 변경**: 향후 `segments` 는 render-time chord_tolerance hint 또는 *명시적 polygonize 트리거* (사용자가 명시 mesh ops 의도 시). default 무시 (canonical Path B 자동).
-- **L3 — Layer A (Pure Mesh) escape hatch**: 향후 `polygonize_closed_curve_face` 또는 신규 `drawCirclePolygonal(N)` API 가 명시 mesh 의도 — Layer H 가 아닌 Layer A canonical. (현재 사용자 사용 사례 없음 — future trigger 시 검토)
+- **L2 — `segments` 파라미터 = threshold-based dispatch** (사용자 결재 2026-05-16 (α) revision, ζ-β-α audit evidence): `segments` 가 **`POLYGON_THRESHOLD` (= 12) 미만** 이면 legacy polygon path (DrawPolygon use case 보존 — hexagon N=6 / octagon N=8 / decagon N=10), **`>= 12`** 면 Path B canonical 자동 변환 (circle approximation 의도). 회귀 evidence: `crates/axia-core/src/scene.rs:12415` 의 `DrawPolygon via DrawCircleAsShape with N=6` use case 보존 + DrawCircleTool default segments=32 (>= threshold) 시 Path B 자동 활성. Threshold = 12 근거 — N=12 (dodecagon) 부터는 circle approximation 자연 인식 (hexagon=6, octagon=8, decagon=10, dodecagon=12).
+- **L3 — Layer A (Pure Mesh) escape hatch**: L2 threshold (segments < 12) 가 자연 escape hatch — 명시 polygon 의도 보존. 향후 명시 `drawCirclePolygonal(N)` API 또는 inspector toggle 은 future trigger 시 별도 ADR.
 - **L4 — RECT 처리**: RECT 는 본 ADR scope 외. RECT 의 4 LINE edges 는 본질적으로 polygonal (자연 Layer A 후보, 또는 Line curve attach 의 Layer H 정책 별도). RECT 의 layer 분리는 별도 ADR.
 - **L5 — Snapshot 호환**: 기존 .axia 파일의 Layer H Circle 은 load 시점에 자동 변환 또는 그대로 load (legacy 보존, V2 호환). 결정 별도 sub-step.
 - **L6 — ADR-088 P22.5 owner-ID uniformity 자연 충족**: Path B 의 1 edge = 1 logical curve = 1 owner. ADR-088 의 N segment grouping 의미 사라짐 (1 edge 자체가 unit).
