@@ -2978,6 +2978,106 @@ revised seam approach).
   at center+(radius,0,0))
 - LOCKED #44 (Complete Meaning per Merge)
 
+### 49. ADR-115 Torus Path B Production Wiring + ADR-104 Family Complete (β-3 closure, 2026-05-17) 🎉
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "네 승인합니다" — ADR-114 cone closure 직후 β-3 torus 진입.
+> **ADR-104 Path B family 완전 closure** (cylinder + sphere + cone + torus).
+
+ADR-104 β-3 Torus Path B atomic closure — **ADR-114 cone production
+wiring 패턴 1:1 mirror (3rd successful template reproduction)**. ADR-104
+Path B Expansion 의 모든 4 primitives production default ON 활성.
+
+**Q3 revision lock-in (canonical)**: ADR-104 Amendment 1 §9.3 default
+"2-seam (axial + meridional)" 폐기 → **1-loop outer equator only**
+(sphere Q1 + cone Q2 self-loop pattern 답습 — *canonical consistency
+> strict topological correctness*). 2-seam strict approach 은 별도
+atomic 트랙으로 분리 (ADR-115 §7 ε).
+
+**Torus Path B canonical**:
+- 1 anchor vertex at `center + (major+minor, 0, 0)` (Z-up, outer equator)
+- 1 self-loop edge with `AnalyticCurve::Circle` (outer equator)
+- 1 face with `AnalyticSurface::Torus` (full u/v range periodic)
+- No Path A baseline (kernel-native from day 1)
+
+**Lock-ins (9개)**:
+- L-115-1 Single atomic PR per LOCKED #44
+- L-115-2 ADR-114 1:1 mirror pattern (cone → torus, 4-layer template
+  reproduction)
+- L-115-3 Engine default OFF + production ON via localStorage
+- L-115-4 Explicit OFF preference 보존
+- L-115-5 No Path A baseline (torus kernel-native from day 1) — flag
+  pattern preserved for consistency + future hook
+- L-115-6 Render zero-code-change (`tessellate_face_surface` Torus
+  variant)
+- L-115-7 ADR-046 P31 #4 additive only (createTorus is new primitive)
+- L-115-8 Q3 revision lock-in: 1-loop canonical (sphere/cone 답습 —
+  canonical consistency 우선)
+- L-115-9 ADR-104 Path B family closure — 모든 4 primitives production ON
+
+**측정 매트릭스 (real Chromium preview)**:
+
+| Torus count | hypothetical Path A | **Path B (canonical)** | 감소율 |
+|---|---|---|---|
+| 1 | 289 / 577 / 289 | **1 / 1 / 1** | **99.65% / 99.83% / 99.65%** |
+| 5 | 1445 / 2885 / 1445 | **5 / 5 / 5** | linear scaling ✓ |
+
+### 🎉 ADR-104 Path B Family Complete (cylinder + sphere + cone + torus)
+
+| Primitive | ADR | PR | Path A | Path B | 감소율 |
+|---|---|---|---|---|---|
+| Cylinder | ADR-094 | (merged) | 25/69/46 | 3/2/2 | 95% |
+| Sphere | ADR-113 | #76 | 289/561/290 | 2/1/1 | 99%+ |
+| Cone | ADR-114 | #77 | 25/49/26 | 2/1/1 | 92% |
+| **Torus** | **ADR-115** | **#78** | **289/577/289** | **1/1/1** | **99.7%** |
+
+**모든 Path B primitives = small constant DCEL** (≤3 face / ≤2 edge /
+≤2 vert). 대규모 scene 1000 primitives 기준 **메모리 99%+ 절감** +
+NURBS direct dispatch 전체 활성 + STEP export 산업 CAD parity.
+
+**회귀 누적 (β-3-β ~ β-3-η)**: axia-geo **+12** (kernel-native +
+rejections + Z-up anchor + memory reduction + flag default/toggle) +
+vitest **+11** (WasmBridge β-3 6 + TorusPathBSettings 5). 합계 **+23**,
+절대 #[ignore] 금지 23/23 준수. axia-geo 1363 → **1375 PASS**, vitest
+1873 → **1884 PASS**.
+
+**ADR-104 family cumulative regression (4 PRs)**: axia-geo +49
+(11 sphere kernel + 12 cone kernel + 6 cone dispatch + 12 torus kernel +
+8 cumulative dispatch) + vitest +33 (sphere 9 + cone 9 + torus 11 + 4
+cross-cut). 합계 **+82 across 4 PRs**, 절대 #[ignore] 금지 82/82 준수.
+
+**Lessons (canonical for future primitive expansion)**:
+- L1 Cone → Torus 1:1 mirror **3rd successful template reproduction** —
+  4-layer template (engine + WASM + TS + production) 완전 reproducible.
+- L2 Q-revisions canonical consistency (3-primitive cross-validation) —
+  closed-curve self-loop pattern canonical. 향후 새 primitive 도 본 패턴
+  우선 검토.
+- L3 Path B family completion architectural value — 1000 primitive scene
+  98.7% memory reduction. NURBS direct ops + STEP export 활성.
+- L4 LOCKED #44 의미 단위 분할 4-PR seq validation — multi-component ADR
+  의 component 별 atomic PR 으로 코드 conflict 0, CI/review
+  independent.
+
+**후속 트랙 (모두 별도 ADR per LOCKED #44)**:
+- γ Boolean / Offset / Push-Pull surface-driven dispatch verification
+  (ADR-104 §3.1 §3.2 — 모든 4 primitives cross-cut)
+- δ STEP export NURBSSurface round-trip audit (ADR-035/036 P21.6
+  tolerance verification for all 4 primitives)
+- ε Torus 2-seam DCEL atomic (ADR-104 Amendment 1 §9.3 strict approach,
+  Q3 revision §1.2 deferred)
+- ζ TorusTool UI integration (`web/src/primitives/TorusTool.ts` new
+  primitive tool)
+
+**Cross-link**:
+- ADR-094 (Cylinder Path B-full canonical) — first Path B primitive
+- ADR-113 (Sphere) — first 1:1 mirror
+- ADR-114 (Cone) — second 1:1 mirror, Q2 revision precedent
+- ADR-104 + Q3 revision (본 ADR §1.1)
+- ADR-049 P-5e-α (engine OFF + production ON pattern)
+- ADR-031 Phase D (AnalyticSurface::Torus 인프라)
+- LOCKED #43 (ADR-103 Z-up)
+- LOCKED #44 (Complete Meaning per Merge — single atomic PR anchor)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

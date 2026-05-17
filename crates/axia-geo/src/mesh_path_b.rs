@@ -18,6 +18,8 @@
 //! - `Mesh::sphere_path_b_default` — flag reader
 //! - `Mesh::set_cone_path_b_default` — ADR-104 β-2-ζ production flag
 //! - `Mesh::cone_path_b_default` — flag reader
+//! - `Mesh::set_torus_path_b_default` — ADR-104 β-3-ζ production flag
+//! - `Mesh::torus_path_b_default` — flag reader
 //! - `Mesh::mark_face_outer_soft` — SOFT flag on outer loop HEs (render hint)
 //!
 //! ## ADR cross-link
@@ -155,6 +157,26 @@ impl Mesh {
     /// ADR-104 β-2-ζ — Read the Path B cone default flag.
     pub fn cone_path_b_default(&self) -> bool {
         self.cone_path_b_default
+    }
+
+    /// ADR-104 β-3-ζ — Set the Path B torus default. See field doc on
+    /// `Mesh::torus_path_b_default` for semantics.
+    ///
+    /// Production layer should call this once at startup (after reading
+    /// localStorage `axia:torus-path-b-mode`). Test layer may toggle
+    /// per-test as needed. Mirrors `set_cone_path_b_default` /
+    /// `set_sphere_path_b_default` / `set_cylinder_path_b_default` patterns.
+    ///
+    /// **Note**: Torus has no Path A polygonal baseline (kernel-native only
+    /// from day 1). Flag exists for pattern consistency + future Path A
+    /// dispatch hook.
+    pub fn set_torus_path_b_default(&mut self, on: bool) {
+        self.torus_path_b_default = on;
+    }
+
+    /// ADR-104 β-3-ζ — Read the Path B torus default flag.
+    pub fn torus_path_b_default(&self) -> bool {
+        self.torus_path_b_default
     }
 
     /// ADR-094 B-γ-prep — Distinguishes Path B multi-loop schema vs

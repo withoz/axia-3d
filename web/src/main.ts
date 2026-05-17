@@ -128,6 +128,17 @@ async function main() {
     if (bridge.isReady()) bridge.setConePathBDefault(on);
   });
 
+  // ADR-104 β-3-ζ default ON — Torus Path B 활성 (산업 CAD parity,
+  // 1 face / 1 edge / 1 vert canonical, ~99.7% 메모리 절감 vs 289-face
+  // hypothetical Path A baseline). ADR-104 Path B family closure
+  // (cylinder + sphere + cone + torus). Sphere/cone 패턴 1:1 mirror.
+  const { getTorusPathBMode, onTorusPathBModeChange } =
+    await import('./tools/TorusPathBSettings');
+  if (bridge.isReady()) bridge.setTorusPathBDefault(getTorusPathBMode());
+  onTorusPathBModeChange((on) => {
+    if (bridge.isReady()) bridge.setTorusPathBDefault(on);
+  });
+
   // Note: WASM is optional for basic Three.js rendering (e.g., Sphere tool)
   // Continue even if WASM fails to initialize
   if (!bridge.isReady()) {

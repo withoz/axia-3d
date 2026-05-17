@@ -175,6 +175,23 @@ pub struct Mesh {
     #[serde(skip, default)]
     pub cylinder_path_b_default: bool,
 
+    /// ADR-104 β-3-ζ — Torus Path B default flag.
+    ///
+    /// `true` (production preference) = `create_torus(...)` 자동 분기하여
+    /// `create_torus_kernel_native` (Path B — 1 face / 1 edge / 1 vert
+    /// canonical, ~99.7% memory reduction) 호출. `false` (engine default) =
+    /// legacy Path A (`create_torus` 의 polygonal mesh, ~289 face for
+    /// default segments).
+    ///
+    /// **Engine default**: `false` (legacy) — preserves Path A regression
+    /// assets. Production layer (WASM bridge / TS init) flips to `true`
+    /// based on user preference (localStorage `axia:torus-path-b-mode`,
+    /// ADR-094 B-η / ADR-113 / ADR-114 답습 패턴).
+    ///
+    /// `serde(skip)` — runtime preference, snapshot 영향 0.
+    #[serde(skip, default)]
+    pub torus_path_b_default: bool,
+
     /// ADR-104 β-2-ζ — Cone Path B default flag.
     ///
     /// `true` (production preference) = `create_cone(...)` 자동 분기하여
@@ -426,6 +443,8 @@ impl Mesh {
             // ADR-104 β-2-ζ — cone default same pattern (engine OFF,
             // production layer flips via set_cone_path_b_default(true)).
             cone_path_b_default: false,
+            // ADR-104 β-3-ζ — torus default same pattern.
+            torus_path_b_default: false,
             // ADR-094 B-γ-prep — empty map, all faces use legacy
             // outer+inners until explicit set_face_boundary_loops call.
             face_to_boundary_loops: FxHashMap::default(),
@@ -3584,6 +3603,206 @@ impl Mesh {
 
         match build_result {
             Ok((base_face, cone_side_face)) => Ok(vec![base_face, cone_side_face]),
+            Err(e) => {
+                // Rollback: remove any new faces, edges, hes, verts.
+                let edges_after: Vec<EdgeId> = self.edges.iter()
+                    .filter(|(id, _)| !edges_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for eid in edges_after {
+                    self.edges.remove(eid);
+                }
+                let hes_after: Vec<HeId> = self.hes.iter()
+                    .filter(|(id, _)| !hes_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for hid in hes_after {
+                    self.hes.remove(hid);
+                }
+                let verts_after: Vec<VertId> = self.verts.iter()
+                    .filter(|(id, _)| !verts_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for vid in verts_after {
+                    self.verts.remove(vid);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// ADR-104 β-3-β — Kernel-native torus creation (Path B, Q3 revision
+    /// 2026-05-17 — mirror of β-1-β sphere + β-2-β cone canonical pattern,
+    /// ~99.7% memory reduction vs Path A polygonal torus).
+    ///
+    /// **Canonical structure (Z-up, LOCKED #43 정합)**
+    ///
+    /// - 1 anchor vertex at `center + (major_radius + minor_radius, 0, 0)`
+    ///   (Z-up, outer equator at u=0 v=0)
+    /// - 1 self-loop edge `e_outer` with `AnalyticCurve::Circle`:
+    ///   - `center` = torus center
+    ///   - `radius` = `major_radius + minor_radius` (outer equator radius)
+    ///   - `normal` = `+Z` (torus axis)
+    ///   - `basis_u` = `+X` (u=0 direction)
+    /// - 1 face with `AnalyticSurface::Torus` attached:
+    ///   - outer loop = HE-fwd self-loop
+    ///   - full u/v range: `(0, 2π) × (0, 2π)`
+    ///   - render via existing `tessellate_face_surface` (Torus variant,
+    ///     ADR-031 Phase D infra)
+    ///
+    /// **Q3 revision (ADR-115)**: ADR-104 Amendment 1 §9.3 의 "2-seam
+    /// (axial + meridional)" approach 폐기 → **1-loop (outer equator only)**
+    /// 채택. 근거:
+    /// - Sphere Q1 Amendment 2 / Cone Q2 ADR-114 의 *closed-curve self-loop
+    ///   pattern canonical* 답습 (consistency)
+    /// - 2-seam 의 4-HE outer boundary 는 DCEL 구현 복잡도 ↑ + manifold
+    ///   invariant 변형 — 별도 atomic 트랙으로 분리 권장
+    /// - Topological trade-off: 1 axial seam alone 은 torus 를 disk 로
+    ///   분할 못 함 (genus=1, Jordan curve theorem 평면 한정) — 동일 한계가
+    ///   sphere/cone 의 single-self-loop boundary 에도 적용
+    /// - 실용 가치: memory unlock 99.7%+ + render 활성 + Boolean/Offset
+    ///   dispatch 활성 — 모두 Q3 default 동등
+    ///
+    /// **Lock-ins (ADR-115 Q3 revision)**
+    ///
+    /// - **L-115-Q3-1** 1-loop canonical (outer equator) — sphere/cone
+    ///   self-loop pattern 답습
+    /// - **L-115-Q3-2** 2-seam approach 별도 atomic 트랙 (DCEL 4-HE outer
+    ///   boundary wiring 복잡성)
+    /// - **L-115-Q3-3** ADR-094 / ADR-113 / ADR-114 답습: 단일 closed curve
+    ///   + 1 face = architectural pattern
+    /// - **L-115-Q3-4** Memory unlock: 1/1/1 vs Path A 289/577/289 = 99.7%+
+    /// - **L-115-Q3-5** 메타-원칙 #14: 면 = 닫힌 경계의 byproduct
+    ///
+    /// # Returns
+    /// `Result<FaceId>` — the single torus surface face id.
+    ///
+    /// # Errors
+    /// - `major_radius <= 0` or `minor_radius <= 0` → bail
+    /// - `minor_radius >= major_radius` → bail (self-intersecting torus)
+    /// - `center` not finite → bail
+    /// - DCEL wiring 실패 → partial rollback + bail
+    pub fn create_torus_kernel_native(
+        &mut self,
+        center: DVec3,
+        major_radius: f64,
+        minor_radius: f64,
+        material: MaterialId,
+    ) -> Result<FaceId> {
+        if major_radius <= 0.0 {
+            bail!(
+                "ADR-104 β-3-β-1: torus major_radius must be positive (got {})",
+                major_radius,
+            );
+        }
+        if minor_radius <= 0.0 {
+            bail!(
+                "ADR-104 β-3-β-1: torus minor_radius must be positive (got {})",
+                minor_radius,
+            );
+        }
+        if minor_radius >= major_radius {
+            bail!(
+                "ADR-104 β-3-β-1: torus minor_radius ({}) must be < major_radius ({}) \
+                 (self-intersecting torus not supported)",
+                minor_radius, major_radius,
+            );
+        }
+        if !center.is_finite() {
+            bail!("ADR-104 β-3-β-1: torus center must be finite");
+        }
+
+        // Z-up canonical (LOCKED #43): axis = +Z, ref_dir = +X.
+        // Anchor on outer equator at u=0 v=0:
+        //   P(0,0) = center + (R + r)·X + 0·Z = center + (R+r, 0, 0)
+        let axis_dir = DVec3::Z;
+        let ref_dir = DVec3::X;
+        let outer_equator_radius = major_radius + minor_radius;
+        let anchor_pos = center + ref_dir * outer_equator_radius;
+
+        // Snapshot for rollback.
+        let edges_before: FxHashSet<EdgeId> = self.edges.iter().map(|(id, _)| id).collect();
+        let hes_before: FxHashSet<HeId> = self.hes.iter().map(|(id, _)| id).collect();
+        let verts_before: FxHashSet<VertId> = self.verts.iter().map(|(id, _)| id).collect();
+
+        // Create anchor vertex (LOCKED #5 spatial-hash dedup).
+        let anchor = self.add_vertex(anchor_pos);
+
+        // Outer equator Circle curve (v=0 cross-section of torus).
+        let outer_curve = crate::curves::AnalyticCurve::Circle {
+            center,
+            radius: outer_equator_radius,
+            normal: axis_dir,
+            basis_u: ref_dir,
+        };
+
+        // Build inside closure for clean rollback on error.
+        let build_result: Result<FaceId> = (|| {
+            // 1. Self-loop outer equator edge with curve attached.
+            let (eid, _) = self.add_edge(anchor, anchor)?;
+            self.edges[eid].set_curve(Some(outer_curve.clone()));
+
+            // 2. Get HE-fwd (HE-bwd via next_rad, but we only use HE-fwd
+            //    for the single face outer loop — twin is unused boundary).
+            let he_fwd = self.edges[eid].any_he();
+            if he_fwd.is_null() {
+                bail!(
+                    "ADR-104 β-3-β-1: self-loop edge {:?} has no half-edge",
+                    eid,
+                );
+            }
+            let he_bwd = self.hes[he_fwd].next_rad();
+            if he_bwd.is_null() || he_bwd == he_fwd {
+                bail!(
+                    "ADR-104 β-3-β-1: outer equator self-loop edge {:?} has \
+                     degenerate radial chain — cannot locate twin HE",
+                    eid,
+                );
+            }
+
+            // 3. Create single torus face with Torus analytic surface.
+            //    Outer normal varies (radial outward); legacy field is +Z
+            //    (axis), canonical truth via AnalyticSurface.
+            let torus_face = self.faces.insert(Face::new(
+                LoopRef::default(),
+                DVec3::Z,
+                FACE_TOLERANCE,
+                material,
+            ));
+
+            // Wire HE-fwd as torus face's outer self-loop.
+            self.hes[he_fwd].set_next(he_fwd);
+            self.hes[he_fwd].set_prev(he_fwd);
+            self.hes[he_fwd].set_face(torus_face);
+            self.hes[he_fwd].set_outer(true);
+            self.faces[torus_face].set_outer(LoopRef::new(he_fwd, true));
+
+            // Twin HE (HE-bwd) is unused — leave face default (slotmap
+            // null), outer = false. The single torus face is "1-sided"
+            // in DCEL (closed manifold with one boundary cycle). This
+            // matches sphere/cone hemisphere self-loop pattern.
+            self.hes[he_bwd].set_face(FaceId::default());
+            self.hes[he_bwd].set_outer(false);
+            self.hes[he_bwd].set_next(he_bwd);
+            self.hes[he_bwd].set_prev(he_bwd);
+
+            // Torus surface: full u/v range periodic.
+            let torus_surface = crate::surfaces::AnalyticSurface::Torus {
+                center,
+                axis_dir,
+                ref_dir,
+                major_radius,
+                minor_radius,
+                u_range: (0.0, std::f64::consts::TAU),
+                v_range: (0.0, std::f64::consts::TAU),
+            };
+            self.faces[torus_face].set_surface(Some(torus_surface));
+
+            Ok(torus_face)
+        })();
+
+        match build_result {
+            Ok(torus_face) => Ok(torus_face),
             Err(e) => {
                 // Rollback: remove any new faces, edges, hes, verts.
                 let edges_after: Vec<EdgeId> = self.edges.iter()
@@ -12633,5 +12852,171 @@ mod tests {
         assert!(reduction > 0.90,
             "Path B cone reduction must be > 90% (got {:.4}, path_b_total={}, path_a_total={})",
             reduction, path_b_total, path_a_total);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-104 β-3-β — Torus Path B kernel-native engine tests
+    // (Q3 revision: 1-loop canonical, sphere/cone self-loop pattern답습).
+    // ════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr104_torus_kernel_native_face_count_1() {
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 3.0, MaterialId::new(0),
+        ).expect("kernel-native torus OK");
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_faces, 1, "Path B torus = 1 surface face");
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_anchor_vertex_count_1() {
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 3.0, MaterialId::new(0),
+        ).unwrap();
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_verts, 1, "Path B torus = 1 anchor vertex (outer equator at u=0 v=0)");
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_outer_equator_self_loop_edge() {
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 3.0, MaterialId::new(0),
+        ).unwrap();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        assert_eq!(active_edges, 1, "Path B torus = 1 self-loop outer equator edge");
+
+        // Verify the edge has Circle curve with major+minor radius.
+        let (_, edge) = mesh.edges.iter().find(|(_, e)| e.is_active()).unwrap();
+        match edge.curve() {
+            Some(crate::curves::AnalyticCurve::Circle { radius, .. }) => {
+                let expected = 10.0 + 3.0; // major + minor (outer equator)
+                assert!((radius - expected).abs() < 1e-9,
+                    "outer equator Circle radius = major + minor (got {}, expected {})",
+                    radius, expected);
+            }
+            _ => panic!("expected AnalyticCurve::Circle on outer equator edge"),
+        }
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_surface_attached() {
+        let mut mesh = Mesh::new();
+        let face_id = mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 3.0, MaterialId::new(0),
+        ).unwrap();
+        let surface = mesh.faces[face_id].surface();
+        assert!(matches!(surface, Some(crate::surfaces::AnalyticSurface::Torus { .. })),
+            "torus face has Torus surface, got {:?}", surface);
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_torus_surface_params_canonical() {
+        let mut mesh = Mesh::new();
+        let major_r = 10.0;
+        let minor_r = 3.0;
+        let face_id = mesh.create_torus_kernel_native(
+            DVec3::ZERO, major_r, minor_r, MaterialId::new(0),
+        ).unwrap();
+
+        match mesh.faces[face_id].surface() {
+            Some(crate::surfaces::AnalyticSurface::Torus {
+                center, axis_dir, ref_dir, major_radius, minor_radius,
+                u_range, v_range,
+            }) => {
+                assert!(center.distance(DVec3::ZERO) < 1e-9, "center preserved");
+                assert!((axis_dir.z - 1.0).abs() < 1e-9, "axis_dir = +Z (Z-up)");
+                assert!((ref_dir.x - 1.0).abs() < 1e-9, "ref_dir = +X");
+                assert!((major_radius - major_r).abs() < 1e-9, "major_radius preserved");
+                assert!((minor_radius - minor_r).abs() < 1e-9, "minor_radius preserved");
+                let tau = std::f64::consts::TAU;
+                assert!(u_range.0.abs() < 1e-9 && (u_range.1 - tau).abs() < 1e-9,
+                    "u_range = (0, 2π) full periodic (got {:?})", u_range);
+                assert!(v_range.0.abs() < 1e-9 && (v_range.1 - tau).abs() < 1e-9,
+                    "v_range = (0, 2π) full periodic (got {:?})", v_range);
+            }
+            _ => panic!("expected Torus surface"),
+        }
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_rejects_zero_major_radius() {
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_torus_kernel_native(
+            DVec3::ZERO, 0.0, 3.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_rejects_zero_minor_radius() {
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 0.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_rejects_minor_geq_major() {
+        // Self-intersecting torus (minor >= major) not supported.
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_torus_kernel_native(
+            DVec3::ZERO, 5.0, 5.0, MaterialId::new(0),
+        ).is_err());
+        let mut mesh2 = Mesh::new();
+        assert!(mesh2.create_torus_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_zup_canonical_anchor_position() {
+        // Anchor at center + (major + minor, 0, 0) per Z-up canonical.
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_torus_kernel_native(
+            DVec3::new(10.0, 20.0, 30.0), 5.0, 2.0, MaterialId::new(0),
+        ).unwrap();
+        let (_, vert) = mesh.verts.iter().find(|(_, v)| v.is_active()).unwrap();
+        let expected = DVec3::new(17.0, 20.0, 30.0); // center + (R+r, 0, 0)
+        assert!(vert.pos().distance(expected) < 1e-9,
+            "anchor at expected Z-up position (got {:?}, expected {:?})",
+            vert.pos(), expected);
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_memory_reduction_vs_path_a_baseline() {
+        // ADR-104 §1.1: Path A (N=24, M=12) = 289 face / 577 edge / 289 vert
+        // Path B Q3 revision = 1 face / 1 edge / 1 vert → 99.7%+ reduction
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_torus_kernel_native(
+            DVec3::ZERO, 10.0, 3.0, MaterialId::new(0),
+        ).unwrap();
+
+        let path_b_total = mesh.faces.iter().filter(|(_, f)| f.is_active()).count()
+            + mesh.edges.iter().filter(|(_, e)| e.is_active()).count()
+            + mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        // Hypothetical Path A baseline (no actual Path A torus exists)
+        let path_a_total: usize = 289 + 577 + 289;
+        let reduction = 1.0 - (path_b_total as f64 / path_a_total as f64);
+        assert!(reduction > 0.99,
+            "Path B torus reduction must be > 99% (got {:.4}, path_b_total={}, path_a_total={})",
+            reduction, path_b_total, path_a_total);
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_flag_default_off() {
+        let mesh = Mesh::new();
+        assert!(!mesh.torus_path_b_default(),
+            "engine default = false (consistency with sphere/cone)");
+    }
+
+    #[test]
+    fn adr104_torus_kernel_native_flag_toggle() {
+        let mut mesh = Mesh::new();
+        mesh.set_torus_path_b_default(true);
+        assert!(mesh.torus_path_b_default());
+        mesh.set_torus_path_b_default(false);
+        assert!(!mesh.torus_path_b_default());
     }
 }

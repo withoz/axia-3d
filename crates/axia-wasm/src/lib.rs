@@ -1401,6 +1401,66 @@ impl AxiaEngine {
         self.scene.mesh.cone_path_b_default()
     }
 
+    /// ADR-104 β-3-β — Create torus (Path B kernel-native, Q3 revision).
+    ///
+    /// 1 face / 1 edge / 1 vert canonical (sphere/cone self-loop pattern
+    /// 답습). 99.7%+ memory reduction vs hypothetical Path A 289-face
+    /// baseline (no Path A torus exists — kernel-native from day 1).
+    ///
+    /// Returns the FaceId (as f64 for JS) of the single torus surface.
+    /// `-1.0` on error.
+    #[wasm_bindgen(js_name = "createTorus")]
+    pub fn create_torus(
+        &mut self,
+        cx: f64, cy: f64, cz: f64,
+        major_radius: f64, minor_radius: f64,
+    ) -> f64 {
+        let position = DVec3::new(cx, cy, cz);
+        self.scene.transactions.begin();
+        let before = self.scene.scene_snapshot();
+        self.scene.transactions.set_before_snapshot(before);
+        match self.scene.mesh.create_torus_kernel_native(
+            position, major_radius, minor_radius, axia_core::FORM_MATERIAL,
+        ) {
+            Ok(face_id) => {
+                self.mark_topology_changed();
+                self.invalidate_cache();
+                let xia_id = self.scene.create_xia_with_faces(
+                    "Torus".to_string(),
+                    position,
+                    vec![face_id],
+                );
+                let after = self.scene.scene_snapshot();
+                self.scene.transactions.set_after_snapshot(after);
+                self.scene.transactions.commit();
+                debug_log!("[RUST] create_torus: face_id={} xia={}",
+                    face_id.raw(), xia_id);
+                face_id.raw() as f64
+            }
+            Err(e) => {
+                self.scene.transactions.cancel();
+                console_error!("[RUST] create_torus error: {}", e);
+                -1.0
+            }
+        }
+    }
+
+    /// ADR-104 β-3-ζ — Set the Path B torus default flag.
+    ///
+    /// Note: Torus has no Path A polygonal baseline. Flag exists for
+    /// pattern consistency with sphere/cone (potential future Path A hook).
+    /// `create_torus` always routes to kernel-native regardless.
+    #[wasm_bindgen(js_name = "setTorusPathBDefault")]
+    pub fn set_torus_path_b_default(&mut self, on: bool) {
+        self.scene.mesh.set_torus_path_b_default(on);
+    }
+
+    /// ADR-104 β-3-ζ — Read the Path B torus default flag.
+    #[wasm_bindgen(js_name = "getTorusPathBDefault")]
+    pub fn get_torus_path_b_default(&self) -> bool {
+        self.scene.mesh.torus_path_b_default()
+    }
+
     // ════════════════════════════════════════════════════════════════
     // ADR-097 T-δ — Topology damage detection + recovery WASM API
     // ════════════════════════════════════════════════════════════════
