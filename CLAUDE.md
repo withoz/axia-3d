@@ -3401,6 +3401,17 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - ADR-087 K-ε hotfix: Plane render → polygon path (DCEL boundary = exact)
 - ADR-088 Phase 1 (curve_owner_id), ADR-089 Phase 2 (true kernel-native
   closed edges) 의 anchor.
+- **ADR-107 (2026-05-16) — deepest realization closure**: `*AsShape` →
+  Path B canonical unification (Layer Separation Policy). 사용자 통찰
+  "메시 곡면과 기하 원의 곡면이 동시에 작용" → Hybrid layer 의 N segment
+  boundary 가 byproduct, **single self-loop edge boundary** 가 canonical.
+  ζ-β engine dispatch (threshold POLYGON_THRESHOLD=12) — segments>=12 →
+  Path B 자동 변환 (Circle approximation), <12 → legacy polygon (DrawPolygon
+  use case 보존). 자연 효과: 결함 G (Layer Separation Violation) 해소 +
+  ADR-101 §A9.8 결함 D (vertex-on-corner degeneracy) 자연 해소 (D2 audit
+  evidence) + 메모리 97% 절감 (LOCKED #35 ADR-094 §6.3). 미리보기 시연
+  evidence (ζ-ζ, 2026-05-16): 결함 D trigger reproduce → split=3 ✅
+  CONFIRMED.
 
 **가이드 (향후 ADR / 코드 결정 시)**:
 - "이 변경이 면을 closed edge boundary 의 byproduct 로 유지하는가?" 가
