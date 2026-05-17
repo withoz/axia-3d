@@ -67,10 +67,37 @@ impl Mesh {
     ) -> Result<BooleanResult> {
         let mut debug = Vec::new();
 
+        // ── ADR-110 π-β — Pre-polygonize Path B closed-curve faces ──
+        //
+        // Path B closed-curve face (1 anchor + 1 self-loop edge with Circle
+        // curve) 는 prepare_solid 의 `positions.len() < 3` short-circuit 으로
+        // skip → Boolean silent fail (audit evidence 2026-05-16: Path B
+        // cylinder × Path B cylinder Union 결과 변경 0).
+        //
+        // ADR-101 Phase A 의 `polygonize_closed_curve_face` helper 재사용 —
+        // closed-curve face 를 polygonal substitute 로 변환 (chord_tol-driven
+        // sampling). 새 FaceId 반환, 원본 face inactive.
+        //
+        // L1 — Additive, drop-in alongside (기존 path UNCHANGED).
+        // L3 — In-place face_id 매핑 (caller 영향 0).
+        // L4 — polygonal face 는 polygonize 가 Ok(None) → 원본 face_id 보존.
+        let faces_a_resolved: Vec<FaceId> = faces_a.iter()
+            .map(|&fid| match self.polygonize_closed_curve_face(fid, material) {
+                Ok(Some(new_fid)) => new_fid,
+                _ => fid,
+            })
+            .collect();
+        let faces_b_resolved: Vec<FaceId> = faces_b.iter()
+            .map(|&fid| match self.polygonize_closed_curve_face(fid, material) {
+                Ok(Some(new_fid)) => new_fid,
+                _ => fid,
+            })
+            .collect();
+
         // Phase F — Boolean 연산은 fan triangulation 사용 (convex face 가정).
         // 구멍(inner loops) 있는 face는 잘못된 결과 생성 → 명확히 거부.
         // 미래 작업: constrained Delaunay로 hole-aware triangulation.
-        for &fid in faces_a.iter().chain(faces_b.iter()) {
+        for &fid in faces_a_resolved.iter().chain(faces_b_resolved.iter()) {
             if let Some(face) = self.faces.get(fid) {
                 if !face.inners().is_empty() {
                     anyhow::bail!(
@@ -80,6 +107,10 @@ impl Mesh {
                 }
             }
         }
+
+        // Use resolved face IDs from here on (ADR-110 π-β).
+        let faces_a = &faces_a_resolved[..];
+        let faces_b = &faces_b_resolved[..];
 
         // ── Stage 0: 솔리드 데이터 준비 ──────────────
         let solid_a = self.prepare_solid(faces_a)?;
@@ -1002,6 +1033,109 @@ fn compute_aabb(tris: &[(DVec3, DVec3, DVec3)]) -> (DVec3, DVec3) {
         }
     }
     (min, max)
+}
+
+#[cfg(test)]
+mod adr110_tests {
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-110 π-β — Boolean Path B Compatibility
+    //
+    // Pre-polygonize at Mesh::boolean entry — Path B closed-curve face
+    // (1 self-loop edge with Circle curve) 를 polygonal substitute 로 변환
+    // 후 Boolean 활성.
+    //
+    // 사용자 통찰 (2026-05-16): "기능 확보 → 결함 자연 해소" canonical
+    // strategy. ADR-101 §3.1 architectural gap 해소.
+    // ════════════════════════════════════════════════════════════════════
+
+    use super::*;
+    use crate::Mesh;
+    use crate::curves::AnalyticCurve;
+
+    /// Path B cylinder profile (1 anchor + 1 self-loop edge with Circle).
+    fn build_path_b_circle(mesh: &mut Mesh, cx: f64, cy: f64, radius: f64) -> FaceId {
+        let mat = MaterialId::new(0);
+        let basis_u = DVec3::new(1.0, 0.0, 0.0);
+        let anchor = mesh.add_vertex(DVec3::new(cx + radius, cy, 0.0));
+        let circle = AnalyticCurve::Circle {
+            center: DVec3::new(cx, cy, 0.0),
+            radius,
+            normal: DVec3::new(0.0, 0.0, 1.0),
+            basis_u,
+        };
+        mesh.add_face_closed_curve(anchor, circle, mat).expect("path B face")
+    }
+
+    /// Path B circle × Path B circle Union — must succeed (이전: silent fail,
+    /// face count 변경 0). ADR-110 fix 후 polygonize 가 Path B → polygonal
+    /// 변환 → Boolean 활성.
+    #[test]
+    fn adr110_pi_beta_path_b_boolean_does_not_silent_fail() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let face_a = build_path_b_circle(&mut mesh, 0.0, 0.0, 5.0);
+        let face_b = build_path_b_circle(&mut mesh, 6.0, 0.0, 5.0);
+
+        let verts_before = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+
+        let result = mesh.boolean(&[face_a], &[face_b], BoolOp::Union, mat);
+        assert!(result.is_ok(),
+            "ADR-110 π-β: Path B Boolean Union must succeed, got {:?}", result.err());
+
+        // Polygonize substitute 가 Path B 의 1 anchor 를 N polygonal verts
+        // 로 확장 → vert count 증가. Boolean fix evidence (이전엔 변경 0).
+        let verts_after = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert!(verts_after > verts_before,
+            "ADR-110 π-β: Path B polygonize 가 verts 추가 (before={}, after={})",
+            verts_before, verts_after);
+    }
+
+    /// Regression guard — polygonal face Boolean 영향 0 (additive only).
+    #[test]
+    fn adr110_pi_beta_polygonal_unchanged() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        let face_a = mesh.add_face(&[v0, v1, v2, v3], mat).expect("rect A");
+
+        let v4 = mesh.add_vertex(DVec3::new(5.0, 5.0, 0.0));
+        let v5 = mesh.add_vertex(DVec3::new(15.0, 5.0, 0.0));
+        let v6 = mesh.add_vertex(DVec3::new(15.0, 15.0, 0.0));
+        let v7 = mesh.add_vertex(DVec3::new(5.0, 15.0, 0.0));
+        let face_b = mesh.add_face(&[v4, v5, v6, v7], mat).expect("rect B");
+
+        // Pre-polygonize 는 polygonal face 에 no-op (Ok(None)).
+        let result = mesh.boolean(&[face_a], &[face_b], BoolOp::Union, mat);
+        assert!(result.is_ok(),
+            "Polygonal Boolean regression guard — must not error");
+    }
+
+    /// Helper unit — polygonize_closed_curve_face returns substituted FaceId
+    /// for Path B input, None for polygonal.
+    #[test]
+    fn adr110_pi_beta_helper_substitution() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let path_b = build_path_b_circle(&mut mesh, 0.0, 0.0, 5.0);
+        let result_b = mesh.polygonize_closed_curve_face(path_b, mat);
+        assert!(matches!(result_b, Ok(Some(_))),
+            "Path B face must polygonize to new FaceId, got {:?}", result_b);
+
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let polygonal = mesh.add_face(&[v0, v1, v2, v3], mat).expect("rect");
+        let result_p = mesh.polygonize_closed_curve_face(polygonal, mat);
+        assert!(matches!(result_p, Ok(None)),
+            "Polygonal face must polygonize to None (no-op), got {:?}", result_p);
+    }
 }
 
 #[cfg(test)]
