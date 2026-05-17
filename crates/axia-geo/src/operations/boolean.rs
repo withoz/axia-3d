@@ -12,7 +12,7 @@ use anyhow::Result;
 use rustc_hash::FxHashMap;
 
 use crate::mesh::Mesh;
-use crate::{FaceId, VertId, MaterialId};
+use crate::{EdgeId, FaceId, VertId, MaterialId};
 use super::boolean_geo::{
     point_in_solid, triangle_triangle_intersection,
     Pt2, project_to_2d, unproject_to_3d, segment_segment_2d,
@@ -563,6 +563,24 @@ impl Mesh {
                     } else {
                         // 원본 face 제거
                         let _ = self.remove_face(fid);
+
+                        // ADR-101 Amendment 10 — 메타-원칙 #15 cross-cut
+                        // enforcement. Boolean split-induced edges (각
+                        // new_face 사이 shared edges) HARD flag 부여.
+                        // 외부 boundary 는 face_normals.len()==1 → 자동
+                        // draw (영향 0). 정확한 split contract.
+                        let mut shared_edges: Vec<EdgeId> = Vec::new();
+                        for i in 0..new_faces.len() {
+                            for j in (i + 1)..new_faces.len() {
+                                if let Some(eid) = self.find_shared_edge_between_faces(
+                                    new_faces[i], new_faces[j],
+                                ) {
+                                    shared_edges.push(eid);
+                                }
+                            }
+                        }
+                        self.mark_edges_hard(&shared_edges);
+
                         split_map.insert(fid, new_faces);
                     }
                 }

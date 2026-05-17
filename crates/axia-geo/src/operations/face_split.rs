@@ -746,6 +746,14 @@ pub fn split_face_by_chain(
         }
     }
 
+    // ADR-101 Amendment 10 — 메타-원칙 #15 cross-cut enforcement.
+    // split-induced chain edges 에 HARD flag 부여. render path 의 angle
+    // coplanar test (LOCKED #16 K-ε hotfix) 우회 → split edges 가 coplanar
+    // sub-faces 사이여도 wireframe emit. `Mesh::split_face` (mesh.rs:4068-
+    // 4069) canonical pattern + ADR-101 Amendment 9 §A9.4 cross-cut audit
+    // 의 자연 enforcement.
+    mesh.mark_chain_edges_hard(chain_verts);
+
     Ok(FaceSplitResult {
         new_faces: vec![fa, fb],
         new_verts: Vec::new(),
@@ -1058,6 +1066,12 @@ fn split_face_case_b(
         if let Some(e) = mesh.find_edge(last.h_b, outer_b) { new_edges.push(e); }
     }
 
+    // ADR-101 Amendment 10 — 메타-원칙 #15 cross-cut enforcement.
+    // case (b) cut edges 에 HARD flag 부여 (hole 통과 cut chain).
+    // `Mesh::split_face` 의 canonical pattern + Amendment 9 §A9.4
+    // cross-cut audit 의 자연 enforcement.
+    mesh.mark_edges_hard(&new_edges);
+
     debug.push(format!("case (b) result: face_1={} ({}v), face_2={} ({}v)",
         face_1.raw(), face_1_verts.len(), face_2.raw(), face_2_verts.len()));
     debug.push(format!("  proj_start={:?}", proj_start));
@@ -1281,6 +1295,10 @@ fn split_face_case_c(
 
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
 
+    // ADR-101 Amendment 10 — 메타-원칙 #15 cross-cut enforcement.
+    // case (c) bridge edge (outer_a → h_vert, endpoint-on-hole-boundary).
+    mesh.mark_edges_hard(&new_edges);
+
     debug.push(format!("case (c) result: face={} ({}v, {} holes)",
         new_face.raw(), bridged.len(), other_holes.len()));
 
@@ -1481,6 +1499,10 @@ fn split_face_case_d(
     }
 
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
+
+    // ADR-101 Amendment 10 — 메타-원칙 #15 cross-cut enforcement.
+    // case (d) bridge edge (outer_a → h_vert, endpoint-inside-hole bridge).
+    mesh.mark_edges_hard(&new_edges);
 
     debug.push(format!("case (d) result: face={} ({}v, {} holes)",
         new_face.raw(), bridged.len(), other_holes.len()));
@@ -3334,5 +3356,92 @@ mod tests {
                 assert_eq!(verts.len(), 4, "hole should still have 4 verts");
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ADR-101 Amendment 10 — 메타-원칙 #15 cross-cut HARD flag enforcement
+    //
+    // canonical: "동일한 분할 연산은 동일한 topological contract — 빠르고,
+    //            신속하고, 정확하게."
+    //
+    // split-type 함수 모두 split-induced edges 에 HARD flag 부여. Render path
+    // 의 angle coplanar test (LOCKED #16 K-ε hotfix) 와 split 의도의 충돌은
+    // split-side 의 HARD 로 명시 해소.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// Helper unit — `Mesh::mark_chain_edges_hard` chain 의 모든 edges 의
+    /// HEs (radial twin 포함) 에 HARD flag 부여.
+    #[test]
+    fn adr101_amendment10_helper_mark_chain_edges_hard() {
+        use crate::entities::HeFlags;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let (_fid, [v0, v1, v2, v3]) = make_square(&mut m);
+
+        // chain = v0 → v1 → v2 (2 edges of the quad boundary)
+        let chain = [v0, v1, v2];
+        m.mark_chain_edges_hard(&chain);
+
+        // Verify v0-v1 and v1-v2 edges HARD; v2-v3 untouched.
+        let e01 = m.find_edge(v0, v1).expect("v0-v1 edge");
+        let e12 = m.find_edge(v1, v2).expect("v1-v2 edge");
+        let e23 = m.find_edge(v2, v3).expect("v2-v3 edge");
+
+        let f01 = m.hes[m.edges[e01].any_he()].flags();
+        let f12 = m.hes[m.edges[e12].any_he()].flags();
+        let f23 = m.hes[m.edges[e23].any_he()].flags();
+
+        assert!(f01.contains(HeFlags::HARD), "v0-v1 (chain) must be HARD");
+        assert!(f12.contains(HeFlags::HARD), "v1-v2 (chain) must be HARD");
+        assert!(!f23.contains(HeFlags::HARD),
+            "v2-v3 (not in chain) must NOT be HARD (preserve scope)");
+    }
+
+    /// Helper unit — `Mesh::mark_edges_hard` EdgeId list 직접 입력.
+    #[test]
+    fn adr101_amendment10_helper_mark_edges_hard() {
+        use crate::entities::HeFlags;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let (_fid, [v0, v1, v2, v3]) = make_square(&mut m);
+
+        let e01 = m.find_edge(v0, v1).expect("v0-v1");
+        let e23 = m.find_edge(v2, v3).expect("v2-v3");
+        m.mark_edges_hard(&[e01, e23]);
+
+        let f01 = m.hes[m.edges[e01].any_he()].flags();
+        let f23 = m.hes[m.edges[e23].any_he()].flags();
+        let e12 = m.find_edge(v1, v2).expect("v1-v2");
+        let f12 = m.hes[m.edges[e12].any_he()].flags();
+
+        assert!(f01.contains(HeFlags::HARD));
+        assert!(f23.contains(HeFlags::HARD));
+        assert!(!f12.contains(HeFlags::HARD),
+            "v1-v2 (not in list) must NOT be HARD");
+    }
+
+    /// `split_face_by_chain` 의 chain edges 가 HARD flag 부여 (메타-원칙 #15
+    /// canonical). chain edge 가 사전 존재 (add_edge) — split_face_by_chain
+    /// API requirement.
+    #[test]
+    fn adr101_amendment10_split_face_by_chain_marks_hard() {
+        use crate::entities::HeFlags;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let (fid, [v0, _v1, v2, _v3]) = make_square(&mut m);
+
+        // Pre-draw chain edge (v0 → v2 diagonal) — split_face_by_chain
+        // requires edges to exist.
+        let (chain_edge, _is_new) = m.add_edge(v0, v2).expect("add_edge v0-v2");
+
+        // Diagonal chain v0 → v2 (single segment)
+        let chain = [v0, v2];
+        let _result = split_face_by_chain(&mut m, fid, &chain, mat)
+            .expect("split_face_by_chain OK");
+
+        // Verify chain edge HARD (Amendment 10 fix)
+        let flags = m.hes[m.edges[chain_edge].any_he()].flags();
+        assert!(flags.contains(HeFlags::HARD),
+            "split_face_by_chain chain edge must be HARD (메타-원칙 #15)");
     }
 }

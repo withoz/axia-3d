@@ -2551,6 +2551,64 @@ impl Mesh {
         self.vert_to_edge.get(&key).copied()
     }
 
+    /// ADR-101 Amendment 10 (메타-원칙 #15) — split-induced chain edges
+    /// 에 `HeFlags::HARD` 일괄 부여. 모든 radial twin HEs 포함.
+    ///
+    /// 메타-원칙 #15: "동일한 분할 연산은 동일한 topological contract
+    /// — 빠르고, 신속하고, 정확하게." `Mesh::split_face` (line 4068-4069)
+    /// 의 단일-edge canonical pattern 을 chain 단위로 일반화.
+    ///
+    /// Render path `export_edge_lines_with_map` (mesh.rs:5384-5404) 의
+    /// angle coplanar test 우회 (force_hard fast-path mesh.rs:5359) →
+    /// split edges 가 두 coplanar face 사이여도 wireframe emit.
+    ///
+    /// 안전 OR 패턴 (mesh.rs:2541 답습) — 기존 flags 보존.
+    ///
+    /// **Callers (ADR-101 Amendment 10 cross-cut fix)**:
+    /// - `split_face_by_chain` (face_split.rs:514) — input chain_verts
+    /// - `split_face_case_b/c/d` (face_split.rs:868/1162/1397) — internal cut chain
+    /// - `boolean::split_faces_by_intersections` (boolean.rs:446) — intersection chain
+    /// - `operations::coplanar::auto_intersect_coplanar` — ADR-101 Amendment 9
+    ///   에서 인라인 패턴 (lens outer loop walk) 으로 처리. 본 helper 도
+    ///   사용 가능하나 lens outer = closed loop 라 chain windows(2) 와
+    ///   의미 약간 다름.
+    pub fn mark_chain_edges_hard(&mut self, chain: &[VertId]) {
+        for w in chain.windows(2) {
+            let Some(eid) = self.find_edge(w[0], w[1]) else { continue };
+            self.mark_single_edge_hard(eid);
+        }
+    }
+
+    /// ADR-101 Amendment 10 — split-induced edges 에 `HeFlags::HARD` 부여
+    /// (EdgeId list 직접 입력). `mark_chain_edges_hard` 와 동일 메커니즘,
+    /// chain 이 아닌 explicit edge 명시 입력.
+    ///
+    /// **Callers**: `split_face_case_b/c/d`, `boolean::split_faces_by_
+    /// intersections` 의 new_edges vector.
+    pub fn mark_edges_hard(&mut self, edges: &[EdgeId]) {
+        for &eid in edges {
+            self.mark_single_edge_hard(eid);
+        }
+    }
+
+    /// Internal helper — mark single edge's all radial twin HEs as HARD.
+    /// Safe OR pattern (mesh.rs:2541 답습) — preserves existing flags.
+    fn mark_single_edge_hard(&mut self, eid: EdgeId) {
+        let Some(edge) = self.edges.get(eid) else { return };
+        if !edge.is_active() { return; }
+        let he_start = edge.any_he();
+        if he_start.is_null() { return; }
+        // Walk radial chain — mark all twin HEs HARD.
+        // Pattern: mesh.rs:5364-5378 (radial chain enumeration).
+        let mut rad_id = he_start;
+        loop {
+            let cur = self.hes[rad_id].flags();
+            self.hes[rad_id].set_flags(cur | HeFlags::HARD);
+            rad_id = self.hes[rad_id].next_rad();
+            if rad_id == he_start { break; }
+        }
+    }
+
     /// Find the shared edge between two faces (if any).
     pub fn find_shared_edge_between_faces(&self, f1: FaceId, f2: FaceId) -> Option<EdgeId> {
         // Collect all edges of face1
