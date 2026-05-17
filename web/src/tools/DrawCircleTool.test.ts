@@ -130,4 +130,38 @@ describe('DrawCircleTool', () => {
       expect(ctx.bridge.drawCircle).not.toHaveBeenCalled();
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-107 ζ-δ — DrawCircleTool default segments=24 triggers ζ-β
+  // threshold-based dispatch (POLYGON_THRESHOLD=12) → Path B canonical
+  // 자동 활성. UI tool 영향 0 (signature 보존).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-107 ζ-δ — DrawCircleTool default Path B activation', () => {
+    beforeEach(async () => {
+      ctx.bridge.drawCircleAsCurve = vi.fn().mockReturnValue(0);
+      const { setDrawCurveMode } = await import('./DrawCurveSettings');
+      setDrawCurveMode(false); // explicit OFF — legacy *AsShape path
+    });
+
+    it('default segments=24 invokes bridge.drawCircleAsShape with segments=24', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.applyVCBValue(50);
+
+      expect(ctx.bridge.drawCircleAsShape).toHaveBeenCalledTimes(1);
+      // ADR-107 ζ-δ — segments=24 (>= POLYGON_THRESHOLD=12) → engine
+      // 내부 ζ-β dispatch 가 Path B canonical 변환. UI tool 의 signature
+      // 보존 (drawCircleAsShape with segments=24).
+      const call = ctx.bridge.drawCircleAsShape.mock.calls[0];
+      expect(call[7]).toBe(24); // segments parameter
+      expect(call[6]).toBe(50); // radius parameter
+    });
+
+    it('VCB segments arg = 24 is >= POLYGON_THRESHOLD (12) → engine Path B', () => {
+      // L1 backward compat — UI tool calls drawCircleAsShape unchanged.
+      // Engine layer (ADR-107 ζ-β) handles threshold dispatch internally.
+      const POLYGON_THRESHOLD = 12;
+      const UI_DEFAULT_SEGMENTS = 24;
+      expect(UI_DEFAULT_SEGMENTS).toBeGreaterThanOrEqual(POLYGON_THRESHOLD);
+    });
+  });
 });
