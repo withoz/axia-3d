@@ -506,6 +506,9 @@ type AxiaEngineExtended = AxiaEngine & {
   // ADR-104 β-1-ζ — Sphere Path B default flag
   setSpherePathBDefault?(on: boolean): void;
   getSpherePathBDefault?(): boolean;
+  // ADR-104 β-2-ζ — Cone Path B default flag
+  setConePathBDefault?(on: boolean): void;
+  getConePathBDefault?(): boolean;
   // ADR-097 T-δ — Topology damage detection + recovery
   detectTopologyDamage?(): string;
   attemptAutoRecovery?(): string;
@@ -1391,6 +1394,35 @@ export class WasmBridge {
   getSpherePathBDefault(): boolean {
     if (!this.engine) return false;
     const fn = this.engine.getSpherePathBDefault;
+    if (!fn) return false;
+    return fn.call(this.engine);
+  }
+
+  /**
+   * ADR-104 β-2-ζ — Set the Path B cone default flag.
+   *
+   * `true` = `create_cone` 가 kernel-native 2 face / 1 edge / 1 vert
+   * canonical 로 분기 (산업 CAD parity, ~92% 메모리 절감).
+   * `false` = legacy Path A (~25 face polygonal cone).
+   *
+   * Call once at app init based on user preference (localStorage
+   * `axia:cone-path-b-mode`). ADR-049 P-5e-α / ADR-094 B-η / ADR-113
+   * 답습 패턴. Graceful no-op when WASM endpoint missing.
+   */
+  setConePathBDefault(on: boolean): void {
+    if (!this.engine) return;
+    const fn = this.engine.setConePathBDefault;
+    if (!fn) return;
+    fn.call(this.engine, on);
+  }
+
+  /**
+   * ADR-104 β-2-ζ — Read the Path B cone default flag.
+   * Returns false on missing endpoint (legacy default).
+   */
+  getConePathBDefault(): boolean {
+    if (!this.engine) return false;
+    const fn = this.engine.getConePathBDefault;
     if (!fn) return false;
     return fn.call(this.engine);
   }

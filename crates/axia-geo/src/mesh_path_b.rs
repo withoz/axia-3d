@@ -16,6 +16,8 @@
 //! - `Mesh::cylinder_path_b_default` — flag reader
 //! - `Mesh::set_sphere_path_b_default` — ADR-104 β-1-ζ production flag
 //! - `Mesh::sphere_path_b_default` — flag reader
+//! - `Mesh::set_cone_path_b_default` — ADR-104 β-2-ζ production flag
+//! - `Mesh::cone_path_b_default` — flag reader
 //! - `Mesh::mark_face_outer_soft` — SOFT flag on outer loop HEs (render hint)
 //!
 //! ## ADR cross-link
@@ -137,6 +139,22 @@ impl Mesh {
     /// ADR-104 β-1-ζ — Read the Path B sphere default flag.
     pub fn sphere_path_b_default(&self) -> bool {
         self.sphere_path_b_default
+    }
+
+    /// ADR-104 β-2-ζ — Set the Path B cone default. See field doc on
+    /// `Mesh::cone_path_b_default` for semantics.
+    ///
+    /// Production layer should call this once at startup (after reading
+    /// localStorage `axia:cone-path-b-mode`). Test layer may toggle
+    /// per-test as needed. Mirrors `set_sphere_path_b_default` /
+    /// `set_cylinder_path_b_default` patterns.
+    pub fn set_cone_path_b_default(&mut self, on: bool) {
+        self.cone_path_b_default = on;
+    }
+
+    /// ADR-104 β-2-ζ — Read the Path B cone default flag.
+    pub fn cone_path_b_default(&self) -> bool {
+        self.cone_path_b_default
     }
 
     /// ADR-094 B-γ-prep — Distinguishes Path B multi-loop schema vs

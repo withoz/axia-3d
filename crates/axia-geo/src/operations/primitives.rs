@@ -240,6 +240,13 @@ impl Mesh {
         segments: u32,
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
+        // ADR-104 β-2-ζ — Path B dispatch (engine OFF default, production ON
+        // via localStorage `axia:cone-path-b-mode`). Returns 2-face cone
+        // (base disk + cone side). Mirrors β-1-ζ sphere dispatch pattern.
+        if self.cone_path_b_default {
+            return self.create_cone_kernel_native(center, radius, height, material);
+        }
+
         if segments < 3 {
             anyhow::bail!("create_cone: need segments >= 3 (got {})", segments);
         }
@@ -1364,6 +1371,88 @@ mod tests {
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "Path B sphere via create_sphere dispatch: {}",
             report.summary());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-104 β-2-ζ — Cone Path B dispatch regression suite
+    // (mirror of β-1-ζ sphere dispatch, 사용자 결재 2026-05-17).
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr104_b2_zeta_engine_default_is_path_a_legacy() {
+        let mesh = Mesh::new();
+        assert!(!mesh.cone_path_b_default(),
+            "engine default must be Path A (false) — preserves regression assets");
+    }
+
+    #[test]
+    fn adr104_b2_zeta_path_b_active_after_flag_flip() {
+        let mut mesh = Mesh::new();
+        mesh.set_cone_path_b_default(true);
+        assert!(mesh.cone_path_b_default());
+
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        assert_eq!(faces.len(), 2,
+            "Path B flip → 2 faces (base disk + cone side), not N polygonal faces");
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_faces, 2, "Path B cone = 2 face total");
+    }
+
+    #[test]
+    fn adr104_b2_zeta_path_a_default_off_preserved() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        // Path A default → polygonal cone with many faces (1 base + N sides)
+        assert!(faces.len() >= 10,
+            "Path A default → ≥ 10 polygonal faces, got {}", faces.len());
+    }
+
+    #[test]
+    fn adr104_b2_zeta_path_a_explicit_off_after_toggle() {
+        let mut mesh = Mesh::new();
+        mesh.set_cone_path_b_default(true);
+        mesh.set_cone_path_b_default(false);
+        assert!(!mesh.cone_path_b_default());
+
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        assert!(faces.len() >= 10,
+            "after toggle off, Path A revert (≥ 10 polygonal faces, got {})",
+            faces.len());
+    }
+
+    #[test]
+    fn adr104_b2_zeta_dispatch_invariants_pass() {
+        let mut mesh = Mesh::new();
+        mesh.set_cone_path_b_default(true);
+        let mat = MaterialId::new(0);
+        let _ = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "Path B cone via create_cone dispatch: {}",
+            report.summary());
+    }
+
+    #[test]
+    fn adr104_b2_zeta_path_b_dispatch_memory_reduction() {
+        let mut mesh_a = Mesh::new();
+        let mut mesh_b = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let faces_a = mesh_a.create_cone(DVec3::ZERO, 50.0, 100.0, 24, mat).unwrap();
+
+        mesh_b.set_cone_path_b_default(true);
+        let faces_b = mesh_b.create_cone(DVec3::ZERO, 50.0, 100.0, 24, mat).unwrap();
+
+        let reduction_pct = (faces_a.len() - faces_b.len()) as f64 * 100.0
+            / faces_a.len() as f64;
+        assert!(reduction_pct > 80.0,
+            "Path B vs Path A cone face reduction expected >80%, got {:.1}% \
+             (Path A = {} faces, Path B = {} faces)",
+            reduction_pct, faces_a.len(), faces_b.len());
+        assert_eq!(faces_b.len(), 2,
+            "Path B cone = exactly 2 faces (base disk + cone side)");
     }
 
     #[test]

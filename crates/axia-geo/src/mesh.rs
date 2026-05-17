@@ -175,6 +175,23 @@ pub struct Mesh {
     #[serde(skip, default)]
     pub cylinder_path_b_default: bool,
 
+    /// ADR-104 β-2-ζ — Cone Path B default flag.
+    ///
+    /// `true` (production preference) = `create_cone(...)` 자동 분기하여
+    /// `create_cone_kernel_native` (Path B — 2 face / 1 edge / 1 vert
+    /// canonical, ~92% memory reduction) 호출. `false` (engine default) =
+    /// legacy Path A (`create_cone` 의 polygonal mesh, ~25 face for default
+    /// segments).
+    ///
+    /// **Engine default**: `false` (legacy) — preserves Path A regression
+    /// assets. Production layer (WASM bridge / TS init) flips to `true`
+    /// based on user preference (localStorage `axia:cone-path-b-mode`,
+    /// ADR-094 B-η / ADR-113 답습).
+    ///
+    /// `serde(skip)` — runtime preference, snapshot 영향 0.
+    #[serde(skip, default)]
+    pub cone_path_b_default: bool,
+
     /// ADR-104 β-1-ζ — Sphere Path B default flag.
     ///
     /// `true` (production preference) = `create_sphere(...)` 자동
@@ -406,6 +423,9 @@ impl Mesh {
             // ADR-104 β-1-ζ — sphere default same pattern (engine OFF,
             // production layer flips via set_sphere_path_b_default(true)).
             sphere_path_b_default: false,
+            // ADR-104 β-2-ζ — cone default same pattern (engine OFF,
+            // production layer flips via set_cone_path_b_default(true)).
+            cone_path_b_default: false,
             // ADR-094 B-γ-prep — empty map, all faces use legacy
             // outer+inners until explicit set_face_boundary_loops call.
             face_to_boundary_loops: FxHashMap::default(),
@@ -3366,6 +3386,204 @@ impl Mesh {
 
         match build_result {
             Ok((north_face, south_face)) => Ok(vec![north_face, south_face]),
+            Err(e) => {
+                // Rollback: remove any new faces, edges, hes, verts.
+                let edges_after: Vec<EdgeId> = self.edges.iter()
+                    .filter(|(id, _)| !edges_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for eid in edges_after {
+                    self.edges.remove(eid);
+                }
+                let hes_after: Vec<HeId> = self.hes.iter()
+                    .filter(|(id, _)| !hes_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for hid in hes_after {
+                    self.hes.remove(hid);
+                }
+                let verts_after: Vec<VertId> = self.verts.iter()
+                    .filter(|(id, _)| !verts_before.contains(id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for vid in verts_after {
+                    self.verts.remove(vid);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// ADR-104 β-2-β — Kernel-native cone creation (Path B, mirror of
+    /// β-1-β `create_sphere_kernel_native`, ~92% memory reduction vs
+    /// Path A polygonal cone).
+    ///
+    /// **Canonical structure (Z-up, LOCKED #43 정합)**
+    ///
+    /// - 1 base anchor vertex at `center + (radius, 0, 0)` (Z-up)
+    /// - 1 self-loop edge `e_base` with `AnalyticCurve::Circle`:
+    ///   - `center` = base circle center
+    ///   - `radius` = cone base radius
+    ///   - `normal` = `+Z` (base plane normal)
+    ///   - `basis_u` = `+X`
+    /// - 2 faces:
+    ///   - **Base disk** (outer = HE-bwd self-loop): `AnalyticSurface::Plane`
+    ///     with normal `-Z` (outward at base = -axis)
+    ///   - **Cone side** (outer = HE-fwd self-loop): `AnalyticSurface::Cone`
+    ///     with `apex` at `center + (0,0,height)`, `axis_dir` = `-Z`
+    ///     (apex → base direction), `half_angle` = `atan(radius/height)`,
+    ///     `v_range` = `(0, height)` (v=0 at apex degenerate, v=height at base)
+    /// - 0 apex vertex (degenerate parameter point — accessible via
+    ///   `Surface::Cone.apex` field, render via `tessellate_face_surface`)
+    ///
+    /// **Lock-ins (ADR-104 Amendment 1 Q2 + ADR-113 mirror)**
+    ///
+    /// - **L-104-Q2-1** apex 는 degenerate parameter point (DCEL vertex 아님)
+    /// - **L-104-Q2-2** ADR-021 P7 strict: base circle = real Jordan curve
+    /// - **L-104-Q2-3** ADR-094/113 답습: 단일 closed curve 가 surface 를
+    ///   2 face 로 분할 (cylinder annulus / sphere hemisphere 패턴 1:1 mirror)
+    /// - **L-104-Q2-4** Memory unlock: 2/1/1 vs Path A 25/49/26 = ~92%
+    /// - **L-104-Q2-5** 메타-원칙 #14: 면 = 닫힌 경계의 byproduct
+    ///
+    /// # Returns
+    /// `Result<Vec<FaceId>>` — `[base_disk_id, cone_side_id]`.
+    ///
+    /// # Errors
+    /// - `radius <= 0` or `height <= 0` → bail
+    /// - `center` not finite → bail
+    /// - DCEL wiring 실패 → partial rollback + bail
+    pub fn create_cone_kernel_native(
+        &mut self,
+        center: DVec3,
+        radius: f64,
+        height: f64,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        if radius <= 0.0 {
+            bail!(
+                "ADR-104 β-2-β-1: cone radius must be positive (got {})",
+                radius,
+            );
+        }
+        if height <= 0.0 {
+            bail!(
+                "ADR-104 β-2-β-1: cone height must be positive (got {})",
+                height,
+            );
+        }
+        if !center.is_finite() {
+            bail!("ADR-104 β-2-β-1: cone center must be finite");
+        }
+
+        // Z-up canonical (LOCKED #43): base on z = center.z plane,
+        // normal = +Z, basis_u = +X. Apex at z = center.z + height.
+        let normal = DVec3::Z;
+        let basis_u = DVec3::X;
+        let base_anchor_pos = center + basis_u * radius;
+        let apex_pt = center + DVec3::Z * height;
+
+        // Snapshot for rollback.
+        let edges_before: FxHashSet<EdgeId> = self.edges.iter().map(|(id, _)| id).collect();
+        let hes_before: FxHashSet<HeId> = self.hes.iter().map(|(id, _)| id).collect();
+        let verts_before: FxHashSet<VertId> = self.verts.iter().map(|(id, _)| id).collect();
+
+        // Create anchor vertex (uses LOCKED #5 spatial-hash dedup).
+        let anchor = self.add_vertex(base_anchor_pos);
+
+        // Base Circle curve.
+        let base_curve = crate::curves::AnalyticCurve::Circle {
+            center,
+            radius,
+            normal,
+            basis_u,
+        };
+
+        // Build inside closure for clean rollback on error.
+        let build_result: Result<(FaceId, FaceId)> = (|| {
+            // 1. Self-loop base edge with curve attached.
+            let (eid, _) = self.add_edge(anchor, anchor)?;
+            self.edges[eid].set_curve(Some(base_curve.clone()));
+
+            // 2. Get HE-fwd + HE-bwd (twin pair).
+            let he_fwd = self.edges[eid].any_he();
+            if he_fwd.is_null() {
+                bail!(
+                    "ADR-104 β-2-β-1: self-loop edge {:?} has no half-edge",
+                    eid,
+                );
+            }
+            let he_bwd = self.hes[he_fwd].next_rad();
+            if he_bwd.is_null() || he_bwd == he_fwd {
+                bail!(
+                    "ADR-104 β-2-β-1: base self-loop edge {:?} has \
+                     degenerate radial chain — cannot locate twin HE",
+                    eid,
+                );
+            }
+
+            // 3. Create base disk face (outer normal = -Z down — outward
+            //    at base). Boundary CCW viewed from -Z = HE-bwd direction.
+            let base_face = self.faces.insert(Face::new(
+                LoopRef::default(),
+                DVec3::NEG_Z, // legacy field; canonical truth is AnalyticSurface
+                FACE_TOLERANCE,
+                material,
+            ));
+
+            // Wire HE-bwd as base face's outer self-loop.
+            self.hes[he_bwd].set_next(he_bwd);
+            self.hes[he_bwd].set_prev(he_bwd);
+            self.hes[he_bwd].set_face(base_face);
+            self.hes[he_bwd].set_outer(true);
+            self.faces[base_face].set_outer(LoopRef::new(he_bwd, true));
+
+            // Base disk Plane surface (outward normal -Z).
+            // Compute basis_u from ref direction; cap_range covers radius.
+            let cap_range = (-radius * 1.5, radius * 1.5);
+            let base_plane = crate::surfaces::AnalyticSurface::Plane {
+                origin: center,
+                normal: DVec3::NEG_Z,
+                basis_u,
+                u_range: cap_range,
+                v_range: cap_range,
+            };
+            self.faces[base_face].set_surface(Some(base_plane));
+
+            // 4. Create cone side face (outer normal varies radially +Z up).
+            //    Boundary CCW viewed from +Z (above) = HE-fwd direction.
+            let cone_side_face = self.faces.insert(Face::new(
+                LoopRef::default(),
+                DVec3::Z, // legacy field — canonical truth via AnalyticSurface
+                FACE_TOLERANCE,
+                material,
+            ));
+
+            // Wire HE-fwd as cone side's outer self-loop.
+            self.hes[he_fwd].set_next(he_fwd);
+            self.hes[he_fwd].set_prev(he_fwd);
+            self.hes[he_fwd].set_face(cone_side_face);
+            self.hes[he_fwd].set_outer(true);
+            self.faces[cone_side_face].set_outer(LoopRef::new(he_fwd, true));
+
+            // Cone surface: apex at (0,0,height) from center, axis_dir = -Z
+            // (apex → base), half_angle = atan(radius/height).
+            // v range: v=0 apex (degenerate), v=height base.
+            let half_angle = (radius / height).atan();
+            let cone_surface = crate::surfaces::AnalyticSurface::Cone {
+                apex: apex_pt,
+                axis_dir: DVec3::NEG_Z, // apex → base
+                half_angle,
+                ref_dir: basis_u,
+                u_range: (0.0, std::f64::consts::TAU),
+                v_range: (0.0, height),
+            };
+            self.faces[cone_side_face].set_surface(Some(cone_surface));
+
+            Ok((base_face, cone_side_face))
+        })();
+
+        match build_result {
+            Ok((base_face, cone_side_face)) => Ok(vec![base_face, cone_side_face]),
             Err(e) => {
                 // Rollback: remove any new faces, edges, hes, verts.
                 let edges_after: Vec<EdgeId> = self.edges.iter()
@@ -12251,6 +12469,169 @@ mod tests {
         let reduction = 1.0 - (path_b_total as f64 / path_a_total as f64);
         assert!(reduction > 0.99,
             "Path B memory reduction must be > 99% (got {:.4}, path_b_total={}, path_a_total={})",
+            reduction, path_b_total, path_a_total);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ADR-104 β-2-β — Cone Path B kernel-native engine tests
+    // (mirror of β-1-β sphere kernel-native test suite).
+    // ════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr104_cone_kernel_native_face_count_2() {
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).expect("kernel-native cone OK");
+        assert_eq!(faces.len(), 2, "Path B cone = 2 faces (base disk + cone side)");
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_base_anchor_vertex_count_1() {
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).unwrap();
+        let active_verts = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        assert_eq!(active_verts, 1, "Path B cone = 1 base anchor vert (apex degenerate, no DCEL vert)");
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_base_self_loop_edge() {
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).unwrap();
+        let active_edges = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+        assert_eq!(active_edges, 1, "Path B cone = 1 self-loop base edge");
+
+        // Verify the edge has Circle curve attached.
+        let (_, edge) = mesh.edges.iter().find(|(_, e)| e.is_active()).unwrap();
+        match edge.curve() {
+            Some(crate::curves::AnalyticCurve::Circle { radius, .. }) => {
+                assert!((radius - 5.0).abs() < 1e-9, "base Circle radius preserved");
+            }
+            _ => panic!("expected AnalyticCurve::Circle on base self-loop edge"),
+        }
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_surface_attached_both_faces() {
+        let mut mesh = Mesh::new();
+        let faces = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).unwrap();
+
+        // faces[0] = base disk Plane, faces[1] = cone side Cone
+        let base_surface = mesh.faces[faces[0]].surface();
+        let cone_surface = mesh.faces[faces[1]].surface();
+
+        assert!(matches!(base_surface, Some(crate::surfaces::AnalyticSurface::Plane { .. })),
+            "base face has Plane surface, got {:?}", base_surface);
+        assert!(matches!(cone_surface, Some(crate::surfaces::AnalyticSurface::Cone { .. })),
+            "cone side face has Cone surface, got {:?}", cone_surface);
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_cone_surface_params_canonical() {
+        let mut mesh = Mesh::new();
+        let radius = 5.0;
+        let height = 10.0;
+        let faces = mesh.create_cone_kernel_native(
+            DVec3::ZERO, radius, height, MaterialId::new(0),
+        ).unwrap();
+
+        match mesh.faces[faces[1]].surface() {
+            Some(crate::surfaces::AnalyticSurface::Cone { apex, axis_dir, half_angle, v_range, .. }) => {
+                // apex above base by height
+                assert!((apex.z - height).abs() < 1e-9, "apex at z=height (got z={})", apex.z);
+                // axis points from apex to base (= -Z for Z-up)
+                assert!((axis_dir.z + 1.0).abs() < 1e-9, "axis_dir = -Z (got {})", axis_dir);
+                // half_angle = atan(radius / height)
+                let expected_half = (radius / height).atan();
+                assert!((half_angle - expected_half).abs() < 1e-9,
+                    "half_angle = atan(r/h) (got {}, expected {})", half_angle, expected_half);
+                // v_range from apex (0) to base (height)
+                assert!(v_range.0.abs() < 1e-9 && (v_range.1 - height).abs() < 1e-9,
+                    "v_range = (0, height) (got {:?})", v_range);
+            }
+            _ => panic!("expected Cone surface"),
+        }
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_invariants_pass() {
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "cone kernel-native invariants: {}", report.summary());
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_rejects_zero_radius() {
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_cone_kernel_native(
+            DVec3::ZERO, 0.0, 10.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_rejects_negative_radius() {
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_cone_kernel_native(
+            DVec3::ZERO, -1.0, 10.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_rejects_zero_height() {
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 0.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_rejects_negative_height() {
+        let mut mesh = Mesh::new();
+        assert!(mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, -1.0, MaterialId::new(0),
+        ).is_err());
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_zup_canonical_anchor_position() {
+        // Anchor at center + (radius, 0, 0) per Z-up canonical (ADR-103).
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_cone_kernel_native(
+            DVec3::new(10.0, 20.0, 30.0), 5.0, 8.0, MaterialId::new(0),
+        ).unwrap();
+        let (_, vert) = mesh.verts.iter().find(|(_, v)| v.is_active()).unwrap();
+        let expected = DVec3::new(15.0, 20.0, 30.0); // center + (radius, 0, 0)
+        assert!(vert.pos().distance(expected) < 1e-9,
+            "anchor at expected Z-up position (got {:?}, expected {:?})",
+            vert.pos(), expected);
+    }
+
+    #[test]
+    fn adr104_cone_kernel_native_memory_reduction_vs_path_a() {
+        // ADR-104 §1.1: Path A (N=24) = 25 face / 49 edge / 26 vert
+        // Path B = 2 face / 1 edge / 1 vert → ~92% reduction
+        let mut mesh = Mesh::new();
+        let _ = mesh.create_cone_kernel_native(
+            DVec3::ZERO, 5.0, 10.0, MaterialId::new(0),
+        ).unwrap();
+
+        let path_b_total = mesh.faces.iter().filter(|(_, f)| f.is_active()).count()
+            + mesh.edges.iter().filter(|(_, e)| e.is_active()).count()
+            + mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+        let path_a_total: usize = 25 + 49 + 26;
+        let reduction = 1.0 - (path_b_total as f64 / path_a_total as f64);
+        assert!(reduction > 0.90,
+            "Path B cone reduction must be > 90% (got {:.4}, path_b_total={}, path_a_total={})",
             reduction, path_b_total, path_a_total);
     }
 }
