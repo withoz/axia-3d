@@ -116,8 +116,15 @@ function tessellateArc(c: ArcCurve): THREE.Vector3[] {
   const center = new THREE.Vector3(...c.center);
   const n = new THREE.Vector3(...c.planeNormal).normalize();
   const xAxis = new THREE.Vector3(...c.xAxis).normalize();
-  // yAxis = xAxis × normal — CCW 회전이 +X → +Z 방향 (user intuitive for XZ plane from above)
-  const yAxis = new THREE.Vector3().crossVectors(xAxis, n).normalize();
+  // ── Bug fix (2026-05-16, 사용자 시연 evidence) ──
+  // yAxis = planeNormal × xAxis (standard right-handed convention).
+  // Mirrors `axia-wasm/src/lib.rs:1070` (drawArcWithCurve): basis_v =
+  // normal.cross(basis_u). UI/engine convention 통일.
+  //
+  // 이전 (`xAxis × planeNormal`) 은 -basis_v (mirror). arcFrom3Points
+  // 가 계산한 angle 을 engine 에 전달 시 결과 점이 의도와 y-축 대칭
+  // (사용자 "호를 정확히 그리지 못함" 결함의 root cause).
+  const yAxis = new THREE.Vector3().crossVectors(n, xAxis).normalize();
 
   const pts: THREE.Vector3[] = [];
   const seg = Math.max(3, c.segments | 0);
@@ -300,8 +307,12 @@ export function arcFrom3Points(
 
   // xAxis = from center to p1, 정규화
   const xAxis = new THREE.Vector3().subVectors(a, center).normalize();
-  // 동일 convention: yAxis = xAxis × normal (tessellateArc와 일치)
-  const yAxis = new THREE.Vector3().crossVectors(xAxis, planeNormal);
+  // ── Bug fix (2026-05-16, 사용자 시연 evidence) ──
+  // yAxis = planeNormal × xAxis (standard right-handed, tessellateArc 와 동기).
+  // 이전 (`xAxis × planeNormal`) 은 engine convention (basis_v = normal.cross
+  // (basis_u), axia-wasm/lib.rs:1070) 와 mirror — angle 계산 부호 inverted
+  // → engine 에 전달 시 y-축 대칭 결과. 사용자 facing visual 결함 root cause.
+  const yAxis = new THREE.Vector3().crossVectors(planeNormal, xAxis);
 
   const angle = (p: THREE.Vector3): number => {
     const v = new THREE.Vector3().subVectors(p, center);
