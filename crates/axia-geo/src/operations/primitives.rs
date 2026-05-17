@@ -116,6 +116,15 @@ impl Mesh {
             self.mark_face_outer_soft(fid)?;
         }
 
+        // ADR-093 + 사용자 통찰 (2026-05-16) — 모든 cylindrical side faces
+        // 에 동일 surface_owner_id 부여. SelectTool click 시 N quad sides
+        // 일괄 선택 (Path B cylinder 의 single side face canonical 과
+        // 동일 성격). "기능 확보 → 결함 자연 해소" canonical strategy.
+        let cylinder_owner_id = self.next_surface_owner_id();
+        for &fid in &side_faces_for_soften {
+            self.set_face_surface_owner_id(fid, Some(cylinder_owner_id));
+        }
+
         Ok(faces)
     }
 
@@ -332,6 +341,14 @@ impl Mesh {
             self.mark_face_outer_soft(fid)?;
         }
 
+        // ADR-093 + 사용자 통찰 (2026-05-16) — 모든 conical side faces 에
+        // 동일 surface_owner_id 부여. SelectTool click 시 N triangle sides
+        // 일괄 선택 (cylinder 와 동일 성격).
+        let cone_owner_id = self.next_surface_owner_id();
+        for &fid in &side_faces_for_soften {
+            self.set_face_surface_owner_id(fid, Some(cone_owner_id));
+        }
+
         Ok(faces)
     }
 
@@ -489,8 +506,16 @@ impl Mesh {
         // boundary), 시각적으로 hide 해야 매끈한 구. 모든 face 의 outer
         // edges 를 soft 마킹.
         let all_sphere_faces = faces.clone();
-        for fid in all_sphere_faces {
-            self.mark_face_outer_soft(fid)?;
+        for fid in &all_sphere_faces {
+            self.mark_face_outer_soft(*fid)?;
+        }
+
+        // ADR-093 + 사용자 통찰 (2026-05-16) — Sphere 의 모든 face 가
+        // 동일 surface_owner_id. SelectTool click 시 전체 sphere 일괄 선택
+        // (cylinder/cone 와 동일 성격, "기능 확보 → 결함 자연 해소").
+        let sphere_owner_id = self.next_surface_owner_id();
+        for &fid in &all_sphere_faces {
+            self.set_face_surface_owner_id(fid, Some(sphere_owner_id));
         }
 
         Ok(faces)
@@ -511,6 +536,82 @@ mod tests {
         mesh.create_cylinder(DVec3::ZERO, 50.0, 100.0, 16, mat).unwrap();
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "cylinder: {}", report.summary());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-093 + 사용자 통찰 (2026-05-16) — primitive surface owner-id grouping.
+    //
+    // create_cylinder / create_cone / create_sphere 가 N side faces 에
+    // 동일 surface_owner_id 부여 → SelectTool click 시 전체 일괄 선택.
+    // Path B cylinder 의 single side face canonical 와 동일 성격.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn primitive_cylinder_sides_share_owner_id() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let segments = 16u32;
+        let faces = mesh.create_cylinder(DVec3::ZERO, 50.0, 100.0, segments, mat).unwrap();
+
+        // faces[0] = base, [1] = top, [2..] = N sides
+        let side_owner = mesh.face_surface_owner_id(faces[2]);
+        assert!(side_owner.is_some(), "cylinder side must have owner_id");
+        for &side in &faces[2..] {
+            assert_eq!(mesh.face_surface_owner_id(side), side_owner,
+                "all cylinder sides share owner_id");
+        }
+        // Caps should NOT share side owner (different surface type).
+        assert_ne!(mesh.face_surface_owner_id(faces[0]), side_owner,
+            "base cap must NOT share side owner");
+        assert_ne!(mesh.face_surface_owner_id(faces[1]), side_owner,
+            "top cap must NOT share side owner");
+    }
+
+    #[test]
+    fn primitive_cone_sides_share_owner_id() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let segments = 16u32;
+        let faces = mesh.create_cone(DVec3::ZERO, 50.0, 100.0, segments, mat).unwrap();
+
+        // faces[0] = base cap, [1..] = N side triangles
+        let side_owner = mesh.face_surface_owner_id(faces[1]);
+        assert!(side_owner.is_some(), "cone side must have owner_id");
+        for &side in &faces[1..] {
+            assert_eq!(mesh.face_surface_owner_id(side), side_owner,
+                "all cone sides share owner_id");
+        }
+        assert_ne!(mesh.face_surface_owner_id(faces[0]), side_owner,
+            "base cap must NOT share side owner");
+    }
+
+    #[test]
+    fn primitive_sphere_all_faces_share_owner_id() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_sphere(DVec3::ZERO, 50.0, 8, 16, mat).unwrap();
+
+        // Sphere = closed surface, all faces share single owner_id.
+        let first_owner = mesh.face_surface_owner_id(faces[0]);
+        assert!(first_owner.is_some(), "sphere face must have owner_id");
+        for &fid in &faces {
+            assert_eq!(mesh.face_surface_owner_id(fid), first_owner,
+                "all sphere faces share single owner_id");
+        }
+    }
+
+    #[test]
+    fn primitive_two_cylinders_get_distinct_owner_ids() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces_a = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, mat).unwrap();
+        let faces_b = mesh.create_cylinder(DVec3::new(20.0, 0.0, 0.0), 5.0, 10.0, 16, mat).unwrap();
+
+        let owner_a = mesh.face_surface_owner_id(faces_a[2]);
+        let owner_b = mesh.face_surface_owner_id(faces_b[2]);
+        assert!(owner_a.is_some() && owner_b.is_some());
+        assert_ne!(owner_a, owner_b,
+            "two separate cylinders must get distinct owner_ids");
     }
 
     /// ADR-032 P17 — Cylinder side faces carry analytic Cylinder surface.
