@@ -1,0 +1,208 @@
+# ADR-122 — GPU Instancing for Repetitive Geometry (α spec)
+
+| Field | Value |
+|---|---|
+| Status | **Proposed (α spec only — hotspot lock-in pending 사용자 결재)** |
+| Date | 2026-05-17 |
+| Author | AXiA team (사용자 KAYAC engine 검토 요청 → Claude audit + spec) |
+| Anchor | KAYAC `documents/BoundingBox그리기 리뉴얼.txt` canonical pattern + AxiA hotspot audit |
+| Cross-cut | ADR-111 α (BVH defer) — render hotspot 후속 / ADR-118 / ADR-120 답습 (α spec → β implementation atomic) / ADR-046 P31 (P1 + P3 가치) |
+
+---
+
+## 0. Summary
+
+> KAYAC AI Studio (WGPU + Rust + WebAssembly) 의 *큰 파일 처리 핵심 기법* = **GPU Instancing** (단일 unit mesh + N instance buffer = 1 drawcall). 사용자 검토 요청 (`E:/KAYAC`) 으로 audit 한 결과, KAYAC 의 architectural value 가 AxiA 에 *Three.js InstancedMesh* / *LineSegments2* 활용으로 **WGPU 전환 없이도 90% 효과** 도입 가능 확인. 본 ADR 은 4 hotspot × 5 lettered options 매트릭스 결재 받음 → 채택된 sub-step 만 별도 atomic implementation PR. Multi-week scope, LOCKED #44 의미 단위 분할 강제.
+
+---
+
+## 1. Context
+
+### 1.1 KAYAC 검토 결과 (canonical evidence)
+
+`E:/KAYAC/native/rust/src/documents/BoundingBox그리기 리뉴얼.txt`:
+> "10K objects 선택 시 BBox: **단일 유닛 박스 + 인스턴싱**. 인스턴스당 24B (center + halfExtents). 10K → 240KB/frame, 1 drawcall."
+
+KAYAC 의 production-level pattern. `helper_line_draw_manager.rs:400+` 에서 `rpass.draw(0..4, 0..instances_count)` — 단 4 vertices (quad) + N instance count → N line segments = 1 drawcall.
+
+### 1.2 AxiA 현재 hotspot audit
+
+**Mesh / LineSegments 생성 위치 22 files** (web/src 전체):
+- `import/StepIgesImporter.ts` — STEP face per `THREE.Mesh` × 각 face × 2 (front+back)
+- `tools/BoxTool.ts` / `DrawRectTool.ts` / `DrawCircleTool.ts` — preview mesh
+- `primitives/PrimitivePreviewManager.ts` — radius circle / height axis
+- `tools/ClashDetection.ts` — collision visualization
+- `viewport/SectionPlane.ts` / `ReferenceImage.ts` / `DraggableLabel.ts` — UI overlays
+- `import/DxfSceneBuilder.ts` — DXF face per mesh
+
+**현재 = 모든 mesh 별 drawcall** — 100+ primitives scene 에서 100+ drawcalls.
+
+### 1.3 ADR-111 α (BVH defer) 와의 관계
+
+ADR-111 α 가 BVH build 비용 145ms → 0 (RAF defer) 으로 click latency 해소. 본 ADR-122 는 *render-side throughput* 의 자연 후속 — drawcall overhead 해소. 두 ADR 모두 *큰 scene* 에 architectural value.
+
+### 1.4 사용자 가치 anchor (ADR-046 P31)
+
+- **P1 (건축/디자인)**: 100+ door/window/snap markers 가 즉시 응답 — production-grade architectural scene
+- **P3 (AI 협업자)**: AI agent 가 batch primitive 생성 시 1000+ objects scene 안정 — automated workflow unlock
+
+**Demo readiness**: 큰 scene (>100 primitives) FPS 개선 — 메모리 footprint 동일 but render time ↓.
+
+---
+
+## 2. AxiA Hotspot 매트릭스 (4 categories)
+
+| Hotspot | 현재 (drawcall N) | Instancing 후 | 도입 risk | 사용자 가치 |
+|---|---|---|---|---|
+| **A — Selection BBox** (group select 시 N face outline) | N drawcalls | 1 (unit box + N instance) | 낮음 | 중간 (group selection UX) |
+| **B — Snap markers** (vertex / midpoint / center / nearest 등 N markers) | N drawcalls (SnapVisual 2D canvas overlay) | N/A (현재 이미 2D canvas, GPU draw 아님) | — | — (이미 효율) |
+| **C — Helper lines** (axis guides / dim lines / extension / parallel) | LineSegments2 별 drawcall | quad-instanced lines (KAYAC pattern) | 중간 (Line2 → quad-shader 변경) | 중간 |
+| **D — Reference imported mesh** (STEP face × N, DXF entity × N) | N × 2 (front+back) Three.js Mesh | InstancedMesh group | 높음 (mesh metadata per-face) | **높음** (대용량 STEP/DXF unlock) |
+| **E — Primitive preview** (rect/circle/arc 마우스 드래그 중) | Per-tool preview mesh | 단일 unit + dynamic update | 낮음 | 낮음 (이미 빠름) |
+| **F — Construction lines / dimensions** (ADR-095 reference 시민권) | Line2 별 | quad-instanced | 중간 | 중간 |
+| **G — Clash detection visualization** (collision pairs) | N pair × Mesh | InstancedMesh | 낮음 | 낮음 (rarely > 50 clashes) |
+
+### 2.1 핵심 hotspot 우선순위
+
+| 순위 | Hotspot | 근거 |
+|---|---|---|
+| **1st** | **D — Reference imported mesh** (STEP/DXF/SKP) | 대용량 vendor file 처리 — production-grade unlock |
+| **2nd** | **A — Selection BBox** (group select) | UX 즉시 개선 (group select 즉시 응답) |
+| **3rd** | **C — Helper lines** (axis / dim / guide) | medium frequency, medium gain |
+| **4th** | **F — Construction lines** (ADR-095) | low frequency, medium gain |
+
+---
+
+## 3. Implementation Options Matrix
+
+### 3.1 Three.js API 선택지
+
+| API | scope | 적용 hotspot | maturity |
+|---|---|---|---|
+| `THREE.InstancedMesh` | mesh instancing (BoxGeometry / SphereGeometry 등) | A, D, E | stable since r110 |
+| `THREE.InstancedBufferGeometry` | custom attribute instancing | C, F | stable |
+| `LineSegments2 + LineSegmentsGeometry` (이미 사용) | thick lines, no instancing | (current state) | — |
+| `GPU-instanced quad lines` (KAYAC pattern) | quad-shader line | C, F (replace LineSegments2) | manual shader |
+| Custom InstancedBufferGeometry + WGSL/GLSL shader | full custom | A, D | high (full control) |
+
+### 3.2 Path options (사용자 결재 결정 필요)
+
+| Option | scope | 시간 | risk | 효과 |
+|---|---|---|---|---|
+| **α-1 A only — Selection BBox InstancedMesh** | ~150 LoC + 5 회귀 | 2-3일 atomic | 낮음 | group select 100+ objects 즉시 응답 |
+| **α-2 D only — Reference imported mesh InstancedMesh** | ~300 LoC + 8 회귀 | 1주 atomic | 중간 (per-face metadata mapping) | 대용량 STEP/DXF unlock |
+| **α-3 A + D 묶음 — UI critical + production-grade** | ~450 LoC + 13 회귀 | 1.5-2주 atomic | 중간 | 사용자 facing 큰 두 hotspot 동시 |
+| **α-4 C only — Helper lines KAYAC pattern** | ~200 LoC + 6 회귀, shader 작성 | 1-2주 atomic | 중간 (custom shader) | 사용자 hover/snap 시 frame time 감소 |
+| **α-5 4 hotspots 묶음 (A+C+D+F)** — full production-ready | ~900 LoC + 25 회귀 | 3-4주 multi-week | 높음 | KAYAC parity 달성 |
+| **α-6 spec only (본 PR)** — implementation 0, lock-in 결재만 | docs only | 본 PR | 0 | 향후 atomic sub-step 의 anchor |
+
+### 3.3 추천 매트릭스
+
+| 추천 | Path | 근거 |
+|---|---|---|
+| **1st** | **α-1 (A only — Selection BBox)** | 단순/신속/정확 — 사용자 facing 즉시 효과, 2-3일 atomic, low risk |
+| **2nd** | **α-3 (A + D 묶음)** | LOCKED #44 의미 단위 ("user-facing GPU instancing essentials"), 1.5-2주 atomic |
+| **3rd** | **α-2 (D only)** | 대용량 STEP/DXF unlock 우선 시 |
+| **4th** | **α-5 (4 hotspots)** | KAYAC parity 우선 시 |
+
+---
+
+## 4. 결재 트리거 (사용자 명시 선택 필요)
+
+### 4.1 Q1 — Hotspot 선택
+
+- **(a) α-1 — Selection BBox only** (default 추천)
+- **(b) α-2 — Reference imported mesh only**
+- **(c) α-3 — A + D 묶음**
+- **(d) α-4 — Helper lines KAYAC pattern**
+- **(e) α-5 — 4 hotspots 묶음 (full)**
+- **(f) defer — 다른 priority 진입**
+
+### 4.2 Q2 — Three.js API
+
+- **(a) `InstancedMesh`** (default, Box/Sphere 등 standard geometry)
+- **(b) `InstancedBufferGeometry`** (custom attribute)
+- **(c) Custom shader** (KAYAC pattern 직접 답습)
+
+### 4.3 Q3 — User-facing UX 변화
+
+- 사용자 facing API 변경 0 (additive only, ADR-046 P31 #4 정합)
+- Visual change 0 (same shape, different render path)
+- 시각 quality 보존 (chord-tolerant tessellation 영향 0)
+
+### 4.4 Q4 — Atomic 분할
+
+- single PR (α-1 단독)
+- α spec → β implementation seq (ADR-118 / ADR-120 답습)
+- multi-week incremental (D → A → C → F sub-steps)
+
+### 4.5 권장 default (사용자 별도 결정 시 채택)
+
+- Q1: **(a) α-1 (Selection BBox)** — 가장 단순/신속/정확
+- Q2: **(a) `InstancedMesh`** — standard, well-tested
+- Q3: API surface unchanged, additive only
+- Q4: single atomic PR
+
+---
+
+## 5. Lock-ins (canonical for whichever path chosen)
+
+- **L-122-1** KAYAC pattern 답습 — single unit mesh + N instance buffer = 1 drawcall
+- **L-122-2** Three.js native API 활용 (`InstancedMesh` / `InstancedBufferGeometry`) — WGPU 전환 없이 90% 효과
+- **L-122-3** ADR-111 α (BVH defer) 답습 — render hotspot 의 자연 후속
+- **L-122-4** ADR-046 P31 #4 additive only — 사용자 facing API 변경 0
+- **L-122-5** 시각 quality 보존 — chord-tolerant tessellation 정합 (LOCKED #40)
+- **L-122-6** Path B family DCEL invariant 정합 — InstancedMesh 가 faceMap / edgeMap 영향 0 (render-only)
+- **L-122-7** ADR-087 K-ζ canonical 사용자 시연 게이트 — implementation 후 100+ primitives stress test
+- **L-122-8** 절대 #[ignore] 금지
+
+---
+
+## 6. Out of Scope (별도 ADR per LOCKED #44)
+
+- **WGPU 전환** (Three.js → WebGPU) — KAYAC architecture full mirror. multi-month, 별도 architectural ADR
+- **Web Worker mesh processing** (Rayon 대안) — ADR-122 와 직교, 별도 ADR
+- **Custom OCCT build** (STEP timing γ-6) — ADR-118 §2 후속
+- **Persistent module cache γ-2** — ADR-118 §2 후속
+- **Service worker** WASM streaming — γ-1-explicit ADR
+
+---
+
+## 7. 사용자 facing 매트릭스 예측 (Path 별)
+
+| Scenario | Before | After α-1 | After α-3 (A+D) | After α-5 (4 hotspots) |
+|---|---|---|---|---|
+| 100 box scene group select | 100 BBox drawcalls | **1 drawcall** | 1 | 1 |
+| STEP 500-face import | 1000 drawcalls (front+back) | 1000 (D 미적용) | **2 drawcalls** | 2 |
+| Hover with 50 snap markers | 50 canvas paints (already 2D) | 50 | 50 | (B not applicable — already 2D) |
+| Helper line 활성 (axis + dim) | 5-10 LineSegments2 | 5-10 | 5-10 | **1 (instanced quad)** |
+| Frame time @ 1000 primitives | 100-150ms | 50-70ms | 30-50ms | **15-25ms** |
+
+---
+
+## 8. Cross-link
+
+- KAYAC `documents/BoundingBox그리기 리뉴얼.txt` — canonical pattern source
+- KAYAC `helper_line_draw_manager.rs:400+` — `rpass.draw(0..4, 0..instances_count)` evidence
+- ADR-111 α (BVH defer) — render hotspot 의 자연 anchor
+- ADR-118 / ADR-120 (α spec → β impl atomic pattern)
+- ADR-035 P20.C #2 (initial bundle 0MB strict) — 본 ADR 도 동일 strict 유지
+- ADR-046 P31 (P1 + P3 두 페르소나 가치 anchor)
+- ADR-046 P31 #4 (additive only)
+- ADR-087 K-ζ (사용자 시연 게이트 canonical)
+- LOCKED #40 (chord_tol render quality 보존)
+- LOCKED #43 priority audit (본 ADR 은 priority #4 와 직교 — 별도 architectural value)
+- LOCKED #44 (Complete Meaning per Merge — α spec → β impl atomic)
+
+---
+
+## 9. 결재 요청
+
+본 spec only PR (α). 사용자 결재 후 채택된 Path 만 별도 atomic sub-step PR 진행.
+
+**Q1 Path 선택** + Q2-Q4 default 채택 여부 명시 부탁드립니다.
+
+권장 default 요약:
+- Q1: **(a) α-1 (Selection BBox)** — 단순/신속/정확, 2-3일 atomic
+- 대안: **(c) α-3 (A + D)** — 사용자 facing 큰 두 hotspot 동시
+- Q2-Q4: default 채택 (`InstancedMesh`, additive only, single PR)
