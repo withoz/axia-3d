@@ -5093,7 +5093,25 @@ impl Scene {
         radius: f64,
         segments: u32,
     ) -> CommandResult {
-        // Phase 1 — delegate to exec_draw_circle.
+        // ADR-107 ζ-β — threshold-based dispatch (L2 revision, 사용자
+        // 결재 (α) 2026-05-16).
+        //
+        // segments >= POLYGON_THRESHOLD (= 12) → Path B canonical
+        //   (drawCircleAsCurve) 자동 변환 — circle approximation 의도.
+        //   메모리 97% 절감 (LOCKED #35 ADR-094 §6.3), Layer Separation
+        //   canonical (ADR-107 §4 L3), 결함 D 자연 해소 (ADR-101 §A9.8).
+        // segments < POLYGON_THRESHOLD → legacy polygon path (Layer H
+        //   hybrid 보존) — DrawPolygon use case (hexagon N=6 / octagon
+        //   N=8 / decagon N=10). scene.rs:12415 evidence.
+        //
+        // Threshold = 12 (dodecagon) — circle vs polygon 자연 경계.
+        // DrawCircleTool default segments=32 → Path B 자동 활성.
+        const POLYGON_THRESHOLD: u32 = 12;
+        if segments >= POLYGON_THRESHOLD {
+            return self.exec_draw_circle_as_curve(center, normal, radius);
+        }
+
+        // Phase 1 — legacy polygon path: delegate to exec_draw_circle.
         let xia_result = self.exec_draw_circle(center, normal, radius, segments);
         let xia_id = match xia_result {
             CommandResult::EntityCreated(id) => id,
@@ -11723,6 +11741,8 @@ mod tests {
 
     #[test]
     fn draw_circle_as_shape_creates_shape_not_xia() {
+        // ADR-107 ζ-β — segments >= POLYGON_THRESHOLD (12) → Path B
+        // canonical 자동 변환. Shape.name = "Circle (kernel-native)".
         let mut scene = Scene::new();
         let result = scene.execute(Command::DrawCircleAsShape {
             center: DVec3::ZERO,
@@ -11738,7 +11758,13 @@ mod tests {
         let shape = scene
             .get_shape(crate::ShapeId::new(shape_id_raw))
             .expect("circle shape exists");
-        assert_eq!(shape.name, "Circle");
+        // ADR-107 ζ-β: Path B canonical 의 Shape name (legacy "Circle"
+        // 가정에서 정정). Both legacy and Path B start with "Circle".
+        assert!(
+            shape.name.starts_with("Circle"),
+            "Shape name should start with 'Circle' (legacy or Path B kernel-native), got: {}",
+            shape.name
+        );
         assert!(!shape.face_ids.is_empty(),
             "Circle must produce face_ids (single face)");
         assert_eq!(shape.surface_normal, Some(DVec3::Z));
@@ -12116,9 +12142,14 @@ mod tests {
 
     #[test]
     fn adr088_s_gamma_draw_circle_as_shape_segments_share_owner_id() {
-        // DrawCircleAsShape 도 동일 (form-mode kernel-aware path).
+        // ADR-107 ζ-β — segments < POLYGON_THRESHOLD (12) → legacy
+        // polygon path (DrawPolygon use case 보존). ADR-088 owner_id
+        // grouping 의도는 polygon path 에서만 의미 (Path B 는 1 edge,
+        // grouping trivially 충족).
+        //
+        // segments=8 (octagon) — Layer H hybrid legacy path 정합 검증.
         let mut scene = Scene::new();
-        let segments = 24u32;
+        let segments = 8u32;
         let _ = scene.execute(Command::DrawCircleAsShape {
             center: DVec3::ZERO,
             normal: DVec3::Z,
@@ -12138,7 +12169,96 @@ mod tests {
             }
         }
         assert_eq!(arc_segment_count, segments as usize);
-        assert_eq!(owners.len(), 1, "AsShape variant must also single owner");
+        assert_eq!(owners.len(), 1, "AsShape (legacy polygon path) must single owner");
+    }
+
+    // ADR-107 ζ-β — Path B canonical regression for DrawCircleAsShape
+    // with segments >= POLYGON_THRESHOLD. ADR-088 의 N segment grouping
+    // 대신 Path B 의 single Circle edge canonical 검증.
+    #[test]
+    fn adr107_zeta_beta_draw_circle_as_shape_path_b_canonical() {
+        let mut scene = Scene::new();
+        let segments = 24u32; // >= 12 → Path B 자동 변환
+        let _ = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 3.0,
+            segments,
+        });
+
+        // Path B canonical: 1 vert + 1 edge + 1 face
+        let active_verts = scene.mesh.verts.iter()
+            .filter(|(_, v)| v.is_active()).count();
+        let active_edges = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active()).count();
+        let active_faces = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+
+        assert_eq!(active_verts, 1, "Path B: 1 anchor vertex");
+        assert_eq!(active_edges, 1, "Path B: 1 self-loop edge");
+        assert_eq!(active_faces, 1, "Path B: 1 face");
+
+        // Edge curve = Circle (kind=2), NOT Arc segments (kind=3).
+        let circle_edge_count = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .filter(|(_, e)| matches!(e.curve(), Some(axia_geo::AnalyticCurve::Circle { .. })))
+            .count();
+        assert_eq!(circle_edge_count, 1,
+            "Path B canonical: 1 Circle curve (not N Arc segments)");
+
+        // Face has Plane surface attached (ADR-087 K-β regression).
+        let plane_face_count = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .filter(|(_, f)| matches!(f.surface(), Some(axia_geo::AnalyticSurface::Plane { .. })))
+            .count();
+        assert_eq!(plane_face_count, 1,
+            "Path B canonical: face has Plane surface (ADR-087 K-β)");
+    }
+
+    // ADR-107 ζ-β — threshold boundary regression. segments < 12 → legacy,
+    // >= 12 → Path B. 명시 N=11 / N=12 boundary 검증.
+    #[test]
+    fn adr107_zeta_beta_threshold_boundary_segments_eleven_legacy() {
+        // segments=11 → legacy polygon path (11 Arc segments + 1 owner).
+        let mut scene = Scene::new();
+        let _ = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 2.0,
+            segments: 11,
+        });
+
+        let arc_count = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .filter(|(_, e)| matches!(e.curve(), Some(axia_geo::AnalyticCurve::Arc { .. })))
+            .count();
+        assert_eq!(arc_count, 11,
+            "segments=11 (< POLYGON_THRESHOLD): legacy 11 Arc segments");
+    }
+
+    #[test]
+    fn adr107_zeta_beta_threshold_boundary_segments_twelve_path_b() {
+        // segments=12 (= POLYGON_THRESHOLD) → Path B 자동 변환 (1 Circle).
+        let mut scene = Scene::new();
+        let _ = scene.execute(Command::DrawCircleAsShape {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 2.0,
+            segments: 12,
+        });
+
+        let circle_count = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .filter(|(_, e)| matches!(e.curve(), Some(axia_geo::AnalyticCurve::Circle { .. })))
+            .count();
+        let arc_count = scene.mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .filter(|(_, e)| matches!(e.curve(), Some(axia_geo::AnalyticCurve::Arc { .. })))
+            .count();
+        assert_eq!(circle_count, 1,
+            "segments=12 (>= POLYGON_THRESHOLD): Path B 1 Circle curve");
+        assert_eq!(arc_count, 0,
+            "segments=12: 0 Arc segments (Path B canonical)");
     }
 
     #[test]
