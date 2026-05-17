@@ -48,6 +48,7 @@ import { DrawCenterlineTool } from './DrawCenterlineTool';
 import { SphereTool } from '../primitives/SphereTool';
 import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
+import { TorusTool } from '../primitives/TorusTool';
 import { BoxTool } from './BoxTool';
 import { SliceTool } from './SliceTool';
 import {
@@ -261,6 +262,8 @@ export class ToolManager {
     this.tools.set('sphere', new SphereTool(this.toolContext));
     this.tools.set('cylinder', new CylinderTool(this.toolContext));
     this.tools.set('cone', new ConeTool(this.toolContext));
+    // ADR-116 ζ — Torus primitive (ADR-115 Path B canonical, 1/1/1 DCEL).
+    this.tools.set('torus', new TorusTool(this.toolContext));
     this.tools.set('box', new BoxTool(this.toolContext));
     this.tools.set('slice', new SliceTool(this.toolContext));
 
