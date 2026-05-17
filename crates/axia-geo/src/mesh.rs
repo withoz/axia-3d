@@ -2631,6 +2631,122 @@ impl Mesh {
         None
     }
 
+    /// ADR-109 π-β — Promote `AnalyticSurface::Cylinder` to side faces
+    /// resulting from Q3 fallback `exec_push_pull` of a profile face whose
+    /// boundary includes `AnalyticCurve::Arc` edges.
+    ///
+    /// **Context (사용자 시연 2026-05-16)**: 반원통 (Arc + chord + extrude)
+    /// 결과 N quad side faces 가 모두 Plane surface — vertical edges
+    /// visible. `create_solid_extrude` 의 `(Plane, Mixed)` dispatch 가
+    /// `NotYetSupported` → legacy push_pull fallback → Cylinder metadata
+    /// 손실. 본 post-process 가 Arc curve metadata 를 inspect 하여 side
+    /// face 에 Cylinder surface 부여 — smooth-group edge hide (ADR-089 A-τ)
+    /// 자동 활성 → 매끈 cylindrical side.
+    ///
+    /// **Algorithm**:
+    /// 1. For each candidate face: skip if already has surface.
+    /// 2. Scan boundary edges — find first `AnalyticCurve::Arc` metadata.
+    /// 3. Verify extrude_axis is parallel to Arc normal (cylinder axis).
+    /// 4. Attach `AnalyticSurface::Cylinder` (axis_origin=Arc.center,
+    ///    axis_dir=Arc.normal, radius=Arc.radius, ref_dir=Arc.basis_u).
+    ///
+    /// **Returns**: count of faces promoted.
+    ///
+    /// **Lock-ins (ADR-109 §3.2)**:
+    /// - L1 Post-process only (other dispatches unchanged)
+    /// - L2 Arc curve detection in boundary
+    /// - L3 Chord/Line side faces UNCHANGED
+    /// - L4 Same Cylinder surface instance for all matching faces
+    pub fn promote_arc_side_faces_to_cylinder(
+        &mut self,
+        candidate_faces: &[FaceId],
+        extrude_axis: DVec3,
+    ) -> usize {
+        use crate::curves::AnalyticCurve;
+        use crate::surfaces::AnalyticSurface;
+        let axis_norm = extrude_axis.normalize_or_zero();
+        if axis_norm.length_squared() < 1e-12 {
+            return 0;
+        }
+        let mut promoted = 0usize;
+
+        for &fid in candidate_faces {
+            let Some(face) = self.faces.get(fid) else { continue };
+            if !face.is_active() { continue; }
+            // L1 scope — skip only if already Cylinder (preserve canonical
+            // Path B). Plane (Q3 fallback default) → promote to Cylinder.
+            if matches!(face.surface(), Some(AnalyticSurface::Cylinder { .. })) {
+                continue;
+            }
+
+            // Find Arc curve in face boundary (L2).
+            let outer_start = face.outer().start;
+            if outer_start.is_null() { continue; }
+            let verts = match self.collect_loop_verts(outer_start) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if verts.len() < 3 { continue; }
+
+            // Capture face normal for L3 strict orthogonality check.
+            let face_normal = face.normal();
+
+            let mut arc_params: Option<(DVec3, f64, DVec3, DVec3)> = None;
+            for i in 0..verts.len() {
+                let v1 = verts[i];
+                let v2 = verts[(i + 1) % verts.len()];
+                let Some(eid) = self.find_edge(v1, v2) else { continue };
+                let Some(edge) = self.edges.get(eid) else { continue };
+                if let Some(AnalyticCurve::Arc {
+                    center, radius, normal, basis_u, ..
+                }) = edge.curve()
+                {
+                    arc_params = Some((*center, *radius, *normal, *basis_u));
+                    break;
+                }
+            }
+            let Some((center, radius, normal, basis_u)) = arc_params else { continue };
+
+            // L3 strict — face must be cylindrical SIDE (face.normal ⊥
+            // cylinder axis). cap face has face.normal ‖ cylinder axis
+            // (skip — Plane). chord side has face.normal ⊥ axis but its
+            // boundary has no Arc → already filtered above (arc_params is None).
+            //
+            // axis = Arc.normal (cylinder axis direction). Side face's
+            // normal radiates outward from axis → perpendicular.
+            let normal_norm_check = normal.normalize_or_zero();
+            if normal_norm_check.length_squared() < 1e-12 { continue; }
+            let face_normal_norm = face_normal.normalize_or_zero();
+            if face_normal_norm.length_squared() < 1e-12 { continue; }
+            let face_axis_dot = face_normal_norm.dot(normal_norm_check).abs();
+            if face_axis_dot > 0.1 {
+                // face.normal nearly parallel to cylinder axis → cap face, skip.
+                continue;
+            }
+
+            // Verify extrude axis is parallel to Arc normal (cylinder axis).
+            let normal_norm = normal.normalize_or_zero();
+            if normal_norm.length_squared() < 1e-12 { continue; }
+            let parallel = axis_norm.dot(normal_norm).abs() > 0.99;
+            if !parallel { continue; }
+
+            // Attach Cylinder surface (L4 — same params for all matching faces).
+            let cylinder = AnalyticSurface::Cylinder {
+                axis_origin: center,
+                axis_dir: normal,
+                radius,
+                ref_dir: basis_u,
+                u_range: (0.0, std::f64::consts::TAU),
+                v_range: (-1e6, 1e6),
+            };
+            if let Some(face_mut) = self.faces.get_mut(fid) {
+                face_mut.set_surface(Some(cylinder));
+                promoted += 1;
+            }
+        }
+        promoted
+    }
+
     /// Create the twin half-edge pair for an edge.
     fn create_halfedge_pair(&mut self, edge_id: EdgeId, pair: &VertPair) -> Result<()> {
         // Forward half-edge: v_start → v_end
