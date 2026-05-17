@@ -37,6 +37,7 @@ const toolNames: Record<string, string> = {
   select: 'Select', line: 'Line', rect: 'Rectangle',
   circle: 'Circle', pushpull: 'Push/Pull', move: 'Move',
   sphere: 'Sphere', cylinder: 'Cylinder', cone: 'Cone',
+  torus: 'Torus',
 };
 
 export function initMenuBar(deps: MenuBarDeps): void {
@@ -374,6 +375,8 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'tool-sphere': setActiveTool('sphere'); break;
       case 'tool-cylinder': setActiveTool('cylinder'); break;
       case 'tool-cone': setActiveTool('cone'); break;
+      // ADR-117 δ — Torus primitive (ADR-115 Path B kernel-native canonical).
+      case 'tool-torus': setActiveTool('torus'); break;
       case 'tool-box': setActiveTool('box'); break;
       case 'tool-slice': setActiveTool('slice'); break;
       case 'tool-move': setActiveTool('move'); break;

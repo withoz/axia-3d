@@ -26,6 +26,7 @@ const toolNames: Record<string, string> = {
   circle: 'Circle', pushpull: 'Push/Pull', move: 'Move',
   rotate: 'Rotate', scale: 'Scale', offset: 'Offset',
   erase: 'Erase', sphere: 'Sphere', cylinder: 'Cylinder', cone: 'Cone',
+  torus: 'Torus',
 };
 
 /** View mode → display name mapping */
@@ -436,6 +437,8 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
         'h': 'sphere', 'H': 'sphere',
         'y': 'cylinder', 'Y': 'cylinder',
         'n': 'cone', 'N': 'cone',
+        // ADR-117 δ — Torus primitive (D = donut/torus mnemonic).
+        'd': 'torus', 'D': 'torus',
         'm': 'move', 'M': 'move',
         'q': 'rotate', 'Q': 'rotate',
         's': 'scale', 'S': 'scale',
