@@ -2594,6 +2594,73 @@ LOCKED #43 ADR-103 의 사용자 directive ("좌표계 의미가 깨지는
   패턴의 multi-PR 활용 예)
 - ADR-076 §C-amendment-1 (cleanup deletion — complete pass 예)
 
+### 45. ADR-111 BVH Defer to Next Frame (α closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "α 우선 (단순/신속/정확 정합 + 30분 closure) + β 는 별도 ADR 후속."
+
+사용자 시연 "그릴때 너무느려요" (2 개 중첩 sphere) trigger → 직접 측정
+audit → primitive create flow 의 `viewport.updateMesh.fullUpdate` 비용
+의 55% (= 145 ms @ 376K tris) 가 `computeBoundsTree({indirect:true})`
+임을 발견. PR #73 β (Lazy syncMesh via RAF) 답습 패턴 *확장* — syncMesh
+자체 defer 위에 syncMesh *내부* 의 BVH 작업도 한 frame 더 defer.
+
+**Lock-ins (8개, canonical for defer-in-syncMesh ADRs)**:
+- L-111-1 frameScheduler TaskKey 'bvhRebuild' 사용 (BUDGETS 33ms,
+  latest-wins dedup 자동)
+- L-111-2 `_scheduleBvhBuild` 위치 정합 (PR #73 β `_scheduleSmoothNormals`
+  답습 — 동일 시그니처 / 동일 dispose guard / 동일 실패 모드)
+- L-111-3 `{ indirect: true }` 옵션 보존 (Critical — faceMap[ti]→faceId
+  매핑 무결성, Viewport.ts:1073 회귀 차단)
+- L-111-4 Picking O(N) naive fallback 의 시각적 비용 0 (three-mesh-bvh
+  patch 의 자연 동작 — 1 frame 영역)
+- L-111-5 Telemetry 통합 (frameScheduler 자동 `telemetry.record('bvhRebuild',
+  elapsed)` 호출)
+- L-111-6 LOCKED #40 (chord_tol) / LOCKED #16 (ADR-038 P23) 회귀 0
+- L-111-7 ADR-046 P31 #4 additive only (API surface UNCHANGED)
+- L-111-8 메타-원칙 #11 정합 (Click 33ms budget — 1st sphere 2.4ms,
+  3rd sphere 18.4ms)
+
+**측정 (real SphereTool flow, clean → 3-sphere 누적)**:
+
+| Sphere # | clicks (user-perceived) | forced sync | total | 개선 |
+|---|---|---|---|---|
+| 1st | **2.4 ms** ✓ Budget 7% | 87.3 ms | 89.7 ms | **33% ↓** |
+| 2nd | 13.1 ms ✓ Budget 40% | 190.3 ms | 203.4 ms | **20% ↓** |
+| 3rd | **18.4 ms** ✓ Budget 56% | 254.2 ms | 272.6 ms | **21% ↓** |
+
+**회귀 누적 (α-2 ~ α-4)**: vitest **+7** (`Viewport.bvh.test.ts` —
+defer 검증 / latest-wins dedup / `{indirect:true}` 보존 / dispose guard
+/ no-op without BVH patch / telemetry integration). 합계 1831 →
+**1838 PASS**, 절대 #[ignore] 금지 7/7 준수.
+
+**Lessons (canonical for future defer-based perf ADRs)** — ADR-111 §6:
+- L1 Path Z atomic 패턴의 sub-ADR 변형 — 큰 syncMesh 내부에서 추가
+  defer 후보가 있으면 *같은* frameScheduler TaskKey 패턴으로 계속 분리
+- L2 측정 우선, fix 결정 (메타-원칙 #6 Preventive over Curative) —
+  초기 가정 (analytic check loop = bottleneck) 은 측정 후 *틀린* 것으로
+  확인. 진짜 cost 는 BVH (145ms) 였음.
+- L3 α + β 분리 의 가치 (Spec-less canonical fix scope) — α (30분
+  closure) 가 β (multi-week atomic delta-buffer ADR) 보다 먼저 진행 →
+  즉시 사용자 facing gain. 향후 ADR 가이드: lettered options 결재 시
+  *가장 단순* 한 option 우선.
+
+**후속 트랙 (모두 별도 ADR)**:
+- β — Delta-buffer extension to primitives (예상 sync 30ms, 90% 감소,
+  multi-week atomic)
+- γ — EdgesGeometry fallback 비용 audit (α 이후 *다음* 가장 큰 비용
+  230~270ms, 별도 audit)
+- δ — BVH worker thread (OffscreenCanvas 호환성 audit 후)
+
+**Cross-link**:
+- 메타-원칙 #11 (Latency Budget First — Click 33ms budget 정합)
+- 메타-원칙 #6 (Preventive over Curative — 측정 우선)
+- ADR-012 §2 (FrameScheduler latest-wins TaskKey)
+- ADR-038 P23 (surface-aware normals — render 영향 0)
+- ADR-046 P31 #4 (additive only — API surface UNCHANGED)
+- PR #73 β (Lazy syncMesh via RAF — 답습 패턴 직계 source)
+- LOCKED #40 (render chord_tol — baseline 보존)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
