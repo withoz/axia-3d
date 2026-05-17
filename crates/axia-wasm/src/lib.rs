@@ -1380,6 +1380,27 @@ impl AxiaEngine {
         self.scene.mesh.sphere_path_b_default()
     }
 
+    /// ADR-104 β-2-ζ — Set the Path B cone default.
+    ///
+    /// `true` = `create_cone` 가 kernel-native 2 face / 1 edge / 1 vert
+    /// canonical 로 분기 (산업 CAD parity, ~92% 메모리 절감).
+    /// `false` = legacy Path A (~25 face polygonal cone).
+    ///
+    /// Production layer (TS bridge) calls this once at app init based on
+    /// localStorage `axia:cone-path-b-mode` preference. Tests may toggle
+    /// per-call. Mirrors `setSpherePathBDefault` / `setCylinderPathBDefault`
+    /// patterns.
+    #[wasm_bindgen(js_name = "setConePathBDefault")]
+    pub fn set_cone_path_b_default(&mut self, on: bool) {
+        self.scene.mesh.set_cone_path_b_default(on);
+    }
+
+    /// ADR-104 β-2-ζ — Read the Path B cone default flag.
+    #[wasm_bindgen(js_name = "getConePathBDefault")]
+    pub fn get_cone_path_b_default(&self) -> bool {
+        self.scene.mesh.cone_path_b_default()
+    }
+
     // ════════════════════════════════════════════════════════════════
     // ADR-097 T-δ — Topology damage detection + recovery WASM API
     // ════════════════════════════════════════════════════════════════

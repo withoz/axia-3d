@@ -118,6 +118,16 @@ async function main() {
     if (bridge.isReady()) bridge.setSpherePathBDefault(on);
   });
 
+  // ADR-104 β-2-ζ default ON — Cone Path B 활성 (산업 CAD parity,
+  // 2 face / 1 edge / 1 vert canonical, ~92% 메모리 절감 vs 25-face
+  // polygonal cone). Sphere Path B 패턴 1:1 mirror (ADR-113 답습).
+  const { getConePathBMode, onConePathBModeChange } =
+    await import('./tools/ConePathBSettings');
+  if (bridge.isReady()) bridge.setConePathBDefault(getConePathBMode());
+  onConePathBModeChange((on) => {
+    if (bridge.isReady()) bridge.setConePathBDefault(on);
+  });
+
   // Note: WASM is optional for basic Three.js rendering (e.g., Sphere tool)
   // Continue even if WASM fails to initialize
   if (!bridge.isReady()) {

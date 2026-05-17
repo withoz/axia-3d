@@ -1723,6 +1723,39 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-104 β-2-ζ — Cone Path B default flag (1:1 mirror of sphere)
+    // ────────────────────────────────────────────────────────────────
+
+    it('setConePathBDefault forwards to engine', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setConePathBDefault: fn };
+      bridge.setConePathBDefault(true);
+      expect(fn).toHaveBeenCalledWith(true);
+      bridge.setConePathBDefault(false);
+      expect(fn).toHaveBeenCalledWith(false);
+    });
+
+    it('setConePathBDefault graceful no-op when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.setConePathBDefault(true)).not.toThrow();
+    });
+
+    it('getConePathBDefault returns engine value', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getConePathBDefault: fn };
+      expect(bridge.getConePathBDefault()).toBe(true);
+    });
+
+    it('getConePathBDefault returns false when endpoint missing (legacy default)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getConePathBDefault()).toBe(false);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-095 Phase 3-γ — Reference 시민권 bridge wrappers
     // ────────────────────────────────────────────────────────────────
 

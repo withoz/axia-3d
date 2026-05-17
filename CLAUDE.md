@@ -2894,6 +2894,90 @@ SpherePathBSettings 5). 합계 **+15**, 절대 #[ignore] 금지 15/15 준수.
 - LOCKED #43 (ADR-103 Z-up — equator anchor +X·radius, Z-up)
 - LOCKED #44 (Complete Meaning per Merge — single atomic PR anchor)
 
+### 48. ADR-114 Cone Path B Production Wiring (ADR-104 β-2 closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "네 승인합니다" — ADR-113 sphere closure 직후 β-2 cone 진입.
+
+ADR-104 β-2 Cone Path B atomic closure — **ADR-113 sphere production
+wiring 패턴 1:1 mirror**. Engine + WASM + TS + Production + 시연 +
+closure 모두 single PR (LOCKED #44 정합).
+
+**Q2 revision lock-in (canonical)**: ADR-104 Amendment 1 §9.2 default
+"NURBS degenerate edge + N base ring" (partial polygonal) 폐기 →
+**base = closed-curve self-loop** (sphere Q1 Amendment 2 답습 — pure
+kernel-native). Apex = degenerate parameter point (0 DCEL vertex).
+
+**Cone Path B canonical**:
+- 1 base anchor vertex at `center + (radius, 0, 0)` (Z-up)
+- 1 self-loop edge with `AnalyticCurve::Circle`
+- 2 face: base disk (Plane) + cone side (Cone with apex degenerate)
+- 0 apex DCEL vertex (degenerate parameter, accessible via Surface.apex)
+
+**Lock-ins (8개)**:
+- L-114-1 Single atomic PR per LOCKED #44
+- L-114-2 ADR-113 1:1 mirror pattern (sphere → cone)
+- L-114-3 Engine default OFF + production ON via localStorage
+- L-114-4 Explicit OFF preference 보존
+- L-114-5 Path A 회귀 자산 보존 (dispatch 시점만 분기)
+- L-114-6 Render zero-code-change (`tessellate_face_surface` Cone variant)
+- L-114-7 ADR-046 P31 #4 additive only (`create_cone(...)` signature
+  UNCHANGED)
+- L-114-8 Q2 revision lock-in: apex degenerate + base self-loop (sphere
+  Q1 Amendment 2 답습 — polyline approach 폐기)
+
+**측정 매트릭스 (real Chromium preview)**:
+
+| Cone count | Path A (default 24 segs) | Path B (canonical) | 감소율 |
+|---|---|---|---|
+| 1 | 25 / 49 / 26 | **2 / 1 / 1** | **92.0% / 98.0% / 96.2%** |
+| 5 | 125 / 245 / 130 | **10 / 5 / 5** | **92.0% / 98.0% / 96.2%** |
+
+(faces / edges / verts. 새 사용자 cones 즉시 Path B 라우팅.)
+
+**회귀 누적**: axia-geo **+18** (12 cone kernel-native + 6 dispatch) +
+vitest **+9** (WasmBridge β-2 4 + ConePathBSettings 5). 합계 **+27**,
+절대 #[ignore] 금지 27/27 준수. axia-geo 1345 → **1363 PASS**, vitest
+1864 → **1873 PASS**.
+
+**Path B family 누적 통계** (Cylinder + Sphere + Cone 모두 production
+default ON):
+
+| Primitive | Path A | Path B | 감소율 |
+|---|---|---|---|
+| Cylinder (ADR-094) | 25/69/46 | 3/2/2 | 95% |
+| Sphere (ADR-113) | 289/561/290 | 2/1/1 | 99%+ |
+| **Cone (ADR-114)** | **25/49/26** | **2/1/1** | **92%** |
+
+모든 Path B = small constant DCEL — 향후 Torus 도 동일 unlock 예상
+(1 face / 2 edge / 1 vert per ADR-104 Amendment 1 Q3 default 또는
+revised seam approach).
+
+**Lessons (canonical for β-3 Torus 진입 시)**:
+- L1 Sphere → Cone 1:1 mirror 완전성 — 4-layer template reproducibility
+  증명. β-3 Torus 도 동일 답습.
+- L2 Q-revisions unification (canonical consistency) — Q1/Q2 모두 closed-
+  curve self-loop pattern. Q3 Torus 도 동일 논리 적용 권장.
+- L3 Memory unlock 정량적 consistency (모든 Path B = constant DCEL)
+- L4 LOCKED #44 의미 단위 분할의 가치 재확인 (primitive 별 자연 분리,
+  코드 충돌 0)
+
+**후속 트랙 (별도 ADR per LOCKED #44)**:
+- β-3 Torus Path B (ADR-104 §11.2, 본 PR 1:1 mirror)
+- γ Boolean / Offset / Push-Pull surface-driven dispatch verification
+- δ STEP export NURBSSurface round-trip audit
+
+**Cross-link**:
+- ADR-113 (Sphere Path B production wiring) — direct 1:1 mirror source
+- ADR-094 (Cylinder Path B-full canonical) — first Path B primitive
+- ADR-104 (Path B Expansion spec) + Amendment 2 (sphere Q1 revision
+  precedent for cone Q2)
+- ADR-049 P-5e-α (engine OFF + production ON pattern)
+- ADR-031 Phase D (AnalyticSurface::Cone 인프라)
+- LOCKED #43 (ADR-103 Z-up — apex at center+(0,0,height), base anchor
+  at center+(radius,0,0))
+- LOCKED #44 (Complete Meaning per Merge)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
