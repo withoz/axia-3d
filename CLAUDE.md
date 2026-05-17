@@ -3408,6 +3408,88 @@ verification). 합계 **+9**, 절대 #[ignore] 금지 9/9 준수. axia-geo
 - LOCKED #43 priority #3 (STEP timing) — α 는 #3 의 hotfix
 - LOCKED #44 (Complete Meaning per Merge — γ 묶음)
 
+### 54. ADR-123 + ADR-124 — AxiA-native optimization audit + WASM SIMD activation (β closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 자기-내성 질문, 2026-05-17)**:
+> "우리 엔진 자체 내에서 해결방법은 없는지요?"
+
+ADR-122 KAYAC 외부 GPU instancing 검토 직후 사용자가 *내부 자산 활용
+가능성* 질문 → ADR-123 α spec (10 lettered AxiA-native options A~J) →
+사용자 결재 "결재 승인합니다" (Q1=D + Q2=ADR-123 D 먼저 → ADR-122 α-1
+후속) → ADR-124 β implementation single atomic PR. ADR-118 → ADR-119
+패턴 1:1 mirror (α spec → β impl atomic).
+
+**핵심 단축**: `.cargo/config.toml` 단일 파일 추가만으로 9 wasm-pack
+호출 site (GitHub workflows 6 + ensure-wasm.mjs + npm scripts 2) 모두
+자동 SIMD 활성화. RUSTFLAGS 환경변수 방식이었다면 각 site 수정 필요 —
+single SSOT 가 향후 새 workflow 추가 시에도 자동 적용.
+
+**Lock-ins (L-124-1 ~ L-124-8)**:
+- L-124-1 `.cargo/config.toml` SSOT (single source of truth)
+- L-124-2 Target-specific only (`[target.wasm32-unknown-unknown]`, native
+  builds 영향 0) — 회귀 테스트로 scope creep 차단
+- L-124-3 2-layer regression guard — vitest source-level + post-build
+  binary scan
+- L-124-4 SIMD evidence threshold = 50 opcodes (실측 7221 — 강력한
+  auto-vectorization evidence)
+- L-124-5 Initial bundle 0MB strict 유지 (P20.C #2)
+- L-124-6 ADR-046 P31 #4 additive only (public API UNCHANGED, `unsafe`
+  SIMD intrinsics 0)
+- L-124-7 Browser baseline = Safari 16.4+ (caniuse 99%+ 지원, OCCT.js
+  baseline 위)
+- L-124-8 절대 #[ignore] 금지
+
+**측정 evidence (실측)**:
+
+| Layer | 결과 |
+|---|---|
+| `.cargo/config.toml` SSOT | 4 checks pass |
+| `axia_wasm_bg.wasm` SIMD opcodes | **7221** (Code section 2121.1 KB 의 0.33%) |
+| Total WASM size | 2410.4 KB |
+| native cargo (axia-core / axia-geo / axia-wasm) | 302 / 1392 / 0 — UNCHANGED |
+| vitest TS suite | 1916 passed (+6 ADR-124) / 1 skipped / 0 failed |
+| `verify-wasm.mjs` | All checks pass |
+| `verify-simd.mjs` | All 8 checks pass |
+
+**Path Z atomic 6-Layer Stack** (architectural reproducibility):
+1. Engine config (`.cargo/config.toml`) — build truth
+2. Post-build verifier (`web/scripts/verify-simd.mjs`) — binary evidence
+3. npm integration (`web/package.json` wasm:verify) — CI/dev integration
+4. Vitest regression (`web/src/build/wasmSimdActivation.test.ts`) —
+   source-level guard
+5. ADR docs (`docs/adr/124-wasm-simd-activation.md` + α spec ADR-123)
+6. LOCKED entry (본 #54)
+
+**사용자 facing 변화**:
+- Public API UNCHANGED
+- Initial bundle 724.99 kB 변화 0 (P20.C #2)
+- Engine compute 2-4× 가속 expected (Vec3 ops / Newell normal / Boolean
+  SSI Newton steps — 실제 runtime benchmark 는 별도 trigger ADR)
+
+**Lessons (canonical for future build-flag ADRs)**:
+- L1 `.cargo/config.toml` SSOT 의 architectural 가치 (9 site 자동 적용)
+- L2 2-layer regression guard 패턴 (config + binary 둘 다)
+- L3 Auto-vectorization 의존의 risk-management (intrinsics 별도 ADR)
+- L4 Browser baseline shift 의 incremental 위험 0 (OCCT.js 가 이미
+  modern browser 요구)
+- L5 Single atomic PR per LOCKED #44 — β implementation 모든 layer 단일
+  PR 강제 (부분 merge 시 silent regression risk)
+
+**다음 트랙 (Q2 default per ADR-123 결재)**:
+- **ADR-122 α-1 (Selection BBox InstancedMesh)** — 2-3일 atomic, render-
+  side throughput unlock. 본 ADR (engine-side) 과 직교 시너지.
+
+**Cross-link**:
+- ADR-123 (α spec — 10 lettered AxiA-native options)
+- ADR-122 (KAYAC GPU instancing 외부 패턴) — Q2 next step
+- ADR-118 → ADR-119 (α spec → β impl atomic 패턴 source)
+- ADR-035 P20.C #2 (initial bundle 0MB strict — L-124-5)
+- ADR-046 P31 #4 (additive only — L-124-6)
+- ADR-087 K-ζ (사용자 시연 게이트 — runtime benchmark trigger 시)
+- LOCKED #43 priority audit (본 ADR 은 priority 매트릭스 외부 —
+  architectural performance optimization)
+- LOCKED #44 (Complete Meaning per Merge — single atomic PR)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

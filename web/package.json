@@ -19,7 +19,8 @@
     "e2e:ui": "playwright test --ui",
     "wasm:build": "cd ../crates/axia-wasm && wasm-pack build --target web --out-dir ../../web/src/wasm",
     "wasm:build:nodejs": "cd ../crates/axia-wasm && wasm-pack build --target nodejs --out-dir ../../packages/axia-wasm-node/dist",
-    "wasm:verify": "node scripts/verify-wasm.mjs"
+    "wasm:verify": "node scripts/verify-wasm.mjs && node scripts/verify-simd.mjs",
+    "wasm:verify-simd": "node scripts/verify-simd.mjs"
   },
   "dependencies": {
     "@axia/action-catalog": "file:../packages/axia-action-catalog",

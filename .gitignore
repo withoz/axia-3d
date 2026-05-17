@@ -9,6 +9,11 @@ out/
 target/
 web/dist/
 
+# ADR-124 — `web/src/build/` holds source-level guards for WASM build config
+# (wasmSimdActivation.test.ts). Source directory, NOT a build-output dir;
+# excluded from the `build/` pattern above.
+!web/src/build/
+
 # WASM artifacts (wasm-pack 산출물, 매번 재생성 가능 — LOCKED #40 follow-up).
 # Was tracked previously; untracked here so binary cannot desync from
 # `crates/axia-geo` / `crates/axia-wasm` source. `web/scripts/ensure-wasm.mjs`
