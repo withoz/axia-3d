@@ -26,11 +26,20 @@ describe('Curve tessellation', () => {
         closed: false,
       };
       const pts = tessellateCurve(arc);
+      // ── Fix (2026-05-16) — standard math right-handed convention ──
+      // yAxis = planeNormal × xAxis (canonical CAD/math).
+      //   planeNormal=+Y, xAxis=+X → yAxis = +Y × +X = -Z
+      // Quarter circle (angle 0 → π/2) endpoint:
+      //   center + xAxis*cos(π/2) + yAxis*sin(π/2)
+      //     = (0,0,0) + 0 + (0,0,-1)*100 = (0, 0, -100)
+      // 이전 expect (+100) 는 mirror convention (xAxis × normal) 가정.
+      // Engine convention (axia-wasm/lib.rs:1070 `normal.cross(basis_u)`) 와
+      // 통일 — 사용자 "호를 정확히 그리지 못함" root cause fix.
       expect(pts.length).toBe(17); // seg + 1 (열린 호)
       expect(pts[0].x).toBeCloseTo(100, 2);
       expect(pts[0].z).toBeCloseTo(0, 2);
       expect(pts[pts.length - 1].x).toBeCloseTo(0, 2);
-      expect(pts[pts.length - 1].z).toBeCloseTo(100, 2);
+      expect(pts[pts.length - 1].z).toBeCloseTo(-100, 2);
     });
 
     it('tessellates closed circle with correct vertex count', () => {
@@ -73,6 +82,52 @@ describe('Curve tessellation', () => {
       const c = new THREE.Vector3(20, 0, 0);
       const arc = arcFrom3Points(a, b, c);
       expect(arc).toBeNull();
+    });
+
+    // ── Bug fix regression (2026-05-16) — yAxis right-handed convention ──
+    //
+    // 사용자 시연 evidence — arcFrom3Points 의 yAxis 가 engine convention
+    // (axia-wasm/lib.rs:1070 `basis_v = normal.cross(basis_u)`) 와 mirror
+    // (이전 `xAxis × planeNormal`) → engine 에 angle 전달 시 결과 점 y-축
+    // 대칭 (사용자 "호를 정확히 그리지 못함" root cause).
+    //
+    // Fix: yAxis = `planeNormal × xAxis` (standard right-handed).
+    // tessellateArc + arcFrom3Points 동기.
+    //
+    // 본 회귀 자산 — UI tessellation 의 mid-point 가 사용자 의도 (upper half)
+    // 와 일치 검증 (이전 fix 안 된 상태 = lower half, 즉 z<0).
+    it('upper-half arc through (1,0,0) → (0,1,0) → (-1,0,0) tessellates upper (y>0)', () => {
+      const a = new THREE.Vector3(1, 0, 0);
+      const b = new THREE.Vector3(0, 1, 0); // upper midpoint (y > 0)
+      const c = new THREE.Vector3(-1, 0, 0);
+      const arc = arcFrom3Points(a, b, c, 16);
+      expect(arc).not.toBeNull();
+
+      const pts = tessellateCurve(arc!);
+      // Mid-point of tessellation should be near b (0, 1, 0), specifically
+      // y > 0.5 (upper half), NOT y < -0.5 (lower half mirror).
+      const midIdx = Math.floor(pts.length / 2);
+      const midPt = pts[midIdx];
+      expect(midPt.y).toBeGreaterThan(0.5);
+      // X near zero (top of arc)
+      expect(Math.abs(midPt.x)).toBeLessThan(0.5);
+    });
+
+    it('xy-plane arc center+radius+xAxis consistent with engine convention', () => {
+      // Symmetric arc — verify center / radius / xAxis trivially correct
+      // regardless of yAxis convention.
+      const a = new THREE.Vector3(5, 0, 0);
+      const b = new THREE.Vector3(0, 5, 0);
+      const c = new THREE.Vector3(-5, 0, 0);
+      const arc = arcFrom3Points(a, b, c, 32);
+      expect(arc).not.toBeNull();
+      expect(arc!.radius).toBeCloseTo(5, 5);
+      expect(arc!.center[0]).toBeCloseTo(0, 5);
+      expect(arc!.center[1]).toBeCloseTo(0, 5);
+      expect(arc!.center[2]).toBeCloseTo(0, 5);
+      // xAxis = a - center direction, normalized → (1, 0, 0)
+      expect(arc!.xAxis[0]).toBeCloseTo(1, 5);
+      expect(arc!.xAxis[1]).toBeCloseTo(0, 5);
     });
   });
 

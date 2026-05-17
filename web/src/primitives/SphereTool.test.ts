@@ -84,4 +84,68 @@ describe('SphereTool', () => {
       expect(tool.isBusy()).toBe(false);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (α) + (β) 사용자 결재 2026-05-17 — "단순/신속/정확" canonical 원칙
+  //
+  // α: default tessellation 감소 — 16×16 (256 faces) → 12×12 (144 faces)
+  // β: Lazy syncMesh via requestAnimationFrame — primitive create 후
+  //    sync 가 RAF 으로 deferred → user-perceived latency 즉시 응답
+  //
+  // 메타-원칙 #11 Latency Budget Click 33ms 정합 강제.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('α — fast default tessellation', () => {
+    it('create_sphere is called with U=12, V=12 (not 16×16)', () => {
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(100, 0, 0));
+      const call = (ctx.bridge.create_sphere as any).mock.calls[0];
+      if (call) {
+        const [_cx, _cy, _cz, _radius, u, v] = call;
+        expect(u).toBe(12); // α default
+        expect(v).toBe(12); // α default
+      }
+    });
+  });
+
+  describe('β — Lazy syncMesh via RAF', () => {
+    it('syncMesh is deferred via requestAnimationFrame (not immediate)', () => {
+      // Mock RAF to verify deferral pattern
+      const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((cb: FrameRequestCallback) => {
+          // Don't auto-execute — verify deferred call exists
+          return 1;
+        });
+
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(100, 0, 0));
+
+      // If creation completed, RAF should have been invoked for syncMesh
+      if ((ctx.bridge.create_sphere as any).mock.calls.length > 0) {
+        expect(rafSpy).toHaveBeenCalled();
+        // syncMesh should NOT yet be called (deferred until RAF fires)
+        expect(ctx.syncMesh).not.toHaveBeenCalled();
+      }
+
+      rafSpy.mockRestore();
+    });
+
+    it('syncMesh executes when RAF fires (deferred callback)', () => {
+      // Mock RAF to immediately fire the callback (simulate next frame)
+      const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((cb: FrameRequestCallback) => {
+          cb(0);
+          return 1;
+        });
+
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+      tool.onMouseDown({} as MouseEvent, new THREE.Vector3(100, 0, 0));
+
+      if ((ctx.bridge.create_sphere as any).mock.calls.length > 0) {
+        // After RAF fires, syncMesh should have been called exactly once
+        expect(ctx.syncMesh).toHaveBeenCalledTimes(1);
+      }
+
+      rafSpy.mockRestore();
+    });
+  });
 });

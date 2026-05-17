@@ -29,6 +29,7 @@ use glam::DVec3;
 use anyhow::{Result, bail};
 
 use crate::mesh::Mesh;
+use crate::entities::HeFlags;
 use crate::{FaceId, VertId};
 use super::polygon_geom::{PlaneBasis, face_unit_normal, sutherland_hodgman};
 
@@ -455,6 +456,30 @@ pub fn auto_intersect_coplanar(
         }
         if let Some(f) = mesh.faces.get_mut(lens) {
             f.set_surface(Some(surf));
+        }
+    }
+
+    // Step 10.5 (Amendment 9, ADR-101 L-B9): split-induced edges HARD flag.
+    // 메타-원칙 #15 — 동일 분할 연산은 동일 topological contract.
+    // `Mesh::split_face` (mesh.rs:4068-4069) 답습. lens 의 outer boundary 는
+    // 모두 split-induced edges (a_only / b_only 와 공유, 외부 boundary 아님)
+    // — render path `export_edge_lines_with_map` 의 coplanar Plane edge hide
+    // (LOCKED #16 K-ε hotfix) 우회 → wireframe 에 lens 분할 라인 emit.
+    {
+        let lens_outer_start = mesh.faces[lens].outer().start;
+        let mut he_id = lens_outer_start;
+        loop {
+            // Walk radial chain — mark all twin HEs HARD for both face sides.
+            // Pattern: mesh.rs:5364-5378 (radial chain enumeration).
+            let mut rad_id = he_id;
+            loop {
+                let cur = mesh.hes[rad_id].flags();
+                mesh.hes[rad_id].set_flags(cur | HeFlags::HARD);
+                rad_id = mesh.hes[rad_id].next_rad();
+                if rad_id == he_id { break; }
+            }
+            he_id = mesh.hes[he_id].next();
+            if he_id == lens_outer_start { break; }
         }
     }
 
@@ -1922,5 +1947,265 @@ mod tests {
             report.violations);
 
         let _ = result;
+    }
+
+    // ── Amendment 9 tests: HARD flag for split-induced edges ──────────
+    //
+    // 메타-원칙 #15 (canonical, 사용자 결재 2026-05-16):
+    //   "동일한 분할 연산은 동일한 topological contract — 빠르고,
+    //    신속하고, 정확하게."
+    //
+    // `Mesh::split_face` (mesh.rs:4068-4069) 가 split-induced edges 에
+    // HARD flag 명시 부여하는 contract 를 `auto_intersect_coplanar` 도
+    // 답습해야. 결함 C — `export_edge_lines_with_map` (mesh.rs:5384-5404)
+    // 의 angle coplanar test 가 두 Plane face 사이 shared edge 를 hide.
+    // HARD flag 부여 시 force_hard fast-path (mesh.rs:5359) 우회로 draw.
+
+    /// L-B9-2 — lens 의 outer boundary 모든 HE (radial 포함) HARD 부여.
+    #[test]
+    fn adr101_amendment9_lens_outer_boundary_hes_hard() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        let result = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK")
+            .expect("partial overlap → 3 sub-faces");
+
+        // Walk lens outer boundary + every radial twin must be HARD.
+        let start = mesh.faces[result.lens].outer().start;
+        let mut he_id = start;
+        let mut he_count = 0usize;
+        let mut rad_count = 0usize;
+        loop {
+            let mut rad_id = he_id;
+            loop {
+                assert!(
+                    mesh.hes[rad_id].flags().contains(HeFlags::HARD),
+                    "lens boundary HE (or radial twin) {:?} missing HARD flag — \
+                     메타-원칙 #15 violation",
+                    rad_id,
+                );
+                rad_count += 1;
+                rad_id = mesh.hes[rad_id].next_rad();
+                if rad_id == he_id { break; }
+            }
+            he_count += 1;
+            he_id = mesh.hes[he_id].next();
+            if he_id == start { break; }
+        }
+        // Lens is a quad (4 outer HEs), each manifold edge has 2 radial HEs.
+        assert_eq!(he_count, 4, "lens outer should have 4 HEs (quad), got {}", he_count);
+        assert!(rad_count >= 8, "expected ≥ 8 HEs marked HARD (4 × twins), got {}", rad_count);
+    }
+
+    /// L-B9-3 — a_only / b_only 외부 boundary HE 는 HARD 미부여 (자동
+    /// draw via face_normals.len()==1 분기). split 영역 (lens 와 공유) 만
+    /// HARD 부여 contract 정합.
+    ///
+    /// 외부 = 인접 face 없는 boundary HE (twin 의 face == NULL).
+    #[test]
+    fn adr101_amendment9_external_boundary_unaffected() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        let result = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK")
+            .expect("partial overlap → 3 sub-faces");
+
+        // For face_a_only L-shape, find HEs whose radial twin sits on
+        // a boundary (face == NULL). Those external HEs must NOT have
+        // been touched by the Amendment 9 fix.
+        let start = mesh.faces[result.face_a_only].outer().start;
+        let mut he_id = start;
+        let mut external_count = 0usize;
+        loop {
+            // Detect external: any radial twin with face NULL
+            let mut rad_id = mesh.hes[he_id].next_rad();
+            let mut is_external = false;
+            while rad_id != he_id {
+                if mesh.hes[rad_id].face().is_null() {
+                    is_external = true;
+                    break;
+                }
+                rad_id = mesh.hes[rad_id].next_rad();
+            }
+            if is_external {
+                external_count += 1;
+                // External HE itself may legitimately have HARD from earlier
+                // logic — we only assert Amendment 9 did not *spuriously*
+                // mark external boundaries of a_only/b_only.
+                // The fix only walks lens.outer(), so a_only external
+                // can only carry HARD if some prior step set it. Assert
+                // the AND of "external AND HARD" never happens for fresh
+                // a_only HEs.
+                assert!(
+                    !mesh.hes[he_id].flags().contains(HeFlags::HARD),
+                    "external boundary HE {:?} unexpectedly HARD — Amendment 9 \
+                     scope creep (should only touch lens boundary)",
+                    he_id,
+                );
+            }
+            he_id = mesh.hes[he_id].next();
+            if he_id == start { break; }
+        }
+        assert!(external_count >= 3,
+            "L-shape face_a_only should have ≥ 3 external HEs (4 outer corners), \
+             got {}", external_count);
+    }
+
+    /// L-B9-2 + L-B9-5 — wireframe 에 lens shared edges 가 실제로 emit
+    /// 되는지 verify. Render path `export_edge_lines_with_map` 호출 후
+    /// edge_map 에 lens boundary edge IDs 가 포함되어야.
+    #[test]
+    fn adr101_amendment9_export_emits_lens_shared_edges() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        let result = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK")
+            .expect("partial overlap → 3 sub-faces");
+
+        // Snapshot lens outer edge IDs.
+        let mut lens_edge_ids: Vec<u32> = Vec::new();
+        let start = mesh.faces[result.lens].outer().start;
+        let mut he_id = start;
+        loop {
+            lens_edge_ids.push(mesh.hes[he_id].edge().raw());
+            he_id = mesh.hes[he_id].next();
+            if he_id == start { break; }
+        }
+        assert_eq!(lens_edge_ids.len(), 4,
+            "lens outer should have 4 edges (quad)");
+
+        // Export wireframe with default 20.1° angle threshold.
+        let (lines, edge_map) = mesh.export_edge_lines_with_map(20.1);
+
+        // Every lens edge must appear in edge_map at least once.
+        for eid in &lens_edge_ids {
+            assert!(
+                edge_map.contains(eid),
+                "lens edge {} missing from wireframe emit (export_edge_lines_with_map) — \
+                 결함 C regression (HARD flag fix should make lens shared edges visible)",
+                eid,
+            );
+        }
+        // Lines must be non-empty (6 floats per segment).
+        assert!(!lines.is_empty(), "export_edge_lines lines must include lens segments");
+        assert_eq!(lines.len() % 6, 0, "lines buffer must be multiple of 6");
+    }
+
+    /// ADR-101 Amendment 9 보너스 — RECT × CIRCLE polygon mixed case 회귀.
+    ///
+    /// **Context (사용자 시연 2026-05-16, ζ-audit)**:
+    /// ADR-101 §3.2 매트릭스 의 "C-3 RECT × Circle mixed → 3 sub-face"
+    /// (B-5 sweep matrix deferred 안 묶임) 의 명시 회귀 자산 누락 발견.
+    /// 미리보기 실시연 결과 *non-degenerate* mixed case 는 정상 split.
+    ///
+    /// **Non-degenerate vs degenerate (canonical 분리 evidence)**:
+    /// - **본 test (non-degenerate)**: CIRCLE center (10.5, 5.5) — RECT corner
+    ///   와 cardinal axis alignment 없음 → 3 sub-faces 정상 split.
+    /// - **Degenerate boundary case (별도 ADR 후속 트랙)**: CIRCLE center
+    ///   (10, 5) — RECT corner (10, 10) / (10, 0) 와 CIRCLE polygon 의
+    ///   cardinal vertex (theta=π/2, 3π/2) 정확 일치. `coplanar_intersection_
+    ///   segments` 의 crossings = 0 (lens detected but boundary cross missed).
+    ///   ADR-101 B-1 lock-in Sutherland-Hodgman MVP convex 가정의 known
+    ///   boundary degeneracy. 해결 시 Weiler-Atherton / Vatti 또는 vertex-
+    ///   on-edge fallback 필요 — 별도 ADR (ADR-101 §5 Out-of-scope 후속).
+    ///
+    /// Lock-in: 본 회귀 자산이 mixed case 의 *non-degenerate* path 봉인.
+    /// Degenerate fix 시 본 test 는 그대로 PASS + 새 degenerate test 추가.
+    #[test]
+    fn adr101_amendment9_rect_x_circle_mixed_non_degenerate_splits() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // RECT_A: x ∈ [0,10], y ∈ [0,10]
+        let rect_a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+
+        // CIRCLE_B polygonized (32 segs) — center (10.5, 5.5), radius 5.
+        // Non-degenerate: cardinal vertices (theta=π/2 → (10.5, 10.5),
+        // theta=3π/2 → (10.5, 0.5)) NOT aligned with RECT corners. Partial
+        // overlap region: roughly x ∈ [5.5, 10], y ∈ [0.5, 10].
+        let n_segs = 32;
+        let (cx, cy, r) = (10.5f64, 5.5f64, 5.0f64);
+        let circle_verts: Vec<DVec3> = (0..n_segs).map(|i| {
+            let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n_segs as f64);
+            DVec3::new(cx + r * theta.cos(), cy + r * theta.sin(), 0.0)
+        }).collect();
+        let cids: Vec<_> = circle_verts.iter().map(|p| mesh.add_vertex(*p)).collect();
+        let circle_b = mesh.add_face(&cids, mat).expect("add circle face");
+
+        let active_before = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_before, 2);
+
+        let result = auto_intersect_coplanar(&mut mesh, rect_a, circle_b, mat)
+            .expect("OK")
+            .expect("non-degenerate partial overlap MUST split (RECT × CIRCLE mixed)");
+
+        // 3 active sub-faces post-split (canonical ADR-101 §B-3b expectation).
+        let active_after = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after, 3,
+            "expected 3 active faces post-split, got {}", active_after);
+
+        // Lens HARD flag (Amendment 9 cross-check) — meta-원칙 #15 정합
+        // 도 mixed case 에서 정합.
+        let lens_outer_start = mesh.faces[result.lens].outer().start;
+        let mut he_id = lens_outer_start;
+        let mut all_hard = true;
+        loop {
+            if !mesh.hes[he_id].flags().contains(HeFlags::HARD) {
+                all_hard = false;
+                break;
+            }
+            he_id = mesh.hes[he_id].next();
+            if he_id == lens_outer_start { break; }
+        }
+        assert!(all_hard,
+            "lens outer boundary HEs MUST be HARD (Amendment 9 mixed case enforcement)");
+
+        // Invariants preserved.
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post-split mesh must satisfy invariants — got {:?}",
+            report.violations);
+    }
+
+    /// Regression guard — fix MUST NOT increase orphan_count or break
+    /// face invariants.
+    #[test]
+    fn adr101_amendment9_invariants_preserved() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let a = add_quad(&mut mesh, [
+            xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0),
+        ]);
+        let b = add_quad(&mut mesh, [
+            xy(5.0, 5.0), xy(15.0, 5.0), xy(15.0, 15.0), xy(5.0, 15.0),
+        ]);
+        let _ = auto_intersect_coplanar(&mut mesh, a, b, mat)
+            .expect("OK")
+            .expect("partial overlap");
+
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "post Amendment 9 fix must satisfy invariants — got {:?}",
+            report.violations);
     }
 }

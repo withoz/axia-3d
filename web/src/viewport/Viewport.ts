@@ -1075,12 +1075,18 @@ export class Viewport {
       // 매핑이 어긋남 → 레이캐스트 hit.faceIndex가 다른 삼각형의 faceId를 반환 → 박스
       // 클릭했는데 스피어가 선택되는 현상. indirect 모드는 별도 permutation 테이블을
       // 유지해 원본 index 순서를 보존한다.
-      const geoWithBvh = geometry as THREE.BufferGeometry & {
-        computeBoundsTree?: (opts?: { indirect?: boolean }) => void;
-      };
-      if (typeof geoWithBvh.computeBoundsTree === 'function' && indices.length > 0) {
-        try { geoWithBvh.computeBoundsTree({ indirect: true }); }
-        catch (e) { console.warn('[Viewport] BVH build failed:', e); }
+      //
+      // ── α (사용자 결재 2026-05-17): BVH defer to next frame ──
+      // 측정 결과 (376K tris 기준) BVH build = 145ms — viewport.updateMesh
+      // 비용 의 55%. 사용자 facing primitive create 의 단일 가장 큰 cost.
+      // PR #73 β (Lazy syncMesh via RAF) 답습 패턴 확장: 같은 frame 의
+      // 동기 build → 다음 frame 으로 defer. picking 은 build 완료 후
+      // O(log N), 그 사이 first frame 은 naive O(N) raycast fallback
+      // (three-mesh-bvh 의 자연 동작). frameScheduler TaskKey 'bvhRebuild'
+      // 가 새 mesh 도착 시 이전 schedule 을 latest-wins 로 대체 — 메타-
+      // 원칙 #11 Click 33ms budget 정합 강제.
+      if (indices.length > 0) {
+        this._scheduleBvhBuild(geometry);
       }
 
       const frontMesh = new THREE.Mesh(geometry, frontMat);
@@ -1431,6 +1437,41 @@ export class Viewport {
       if (!pos) return;
       try { this.smoothNormals(geometry, angleDeg); }
       catch (e) { console.warn('[Viewport] deferred smoothNormals failed:', e); }
+    });
+  }
+
+  /**
+   * ── α (사용자 결재 2026-05-17): Schedule BVH build on next animation frame ──
+   *
+   * BVH (three-mesh-bvh) build cost ≈ O(N log N) over triangle count. For a
+   * 3-sphere scene (~376K tris) this is ~145ms — single largest cost in the
+   * primitive-create pipeline (55% of viewport.updateMesh). Deferring to the
+   * next frame lets the new mesh paint immediately and shifts the BVH cost
+   * out of the click-commit critical path. Picking before the BVH finishes
+   * falls back to naive O(N) raycast (three-mesh-bvh natural behavior).
+   *
+   * frameScheduler TaskKey 'bvhRebuild' (BUDGETS = 33ms, ADR-012 §2) auto-
+   * deduplicates: if a newer mesh arrives the prior schedule is replaced —
+   * we never build BVH for stale geometry.
+   *
+   * Guard: skip build if the geometry has been disposed (position attribute
+   * cleared by a newer updateMesh()).
+   *
+   * Cross-link: PR #73 β (Lazy syncMesh via RAF) 답습 패턴, ADR-012 §2
+   * FrameScheduler latest-wins, 메타-원칙 #11 Latency Budget First.
+   */
+  private _scheduleBvhBuild(geometry: THREE.BufferGeometry): void {
+    const geoWithBvh = geometry as THREE.BufferGeometry & {
+      computeBoundsTree?: (opts?: { indirect?: boolean }) => void;
+    };
+    if (typeof geoWithBvh.computeBoundsTree !== 'function') return;
+
+    frameScheduler.schedule('bvhRebuild', () => {
+      // Geometry might have been disposed if a newer updateMesh() ran.
+      const pos = geometry.getAttribute('position');
+      if (!pos) return;
+      try { geoWithBvh.computeBoundsTree!({ indirect: true }); }
+      catch (e) { console.warn('[Viewport] deferred BVH build failed:', e); }
     });
   }
 

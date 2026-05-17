@@ -825,3 +825,170 @@ axia-geo: 1318 → **1321 PASS**. axia-core: 296 유지 (영향 없음 — addit
 - **LOCKED #16 (ADR-038 K-ε hotfix)** — coplanar Plane edge hide 정책 (보존). split 의도와의 충돌은 HARD 부여로 명시 해소
 - **메타-원칙 #14** — "면은 닫힌 경계로부터 유도된다" — split-induced edges 가 새 face boundary 의 일부, 시각 일관성 강제
 - **LOCKED #1 / #12** — face 합성 / 분할 정책 유지 (additive only, 영향 0)
+
+---
+
+## Amendment 9 — 결함 C fix (Render edge hide) + §3.2 매트릭스 정정 (2026-05-16)
+
+**상태**: 🔄 In progress (ζ-1 spec, this commit)
+**Trigger**: Closure 후 추가 사용자 시연 audit (2026-05-16):
+> "engine 은 분할 (audit PASS) 하지만 시각적으로 안 보입니다. CIRCLE 이
+> 관여하면 분할 boundary 가 wireframe 에서 hide 됩니다."
+
+### A9.1 결함 C — 진단 매트릭스 (재정리)
+
+| 케이스 | engine | 시각 | 분류 |
+|---|---|---|---|
+| RECT × RECT partial overlap | ✅ 분할 (3 sub-faces) | ⚠️ 외부 boundary 만 보임 (lens 내부 분할 라인 hide) | **결함 C 적용** (이전 매트릭스 "✅ 보임" 정정 — 외부 boundary 만 visible) |
+| RECT × CIRCLE partial | ✅ 3 sub-faces, 14 shared edges | ❌ lens 내부 분할 라인 안 보임 | **결함 C 적용** |
+| CIRCLE × CIRCLE partial | ✅ 3 sub-faces, 15 shared edges | ❌ lens 내부 분할 라인 안 보임 | **결함 C 적용** |
+| 큰 안 작은 (containment) | ❌ 두 도형 별개 공존 | ❌ 분할 라인 없음 | **LOCKED #1 정책 (의도)** — §3.2 "Containment ✅" 잘못된 기재 정정 |
+| 3+ overlap | ❌ 부분만 | 부분만 | ADR-101 L-B4-3 deferred (Out-of-scope 보존) |
+
+### A9.2 §3.2 매트릭스 amendment (canonical)
+
+**기존 (잘못된 기재)**:
+```
+| Containment (A ⊂ B) | ✅ Hole injection (`auto_intersect_on_draw` containment branch) |
+```
+
+**정정 (canonical, LOCKED #1 정합)**:
+```
+| Containment (A ⊂ B) | ❌ 자동 hole injection 비활성 — LOCKED #1 ADR-015 B1 auto hole-promote 비활성 정책 정합. 명시적 `merge-as-hole` 우클릭 메뉴만 promote. `scene.rs:2908-2916` 답습. |
+```
+
+근거: LOCKED #1 (ADR-015) 의 stacked inner RECT topology 정책 — B1 auto hole-promote **비활성**. 두 face 가 별개 simple face 로 공존, 자동 ring 변환 안 함. ADR-101 §3.2 의 기존 "Containment ✅" 기재는 LOCKED #1 와 직접 충돌.
+
+### A9.3 결함 C 진짜 메커니즘 (audit 결과)
+
+**경로 추적**:
+1. ADR-101 B-3 `auto_intersect_coplanar` (`coplanar.rs:444-446`): `remove_face × 2 + add_face × 3` 패턴으로 lens / face_a_only / face_b_only 생성
+2. `add_face` 가 만든 새 boundary HEs 의 flags = clear (HARD 미부여)
+3. Render path `Mesh::export_edge_lines_with_map` (`mesh.rs:5384-5404`):
+   - lens 와 a_only/b_only 사이의 shared edges → `face_normals.len() == 2`
+   - `surfaces_in_same_smooth_group` → Plane case `_ => false` (smooth-group 아님)
+   - fallback angle test: `dot = 1.0` (같은 평면 normal) `< cos_threshold = cos(20.1°) ≈ 0.939` → **false** → **draw=false → edge hide**
+4. 사용자: lens 내부 분할 라인 시각 인지 불가
+
+**Contract 불일치 (architectural root)**:
+- `Mesh::split_face` (`mesh.rs:3891-3892`): **명시 부여** (`set_flags(HeFlags::HARD)`) — 주석 "Mark split edge HEs as HARD so they render even between coplanar faces"
+- `Mesh::polygonize_closed_curve_face` (`mesh.rs:3308`): **부여 없음** (substitute, split 아님 — 의도)
+- ADR-101 `auto_intersect_coplanar`: **부여 없음** (결함)
+
+### A9.4 메타-원칙 #15 (canonical, 사용자 결재 2026-05-16)
+
+> **"동일한 분할 연산은 동일한 topological contract — 빠르고, 신속하고, 정확하게"**
+> ("Same split op = same topological contract — fast, swift, accurate.")
+
+**의미**:
+- 모든 split-type 함수 (`split_face` / `split_face_by_chain` / `split_face_case_b/c/d` / `auto_intersect_coplanar` / Boolean split / `split_faces_by_intersections`) 는 split-induced edges 에 **HARD flag 부여** 라는 동일 contract 준수.
+- Render path (`export_edge_lines_with_map`) 의 coplanar hide 정책 (LOCKED #16 K-ε hotfix) 과 split 의도의 충돌은 split-side 의 HARD flag 부여로 명시 해소.
+- "빠르고 신속하고 정확" — 추가 분기 / lookup 없이 flag 1 bit 로 정확한 동작 보장 (`force_hard` fast-path in `mesh.rs:5359`).
+
+**적용 사례 (cross-check, ζ-3 audit 결과 2026-05-16)**:
+
+| 함수 | HARD flag 부여 | 메타-원칙 #15 정합 | 상태 |
+|---|---|---|---|
+| `Mesh::split_face` (mesh.rs:4068-4069) | ✅ 명시 (`set_flags(HeFlags::HARD)`) | ✅ canonical model | reference |
+| `Mesh::polygonize_closed_curve_face` (mesh.rs:3308) | ❌ (substitute, split 아님) | ✅ out of contract (의도) | 정합 |
+| `auto_intersect_coplanar` (coplanar.rs:444+Step 10.5) | ✅ Amendment 9 부여 | ✅ **fix 완료** | **ζ-2 closure** |
+| `Mesh::split_face_by_chain` (face_split.rs:514) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `split_face_case_b` (face_split.rs:868) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `split_face_case_c` (face_split.rs:1162) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `split_face_case_d` (face_split.rs:1397) | ❌ HARD 흔적 0건 | ⚠️ **위반** | 별도 PR 권장 |
+| `boolean.rs::split_faces_by_intersections` (boolean.rs:446) | ❌ `add_face` 만 호출 | ⚠️ **위반** | 별도 PR 권장 |
+
+**audit 결정 (사용자 결재 기다림)**:
+- 본 Amendment 9 scope = `auto_intersect_coplanar` 만 fix (사용자 결재 zeta-1)
+- 잔존 4 함수 (split_face_by_chain / case_b/c/d / split_faces_by_intersections) 의 HARD 미부여는 **별도 PR / 별도 ADR** 권장
+- 근거: Amendment 9 의 atomic 범위 + 각 함수의 실제 사용자 시연 결함 우선순위 별개
+
+향후 모든 split-type 함수 신설 / 수정 시 본 메타-원칙 #15 정합 강제. 회귀 테스트로 enforce.
+
+### A9.5 Fix 방향 (ζ-2 engine fix, 사용자 결재 후)
+
+**위치**: `crates/axia-geo/src/operations/coplanar.rs:444-466`, lens 생성 직후 Step 10.5 신설.
+
+**정책 — 어떤 edges 가 HARD 부여 받는가**:
+- **lens 의 outer boundary HEs (양쪽 twin 포함)** 만 HARD 부여.
+- 근거: lens 의 outer boundary 는 **모두 split-induced edges** (a_only / b_only 와 공유). 외부 boundary 아님. 정확한 contract.
+- a_only / b_only 의 외부 boundary HEs 는 자동으로 face_normals.len()==1 분기 (인접 face 없음) → 항상 draw. 추가 부여 불필요.
+
+**구현 패턴** (`mesh.rs:2799` 답습 — 안전한 OR 패턴):
+```rust
+// Step 10.5 (Amendment 9, ADR-101 L-B9): split-induced edges HARD flag.
+// 메타-원칙 #15 (동일 분할 연산 = 동일 topological contract) 정합.
+// LOCKED #16 K-ε hotfix 의 coplanar Plane edge hide (`mesh.rs:5384-5404`)
+// 와 ADR-101 의 split 의도 충돌 해소.
+//
+// lens 의 outer boundary 는 모두 split edges (a_only / b_only 와 공유,
+// 외부 boundary 아님). 두 twin HE 모두 HARD.
+let start = mesh.faces[lens].outer().start;
+let mut he_id = start;
+loop {
+    let twin = mesh.hes[he_id].twin();
+    let f0 = mesh.hes[he_id].flags() | HeFlags::HARD;
+    mesh.hes[he_id].set_flags(f0);
+    if !twin.is_null() {
+        let f1 = mesh.hes[twin].flags() | HeFlags::HARD;
+        mesh.hes[twin].set_flags(f1);
+    }
+    he_id = mesh.hes[he_id].next();
+    if he_id == start { break; }
+}
+```
+
+### A9.6 회귀 영향 예측
+
+| Suite | Δ (예상) | 내용 |
+|---|---|---|
+| axia-geo (Rust) | +3 ~ 5 | `adr101_amendment9_lens_boundary_hard_flag_set` / `adr101_amendment9_export_emits_lens_shared_edges` / `adr101_amendment9_external_boundary_unchanged` |
+| Playwright E2E (선택, ζ-4) | +1 | B-6 visual demo 에 `getEdgeLineBufferLength()` 또는 분할 라인 wire count assert |
+| 절대 #[ignore] 금지 | 100% | 유지 |
+
+### A9.7 Lock-ins (canonical)
+
+- **L-B9-1**: split-induced edges 만 HARD 부여 (외부 boundary 무관 — 자동 draw)
+- **L-B9-2**: lens outer boundary 전체 (twin 포함) HARD — `split_face` answer 답습
+- **L-B9-3**: a_only / b_only outer boundary 는 HARD 미부여 (외부 = face_normals.len()==1 → 자동 draw)
+- **L-B9-4**: HARD 부여는 `add_face × 3` *직후* 실행 — face wiring 완료 후 안전
+- **L-B9-5**: `set_flags(flags() | HARD)` 패턴 (안전 OR) — 기존 flags 보존
+- **L-B9-6**: §3.2 매트릭스 "Containment ✅" → "❌ (LOCKED #1 정합)" 정정 — A9.2
+- **L-B9-7**: 매트릭스 "RECT × RECT ✅ 보임" 의미 정정 — 외부 boundary 만 visible (이전 잘못된 인지 보정)
+- **L-B9-8**: 메타-원칙 #15 등재 — 향후 모든 split-type 함수의 anchor
+- **L-B9-9**: ζ-3 cross-cut audit (split_face_by_chain / split_faces_by_intersections / split_face_case_b/c/d) — 본 Amendment scope 외 발견 시 별도 fix 권장 (별도 commit 또는 별도 ADR)
+
+### A9.8 Out-of-scope (deferred to future)
+
+- **ζ-3 cross-cut 의 함수들 fix** — audit 결과 HARD 미부여 발견 시 별도 commit / 별도 PR (본 Amendment 는 `auto_intersect_coplanar` 만 scope)
+- **Visual baseline (LOCKED #40 / ADR-077) 의 lens shared edges 색상** — 별도 visual baseline 확장
+- **Lens 내부 분할 라인의 사용자 highlight UX** (선택 시 강조 색) — 별도 ADR
+- **3-way overlap edge contract** — ADR-101 §5 의 future trigger
+- **결함 D — Mixed case vertex-on-corner degeneracy (canonical, 사용자 시연 evidence 2026-05-16)**:
+  - 사용자 미리보기 시연에서 발견 — `drawRectAsShape` (10×10 @ center (5,5)) + `drawCircleAsShape` (r=5 @ center (10,5), 32 segs) partial overlap 시 `auto_intersect_coplanar` 가 split 발동 안 함 (afterA=1, afterB=2, expected 3).
+  - **Root cause audit (test diagnostic evidence)**: `coplanar_intersection_segments` 의 crossings count = 0 (lens detected size=17, but boundary crossings missed). CIRCLE polygon 의 cardinal vertices (theta = π/2 → (10, 10), theta = 3π/2 → (10, 0)) 가 RECT corner 와 정확히 일치 → vertex-on-corner incidence 가 edge-edge cross 로 count 안 됨.
+  - **Non-degenerate verification**: center 를 (10.5, 5.5) 로 offset 한 case 는 정상 3 sub-faces split (Amendment 9 보너스 회귀 `adr101_amendment9_rect_x_circle_mixed_non_degenerate_splits` 봉인).
+  - **ADR-101 B-1 lock-in trade-off**: Sutherland-Hodgman MVP convex 가정의 known boundary degeneracy. ADR-101 §5 의 "Non-convex polygon clipping — Weiler-Atherton / Vatti 필요 시 별도 ADR" 영역.
+  - **별도 ADR (가칭 ADR-101-D 또는 ADR-103+)**: Algorithm-level fix — vertex-on-edge fallback 또는 robust polygon clipping (Vatti) 또는 epsilon-perturbation. 본 Amendment scope 외.
+  - **✨ 자연 해소 evidence — ADR-107 (PR #65)** (2026-05-16 audit, 사용자 결재 (ν) 후 미리보기 환경 직접 측정): `drawCircleAsCurve` (Path B canonical, ADR-089) 사용 시 동일 trigger (center=(10,5)) → **split=3 ✅** (D2 audit). Path B 의 `auto_intersect_coplanar` 진입 시 `polygonize_closed_curve_face` 가 chord_tol-driven sampling 으로 polygonize → 32-segs cardinal alignment 회피 → vertex-on-corner degeneracy 차단. ADR-107 ζ-β engine dispatch (`drawCircleAsShape` → `drawCircleAsCurve` 자동 변환) 후 사용자 시연 시 결함 D **자동 해소**. 별도 algorithm-level fix ADR 불필요. Cross-link: [ADR-107 §7.1](107-as-shape-path-b-unification.md).
+
+### A9.9 Path Z atomic plan (ζ-1 ~ ζ-5)
+
+| Step | 변경 | 회귀 (예상) | Status |
+|---|---|---|---|
+| **ζ-1** | 본 Amendment 9 spec (docs only) | 0 | 🔄 In progress |
+| **ζ-2** | `auto_intersect_coplanar` engine fix (Step 10.5 HARD 부여) | +3~5 axia-geo | Pending |
+| **ζ-3** | cross-cut audit (split_face_by_chain / split_faces_by_intersections / etc.) | +1~2 | Pending |
+| **ζ-4** | Playwright B-6 visual assert (선택) | +1 | Pending |
+| **ζ-5** | Closure — CLAUDE.md LOCKED #41 갱신 + 메타-원칙 #15 등재 + docs final | 0 | Pending |
+
+**총 회귀 예상**: +5 ~ +8, 절대 #[ignore] 금지 100% 유지. Single PR (`feat/adr-101-amendment-9-hard-flag`).
+
+### A9.10 Cross-link
+
+- **LOCKED #1 ADR-021 P7** — Amendment 9 §3.2 매트릭스 정정의 anchor (Containment ❌)
+- **LOCKED #16 ADR-038 K-ε hotfix** — render path coplanar hide 정책의 source. 본 Amendment 는 hide 정책은 유지 + split-side 의 HARD flag 부여로 충돌 해소
+- **LOCKED #34 ADR-087** — Kernel-Native Command Suite Reset 의 architectural correctness 답습 (split contract uniformity)
+- **메타-원칙 #15 (신설)** — 모든 split-type 함수의 canonical anchor
+- **Cross-cut audit 대상 (ζ-3)**: `Mesh::split_face_by_chain` / `Mesh::boolean.split_faces_by_intersections` / `face_split.rs::split_face_case_b/c/d` — 동일 contract 정합 여부
+- **메타-원칙 #14** ("면은 닫힌 경계로부터 유도된다") — 본 Amendment 의 *분할 라인 시각* 측면 첫 적용
