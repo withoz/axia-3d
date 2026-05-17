@@ -1690,6 +1690,39 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-104 β-1-ζ — Sphere Path B default flag (1:1 mirror of cylinder)
+    // ────────────────────────────────────────────────────────────────
+
+    it('setSpherePathBDefault forwards to engine', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setSpherePathBDefault: fn };
+      bridge.setSpherePathBDefault(true);
+      expect(fn).toHaveBeenCalledWith(true);
+      bridge.setSpherePathBDefault(false);
+      expect(fn).toHaveBeenCalledWith(false);
+    });
+
+    it('setSpherePathBDefault graceful no-op when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.setSpherePathBDefault(true)).not.toThrow();
+    });
+
+    it('getSpherePathBDefault returns engine value', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getSpherePathBDefault: fn };
+      expect(bridge.getSpherePathBDefault()).toBe(true);
+    });
+
+    it('getSpherePathBDefault returns false when endpoint missing (legacy default)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getSpherePathBDefault()).toBe(false);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-095 Phase 3-γ — Reference 시민권 bridge wrappers
     // ────────────────────────────────────────────────────────────────
 

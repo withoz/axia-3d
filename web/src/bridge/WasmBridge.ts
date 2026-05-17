@@ -503,6 +503,9 @@ type AxiaEngineExtended = AxiaEngine & {
   getFaceSurfaceOwnerId?(faceId: number): number;
   setCylinderPathBDefault?(on: boolean): void;
   getCylinderPathBDefault?(): boolean;
+  // ADR-104 β-1-ζ — Sphere Path B default flag
+  setSpherePathBDefault?(on: boolean): void;
+  getSpherePathBDefault?(): boolean;
   // ADR-097 T-δ — Topology damage detection + recovery
   detectTopologyDamage?(): string;
   attemptAutoRecovery?(): string;
@@ -1358,6 +1361,36 @@ export class WasmBridge {
   getCylinderPathBDefault(): boolean {
     if (!this.engine) return false;
     const fn = this.engine.getCylinderPathBDefault;
+    if (!fn) return false;
+    return fn.call(this.engine);
+  }
+
+  /**
+   * ADR-104 β-1-ζ — Set the Path B sphere default flag.
+   *
+   * `true` = `create_sphere` 가 kernel-native 2 hemisphere / 1 equator
+   * edge / 1 vert canonical 로 분기 (산업 CAD parity, 99%+ 메모리 절감).
+   * `false` = legacy Path A (289 face default polygonal mesh).
+   *
+   * Call once at app init based on user preference (localStorage
+   * `axia:sphere-path-b-mode`). ADR-049 P-5e-α / ADR-094 B-η 답습 패턴.
+   *
+   * Graceful no-op when WASM endpoint missing (legacy build).
+   */
+  setSpherePathBDefault(on: boolean): void {
+    if (!this.engine) return;
+    const fn = this.engine.setSpherePathBDefault;
+    if (!fn) return;
+    fn.call(this.engine, on);
+  }
+
+  /**
+   * ADR-104 β-1-ζ — Read the Path B sphere default flag.
+   * Returns false on missing endpoint (legacy default).
+   */
+  getSpherePathBDefault(): boolean {
+    if (!this.engine) return false;
+    const fn = this.engine.getSpherePathBDefault;
     if (!fn) return false;
     return fn.call(this.engine);
   }

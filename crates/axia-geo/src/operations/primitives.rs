@@ -353,6 +353,17 @@ impl Mesh {
     }
 
     /// Create a sphere (quads only, no triangular poles).
+    ///
+    /// **ADR-104 β-1-ζ dispatch**: If `self.sphere_path_b_default == true`,
+    /// routes to `create_sphere_kernel_native` (Path B — 2 hemisphere /
+    /// 1 equator edge / 1 vert canonical, 99%+ memory reduction).
+    /// Otherwise falls through to legacy Path A polygonal mesh below.
+    /// Production layer sets the flag from localStorage `axia:sphere-path-
+    /// b-mode` (ADR-094 B-η pattern 1:1 mirror).
+    ///
+    /// Path B 분기 시 `u_segments` / `v_segments` 무시 (kernel-native
+    /// representation does not need polygonal subdivision — render path
+    /// uses `tessellate_face_surface` for chord-tolerant tessellation).
     pub fn create_sphere(
         &mut self,
         center: DVec3,
@@ -361,6 +372,12 @@ impl Mesh {
         v_segments: u32,
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
+        // ADR-104 β-1-ζ — Path B dispatch (engine OFF, production ON via
+        // localStorage). Returns 2 hemisphere FaceIds.
+        if self.sphere_path_b_default {
+            return self.create_sphere_kernel_native(center, radius, material);
+        }
+
         // ADR-007 — polar singularity 문제 해결:
         // 기존 코드는 북/남극에서 u_segments개의 정점을 생성했으나 spatial hash
         // dedup으로 전부 단일 vertex로 병합 → quad가 퇴화되고 한 엣지가 N개
@@ -1269,5 +1286,107 @@ mod tests {
                     "N=64 savings {} expected >90%", savings_pct);
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-104 β-1-ζ — Sphere Path B dispatch regression suite
+    // (사용자 결재 2026-05-17 mirror of ADR-094 B-η cylinder dispatch).
+    //
+    // Engine default = false (Path A polygonal preservation). Production
+    // layer (web/src/main.ts) flips via `set_sphere_path_b_default(true)`
+    // from localStorage `axia:sphere-path-b-mode`.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr104_b1_zeta_engine_default_is_path_a_legacy() {
+        // Engine default = false (Path A) — preserves Path A regression
+        // assets. Production layer flips via set_sphere_path_b_default.
+        let mesh = Mesh::new();
+        assert!(!mesh.sphere_path_b_default(),
+            "engine default must be Path A (false) — preserves regression assets");
+    }
+
+    #[test]
+    fn adr104_b1_zeta_path_b_active_after_flag_flip() {
+        // After set_sphere_path_b_default(true), create_sphere routes
+        // to Path B (2 hemisphere faces).
+        let mut mesh = Mesh::new();
+        mesh.set_sphere_path_b_default(true);
+        assert!(mesh.sphere_path_b_default());
+
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_sphere(DVec3::ZERO, 50.0, 16, 12, mat).unwrap();
+        // Path B = 2 hemisphere faces.
+        assert_eq!(faces.len(), 2,
+            "Path B flip → 2 hemisphere faces (not 289 polygonal quads)");
+        // Active face count = 2 (no other geometry).
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_faces, 2, "Path B sphere = 2 face total");
+    }
+
+    #[test]
+    fn adr104_b1_zeta_path_a_default_off_preserved() {
+        // OFF preference (default false) — create_sphere still routes
+        // to Path A polygonal sphere (289 face for default 24×12).
+        let mut mesh = Mesh::new();
+        // Don't flip — default off.
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_sphere(DVec3::ZERO, 50.0, 16, 12, mat).unwrap();
+        // Path A default → polygonal mesh with many faces.
+        assert!(faces.len() >= 100,
+            "Path A default → ≥ 100 polygonal faces, got {}", faces.len());
+    }
+
+    #[test]
+    fn adr104_b1_zeta_path_a_explicit_off_after_toggle() {
+        // Toggle on then off — must revert to Path A. Tests bidirectional
+        // flag transitions.
+        let mut mesh = Mesh::new();
+        mesh.set_sphere_path_b_default(true);
+        mesh.set_sphere_path_b_default(false);
+        assert!(!mesh.sphere_path_b_default());
+
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_sphere(DVec3::ZERO, 50.0, 16, 12, mat).unwrap();
+        assert!(faces.len() >= 100,
+            "after toggle off, Path A revert (≥ 100 polygonal faces, got {})",
+            faces.len());
+    }
+
+    #[test]
+    fn adr104_b1_zeta_dispatch_invariants_pass() {
+        // Path B dispatch must still produce valid manifold (ADR-007 +
+        // ADR-021 P7 정합 — verified through create_sphere_kernel_native).
+        let mut mesh = Mesh::new();
+        mesh.set_sphere_path_b_default(true);
+        let mat = MaterialId::new(0);
+        let _ = mesh.create_sphere(DVec3::ZERO, 50.0, 16, 12, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(), "Path B sphere via create_sphere dispatch: {}",
+            report.summary());
+    }
+
+    #[test]
+    fn adr104_b1_zeta_path_b_dispatch_memory_reduction() {
+        // Path A (default 24×12) vs Path B canonical (2 faces).
+        // Demonstrates ~99% face count reduction matching ADR-104 §1.1
+        // memory matrix prediction.
+        let mut mesh_a = Mesh::new();
+        let mut mesh_b = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        let faces_a = mesh_a.create_sphere(DVec3::ZERO, 50.0, 24, 12, mat).unwrap();
+
+        mesh_b.set_sphere_path_b_default(true);
+        let faces_b = mesh_b.create_sphere(DVec3::ZERO, 50.0, 24, 12, mat).unwrap();
+
+        let reduction_pct = (faces_a.len() - faces_b.len()) as f64 * 100.0
+            / faces_a.len() as f64;
+        assert!(reduction_pct > 95.0,
+            "Path B vs Path A face reduction expected >95%, got {:.1}% \
+             (Path A = {} faces, Path B = {} faces)",
+            reduction_pct, faces_a.len(), faces_b.len());
+        assert_eq!(faces_b.len(), 2,
+            "Path B sphere = exactly 2 hemisphere faces");
     }
 }

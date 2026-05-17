@@ -1360,6 +1360,26 @@ impl AxiaEngine {
         self.scene.mesh.cylinder_path_b_default()
     }
 
+    /// ADR-104 β-1-ζ — Set the Path B sphere default.
+    ///
+    /// `true` = `create_sphere` 가 kernel-native 2 hemisphere / 1 equator
+    /// edge / 1 vert canonical 로 분기 (산업 CAD parity, 메모리 99%+ 절감).
+    /// `false` = legacy Path A (289 face default polygonal mesh).
+    ///
+    /// Production layer (TS bridge) calls this once at app init based on
+    /// localStorage `axia:sphere-path-b-mode` preference. Tests may toggle
+    /// per-call. Mirrors `setCylinderPathBDefault` pattern (ADR-094 B-η).
+    #[wasm_bindgen(js_name = "setSpherePathBDefault")]
+    pub fn set_sphere_path_b_default(&mut self, on: bool) {
+        self.scene.mesh.set_sphere_path_b_default(on);
+    }
+
+    /// ADR-104 β-1-ζ — Read the Path B sphere default flag.
+    #[wasm_bindgen(js_name = "getSpherePathBDefault")]
+    pub fn get_sphere_path_b_default(&self) -> bool {
+        self.scene.mesh.sphere_path_b_default()
+    }
+
     // ════════════════════════════════════════════════════════════════
     // ADR-097 T-δ — Topology damage detection + recovery WASM API
     // ════════════════════════════════════════════════════════════════

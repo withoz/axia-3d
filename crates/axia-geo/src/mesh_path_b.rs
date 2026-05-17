@@ -14,6 +14,8 @@
 //! - `Mesh::face_has_multi_loop_schema` — Path B dispatch query
 //! - `Mesh::set_cylinder_path_b_default` — ADR-094 B-η production flag
 //! - `Mesh::cylinder_path_b_default` — flag reader
+//! - `Mesh::set_sphere_path_b_default` — ADR-104 β-1-ζ production flag
+//! - `Mesh::sphere_path_b_default` — flag reader
 //! - `Mesh::mark_face_outer_soft` — SOFT flag on outer loop HEs (render hint)
 //!
 //! ## ADR cross-link
@@ -119,6 +121,22 @@ impl Mesh {
     /// ADR-094 B-η — Read the Path B cylinder default flag.
     pub fn cylinder_path_b_default(&self) -> bool {
         self.cylinder_path_b_default
+    }
+
+    /// ADR-104 β-1-ζ — Set the Path B sphere default. See field doc on
+    /// `Mesh::sphere_path_b_default` for semantics.
+    ///
+    /// Production layer should call this once at startup (after reading
+    /// localStorage `axia:sphere-path-b-mode`). Test layer may toggle
+    /// per-test as needed. Mirrors `set_cylinder_path_b_default`
+    /// pattern (ADR-094 B-η canonical).
+    pub fn set_sphere_path_b_default(&mut self, on: bool) {
+        self.sphere_path_b_default = on;
+    }
+
+    /// ADR-104 β-1-ζ — Read the Path B sphere default flag.
+    pub fn sphere_path_b_default(&self) -> bool {
+        self.sphere_path_b_default
     }
 
     /// ADR-094 B-γ-prep — Distinguishes Path B multi-loop schema vs

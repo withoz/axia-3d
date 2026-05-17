@@ -2818,6 +2818,82 @@ ADR-112 §6:
 - 메타-원칙 #6 (Preventive over Curative — 측정 우선)
 - ADR-046 P31 #4 (additive only — API surface UNCHANGED)
 
+### 47. ADR-113 Sphere Path B Production Wiring (ADR-104 β-1 closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "ζ (β-1 atomic + β-2/β-3 별도 후속)으로 진행" — β-1 Sphere 완전 활성
+> 단일 PR (LOCKED #44 Complete Meaning per Merge 정합).
+
+ADR-104 β-1-β (Sphere Path B engine `create_sphere_kernel_native`) 가
+이미 main 에 closure (11 회귀 PASS) 된 상태에서, 남은 wiring layers
+(β-1-δ + ε + ζ + η) 를 single atomic PR 으로 closure. ADR-094 B-η
+cylinder Path B production wiring 패턴 **1:1 mirror**.
+
+**Lock-ins (8개)**:
+- L-113-1 Single atomic PR per LOCKED #44 (Engine + WASM + TS + Production
+  wiring 같은 의미 단위)
+- L-113-2 ADR-094 B-η 1:1 mirror pattern — 모든 layer 가 cylinder pattern
+  답습 (4-layer architectural template)
+- L-113-3 Engine default OFF + production ON via localStorage (ADR-049
+  P-5e-α 답습)
+- L-113-4 Explicit OFF preference 보존 (`localStorage 'false'` 명시 시
+  Path A 보존)
+- L-113-5 Path A 회귀 자산 245+ 보존 (engine default OFF + dispatch 시점
+  만 분기)
+- L-113-6 Render zero-code-change (`tessellate_face_surface` 자연 활용 —
+  ADR-031 Phase D infra)
+- L-113-7 ADR-046 P31 #4 additive only (`create_sphere(...)` signature
+  UNCHANGED)
+- L-113-8 사용자 시연 게이트 PASS (real Chromium preview screenshot —
+  매끈한 곡면 + 적도 edge 가시)
+
+**측정 매트릭스 (real Chromium preview)**:
+
+| Sphere count | Path A (default 12×12) | Path B (Amendment 2) | 감소율 |
+|---|---|---|---|
+| 1 | 144 / 264 / 122 | **2 / 1 / 1** | **99.0%** |
+| 5 | 720 / 1320 / 610 | **10 / 5 / 5** | **98.6%** |
+
+(faces / edges / verts. Default 사용자 spheres 가 즉시 Path B 로 라우팅.)
+
+**회귀 누적 (β-1-δ ~ β-1-η)**: axia-geo **+6** (dispatch + flag toggle
++ memory reduction) + vitest **+9** (WasmBridge β-1-ζ 4 +
+SpherePathBSettings 5). 합계 **+15**, 절대 #[ignore] 금지 15/15 준수.
+
+**사용자 facing 변화**:
+- 새 sphere 도구 → 자동 Path B (2 hemisphere face), 99% 메모리 감소
+- 시각 quality 보존 (chord-tolerant tessellation via `tessellate_face_
+  surface`, ADR-031 Phase D)
+- Boolean / Offset / Push-Pull 의 NURBS direct dispatch 활성 (ADR-064/066
+  /080 cross-cut)
+- STEP export 의 analytic NURBSSurface (1e-3 mm round-trip)
+- `localStorage 'axia:sphere-path-b-mode' = 'false'` 명시 시 Path A
+  legacy 보존
+
+**Lessons (canonical for future Path B primitive expansions)**:
+- L1 β-1-β 가 main 에 먼저 존재 → wiring layers 만 묶음 (audit 우선 패턴)
+- L2 Cylinder pattern 1:1 mirror canonical (새 패턴 0, template 재사용)
+- L3 Render zero-code-change architectural value (`tessellate_face_surface`
+  framework 의 uv-range subset 활용은 universal pattern)
+- L4 LOCKED #44 의미 단위 분할 정확성 (primitive 별 atomic PR — β-2/
+  β-3 자연 분리)
+
+**후속 트랙 (모두 별도 ADR per LOCKED #44)**:
+- β-2 Cone Path B (ADR-104 §11.1, 본 PR 1:1 mirror)
+- β-3 Torus Path B (ADR-104 §11.2, 본 PR 1:1 mirror)
+- γ ADR-104 §3.1 — Boolean / Offset / Push-Pull surface-driven dispatch
+  verification
+- δ STEP export NURBSSurface round-trip audit
+
+**Cross-link**:
+- ADR-094 (Cylinder Path B-full canonical) — 1:1 mirror source
+- ADR-104 (Path B Expansion spec) + Amendment 2 (Q1=2-hemisphere)
+- ADR-049 P-5e-α (engine OFF + production ON pattern)
+- ADR-031 Phase D (AnalyticSurface::Sphere 인프라)
+- ADR-091 §E L1 (Mesh-level Map canonical)
+- LOCKED #43 (ADR-103 Z-up — equator anchor +X·radius, Z-up)
+- LOCKED #44 (Complete Meaning per Merge — single atomic PR anchor)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
