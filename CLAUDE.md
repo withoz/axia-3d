@@ -3078,6 +3078,97 @@ cross-cut). 합계 **+82 across 4 PRs**, 절대 #[ignore] 금지 82/82 준수.
 - LOCKED #43 (ADR-103 Z-up)
 - LOCKED #44 (Complete Meaning per Merge — single atomic PR anchor)
 
+### 50. ADR-116 Path B Family User-Facing Closure (γ verification + ζ TorusTool, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "네 묶음으로 진행 승인합니다" — ADR-104 Path B family 의 user-facing
+> complete closure 단일 PR (γ verification + ζ TorusTool UI).
+
+ADR-104 Path B family (ADR-094/113/114/115) closure 후 user-facing 마지
+막 layer 완전 결합. γ cross-cut verification (architectural promise audit)
++ ζ TorusTool UI integration (engine + bridge 만 있던 ADR-115 자연
+closure).
+
+**γ verification finding (α-1)** — architectural asymmetry locked-in:
+`create_cylinder` 항상 Path A 반환, Path B 는 `create_solid` extrude path
+만 활성. Sphere/Cone/Torus 는 direct primitive create 에서 dispatch.
+의도된 design (ADR-094 cylinder Path B = extrude-based annulus). 별도
+atomic ADR 으로 `create_cylinder` direct dispatch 추가 가능 (symmetry).
+
+**Lock-ins (8개)**:
+- L-116-1 Single atomic PR for "Path B family user-facing closure"
+  (γ + ζ bundle per 사용자 결재 + LOCKED #44)
+- L-116-2 γ verification 매트릭스 documented (4 primitives × surface
+  attach + tessellation + invariants + memory)
+- L-116-3 Cylinder dispatch asymmetry locked-in (regression test) —
+  `create_cylinder` direct = Path A, `create_solid` extrude = Path B
+- L-116-4 TorusTool 3-click flow (sphere/cone/cylinder UI 패턴 답습)
+- L-116-5 Tool-side engine validation guard (minor >= major reject)
+- L-116-6 ADR-046 P31 #4 additive only (TorusTool 신규 등록만)
+- L-116-7 PrimitiveSession schema extension (PrimitiveType += 'torus',
+  requiresSizing2 추가, semantic aliasing radius/height = major/minor)
+- L-116-8 LOCKED #44 정합 (의미 단위 묶음 — γ + ζ 가 함께 "Path B
+  family user-facing closure" 의 complete meaning)
+
+**γ verification 매트릭스 결과** (모든 4 primitives PASS):
+
+| Primitive | Surface attach | Tessellation | Invariants | Memory unlock |
+|---|---|---|---|---|
+| Cylinder (Path B via create_solid) | ✅ Cylinder | ✅ | ✅ | 95% |
+| Sphere | ✅ Sphere (2) | ✅ | ✅ | 99%+ |
+| Cone | ✅ Cone (side) | ✅ | ✅ | 92% |
+| Torus | ✅ Torus | ✅ | ✅ (Q3 quirks ≤2) | 99.7% |
+
+**ζ TorusTool UI** — 3-click flow (anchor → major_radius → minor_radius)
++ ToolManager registration `tools.set('torus', new TorusTool(ctx))`.
+Tool-side engine guard 의 minor>=major reject + bridge.create_torus
+graceful no-op (legacy build 호환).
+
+**회귀 누적 (γ + ζ)**: axia-geo **+10** (path_b_family_verification
+module 10 tests) + vitest **+10** (TorusTool 10 tests). 합계 **+20**,
+절대 #[ignore] 금지 20/20 준수. axia-geo 1369 → **1379 PASS**, vitest
+1884 → **1894 PASS**.
+
+**ADR-104 family final cumulative (5 PRs: β-1 + β-2 + β-3 + γ + ζ)**:
+- axia-geo +59 (sphere 11 + cone 18 + torus 12 + γ 10 + cross-cut 8)
+- vitest +43 (sphere 9 + cone 9 + torus 11 + TorusTool 10 + 4 misc)
+- Total **+102 across 5 PRs**, 절대 #[ignore] 금지 102/102 준수
+
+**Lessons (canonical for future architectural family closure)**:
+- L1 Verification 의 architectural finding 가치 — γ verification 이
+  단순 sanity check 가 아닌 architectural asymmetry audit. 모든 family
+  closure 후 cross-cut verification 필수.
+- L2 Test failure → architectural finding documentation pattern —
+  test 가 fail 시 fix 가 아닌 architectural reality 발견. Test 를
+  reality 에 맞게 update + 명시 regression lock-in.
+- L3 Bundle scope per LOCKED #44 — γ + ζ 가 "complete meaning" 으로
+  자연 묶음. 향후 multi-component closure scope 결정 시 참조.
+- L4 PrimitiveSession schema extension via semantic aliasing — 새 field
+  추가 없이 기존 slot 재사용 (ADR-091 §E L1 자연 답습).
+
+**🎉 ADR-104 Path B Family Complete (5 ADRs, 5 PRs)**:
+- ADR-094 (Cylinder Path B-full canonical) — first
+- ADR-113 (Sphere Path B production wiring) — first 1:1 mirror
+- ADR-114 (Cone Path B production wiring) — second mirror, Q2 revision
+- ADR-115 (Torus Path B production wiring) — third mirror, Q3 revision
+- **ADR-116 (Path B Family user-facing closure) — γ verification + ζ
+  TorusTool UI**
+
+**후속 트랙 (별도 ADR per LOCKED #44)**:
+- γ-next Cylinder primitive direct dispatch (α-1 asymmetry 해소,
+  symmetry with sphere/cone)
+- δ-next TorusTool menu / keyboard binding (Primitive menu entry)
+- ε STEP timing 단축 (LOCKED #43 priority #3 — ADR-082 Drift #5)
+- ζ NURBS-aware coplanar intersect (LOCKED #43 priority #4 — ADR-101 §5)
+
+**Cross-link**:
+- ADR-094 / ADR-113 / ADR-114 / ADR-115 — Path B family predecessors
+- ADR-104 (Path B Expansion spec) §3.1 §3.2 — γ verification spec
+- ADR-046 P31 #4 (additive only — TorusTool 신규 등록)
+- ADR-091 §E L1 (struct field 추가 0 — semantic aliasing)
+- LOCKED #43 (Z-up — TorusTool 좌표 정합)
+- LOCKED #44 (Complete Meaning per Merge — bundle scope decision)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

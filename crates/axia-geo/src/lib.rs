@@ -26,6 +26,10 @@ pub mod mesh_path_b;
 pub mod mesh_owner_ids;
 pub mod p7_manifold;
 pub mod topology_damage;
+// ADR-104 γ — Path B family cross-cut verification suite (Cylinder/Sphere/
+// Cone/Torus surface attach + tessellation + invariants). Test-only.
+#[cfg(test)]
+pub mod path_b_family_verification;
 
 // Re-export main types
 pub use mesh::{Mesh, NormalizeOptions, NormalizeReport, ManifoldInfo};

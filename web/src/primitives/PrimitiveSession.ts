@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 
-export type PrimitiveType = 'sphere' | 'cylinder' | 'cone';
+export type PrimitiveType = 'sphere' | 'cylinder' | 'cone' | 'torus';
 
 export type InteractionState = 'idle' | 'sizing1' | 'sizing2' | 'done';
 
@@ -124,10 +124,16 @@ export class PrimitiveSession {
   }
 
   /**
-   * Check if shape requires Sizing2 (height)
+   * Check if shape requires Sizing2 (height).
+   *
+   * For Torus, sizing1 = `radius` (major) and sizing2 = `height` (minor
+   * radius — semantic alias in `params.height`). ADR-115 β-3-ζ Path B
+   * tool integration (사용자 결재 2026-05-17).
    */
   requiresSizing2(): boolean {
-    return this.primitiveType === 'cylinder' || this.primitiveType === 'cone';
+    return this.primitiveType === 'cylinder'
+      || this.primitiveType === 'cone'
+      || this.primitiveType === 'torus';
   }
 
   /**
