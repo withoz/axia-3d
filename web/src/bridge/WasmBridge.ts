@@ -509,6 +509,10 @@ type AxiaEngineExtended = AxiaEngine & {
   // ADR-104 β-2-ζ — Cone Path B default flag
   setConePathBDefault?(on: boolean): void;
   getConePathBDefault?(): boolean;
+  // ADR-104 β-3 — Torus Path B kernel-native + default flag
+  createTorus?(cx: number, cy: number, cz: number, majorRadius: number, minorRadius: number): number;
+  setTorusPathBDefault?(on: boolean): void;
+  getTorusPathBDefault?(): boolean;
   // ADR-097 T-δ — Topology damage detection + recovery
   detectTopologyDamage?(): string;
   attemptAutoRecovery?(): string;
@@ -1423,6 +1427,49 @@ export class WasmBridge {
   getConePathBDefault(): boolean {
     if (!this.engine) return false;
     const fn = this.engine.getConePathBDefault;
+    if (!fn) return false;
+    return fn.call(this.engine);
+  }
+
+  /**
+   * ADR-104 β-3-β — Create torus (Path B kernel-native, Q3 revision).
+   *
+   * 1 face / 1 edge / 1 vert canonical (sphere/cone self-loop pattern
+   * 답습). ~99.7% memory reduction vs hypothetical Path A polygonal
+   * torus (no Path A baseline exists — kernel-native from day 1).
+   *
+   * Returns the FaceId of the single torus surface, or `-1` on error.
+   */
+  create_torus(
+    cx: number, cy: number, cz: number,
+    majorRadius: number, minorRadius: number,
+  ): number {
+    if (!this.engine || !this.engine.createTorus) return -1;
+    this.markDirty();
+    return this.engine.createTorus(cx, cy, cz, majorRadius, minorRadius);
+  }
+
+  /**
+   * ADR-104 β-3-ζ — Set the Path B torus default flag.
+   *
+   * Note: Torus has no Path A polygonal baseline. Flag exists for
+   * pattern consistency with sphere/cone. Graceful no-op when WASM
+   * endpoint missing.
+   */
+  setTorusPathBDefault(on: boolean): void {
+    if (!this.engine) return;
+    const fn = this.engine.setTorusPathBDefault;
+    if (!fn) return;
+    fn.call(this.engine, on);
+  }
+
+  /**
+   * ADR-104 β-3-ζ — Read the Path B torus default flag.
+   * Returns false on missing endpoint.
+   */
+  getTorusPathBDefault(): boolean {
+    if (!this.engine) return false;
+    const fn = this.engine.getTorusPathBDefault;
     if (!fn) return false;
     return fn.call(this.engine);
   }

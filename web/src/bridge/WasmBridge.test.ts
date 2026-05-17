@@ -1756,6 +1756,54 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-104 β-3 — Torus Path B (create + flag, 1:1 mirror of sphere)
+    // ────────────────────────────────────────────────────────────────
+
+    it('create_torus forwards center + radii to engine.createTorus', () => {
+      const fn = vi.fn(() => 7);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { createTorus: fn };
+      const faceId = bridge.create_torus(1, 2, 3, 10, 3);
+      expect(fn).toHaveBeenCalledWith(1, 2, 3, 10, 3);
+      expect(faceId).toBe(7);
+    });
+
+    it('create_torus returns -1 when endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.create_torus(0, 0, 0, 10, 3)).toBe(-1);
+    });
+
+    it('setTorusPathBDefault forwards to engine', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { setTorusPathBDefault: fn };
+      bridge.setTorusPathBDefault(true);
+      expect(fn).toHaveBeenCalledWith(true);
+      bridge.setTorusPathBDefault(false);
+      expect(fn).toHaveBeenCalledWith(false);
+    });
+
+    it('setTorusPathBDefault graceful no-op when endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.setTorusPathBDefault(true)).not.toThrow();
+    });
+
+    it('getTorusPathBDefault returns engine value', () => {
+      const fn = vi.fn(() => true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { getTorusPathBDefault: fn };
+      expect(bridge.getTorusPathBDefault()).toBe(true);
+    });
+
+    it('getTorusPathBDefault returns false when endpoint missing (legacy default)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.getTorusPathBDefault()).toBe(false);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-095 Phase 3-γ — Reference 시민권 bridge wrappers
     // ────────────────────────────────────────────────────────────────
 
