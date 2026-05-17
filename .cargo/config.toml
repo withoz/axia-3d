@@ -1,0 +1,52 @@
+# ADR-124 — WASM SIMD activation (β implementation of ADR-123 Q1=D)
+#
+# Anchor: ADR-123 §2 Option D — "WASM SIMD activation" 1st recommendation.
+# Sub-step: β implementation (ADR-118 → ADR-119 패턴 답습).
+#
+# This file is the **single source of truth** for WASM target rustflags.
+# Cargo automatically applies `[target.wasm32-unknown-unknown]` rustflags
+# to all builds for that target — no workflow file modifications needed.
+#
+# ## What this enables
+#
+# `target-feature=+simd128` activates the WebAssembly SIMD proposal
+# (standardized 2021, baseline in:
+#   - Chrome 91+ (May 2021)
+#   - Firefox 89+ (June 2021)
+#   - Safari 16.4+ (March 2023)
+#   - Edge 91+ (May 2021)
+#   - Node.js 16.4+ (June 2021)
+# ).
+#
+# Browser support is 99%+ as of 2026-05-17 (caniuse: WebAssembly SIMD).
+#
+# Rust's `std::simd` / `core::arch::wasm32` modules become usable, and the
+# compiler auto-vectorizes hot loops (Vec3 dot/cross/normalize, Newell
+# normal sum, Boolean SSI Newton steps). Expected 2-4× engine compute
+# gain on supported browsers per ADR-123 §1.3 finding #1.
+#
+# ## What this does NOT change
+#
+# - Native cargo builds (Linux/macOS/Windows host architectures) are
+#   UNCHANGED — the `[target.wasm32-unknown-unknown]` section only
+#   affects WASM target builds. `cargo test` on the host platform
+#   continues to use native CPU features without modification.
+# - Initial bundle size — `axia_wasm_bg.wasm` size delta is negligible
+#   (SIMD opcodes are compact, ~1-3% size increase per Rust 1.75+ tests).
+# - Public API surface — no `unsafe` SIMD intrinsics in user-facing
+#   crates. Auto-vectorization happens at LLVM codegen level.
+#
+# ## Cross-link
+#
+# - ADR-123 — α spec (this is the β implementation of Q1=D)
+# - ADR-124 — β implementation ADR (this file's commit)
+# - ADR-035 P20.C #2 — initial bundle 0MB strict (preserved)
+# - ADR-046 P31 #4 — additive only (API surface UNCHANGED)
+# - LOCKED #44 — Complete Meaning per Merge (single PR atomic)
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    # WebAssembly SIMD (W3C standardized 2021).
+    # Modern browsers 99%+ support (Safari 16.4+ since March 2023).
+    "-C", "target-feature=+simd128",
+]
