@@ -233,13 +233,25 @@ export class StepIgesImporter {
     //
     // ADR-119 γ-7 pre-warm 의 silent failure root cause. 본 fix 후
     // STEP import production-ready.
+    //
+    // **ADR-121 Amendment 1 (사용자 2차 시연 evidence 2026-05-17, 19:02)**:
+    // `ocVisualApplication` 추가만으로 부족 — **load order critical**.
+    // opencascade.js README canonical order:
+    //   ocCore → ocModelingAlgorithms → ocVisualApplication →
+    //   ocDataExchangeBase → ocDataExchangeExtra
+    // dataExchange 가 visualApplication 의 TDF_Attribute 참조하므로
+    // visualApplication 이 *사전* 로드 필수. 잘못된 sequence 시 동일
+    // assertion 재발.
+    //
+    // Fix: ocVisualApplication 을 dataExchange 그룹 *앞* 으로 이동.
     const occt = await initFn.call(mod, {
       libs: [
+        // ADR-121 Amendment 1: canonical sequence (opencascade.js README)
         mod.ocCore,
         mod.ocModelingAlgorithms,
+        mod.ocVisualApplication, // ← MUST BE BEFORE dataExchange (TDF_Attribute)
         mod.ocDataExchangeBase,
         mod.ocDataExchangeExtra,
-        mod.ocVisualApplication, // ADR-121 α: TKLCAF/TKCAF for TDF_Attribute
       ],
     });
     debugLog('[StepIgesImporter] OCCT.js init complete');
