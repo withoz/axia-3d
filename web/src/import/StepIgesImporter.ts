@@ -218,12 +218,28 @@ export class StepIgesImporter {
     // 로드되어 `STEPControl_Reader_1` 등 API 부재. ocDataExchangeBase
     // + ocDataExchangeExtra 가 STEP/IGES bundle. ocCore + ocModelingAlgorithms
     // 도 BRep / topology 전체 지원에 필요.
+    //
+    // **ADR-121 α Finding #2 fix (사용자 시연 evidence 2026-05-17)**:
+    // `ocVisualApplication` 추가 필수 — TKLCAF (Light CAF) 가 포함된
+    // bundle. ocDataExchangeBase 의 XCAF (Extended CAF for STEP color/
+    // layer attributes) 가 `TDF_Attribute` (TKLCAF) 를 참조. 미로딩 시
+    // `Assertion failed: bad export type for '_ZTI13TDF_Attribute':
+    // undefined` 발생 → STEP import 완전 실패.
+    //
+    // 사용자 시연 (2026-05-17) console error 로 직접 확인:
+    //   [18:31:37] Assertion failed: bad export type for
+    //   `_ZTI13TDF_Attribute`: undefined
+    //   [18:31:37] Unhandled promise: abort(...)
+    //
+    // ADR-119 γ-7 pre-warm 의 silent failure root cause. 본 fix 후
+    // STEP import production-ready.
     const occt = await initFn.call(mod, {
       libs: [
         mod.ocCore,
         mod.ocModelingAlgorithms,
         mod.ocDataExchangeBase,
         mod.ocDataExchangeExtra,
+        mod.ocVisualApplication, // ADR-121 α: TKLCAF/TKCAF for TDF_Attribute
       ],
     });
     debugLog('[StepIgesImporter] OCCT.js init complete');
