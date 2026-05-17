@@ -108,6 +108,16 @@ async function main() {
     if (bridge.isReady()) bridge.setCylinderPathBDefault(on);
   });
 
+  // ADR-104 β-1-ζ default ON — Sphere Path B 활성 (산업 CAD parity,
+  // 2 hemisphere face / 1 equator edge / 1 vert canonical, 99%+ 메모리
+  // 절감 vs 289-face polygonal mesh). Cylinder Path B 패턴 1:1 mirror.
+  const { getSpherePathBMode, onSpherePathBModeChange } =
+    await import('./tools/SpherePathBSettings');
+  if (bridge.isReady()) bridge.setSpherePathBDefault(getSpherePathBMode());
+  onSpherePathBModeChange((on) => {
+    if (bridge.isReady()) bridge.setSpherePathBDefault(on);
+  });
+
   // Note: WASM is optional for basic Three.js rendering (e.g., Sphere tool)
   // Continue even if WASM fails to initialize
   if (!bridge.isReady()) {

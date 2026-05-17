@@ -175,6 +175,26 @@ pub struct Mesh {
     #[serde(skip, default)]
     pub cylinder_path_b_default: bool,
 
+    /// ADR-104 β-1-ζ — Sphere Path B default flag.
+    ///
+    /// `true` (production preference) = `create_sphere(...)` 자동
+    /// 분기하여 `create_sphere_kernel_native` (Path B — 2 hemisphere /
+    /// 1 equator edge / 1 vert canonical, 99%+ memory reduction)
+    /// 호출. `false` (engine default) = legacy Path A (`create_sphere`
+    /// 의 polygonal mesh, 289 face / 561 edge / 290 vert default).
+    ///
+    /// **Engine default**: `false` (legacy) — preserves Path A
+    /// regression assets. Production layer (WASM bridge / TS init)
+    /// flips to `true` based on user preference (localStorage
+    /// `axia:sphere-path-b-mode`, ADR-049 P-5e-α / ADR-094 B-η 답습).
+    ///
+    /// **Caveat**: 분기 trigger 는 `create_sphere` 의 dispatch 시점.
+    /// Direct `create_sphere_kernel_native` 호출은 본 flag 와 무관.
+    ///
+    /// `serde(skip)` — runtime preference, snapshot 영향 0.
+    #[serde(skip, default)]
+    pub sphere_path_b_default: bool,
+
     /// ADR-094 B-γ-prep — `FaceId → Vec<LoopRef>` map for multi-loop
     /// face schema (Path B-full B-β option, additive coexist phase).
     ///
@@ -383,6 +403,9 @@ impl Mesh {
             // ADR-094 B-η — engine default = legacy Path A. Production
             // layer flips to Path B via set_cylinder_path_b_default(true).
             cylinder_path_b_default: false,
+            // ADR-104 β-1-ζ — sphere default same pattern (engine OFF,
+            // production layer flips via set_sphere_path_b_default(true)).
+            sphere_path_b_default: false,
             // ADR-094 B-γ-prep — empty map, all faces use legacy
             // outer+inners until explicit set_face_boundary_loops call.
             face_to_boundary_loops: FxHashMap::default(),
