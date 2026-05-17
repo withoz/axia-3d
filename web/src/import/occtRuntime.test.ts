@@ -184,4 +184,35 @@ describe('ADR-121 α — Finding #2 fix (사용자 시연 evidence 2026-05-17)',
     expect(importerSrc).toContain('TDF_Attribute');
     expect(importerSrc).toContain('TKLCAF');
   });
+
+  // ADR-121 Amendment 1 (사용자 2차 시연 evidence 2026-05-17, 19:02)
+  // ocVisualApplication 추가만으로 부족 — load order critical.
+  // opencascade.js README canonical sequence:
+  //   ocCore → ocModelingAlgorithms → ocVisualApplication →
+  //   ocDataExchangeBase → ocDataExchangeExtra
+
+  it('Amendment 1: ocVisualApplication 이 dataExchange 그룹 BEFORE 위치 (canonical order)', () => {
+    const importerSrc = readFileSync(
+      resolve('src/import/StepIgesImporter.ts'),
+      'utf-8',
+    );
+    const idxVisualApp = importerSrc.indexOf('mod.ocVisualApplication');
+    const idxDataBase = importerSrc.indexOf('mod.ocDataExchangeBase');
+    const idxDataExtra = importerSrc.indexOf('mod.ocDataExchangeExtra');
+    expect(idxVisualApp).toBeGreaterThan(0);
+    expect(idxDataBase).toBeGreaterThan(0);
+    expect(idxDataExtra).toBeGreaterThan(0);
+    // visualApplication 이 두 dataExchange 보다 *먼저* (string 위치 작음)
+    expect(idxVisualApp).toBeLessThan(idxDataBase);
+    expect(idxVisualApp).toBeLessThan(idxDataExtra);
+  });
+
+  it('Amendment 1: canonical sequence README 명시', () => {
+    const importerSrc = readFileSync(
+      resolve('src/import/StepIgesImporter.ts'),
+      'utf-8',
+    );
+    expect(importerSrc).toContain('Amendment 1');
+    expect(importerSrc).toContain('canonical sequence');
+  });
 });
