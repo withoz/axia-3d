@@ -102,6 +102,8 @@ export function registerAxiaCommands(deps: CommandRegistrationDeps): void {
   cmds.push(tool('tool-sphere',   'sphere',   'primitive', '구 (Sphere)',         '구',    'H', true, 'primitive', deps));
   cmds.push(tool('tool-cylinder', 'cylinder', 'primitive', '원통 (Cylinder)',     '원통',  'Y', false, undefined, deps));
   cmds.push(tool('tool-cone',     'cone',     'primitive', '원뿔 (Cone)',         '원뿔',  'N', false, undefined, deps));
+  // ADR-117 δ — Torus primitive (ADR-115 Path B kernel-native canonical).
+  cmds.push(tool('tool-torus',    'torus',    'primitive', '토러스 (Torus)',      '토러스', 'D', false, undefined, deps));
   cmds.push(tool('tool-box',      'box',      'primitive', '박스 (Box)',          '박스',  undefined, false, undefined, deps));
 
   // ── Modify ──────────────────────────────────────────────────────

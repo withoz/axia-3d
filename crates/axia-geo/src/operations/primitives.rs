@@ -9,6 +9,19 @@ use crate::surfaces::AnalyticSurface;
 
 impl Mesh {
     /// Create a cylinder (quads only).
+    ///
+    /// **ADR-117 γ-next — Cylinder primitive direct dispatch**
+    /// (사용자 결재 2026-05-17, ADR-116 α-1 finding 해소):
+    /// If `self.cylinder_path_b_default == true`, routes to Path B via
+    /// `create_solid` extrude path — builds closed-curve Circle profile
+    /// face (ADR-089 1-anchor + 1-self-loop edge canonical) + extrudes.
+    /// Sphere/Cone/Torus 답습 패턴 (4th 1:1 mirror) — ADR-104 family
+    /// architectural symmetry 완성.
+    ///
+    /// Path B 분기 시 `segments` 무시 (kernel-native annulus —
+    /// chord-tolerant tessellation via `tessellate_face_surface`).
+    /// Returns `[base_face, top_face, side_face]` (3-face annulus,
+    /// L-117-α-1 lock-in).
     pub fn create_cylinder(
         &mut self,
         center: DVec3,
@@ -17,6 +30,17 @@ impl Mesh {
         segments: u32,
         material: MaterialId,
     ) -> Result<Vec<FaceId>> {
+        // ADR-117 γ-next — Path B dispatch via create_solid extrude path.
+        // ADR-094 cylinder Path B 의 canonical entry 가 create_solid 이므로,
+        // create_cylinder 가 closed-curve profile build + create_solid 호출
+        // 으로 sphere/cone/torus 와 동일한 direct primitive dispatch 패턴
+        // 제공.
+        if self.cylinder_path_b_default {
+            return self.create_cylinder_kernel_native_via_extrude(
+                center, radius, height, material,
+            );
+        }
+
         let mut faces = Vec::new();
         // ADR-103-β-1 (Z-up migration): cylinder default axis = +Z.
         // Industry CAD parity (SketchUp / Fusion / SolidWorks).
@@ -543,6 +567,103 @@ impl Mesh {
         }
 
         Ok(faces)
+    }
+
+    /// ADR-117 γ-next — Cylinder Path B via create_solid extrude
+    /// (사용자 결재 2026-05-17, ADR-116 α-1 finding 해소).
+    ///
+    /// **Canonical structure**: build closed-curve Circle profile face
+    /// (1 anchor + 1 self-loop edge + 1 face with Plane+Circle, ADR-089
+    /// canonical) → `create_solid(Extrude)` → 3-face annulus (base disk +
+    /// top disk + cylindrical side, ADR-094 B-η canonical).
+    ///
+    /// **Lock-ins (ADR-117 γ-next L-117-α-*)**
+    ///
+    /// - **L-117-α-1** Returns `[base_face, top_face, side_face]` — 3-face
+    ///   annulus (cylinder Path B canonical structure)
+    /// - **L-117-α-2** Profile = closed-curve Circle (Plane surface + Circle
+    ///   curve, ADR-089 1-anchor + 1-self-loop canonical)
+    /// - **L-117-α-3** Z-up canonical (LOCKED #43): axis = +Z, anchor at
+    ///   `center + (radius, 0, 0)`
+    /// - **L-117-α-4** create_solid dispatch reuses ADR-094 Path B
+    ///   (`extrude_cylinder_kernel_native` via cylinder_path_b_default flag)
+    ///
+    /// # Returns
+    /// `Result<Vec<FaceId>>` — `[base_face, top_face, side_face]` (3 faces)
+    ///
+    /// # Errors
+    /// - radius ≤ 0 or height ≤ 0 → bail
+    /// - center not finite → bail
+    /// - profile face build / create_solid failure → bail
+    pub(crate) fn create_cylinder_kernel_native_via_extrude(
+        &mut self,
+        center: DVec3,
+        radius: f64,
+        height: f64,
+        material: MaterialId,
+    ) -> Result<Vec<FaceId>> {
+        if radius <= 0.0 {
+            anyhow::bail!(
+                "ADR-117 γ-next: cylinder radius must be positive (got {})",
+                radius,
+            );
+        }
+        if height <= 0.0 {
+            anyhow::bail!(
+                "ADR-117 γ-next: cylinder height must be positive (got {})",
+                height,
+            );
+        }
+        if !center.is_finite() {
+            anyhow::bail!("ADR-117 γ-next: cylinder center must be finite");
+        }
+
+        // Z-up canonical (LOCKED #43): base on z = center.z plane.
+        // Anchor at outer equator (radius, 0, 0) per ADR-115 / ADR-114
+        // 답습 (closed-curve self-loop pattern canonical).
+        let normal = DVec3::Z;
+        let basis_u = DVec3::X;
+        let anchor_pos = center + basis_u * radius;
+
+        // Step 1: Build closed-curve Circle profile face (ADR-089 canonical).
+        let anchor = self.add_vertex(anchor_pos);
+        let base_circle = crate::curves::AnalyticCurve::Circle {
+            center,
+            radius,
+            normal,
+            basis_u,
+        };
+        let profile_face = self.add_face_closed_curve(anchor, base_circle, material)?;
+
+        // Attach Plane surface to profile face (ADR-079 requirement —
+        // create_solid needs profile with surface attached).
+        // Plane: origin at center, normal = +Z (will become base normal -Z
+        // after Extrude — create_solid handles orientation).
+        let cap_range = (-radius * 1.5, radius * 1.5);
+        let plane_surface = crate::surfaces::AnalyticSurface::Plane {
+            origin: center,
+            normal,
+            basis_u,
+            u_range: cap_range,
+            v_range: cap_range,
+        };
+        if let Some(f) = self.faces.get_mut(profile_face) {
+            f.set_surface(Some(plane_surface));
+        }
+
+        // Step 2: create_solid(Extrude) — cylinder_path_b_default=true 이
+        // 보장되므로 ADR-094 Path B canonical (annulus) 라우팅.
+        let result = self.create_solid(
+            profile_face,
+            crate::operations::create_solid::CreateSolidMode::Extrude { distance: height },
+            material,
+        ).map_err(|e| anyhow::anyhow!("ADR-117 γ-next: create_solid failed: {}", e))?;
+
+        // Step 3: Return canonical [base, top, side] order (ADR-094 답습).
+        // profile_face = base, top_face = top, side_faces[0] = annulus side.
+        let mut out = vec![result.profile_face, result.top_face];
+        out.extend(result.side_faces);
+        Ok(out)
     }
 }
 
@@ -1371,6 +1492,87 @@ mod tests {
         let report = mesh.verify_face_invariants();
         assert!(report.is_valid(), "Path B sphere via create_sphere dispatch: {}",
             report.summary());
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-117 γ-next — Cylinder Path B direct dispatch tests
+    // (사용자 결재 2026-05-17, ADR-116 α-1 finding 해소).
+    // Mirror of β-1-ζ sphere / β-2-ζ cone dispatch test suites.
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr117_cylinder_direct_dispatch_engine_default_path_a() {
+        let mesh = Mesh::new();
+        assert!(!mesh.cylinder_path_b_default(),
+            "engine default must be Path A (false)");
+    }
+
+    #[test]
+    fn adr117_cylinder_direct_dispatch_path_b_active_after_flag_flip() {
+        let mut mesh = Mesh::new();
+        mesh.set_cylinder_path_b_default(true);
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, mat).unwrap();
+        // Path B canonical = 3-face annulus.
+        assert_eq!(faces.len(), 3,
+            "Path B flip → 3 faces (base + top + side annulus), not 18 polygonal");
+        let active_faces = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_faces, 3, "Path B cylinder = 3 face total");
+    }
+
+    #[test]
+    fn adr117_cylinder_direct_dispatch_path_a_default_off_preserved() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, mat).unwrap();
+        // Path A default → polygonal cylinder (18 faces for 16 segments: 2 caps + 16 sides)
+        assert!(faces.len() >= 10,
+            "Path A default → ≥ 10 polygonal faces (got {})", faces.len());
+    }
+
+    #[test]
+    fn adr117_cylinder_direct_dispatch_bidirectional_toggle() {
+        let mut mesh = Mesh::new();
+        mesh.set_cylinder_path_b_default(true);
+        mesh.set_cylinder_path_b_default(false);
+        assert!(!mesh.cylinder_path_b_default());
+
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, mat).unwrap();
+        assert!(faces.len() >= 10,
+            "after toggle off, Path A revert (≥ 10 polygonal, got {})", faces.len());
+    }
+
+    #[test]
+    fn adr117_cylinder_direct_dispatch_invariants_pass() {
+        let mut mesh = Mesh::new();
+        mesh.set_cylinder_path_b_default(true);
+        let mat = MaterialId::new(0);
+        let _ = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, mat).unwrap();
+        let report = mesh.verify_face_invariants();
+        assert!(report.is_valid(),
+            "Path B cylinder via create_cylinder dispatch: {}", report.summary());
+    }
+
+    #[test]
+    fn adr117_cylinder_direct_dispatch_returns_canonical_face_order() {
+        let mut mesh = Mesh::new();
+        mesh.set_cylinder_path_b_default(true);
+        let mat = MaterialId::new(0);
+        let faces = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, mat).unwrap();
+
+        // Expected order: [base, top, side]
+        assert_eq!(faces.len(), 3, "Path B cylinder returns 3 faces");
+
+        // Base face should have Plane surface, side should have Cylinder.
+        match mesh.face_surface(faces[0]) {
+            Some(AnalyticSurface::Plane { .. }) => {} // base disk
+            other => panic!("Expected Plane on base face, got {:?}", other),
+        }
+        match mesh.face_surface(faces[2]) {
+            Some(AnalyticSurface::Cylinder { .. }) => {} // side annulus
+            other => panic!("Expected Cylinder on side face, got {:?}", other),
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════

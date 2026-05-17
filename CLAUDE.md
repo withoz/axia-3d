@@ -3169,6 +3169,82 @@ module 10 tests) + vitest **+10** (TorusTool 10 tests). 합계 **+20**,
 - LOCKED #43 (Z-up — TorusTool 좌표 정합)
 - LOCKED #44 (Complete Meaning per Merge — bundle scope decision)
 
+### 51. ADR-117 Cylinder Direct Dispatch + TorusTool UI Bindings — ADR-104 Family 100% Closure (2026-05-17) 🎉🎉
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "✅ 결재: ε (α + β 묶음) — 지금 단계에서 가장 완전한 closure 선택"
+
+ADR-104 Path B family 의 **architectural symmetry 완성 + user-facing
+마지막 layer 결합**. 사용자 결재 ε bundle:
+- α (γ-next): ADR-116 α-1 finding (cylinder dispatch asymmetry) 해소
+  — `create_cylinder` direct dispatch (sphere/cone/torus 패턴 4번째
+  1:1 mirror)
+- β (δ-next): TorusTool menu / keyboard binding (`D` = donut mnemonic)
+
+**Lock-ins (10개)**:
+- L-117-1 Single atomic PR for "ADR-104 family 100% closure"
+- L-117-α-1 Cylinder direct dispatch via `create_cylinder_kernel_native_
+  via_extrude` helper (3-step pipeline: closed-curve profile build →
+  create_solid Extrude → canonical [base, top, side] face order)
+- L-117-α-2 Profile = closed-curve Circle (ADR-089 1-anchor + 1-self-
+  loop + Plane surface)
+- L-117-α-3 Z-up canonical (LOCKED #43)
+- L-117-α-4 create_solid dispatch reuses ADR-094 Path B
+- L-117-α-5 Returns [base, top, side] canonical order
+- L-117-β-1 TorusTool keyboard shortcut = `D` (donut mnemonic, avoids
+  'U'=measure / 'T'=top view conflict)
+- L-117-β-2 Menu position: 프리미티브 → 구/원통/원뿔/**토러스**/박스
+  (natural spatial complexity order)
+- L-117-2 ADR-046 P31 #4 additive only
+
+**ADR-104 Path B family — 100% architectural + user-facing closure**:
+
+| Primitive | Engine | Direct dispatch | UI tool | Menu | Keyboard | Memory |
+|---|---|---|---|---|---|---|
+| Cylinder | ✅ ADR-094 | ✅ **ADR-117 α** | ✅ | ✅ | Y | 95% |
+| Sphere | ✅ ADR-113 | ✅ ADR-113 ζ | ✅ | ✅ | H | 99%+ |
+| Cone | ✅ ADR-114 | ✅ ADR-114 ζ | ✅ | ✅ | N | 92% |
+| Torus | ✅ ADR-115 | ✅ ADR-115 ζ + **ADR-117 β** | ✅ | ✅ **ADR-117 β** | **D ADR-117 β** | 99.7% |
+
+🎉🎉 **ADR-104 Path B family 가 architectural (4 primitives × Path B
+dispatch) + user-facing (4 tools × menu + keyboard) 양쪽 layer 모두
+100% 완성**.
+
+**회귀 누적**: axia-geo **+7** (6 ADR-117 dispatch + 1 net γ update).
+vitest unchanged (UI bindings runtime-only, TorusTool 회귀 이미 있음).
+axia-geo 1379 → **1386 PASS**, 절대 #[ignore] 금지 7/7 준수.
+
+**ADR-104 family final cumulative (6 PRs)**:
+- ADR-094 (early), ADR-113 #76 (+21), ADR-114 #77 (+27), ADR-115 #78
+  (+23), ADR-116 #79 (+20), **ADR-117 #80 (+7)**
+- Total **+98+ across 6 PRs**, 절대 #[ignore] 금지 98+/98+ 준수.
+
+**Lessons (canonical for verification → closure chain)**:
+- L1 Verification finding 의 자연 closure — ADR-116 α-1 finding 이
+  본 ADR α 에서 즉시 해소. Verification → finding → closure atomic chain.
+- L2 4th template reproduction (sphere → cone → torus → cylinder)
+  — 4-layer template 완전 reproducible. Cylinder 는 기존 Path B engine
+  자산 위에 dispatch wrapper 만 추가.
+- L3 Helper-based dispatch pattern — `create_cylinder_kernel_native_
+  via_extrude` 가 Path A entry signature 와 Path B execution path 의
+  bridge. 향후 entry signature 다른 primitive 도 동일 패턴 가능.
+- L4 Keyboard mnemonic discipline — 'D' for Donut/Torus (의미적
+  mnemonic 우선). 향후 새 primitive shortcut 도 mnemonic 우선.
+
+**후속 트랙 (별도 ADR per LOCKED #44)**:
+- ε STEP timing 단축 (LOCKED #43 priority #3 — ADR-082 Drift #5)
+- ζ NURBS-aware coplanar intersect (LOCKED #43 priority #4 — ADR-101 §5)
+- η Surface-driven Boolean / Offset / Push-Pull pair-wise verification
+  (ADR-104 §3.1 cross-cut)
+
+**Cross-link**:
+- ADR-094 / ADR-113 / ADR-114 / ADR-115 / ADR-116 (Path B family 5 predecessors)
+- ADR-104 (Path B Expansion spec — family closure)
+- ADR-089 (closed-curve face canonical — profile face build helper)
+- ADR-046 P31 #4 (additive only)
+- LOCKED #43 (Z-up canonical)
+- LOCKED #44 (Complete Meaning per Merge — bundle scope)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

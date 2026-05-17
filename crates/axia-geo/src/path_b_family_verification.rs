@@ -118,19 +118,24 @@ mod tests {
         // Each Path B primitive should have constant small DCEL when
         // reached through its canonical entry point.
         //
-        // **Architectural asymmetry finding (ADR-116 γ verification)**:
-        // - Sphere / Cone / Torus dispatch happens in `create_sphere/cone`
-        //   / `create_torus` directly (via {sphere/cone/torus}_path_b_default
-        //   flag) — entry = primitive create.
-        // - **Cylinder** dispatch happens in `create_solid` (extrude path),
-        //   NOT in `create_cylinder`. The cylinder Path B canonical entry
-        //   is "Draw Circle → Push/Pull" workflow (closed-curve profile +
-        //   extrude). Direct `create_cylinder(...)` always returns Path A
-        //   polygonal regardless of cylinder_path_b_default.
-        //
-        // This asymmetry is *intentional* (ADR-094 design — cylinder Path B
-        // = extrude-based annulus, not direct primitive). Separate atomic
-        // ADR may add `create_cylinder` direct dispatch for symmetry.
+        // **Architectural symmetry resolved (ADR-117 γ-next, 2026-05-17)**:
+        // All 4 primitives dispatch in their direct `create_*` function
+        // when {kind}_path_b_default flag is ON. Earlier asymmetry
+        // (ADR-116 α-1 finding) where cylinder dispatched only via
+        // create_solid extrude has been resolved by adding direct
+        // dispatch in create_cylinder via create_cylinder_kernel_native_
+        // via_extrude helper.
+
+        // Cylinder Path B — canonical entry: create_cylinder (with flag)
+        {
+            let mut mesh = Mesh::new();
+            mesh.set_cylinder_path_b_default(true);
+            let _ = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, MaterialId::new(0))
+                .unwrap();
+            let f = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+            assert_eq!(f, 3,
+                "Cylinder Path B = 3 face annulus (got {})", f);
+        }
 
         // Sphere Path B — canonical entry: create_sphere_kernel_native
         {
@@ -167,24 +172,43 @@ mod tests {
     }
 
     #[test]
-    fn adr104_gamma_cylinder_create_direct_returns_path_a_known_asymmetry() {
-        // Document the architectural asymmetry: create_cylinder always
-        // returns Path A polygonal regardless of cylinder_path_b_default.
-        // Path B activates only via create_solid extrude path (ADR-094).
+    fn adr104_gamma_cylinder_create_direct_dispatches_to_path_b_when_flag_on() {
+        // ADR-117 γ-next (사용자 결재 2026-05-17): create_cylinder direct
+        // dispatch added — α-1 asymmetry resolved.
         //
-        // This test exists to lock-in the known finding from ADR-116
-        // γ verification. If create_cylinder ever gains direct dispatch
-        // (separate atomic PR for symmetry with sphere/cone), update
-        // this test accordingly.
+        // When cylinder_path_b_default = true, create_cylinder routes to
+        // create_cylinder_kernel_native_via_extrude (Path B canonical
+        // 3 face / 2 edge / 2 vert annulus, mirroring sphere/cone).
+        //
+        // This test locks in the *resolution* of ADR-116 α-1 finding.
+        // Mirror of adr104_b1/2_zeta_path_b_active_after_flag_flip
+        // pattern (sphere/cone β-ζ).
         let mut mesh = Mesh::new();
         mesh.set_cylinder_path_b_default(true);
         let _ = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, MaterialId::new(0))
             .unwrap();
         let face_count = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(face_count, 3,
+            "create_cylinder direct dispatch with Path B flag ON = 3-face \
+             annulus (base + top + side). Got {} faces.", face_count);
+    }
+
+    #[test]
+    fn adr104_gamma_cylinder_create_direct_path_a_when_flag_off() {
+        // Engine default = OFF — create_cylinder direct returns Path A
+        // polygonal (preserves Path A regression assets).
+        let mesh_default = Mesh::new();
+        assert!(!mesh_default.cylinder_path_b_default(),
+            "engine default flag must be OFF");
+
+        let mut mesh = Mesh::new();
+        // Flag stays OFF (default) → Path A
+        let _ = mesh.create_cylinder(DVec3::ZERO, 5.0, 10.0, 16, MaterialId::new(0))
+            .unwrap();
+        let face_count = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
         assert!(face_count > 3,
-            "create_cylinder direct dispatch is Path A polygonal (>3 faces). \
-             Got {} faces. If this fails, cylinder gained direct Path B \
-             dispatch — update verification accordingly.", face_count);
+            "create_cylinder with flag OFF = Path A polygonal (>3 faces). \
+             Got {} faces.", face_count);
     }
 
     // ════════════════════════════════════════════════════════════════
