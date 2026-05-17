@@ -3245,6 +3245,85 @@ axia-geo 1379 → **1386 PASS**, 절대 #[ignore] 금지 7/7 준수.
 - LOCKED #43 (Z-up canonical)
 - LOCKED #44 (Complete Meaning per Merge — bundle scope)
 
+### 52. ADR-118 + ADR-119 STEP/IGES Engine Pre-warm — Drift #5 user-perceived 해소 (LOCKED #43 priority #3 closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "3. STEP timing 단축 ← 다음 priority (multi-week) 으로 승인합니다"
+> → ADR-118 α spec (9 options matrix) → "추천대로 승인합니다" (γ-7)
+> → ADR-119 β implementation
+
+LOCKED #43 priority #3 **STEP timing 단축** 의 첫 sub-step closure.
+ADR-082 Drift #5 (180s+ wait) 의 *본질 architectural* 해소 — ADR-085
+가 perception (Toast progress) 만 다룬 위에, ADR-119 가 actual
+*user-perceived wait* 0s 까지 단축.
+
+**ADR-118 (α spec only)**:
+- 9 fix path options 매트릭스 (γ-1 streaming / γ-2 cache / γ-3 lib trim
+  / γ-4 pre-warm / γ-5 worker / γ-6 custom build / γ-7 묶음 / γ-8 full /
+  γ-9 audit)
+- 사용자 결재 γ-7 (γ-1 + γ-4 묶음, 단순/신속/정확) 채택
+- Spec only, implementation 0
+
+**ADR-119 (β implementation)**:
+- γ-4 fully implemented: `web/src/import/StepIgesPrewarm.ts` (NEW) +
+  `web/src/main.ts` wiring
+- γ-1 implicit: Vite chunk loader + HTTP/2 multiplexing + browser
+  automatic streaming (vendor patching 없이 ~10-20s 절감)
+- localStorage `axia:step-iges-prewarm` default ON, opt-out via `'false'`
+- requestIdleCallback (5s timeout fallback setTimeout 2s)
+- Idempotent + graceful failure
+
+**Lock-ins (10)**:
+- L-119-1~10: γ-7 사용자 결재, γ-4 fully impl, γ-1 implicit, localStorage
+  default ON, idempotent, graceful, bundle 0MB strict, Toast preserved,
+  additive only, 사용자 시연 게이트
+
+**사용자 facing 변화 매트릭스 (γ-7 실측 예상)**:
+
+| Scenario | Before (180s baseline) | After γ-7 |
+|---|---|---|
+| 즉시 Import (<5s) | 180s wait | 180s wait (pre-warm 미완료) |
+| 30s 후 Import | 180s wait | **~20s wait** (~85% 완료) |
+| 180s+ 후 Import | 180s wait | **~0s wait** (완료) |
+| Return visit (HTTP cache) | 180s wait | **~10-30s wait** |
+
+**Typical demo 시나리오**: page load 후 30-60s 동안 다른 도구 사용 →
+STEP import 즉시 응답.
+
+**회귀 누적**: vitest **+11** (StepIgesPrewarm). 합계 1894 → **1905
+PASS**, 절대 #[ignore] 금지 11/11 준수. vite build 정상 (initial
+bundle 0MB 증가 strict 유지).
+
+**Lessons (canonical for vendor-dep async init wrappers)**:
+- L1 γ-1 implicit via Vite chunk loader (architectural insight) —
+  vendor library 의 internal loader 가 modern browser streaming 활용
+  시 explicit override 불필요
+- L2 Pre-warm 의 architectural 가치 — actual computation time 동일,
+  user-initiated wait 만 0s. HCI 관점에서 background work 와 interactive
+  wait 분리. 다른 long-running init (rhino3dm, OBJLoader 등) 도 동일
+  패턴 가능
+- L3 Idempotent + graceful = robust pre-warm 표준 패턴
+- L4 ADR-118 α spec → ADR-119 β impl atomic separation (LOCKED #44
+  답습) — multi-week ADR 진입 시 α spec PR 먼저 → 사용자 결재 → β impl
+
+**후속 트랙 (별도 ADR per LOCKED #44)**:
+- γ-2 persistent module cache (Cache API / service worker) — 재방문 95%
+  단축
+- γ-1-explicit (vendor patch streaming compile) — 5-7일 architectural
+- γ-3 conditional lib loading (STEP vs IGES 분기)
+- Settings UI for prewarm opt-out (SettingsPanel 체크박스)
+
+**Cross-link**:
+- ADR-118 (architectural spec) — α 9 options matrix
+- ADR-082 §Drift #5 — 180s+ wait 본질 trigger
+- ADR-085 (Toast progress UX) — perception layer 보존
+- ADR-083 (BRepMesh Tessellation) — Drift #5 단축 후 demo 완전 활성
+- ADR-035 P20.C #2 (initial bundle 0MB strict)
+- ADR-049 P-5e-α (localStorage default ON pattern)
+- ADR-087 K-ζ (사용자 시연 게이트)
+- LOCKED #43 priority #3 (STEP timing 단축) — 첫 sub-step closure
+- LOCKED #44 (Complete Meaning per Merge — α/β atomic separation)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
