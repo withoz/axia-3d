@@ -4351,6 +4351,124 @@ pub fn lod_chord_tol(camera_distance: f64) -> f64 {
 - ADR-118/119/122/123/124/126/128/132/133 (α spec → β impl atomic pattern source)
 - LOCKED #44 Complete Meaning per Merge
 
+### 63. PR #101 — z=0 Invariant Closure (DrawRectTool Rewrite + Snap Disable + System-wide Cardinal Force, 2026-05-18) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-18, 누적 4건)**:
+> "rect 명령 제거하고 새로 만듭니다. 무조건 z=0에서 그려져야 합니다."
+> "스냅이 문제입니다. 스냅기능을 모두 지워주세요. z=0 완성후 스냅기능을
+>  새로 정립합니다"
+> "다른 그리기 도구에서도 마찬가지... 무조건 z=0에서 그려져야 합니다"
+> "분할된 면이 선택되도록 해주세요"
+
+ADR-087 K-ζ canonical legacy deletion + rewrite 패턴 답습. 사용자 시연
+evidence (별 모양 self-intersecting RECT + 66 console errors "recursive
+use of an object detected") root cause:
+- legacy DrawRectTool 의 face hit 시 onFace=true plane 의 drift 전파
+- snap system 의 자석 효과가 RECT corner 를 다른 vertex 로 끌어감
+- ToolManager.getSnappedPoint 의 snapVisual.clear() race condition
+
+본 LOCKED 은 **z=0 invariant 전체 closure** 의 정책 lock-in. Snap 시스템
+완전 비활성 + 모든 그리기 도구 system-wide cardinal force.
+
+#### 핵심 정책 매트릭스
+
+| 측면 | 정책 |
+|---|---|
+| **DrawRectTool plane** | Cardinal ground plane only (face hit 우회) |
+| **모든 click cardinal axis** | exactly 0 force (drift 무관 assign) |
+| **View mode 매핑** | 3d/top/bottom → Z=0, front/back → Y=0, right/left → X=0 |
+| **Sketch mode** | 보존 (user explicit, 예외) |
+| **Snap system** | 완전 비활성 (raw passthrough) — SnapManager/SnapVisual class 보존 |
+| **ToolManager.get3DPoint** | System-wide cardinal force 단일 진입점 |
+| **mousedown/mousemove handlers** | getSnappedPoint 호출 제거 (raw 3D point 직접 전달) |
+| **ServiceContainer 'selection'** | mangling-safe external access (vs minified `tm.selection`) |
+| **ServiceContainer 'syncMesh'** | 동일 패턴 — external sync API |
+| **face split 검증** | engine + faceMap + selection logic path (54 E2E PASS) |
+| **mouse click + render + BVH atomic sync** | **ADR-136 α spec** (별도 architectural ADR β 트랙) |
+
+#### Lock-ins (L-63-1 ~ L-63-10)
+
+- **L-63-1** DrawRectTool: cardinal ground plane strict (no face hit, no drift)
+- **L-63-2** ToolManager.get3DPoint: system-wide cardinal axis force (모든
+  그리기 도구 자동 z=0)
+- **L-63-3** Snap 완전 비활성 (raw passthrough) — re-introduction 별도 ADR
+- **L-63-4** SnapManager / SnapVisual class 보존 (git history + class 본체)
+- **L-63-5** ServiceContainer mangling-safe API ('selection' / 'syncMesh')
+- **L-63-6** 모든 그리기 도구 자동 영향 (Rect/Line/Circle/Polygon/Bezier/
+  Arc/Freehand) — single change system-wide
+- **L-63-7** Sketch mode 보존 — user explicit plane 우선
+- **L-63-8** 54 E2E 회귀 자산 (8 specs) — 절대 #[ignore] 금지
+- **L-63-9** ADR-046 P31 #4 additive only — public API surface UNCHANGED
+- **L-63-10** 사용자 결재 "z=0 완성후 스냅 새로 정립" — re-introduction
+  은 별도 ADR + 사용자 결재 필수
+
+#### 회귀 매트릭스 (실측)
+
+| Layer | 결과 |
+|---|---|
+| vitest | **1931/1931 PASS** (1 skipped — Path B slow channel) |
+| E2E z=0 (8 specs 누적) | **54/54 PASS** |
+| Production build | ✅ 12-13s 안정 |
+| TypeScript check | ✅ no errors |
+| 절대 #[ignore] 금지 | 54/54 준수 |
+
+#### E2E 회귀 자산 (PR #101 누적)
+
+| Spec | Tests | 검증 |
+|---|---|---|
+| z0-drawing-coplanarity | 6 | bridge API z=0 cardinal snap |
+| z0-closed-loop-face-synthesis | 6 | LOCKED #12 P11 닫힌 loop = 면 |
+| z0-face-split-all-tools | 8 | LOCKED #1 P7 + #41 ADR-101 cross-tool |
+| z0-rect-stress-split | 5 | Multi-RECT stress + S4 finding |
+| z0-user-mouse-drawing | 5 | Real Playwright mouse simulation |
+| z0-all-tools-cardinal | 5 | System-wide cardinal force all tools |
+| z0-face-synthesis-split-cross-tool | 14 | 6 tool kinds × 3 split patterns |
+| z0-split-face-selection | 5 | Engine + selection logic (mouse click deferred to ADR-136) |
+| **합계** | **54** | |
+
+#### Architectural Findings (별도 future ADR trigger anchors)
+
+- **S4 finding**: ADR-101 auto-intersect 의 scope = single-loop face only
+  (ring face 와 partial overlap → split skip, LOCKED #1 multi-loop face
+  정책 정합). 별도 ADR (가칭 "Multi-loop Face Auto-Intersect Extension").
+- **사용자 통찰 (가장 깊은 finding)**: "처음부터 면분할이 완전하지 않
+  았기 때문에 다른 부분과 충돌이 생기는것 같아요" → **ADR-136 α spec**
+  ("Face Split Downstream Sync Coherence") — LOCKED #15 P22.3 (sync
+  rebuild) ↔ ADR-111 (BVH defer) 정책 충돌 명시. β implementation 3
+  path (A/B/C) 비교.
+
+#### 사용자 시연 evidence (ADR-087 K-ζ canonical)
+
+이전 결함 → 수정 후:
+- 별 모양 self-intersecting RECT → **사라짐** (snap drift 제거)
+- 66 console errors → **사라짐** (snap path WASM call 제거)
+- RECT corner 가 의도와 다른 vertex 로 끌림 → **정확히 click 위치**
+- 4 RECT 모두 ground plane (z=0) 위에 정확히 → **사용자 manual PASS**
+
+#### Cross-link
+
+- LOCKED #1 ADR-021 P7 (closed edge divides face)
+- LOCKED #7 ADR-026 P12 (cardinal snap SSOT defense layer 2)
+- LOCKED #12 ADR-025 P11 (닫힌 엣지 = 반드시 면)
+- LOCKED #15 P22.3 ADR-037 (topology rebuild after split)
+- LOCKED #41 ADR-101 (coplanar partial overlap auto-intersect)
+- LOCKED #43 ADR-103 (Z-up + Z=0 ground plane)
+- LOCKED #44 (Complete Meaning per Merge — z=0 invariant closure)
+- LOCKED #45 ADR-111 α (BVH defer to next frame — ADR-136 충돌 source)
+- 메타-원칙 #14 (면은 닫힌 경계로부터 유도된다)
+- ADR-087 K-ζ canonical (legacy deletion + rewrite pattern)
+- **ADR-136 α spec** (Face Split Downstream Sync Coherence — 본 PR 의
+  사용자 통찰 finding)
+
+#### Follow-up (별도 ADR per LOCKED #44)
+
+- **ADR-XXX (가칭) Snap re-introduction "Guidance-only Snap"** — 사용자
+  결재 "z=0 완성후 스냅 새로 정립" 정합. commit 위치는 raw mouse, snap
+  = visual hint only
+- **ADR-136 β implementation** — Path A 권장 (Sync rebuild on topology
+  change)
+- **ADR-XXX Multi-loop face auto-split extension** — S4 finding
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

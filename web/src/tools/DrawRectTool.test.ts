@@ -59,9 +59,12 @@ describe('DrawRectTool', () => {
 
   describe('onMouseDown - first click', () => {
     it('sets start point and enters busy state', () => {
+      // ADR-DrawRectTool-rewrite (2026-05-18): cardinal-plane strict
+      //   invariant uses viewport.viewMode (not getDrawPlane face-hit) —
+      //   the rewrite's core change. State entry (isBusy + reference point)
+      //   remains the canonical user-facing contract.
       tool.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
       expect(tool.isBusy()).toBe(true);
-      expect(ctx.getDrawPlane).toHaveBeenCalled();
       expect(ctx.snap.setReferencePoint).toHaveBeenCalled();
     });
 

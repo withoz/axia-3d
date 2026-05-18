@@ -245,6 +245,14 @@ async function main() {
   // Initialize tool manager (connects bridge ↔ viewport ↔ units)
   const toolManager = new ToolManager(viewport, bridge, units);
   container.register('toolManager', toolManager);
+  // Expose SelectionManager via ServiceContainer — string-literal key 'selection'
+  // is mangling-safe (vs production-minified field access via tm.selection).
+  // External callers (E2E tests / UI panels) can reliably reach the singleton.
+  container.register('selection', toolManager.selection);
+  // String-literal 'syncMesh' function registration — bypass minified
+  // method-name access in production build. External callers can reliably
+  // trigger viewport update via `container.get('syncMesh')()`.
+  container.register('syncMesh', () => toolManager.syncMesh());
 
   // Initialize command input (CAD-style commands)
   const commandInput = new CommandInput();
