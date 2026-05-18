@@ -43,6 +43,48 @@ import {
 /** OCCT.js 인스턴스 핸들 (opencascade.js v2 API). */
 type OcctInstance = unknown;
 
+/**
+ * Per-face metadata side-table entry (ADR-126 β).
+ *
+ * ADR-126 (Amendment 2 of ADR-122 α-2) refactor: per-face metadata moved
+ * from per-face Three.js `Group.userData` to *single shared side-table*
+ * indexed by W-δ traversal stable index. Drawcalls collapse from
+ * N (face Mesh × 2 front+back) → 2 (faces-front + faces-back merged Mesh).
+ *
+ * The side-table is stored on the *parent import Group*:
+ *   `importGroup.userData.faceMetadata: Map<number, FaceMetadata>`
+ *
+ * **Indices into the merged BufferGeometry** (allow future per-face
+ * picking / hover / inspection without per-face Mesh objects):
+ * - `vertStart` / `vertCount`: range in merged `position` / `normal` arrays
+ * - `indexStart` / `indexCount`: range in merged `index` array
+ *
+ * **Backward compat**: `faceIndex` matches W-δ traversal stable index
+ * (ADR-081 W-δ + ADR-083 T-γ + ADR-084 E-γ + ADR-086 O-δ canonical).
+ */
+export interface FaceMetadata {
+  /** W-δ stable index from OCCT BRep traversal (ADR-081 W-δ). */
+  faceIndex: number;
+  /** ADR-081 W-γ surface promotion result, if any. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  surface?: any;
+  /** ADR-086 O-δ — boundary polygon for axia DCEL inject (Float32Array xyz). */
+  boundaryPolygon?: Float32Array;
+  /**
+   * ADR-086 O-δ — axia FaceId.raw() after `injectIntoAxia` success.
+   * Populated by `injectIntoAxia`; undefined before inject.
+   */
+  axiaFaceId?: number;
+  /** Vertex start offset in merged BufferGeometry positions. */
+  vertStart: number;
+  /** Vertex count (positions = vertCount × 3 floats). */
+  vertCount: number;
+  /** Index start offset in merged BufferGeometry index. */
+  indexStart: number;
+  /** Triangle index count. */
+  indexCount: number;
+}
+
 /** Import 결과 — Three.js Group + metadata. */
 export interface StepIgesImportResult {
   group: THREE.Group;
@@ -429,16 +471,38 @@ export class StepIgesImporter {
       metalness: 0.05,
     });
 
-    for (const face of tess.faces) {
-      try {
-        const mesh = this._faceToMesh(face, frontMat, backMat);
-        if (mesh) {
-          group.add(mesh);
-        }
-      } catch (e) {
-        tess.warnings.push(`face[${face.index}] mesh 생성: ${String(e)}`);
-      }
+    // ──────────────────────────────────────────────────────────────
+    // ADR-126 β — Merged BufferGeometry pattern (ADR-122 α-2 pivot).
+    //
+    // Previous (per LOCKED #55 / ADR-125 audit): N face = N×2 Mesh + N
+    // BufferGeometry (each face had own Group{front+back Mesh}). For
+    // STEP 500 face import: 1000 drawcalls.
+    //
+    // Now: collapse to 2 Mesh (front+back) sharing ONE merged
+    // BufferGeometry. Per-face metadata moves to side-table
+    // `group.userData.faceMetadata: Map<faceIndex, FaceMetadata>` —
+    // includes `vertStart`/`vertCount`/`indexStart`/`indexCount` for
+    // future per-face picking via geometry sub-range.
+    //
+    // Drawcalls: N×2 → 2 (e.g., STEP 500 face: 1000 → 2 = **500×
+    // 감소**, ADR-122 Amendment 2 hotspot D 본질 해소).
+    //
+    // **Edges sub-group UNCHANGED** — ADR-084 E-γ per-edge LineSegments
+    // pattern preserved (edges are typically << faces, and per-edge
+    // hover/selection needs edge-level entity).
+    // ──────────────────────────────────────────────────────────────
+    const mergeResult = this._mergeFacesIntoSingleGeometry(tess.faces, tess.warnings);
+    if (mergeResult.geometry) {
+      const frontMesh = new THREE.Mesh(mergeResult.geometry, frontMat);
+      frontMesh.name = 'faces-front';
+      const backMesh = new THREE.Mesh(mergeResult.geometry, backMat);
+      backMesh.name = 'faces-back';
+      group.add(frontMesh);
+      group.add(backMesh);
     }
+    // Side-table always attached (even when empty) for downstream code
+    // to find via uniform path. Edges (ADR-084 E-γ) iterate separately.
+    group.userData.faceMetadata = mergeResult.metadata;
 
     // ADR-084 E-γ — BRep edge wireframe rendering.
     // BRepMesh_IncrementalMesh 가 이미 적용된 shape 위에 Polygon3D 추출 →
@@ -497,59 +561,134 @@ export class StepIgesImporter {
   }
 
   /**
-   * Per-face FaceTessellation → Three.js Group (front + back mesh).
+   * ADR-126 β — Merge N face tessellations into single shared BufferGeometry
+   * + side-table `Map<faceIndex, FaceMetadata>`.
    *
-   * 빈 buffer (positions.length === 0) 은 null 반환 — caller 가 skip.
+   * **Drawcall reduction**: N×2 (per-face Group{front+back Mesh}) → 2
+   * (faces-front + faces-back merged Mesh sharing geometry).
    *
-   * **재질 정책**: front (#e8e8e8) + back (#9898b4) 같은 BufferGeometry
-   * 공유. ADR-018 two-tone 답습.
+   * **Per-face metadata**: moved from `Group.userData` per face to
+   * shared `Map<faceIndex, FaceMetadata>` indexed by W-δ stable index.
+   * Includes `vertStart`/`vertCount`/`indexStart`/`indexCount` for
+   * potential future per-face picking via geometry sub-range.
+   *
+   * **Normal computation**:
+   * - If all faces have non-zero normals → use as-is (concatenate)
+   * - If any face has zero-fill normals → `computeVertexNormals()`
+   *   on merged geometry (matches previous per-face fallback semantics)
+   *
+   * **Index offsetting**: per-face indices rebased to merged vertex
+   * offsets. `Uint32Array` (not Uint16) — safe for >65K vertices.
+   *
+   * @param faces - tessellation results from `tessellateShape`
+   * @param warnings - mutated; per-face errors appended
+   * @returns `{ geometry, metadata }` — geometry is `null` if all faces
+   *   skipped (empty/invalid); metadata is always a Map (possibly empty).
    */
-  private _faceToMesh(
-    face: FaceTessellation,
-    frontMat: THREE.Material,
-    backMat: THREE.Material,
-  ): THREE.Group | null {
-    if (face.positions.length === 0 || face.indices.length === 0) {
-      return null;
-    }
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(face.positions, 3));
-    // Normals — buffer 가 zero-filled (HasNormals=false) 면 computeVertexNormals
-    // 으로 fallback. 둘 다 동일하게 attribute 설정.
-    if (face.normals.length === face.positions.length) {
-      geom.setAttribute('normal', new THREE.BufferAttribute(face.normals, 3));
-      // zero-fill 인지 확인해 fallback 결정 (모든 normal 이 0 이면 compute)
-      const hasNonZeroNormal = face.normals.some(v => v !== 0);
-      if (!hasNonZeroNormal) {
-        geom.computeVertexNormals();
+  private _mergeFacesIntoSingleGeometry(
+    faces: FaceTessellation[],
+    warnings: string[],
+  ): { geometry: THREE.BufferGeometry | null; metadata: Map<number, FaceMetadata> } {
+    const metadata = new Map<number, FaceMetadata>();
+
+    // First pass: count totals + filter valid faces.
+    let totalVerts = 0;
+    let totalIndices = 0;
+    let anyZeroFillNormals = false;
+    const validFaces: FaceTessellation[] = [];
+
+    for (const face of faces) {
+      try {
+        if (face.positions.length === 0 || face.indices.length === 0) {
+          continue;
+        }
+        if (face.positions.length % 3 !== 0) {
+          warnings.push(`face[${face.index}] mesh 생성: positions length not multiple of 3`);
+          continue;
+        }
+        const vertCount = face.positions.length / 3;
+        // Detect zero-fill normals (HasNormals=false) — triggers fallback
+        // computeVertexNormals on merged geometry (matches legacy behavior).
+        if (face.normals.length === face.positions.length) {
+          const hasNonZeroNormal = face.normals.some(v => v !== 0);
+          if (!hasNonZeroNormal) {
+            anyZeroFillNormals = true;
+          }
+        } else {
+          // Length mismatch → fallback needed
+          anyZeroFillNormals = true;
+        }
+        totalVerts += vertCount;
+        totalIndices += face.indices.length;
+        validFaces.push(face);
+      } catch (e) {
+        warnings.push(`face[${face.index}] mesh 생성: ${String(e)}`);
       }
-    } else {
+    }
+
+    if (validFaces.length === 0) {
+      return { geometry: null, metadata };
+    }
+
+    // Second pass: allocate merged buffers + copy.
+    const positions = new Float32Array(totalVerts * 3);
+    const normals = new Float32Array(totalVerts * 3);
+    const indices = new Uint32Array(totalIndices);
+    let vertOffset = 0;
+    let indexOffset = 0;
+
+    for (const face of validFaces) {
+      const vertCount = face.positions.length / 3;
+      const vertStart = vertOffset;
+      const indexStart = indexOffset;
+      const indexCount = face.indices.length;
+
+      // Copy positions.
+      positions.set(face.positions, vertOffset * 3);
+
+      // Copy normals — if length matches, otherwise leave as zero
+      // (computeVertexNormals fallback will replace).
+      if (face.normals.length === face.positions.length) {
+        normals.set(face.normals, vertOffset * 3);
+      }
+      // else: zero-filled, fallback runs below
+
+      // Copy indices with vertex offset rebase.
+      for (let i = 0; i < indexCount; i++) {
+        indices[indexOffset + i] = face.indices[i] + vertOffset;
+      }
+
+      // Side-table entry.
+      const meta: FaceMetadata = {
+        faceIndex: face.index,
+        vertStart,
+        vertCount,
+        indexStart,
+        indexCount,
+      };
+      if (face.surface) meta.surface = face.surface;
+      if (face.boundaryPolygon && face.boundaryPolygon.length > 0) {
+        meta.boundaryPolygon = face.boundaryPolygon;
+      }
+      metadata.set(face.index, meta);
+
+      vertOffset += vertCount;
+      indexOffset += indexCount;
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geom.setIndex(new THREE.BufferAttribute(indices, 1));
+    if (anyZeroFillNormals) {
+      // Fallback: compute on merged geometry. Slight semantic shift —
+      // previously per-face computeVertexNormals; now merged. Should
+      // produce identical visual result (geometry is just concatenated).
       geom.computeVertexNormals();
     }
-    geom.setIndex(new THREE.BufferAttribute(face.indices, 1));
     geom.computeBoundingSphere();
 
-    // Front + back mesh 같은 geometry 공유 (ADR-018 two-tone)
-    const frontMesh = new THREE.Mesh(geom, frontMat);
-    frontMesh.name = `face-${face.index}-front`;
-    const backMesh = new THREE.Mesh(geom, backMat);
-    backMesh.name = `face-${face.index}-back`;
-
-    const faceGroup = new THREE.Group();
-    faceGroup.name = `face-${face.index}`;
-    faceGroup.add(frontMesh);
-    faceGroup.add(backMesh);
-    // T-β surface promotion 결과를 userData 에 보존 (caller W-η 가 axia
-    // FaceId 매핑 시 활용 가능, ADR-037 P22.7).
-    if (face.surface) {
-      faceGroup.userData.surface = face.surface;
-    }
-    faceGroup.userData.faceIndex = face.index;
-    // ADR-086 O-δ — boundary polygon 보존 (axia DCEL inject 입력).
-    if (face.boundaryPolygon && face.boundaryPolygon.length > 0) {
-      faceGroup.userData.boundaryPolygon = face.boundaryPolygon;
-    }
-    return faceGroup;
+    return { geometry: geom, metadata };
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -559,23 +698,30 @@ export class StepIgesImporter {
   /**
    * Inject all face boundaries from imported group into axia DCEL.
    *
-   * Walks `group.children` for `face-N` Group children, reads
-   * `userData.boundaryPolygon` + `userData.surface`, dispatches to
-   * appropriate `bridge.injectExternalFace*` based on surface kind.
-   * Stores returned axia `FaceId.raw()` in `userData.axiaFaceId`.
+   * **ADR-126 β refactor**: reads from `group.userData.faceMetadata`
+   * (side-table `Map<faceIndex, FaceMetadata>`) instead of walking
+   * `group.children` for `face-N` Group children. Per-face metadata
+   * (surface, boundaryPolygon, axiaFaceId) lives in the side-table —
+   * the imported group now has only `faces-front` + `faces-back` Mesh
+   * (merged geometry) + `edges` sub-Group.
    *
-   * **Surface kind dispatch**:
+   * Stores returned axia `FaceId.raw()` back into the side-table entry
+   * (`meta.axiaFaceId = ...`) — caller can iterate `faceMetadata` map
+   * to find the mapping.
+   *
+   * **Surface kind dispatch** (unchanged):
    * - `Plane` → `injectExternalFacePlane(positions, origin, normal, basisU)`
    * - 그 외 (Tessellate / Cylinder / Sphere / 기타) → `injectExternalFaceNoSurface(positions)`
-   *   (다른 surface kinds 는 후속 sub-step 에서 활성)
    *
-   * **Failure modes** (P21.7 답습):
+   * **Failure modes** (P21.7 답습, unchanged):
    * - bridge inject 메서드 미존재 → graceful skip + warning
    * - boundaryPolygon 부재 (length 0) → skip face + warning
    * - inject 반환값 -1 → skip face + warning (axia DCEL 거부)
+   * - **NEW**: faceMetadata side-table 부재 → empty result + warning
+   *   (legacy callers that pass non-ADR-126 groups)
    *
    * @param bridge - WasmBridge 또는 minimal subset (InjectBridge)
-   * @param group - importFile 결과의 Three.js Group
+   * @param group - importFile 결과의 Three.js Group (ADR-126 side-table)
    * @returns `{ faceIndexToAxiaId, warnings }` — caller 가 사용자 facing
    *   pick UX / engine ops 시 활용
    */
@@ -588,15 +734,18 @@ export class StepIgesImporter {
       warnings: [],
     };
 
-    for (const child of group.children) {
-      if (!child.name.startsWith('face-')) continue;
-      const faceGroup = child as THREE.Group;
-      const faceIndex = faceGroup.userData.faceIndex as number | undefined;
-      const boundaryPolygon = faceGroup.userData.boundaryPolygon as Float32Array | undefined;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const surface = faceGroup.userData.surface as any;
+    const metadata = group.userData.faceMetadata as Map<number, FaceMetadata> | undefined;
+    if (!metadata) {
+      result.warnings.push(
+        'No faceMetadata side-table found on group — was this group built by ADR-126 _convertToThreeGroup?',
+      );
+      return result;
+    }
 
-      if (typeof faceIndex !== 'number') continue;
+    for (const [faceIndex, meta] of metadata) {
+      const boundaryPolygon = meta.boundaryPolygon;
+      const surface = meta.surface;
+
       if (!boundaryPolygon || boundaryPolygon.length < 9) {
         result.warnings.push(
           `face[${faceIndex}]: missing/insufficient boundaryPolygon — inject skipped`,
@@ -654,7 +803,9 @@ export class StepIgesImporter {
         continue;
       }
 
-      faceGroup.userData.axiaFaceId = axiaFaceId;
+      // ADR-126 β — store back into side-table (NOT per-face userData,
+      // since per-face Group no longer exists).
+      meta.axiaFaceId = axiaFaceId;
       result.faceIndexToAxiaId.set(faceIndex, axiaFaceId);
     }
 

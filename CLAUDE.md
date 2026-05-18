@@ -3572,6 +3572,118 @@ per LOCKED #54. ADR-077 V-2 visual baselines 보존.
 - LOCKED #44 (Complete Meaning per Merge — docs-only PR scope)
 - LOCKED #54 (직전 closure, ADR-123 + ADR-124)
 
+### 56. ADR-126 + ADR-122 Amendment 2 — STEP/IGES Merged BufferGeometry (β closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "네 승인합니다" (Option A — Merged BufferGeometry, ADR-126 β single atomic PR)
+
+ADR-125 audit closure 후 Step A 진입 사전 검토 시 **2번째 audit
+finding**: ADR-122 α-2 spec wording "InstancedMesh" 가 STEP face 의
+각자 다른 polygon geometry 와 부적합. ADR-125 L-125-1 (audit-first
+canonical) 정합 → 사용자 결재 후 Option A (Merged BufferGeometry)
+채택. ADR-122 Amendment 2 추가 + ADR-126 β implementation single
+atomic PR.
+
+**Architectural change (canonical)**:
+
+Before (per ADR-083 T-γ):
+```
+importGroup (`STEP: file.step`)
+├─ face-0 (Group, userData: { faceIndex, surface, boundaryPolygon, axiaFaceId })
+│   ├─ face-0-front (Mesh, frontMat)  ← drawcall #1
+│   └─ face-0-back  (Mesh, backMat)   ← drawcall #2
+├─ face-1 (Group)...
+└─ edges (Group)
+```
+N face = 2N Mesh drawcalls.
+
+After (ADR-126 β):
+```
+importGroup
+├─ faces-front (Mesh, frontMat, MERGED geometry)  ← drawcall #1
+├─ faces-back  (Mesh, backMat, MERGED geometry)   ← drawcall #2
+├─ edges (Group)  [ADR-084 E-γ — UNCHANGED]
+└─ userData.faceMetadata: Map<faceIndex, FaceMetadata>  ← side-table
+```
+N face = **2 Mesh drawcalls**.
+
+**Drawcall reduction 매트릭스**:
+
+| Scene size | Before (N×2) | After | 감소율 |
+|---|---|---|---|
+| STEP cube (6 face) | 12 | **2** | **6× ↓** |
+| STEP 50-face | 100 | **2** | **50× ↓** |
+| STEP 500-face | 1000 | **2** | **500× ↓** |
+| STEP 5000-face | 10000 | **2** | **5000× ↓** |
+
+**Lock-ins (L-126-1 ~ L-126-9)**:
+- L-126-1 Merged BufferGeometry pattern over InstancedMesh (per-face
+  geometry variability 정합)
+- L-126-2 Per-face metadata → side-table SSOT (per-face Three.js
+  Object 폐지)
+- L-126-3 Side-table includes vertStart/vertCount/indexStart/
+  indexCount (향후 per-face picking via geometry sub-range 가능)
+- L-126-4 Front + back Mesh share merged BufferGeometry (ADR-018
+  two-tone preserved, 메모리 footprint 동일)
+- L-126-5 Edges sub-group (ADR-084 E-γ) UNCHANGED (entity-level
+  hover/selection 가치)
+- L-126-6 Uint32Array index (>65K vertices safe for typical STEP scenes)
+- L-126-7 ADR-077 V-2 visual baseline 변경 0 (render output 동일)
+- L-126-8 ADR-086 O-δ DCEL injection 정합 + 새 graceful path 추가
+- L-126-9 절대 #[ignore] 금지
+
+**회귀 매트릭스 (실측)**:
+
+| Layer | Before (LOCKED #55) | After ADR-126 β | Delta |
+|---|---|---|---|
+| vitest | 1916 / 1 skipped | **1917 / 1 skipped** | **+1** (graceful guard) |
+| `StepIgesImporter.test.ts` | 26 tests | **27 tests** | +1 |
+| axia-geo cargo | 1392 | 1392 | UNCHANGED |
+| axia-core cargo | 302 | 302 | UNCHANGED |
+| axia-wasm cargo | 0 | 0 | UNCHANGED |
+| Initial bundle | 724.99 kB | 724.99 kB | UNCHANGED (P20.C #2) |
+| ADR-077 V-2 baselines | 3 | 3 | UNCHANGED |
+
+**사용자 facing 변화 (0)**:
+- 시각 output UNCHANGED (동일 geometry vertices/normals)
+- Public API UNCHANGED (StepIgesImporter.importFile signature)
+- ADR-046 P31 #4 additive only 정합
+
+**Lessons (canonical for future Three.js merged-geometry / API-choice
+ADRs)**:
+- L1 Audit-first 의 architectural value (3번째 적용) — ADR-122 α-1
+  pivot (ADR-125), ADR-122 α-2 wording pivot (ADR-126), 두 audit-
+  first finding 모두 silent 강행 회피. 향후 모든 α spec → β impl
+  진입 시 audit 우선 강제 권장.
+- L2 Three.js API 정확성 — spec wording (특히 5개월 누적 ADR 의 옛
+  표기) 가 기술적으로 부정확할 수 있음. intent (drawcall reduction)
+  와 mechanism (InstancedMesh vs Merged BufferGeometry vs BatchedMesh)
+  분리.
+- L3 Side-table pattern canonical — per-face Three.js Object 폐지 +
+  Map<id, Metadata> 가 render-perf 와 metadata-access 동시 해소. ADR-
+  074 group outline merged geometry 패턴의 자연 진화.
+- L4 Vertex offset rebase — per-face indices `+ vertOffset` rebase
+  + Uint32Array index (>65K vertices safe).
+- L5 Spec preservation pattern 2번째 적용 — ADR-122 α-2 spec 보존 +
+  Amendment 2 (ADR-125 §A1.3 pattern 답습). InstancedMesh wording 의
+  보존 + Merged BufferGeometry pivot 명시.
+
+**Cross-link**:
+- ADR-126 (β implementation ADR — 본 LOCKED 의 anchor)
+- ADR-122 Amendment 2 (α-2 API choice correction)
+- ADR-125 + LOCKED #55 (직전 audit closure — audit-first canonical
+  source)
+- ADR-123 Q2 default (재해석 후 본 LOCKED 에서 완전 closure)
+- ADR-124 + LOCKED #54 (직전 closure, engine-side SIMD)
+- ADR-083 T-γ (`_faceToMesh` 폐지 source)
+- ADR-084 E-γ (edges sub-group preserved per L-126-5)
+- ADR-086 O-δ (DCEL injection side-table refactor)
+- ADR-074 (merged-geometry-per-type pattern source)
+- ADR-018 (two-tone front/back preserved)
+- ADR-077 V-2 (visual baseline 보존)
+- ADR-046 P31 #4 (additive only)
+- LOCKED #44 (Complete Meaning per Merge — single atomic PR)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

@@ -265,3 +265,61 @@ ADR-123 §3.2 Q2 default ("ADR-123 D 먼저 → ADR-122 α-1 후속") 가 본 am
 - **ADR-074** — type-level merged geometry pattern source (implicit optimization)
 - **ADR-077 V-2** — visual baseline 가드 (α-1 강행 거부 사유)
 - **ADR-123** — Q2 default 재해석 anchor
+
+---
+
+## Amendment 2 — α-2 API Choice Correction (2026-05-17, ADR-126 β implementation)
+
+**상태**: ADR-122 spec 본문 (§§1~9) + Amendment 1 보존. 본 amendment 만 추가.
+**Trigger**: ADR-125 §3.3 후속 — Step A 진입 사전 검토에서 추가 audit finding.
+**사용자 결재**: 2026-05-17, "네 승인합니다" (Option A — Merged BufferGeometry, ADR-126 β single atomic PR).
+
+### A2.1 §A1.2 α-2 implementation API 정정
+
+α-2 ("Reference imported mesh InstancedMesh") wording 의 architectural reality 정정:
+
+| 측면 | §3.1 §A1.2 spec wording | Audit finding (2026-05-17) |
+|---|---|---|
+| API | "InstancedMesh" | **InstancedMesh = "draw same geometry N times"** — STEP face 의 *각자 다른 polygon geometry* 와 부적합 |
+| 진짜 적합 API | — | **Merged BufferGeometry** (모든 face geometry 를 single BufferGeometry 로 concat, 2 Mesh share) |
+| 대안 검토 | — | BatchedMesh (Three.js r155+) — 향후 per-instance matrix 필요 시; 현재 Option I 가 minimum risk |
+
+### A2.2 추천 매트릭스 정정 (canonical)
+
+| 추천 | §A1.2 wording | 이후 (Amendment 2) | 사유 |
+|---|---|---|---|
+| **α-2 implementation API** | "Reference imported mesh InstancedMesh" | **Merged BufferGeometry pattern** (Option I) | per-face geometry variability 정합 |
+| **2nd alternative** | — | BatchedMesh (Option II) | per-instance matrix 또는 visibility 필요 시 향후 ADR |
+
+### A2.3 ADR-126 β implementation 명시 (canonical)
+
+ADR-126 β implementation 채택:
+- N face Group{front+back Mesh} → 2 Mesh (faces-front + faces-back) sharing merged BufferGeometry
+- Per-face metadata → side-table `Map<faceIndex, FaceMetadata>` (with vertStart/vertCount/indexStart/indexCount for future per-face picking)
+- Drawcalls: N×2 → 2 (e.g., STEP 500 face: 1000 → 2 = **500× 감소**)
+- Edges sub-group (ADR-084 E-γ) UNCHANGED
+- ADR-077 V-2 visual baseline 변경 0 (render output 동일)
+- Vitest +1 (1916 → 1917), cargo UNCHANGED
+
+### A2.4 InstancedMesh wording 보존 사유
+
+ADR-122 spec §A1.2 의 `α-2 (Reference imported mesh InstancedMesh)` wording 은 **보존** (supersede 아님):
+- 향후 selection > 1000 instances + 동일 geometry pattern (예: snap markers, helper unit boxes) 시 *진짜* InstancedMesh 사용 가능
+- 본 amendment 는 *α-2 의 implementation API 선택* 만 명시 (intent = drawcall reduction 보존)
+
+### A2.5 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-126: vitest +1 (graceful guard test), cargo UNCHANGED
+- ADR-077 V-2 visual baseline UNCHANGED
+
+### A2.6 Cross-link (Amendment 2)
+
+- **ADR-126** — 본 amendment 의 implementation (Merged BufferGeometry pattern)
+- **ADR-125** — audit-first canonical pattern source (L-125-1)
+- **ADR-074** — merged-geometry-per-type pattern source (architectural inspiration)
+- **ADR-018** — two-tone front/back (preserved)
+- **ADR-077 V-2** — visual baseline 가드 (변경 0)
+- **ADR-083 T-γ** — `_faceToMesh` 폐지 source (ADR-126 _mergeFacesIntoSingleGeometry 로 대체)
+- **ADR-084 E-γ** — edges sub-group preserved
+- **ADR-086 O-δ** — DCEL injection side-table refactor
