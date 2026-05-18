@@ -2017,77 +2017,40 @@ export class ToolManager {
     // deferred to ADR-106 redesign.
   }
 
-  private getSnappedPoint(e: MouseEvent, rawGroundPoint: THREE.Vector3 | null, consumeOverride = false): THREE.Vector3 | null {
-    const canvas = this.viewport.renderer.domElement;
-
-    // ── onFace 스냅용: 커서 아래 face pick (있으면 전달) ──
-    let faceHitPoint: THREE.Vector3 | null = null;
-    try {
-      const hit = this.viewport.pick(e.clientX, e.clientY);
-      if (hit && hit.point) {
-        faceHitPoint = hit.point.clone();
-      }
-    } catch {
-      faceHitPoint = null;
-    }
-
-    // ADR-047 P32 — pass chain-pending vertices to SnapManager so endpoint
-    // snap doesn't pull the cursor onto a vertex already in the active
-    // tool's chain (which would cause face synthesis to bail with a
-    // duplicate-vertex error). chainStart is intentionally NOT excluded —
-    // it must remain snappable for the loop-close gesture.
-    const activeTool = this.tools.get(this._currentTool);
-    const excluded = activeTool?.getExcludedSnapPoints?.() ?? [];
-    this.snap.setExcludePositions(excluded);
-
-    const overrideType = consumeOverride
-      ? this.snap.consumeOverride()
-      : this.snap.getOverride();
-    let snapResult;
-
-    if (overrideType === 'none') {
-      snapResult = null;
-    } else if (overrideType) {
-      snapResult = this.snap.findSnapOverride(
-        overrideType,
-        e.clientX, e.clientY,
-        this.viewport.activeCamera,
-        canvas,
-        rawGroundPoint,
-        faceHitPoint,
-      );
-    } else {
-      snapResult = this.snap.findSnap(
-        e.clientX, e.clientY,
-        this.viewport.activeCamera,
-        canvas,
-        rawGroundPoint,
-        faceHitPoint,
-      );
-    }
-
-    // Phase B2: Inference chaining — remember recently hovered edges so that
-    // parallel / extension inferences remain available even after the cursor
-    // leaves them. Called whenever a snap fires on an edge-type candidate.
-    if (snapResult?.edgeRef) {
-      this.snap.recordHoveredEdge(snapResult.edgeRef.a, snapResult.edgeRef.b);
-    }
-
-    // SketchUp-style: if normal snap didn't fire, always-on endpoint inference kicks in
-    if (!snapResult) {
-      snapResult = this.snap.findNearestEndpoint(
-        e.clientX, e.clientY,
-        this.viewport.activeCamera,
-        canvas,
-      );
-    }
-
-    this.snapVisual.update(snapResult, this.viewport.activeCamera);
-
-    if (snapResult) {
-      return snapResult.position.clone();
-    }
+  private getSnappedPoint(_e: MouseEvent, rawGroundPoint: THREE.Vector3 | null, _consumeOverride = false): THREE.Vector3 | null {
+    // ════════════════════════════════════════════════════════════════════
+    // SNAP SYSTEM DISABLED (사용자 결재 2026-05-18)
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // 결재: "스냅이 문제입니다. 스냅기능을 모두 지워주세요. z=0 완성후
+    //        스냅기능을 새로 정립합니다"
+    //
+    // 결함 evidence: snap 이 RECT corner 를 다른 vertex 위치로 끌어가서
+    //   self-intersect / 별 모양 결과. 사용자 click 의도 ↔ snap 결과 mismatch.
+    //
+    // Action: 모든 snap 동작 완전 비활성화. raw mouse pick 만 사용.
+    //   - findSnap / findNearestEndpoint / overrideType 우회
+    //   - SnapVisual marker clear (시각적 hint 도 모두 제거)
+    //   - SnapManager / SnapVisual class 자체는 보존 (re-introduction
+    //     별도 ADR — z=0 invariant 사용자 시연 PASS 후)
+    //   - 사용자 ortho axis (Alt+E/M/I/...) 토글 / Tab tentative 등 모두 no-op
+    //
+    // 영향:
+    //   - 모든 그리기 도구 (Rect/Line/Circle/Polygon/Bezier/Arc/Freehand)
+    //     가 raw ground point 사용 (precision-first)
+    //   - 다른 vertex 자석 정렬 → 사용자가 visual 로 정확히 click 필요
+    //   - 향후 별도 ADR 로 *guidance-only* snap 재도입 (commit 위치는
+    //     항상 mouse 실제 위치, snap 은 visual hint 만)
+    //
+    // Reference: ADR-087 K-ζ canonical legacy deletion pattern.
+    // ════════════════════════════════════════════════════════════════════
+    this.snapVisual.clear();
     return rawGroundPoint;
+    // SnapManager / SnapVisual class 자체는 보존 (re-introduction 별도 ADR).
+    // 원래 snap logic (findSnap / findNearestEndpoint / overrideType / chain
+    // exclude 등) 은 git history `git log -p ToolManagerRefactored.ts` 에서
+    // 복원 가능. ADR-047 P32 chain exclude + ADR (Phase B2) inference chaining
+    // 등의 design notes 도 함께 보존.
   }
 
   /**
@@ -3359,37 +3322,26 @@ export class ToolManager {
     });
 
     // ===== MOUSE DOWN =====
+    // SNAP DISABLED (사용자 결재 2026-05-18) — see getSnappedPoint above.
+    // Pass raw 3D point directly to tool. getSnappedPoint() call removed
+    // entirely to eliminate every snap-related WASM call path during
+    // mousedown/mousemove (prevents recursive-use Rust borrow violations
+    // observed in user demo).
     canvas.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || e.altKey) return;
-
-      // Get 3D point
       const rawPt = this.get3DPoint(e);
-
-      // Skip snap for tools that explicitly opt out (Select, Erase).
       const tool = this.tools.get(this._currentTool);
-      const point = tool?.wantsSnap === false
-        ? rawPt
-        : this.getSnappedPoint(e, rawPt, true);
-
-      // Dispatch to current tool
       if (tool?.onMouseDown) {
-        tool.onMouseDown(e, point);
+        tool.onMouseDown(e, rawPt);
       }
     });
 
     // ===== MOUSE MOVE =====
     canvas.addEventListener('mousemove', (e) => {
       const rawPt = this.get3DPoint(e);
-
-      // Snap is skipped when the active tool opts out (wantsSnap=false) —
-      // eliminates visual marker noise and saves findSnap computation.
       const tool = this.tools.get(this._currentTool);
-      const point = tool?.wantsSnap === false
-        ? rawPt
-        : this.getSnappedPoint(e, rawPt);
-
       if (tool?.onMouseMove) {
-        tool.onMouseMove(e, point);
+        tool.onMouseMove(e, rawPt);
       }
 
       // Hover highlight for applicable tools.
