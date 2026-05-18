@@ -4027,6 +4027,118 @@ functionality preserved.
 - LOCKED #44 (Complete Meaning per Merge)
 - LOCKED #58 (직전 closure, ADR-128 priority #4)
 
+### 60. ADR-133 — Adapter Layer Implementation (ADR-132 Path E β, ADR-045 D1 SSOT 실측 회복, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "승인합니다" (ADR-132 Q1=(a) Path E + Q2=(a) AC 66 entries + Q3=(c) audit-first 7번째)
+
+ADR-132 (audit ADR, PR #96 merged `13ae8f7`) 의 6 path matrix 중 **Path E
+(Adapter layer)** β implementation. ADR-131 §A1.2 dual catalog finding
+(ActionCatalog 95 ↔ CommandCatalog 148, 66 CC-only entries) 의 architectural
+해소.
+
+**ADR-045 D1 SSOT invariant 실측 회복**:
+
+| 측면 | Pre-ADR-133 | Post-ADR-133 |
+|---|---|---|
+| ActionCatalog total | 95 entries | **161 entries** (82 shared + 13 AC-only + **66 ADR-133 added**) |
+| CommandCatalog total | 148 entries | 148 entries (UNCHANGED) |
+| **AC ⊇ CC invariant** | ❌ Violated | ✅ **Satisfied** |
+| **Identity SSOT** | ❌ Two SSOTs (no SSOT) | ✅ **ActionCatalog** |
+| **Dispatch SSOT** | CommandCatalog (production) | CommandCatalog (UNCHANGED) — *separate concern* |
+
+**Identity vs Dispatch layer 명확 분리**:
+- **ActionCatalog** = identity SSOT (id / label / description / tier /
+  surfaces / aliases / status / adrs)
+- **CommandCatalog** = dispatch SSOT (toolbar / shortcut / iconSvg /
+  execute closure / enabled / active)
+
+**66 new entries (status: 'ui-only', aliases: {})**:
+
+| 카테고리 | Count | tier |
+|---|---|---|
+| Snap state (axis/edge/grid/osnap/snap-override) | 5 | 0 |
+| Clash / Reference / Repair | 3 | 2 |
+| Export format (dxf/gltf/obj/stl) | 4 | 1 |
+| File I/O (new/open/save/saveas/import/export) | 6 | 1 |
+| Format panels (osnap/style/units) | 3 | 0 |
+| Group state (edit/hide/lock) | 3 | 2 |
+| Help (help/about/shortcuts) | 3 | 0 |
+| Import format (3dm/3ds/all/dae/dwg/dxf/gltf/ifc/obj/ply/stl) | 11 | 1 |
+| Rename | 1 | 1 |
+| Section plane (off/x/y/z) | 4 | 0 |
+| Sketch extras (align-up/resume-last/start-face) | 3 | 1 |
+| Solar (heatmap/heatmap-off) | 2 | 2 |
+| Tool modes (explode/select/torus) | 3 | 0~2 |
+| View commands (3d/top/bottom/front/back/left/right/home/axis/grid/history/scenes/ssao/shadow-pro/sun-panel) | 15 | 0 |
+| **합계** | **66** | |
+
+**Lock-ins (L-133-1 ~ L-133-10)**:
+- L-133-1 ADR-132 Path E β implementation (Adapter layer pattern)
+- L-133-2 New entry pattern — `aliases: {}`, `status: 'ui-only'`,
+  `adrs: ['ADR-133', ...]` canonical
+- L-133-3 AC ⊇ CC invariant (CatalogConsistency.test.ts 강제)
+- L-133-4 13 AC-only entries 보존 (MCP/diagnostic-only)
+- L-133-5 ActionCatalog tier 정책 정합 (ADR-041 P26.1)
+- L-133-6 ADR-045 D1 SSOT invariant 실측 회복 (identity 161 = 모든
+  user-facing IDs)
+- L-133-7 ADR-046 P31 #4 additive only — production functionality
+  (CommandPalette + CapabilityExplorerPanel) UNCHANGED
+- L-133-8 dist rebuild required (catalog.ts 변경 후 `npx tsc -p
+  packages/axia-action-catalog/tsconfig.json` 필수)
+- L-133-9 ADR-132 §6 out-of-scope items 보존 (Path A / UX 중복 해소
+  / i18n / Tier 3 destructive content 모두 future ADR)
+- L-133-10 절대 #[ignore] 금지
+
+**회귀 매트릭스 (실측)**:
+
+| Layer | Before (LOCKED #59) | After ADR-133 β | Delta |
+|---|---|---|---|
+| **vitest** (TS) | 1917 / 1 skipped | **1920 / 1 skipped** | **+3** |
+| ActionCatalog ALL_ACTIONS | 95 | **161** | +66 |
+| axia-geo (cargo) | 1399 | 1399 | UNCHANGED |
+| axia-core (cargo) | 302 | 302 | UNCHANGED |
+| axia-wasm (cargo) | 0 | 0 | UNCHANGED |
+| Playwright E2E | 15+ | 15+ | UNCHANGED |
+| Initial bundle | 724.99 kB | 724.99 kB | UNCHANGED (P20.C #2) |
+| Production CommandPalette | active | active | UNCHANGED |
+| CapabilityExplorerPanel display | 95 entries | 161 entries (자동) | additive |
+
+**+3 회귀** (절대 #[ignore] 금지 3/3 준수).
+
+**Lessons (canonical for future SSOT unification ADRs)**:
+- L1 Path E (Adapter layer) architectural simplicity — unidirectional
+  dependency, non-invasive
+- L2 `status: 'ui-only'` lock-in pattern (66 entries 통일)
+- L3 dist rebuild 필수 (web 의 import source)
+- L4 Identity vs Dispatch 두 layer 분리 canonical (ADR-045 D1 amendment
+  필요 시점 — 별도 ADR)
+- L5 Single-direction invariant (AC ⊇ CC) — 13 AC-only entries OK
+- L6 α spec → β implementation atomic pattern 6번째 적용
+- L7 Audit-first canonical 7번째 적용 (메타 evidence)
+
+**다음 트랙 (자연 next)**:
+- **ADR-045 D1 amendment** (가칭) — SSOT spec correction (identity vs
+  dispatch 분리 명시)
+- **ADR-134 (가칭) — field-level drift detection** (label/description
+  /shortcut 일치 강제, ADR-133의 ID-only invariant 확장)
+- **ADR-129 Priority #1 closure 갱신** — Pillar 1 부분 closure → ADR-132
+  + ADR-133 추가
+- **ADR-129 Priority #2** (Visual Baseline V-4) 진입
+
+**Cross-link**:
+- ADR-132 audit spec (Path E 추천, 본 LOCKED 의 직접 trigger)
+- ADR-131 + LOCKED #59 (dual catalog finding 발견)
+- ADR-130 Amendment 1 (ADR-131 §A1.2 detailed source)
+- ADR-045 D1 (ActionCatalog SSOT spec — invariant 실측 회복)
+- ADR-041 P26 (capability tier policy)
+- ADR-046 P31 Pillar 1 (Discoverability anchor)
+- ADR-046 P31 #4 additive only
+- ADR-118/119/124/126/128 (α spec → β implementation atomic pattern source)
+- ADR-115 / ADR-117 (tool-torus entry adrs[] reference)
+- LOCKED #44 (Complete Meaning per Merge)
+- LOCKED #59 (직전 closure, ADR-131 + ADR-130 Amendment 1)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
