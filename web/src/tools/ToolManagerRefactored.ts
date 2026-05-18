@@ -2375,23 +2375,66 @@ export class ToolManager {
   }
 
   private get3DPoint(e: MouseEvent): THREE.Vector3 | null {
-    // Sketch mode: bypass object pick — all clicks project to the sketch
-    // plane (user explicitly chose the plane when entering sketch).
+    // ════════════════════════════════════════════════════════════════════
+    // CARDINAL GROUND PLANE STRICT (사용자 결재 2026-05-18)
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // 결재: "다른 그리기 도구에서도 마찬가지... 무조건 z=0에서 그려져야 합니다"
+    //
+    // System-wide cardinal force at get3DPoint level. 모든 그리기 도구
+    // (Rect/Line/Circle/Polygon/Bezier/Arc/Freehand) 가 자동으로 cardinal
+    // axis = 0 강제 받음. face hit 우회 — sketch mode 만 예외.
+    //
+    // 폐기된 동작:
+    //   - viewport.pick(face hit) → 다른 face 의 z 좌표 사용 → drift 전파
+    //
+    // 활성된 동작:
+    //   - sketch mode → sketch plane intersect (user explicit, 보존)
+    //   - 기본 그리기 → cardinal ground plane intersect + axis=0 force
+    //     * 3d/top/bottom → Z=0 강제
+    //     * front/back    → Y=0 강제
+    //     * right/left    → X=0 강제
+    //
+    // 결과: 모든 도구의 click position 의 cardinal axis 좌표 = exactly 0.
+    // ray-plane intersect drift (float precision) 흡수.
+    //
+    // DrawRectTool 등 개별 도구가 internal cardinal projection 도 함 (defense
+    // in depth) — 둘 다 같은 결과.
+    //
+    // 3D solid face 위에 그리기 원하면 explicit sketch mode 진입 (Q sketch
+    // start). 기본 그리기는 ground plane only.
+    // ════════════════════════════════════════════════════════════════════
+
+    // Sketch mode: bypass cardinal force — user explicit plane.
     if (this._sketch) {
       const ray = this.getRay(e);
       const target = new THREE.Vector3();
       return ray.ray.intersectPlane(this.getWorkPlane(), target);
     }
-    // 1st: try hitting an object face (exact surface point)
-    const hit = this.viewport.pick(e.clientX, e.clientY);
-    if (hit && hit.point) {
-      return hit.point.clone();
-    }
-    // 2nd: fall back to view-adaptive work plane
+
+    // Default: ground plane intersect + cardinal axis force.
     const ray = this.getRay(e);
     const groundPlane = this.getWorkPlane();
     const target = new THREE.Vector3();
-    return ray.ray.intersectPlane(groundPlane, target);
+    const hit = ray.ray.intersectPlane(groundPlane, target);
+    if (!hit) return null;
+
+    // **THE INVARIANT**: force cardinal axis = exactly 0
+    const vm = this.viewport.viewMode;
+    switch (vm) {
+      case 'front':
+      case 'back':
+        target.y = 0;
+        break;
+      case 'right':
+      case 'left':
+        target.x = 0;
+        break;
+      default:  // '3d', 'top', 'bottom'
+        target.z = 0;
+        break;
+    }
+    return target;
   }
 
   private getRay(e: MouseEvent): THREE.Raycaster {
