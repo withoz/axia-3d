@@ -58,9 +58,22 @@ P5.UX.39-45 cascading fixes 패턴 evidence + 사용자 RECT 시연 시 *구멍
 
 각 경우 사용자가 *명시* 결정해야 정확. 자동화 = 잘못된 가정 → cascading fixes.
 
-## 2. Architectural insight (메타-원칙 #16 후보)
+## 2. Architectural insight — 메타-원칙 직교 (WHAT vs WHEN)
 
-**새 메타-원칙 후보**:
+### 2.1 메타-원칙 #14 는 *불변* (기하학적 진리)
+
+**사용자 결재 정정 (2026-05-18)**:
+> "메타-원칙 #14 (면은 닫힌 경계로 유도된다) 이것은 바뀌지 않습니다.
+>  중요한것은 바운더리를 만들어 생성을 할수있느냐지?"
+
+**메타-원칙 #14 (WHAT — 결과 invariant)**:
+> "면은 닫힌 경계로부터 유도된다."
+
+이것은 *기하학적 진리* — **불변**. ADR-139 는 이 원칙을 *변경하지 않음*.
+ADR-139 는 *어떻게* 그 닫힌 경계를 인식하는지의 **trigger 정책 layer**
+변경.
+
+### 2.2 메타-원칙 #16 (WHEN — trigger 정책, 신설 후보)
 
 > **메타-원칙 #16 (가칭)**: "자동화는 사용자 의도를 미리 알 수 없다.
 > 휴리스틱 자동화는 cascading 부작용의 source."
@@ -71,11 +84,21 @@ P5.UX.39-45 cascading fixes 패턴 evidence + 사용자 RECT 시연 시 *구멍
 메타-원칙 #5 ("명확하면 자동, 모호하면 명시 동의") 의 *강화* — *모호함의
 정의 자체* 가 "휴리스틱 = 모호" 인 것.
 
-### 2.1 메타-원칙 #14 amendment
+### 2.3 두 메타-원칙 직교 분석
 
-**Before**: "면은 닫힌 경계로부터 유도된다."
-**After**: "면은 닫힌 경계 + **사용자 의도**로부터 유도된다."
-("A face derives from a closed boundary **AND user intent**.")
+| 메타-원칙 | 측면 | 의미 | ADR-139 영향 |
+|---|---|---|---|
+| **#14** | WHAT (결과) | 닫힌 경계 → 면 | **불변** (보존) |
+| **#16** (신설) | WHEN (trigger) | 자동화 antipattern → 명시 우선 | **신설** (trigger 정책) |
+
+**ADR-139 의 핵심**:
+- **결과 = 동일** (메타-원칙 #14 보존 — 닫힌 경계 → 면)
+- **Trigger = 다름** (메타-원칙 #16 신설 — 자동 → 명시)
+
+**사용자 의도**:
+- "**바운더리를 만들어 생성할 수 있는 도구**" — 메타-원칙 #14 의 자연
+  결과 (닫힌 경계 → 면) 를 *사용자 명시 시점* 에 활성
+- 자동 trigger 의 *모호함* 제거, 명시 trigger 의 *예측 가능성* 확보
 
 ## 3. 제안 — CAD BOUNDARY 방식
 
@@ -174,7 +197,8 @@ Euler formula (F = E - V + 2) 자연 보장.
 | **LOCKED #1 ADR-021 P7** (containment auto-split) | 자동 ring/hole | **사용자 명시 only** (Superseded) |
 | **LOCKED #41 ADR-101** (partial overlap auto-intersect) | 자동 3 sub-face | **사용자 명시 only** (Superseded) |
 | **LOCKED #63** (z=0 invariant) | 보존 | **보존** ✅ (직교) |
-| **메타-원칙 #14** ("면은 닫힌 경계로부터 유도된다") | 자동 trigger | **amendment: "+ 사용자 의도"** |
+| **메타-원칙 #14** ("면은 닫힌 경계로부터 유도된다") | 자동 trigger (WHEN 모호) | **불변 보존** (WHAT — 결과 invariant 유지) |
+| **메타-원칙 #16** (신설 후보) | 부재 | **신설** — "자동화는 사용자 의도 모름, 명시 우선" (WHEN 정책) |
 | **ADR-138 Path B** (multi-loop 회피) | 자동 합성 결과 정책 | **흡수**: 자동 trigger 폐기 시 multi-loop face 자체 안 생성 (Path B 자연 달성) |
 | **DrawRect / DrawCircle** (single explicit op) | 자동 face 합성 | **보존** (single op = explicit intent) |
 | **DrawLine** | 그리기 + 닫힘 시 자동 면 | **그리기 only** (Boundary 명시 필요) |
@@ -349,8 +373,10 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
   - **Q5 = (a) ADR-138 흡수** ✅
     (Pure Boundary = 자동 trigger 폐기 → multi-loop face 자체 안 생성 →
      Path B 자연 달성 → ADR-138 Superseded by ADR-139)
-  - **메타-원칙 #14 amendment** 확정: "+ 사용자 의도"
-  - **메타-원칙 #16 신설** 확정: "자동화는 사용자 의도를 미리 알 수 없다"
+  - **메타-원칙 #14 불변 보존** 확정 — *기하학적 진리* (사용자 정정 2026-05-18)
+    - "면은 닫힌 경계로부터 유도된다" 그대로 (WHAT 결과 invariant)
+    - ADR-139 는 *trigger 정책 layer* (WHEN) 변경, *결과 invariant* 보존
+  - **메타-원칙 #16 신설** 확정: "자동화는 사용자 의도를 미리 알 수 없다" (WHEN 정책)
 - **(β implementation): atomic sub-step Path Z 답습** (multi-month)
 
 ## 14. β implementation atomic sub-step plan (B-α ~ B-μ)
@@ -392,7 +418,7 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
 
 ### 메타-원칙 amendment Lock-ins
 
-- **L-139-MP14** 메타-원칙 #14 amendment: "면은 닫힌 경계 + **사용자 의도**로부터 유도된다"
+- **L-139-MP14** 메타-원칙 #14 **불변 보존** (사용자 정정 2026-05-18 — 기하학적 진리, ADR-139 의 trigger 정책 layer 와 직교)
 - **L-139-MP16** 메타-원칙 #16 신설: "자동화는 사용자 의도를 미리 알 수 없다. 휴리스틱 자동화는 cascading 부작용의 source."
 
 ### LOCKED #64 신설 Lock-ins (B-λ 시)
