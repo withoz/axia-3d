@@ -3927,6 +3927,106 @@ non-empty). 60+ 기존 happy-path tests 정합 자연 보존.
   in priority track)
 - LOCKED #44 (Complete Meaning per Merge — single atomic PR)
 
+### 59. ADR-131 + ADR-130 Amendment 1 — CommandPalette already exists pivot (audit-first canonical 6번째 적용, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "승인합니다" (Option A — ADR-131 audit closure pivot, ADR-125 답습)
+
+ADR-130 γ-1 (Cmd-K entry + empty modal) β implementation 진입 직전
+**첫 Write tool fail** 발생 → Read tool 로 existing implementation 발견:
+
+| File | LOC | Status |
+|---|---|---|
+| `web/src/ui/CommandPalette.ts` | 286 | ✅ Full Cmd-K palette (fuzzy + ↑/↓ + Enter + Esc) |
+| `web/src/commands/CommandCatalog.ts` | 159 | ✅ Full registry |
+| `web/src/commands/AxiaCommands.ts` | 273 | ✅ **148 commands registered** |
+| `main.ts:463-464` | wiring | ✅ `bindCommandPaletteHotkey()` **production 활성** |
+
+**세션 audit-first canonical 6번째 적용** (ADR-125 α-1 / ADR-126 α-2 /
+ADR-127 α-4 / ADR-128 priority #4 / ADR-130 Pillar 1 답습). 본 케이스는
+*audit ADR ITSELF가 audit miss* 한 메타-finding — pattern의
+self-applying robustness evidence.
+
+**Dual catalog architectural finding (canonical lock-in)**:
+
+| System | Location | Used by | Count |
+|---|---|---|---|
+| **ActionCatalog** (ADR-045 D1) | `packages/axia-action-catalog/` | CapabilityExplorerPanel ONLY | 95 actions |
+| **CommandCatalog** (production) | `web/src/commands/` | CommandPalette + main.ts | **148 commands** |
+
+ADR-130 §2.3 audit가 ActionCatalog import 만 검색 → CommandCatalog
+(별개 system) 누락. ADR-045 D1 SSOT policy + ADR-130 §2.3 binding gap
+가정 둘 다 invalid (production 의 SSOT는 CommandCatalog).
+
+**Pivot decision (canonical, ADR-131 §3)**:
+- ADR-130 γ-1 β implementation **거부** (duplicate system, architectural
+  debt 증가)
+- ADR-130 §spec 보존 + Amendment 1 추가 (current state correction,
+  γ-1/γ-2/γ-4 무효 명시, γ-3/γ-5/γ-6 재정의)
+- Production CommandPalette functionality **UNCHANGED 보존**
+- 진짜 Pillar 1 gap (§2.5 4 영역) = **ADR-132 (가칭) dual catalog
+  unification audit ADR** trigger anchor
+
+**진짜 Pillar 1 gap (ADR-131 §2.5)**:
+1. Dual catalog system 통합 미정 (ActionCatalog ↔ CommandCatalog 별개)
+2. CapabilityExplorerPanel vs CommandPalette UX 중복
+3. i18n infrastructure (ADR-046 Q7 Phase 2)
+4. ActionCatalog Tier 3 destructive content (ADR-045 D3 reserved)
+
+**Lock-ins (L-131-1 ~ L-131-10)**:
+- L-131-1 Pre-implementation audit canonical 6번째 적용 (Write tool fail
+  = pre-existing implementation signal)
+- L-131-2 Existing implementation preservation (CommandPalette + Catalog
+  + AxiaCommands 전부 보존)
+- L-131-3 Dual catalog finding architectural lock-in
+- L-131-4 ADR-130 audit miss 메타-finding (audit ADR ITSELF의
+  architectural blindspot 명시)
+- L-131-5 ADR-130 §spec 보존 + Amendment 1 (spec preservation pattern
+  5번째 적용)
+- L-131-6 부정 결정 명시 lock-in (ADR-076 / ADR-125 / ADR-127 답습 —
+  4번째)
+- L-131-7 ADR-046 P31 #4 additive only 정합
+- L-131-8 진짜 Pillar 1 gap (§2.5) 별도 ADR-132 (가칭) anchor
+- L-131-9 **Audit 패턴 개선 강제 — production wiring 직접 검증 필수**
+  (main.ts dynamic imports + hotkey bindings + runtime wiring)
+- L-131-10 절대 #[ignore] 금지
+
+**회귀 (0)**: docs only — vitest 1917 / cargo 1392+302+0 UNCHANGED per
+LOCKED #58. ADR-077 V-2 baselines + production CommandPalette
+functionality preserved.
+
+**Lessons (canonical for future audit-first / audit ADR self-application)**:
+- **L1 Audit ADR ITSELF가 audit-first canonical 적용 필요 (메타-finding)** —
+  audit ADR도 architectural reality 재확인 필요. *production wiring 직접
+  검증 강제* + *Multiple systems search* (단일 keyword 거부) +
+  *Implementation 시작 전 read-tool check* (Write tool fail = signal)
+- **L2 Dual system architectural pattern 명시** — 5개월 누적 AxiA에
+  parallel evolution 가능성. 향후 audit는 *parallel system existence*
+  가정 → cross-search 강제
+- **L3 `File has not been read` error의 architectural value** — Write
+  tool fail은 pre-existing implementation의 silent signal
+- **L4 Spec preservation pattern 5번째 적용** — ADR-122 1/2/3 + ADR-120
+  + ADR-130 = canonical pattern 정착
+- **L5 부정 결정 4번째 lock-in** — ADR-076 / ADR-125 / ADR-127 답습
+- **L6 Audit-first canonical의 self-applying robustness** — ADR-130
+  audit ADR 자체에서 finding miss → ADR-131이 finding 발견 → 패턴이
+  self-recursively 동작 (ADR-125 L-125-1 deepest realization)
+- **L7 Pillar 1 priority status redefinition** — ADR-129 Priority #1
+  의 진짜 gap = §2.5 4 영역, 별도 ADR-132 trigger
+
+**Cross-link**:
+- ADR-131 (audit closure pivot ADR — 본 LOCKED 의 anchor)
+- ADR-130 Amendment 1 (current state correction)
+- ADR-129 Priority #1 부분 closure 명시 update (별도 amendment 가능)
+- ADR-045 D1 (ActionCatalog SSOT, isolated)
+- ADR-125/126/127 (audit-first pivot pattern 1~3번째 source)
+- ADR-128 (priority track β implementation, 4번째)
+- ADR-076 §C-amendment-1 (부정 결정 명시 lock-in 패턴 source)
+- ADR-046 P31 Pillar 1 (Discoverability anchor)
+- ADR-077 V-2 (visual baseline 보존)
+- LOCKED #44 (Complete Meaning per Merge)
+- LOCKED #58 (직전 closure, ADR-128 priority #4)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

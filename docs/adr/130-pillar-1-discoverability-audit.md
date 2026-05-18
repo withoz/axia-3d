@@ -264,3 +264,84 @@ ADR-129 권장 Q3 (single PR per priority) 정합으로 Pillar 1 implementation 
 - **Q1 (b) γ-1 + γ-2 묶음** — Cmd-K + palette listing 동시, 빠른 사용자 가치
 - **Q1 (c) γ-1+γ-2+γ-3 묶음** — 완전한 Cmd-K atomic, 5-8일
 - **Q1 (d) γ-3 단독 우선** — CapabilityExplorer Step 4 완료 먼저
+
+---
+
+## Amendment 1 — Current State Correction (2026-05-17, ADR-131 audit closure pivot)
+
+**상태**: ADR-130 spec 본문 (§§1~9) 보존. 본 amendment 만 추가.
+**Trigger**: γ-1 β implementation 진입 시점 첫 `Write` tool fail → existing CommandPalette.ts (286 LOC) 발견 → 사용자 escalate.
+**사용자 결재**: 2026-05-17, "승인합니다" (Option A — ADR-131 audit closure pivot).
+
+### A1.1 §2.3 ActionCatalog binding gap 가정 무효 (canonical truth)
+
+ADR-130 §2.3 의 4 finding 중 audit miss 정정:
+
+| §2.3 finding | 가정 | 실측 (audit 2026-05-17, ADR-131) |
+|---|---|---|
+| CapabilityExplorerPanel = ONLY ActionCatalog consumer | ✅ 정확 | ✅ 정확 (regression test로 보장) |
+| MenuBar / KeyboardShortcuts / ShortcutHelp 모두 hardcoded | ⚠ 부분 정확 | ⚠ ActionCatalog 미사용은 사실이나 *CommandCatalog* (parallel system) 으로 dynamic dispatch 가능 |
+| **Cmd-K NOT implemented** | ❌ **무효** | ❌ **CommandPalette.ts 286 LOC + bindCommandPaletteHotkey() main.ts:463-464 production 활성 중** |
+| Fuzzy search library 미선택 | ❌ 무효 | ❌ CommandPalette 자체 fuzzy `score_match` + `containsAll` (line 229-256) 활성 — 외부 lib 필요 없음 |
+
+### A1.2 Dual catalog system architectural finding
+
+ADR-130 audit 의 architectural blindspot 노출 — **두 parallel catalog 시스템 존재**:
+
+| System | Location | Used by | Count | Status |
+|---|---|---|---|---|
+| **ActionCatalog** (ADR-045 D1) | `packages/axia-action-catalog/` | CapabilityExplorerPanel ONLY | 95 actions | Isolated |
+| **CommandCatalog** (production) | `web/src/commands/CommandCatalog.ts` | CommandPalette + main.ts | **148 commands** | **Production active** |
+
+ADR-130 §2.3 audit가 ActionCatalog import 만 검색 → CommandCatalog (별개 system) 누락. ADR-045 D1 SSOT policy + ADR-130 §2.3 binding gap 가정 둘 다 invalid (production 의 SSOT는 CommandCatalog).
+
+### A1.3 γ sub-step 분할 매트릭스 정정
+
+| γ | §4 spec wording | 이후 (Amendment 1) | 사유 |
+|---|---|---|---|
+| **γ-1** | Cmd-K entry + empty modal | **무효 — 이미 production 활성** | CommandPalette.ts 286 LOC 이미 완성 |
+| **γ-2** | Palette listing + substring search | **무효 — 이미 활성** (148 commands listed + fuzzy search) | CommandCatalog + CommandPalette 통합 완료 |
+| **γ-3** | CapabilityExplorer Step 4 completion | ⚠ 유효 — CapabilityExplorer Step 4 (Tier 1/2/3 dispatch) 별도 path (CommandPalette와 분리된 ActionCatalog consumer) | Step 4 invoke 60% complete 상태 |
+| **γ-4** | Fuzzy search upgrade (fuzzysort) | **무효** | CommandPalette 자체 fuzzy 활성 (외부 lib 불필요) |
+| **γ-5** | MenuBar ActionCatalog binding | ⚠ 재정의 — MenuBar는 CommandCatalog 통합 후보 (ActionCatalog가 아닌) | dual catalog unification audit 필요 |
+| **γ-6** | KbdShortcuts + ShortcutHelp auto-gen | ⚠ 재정의 — CommandCatalog 기반으로 가능 | dual catalog unification audit 필요 |
+
+**γ-1, γ-2, γ-4 무효** — Pillar 1 의 진짜 gap = 다른 영역.
+
+### A1.4 진짜 Pillar 1 gap (재발견)
+
+ADR-131 §2.5 의 4 영역:
+
+1. **Dual catalog system 통합 미정** — ActionCatalog ↔ CommandCatalog architectural 관계 미정의
+2. **CapabilityExplorerPanel vs CommandPalette UX 중복** — 두 different palette 존재 (F1 ShortcutHelp + Cmd-K CommandPalette + CapabilityExplorerPanel)
+3. **i18n infrastructure** — ADR-130 §2.5 확인 정합 (여전히 미정의, Phase 2 explicit gate)
+4. **ActionCatalog Tier 3 destructive content** — ADR-045 D3 reserved (production 0)
+
+이 4 gap이 진짜 Pillar 1 architectural debt — **ADR-132 (가칭) audit ADR** trigger anchor.
+
+### A1.5 γ sub-step status — preserved (NOT superseded)
+
+본 amendment 는 γ sub-step 분할 spec 을 *supersede 하지 않음*. 보존 사유:
+- γ-3 (CapabilityExplorer Step 4) 는 여전히 유효 (별도 path, ActionCatalog consumer)
+- 향후 dual catalog unification 결재 시 γ-5/γ-6 가 다른 형태로 재활성 가능
+- ADR-125 §A1.3 / ADR-126 Amendment 2 / ADR-127 Amendment 3 / ADR-120 Amendment 1 답습 (spec preservation pattern 5번째)
+
+### A1.6 ADR-129 Priority #1 status 갱신
+
+ADR-129 Priority #1 (Pillar 1 Discoverability) **부분 closure 도달** — Cmd-K palette 이미 production. 진짜 closure 의 잔존 gap = §2.5 의 4 영역. 별도 ADR-132 (가칭) trigger anchor.
+
+### A1.7 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-131: docs only, 회귀 0
+- Production CommandPalette functionality: UNCHANGED (보존)
+- ADR-077 V-2 visual baseline: UNCHANGED
+
+### A1.8 Cross-link (Amendment 1)
+
+- **ADR-131** — 본 amendment 의 직접 trigger (audit closure ADR)
+- **ADR-045 D1** — ActionCatalog SSOT (isolated system, 95 actions)
+- **CommandCatalog** (`web/src/commands/`) — production SSOT (148 commands, 별개 system)
+- **CommandPalette** (`web/src/ui/CommandPalette.ts`) — production Cmd-K (286 LOC)
+- **ADR-130 §2.3** — audit miss 정정 대상
+- **ADR-125 §A1.3 / ADR-126 §A2.4 / ADR-127 §A3.3 / ADR-120 §A1.4** — spec preservation pattern source (5번째 답습)
