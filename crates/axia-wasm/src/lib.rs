@@ -191,6 +191,17 @@ pub struct AxiaEngine {
     /// 가장 최근 `batch_erase_edges_with_merge`에서 일부 edge의 merge가
     /// 실패했을 때 첫 번째 실패 사유. 디버그 Toast 용.
     last_merge_failure: String,
+
+    /// ADR-135 β — Render-side chord tolerance for analytic surface /
+    /// curve tessellation. Set by `setRenderChordTol(value)` from JS
+    /// (Viewport computes `lod_chord_tol(camera_distance)` and pushes
+    /// here on camera change).
+    ///
+    /// Default = `DEFAULT_ANALYTIC_CHORD_TOL` (0.02 mm, LOCKED #40 §L1).
+    /// Range = `[0.001, 10.0]` mm (clamped in setter).
+    /// Changing this value triggers `cache_dirty = true` (next render
+    /// pass re-tessellates with new tolerance).
+    render_chord_tol: f64,
 }
 
 #[wasm_bindgen]
@@ -214,6 +225,9 @@ impl AxiaEngine {
             last_error: String::new(),
             edge_angle_threshold_deg: axia_geo::tolerances::EDGE_VISIBILITY_ANGLE_DEG,
             last_merge_failure: String::new(),
+            // ADR-135 β — LOCKED #40 §L1 baseline (0.02 mm). Viewport
+            // overrides via setRenderChordTol(lod_chord_tol(camera_dist)).
+            render_chord_tol: axia_geo::mesh_export::DEFAULT_ANALYTIC_CHORD_TOL,
         }
     }
 
@@ -364,7 +378,10 @@ impl AxiaEngine {
         //   - Err: KEEP previous cache intact for debugging — caller can
         //     still inspect last-good buffers, and a brief render of stale
         //     geometry beats a flicker-to-empty during a transient failure.
-        match self.scene.export_mesh_buffers() {
+        // ADR-135 β — Use stored render_chord_tol (Viewport-set LOD value
+        // via setRenderChordTol). Default = DEFAULT_ANALYTIC_CHORD_TOL
+        // (0.02 mm, LOCKED #40 §L1) if Viewport hasn't set yet.
+        match self.scene.export_mesh_buffers_with_tol(self.render_chord_tol) {
             Ok((p, n, i, fm, p64)) => {
                 self.cached_positions = p;
                 self.cached_positions_f64 = p64;
@@ -5337,6 +5354,62 @@ impl AxiaEngine {
             self.edge_angle_threshold_deg = clamped;
             self.cache_dirty = true;
         }
+    }
+
+    // ════ ADR-135 β — Distance-based LOD chord_tol ════
+
+    /// ADR-135 β — Get current render chord tolerance (mm).
+    ///
+    /// Returns the value set by `setRenderChordTol` (or default
+    /// `DEFAULT_ANALYTIC_CHORD_TOL = 0.02 mm` if not yet set).
+    #[wasm_bindgen(js_name = "renderChordTol")]
+    pub fn render_chord_tol(&self) -> f64 {
+        self.render_chord_tol
+    }
+
+    /// ADR-135 β — Set render chord tolerance (mm).
+    ///
+    /// Caller (Viewport) computes `lod_chord_tol(camera_distance)` in TS
+    /// and pushes the result here. Clamped to `[0.001, 10.0]` mm. Change
+    /// triggers `cache_dirty = true` (next `getMeshBuffers` re-tessellates
+    /// with new chord tolerance).
+    ///
+    /// **Idempotent**: Setting the same value (within 1μm) is a no-op
+    /// (no cache invalidation), so Viewport can call every frame without
+    /// performance penalty.
+    ///
+    /// **Visual impact**: Near rendering (camera ≤ 100 mm via `lod_chord_tol`)
+    /// uses default 0.02 mm — visual output identical to pre-ADR-135.
+    /// Far rendering automatically coarser (0.2 mm at 1 m, 1.0 mm at 5 m+).
+    ///
+    /// **Triangle count reduction** (r=1000 mm sphere example):
+    /// - Near (0.02 mm tol): ~2,000,000 tris (LOCKED #40 baseline)
+    /// - Mid (0.20 mm tol, 1 m camera): ~200,000 tris (10× ↓)
+    /// - Far (1.00 mm tol, 5 m+ camera): ~40,000 tris (50× ↓)
+    #[wasm_bindgen(js_name = "setRenderChordTol")]
+    pub fn set_render_chord_tol(&mut self, tol: f64) {
+        let clamped = tol.max(0.001).min(10.0);
+        if (clamped - self.render_chord_tol).abs() > 1e-6 {
+            self.render_chord_tol = clamped;
+            self.cache_dirty = true;
+            // Triangle count change can be drastic (10-50×) → force full
+            // rebuild (topology_changed) so delta-buffer path doesn't try
+            // to apply position-only delta to wrong-sized buffer.
+            self.topology_changed = true;
+        }
+    }
+
+    /// ADR-135 β — Compute LOD chord_tol for given camera distance (mm).
+    ///
+    /// Pure function — does NOT modify engine state. Caller (Viewport)
+    /// uses this to compute the value, then pushes via `setRenderChordTol`.
+    /// Exposed here so TS can validate / debug the formula independently.
+    ///
+    /// Formula: `base * max(1, dist / 100)`, capped at 1.0 mm.
+    /// See `axia_geo::mesh_export::lod_chord_tol` for full docs.
+    #[wasm_bindgen(js_name = "lodChordTol")]
+    pub fn lod_chord_tol(&self, camera_distance: f64) -> f64 {
+        axia_geo::mesh_export::lod_chord_tol(camera_distance)
     }
 
     /// Analyse the whole active mesh for solid-closure status.

@@ -377,6 +377,10 @@ type AxiaEngineExtended = AxiaEngine & {
   // computeGroundProjectedShadows removed 2026-05-16 (shadow system → ADR-106)
   edgeAngleThreshold?(): number;
   setEdgeAngleThreshold?(deg: number): void;
+  // ADR-135 β — Distance-based LOD chord_tol
+  renderChordTol?(): number;
+  setRenderChordTol?(tol: number): void;
+  lodChordTol?(cameraDistance: number): number;
 
   // Face merge (coplanar face combine)
   mergeFacesByEdge?(edgeId: number): number;
@@ -2797,6 +2801,49 @@ export class WasmBridge {
     if (!this.engine?.setEdgeAngleThreshold) return;
     try { this.engine.setEdgeAngleThreshold(deg); this.markDirty(); }
     catch (e) { this.recordBridgeError('setEdgeAngleThreshold', e); }
+  }
+
+  // ─── ADR-135 β — Distance-based LOD chord_tol ───
+  // Viewport computes camera distance + calls these wrappers on
+  // camera change to push the LOD-aware chord tolerance to engine.
+  // Near rendering (cam ≤ 100mm) unchanged (0.02mm baseline preserved);
+  // far rendering automatically coarser (0.2mm at 1m, 1.0mm cap at 5m+).
+  //
+  // Triangle reduction example (r=1000mm sphere):
+  //   Near: ~2,000,000 tris (LOCKED #40 baseline)
+  //   Mid (1m):  ~200,000 tris (10× reduction)
+  //   Far (5m+): ~40,000 tris (50× reduction)
+
+  /** Current render chord tolerance (mm). Default 0.02 (LOCKED #40 §L1). */
+  renderChordTol(): number {
+    if (!this.engine?.renderChordTol) return 0.02;
+    try { return this.engine.renderChordTol(); }
+    catch { return 0.02; }
+  }
+
+  /** Set render chord tolerance (mm). Clamped to [0.001, 10.0] in WASM.
+   *  Change triggers cache_dirty + topology_changed → next syncMesh
+   *  full rebuild with new tolerance.
+   *  Idempotent: setting same value (within 1μm) is no-op. */
+  setRenderChordTol(tol: number): void {
+    if (!this.engine?.setRenderChordTol) return;
+    try { this.engine.setRenderChordTol(tol); }
+    catch (e) { this.recordBridgeError('setRenderChordTol', e); }
+  }
+
+  /** Compute LOD chord_tol for given camera distance (mm). Pure
+   *  function — does NOT modify engine state. Use to push via
+   *  `setRenderChordTol(bridge.lodChordTol(distance))`.
+   *  Formula: base 0.02 * max(1, dist/100), capped at 1.0. */
+  lodChordTol(cameraDistance: number): number {
+    if (!this.engine?.lodChordTol) {
+      // Mirror formula in TS for graceful fallback when WASM stub missing
+      const base = 0.02;
+      const lodFactor = Math.max(1, cameraDistance / 100);
+      return Math.min(1.0, base * lodFactor);
+    }
+    try { return this.engine.lodChordTol(cameraDistance); }
+    catch { return 0.02; }
   }
 
   // computeGroundProjectedShadows method removed 2026-05-16
