@@ -321,6 +321,38 @@ single-loop. 자연 작동.
 - **모든 닫힌 경계 = 면** (메타-원칙 #14) — Path B 강화
 - **manifold safety** — Path B 자연 보장 (single-loop only)
 
+### B-β audit 결과 (axia-core scene::tests, 14 tests identified)
+
+| Test | 현재 expected | Path B expected | Update type |
+|---|---|---|---|
+| `test_adr021_p7_case_a_inner_first_then_outer` | 1 ring + 2 simple = 3 face | 3 simple = 3 face | **의미 변경** (ring → simple) |
+| `test_adr021_p7_case_b_outer_first_then_inner` | 동일 (그리기 순서 무관) | 동일 | **의미 변경** |
+| `test_two_stacked_inner_rects_both_faced` | 1 ring + 2 simple | 3 simple | 의미 변경 |
+| `test_column_of_inner_rects_all_faced` | 1 ring + 5 simple | 6 simple | 의미 변경 |
+| `test_complex_overlap_no_missing_faces` | (multi-loop 포함) | (모두 simple, count 변경 가능) | **count 영향 가능** |
+| `test_outer_with_overlapping_extending_rects` | 동일 | 동일 | count 영향 가능 |
+| `test_all_rects_have_consistent_winding` | winding 검증 | winding 변경 없음 | **불변** (winding 정책 독립) |
+| `test_outer_rect_drawn_after_inners_keeps_face` | 1 ring + 2 simple | 3 simple | 의미 변경 |
+| `test_draw_order_independence` | (P7 핵심 invariant) | **보존** (Path B 도 순서 무관) | **불변** (P7 핵심) |
+| `test_user_pattern_no_missing_faces` | (count 검증) | count 검증 (의미 변경) | 의미 변경 |
+| `test_partial_overlap_no_degenerate_faces` | (overlap count) | count 변경 가능 | count 영향 가능 |
+| `test_outer_with_two_partial_overlap_inners` | 1 ring + 2 simple + overlap | 3 simple + overlap = 3+ | 의미 변경 |
+| `test_lshape_with_inner_rects_all_faced` | 1 L-ring + N simple | (N+1) simple | 의미 변경 |
+| `test_outer_edge_collinear_overlap_with_inner` | (edge collinear case) | 동일 (single-loop) | count 영향 가능 |
+
+**Summary**:
+- **의미 변경 필요**: 8 tests (ring → simple)
+- **count 영향 가능**: 4 tests
+- **불변** (보존): 2 tests (winding, draw order independence — P7 핵심)
+
+### B-β code change scope
+
+| File | 변경 | LoC 영향 |
+|---|---|---|
+| `crates/axia-geo/src/operations/face_synthesis.rs` | Step 4.95 second-pass 변경 — component-merge 호출 제거, 두 simple face 유지 | ~50-100 |
+| `crates/axia-geo/src/mesh.rs::add_face_with_holes` | hole loop 처리 분기 — Path B 시 fallback to simple face | ~30-50 |
+| `crates/axia-core/src/scene.rs` (tests) | 8 tests 의 expected 변경 + 새 회귀 자산 추가 | ~200-300 |
+
 ### B-γ 후 새 회귀 자산 (Path B 정합 검증)
 
 - `test_path_b_containment_two_simple_faces` — outer + inner = 2 simple (not ring)
