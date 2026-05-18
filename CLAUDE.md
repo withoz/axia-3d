@@ -4139,6 +4139,106 @@ ADR-132 (audit ADR, PR #96 merged `13ae8f7`) 의 6 path matrix 중 **Path E
 - LOCKED #44 (Complete Meaning per Merge)
 - LOCKED #59 (직전 closure, ADR-131 + ADR-130 Amendment 1)
 
+### 61. ADR-045 D1 Amendment 1 + ADR-129 Amendment 1 — Identity vs Dispatch + Priority #1 부분 closure (docs only, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "승인합니다" (Option A — small docs cleanup amendment)
+
+ADR-133 closure (LOCKED #60) 후 자연 후속 documentation amendment 2건
+single PR. ADR-131/132/133 closure 의 architectural truth 명시 lock-in.
+
+**Amendment 1.1 — ADR-045 D1 (Identity vs Dispatch 분리)**:
+
+D1 spec §5 핵심 문장 1:
+> "ActionCatalog is the single source of truth for action identity across UI and MCP."
+
+ADR-133 closure 시점 *refinement* (spec 본문 변경 0, 의미 명시화):
+
+| Layer | SSOT | Fields | Consumer |
+|---|---|---|---|
+| **Identity** | ActionCatalog (`packages/axia-action-catalog/`) | id / label / description / tier / surfaces / aliases / status / adrs | CapabilityExplorerPanel + MCP server |
+| **Dispatch** | CommandCatalog (`web/src/commands/`) | execute closure / toolbar / shortcut / iconSvg / enabled() / active() / group | CommandPalette + main.ts + (potential) MenuBar/KeyboardShortcuts |
+
+**AC ⊇ CC invariant** (ADR-133 L-133-3) 강제 — `web/src/commands/
+CatalogConsistency.test.ts` 가 CI에서 검증. 13 AC-only entries
+(`attach-surface-*-validated` × 5, diagnostic helpers 8) 는 MCP/diagnostic-
+only, intentional.
+
+**두 layer 분리의 architectural value**:
+- Identity (AC) 변경: capability/metadata, **빈도 낮음** (architectural)
+- Dispatch (CC) 변경: UI 행동, **빈도 높음** (UX iteration)
+- 변경 빈도 + 영향 범위 분리 → single SSOT churn 충돌 방지
+
+**Amendment 1.2 — ADR-129 (Priority #1 부분 closure)**:
+
+ADR-129 §3.1 Priority #1 (Pillar 1 Discoverability) 진행 매트릭스:
+
+| Component | Spec scope | Actual | Closure |
+|---|---|---|---|
+| Cmd-K palette | 추가 impl 필요 | ✅ Production active (286 LOC, 148 commands) | ADR-131 (6번째 pivot) |
+| ActionCatalog SSOT | binding 필요 | ✅ 161 entries, AC ⊇ CC | ADR-133 β |
+| CapabilityExplorerPanel Step 4 | 60% → 100% | ⚠ 60% UNCHANGED | (future γ-3) |
+| MenuBar/KeyboardShortcuts binding | Phase 2 | ❌ Not started | (future γ-5/γ-6) |
+| Fuzzy search library | fuzzysort | ✅ Native (CommandPalette 자체) | ADR-131 §2.4 |
+| i18n infrastructure | Phase 2 | ❌ Not started | (future Phase 2) |
+| Tier 3 destructive | ADR-045 D3 reserved | ❌ 0 entries | (future) |
+
+**Priority #1 부분 closure 도달** (원래 spec 의 60-70%). 잔존 30-40% gap:
+1. CapabilityExplorerPanel Step 4 dispatch 완료 (~2-3일)
+2. CapabilityExplorerPanel vs CommandPalette UX 중복 해소
+3. i18n infrastructure
+4. ActionCatalog Tier 3 destructive content
+
+**Priority track sequence 유효**:
+- ✅ P#1 Pillar 1 부분 closure
+- ⏭ P#2 Visual Baseline V-4 (다음 진입 후보, ~2주 atomic)
+- ⏭ P#3 Reference Visual Rendering (ADR-095 Phase 4)
+- ⏭ P#4 Mode Coherence
+
+P#1 잔존 gap은 P#2 진입과 orthogonal (별도 ADR 가능).
+
+**Lock-ins (L-61-1 ~ L-61-7)**:
+- L-61-1 ADR-045 D1 spec 본문 보존 + Amendment 1 (spec preservation
+  pattern 7번째 누적)
+- L-61-2 Identity vs Dispatch 두 SSOT canonical (ADR-133 §5 답습)
+- L-61-3 AC ⊇ CC invariant 명시 (ADR-133 L-133-3)
+- L-61-4 13 AC-only entries 보존 (MCP/diagnostic-only intentional)
+- L-61-5 ADR-129 §3 priority track sequence UNCHANGED (P#1 부분 closure
+  추가만)
+- L-61-6 P#1 잔존 gap (4 영역) ADR-135 (가칭) future trigger
+- L-61-7 절대 #[ignore] 금지
+
+**회귀 (0)**: docs only — vitest 1920 / cargo 1399 + 302 UNCHANGED per
+LOCKED #60. ADR-077 V-2 baselines + production functionality preserved.
+
+**Lessons (canonical for future architectural truth amendments)**:
+- L1 Spec preservation + Amendment pattern **7번째 누적** (ADR-122 의 3
+  amendments + ADR-120 / ADR-130 / ADR-045 / ADR-129 amendments)
+- L2 Identity vs Dispatch 두 layer 분리 canonical — *변경 빈도 + 영향
+  범위* 분리로 single SSOT churn 회피
+- L3 Partial closure 명시 lock-in pattern — priority status 가 binary
+  (complete/not-started) 아닌 *gradient* 일 때 canonical documentation
+- L4 ADR amendment via additional context (spec wording UNCHANGED, refined
+  meaning) — ADR-125/126/127/120/131 답습
+
+**다음 트랙 (자연 next)**:
+- **ADR-129 Priority #2 (Visual Baseline V-4) 진입** — 권장 default
+- **ADR-134 (가칭) field-level drift detection** (label/shortcut 일치
+  강제)
+- **ADR-135 (가칭) P#1 잔존 gap closure** (CapabilityExplorer Step 4 +
+  UX 중복 해소)
+- **세션 저장** — 자연 break point (13 PRs / 8 LOCKED entries 추가)
+
+**Cross-link**:
+- ADR-045 D1 Amendment 1 (identity vs dispatch 분리)
+- ADR-129 Amendment 1 (P#1 부분 closure documented)
+- ADR-133 / LOCKED #60 (β implementation, AC ⊇ CC invariant 강제)
+- ADR-132 (audit, Path E 추천)
+- ADR-131 / LOCKED #59 (dual catalog finding)
+- ADR-130 Amendment 1 (Pillar 1 audit findings)
+- LOCKED #44 (Complete Meaning per Merge)
+- LOCKED #60 (직전 closure, ADR-133)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
