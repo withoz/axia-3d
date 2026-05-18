@@ -3790,6 +3790,143 @@ per LOCKED #56. ADR-077 V-2 visual baselines 보존.
 - LOCKED #43 priority #4 (ADR-120 Q1 결재 — 본 LOCKED 의 자연 next)
 - LOCKED #44 (Complete Meaning per Merge — docs-only PR scope)
 
+### 58. ADR-128 + ADR-120 Amendment 1 — Vertex-on-edge fallback (β closure, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "추천 승인합니다" (Q1=G — Vertex-on-edge fallback, ADR-120 §3.2 1st recommendation)
+
+ADR-127 closure (LOCKED #57) 후 LOCKED #43 priority #4 자연 transition.
+ADR-120 (α spec, PR #83 merged 2026-05-17) 의 7 algorithm path options
+중 Q1=G (Vertex-on-edge fallback, ADR-046 P31 #1 "가볍게" + ADR-101
+Amendment 9 §A9.8 evidence 정합) 채택.
+
+본 ADR 은 **LOCKED #43 priority track 의 첫 β implementation** (priority
+#1 Z-up / #2 Path B / #3 STEP timing 모두 closure 후 #4 진입). 세션
+audit-first canonical 4번째 적용 (ADR-125/126/127 답습).
+
+**Architectural change**:
+
+`crates/axia-geo/src/operations/coplanar.rs` —
+`coplanar_intersection_segments` 의 raw_crossings loop 후 conservative
+fallback 추가:
+
+```rust
+if raw_crossings.is_empty() && !lens_polygon.is_empty() {
+    let detected = detect_vertex_incidence_crossings(
+        &a_2d, &b_2d, b_reversed, &plane,
+    );
+    raw_crossings.extend(detected);
+}
+```
+
+Fallback only fires when 결함 D condition (raw is empty + lens
+non-empty). 60+ 기존 happy-path tests 정합 자연 보존.
+
+**핵심 helpers**:
+- `point_on_segment_2d(point, p0, p1, eps) -> Option<f64>` —
+  perpendicular distance test + parameter clamp
+- `detect_vertex_incidence_crossings(a, b, b_reversed, plane)` —
+  bidirectional scan (A vertex on B edge / B vertex on A edge),
+  symmetric DEDUP_EPS_2D collapse for vertex-on-vertex
+
+**Synthetic crossing convention**:
+- `point`: exact incident vertex 3D position (geometric correctness)
+- `face_*_t`: `VERTEX_INCIDENCE_T_OFFSET = 1e-4` (sits just past edge
+  start, avoids ENDPOINT_EPS gating)
+
+**Tolerance hierarchy (L-128-3)**:
+- `VERTEX_ON_EDGE_EPS_2D = 1e-5` (perpendicular detection)
+- `DEDUP_EPS_2D = 1e-6` (existing crossing dedup)
+- `LOCKED #5 = 1.5μm` (spatial-hash, mm-scale 변환 시 1.5e-3)
+
+**결함 D detection matrix**:
+
+| Scenario | Pre-ADR-128 | Post-ADR-128 |
+|---|---|---|
+| Classic partial overlap | 3 sub-faces ✓ | 3 sub-faces ✓ (unchanged) |
+| Containment / Disjoint | Ok(None) ✓ | Ok(None) ✓ (unchanged) |
+| **결함 D: vertex on edge interior** | **Ok(None) silent skip** | **3 sub-faces (synthesized)** |
+| **결함 D: vertex coincident with corner** | **Ok(None) silent skip** | **3 sub-faces OR Ok(None)** (L-128-8 residual) |
+
+**Lock-ins (L-128-1 ~ L-128-10)**:
+- L-128-1 Conservative fallback (only fires when raw empty + lens
+  non-empty) — happy-path code UNCHANGED, 60+ test 자산 보존
+- L-128-2 Geometric correctness — synthetic point = exact vertex,
+  topological t = offset
+- L-128-3 Tolerance hierarchy 명시 lock-in
+- L-128-4 Bidirectional symmetric scan + DEDUP_EPS_2D collapse
+  (vertex-on-vertex natural handling)
+- L-128-5 No public API change (ADR-046 P31 #4 additive only)
+- L-128-6 ADR-101 §B-3 invariants preserved (surface inheritance,
+  manifold safety)
+- L-128-7 ADR-120 §3.3 epsilon-perturbation 거부 정합 (polygon vertex
+  미이동, 정밀도 무손실)
+- L-128-8 Cardinal corner residual edge case 명시 (split OR None
+  acceptable — test documents future ADR trigger)
+- L-128-9 ADR-120 Path D (NURBS-direct) deferred (future
+  architectural step)
+- L-128-10 절대 #[ignore] 금지
+
+**회귀 매트릭스 (실측)**:
+
+| Layer | Before (LOCKED #57) | After ADR-128 β | Delta |
+|---|---|---|---|
+| **axia-geo** (cargo) | 1392 | **1399** | **+7** (ADR-128 tests) |
+| axia-core (cargo) | 302 | 302 | UNCHANGED |
+| axia-wasm (cargo) | 0 | 0 | UNCHANGED |
+| vitest (TS) | 1917 / 1 skipped | 1917 / 1 skipped | UNCHANGED |
+| Playwright E2E | 15+ | 15+ | UNCHANGED |
+| Initial bundle | 724.99 kB | 724.99 kB | UNCHANGED (P20.C #2) |
+| ADR-077 V-2 baselines | preserved | preserved | UNCHANGED |
+
+**합계 +7 회귀** (절대 #[ignore] 금지 7/7 준수).
+
+**7 new ADR-128 tests**:
+- `adr128_point_on_segment_2d_basic` (helper unit, 8 cases)
+- `adr128_circle_fully_inside_rect_returns_none` (containment)
+- `adr128_circle_cardinal_corner_coincidence_splits` (결함 D
+  vertex-on-vertex, L-128-8)
+- `adr128_diamond_vertices_on_rect_edges_splits` (inscribed diamond)
+- `adr128_rect_partial_overlap_with_shared_vertex_on_edge` (control)
+- `adr128_existing_two_crossings_path_unaffected` (backward compat)
+- `adr128_detect_vertex_incidence_basic` (function unit test)
+
+**Lessons (canonical for future fallback / 결함 fix ADRs)**:
+- L1 Conservative fallback pattern (happy-path 변경 없이 parallel
+  fallback path) — 향후 모든 결함 fix 의 default pattern
+- L2 Tolerance hierarchy 명시 lock-in (ADR-038 P23 / LOCKED #40 답습)
+- L3 Bidirectional symmetric scan + dedup pattern (incidence
+  detection canonical)
+- L4 Geometric vs topological 분리 (point vs t) — synthetic crossing
+  design template
+- L5 결함 fix 의 partial outcome 명시 lock-in (L-128-8) — 100%
+  coverage 아닐 때 잔존 edge case 의 test 가 future ADR trigger anchor
+- L6 ADR-120 Amendment pattern 4번째 정착 (ADR-122 의 3 amendments
+  + ADR-120 의 amendment 1 = canonical multi-option spec pattern)
+- L7 Pre-implementation audit canonical 4번째 적용 (세션 패턴 정착
+  강화)
+
+**다음 트랙 (자연 next)**:
+- **사용자 manual 시연 게이트** (ADR-087 K-ζ canonical) — 결함 D
+  trigger 시나리오 (RECT × CIRCLE cardinal alignment) 실제 측정
+- **LOCKED #43 priority audit 재평가** — priority #1~4 모두 closure
+  도달 → 새 priority 선정 or 별도 architectural value track
+- **세션 저장** (자연 break point — 7 PRs 누적, 5 LOCKED entries)
+
+**Cross-link**:
+- ADR-128 (β implementation ADR — 본 LOCKED 의 anchor)
+- ADR-120 Amendment 1 (Q1=G chosen)
+- ADR-127 + LOCKED #57 (직전 audit closure — audit-first 3번째)
+- ADR-101 Amendment 9 §A9.8 (결함 D documented limitation — 본 ADR 이 해소)
+- ADR-107 Path B canonical (real-world trigger 약화 evidence source)
+- ADR-046 P31 #1 "가볍게" (Q1=G 선택 근거)
+- ADR-046 P31 #4 additive only (L-128-5)
+- ADR-027 NURBS Kernel (Path D future anchor)
+- LOCKED #5 (1.5μm spatial-hash) — VERTEX_ON_EDGE_EPS_2D > LOCKED #5
+- LOCKED #43 priority #4 (본 LOCKED 의 anchor — 첫 β implementation
+  in priority track)
+- LOCKED #44 (Complete Meaning per Merge — single atomic PR)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
