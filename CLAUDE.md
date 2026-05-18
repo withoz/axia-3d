@@ -3490,6 +3490,88 @@ single SSOT 가 향후 새 workflow 추가 시에도 자동 적용.
   architectural performance optimization)
 - LOCKED #44 (Complete Meaning per Merge — single atomic PR)
 
+### 55. ADR-125 + ADR-122 Amendment 1 — Selection rendering audit closure + α-1 pivot (docs only, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "C → A 순차 — 가장 단순/신속/정확 승인합니다"
+
+ADR-124 closure 후 ADR-123 Q2 default 정합으로 ADR-122 α-1 (Selection
+BBox InstancedMesh) β implementation 진입. *사전 검토 audit* 으로
+`SelectionManager.ts` 측정 → **ADR-122 α-1 가정 ("N drawcalls") 가
+현재 코드 실측 (1 drawcall, merged geometry) 과 불일치** 발견. 사용자
+escalate 후 C → A 순차 결재.
+
+**Audit finding 매트릭스** (canonical truth):
+
+| Hotspot | ADR-122 §2 가정 | 실측 audit | 상태 |
+|---|---|---|---|
+| **A — Selection BBox** | N drawcalls | **1 drawcall** (merged per type) | ❌ 가정 무효 |
+| B — Snap markers | 2D canvas | 0 GPU drawcalls | ✅ 정합 |
+| C — Helper lines | LineSegments2 별 | 1-5 per type | ⚠️ medium |
+| **D — Reference imported mesh** | N × 2 | **N × 2 (STEP 500 face = 1000 drawcalls)** | ✅ **진짜 hotspot** |
+| E — Primitive preview | per-tool | 1 (이미 single) | ❌ 이미 optimal |
+
+**Architectural reason**: ADR-074 (2026-05-05) 시점에 type-level merged
+geometry pattern (`rebuildSelectionMesh()` line 1124, `rebuildGroupOutlines()`
+line 1851) 채택 — ADR-122 §2 작성 시 이 implicit optimization 누락.
+
+**Pivot decision (canonical, ADR-125 §3)**:
+- ADR-122 α-1 β implementation **거부** (visual regression risk +
+  gain 0)
+- ADR-122 §spec 자체는 **보존** (supersede 아님) + Amendment 1 추가
+  (current state correction + 추천 순위 재정렬)
+- ADR-126 (가칭) 으로 **ADR-122 α-2 (Reference imported mesh
+  InstancedMesh) 별도 β implementation** 진행 — 진짜 N-drawcall hotspot
+
+**Lock-ins (L-125-1 ~ L-125-9)**:
+- L-125-1 Pre-implementation audit canonical (모든 β implementation
+  진입 전 audit 우선)
+- L-125-2 Audit truth > spec assumption (escalation 강제)
+- L-125-3 Visual regression 거부 정책 (ADR-046 P31 #4 defensive
+  interpretation)
+- L-125-4 ADR-074 group outline merged geometry 정합 보존
+- L-125-5 ADR-077 V-2 visual baseline 보존
+- L-125-6 Pivot 의 architectural value (부정 결정도 명시 lock-in)
+- L-125-7 ADR-122 α-1 spec 보존 (Amendment 1 patch, 향후 trigger 가능)
+- L-125-8 ADR-122 α-2 가 다음 β implementation 트랙 (별도 ADR-126)
+- L-125-9 절대 #[ignore] 금지
+
+**회귀 (0)**: docs only — vitest 1916 / cargo 1392+302+0 unchanged
+per LOCKED #54. ADR-077 V-2 visual baselines 보존.
+
+**다음 트랙 (사용자 A 승인 후)**:
+- **ADR-126 (가칭)** — ADR-122 α-2 Reference imported mesh InstancedMesh
+  β implementation. 1주 atomic. `StepIgesImporter.ts` 의 N face ×
+  Mesh × 2 → 1 InstancedMesh × 2 (front+back). ADR-077 V-2 visual
+  baseline + ADR-083 STEP baseline + ADR-086 owner-ID 매핑 정합.
+
+**Lessons (canonical for future audit-first ADRs)**:
+- L1 Audit-first canonical 강화 — ADR-103-ε §L2 (audit-first vs sed
+  assumption) 의 더 깊은 적용. 모든 α spec → β implementation 전 audit
+  우선 권장.
+- L2 5개월 누적 자산의 implicit optimization (ADR-074 group outline
+  merged geometry) — spec assumption 보다 architecture audit 우선.
+- L3 부정 결정의 architectural value — ADR-076 (legacy deletion 부정
+  결정) 답습. silent 거부 회피, 명시 documented.
+- L4 Spec preservation + Amendment pattern — supersede 대신 amendment
+  로 current state correction. 향후 trigger 시 anchor 보존.
+- L5 Q2 default 의 architectural 재해석 — ADR-123 Q2 default 가 본
+  ADR 후 α-2 로 재해석. spec default 가 절대 아님.
+
+**Cross-link**:
+- ADR-125 (audit closure ADR — 본 LOCKED 의 anchor)
+- ADR-122 Amendment 1 (current state correction)
+- ADR-123 Q2 default 재해석 (α-1 → α-2)
+- ADR-124 (직전 ADR, engine-side SIMD)
+- ADR-074 (group outline merged geometry pattern source)
+- ADR-077 V-2 (visual baseline 가드)
+- ADR-088 (multi-segment edge hover)
+- ADR-046 P31 #4 (additive only)
+- ADR-076 §C-amendment-1 (부정 결정 명시 lock-in 패턴 source)
+- ADR-126 (가칭, 본 LOCKED 의 자연 후속 — α-2 β implementation)
+- LOCKED #44 (Complete Meaning per Merge — docs-only PR scope)
+- LOCKED #54 (직전 closure, ADR-123 + ADR-124)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

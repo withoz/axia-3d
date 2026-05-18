@@ -206,3 +206,62 @@ ADR-111 α 가 BVH build 비용 145ms → 0 (RAF defer) 으로 click latency 해
 - Q1: **(a) α-1 (Selection BBox)** — 단순/신속/정확, 2-3일 atomic
 - 대안: **(c) α-3 (A + D)** — 사용자 facing 큰 두 hotspot 동시
 - Q2-Q4: default 채택 (`InstancedMesh`, additive only, single PR)
+
+> **⚠️ Amendment 1 (2026-05-17) — α-1 가정 무효, α-2 가 진짜 hotspot. §Amendment 1 참조.**
+
+---
+
+## Amendment 1 — Current State Correction (2026-05-17, ADR-125 audit closure)
+
+**상태**: ADR-122 spec 본문 (§§1~9) 보존, 본 amendment 만 추가.
+**Trigger**: ADR-125 pre-implementation audit (`SelectionManager.ts` 측정).
+**사용자 결재**: 2026-05-17, "C → A 순차 — 가장 단순/신속/정확 승인합니다".
+
+### A1.1 §2 hotspot 매트릭스 정정 (canonical truth)
+
+ADR-122 §2 의 **A hotspot 가정 무효화** + **D hotspot 재확인**:
+
+| Hotspot | §2 spec 가정 | 실측 (audit 2026-05-17) | 상태 |
+|---|---|---|---|
+| **A — Selection BBox** | "N drawcalls" | **1 drawcall** (merged LineSegments per type) | ❌ **가정 무효** |
+| B — Snap markers | (이미 2D canvas) | 0 GPU drawcalls | ✅ 정합 |
+| C — Helper lines | LineSegments2 별 drawcall | 1-5 per type | ⚠️ medium gain |
+| **D — Reference imported mesh** | N × 2 (front+back) | **N × 2 (STEP 500 face = 1000 drawcalls)** | ✅ **진짜 hotspot 확인** |
+| E — Primitive preview | Per-tool preview mesh | 1 (이미 single mesh) | ❌ 이미 optimal |
+
+**Architectural reason** (A 가정 무효 사유): `SelectionManager.ts:1124` `rebuildSelectionMesh()` + `SelectionManager.ts:1851` `rebuildGroupOutlines()` 가 ADR-074 (2026-05-05) 시점에 *type-level merged geometry* 패턴 채택. ADR-122 §2 작성 시점 (2026-05-17) 에 이 implicit optimization 이 audit 누락. 자세히는 ADR-125 §2.1~2.2.
+
+### A1.2 추천 순위 정정 (canonical)
+
+| 추천 | 이전 (§2.1) | 이후 (Amendment 1) | 사유 |
+|---|---|---|---|
+| **1st** | α-1 (Selection BBox) | **α-2 (Reference imported mesh)** | 진짜 N-drawcall hotspot (audit confirmed) |
+| **2nd** | α-3 (A + D 묶음) | α-2 단독 (먼저) → α-4 (Helper lines) 후속 | A 가정 무효, D 만 유효 |
+| **3rd** | α-2 (D only) | α-4 (Helper lines KAYAC pattern) | D 후 medium-gain hotspot |
+| **4th** | α-5 (4 hotspots) | (현재 priority 없음) | A 무효로 묶음 의미 감소 |
+
+### A1.3 α-1 status — preserved (NOT superseded)
+
+본 amendment 는 α-1 spec 을 *supersede 하지 않음*. 보존 사유:
+- 향후 selection > 1000 faces 시 CPU rebuild perf 가 문제될 가능성 (ADR-125 §2.4)
+- 그 trigger 시 α-1 의 "InstancedMesh 로 CPU rebuild → GPU instance matrix" 가 valid path 가능
+- 부정 결정 lock-in (ADR-125 §3.2) — silent 거부 회피, *명시 documented*
+
+### A1.4 ADR-123 Q2 default 재해석
+
+ADR-123 §3.2 Q2 default ("ADR-123 D 먼저 → ADR-122 α-1 후속") 가 본 amendment 후:
+- **재해석**: "ADR-123 D (ADR-124) 먼저 → ADR-122 **α-2** 후속" (별도 ADR-126 가칭, ADR-125 §3.3 anchor)
+- ADR-123 본문은 *변경 없음* — Q2 default 의 의미가 audit 후 재해석.
+
+### A1.5 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-125: docs only, 회귀 0
+- ADR-126 (가칭, 후속): β implementation 시 별도 회귀 (회귀 명세는 ADR-126 작성 시 lock-in)
+
+### A1.6 Cross-link (Amendment 1)
+
+- **ADR-125** — 본 amendment 의 직접 trigger (audit closure ADR)
+- **ADR-074** — type-level merged geometry pattern source (implicit optimization)
+- **ADR-077 V-2** — visual baseline 가드 (α-1 강행 거부 사유)
+- **ADR-123** — Q2 default 재해석 anchor
