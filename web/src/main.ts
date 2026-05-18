@@ -602,6 +602,34 @@ async function main() {
   // 7. Start render loop
   viewport.start();
 
+  // ─── ADR-135 β — Distance-based LOD chord_tol wiring ───
+  //
+  // Computes lod_chord_tol(camera_distance) on each frame; pushes via
+  // bridge.setRenderChordTol() only when the value changes by more than
+  // 5% from previously pushed (avoids per-frame full rebuild thrashing).
+  //
+  // Near rendering (camera ≤ 100mm): 0.02mm (LOCKED #40 baseline preserved).
+  // Far rendering: auto-coarser (0.2mm at 1m, 1.0mm at 5m+) → 10-50× triangle
+  // reduction for large primitives (sphere r=1000 at 5m: 2M → 40K tris).
+  //
+  // Cross-link: ADR-135 §5 Path A, LOCKED #40 §L1 baseline preserved.
+  let lodLastPushedTol = 0.02; // baseline (matches engine default)
+  viewport.onFrame(() => {
+    const camPos = viewport.camera.position;
+    // Use orbitTarget proxy via camera's distance to scene origin —
+    // approximation since we don't have public orbitTarget accessor.
+    // For LOD purposes this is good enough (sketch/primitives are near
+    // origin in typical scenes).
+    const camDistance = camPos.length();
+    if (!Number.isFinite(camDistance) || camDistance <= 0) return;
+    const lodTol = bridge.lodChordTol(camDistance);
+    // Only push when change is > 5% (avoids per-frame churn on slow zoom).
+    if (Math.abs(lodTol / lodLastPushedTol - 1) > 0.05) {
+      bridge.setRenderChordTol(lodTol);
+      lodLastPushedTol = lodTol;
+    }
+  });
+
   // 8. Status bar updates
   const statUnit = document.getElementById('stat-unit')!;
   const statPrec = document.getElementById('stat-prec')!;

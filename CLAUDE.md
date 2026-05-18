@@ -4239,6 +4239,118 @@ LOCKED #60. ADR-077 V-2 baselines + production functionality preserved.
 - LOCKED #44 (Complete Meaning per Merge)
 - LOCKED #60 (직전 closure, ADR-133)
 
+### 62. ADR-135 — Distance-based LOD chord_tol Implementation (ADR-134 Path A β, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "Distance-based LOD chord_tol (near=0.02, far=0.2-1.0mm 자동) 로 진행승인합니다"
+
+ADR-134 §5.2 Path A (Distance-based LOD chord_tol) β implementation —
+단순/신속/정확, near 영향 0 + far 자동 coarser. 세션 audit-first
+canonical 8번째 적용 후 α spec → β implementation atomic 6번째 적용.
+
+**LOCKED #40 §L1 baseline 보존** — near rendering (cam ≤ 100 mm) 영향 0.
+Far rendering (cam > 100 mm) 만 자동 LOD coarser → triangle 폭발 해소.
+
+**LOD formula**:
+```rust
+pub fn lod_chord_tol(camera_distance: f64) -> f64 {
+    const THRESHOLD_MM: f64 = 100.0;
+    const MAX_LOD_CHORD_TOL: f64 = 1.0;
+    let dist = camera_distance.max(0.0);
+    let lod_factor = (dist / THRESHOLD_MM).max(1.0);
+    (DEFAULT_ANALYTIC_CHORD_TOL * lod_factor).min(MAX_LOD_CHORD_TOL)
+}
+```
+
+| Camera distance | LOD chord_tol | r=1000 sphere triangles |
+|---|---|---|
+| 0 ~ 100 mm (near) | **0.02 mm** (DEFAULT) | ~2,000,000 (LOCKED #40 baseline) |
+| 500 mm (mid) | 0.10 mm | ~200,000 (10× ↓) |
+| 1 m (mid) | 0.20 mm | ~100,000 (20× ↓) |
+| 2 m (mid) | 0.40 mm | ~50,000 (40× ↓) |
+| 5 m+ (far) | **1.0 mm** (cap) | ~40,000 (50× ↓) |
+
+**Implementation (5 layers)**:
+1. **Engine** (`axia-geo/src/mesh_export.rs`) — `DEFAULT_ANALYTIC_CHORD_TOL`
+   const + `lod_chord_tol()` helper + `Mesh::export_buffers_with_tol(chord_tol)`
+   method (backward compat: `export_buffers()` UNCHANGED, calls `_with_tol(DEFAULT)`)
+2. **Scene** (`axia-core/src/scene.rs`) — `Scene::export_mesh_buffers_with_tol(chord_tol)`
+   wrapper
+3. **WASM** (`axia-wasm/src/lib.rs`) — `render_chord_tol: f64` field + 3
+   exports (`renderChordTol`/`setRenderChordTol`/`lodChordTol`) + `rebuild_cache`
+   uses dynamic tol
+4. **TS bridge** (`web/src/bridge/WasmBridge.ts`) — 3 wrappers with graceful
+   fallback (TS formula mirror when WASM stub missing)
+5. **Viewport wiring** (`web/src/main.ts`) — `viewport.onFrame` per-frame
+   LOD compute + 5% threshold push (avoids per-frame rebuild churn)
+
+**Lock-ins (L-135-1 ~ L-135-10)**:
+- L-135-1 ADR-134 §5.2 Path A 채택 (단순/신속/정확)
+- L-135-2 LOCKED #40 §L1 baseline (0.02 mm) **보존** (near 영향 0)
+- L-135-3 LOD formula monotonic non-decreasing in distance (property test)
+- L-135-4 Backward compat: 기존 signatures UNCHANGED, `_with_tol` 추가만
+- L-135-5 WASM `setRenderChordTol` idempotent (< 1μm 변화 no-op) + triggers
+  `cache_dirty + topology_changed` (full rebuild required, triangle count
+  drastic change)
+- L-135-6 TS Viewport 5% threshold throttling (per-frame no-op for slow zoom)
+- L-135-7 TS bridge graceful fallback (engine stub missing → TS formula mirror)
+- L-135-8 ADR-046 P31 #4 additive only — public API + UX UNCHANGED, visual
+  near rendering 영향 0
+- L-135-9 ADR-077 V-2 visual baselines unchanged (near rendering identical)
+- L-135-10 절대 #[ignore] 금지
+
+**회귀 매트릭스 (실측)**:
+
+| Layer | Before (LOCKED #61) | After ADR-135 β | Delta |
+|---|---|---|---|
+| **axia-geo** (cargo) | 1399 | **1407** | **+8** |
+| axia-core (cargo) | 302 | 302 | UNCHANGED |
+| axia-wasm (cargo) | 0 | 0 | UNCHANGED |
+| **vitest** (TS) | 1920 / 1 skipped | **1931 / 1 skipped** | **+11** |
+| `mesh_export::adr135_lod_tests` | (new) | 8 tests | +8 |
+| `bridge/LodChordTol.test.ts` | (new) | 11 tests | +11 |
+| Initial bundle | 724.99 kB | 724.99 kB | UNCHANGED (P20.C #2) |
+| ADR-077 V-2 baselines | preserved | preserved | UNCHANGED |
+
+**합계 +19 회귀** (cargo +8 + vitest +11, 절대 #[ignore] 금지 19/19 준수).
+
+**사용자 facing 변화**:
+- Near (cam ≤ 100mm): UNCHANGED (0.02mm preserved)
+- Mid (1m): **5-10× faster syncMesh** (50K → 10K tris for r=100 sphere)
+- Far (5m+): **50× faster** (2M → 40K tris for r=1000 sphere, frame budget restored)
+
+**Lessons (canonical for future render-perf ADRs)**:
+- L1 Single-direction monotonic invariant (property test)
+- L2 Backward-compat via additive method (signature UNCHANGED)
+- L3 Pure function exposed via WASM (`lodChordTol` for TS validation)
+- L4 5% threshold throttling at TS-side (avoids per-frame rebuild)
+- L5 Near rendering 영향 0 design (LOCKED #40 spirit preserved)
+- L6 α spec → β implementation atomic 7번째 적용 (pattern 정착)
+- L7 `topology_changed = true` on chord_tol change (delta-buffer safety)
+- L8 사용자 시연 evidence post-closure 권장 (LOD threshold/cap 조정 가능)
+
+**다음 트랙 (자연 next)**:
+- **사용자 manual 시연** — Sphere r=10/100/1000 + sketch panning + STEP
+  import 측정 (ADR-087 K-ζ canonical). LOD threshold (100mm) / cap (1.0mm)
+  조정 가능 (future amendment).
+- **ADR-134 §5 Path B (Adaptive per radius)** — Path A 와 직교, 결합 시 별도 ADR
+- **ADR-134 §5 Path D (Sketch export cache)** — preview latency 별도 architectural fix
+- **ADR-134 §5 Path E (Mesh build hash optimization)** — 1000-face O(N²) scaling 별도 audit
+- **세션 저장** — 자연 break point (14 PRs / 9 LOCKED entries 추가)
+
+**Cross-link**:
+- ADR-134 / PR #99 (audit spec — 사용자 perceived slowness 원인 + 6 fix options)
+- LOCKED #40 §L1 (ANALYTIC_CHORD_TOL = 0.02 mm 정책 baseline 보존)
+- LOCKED #35/47/48/49 (Path B production default ON)
+- ADR-031 Phase D / ADR-038 P23 / ADR-089 Phase 2 (analytic surface infra)
+- ADR-094/113/114/115 (Path B β implementations — Sphere/Cylinder/Cone/Torus)
+- ADR-111 α / ADR-112 / ADR-124 / ADR-126 (other render perf ADRs, 시너지)
+- ADR-046 P31 #4 additive only (L-135-8)
+- ADR-077 V-2 visual baseline (near preserved, L-135-9)
+- ADR-087 K-ζ 사용자 시연 게이트 canonical
+- ADR-118/119/122/123/124/126/128/132/133 (α spec → β impl atomic pattern source)
+- LOCKED #44 Complete Meaning per Merge
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

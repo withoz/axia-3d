@@ -5596,6 +5596,19 @@ impl Scene {
         self.mesh.export_buffers()
     }
 
+    /// ADR-135 β — Distance-based LOD chord_tol export.
+    ///
+    /// Caller (WasmEngine via `setRenderChordTol`) passes
+    /// `axia_geo::mesh_export::lod_chord_tol(camera_distance)`.
+    /// Backward-compat: `export_mesh_buffers()` unchanged (uses
+    /// `DEFAULT_ANALYTIC_CHORD_TOL = 0.02`).
+    pub fn export_mesh_buffers_with_tol(
+        &mut self,
+        chord_tol: f64,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
+        self.mesh.export_buffers_with_tol(chord_tol)
+    }
+
     /// Export hard edge line segments for wireframe rendering.
     /// Coplanar edges (angle ≤ threshold) are hidden — like SketchUp's soft/smooth edges.
     pub fn export_edge_lines(&self, angle_threshold_deg: f64) -> Vec<f32> {

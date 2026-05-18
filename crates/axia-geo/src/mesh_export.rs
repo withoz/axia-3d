@@ -32,6 +32,48 @@ use anyhow::Result;
 use crate::entities::*;
 use crate::mesh::{Mesh, ExportSkipStats, compute_uv_slice_for_quad_face, surfaces_in_same_smooth_group};
 
+/// ADR-135 β — Default render chord_tol (LOCKED #40 §L1, 2026-05-12).
+///
+/// 0.02 mm = 5× finer than legacy 0.1 mm. Visual quality 우선 결정 —
+/// top rim facet 해소 (사용자 시연 "옆면처럼 원도 같은 방식 쓸 수 없나요?"
+/// 답습). LOD-aware caller (Viewport via WASM `setRenderChordTol`) 가
+/// `lod_chord_tol(camera_distance)` 의 결과를 `export_buffers_with_tol`
+/// 에 전달; 본 const 는 LOD 미적용 시 fallback (backward compat) 만.
+pub const DEFAULT_ANALYTIC_CHORD_TOL: f64 = 0.02;
+
+/// ADR-135 β — Distance-based LOD chord_tol formula.
+///
+/// Returns chord_tol for given camera distance (mm), clamped to
+/// `[DEFAULT_ANALYTIC_CHORD_TOL, MAX_LOD_CHORD_TOL]`.
+///
+/// **Formula**: `base * max(1, dist / threshold)`, capped at 1.0 mm.
+/// - `base = 0.02 mm` (DEFAULT_ANALYTIC_CHORD_TOL, LOCKED #40)
+/// - `threshold = 100 mm` (near rendering region)
+/// - `cap = 1.0 mm` (far rendering coarsest)
+///
+/// **Examples**:
+/// - cam 50 mm  (near) → 0.02 mm (unchanged, near rendering)
+/// - cam 100 mm (near) → 0.02 mm (still near, baseline)
+/// - cam 500 mm (mid)  → 0.10 mm (5× coarser)
+/// - cam 1 m    (mid)  → 0.20 mm (10× coarser)
+/// - cam 5 m    (far)  → 1.00 mm (capped, 50× coarser)
+/// - cam 100 m  (far)  → 1.00 mm (capped, max coarseness)
+///
+/// **r=1000 mm sphere triangle reduction example**:
+/// - Near (cam 100 mm, tol 0.02): ~2,000,000 tris
+/// - Mid (cam 1 m, tol 0.20): ~200,000 tris (10× reduction)
+/// - Far (cam 5 m+, tol 1.0): ~40,000 tris (50× reduction)
+///
+/// Visual impact: near rendering 영향 0 (≤ 100 mm), far rendering only
+/// auto-coarser. LOCKED #40 spirit 보존.
+pub fn lod_chord_tol(camera_distance: f64) -> f64 {
+    const THRESHOLD_MM: f64 = 100.0;
+    const MAX_LOD_CHORD_TOL: f64 = 1.0;
+    let dist = camera_distance.max(0.0);
+    let lod_factor = (dist / THRESHOLD_MM).max(1.0);
+    (DEFAULT_ANALYTIC_CHORD_TOL * lod_factor).min(MAX_LOD_CHORD_TOL)
+}
+
 impl Mesh {
 
     /// Export mesh as flat vertex/index buffers for GPU rendering.
@@ -57,7 +99,33 @@ impl Mesh {
     /// faces in the mesh. NO active face with zero triangles can leak
     /// past this boundary.
     pub fn export_buffers(&mut self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
-        let result = self.export_buffers_inner()?;
+        // Default render chord_tol — LOCKED #40 §L1 baseline (0.02 mm).
+        // For LOD-aware caller (ADR-135 β, Viewport), use
+        // `export_buffers_with_tol(chord_tol)`.
+        self.export_buffers_with_tol(DEFAULT_ANALYTIC_CHORD_TOL)
+    }
+
+    /// ADR-135 β — Distance-based LOD chord_tol export.
+    ///
+    /// Caller (Viewport via WASM `setRenderChordTol`) computes
+    /// `lod_chord_tol(camera_distance)` and passes it here. For near
+    /// rendering (camera ≤ 100mm), pass `DEFAULT_ANALYTIC_CHORD_TOL`
+    /// (= 0.02 mm, LOCKED #40 baseline) — visual output identical to
+    /// pre-ADR-135 path.
+    ///
+    /// For far rendering (camera > 100mm), pass a larger chord_tol
+    /// (e.g., 0.2 mm at 1m, 1.0 mm at 5m+) — significantly fewer
+    /// triangles per primitive, no visual difference at viewing distance.
+    ///
+    /// **Triangle count formula** (sphere example, r=100 mm):
+    /// - chord_tol = 0.02 mm → ~50,000 tris (LOCKED #40 baseline)
+    /// - chord_tol = 0.2 mm → ~5,000 tris (LOD at 1m)
+    /// - chord_tol = 1.0 mm → ~500 tris (LOD at 5m+)
+    pub fn export_buffers_with_tol(
+        &mut self,
+        chord_tol: f64,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
+        let result = self.export_buffers_inner(chord_tol)?;
         // Step 3 — deactivate any face whose triangulation produced 0
         // triangles (earcut Ok([])). Restores the "1 face = ≥1 tri"
         // invariant before stats are snapshotted.
@@ -68,10 +136,13 @@ impl Mesh {
         }
         // Step 4 — re-export with cleaned mesh state. Stats from this
         // pass are the canonical snapshot (recorded at end of inner).
-        self.export_buffers_inner()
+        self.export_buffers_inner(chord_tol)
     }
 
-    fn export_buffers_inner(&self) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
+    fn export_buffers_inner(
+        &self,
+        chord_tol: f64,
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>, Vec<f64>)> {
         let mut positions: Vec<f32> = Vec::new();
         let mut positions_f64: Vec<f64> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
@@ -105,8 +176,12 @@ impl Mesh {
         //   Top face fan: ~22 → ~78 triangles (×3.5)
         //   Rim wireframe: ~22 → ~78 line segments (×3.5)
         //   합계 cylinder 1개: ~150 → ~360 verts (+210 verts, 무시 가능)
-        // LOD 는 별도 phase.
-        const ANALYTIC_CHORD_TOL: f64 = 0.02;
+        //
+        // ADR-135 β — Distance-based LOD chord_tol activated.
+        // Caller (Viewport via WASM setRenderChordTol) passes
+        // `lod_chord_tol(camera_distance)`. Default = 0.02 mm (LOCKED #40).
+        // Far rendering (camera > 100mm) auto-coarser via LOD formula.
+        let analytic_chord_tol = chord_tol;
 
         for (face_id, face) in self.faces.iter() {
             if !face.is_active() || !face.is_visible() {
@@ -149,7 +224,7 @@ impl Mesh {
                         surface
                     };
 
-                let tess = render_surface.tessellate(ANALYTIC_CHORD_TOL);
+                let tess = render_surface.tessellate(analytic_chord_tol);
                 if tess.vertices.is_empty() || tess.triangles.is_empty() {
                     stats.analytic_empty_tess += 1;
                     continue;
@@ -218,11 +293,12 @@ impl Mesh {
                     }) = edge_ref.curve().cloned()
                     {
                         // ADR-038 P23.2 + 2026-05-12 render refinement —
-                        // 0.02mm baseline (ANALYTIC_CHORD_TOL) capped by
+                        // baseline (analytic_chord_tol, default 0.02mm) capped by
                         // `radius * 0.002` (5× finer than engine ops'
                         // `radius * 0.01`). For r=5 → 0.01mm → ~78 fan
-                        // triangles (was ~22).
-                        let chord_tol = ANALYTIC_CHORD_TOL.min(radius * 0.002).max(1e-6);
+                        // triangles (was ~22). ADR-135 β: analytic_chord_tol
+                        // is now caller-provided (LOD-aware).
+                        let chord_tol = analytic_chord_tol.min(radius * 0.002).max(1e-6);
                         let pts = crate::curves::circle::tessellate_full(
                             center, radius, c_normal, basis_u, chord_tol,
                         );
@@ -284,7 +360,7 @@ impl Mesh {
                     let curve_tess: Option<Vec<DVec3>> = match edge_ref.curve().cloned() {
                         Some(crate::curves::AnalyticCurve::Bezier { control_pts }) => {
                             crate::curves::bezier::tessellate(
-                                &control_pts, ANALYTIC_CHORD_TOL,
+                                &control_pts, analytic_chord_tol,
                             ).ok()
                         }
                         Some(crate::curves::AnalyticCurve::BSpline {
@@ -292,7 +368,7 @@ impl Mesh {
                         }) => {
                             crate::curves::bspline::tessellate(
                                 &control_pts, &knots, degree as usize,
-                                ANALYTIC_CHORD_TOL,
+                                analytic_chord_tol,
                             ).ok()
                         }
                         Some(crate::curves::AnalyticCurve::NURBS {
@@ -300,7 +376,7 @@ impl Mesh {
                         }) => {
                             crate::curves::nurbs::tessellate(
                                 &control_pts, &weights, &knots, degree as usize,
-                                ANALYTIC_CHORD_TOL,
+                                analytic_chord_tol,
                             ).ok()
                         }
                         _ => None,
@@ -843,5 +919,127 @@ impl Mesh {
         }
 
         (lines, edge_map)
+    }
+}
+
+// ═══ ADR-135 β — Distance-based LOD chord_tol regression tests ═══
+
+#[cfg(test)]
+mod adr135_lod_tests {
+    use super::*;
+    use crate::Mesh;
+
+    // ─── lod_chord_tol formula tests ────────────────────────────────
+
+    #[test]
+    fn adr135_lod_near_camera_unchanged() {
+        // Camera ≤ 100mm threshold → returns DEFAULT_ANALYTIC_CHORD_TOL.
+        // LOCKED #40 §L1 spirit preserved (near rendering 영향 0).
+        assert_eq!(lod_chord_tol(0.0), DEFAULT_ANALYTIC_CHORD_TOL);
+        assert_eq!(lod_chord_tol(50.0), DEFAULT_ANALYTIC_CHORD_TOL);
+        assert_eq!(lod_chord_tol(100.0), DEFAULT_ANALYTIC_CHORD_TOL);
+    }
+
+    #[test]
+    fn adr135_lod_mid_camera_proportional() {
+        // Camera 500mm → 5× DEFAULT = 0.10mm
+        assert!((lod_chord_tol(500.0) - 0.10).abs() < 1e-9);
+        // Camera 1000mm (1m) → 10× DEFAULT = 0.20mm
+        assert!((lod_chord_tol(1000.0) - 0.20).abs() < 1e-9);
+        // Camera 2000mm (2m) → 20× DEFAULT = 0.40mm
+        assert!((lod_chord_tol(2000.0) - 0.40).abs() < 1e-9);
+    }
+
+    #[test]
+    fn adr135_lod_far_camera_capped_at_1mm() {
+        // Camera 5000mm (5m) → 50× DEFAULT = 1.00mm (cap)
+        assert!((lod_chord_tol(5000.0) - 1.0).abs() < 1e-9);
+        // Camera 10000mm (10m) → would be 2.00mm but capped at 1.00mm
+        assert_eq!(lod_chord_tol(10000.0), 1.0);
+        // Camera 100000mm (100m) → still capped at 1.00mm
+        assert_eq!(lod_chord_tol(100000.0), 1.0);
+    }
+
+    #[test]
+    fn adr135_lod_negative_distance_treated_as_zero() {
+        // Defensive: negative distance (impossible in normal use) treated
+        // as 0 → returns DEFAULT.
+        assert_eq!(lod_chord_tol(-100.0), DEFAULT_ANALYTIC_CHORD_TOL);
+    }
+
+    #[test]
+    fn adr135_lod_monotonic_non_decreasing() {
+        // Property: lod_chord_tol is monotonic non-decreasing in distance.
+        let distances = [0.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 5000.0, 10000.0];
+        let tols: Vec<f64> = distances.iter().map(|&d| lod_chord_tol(d)).collect();
+        for w in tols.windows(2) {
+            assert!(w[1] >= w[0], "monotonic violation: {} → {}", w[0], w[1]);
+        }
+    }
+
+    // ─── export_buffers_with_tol equivalence + LOD effect tests ─────
+
+    #[test]
+    fn adr135_export_buffers_default_equivalence() {
+        // Backward compat: export_buffers() == export_buffers_with_tol(0.02)
+        let mut mesh1 = Mesh::new();
+        let mut mesh2 = Mesh::new();
+        // Identical empty mesh — both should produce identical (empty) output
+        let r1 = mesh1.export_buffers().unwrap();
+        let r2 = mesh2.export_buffers_with_tol(DEFAULT_ANALYTIC_CHORD_TOL).unwrap();
+        assert_eq!(r1.0.len(), r2.0.len(), "positions f32 len mismatch");
+        assert_eq!(r1.1.len(), r2.1.len(), "normals len mismatch");
+        assert_eq!(r1.2.len(), r2.2.len(), "indices len mismatch");
+    }
+
+    #[test]
+    fn adr135_export_buffers_coarser_chord_reduces_triangles_for_analytic_surface() {
+        // For a sphere with analytic surface, coarser chord_tol must
+        // produce fewer triangles than default 0.02 mm.
+        //
+        // Build a sphere via Path B (kernel-native, surface metadata
+        // attached). Then export at 0.02 vs 1.0 chord_tol.
+        use crate::MaterialId;
+
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        // r=100, kernel-native (Path B) — Mesh has a method per LOCKED #47
+        let _ = mesh.create_sphere_kernel_native(
+            glam::DVec3::ZERO, 100.0, mat,
+        ).expect("sphere created");
+
+        // Export at default chord_tol (0.02 mm) — fine tessellation.
+        let (pos_fine, _, _, _, _) = mesh
+            .export_buffers_with_tol(DEFAULT_ANALYTIC_CHORD_TOL)
+            .expect("fine export");
+        let tri_count_fine = pos_fine.len() / 9; // 3 vertices × 3 floats per tri
+
+        // Export at coarse chord_tol (1.0 mm) — far LOD tessellation.
+        let (pos_coarse, _, _, _, _) = mesh
+            .export_buffers_with_tol(1.0)
+            .expect("coarse export");
+        let tri_count_coarse = pos_coarse.len() / 9;
+
+        // Coarse should produce strictly fewer triangles (lossy LOD).
+        assert!(
+            tri_count_coarse < tri_count_fine,
+            "coarse tol should reduce triangles: fine={}, coarse={}",
+            tri_count_fine, tri_count_coarse,
+        );
+        // Sanity: coarse should be >0 (still has a sphere, just fewer verts)
+        assert!(tri_count_coarse > 0);
+    }
+
+    #[test]
+    fn adr135_lod_chord_tol_clamp_lower_bound() {
+        // Theoretical: chord_tol < DEFAULT (0.02) impossible via lod_chord_tol
+        // (formula multiplies by max(1, ...) so result ≥ DEFAULT).
+        // Verify: any distance returns ≥ DEFAULT.
+        for &d in &[0.0, 10.0, 100.0, 1000.0, 10000.0] {
+            let tol = lod_chord_tol(d);
+            assert!(tol >= DEFAULT_ANALYTIC_CHORD_TOL,
+                "lod_chord_tol({}) = {} < DEFAULT {}",
+                d, tol, DEFAULT_ANALYTIC_CHORD_TOL);
+        }
     }
 }
