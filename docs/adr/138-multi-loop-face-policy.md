@@ -1,9 +1,13 @@
 # ADR-138 — Multi-loop Face Policy Re-architecting (α spec)
 
-**Status**: α spec only (β implementation 사용자 결재 후 진행)
+**Status**: ⚠ **Superseded by ADR-139** (2026-05-18, 사용자 결재 Q5=a)
+  — Pure Boundary Tool 정책이 자동 trigger 폐기 → multi-loop face 자체
+  안 생성 → ADR-138 Path B 자연 흡수. ADR-138 의 핵심 의도 (multi-loop
+  회피) 는 ADR-139 의 자연 결과로 달성.
 **Date**: 2026-05-18
 **Author**: WYKO (사용자 결재) + Claude
-**Supersedes candidates**: LOCKED #1 ADR-021 P7 amendment (multi-loop face 거부 정책) + ADR-016 Q2 (multi-loop face 도구 정책)
+**Supersedes candidates** (ADR-138 자체): LOCKED #1 ADR-021 P7 amendment + ADR-016 Q2
+**Superseded by**: ADR-139 (Boundary Tool + Auto-cycle Deprecation, Q5=a 흡수)
 
 ## Canonical anchor (사용자 결재, 2026-05-18)
 
@@ -353,7 +357,28 @@ single-loop. 자연 작동.
 | `crates/axia-geo/src/mesh.rs::add_face_with_holes` | hole loop 처리 분기 — Path B 시 fallback to simple face | ~30-50 |
 | `crates/axia-core/src/scene.rs` (tests) | 8 tests 의 expected 변경 + 새 회귀 자산 추가 | ~200-300 |
 
-### B-γ 후 새 회귀 자산 (Path B 정합 검증)
+## SUPERSEDED NOTE (2026-05-18, ADR-139 Q5=a 결재)
+
+본 ADR-138 은 ADR-139 (Boundary Tool + Auto-cycle Deprecation) 의
+사용자 결재 후 **자연 흡수**됨:
+
+- ADR-138 Path B = "containment auto-split 시 두 simple face (multi-loop
+  회피)"
+- ADR-139 Path A = "모든 자동 trigger 폐기 — Boundary tool 명시 only"
+- ADR-139 적용 시: 자동 containment auto-split *자체* 폐기 → multi-loop
+  face 생성 trigger 없음 → ADR-138 Path B 의 결과 자연 달성 → ADR-138
+  별도 implementation 불필요.
+
+**ADR-138 β implementation 불필요** — ADR-139 β implementation 이 같은
+의도를 더 깊은 architectural level 에서 달성. ADR-138 §11 의 B-α ~ B-ι
+plan 은 deprecation, ADR-139 §14 의 B-α ~ B-μ plan 으로 대체.
+
+ADR-138 의 사용자 통찰 ("정책이 잘못되었네요" / "쉽게 가려면 큰원에서
+작은원을 빼고 작은원만 다시 생성") 은 ADR-139 의 더 깊은 통찰 ("자동화
+자체가 antipattern, CAD BOUNDARY 방식이 더 안정") 로 진화. 두 ADR 모두
+역사적 record 로 보존.
+
+### B-γ 후 새 회귀 자산 (Path B 정합 검증) — DEPRECATED (ADR-139 흡수)
 
 - `test_path_b_containment_two_simple_faces` — outer + inner = 2 simple (not ring)
 - `test_path_b_no_multi_loop_face_generated` — Mesh 전체에 multi-loop face = 0
