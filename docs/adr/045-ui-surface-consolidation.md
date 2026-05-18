@@ -287,3 +287,71 @@ ADR-045 의 톤을 정의하는 5 문장:
   - PR-1 (별도 commit, 같은 세션): MaterialPropertiesPanel 삭제
   - PR-2~4: 후속 세션
 - 핵심 결정 5 문장 (위 Section "5 핵심 문장") 가 ADR 의 톤을 정의.
+- **2026-05-17 — D1 Amendment 1**: identity vs dispatch layer 분리 명시
+  (ADR-131/132/133 closure 후, 자세히는 §D1 Amendment 1 참조).
+
+---
+
+## D1 Amendment 1 — Identity vs Dispatch Layer 분리 (2026-05-17, ADR-133 closure)
+
+**상태**: ADR-045 spec 본문 보존. 본 amendment 만 추가.
+**Trigger**: ADR-131 §A1.2 dual catalog finding → ADR-132 audit → ADR-133 Path E β implementation closure.
+**사용자 결재**: 2026-05-17, "승인합니다" (Option A — small docs cleanup amendment).
+
+### A1.1 D1 spec 원문 정정 (canonical refinement)
+
+D1 spec (위 §D1) + §5 핵심 문장 1:
+> "ActionCatalog is the single source of truth for action identity across UI and MCP."
+
+**ADR-133 closure 시점의 architectural 정정**:
+
+이 statement 는 **identity** SSOT 에 한정. *Dispatch* (toolbar 표시 / shortcut binding / execute closure / runtime enabled+active) 는 별도 layer (CommandCatalog, `web/src/commands/`) 책임. 두 SSOT 는 **complementary**, NOT redundant.
+
+### A1.2 Identity vs Dispatch 분리 매트릭스 (canonical, ADR-133 §5)
+
+| Layer | SSOT | Fields | Consumer |
+|---|---|---|---|
+| **Identity** | **ActionCatalog** (`packages/axia-action-catalog/`) | id / label / description / tier / surfaces / aliases / status / adrs | CapabilityExplorerPanel + MCP server (potential) + 모든 future capability tier policy |
+| **Dispatch** | **CommandCatalog** (`web/src/commands/`) | execute closure / toolbar / shortcut / iconSvg / enabled() / active() / group | CommandPalette + main.ts boot wiring + MenuBar (potential) + KeyboardShortcuts (potential) |
+
+**ADR-133 L-133-3 invariant 강제**: **AC ⊇ CC** (every CommandCatalog id MUST exist in ActionCatalog). `web/src/commands/CatalogConsistency.test.ts` 가 CI에서 검증.
+
+### A1.3 두 layer 분리의 architectural value
+
+- **Identity (AC)** 변경 = capability / metadata 변경 (label / description / tier / MCP alias 등)
+  - 영향 범위: CapabilityExplorerPanel display, MCP server discovery, ADR traceability
+  - 빈도: 낮음 (architectural decisions level)
+- **Dispatch (CC)** 변경 = UI 행동 변경 (toolbar 위치 / keyboard shortcut / icon / execute logic 등)
+  - 영향 범위: 사용자 UX (즉각 visible)
+  - 빈도: 높음 (UX iteration level)
+
+두 layer 의 **변경 빈도 + 영향 범위 분리** = single SSOT 강제 시 churn 충돌 방지.
+
+### A1.4 13 AC-only entries 정합
+
+ADR-133 L-133-4 — 13 AC-only entries (`attach-surface-*-validated` × 5, `bool-dispatch`, `cache-stats`, `edge-curve-info`, `edge-polyline-cached`, `face-normals-cached`, `face-surface-info`, `fillet-dispatch`, `migrate-curve-surface`) 는 **MCP/diagnostic-only** — CommandCatalog 등록 안 됨, intentional.
+
+본 13 entries 는 CapabilityExplorerPanel 의 Tier 1 entries 로 표시되며 (CapabilityExplorer = identity SSOT consumer), MCP server 에서 capability 로 노출 가능 (현재 0 hits, 향후 ADR 시 활성).
+
+### A1.5 핵심 문장 1 refinement (canonical)
+
+§5 핵심 문장 1 의 *additional context* (보존 + 명시 refinement):
+
+> "ActionCatalog is the single source of truth for action **identity** (id/label/tier/surfaces/aliases). CommandCatalog (`web/src/commands/`) is the single source of truth for action **dispatch** (toolbar/shortcut/execute closure). AC ⊇ CC invariant 강제 (every CC id ∈ AC)."
+
+본 refinement 는 *spec 본문 변경 0* — 정확한 의미 명시화 만 추가.
+
+### A1.6 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-133 closure 의 자연 documentation
+- 14 회귀 invariant 매트릭스 (ADR-045 spec §5) UNCHANGED — 본 amendment 는 *spec refinement*, invariant 변경 없음
+
+### A1.7 Cross-link (Amendment 1)
+
+- **ADR-133** — β implementation (Path E adapter layer, identity vs dispatch 분리 의 architectural origin)
+- **ADR-132** — α audit spec (Path E 추천 default)
+- **ADR-131** — dual catalog finding 발견 (ADR-131 §A1.2)
+- **ADR-130 Amendment 1** — ADR-131 §A1.2 detailed source
+- **LOCKED #60** — ADR-133 closure entry
+- **LOCKED #61** (본 amendment closure)

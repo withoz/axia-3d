@@ -218,3 +218,74 @@ LOCKED #43 priority track 100% closure 도달 (2026-05-17, ADR-128 β implementa
 - **Q1 (b) Pillar 1 only** — 점진, 빠른 atomic
 - **Q1 (c) Custom matrix** — priority order 변경 또는 secondary 후보 포함
 - **Q2 (b) 직접 β implementation** — Pillar 1 audit 생략, ~2주 atomic 진입
+
+---
+
+## Amendment 1 — Priority #1 부분 closure (2026-05-17, ADR-130/131/132/133 후속)
+
+**상태**: ADR-129 spec 본문 (§§1~8) 보존. 본 amendment 만 추가.
+**Trigger**: ADR-130 audit (Pillar 1 audit) → ADR-131 (dual catalog finding 발견) → ADR-132 audit + ADR-133 β implementation closure.
+**사용자 결재**: 2026-05-17, "승인합니다" (Option A — small docs cleanup amendment).
+
+### A1.1 Priority #1 (Pillar 1 Discoverability) 부분 closure 명시
+
+ADR-129 §3.1 Priority #1 (Pillar 1 Discoverability) 의 실제 진행 매트릭스:
+
+| Component | Spec scope (§3.1) | Actual status | Closure ADR |
+|---|---|---|---|
+| **Cmd-K palette** | 추가 implementation 필요 | ✅ **이미 production 활성** (286 LOC CommandPalette, 148 commands, fuzzy + ↑/↓ + Enter + Esc) | ADR-131 (audit closure pivot 6번째) |
+| **ActionCatalog SSOT** | binding 추가 필요 | ✅ **161 entries (66 ADR-133 added)**, AC ⊇ CC invariant 강제 | ADR-133 β implementation |
+| **CapabilityExplorerPanel** | Step 4 invoke 60% → 100% | ⚠ Step 4 dispatch 60% (UNCHANGED, ADR-130 §2.1 audit) | (future ADR — γ-3 sub-step) |
+| **MenuBar / KeyboardShortcuts ActionCatalog binding** | Phase 2 prep | ❌ Not started (ADR-130 §2.3 binding gap) | (future ADR-134/135 가칭, γ-5/γ-6 sub-step) |
+| **Fuzzy search library** | fuzzysort 권장 | ✅ Native (CommandPalette 자체 `score_match` + `containsAll`) | ADR-131 §2.4 finding |
+| **i18n infrastructure** | Phase 2 explicit gate | ❌ Not started (ADR-130 §2.5 #3) | (future Phase 2 ADR) |
+| **Tier 3 destructive content** | ADR-045 D3 reserved | ❌ 0 entries (ADR-130 §2.5 #4) | (future ADR) |
+
+### A1.2 Priority #1 status redefinition
+
+| Status field | Pre-ADR-130 | Post-ADR-133 (current) |
+|---|---|---|
+| Cmd-K palette implemented | "scaffold-only" 가정 | ✅ **Production active** |
+| ActionCatalog identity SSOT | "spec only" | ✅ **161 entries with AC ⊇ CC invariant** |
+| CapabilityExplorerPanel Step 4 | "scaffold" | ⚠ 60% (UNCHANGED) |
+| Dual catalog architectural finding | (unknown) | ✅ **Architectural lock-in** (ADR-131 + ADR-132 + ADR-133) |
+| Pillar 1 진짜 잔존 gap | (unknown) | §A1.3 4 영역 (ADR-131 §2.5 답습) |
+
+**Priority #1 부분 closure 도달** — ADR-131/132/133 closure 가 *원래 spec의 60-70%* 수행. 잔존 30-40% = §A1.3.
+
+### A1.3 진짜 Pillar 1 잔존 gap (ADR-131 §2.5 답습)
+
+ADR-131 §2.5 의 진짜 Pillar 1 gap 4 영역:
+
+1. **CapabilityExplorerPanel Step 4 dispatch 완료** (Tier 1/2/3 invoke logic, main.ts wiring) — γ-3 sub-step 추정 ~2-3일
+2. **CapabilityExplorerPanel vs CommandPalette UX 중복 해소** — 두 different palette + F1 ShortcutHelp = 사용자 혼란 (별도 UX ADR)
+3. **i18n infrastructure** (ADR-046 Q7 Korean+English) — Phase 2 explicit gate
+4. **ActionCatalog Tier 3 destructive content** (ADR-045 D3 reserved, ADR-133 0 entries added) — future ADR
+
+§A1.3 4 영역은 별도 ADR (가칭 ADR-135 + future) 으로 진입 가능.
+
+### A1.4 Priority track sequence 유효성 재확인
+
+ADR-129 §3 4-priority track (P#1 → P#2 → P#3 → P#4) 의 sequence **유효**:
+- ✅ **P#1 Pillar 1 부분 closure** (ADR-131/132/133) — §A1.2 status
+- ⏭ **P#2 Visual Baseline Multi-OS Matrix V-4** — 다음 진입 후보 (~2주 atomic)
+- ⏭ P#3 Reference Visual Rendering (ADR-095 Phase 4) — 후속
+- ⏭ P#4 Mode Coherence (ADR-046 Pillar 3) — 후속
+
+P#1 잔존 gap (§A1.3) 의 4 영역 중 *critical path* 는 #1 (CapabilityExplorer Step 4) — 별도 ADR 시 진입 가능 but P#2 진입과 ortho gonal.
+
+### A1.5 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-131/132/133 closure 의 자연 documentation
+- ADR-129 §3 priority track sequence UNCHANGED
+
+### A1.6 Cross-link (Amendment 1)
+
+- **ADR-130 Amendment 1** — Pillar 1 audit findings (ADR-131 §A1.2 detailed source)
+- **ADR-131** — dual catalog finding (Cmd-K already production)
+- **ADR-132** — dual catalog unification audit (Path E 추천)
+- **ADR-133** — Path E β implementation (161 AC entries + AC ⊇ CC invariant)
+- **ADR-045 D1 Amendment 1** — identity vs dispatch 분리 명시 (본 PR 동시 commit)
+- **LOCKED #59 / #60** — ADR-131 / ADR-133 closure entries
+- **LOCKED #61** (본 amendment closure)
