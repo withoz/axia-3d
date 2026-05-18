@@ -323,3 +323,73 @@ ADR-122 spec §A1.2 의 `α-2 (Reference imported mesh InstancedMesh)` wording �
 - **ADR-083 T-γ** — `_faceToMesh` 폐지 source (ADR-126 _mergeFacesIntoSingleGeometry 로 대체)
 - **ADR-084 E-γ** — edges sub-group preserved
 - **ADR-086 O-δ** — DCEL injection side-table refactor
+
+---
+
+## Amendment 3 — α-4 Helper Lines Audit Closure (2026-05-17, ADR-127 pivot)
+
+**상태**: ADR-122 spec 본문 (§§1~9) + Amendment 1 + Amendment 2 보존. 본 amendment 만 추가.
+**Trigger**: ADR-126 closure 후 ADR-123 Q2 default 정합으로 α-4 audit 진입. ADR-125 L-125-1 audit-first canonical 3번째 적용.
+**사용자 결재**: 2026-05-17, "승인합니다" (Option A — 순수 audit closure ADR-127, ADR-125 답습).
+
+### A3.1 §2 hotspot C 매트릭스 정정 (canonical truth, 3번째)
+
+ADR-122 §2 hotspot C ("Helper lines") 가정의 audit 결과:
+
+| Hotspot C source | §2 spec 가정 | Audit finding (2026-05-17) | 상태 |
+|---|---|---|---|
+| **SnapVisual** (snap guides) | "LineSegments2 별 drawcall" | **Canvas 2D 1 stroke per guide** | ❌ **3D 안 씀 — 가정 무효** |
+| **DimensionLabel** (dim ticks) | LineSegments | **Canvas 2D N strokes** | ❌ **3D 안 씀 — 가정 무효** |
+| **DrawPlaneIndicator** (axis gizmo) | "1 LineSegments per axis" | **3 separate `THREE.Line`** | ⚠️ marginal hotspot (2 drawcalls 절감 가능) |
+| Viewport overlays (non-manifold / free edge) | not classified | `LineSegments2` (fast path) | ✅ 이미 fast |
+| PrimitivePreview (radius/height) | not classified | 1-2 LineSegments per tool | ✅ lightweight |
+
+**Architectural reason** (hotspot C 가정 largely 무효 사유): AxiA 의 SnapVisual + DimensionLabel 가 **2D Canvas overlay** 패턴 채택 — Three.js 3D scene 위에 별도 2D layer 로 helper 표시. 3D LineSegments 자체 사용 안 함 → drawcall hotspot 자연 부재. 자세히는 ADR-127 §2.1~2.2.
+
+### A3.2 추천 매트릭스 정정 (canonical, 3번째 갱신)
+
+| 추천 | Amendment 1 (이전) | 이후 (Amendment 3) | 사유 |
+|---|---|---|---|
+| **1st** | α-2 (Reference imported mesh) | α-2 (ADR-126 β implementation 완료) ✅ | ADR-126 closure |
+| **2nd** | α-2 → α-4 순차 | **deprecation (α-4 무효)** | ADR-127 audit closure |
+| **3rd** | α-4 (Helper lines KAYAC pattern) | **deprecated** | hotspot C 가정 largely 무효 |
+| **4th** | (현재 priority 없음) | **deprecated** (α-3 / α-5 묶음 자연 deprecation) | A + C 가정 모두 무효 → 묶음 의미 감소 |
+
+### A3.3 α-4 status — preserved (NOT superseded)
+
+본 amendment 는 α-4 spec 을 *supersede 하지 않음*. 보존 사유:
+- 향후 multi-tool 동시 활성 시점 (예: AI agent 가 10+ DrawPlaneIndicator 동시 활성) 시 *marginal merge* 가치 발생 가능
+- DrawPlaneIndicator 3-Line → 1 LineSegments merge 가 valid path 가능
+- 부정 결정 lock-in (ADR-127 §3.2) — silent 거부 회피, 명시 documented
+- ADR-125 §A1.3 (α-1 preservation) + ADR-126 Amendment 2 §A2.4 (α-2 InstancedMesh wording 보존) 답습 — 3번째 적용
+
+### A3.4 ADR-122 family 자연 closure
+
+Amendment 1 + 2 + 3 누적으로 ADR-122 §2 hotspot 매트릭스 전체 closure:
+
+| Hotspot | §2 가정 | Audit truth | Status | Closure ADR |
+|---|---|---|---|---|
+| A — Selection BBox | N drawcalls | 1 (merged per type) | ❌ 가정 무효 | **Amendment 1** (ADR-125) |
+| B — Snap markers | 2D canvas | 0 GPU drawcalls | ✅ 정합 | (audit only) |
+| **C — Helper lines** | **N drawcalls** | **Canvas 2D + 1-3 fixed** | ❌ **가정 largely 무효** | **Amendment 3** (ADR-127) |
+| **D — Reference imported mesh** | N × 2 | N × 2 | ✅ **진짜 hotspot** | **Amendment 2 + β** (ADR-126) |
+| E — Primitive preview | per-tool | 1 (이미 single) | ❌ 이미 optimal | (audit only) |
+| F — Construction lines | N drawcalls | (future audit 필요) | (deferred) | future ADR |
+| G — Clash detection | N drawcalls | rarely > 50 | (low priority) | future ADR |
+
+**핵심 finding**: 7 hotspots 중 **단 1 (D)** 만 진짜 N-drawcall hotspot. ADR-126 가 그 single hotspot 해소. ADR-122 family 의 architectural value 가 *audit-first canonical 패턴 정착* 으로 발현 (3 finding pivots).
+
+### A3.5 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-127: docs only, 회귀 0
+- ADR-077 V-2 visual baseline UNCHANGED
+
+### A3.6 Cross-link (Amendment 3)
+
+- **ADR-127** — 본 amendment 의 직접 trigger (audit closure ADR)
+- **ADR-125 / ADR-126** — audit-first canonical pattern source (1번째 / 2번째 success)
+- **ADR-074** — type-level merged geometry pattern source (implicit optimization)
+- **ADR-046 P31 #1** "가볍게" (DrawPlaneIndicator merge marginal gain 거부 사유)
+- **ADR-046 P31 #4** additive only
+- **ADR-076 §C-amendment-1** — 부정 결정 명시 lock-in 패턴 source (3번째 답습)

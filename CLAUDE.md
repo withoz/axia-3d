@@ -3684,6 +3684,112 @@ ADRs)**:
 - ADR-046 P31 #4 (additive only)
 - LOCKED #44 (Complete Meaning per Merge — single atomic PR)
 
+### 57. ADR-127 + ADR-122 Amendment 3 — Helper lines audit closure + α-4 pivot (docs only, 2026-05-17) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-17)**:
+> "승인합니다" (Option A — 순수 audit closure ADR-127, ADR-125 답습)
+
+ADR-126 closure (LOCKED #56) 후 ADR-123 Q2 default 정합으로 ADR-122
+α-4 (Helper lines KAYAC pattern) audit 진입. **세션 audit-first
+canonical 의 3번째 success** (ADR-125 α-1, ADR-126 α-2 pivot 답습).
+Helper line rendering 의 architectural reality 가 spec 가정과 다름을
+명시 lock-in + ADR-122 §2 hotspot C 정정.
+
+**Audit finding 매트릭스 (canonical truth)**:
+
+| Hotspot C source | ADR-122 §2 가정 | 실측 audit | 상태 |
+|---|---|---|---|
+| **SnapVisual** (snap guides) | "LineSegments2 별 drawcall" | **Canvas 2D 1 stroke** | ❌ 3D 안 씀 — 가정 무효 |
+| **DimensionLabel** (dim ticks) | LineSegments | **Canvas 2D N strokes** | ❌ 3D 안 씀 — 가정 무효 |
+| **DrawPlaneIndicator** (axis gizmo) | "1 LineSegments per axis" | **3 separate `THREE.Line`** | ⚠️ marginal (2 drawcalls 절감 가능, ADR-046 P31 #1 거부) |
+| Viewport overlays | not classified | `LineSegments2` (fast path) | ✅ 이미 fast |
+| PrimitivePreview | not classified | 1-2 LineSegments per tool | ✅ lightweight |
+
+**Architectural reason**: AxiA 의 SnapVisual + DimensionLabel 가 **2D
+Canvas overlay** 패턴 채택 — 3D LineSegments 자체 사용 안 함 → drawcall
+hotspot 자연 부재. ADR-074 (2026-05-05) merged geometry pattern 과
+동일 architectural pattern (implicit optimization). ADR-122 §2 작성
+시점에 audit 누락.
+
+**ADR-122 family 자연 closure** (Amendment 1 + 2 + 3 누적):
+
+| Hotspot | 가정 | Audit | Status | Closure |
+|---|---|---|---|---|
+| A — Selection BBox | N | 1 (merged) | ❌ 무효 | Amendment 1 / ADR-125 |
+| B — Snap markers | 2D | 0 GPU | ✅ 정합 | (audit only) |
+| **C — Helper lines** | **N** | **Canvas 2D + 1-3** | ❌ **largely 무효** | **Amendment 3 / ADR-127** |
+| **D — Reference imported mesh** | N × 2 | N × 2 | ✅ **진짜 hotspot** | **Amendment 2 / ADR-126** β |
+| E — Primitive preview | per-tool | 1 (이미 single) | ❌ 이미 optimal | (audit only) |
+
+**핵심 finding**: 7 hotspots 중 **단 1 (D)** 만 진짜 N-drawcall hotspot.
+ADR-126 이 그 single hotspot 해소. ADR-122 family 의 architectural
+value 가 *audit-first canonical 패턴 정착* 으로 발현 (3 finding pivots).
+
+**Pivot decision (canonical, ADR-127 §3)**:
+- ADR-122 α-4 β implementation **거부** (Canvas 2D 위임 dominant + DrawPlaneIndicator marginal)
+- ADR-122 §spec 자체 **보존** + Amendment 3 추가
+- ADR-122 family 자연 closure 도달 (α-2 만 implement, 나머지 모두 audit closure 또는 자연 deprecation)
+- 다음 priority 진입 — LOCKED #43 priority #4 (ADR-120 Q1 결재) 가 자연 next
+
+**Lock-ins (L-127-1 ~ L-127-9)**:
+- L-127-1 Pre-implementation audit canonical 강화 (ADR-125 L-125-1
+  의 3번째 적용 — 세션 패턴 정착 evidence)
+- L-127-2 Canvas 2D overlay pattern 이 helper line rendering 의
+  canonical (SnapVisual + DimensionLabel)
+- L-127-3 DrawPlaneIndicator 3-Line pattern 보존 (marginal merge
+  gain, ADR-046 P31 #1 거부)
+- L-127-4 ADR-122 α-4 spec 보존 (NOT superseded) + Amendment 3 추가
+  (spec preservation pattern 3번째 적용)
+- L-127-5 ADR-122 §2 hotspot C 가정 무효 명시
+- L-127-6 ADR-122 추천 매트릭스 정정 (α-4 deprecation, α-3/α-5/α-6
+  묶음 자연 deprecation)
+- L-127-7 부정 결정의 architectural value (ADR-076 §C-amendment-1
+  + ADR-125 L-125-6 답습 — 3번째 적용)
+- L-127-8 다음 priority 진입 anchor (LOCKED #43 priority #4 — ADR-120 Q1)
+- L-127-9 절대 #[ignore] 금지
+
+**회귀 (0)**: docs only — vitest 1917 / cargo 1392+302+0 unchanged
+per LOCKED #56. ADR-077 V-2 visual baselines 보존.
+
+**다음 트랙 (자연 next)**:
+- **LOCKED #43 priority #4 (ADR-120 Q1 결재)** — NURBS-aware coplanar
+  intersect β implementation 진입. 7 algorithm path options
+  (G/D/A/B/C/E/F).
+
+**Lessons (canonical for future audit-first ADRs, 3번째 누적)**:
+- L1 Audit-first canonical 패턴 정착 (3번째 success) — 세션 단일
+  트리거 (ADR-123 Q2 default) 3 atomic ADR 3 audit-first finding.
+  향후 모든 β implementation 진입 시 audit 우선 강제 기본 default.
+- L2 Implicit optimization pattern 의 architectural value 재확인 —
+  5개월 누적 자산 (ADR-074 merged geometry, Canvas 2D overlay) 가
+  hotspot 가정 자연 무효화. 향후 N-drawcall 가정 ADR 작성 시 audit
+  우선 강제.
+- L3 Canvas 2D overlay pattern canonical (helper line rendering) —
+  SnapVisual + DimensionLabel 의 architectural choice 가 향후 새
+  helper line 도입 시 우선 검토 권장.
+- L4 부정 결정 lock-in 패턴 정착 (3번째 적용) — ADR-076 / ADR-125
+  답습.
+- L5 Spec preservation + Amendment pattern 3번째 적용 — ADR-122 의
+  Amendment 1/2/3 누적 (단일 spec 의 3 amendment). supersede 회피.
+- L6 α-3/α-5/α-6 묶음 자연 deprecation — A + C 가정 모두 무효 →
+  묶음 의미 감소 (architectural value 자연 도달).
+- L7 다음 priority 진입 자연 transition — audit closure → 다음 priority
+  natural transition 패턴 정착.
+
+**Cross-link**:
+- ADR-127 (audit closure ADR — 본 LOCKED 의 anchor)
+- ADR-122 Amendment 3 (α-4 current state correction)
+- ADR-125 + LOCKED #55 (audit-first canonical 1번째 success)
+- ADR-126 + LOCKED #56 (audit-first canonical 2번째 success — pivot + β impl)
+- ADR-074 (type-level merged geometry pattern source)
+- ADR-076 §C-amendment-1 (부정 결정 명시 lock-in 패턴 source — 3번째 답습)
+- ADR-077 V-2 (visual baseline 보존)
+- ADR-018 (visual policy preserved)
+- ADR-046 P31 #1 "가볍게" (DrawPlaneIndicator marginal merge 거부 사유)
+- ADR-046 P31 #4 additive only
+- LOCKED #43 priority #4 (ADR-120 Q1 결재 — 본 LOCKED 의 자연 next)
+- LOCKED #44 (Complete Meaning per Merge — docs-only PR scope)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
