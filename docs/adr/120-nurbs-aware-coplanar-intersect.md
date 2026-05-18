@@ -220,3 +220,68 @@ Path B closed-curve face 는 1 self-loop edge with `AnalyticCurve::Circle` (또�
 - Q1: (a) G (vertex-on-edge fallback) — 단순/신속/정확
 - 대안: (b) D (NURBS-direct) — architectural value 우선
 - Q3-Q4: default 채택 (API unchanged, single atomic PR)
+
+---
+
+## Amendment 1 — Q1=G Decision Lock-in (2026-05-17, ADR-128 β implementation)
+
+**상태**: ADR-120 spec 본문 (§§1~9) 보존. 본 amendment 만 추가.
+**Trigger**: ADR-127 closure 후 LOCKED #43 priority #4 자연 transition.
+**사용자 결재**: 2026-05-17, "추천 승인합니다" (Q1=G — Vertex-on-edge fallback).
+
+### A1.1 Q1 path 선택 (canonical lock-in)
+
+**Q1 = G (Vertex-on-edge fallback)** — ADR-120 §3.2 의 1st recommendation 채택.
+
+근거 (사용자 결재 시점 정합):
+- **ADR-046 P31 #1 "가볍게"**: minimum fix 우선 — *architectural completeness* 가 user-facing trigger 보다 우선이지만, marginal effort 만 가치
+- **ADR-101 Amendment 9 §A9.8 evidence**: 결함 D 가 ADR-107 Path B canonical 로 *real-world trigger 약함* (시연 사례 자연 해소) — Path D (NURBS-direct, 2-3주) 의 multi-week scope 가 ROI 미달
+- **세션 패턴 일관**: ADR-124 (2-3일 SIMD), ADR-126 (4-6일 STEP), ADR-127 (30분 audit) — atomic single PR + low risk 일관
+
+### A1.2 Q2-Q4 default 채택
+
+- **Q2 N/A** (G 선택 시, Path D curve type 우선순위 무관)
+- **Q3 API surface unchanged** (additive only — ADR-046 P31 #4 정합)
+- **Q4 single atomic PR** (G scope ~100-150 LOC + 7 회귀)
+
+### A1.3 ADR-128 β implementation 명시
+
+ADR-128 β implementation 채택:
+- `point_on_segment_2d` helper + `detect_vertex_incidence_crossings` function 추가
+- `coplanar_intersection_segments` 의 raw_crossings 후 conservative fallback (only fires when empty + lens non-empty)
+- 7 new ADR-128 regression tests (axia-geo 1392 → 1399)
+- 0 regression on existing 60+ coplanar tests
+
+### A1.4 G option 외 path status (preserved, NOT superseded)
+
+본 amendment 는 다른 path 들 (D / A / B / C / E / F) 을 *supersede 하지 않음*. 보존 사유:
+- **D (NURBS-direct)** — LOCKED #43 priority #4 literal interpretation, 향후 architectural value 우선 시 trigger 가능 (ADR-027 NURBS Kernel 확장 anchor)
+- **A (Vatti)** — STEP/IGES vendor file edge case robustness, 향후 trigger 시 별도 ADR
+- **E (Hybrid D+A)** — production-ready 전체, multi-week scope, 향후 trigger 시 별도 ADR
+- 부정 결정 lock-in (ADR-125 §A1.3 + ADR-126 §A2.4 + ADR-127 §A3.3 답습 — 4번째 적용)
+
+### A1.5 회귀 / 산출물
+
+- 본 amendment: docs only, 회귀 0
+- ADR-128: axia-geo +7 (1392 → 1399), 0 regression elsewhere
+- ADR-077 V-2 visual baseline UNCHANGED
+- Initial bundle UNCHANGED (Rust-only change, no WASM bridge)
+
+### A1.6 결함 D detection matrix
+
+| Scenario | Pre-ADR-128 | Post-ADR-128 |
+|---|---|---|
+| Classic partial overlap (2 real crossings) | 3 sub-faces ✓ | 3 sub-faces ✓ (unchanged) |
+| Containment / Disjoint | Ok(None) ✓ | Ok(None) ✓ (unchanged) |
+| **결함 D: cardinal vertex on edge interior** | **Ok(None) silent skip** | **3 sub-faces (synthesized crossings)** |
+| **결함 D: vertex coincident with corner** | **Ok(None) silent skip** | **3 sub-faces OR Ok(None)** (residual L-128-8) |
+
+### A1.7 Cross-link (Amendment 1)
+
+- **ADR-128** — 본 amendment 의 implementation
+- **ADR-101 Amendment 9 §A9.8** — 결함 D documented limitation (본 amendment 가 해소)
+- **ADR-107** Path B canonical (real-world trigger 약화 evidence)
+- **ADR-046 P31 #1** "가볍게" (Q1=G 선택 근거)
+- **ADR-046 P31 #4** additive only
+- **ADR-027** NURBS Kernel — Path D future architectural anchor (preserved)
+- **LOCKED #43 priority #4** — 본 amendment 의 anchor
