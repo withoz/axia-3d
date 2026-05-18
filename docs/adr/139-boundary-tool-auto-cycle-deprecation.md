@@ -331,20 +331,82 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
 - ADR-094/097/099/138 (Path Z atomic 패턴 source)
 - ADR-138 (Path B multi-loop 회피 — 흡수 / 공존 결재 Q5)
 
-## 13. Acceptance Log (α spec)
+## 13. Acceptance Log (α spec + Q 결재)
 
 - **2026-05-18 α**: α spec 작성 (PR #101 closure 후 사용자 통찰 누적)
   - Trigger 1: P5.UX.39-45 cascading fixes 패턴 evidence
   - Trigger 2: 사용자 RECT 시연 시 "구멍이 난 부분이 많았다"
   - Trigger 3: 사용자 통찰 "CAD BOUNDARY 방식이 더 안정적"
   - Trigger 4: 시뮬레이션 결과 (5 part) — 자동화 vs Boundary 비교
-  - Scope: α spec only — β implementation 별도 사용자 결재 (Q1~Q5)
-- **(β implementation): TBD** — Q1~Q5 결재 후 별도 PR
+- **2026-05-18 Q 결재 (전체 권장 승인)**:
+  - **Q1 = Path A (Pure Boundary only)** ✅
+  - **Q2 = (a) DrawRect/Circle single-op auto-face 보존** ✅
+    (single op = closed boundary 그리기 + 면 만들기 = 사용자 explicit intent 명확)
+  - **Q3 = (a) 자동 합성 정책 모두 Superseded** ✅
+    (LOCKED #12 P11 / #1 P7 / #41 모두 supersede)
+  - **Q4 = (a) 회귀 자산 60+ tests 재작성** ✅
+    (자동 trigger expect → Boundary 명시 호출 시뮬레이션)
+  - **Q5 = (a) ADR-138 흡수** ✅
+    (Pure Boundary = 자동 trigger 폐기 → multi-loop face 자체 안 생성 →
+     Path B 자연 달성 → ADR-138 Superseded by ADR-139)
+  - **메타-원칙 #14 amendment** 확정: "+ 사용자 의도"
+  - **메타-원칙 #16 신설** 확정: "자동화는 사용자 의도를 미리 알 수 없다"
+- **(β implementation): atomic sub-step Path Z 답습** (multi-month)
+
+## 14. β implementation atomic sub-step plan (B-α ~ B-μ)
+
+**Path Z atomic 패턴** (ADR-094 / ADR-097 / ADR-099 / ADR-138 답습):
+
+| Sub-step | Scope | 비용 |
+|---|---|---|
+| **B-α** | Q 결재 + plan amendment (본 commit) | 완료 |
+| **B-β** | Engine — auto cycle detection 폐기 (`resolve_planar_free_faces` Step 4.99 disable + Step 4.95 second-pass disable + cycle finder 호출 site 제거) | ~3-5일 |
+| **B-γ** | Engine — `Mesh::boundary_from_point(p, plane)` 신규 (planar graph face traversal — 기존 cycle finder 코드 재활용 + 명시 trigger) | ~2-3일 |
+| **B-δ** | WASM bridge — `bridge.boundaryFromClick(x, y, z, normal)` + TS wrapper | ~1일 |
+| **B-ε** | TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair + click → boundary 호출 | ~1-2일 |
+| **B-ζ** | 회귀 자산 update — 60+ tests 재작성 (자동 → 명시 호출 시뮬레이션) | ~1-2주 |
+| **B-η** | ADR-101 / LOCKED #1 P7 / LOCKED #12 P11 supersede docs | ~1일 |
+| **B-θ** | ADR-138 흡수 docs (ADR-138 status: Superseded by ADR-139) + PR #102 closure note | ~30분 |
+| **B-ι** | E2E + 사용자 시연 (구멍 0 검증, ADR-087 K-ζ canonical) | ~1일 |
+| **B-κ** | 메타-원칙 #14 amendment + #16 신설 — CLAUDE.md update | ~30분 |
+| **B-λ** | LOCKED #64 신설 — "Boundary-only Face Synthesis" 정책 | ~30분 |
+| **B-μ** | 3D BOUNDARY (closed shell extraction) Phase 2 별도 ADR | future |
+
+**예상 총 소요**: 4-8주 atomic (회귀 자산 update 가 가장 큼).
+
+## 15. Lock-ins (Path A 확정, Q1~Q5 결재 정합)
+
+### Path A (Pure Boundary) Lock-ins
+
+- **L-139-A-1** LOCKED #12 ADR-025 P11 Superseded — 자동 합성 폐기
+- **L-139-A-2** LOCKED #1 ADR-021 P7 Superseded — containment auto-split 폐기
+- **L-139-A-3** LOCKED #41 ADR-101 Superseded — partial overlap auto-intersect 폐기
+- **L-139-A-4** DrawLine / DrawArc / DrawBezier / DrawPolyline / DrawFreehand = 그리기 only (line + edge 만, face 자동 0)
+- **L-139-A-5** DrawRect / DrawCircle = single explicit op auto-face 보존 (Q2-a)
+  — single op = closed boundary + 면 한 동작 = explicit intent
+- **L-139-A-6** Boundary tool 단축키 = `B` (CAD parity)
+- **L-139-A-7** Algorithm = planar graph face traversal (DCEL 기존 자산)
+- **L-139-A-8** 결과 face = simple (single closed loop, multi-loop 자체 안 생성 → ADR-138 Path B 자연 달성)
+- **L-139-A-9** LOCKED #63 z=0 invariant 보존 (직교)
+- **L-139-A-10** ADR-138 Superseded by ADR-139 (Q5-a 흡수)
+
+### 메타-원칙 amendment Lock-ins
+
+- **L-139-MP14** 메타-원칙 #14 amendment: "면은 닫힌 경계 + **사용자 의도**로부터 유도된다"
+- **L-139-MP16** 메타-원칙 #16 신설: "자동화는 사용자 의도를 미리 알 수 없다. 휴리스틱 자동화는 cascading 부작용의 source."
+
+### LOCKED #64 신설 Lock-ins (B-λ 시)
+
+- **L-139-LOCKED64** LOCKED #64 — "Boundary-only Face Synthesis" 정책:
+  - 모든 face 합성 = 사용자 명시 (Boundary tool 또는 single explicit op)
+  - 자동 cycle detection / auto-split / auto-intersect 모두 폐기
+  - P5.UX.39-45 cascading fixes 패턴 영구 차단
+  - 사용자 시연 시 구멍 0 보장 (자동 fail 없음)
 
 ---
 
-**다음 trigger** (사용자 결재 시 진행):
-- Q1~Q5 결재 매트릭스
-- Path 선택 후 atomic sub-step plan (Path Z 답습)
-- 회귀 자산 영향 audit (60+ tests update plan)
-- ADR-138 과의 관계 명시 결정
+**다음 trigger** (β implementation 진행 시):
+- B-β 진입 (Engine auto cycle detection 폐기) — 별도 PR + 사용자 결재
+- 회귀 자산 60+ tests 재작성 plan audit (B-ζ 진입 전)
+- ADR-138 closure docs (B-θ — PR #102 amendment)
+- 사용자 시연 baseline (B-ι — 구멍 0 검증)
