@@ -261,20 +261,86 @@ single-loop. 자연 작동.
 - ADR-137 α spec (Guidance-only Snap — orthogonal)
 - ADR-087 K-ζ canonical (사용자 시연 게이트 → 본 ADR trigger)
 
-## 10. Acceptance Log (α spec)
+## 10. Acceptance Log (α spec + β plan)
 
-- **2026-05-18**: α spec 작성 (PR #101 closure 후 사용자 통찰 evidence)
+- **2026-05-18 α**: α spec 작성 (PR #101 closure 후 사용자 통찰 evidence)
   - Trigger 1: S4 finding (ring face partial overlap split skip)
   - Trigger 2: 사용자 결재 "정책이 잘못되었네요"
   - Trigger 3: 사용자 통찰 "쉽게 가려면 큰원에서 작은원을 빼고 작은원만
     다시 생성"
   - Scope: α spec only — β implementation 별도 사용자 결재 (Path A vs B)
-- **(β implementation): TBD** — Q1~Q5 결재 후 별도 PR
+- **2026-05-18 amendment (사용자 결재 Q1~Q5)**:
+  - **Q1 = Path B 채택** ✅ (사용자 통찰 "쉽게 가려면" + AxiA 컨셉 "단순/빠름/신속/정확" 정합)
+  - **Q2 = (a) Depth offset 1μm** ✅ (LOCKED #5 1.5μm 미만, runtime 비용 0)
+  - **Q3 = (a) Boolean Difference 도구 (이미 존재)** ✅ (industry standard, "구멍" explicit)
+  - **Q4 = (a) STEP/IGES round-trip 자동 변환** ✅ (import ring → 두 simple, export 역)
+  - **Q5 = (a) 즉시 진행** ✅ (별도 PR per LOCKED #44)
+  - 사용자 추가 reasoning: "연산도 오래걸리고 우리 컨셉인 단순하고 빠르고
+    신속하며 정확한 개념에 정합" (Path B 의 architectural 가치 강화)
+- **(β implementation): atomic sub-step Path Z 답습** (multi-week)
 
----
+## 11. β implementation atomic sub-step plan (B-α ~ B-ι)
 
-**다음 trigger** (사용자 결재 시 진행):
-- Q1: Path A vs Path B 선택
-- 만약 Path B — Q2~Q4 세부 결재
-- β implementation 우선순위 / 일정 결재
-- 회귀 자산 영향 audit (LOCKED #1 P7 11+ tests update plan)
+**Path Z atomic 패턴** (ADR-094 / ADR-097 / ADR-099 답습):
+
+| Sub-step | Scope | 비용 | 의존성 |
+|---|---|---|---|
+| **B-α** | Plan + amendment docs (본 commit) | ~10분 | (이전) α spec |
+| **B-β** | Engine — `add_face_with_holes` 의미 변경 + P7 component-merge resolver path 변경 | ~3-5일 | B-α |
+| **B-γ** | LOCKED #1 P7 회귀 자산 update (11+ tests, ring → 두 simple) | ~2-3일 | B-β |
+| **B-δ** | Render — depth offset 1μm (Q2-a) — Three.js polygonOffset 또는 vertex shader | ~1일 | B-γ |
+| **B-ε** | Selection — depth priority (작은 face 우선) — raycaster 자연 또는 area sort | ~1일 | B-δ |
+| **B-ζ** | STEP/IGES round-trip 변환 (Q4-a) — import ring → 두 simple, export 역 | ~3-5일 | B-ε |
+| **B-η** | Boolean Difference 정책 amendment docs (Q3-a) — 사용자 facing UX guide | ~30분 | B-ζ |
+| **B-θ** | E2E 회귀 + 사용자 시연 (S4 finding 해소 검증, ADR-087 K-ζ canonical) | ~1일 | B-η |
+| **B-ι** | LOCKED #1 amendment + ADR-138 closure | ~30분 | B-θ |
+
+**예상 총 소요**: 2-3주 atomic.
+
+### B-β 첫 atomic step audit
+
+**Engine 변경 scope** (Rust axia-geo):
+- `crates/axia-geo/src/operations/face_synthesis.rs` — Step 4.95 second-pass component-merge resolver 변경
+- `crates/axia-geo/src/mesh.rs::add_face_with_holes` — containment 시 ring + hole 패턴 생성 폐기
+- 새 동작: containment 검출 시 *두 simple face 유지* (inner face 그대로, outer face 의 hole loop 생성 안 함)
+
+**LOCKED #1 P7 회귀 자산 update plan** (11+ tests, axia-core scene::tests):
+- `test_adr021_p7_case_a_inner_first_then_outer` — face count 동일 (2), *의미 변경* (ring + simple → 두 simple)
+- `test_adr021_p7_case_b_outer_first_then_inner` — 동일
+- `test_two_stacked_inner_rects_both_faced` — face count 동일 (2), 의미 변경
+- `test_column_of_inner_rects_all_faced` — face count 동일, 의미 변경
+- `test_complex_overlap_no_missing_faces` — face count 변경 가능 (multi-loop 없음)
+- `test_outer_with_overlapping_extending_rects` — 변경
+- `test_all_rects_have_consistent_winding` — winding 정책 변경 없음
+- `test_outer_rect_drawn_after_inners_keeps_face` — 의미 변경
+- `test_draw_order_independence` — *유지* (P7 핵심 invariant)
+- `test_user_pattern_no_missing_faces` — 의미 변경
+
+핵심 invariant 보존:
+- **그리기 순서 무관성** (P7 의 핵심) — Path B 도 보존
+- **모든 닫힌 경계 = 면** (메타-원칙 #14) — Path B 강화
+- **manifold safety** — Path B 자연 보장 (single-loop only)
+
+### B-γ 후 새 회귀 자산 (Path B 정합 검증)
+
+- `test_path_b_containment_two_simple_faces` — outer + inner = 2 simple (not ring)
+- `test_path_b_no_multi_loop_face_generated` — Mesh 전체에 multi-loop face = 0
+- `test_path_b_op_natural_on_all_faces` — Push/Pull / Boolean / Offset 모두 자연 작동
+- `test_path_b_render_z_fighting_resolved` — depth offset 1μm 적용 확인
+- `test_path_b_selection_depth_priority` — 작은 face 우선
+- `test_path_b_step_iges_roundtrip` — import ring → 두 simple → export ring (의미 보존)
+
+## 12. Lock-ins (β implementation 시 강제, 사용자 결재 정합)
+
+### Path B 확정 Lock-ins (Q1~Q5 결재 정합)
+
+- **L-138-B-1** Containment 정책 변경 — ring + hole 생성 안 함, 두 simple face
+- **L-138-B-2** Multi-loop face deprecation — Mesh 전체에 multi-loop = 0 (invariant)
+- **L-138-B-3** Depth offset 1μm (Q2) — Three.js polygonOffset 또는 vertex shader
+- **L-138-B-4** Boolean Difference = "구멍" explicit op (Q3) — 사용자 facing UX
+- **L-138-B-5** STEP/IGES round-trip 자동 변환 (Q4) — I/O 경계만 변환
+- **L-138-B-6** ADR-016 Q2 / LOCKED #1 P7 amendment / ADR-051 verify_p7_manifold 모두 *deprecated* (Path B 후)
+- **L-138-B-7** LOCKED #1 P7 회귀 자산 11+ tests update (의미 변경, count 보존 가능)
+- **L-138-B-8** 그리기 순서 무관성 (P7 핵심 invariant) 보존 — Path B 도 강제
+- **L-138-B-9** ADR-101 auto-intersect scope 자연 확장 (모든 case 작동, S4 finding 해소)
+- **L-138-B-10** ADR-046 P31 #4 additive only — 사용자 facing 시각 결과 보존 (단순 face 두 개로 보임, 사용자 의도 동일)
