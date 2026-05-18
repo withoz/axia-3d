@@ -220,7 +220,7 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       expect(result.tessellationWarnings.some((w: string) => w.includes('shape null'))).toBe(true);
     });
 
-    it('happy path — single face → THREE.Group with face-0 (front + back mesh)', () => {
+    it('ADR-126 β: single face → merged geometry (faces-front + faces-back) + side-table', () => {
       const importer = StepIgesImporter.getInstance();
       const tri = mockTriangulation(
         [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
@@ -234,14 +234,22 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
         'step',
         'cube.step',
       );
-      expect(result.group.children.length).toBe(1);  // 1 face group
-      const faceGroup = result.group.children[0];
-      expect(faceGroup.name).toBe('face-0');
-      expect(faceGroup.userData.faceIndex).toBe(0);
-      // front + back mesh
-      expect(faceGroup.children.length).toBe(2);
-      expect(faceGroup.children[0].name).toBe('face-0-front');
-      expect(faceGroup.children[1].name).toBe('face-0-back');
+      // ADR-126 β: 2 Mesh (faces-front + faces-back), NOT per-face Group.
+      expect(result.group.children.length).toBe(2);
+      const frontMesh = result.group.children.find((c: any) => c.name === 'faces-front');
+      const backMesh = result.group.children.find((c: any) => c.name === 'faces-back');
+      expect(frontMesh).toBeDefined();
+      expect(backMesh).toBeDefined();
+      // Side-table on parent group (ADR-126 §B L-126-3).
+      const metadata = result.group.userData.faceMetadata as Map<number, any>;
+      expect(metadata).toBeInstanceOf(Map);
+      expect(metadata.size).toBe(1);
+      const meta = metadata.get(0);
+      expect(meta).toBeDefined();
+      expect(meta.faceIndex).toBe(0);
+      expect(meta.vertStart).toBe(0);
+      expect(meta.vertCount).toBe(3);  // 3 verts for triangle
+      expect(meta.indexCount).toBe(3);  // 1 triangle = 3 indices
       // Mock 에서 promoteSurface 가 Unsupported 반환 (DynamicType 없음) →
       // tessellation 자체는 성공하지만 face[N].surface warning 1개. mesh
       // 생성 자체는 영향 없음 (P21.7 graceful).
@@ -249,7 +257,7 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       expect(meshErrors.length).toBe(0);
     });
 
-    it('multi-face — 2 faces → group with face-0 + face-1 (W-δ stable index)', () => {
+    it('ADR-126 β: multi-face — 2 faces in merged geometry + side-table (W-δ stable index)', () => {
       const importer = StepIgesImporter.getInstance();
       const tri1 = mockTriangulation([[0, 0, 0], [1, 0, 0], [0, 1, 0]], [[1, 2, 3]]);
       const tri2 = mockTriangulation([[0, 0, 1], [1, 0, 1], [0, 1, 1]], [[1, 2, 3]]);
@@ -261,9 +269,18 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
         'step',
         'multi.step',
       );
+      // Still 2 children (faces-front + faces-back) regardless of N face.
       expect(result.group.children.length).toBe(2);
-      expect(result.group.children[0].name).toBe('face-0');
-      expect(result.group.children[1].name).toBe('face-1');
+      // Side-table has 2 entries indexed by W-δ stable index 0/1.
+      const metadata = result.group.userData.faceMetadata as Map<number, any>;
+      expect(metadata.size).toBe(2);
+      expect(metadata.get(0)).toBeDefined();
+      expect(metadata.get(1)).toBeDefined();
+      // Second face's vertStart should be after first face's verts.
+      expect(metadata.get(0).vertStart).toBe(0);
+      expect(metadata.get(0).vertCount).toBe(3);
+      expect(metadata.get(1).vertStart).toBe(3);
+      expect(metadata.get(1).vertCount).toBe(3);
     });
 
     it('group name reflects format + filename', () => {
@@ -327,7 +344,7 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       return occt;
     }
 
-    it('E-γ: face + edges → group has face-N + edges sub-group', () => {
+    it('E-γ: face + edges → group has faces-front/back + edges sub-group (ADR-126 β)', () => {
       const importer = StepIgesImporter.getInstance();
       const tri = mockTriangulation(
         [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
@@ -345,13 +362,15 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       const result = (importer as any)._convertToThreeGroup(
         occt, {}, 'step', 'tri.step',
       );
-      // group: face-0 + edges sub-group
-      expect(result.group.children.length).toBe(2);
-      const faceGroup = result.group.children.find((c: any) => c.name === 'face-0');
+      // ADR-126 β: group has faces-front + faces-back + edges sub-group = 3 children.
+      expect(result.group.children.length).toBe(3);
+      const frontMesh = result.group.children.find((c: any) => c.name === 'faces-front');
+      const backMesh = result.group.children.find((c: any) => c.name === 'faces-back');
       const edgesGroup = result.group.children.find((c: any) => c.name === 'edges');
-      expect(faceGroup).toBeDefined();
+      expect(frontMesh).toBeDefined();
+      expect(backMesh).toBeDefined();
       expect(edgesGroup).toBeDefined();
-      // Edges sub-group has 3 LineSegments (W-δ stable indices 0/1/2)
+      // Edges sub-group UNCHANGED (ADR-126 §B L-126-5) — 3 LineSegments.
       expect(edgesGroup.children.length).toBe(3);
       expect(edgesGroup.children[0].name).toBe('edge-0');
       expect(edgesGroup.children[1].name).toBe('edge-1');
@@ -359,7 +378,7 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       expect(edgesGroup.children[0].userData.edgeIndex).toBe(0);
     });
 
-    it('E-γ: zero edges → no edges sub-group (graceful)', () => {
+    it('E-γ: zero edges → only faces-front/back, no edges sub-group (ADR-126 β)', () => {
       const importer = StepIgesImporter.getInstance();
       const tri = mockTriangulation(
         [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
@@ -370,14 +389,15 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       const result = (importer as any)._convertToThreeGroup(
         occt, {}, 'step', 'noedges.step',
       );
-      // Only face-0, no edges sub-group
-      expect(result.group.children.length).toBe(1);
-      expect(result.group.children[0].name).toBe('face-0');
+      // ADR-126 β: 2 children (faces-front + faces-back), no edges sub-group.
+      expect(result.group.children.length).toBe(2);
+      expect(result.group.children.find((c: any) => c.name === 'faces-front')).toBeDefined();
+      expect(result.group.children.find((c: any) => c.name === 'faces-back')).toBeDefined();
       const edgesGroup = result.group.children.find((c: any) => c.name === 'edges');
       expect(edgesGroup).toBeUndefined();
     });
 
-    it('E-γ: per-edge null Polygon3D → others continue (P21.7)', () => {
+    it('E-γ: per-edge null Polygon3D → others continue (P21.7) [ADR-126 β edges unchanged]', () => {
       const importer = StepIgesImporter.getInstance();
       const tri = mockTriangulation(
         [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
@@ -397,7 +417,7 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       );
       const edgesGroup = result.group.children.find((c: any) => c.name === 'edges');
       expect(edgesGroup).toBeDefined();
-      // 2 edges (edge[1] skipped due to null Polygon3D)
+      // 2 edges (edge[1] skipped due to null Polygon3D) — ADR-084 E-γ unchanged.
       expect(edgesGroup.children.length).toBe(2);
       expect(edgesGroup.children[0].userData.edgeIndex).toBe(0);
       expect(edgesGroup.children[1].userData.edgeIndex).toBe(2);  // W-δ stable index preserved
@@ -431,19 +451,34 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
   // ADR-086 O-δ — injectIntoAxia method (axia DCEL injection)
   // ────────────────────────────────────────────────────────────────────
 
-  describe('ADR-086 O-δ — injectIntoAxia', () => {
+  describe('ADR-086 O-δ — injectIntoAxia (ADR-126 β side-table refactor)', () => {
     /* eslint-disable @typescript-eslint/no-explicit-any */
 
-    function makeFaceGroup(
-      faceIndex: number,
-      boundaryPolygon: Float32Array,
-      surface?: any,
+    /**
+     * ADR-126 β helper: build a Group with `userData.faceMetadata`
+     * side-table populated for N faces. Replaces previous `makeFaceGroup`
+     * which built per-face Group children (no longer used post-ADR-126).
+     */
+    function makeGroupWithMetadata(
+      entries: Array<{ faceIndex: number; boundaryPolygon: Float32Array; surface?: any }>,
     ): THREE.Group {
       const g = new THREE.Group();
-      g.name = `face-${faceIndex}`;
-      g.userData.faceIndex = faceIndex;
-      g.userData.boundaryPolygon = boundaryPolygon;
-      if (surface) g.userData.surface = surface;
+      const metadata = new Map<number, any>();
+      let vertOffset = 0;
+      for (const e of entries) {
+        const vertCount = e.boundaryPolygon.length / 3;
+        metadata.set(e.faceIndex, {
+          faceIndex: e.faceIndex,
+          boundaryPolygon: e.boundaryPolygon,
+          surface: e.surface,
+          vertStart: vertOffset,
+          vertCount,
+          indexStart: 0,
+          indexCount: 0,
+        });
+        vertOffset += vertCount;
+      }
+      g.userData.faceMetadata = metadata;
       return g;
     }
 
@@ -457,9 +492,10 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
         },
       };
 
-      const group = new THREE.Group();
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      group.add(makeFaceGroup(0, positions /* no surface */));
+      const group = makeGroupWithMetadata([
+        { faceIndex: 0, boundaryPolygon: positions /* no surface */ },
+      ]);
 
       const result = importer.injectIntoAxia(bridge, group);
       expect(result.faceIndexToAxiaId.size).toBe(1);
@@ -494,8 +530,9 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
         origin: [5, 5, 0],
         normal: [0, 0, 1],
       };
-      const group = new THREE.Group();
-      group.add(makeFaceGroup(0, positions, surface));
+      const group = makeGroupWithMetadata([
+        { faceIndex: 0, boundaryPolygon: positions, surface },
+      ]);
 
       const result = importer.injectIntoAxia(bridge, group);
       expect(result.faceIndexToAxiaId.size).toBe(1);
@@ -508,27 +545,32 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       expect(calledArgs.basisU[2]).toBeCloseTo(0);
     });
 
-    it('axiaFaceId stored in userData on success', () => {
+    it('axiaFaceId stored in side-table FaceMetadata on success (ADR-126 β)', () => {
       const importer = StepIgesImporter.getInstance();
       const bridge = { injectExternalFaceNoSurface: () => 7 };
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const faceGroup = makeFaceGroup(3, positions);
-      const group = new THREE.Group();
-      group.add(faceGroup);
+      const group = makeGroupWithMetadata([
+        { faceIndex: 3, boundaryPolygon: positions },
+      ]);
 
       importer.injectIntoAxia(bridge, group);
-      expect(faceGroup.userData.axiaFaceId).toBe(7);
+      // ADR-126 β: axiaFaceId stored in side-table entry, NOT per-face Group userData.
+      const metadata = group.userData.faceMetadata as Map<number, any>;
+      expect(metadata.get(3).axiaFaceId).toBe(7);
     });
 
     it('graceful — missing boundaryPolygon → skip face + warning', () => {
       const importer = StepIgesImporter.getInstance();
       const bridge = { injectExternalFaceNoSurface: () => 0 };
+      // Build group with metadata entry but no boundaryPolygon.
       const group = new THREE.Group();
-      const faceGroup = new THREE.Group();
-      faceGroup.name = 'face-0';
-      faceGroup.userData.faceIndex = 0;
-      // no boundaryPolygon
-      group.add(faceGroup);
+      const metadata = new Map<number, any>();
+      metadata.set(0, {
+        faceIndex: 0,
+        boundaryPolygon: undefined,  // missing
+        vertStart: 0, vertCount: 0, indexStart: 0, indexCount: 0,
+      });
+      group.userData.faceMetadata = metadata;
 
       const result = importer.injectIntoAxia(bridge, group);
       expect(result.faceIndexToAxiaId.size).toBe(0);
@@ -539,8 +581,9 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       const importer = StepIgesImporter.getInstance();
       const bridge = { injectExternalFaceNoSurface: () => -1 };
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const group = new THREE.Group();
-      group.add(makeFaceGroup(0, positions));
+      const group = makeGroupWithMetadata([
+        { faceIndex: 0, boundaryPolygon: positions },
+      ]);
 
       const result = importer.injectIntoAxia(bridge, group);
       expect(result.faceIndexToAxiaId.size).toBe(0);
@@ -551,8 +594,9 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       const importer = StepIgesImporter.getInstance();
       const bridge = {};  // no inject methods
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const group = new THREE.Group();
-      group.add(makeFaceGroup(0, positions));
+      const group = makeGroupWithMetadata([
+        { faceIndex: 0, boundaryPolygon: positions },
+      ]);
 
       const result = importer.injectIntoAxia(bridge, group);
       expect(result.faceIndexToAxiaId.size).toBe(0);
@@ -567,10 +611,11 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       };
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const group = new THREE.Group();
-      group.add(makeFaceGroup(0, positions));
-      group.add(makeFaceGroup(1, positions));
-      group.add(makeFaceGroup(2, positions));
+      const group = makeGroupWithMetadata([
+        { faceIndex: 0, boundaryPolygon: positions },
+        { faceIndex: 1, boundaryPolygon: positions },
+        { faceIndex: 2, boundaryPolygon: positions },
+      ]);
 
       const result = importer.injectIntoAxia(bridge, group);
       expect(result.faceIndexToAxiaId.size).toBe(3);
@@ -579,7 +624,7 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       expect(result.faceIndexToAxiaId.get(2)).toBe(102);
     });
 
-    it('non-face children skipped (e.g., edges sub-group)', () => {
+    it('ADR-126 β: edges sub-group as child does NOT contribute faces (side-table is SSOT)', () => {
       const importer = StepIgesImporter.getInstance();
       let callCount = 0;
       const bridge = {
@@ -590,14 +635,29 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       };
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const group = new THREE.Group();
-      group.add(makeFaceGroup(0, positions));
+      const group = makeGroupWithMetadata([
+        { faceIndex: 0, boundaryPolygon: positions },
+      ]);
+      // Add edges sub-group as a child — should NOT affect inject (side-table is SSOT).
       const edgesGroup = new THREE.Group();
-      edgesGroup.name = 'edges';  // E-γ edges sub-group
+      edgesGroup.name = 'edges';
       group.add(edgesGroup);
 
       importer.injectIntoAxia(bridge, group);
-      expect(callCount).toBe(1);  // Only face-0 processed, edges skipped
+      expect(callCount).toBe(1);  // Only the 1 face in side-table is processed.
+    });
+
+    it('ADR-126 β: missing faceMetadata side-table → graceful warning', () => {
+      const importer = StepIgesImporter.getInstance();
+      const bridge = { injectExternalFaceNoSurface: () => 1 };
+      // Group with no faceMetadata (legacy / non-ADR-126 group).
+      const group = new THREE.Group();
+
+      const result = importer.injectIntoAxia(bridge, group);
+      expect(result.faceIndexToAxiaId.size).toBe(0);
+      expect(
+        result.warnings.some((w) => w.includes('faceMetadata')),
+      ).toBe(true);
     });
 
     /* eslint-enable @typescript-eslint/no-explicit-any */

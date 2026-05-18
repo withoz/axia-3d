@@ -93,34 +93,46 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
         let axiaFaceCount = 0;
         let injectFaceMappingSize = 0;
         let firstFaceAxiaId: number | null = null;
+        let faceMetadataSize = 0;
         if (bridge && typeof bridge.injectExternalFaceNoSurface === 'function') {
           const injectResult = importer.injectIntoAxia(bridge, importResult.group);
           injectFaceMappingSize = injectResult.faceIndexToAxiaId.size;
           axiaFaceCount = bridge.getStats?.()?.faces ?? 0;
-          // First face's userData.axiaFaceId (O-δ wiring)
-          const firstFaceGroup = importResult.group?.children?.find(
-            (c: { name?: string }) => c?.name?.startsWith('face-'),
-          );
-          firstFaceAxiaId = firstFaceGroup?.userData?.axiaFaceId ?? null;
+          // ADR-126 β: faceMetadata side-table is SSOT for per-face data.
+          // Per-face Group children no longer exist (replaced by faces-front
+          // + faces-back merged Meshes). First face's axiaFaceId via map.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const metadata = (importResult.group?.userData as any)?.faceMetadata as
+            Map<number, { axiaFaceId?: number }> | undefined;
+          faceMetadataSize = metadata?.size ?? 0;
+          if (metadata && metadata.size > 0) {
+            const firstMeta = metadata.values().next().value;
+            firstFaceAxiaId = firstMeta?.axiaFaceId ?? null;
+          }
         }
 
         // Step 4: extract verifiable invariants
+        // ADR-126 β: child structure changed — faces-front + faces-back +
+        // optional edges sub-group (replaces N face-{N} Groups).
+        const childNames = (importResult.group?.children ?? []).map(
+          (c: { name?: string }) => c?.name ?? null,
+        );
         return {
           ok: true,
           format: importResult.format,
           faceCount: importResult.faceCount,
           edgeCount: importResult.edgeCount,
           groupChildrenCount: importResult.group?.children?.length ?? 0,
-          firstChildName: importResult.group?.children?.[0]?.name ?? null,
-          firstChildType: importResult.group?.children?.[0]?.type ?? null,
+          childNames,  // ADR-126 β: should include 'faces-front', 'faces-back'
           traversalFaceCount: importResult.traversal?.faces?.length ?? 0,
           traversalEdgeCount: importResult.traversal?.edges?.length ?? 0,
           warningsCount: importResult.warnings?.length ?? 0,
           warningsSample: importResult.warnings?.slice(0, 5) ?? [],
-          // ADR-086 O-δ ground truth invariants
+          // ADR-086 O-δ + ADR-126 β ground truth invariants
           injectFaceMappingSize,
           axiaFaceCount,
           firstFaceAxiaId,
+          faceMetadataSize,
           bridgeAvailable: !!bridge,
         };
       } catch (e) {
@@ -136,15 +148,17 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      // **Ground truth invariants** (ADR-083 T-α §3.4 spec):
+      // **Ground truth invariants** (ADR-083 T-α §3.4 spec, ADR-126 β refactor):
       expect(result.format).toBe('step');
       expect(result.faceCount).toBeGreaterThanOrEqual(1);
       expect(result.traversalFaceCount).toBeGreaterThanOrEqual(1);
-      expect(result.groupChildrenCount).toBeGreaterThanOrEqual(1);
-      // First child = face-N Group (T-γ wiring)
-      if (result.firstChildName) {
-        expect(result.firstChildName).toMatch(/^face-/);
-      }
+      expect(result.groupChildrenCount).toBeGreaterThanOrEqual(2);
+      // ADR-126 β: top-level children include 'faces-front' + 'faces-back'
+      // (replaces per-face 'face-{N}' Groups — drawcalls collapsed N×2 → 2).
+      expect(result.childNames).toContain('faces-front');
+      expect(result.childNames).toContain('faces-back');
+      // ADR-126 β: faceMetadata side-table has at least 1 entry (corpus = 1 quad).
+      expect(result.faceMetadataSize).toBeGreaterThanOrEqual(1);
 
       // ADR-086 O-ε — axia DCEL injection ground truth invariants
       expect(result.bridgeAvailable).toBe(true);
@@ -152,7 +166,7 @@ test.describe('ADR-083 T-δ — STEP corpus real round-trip (slow channel)', () 
       expect(result.injectFaceMappingSize).toBeGreaterThanOrEqual(1);
       // axia engine FaceCount >= 1 (DCEL inject succeeded)
       expect(result.axiaFaceCount).toBeGreaterThanOrEqual(1);
-      // First face's userData.axiaFaceId is set (O-δ wiring)
+      // ADR-126 β: first face's axiaFaceId from side-table (not per-face userData).
       expect(result.firstFaceAxiaId).not.toBeNull();
       expect(typeof result.firstFaceAxiaId).toBe('number');
     }
