@@ -19,6 +19,7 @@ import { moveXiaCapability } from './move_xia.js';
 import { listGroupsCapability } from './list_groups.js';
 import { getFaceInfoCapability } from './get_face_info.js';
 import { getEdgeInfoCapability } from './get_edge_info.js';
+import { mergeCoplanarContainingCapability } from './merge_coplanar_containing.js';
 import type { CapabilityHandler } from './types.js';
 import { isKnownCapability } from '../tiers.js';
 
@@ -39,6 +40,7 @@ export const ALL_CAPABILITY_HANDLERS: ReadonlyArray<CapabilityHandler<any, any>>
   booleanSubtractCapability,
   filletEdgeCapability,
   moveXiaCapability,
+  mergeCoplanarContainingCapability,
 ];
 
 const REGISTRY = new Map<string, CapabilityHandler<any, any>>();

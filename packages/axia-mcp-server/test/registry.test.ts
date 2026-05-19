@@ -22,6 +22,7 @@ describe('capability handler registry', () => {
   it('current registry surface (Stage 3 + #2 + Tier 2 expansion)', () => {
     // Adding/removing handlers requires updating this list AND the
     // tier declarations in tiers.ts. Drift between the two = bug.
+    // ADR-101 H-β — `merge_coplanar_containing` (Tier 2) added.
     expect(listRegisteredCapabilities().sort()).toEqual([
       'boolean_subtract',
       'draw_circle',
@@ -34,6 +35,7 @@ describe('capability handler registry', () => {
       'get_scene_summary',
       'list_groups',
       'list_xias',
+      'merge_coplanar_containing',
       'move_xia',
       'push_pull',
     ]);

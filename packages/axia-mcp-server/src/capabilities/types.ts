@@ -67,6 +67,17 @@ export interface EngineInstance {
   // ─── Tier 0 read additions ─────────────────────────────────────
   /** Face area in mm². */
   faceArea(faceIdRaw: number): number;
+  /**
+   * ADR-006 C1 Phase F — Merge a coplanar inner face into an outer face
+   * as a hole loop. Returns the new merged face ID on success, -1 on
+   * failure (lastError set). ADR-101 H-β / LOCKED #40 boundary op for
+   * headless hole synthesis.
+   */
+  mergeCoplanarContaining(
+    outerFaceRaw: number,
+    innerFaceRaw: number,
+    angleTolDeg: number,
+  ): number;
   /** True if face belongs to a closed solid (Volume). */
   isFaceInVolume(faceIdRaw: number): boolean;
   /** Number of inner loops (holes) on the face. */

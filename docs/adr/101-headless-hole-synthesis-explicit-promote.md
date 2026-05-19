@@ -220,19 +220,53 @@ ADR-041 P26.8 surface drift guard 회귀 자산 갱신 — 33 capabilities
 - **Cargo sweep**: axia-geo 1256 → **1259 PASS** (+3), 절대 #[ignore]
   금지 3/3 준수.
 
-### H-β ~ H-ε (remaining)
+### H-β (본 commit) — MCP capability `merge_coplanar_containing` Tier 2
+
+- **commit**: 본 commit (Tier 2 + handler + Zod + drift guard + tests)
+- **변경 파일** (5):
+  - `packages/axia-mcp-server/src/capabilities/merge_coplanar_containing.ts`
+    (신규) — Zod input/output schema + handler 본체
+  - `packages/axia-mcp-server/src/capabilities/index.ts` — registry 등록
+  - `packages/axia-mcp-server/src/capabilities/types.ts` —
+    `EngineInstance.mergeCoplanarContaining(outer, inner, tol_deg) -> number`
+    method signature 추가
+  - `packages/axia-mcp-server/src/tiers.ts` — `TIER_2_MODIFY` 에
+    `merge_coplanar_containing` 추가 (ADR-041 P26.1 surface 32 → 33)
+  - `packages/axia-mcp-server/test/tiers.test.ts` — Tier 2 expected list 갱신
+  - `packages/axia-mcp-server/test/registry.test.ts` — registry expected list
+    갱신 (Stage 3 + #2 + Tier 2 expansion 의 14 → 15)
+- **신규 회귀 자산** (`packages/axia-mcp-server/test/merge_coplanar_containing.test.ts`):
+  - **Mock-based dispatch 5**:
+    * dispatchable when Tier 2 enabled
+    * blocked when Tier 2 disabled (default [0, 1])
+    * forwards inputs verbatim
+    * engine `-1` sentinel → thrown Error
+    * default `angle_tol_deg = 1.0` when omitted
+  - **Real WASM e2e 2** (skipIf no Node build):
+    * rect + inner circle → dispatch → 1 face / 1 hole loop / invariants 0
+    * swap (small outer + big inner) → throws
+- **Schema preservation** (ADR-041 P26.2): `merge_coplanar_containing` 은
+  *new capability*, schema_version 은 MINOR bump 후보 (server tolerates
+  new capabilities — handshake `^MAJOR.MINOR` 의 caret semantics 자연
+  허용). schema bump 별도 amendment commit 권장.
+- **P3 페르소나 unlock**: AI agent 가 headless hole 합성 의도 직접 표현
+  가능 — `draw_rect` + `draw_circle` + `merge_coplanar_containing` 의
+  3-call sequence.
+- **Cargo sweep**: vitest @axia/mcp-server **174/174 PASS** (이전 167
+  + 7 신규), 절대 #[ignore] 금지 7/7 준수.
+
+### H-ε (remaining)
 
 | Sub | 목표 | 예상 회귀 | 비고 |
 |-----|------|----------|------|
-| H-β | MCP capability `merge_coplanar_containing` Tier 2 — handler + Zod + surface drift guard | vitest +3 (capability surface) | ADR-041 P26.1 32 → 33 capabilities, P26.8 drift guard 갱신 |
-| H-ε | Playwright E2E UI tool 경로 ↔ headless 의미 등가 검증 | Playwright +2 | ADR-075 E.4 인프라 활용 |
+| H-ε | Playwright E2E UI tool 경로 ↔ headless 의미 등가 검증 | Playwright +2 | ADR-075 E.4 인프라 활용. 메타-원칙 #15 explicit verification |
 
-**누적 H-α ~ H-η (현재)**: docs +1 ADR + CLAUDE.md (LOCKED #40 +
-메타-원칙 #15) + README + memory pointer = docs +4. 회귀: vitest +4
-(H-γ) + axia-geo +3 (H-δ) = **+7**, 절대 #[ignore] 금지 7/7 준수.
+**누적 H-α ~ H-β (현재)**: docs +1 ADR + CLAUDE.md (LOCKED #40 +
+메타-원칙 #15) + README + memory pointer = docs +4. 회귀: vitest +11
+(H-γ +4, H-β +7) + axia-geo +3 (H-δ) = **+14**, 절대 #[ignore] 금지
+14/14 준수.
 
-**남은 회귀 예상 (H-β + H-ε 시)**: +5 → 총 **+12** (모두 절대
-#[ignore] 금지 정책 강제).
+**남은 회귀 예상 (H-ε 시)**: +2 → 총 **+16**.
 
 ---
 
