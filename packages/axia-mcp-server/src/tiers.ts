@@ -51,6 +51,8 @@ export const TIER_2_MODIFY = [
   'boolean_intersect',
   'fillet_edge',
   'chamfer_edge',
+  // ADR-101 H-β / LOCKED #40 — headless hole synthesis boundary op.
+  'merge_coplanar_containing',
 ] as const;
 
 /**

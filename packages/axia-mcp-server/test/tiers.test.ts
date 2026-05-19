@@ -99,6 +99,7 @@ describe('ADR-041 P26.8 — mcp_capability_surface_matches_adr_041_p26_1', () =>
   });
 
   it('Tier 2 contains exactly the modificative capabilities', () => {
+    // ADR-101 H-β — `merge_coplanar_containing` added (LOCKED #40).
     expect([...TIER_2_MODIFY].sort()).toEqual(
       [
         'boolean_intersect',
@@ -106,6 +107,7 @@ describe('ADR-041 P26.8 — mcp_capability_surface_matches_adr_041_p26_1', () =>
         'boolean_union',
         'chamfer_edge',
         'fillet_edge',
+        'merge_coplanar_containing',
         'move_xia',
         'offset_face',
         'push_pull',
