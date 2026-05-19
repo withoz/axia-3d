@@ -25,6 +25,15 @@ import {
 } from '../helpers/boolean-fixtures';
 
 test.describe('ADR-077 V-2 — Group A/B color outline visuals', () => {
+  // ADR-102 R-θ-skip — Linux baseline 생성이 Three.js render-loop
+  // stability 문제로 차단 (PR-111/112 update-visual-baselines workflow
+  // 결과 audit). 별도 트랙 (ADR-103 가칭 Three.js stability hook) 결재
+  // 시까지 Linux 만 skip.
+  test.skip(
+    process.platform === 'linux',
+    'ADR-102 R-θ — Linux baseline pending (ADR-103 Three.js stability)',
+  );
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBridgeReady(page);
