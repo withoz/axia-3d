@@ -190,16 +190,95 @@ chain + libs 명시화 이후 test mock 의 fixture shape 가 stale.
 - **TS strict typecheck**: `occtRuntime.test.ts` errors 0 (이전 1).
   나머지 typecheck errors 는 R-γ / R-δ scope (별도 트랙).
 
-### R-γ ~ R-δ (remaining)
+### R-γ (본 commit) — OCCT mock fixture 갱신
 
-| Sub | 잔존 fail count | 비고 |
-|-----|---------------|------|
-| R-γ | StepIgesImporter.test.ts:319,322 + occtBrepTraversal.test.ts:199~216 = ~6 sites | OCCT.js mock fixture 갱신 |
-| R-δ | WasmBridge.test.ts 8 sites (1447, 1450, 1728~30, 2351~53, 2363) + WasmBridge.ts:1851 = 9 sites | vitest mock 타이핑 + cast 정정 |
+- **commit**: 본 commit (`web/src/import/occtBrepTraversal.test.ts` +
+  `web/src/import/StepIgesImporter.test.ts`)
+- **Root cause confirmed**: 두 test 의 `mockOcctWithShape /
+  mockOcctWithFaces` 반환 타입이 좁아서 helper 들이 `BRep_Tool /
+  BRepTools / Polygon3D / TopAbs_EDGE` 등을 동적 추가할 때 TS strict
+  TS2339 / TS2353 reject.
+- **Fix path applied**:
+  - 두 함수의 return type 을 `Record<string, any>` 로 명시 →
+    augmentation 허용
+  - Mock fixture 자체는 변경 없음 (구조적 mock 유지)
+- **Sweep**: occtBrepTraversal / StepIgesImporter 두 파일 TS strict 0
+  errors.
 
-CI workflow 회복 전망:
-- **MCP Server (ADR-041)**: R-β closure 로 즉시 회복 예상
-- **CI (Web E2E) / Build AXiA 3D**: R-γ + R-δ closure 필요 (R-ε 단독으로는 부분 회복)
+### R-δ (본 commit) — vitest mock 타이핑 + WasmBridge.ts cast
+
+- **commit**: 본 commit (`web/src/bridge/WasmBridge.test.ts` 4 sites +
+  `web/src/bridge/WasmBridge.ts:1851` cast)
+- **Root cause confirmed**:
+  - `vi.fn(() => N)` 의 generic inference 가 `() => N` (zero arg) 로
+    type 됨 → `fn.mock.calls[0]` 가 `[]` 빈 tuple → indexed access
+    `args[i]` 모두 TS2493 reject (9 sites)
+  - `WasmBridge.ts:1851` 의 `(fn as (pts: Float64Array, ...) => number)`
+    cast 가 TS2352 — `(...args: number[]) => number` 에서 Float64Array
+    first arg 로 직접 cast 불가
+- **Fix path applied**:
+  - 4 `vi.fn(...)` 호출에 explicit signature type
+    (`vi.fn<(name: string, faces: Uint32Array) => number>(...)` 등)
+    추가
+  - `mock.calls[0]!` non-null assertion (vitest API 의 inferred shape
+    정합)
+  - `WasmBridge.ts:1851` cast 를 `fn as unknown as (...) => number`
+    로 정정 (TS strict 권장 패턴)
+- **Sweep**: WasmBridge.test.ts / WasmBridge.ts TS strict 0 errors.
+
+### R-ζ (본 commit, 확장 scope) — 추가 typecheck cleanup
+
+R-γ + R-δ 진행 중 audit 외부 추가 errors 8 sites 발견 (이전 audit 가
+WasmBridge / occt errors 에 가려서 미감지). 동일 PR 에 batch — CI 완전
+green 목표 정합 (사용자 권장 (c) 의도 답습).
+
+- **8 sites 분류**:
+  - `@axia/action-catalog` workspace 패키지의 `dist/` 가 web/'s
+    npm ci 시 자동 빌드 안 됨 → `CapabilityExplorerPanel.ts:25`
+    module not found + 종속 implicit any 3 sites (main.ts:703,
+    CapabilityExplorerPanel.test.ts:212, CapabilityExplorerPanel.ts:200,
+    317)
+  - `InitialScene.test.ts:11,12,47,48` — legacy `drawRect` / `drawCircle`
+    참조 (ADR-087 K-ζ 의 web/src/bridge 의 자연 변경 — R-β 의 자매 site)
+  - `LayeredMaterialDialog.test.ts:55` — `ReturnType<typeof vi.spyOn>`
+    generic empty-args signature vs 실제 `prompt` spy variance reject
+    (vitest 3.x bivariance)
+- **Fix path applied**:
+  - `web/package.json` 에 `build:action-catalog` 보조 script 추가
+    + `prebuild` / `pretypecheck` / `pretest` 훅으로 일관 호출 (workspace
+    file: dep 의 dist 자동 생성)
+  - `InitialScene.test.ts` mock entries 와 assertions 모두 `_AsShape`
+    variants 로 마이그레이션 (R-β 패턴 답습)
+  - `LayeredMaterialDialog.test.ts` 의 `promptSpy: any` (jsdom prompt
+    spy 의 한정 surface 정합)
+- **Sweep**: full vitest 1828/1828 PASS + 1 skipped (이전 1827 + 1
+  fail). vite build 정상 (724.34 KB three-loaders + 5,368.70 KB
+  opencascade lazy chunk).
+
+### 전체 회복 결과
+
+- **`npm run typecheck`** (web/): TS strict 0 errors
+- **`npm test`** (web/): vitest 116/116 files, **1828/1828 tests PASS**
+  + 1 skipped (pre-existing)
+- **`npm run build`** (web/): vite 정상 (29.83s)
+- **`cargo test --package axia-geo --lib`**: **1259 PASS**, 0 failed,
+  0 ignored
+- **`npm test` (@axia/mcp-server)**: **167/167 PASS**
+
+**CI workflow 회복 전망** (PR merge 후):
+- **MCP Server (ADR-041)**: 이미 R-β PR-107 closure 로 회복 ✅
+- **Build AXiA 3D**: 본 PR 로 회복 예상 (typecheck + vitest + build 정상)
+- **CI (Web E2E)**: 본 PR 로 typecheck 부분 회복 예상.
+  Playwright E2E 별도 분석 필요 (회귀 자체 통과 시 확정)
+
+### 누적 (R-α ~ R-ζ)
+
+- ADR-102 R-α (audit + LOCKED #41 entry) — PR-106 merged
+- ADR-102 R-β + R-ε (MCP `_as_shape` + `@types/node`) — PR-107 merged
+- ADR-102 R-γ + R-δ + R-ζ (OCCT mock + vitest typing + workspace
+  build hook + drift cleanup) — 본 commit
+
+4-Track audit 100% closure.
 
 ---
 

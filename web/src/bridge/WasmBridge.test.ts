@@ -1439,12 +1439,13 @@ describe('WasmBridge', () => {
   // ════════════════════════════════════════════════════════════════════════
   describe('ADR-050 P-4 Shape WASM bridge wrappers', () => {
     it('createShape forwards name + Uint32Array(faceIds), returns id', () => {
-      const fn = vi.fn(() => 42);
+      // ADR-102 R-δ — explicit typed mock for TS strict indexed access.
+      const fn = vi.fn<(name: string, faces: Uint32Array) => number>(() => 42);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = { createShape: fn };
       const id = bridge.createShape('Rect', [10, 20, 30]);
       expect(id).toBe(42);
-      const [name, faces] = fn.mock.calls[0];
+      const [name, faces] = fn.mock.calls[0]!;
       expect(name).toBe('Rect');
       expect(faces).toBeInstanceOf(Uint32Array);
       expect(Array.from(faces)).toEqual([10, 20, 30]);
@@ -1717,14 +1718,15 @@ describe('WasmBridge', () => {
     });
 
     it('drawLineAsShape forwards to engine.draw_line_as_shape', () => {
-      const fn = vi.fn(() => 11);
+      // ADR-102 R-δ — explicit typed mock for TS strict indexed access.
+      const fn = vi.fn<(...args: number[]) => number>(() => 11);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = { draw_line_as_shape: fn };
       const id = bridge.drawLineAsShape(0, 0, 0, 1, 0, 0);
       expect(id).toBe(11);
       expect(fn).toHaveBeenCalledTimes(1);
       // Verify nx=ny=nz=0 default propagated for free-edge mode.
-      const args = fn.mock.calls[0];
+      const args = fn.mock.calls[0]!;
       expect(args[6]).toBe(0); // nx
       expect(args[7]).toBe(0); // ny
       expect(args[8]).toBe(0); // nz
@@ -2341,26 +2343,28 @@ describe('WasmBridge', () => {
     });
 
     it('setLayeredChannel uses NaN sentinel for missing rotation + empty string for label', () => {
-      const fn = vi.fn(() => true);
+      // ADR-102 R-δ — explicit typed mock for TS strict indexed access.
+      const fn = vi.fn<(...args: (number | string)[]) => boolean>(() => true);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = { setLayeredChannel: fn };
       bridge.setLayeredChannel(50, 'albedo', {
         dataUrl: 'd:a', projection: 'planar', scale: 0.001,
       });
-      const call = fn.mock.calls[0];
+      const call = fn.mock.calls[0]!;
       expect(call[3]).toBe(0); // projection planar = 0
       expect(Number.isNaN(call[5] as number)).toBe(true); // rotation NaN
       expect(call[6]).toBe(''); // label empty
     });
 
     it('setLayeredChannel maps cylindrical projection to 2', () => {
-      const fn = vi.fn(() => true);
+      // ADR-102 R-δ — explicit typed mock for TS strict indexed access.
+      const fn = vi.fn<(...args: (number | string)[]) => boolean>(() => true);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (bridge as any).engine = { setLayeredChannel: fn };
       bridge.setLayeredChannel(50, 'roughness', {
         dataUrl: 'd', projection: 'cylindrical', scale: 0.001,
       });
-      expect(fn.mock.calls[0][3]).toBe(2);
+      expect(fn.mock.calls[0]![3]).toBe(2);
     });
 
     it('clearLayeredChannel calls engine + markDirty', () => {

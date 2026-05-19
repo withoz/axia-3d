@@ -8,8 +8,9 @@ function mockDeps(): InitialSceneDeps {
     bridge: {
       create_cylinder: vi.fn().mockReturnValue(0),
       faceCount: vi.fn().mockReturnValue(0),
-      drawRect: vi.fn().mockReturnValue(0),
-      drawCircle: vi.fn().mockReturnValue(0),
+      // ADR-087 K-ζ — `drawRect`/`drawCircle` legacy bridge methods removed.
+      drawRectAsShape: vi.fn().mockReturnValue(0),
+      drawCircleAsShape: vi.fn().mockReturnValue(0),
       pushPull: vi.fn(),
       create_sphere: vi.fn().mockReturnValue(1),
       create_cone: vi.fn().mockReturnValue(2),
@@ -44,8 +45,10 @@ describe('InitialScene', () => {
       expect((deps.bridge.create_sphere as any).mock.calls.length).toBe(0);
       expect((deps.bridge.revolveProfile as any).mock.calls.length).toBe(0);
       expect((deps.bridge.sweepProfileAlongPath as any).mock.calls.length).toBe(0);
-      expect((deps.bridge.drawRect as any).mock.calls.length).toBe(0);
-      expect((deps.bridge.drawCircle as any).mock.calls.length).toBe(0);
+      // ADR-087 K-ζ — `drawRect`/`drawCircle` legacy methods removed
+      // from WasmBridge. Use `drawRectAsShape`/`drawCircleAsShape`.
+      expect((deps.bridge.drawRectAsShape as any).mock.calls.length).toBe(0);
+      expect((deps.bridge.drawCircleAsShape as any).mock.calls.length).toBe(0);
     });
 
     it('syncs the (empty) mesh once so viewport / BVH initialise cleanly', () => {

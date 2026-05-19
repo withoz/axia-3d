@@ -164,7 +164,12 @@ describe('StepIgesImporter (ADR-035 P20.7)', () => {
       };
     }
 
-    function mockOcctWithFaces(faces: Array<{ tri: any | null }>) {
+    // ADR-102 R-γ — return type widened with Record<string, any> so
+    // `mockOcctWithFacesAndEdges` (line 297+) can augment `TopAbs_ShapeEnum`
+    // with `TopAbs_EDGE` and add `BRep_Tool.Polygon3D` under TS strict.
+    function mockOcctWithFaces(
+      faces: Array<{ tri: any | null }>,
+    ): Record<string, any> {
       const TopAbs_FACE = 4;
       const TopAbs_WIRE = 5;
       const TopAbs_SHAPE = 8;
