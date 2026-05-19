@@ -26,8 +26,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
-import { resolve } from 'path';
+// ADR-102 R-ε — `node:` prefix + `@types/node` devDep for TS strict typecheck.
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { StepIgesImporter } from './StepIgesImporter';
 
 const PKG_PATH = resolve('node_modules/opencascade.js/package.json');

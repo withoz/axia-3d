@@ -140,10 +140,66 @@ chain + libs 명시화 이후 test mock 의 fixture shape 가 stale.
 - **다음**: R-β ~ R-ε 결재 옵션 사용자 선택 후 진행. Track A (R-β) 가
   가장 작은 surface — 권장 첫 trial.
 
-### R-β ~ R-ε (planned)
+### R-β (본 commit) — MCP `draw_*` capability migration to `_as_shape`
 
-각 track 별 별도 ADR 번호 + 별도 PR 예정. ADR-103 / 104 / 105 / 106
-(추정).
+- **commit**: 본 commit (`packages/axia-mcp-server/src/capabilities/
+  {draw_rect,draw_circle,draw_line}.ts` + `types.ts` + 6 test files)
+- **Root cause confirmed**: ADR-087 K-ζ legacy WASM exports `draw_rect /
+  draw_circle / draw_line` 제거. MCP capabilities 가 여전히 legacy
+  method 호출 → `TypeError: engine.draw_rect is not a function`.
+- **Fix path applied**:
+  - 3 capability handlers 의 engine call 을 `_as_shape` variant 로 마이그
+    레이션 (`draw_rect_as_shape` / `draw_circle_as_shape` /
+    `draw_line_as_shape`)
+  - Return `-1` 에러 sentinel detection + throw
+  - `EngineInstance` interface (`src/capabilities/types.ts`) — legacy
+    method signatures 제거, `_as_shape` variants 추가
+  - 6 test files 의 mock entries (`draw_rect: ()=>1` 등 17 callsites) 를
+    `_as_shape` 로 일괄 rename
+  - `capabilities_extra.test.ts:243` 의 `draw_circle → list_xias workflow`
+    test 의미 갱신 — ADR-049/050 Two-Layer Citizenship 반영, Shape
+    drawing 후 `list_xias.count === 0` 검증 (material 부착 전 promotion
+    없음)
+- **Schema preservation**: Output field name `xia_id` 유지 (backward
+  compat). 값은 이제 ShapeId. capability description 에 명시 — "value
+  is a ShapeId; promotion to property-layer Xia requires explicit
+  material assignment (ADR-049 §4 Q1)". ADR-041 P26.2 schema_version
+  bump 불필요 (field shape 동일).
+- **Sweep**: vitest @axia/mcp-server 17 files / **167/167 PASS**
+  (이전 166/167, draw_circle workflow test 의 의미 갱신으로 정합 완료).
+  절대 #[ignore] 금지 167/167 준수.
+- **알려진 semantic drift (별도 트랙)**: ADR-049 §4 Q1 의 4-condition
+  promotion 이 MCP layer 에 노출되지 않음 — Shape ↔ Xia 전이 capability
+  (가칭 `promote_shape_to_xia`) 향후 ADR. 본 R-β scope 외.
+
+### R-ε (본 commit) — `web/` `@types/node` + `node:` prefix imports
+
+- **commit**: 본 commit (`web/package.json` + `web/package-lock.json` +
+  `web/src/import/occtRuntime.test.ts`)
+- **Root cause confirmed**: `occtRuntime.test.ts:29` 의 `import 'fs'`
+  가 TS strict typecheck 에서 `TS2307: Cannot find module 'fs'` —
+  `@types/node` 가 `web/package.json` devDependencies 에 미포함.
+- **Fix path applied**:
+  - `@types/node: ^22.0.0` devDep 추가 (CI matrix `node-version: [22.x,
+    24.x]` 정합)
+  - `occtRuntime.test.ts` 의 `from 'fs'` → `from 'node:fs'`,
+    `from 'path'` → `from 'node:path'` (modern Node import prefix —
+    Node-only intent 명시)
+- **Sweep**: vitest occtRuntime 8/8 PASS (`Drift #2 회귀 가드` 포함).
+  절대 #[ignore] 금지 8/8 준수.
+- **TS strict typecheck**: `occtRuntime.test.ts` errors 0 (이전 1).
+  나머지 typecheck errors 는 R-γ / R-δ scope (별도 트랙).
+
+### R-γ ~ R-δ (remaining)
+
+| Sub | 잔존 fail count | 비고 |
+|-----|---------------|------|
+| R-γ | StepIgesImporter.test.ts:319,322 + occtBrepTraversal.test.ts:199~216 = ~6 sites | OCCT.js mock fixture 갱신 |
+| R-δ | WasmBridge.test.ts 8 sites (1447, 1450, 1728~30, 2351~53, 2363) + WasmBridge.ts:1851 = 9 sites | vitest mock 타이핑 + cast 정정 |
+
+CI workflow 회복 전망:
+- **MCP Server (ADR-041)**: R-β closure 로 즉시 회복 예상
+- **CI (Web E2E) / Build AXiA 3D**: R-γ + R-δ closure 필요 (R-ε 단독으로는 부분 회복)
 
 ---
 

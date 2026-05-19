@@ -9,7 +9,10 @@ import type { Tier } from '../tiers.js';
  * Method names match the WASM bindings exactly (snake_case from Rust).
  */
 export interface EngineInstance {
-  draw_rect(
+  // ADR-087 K-ζ + ADR-050 P-5c — legacy `draw_rect/circle/line` removed
+  // from the WASM surface. Use `_as_shape` variants (form-layer Shape).
+  // Returns ShapeId.raw() as f64 on success, -1.0 on error.
+  draw_rect_as_shape(
     cx: number,
     cy: number,
     cz: number,
@@ -22,7 +25,7 @@ export interface EngineInstance {
     width: number,
     height: number,
   ): number;
-  draw_circle(
+  draw_circle_as_shape(
     cx: number,
     cy: number,
     cz: number,
@@ -32,7 +35,7 @@ export interface EngineInstance {
     radius: number,
     segments: number,
   ): number;
-  draw_line(
+  draw_line_as_shape(
     x0: number,
     y0: number,
     z0: number,
