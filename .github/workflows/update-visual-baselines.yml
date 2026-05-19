@@ -71,15 +71,23 @@ jobs:
 
       - name: Regenerate visual baselines
         working-directory: ./web
-        run: npx playwright test e2e/visual/ --update-snapshots
+        # Playwright marks the test as failed on first-time snapshot
+        # creation (writes the PNG, reports "snapshot was created" as
+        # a failure). `|| true` keeps the workflow going so subsequent
+        # upload step runs.
+        run: npx playwright test e2e/visual/ --update-snapshots || true
 
       - name: List regenerated baselines
+        if: always()
         working-directory: ./web
         run: |
           echo "=== Generated baselines ==="
           find e2e/visual -name '*-chromium-linux.png' | sort
+          echo "=== File count ==="
+          find e2e/visual -name '*-chromium-linux.png' | wc -l
 
       - name: Upload regenerated baselines
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: visual-baselines-linux
