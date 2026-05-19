@@ -9,7 +9,7 @@ import type { EngineInstance } from '../src/capabilities/types.js';
 
 function mockEngine(overrides: Partial<EngineInstance> = {}): EngineInstance {
   return {
-    draw_rect: () => 1,
+    draw_rect_as_shape: () => 1,
     push_pull: () => true,
     exportSnapshotStrict: () => new Uint8Array([0x41, 0x58, 0x69, 0x41]), // "AXiA"
     ...overrides,
@@ -21,7 +21,7 @@ const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
 describe('ADR-041 — capability dispatcher', () => {
   describe('Tier 1 — draw_rect (constructive, default-on)', () => {
     it('returns xia_id from engine', async () => {
-      const engine = mockEngine({ draw_rect: () => 42 });
+      const engine = mockEngine({ draw_rect_as_shape: () => 42 });
       const sink = new MemoryAuditSink();
       const result = await dispatch(
         'draw_rect',
@@ -41,7 +41,7 @@ describe('ADR-041 — capability dispatcher', () => {
     it('applies default normal/up when omitted', async () => {
       let captured: number[] = [];
       const engine = mockEngine({
-        draw_rect: (...args: number[]) => {
+        draw_rect_as_shape: (...args: number[]) => {
           captured = args;
           return 1;
         },

@@ -1,4 +1,7 @@
 // Tier 1 — draw_line: straight line between two points on a draw plane.
+// ADR-087 K-ζ + ADR-050 P-5c — legacy `engine.draw_line` removed;
+// now calls `engine.draw_line_as_shape`. Output field `xia_id` preserved
+// for backward compatibility (returns ShapeId.raw()).
 import { z } from 'zod';
 import { Vec3, XiaId } from '../schema.js';
 import type { CapabilityHandler } from './types.js';
@@ -21,15 +24,21 @@ export const drawLineCapability: CapabilityHandler<Input, Output> = {
   name: 'draw_line',
   tier: 1,
   description:
-    'Draw a straight line segment from `start` to `end`. Returns the new ' +
-    "XIA's owner ID. ADR-019 P4: an edge added on an existing face whose " +
-    'endpoints lie on the same boundary loop will auto-split that face.',
+    'Draw a straight line segment from `start` to `end`. Returns the owner ID ' +
+    'of the newly created form-layer Shape (ADR-050 P-5c). Output field ' +
+    '`xia_id` preserved for backward compatibility; value is a ShapeId. ' +
+    'ADR-019 P4: an edge added on an existing face whose endpoints lie on ' +
+    'the same boundary loop will auto-split that face.',
   inputSchema: InputSchema,
   handler: ({ engine }, input) => {
     const [x0, y0, z0] = input.start;
     const [x1, y1, z1] = input.end;
     const [nx, ny, nz] = input.plane_normal;
-    const xia_id = engine.draw_line(x0, y0, z0, x1, y1, z1, nx, ny, nz);
-    return { xia_id };
+    // ADR-087 K-ζ — legacy `draw_line` removed; use `_as_shape` variant.
+    const raw = engine.draw_line_as_shape(x0, y0, z0, x1, y1, z1, nx, ny, nz);
+    if (raw < 0) {
+      throw new Error('draw_line_as_shape failed (engine returned -1)');
+    }
+    return { xia_id: raw };
   },
 };

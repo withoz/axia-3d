@@ -16,9 +16,9 @@ const TIER2_POLICY = {
 
 function mockEngine(overrides: Partial<EngineInstance> = {}): EngineInstance {
   return {
-    draw_rect: () => 1,
-    draw_circle: () => 2,
-    draw_line: () => 3,
+    draw_rect_as_shape: () => 1,
+    draw_circle_as_shape: () => 2,
+    draw_line_as_shape: () => 3,
     push_pull: () => true,
     exportSnapshotStrict: () => new Uint8Array(),
     allXiaIds: () => new Uint32Array([1, 2]),

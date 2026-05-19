@@ -9,7 +9,7 @@ const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
 
 function mockEngine(): EngineInstance {
   return {
-    draw_rect: () => 1,
+    draw_rect_as_shape: () => 1,
     push_pull: () => true,
     exportSnapshotStrict: () => new Uint8Array(),
   };

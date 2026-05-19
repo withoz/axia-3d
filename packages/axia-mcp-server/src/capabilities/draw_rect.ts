@@ -1,5 +1,7 @@
 // Tier 1 — draw_rect: parametric rectangle on an arbitrary plane.
-// Returns the XiaId (Object ID) created by the engine.
+// ADR-087 K-ζ + ADR-050 P-5c — legacy `engine.draw_rect` removed;
+// now calls `engine.draw_rect_as_shape`. Output field `xia_id` preserved
+// for backward compatibility (returns ShapeId.raw()).
 import { z } from 'zod';
 import { Vec3, XiaId } from '../schema.js';
 import type { CapabilityHandler } from './types.js';
@@ -32,14 +34,24 @@ export const drawRectCapability: CapabilityHandler<Input, Output> = {
   tier: 1,
   description:
     'Draw a planar rectangle of given width × height at center, oriented by ' +
-    "(normal, up). Returns the new XIA's owner ID. Coordinates that lie on a " +
-    'cardinal plane to within 1e-3 mm are snapped exactly to that plane (ADR-026 P12).',
+    '(normal, up). Returns the owner ID of the newly created form-layer ' +
+    'Shape (ADR-050 P-5c). The output field is named `xia_id` for backward ' +
+    'compatibility; the value is a ShapeId. Promotion to a property-layer ' +
+    'Xia requires explicit material assignment (ADR-049 §4 Q1). Coordinates ' +
+    'on a cardinal plane within 1e-3 mm are snapped exactly (ADR-026 P12).',
   inputSchema: InputSchema,
   handler: ({ engine }, input) => {
     const [cx, cy, cz] = input.center;
     const [nx, ny, nz] = input.normal;
     const [ux, uy, uz] = input.up;
-    const xia_id = engine.draw_rect(cx, cy, cz, nx, ny, nz, ux, uy, uz, input.width, input.height);
-    return { xia_id };
+    // ADR-087 K-ζ — legacy `draw_rect` removed; use `_as_shape` variant.
+    // Returns ShapeId.raw() as f64, -1.0 on error.
+    const raw = engine.draw_rect_as_shape(
+      cx, cy, cz, nx, ny, nz, ux, uy, uz, input.width, input.height,
+    );
+    if (raw < 0) {
+      throw new Error('draw_rect_as_shape failed (engine returned -1)');
+    }
+    return { xia_id: raw };
   },
 };

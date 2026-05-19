@@ -12,9 +12,9 @@ const VERSIONS = { engine_version: '0.1.0', schema_version: '1.0.0' };
 
 function mockEngine(overrides: Partial<EngineInstance> = {}): EngineInstance {
   return {
-    draw_rect: () => 1,
-    draw_circle: () => 2,
-    draw_line: () => 3,
+    draw_rect_as_shape: () => 1,
+    draw_circle_as_shape: () => 2,
+    draw_line_as_shape: () => 3,
     push_pull: () => true,
     exportSnapshotStrict: () => new Uint8Array([0x41, 0x58, 0x69, 0x41]),
     allXiaIds: () => new Uint32Array([1, 2, 3]),
@@ -38,7 +38,7 @@ describe('draw_circle (Tier 1)', () => {
   it('passes center/normal/radius/segments to engine', async () => {
     let captured: number[] = [];
     const engine = mockEngine({
-      draw_circle: (...args: number[]) => {
+      draw_circle_as_shape: (...args: number[]) => {
         captured = args;
         return 42;
       },
@@ -56,7 +56,7 @@ describe('draw_circle (Tier 1)', () => {
   it('default normal = +Z, default segments = 64', async () => {
     let captured: number[] = [];
     const engine = mockEngine({
-      draw_circle: (...args: number[]) => {
+      draw_circle_as_shape: (...args: number[]) => {
         captured = args;
         return 1;
       },
@@ -102,7 +102,7 @@ describe('draw_line (Tier 1)', () => {
   it('passes start/end/plane_normal to engine', async () => {
     let captured: number[] = [];
     const engine = mockEngine({
-      draw_line: (...args: number[]) => {
+      draw_line_as_shape: (...args: number[]) => {
         captured = args;
         return 7;
       },
@@ -240,7 +240,12 @@ describe.skipIf(!wasmBuilt)('extra capabilities — real WASM e2e', () => {
     expect(out.schema_version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('draw_circle → list_xias workflow', async () => {
+  it('draw_circle creates a form-layer Shape (Two-Layer Citizenship, ADR-050)', async () => {
+    // ADR-087 K-ζ + ADR-050 P-5c — draw_circle now creates a form-layer
+    // Shape, not a Xia. Output field `xia_id` retains the legacy name for
+    // schema compat but the value is a ShapeId. `list_xias` returns 0
+    // because Shape→Xia promotion requires explicit material assignment
+    // (ADR-049 §4 Q1).
     const engine = await loadEngine();
     const drawResult = await dispatch(
       'draw_circle',
@@ -248,28 +253,28 @@ describe.skipIf(!wasmBuilt)('extra capabilities — real WASM e2e', () => {
       { engine, versions: VERSIONS },
     );
     const drawOut = drawResult.output as { xia_id: number };
+    // Shape ID is a valid positive integer
     expect(drawOut.xia_id).toBeGreaterThan(0);
+    expect(Number.isInteger(drawOut.xia_id)).toBe(true);
 
+    // No Xia exists yet — list_xias should be empty per ADR-049 §4 Q1
     const listResult = await dispatch(
       'list_xias',
       { include_stats: true },
       { engine, versions: VERSIONS },
     );
-    const listOut = listResult.output as {
-      count: number;
-      xias: { xia_id: number; stats?: unknown }[];
-    };
-    expect(listOut.count).toBeGreaterThan(0);
-    expect(listOut.xias.find((x) => x.xia_id === drawOut.xia_id)).toBeDefined();
+    const listOut = listResult.output as { count: number };
+    expect(listOut.count).toBe(0);
   });
 
-  it('draw_line creates a valid XIA', async () => {
+  it('draw_line creates a form-layer Shape (ADR-050)', async () => {
     const engine = await loadEngine();
     const result = await dispatch(
       'draw_line',
       { start: [0, 0, 0], end: [50, 0, 0] },
       { engine, versions: VERSIONS },
     );
+    // ShapeId.raw() is a positive integer (legacy `xia_id` field preserved)
     expect((result.output as { xia_id: number }).xia_id).toBeGreaterThan(0);
   });
 
