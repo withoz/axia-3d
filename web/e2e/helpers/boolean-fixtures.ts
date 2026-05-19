@@ -61,6 +61,10 @@ export async function setupTwoPlaneFaces(
       const faceA = faceIdsA[0];
       const faceB = faceIdsB[0];
 
+      // ADR-087 K-δ — `drawRectAsShape` 가 form-layer Shape 의 face 에
+      // Plane surface 자동 attach. `withSurfaces=false` 케이스 (Y-E
+      // ineligibility 검증) 의 원래 의미를 유지하려면 명시적으로 surface
+      // 제거. ADR-102 R-η-post.
       if (withSurfaces) {
         // setFaceSurfacePlane: (faceId, ox, oy, oz, nx, ny, nz,
         //                      ux, uy, uz, u_min, u_max, v_min, v_max)
@@ -80,6 +84,10 @@ export async function setupTwoPlaneFaces(
           -5, 5,
           -5, 5,
         );
+      } else {
+        // Remove auto-attached Plane surface (ADR-087 K-δ side effect).
+        bridge.clearFaceSurface(faceA);
+        bridge.clearFaceSurface(faceB);
       }
       return { faceA, faceB };
     },
@@ -150,6 +158,10 @@ export async function setupNPlaneFaces(
           throw new Error(`drawRectAsShape Shape ${shape} produced no faces (i=${i})`);
         }
         const faceId = ids[0];
+        // ADR-087 K-δ — `drawRectAsShape` 가 form-layer Shape 의 face 에
+        // Plane surface 자동 attach. `withSurfaces=false` 케이스 (Y-E
+        // ineligibility 검증) 의 원래 의미를 유지하려면 명시적으로 surface
+        // 제거. ADR-102 R-η-post (PR-109 R-η 의 보조 fix).
         if (withSurfaces) {
           bridge.engine.setFaceSurfacePlane(
             faceId,
@@ -159,6 +171,9 @@ export async function setupNPlaneFaces(
             -5, 5,          // u_range
             -5, 5,          // v_range
           );
+        } else {
+          // Remove auto-attached Plane surface (ADR-087 K-δ side effect).
+          bridge.clearFaceSurface(faceId);
         }
         faces.push(faceId);
       }
