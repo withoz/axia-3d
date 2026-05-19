@@ -2169,6 +2169,46 @@ metallic 4 PBR channels).
   - Playwright (H-ε 예정): UI 경로 ↔ headless 경로 의 *의미 등가*
     (face/edge/vert count + inner loop count + invariants)
 
+### 41. ADR-102 — CI Restoration 4-Track Audit (R-α spec, 2026-05-19)
+
+- **canonical statement (투명 봉인)**:
+  > "CI workflow 3 종 (Build AXiA 3D / CI / MCP Server) 모두 2026-05-09
+  > 부터 일관 red. PR-105 (ADR-101) merge 후 audit 결과 본 PR 책임 0 —
+  > 변경 파일과 CI 실패 파일 교집합 ∅. 4 독립 root cause 추정 → ADR-102
+  > R-β~R-ε 별도 트랙 분리."
+- **anchor**: PR-105 merge (2026-05-19) 직후 CI red 발견. 20+ 연속 commit
+  audit 결과 pre-existing scope 확인.
+- **4 Track 분리**:
+  - **Track A (R-β)** — MCP `draw_*` capability handler: ADR-087 K-ζ 가
+    legacy `draw_rect / draw_circle / draw_line` WASM exports 제거 시
+    `packages/axia-mcp-server/src/capabilities/draw_*.ts` 미마이그레이션.
+    호출 시 `TypeError: engine.draw_rect is not a function`.
+    Fix path: `_as_shape` variant 로 마이그레이션 (반환 의미 검토 필요 —
+    legacy `XiaId` ↔ As-Shape `ShapeId.raw()`).
+  - **Track B (R-γ)** — OCCT.js API drift in tests: ADR-082 C-ε
+    amendment 의 wrapper + libs 명시화 이후 `occtBrepTraversal.test.ts`
+    / `StepIgesImporter.test.ts` 의 mock fixture 가 `BRep_Tool` /
+    `BRepTools` / `Polygon3D` / `TopAbs_EDGE` 미포함. Fix path: mock
+    fixture 갱신.
+  - **Track C (R-δ)** — TypeScript strict tuple errors: `WasmBridge.test.ts`
+    의 `fn.mock.calls[0]` 가 빈 tuple 로 inference 되어 indexed access
+    8 sites TS2493 fail. Fix path: vitest mock 타이핑 명시.
+  - **Track D (R-ε)** — `occtRuntime.test.ts` 의 `Cannot find module
+    'fs'`. Fix path: `@types/node` 또는 vitest env 분기.
+- **본 ADR (R-α) scope**: spec only audit + LOCKED #41 entry. 코드 변경
+  0. ADR-101 H-B (Q2=a) 의 docs-first 정신 답습.
+- **결재 필요 (각 track 별)**:
+  - 각 track 의 별도 ADR 진행 (lettered options) — (a) 별도 ADR + 별도
+    PR / (b) batch / (c) 보류
+  - Track A 의 schema 변경 영향 (ADR-041 P26.2 schema_version bump 필요?)
+- **PR-105 merge 정합 review**: 메타-원칙 #9 (회귀 없음) 의 spirit —
+  CI red 상태에서 merge 진행은 위반. 단 audit 결과 본 PR 책임 0 이므로
+  *new regression introduced 0*. 향후 PR 은 base branch CI 상태 확인 후
+  진행 권장 (별도 PR review checklist 검토 가능).
+- **Cross-link**: ADR-087 LOCKED #34 (Track A 원인), ADR-082 LOCKED #29
+  (Track B 추정 원인), ADR-046 P31 (Track C 시점 추정), ADR-101
+  LOCKED #40 (본 audit trigger), 메타-원칙 #4 / #6 / #9 / #15.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
