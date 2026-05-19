@@ -1,0 +1,88 @@
+# ADR-077 V-4 / ADR-102 R-θ — Manual visual baseline regeneration.
+#
+# `workflow_dispatch` only. Runs `npx playwright test --update-snapshots`
+# on Linux runner and uploads regenerated `__screenshots__/*-chromium-
+# linux.png` files as an artifact. Maintainer downloads + commits.
+#
+# Per ADR-077 README "Option C: Update via dedicated workflow (future
+# V-3+ sub-step)" — this commit lands the V-4-partial implementation.
+
+name: Update Visual Baselines (Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: 'Playwright project name (chromium only for now)'
+        required: false
+        default: 'chromium'
+
+# Cancel stale runs on the same ref.
+concurrency:
+  group: visual-baseline-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update-baselines:
+    name: Regenerate Linux visual baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: visual-baseline-update
+          workspaces: |
+            crates/axia-geo
+            crates/axia-wasm
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: npm ci (web)
+        working-directory: ./web
+        run: npm ci
+
+      - name: Build WASM (release)
+        working-directory: ./crates/axia-wasm
+        run: wasm-pack build --target web --out-dir ../../web/src/wasm
+
+      - name: Build dist (vite + tsc)
+        working-directory: ./web
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        working-directory: ./web
+        run: npx playwright install --with-deps chromium
+
+      - name: Regenerate visual baselines
+        working-directory: ./web
+        run: npx playwright test e2e/visual/ --update-snapshots
+
+      - name: List regenerated baselines
+        working-directory: ./web
+        run: |
+          echo "=== Generated baselines ==="
+          find e2e/visual -name '*-chromium-linux.png' | sort
+
+      - name: Upload regenerated baselines
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-baselines-linux
+          path: web/e2e/visual/**/*-chromium-linux.png
+          retention-days: 30
+          if-no-files-found: error
