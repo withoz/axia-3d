@@ -12,6 +12,9 @@ web/dist/
 # WASM binary (wasm-pack으로 재생성, 용량 큼)
 web/src/wasm/*.wasm
 
+# Headless demo output (ADR-101 / LOCKED #40 reference scripts 재생성, gitignored)
+web/demo-output/
+
 # Node WASM target (ADR-041 — wasm-pack --target nodejs 산출물, 재빌드 가능)
 packages/axia-wasm-node/dist/
 

@@ -2110,6 +2110,65 @@ metallic 4 PBR channels).
 
 **자세한 회고는 `docs/retro/2026-05-locked-26-closure.md` 참조**.
 
+### 40. ADR-101 — Headless Hole Synthesis Explicit Promote Path (H-α spec, 2026-05-19)
+
+- **canonical statement (사용자 facing)**:
+  > "Headless / scripted / MCP 경로에서 `draw_*_as_shape` 를 두 번
+  > sequential 호출해서 *큰 shape 안에 작은 shape* 를 만들면 두 face
+  > 는 **coplanar overlapping** 으로 잔존한다. 자동 hole-promote 안 됨.
+  > 진짜 hole 합성은 `mergeCoplanarContaining(outer, inner, tol_deg)`
+  > (ADR-006 C1 Phase F) 명시 호출."
+- **anchor**: 사용자 session 2026-05-19 hands-on 발견. headless 스크립트
+  로 사각형 (2m×4m) + 원 hole (r=0.5m) 생성 시 시각상 "rect + circle
+  outline overlay" 만 — 진짜 hole 아님. `mergeCoplanarContaining` 명시
+  호출로 `faceInnerLoopCount === 1` 확인 + invariants 0 violations
+  PASS.
+- **왜 자동 안 됨?** ADR-021 P7 component-merge 의 fire 조건 = *single
+  draw batch 내 free-edge resolution*. LOCKED #26 P-5e-γ
+  (`replace_last_after_snapshot`) 의 1-Undo 정책에 따라 각 `_as_shape`
+  호출은 독립 transaction → 두 face 가 별개로 close 됨. UI tool 경로
+  (DrawRectTool 후 DrawCircleTool, drawShapeMode ON) 에서는 단일
+  syncMesh 사이클 내 free-edge resolution 이 fire 하여 자연 hole 합성.
+- **정답 경로**:
+  ```js
+  // 1. Outer + inner 를 각각 draw
+  eng.draw_rect_as_shape(0,0,0, 0,0,1, 1,0,0, 2000, 4000); // face 0
+  eng.draw_circle_as_shape(0,0,0, 0,0,1, 500, 64);          // face 1
+  // 2. faceArea desc 정렬로 outer/inner 분류
+  const faces = [...new Set(eng.get_face_map())]
+    .map(fid => ({ fid, area: eng.faceArea(fid) }))
+    .sort((a, b) => b.area - a.area);
+  const [outer, inner] = faces;
+  // 3. 명시 promote — Phase F coplanar containing merge
+  const merged = eng.mergeCoplanarContaining(outer.fid, inner.fid, 1.0);
+  // → faceInnerLoopCount(merged) === 1, invariants 0 violations
+  ```
+- **`.xia` UI 포맷 footnote**: `exportSnapshotStrict()` 의 raw bincode
+  는 UI 의 `Open` 로더 (JSON.parse) 와 비호환. headless 저장 시
+  `ProjectSerializer.saveProject` 와 동일한 JSON 봉투 (`{format:
+  'xia', version, mesh: <base64>}`) 로 wrap 필요. 자세한 내용
+  `web/src/ui/ProjectSerializer.ts:141`.
+- **사용자 facing 경로 vs headless 경로 의미 등가 정책**: 메타-원칙
+  #15 신설 — "Headless API ≡ Tool Path 의미 동등". 차이 발견 시
+  명시 boundary op + 문서화 + 회귀 자산 필수.
+- **H-α scope (본 commit)**: ADR-101 spec only. 코드 변경 0. 후속
+  H-β ~ H-η (MCP capability + 회귀 4-layer + memory pointer + 회고) 는
+  별도 atomic commit.
+- **Cross-link**: ADR-006 (Phase F coplanar merge anchor), ADR-015
+  LOCKED #1 (B1 auto hole-promote 비활성 — 본 entry 의 *왜* 근거),
+  ADR-021 P7 LOCKED #1 (component-merge fire 조건), ADR-049 P-5c +
+  ADR-050 (Two-Layer Citizenship Phase 1 As-Shape Draw single-
+  transaction), ADR-041 P26 (MCP capability surface — H-C base),
+  메타-원칙 #4 / #5 / #10 / #13 / #14 / #15.
+- **회귀 방지 (H-γ 예정, 절대 #[ignore] 금지)**:
+  - vitest: `headless_two_shapes_overlap_until_explicit_merge` —
+    `_as_shape` × 2 후 `faceCount === 2` (auto-promote 안 됨 확인)
+  - vitest: `merge_coplanar_containing_promotes_to_hole_loop` —
+    `mergeCoplanarContaining` 후 `faceInnerLoopCount === 1`,
+    `verifyInvariants.valid === true`
+  - Playwright (H-ε 예정): UI 경로 ↔ headless 경로 의 *의미 등가*
+    (face/edge/vert count + inner loop count + invariants)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
@@ -2838,9 +2897,9 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - Fillet 3-way corner (같은 vertex 공유 다중 엣지) 미해결 — 별도 작업
 - STEP/IGES OCCT.js 통합 미구현 — 10MB+ 번들 검토 필요
 
-## 메타-원칙 (#1~#14, ADR-087 까지 통과)
+## 메타-원칙 (#1~#15, ADR-101 까지 통과)
 
-설계 결정 시 참조하는 14개 메타-원칙. 자세한 출처는
+설계 결정 시 참조하는 15개 메타-원칙. 자세한 출처는
 `docs/adr/README.md` 참조.
 
 | # | 원칙 | 축 |
@@ -2859,6 +2918,7 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 | 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
 | 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
 | 14 | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) | 기하 본질 |
+| 15 | **Headless API ≡ Tool Path 의미 동등** (모든 호출 sequence 는 동일 입력 사용자 tool 결과와 의미 등가, 차이는 명시 boundary op + 문서화 필수) | 일관성/UX |
 
 ### 메타-원칙 #14 — 면은 닫힌 경계로부터 유도된다
 
@@ -2899,6 +2959,40 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
   approximation 의존, kernel-aware ops 차단, selection unification
   실패 등.
 - 답이 No 면 거부 또는 새 ADR 필요.
+
+### 메타-원칙 #15 — Headless API ≡ Tool Path 의미 동등
+
+**Canonical statement (ADR-101 H-α, 2026-05-19)**:
+> "엔진 API 의 모든 호출 sequence 는 동일 입력의 사용자 tool 조작
+> 결과와 *의미 등가* 여야 한다. 차이가 불가피하면 명시적 boundary
+> op + 명시 문서화 + 회귀 자산 필수."
+
+**의미**:
+- AxiA 의 surface 는 *headless* (axia-wasm-node / MCP / scripted) /
+  *tool path* (DrawRectTool / DrawCircleTool / 우클릭 메뉴 등) /
+  *MCP* (Tier 0~3 capability) 세 경로가 같은 engine truth 를 공유.
+- 동일 사용자 의도 (예: "rect with hole") 의 의미적 결과는 경로
+  무관하게 일치해야 함.
+- 차이 발생 시 — 그 차이가 의도된 (LOCKED 정책의 manifold-first 등)
+  것이면 명시 boundary op 가 의도 표현 채널. 의도되지 않은 차이는
+  bug.
+
+**적용 사례**:
+- ADR-021 P7 component-merge 가 *single draw batch* 에서만 fire →
+  headless 두 번 호출 시 자동 promote 안 됨 → 의도된 차이 →
+  `mergeCoplanarContaining` 가 의도 표현 boundary op
+- ADR-041 P26 (MCP capability surface) — 4-tier whitelist 가 surface
+  drift 차단의 첫 layer
+- LOCKED #34 (ADR-087 kernel-native command suite reset) — UI tool
+  들이 kernel-aware 입력만 받도록 정합 (의미 등가의 첫 강제)
+- LOCKED #40 (ADR-101) — 본 ADR 이 anchor
+
+**가이드 (향후 ADR / 코드 결정 시)**:
+- "이 변경이 headless API ↔ tool path 의 의미 동등을 유지하는가?"
+- 차이가 의도된 것이면 명시 boundary op 가 있는가?
+- 차이가 의도된 것이면 문서화 (CLAUDE.md LOCKED 또는 ADR) 되어
+  있는가?
+- 회귀 자산이 *의미 등가* 를 검증하는가?
 
 ## Session 2026-04-28 완료 내역 (11 commits — RECT 면 합성 정책 정비)
 
