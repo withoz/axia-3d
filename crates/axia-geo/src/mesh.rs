@@ -8462,6 +8462,89 @@ mod tests {
         assert!(mesh.merge_coplanar_containing(of, inf, 0.5).is_err());
     }
 
+    // ADR-101 H-δ — Canonical headless hole synthesis: rect outer + circle
+    // (N-gon) inner. 사용자 facing 의 가장 흔한 use case.
+    #[test]
+    fn test_adr101_merge_coplanar_containing_circle_inner_creates_hole() {
+        use std::f64::consts::TAU;
+        let mut mesh = Mesh::new();
+        // Outer 2000×4000 rect (XY 평면, ADR-101 demo 와 동일 크기, mm)
+        let o0 = mesh.add_vertex(DVec3::new(-1000.0, -2000.0, 0.0));
+        let o1 = mesh.add_vertex(DVec3::new( 1000.0, -2000.0, 0.0));
+        let o2 = mesh.add_vertex(DVec3::new( 1000.0,  2000.0, 0.0));
+        let o3 = mesh.add_vertex(DVec3::new(-1000.0,  2000.0, 0.0));
+        let outer_f = mesh.add_face(&[o0, o1, o2, o3], MaterialId::new(0)).unwrap();
+
+        // Inner: r=500mm 동심, 64-segment (ADR-101 H-α / H-γ 회귀와 정합)
+        let segments = 64;
+        let radius = 500.0;
+        let inner_verts: Vec<_> = (0..segments)
+            .map(|i| {
+                let theta = (i as f64) * TAU / (segments as f64);
+                mesh.add_vertex(DVec3::new(
+                    radius * theta.cos(),
+                    radius * theta.sin(),
+                    0.0,
+                ))
+            })
+            .collect();
+        let inner_f = mesh.add_face(&inner_verts, MaterialId::new(0)).unwrap();
+        assert_eq!(mesh.face_count(), 2);
+
+        let merged = mesh
+            .merge_coplanar_containing(outer_f, inner_f, 1.0)
+            .expect("merge should succeed for non-rect inner");
+        assert_eq!(mesh.face_count(), 1);
+        let face = &mesh.faces[merged];
+        assert_eq!(
+            face.inners().len(),
+            1,
+            "ADR-101: rect outer + circle inner should produce exactly 1 hole loop",
+        );
+    }
+
+    // ADR-101 H-δ — Geometric containment failure: small face as outer +
+    // big face as inner (swap). H-γ test 4 (TS) 의 Rust mirror.
+    #[test]
+    fn test_adr101_merge_coplanar_containing_rejects_when_inner_outside() {
+        let mut mesh = Mesh::new();
+        // Small face (will be misused as outer)
+        let s0 = mesh.add_vertex(DVec3::new(-100.0, -100.0, 0.0));
+        let s1 = mesh.add_vertex(DVec3::new( 100.0, -100.0, 0.0));
+        let s2 = mesh.add_vertex(DVec3::new( 100.0,  100.0, 0.0));
+        let s3 = mesh.add_vertex(DVec3::new(-100.0,  100.0, 0.0));
+        let small_f = mesh.add_face(&[s0, s1, s2, s3], MaterialId::new(0)).unwrap();
+
+        // Big face — vertices extend outside small face
+        let b0 = mesh.add_vertex(DVec3::new(-1000.0, -1000.0, 0.0));
+        let b1 = mesh.add_vertex(DVec3::new( 1000.0, -1000.0, 0.0));
+        let b2 = mesh.add_vertex(DVec3::new( 1000.0,  1000.0, 0.0));
+        let b3 = mesh.add_vertex(DVec3::new(-1000.0,  1000.0, 0.0));
+        let big_f = mesh.add_face(&[b0, b1, b2, b3], MaterialId::new(0)).unwrap();
+
+        // Swap: small as outer, big as inner → containment 실패
+        let result = mesh.merge_coplanar_containing(small_f, big_f, 1.0);
+        assert!(result.is_err(), "big inner inside small outer should reject");
+
+        // 실패 시 mesh 상태 보존
+        assert_eq!(mesh.face_count(), 2);
+    }
+
+    // ADR-101 H-δ — `outer == inner` 안전 가드 (mesh.rs:6052 명시 reject).
+    #[test]
+    fn test_adr101_merge_coplanar_containing_rejects_self() {
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(100.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(100.0, 100.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 100.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+
+        let result = mesh.merge_coplanar_containing(f, f, 1.0);
+        assert!(result.is_err(), "self-merge should reject");
+        assert_eq!(mesh.face_count(), 1);
+    }
+
     #[test]
     fn test_merge_tolerance_rejects_strict_but_accepts_loose() {
         // 1° 기울어진 두 사각형: strict(0.5°)는 reject, loose(2°)는 accept
