@@ -41,7 +41,11 @@ function mockExplorer(items: any[]): any {
  * Build a mock OCCT object with stage-aware TopExp_Explorer:
  * the constructor inspects `kind` arg and returns face or edge iterator.
  */
-function mockOcctWithShape(faces: any[], edges: any[]) {
+// ADR-102 R-γ — return type widened with an index signature so the helper
+// makers (makePlaneFace / makeLineEdge / makeCircleEdge / makeArcEdge) and
+// individual test bodies can augment with BRep_Tool / BRepTools / Handle_*
+// shims under TS strict (TS2339 fix). Mock fixture stays purely structural.
+function mockOcctWithShape(faces: any[], edges: any[]): Record<string, any> {
   const TopAbs_FACE = 4;
   const TopAbs_EDGE = 6;
   // TopExp_Explorer_2 — version-tolerant primary path used by makeExplorer

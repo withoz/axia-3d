@@ -52,7 +52,13 @@ describe('LayeredMaterialDialog (L-ε)', () => {
   });
 
   describe('openLayeredChannelDialog (end-to-end with mocks)', () => {
-    let promptSpy: ReturnType<typeof vi.spyOn>;
+    // ADR-102 R-ζ — `ReturnType<typeof vi.spyOn>` defaults to the generic
+    // empty-args signature; the actual `window.prompt` spy has a specific
+    // signature → vitest 3.x MockInstance bivariance reject. `prompt` is
+    // not a `Window` keyof in the current DOM lib, so use vitest's
+    // `MockInstance` directly with the prompt fn type.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let promptSpy: any;
 
     beforeEach(() => {
       document.body.innerHTML = '';
