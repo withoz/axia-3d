@@ -44,17 +44,18 @@ export async function setupTwoPlaneFaces(
       const w = window as any;
       const bridge = w.__axia.get('bridge');
 
-      // drawRect returns XIA ID (semantic object), not FaceId — per
-      // crates/axia-wasm/src/lib.rs:660. Resolve XIA → its face IDs and
-      // pick the first one (single-face XIA per drawRect contract).
-      const xiaA = bridge.drawRect(0, 0, zA, 0, 0, 1, 1, 0, 0, 10, 10);
-      const xiaB = bridge.drawRect(0, 0, zB, 0, 0, 1, 1, 0, 0, 10, 10);
-      const faceIdsA = bridge.getXiaFaceIds(xiaA);
-      const faceIdsB = bridge.getXiaFaceIds(xiaB);
+      // ADR-087 K-ζ + ADR-050 P-5c — `drawRect` removed; use
+      // `drawRectAsShape` (form-layer Shape). Returns ShapeId, not XiaId.
+      // Resolve Shape → its face IDs and pick the first one (single-face
+      // Shape per drawRectAsShape contract).
+      const shapeA = bridge.drawRectAsShape(0, 0, zA, 0, 0, 1, 1, 0, 0, 10, 10);
+      const shapeB = bridge.drawRectAsShape(0, 0, zB, 0, 0, 1, 1, 0, 0, 10, 10);
+      const faceIdsA = bridge.getShapeFaceIds(shapeA);
+      const faceIdsB = bridge.getShapeFaceIds(shapeB);
       if (faceIdsA.length === 0 || faceIdsB.length === 0) {
         throw new Error(
-          `drawRect XIA produced no faces (xiaA=${xiaA} faces=${faceIdsA.length}, ` +
-          `xiaB=${xiaB} faces=${faceIdsB.length})`,
+          `drawRectAsShape Shape produced no faces (shapeA=${shapeA} faces=${faceIdsA.length}, ` +
+          `shapeB=${shapeB} faces=${faceIdsB.length})`,
         );
       }
       const faceA = faceIdsA[0];
@@ -141,10 +142,12 @@ export async function setupNPlaneFaces(
       const faces: number[] = [];
       for (let i = 0; i < count; i++) {
         const z = i * zStep;
-        const xia = bridge.drawRect(0, 0, z, 0, 0, 1, 1, 0, 0, 10, 10);
-        const ids = bridge.getXiaFaceIds(xia);
+        // ADR-087 K-ζ — `drawRect` removed; use `drawRectAsShape`
+        // (form-layer Shape, returns ShapeId).
+        const shape = bridge.drawRectAsShape(0, 0, z, 0, 0, 1, 1, 0, 0, 10, 10);
+        const ids = bridge.getShapeFaceIds(shape);
         if (ids.length === 0) {
-          throw new Error(`drawRect XIA ${xia} produced no faces (i=${i})`);
+          throw new Error(`drawRectAsShape Shape ${shape} produced no faces (i=${i})`);
         }
         const faceId = ids[0];
         if (withSurfaces) {
