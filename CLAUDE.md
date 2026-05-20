@@ -4581,7 +4581,7 @@ PR 시리즈.
   - B-θ — ADR-138 closure note (이미 ADR-138 §SUPERSEDED NOTE 에 등재)
   - B-κ — 메타-원칙 #14 amendment + #16 신설
   - B-λ — LOCKED #64 신설 (본 entry)
-- **2026-05-18 B-β-1 implementation** (본 PR, 첫 β implementation
+- **2026-05-18 B-β-1 implementation** (PR #129, 첫 β implementation
   step) — `auto_intersect_on_draw` flag default `true` → `false`:
   - Engine + WASM bridge + TS layer default OFF (LOCKED #44 single
     atomic PR)
@@ -4595,8 +4595,23 @@ PR 시리즈.
     adr-101-b6-visual-demo / adr-101-b6-user-demo-verify)
   - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54
     모두 PASS, 절대 #[ignore] 금지 준수
-- **(β-2 ~ β-4 + B-γ ~ B-μ): 다음 sub-steps** (multi-month, 별도 PRs):
-  - B-β-2: Step 4.99 `resolve_planar_free_faces` auto disable (~1일)
+- **2026-05-18 B-β-2 implementation** (본 PR) — `auto_face_synthesis_on_
+  draw` flag 신설 + Step 4.99 (`resolve_planar_free_faces` fixed-point
+  loop) 자동 호출 사이트 wrap. Default `false`:
+  - Engine scene.rs: 신규 flag field + Step 4.99 wrap
+  - WASM bridge: `setAutoFaceSynthesisOnDraw` / `getAutoFaceSynthesisOnDraw`
+    exports (export_baseline +2 entries)
+  - TS AutoFaceSynthesisSettings.ts (신규 모듈, AutoIntersectSettings
+    패턴 답습)
+  - TS WasmBridge.ts wrappers
+  - main.ts wiring (init + onChange 패턴)
+  - Playwright E2E: z0-closed-loop-face-synthesis explicit opt-in +
+    z0-face-split-all-tools opt-in 확장 (2 flags)
+  - 회귀 0 (Step 4.99 mop-up 단계 — earlier 단계 4.5/4.6/4.9/4.95 가
+    이미 closed cycle synthesis 처리)
+  - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54 /
+    vitest 1931 모두 PASS
+- **(β-3 ~ β-4 + B-γ ~ B-μ): 다음 sub-steps** (multi-month, 별도 PRs):
   - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일)
   - B-β-4: DrawLine closed loop 자동 face 합성 폐기 (TS, ~30분)
   - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규

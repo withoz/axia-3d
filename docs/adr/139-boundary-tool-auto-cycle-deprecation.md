@@ -401,9 +401,29 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
     InitScript` 으로 localStorage 'true' 사전 설정 (legacy ON 보존)
   - 회귀: axia-core 302 + 36 = 338 PASS / axia-geo 1407 + 24 = 1431
     PASS / axia-wasm 54 PASS, 절대 #[ignore] 금지 준수
-- **(β-2 ~ β-4): 다음 atomic sub-step** (별도 PR):
-  - B-β-2: Step 4.99 `resolve_planar_free_faces` auto disable (~1일)
-  - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일)
+- **2026-05-18 B-β-2 implementation** (본 PR) — `auto_face_synthesis_on_
+  draw` flag 신설 + Step 4.99 (`resolve_planar_free_faces` fixed-point
+  loop) 자동 호출 사이트 wrap. Default `false` (메타-원칙 #16 자동화
+  antipattern 폐기).
+  - Engine scene.rs: 신규 flag field + Step 4.99 block wrap with `if
+    self.auto_face_synthesis_on_draw`
+  - WASM bridge lib.rs: `setAutoFaceSynthesisOnDraw` / `getAutoFaceSynthesisOnDraw`
+    exports 추가 (export_baseline +2 entries)
+  - TS AutoFaceSynthesisSettings.ts: 신규 모듈 (AutoIntersectSettings
+    패턴 답습, localStorage `'true'` 명시 ON preference 보존)
+  - TS WasmBridge.ts: `setAutoFaceSynthesisOnDraw` / `getAutoFaceSynthesisOnDraw`
+    wrappers 추가
+  - main.ts: 신규 설정 모듈 wiring (init + onChange 패턴, AutoIntersect 답습)
+  - Playwright E2E: `z0-closed-loop-face-synthesis.spec.ts` explicit
+    opt-in + `z0-face-split-all-tools.spec.ts` 의 기존 opt-in 확장
+  - 회귀 0 (Step 4.99 가 mop-up 단계라 earlier 단계 4.5/4.6/4.9/4.95 가
+    이미 closed cycle synthesis 처리 — 사용자 facing 효과 미미, 향후
+    B-β-3 에서 earlier 단계 disable 시 본격 영향 발생 예상)
+  - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54 /
+    vitest 1931 모두 PASS
+- **(β-3 ~ β-4): 다음 atomic sub-step** (별도 PR):
+  - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일, 가장 큰
+    sub-step — closed cycle synthesis 의 본질 영향)
   - B-β-4: DrawLine closed loop 자동 face 합성 폐기 (TS, ~30분)
 
 ## 14. β implementation atomic sub-step plan (B-α ~ B-μ)
