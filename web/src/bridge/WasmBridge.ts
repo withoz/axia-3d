@@ -570,6 +570,12 @@ type AxiaEngineExtended = AxiaEngine & {
   setFaceSurfaceTorus?(...args: number[]): boolean;
   clearFaceSurface?(faceId: number): boolean;
   faceSurfaceKind?(faceId: number): number;
+  // ADR-110 P-δ — Entity provenance (creating CommandId).
+  // Returns -1 (or `null` via bridge) when entity has no stamp.
+  faceProvenance?(faceId: number): number | bigint;
+  edgeProvenance?(edgeId: number): number | bigint;
+  vertProvenance?(vertId: number): number | bigint;
+  facesByCommand?(commandId: bigint): Uint32Array;
   tessellateFaceSurface?(faceId: number, chordTol: number): Float64Array;
   // ADR-086 O-γ — Inject external face (STEP/IGES Approach A)
   injectExternalFaceNoSurface?(positionsXyz: Float64Array): number;
@@ -3854,10 +3860,90 @@ export class WasmBridge {
       const ids = new Uint32Array(faceIds);
       const json = this.engine.get_xia_info?.(ids);
       if (!json) return null;
-      return JSON.parse(json) as XiaInfo;
+      const info = JSON.parse(json) as XiaInfo;
+      // ADR-110 P-δ — Attach common provenance for selected faces.
+      // Returns the CommandId only if ALL selected faces share the same
+      // creating Command (else undefined = mixed origin or no stamp).
+      const provs = faceIds
+        .map((fid) => this.faceProvenance(fid))
+        .filter((v): v is number => v !== null);
+      if (provs.length === faceIds.length && provs.length > 0) {
+        const first = provs[0];
+        if (provs.every((p) => p === first)) {
+          info.provenance = first;
+        }
+      }
+      return info;
     } catch (e) {
       console.error('[WasmBridge] getXiaInfo failed:', e);
       return null;
+    }
+  }
+
+  /**
+   * ADR-110 P-δ — Read entity provenance (creating CommandId).
+   * Returns `null` if entity has no stamp (anonymous mutation, missing,
+   * or WASM endpoint absent in legacy builds).
+   */
+  faceProvenance(faceId: number): number | null {
+    if (!this.engine) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).faceProvenance;
+    if (typeof fn !== 'function') return null;
+    try {
+      const raw = fn.call(this.engine, faceId) as number | bigint;
+      const v = typeof raw === 'bigint' ? Number(raw) : raw;
+      return v >= 0 ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** ADR-110 P-δ — Edge provenance. */
+  edgeProvenance(edgeId: number): number | null {
+    if (!this.engine) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).edgeProvenance;
+    if (typeof fn !== 'function') return null;
+    try {
+      const raw = fn.call(this.engine, edgeId) as number | bigint;
+      const v = typeof raw === 'bigint' ? Number(raw) : raw;
+      return v >= 0 ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** ADR-110 P-δ — Vertex provenance. */
+  vertProvenance(vertId: number): number | null {
+    if (!this.engine) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).vertProvenance;
+    if (typeof fn !== 'function') return null;
+    try {
+      const raw = fn.call(this.engine, vertId) as number | bigint;
+      const v = typeof raw === 'bigint' ? Number(raw) : raw;
+      return v >= 0 ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ADR-110 P-δ — Reverse lookup: face IDs created by a given Command.
+   * Returns `[]` if Command unknown or WASM endpoint absent.
+   */
+  facesByCommand(commandId: number): number[] {
+    if (!this.engine) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (this.engine as any).facesByCommand;
+    if (typeof fn !== 'function') return [];
+    try {
+      // wasm-bindgen takes u64; pass as BigInt to preserve precision.
+      const result = fn.call(this.engine, BigInt(commandId)) as Uint32Array | number[];
+      return Array.from(result);
+    } catch {
+      return [];
     }
   }
 
@@ -4714,6 +4800,12 @@ export interface XiaInfo {
   height?: number;  // mm
   surfaceArea?: number; // mm²
   volume?: number;      // mm³
+  /**
+   * ADR-110 P-δ — Creating CommandId common across all selected faces.
+   * `undefined` if faces have no stamp (anonymous origin) or mixed
+   * provenance (selection spans multiple Commands).
+   */
+  provenance?: number;
 }
 
 export interface GroupInfo {

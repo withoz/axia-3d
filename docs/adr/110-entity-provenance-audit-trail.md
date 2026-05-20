@@ -191,16 +191,59 @@ impl Mesh {
 - **사용자 facing**: 외부 변경 0. Engine 내부 provenance 활성. P-δ
   (Inspector UI) 별도 트랙 시 디버깅 / AI agent 의도 분석 unlock.
 
-### P-β ~ P-δ (planned)
+### P-δ (본 commit, 2026-05-20) — Inspector UI + WASM bridge + provenance display
 
-| Sub | 목표 | 예상 회귀 |
-|-----|------|----------|
-| P-β | Mesh-level field + API + Command boundary stamp (engine only) | +5 |
-| P-γ | TransactionManager integration + Scene::execute stamp | +3 |
-| P-δ | Inspector UI provenance display (optional, gated by user 결재) | +3 |
+- **commit**: 본 commit
+- **변경 (6 파일)**:
+  - `crates/axia-wasm/src/lib.rs` — 4 WASM exports:
+    `faceProvenance(face_id) -> i64` / `edgeProvenance` / `vertProvenance`
+    (-1 sentinel for None) + `facesByCommand(u64) -> Vec<u32>` reverse lookup
+  - `crates/axia-wasm/tests/export_baseline.txt` — 4 신규 export 등록
+    (ADR-076 §C-amendment-1 baseline guard 정합)
+  - `web/src/bridge/WasmBridge.ts`:
+    - `AxiaEngineExtended` interface 에 4 methods (optional, graceful
+      legacy build 호환)
+    - `XiaInfo.provenance?: number` 필드 추가
+    - 4 typed wrappers: `faceProvenance` / `edgeProvenance` /
+      `vertProvenance` / `facesByCommand` — -1 → null mapping +
+      BigInt round-trip + graceful return `null`/`[]`
+    - `getXiaInfo` 가 selected faces 의 *공통* provenance 만 attach
+      (mixed origin / no stamp → undefined)
+  - `web/index.html` — Inspector 에 `xi-provenance-row` 추가
+    (default hidden, only shown on common stamp)
+  - `web/src/ui/XiaInspector.ts` — selected faces 의 common provenance
+    표시 (`#N` 형식, 없으면 행 숨김)
+- **회귀 자산** (8, 절대 #[ignore] 금지):
+  - axia-wasm: `wasm_export_baseline_unchanged` PASS (4 신규 entries
+    추가됨)
+  - web vitest (8 신규):
+    * `faceProvenance returns number when engine returns ≥ 0`
+    * `faceProvenance returns null when engine returns -1 (anonymous)`
+    * `faceProvenance returns null when WASM endpoint missing (legacy build)`
+    * `edgeProvenance / vertProvenance mirror the same pattern`
+    * `facesByCommand forwards BigInt to engine and returns number[]`
+    * `facesByCommand returns [] when WASM endpoint missing`
+    * `getXiaInfo attaches common provenance for selected faces`
+    * `getXiaInfo omits provenance for mixed origin`
+- **Sweep**:
+  - web vitest: 1828 → **1836 PASS** (+8)
+  - axia-wasm baseline guard: **54 PASS** unchanged
+  - 절대 #[ignore] 금지 8/8 준수
+- **사용자 facing**: Inspector 가 선택된 face(s) 의 *공통* origin
+  Command 를 `#N` 형식으로 표시. Mixed origin / no stamp 시 행 숨김.
+  legacy build (WASM endpoint 부재) 환경에서도 graceful (행 숨김).
 
-**예상 누적**: docs +1 + axia-geo / axia-core +8 + web +3,
-multi-week atomic.
+### Total accumulated (P-α + P-β + P-γ + P-δ)
+
+- docs +1 ADR
+- axia-geo +6 (P-β engine layer)
+- axia-core +2 (P-γ Scene integration)
+- axia-wasm baseline +4 (P-δ exports)
+- web vitest +8 (P-δ bridge wrappers + getXiaInfo)
+- **합계 +16**, 절대 #[ignore] 금지 16/16 준수
+
+ADR-110 4-sub-step closure 완료 (P-α spec → P-β engine → P-γ Scene →
+P-δ UI). Tier 1 batch 의 **첫 번째 ADR full closure**.
 
 ---
 
