@@ -1476,6 +1476,20 @@
     - Scenario 5: Path A ↔ Path B toggle integrity
     - Scenario 6: Visual capture (overall + rim zoom)
     - Scenario 7: 5× cylinders linear scaling (15/10/10)
+  * **Default ON side effect inventory** (ADR-104 amendment, 2026-05-20):
+    Path B default flip 이 동일 날짜 (2026-05-09) 작성된 test 의 의미
+    drift 유발. 향후 default flip ADR 의 acceptance log 에 "관련 test
+    assertion sweep" step 필수 (메타-인프라). 발견된 sites:
+    - **ADR-092 C-δ Playwright** (`adr-092-pushpull-circle-rim.spec.ts:40`,
+      ADR-102 R-θ skip → ADR-104 fix) — Path A: 46 multi-segment edges ×
+      8 seg vs Path B: 2 multi-segment edges × 23 seg. 같은 semantic
+      intent ("rim 매끈") 의 두 manifestation. 새 assertion =
+      `totalSegmentsPost >= 16 && multiSegmentEdges >= 2` (둘 다 통과).
+    - **잠재 sites** (audit pending): chord_tol / segment_count 기반
+      모든 visual / structural test. 향후 발견 시 본 inventory 추가.
+    - **canonical rule**: Engine truth (Rust unit test, Path A default) ≠
+      Render observable (Browser Playwright, Path B default). Assertion
+      은 semantic intent 기준, path-specific manifestation 명시 분리.
 
 - **ADR-094 amendment (2026-05-09)** — Path B-full Refined Plan
   closure (multi-week atomic architectural track):
