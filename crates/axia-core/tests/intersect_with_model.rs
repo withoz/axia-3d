@@ -139,10 +139,15 @@ fn no_intersection_no_change() {
 /// Phase 2 — auto_intersect_on_draw = true 일 때 두 번째 rect 를 그리면
 /// 첫 번째 rect 와 자동 교차되어 sub-face 가 생성된다.
 /// 그리고 Ctrl+Z 한 번으로 draw + intersect 전체를 취소해야 한다.
+///
+/// ADR-139 B-β-1 (2026-05-18): default `false` 후 explicit opt-in 필요.
+/// Legacy auto-intersect 동작 검증 위해 explicit `= true` 설정.
 #[test]
 fn auto_intersect_on_draw_single_undo() {
     let mut scene = Scene::default();
-    assert!(scene.auto_intersect_on_draw, "default should be true");
+    // ADR-139 B-β-1: explicit opt-in for legacy auto-intersect behavior
+    scene.auto_intersect_on_draw = true;
+    assert!(scene.auto_intersect_on_draw, "explicit opt-in");
 
     // A: XY 평면 (Z=0) 1000×1000 centered (0,0,0)
     let a_result = scene.execute(Command::DrawRect {
@@ -207,8 +212,9 @@ fn auto_intersect_toggle_affects_result() {
     });
     let count_off = scene_off.mesh.faces.iter().filter(|(_,f)| f.is_active()).count();
 
-    // ON 상태 (default)
+    // ON 상태 (ADR-139 B-β-1 후 explicit opt-in — default 는 OFF)
     let mut scene_on = Scene::default();
+    scene_on.auto_intersect_on_draw = true; // ADR-139 B-β-1: explicit opt-in
     assert!(scene_on.auto_intersect_on_draw);
     scene_on.execute(Command::DrawRect {
         center: DVec3::new(0.0, 0.0, 0.0),
