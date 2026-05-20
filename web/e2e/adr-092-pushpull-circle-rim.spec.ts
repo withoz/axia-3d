@@ -37,12 +37,7 @@ test.describe('ADR-092 C-δ — Push-Pull Circle rim preservation', () => {
     await waitForBridgeReady(page);
   });
 
-  // ADR-102 R-θ-skip — `multiSegmentEdges >= 16` 가 CI Linux 에서 미충족
-  // (received ~few). ADR-092 C-δ engine 동작 (closed Circle Push-Pull
-  // top rim Arc 보존) 의 chord_tol / segment_count 산출이 host platform
-  // 별 차이 또는 본 implementation 의 잔존 한계. 별도 engine-level audit
-  // ADR (가칭 ADR-104) 트랙으로 분리. local Windows 에서는 정상 passing.
-  test.skip('top rim has Arc curves after Push-Pull on closed-curve Circle', async ({ page }) => {
+  test('top rim has Arc curves after Push-Pull on closed-curve Circle', async ({ page }) => {
     const result = await page.evaluate(() => {
       const w = window as unknown as AxiaWindow;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,20 +109,29 @@ test.describe('ADR-092 C-δ — Push-Pull Circle rim preservation', () => {
       throw new Error(`Test setup failed: ${(result as { reason?: string }).reason}`);
     }
 
-    // ADR-092 C-β contract:
-    // - Bottom face has N Arc edges (existing — ADR-089 step 6)
-    // - Top face has N Arc edges (NEW — C-β)
-    // - Side N quad faces have 4 edges each: 2 vertical (Line) + 1 bottom
-    //   (shared with bottom face Arc) + 1 top (shared with top face Arc)
+    // ADR-092 C-δ semantic: 'top rim is smooth (Arc-rendered), not polygon'.
     //
-    // After C-β: 2N edges have Arc (bottom + top rim) — multi-segment in render.
-    // Pre-C-β: only N edges had Arc (bottom rim only) — multi-segment count ≈ N.
+    // ADR-104 audit (2026-05-20) — original assertion (`multiSegmentEdges >= 16`)
+    // was written 2026-05-09 BEFORE ADR-094 Path B default ON (same date).
+    // Browser activates Path B → cylinder is 3 face / 2 edge / 2 vert
+    // (산업 CAD parity, ~97% memory reduction). Both rims become *single*
+    // self-loop edges with Circle/Arc curve attached, rendering via the
+    // ADR-089 A-κ-β closed-curve fast-path (one EdgeId emits N polyline
+    // segments).
     //
-    // For default Circle (radius 5, chord_tol = 5/100 = 0.05mm), N is computed
-    // by segment_count_for_arc and is ≥ 8. Conservatively assert ≥ 16 multi-
-    // segment edges (proves both bottom + top are smooth).
+    // Path B canonical observable:
+    //   - exactly 2 multi-segment edges (top rim + bottom rim self-loops)
+    //   - total segments >= 16 (proves both are smooth, not 1-segment lines)
+    //
+    // Path A (legacy / Rust unit test default — Path B mode OFF) would
+    // show ~46 multi-segment edges with ~8 segments each (per-Arc segment).
+    // Both paths satisfy the semantic intent ('top rim smooth') — assertion
+    // checks the invariant that survives the path swap.
     expect(result.ok).toBe(true);
-    expect(result.multiSegmentEdges).toBeGreaterThanOrEqual(16);
+    // Each rim is at least 8 segments smooth (chord_tol = radius/100 default).
+    expect(result.totalSegmentsPost).toBeGreaterThanOrEqual(16);
+    // At least 2 distinct edges produce multi-segment renders (top + bottom rim).
+    expect(result.multiSegmentEdges).toBeGreaterThanOrEqual(2);
   });
 
   test('Arc-attached top edges produce visibly smoother polyline than straight lines', async ({ page }) => {
