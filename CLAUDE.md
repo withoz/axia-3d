@@ -4568,7 +4568,13 @@ multi-month atomic 트랙 (B-β ~ B-μ) — 별도 PR 시리즈.
 - **2026-05-18 α** (`d233f16` PR #103) — α spec 작성 + Q1~Q5 결재 anchor
 - **2026-05-18 B-β audit** (`a2421d5` PR #104) — multi-hole connected
   inner audit + 즉시 회피 가이드
-- **2026-05-18 docs batch** (본 commit, PR ADR-139 supersede batch):
+- **2026-05-18 B-ζ audit** (PR #128, audit-first canonical 8번째) —
+  회귀 자산 update audit (5 layer inventory + update type 매트릭스 +
+  위험 분석). 총 ~275-280 회귀 자산 inventory — 불변 ~123 (45%) /
+  명시 호출 추가 ~45 (17%) / 재작성 ~107 (39%) / count 영향 ~27 (10%).
+  B-β implementation 진입 전 위험 격리 + sub-step 분할 (B-β-1~B-β-4)
+  권장.
+- **2026-05-18 docs batch** (PR #127, supersede notes):
   - B-η — LOCKED #1 / #12 / #41 supersede docs
   - B-θ — ADR-138 closure note (이미 ADR-138 §SUPERSEDED NOTE 에 등재)
   - B-κ — 메타-원칙 #14 amendment + #16 신설
