@@ -3503,9 +3503,14 @@ impl Mesh {
     // face_via_tessellation` (ADR-089 A-θ Path A).
     // ========================================================================
 
-    /// ADR-105 R-α — Detect a closed-curve face: 1 outer vertex (anchor) +
-    /// 1 self-loop edge with Circle curve attached. Bezier/BSpline/NURBS
-    /// variants deferred (R-β follow-up).
+    /// ADR-105 R-α/R-β — Detect a closed-curve face: 1 outer vertex
+    /// (anchor) + 1 self-loop edge with a closed AnalyticCurve attached.
+    ///
+    /// R-α (2026-05-20): Circle only.
+    /// R-β (2026-05-20): Circle + Bezier + BSpline + NURBS — all closed-
+    /// curve types ADR-089 시민권 (A-η-1 / A-ω / A-Α / A-Β).
+    /// Arc 는 *부분* 곡선이라 closed-curve face 의 self-loop 로 쓰이지
+    /// 않음 → false 반환.
     pub fn is_closed_curve_face(&self, face_id: FaceId) -> bool {
         let face = match self.faces.get(face_id) {
             Some(f) if f.is_active() => f,
@@ -3527,22 +3532,34 @@ impl Mesh {
             Some(e) if e.is_active() && e.is_self_loop() => e,
             _ => return false,
         };
-        matches!(edge.curve(), Some(crate::curves::AnalyticCurve::Circle { .. }))
+        matches!(
+            edge.curve(),
+            Some(crate::curves::AnalyticCurve::Circle { .. })
+                | Some(crate::curves::AnalyticCurve::Bezier { .. })
+                | Some(crate::curves::AnalyticCurve::BSpline { .. })
+                | Some(crate::curves::AnalyticCurve::NURBS { .. })
+        )
     }
 
-    /// ADR-105 R-α — Replace a closed-curve face (1 anchor + 1 self-loop
-    /// Circle edge) with a polygonal substitute (N ≥ 8 verts, Arc curve on
-    /// each segment edge, parent's Plane surface preserved). Returns the new
+    /// ADR-105 R-α/R-β — Replace a closed-curve face (1 anchor + 1 self-
+    /// loop curve edge) with a polygonal substitute. Returns the new
     /// polygonal face's FaceId.
     ///
     /// Caller is responsible for ensuring `is_closed_curve_face(face_id)`
     /// before calling. Returns `Err` if not a closed-curve face or if the
     /// tessellation yields too few points (< 4).
     ///
-    /// Pattern: mirrors `extrude_closed_curve_face_via_tessellation`
-    /// (create_solid.rs steps 1–6). The new face's outer loop has N edges
-    /// each carrying an `AnalyticCurve::Arc { center, radius, normal,
-    /// basis_u, start_angle = i·2π/N, end_angle = (i+1)·2π/N }`.
+    /// Curve-type specific behavior:
+    /// - **Circle (R-α)**: N ≥ 8 polygon, each segment edge carries an
+    ///   `AnalyticCurve::Arc { ... }` (render fast-path A-κ-β kicks in
+    ///   → sub-faces render as smooth ring).
+    /// - **Bezier / BSpline / NURBS (R-β)**: N polygon (count derived
+    ///   from chord_tol), segment edges carry no curve metadata (sub-
+    ///   faces render as straight polygon facets — analytic metadata
+    ///   loss is the accepted cost of split).
+    ///
+    /// Parent's Plane surface + surface_owner_id always inherited
+    /// (ADR-089 A-χ-β + ADR-106 R-α).
     pub fn tessellate_closed_curve_face_in_place(
         &mut self,
         face_id: FaceId,
@@ -3557,32 +3574,71 @@ impl Mesh {
         let parent_surface = face.surface().cloned();
         let parent_owner_id = self.face_surface_owner_id(face_id);
 
-        // 1. Locate self-loop edge + Circle curve params.
+        // 1. Locate self-loop edge + curve.
         let self_loop_edge_id = self.hes[outer_start].edge();
         let anchor_vid = self.edges[self_loop_edge_id].v_small();
         let curve = self.edges[self_loop_edge_id].curve().cloned()
             .ok_or_else(|| anyhow::anyhow!(
                 "is_closed_curve_face passed but edge has no curve — inconsistency"
             ))?;
-        let (center, radius, normal, basis_u) = match curve {
-            crate::curves::AnalyticCurve::Circle { center, radius, normal, basis_u } => {
-                (center, radius, normal, basis_u)
+
+        // 2. Tessellate per curve type. Each branch returns (pts, sub_arcs)
+        //    where `sub_arcs` is the Arc curve to attach per segment edge
+        //    (Circle only; None for Bezier/BSpline/NURBS — R-β scope).
+        use crate::curves::AnalyticCurve;
+        let (pts, sub_arcs_circle): (
+            Vec<DVec3>,
+            Option<(DVec3, f64, DVec3, DVec3)>, // (center, radius, normal, basis_u)
+        ) = match curve {
+            AnalyticCurve::Circle { center, radius, normal, basis_u } => {
+                let chord_tol = (radius * 0.01).max(1e-6);
+                let pts = crate::curves::circle::tessellate_full(
+                    center, radius, normal, basis_u, chord_tol,
+                );
+                (pts, Some((center, radius, normal, basis_u)))
             }
-            _ => bail!("only Circle curves supported in R-α (Bezier/BSpline/NURBS R-β)"),
+            AnalyticCurve::Bezier { control_pts } => {
+                let chord_tol = 0.05;
+                let pts = crate::curves::bezier::tessellate(&control_pts, chord_tol)
+                    .map_err(|e| anyhow::anyhow!("bezier tessellation failed: {}", e))?;
+                (pts, None)
+            }
+            AnalyticCurve::BSpline { ref control_pts, ref knots, degree } => {
+                let chord_tol = 0.05;
+                let pts = crate::curves::bspline::tessellate(
+                    control_pts, knots, degree as usize, chord_tol,
+                ).map_err(|e| anyhow::anyhow!("bspline tessellation failed: {}", e))?;
+                (pts, None)
+            }
+            AnalyticCurve::NURBS { ref control_pts, ref weights, ref knots, degree } => {
+                let chord_tol = 0.05;
+                let pts = crate::curves::nurbs::tessellate(
+                    control_pts, weights, knots, degree as usize, chord_tol,
+                ).map_err(|e| anyhow::anyhow!("nurbs tessellation failed: {}", e))?;
+                (pts, None)
+            }
+            _ => bail!(
+                "tessellate_closed_curve_face_in_place: unsupported curve variant"
+            ),
         };
 
-        // 2. Tessellate (chord_tol = radius / 100 → ~32 seg, min 8 enforced).
-        let chord_tol = (radius * 0.01).max(1e-6);
-        let pts = crate::curves::circle::tessellate_full(
-            center, radius, normal, basis_u, chord_tol,
-        );
         if pts.len() < 4 {
             bail!(
                 "tessellate_closed_curve_face_in_place: tessellation produced {} points (need ≥ 4)",
                 pts.len()
             );
         }
-        let unique_pts = &pts[..pts.len() - 1];
+        // Drop trailing closure duplicate if present (Circle's tessellate_full
+        // returns N+1 with last == first; Bezier/BSpline/NURBS may or may
+        // not — defensively check).
+        let unique_pts: &[DVec3] = if pts.len() >= 2
+            && (pts.last().unwrap() - pts.first().unwrap()).length_squared()
+                < 1e-10
+        {
+            &pts[..pts.len() - 1]
+        } else {
+            &pts[..]
+        };
         let tess_verts: Vec<VertId> =
             unique_pts.iter().map(|p| self.add_vertex(*p)).collect();
 
@@ -3613,24 +3669,27 @@ impl Mesh {
             self.set_face_surface_owner_id(substituted, Some(owner));
         }
 
-        // 6. Attach Arc curves to each substitute edge — ADR-089 step 6
-        //    mirror. Preserves analytic metadata for render fast-path (A-κ).
-        let n_seg = tess_verts.len();
-        let edges = self.face_outer_edges(substituted)?;
-        let two_pi = std::f64::consts::TAU;
-        for (i, &eid) in edges.iter().enumerate() {
-            let theta_start = (i as f64) * two_pi / (n_seg as f64);
-            let theta_end = ((i + 1) as f64) * two_pi / (n_seg as f64);
-            let arc = crate::curves::AnalyticCurve::Arc {
-                center,
-                radius,
-                normal,
-                basis_u,
-                start_angle: theta_start,
-                end_angle: theta_end,
-            };
-            if let Some(edge_mut) = self.edges.get_mut(eid) {
-                edge_mut.set_curve(Some(arc));
+        // 6. Attach Arc curves to each substitute edge — Circle only (R-α
+        //    pattern). For Bezier/BSpline/NURBS (R-β), segment edges remain
+        //    straight (no curve metadata) — analytic-metadata loss accepted.
+        if let Some((center, radius, normal, basis_u)) = sub_arcs_circle {
+            let n_seg = tess_verts.len();
+            let edges = self.face_outer_edges(substituted)?;
+            let two_pi = std::f64::consts::TAU;
+            for (i, &eid) in edges.iter().enumerate() {
+                let theta_start = (i as f64) * two_pi / (n_seg as f64);
+                let theta_end = ((i + 1) as f64) * two_pi / (n_seg as f64);
+                let arc = AnalyticCurve::Arc {
+                    center,
+                    radius,
+                    normal,
+                    basis_u,
+                    start_angle: theta_start,
+                    end_angle: theta_end,
+                };
+                if let Some(edge_mut) = self.edges.get_mut(eid) {
+                    edge_mut.set_curve(Some(arc));
+                }
             }
         }
 

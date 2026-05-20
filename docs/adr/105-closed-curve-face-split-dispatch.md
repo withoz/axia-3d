@@ -130,9 +130,9 @@ internal pre-dispatch*. 사용자 facing 효과 (Toast "면 분할 실패" 사�
 
 ## D. Acceptance Log
 
-### R-α (본 commit) — Engine fix + 5 regression + ADR
+### R-α (PR-119, 2026-05-20) — Engine fix + 5 regression + ADR (Circle only)
 
-- **commit**: 본 commit
+- **commit**: `5642592`
 - **변경 (3 파일)**:
   - `crates/axia-geo/src/mesh.rs` — `is_closed_curve_face` +
     `tessellate_closed_curve_face_in_place` API 신규
@@ -149,6 +149,36 @@ internal pre-dispatch*. 사용자 facing 효과 (Toast "면 분할 실패" 사�
 - **사용자 facing**: DrawCircle (closed-curve mode default ON, ADR-089
   A-π) → DrawLine chord → 면 분할 성공 + Plane surface 보존 + Arc 곡선
   metadata 유지 (render fast-path).
+
+### R-β (본 commit, 2026-05-20) — Bezier / BSpline / NURBS dispatch
+
+- **commit**: 본 commit
+- **R-β scope**: R-α 의 자연 확장. closed Bezier / BSpline / NURBS
+  face 모두 같은 dispatcher path 진입. R-α 가 미커버한 4 곡선 type 중
+  3 (Circle 이미 R-α) 활성. ADR-089 시민권 4 type 모두 split 영역에서
+  활성.
+- **변경 (2 파일)**:
+  - `crates/axia-geo/src/mesh.rs`:
+    - `is_closed_curve_face` — Bezier/BSpline/NURBS variant 도 true
+    - `tessellate_closed_curve_face_in_place` — curve type 분기 + 각
+      tessellate API 호출. **Circle 만 Arc curve attach** (render
+      fast-path 활성), **Bezier/BSpline/NURBS 는 sub-edges 가 curve 미부착**
+      (R-β scope — analytic-metadata 손실 accepted, polygon facet 으로
+      render. 사용자 정신적 trade-off: split 의도 = 의도된 metadata 손실).
+- **신규 회귀 자산** (5 in `create_solid.rs::tests`):
+  - `adr105_r_beta_is_closed_curve_face_detects_bezier`
+  - `adr105_r_beta_is_closed_curve_face_detects_bspline`
+  - `adr105_r_beta_is_closed_curve_face_detects_nurbs`
+  - `adr105_r_beta_tessellate_closed_bezier_substitutes_to_polygon` —
+    sub-edges no curve metadata 확인 (R-β accepted)
+  - `adr105_r_beta_split_closed_bezier_face_via_dispatch` — 사용자
+    workflow (closed Bezier + chord) end-to-end
+- **회귀**: axia-geo lib **1272 PASS** (이전 1267, +5), 0 failed, 0 ignored
+- **사용자 facing**: closed Bezier / BSpline / NURBS face (ADR-089 A-ω
+  / A-Α / A-Β 시민권) + chord → 면 분할 성공. Sub-faces 는 polygon
+  facet 으로 render (R-β accepted trade-off — split 의도).
+- **R-α + R-β 합산 효과**: ADR-089 시민권 4 closed-curve type 모두
+  split 영역 활성. 메타-원칙 #14 + LOCKED #1 P7 의 *완전* 활성.
 
 ---
 

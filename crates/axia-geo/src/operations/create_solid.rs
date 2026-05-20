@@ -5434,6 +5434,136 @@ mod tests {
         }
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-105 R-β — closed Bezier / BSpline / NURBS dispatch.
+    //   Phase 2 시민권 (ADR-089 A-ω/A-Α/A-Β) 의 split 영역 확장.
+    // ────────────────────────────────────────────────────────────────
+
+    fn build_closed_bezier_square_face(mesh: &mut Mesh) -> FaceId {
+        // 4 control points + closure → square-ish closed Bezier on z=0.
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::Bezier {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+        };
+        mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("closed Bezier face build")
+    }
+
+    fn build_closed_bspline_square_face(mesh: &mut Mesh) -> FaceId {
+        // Clamped knots, 5 control points (with closure), degree 3.
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::BSpline {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("closed BSpline face build")
+    }
+
+    fn build_closed_nurbs_square_face(mesh: &mut Mesh) -> FaceId {
+        let anchor = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let curve = crate::curves::AnalyticCurve::NURBS {
+            control_pts: vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(10.0, 0.0, 0.0),
+                DVec3::new(10.0, 10.0, 0.0),
+                DVec3::new(0.0, 10.0, 0.0),
+                DVec3::new(0.0, 0.0, 0.0),
+            ],
+            weights: vec![1.0, 1.0, 1.0, 1.0, 1.0],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            degree: 3,
+        };
+        mesh.add_face_closed_curve(anchor, curve, MaterialId::new(0))
+            .expect("closed NURBS face build")
+    }
+
+    #[test]
+    fn adr105_r_beta_is_closed_curve_face_detects_bezier() {
+        let mut mesh = Mesh::new();
+        let f = build_closed_bezier_square_face(&mut mesh);
+        assert!(mesh.is_closed_curve_face(f),
+            "closed Bezier face must be detected (R-β)");
+    }
+
+    #[test]
+    fn adr105_r_beta_is_closed_curve_face_detects_bspline() {
+        let mut mesh = Mesh::new();
+        let f = build_closed_bspline_square_face(&mut mesh);
+        assert!(mesh.is_closed_curve_face(f),
+            "closed BSpline face must be detected (R-β)");
+    }
+
+    #[test]
+    fn adr105_r_beta_is_closed_curve_face_detects_nurbs() {
+        let mut mesh = Mesh::new();
+        let f = build_closed_nurbs_square_face(&mut mesh);
+        assert!(mesh.is_closed_curve_face(f),
+            "closed NURBS face must be detected (R-β)");
+    }
+
+    #[test]
+    fn adr105_r_beta_tessellate_closed_bezier_substitutes_to_polygon() {
+        let mut mesh = Mesh::new();
+        let f = build_closed_bezier_square_face(&mut mesh);
+        let substituted = mesh.tessellate_closed_curve_face_in_place(f)
+            .expect("Bezier tessellation OK");
+        // Polygonal with N segment edges, NO Arc curve attached (R-β scope).
+        let edges = mesh.face_outer_edges(substituted).expect("edges OK");
+        assert!(edges.len() >= 4,
+            "Bezier tessellation must produce N >= 4 segments, got {}", edges.len());
+        for &eid in &edges {
+            assert!(
+                mesh.edges[eid].curve().is_none(),
+                "R-β: Bezier sub-edges carry no curve metadata (analytic loss accepted)"
+            );
+        }
+        assert!(!mesh.is_closed_curve_face(substituted),
+            "polygonal substitute must not be classified as closed-curve");
+    }
+
+    #[test]
+    fn adr105_r_beta_split_closed_bezier_face_via_dispatch() {
+        use crate::operations::face_split::split_face_by_line;
+        let mut mesh = Mesh::new();
+        let f = build_closed_bezier_square_face(&mut mesh);
+        // Attach Plane surface to verify inheritance after split.
+        let plane = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (0.0, 10.0),
+            v_range: (0.0, 10.0),
+        };
+        mesh.faces[f].set_surface(Some(plane));
+
+        // Chord across the Bezier interior (rough horizontal cut at y=5).
+        let chord_start = DVec3::new(-1.0, 5.0, 0.0);
+        let chord_end = DVec3::new(11.0, 5.0, 0.0);
+        let result = split_face_by_line(&mut mesh, f, chord_start, chord_end)
+            .expect("Bezier chord split via ADR-105 R-β dispatch must succeed");
+        assert!(result.new_faces.len() >= 2,
+            "closed Bezier + chord must yield ≥ 2 sub-faces, got {}",
+            result.new_faces.len());
+        for &fid in &result.new_faces {
+            assert!(mesh.faces[fid].surface().is_some(),
+                "R-β: sub-face must inherit Plane surface from parent");
+        }
+    }
+
     #[test]
     fn adr105_polygonal_circle_split_unaffected_by_dispatch() {
         // Regression guard — polygonal circle (built via build_circle_face
