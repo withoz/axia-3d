@@ -3489,6 +3489,155 @@ impl Mesh {
     }
 
     // ========================================================================
+    // ADR-105 R-α — Closed-curve face polygonal substitution
+    //
+    // A closed-curve face (1 anchor vert + 1 self-loop edge with Circle
+    // curve) cannot be split by polygon-aware functions (split_face_by_line,
+    // find_line_crossings, point_in_face). Bug report 2026-05-19 시나리오
+    // 1 (CRITICAL): "원 그리고 자르기" silent functional failure.
+    //
+    // Solution: at face-split entry, detect closed-curve face → tessellate
+    // into polygonal substitute (N ≥ 8 vertices) preserving Plane surface +
+    // Arc curves on each segment edge. Polygon-aware code then handles the
+    // chord split via existing flow. Pattern mirrors `extrude_closed_curve_
+    // face_via_tessellation` (ADR-089 A-θ Path A).
+    // ========================================================================
+
+    /// ADR-105 R-α — Detect a closed-curve face: 1 outer vertex (anchor) +
+    /// 1 self-loop edge with Circle curve attached. Bezier/BSpline/NURBS
+    /// variants deferred (R-β follow-up).
+    pub fn is_closed_curve_face(&self, face_id: FaceId) -> bool {
+        let face = match self.faces.get(face_id) {
+            Some(f) if f.is_active() => f,
+            _ => return false,
+        };
+        let outer_start = face.outer().start;
+        if outer_start.is_null() {
+            return false;
+        }
+        let loop_verts = match self.collect_loop_verts(outer_start) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if loop_verts.len() != 1 {
+            return false;
+        }
+        let edge_id = self.hes[outer_start].edge();
+        let edge = match self.edges.get(edge_id) {
+            Some(e) if e.is_active() && e.is_self_loop() => e,
+            _ => return false,
+        };
+        matches!(edge.curve(), Some(crate::curves::AnalyticCurve::Circle { .. }))
+    }
+
+    /// ADR-105 R-α — Replace a closed-curve face (1 anchor + 1 self-loop
+    /// Circle edge) with a polygonal substitute (N ≥ 8 verts, Arc curve on
+    /// each segment edge, parent's Plane surface preserved). Returns the new
+    /// polygonal face's FaceId.
+    ///
+    /// Caller is responsible for ensuring `is_closed_curve_face(face_id)`
+    /// before calling. Returns `Err` if not a closed-curve face or if the
+    /// tessellation yields too few points (< 4).
+    ///
+    /// Pattern: mirrors `extrude_closed_curve_face_via_tessellation`
+    /// (create_solid.rs steps 1–6). The new face's outer loop has N edges
+    /// each carrying an `AnalyticCurve::Arc { center, radius, normal,
+    /// basis_u, start_angle = i·2π/N, end_angle = (i+1)·2π/N }`.
+    pub fn tessellate_closed_curve_face_in_place(
+        &mut self,
+        face_id: FaceId,
+    ) -> Result<FaceId> {
+        if !self.is_closed_curve_face(face_id) {
+            bail!("tessellate_closed_curve_face_in_place: face {:?} is not a closed-curve face", face_id);
+        }
+
+        let face = &self.faces[face_id];
+        let outer_start = face.outer().start;
+        let material = face.material();
+        let parent_surface = face.surface().cloned();
+        let parent_owner_id = self.face_surface_owner_id(face_id);
+
+        // 1. Locate self-loop edge + Circle curve params.
+        let self_loop_edge_id = self.hes[outer_start].edge();
+        let anchor_vid = self.edges[self_loop_edge_id].v_small();
+        let curve = self.edges[self_loop_edge_id].curve().cloned()
+            .ok_or_else(|| anyhow::anyhow!(
+                "is_closed_curve_face passed but edge has no curve — inconsistency"
+            ))?;
+        let (center, radius, normal, basis_u) = match curve {
+            crate::curves::AnalyticCurve::Circle { center, radius, normal, basis_u } => {
+                (center, radius, normal, basis_u)
+            }
+            _ => bail!("only Circle curves supported in R-α (Bezier/BSpline/NURBS R-β)"),
+        };
+
+        // 2. Tessellate (chord_tol = radius / 100 → ~32 seg, min 8 enforced).
+        let chord_tol = (radius * 0.01).max(1e-6);
+        let pts = crate::curves::circle::tessellate_full(
+            center, radius, normal, basis_u, chord_tol,
+        );
+        if pts.len() < 4 {
+            bail!(
+                "tessellate_closed_curve_face_in_place: tessellation produced {} points (need ≥ 4)",
+                pts.len()
+            );
+        }
+        let unique_pts = &pts[..pts.len() - 1];
+        let tess_verts: Vec<VertId> =
+            unique_pts.iter().map(|p| self.add_vertex(*p)).collect();
+
+        // 3. Remove original closed-curve face.
+        self.remove_face(face_id)?;
+
+        // 3b. Cleanup orphan self-loop edge + anchor (ADR-089 A-υ pattern).
+        if self.edges.contains(self_loop_edge_id)
+            && self.edges[self_loop_edge_id].is_active()
+        {
+            let _ = self.remove_edge_and_halfedges(self_loop_edge_id);
+        }
+        if self.verts.contains(anchor_vid) && self.verts[anchor_vid].is_active() {
+            if self.verts[anchor_vid].outgoing().is_none() {
+                self.verts[anchor_vid].set_active(false);
+            }
+        }
+
+        // 4. Create polygonal substitute face.
+        let substituted = self.add_face(&tess_verts, material)?;
+
+        // 5. Inherit Plane surface + surface_owner_id from parent (L-θ-5 +
+        //    ADR-106 R-α).
+        if let Some(ref s) = parent_surface {
+            self.faces[substituted].set_surface(Some(s.clone()));
+        }
+        if let Some(owner) = parent_owner_id {
+            self.set_face_surface_owner_id(substituted, Some(owner));
+        }
+
+        // 6. Attach Arc curves to each substitute edge — ADR-089 step 6
+        //    mirror. Preserves analytic metadata for render fast-path (A-κ).
+        let n_seg = tess_verts.len();
+        let edges = self.face_outer_edges(substituted)?;
+        let two_pi = std::f64::consts::TAU;
+        for (i, &eid) in edges.iter().enumerate() {
+            let theta_start = (i as f64) * two_pi / (n_seg as f64);
+            let theta_end = ((i + 1) as f64) * two_pi / (n_seg as f64);
+            let arc = crate::curves::AnalyticCurve::Arc {
+                center,
+                radius,
+                normal,
+                basis_u,
+                start_angle: theta_start,
+                end_angle: theta_end,
+            };
+            if let Some(edge_mut) = self.edges.get_mut(eid) {
+                edge_mut.set_curve(Some(arc));
+            }
+        }
+
+        Ok(substituted)
+    }
+
+    // ========================================================================
     // Edge splitting
     // ========================================================================
 
