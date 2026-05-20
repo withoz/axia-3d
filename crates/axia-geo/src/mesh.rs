@@ -3479,6 +3479,12 @@ impl Mesh {
 
         // Remove the face from storage
         self.faces.remove(face_id);
+        // ADR-106 R-α — clean up `face_to_surface_owner_id` map entry to
+        // prevent stale accumulation (ADR-093 D-β L9 cleanup promise).
+        // `faces_by_surface_owner` filters by `is_active()` so stale entries
+        // are functionally harmless, but they leak memory N×N for cylinder-
+        // heavy scenes (메타-원칙 #12 — Memory Budget Per Entity).
+        self.face_to_surface_owner_id.remove(&face_id);
         Ok(())
     }
 
@@ -3911,6 +3917,11 @@ impl Mesh {
         // (face_id keeps its slot + surface automatically.)
         if let Some(ref s) = parent_surface {
             self.faces[face_b].set_surface(Some(s.clone()));
+        }
+        // ADR-106 R-α — propagate parent surface_owner_id to face_b.
+        // (face_id keeps its slot, so its existing entry stays — ADR-093 D-β L9.)
+        if let Some(owner) = self.face_surface_owner_id(face_id) {
+            self.set_face_surface_owner_id(face_b, Some(owner));
         }
 
         // Set face on he_v2v1
