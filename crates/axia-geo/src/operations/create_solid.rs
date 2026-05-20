@@ -916,6 +916,14 @@ impl Mesh {
         };
         self.faces[annulus_face].set_surface(Some(cylinder_surface));
 
+        // 6b. ADR-106 R-α — annulus face surface_owner_id (Path A symmetry).
+        //     Path A allocates one owner_id per cylinder side group (line
+        //     534-537). Path B's single annulus face deserves the same
+        //     allocation for selection group consistency + future face_split_*
+        //     propagation (ADR-093 D-β L9).
+        let annulus_owner_id = self.next_surface_owner_id();
+        self.set_face_surface_owner_id(annulus_face, Some(annulus_owner_id));
+
         // 7. Aggregate result. Top face has its Plane surface from
         //    add_face_closed_curve (ADR-089 A-η-1). Bottom (profile_face)
         //    too. Annulus has Cylinder.
@@ -5259,6 +5267,95 @@ mod tests {
             assert_eq!(mesh.face_surface_owner_id(fid), first_owner,
                 "all 16 polygonal side faces share the same owner_id");
         }
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-106 R-α — surface_owner_id propagation across face splits +
+    //   Path B annulus owner_id + remove_face map cleanup.
+    //   Bug report 2026-05-19 시나리오 3 (HIGH) fix verification.
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr106_split_face_propagates_surface_owner_id_to_face_b() {
+        // mesh.rs::split_face — face_id keeps slot, face_b is new.
+        // Both should share the parent's surface_owner_id.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        let parent = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let owner = mesh.next_surface_owner_id();
+        assert!(mesh.set_face_surface_owner_id(parent, Some(owner)));
+
+        // Split diagonally v0↔v2.
+        let (kept, face_b) = mesh.split_face(parent, v0, v2).expect("split OK");
+        assert_eq!(kept, parent, "split_face keeps parent slot");
+
+        assert_eq!(
+            mesh.face_surface_owner_id(parent),
+            Some(owner),
+            "parent face_id retains its owner_id after split",
+        );
+        assert_eq!(
+            mesh.face_surface_owner_id(face_b),
+            Some(owner),
+            "face_b inherits parent surface_owner_id (ADR-106 R-α)",
+        );
+
+        // walk from either face returns both.
+        let mut walked = mesh.walk_face_owner_siblings(parent);
+        walked.sort_by_key(|f| f.raw());
+        let mut expected = vec![parent, face_b];
+        expected.sort_by_key(|f| f.raw());
+        assert_eq!(walked, expected,
+            "walk after split returns both sub-faces (siblings stay in group)");
+    }
+
+    #[test]
+    fn adr106_path_b_annulus_face_has_owner_id() {
+        // Path B (extrude_cylinder_kernel_native) annulus face must have
+        // surface_owner_id (Path A symmetry — ADR-093 D-F lock-in).
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 10.0, MaterialId::new(0))
+            .expect("Path B extrude OK");
+        // Path B canonical: side_faces is a single-element vec containing
+        // the annulus face (cylinder side).
+        assert_eq!(result.side_faces.len(), 1,
+            "Path B annulus = single side_face");
+        let annulus = result.side_faces[0];
+        let annulus_owner = mesh.face_surface_owner_id(annulus);
+        assert!(
+            annulus_owner.is_some(),
+            "Path B annulus face must have surface_owner_id (ADR-106 R-α)",
+        );
+        assert_eq!(
+            mesh.walk_face_owner_siblings(annulus),
+            vec![annulus],
+            "walk from annulus returns self (single-face group, ADR-093 D-β walk semantics)",
+        );
+    }
+
+    #[test]
+    fn adr106_remove_face_cleans_surface_owner_id_map() {
+        // ADR-093 D-β L9 cleanup promise — remove_face must remove the
+        // map entry to prevent stale accumulation (메타-원칙 #12).
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        let owner = mesh.next_surface_owner_id();
+        assert!(mesh.set_face_surface_owner_id(f, Some(owner)));
+        assert!(mesh.face_to_surface_owner_id.contains_key(&f),
+            "map has entry before remove");
+
+        mesh.remove_face(f).expect("remove_face OK");
+        assert!(!mesh.face_to_surface_owner_id.contains_key(&f),
+            "ADR-106 R-α: remove_face must clean up surface_owner_id map");
     }
 
     // ────────────────────────────────────────────────────────────────

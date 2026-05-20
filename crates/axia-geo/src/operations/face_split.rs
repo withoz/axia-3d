@@ -715,6 +715,9 @@ pub fn split_face_by_chain(
     //   sub-face contains each hole afterwards).
     // ADR-089 A-χ-β — capture parent surface before soft_remove.
     let parent_surface = mesh.faces[face_id].surface().cloned();
+    // ADR-106 R-α — capture parent surface_owner_id for propagation
+    // (ADR-093 D-β L9 promise: "Inherited by face_split_*").
+    let parent_owner_id = mesh.face_surface_owner_id(face_id);
     mesh.faces[face_id].inners_mut().clear();
     mesh.soft_remove_face(face_id)?;
 
@@ -726,6 +729,11 @@ pub fn split_face_by_chain(
     if let Some(ref s) = parent_surface {
         mesh.faces[fa].set_surface(Some(s.clone()));
         mesh.faces[fb].set_surface(Some(s.clone()));
+    }
+    // ADR-106 R-α — propagate surface_owner_id to both sub-faces (ADR-093 D-β L9).
+    if let Some(owner) = parent_owner_id {
+        mesh.set_face_surface_owner_id(fa, Some(owner));
+        mesh.set_face_surface_owner_id(fb, Some(owner));
     }
 
     // Redistribute any holes by containment, mirroring split_face_by_line.
@@ -1032,6 +1040,8 @@ fn split_face_case_b(
     let material = mesh.faces[face_id].material();
     // ADR-089 A-χ-β — capture parent surface before remove.
     let parent_surface = mesh.faces[face_id].surface().cloned();
+    // ADR-106 R-α — capture parent surface_owner_id (ADR-093 D-β L9).
+    let parent_owner_id = mesh.face_surface_owner_id(face_id);
     mesh.remove_face(face_id)?;
 
     let holes_for_1_slices: Vec<&[VertId]> = holes_for_1.iter().map(|v| v.as_slice()).collect();
@@ -1043,6 +1053,11 @@ fn split_face_case_b(
     if let Some(ref s) = parent_surface {
         mesh.faces[face_1].set_surface(Some(s.clone()));
         mesh.faces[face_2].set_surface(Some(s.clone()));
+    }
+    // ADR-106 R-α — propagate surface_owner_id to both sub-faces.
+    if let Some(owner) = parent_owner_id {
+        mesh.set_face_surface_owner_id(face_1, Some(owner));
+        mesh.set_face_surface_owner_id(face_2, Some(owner));
     }
 
     // Track the new cut edges (A↔first h_a, each h_b↔next h_a, last h_b↔B)
@@ -1269,12 +1284,18 @@ fn split_face_case_c(
     let material = mesh.faces[face_id].material();
     // ADR-089 A-χ-β — capture parent surface before remove.
     let parent_surface = mesh.faces[face_id].surface().cloned();
+    // ADR-106 R-α — capture parent surface_owner_id (ADR-093 D-β L9).
+    let parent_owner_id = mesh.face_surface_owner_id(face_id);
     mesh.remove_face(face_id)?;
 
     let other_slices: Vec<&[VertId]> = other_holes.iter().map(|v| v.as_slice()).collect();
     let new_face = mesh.add_face_with_holes(&bridged, &other_slices, material)?;
     if let Some(s) = parent_surface {
         mesh.faces[new_face].set_surface(Some(s));
+    }
+    // ADR-106 R-α — propagate surface_owner_id to new face.
+    if let Some(owner) = parent_owner_id {
+        mesh.set_face_surface_owner_id(new_face, Some(owner));
     }
 
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
@@ -1470,12 +1491,18 @@ fn split_face_case_d(
     let material = mesh.faces[face_id].material();
     // ADR-089 A-χ-β — capture parent surface before remove.
     let parent_surface = mesh.faces[face_id].surface().cloned();
+    // ADR-106 R-α — capture parent surface_owner_id (ADR-093 D-β L9).
+    let parent_owner_id = mesh.face_surface_owner_id(face_id);
     mesh.remove_face(face_id)?;
 
     let other_slices: Vec<&[VertId]> = other_holes.iter().map(|v| v.as_slice()).collect();
     let new_face = mesh.add_face_with_holes(&bridged, &other_slices, material)?;
     if let Some(s) = parent_surface {
         mesh.faces[new_face].set_surface(Some(s));
+    }
+    // ADR-106 R-α — propagate surface_owner_id to new face.
+    if let Some(owner) = parent_owner_id {
+        mesh.set_face_surface_owner_id(new_face, Some(owner));
     }
 
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }

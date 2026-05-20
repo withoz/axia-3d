@@ -1762,6 +1762,8 @@ impl Mesh {
 
         // Face storage에서 제거
         self.faces.remove(face_id);
+        // ADR-106 R-α — clean up surface_owner_id map (same as remove_face).
+        self.face_to_surface_owner_id.remove(&face_id);
         Ok(())
     }
 }

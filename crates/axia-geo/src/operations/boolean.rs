@@ -521,6 +521,10 @@ impl Mesh {
                     // sub-faces → A-ρ/A-φ/A-τ all skip them.
                     let parent_surface = self.faces.get(fid)
                         .and_then(|f| f.surface().cloned());
+                    // ADR-106 R-α — capture parent surface_owner_id so all
+                    // intersection-split sub-faces remain in the same surface
+                    // group (ADR-093 D-β L9 promise: "Inherited by face_split_*").
+                    let parent_owner_id = self.face_surface_owner_id(fid);
 
                     for sub_poly in &sub_polys {
                         // 2D → 3D 역투영
@@ -548,6 +552,10 @@ impl Mesh {
                                 // ADR-089 A-χ-β — propagate parent surface.
                                 if let Some(ref s) = parent_surface {
                                     self.faces[new_fid].set_surface(Some(s.clone()));
+                                }
+                                // ADR-106 R-α — propagate surface_owner_id.
+                                if let Some(owner) = parent_owner_id {
+                                    self.set_face_surface_owner_id(new_fid, Some(owner));
                                 }
                                 new_faces.push(new_fid);
                             }
