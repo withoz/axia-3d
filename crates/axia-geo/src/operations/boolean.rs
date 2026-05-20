@@ -525,6 +525,8 @@ impl Mesh {
                     // intersection-split sub-faces remain in the same surface
                     // group (ADR-093 D-β L9 promise: "Inherited by face_split_*").
                     let parent_owner_id = self.face_surface_owner_id(fid);
+                    // ADR-110 P-β — capture parent provenance.
+                    let parent_provenance = self.face_provenance(fid);
 
                     for sub_poly in &sub_polys {
                         // 2D → 3D 역투영
@@ -556,6 +558,10 @@ impl Mesh {
                                 // ADR-106 R-α — propagate surface_owner_id.
                                 if let Some(owner) = parent_owner_id {
                                     self.set_face_surface_owner_id(new_fid, Some(owner));
+                                }
+                                // ADR-110 P-β — propagate provenance.
+                                if let Some(cmd) = parent_provenance {
+                                    self.set_face_provenance(new_fid, cmd);
                                 }
                                 new_faces.push(new_fid);
                             }

@@ -5582,6 +5582,125 @@ mod tests {
             "polygonal disk chord split must still yield 2 sub-faces");
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-110 P-β — Entity provenance / audit trail
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr110_anonymous_mutation_no_provenance_stamp() {
+        // current_command_id None → entity creation 시 stamp 없음.
+        let mut mesh = Mesh::new();
+        assert_eq!(mesh.current_command_id(), None);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        assert_eq!(mesh.face_provenance(f), None,
+            "anonymous mutation 은 provenance stamp 없음");
+        assert_eq!(mesh.vert_provenance(v0), None);
+    }
+
+    #[test]
+    fn adr110_active_command_stamps_face_and_verts_and_edges() {
+        let mut mesh = Mesh::new();
+        let cmd = mesh.next_command_id();
+        mesh.set_current_command_id(Some(cmd));
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        // edges 는 add_face 가 자동 add_edge 호출
+        mesh.set_current_command_id(None);
+
+        // 모든 entity 가 같은 cmd id 로 stamp
+        assert_eq!(mesh.face_provenance(f), Some(cmd));
+        assert_eq!(mesh.vert_provenance(v0), Some(cmd));
+        assert_eq!(mesh.vert_provenance(v1), Some(cmd));
+        assert_eq!(mesh.vert_provenance(v2), Some(cmd));
+        // edges 도 stamp 확인 (3 edges per triangle)
+        let edges_with_cmd: usize = mesh.edges.iter()
+            .filter(|(_, e)| e.is_active())
+            .filter(|(eid, _)| mesh.edge_provenance(*eid) == Some(cmd))
+            .count();
+        assert_eq!(edges_with_cmd, 3, "3 edges stamped with cmd");
+    }
+
+    #[test]
+    fn adr110_next_command_id_monotonic() {
+        let mut mesh = Mesh::new();
+        let id1 = mesh.next_command_id();
+        let id2 = mesh.next_command_id();
+        let id3 = mesh.next_command_id();
+        assert!(id1 < id2 && id2 < id3,
+            "CommandId monotonic: got {} {} {}", id1, id2, id3);
+        // first issued id ≥ 1 (0 reserved as null sentinel)
+        assert!(id1 >= 1);
+    }
+
+    #[test]
+    fn adr110_faces_by_command_reverse_lookup() {
+        let mut mesh = Mesh::new();
+        let cmd_a = mesh.next_command_id();
+        mesh.set_current_command_id(Some(cmd_a));
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f_a = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+
+        let cmd_b = mesh.next_command_id();
+        mesh.set_current_command_id(Some(cmd_b));
+        let v3 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v4 = mesh.add_vertex(DVec3::new(11.0, 0.0, 0.0));
+        let v5 = mesh.add_vertex(DVec3::new(10.0, 1.0, 0.0));
+        let f_b = mesh.add_face(&[v3, v4, v5], MaterialId::new(0)).unwrap();
+        mesh.set_current_command_id(None);
+
+        assert_eq!(mesh.faces_by_command(cmd_a), vec![f_a]);
+        assert_eq!(mesh.faces_by_command(cmd_b), vec![f_b]);
+        // unrelated cmd id → empty
+        assert!(mesh.faces_by_command(9999).is_empty());
+    }
+
+    #[test]
+    fn adr110_split_face_propagates_provenance_to_face_b() {
+        let mut mesh = Mesh::new();
+        let cmd = mesh.next_command_id();
+        mesh.set_current_command_id(Some(cmd));
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        let parent = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        mesh.set_current_command_id(None);
+
+        // Split diagonally v0↔v2 — *no current_command_id*, but parent
+        // provenance should still be inherited by face_b.
+        let (kept, face_b) = mesh.split_face(parent, v0, v2).expect("split OK");
+        assert_eq!(kept, parent);
+
+        assert_eq!(mesh.face_provenance(parent), Some(cmd),
+            "parent slot retains original provenance");
+        assert_eq!(mesh.face_provenance(face_b), Some(cmd),
+            "face_b inherits parent provenance (ADR-110 P-β)");
+    }
+
+    #[test]
+    fn adr110_remove_face_cleans_provenance_map() {
+        let mut mesh = Mesh::new();
+        let cmd = mesh.next_command_id();
+        mesh.set_current_command_id(Some(cmd));
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2], MaterialId::new(0)).unwrap();
+        mesh.set_current_command_id(None);
+
+        assert!(mesh.entity_provenance_faces.contains_key(&f));
+        mesh.remove_face(f).expect("remove_face OK");
+        assert!(!mesh.entity_provenance_faces.contains_key(&f),
+            "ADR-110 P-β: remove_face must clean up provenance map");
+    }
+
     #[test]
     fn adr106_remove_face_cleans_surface_owner_id_map() {
         // ADR-093 D-β L9 cleanup promise — remove_face must remove the

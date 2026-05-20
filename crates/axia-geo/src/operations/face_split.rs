@@ -737,6 +737,8 @@ pub fn split_face_by_chain(
     // ADR-106 R-α — capture parent surface_owner_id for propagation
     // (ADR-093 D-β L9 promise: "Inherited by face_split_*").
     let parent_owner_id = mesh.face_surface_owner_id(face_id);
+    // ADR-110 P-β — capture parent provenance for propagation.
+    let parent_provenance = mesh.face_provenance(face_id);
     mesh.faces[face_id].inners_mut().clear();
     mesh.soft_remove_face(face_id)?;
 
@@ -753,6 +755,13 @@ pub fn split_face_by_chain(
     if let Some(owner) = parent_owner_id {
         mesh.set_face_surface_owner_id(fa, Some(owner));
         mesh.set_face_surface_owner_id(fb, Some(owner));
+    }
+    // ADR-110 P-β — propagate parent provenance to both sub-faces.
+    // Split site 의 *origin* Command 는 parent 의 origin Command. Split
+    // 자체는 modification 으로 간주 (last-modifier 별도 트랙).
+    if let Some(cmd) = parent_provenance {
+        mesh.set_face_provenance(fa, cmd);
+        mesh.set_face_provenance(fb, cmd);
     }
 
     // Redistribute any holes by containment, mirroring split_face_by_line.
@@ -1061,6 +1070,8 @@ fn split_face_case_b(
     let parent_surface = mesh.faces[face_id].surface().cloned();
     // ADR-106 R-α — capture parent surface_owner_id (ADR-093 D-β L9).
     let parent_owner_id = mesh.face_surface_owner_id(face_id);
+    // ADR-110 P-β — capture parent provenance for propagation.
+    let parent_provenance = mesh.face_provenance(face_id);
     mesh.remove_face(face_id)?;
 
     let holes_for_1_slices: Vec<&[VertId]> = holes_for_1.iter().map(|v| v.as_slice()).collect();
@@ -1077,6 +1088,11 @@ fn split_face_case_b(
     if let Some(owner) = parent_owner_id {
         mesh.set_face_surface_owner_id(face_1, Some(owner));
         mesh.set_face_surface_owner_id(face_2, Some(owner));
+    }
+    // ADR-110 P-β — propagate parent provenance to both sub-faces.
+    if let Some(cmd) = parent_provenance {
+        mesh.set_face_provenance(face_1, cmd);
+        mesh.set_face_provenance(face_2, cmd);
     }
 
     // Track the new cut edges (A↔first h_a, each h_b↔next h_a, last h_b↔B)
@@ -1305,6 +1321,8 @@ fn split_face_case_c(
     let parent_surface = mesh.faces[face_id].surface().cloned();
     // ADR-106 R-α — capture parent surface_owner_id (ADR-093 D-β L9).
     let parent_owner_id = mesh.face_surface_owner_id(face_id);
+    // ADR-110 P-β — capture parent provenance.
+    let parent_provenance = mesh.face_provenance(face_id);
     mesh.remove_face(face_id)?;
 
     let other_slices: Vec<&[VertId]> = other_holes.iter().map(|v| v.as_slice()).collect();
@@ -1315,6 +1333,10 @@ fn split_face_case_c(
     // ADR-106 R-α — propagate surface_owner_id to new face.
     if let Some(owner) = parent_owner_id {
         mesh.set_face_surface_owner_id(new_face, Some(owner));
+    }
+    // ADR-110 P-β — propagate provenance to new face.
+    if let Some(cmd) = parent_provenance {
+        mesh.set_face_provenance(new_face, cmd);
     }
 
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }
@@ -1512,6 +1534,8 @@ fn split_face_case_d(
     let parent_surface = mesh.faces[face_id].surface().cloned();
     // ADR-106 R-α — capture parent surface_owner_id (ADR-093 D-β L9).
     let parent_owner_id = mesh.face_surface_owner_id(face_id);
+    // ADR-110 P-β — capture parent provenance.
+    let parent_provenance = mesh.face_provenance(face_id);
     mesh.remove_face(face_id)?;
 
     let other_slices: Vec<&[VertId]> = other_holes.iter().map(|v| v.as_slice()).collect();
@@ -1522,6 +1546,10 @@ fn split_face_case_d(
     // ADR-106 R-α — propagate surface_owner_id to new face.
     if let Some(owner) = parent_owner_id {
         mesh.set_face_surface_owner_id(new_face, Some(owner));
+    }
+    // ADR-110 P-β — propagate provenance to new face.
+    if let Some(cmd) = parent_provenance {
+        mesh.set_face_provenance(new_face, cmd);
     }
 
     if let Some(e) = mesh.find_edge(outer_a, h_vert) { new_edges.push(e); }

@@ -1764,6 +1764,8 @@ impl Mesh {
         self.faces.remove(face_id);
         // ADR-106 R-α — clean up surface_owner_id map (same as remove_face).
         self.face_to_surface_owner_id.remove(&face_id);
+        // ADR-110 P-β — clean up provenance map (same pattern).
+        self.entity_provenance_faces.remove(&face_id);
         Ok(())
     }
 }
