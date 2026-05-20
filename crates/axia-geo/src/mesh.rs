@@ -152,6 +152,41 @@ pub struct Mesh {
     #[serde(default)]
     next_surface_owner_id: u32,
 
+    // ── ADR-110 P-β — Entity provenance / audit trail ────────────────
+    //
+    // 각 entity (Face/Edge/Vertex) 의 *creating Command id* 를 추적.
+    // Bincode struct field 추가 금지 (ADR-091 §E L1 canonical) — Mesh-
+    // level FxHashMap 사용. Face / Edge / Vertex struct UNCHANGED.
+    //
+    // Invariants:
+    // - 생성 시 stamp: `current_command_id.get()` 가 Some → 자동 기록
+    // - 외부 직접 호출 (test fixture 등 `current_command_id = None`) →
+    //   anonymous, provenance 미기록 (map entry 없음 = None)
+    // - Split sites (ADR-106 R-α 패턴): parent 의 provenance inherit
+    // - Mutation (translate/rotate/scale 등) 은 stamp 변경 없음 —
+    //   provenance = *origin* 의미. last-modifier 는 별도 트랙
+    // - Cleanup on remove (ADR-106 R-α 답습)
+    //
+    /// Monotonic CommandId allocator. Issued by Scene::execute boundary.
+    #[serde(default)]
+    next_command_id: u64,
+
+    /// Currently active Command id (set by Scene::execute, cleared on
+    /// exit). `&self` 호출 path 도 stamp 가능하도록 `Cell` interior mut.
+    /// `#[serde(skip)]` — runtime-only state.
+    #[serde(skip, default)]
+    current_command_id: std::cell::Cell<Option<u64>>,
+
+    /// Face → creating CommandId map.
+    #[serde(default)]
+    pub entity_provenance_faces: FxHashMap<FaceId, u64>,
+    /// Edge → creating CommandId map.
+    #[serde(default)]
+    pub entity_provenance_edges: FxHashMap<EdgeId, u64>,
+    /// Vertex → creating CommandId map.
+    #[serde(default)]
+    pub entity_provenance_verts: FxHashMap<VertId, u64>,
+
     /// ADR-094 B-η — Cylinder Path B-full default flag.
     ///
     /// `true` = `extrude_planar_cylinder` 의 closed-curve profile fast-
@@ -450,6 +485,12 @@ impl Mesh {
             // ADR-094 B-γ-prep — empty map, all faces use legacy
             // outer+inners until explicit set_face_boundary_loops call.
             face_to_boundary_loops: FxHashMap::default(),
+            // ADR-110 P-β — provenance maps + monotonic CommandId.
+            next_command_id: 0,
+            current_command_id: std::cell::Cell::new(None),
+            entity_provenance_faces: FxHashMap::default(),
+            entity_provenance_edges: FxHashMap::default(),
+            entity_provenance_verts: FxHashMap::default(),
         }
     }
 
@@ -603,6 +644,99 @@ impl Mesh {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ADR-110 P-β — Entity provenance / audit trail API
+    //
+    // Mesh-level Map 의 세 번째 canonical 적용 (ADR-091 §E L1).
+    // Mutation site 가 `current_command_id` 가 Some 일 때 자동 stamp.
+    // Scene::execute boundary 가 set/clear 제어.
+    // ════════════════════════════════════════════════════════════════
+
+    /// ADR-110 P-β — Allocate a new monotonic CommandId.
+    /// Issued by Scene::execute boundary on every Command dispatch.
+    pub fn next_command_id(&mut self) -> u64 {
+        self.next_command_id += 1;
+        self.next_command_id
+    }
+
+    /// ADR-110 P-β — Set the currently-active CommandId. `None` →
+    /// anonymous mutation (test fixture, internal scaffolding) — no
+    /// provenance stamp.
+    pub fn set_current_command_id(&self, id: Option<u64>) {
+        self.current_command_id.set(id);
+    }
+
+    /// ADR-110 P-β — Read the currently-active CommandId.
+    pub fn current_command_id(&self) -> Option<u64> {
+        self.current_command_id.get()
+    }
+
+    /// ADR-110 P-β — Provenance query: which Command created this face?
+    pub fn face_provenance(&self, face_id: FaceId) -> Option<u64> {
+        self.entity_provenance_faces.get(&face_id).copied()
+    }
+
+    /// ADR-110 P-β — Provenance query: which Command created this edge?
+    pub fn edge_provenance(&self, edge_id: EdgeId) -> Option<u64> {
+        self.entity_provenance_edges.get(&edge_id).copied()
+    }
+
+    /// ADR-110 P-β — Provenance query: which Command created this vert?
+    pub fn vert_provenance(&self, vert_id: VertId) -> Option<u64> {
+        self.entity_provenance_verts.get(&vert_id).copied()
+    }
+
+    /// ADR-110 P-β — Reverse lookup: all faces created by a given Command.
+    pub fn faces_by_command(&self, command_id: u64) -> Vec<FaceId> {
+        self.entity_provenance_faces.iter()
+            .filter_map(|(&fid, &cid)| {
+                if cid != command_id { return None; }
+                self.faces.get(fid)
+                    .filter(|f| f.is_active())
+                    .map(|_| fid)
+            })
+            .collect()
+    }
+
+    /// ADR-110 P-β — Explicit provenance setter (split sites use this
+    /// to propagate parent's provenance to sub-faces — ADR-106 R-α pattern).
+    pub fn set_face_provenance(&mut self, face_id: FaceId, cmd: u64) {
+        self.entity_provenance_faces.insert(face_id, cmd);
+    }
+
+    /// ADR-110 P-β — Edge provenance setter.
+    pub fn set_edge_provenance(&mut self, edge_id: EdgeId, cmd: u64) {
+        self.entity_provenance_edges.insert(edge_id, cmd);
+    }
+
+    /// ADR-110 P-β — Vertex provenance setter.
+    pub fn set_vert_provenance(&mut self, vert_id: VertId, cmd: u64) {
+        self.entity_provenance_verts.insert(vert_id, cmd);
+    }
+
+    /// ADR-110 P-β — Internal helper: stamp a face with the currently-
+    /// active CommandId if any. Called by mutation sites after entity
+    /// insertion. No-op if `current_command_id` is None (anonymous).
+    pub(crate) fn stamp_face_if_in_command(&mut self, face_id: FaceId) {
+        if let Some(cmd) = self.current_command_id.get() {
+            self.entity_provenance_faces.insert(face_id, cmd);
+        }
+    }
+
+    /// ADR-110 P-β — Internal helper: stamp an edge.
+    pub(crate) fn stamp_edge_if_in_command(&mut self, edge_id: EdgeId) {
+        if let Some(cmd) = self.current_command_id.get() {
+            self.entity_provenance_edges.insert(edge_id, cmd);
+        }
+    }
+
+    /// ADR-110 P-β — Internal helper: stamp a vertex.
+    pub(crate) fn stamp_vert_if_in_command(&mut self, vert_id: VertId) {
+        if let Some(cmd) = self.current_command_id.get() {
+            self.entity_provenance_verts.insert(vert_id, cmd);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ADR-094 B-γ-prep — Multi-loop face schema (Path B-full additive
     // prep phase).
     //
@@ -739,6 +873,13 @@ impl Mesh {
             self.face_to_surface_owner_id = restored.face_to_surface_owner_id;
             self.next_surface_owner_id = restored.next_surface_owner_id;
             self.face_to_boundary_loops = restored.face_to_boundary_loops;
+            // ADR-110 P-β — Provenance maps도 복원 (Mesh-level Map L1 정합).
+            self.next_command_id = restored.next_command_id;
+            self.entity_provenance_faces = restored.entity_provenance_faces;
+            self.entity_provenance_edges = restored.entity_provenance_edges;
+            self.entity_provenance_verts = restored.entity_provenance_verts;
+            // current_command_id 는 serde skip — 복원 시 None 으로 유지
+            // (snapshot 은 *데이터*, 진행 중 Command 는 *런타임 state*).
             // uuid는 유지 (변경하지 않음)
             // spatial_hash는 직렬화되지 않으므로 재구축 필요
             self.rebuild_spatial_hash();
@@ -786,6 +927,8 @@ impl Mesh {
         // No coincident vertex found — insert new one
         let vid = self.verts.insert(Vertex::new(pos, VERTEX_TOLERANCE));
         self.spatial_hash.entry(key).or_default().push(vid);
+        // ADR-110 P-β — Stamp creating Command (no-op if anonymous).
+        self.stamp_vert_if_in_command(vid);
         vid
     }
 
@@ -799,6 +942,8 @@ impl Mesh {
         let vid = self.verts.insert(Vertex::new(pos, VERTEX_TOLERANCE));
         let key = spatial_key(pos);
         self.spatial_hash.entry(key).or_default().push(vid);
+        // ADR-110 P-β — Stamp creating Command (no-op if anonymous).
+        self.stamp_vert_if_in_command(vid);
         vid
     }
 
@@ -923,6 +1068,9 @@ impl Mesh {
 
         // Create half-edge pair
         self.create_halfedge_pair(edge_id, &pair)?;
+
+        // ADR-110 P-β — Stamp creating Command (no-op if anonymous).
+        self.stamp_edge_if_in_command(edge_id);
 
         Ok((edge_id, true))
     }
@@ -2999,7 +3147,11 @@ impl Mesh {
         })();
 
         match build_result {
-            Ok(()) => Ok(face_id),
+            Ok(()) => {
+                // ADR-110 P-β — Stamp creating Command (no-op if anonymous).
+                self.stamp_face_if_in_command(face_id);
+                Ok(face_id)
+            }
             Err(e) => {
                 self.rollback_partial_face_creation(face_id, &edges_before, &hes_before);
                 Err(e)
@@ -3268,7 +3420,11 @@ impl Mesh {
         })();
 
         match build_result {
-            Ok(()) => Ok(face_id),
+            Ok(()) => {
+                // ADR-110 P-β — Stamp creating Command (no-op if anonymous).
+                self.stamp_face_if_in_command(face_id);
+                Ok(face_id)
+            }
             Err(e) => {
                 self.rollback_partial_face_creation(face_id, &edges_before, &hes_before);
                 Err(e)
@@ -3485,6 +3641,10 @@ impl Mesh {
         // are functionally harmless, but they leak memory N×N for cylinder-
         // heavy scenes (메타-원칙 #12 — Memory Budget Per Entity).
         self.face_to_surface_owner_id.remove(&face_id);
+        // ADR-110 P-β — clean up provenance entry (메타-원칙 #12 memory
+        // budget). `face_provenance` queries return None for inactive face
+        // (filter), so stale entry harmless functionally but memory leak.
+        self.entity_provenance_faces.remove(&face_id);
         Ok(())
     }
 
@@ -4130,6 +4290,11 @@ impl Mesh {
         // (face_id keeps its slot, so its existing entry stays — ADR-093 D-β L9.)
         if let Some(owner) = self.face_surface_owner_id(face_id) {
             self.set_face_surface_owner_id(face_b, Some(owner));
+        }
+        // ADR-110 P-β — propagate parent provenance to face_b
+        // (face_id keeps its existing provenance entry).
+        if let Some(cmd) = self.face_provenance(face_id) {
+            self.set_face_provenance(face_b, cmd);
         }
 
         // Set face on he_v2v1

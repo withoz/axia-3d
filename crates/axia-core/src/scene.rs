@@ -1965,6 +1965,20 @@ impl Scene {
 
     /// Execute a command and return the result.
     pub fn execute(&mut self, cmd: Command) -> CommandResult {
+        // ADR-110 P-γ — Stamp `current_command_id` on Mesh for the
+        // duration of this Command. Mutation sites (add_vertex /
+        // add_edge / add_face / split sites) read this and write to
+        // entity_provenance_* maps automatically (no-op if anonymous).
+        //
+        // Cleared at exit (panic-safe: next execute() overwrites).
+        let cmd_id = self.mesh.next_command_id();
+        self.mesh.set_current_command_id(Some(cmd_id));
+        let result = self._execute_inner(cmd);
+        self.mesh.set_current_command_id(None);
+        result
+    }
+
+    fn _execute_inner(&mut self, cmd: Command) -> CommandResult {
         match cmd {
             // ADR-087 K-ζ — Legacy DrawLine / DrawRect / DrawCircle /
             // PushPull 은 internal-only (Test 회귀 자산 보존용). User-facing
@@ -6131,6 +6145,64 @@ mod tests {
         assert_eq!(scene.mesh.vert_count(), 0, "new scene should have empty mesh");
         assert_eq!(scene.mesh.face_count(), 0);
         assert!(!scene.transactions.can_undo(), "new scene should not have undo");
+    }
+
+    #[test]
+    fn adr110_p_gamma_scene_execute_stamps_provenance() {
+        // ADR-110 P-γ — Scene::execute boundary 가 current_command_id
+        // 를 set/clear 하여 mutation site 가 자동 provenance stamp.
+        let mut scene = Scene::new();
+        // Execute a DrawRect (3-vert+ polygon → 1 face).
+        let _result = scene.execute(crate::Command::DrawRectAsShape {
+            center: glam::DVec3::ZERO,
+            normal: glam::DVec3::Z,
+            up: glam::DVec3::X,
+            width: 100.0,
+            height: 100.0,
+        });
+        // Every active face must have a provenance stamp (active during
+        // execute, anonymous after).
+        for (fid, face) in scene.mesh.faces.iter() {
+            if face.is_active() {
+                assert!(scene.mesh.face_provenance(fid).is_some(),
+                    "Face {:?} created during execute() must have provenance",
+                    fid);
+            }
+        }
+        // current_command_id cleared after execute()
+        assert_eq!(scene.mesh.current_command_id(), None,
+            "Scene::execute must clear current_command_id on exit");
+    }
+
+    #[test]
+    fn adr110_p_gamma_two_commands_have_distinct_ids() {
+        // 두 개의 execute() 호출 → 두 다른 CommandId, faces_by_command 가
+        // 각 Command 의 face 만 반환.
+        let mut scene = Scene::new();
+        scene.execute(crate::Command::DrawRectAsShape {
+            center: glam::DVec3::new(0.0, 0.0, 0.0),
+            normal: glam::DVec3::Z,
+            up: glam::DVec3::X,
+            width: 50.0,
+            height: 50.0,
+        });
+        scene.execute(crate::Command::DrawRectAsShape {
+            center: glam::DVec3::new(100.0, 100.0, 0.0),
+            normal: glam::DVec3::Z,
+            up: glam::DVec3::X,
+            width: 50.0,
+            height: 50.0,
+        });
+
+        // Collect provenance ids of active faces — must be exactly 2 distinct ids.
+        use std::collections::HashSet;
+        let cmd_ids: HashSet<u64> = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .filter_map(|(fid, _)| scene.mesh.face_provenance(fid))
+            .collect();
+        assert_eq!(cmd_ids.len(), 2,
+            "two execute() calls must produce 2 distinct CommandIds, got {:?}",
+            cmd_ids);
     }
 
     #[test]

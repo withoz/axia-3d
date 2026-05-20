@@ -140,13 +140,56 @@ impl Mesh {
 
 ## D. Acceptance Log
 
-### P-α (본 commit) — Spec only
+### P-α (PR-124, 2026-05-20) — Spec only
 
-- **commit**: 본 commit (`docs/adr/110-entity-provenance-audit-trail.md`)
+- **commit**: `ce8e52e`
 - **변경**: ADR draft 1 file
 - **회귀**: 0 (spec only)
-- **코드 변경**: 0
-- **다음**: P-β (Mesh field + API + stamp hook) — 사용자 결재 후 진행.
+
+### P-β + P-γ (본 commit, 2026-05-20) — Engine + Scene integration
+
+- **commit**: 본 commit
+- **P-β scope** (axia-geo engine layer):
+  - Mesh-level fields 추가 (ADR-091 §E L1 *세 번째* canonical 적용):
+    * `next_command_id: u64` (#[serde(default)])
+    * `current_command_id: std::cell::Cell<Option<u64>>` (#[serde(skip)])
+    * `entity_provenance_faces: FxHashMap<FaceId, u64>` (pub)
+    * `entity_provenance_edges: FxHashMap<EdgeId, u64>` (pub)
+    * `entity_provenance_verts: FxHashMap<VertId, u64>` (pub)
+  - API: `next_command_id` / `set/get_current_command_id` /
+    `face/edge/vert_provenance` / `faces_by_command` / setters /
+    internal `stamp_*_if_in_command` helpers
+  - Mutation hook: `add_vertex` / `add_vertex_force_new` / `add_edge` /
+    `add_face_with_holes` (2 return paths) 에 stamp
+  - Inherit on split: split_face (mesh.rs) + 4 face_split.rs sites
+    (split_face_by_chain / case_b / case_c / case_d) + boolean.rs
+    split_faces_by_intersections — 모두 parent provenance capture +
+    propagate (ADR-106 R-α 패턴 답습)
+  - Cleanup on remove: `remove_face` + `soft_remove_face` 모두 map
+    entry 정리
+  - Snapshot/restore: provenance maps 도 bincode 복원 (current_command_id
+    는 serde skip — 런타임 state)
+- **P-γ scope** (axia-core Scene::execute boundary):
+  - `Scene::execute(cmd)` 의 입구에서 `mesh.next_command_id()` →
+    `mesh.set_current_command_id(Some(id))`, 출구에서 `None`
+  - `_execute_inner(cmd)` private 도우미로 dispatch 분리
+- **회귀 자산** (8, 절대 #[ignore] 금지):
+  - axia-geo (6):
+    * `adr110_anonymous_mutation_no_provenance_stamp`
+    * `adr110_active_command_stamps_face_and_verts_and_edges`
+    * `adr110_next_command_id_monotonic`
+    * `adr110_faces_by_command_reverse_lookup`
+    * `adr110_split_face_propagates_provenance_to_face_b`
+    * `adr110_remove_face_cleans_provenance_map`
+  - axia-core (2):
+    * `adr110_p_gamma_scene_execute_stamps_provenance`
+    * `adr110_p_gamma_two_commands_have_distinct_ids`
+- **Sweep**:
+  - axia-geo: 1272 → **1278 PASS** (+6)
+  - axia-core: 285 → **287 PASS** (+2)
+  - 절대 #[ignore] 금지 8/8 준수
+- **사용자 facing**: 외부 변경 0. Engine 내부 provenance 활성. P-δ
+  (Inspector UI) 별도 트랙 시 디버깅 / AI agent 의도 분석 unlock.
 
 ### P-β ~ P-δ (planned)
 
