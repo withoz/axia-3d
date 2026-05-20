@@ -5338,6 +5338,120 @@ mod tests {
         );
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADR-105 R-α — Closed-curve face polygonal substitution +
+    //   split_face_by_line dispatcher branch.
+    //   Bug report 2026-05-19 시나리오 1 (CRITICAL) fix verification.
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr105_is_closed_curve_face_detects_circle_face() {
+        let mut mesh = Mesh::new();
+        // Closed-curve disk
+        let _disk = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let faces: Vec<_> = mesh.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(faces.len(), 1);
+        assert!(mesh.is_closed_curve_face(faces[0]),
+            "Circle profile must be detected as closed-curve face");
+    }
+
+    #[test]
+    fn adr105_is_closed_curve_face_rejects_polygon() {
+        // Polygonal RECT/square is NOT closed-curve (4 verts, no self-loop).
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(10.0, 10.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 10.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0)).unwrap();
+        assert!(!mesh.is_closed_curve_face(f),
+            "polygonal face must NOT be classified as closed-curve");
+    }
+
+    #[test]
+    fn adr105_tessellate_closed_curve_in_place_produces_polygon_with_arc_edges() {
+        let mut mesh = Mesh::new();
+        let disk = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        // Pre-tessellate: 1 anchor + 1 self-loop edge + 1 face
+        assert_eq!(mesh.faces.iter().filter(|(_, f)| f.is_active()).count(), 1);
+        assert!(mesh.is_closed_curve_face(disk));
+
+        let substituted = mesh
+            .tessellate_closed_curve_face_in_place(disk)
+            .expect("tessellation OK");
+
+        // Post-tessellate: polygonal face with N >= 8 verts + N edges with Arc curves
+        let edges = mesh.face_outer_edges(substituted).expect("edges OK");
+        assert!(edges.len() >= 8,
+            "tessellation must produce N >= 8 segment edges, got {}", edges.len());
+        for &eid in &edges {
+            let curve = mesh.edges[eid].curve();
+            assert!(
+                matches!(curve, Some(crate::curves::AnalyticCurve::Arc { .. })),
+                "each substitute edge must carry an Arc curve (ADR-089 step 6 pattern)"
+            );
+        }
+        // is_closed_curve_face no longer true on the polygonal substitute.
+        assert!(!mesh.is_closed_curve_face(substituted));
+    }
+
+    #[test]
+    fn adr105_split_face_by_line_dispatches_closed_curve_to_polygon_path() {
+        // ADR-105 R-α key invariant: a closed-curve disk + a chord line
+        // (line_start, line_end on or near the circle) must split into 2
+        // polygonal sub-faces, both with Plane surface preserved.
+        use crate::operations::face_split::split_face_by_line;
+        let mut mesh = Mesh::new();
+        let disk = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 10.0);
+
+        // Attach a Plane surface so we can verify inheritance after split.
+        let plane = crate::surfaces::AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-10.0, 10.0),
+            v_range: (-10.0, 10.0),
+        };
+        mesh.faces[disk].set_surface(Some(plane));
+
+        // Chord from west to east — both endpoints exactly on the circle.
+        let chord_start = DVec3::new(-10.0, 0.0, 0.0);
+        let chord_end   = DVec3::new( 10.0, 0.0, 0.0);
+        let result = split_face_by_line(&mut mesh, disk, chord_start, chord_end)
+            .expect("closed-curve chord split must succeed via ADR-105 dispatch");
+
+        // Result has 2 sub-faces (north + south half disks).
+        assert_eq!(result.new_faces.len(), 2,
+            "chord split of disk must yield 2 sub-faces, got {}",
+            result.new_faces.len());
+        for &fid in &result.new_faces {
+            // Plane surface inherited (ADR-089 A-χ-β + ADR-105 R-α).
+            assert!(mesh.faces[fid].surface().is_some(),
+                "ADR-105 R-α: sub-face must inherit Plane surface from parent");
+        }
+    }
+
+    #[test]
+    fn adr105_polygonal_circle_split_unaffected_by_dispatch() {
+        // Regression guard — polygonal circle (built via build_circle_face
+        // with N segments) must NOT route through the closed-curve dispatch.
+        use crate::operations::face_split::split_face_by_line;
+        let mut mesh = Mesh::new();
+        let poly_disk = build_circle_face(&mut mesh, 10.0, 16);
+        // Polygonal — not closed-curve.
+        assert!(!mesh.is_closed_curve_face(poly_disk));
+
+        let chord_start = DVec3::new(-10.0, 0.0, 0.0);
+        let chord_end   = DVec3::new( 10.0, 0.0, 0.0);
+        let result = split_face_by_line(&mut mesh, poly_disk, chord_start, chord_end)
+            .expect("polygonal circle chord split must work as before (regression)");
+        assert_eq!(result.new_faces.len(), 2,
+            "polygonal disk chord split must still yield 2 sub-faces");
+    }
+
     #[test]
     fn adr106_remove_face_cleans_surface_owner_id_map() {
         // ADR-093 D-β L9 cleanup promise — remove_face must remove the

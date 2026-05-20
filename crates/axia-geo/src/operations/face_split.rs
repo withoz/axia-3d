@@ -235,6 +235,25 @@ pub fn split_face_by_line(
         "split_face_by_line: line_end must be finite, got {:?}",
         line_end
     );
+
+    // ADR-105 R-α — Closed-curve face dispatch.
+    //
+    // Closed-curve face (1 anchor + 1 self-loop Circle edge) violates the
+    // polygon (≥3 verts) assumption of the polygon-aware split flow:
+    // - compute_face_diagonal = 0 → snap_tolerance = 0 → all points
+    //   collapse to anchor → bail `v1 != v2`
+    // - find_line_crossings: d2 = 0 → always "parallel" → 0 crossings
+    // - point_in_face: n=1 ray casting → inside=false
+    //
+    // Bug report 2026-05-19 시나리오 1 (CRITICAL): "원 그리고 자르기"
+    // silent functional failure. Tessellate the closed-curve face into
+    // its polygonal substitute first, then recurse with the polygon-
+    // aware flow. Mirrors `extrude_closed_curve_face_via_tessellation`
+    // (ADR-089 A-θ Path A) pattern.
+    if mesh.is_closed_curve_face(face_id) {
+        let substituted = mesh.tessellate_closed_curve_face_in_place(face_id)?;
+        return split_face_by_line(mesh, substituted, line_start, line_end);
+    }
     let line_len = (line_end - line_start).length();
     ensure!(
         line_len >= crate::tolerances::EPSILON_LENGTH,
