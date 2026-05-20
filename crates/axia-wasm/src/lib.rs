@@ -1337,6 +1337,51 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-110 P-δ — Read entity provenance (creating CommandId).
+    /// Returns -1 if entity has no stamp (anonymous mutation or missing).
+    /// `i64` so the full `u64` CommandId range fits (with -1 sentinel).
+    #[wasm_bindgen(js_name = "faceProvenance")]
+    pub fn face_provenance(&self, face_id: u32) -> i64 {
+        use axia_geo::FaceId;
+        let fid = FaceId::new(face_id);
+        match self.scene.mesh.face_provenance(fid) {
+            Some(cmd) => cmd as i64,
+            None => -1,
+        }
+    }
+
+    /// ADR-110 P-δ — Read entity provenance for an edge.
+    #[wasm_bindgen(js_name = "edgeProvenance")]
+    pub fn edge_provenance(&self, edge_id: u32) -> i64 {
+        use axia_geo::EdgeId;
+        let eid = EdgeId::new(edge_id);
+        match self.scene.mesh.edge_provenance(eid) {
+            Some(cmd) => cmd as i64,
+            None => -1,
+        }
+    }
+
+    /// ADR-110 P-δ — Read entity provenance for a vertex.
+    #[wasm_bindgen(js_name = "vertProvenance")]
+    pub fn vert_provenance(&self, vert_id: u32) -> i64 {
+        use axia_geo::VertId;
+        let vid = VertId::new(vert_id);
+        match self.scene.mesh.vert_provenance(vid) {
+            Some(cmd) => cmd as i64,
+            None => -1,
+        }
+    }
+
+    /// ADR-110 P-δ — Reverse lookup: all face IDs created by Command N.
+    /// Returns empty if the CommandId is unknown.
+    #[wasm_bindgen(js_name = "facesByCommand")]
+    pub fn faces_by_command(&self, command_id: u64) -> Vec<u32> {
+        self.scene.mesh.faces_by_command(command_id)
+            .into_iter()
+            .map(|fid| fid.raw())
+            .collect()
+    }
+
     /// ADR-094 B-η — Set the Path B cylinder default.
     ///
     /// `true` = `create_solid` 의 closed-curve cylinder profile 이

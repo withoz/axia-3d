@@ -1434,6 +1434,89 @@ describe('WasmBridge', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
+  // ADR-110 P-δ — Provenance bridge wrappers (Mesh-level Map *세 번째*
+  // canonical 적용: ADR-091 §E L1. ADR-093 surface_owner_id 패턴 답습)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-110 P-δ provenance wrappers', () => {
+    it('faceProvenance returns number when engine returns ≥ 0', () => {
+      const fn = vi.fn<(fid: number) => number>(() => 42);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { faceProvenance: fn };
+      expect(bridge.faceProvenance(7)).toBe(42);
+      expect(fn).toHaveBeenCalledWith(7);
+    });
+
+    it('faceProvenance returns null when engine returns -1 (anonymous)', () => {
+      const fn = vi.fn<(fid: number) => number>(() => -1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { faceProvenance: fn };
+      expect(bridge.faceProvenance(7)).toBeNull();
+    });
+
+    it('faceProvenance returns null when WASM endpoint missing (legacy build)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.faceProvenance(7)).toBeNull();
+    });
+
+    it('edgeProvenance / vertProvenance mirror the same pattern', () => {
+      const efn = vi.fn<(eid: number) => number>(() => 11);
+      const vfn = vi.fn<(vid: number) => number>(() => -1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { edgeProvenance: efn, vertProvenance: vfn };
+      expect(bridge.edgeProvenance(5)).toBe(11);
+      expect(bridge.vertProvenance(8)).toBeNull(); // -1 → null
+    });
+
+    it('facesByCommand forwards BigInt to engine and returns number[]', () => {
+      const fn = vi.fn<(cmd: bigint) => Uint32Array>(
+        () => new Uint32Array([3, 7, 11]),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { facesByCommand: fn };
+      const result = bridge.facesByCommand(42);
+      expect(result).toEqual([3, 7, 11]);
+      expect(fn).toHaveBeenCalledWith(BigInt(42));
+    });
+
+    it('facesByCommand returns [] when WASM endpoint missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(bridge.facesByCommand(42)).toEqual([]);
+    });
+
+    it('getXiaInfo attaches common provenance for selected faces', () => {
+      // All 3 faces share Command #5 → provenance = 5
+      const xiaFn = vi.fn<(ids: Uint32Array) => string>(
+        () => JSON.stringify({ empty: false, faceCount: 3 }),
+      );
+      const provFn = vi.fn<(fid: number) => number>((fid) => {
+        // All faces stamped with Command #5
+        if (fid === 10 || fid === 20 || fid === 30) return 5;
+        return -1;
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { get_xia_info: xiaFn, faceProvenance: provFn };
+      const info = bridge.getXiaInfo([10, 20, 30]);
+      expect(info?.provenance).toBe(5);
+    });
+
+    it('getXiaInfo omits provenance for mixed origin', () => {
+      const xiaFn = vi.fn<(ids: Uint32Array) => string>(
+        () => JSON.stringify({ empty: false, faceCount: 2 }),
+      );
+      const provFn = vi.fn<(fid: number) => number>((fid) => {
+        if (fid === 10) return 5;
+        if (fid === 20) return 7; // Different Command → mixed
+        return -1;
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { get_xia_info: xiaFn, faceProvenance: provFn };
+      const info = bridge.getXiaInfo([10, 20]);
+      expect(info?.provenance).toBeUndefined();
+    });
+  });
+
   // ADR-050 P-4 — Shape (form-layer citizenship) typed wrappers
   // (mirrors ADR-078 P-2 pattern; TS surface for Two-Layer Citizenship)
   // ════════════════════════════════════════════════════════════════════════

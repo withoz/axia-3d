@@ -432,6 +432,20 @@ export async function initXiaInspector(deps: XiaInspectorDeps): Promise<void> {
       const snapEl = document.getElementById('xi-snap-count');
       if (snapEl) snapEl.textContent = String(info.snapPoints || 0);
 
+      // ADR-110 P-δ — Provenance display (creating CommandId).
+      // Show only when common across selected faces; hide on mixed/none.
+      const provRow = document.getElementById('xi-provenance-row');
+      const provEl = document.getElementById('xi-provenance');
+      if (provRow && provEl) {
+        if (typeof info.provenance === 'number' && info.provenance > 0) {
+          provRow.style.display = '';
+          provEl.textContent = `#${info.provenance}`;
+        } else {
+          provRow.style.display = 'none';
+          provEl.textContent = '-';
+        }
+      }
+
       // 이름 자동 설정
       if (nameEl && !nameEl.dataset.edited) {
         // Material is a property — no special "Xia" naming
