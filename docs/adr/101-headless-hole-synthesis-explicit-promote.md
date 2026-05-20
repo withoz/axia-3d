@@ -255,18 +255,35 @@ ADR-041 P26.8 surface drift guard 회귀 자산 갱신 — 33 capabilities
 - **Cargo sweep**: vitest @axia/mcp-server **174/174 PASS** (이전 167
   + 7 신규), 절대 #[ignore] 금지 7/7 준수.
 
-### H-ε (remaining)
+### H-ε (본 commit) — Playwright cross-runtime parity (메타-원칙 #15 explicit verification)
 
-| Sub | 목표 | 예상 회귀 | 비고 |
-|-----|------|----------|------|
-| H-ε | Playwright E2E UI tool 경로 ↔ headless 의미 등가 검증 | Playwright +2 | ADR-075 E.4 인프라 활용. 메타-원칙 #15 explicit verification |
+- **commit**: 본 commit (`web/e2e/adr-101-headless-vs-tool-path-parity.spec.ts` 신규)
+- **canonical 결정**: "UI tool 경로" 의 진정한 surface 는
+  `bridge.drawRectAsShape` / `bridge.drawCircleAsShape` /
+  `bridge.mergeCoplanarContaining` (tool 들이 결국 호출하는 entry). 따라서
+  **cross-runtime parity** (Node WASM headless ↔ Browser WASM via Vite
+  preview) 가 메타-원칙 #15 의 본질 검증. 마우스 시뮬레이션 (canvas
+  coords 의존, flaky) 대신 두 runtime 의 동일 sequence 결과 비교.
+- **신규 회귀 자산** (Playwright +2, 절대 #[ignore] 금지 2/2 준수):
+  * `canonical LOCKED #40 sequence produces semantically equivalent mesh
+    on both runtimes` — Node + Browser 두 path 가 같은 invariant
+    (faceCount=1 / innerLoopCount=1 / invariants 0 violations) +
+    cross-runtime edgeCount/vertCount equality 검증
+  * `headless _as_shape × 2 without merge leaves 2 coplanar overlapping
+    faces in browser too` — LOCKED #40 의 "차이가 의도된 경우" (auto-
+    promote 안 됨) 두 runtime 모두 명시 invariant 봉인
+- **Playwright sweep**: 2/2 PASS (3.3s real Chromium via Vite preview).
+- **메타-원칙 #15 의 첫 explicit Playwright 회귀** — 향후 모든
+  *headless API ↔ tool path 의미 동등* claim 의 검증 anchor.
 
-**누적 H-α ~ H-β (현재)**: docs +1 ADR + CLAUDE.md (LOCKED #40 +
-메타-원칙 #15) + README + memory pointer = docs +4. 회귀: vitest +11
-(H-γ +4, H-β +7) + axia-geo +3 (H-δ) = **+14**, 절대 #[ignore] 금지
-14/14 준수.
+### 누적 H-α ~ H-ε
 
-**남은 회귀 예상 (H-ε 시)**: +2 → 총 **+16**.
+ADR-101 4-Track audit (H-α ~ H-η + H-β + H-ε) 전체 closure.
+
+- **docs**: +1 ADR + CLAUDE.md (LOCKED #40 + 메타-원칙 #15) + README +
+  memory pointer = **docs +4**
+- **회귀**: vitest +11 (H-γ +4, H-β +7) + axia-geo +3 (H-δ) +
+  Playwright +2 (H-ε) = **+16**, 절대 #[ignore] 금지 16/16 준수.
 
 ---
 
