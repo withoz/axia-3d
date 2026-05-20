@@ -7,6 +7,14 @@
 ("ADR 불변 — 변경 시 새 ADR + Superseded") 적용.
 
 ### 1. ADR-021 — Closed Edge Loop Divides Face (P7, 2026-04-29)
+
+> ⚠ **Superseded by ADR-139** (2026-05-18, Q3=a 결재). Auto containment
+> split 폐기 — Boundary tool 명시 only. 본 LOCKED 의 *결과 invariant*
+> (닫힌 경계 → 면) 는 메타-원칙 #14 로 보존, *trigger 정책* (자동 split)
+> 만 supersede. 회귀 자산 11+ tests 는 B-ζ atomic sub-step 에서 명시
+> Boundary 호출 시뮬레이션으로 재작성 예정. 자세한 supersede 근거 는
+> `docs/adr/139-boundary-tool-auto-cycle-deprecation.md` §6 + §15 참조.
+
 - **새 원칙 P7**: "닫힌 라인(엣지)는 면을 나눈다."
 - Connected inner components 는 1 combined hole 로 합쳐진다.
 - Disjoint inner components 는 multi-hole ring (별개 hole 들).
@@ -103,6 +111,19 @@
 - f32 ray-plane intersection ε 정밀도 손실 → 엔진 단계 누적 오차 차단.
 
 ### 12. ADR-025 — Closed Edge Cycle MUST Synthesize Face (P11, 2026-04-29)
+
+> ⚠ **Superseded by ADR-139** (2026-05-18, Q3=a 결재). Auto cycle
+> detection + auto face synthesis 폐기 — Boundary tool 명시 only.
+> 본 LOCKED 의 *결과 invariant* (닫힌 cycle → 면) 는 메타-원칙 #14 로
+> 보존, *trigger 정책* (DrawLine closed loop 자동 합성, Step 4.95 /
+> 4.99 second-pass) 만 supersede. DrawRect / DrawCircle 같은 single
+> explicit op 의 auto-face 는 보존 (Q2=a 결재). 회귀 자산 (orphan
+> count 0, 27-RECT 스트레스) 는 B-ζ 에서 명시 Boundary 호출 시뮬레이
+> 션으로 재작성. P5.UX.39-45 cascading fixes 패턴 evidence 가 본 정책
+> 폐기 trigger. 자세한 근거는 `docs/adr/139-boundary-tool-auto-cycle-
+> deprecation.md` §1 (Problem statement) + §6 (정책 영향 매트릭스)
+> 참조.
+
 - **새 원칙 P11 (사용자 강조)**: "닫힌 엣지에는 반드시 면이 생성되어야 한다."
 - ADR-019 ("Line is Truth, Face is Byproduct") + ADR-021 P7 의 가장 강한 형태.
 - 모든 draw 연산 종료 시점에 free edge (face=null) 로 형성되는 simple closed
@@ -2210,6 +2231,18 @@ render fast-path), LOCKED #15 (P22.5 owner-ID uniformity), LOCKED #16
 (P23 surface-aware normals).
 
 ### 41. ADR-101 Coplanar Partial Overlap Auto-Intersect (P7 Completion, 2026-05-15) ✅
+
+> ⚠ **Superseded by ADR-139** (2026-05-18, Q3=a 결재). `auto_intersect_
+> coplanar` 의 Draw 자동 trigger 폐기 — Boundary tool 명시 only.
+> 본 LOCKED 의 *결과 invariant* (두 닫힌 경계 overlap → 3 sub-face) 는
+> 메타-원칙 #14 로 보존, *Draw 자동 trigger* (B-4 Scene wiring,
+> `auto_intersect_on_draw` flag default true) 만 supersede.
+> Amendment 9 (메타-원칙 #15) HARD flag 정책 자체는 **불변 보존** —
+> Boundary tool 호출 시에도 split-induced edges 의 HARD contract 유지.
+> Engine 본체 (`auto_intersect_coplanar` public API, `polygon_difference_
+> walking`, `coplanar_intersection_segments`) 는 보존 — Boundary tool
+> 호출 시 자산 재활용. 자세한 근거는 `docs/adr/139-boundary-tool-auto-
+> cycle-deprecation.md` §6 (정책 영향 매트릭스) + §10 (Lock-ins) 참조.
 
 **Canonical anchor (사용자 통찰, 2026-05-14)**:
 > "닫힌 엣지에는 면이 생성되어야 한다. 두 닫힌 엣지가 겹치면 세 면으로
@@ -4467,7 +4500,103 @@ use of an object detected") root cause:
   = visual hint only
 - **ADR-136 β implementation** — Path A 권장 (Sync rebuild on topology
   change)
-- **ADR-XXX Multi-loop face auto-split extension** — S4 finding
+- **ADR-XXX Multi-loop face auto-split extension** — S4 finding 자연
+  흡수 by **ADR-139 (Boundary tool only)**
+
+### 64. ADR-139 — Boundary-only Face Synthesis (B-α α spec closure, 2026-05-18)
+
+**Canonical anchor (사용자 통찰, 2026-05-18)**:
+> "현재 자동 cycle detection + auto-punching 접근이 cascading 이슈 만들고
+>  있습니다 (P5.UX.39-45가 모두 이전 자동화의 부작용 처리). CAD 표준
+>  BOUNDARY 명령 방식이 더 안정적입니다."
+
+**Status**: α spec + Q1~Q5 결재 완료 (commit `d233f16`). β implementation
+multi-month atomic 트랙 (B-β ~ B-μ) — 별도 PR 시리즈.
+
+**5 핵심 결재 (Q1~Q5, all approved 2026-05-18)**:
+- **Q1 = Path A (Pure Boundary only)** — 자동 trigger 완전 폐기
+- **Q2 = (a) DrawRect/DrawCircle single-op auto-face 보존** — single op =
+  closed boundary 그리기 + 면 만들기 = explicit intent 명확
+- **Q3 = (a) 자동 합성 정책 모두 Superseded** — LOCKED #1 P7 / #12 P11
+  / #41 ADR-101 모두 supersede (결과 invariant 보존, trigger 만 변경)
+- **Q4 = (a) 60+ 회귀 자산 재작성** — 자동 trigger expect → Boundary
+  명시 호출 시뮬레이션
+- **Q5 = (a) ADR-138 흡수** — Pure Boundary = 자동 trigger 폐기 →
+  multi-loop face 자체 안 생성 → Path B 자연 달성
+
+#### 핵심 정책 매트릭스
+
+| 측면 | 정책 |
+|---|---|
+| **DrawLine / DrawArc / DrawBezier / DrawPolyline / DrawFreehand** | 그리기 only (line + edge 만, face 자동 0) |
+| **DrawRect / DrawCircle / DrawPolygon** | single explicit op auto-face **보존** (Q2-a) |
+| **Boundary tool 단축키** | `B` (CAD AutoCAD `BOUNDARY` parity) |
+| **2D BOUNDARY algorithm** | Planar graph face traversal (DCEL 기존 자산 + Cardinal + BVH) — O(N) per query |
+| **3D BOUNDARY** | Phase 2 future (closed shell → volume) |
+| **자동 cycle detection** | **폐기** (`resolve_planar_free_faces` Step 4.99 disable, Step 4.95 second-pass disable) |
+| **자동 containment split** | **폐기** (LOCKED #1 P7 supersede) |
+| **자동 coplanar overlap intersect** | **폐기** (LOCKED #41 supersede) |
+| **STEP/IGES import free edges** | Boundary 명시로 face 가능 (가치 unlock — 이전엔 무시) |
+| **결과 face** | simple (single closed loop) — multi-loop face 자체 안 생성 (ADR-138 Path B 자연 달성) |
+| **LOCKED #63 z=0 invariant** | **직교 보존** ✅ |
+| **메타-원칙 #14** | **불변 보존** (WHAT layer — 결과 invariant) |
+| **메타-원칙 #16** | **신설 anchor** (WHEN layer — trigger 정책) |
+
+#### Lock-ins (L-64-1 ~ L-64-10)
+
+- **L-64-1** LOCKED #12 ADR-025 P11 Superseded (자동 cycle face 합성)
+- **L-64-2** LOCKED #1 ADR-021 P7 Superseded (자동 containment split)
+- **L-64-3** LOCKED #41 ADR-101 Superseded (자동 partial overlap intersect)
+- **L-64-4** Boundary tool 단축키 = `B` (CAD parity)
+- **L-64-5** Algorithm = planar graph face traversal (기존 DCEL 자산
+  + Cardinal projection LOCKED #63 + BVH spatial accel) — 새 알고리즘 0
+- **L-64-6** 결과 face = simple (single closed loop) — multi-loop 자체
+  생성 안 함 → ADR-138 Path B 자연 달성 (ADR-138 Superseded by ADR-139)
+- **L-64-7** DrawRect / DrawCircle / DrawPolygon single-op auto-face 보존
+  (single op = explicit intent, Q2-a 결재)
+- **L-64-8** LOCKED #63 z=0 invariant 보존 (직교)
+- **L-64-9** 메타-원칙 #14 불변 보존 (WHAT — 결과 invariant)
+- **L-64-10** 메타-원칙 #16 신설 anchor (WHEN — trigger 정책)
+- **L-64-11** P5.UX.39-45 cascading fixes 패턴 영구 차단 (autopilot
+  antipattern 회귀 0)
+- **L-64-12** 사용자 시연 시 *구멍 0 보장* — 자동 fail 없음
+- **L-64-13** 60+ 회귀 자산 재작성 (B-ζ atomic sub-step) — 자동 trigger
+  expect → 명시 Boundary 호출 simulate
+
+#### Acceptance Log (α + Q 결재 + 후속 plan)
+
+- **2026-05-18 α** (`d233f16` PR #103) — α spec 작성 + Q1~Q5 결재 anchor
+- **2026-05-18 B-β audit** (`a2421d5` PR #104) — multi-hole connected
+  inner audit + 즉시 회피 가이드
+- **2026-05-18 docs batch** (본 commit, PR ADR-139 supersede batch):
+  - B-η — LOCKED #1 / #12 / #41 supersede docs
+  - B-θ — ADR-138 closure note (이미 ADR-138 §SUPERSEDED NOTE 에 등재)
+  - B-κ — 메타-원칙 #14 amendment + #16 신설
+  - B-λ — LOCKED #64 신설 (본 entry)
+- **(β implementation, multi-month)** — atomic sub-step Path Z 답습:
+  - B-β: Engine — auto cycle detection 폐기 (`resolve_planar_free_faces`
+    + Step 4.95 / 4.99 disable + cycle finder 호출 site 제거)
+  - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규
+  - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
+  - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair + click
+  - B-ζ: 회귀 자산 update — 60+ tests 재작성 (자동 → 명시 호출 시뮬레이션)
+  - B-ι: E2E + 사용자 시연 (구멍 0 검증, ADR-087 K-ζ canonical)
+  - B-μ: 3D BOUNDARY (closed shell extraction) Phase 2 별도 ADR
+
+#### Cross-link
+
+- ADR-139 α spec / B-β audit (`docs/adr/139-boundary-tool-auto-cycle-
+  deprecation.md` + `docs/adr/139-b-beta-audit-and-workaround.md`)
+- ADR-138 closure (Superseded by ADR-139, Q5-a 흡수)
+- LOCKED #1 ADR-021 P7 (Superseded)
+- LOCKED #12 ADR-025 P11 (Superseded)
+- LOCKED #41 ADR-101 (Superseded)
+- LOCKED #63 PR #101 (z=0 invariant — 직교 보존)
+- 메타-원칙 #14 (WHAT layer 불변 보존)
+- 메타-원칙 #16 (WHEN layer 신설 anchor)
+- 메타-원칙 #5 (사용자 편의 — 명확 자동 / 모호 명시)
+- ADR-087 K-ζ canonical (legacy deletion + 사용자 시연 게이트)
+- ADR-094/097/099/138 (Path Z atomic 패턴 source)
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
@@ -5223,9 +5352,9 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - Fillet 3-way corner (같은 vertex 공유 다중 엣지) 미해결 — 별도 작업
 - STEP/IGES OCCT.js 통합 미구현 — 10MB+ 번들 검토 필요
 
-## 메타-원칙 (#1~#15, ADR-101 Amendment 9 까지 통과)
+## 메타-원칙 (#1~#16, ADR-139 까지 통과)
 
-설계 결정 시 참조하는 15개 메타-원칙. 자세한 출처는
+설계 결정 시 참조하는 16개 메타-원칙. 자세한 출처는
 `docs/adr/README.md` 참조.
 
 | # | 원칙 | 축 |
@@ -5243,14 +5372,27 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 | 11 | **Latency Budget First** (Hover 16/Click 33/Commit 100/Heavy 500 ms) | 성능 |
 | 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
 | 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
-| 14 | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) | 기하 본질 |
+| 14 | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) — **WHAT layer (결과 invariant 불변)** | 기하 본질 |
 | 15 | **동일 분할 = 동일 topological contract — 빠르고 신속하고 정확하게** (Same split = same topo contract: fast, swift, accurate) | 분할 정합 |
+| 16 | **자동화는 사용자 의도를 미리 알 수 없다 — 휴리스틱 자동화는 cascading 부작용의 source** (Automation cannot infer user intent; heuristic automation is the source of cascading side-effects) — **WHEN layer (trigger 정책)** | UX/거버넌스 |
 
-### 메타-원칙 #14 — 면은 닫힌 경계로부터 유도된다
+### 메타-원칙 #14 — 면은 닫힌 경계로부터 유도된다 (WHAT layer)
 
-**Canonical statement (사용자 통찰, 2026-05-08)**:
+**Canonical statement (사용자 통찰, 2026-05-08; ADR-139 amendment 2026-05-18)**:
 > "면은 닫힌 경계로부터 유도된다."
 > ("A face is derived from a closed boundary.")
+
+**ADR-139 amendment (2026-05-18, 사용자 정정)**:
+> "메타-원칙 #14 (면은 닫힌 경계로 유도된다) 이것은 바뀌지 않습니다.
+> 중요한것은 바운더리를 만들어 생성을 할수있느냐지?"
+
+**WHAT vs WHEN 직교 분리** (ADR-139 신설):
+- **메타-원칙 #14 (WHAT — 결과 invariant, 불변)**: 닫힌 경계 → 면.
+  *기하학적 진리* — 결과는 같다.
+- **메타-원칙 #16 (WHEN — trigger 정책, 신설)**: *어떻게* 그 닫힌
+  경계를 인식하는지의 *trigger* — 자동 vs 사용자 명시. ADR-139 가
+  자동 trigger 폐기 / 사용자 명시 trigger 활성.
+- 두 원칙은 직교 — #14 는 *결과* 보존, #16 는 *trigger* 변경.
 
 **의미**:
 - Face 는 *first-class entity 가 아닌 byproduct* — closed edge loop 의
@@ -5258,9 +5400,10 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
   형태).
 - Edge 는 fundamental — vertex 는 edge endpoint, face 는 edge cycle
   의 derivation.
-- Closed boundary 가 있으면 face 가 합성되어야 (LOCKED #12 ADR-025 P11).
-- Closed boundary 가 기존 face 위에 있으면 그 face 를 분할 (LOCKED #1
-  ADR-021 P7).
+- Closed boundary 가 있으면 면이 합성되어야 — *trigger 는 사용자 명시*
+  (ADR-139 Boundary tool / single explicit op).
+- Closed boundary 가 기존 face 위에 있으면 그 face 를 분할 — *trigger
+  는 사용자 명시* (ADR-139).
 - Boundary 에 attach 된 analytic curve (Circle/Arc/Bezier/BSpline/NURBS)
   가 face 의 경계 형상을 정의 — polygon approximation 은 render 부산물
   (ADR-027 NURBS Kernel + ADR-028 Edge curve attach).
@@ -5272,11 +5415,17 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 - ADR-008 Axiom 1: Face = byproduct
 - ADR-015 LOCKED #1 의 v2.0 (component-merge resolver deferred)
 - ADR-019 "Line is Truth, Face is Byproduct"
-- ADR-025 P11 LOCKED #12: 닫힌 엣지 = 반드시 면
-- ADR-021 P7 LOCKED #1: 닫힌 경계로 면 분할
+- ADR-025 P11 LOCKED #12: 닫힌 엣지 = 반드시 면 (자동 trigger — ADR-139
+  로 supersede, 결과 invariant 보존)
+- ADR-021 P7 LOCKED #1: 닫힌 경계로 면 분할 (자동 trigger — ADR-139 로
+  supersede, 결과 invariant 보존)
 - ADR-087 K-ε hotfix: Plane render → polygon path (DCEL boundary = exact)
 - ADR-088 Phase 1 (curve_owner_id), ADR-089 Phase 2 (true kernel-native
   closed edges) 의 anchor.
+- **ADR-139 (2026-05-18) — WHAT/WHEN 분리 명시**: 메타-원칙 #14 가 *WHAT
+  layer (결과 invariant)* 임을 명시하고, *WHEN layer (trigger 정책)* 을
+  메타-원칙 #16 으로 분리. 사용자 정정 "메타-원칙 #14 는 바뀌지 않습니다"
+  — 결과 (닫힌 경계 → 면) 는 보존, *trigger* 만 자동 → 명시 Boundary tool.
 - **ADR-107 (2026-05-16) — deepest realization closure**: `*AsShape` →
   Path B canonical unification (Layer Separation Policy). 사용자 통찰
   "메시 곡면과 기하 원의 곡면이 동시에 작용" → Hybrid layer 의 N segment
@@ -5356,6 +5505,60 @@ mesh.hes[he_id].set_flags(cur | HeFlags::HARD);
 - ADR-101 Amendment 9: 결함 C (render edge hide) 의 architectural root
   은 `Mesh::split_face` ↔ `auto_intersect_coplanar` 의 contract 불일치
 - 향후 모든 split-type 함수 신설 / 수정 시 본 원칙 정합 강제
+
+### 메타-원칙 #16 — 자동화 antipattern (WHEN layer, 신설)
+
+**Canonical statement (사용자 통찰 누적 + Claude 합의, ADR-139 결재 2026-05-18)**:
+> "자동화는 사용자 의도를 미리 알 수 없다. 휴리스틱 자동화는 cascading
+> 부작용의 source."
+> ("Automation cannot infer user intent. Heuristic automation is the
+> source of cascading side-effects.")
+
+**Trigger evidence (사용자 evidence + 시연 누적)**:
+- **P5.UX.39~45 cascading fixes 패턴** — 자동 cycle / split / intersect
+  trigger 가 각각 부작용 만들고, 이후 sprint 들이 부작용 fix 시도하다
+  새 부작용 누적. 6 sprint 누적 의 가장 직접적 evidence.
+- **사용자 RECT 시연** (2026-05-18, PR #101 closure 후) — 다수 RECT 그린
+  뒤 *구멍이 난 부분이 많았다*. 자동 합성 휴리스틱 한계 직접 evidence.
+- **사용자 통찰**: "현재 자동 cycle detection + auto-punching 접근이
+  cascading 이슈 만들고 있습니다 (P5.UX.39-45가 모두 이전 자동화의
+  부작용 처리). CAD 표준 BOUNDARY 명령 방식이 더 안정적입니다."
+
+**의미**:
+- 자동 trigger 가 *모호한 케이스* (self-intersecting line, multi-RECT
+  containment + overlap, pentagon 5 line, Push/Pull inner detail) 에서
+  *추측* 해야 → 잘못된 결정 → cascading fixes.
+- 사용자 의도는 모호함 자체가 *사용자가 명시* 해야 결정 가능.
+- 메타-원칙 #5 ("명확하면 자동, 모호하면 명시 동의") 의 *강화* — "휴리
+  스틱 자동화 = 모호" 임을 lock-in.
+- 본 원칙은 *WHEN layer (trigger 정책)* — *WHAT layer (결과 invariant
+  메타-원칙 #14)* 와 직교. 결과는 같다, *언제 trigger 하느냐* 만 다름.
+
+**가이드 (향후 ADR / 코드 결정 시)**:
+- 새 자동화 (자동 trigger / 자동 detect / 자동 split / 자동 intersect)
+  도입 검토 시 본 원칙 정합 *명시 검증*. 답이 "휴리스틱" 이면 거부.
+- 자동화 제안 시 *cascading fix 위험* 명시 (예: 메모리 누수, edge case,
+  사용자 intent 추측). cascading risk 0 증명 의무.
+- 명확한 단일 사용자 의도 (e.g., DrawRect = 사각형 그리기 = explicit
+  intent) 는 *자동 face 합성 보존* (ADR-139 Q2=a 결재). 모호 ≠ 단일.
+- 휴리스틱 자동화 vs 사용자 명시 trigger 선택지 항상 고려.
+
+**적용 사례 (역사적 맥락)**:
+- ADR-139 (2026-05-18) — 본 메타-원칙 *신설 anchor*. LOCKED #1 P7 /
+  #12 P11 / #41 ADR-101 의 자동 trigger 폐기 결재. Boundary tool
+  명시 only.
+- 메타-원칙 #5 (사용자 편의) 의 자연 강화 — "모호함의 정의" 가 "휴리
+  스틱" 임을 명시.
+
+**구분 가이드 — 명시 vs 휴리스틱**:
+| 자동화 유형 | 분류 | 사례 |
+|---|---|---|
+| Single explicit op (DrawRect 의 4 vertex → 1 face) | **명시** ✅ | 보존 |
+| Cardinal projection (z=0 강제, LOCKED #63) | **명시** ✅ | 보존 (사용자 view 명확) |
+| Single click → owner ID promote (ADR-037 P22) | **명시** ✅ | 보존 |
+| 닫힌 line cycle 자동 face 합성 (LOCKED #12 P11) | **휴리스틱** ❌ | ADR-139 폐기 |
+| Containment 자동 split (LOCKED #1 P7) | **휴리스틱** ❌ | ADR-139 폐기 |
+| Coplanar overlap 자동 3 sub-face (LOCKED #41) | **휴리스틱** ❌ | ADR-139 폐기 |
 
 ## Session 2026-04-28 완료 내역 (11 commits — RECT 면 합성 정책 정비)
 
