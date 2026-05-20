@@ -61,6 +61,11 @@ function drawRect(bridge: BridgeShim, r: Rect): number {
 
 test.describe('z=0 multi-RECT stress: 닫힌 경계 모두 면분할 (사용자 요구)', () => {
   test.beforeEach(async ({ page }) => {
+    // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
+    // Legacy auto-intersect 동작 검증 — explicit opt-in via localStorage.
+    await page.addInitScript(() => {
+      localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+    });
     await page.goto('/');
     await page.waitForFunction(
       () => !!(window as unknown as AxiaWindow).__axia,

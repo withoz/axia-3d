@@ -186,11 +186,17 @@ pub struct Scene {
     /// cleared in the epoch finalizer. When `Some`, inner exec_draw_line
     /// calls contribute to this buffer and skip their per-line post-process.
     epoch: Option<EpochContext>,
-    /// Phase 2 — SketchUp-style "auto intersect on draw". When true, every
-    /// draw_rect / draw_circle command automatically runs
-    /// intersect_faces_inner on the newly-created faces against the rest of
-    /// the scene (still inside the outer transaction, so Ctrl+Z undoes both
-    /// the draw and the intersect in one step). User-toggleable.
+    /// Phase 2 — SketchUp-style "auto intersect on draw".
+    ///
+    /// **ADR-139 B-β-1 (2026-05-18)**: default `false` (was `true`).
+    /// 자동 trigger antipattern (메타-원칙 #16) — 사용자 의도 추측 →
+    /// cascading 부작용 (P5.UX.39-45). Boundary tool 명시 only 정책 정합.
+    /// When `true` (explicit opt-in), every draw_rect / draw_circle command
+    /// automatically runs intersect_faces_inner on the newly-created faces
+    /// against the rest of the scene (still inside the outer transaction,
+    /// so Ctrl+Z undoes both the draw and the intersect in one step).
+    /// User-toggleable for legacy compatibility (localStorage 'true' ON
+    /// preference 보존, ADR-049 P-5e-α canonical 답습).
     pub auto_intersect_on_draw: bool,
     /// ADR-078 P-1 — Boolean Group A/B persistence (Rust mirror of TS U-1).
     ///
@@ -380,7 +386,8 @@ impl Scene {
             groups: GroupManager::new(),
             constraints: ConstraintGraph::new(),
             epoch: None,
-            auto_intersect_on_draw: true,
+            // ADR-139 B-β-1: default OFF (메타-원칙 #16 자동화 antipattern 폐기)
+            auto_intersect_on_draw: false,
             boolean_group_tags: HashMap::new(),
             shapes: HashMap::new(),
             next_shape_id: 1,
@@ -14583,9 +14590,9 @@ mod tests {
     #[test]
     fn adr101_b4_two_rects_partial_overlap_auto_splits() {
         let mut scene = Scene::new();
-        // Disable other auto-cleanup that might interfere with the test.
-        // (auto_intersect_on_draw is default true.)
-        assert!(scene.auto_intersect_on_draw, "default ON");
+        // ADR-139 B-β-1 (2026-05-18): default OFF — explicit opt-in for
+        // tests that verify the legacy auto-intersect behavior.
+        scene.auto_intersect_on_draw = true;
 
         // Draw rect A: center (5, 5), 10×10 → footprint [0,0]–[10,10].
         let result_a = scene.execute(Command::DrawRect {
@@ -14731,6 +14738,8 @@ mod tests {
     #[test]
     fn adr101_b4_two_circles_as_shape_partial_overlap_auto_splits() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-1: explicit opt-in for legacy auto-intersect behavior
+        scene.auto_intersect_on_draw = true;
         scene.execute(Command::DrawCircleAsShape {
             center: DVec3::new(0.0, 0.0, 0.0),
             normal: DVec3::new(0.0, 0.0, 1.0),
@@ -14760,6 +14769,8 @@ mod tests {
     #[test]
     fn adr101_b4b_two_path_b_circles_partial_overlap_auto_splits() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-1: explicit opt-in for legacy auto-intersect behavior
+        scene.auto_intersect_on_draw = true;
         // DrawCircleAsCurve = Path B (kernel-native, 1 anchor + 1 self-loop).
         let r1 = scene.execute(Command::DrawCircleAsCurve {
             center: DVec3::new(0.0, 0.0, 0.0),
@@ -14833,6 +14844,8 @@ mod tests {
     #[test]
     fn adr101_b4_two_circles_partial_overlap_auto_splits() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-1: explicit opt-in for legacy auto-intersect behavior
+        scene.auto_intersect_on_draw = true;
         // Circle A: center origin, radius 5, 32 segments (polygonized).
         scene.execute(Command::DrawCircle {
             center: DVec3::new(0.0, 0.0, 0.0),

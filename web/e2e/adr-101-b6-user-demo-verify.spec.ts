@@ -25,6 +25,11 @@ const CIRCLE_B = { cx: 6, cy: 0, cz: 0, nx: 0, ny: 0, nz: 1, radius: 5, segments
 
 test.describe('ADR-101 B-6 — User demo verification', () => {
   test.beforeEach(async ({ page }) => {
+    // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
+    // ADR-101 verification — explicit opt-in via localStorage.
+    await page.addInitScript(() => {
+      localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+    });
     await page.goto('/');
     await page.waitForFunction(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

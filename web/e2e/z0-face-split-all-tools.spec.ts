@@ -74,6 +74,11 @@ function drawSquareViaLines(
 
 test.describe('z=0 face split — all drawing tools (LOCKED #1 P7 + LOCKED #41)', () => {
   test.beforeEach(async ({ page }) => {
+    // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
+    // Legacy LOCKED #41 ADR-101 auto-split 동작 검증 — explicit opt-in.
+    await page.addInitScript(() => {
+      localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+    });
     await page.goto('/');
     await page.waitForFunction(
       () => !!(window as unknown as AxiaWindow).__axia,

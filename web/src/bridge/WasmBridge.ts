@@ -4619,13 +4619,16 @@ export class WasmBridge {
     }
   }
 
-  /** Phase 2 — auto-intersect on draw 토글 (기본 true). */
+  /** Phase 2 — auto-intersect on draw 토글.
+   *  ADR-139 B-β-1 (2026-05-18): default `false`. 메타-원칙 #16 자동화
+   *  antipattern 폐기. Legacy `true` 사용자 명시 opt-in 보존. */
   setAutoIntersectOnDraw(enabled: boolean): void {
     this.engine?.setAutoIntersectOnDraw?.(enabled);
   }
 
   getAutoIntersectOnDraw(): boolean {
-    return this.engine?.getAutoIntersectOnDraw?.() ?? true;
+    // ADR-139 B-β-1: default fallback OFF
+    return this.engine?.getAutoIntersectOnDraw?.() ?? false;
   }
 
   /**

@@ -6309,7 +6309,10 @@ impl AxiaEngine {
         }
     }
 
-    /// Phase 2 — auto_intersect_on_draw 토글. 기본 true.
+    /// Phase 2 — auto_intersect_on_draw 토글.
+    /// **ADR-139 B-β-1 (2026-05-18)**: default `false`. 자동 trigger
+    /// antipattern 폐기 (메타-원칙 #16). Boundary tool 명시 only 정책.
+    /// `true` 명시 시 legacy 동작 (사용자 explicit opt-in).
     #[wasm_bindgen(js_name = "setAutoIntersectOnDraw")]
     pub fn set_auto_intersect_on_draw(&mut self, enabled: bool) {
         self.scene.auto_intersect_on_draw = enabled;

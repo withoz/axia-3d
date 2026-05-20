@@ -4510,8 +4510,10 @@ use of an object detected") root cause:
 >  있습니다 (P5.UX.39-45가 모두 이전 자동화의 부작용 처리). CAD 표준
 >  BOUNDARY 명령 방식이 더 안정적입니다."
 
-**Status**: α spec + Q1~Q5 결재 완료 (commit `d233f16`). β implementation
-multi-month atomic 트랙 (B-β ~ B-μ) — 별도 PR 시리즈.
+**Status**: α spec + Q1~Q5 결재 완료 (commit `d233f16`). **β
+implementation B-β-1 closure** (본 PR) — `auto_intersect_on_draw` flag
+default `true` → `false`. 나머지 sub-step (B-β-2/3/4 + B-γ ~ B-μ) 별도
+PR 시리즈.
 
 **5 핵심 결재 (Q1~Q5, all approved 2026-05-18)**:
 - **Q1 = Path A (Pure Boundary only)** — 자동 trigger 완전 폐기
@@ -4579,9 +4581,24 @@ multi-month atomic 트랙 (B-β ~ B-μ) — 별도 PR 시리즈.
   - B-θ — ADR-138 closure note (이미 ADR-138 §SUPERSEDED NOTE 에 등재)
   - B-κ — 메타-원칙 #14 amendment + #16 신설
   - B-λ — LOCKED #64 신설 (본 entry)
-- **(β implementation, multi-month)** — atomic sub-step Path Z 답습:
-  - B-β: Engine — auto cycle detection 폐기 (`resolve_planar_free_faces`
-    + Step 4.95 / 4.99 disable + cycle finder 호출 site 제거)
+- **2026-05-18 B-β-1 implementation** (본 PR, 첫 β implementation
+  step) — `auto_intersect_on_draw` flag default `true` → `false`:
+  - Engine + WASM bridge + TS layer default OFF (LOCKED #44 single
+    atomic PR)
+  - localStorage `'true'` 명시 ON preference 보존 (ADR-049 P-5e-α
+    canonical 답습)
+  - axia-core 영향 6 tests: explicit `scene.auto_intersect_on_draw =
+    true` opt-in (4 scene::tests adr101_b4 + 2 intersect_with_model)
+  - Playwright E2E 6 specs: `page.addInitScript` 으로 localStorage
+    'true' 사전 설정 (z0-rect-stress-split / z0-face-split-all-tools /
+    z0-face-synthesis-split-cross-tool / z0-split-face-selection /
+    adr-101-b6-visual-demo / adr-101-b6-user-demo-verify)
+  - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54
+    모두 PASS, 절대 #[ignore] 금지 준수
+- **(β-2 ~ β-4 + B-γ ~ B-μ): 다음 sub-steps** (multi-month, 별도 PRs):
+  - B-β-2: Step 4.99 `resolve_planar_free_faces` auto disable (~1일)
+  - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일)
+  - B-β-4: DrawLine closed loop 자동 face 합성 폐기 (TS, ~30분)
   - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규
   - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
   - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair + click

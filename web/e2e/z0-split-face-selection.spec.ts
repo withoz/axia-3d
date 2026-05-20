@@ -30,6 +30,11 @@ interface AxiaWindow {
 }
 
 async function setup(page: import('@playwright/test').Page): Promise<void> {
+  // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
+  // Legacy ADR-101 + LOCKED #1 split 동작 검증 — explicit opt-in.
+  await page.addInitScript(() => {
+    localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+  });
   await page.goto('/');
   await page.waitForFunction(
     () => !!(window as unknown as AxiaWindow).__axia,

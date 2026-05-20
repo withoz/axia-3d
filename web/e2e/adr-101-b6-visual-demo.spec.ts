@@ -92,6 +92,11 @@ async function hideUIChrome(page: import('@playwright/test').Page): Promise<void
 
 test.describe('ADR-101 B-6 — Visual demo (Claude direct test)', () => {
   test.beforeEach(async ({ page }) => {
+    // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
+    // ADR-101 auto-intersect demo — explicit opt-in via localStorage.
+    await page.addInitScript(() => {
+      localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+    });
     await page.goto('/');
     await waitForBridgeReady(page);
   });

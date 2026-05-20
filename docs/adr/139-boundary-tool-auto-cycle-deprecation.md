@@ -377,7 +377,34 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
     - "면은 닫힌 경계로부터 유도된다" 그대로 (WHAT 결과 invariant)
     - ADR-139 는 *trigger 정책 layer* (WHEN) 변경, *결과 invariant* 보존
   - **메타-원칙 #16 신설** 확정: "자동화는 사용자 의도를 미리 알 수 없다" (WHEN 정책)
-- **(β implementation): atomic sub-step Path Z 답습** (multi-month)
+- **2026-05-18 B-η/θ/κ/λ docs batch** (PR #127, commit `9aa948f`) —
+  LOCKED #1/#12/#41 supersede notes + 메타-원칙 #14 amendment + #16 신설
+  + LOCKED #64 신설.
+- **2026-05-18 B-ζ audit** (PR #128, commit `aaa800e`) — 회귀 자산 update
+  사전 검토 (5-layer inventory + update type 매트릭스). 총 ~275-280 회귀
+  자산 inventory — 불변 ~123 (45%) / 명시 호출 추가 ~45 (17%) / 재작성
+  ~107 (39%) / count 영향 ~27 (10%). audit-first canonical 8번째 적용.
+- **2026-05-18 B-β-1 implementation** (본 PR) — `auto_intersect_on_draw`
+  flag default `true` → `false`. Engine + WASM bridge + TS layer + 영향
+  tests 13개 + Playwright E2E 6 specs explicit opt-in 전환.
+  - Engine scene.rs: default `false`
+  - WASM bridge lib.rs: 주석 갱신 (default OFF)
+  - TS AutoIntersectSettings.ts: localStorage 'true' 명시 시 ON 보존
+    (ADR-049 P-5e-α canonical 답습)
+  - TS WasmBridge.ts fallback default: `false`
+  - axia-core scene::tests adr101_b4 4 tests: explicit `scene.auto_
+    intersect_on_draw = true` opt-in (auto-split 동작 검증)
+  - axia-core tests/intersect_with_model.rs 2 tests: explicit opt-in
+  - Playwright E2E 6 specs (z0-rect-stress-split / z0-face-split-all-
+    tools / z0-face-synthesis-split-cross-tool / z0-split-face-selection
+    / adr-101-b6-visual-demo / adr-101-b6-user-demo-verify): `page.add
+    InitScript` 으로 localStorage 'true' 사전 설정 (legacy ON 보존)
+  - 회귀: axia-core 302 + 36 = 338 PASS / axia-geo 1407 + 24 = 1431
+    PASS / axia-wasm 54 PASS, 절대 #[ignore] 금지 준수
+- **(β-2 ~ β-4): 다음 atomic sub-step** (별도 PR):
+  - B-β-2: Step 4.99 `resolve_planar_free_faces` auto disable (~1일)
+  - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일)
+  - B-β-4: DrawLine closed loop 자동 face 합성 폐기 (TS, ~30분)
 
 ## 14. β implementation atomic sub-step plan (B-α ~ B-μ)
 
