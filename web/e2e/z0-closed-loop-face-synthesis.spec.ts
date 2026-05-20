@@ -52,6 +52,12 @@ interface BridgeShim {
 
 test.describe('Closed loop face synthesis on z=0 (LOCKED #12 + 메타-원칙 #14)', () => {
   test.beforeEach(async ({ page }) => {
+    // ADR-139 B-β-2 (2026-05-18): auto Step 4.99 closed cycle face
+    // synthesis default OFF. Legacy LOCKED #12 P11 동작 검증 — explicit
+    // opt-in via localStorage (ADR-049 P-5e-α canonical 답습).
+    await page.addInitScript(() => {
+      localStorage.setItem('axia:auto-face-synthesis-on-draw', 'true');
+    });
     await page.goto('/');
     await page.waitForFunction(
       () => !!(window as unknown as AxiaWindow).__axia,

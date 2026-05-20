@@ -198,6 +198,16 @@ pub struct Scene {
     /// User-toggleable for legacy compatibility (localStorage 'true' ON
     /// preference 보존, ADR-049 P-5e-α canonical 답습).
     pub auto_intersect_on_draw: bool,
+    /// **ADR-139 B-β-2 (2026-05-18)** — LOCKED #12 ADR-025 P11 자동 cycle
+    /// face synthesis 토글. Default `false` (메타-원칙 #16 자동화 antipattern
+    /// 폐기). Step 4.99 (`resolve_planar_free_faces` fixed-point loop) 의
+    /// 자동 호출 사이트 control.
+    /// When `true` (explicit opt-in), every postprocess pipeline 의 last
+    /// step (Step 4.99) 가 free edge closed cycle 을 자동 face 로 합성.
+    /// Boundary tool (ADR-139 B-γ ~ B-ε) 진입 시 명시 trigger 로 대체.
+    /// User-toggleable for legacy compatibility (localStorage 'true' ON
+    /// preference 보존, ADR-049 P-5e-α canonical 답습).
+    pub auto_face_synthesis_on_draw: bool,
     /// ADR-078 P-1 — Boolean Group A/B persistence (Rust mirror of TS U-1).
     ///
     /// `FaceId → BooleanGroupTag` map. Mirrors the runtime
@@ -388,6 +398,8 @@ impl Scene {
             epoch: None,
             // ADR-139 B-β-1: default OFF (메타-원칙 #16 자동화 antipattern 폐기)
             auto_intersect_on_draw: false,
+            // ADR-139 B-β-2: default OFF (Step 4.99 자동 cycle face synthesis 폐기)
+            auto_face_synthesis_on_draw: false,
             boolean_group_tags: HashMap::new(),
             shapes: HashMap::new(),
             next_shape_id: 1,
@@ -3298,7 +3310,11 @@ impl Scene {
         //
         // 한 번의 final sweep 후에도 잔존 free edge 가 있으면 그 cycle 은 manifold
         // 안전상 합성 불가 (Phase G case (c) 같은 boundary 결합 등) — 별도 phase.
-        {
+        //
+        // **ADR-139 B-β-2 (2026-05-18)**: `auto_face_synthesis_on_draw` flag
+        // default OFF — 메타-원칙 #16 자동화 antipattern 폐기. Boundary tool
+        // (ADR-139 B-γ) 명시 trigger 로 대체. Legacy `true` explicit opt-in.
+        if self.auto_face_synthesis_on_draw {
             let any_orphan = self.mesh.edges.iter().any(|(eid, e)| {
                 if !e.is_active() { return false; }
                 let (faces, _) = self.mesh.get_faces_sharing_edge(eid);
@@ -3326,7 +3342,8 @@ impl Scene {
                     if !still_orphan { break; }
                 }
             }
-
+        }
+        {
             trace_step("after Step 4.99 resolve_planar_free_faces", &self.mesh, &mut last_nm);
 
             // ADR-025 P11 Phase 5 — Brute-force cycle mop-up.

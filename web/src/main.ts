@@ -97,6 +97,16 @@ async function main() {
     if (bridge.isReady()) bridge.setAutoIntersectOnDraw(v);
   });
 
+  // ADR-139 B-β-2 — auto-face-synthesis-on-draw 설정 WASM 에 반영
+  // (LOCKED #12 ADR-025 P11 Step 4.99 자동 cycle face synthesis 토글).
+  // Default `false` (메타-원칙 #16 자동화 antipattern 폐기).
+  const { getAutoFaceSynthesis, onAutoFaceSynthesisChange } =
+    await import('./tools/AutoFaceSynthesisSettings');
+  if (bridge.isReady()) bridge.setAutoFaceSynthesisOnDraw(getAutoFaceSynthesis());
+  onAutoFaceSynthesisChange((v) => {
+    if (bridge.isReady()) bridge.setAutoFaceSynthesisOnDraw(v);
+  });
+
   // ADR-094 B-θ post-retrospective default ON — Cylinder Path B 활성
   // (산업 CAD parity, 3 face / 2 edge / 2 vert, ~95% 메모리 절감).
   // ADR-049 P-5e-α 답습 — engine default OFF + production default ON

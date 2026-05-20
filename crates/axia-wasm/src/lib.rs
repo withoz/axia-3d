@@ -6323,6 +6323,20 @@ impl AxiaEngine {
         self.scene.auto_intersect_on_draw
     }
 
+    /// **ADR-139 B-β-2 (2026-05-18)** — auto_face_synthesis_on_draw 토글.
+    /// Default `false`. LOCKED #12 ADR-025 P11 Step 4.99 자동 cycle face
+    /// synthesis 폐기 (메타-원칙 #16). Boundary tool (B-γ ~ B-ε) 명시 trigger
+    /// 로 대체. `true` 명시 시 legacy 동작 (사용자 explicit opt-in).
+    #[wasm_bindgen(js_name = "setAutoFaceSynthesisOnDraw")]
+    pub fn set_auto_face_synthesis_on_draw(&mut self, enabled: bool) {
+        self.scene.auto_face_synthesis_on_draw = enabled;
+    }
+
+    #[wasm_bindgen(js_name = "getAutoFaceSynthesisOnDraw")]
+    pub fn get_auto_face_synthesis_on_draw(&self) -> bool {
+        self.scene.auto_face_synthesis_on_draw
+    }
+
     /// "Intersect with Model" — SketchUp 스타일 수동 교차선 생성.
     /// 선택된 face 들과 나머지 active face 사이의 3D 교차선을 edge 로 변환.
     /// inside/outside 판정 없이 모든 sub-face 유지.

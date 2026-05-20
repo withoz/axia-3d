@@ -435,6 +435,9 @@ type AxiaEngineExtended = AxiaEngine & {
   getFaceVolumeFlags?(): Uint8Array;
   setAutoIntersectOnDraw?(enabled: boolean): void;
   getAutoIntersectOnDraw?(): boolean;
+  // ADR-139 B-β-2: auto Step 4.99 closed cycle face synthesis toggle
+  setAutoFaceSynthesisOnDraw?(enabled: boolean): void;
+  getAutoFaceSynthesisOnDraw?(): boolean;
   // Group / Component
   create_group?(name: string, faceIds: Uint32Array): number;
   delete_group?(groupId: number): boolean;
@@ -4629,6 +4632,18 @@ export class WasmBridge {
   getAutoIntersectOnDraw(): boolean {
     // ADR-139 B-β-1: default fallback OFF
     return this.engine?.getAutoIntersectOnDraw?.() ?? false;
+  }
+
+  /** **ADR-139 B-β-2 (2026-05-18)** — auto Step 4.99 closed cycle face
+   *  synthesis 토글. Default `false`. 메타-원칙 #16 자동화 antipattern
+   *  폐기. Legacy `true` 사용자 명시 opt-in 보존. */
+  setAutoFaceSynthesisOnDraw(enabled: boolean): void {
+    this.engine?.setAutoFaceSynthesisOnDraw?.(enabled);
+  }
+
+  getAutoFaceSynthesisOnDraw(): boolean {
+    // ADR-139 B-β-2: default fallback OFF
+    return this.engine?.getAutoFaceSynthesisOnDraw?.() ?? false;
   }
 
   /**
