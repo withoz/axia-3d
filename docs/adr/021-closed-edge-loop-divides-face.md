@@ -1,11 +1,29 @@
 # ADR-021: Closed Edge Loop Divides Face
 
-**Status**: Draft
+**Status**:
+- Accepted (2026-04-29)
+- Locked as LOCKED #1 (CLAUDE.md §1)
+- Amended by ADR-051 (2026-05-05) — strict reaffirmation + verify_p7_manifold
+  invariants (P7-M1/M2/M3)
+- Extended by ADR-101 (2026-05-15) — Coplanar Partial Overlap Auto-Intersect
+  (P7 Completion, 9 PR series)
+- Superseded by ADR-139 (2026-05-18, Q3=a 결재) — Auto containment split
+  trigger 폐기 (Boundary tool 명시 only). *결과 invariant* (메타-원칙
+  #14 닫힌 경계 → 면) 보존, *trigger 정책* 만 supersede.
+
 **Owner**: AXiA Geometry/Core
 **Supersedes**: ADR-015 LOCKED #1 (single-promote heuristic), ADR-016 single-inner
 conditional B1 (확장)
 **Related**: ADR-007 (Winding), ADR-008 (Axioms — Axiom 1 운영 명시), ADR-016
-(Conditional B1), ADR-019 (Line is Truth, A6)
+(Conditional B1), ADR-019 (Line is Truth, A6), ADR-051 (P7 strict
+reaffirmation), ADR-101 (Coplanar Partial Overlap), ADR-139 (Boundary
+Tool + Auto-cycle Deprecation)
+
+**Governance note (2026-05-21, 보고서 P1 정정)**: 본 ADR 의 이전 Status
+`Draft` 표기는 거버넌스 drift 였음 — 실제로는 LOCKED #1 anchor +
+ADR-051 amendment + ADR-101 extension 모두 active policy 로 인용 중.
+메타-원칙 #10 ("ADR 불변 — 변경 시 새 ADR + Superseded") 정합 회복.
+자세한 근거는 `reports/엔진_개념_이론_검토_보고서.html` §2 P1 참조.
 
 ---
 
