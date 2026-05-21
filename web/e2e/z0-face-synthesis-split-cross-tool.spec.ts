@@ -44,10 +44,12 @@ interface AxiaWindow {
 
 test.describe('Face synthesis + split — all tools cross-cut', () => {
   test.beforeEach(async ({ page }) => {
-    // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
-    // Legacy ADR-101 + LOCKED #1 auto-split 동작 검증 — explicit opt-in.
+    // ADR-139 B-β-1 + B-β-3 (2026-05-18~21): auto-intersect + auto-face-
+    // synthesis default OFF. Legacy ADR-101 + LOCKED #1 P7 + LOCKED #12
+    // P11 동작 검증 — explicit opt-in.
     await page.addInitScript(() => {
       localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+      localStorage.setItem('axia:auto-face-synthesis-on-draw', 'true');
     });
     await page.goto('/');
     await page.waitForFunction(
