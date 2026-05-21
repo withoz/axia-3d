@@ -4639,7 +4639,7 @@ PR 시리즈.
     * RECT containment → 자동 ring + hole 안 만들어짐 (LOCKED #1 P7 본격 회피)
     * DrawRect / DrawCircle single-op auto-face **보존** (Q2-a, Phase 7 STRICT)
     * P5.UX.39-45 cascading fixes 패턴 **본격 회피 시작**
-- **2026-05-22 B-γ MVP audit pivot** (본 PR) — **audit-first canonical
+- **2026-05-22 B-γ MVP audit pivot** (PR #138) — **audit-first canonical
   11번째 적용**. ADR-139 §14 B-γ engine API 가 **이미 사실상 구현됨**
   finding:
   - Engine `Scene::resynthesize_orphan_faces` + WASM `resynthesizeOrphanFaces`
@@ -4655,7 +4655,24 @@ PR 시리즈.
     * B-ε TS BoundaryTool 'B' 단축키 (현재 b=bottom view 충돌, 결재 필요)
 - **(B-γ' + B-δ + B-ε + B-ι + B-μ): 다음 sub-steps** (별도 PRs):
   - B-β-4: ✅ closed (PR #131 audit pivot — TS 변경 0)
-  - B-γ MVP: ✅ closed (본 PR — label 재정의, audit pivot)
+  - B-γ MVP: ✅ closed (PR #138 — label 재정의, audit pivot)
+- **2026-05-23 K3 시나리오 3 hotfix** (본 PR) — `face_to_surface_owner_id`
+  propagation 추가. 보고서 (`reports/입력보정파이프라인_적용계획.html`)
+  의 시나리오 3 권장 fix + audit (PR #139) 의 demo-breaking 확정 후속.
+  6 split sites 모두 propagation 추가:
+  * `split_face_by_chain` (face_split.rs:717-732)
+  * `case_b` (face_split.rs:1051-1071)
+  * `case_c` (face_split.rs:1301-1320)
+  * `case_d` (face_split.rs:1512-1531)
+  * `Mesh::split_face` (mesh.rs:4640-4730)
+  * `boolean::split_faces_by_intersections` (boolean.rs:544-589)
+  - 패턴 답습: ADR-089 A-χ-β (parent surface propagation) — 각 사이트
+    `parent_owner = mesh.face_surface_owner_id(face_id)` 1-line + 자식
+    set 1-line × N.
+  - 회귀: axia-geo +2 (`k3_split_face_propagates_surface_owner_id` +
+    `k3_split_face_no_owner_propagates_none`)
+  - 사용자 facing 변화: Path A cylinder Push/Pull 후 측면 face 클릭
+    → group full-selection (N face 모두 선택) 정합 회복
   - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규
   - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
   - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair + click

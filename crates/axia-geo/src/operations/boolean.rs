@@ -552,6 +552,12 @@ impl Mesh {
                     // sub-faces → A-ρ/A-φ/A-τ all skip them.
                     let parent_surface = self.faces.get(fid)
                         .and_then(|f| f.surface().cloned());
+                    // K3 (보고서 시나리오 3 hotfix, 2026-05-23) — capture
+                    // parent surface owner_id for propagation. Boolean
+                    // split (sphere × sphere, cylinder × X) must preserve
+                    // group identity to keep "click any → all siblings
+                    // selected" UX consistent.
+                    let parent_owner = self.face_surface_owner_id(fid);
 
                     for sub_poly in &sub_polys {
                         // 2D → 3D 역투영
@@ -579,6 +585,10 @@ impl Mesh {
                                 // ADR-089 A-χ-β — propagate parent surface.
                                 if let Some(ref s) = parent_surface {
                                     self.faces[new_fid].set_surface(Some(s.clone()));
+                                }
+                                // K3 — propagate parent surface owner_id.
+                                if let Some(owner) = parent_owner {
+                                    self.set_face_surface_owner_id(new_fid, Some(owner));
                                 }
                                 new_faces.push(new_fid);
                             }

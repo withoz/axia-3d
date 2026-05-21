@@ -4641,6 +4641,10 @@ impl Mesh {
         // sub-face (face_id retains its slot, only face_b is fresh).
         // L-χ-1 / L-χ-3 / L-χ-5.
         let parent_surface = self.faces[face_id].surface().cloned();
+        // K3 (보고서 시나리오 3 hotfix, 2026-05-23) — capture parent
+        // surface owner_id for propagation to face_b (face_id keeps its
+        // slot + owner_id automatically since it stays in the map).
+        let parent_owner = self.face_surface_owner_id(face_id);
 
         let outer_start = self.faces[face_id].outer().start;
         let loop_hes = self.collect_loop_hes(outer_start)?;
@@ -4722,6 +4726,11 @@ impl Mesh {
         // (face_id keeps its slot + surface automatically.)
         if let Some(ref s) = parent_surface {
             self.faces[face_b].set_surface(Some(s.clone()));
+        }
+        // K3 — propagate parent surface owner_id to face_b.
+        // (face_id keeps its slot + owner_id since the map key stays.)
+        if let Some(owner) = parent_owner {
+            self.set_face_surface_owner_id(face_b, Some(owner));
         }
 
         // Set face on he_v2v1
