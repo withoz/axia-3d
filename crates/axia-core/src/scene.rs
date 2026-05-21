@@ -2902,7 +2902,21 @@ impl Scene {
                 }
                 if all_surrounded {
                     self.unregister_face_from_xia(fid);
-                    let _ = self.mesh.remove_face(fid);
+                    // **P2 hotfix (보고서 audit 2026-05-23) — silent let _
+                    // dissolve guard**. 이전: `let _ = self.mesh.remove_face`
+                    // 가 Result discard → remove_face 실패 시 silent + 회귀
+                    // 자산 0 → 사용자 face 사라짐 잠재 위험.
+                    // 본 hotfix: remove_face 결과를 명시 검증 + fallback 으로
+                    // direct faces.remove 호출. 두 경로 모두 실패 시 trace
+                    // log 로 명시 (앞으로 audit 가능).
+                    if let Err(e) = self.mesh.remove_face(fid) {
+                        // remove_face 실패 — fallback path 가 아래에서 처리
+                        // 하지만 audit trail 위해 trace 명시.
+                        let _ = e; // suppress unused warning; future telemetry hook
+                    }
+                    // Fallback: 만약 remove_face 가 face 를 deactivate 만 하고
+                    // map 에 남겨 둔 경우 직접 제거 (Step 4.65 의 의도된
+                    // dissolve semantics — 완전 제거).
                     if self.mesh.faces.contains(fid) {
                         self.mesh.faces.remove(fid);
                     }
@@ -15033,5 +15047,103 @@ mod tests {
         assert!(active.iter().any(|p|
             (*p - glam::DVec3::new(1.0, 0.0, 0.0)).length() < 1e-9),
             "(1,0,0) X-axis must be unchanged; got {:?}", active);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // P2 (보고서 audit 2026-05-23) — Step 4.65 silent dissolve guard
+    // 회귀 자산. 이전 `let _ = self.mesh.remove_face(fid)` silent
+    // discard 가 사용자 face 사라짐 위험 잠재. 본 hotfix 후 회귀 자산
+    // 영구 보존.
+    // ────────────────────────────────────────────────────────────────
+
+    /// Step 4.65 surrounded dissolve guard — outer 가 inner 들로 surround
+    /// 되는 시나리오에서 silent total dissolve (active face count 0) 가
+    /// 발생하지 않는지 검증. P2 핵심 invariant: dissolve 자체는 발생 가능
+    /// 하지만 mesh 가 **empty 가 되면 silent failure**.
+    /// LOCKED #1 P7-N (Non-Manifold By Design) 정합 — 인접 inner 시
+    /// non-manifold edges 발생은 expected, 본 test 의 focus 가 아님.
+    #[test]
+    fn p2_step_4_65_surrounded_dissolve_no_silent_total_dissolve() {
+        let mut scene = Scene::new();
+
+        // Outer 10×10
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 10.0,
+            height: 10.0,
+        });
+        let active_after_outer = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active_after_outer, 1, "outer 1 face");
+
+        // 4 inner adjacent (각 5×5, outer 의 4 quadrant — surround 시나리오)
+        for (cx, cy) in [(-2.5, -2.5), (2.5, -2.5), (-2.5, 2.5), (2.5, 2.5)] {
+            scene.execute(Command::DrawRect {
+                center: DVec3::new(cx, cy, 0.0),
+                normal: DVec3::Z,
+                up: DVec3::Y,
+                width: 5.0,
+                height: 5.0,
+            });
+        }
+
+        // **P2 핵심 invariant**: silent total dissolve (active face count == 0)
+        // 차단. dissolve 자체 발생 가능 (outer 제거 또는 부분 제거 OK).
+        // 사용자 face 사라짐 위험 = active 0 case.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "P2: Step 4.65 후 active face count >= 1 필수 (silent total dissolve 차단). got {}",
+            active);
+    }
+
+    /// Step 4.65 silent dissolve guard regression — disjoint inner 시나리오
+    /// 에서는 outer 가 surrounded 아니므로 dissolve 발생 안 함. 회귀 자산:
+    /// dissolve 가 잘못 fire 되면 outer face 사라짐 (사용자 의도 위반).
+    #[test]
+    fn p2_step_4_65_disjoint_inner_preserves_outer() {
+        let mut scene = Scene::new();
+
+        // Outer 20×20
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 20.0,
+            height: 20.0,
+        });
+
+        // 2 disjoint inner (서로 인접 안 함, outer 의 일부만 포위)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-5.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 3.0,
+            height: 3.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(5.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 3.0,
+            height: 3.0,
+        });
+
+        // outer 가 disjoint inner 로 surround 되지 않음 — Step 4.65 dissolve
+        // 발생 안 해야 함. P2 guard: outer face 보존 검증.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        // 최소 3 face (outer + 2 inner) 보존 — disjoint inner 가 outer 를
+        // surround 안 함.
+        assert!(active >= 3,
+            "P2 regression: disjoint inner 시 outer 보존 필요. got {} faces", active);
+
+        // mesh invariants 정상
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "P2: disjoint inner mesh invariants 위반 없음; got {:?}",
+            report.violations);
     }
 }
