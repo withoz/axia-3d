@@ -210,8 +210,11 @@ test.describe('K3 시나리오 3 hotfix — Cylinder 측면 group full-selection
       const bridge = w.__axia!.get<any>('bridge');
 
       // 1) Sphere 생성 (Path B kernel-native, owner_id_A)
-      const sphereResult = bridge.create_sphere?.(0, 0, 0, 5);
-      if (!sphereResult) return { ok: false, stage: 'create_sphere' };
+      // Signature: create_sphere(cx, cy, cz, radius, u_segments, v_segments)
+      const sphereResult = bridge.create_sphere?.(0, 0, 0, 5, 8, 6);
+      if (sphereResult == null || sphereResult < 0) {
+        return { ok: false, stage: 'create_sphere', result: sphereResult };
+      }
 
       // 2) Cylinder 생성 (Path B, owner_id_B) — sphere 와 교차 위치
       const cylinderShapeId = bridge.drawCircleAsCurve?.(0, 0, 0, 0, 1, 0, 3);

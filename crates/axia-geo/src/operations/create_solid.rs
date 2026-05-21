@@ -953,6 +953,16 @@ impl Mesh {
         };
         self.faces[annulus_face].set_surface(Some(cylinder_surface));
 
+        // **Path B annulus owner_id hotfix (2026-05-23, 사용자 시연 evidence)**
+        // — annulus side face 에도 surface_owner_id 부여. Path A
+        // extrude_planar_cylinder 와 동일 패턴 (ADR-093 D-δ 답습).
+        // Path B 는 1 annulus = 1 group 이지만 K3 propagation 정합 +
+        // 향후 split 시 sub-face 가 같은 owner_id inherit (ADR-093 D-δ).
+        // 사용자 시연 finding: Path B cylinder 측면 모든 face owner_id
+        // 부재 → group selection 미작동 → 본 hotfix 로 해소.
+        let owner_id = self.next_surface_owner_id();
+        self.set_face_surface_owner_id(annulus_face, Some(owner_id));
+
         // 7. Aggregate result. Top face has its Plane surface from
         //    add_face_closed_curve (ADR-089 A-η-1). Bottom (profile_face)
         //    too. Annulus has Cylinder.
@@ -5353,6 +5363,69 @@ mod tests {
             assert_eq!(mesh.face_surface_owner_id(sib), Some(parent_owner),
                 "all siblings must share parent owner_id");
         }
+    }
+
+    #[test]
+    fn path_b_cylinder_annulus_has_owner_id() {
+        // Path B annulus owner_id hotfix (2026-05-23, 사용자 시연 evidence).
+        // Path B cylinder annulus 도 surface_owner_id 부여 받아야 함 —
+        // 그렇지 않으면 Path B cylinder 측면 group selection (ADR-093 D-δ)
+        // 미작동.
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("Path B cylinder OK");
+
+        assert_eq!(result.side_faces.len(), 1, "Path B = 1 annulus face");
+        let annulus = result.side_faces[0];
+        let owner = mesh.face_surface_owner_id(annulus);
+        assert!(owner.is_some(),
+            "Path B annulus must have surface_owner_id (사용자 시연 evidence — \
+             previously missing, K3 group selection 미작동의 root cause)");
+    }
+
+    #[test]
+    fn path_b_cylinder_walk_returns_annulus_self() {
+        // Regression guard — Path B annulus walk_face_owner_siblings 가
+        // 자기 자신 반환 (1 group of 1). Future split 시 sub-faces 모두
+        // walk 에 포함되어야 함 (K3 propagation 정합).
+        let mut mesh = Mesh::new();
+        let profile = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 5.0);
+        let result = mesh
+            .extrude_cylinder_kernel_native(profile, 8.0, MaterialId::new(0))
+            .expect("Path B cylinder OK");
+
+        let annulus = result.side_faces[0];
+        let siblings = mesh.walk_face_owner_siblings(annulus);
+        assert_eq!(siblings.len(), 1,
+            "Path B annulus walk returns self only (1 group of 1)");
+        assert_eq!(siblings[0], annulus,
+            "walk siblings[0] == annulus");
+    }
+
+    #[test]
+    fn path_b_cylinder_owner_unique_across_cylinders() {
+        // 두 개 Path B cylinder 생성 시 각자 독립적 owner_id.
+        let mut mesh = Mesh::new();
+        let profile1 = build_closed_curve_circle_face(&mut mesh, DVec3::ZERO, 3.0);
+        let result1 = mesh
+            .extrude_cylinder_kernel_native(profile1, 5.0, MaterialId::new(0))
+            .expect("cylinder 1 OK");
+        let owner1 = mesh.face_surface_owner_id(result1.side_faces[0])
+            .expect("cylinder 1 annulus has owner_id");
+
+        let profile2 = build_closed_curve_circle_face(
+            &mut mesh, DVec3::new(20.0, 0.0, 0.0), 4.0,
+        );
+        let result2 = mesh
+            .extrude_cylinder_kernel_native(profile2, 6.0, MaterialId::new(0))
+            .expect("cylinder 2 OK");
+        let owner2 = mesh.face_surface_owner_id(result2.side_faces[0])
+            .expect("cylinder 2 annulus has owner_id");
+
+        assert_ne!(owner1, owner2,
+            "두 cylinder annulus 의 owner_id 는 독립적");
     }
 
     #[test]
