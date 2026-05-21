@@ -15,6 +15,50 @@ use crate::entities::*;
 use crate::mesh::Mesh;
 use crate::tolerances::*;
 
+/// **K1 hotfix (보고서 시나리오 1, 2026-05-23)** — closed-curve face 자동
+/// polygonize helper. Path B closed-curve face (1 anchor + 1 self-loop
+/// edge) 는 split 함수 polygon ≥3 verts 가정 위반 → 사용자 demo silent
+/// failure. 본 helper 는 진입 시 closed-curve face detect → polygonize
+/// 자동 호출 → polygon mode 변환 + new face_id 반환.
+///
+/// ADR-105 R-α (tessellate closed-curve face in place) 패턴 답습.
+///
+/// Returns: original face_id if not closed-curve, or new face_id after
+/// polygonize. `polygonize_closed_curve_face` returns `Ok(None)` if the
+/// face already has polygonal boundary (>1 vert) — in that case we keep
+/// the original face_id.
+pub(crate) fn polygonize_if_closed_curve(
+    mesh: &mut Mesh,
+    face_id: FaceId,
+) -> Result<FaceId> {
+    // Detect closed-curve face: 1-vert boundary loop (anchor + self-loop edge).
+    let is_closed_curve = {
+        let face = match mesh.faces.get(face_id) {
+            Some(f) if f.is_active() => f,
+            _ => return Ok(face_id),  // inactive — let caller error out
+        };
+        let outer_start = face.outer().start;
+        if outer_start.is_null() {
+            return Ok(face_id);
+        }
+        match mesh.collect_loop_verts(outer_start) {
+            Ok(verts) => verts.len() == 1,
+            Err(_) => false,
+        }
+    };
+
+    if !is_closed_curve {
+        return Ok(face_id);
+    }
+
+    // Polygonize closed-curve face → polygon mode.
+    let material = mesh.faces[face_id].material();
+    match mesh.polygonize_closed_curve_face(face_id, material)? {
+        Some(new_face_id) => Ok(new_face_id),
+        None => Ok(face_id),  // unsupported curve type — caller may error
+    }
+}
+
 /// Result of a face split operation.
 #[derive(Clone, Debug)]
 pub struct FaceSplitResult {
@@ -245,6 +289,16 @@ pub fn split_face_by_line(
     );
 
     ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
+
+    // **K1 hotfix (보고서 시나리오 1, 2026-05-23) — closed-curve face 자동
+    // polygonize** — Path B closed-curve face (1 anchor + 1 self-loop edge)
+    // 는 split 함수 polygon ≥3 verts 가정 위반 → silent failure 발생
+    // (사용자 시연 evidence "Both split points resolved to same vertex" /
+    //  "Point is 20218.2384 from face plane").
+    // K1 hotfix: 진입 시 closed-curve face detect → polygonize 자동 호출
+    // → polygon mode 로 변환 후 split 진행. ADR-105 R-α (tessellate
+    // closed-curve face in place) 패턴 답습.
+    let face_id = polygonize_if_closed_curve(mesh, face_id)?;
 
     // Phase G — multi-loop split support.
     //
