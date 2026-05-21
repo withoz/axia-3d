@@ -2778,6 +2778,48 @@ impl AxiaEngine {
         }
     }
 
+    /// **ADR-140 β (2026-05-24)** — Surface-aware normal at world position.
+    /// 사용자 click hit point `(x, y, z)` 에서 face 의 AnalyticSurface
+    /// 의 *exact normal* 평가. ADR-038 P23 surface-aware normals 의 도구
+    /// 입력 경로 1:1 mirror.
+    ///
+    /// Returns `[nx, ny, nz]` (3 elements) 정상 시.
+    /// Returns empty `[]` 시:
+    /// - face_id 가 invalid
+    /// - face 가 surface attached 안 됨 (DCEL face normal 만 가능)
+    /// - normal evaluation 이 zero vector (degenerate position)
+    ///
+    /// **Caller contract** (ADR-031 Phase D `normal_at_world_pos` 답습):
+    /// `pos` 가 surface 위 또는 매우 근접해야 (raycast hit point). 멀리 떨어진
+    /// pos 의 result 는 미정의.
+    ///
+    /// 사용 사례:
+    /// - Cylinder/Sphere/Cone/Torus surface 위 사용자 click → tangent plane
+    /// - DrawLine/Rect/Circle/Sketch 도구의 `getDrawPlane(faceId, hitPoint?)`
+    ///   surface-aware path
+    /// - ADR-038 P23 render 가 이미 활용 — 본 export 는 도구 입력 경로 활성
+    #[wasm_bindgen(js_name = "faceSurfaceNormalAtPos")]
+    pub fn face_surface_normal_at_pos(
+        &self,
+        face_id: u32,
+        x: f64, y: f64, z: f64,
+    ) -> Vec<f64> {
+        use axia_geo::FaceId;
+        use glam::DVec3;
+        let fid = FaceId::new(face_id);
+        let surface = match self.scene.mesh.face_surface(fid) {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        let pos = DVec3::new(x, y, z);
+        let normal = surface.normal_at_world_pos(pos);
+        // Reject zero-normal (degenerate position — e.g., apex of cone)
+        if normal.length_squared() < 1e-20 {
+            return Vec::new();
+        }
+        vec![normal.x, normal.y, normal.z]
+    }
+
     /// Tessellate a face's analytic surface for rendering. Returns flat
     /// `[v_count, t_count, vx, vy, vz, ..., t0_a, t0_b, t0_c, t1_a, ...]`.
     /// Returns empty array if face has no surface.

@@ -988,4 +988,59 @@ mod tests {
             assert!((ctrl_grid[1][1] - DVec3::new(1.0, 0.0, 1.0)).length() < 1e-9);
         } else { panic!("expected BezierPatch"); }
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-140 β (2026-05-24) — Surface-aware normal_at_world_pos 회귀
+    // 자산. 도구 입력 경로 (getDrawPlane surface-aware path) 의 anchor.
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr140_cylinder_normal_at_world_pos_is_radial() {
+        // Z-axis cylinder radius 5 at origin.
+        // Point on surface at angle 0 → normal = +X (radial outward).
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            radius: 5.0,
+            ref_dir: DVec3::X,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 10.0),
+        };
+        let pos = DVec3::new(5.0, 0.0, 4.0);  // on surface, mid-height
+        let n = cyl.normal_at_world_pos(pos);
+        assert!((n - DVec3::X).length() < 1e-9,
+            "Cylinder normal at (5,0,4) must be +X (radial); got {:?}", n);
+    }
+
+    #[test]
+    fn adr140_sphere_normal_at_world_pos_is_radial() {
+        // Sphere radius 5 at origin.
+        // Point on equator at (5,0,0) → normal = +X.
+        let sph = AnalyticSurface::Sphere {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        let pos = DVec3::new(5.0, 0.0, 0.0);
+        let n = sph.normal_at_world_pos(pos);
+        assert!((n - DVec3::X).length() < 1e-9,
+            "Sphere normal at (5,0,0) must be +X (radial); got {:?}", n);
+    }
+
+    #[test]
+    fn adr140_plane_normal_at_world_pos_is_normal() {
+        // Plane Z=0 with +Z normal — any pos returns +Z.
+        let pl = AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-10.0, 10.0),
+            v_range: (-10.0, 10.0),
+        };
+        let pos = DVec3::new(3.0, 4.0, 0.0);
+        let n = pl.normal_at_world_pos(pos);
+        assert!((n - DVec3::Z).length() < 1e-9,
+            "Plane normal anywhere must be Z; got {:?}", n);
+    }
 }
