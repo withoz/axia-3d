@@ -21,7 +21,7 @@
 - **When to Revisit (재검토 트리거)** — 재검토가 필요해지는 조건
 - **Related (관련 기록)** — 다른 ADR / 커밋 / 이슈
 
-## 카테고리별 색인 (90 ADRs)
+## 카테고리별 색인 (140+ ADRs, 2026-05-21 갱신)
 
 ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그룹화됩니다.
 
@@ -45,9 +45,9 @@ ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그�
 |---|------|------|
 | [010](./010-inference-resolution.md) | Inference Resolution Table | Proposed |
 | [011](./011-tool-inertia.md) | Tool Inertia & Predictive Switch | Proposed |
-| [012](./012-latency-budget.md) | Latency Budget ⭐ (메타-원칙 #11) | Proposed P1 |
-| [013](./013-memory-budget.md) | Memory Budget & Bounded Collections ⭐ (#12, #13) | Proposed P1 |
-| [014](./014-meta-principles-extension.md) | 메타-원칙 확장 (#11~#13) | Proposed P0 |
+| [012](./012-latency-budget.md) | Latency Budget ⭐ (메타-원칙 #11) | Accepted |
+| [013](./013-memory-budget.md) | Memory Budget & Bounded Collections ⭐ (#12, #13) | Accepted |
+| [014](./014-meta-principles-extension.md) | 메타-원칙 확장 (#11~#16) | Accepted (Amendment 1 — 2026-05-21) |
 
 ### 3. Topology — Face/Edge 합성·분할 (#015~#026)
 
@@ -133,14 +133,28 @@ ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그�
 | [069](./069-adr-046-phase-1-path-y-audit-log-viewer-pilot.md) | Phase 1 — Audit Log Viewer Pilot | Accepted |
 | [070](./070-adr-046-phase-1-path-y-analytic-hover-overlay-pilot.md) | Phase 1 — Analytic Hover Overlay Pilot | Accepted |
 
-### 9. Two-Layer Citizenship (#048~#051)
+### 9. Three-Layer Citizenship (#048~#051, #091, #095~#100)
+
+**역사적 명명**: ADR-049 의 Two-Layer 모델이 ADR-095 (Reference 시민권)
+로 **Three-Layer** 자연 진화. Form / Property / Reference 3 시민권은
+mutually exclusive geometry ownership. LOCKED #26 메타-원칙 #2 정착.
 
 | # | 제목 | 상태 |
 |---|------|------|
 | [048](./048-citizenship-model-conceptual-gap.md) | Citizenship Model Conceptual Gap | Superseded by 049 |
-| [049](./049-two-layer-citizenship-model.md) | Two-Layer Citizenship Model (canonical) | Accepted |
+| [049](./049-two-layer-citizenship-model.md) | Two-Layer Citizenship Model (canonical, Amendments 1~4) | Accepted |
 | [050](./050-shape-xia-type-split.md) | Shape/Xia Type Split + Promotion (Phase 1) | Accepted |
 | [051](./051-p7-canonical-restatement.md) | P7 Canonical Restatement + verify_p7_manifold | Accepted |
+| [091](./091-material-removal-shape-demotion.md) | Material Removal → Shape Demotion (Phase 2) | Accepted |
+| [095](./095-reference-citizenship-phase-3.md) | Reference Citizenship (Phase 3) | Accepted |
+| [096](./096-step-iges-reference-auto-classification.md) | STEP/IGES Reference Auto-Classification | Accepted |
+| [097](./097-topology-damage-auto-recovery.md) | Topology Damage Auto-Recovery (Phase 4) | Accepted |
+| [098](./098-asset-library-3-tier-material-scope.md) | Asset Library 3-Tier Material Scope (Phase 5-A) | Accepted |
+| [099](./099-layered-material-4-pbr-channels.md) | Layered Material 4-PBR Channels (Phase 5-B) | Accepted |
+| [100](./100-material-removal-recovery.md) | Material Removal Recovery (Phase 5-C) | Accepted |
+
+🎉 **LOCKED #26 Two-Layer Citizenship Model 5-Phase 완전 closure** (2026-05-10).
+ADR-049 Amendments 1~4 참조.
 
 ### 10. Boolean / Press-Pull / Visual (#064, #066~#067, #074~#078)
 
@@ -164,16 +178,64 @@ ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그�
 | [087](./087-kernel-native-command-suite-reset.md) | Kernel-Native Command Suite Reset | Accepted |
 | [088](./088-curve-owner-id-grouping.md) | curve_owner_id Grouping (Phase 1) | Accepted |
 | [089](./089-true-kernel-native-closed-edges.md) | True Kernel-Native Closed Edges (Phase 2) | Accepted |
-| [090](./090-true-kernel-native-cylinder-path-b.md) | True Kernel-Native Cylinder (Path B, deferred) | Proposed |
+| [090](./090-true-kernel-native-cylinder-path-b.md) | True Kernel-Native Cylinder (Path B, deferred) | Deferred (ADR-094 refined plan 후속) |
 | [091](./091-material-removal-shape-demotion.md) | Material Removal → Shape 가역 강등 (Phase 2) | Accepted |
 | [092](./092-pushpull-top-boundary-closed-curve-preservation.md) | Push-Pull Top Boundary Closed-Curve Preservation (Partial Path B) | Accepted |
 | [093](./093-cylinder-side-face-owner-id-grouping.md) | Cylinder Side Face Owner-ID Grouping (B-MVP — Path B Light) | Accepted |
 | [094](./094-path-b-full-refined-plan.md) | Path B-full Refined Plan (Multi-week Atomic Architectural Track) | Accepted |
-| [095](./095-reference-citizenship-phase-3.md) | Reference Citizenship (Two-Layer Citizenship Phase 3) | Accepted |
+| [095](./095-reference-citizenship-phase-3.md) | Reference Citizenship (Three-Layer Citizenship Phase 3) | Accepted |
 | [096](./096-step-iges-reference-auto-classification.md) | STEP/IGES Import — Reference Auto-Classification | Accepted |
-| [097](./097-topology-damage-auto-recovery.md) | Topology Damage Auto-Recovery (Two-Layer Citizenship Phase 4) | Proposed |
+| [097](./097-topology-damage-auto-recovery.md) | Topology Damage Auto-Recovery (Three-Layer Citizenship Phase 4) | Accepted |
+| [098](./098-asset-library-3-tier-material-scope.md) | Asset Library 3-Tier Material Scope (Phase 5-A) | Accepted |
+| [099](./099-layered-material-4-pbr-channels.md) | Layered Material 4-PBR Channels (Phase 5-B) | Accepted |
+| [100](./100-material-removal-recovery.md) | Material Removal Recovery (Phase 5-C) | Accepted |
 
-## 메타-원칙 (#1~#14)
+### 12. Coplanar Auto-Intersect + Z-up + Boundary Tool (#101~#139)
+
+| # | 제목 | 상태 |
+|---|------|------|
+| [101](./101-coplanar-partial-overlap-auto-intersect.md) | Coplanar Partial Overlap Auto-Intersect (P7 Completion) | Accepted, Superseded by ADR-139 |
+| [102](./102-pushpull-detach-on-arrangement.md) | Push/Pull Detach-on-Arrangement (Manifold Reconciliation) | Accepted |
+| [103](./103-z-up-coordinate-migration.md) | Z-up Coordinate Migration (Engine + Viewport) | Accepted |
+| [104](./104-path-b-expansion.md) | Path B Expansion (Sphere/Cone/Torus) | Accepted |
+| [111](./111-bvh-defer-to-next-frame.md) | BVH Defer to Next Frame | Accepted |
+| [112](./112-edges-empty-explicit.md) | Edges Empty 명시 처리 | Accepted |
+| [113](./113-sphere-path-b.md) | Sphere Path B Production Wiring | Accepted |
+| [114](./114-cone-path-b.md) | Cone Path B Production Wiring | Accepted |
+| [115](./115-torus-path-b.md) | Torus Path B Production Wiring | Accepted |
+| [116](./116-path-b-family-user-facing-closure.md) | Path B Family User-Facing Closure | Accepted |
+| [117](./117-cylinder-direct-dispatch-torus-ui.md) | Cylinder Direct Dispatch + TorusTool UI | Accepted |
+| [118](./118-step-iges-prewarm-spec.md) | STEP/IGES Engine Pre-warm (α spec) | Accepted |
+| [119](./119-step-iges-prewarm-impl.md) | STEP/IGES Pre-warm (β implementation) | Accepted |
+| [121](./121-step-prewarm-libs-fix.md) | STEP Pre-warm lib fix + Path B area | Accepted |
+| [124](./124-wasm-simd-activation.md) | WASM SIMD Activation | Accepted |
+| [126](./126-step-iges-merged-buffergeometry.md) | STEP/IGES Merged BufferGeometry | Accepted |
+| [128](./128-vertex-on-edge-fallback.md) | Vertex-on-edge Fallback | Accepted |
+| [131](./131-cmdk-already-exists-pivot.md) | CommandPalette Already Exists Pivot | Accepted |
+| [132](./132-dual-catalog-unification-audit.md) | Dual Catalog Unification Audit | Accepted |
+| [133](./133-adapter-layer-implementation.md) | Adapter Layer (Path E β) | Accepted |
+| [135](./135-lod-chord-tol-implementation.md) | Distance-based LOD chord_tol | Accepted |
+| [138](./138-multi-loop-face-policy.md) | Multi-loop Face Policy (Path A vs B) | Superseded by ADR-139 |
+| [139](./139-boundary-tool-auto-cycle-deprecation.md) | Boundary Tool + Auto-cycle Deprecation | Accepted (β implementation 진행 중) |
+
+## 충돌 시 우선순위 매트릭스 (P7/P8/P9/P11, 보고서 P6)
+
+ADR-021 P7 / ADR-022 P9 / ADR-023 P8 / ADR-025 P11 이 **동시 적용 가능한
+사례** 의 우선순위 정의 (보고서 §2 P6 Medium 권장). 운영 시 ad-hoc 결재
+회피.
+
+| 순위 | 원칙 | ADR | 의미 |
+|---|---|---|---|
+| 1 | **P11** Closed cycle MUST face | ADR-025 | 가장 강한 강제력 — 닫힌 cycle 은 반드시 면 (메타-원칙 #14) |
+| 2 | **P7** Closed loop divides face | ADR-021 | face partition 정합 — containment auto-split (Superseded by ADR-139 trigger) |
+| 3 | **P9** Vertex-shared pinch | ADR-022 | manifold preservation — 1-vertex pinch auto-promote |
+| 4 | **P8** Endpoint-on-hole bridge | ADR-023 | endpoint disambiguation — hole boundary bridge |
+
+**ADR-139 후 정합**: P11 / P7 의 *자동 trigger* 는 Boundary tool 명시
+only 로 supersede. *결과 invariant* (메타-원칙 #14) 는 모두 보존.
+**우선순위 자체는 변경 없음** — 동시 trigger 가능한 케이스의 처리 순서.
+
+## 메타-원칙 (#1~#16)
 
 | # | 원칙 | 축 | 출처 |
 |---|------|-----|------|
@@ -188,9 +250,11 @@ ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그�
 | 9 | 회귀 없음 | 품질 | 세션 |
 | 10 | ADR 불변 | 거버넌스 | README |
 | 11 | Latency Budget First | 성능 | ADR-014 |
-| 12 | Memory Budget Per Entity | 메모리 | ADR-014 |
+| 12 | Memory Budget Per **Subsystem** (명명 정정 2026-05-21) | 메모리 | ADR-014 + ADR-013 §1 |
 | 13 | One Source, Two Views | 메모리/일관성 | ADR-014 |
-| **14** | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) | **기하 본질** | **세션 2026-05-08, LOCKED #34/#35 anchor** |
+| **14** | **면은 닫힌 경계로부터 유도된다** (H₁=0 한정, Jordan-Schoenflies 정리 기반, 학술적 정밀화 2026-05-21) — **WHAT layer** | **기하 본질** | **세션 2026-05-08, ADR-014 Amendment 1** |
+| **15** | **동일 분할 = 동일 topological contract** (HARD flag 부여, 2026-05-16) | **분할 정합** | **ADR-101 Amendment 9** |
+| **16** | **자동화 antipattern** (휴리스틱 자동화 = cascading 부작용 source, 2026-05-18) — **WHEN layer** | **UX/거버넌스** | **ADR-139, CLAUDE.md LOCKED #64** |
 
 ### 메타-원칙 #14 (canonical)
 
@@ -240,6 +304,37 @@ fundamental 이고 Face 는 closed edge cycle 의 derivation. 모든 후속
 | 33 | ADR-086 | WasmBridge Owner-ID Mapping |
 | 34 | ADR-087 | Kernel-Native Command Suite Reset |
 | 35 | ADR-089 | True Kernel-Native Closed Edges |
+| 36 | ADR-097 | Topology Damage Auto-Recovery (Phase 4) |
+| 37 | ADR-098 | Asset Library 3-Tier Material Scope (Phase 5-A) |
+| 38 | ADR-100 | Material Removal Recovery (Phase 5-C) |
+| 39 | ADR-099 | Layered Material 4-PBR Channels (Phase 5-B) |
+| 40 | — | Render chord_tol + Hover Group Unification (LOCKED #40) |
+| 41 | ADR-101 | Coplanar Partial Overlap Auto-Intersect (Superseded by ADR-139) |
+| 42 | ADR-102 | Push/Pull Detach-on-Arrangement |
+| 43 | ADR-103 | Z-up Coordinate Migration |
+| 44 | — | Complete Meaning per Merge |
+| 45 | ADR-111 | BVH Defer to Next Frame |
+| 46 | ADR-112 | Edges Empty 명시 처리 |
+| 47 | ADR-113 | Sphere Path B Production Wiring |
+| 48 | ADR-114 | Cone Path B Production Wiring |
+| 49 | ADR-115 | Torus Path B Production Wiring |
+| 50 | ADR-116 | Path B Family User-Facing Closure |
+| 51 | ADR-117 | Cylinder Direct Dispatch + TorusTool UI |
+| 52 | ADR-118 + ADR-119 | STEP/IGES Engine Pre-warm |
+| 53 | ADR-121 | STEP pre-warm libs + Path B area |
+| 54 | ADR-123 + ADR-124 | AxiA-native optimization + WASM SIMD |
+| 55 | ADR-125 + ADR-122 Amendment 1 | Selection Rendering Audit Pivot |
+| 56 | ADR-126 + ADR-122 Amendment 2 | STEP/IGES Merged BufferGeometry |
+| 57 | ADR-127 + ADR-122 Amendment 3 | Helper Lines Audit Pivot |
+| 58 | ADR-128 + ADR-120 Amendment 1 | Vertex-on-edge Fallback |
+| 59 | ADR-131 + ADR-130 Amendment 1 | CommandPalette Already Exists Pivot |
+| 60 | ADR-133 | Adapter Layer (Path E β) |
+| 61 | ADR-045 D1 Amendment 1 + ADR-129 Amendment 1 | Identity vs Dispatch |
+| 62 | ADR-135 | Distance-based LOD chord_tol |
+| 63 | — | PR #101 z=0 Invariant Closure |
+| 64 | ADR-139 | Boundary-only Face Synthesis (Auto-cycle Deprecation) |
+
+자세한 LOCKED 정책 본문은 `CLAUDE.md` §1~§64 참조.
 
 ## 변경 규칙
 
