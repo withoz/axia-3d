@@ -4695,6 +4695,129 @@ PR 시리즈.
 - ADR-087 K-ζ canonical (legacy deletion + 사용자 시연 게이트)
 - ADR-094/097/099/138 (Path Z atomic 패턴 source)
 
+### 65. ADR-141 — Master Roadmap (Sprint 0 Foundation Sync closure, 2026-05-22) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-22)**:
+> "5/5 결재 lock-in (옵션 B 면 생성 / 옵션 A Ellipse / 신규 3 ADR / Sprint +1주
+> / 21~29주 +330 회귀). Sprint 0 Foundation Sync 즉시 시작. ADR 번호 ADR-141~161
+> 재배정 적용. 5/5 결재 의도 모두 보존."
+
+외부 에이전트 마스터 완성 계획 (`reports/최종_결재완료_Sprint0_시작.html`
++ `reports/Sprint0_Kickoff_Guide.html` + `reports/마스터_완성계획.html`
++ `reports/곡선면_도형그리기_완성계획.html`) 의 5/5 결재 lock-in 을
+main 으로 통합. 외부 agent 가 본 worktree 의 stale main (73c004e, 167
+commits behind) 만 보고 작성한 ADR-101~123 reserve 는 audit-first
+canonical 16번째 적용으로 **ADR-141~161 재배정** — 5/5 결재 의도 보존
++ ADR 번호 영역만 main 현실 (ADR-100~140 all used) 에 정합 정정.
+
+#### 5/5 결재 lock-in 매트릭스
+
+| # | 결재 | 재배정 ADR | 비고 |
+|---|---|---|---|
+| 1 | 면 생성 정책 옵션 B (annulus 명시 활성) | ADR-145 | 메타-원칙 #16 정합 |
+| 2 | Ellipse 옵션 A (NURBS-only) | ADR-158 | ADR-027 정합, enum 변경 0 |
+| 3 | 신규 ADR 3개 (Circle annulus / Ellipse / Surface Push-Pull) | ADR-145, 158, 159 | 외부 ADR-121/122/123 정정 |
+| 4 | Sprint 1, 5 각 +1주 확장 | (Sprint 기간 lock-in) | S1: 3~4주 / S5: 3~4주 |
+| 5 | 총 timeline 21~29주 / 회귀 +330 | (정합 lock-in) | 절대 #[ignore] 금지 330/330 |
+
+#### 8-Sprint 통합 roadmap
+
+| Sprint | 제목 | 기간 | 회귀 | ADRs (재배정) |
+|---|---|---|---|---|
+| S0 | Foundation Sync | 1주 | +0 | **ADR-141 (본 ADR)** |
+| S1 | Demo-Breaking Hotfix + Circle annulus | 3~4주 | +55 | ADR-142, 143, 144, 145 |
+| S2 | Input Step 1+2 | 2~3주 | +30 | ADR-146, 147, 148 |
+| S3 | Topology Cleanup Step 3 | 3~4주 | +50 | ADR-149, 150, 151 |
+| S4 | Healing Pipeline Step 4 | 3~4주 | +60 | ADR-152, 153, 154 |
+| S4.5 | Curve-to-Curve Face Split | 4~6주 | +30 | ADR-155 |
+| S5 | 곡면 face + Sketch + Ellipse + Surface Push/Pull | 3~4주 | +75 | ADR-156, 157, 158, 159 |
+| S6 | Annotation + Polish + Release | 2~3주 | +30 | ADR-160, 161 |
+| **합계** | **Production-grade RC** | **21~29주** | **+330** | **21 ADRs** (ADR-141~161) |
+
+#### Sprint 0 5 sub-step 결산
+
+| Sub-step | 결과 |
+|---|---|
+| α (git pull) | main 167 commits behind → 0 (708b1c1) ✅ |
+| β (PR #140 merge) | 본 세션 PR #140 (K3) 이미 main merge (auto-closed) ✅ |
+| γ (worktree closure) | nervous-bose merged ✅ / elated-poitras + tender-chaum deferred ⚠ |
+| δ (core.autocrlf) | `core.autocrlf input` 설정 (cross-platform safe) ✅ |
+| ε (본 ADR) | ADR-141 + LOCKED #65 + README catalog update ✅ |
+
+#### Lock-ins (L-65-1 ~ L-65-12)
+
+- **L-65-1** 5/5 결재 의도 보존 강제 (옵션 B 면 생성 / 옵션 A Ellipse /
+  신규 3 ADR / Sprint +1주 / 21~29주 +330)
+- **L-65-2** ADR-141~161 reserve 매트릭스 (외부 agent ADR-101~123 정정)
+- **L-65-3** 모든 21 ADR 의 메타-원칙 #16 정합 강제 (자동 trigger
+  default OFF + opt-in)
+- **L-65-4** 모든 21 ADR 의 LOCKED #44 정합 강제 (Complete Meaning
+  per Merge — 단일 atomic PR per sub-step)
+- **L-65-5** 모든 21 ADR 의 Path Z atomic pattern 강제 (α~η sub-step
+  + 사전 audit + 사용자 결재 + 회귀 자산 + 사용자 시연)
+- **L-65-6** 절대 #[ignore] 금지 330/330 강제
+- **L-65-7** 회귀 자산 단조 증가 (Sprint 별 분배 매트릭스 anchor)
+- **L-65-8** Sprint 4.5 (ADR-155) 의 4~6주 multi-week atomic 강제
+  (ADR-094 §E L1 답습)
+- **L-65-9** 모든 자동 trigger default OFF + localStorage opt-in
+  canonical (ADR-049 P-5e-α 답습)
+- **L-65-10** 사용자 시연 게이트 (ADR-087 K-ζ canonical) Sprint 종료
+  시점 필수
+- **L-65-11** 외부 agent 계획 integration 의 **audit-first canonical
+  default** (본 ADR 의 architectural foundation)
+- **L-65-12** Worktree 다중 운영 closure 결정은 별도 audit ADR (γ
+  deferred 2 worktree — elated-poitras / tender-chaum)
+
+#### Lessons (canonical for future external-agent integration ADRs)
+
+- **L1 audit-first canonical 16번째 적용** — 외부 agent 계획 도착 →
+  즉시 git state audit (worktree main = stale, 167 commits behind).
+  결과 — ADR 번호 23개 충돌 발견 + 의도 보존 + 번호 재배정 plan.
+- **L2 5/5 결재 의도 보존 정책 (architectural value)** — *번호 영역*
+  은 운영 문제, *의도* 는 architectural 가치. 의도 보존 + 운영 영역만
+  정정.
+- **L3 Sprint 0 의 architectural 가치 (Foundation Sync ≠ throwaway)**
+  — 외부 agent 계획 ↔ main 현실 정합 anchor. 모든 후속 Sprint 진입의
+  sole pre-condition.
+- **L4 Worktree 다중 운영 의 architectural risk** — 본 세션 3 worktree
+  중 nervous-bose 만 origin/main 정합. 다른 2 worktree 별도 audit
+  deferred.
+- **L5 메타-원칙 #16 정합 강제 (모든 Sprint ADRs)** — 휴리스틱 자동화
+  vs 사용자 명시 의도 path 분리. ADR-139 (Boundary tool, WHEN layer
+  신설) 이 본 roadmap 전체의 anchor.
+- **L6 Path Z atomic + LOCKED #44 정합 강제** — 단일 atomic PR per
+  sub-step + 사전 audit + 사용자 결재 cycle + 회귀 자산 단조 증가.
+- **L7 Multi-week atomic decomposition** — Sprint 4.5 (ADR-155) 의
+  4~6주 multi-week atomic 가 본 roadmap 의 architectural depth
+  demonstration (ADR-094 §E L1 답습).
+
+#### 회귀 누적 (Sprint 0 ε)
+
+axia-core / axia-geo / axia-wasm: **0** (docs only — ADR + LOCKED + README)
+
+본 ADR 자체는 회귀 자산 0 (Sprint 0 = Foundation Sync, +0 회귀 by
+design). 회귀 자산은 Sprint 1~6 의 각 sub-step ADR 에서 단조 증가
+(S1: +55, ..., S6: +30, 누적 +330).
+
+#### Cross-link
+
+- ADR-141 본문 (`docs/adr/141-master-roadmap-sprint0-foundation-sync.md`)
+- 4 보고서 (`reports/최종_결재완료_Sprint0_시작.html` /
+  `reports/Sprint0_Kickoff_Guide.html` / `reports/마스터_완성계획.html`
+  / `reports/곡선면_도형그리기_완성계획.html`)
+- LOCKED #1 ADR-021 / #5 / #7 ADR-026 / #14 메타-원칙 #14 / #15 P22.5
+  / #16 ADR-038 P23 / #26 ADR-049 / #43 ADR-103 / #44 / #45 ADR-111
+  / #63 / #64 ADR-139 (모두 정합 강제)
+- 메타-원칙 #5 / #9 / #10 / #11 / #12 / #14 / #15 / **#16** (canonical anchor)
+- ADR-027 (NURBS Kernel — Ellipse 옵션 A 정합)
+- ADR-049 P-5e-α (default OFF + localStorage opt-in canonical)
+- ADR-074/078/091/094/097/099/100/101/103/104 family (atomic pattern
+  source)
+- ADR-118/119/126/128/132/133 (α spec → β impl atomic source)
+- ADR-125/126/127/131 (audit-first canonical pivot source)
+- ADR-139 (WHAT/WHEN layer 분리 + 메타-원칙 #16 anchor)
+- ADR-140 (Surface-aware getDrawPlane — S1 자연 후속 anchor)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
