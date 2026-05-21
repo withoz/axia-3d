@@ -25,10 +25,12 @@ const CIRCLE_B = { cx: 6, cy: 0, cz: 0, nx: 0, ny: 0, nz: 1, radius: 5, segments
 
 test.describe('ADR-101 B-6 — User demo verification', () => {
   test.beforeEach(async ({ page }) => {
-    // ADR-139 B-β-1 (2026-05-18): auto-intersect default OFF.
-    // ADR-101 verification — explicit opt-in via localStorage.
+    // ADR-139 B-β-1 + B-β-3 (2026-05-18~21): auto-intersect + auto-face-
+    // synthesis default OFF. ADR-101 + LOCKED #1 P7 verification —
+    // explicit opt-in via localStorage.
     await page.addInitScript(() => {
       localStorage.setItem('axia:auto-intersect-on-draw', 'true');
+      localStorage.setItem('axia:auto-face-synthesis-on-draw', 'true');
     });
     await page.goto('/');
     await page.waitForFunction(() => {

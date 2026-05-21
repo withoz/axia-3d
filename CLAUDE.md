@@ -4595,7 +4595,7 @@ PR 시리즈.
     adr-101-b6-visual-demo / adr-101-b6-user-demo-verify)
   - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54
     모두 PASS, 절대 #[ignore] 금지 준수
-- **2026-05-18 B-β-2 implementation** (본 PR) — `auto_face_synthesis_on_
+- **2026-05-18 B-β-2 implementation** (PR #130) — `auto_face_synthesis_on_
   draw` flag 신설 + Step 4.99 (`resolve_planar_free_faces` fixed-point
   loop) 자동 호출 사이트 wrap. Default `false`:
   - Engine scene.rs: 신규 flag field + Step 4.99 wrap
@@ -4611,9 +4611,36 @@ PR 시리즈.
     이미 closed cycle synthesis 처리)
   - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54 /
     vitest 1931 모두 PASS
-- **(β-3 ~ β-4 + B-γ ~ B-μ): 다음 sub-steps** (multi-month, 별도 PRs):
-  - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일)
-  - B-β-4: DrawLine closed loop 자동 face 합성 폐기 (TS, ~30분)
+- **2026-05-21 B-β-3 implementation** (본 PR) — `auto_face_synthesis_on_draw`
+  flag 의미 확장: Step 4.99 만 → **Step 4.95 + Step 4.99 + Phase 5 + Phase 6**
+  모두 gate. LOCKED #1 ADR-021 P7 의 본격 trigger 폐기:
+  - Engine scene.rs:
+    * Step 4.95 (P7 ring rebuild, lines 2967-3273, 307 LoC) wrap with flag
+    * Phase 5 (`mop_up_orphan_cycles_via_dfs`) 자동 호출 wrap
+    * Phase 6 (`absorb_orphan_strands_into_faces`) 자동 호출 wrap
+    * Phase 7 STRICT 보존 (Q2-a single-op auto-face)
+    * User-callable `resynthesize_orphan_faces` command 보존 (명시 호출)
+  - axia-core scene::tests 6 tests explicit opt-in (P7/P9 4 + Phase A 1 +
+    drawing order 1):
+    * `test_adr016_path_b_inner_first_then_outer_resynthesize`
+    * `test_adr021_p7_case_a_inner_first_then_outer`
+    * `test_adr021_phaseB_3level_nested_smallest_first`
+    * `test_phaseA_postprocess_promote_path_radial`
+    * `test_p9_corner_pinch_two_inners_become_two_holes`
+    * `test_p9_pinch_drawing_order_independence` (Case A + B 모두)
+  - Playwright E2E 5 specs: `'axia:auto-face-synthesis-on-draw' = 'true'`
+    localStorage 사전 설정 (z0-rect-stress-split / z0-face-synthesis-
+    split-cross-tool / z0-split-face-selection / adr-101-b6-visual-demo /
+    adr-101-b6-user-demo-verify)
+  - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54 /
+    vitest 1931 모두 PASS. 절대 #[ignore] 금지 준수.
+  - **사용자 facing 본격 변화**:
+    * DrawLine × N closed loop → 자동 face 안 만들어짐 (LOCKED #12 P11 본격 회피)
+    * RECT containment → 자동 ring + hole 안 만들어짐 (LOCKED #1 P7 본격 회피)
+    * DrawRect / DrawCircle single-op auto-face **보존** (Q2-a, Phase 7 STRICT)
+    * P5.UX.39-45 cascading fixes 패턴 **본격 회피 시작**
+- **(B-β-4 + B-γ ~ B-μ): 다음 sub-steps** (multi-month, 별도 PRs):
+  - B-β-4: ✅ closed (PR #131 audit pivot — TS 변경 0)
   - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규
   - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
   - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair + click

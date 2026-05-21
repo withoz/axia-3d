@@ -421,10 +421,43 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
     B-β-3 에서 earlier 단계 disable 시 본격 영향 발생 예상)
   - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54 /
     vitest 1931 모두 PASS
-- **(β-3 ~ β-4): 다음 atomic sub-step** (별도 PR):
-  - B-β-3: Step 4.95 second-pass + Phase 5/6 disable (~1-2일, 가장 큰
-    sub-step — closed cycle synthesis 의 본질 영향)
-  - B-β-4: DrawLine closed loop 자동 face 합성 폐기 (TS, ~30분)
+- **2026-05-21 B-β-3 implementation** (본 PR) — `auto_face_synthesis_on_
+  draw` flag 의미 확장. Step 4.95 (P7 ring rebuild) + Phase 5 (DFS cycle
+  finder) + Phase 6 (strand absorption) 자동 호출 사이트 모두 wrap.
+  - Engine 3 site wrap (scene.rs):
+    * Step 4.95 (lines 2967-3273, 307 LoC) — LOCKED #1 ADR-021 P7
+    * Phase 5 자동 호출 — `mop_up_orphan_cycles_via_dfs` 함수 자체 보존
+    * Phase 6 자동 호출 — `absorb_orphan_strands_into_faces` 동일
+  - 보존: Phase 7 STRICT (Q2-a) + User-callable `resynthesize_orphan_
+    faces` command + 모든 함수 자체 (자동 호출 site 만 wrap)
+  - axia-core scene::tests **6 tests** explicit opt-in (audit estimate
+    ~78 보다 훨씬 적음 — Step 4.99 만 의존하던 tests 가 B-β-2 에서 이미
+    처리됨, 본 PR 은 P7/P9 관련 6 tests 만 영향):
+    * test_adr016_path_b_inner_first_then_outer_resynthesize
+    * test_adr021_p7_case_a_inner_first_then_outer
+    * test_adr021_phaseB_3level_nested_smallest_first
+    * test_phaseA_postprocess_promote_path_radial
+    * test_p9_corner_pinch_two_inners_become_two_holes
+    * test_p9_pinch_drawing_order_independence (Case A + B)
+  - Playwright E2E **5 specs** 추가 opt-in (auto-face-synthesis 'true'):
+    z0-rect-stress-split / z0-face-synthesis-split-cross-tool /
+    z0-split-face-selection / adr-101-b6-visual-demo / adr-101-b6-user-
+    demo-verify
+  - 회귀: axia-core 302+36=338 / axia-geo 1407+24=1431 / axia-wasm 54 /
+    vitest 1931 모두 PASS. 절대 #[ignore] 금지 준수.
+  - **사용자 facing 본격 변화**:
+    * DrawLine × N closed loop → 자동 face 안 만들어짐 (LOCKED #12 P11 본격 회피)
+    * RECT containment → 자동 ring + hole 안 만들어짐 (LOCKED #1 P7 본격 회피)
+    * DrawRect / DrawCircle single-op auto-face **보존** (Q2-a, Phase 7 STRICT)
+    * P5.UX.39-45 cascading fixes 패턴 **본격 회피 시작**
+- **(B-β-4 + B-γ ~ B-μ): 다음 sub-steps** (별도 PR):
+  - B-β-4: ✅ closed (PR #131 audit pivot — TS 변경 0)
+  - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규 (기존 cycle
+    finder 본체 재활용 + 명시 trigger)
+  - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
+  - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair
+  - B-ι: E2E + 사용자 시연 (구멍 0 검증)
+  - B-μ: 3D BOUNDARY Phase 2 별도 ADR
 
 ## 14. β implementation atomic sub-step plan (B-α ~ B-μ)
 

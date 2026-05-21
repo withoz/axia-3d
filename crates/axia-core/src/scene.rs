@@ -2981,8 +2981,15 @@ impl Scene {
         //   - Phase A (reverse_loop twin update): manifold 보장
         //   - Phase B: ring 도 inner candidate (Test 3B nested)
         //   - Phase C (ring as container, Test 1B/4B): 별도 후속 — 회귀 위험.
+        //
+        //   **ADR-139 B-β-3 (2026-05-21)**: `auto_face_synthesis_on_draw`
+        //   flag default OFF — 메타-원칙 #16 자동화 antipattern 폐기. P7 ring
+        //   rebuild 자동 trigger 는 Boundary tool (ADR-139 B-γ) 명시 trigger
+        //   로 대체. Legacy `true` explicit opt-in 시 legacy 동작 보존.
+        //   DrawRect / DrawCircle single-op auto-face 는 Phase 7 STRICT 보존
+        //   (Q2-a 결재).
         use std::collections::HashMap;
-        {
+        if self.auto_face_synthesis_on_draw {
             // 1) Phase B: 모든 active face 수집 — simple + ring 둘 다 inner.
             let candidates: Vec<FaceId> = self.mesh.faces.iter()
                 .filter(|(_, f)| f.is_active())
@@ -3346,21 +3353,32 @@ impl Scene {
         {
             trace_step("after Step 4.99 resolve_planar_free_faces", &self.mesh, &mut last_nm);
 
-            // ADR-025 P11 Phase 5 — Brute-force cycle mop-up.
-            self.mop_up_orphan_cycles_via_dfs(all_created_faces);
-            trace_step("after Phase 5 (DFS mop-up)", &self.mesh, &mut last_nm);
+            // **ADR-139 B-β-3 (2026-05-21)**: Phase 5 + Phase 6 도 동일 flag
+            // (`auto_face_synthesis_on_draw`) 로 gate. Boundary tool (ADR-139
+            // B-γ) 명시 trigger 로 대체. User-callable `resynthesize_orphan_
+            // faces` command (line 3501) 은 명시 호출 이므로 보존 — 함수
+            // 자체 (`mop_up_orphan_cycles_via_dfs` / `absorb_orphan_strands_
+            // into_faces`) 는 보존, 자동 호출 site 만 wrap. Legacy `true`
+            // explicit opt-in 시 legacy 동작 보존.
+            if self.auto_face_synthesis_on_draw {
+                // ADR-025 P11 Phase 5 — Brute-force cycle mop-up.
+                self.mop_up_orphan_cycles_via_dfs(all_created_faces);
+                trace_step("after Phase 5 (DFS mop-up)", &self.mesh, &mut last_nm);
 
-            // ADR-025 P11 Phase 6 — Strand absorption.
-            //
-            // 잔존 orphan strand (cycle 없는 dangling edge) 를 enclosing face 의
-            // boundary 에 흡수. 양 endpoint 가 같은 face 의 outer loop 위에 있으면
-            // split_face_by_chain 으로 face 를 둘로 분할 → strand 가 boundary 가 됨.
-            self.absorb_orphan_strands_into_faces(all_created_faces);
-            trace_step("after Phase 6 (strand absorb)", &self.mesh, &mut last_nm);
+                // ADR-025 P11 Phase 6 — Strand absorption.
+                //
+                // 잔존 orphan strand (cycle 없는 dangling edge) 를 enclosing face 의
+                // boundary 에 흡수. 양 endpoint 가 같은 face 의 outer loop 위에 있으면
+                // split_face_by_chain 으로 face 를 둘로 분할 → strand 가 boundary 가 됨.
+                self.absorb_orphan_strands_into_faces(all_created_faces);
+                trace_step("after Phase 6 (strand absorb)", &self.mesh, &mut last_nm);
+            }
 
             // Phase 7 (final cleanup of remaining strands) 은 의도적 사용자
             // 와이어 (DrawLine intermediate) 와 구별 불가 — closed-shape 명령
             // (DrawRect/DrawCircle) 의 finalizer 에서만 명시적으로 호출.
+            // **ADR-139 보존 결정 (Q2-a)**: DrawRect / DrawCircle single-op
+            // auto-face 는 보존 → Phase 7 STRICT 보존.
         }
     }
 
@@ -9040,6 +9058,8 @@ mod tests {
     #[test]
     fn test_adr021_phaseB_3level_nested_smallest_first() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy auto Step 4.95 P7 ring rebuild
+        scene.auto_face_synthesis_on_draw = true;
         scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
             width: 4.0, height: 2.0,
@@ -9149,6 +9169,8 @@ mod tests {
     #[test]
     fn test_phaseA_postprocess_promote_path_radial() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy auto Step 4.95 P7 ring rebuild
+        scene.auto_face_synthesis_on_draw = true;
         // inner first
         scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
@@ -9299,6 +9321,8 @@ mod tests {
     #[test]
     fn test_adr021_p7_case_a_inner_first_then_outer() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy P7 auto containment split
+        scene.auto_face_synthesis_on_draw = true;
         // 2 inner adjacent (sharing an edge)
         scene.execute(Command::DrawRect {
             center: DVec3::new(-1.5, 0.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
@@ -9465,6 +9489,8 @@ mod tests {
     #[test]
     fn test_adr016_path_b_inner_first_then_outer_resynthesize() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy P7 auto containment split
+        scene.auto_face_synthesis_on_draw = true;
         // Inner 4×2 먼저
         scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
@@ -9680,6 +9706,8 @@ mod tests {
     #[test]
     fn test_p9_corner_pinch_two_inners_become_two_holes() {
         let mut scene = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy P9 auto multi-hole promote
+        scene.auto_face_synthesis_on_draw = true;
         // Outer 12×12
         scene.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
@@ -10179,6 +10207,8 @@ mod tests {
     fn test_p9_pinch_drawing_order_independence() {
         // Case A: inner1 → inner2 → outer
         let mut scene_a = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy P9 auto multi-hole promote
+        scene_a.auto_face_synthesis_on_draw = true;
         scene_a.execute(Command::DrawRect {
             center: DVec3::new(-2.0, -2.0, 0.0), normal: DVec3::Z, up: DVec3::Y,
             width: 2.0, height: 2.0,
@@ -10204,6 +10234,8 @@ mod tests {
 
         // Case B: outer → inner1 → inner2
         let mut scene_b = Scene::new();
+        // ADR-139 B-β-3: explicit opt-in for legacy P9 auto multi-hole promote
+        scene_b.auto_face_synthesis_on_draw = true;
         scene_b.execute(Command::DrawRect {
             center: DVec3::ZERO, normal: DVec3::Z, up: DVec3::Y,
             width: 12.0, height: 12.0,
