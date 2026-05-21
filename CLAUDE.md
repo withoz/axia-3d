@@ -5408,21 +5408,43 @@ hole_preserves_other`, `phase_g2_cuts_through_two_holes`.
 | 9 | 회귀 없음 (테스트 통과 후 커밋) | 품질 |
 | 10 | ADR 불변 (변경 시 새 ADR + Superseded) | 거버넌스 |
 | 11 | **Latency Budget First** (Hover 16/Click 33/Commit 100/Heavy 500 ms) | 성능 |
-| 12 | **Memory Budget Per Entity** (모든 자료구조 cap 강제) | 메모리 |
+| 12 | **Memory Budget Per Subsystem** (Rust slot / Three.js / BVH / OperationLog 등 영역별 cap 강제, ADR-013 §1) | 메모리 |
 | 13 | **One Source, Two Views** (Rust=truth, JS=view, cache 휘발성) | 메모리/일관성 |
-| 14 | **면은 닫힌 경계로부터 유도된다** (Face derives from a closed boundary) — **WHAT layer (결과 invariant 불변)** | 기하 본질 |
+| 14 | **면은 닫힌 경계로부터 유도된다** — 평면적(coplanar) 닫힌 단순 경계 → disk-topology face (H₁=0 한정, Jordan-Schoenflies 정리 기반). Knotted curve / Plateau's problem 등 비평면 / 비단순 경계는 명제 외부 — **WHAT layer (결과 invariant 불변)** | 기하 본질 |
 | 15 | **동일 분할 = 동일 topological contract — 빠르고 신속하고 정확하게** (Same split = same topo contract: fast, swift, accurate) | 분할 정합 |
 | 16 | **자동화는 사용자 의도를 미리 알 수 없다 — 휴리스틱 자동화는 cascading 부작용의 source** (Automation cannot infer user intent; heuristic automation is the source of cascading side-effects) — **WHEN layer (trigger 정책)** | UX/거버넌스 |
 
 ### 메타-원칙 #14 — 면은 닫힌 경계로부터 유도된다 (WHAT layer)
 
-**Canonical statement (사용자 통찰, 2026-05-08; ADR-139 amendment 2026-05-18)**:
+**Canonical statement (사용자 통찰, 2026-05-08; ADR-139 amendment 2026-05-18;
+학술적 정밀화 amendment 2026-05-21)**:
 > "면은 닫힌 경계로부터 유도된다."
 > ("A face is derived from a closed boundary.")
 
 **ADR-139 amendment (2026-05-18, 사용자 정정)**:
 > "메타-원칙 #14 (면은 닫힌 경계로 유도된다) 이것은 바뀌지 않습니다.
 > 중요한것은 바운더리를 만들어 생성을 할수있느냐지?"
+
+**학술적 정밀화 amendment (2026-05-21, 보고서 P3 High)**:
+> "평면적(coplanar) 닫힌 단순 경계로부터 disk-topology face 가 유도된다
+> — H₁=0 영역 한정. Knotted curve / Plateau's problem / 비평면 closed
+> curve 는 명제 외부."
+
+**위상수학적 근거 (Jordan-Schoenflies 정리)**:
+- 평면 R² 의 simple closed curve 는 R² 를 inside (disk homeomorphic) +
+  outside 로 분할 (Jordan curve 정리)
+- inside region 이 disk 와 homeomorphic (Schoenflies 정리)
+- AxiA 의 coplanar 검사 (LOCKED #5 ε=1.5μm spatial-hash) 가 진입 가드 →
+  본질적으로 R² 환경 → P14 수학적으로 정합
+- 전역 명제로는 H₁ (first homology group) = 0 (simply-connected surface)
+  한정 — torus / Klein bottle / multi-genus 곡면은 비자명 cycle 존재 →
+  명제 외부 (AxiA scope 외)
+
+**비평면 / 비단순 경계 명제 외부 사례 (학술적 정합)**:
+- Knotted curve (knot theory) — 3D closed curve 의 surface 채움 비유일
+- Plateau's problem — minimal surface 다중성, 일반 3D closed curve 의
+  surface 채움 비유일
+- Self-intersecting boundary — non-simple closed curve, 단순화 후 적용
 
 **WHAT vs WHEN 직교 분리** (ADR-139 신설):
 - **메타-원칙 #14 (WHAT — 결과 invariant, 불변)**: 닫힌 경계 → 면.
