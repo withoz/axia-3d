@@ -4639,8 +4639,23 @@ PR 시리즈.
     * RECT containment → 자동 ring + hole 안 만들어짐 (LOCKED #1 P7 본격 회피)
     * DrawRect / DrawCircle single-op auto-face **보존** (Q2-a, Phase 7 STRICT)
     * P5.UX.39-45 cascading fixes 패턴 **본격 회피 시작**
-- **(B-β-4 + B-γ ~ B-μ): 다음 sub-steps** (multi-month, 별도 PRs):
+- **2026-05-22 B-γ MVP audit pivot** (본 PR) — **audit-first canonical
+  11번째 적용**. ADR-139 §14 B-γ engine API 가 **이미 사실상 구현됨**
+  finding:
+  - Engine `Scene::resynthesize_orphan_faces` + WASM `resynthesizeOrphanFaces`
+    + TS wrapper + ToolManager action `'resynthesize-faces'` + MenuBar 모두
+    이미 활성
+  - 본 PR 변경: Korean label 재정의 — "면 재합성 (닫힌 라인 cycle →
+    face)" → "경계 도구 (Boundary) — 닫힌 line cycle 명시 면 합성
+    (ADR-139)"
+  - 사용자 facing 즉시 가치: ADR-139 의 명시 trigger entry 활성 (기존
+    label 의 의미가 ADR-139 정합 보정 명시)
+  - **남은 작업** (별도 sub-step):
+    * B-γ' point-based localization (full mesh sweep 보다 정밀)
+    * B-ε TS BoundaryTool 'B' 단축키 (현재 b=bottom view 충돌, 결재 필요)
+- **(B-γ' + B-δ + B-ε + B-ι + B-μ): 다음 sub-steps** (별도 PRs):
   - B-β-4: ✅ closed (PR #131 audit pivot — TS 변경 0)
+  - B-γ MVP: ✅ closed (본 PR — label 재정의, audit pivot)
   - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규
   - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
   - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair + click

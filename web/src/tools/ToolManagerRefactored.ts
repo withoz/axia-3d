@@ -450,7 +450,7 @@ export class ToolManager {
     'thicken-faces': '선택 면에 두께 부여 (Shell/Thicken)',
     'solidify': '열린 쉘을 닫힌 솔리드로 변환 (Solidify)',
     'mesh-repair': '메시 정리 (퇴화면/와인딩/고립 정점)',
-    'resynthesize-faces': '면 재합성 (닫힌 라인 cycle → face)',
+    'resynthesize-faces': '경계 도구 (Boundary) — 닫힌 line cycle 명시 면 합성 (ADR-139)',
     'sketch-start-xz': '스케치 시작 — XZ 바닥 평면',
     'sketch-start-xy': '스케치 시작 — XY 정면 평면',
     'sketch-start-yz': '스케치 시작 — YZ 측면 평면',

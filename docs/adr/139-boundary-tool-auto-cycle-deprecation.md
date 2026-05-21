@@ -450,12 +450,43 @@ cascading fixes 의 root cause 완전 해소. 학습 비용 (B 키 1개) trade-o
     * RECT containment → 자동 ring + hole 안 만들어짐 (LOCKED #1 P7 본격 회피)
     * DrawRect / DrawCircle single-op auto-face **보존** (Q2-a, Phase 7 STRICT)
     * P5.UX.39-45 cascading fixes 패턴 **본격 회피 시작**
-- **(B-β-4 + B-γ ~ B-μ): 다음 sub-steps** (별도 PR):
+- **2026-05-22 B-γ MVP audit pivot** (본 PR) — **audit-first canonical
+  11번째 적용**. ADR-139 §14 B-γ ("Engine — `Mesh::boundary_from_point(p,
+  plane)` 신규") 의 사전 검토 audit 으로 **이미 사실상 구현됨** 발견:
+  - ✅ Engine: `Scene::resynthesize_orphan_faces` (scene.rs:3519,
+    user-callable command, `mop_up_orphan_cycles_via_dfs` Phase 5
+    재활용, transaction wrap, ResynthesizeReport 반환)
+  - ✅ WASM bridge: `resynthesizeOrphanFaces` (lib.rs:5578,
+    export_baseline 등재)
+  - ✅ TS bridge wrapper: `WasmBridge.resynthesizeOrphanFaces`
+    (line 2105)
+  - ✅ ToolManager action: `'resynthesize-faces'` (line 413)
+  - ✅ MenuBar 진입점: `'resynthesize-faces'` (MenuBar.ts:588)
+  - 본 PR 변경: Korean label 재정의 (ADR-139 vision 정합)
+    * 이전: "면 재합성 (닫힌 라인 cycle → face)"
+    * 이후: "경계 도구 (Boundary) — 닫힌 line cycle 명시 면 합성 (ADR-139)"
+  - 회귀: 코드 변경 1-line (label) + docs only. 절대 #[ignore] 금지
+    준수.
+  - **MVP 의 본질**: ADR-139 가 자동 trigger 폐기 (B-β-1/2/3) → 명시
+    trigger 가 필요한데, `resynthesize-faces` 가 *전체 mesh sweep*
+    명시 trigger 로 이미 활성. 사용자 명시 호출 = 보고서 4단계
+    파이프라인의 entry point.
+  - **남은 작업** (별도 sub-step):
+    * B-γ' (가칭) — Point-based localization (`Mesh::boundary_from_
+      point(p, plane)` 신규 — click point 근처 region-limited boundary
+      detection, ADR-139 §10 L-139-5 specific). Full mesh sweep 보다
+      정밀.
+    * B-ε — TS BoundaryTool 신규 ('B' 단축키 + cursor crosshair). 현재
+      'b' 가 bottom view 와 충돌 — 단축키 결정 (Ctrl+B 또는 다른) 별도
+      결재 필요.
+
+- **(B-γ' + B-δ + B-ε + B-ι + B-μ): 다음 sub-steps** (별도 PR):
   - B-β-4: ✅ closed (PR #131 audit pivot — TS 변경 0)
-  - B-γ: Engine — `Mesh::boundary_from_point(p, plane)` 신규 (기존 cycle
-    finder 본체 재활용 + 명시 trigger)
-  - B-δ: WASM bridge — `bridge.boundaryFromClick(...)` + TS wrapper
-  - B-ε: TS BoundaryTool 신규 — 'B' 단축키 + cursor crosshair
+  - B-γ MVP: ✅ closed (본 PR — 이미 구현, label 재정의)
+  - B-γ' (가칭): Engine — `Mesh::boundary_from_point(p, plane)` 신규
+    point-based localization (full mesh sweep 보다 정밀)
+  - B-δ: WASM bridge — point-based localization wrapper
+  - B-ε: TS BoundaryTool 신규 — cursor crosshair + 단축키 (B vs Ctrl+B 결정)
   - B-ι: E2E + 사용자 시연 (구멍 0 검증)
   - B-μ: 3D BOUNDARY Phase 2 별도 ADR
 
