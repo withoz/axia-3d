@@ -5299,6 +5299,85 @@ mod tests {
     }
 
     // ────────────────────────────────────────────────────────────────
+    // K3 (보고서 시나리오 3 hotfix, 2026-05-23) — surface_owner_id
+    // propagation through 6 split sites.
+    //
+    // Path A cylinder Push/Pull 후 side face split (Mesh::split_face) 시
+    // sub-face 가 parent owner_id 를 자동 propagation 받아야 — 그렇지
+    // 않으면 cylinder 측면 group full-selection (ADR-093 D-δ) 시 N-1
+    // face 만 선택됨.
+    // ADR-089 A-χ-β (parent surface propagation) 패턴 답습.
+    // ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn k3_split_face_propagates_surface_owner_id() {
+        // Setup: cylinder Path A → N side faces with same owner_id.
+        let mut mesh = Mesh::new();
+        let profile = build_circle_face(&mut mesh, 5.0, 8);
+        let result = mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 10.0 },
+            MaterialId::new(0),
+        ).expect("create_solid OK");
+        let side = result.side_faces[0];
+        let parent_owner = mesh.face_surface_owner_id(side)
+            .expect("side face must have owner_id");
+
+        // Get two non-adjacent vertices on side face's outer loop.
+        let outer_start = mesh.faces[side].outer().start;
+        let verts = mesh.collect_loop_verts(outer_start)
+            .expect("collect verts OK");
+        assert!(verts.len() >= 4,
+            "side face needs >= 4 verts for non-adjacent split, got {}",
+            verts.len());
+        let v1 = verts[0];
+        let v2 = verts[2];  // non-adjacent (skip 1 vert)
+
+        // Split side face.
+        let (face_a, face_b) = mesh.split_face(side, v1, v2)
+            .expect("split_face OK");
+
+        // K3 invariant: both sub-faces share parent owner_id.
+        assert_eq!(mesh.face_surface_owner_id(face_a), Some(parent_owner),
+            "K3: face_a must inherit parent owner_id");
+        assert_eq!(mesh.face_surface_owner_id(face_b), Some(parent_owner),
+            "K3: face_b must inherit parent owner_id");
+
+        // Walk from any sub-face → all N+1 siblings (original N-1
+        // remaining + 2 split sub-faces) share owner_id.
+        let siblings = mesh.walk_face_owner_siblings(face_a);
+        assert!(siblings.len() >= 2,
+            "walk must find at least 2 siblings (face_a + face_b), got {}",
+            siblings.len());
+        for &sib in &siblings {
+            assert_eq!(mesh.face_surface_owner_id(sib), Some(parent_owner),
+                "all siblings must share parent owner_id");
+        }
+    }
+
+    #[test]
+    fn k3_split_face_no_owner_propagates_none() {
+        // Regression guard: face without owner_id → sub-faces stay None.
+        let mut mesh = Mesh::new();
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(2.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(2.0, 2.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 2.0, 0.0));
+        let f = mesh.add_face(&[v0, v1, v2, v3], MaterialId::new(0))
+            .expect("add_face OK");
+        // No owner_id assigned (default None for plain add_face).
+        assert_eq!(mesh.face_surface_owner_id(f), None,
+            "plain face has no owner_id");
+
+        let (face_a, face_b) = mesh.split_face(f, v0, v2)
+            .expect("split_face OK");
+        assert_eq!(mesh.face_surface_owner_id(face_a), None,
+            "K3: sub-face stays None if parent had no owner_id");
+        assert_eq!(mesh.face_surface_owner_id(face_b), None,
+            "K3: sub-face stays None if parent had no owner_id");
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-094 B-δ-prep — Path B kernel-native cylinder (additive coexist)
     // ────────────────────────────────────────────────────────────────
 
