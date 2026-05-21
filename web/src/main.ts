@@ -632,19 +632,40 @@ async function main() {
   //
   // Cross-link: ADR-135 §5 Path A, LOCKED #40 §L1 baseline preserved.
   let lodLastPushedTol = 0.02; // baseline (matches engine default)
+  // **Demo #2 fix (audit-first canonical 15번째 — PR #146 audit Path A,
+  // 2026-05-24)** — RefCell aliasing guard. wasm-bindgen 의 RefCell guard
+  // 가 다른 WASM call panic 후 영구 잠김 시 매 frame "recursive use" error
+  // 발생 (사용자 demo screenshot #2 evidence: 60fps × 3.3초 = 200 errors).
+  // 본 try-catch 가 frame loop 보호 — LOD 일시 비활성으로 graceful
+  // degradation (frame loop blocking 보다 안전).
+  let lodWarnedOnce = false;
   viewport.onFrame(() => {
-    const camPos = viewport.camera.position;
-    // Use orbitTarget proxy via camera's distance to scene origin —
-    // approximation since we don't have public orbitTarget accessor.
-    // For LOD purposes this is good enough (sketch/primitives are near
-    // origin in typical scenes).
-    const camDistance = camPos.length();
-    if (!Number.isFinite(camDistance) || camDistance <= 0) return;
-    const lodTol = bridge.lodChordTol(camDistance);
-    // Only push when change is > 5% (avoids per-frame churn on slow zoom).
-    if (Math.abs(lodTol / lodLastPushedTol - 1) > 0.05) {
-      bridge.setRenderChordTol(lodTol);
-      lodLastPushedTol = lodTol;
+    try {
+      const camPos = viewport.camera.position;
+      // Use orbitTarget proxy via camera's distance to scene origin —
+      // approximation since we don't have public orbitTarget accessor.
+      // For LOD purposes this is good enough (sketch/primitives are near
+      // origin in typical scenes).
+      const camDistance = camPos.length();
+      if (!Number.isFinite(camDistance) || camDistance <= 0) return;
+      const lodTol = bridge.lodChordTol(camDistance);
+      // Only push when change is > 5% (avoids per-frame churn on slow zoom).
+      if (Math.abs(lodTol / lodLastPushedTol - 1) > 0.05) {
+        bridge.setRenderChordTol(lodTol);
+        lodLastPushedTol = lodTol;
+      }
+    } catch (e) {
+      // RefCell 영구 잠김 또는 다른 WASM panic — silent skip per frame.
+      // 첫 번째만 console.warn 으로 audit trail (이후 frame 마다 silent).
+      // Cross-link: docs/audits/2026-05-24-demo-2-refcell-aliasing-audit.md
+      if (!lodWarnedOnce) {
+        lodWarnedOnce = true;
+        console.warn(
+          '[ADR-135 LOD] frame loop WASM call failed (likely RefCell aliasing — see Demo #2 audit). ' +
+          'LOD silently disabled. First error:',
+          e,
+        );
+      }
     }
   });
 
