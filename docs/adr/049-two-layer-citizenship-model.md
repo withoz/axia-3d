@@ -336,12 +336,107 @@ Xia (v3.2 strict):
 
 ---
 
+## 4.5 Amendments
+
+### Amendment 1 (2026-05-09) — Three-Layer Extension (보고서 P2 High)
+
+ADR-095 가 본 모델을 **Three-Layer Citizenship Model** 로 확장:
+
+- **Form (Shape)** — 기하학적 추상 (본 ADR §1.2 형태 계층)
+- **Property (Xia)** — 부재 정체성 (material + volume/section > 0 +
+  watertight + manifold 4-조건, 본 ADR §1.2 특성 계층)
+- **Reference (NEW)** — Construction line / Imported mesh / Point cloud
+  (외부 / 작도, *수정 안 함*)
+
+세 시민권은 **mutually exclusive geometry ownership** (mathematical
+orthogonality, disjoint union). LOCKED #26 메타-원칙 #2 ("외부 참조는
+형태/모양만") 의 architectural 정착.
+
+세부: `docs/adr/095-reference-citizenship-introduction.md` 참조.
+
+### Amendment 2 (2026-05-09) — Phase 5 sub-track 분리 (보고서 P2 High)
+
+본 ADR §2.3 의 Phase 5 (자산 라이브러리 3계층 + Layered material) 가
+ADR-098/099/100 **3 sub-track** 으로 분리:
+
+- **Phase 5-A** (ADR-098) — Asset Library 3-Tier Material Scope
+  (System / Project / User)
+- **Phase 5-B** (ADR-099) — Layered Material (4-PBR Channels: albedo /
+  normal / roughness / metallic)
+- **Phase 5-C** (ADR-100) — Material Removal Recovery (auto-demote
+  → fallback Concrete → escalate dialog)
+
+번호 시퀀스 정정: 본 ADR §2.3 의 "Phase 5+: ADR-055+" 표기 → 실제
+**ADR-098/099/100** (인접 ADR 충돌 회피). 모두 ✅ Closed (2026-05-09 ~
+2026-05-10).
+
+🎉 **LOCKED #26 Two-Layer Citizenship Model 5-Phase 완전 closure**
+(2026-05-10) — CLAUDE.md LOCKED #39 참조.
+
+### Amendment 3 (2026-05-21) — 4-조건 mathematical 정형화 (보고서 P5 High)
+
+본 ADR §1.2 특성 계층의 4-조건 (material + volume > 0 + watertight +
+manifold) 의 학술적 정형화:
+
+```
+Xia 승격 조건 (정형):
+  (material assigned)
+  ∧ (volume > ε_volume_floor  OR  cross_section_area_in_normal_plane > ε_section_floor)
+  ∧ (∂M = ∅)                    // watertight = closed manifold without boundary
+  ∧ (∀ edge e: |faces(e)| = 2)  // 2-manifold edge-side (ADR-051 P7-M1)
+  ∧ (∀ vertex v: link(v) ≃ S¹)  // 2-manifold vertex-side (future P7-M4, 보고서 P7)
+```
+
+**조건별 정형 명시**:
+- `material`: set membership (MaterialLibrary 에 등록된 비-FORM_MATERIAL)
+- `volume > ε_volume_floor`: 3D solid 의 경우. ε_volume_floor 는 numerical
+  underflow 방지 (1e-300 underflow 회피, ADR-007 winding 정합 검증)
+- `cross_section_area > ε_section_floor`: Linear XIA (column / beam) 의
+  경우. **기준 평면 = curve normal-plane** (boundary curve 의 local
+  Frenet frame normal vector 직교 평면). 0-area degeneracy 방지.
+- `watertight = ∂M = ∅`: closed manifold without boundary. Möbius / Klein
+  bottle 은 boundary 없으나 비-orientable — orientable 추가 강제 가능
+  (보고서 P7 vertex link circle invariant 와 함께)
+- `manifold (edge-side)`: ADR-051 P-1 verify_p7_manifold P7-M1 invariant
+  (모든 edge 가 정확히 2 face 공유). P7-M2 / P7-M3 도 함께 검증.
+- **manifold (vertex-side)** — *현재 누락 invariant* (보고서 P7 Medium):
+  vertex 주변 face fan 의 link circle 검사. ADR-022 P9 (1-vertex pinch
+  auto-promote) 는 link circle 위배 케이스를 허용 — 학술적 strictness
+  위해 별도 invariant (가칭 P7-M4) 추가 검토.
+
+**watertight ⇒ manifold-without-boundary** 부분 동치이나 *완전 동치 아님*:
+- watertight = closed (∂M = ∅) 만 의미
+- manifold = local Euclidean structure (모든 점의 neighborhood 가 disk
+  or half-disk 와 homeomorphic)
+- 두 조건 모두 필요 — watertight 만 만족하고 non-manifold 인 mesh 가능
+  (예: pinch vertex, edge-3-share 등)
+
+### Amendment 4 (2026-05-21) — 학술적 정밀화 cross-link (보고서 §3 High)
+
+본 ADR §1.2 "Form 0 차원" 진술의 학술적 분리 명시:
+- **Face 두께 0** = embedding codimension 의미 (R³ embedded 2-manifold,
+  topology dimension 은 여전히 2)
+- **Vertex 0 차원** = intrinsic dimension 의미 (0-cell)
+- 두 개념 (codim 0 vs intrinsic dim 0) 학술적 분리 — Form 의 정형 명시:
+  *"Form 은 codim ≥ 1 entity 를 차원 invariant 위배 없이 표현"*
+
+---
+
 ## 5. References
 
 - ADR-048 (격차 진단 — supersede 됨, 이력 보존)
 - AixxiA Design Specification v3.2 (`D:\1. 도구의시작\AixxiA_Design_Specification_v3.2.docx`)
 - ADR-007 / ADR-019 / ADR-021 / ADR-025 — 모두 형태 계층의 정책으로 재분류
 - ADR-046 P31 (Product Identity) — 두 계층 모두 P1+P3 페르소나 지원
+- ADR-095 (Reference 시민권 introduction) — Amendment 1 source
+- ADR-097 (Topology Damage Auto-Recovery) — Phase 4
+- ADR-098 (Asset Library 3-Tier) — Phase 5-A
+- ADR-099 (Layered Material 4-PBR) — Phase 5-B
+- ADR-100 (Material Removal Recovery) — Phase 5-C
+- ADR-050 / ADR-051 — Phase 1 (Shape/Xia type split + P7 strict reaffirmation)
+- ADR-091 — Phase 2 (Material removal demote)
+- ADR-139 — Boundary tool + Auto-cycle Deprecation (LOCKED #64 정합)
+- 보고서: `reports/엔진_개념_이론_검토_보고서.html` §3 시민권 모델 학술적 완전성
 - 어제 세션 (2026-05-02) commits: `52c42a0`, `1cb1827`, `fc3abe6`, `0c04ae1`,
   `0877913`, `8f0fe38`, `6f6cd3e` — 모두 **형태 계층 자체 invariant 강화**
 
