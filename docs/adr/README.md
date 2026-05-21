@@ -21,7 +21,7 @@
 - **When to Revisit (재검토 트리거)** — 재검토가 필요해지는 조건
 - **Related (관련 기록)** — 다른 ADR / 커밋 / 이슈
 
-## 카테고리별 색인 (140+ ADRs, 2026-05-21 갱신)
+## 카테고리별 색인 (141+ ADRs, 2026-05-22 갱신 — ADR-141 Master Roadmap 추가)
 
 ADR 은 단조 증가 번호이지만 주제별로 8개 트랙으로 자연 그룹화됩니다.
 
@@ -217,6 +217,37 @@ ADR-049 Amendments 1~4 참조.
 | [135](./135-lod-chord-tol-implementation.md) | Distance-based LOD chord_tol | Accepted |
 | [138](./138-multi-loop-face-policy.md) | Multi-loop Face Policy (Path A vs B) | Superseded by ADR-139 |
 | [139](./139-boundary-tool-auto-cycle-deprecation.md) | Boundary Tool + Auto-cycle Deprecation | Accepted (β implementation 진행 중) |
+| [140](./140-surface-aware-get-draw-plane.md) | Surface-aware getDrawPlane (곡면 face 위 도구 정확도) | α spec (β 진행 중) |
+
+### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
+
+본 카테고리는 외부 에이전트 마스터 완성 계획 (5/5 결재 lock-in, 2026-05-22)
+의 main 통합 트랙. 21~29주 / 5~7개월 production-grade RC + 회귀 +330.
+ADR-141 (Master Roadmap) + ADR-142~161 (Sprint 1~6+4.5 worker ADRs).
+
+| # | 제목 | 상태 | Sprint |
+|---|------|------|---|
+| [141](./141-master-roadmap-sprint0-foundation-sync.md) | **Master Roadmap (Sprint 0 closure)** | **Accepted** | **S0** |
+| 142 (reserve) | Closed-curve face split 5 함수 hotfix | Reserved | S1 |
+| 143 (reserve) | Surface-aware getDrawPlane (ADR-140 β 자연 후속) | Reserved | S1 |
+| 144 (reserve) | Step 4.65 silent dissolve 회귀 자산 | Reserved | S1 |
+| 145 (reserve) | **Circle annulus 명시 활성 (옵션 B, 결재 1)** | Reserved | S1 |
+| 146 (reserve) | Step 1 Inferencing 보강 | Reserved | S2 |
+| 147 (reserve) | Step 2 Scenario B1 (spatial-hash 0.1μm) | Reserved | S2 |
+| 148 (reserve) | B-γ' Point-Localized BoundaryTool | Reserved | S2 |
+| 149 (reserve) | T-junction Sweep 명시 도구 | Reserved | S3 |
+| 150 (reserve) | 자동 Coplanar Face Merge (opt-in) | Reserved | S3 |
+| 151 (reserve) | Connected Stacked-inner Component-Merge Resolver | Reserved | S3 |
+| 152 (reserve) | P7-M4/M5 + Euler/Genus 모듈 | Reserved | S4 |
+| 153 (reserve) | Best-fit Plane SVD + Pullback | Reserved | S4 |
+| 154 (reserve) | Mesh::heal() 통합 entry | Reserved | S4 |
+| 155 (reserve) | **Curve-to-Curve Face Split (10 sub-step, 4~6주)** | Reserved | S4.5 |
+| 156 (reserve) | 곡면 위 Sketch + Sphere/Cylinder Mode | Reserved | S5 |
+| 157 (reserve) | OCCT BRepFeat_SplitShape 활용 | Reserved | S5 |
+| 158 (reserve) | **DrawEllipseTool — NURBS-only (옵션 A, 결재 2)** | Reserved | S5 |
+| 159 (reserve) | **Surface-aware Push/Pull** | Reserved | S5 |
+| 160 (reserve) | 영구 Annotation Entity | Reserved | S6 |
+| 161 (reserve) | Face 위 Hole Pattern Array | Reserved | S6 |
 
 ## 충돌 시 우선순위 매트릭스 (P7/P8/P9/P11, 보고서 P6)
 
@@ -333,8 +364,9 @@ fundamental 이고 Face 는 closed edge cycle 의 derivation. 모든 후속
 | 62 | ADR-135 | Distance-based LOD chord_tol |
 | 63 | — | PR #101 z=0 Invariant Closure |
 | 64 | ADR-139 | Boundary-only Face Synthesis (Auto-cycle Deprecation) |
+| 65 | ADR-141 | Master Roadmap (Sprint 0 Foundation Sync, 21~29주 +330 회귀) |
 
-자세한 LOCKED 정책 본문은 `CLAUDE.md` §1~§64 참조.
+자세한 LOCKED 정책 본문은 `CLAUDE.md` §1~§65 참조.
 
 ## 변경 규칙
 
