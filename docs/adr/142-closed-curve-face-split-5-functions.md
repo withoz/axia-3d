@@ -1,6 +1,6 @@
 # ADR-142 — Closed-curve face split 5 함수 hotfix (Sprint 1 첫 트랙)
 
-**Status**: α spec (β implementation 별도 사용자 결재 후 진행)
+**Status**: α spec + Amendment 1 (audit-first 18번째 finding + scope reduce) + β-1 closed (split_face_by_chain K1)
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Sprint**: S1 (ADR-141 §2 — 3~4주, 회귀 +55 분담 ~15~20)
@@ -264,7 +264,110 @@ Sprint 1 누적 회귀 추세: ADR-142 (+18) + ADR-143 (+15) + ADR-144 (+5) + AD
 - **회귀**: +0 (docs only)
 - **다음 sub-step**: β-1 (`split_face_by_chain` K1 + HARD) — 사용자 결재 후 진행
 
-### β ~ η Acceptance (향후 작성)
+### β-1 (split_face_by_chain K1 — 본 commit)
+
+- **Trigger**: 사용자 결재 (2026-05-22 휴식 후) + audit-first 18번째 finding 적용
+- **변경 (3 files)**:
+  - `crates/axia-geo/src/operations/face_split.rs` — `split_face_by_chain` entry 에 `polygonize_if_closed_curve` 호출 추가 (line 588 신설)
+  - `crates/axia-geo/src/operations/face_split.rs` — Amendment 1 회귀 자산 +4 (test module)
+  - `docs/adr/142-closed-curve-face-split-5-functions.md` — Amendment 1 + β-1 closure
+- **회귀**: axia-geo **1415 → 1419** (+4, 절대 #[ignore] 금지 4/4 준수)
+  - `adr142_beta1_split_face_by_chain_polygon_face_regression` — polygon no-op 보존
+  - `adr142_beta1_split_face_by_chain_polygonizes_closed_curve_face` — Path B Circle face K1 fire evidence
+  - `adr142_beta1_polygonize_if_closed_curve_polygon_noop` — helper API contract (no-op)
+  - `adr142_beta1_polygonize_if_closed_curve_transforms_closed_curve` — helper API contract (transform)
+- **다음 sub-step**: β-2 (`boolean::split_faces_by_intersections` K1) — Amendment 1 §B 참조
+
+### β-2 ~ η Acceptance (향후 작성)
 
 각 sub-step 종료 시 본 §10 에 추가 entry 작성 — commit hash + 산출물 +
 회귀 카운트 + 사용자 시연 evidence (해당 시).
+
+## Amendment 1 — audit-first 18번째 finding (β-1 진입 직전, 2026-05-22)
+
+### §A. Trigger
+
+본 ADR α spec 작성 시 (2026-05-22 휴식 전 turn) LOCKED #41 Amendment 9
+§A9.4 audit (2026-05-16) 의 "4 site HARD flag 부재" 를 β-1~β-3 plan 의
+근거로 사용. 사용자 휴식 복귀 후 β-1 implementation 진입 직전
+**audit-first canonical 18번째 적용** — main 의 실제 상태 재audit
+중 발견된 finding:
+
+**ADR-101 Amendment 9 후속 작업 (ADR-101 Amendment 10)** 이 main 에
+사전 통합 — `Mesh::mark_chain_edges_hard` + `Mesh::mark_edges_hard`
+helpers (mesh.rs:2637 / 2650) + 5 site 호출 사전 활성:
+
+| Site | mark_*_hard 호출 위치 |
+|---|---|
+| `Mesh::split_face` (canonical) | mesh.rs:4706-4707 (직접 HARD set) |
+| `split_face_by_chain` | face_split.rs:819 → mark_chain_edges_hard |
+| `split_face_case_b` | face_split.rs:1144 → mark_edges_hard |
+| `split_face_case_c` | face_split.rs:1377 → mark_edges_hard |
+| `split_face_case_d` | face_split.rs:1588 → mark_edges_hard |
+| `boolean::split_faces_by_intersections` | boolean.rs:623 → mark_edges_hard |
+| `operations::coplanar::auto_intersect_coplanar` | coplanar.rs:665 (인라인) |
+
+→ **HARD flag dimension = 6/6 site 사전 closure** (원안 4 site → 실제 6
+site 포함, ADR-101 Amendment 10 으로 통합).
+
+### §B. β scope 정정
+
+원안 (α spec §3 sub-step plan):
+
+| Sub-step | 원안 의도 | 실제 필요성 |
+|---|---|---|
+| β-1 | split_face_by_chain K1 + HARD (+4) | ✅ K1 필요 / ❌ HARD 이미 완료 |
+| β-2 | case_b/c/d HARD 일괄 (+6) | ❌ 이미 완료 (보존, 신규 작업 0) |
+| β-3 | boolean K1 + HARD (+5) | ✅ K1 필요 / ❌ HARD 이미 완료 |
+| γ | cross-cut 회귀 (+3) | 부분 보존 (K1 cross-cut 만, HARD 는 ADR-101 Amendment 10 회귀 자산 이미 확보) |
+| δ | 사용자 시연 | (보존) |
+| ε | closure | (보존) |
+
+**정정 후 β scope** (HARD 부분 모두 제거 — 이미 완료):
+
+| Sub-step | 정정 후 scope | 회귀 | 소요 |
+|---|---|---|---|
+| **β-1 (본 commit)** | **split_face_by_chain K1 polygonize_if_closed_curve 적용** | **+4** | **30분** |
+| β-2 (다음 PR) | `boolean::split_faces_by_intersections` K1 polygonize 적용 (per-face pre-pass) | +5~6 | 1~2시간 |
+| γ (선택) | K1 cross-cut 사용자 시연 회귀 자산 + 통합 sweep | +2~3 | 30분 |
+| δ | 사용자 시연 게이트 — Path B Circle Boolean (Union/Subtract/Intersect) | +0 | 30분 |
+| ε | closure docs | +0 | 15분 |
+| **합계** | **K1 dimension only — HARD 는 ADR-101 Amendment 10 으로 사전 완료** | **+11~13** | **2~4시간** |
+
+→ **회귀 +18 (원안) → +11~13 (정정)** — 7 회귀 정도 reduce. Sprint 1
+target (+55) 의 ADR-142 share 도 자동 조정. ADR-141 §6 Sprint 1 +55
+allocation 정합 강제 — ADR-143/144/145 분배 재산정 필요 (별도 트랙).
+
+### §C. β-1 implementation 산출물 요약
+
+- `split_face_by_chain` (face_split.rs:588) — `let face_id = polygonize_if_closed_curve(mesh, face_id)?;` 1 line 추가 (split_face_by_line:301 패턴 1:1 mirror)
+- 4 회귀 자산 추가 (face_split.rs test module 끝)
+- ADR-142 §10 β-1 Acceptance entry + Amendment 1 (본 §A~§D)
+
+### §D. Lessons (audit-first canonical 18번째 적용 evidence)
+
+**L1 — audit timing 의 architectural 가치**: α spec 작성 시 audit (2026-05-16
+LOCKED #41 Amendment 9 §A9.4) 사용. β implementation 진입 시 **재audit**
+필수 — α 와 β 사이 시간 동안 main 진화 가능. 본 ADR 의 경우 ADR-101
+Amendment 10 (별도 트랙) 가 5 site HARD 사전 closure.
+
+**L2 — Amendment vs supersede 선택**: 원안 의도 (closed-curve face 5
+site first-class input) 는 보존, 운영 scope (회귀 수 / 작업 분담) 만
+정정. Amendment pattern 적용 (ADR-125/126/127/130 amendment 답습) —
+원안 ADR 본문 보존 + Amendment 1 추가. **supersede 회피**.
+
+**L3 — Sprint 1 회귀 +55 share 재분배 필요**: ADR-142 분담 +18 → +11~13
+으로 reduce. ADR-143/144/145 의 share 가 자연 증가 또는 ADR-141 §6 의
+Sprint 1 total 회귀 target 조정. Sprint 1 종료 시 cowork sweep 시 결재.
+
+**L4 — Out-of-date audit 의 architectural risk**: α spec 의 LOCKED #41
+Amendment 9 audit 참조 (2026-05-16) 는 **2주 이상 stale**. main 진화
+빈도 (외부 agent 작업 + 본 세션 PR 누적) 가 높으므로 α-to-β 시간 간격
+에서 audit 회귀 가능. → 모든 ADR β implementation 진입 시 **사전
+검토** 절차 강제 (메타-원칙 #6 Preventive over Curative 정합).
+
+**L5 — boolean K1 (β-2) 의 별도 atomic 분리 정당성**: β-1 (chain) 과 β-2
+(boolean) 는 같은 K1 dimension 이지만 *다른 의미 단위* — split_face_
+by_chain 의 chain endpoint lookup 과 boolean::split_faces_by_intersections
+의 per-face pre-pass 는 별개 architectural path. LOCKED #44 (Complete
+Meaning per Merge) 정합 — 각 PR 단일 의미 단위.
