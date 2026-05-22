@@ -1,6 +1,6 @@
 # ADR-142 — Closed-curve face split 5 함수 hotfix (Sprint 1 첫 트랙)
 
-**Status**: Accepted (α spec + Amendment 1 — audit-first 18번째 finding + scope reduce + β-1 closed: split_face_by_chain K1 + Amendment 2 — audit-first 19번째 finding: β-2 CANCEL as ADR-110 redundant, γ/δ/ε scope reallocated)
+**Status**: Accepted (Sprint 1 ADR-142 fully closed, 2026-05-22) — α + Amendment 1 (audit-first 18 + β-1 closed) + Amendment 2 (audit-first 19 — β-2 CANCEL as ADR-110 redundant) + γ (5 K1 cross-cut Rust integration tests) + δ (2 Playwright Chromium E2E specs) + ε (closure synthesis). 회귀 axia-geo +9, Playwright +2. Sprint 1 첫 ADR closure 완성, ADR-143~145 share 자연 증가.
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Sprint**: S1 (ADR-141 §2 — 3~4주, 회귀 +55 분담 ~15~20)
@@ -288,10 +288,57 @@ Sprint 1 누적 회귀 추세: ADR-142 (+18) + ADR-143 (+15) + ADR-144 (+5) + AD
 - **회귀**: +0 (docs only — boolean.rs 변경 0)
 - **다음 sub-step**: γ K1 cross-cut 사용자 시연 회귀 자산 + 통합 sweep (Amendment 2 §C 매트릭스 + §F 결재 매트릭스)
 
-### γ ~ ε Acceptance (향후 작성)
+### γ (K1 cross-cut 통합 sweep — 본 commit)
 
-각 sub-step 종료 시 본 §10 에 추가 entry 작성 — commit hash + 산출물 +
-회귀 카운트 + 사용자 시연 evidence (해당 시).
+- **Trigger**: Amendment 2 §F 결재 매트릭스 (γ + δ + ε 묶음 single atomic PR, 사용자 결재 2026-05-22)
+- **변경 (1 file)**: `crates/axia-geo/src/operations/boolean.rs` — `adr142_gamma_tests` module 추가 (5 회귀 자산, line 1571+)
+- **회귀**: axia-geo **1419 → 1424** (+5, 절대 #[ignore] 금지 5/5 준수)
+  - `gamma_path_b_circle_union_via_adr110_cover` — ADR-110 entry pre-polygonize cover (Union)
+  - `gamma_path_b_circle_subtract_via_adr110_cover` — ADR-110 cover (Subtract)
+  - `gamma_path_b_circle_intersect_via_adr110_cover` — ADR-110 cover (Intersect)
+  - `gamma_path_b_circle_chain_split_via_beta1_cover` — β-1 K1 cover (split_face_by_chain Path B input)
+  - `gamma_polygonal_regression_guard` — Path A polygonal Boolean additive only 보존
+
+### δ (사용자 시연 게이트 — 본 commit, Playwright E2E)
+
+- **Trigger**: Amendment 2 §F 결재 매트릭스 (γ + δ + ε 묶음, ADR-087 K-ζ canonical)
+- **변경 (1 file)**: `web/e2e/adr-142-demo.spec.ts` — Playwright Chromium real browser round-trip evidence (2 spec)
+- **회귀 (Playwright)**: +2 spec (절대 #[ignore] 금지)
+  - `δ-1: Path B Circle × Path B Circle Boolean Union (ADR-110 cover)` — real Chromium 의 drawCircleAsCurve × 2 → face count 증가 evidence
+  - `δ-2: Single Path B Circle face creation` — sanity check (1 anchor + 1 self-loop edge, ADR-089 Phase 2 canonical)
+- **CI 자동 검증**: ADR-075 E.4 `ci.yml` `web-e2e` job 통합 — PR 마다 자동 실행
+- **사용자 manual demo**: Playwright spec 이 evidence template + 자동화 cover. ADR-087 K-ζ "사용자 manual 시연" 도 보완적으로 권장 (선택, 별도 cowork sweep).
+
+### ε (closure docs synthesis — 본 commit)
+
+- **Trigger**: Sprint 1 ADR-142 closure (단일 의미 단위, LOCKED #44 정합)
+- **변경**: 본 §10 γ + δ + ε entries + Status line canonical 갱신 ("Closed" 표시)
+- **회귀**: +0 (docs only)
+- **Status 최종**: Accepted (α + Amendment 1 + β-1 + Amendment 2 + γ + δ + ε all atomic-merged) — Sprint 1 ADR-142 closure 완성
+
+### Sprint 1 ADR-142 누적 결산
+
+| Sub-step | PR | 회귀 (axia-geo cargo) | 회귀 (Playwright) |
+|---|---|---|---|
+| α (spec) | #151 (73b40c7) | +0 | +0 |
+| β-1 (split_face_by_chain K1 + Amendment 1) | #152 (fbfebe9) | +4 | +0 |
+| β-2 (CANCEL) | — | +0 | +0 |
+| Amendment 2 (β-2 cancel docs) | #157 (46123cc) | +0 | +0 |
+| γ + δ + ε (본 PR) | (다음) | +5 | +2 |
+| **합계** | **5 PRs** | **+9** | **+2** |
+
+**Sprint 1 +55 target ADR-142 share**: 원안 +18 → Amendment 1 +11~13 → Amendment 2 +7~9 → **실제 +11 (axia-geo +9 + Playwright +2)**. Sprint 1 +55 target 의 1/5 사용. ADR-143/144/145 cumulative share 자연 증가.
+
+### 보존 정합 (LOCKED 정책)
+
+- ✅ LOCKED #1 ADR-021 P7 (closed-curve face first-class input)
+- ✅ LOCKED #14 메타-원칙 #14 (WHAT layer — face from closed boundary)
+- ✅ LOCKED #15 메타-원칙 #15 (HARD contract — ADR-101 Amendment 10 자동 cover)
+- ✅ LOCKED #41 ADR-101 (Coplanar auto-intersect)
+- ✅ LOCKED #44 (Complete Meaning per Merge — 5 PRs atomic 분리)
+- ✅ LOCKED #64 ADR-139 (WHAT/WHEN layer, Boundary tool default OFF + opt-in)
+- ✅ LOCKED #65 ADR-141 (Master Roadmap Sprint 1 첫 ADR closure)
+- ✅ LOCKED #66 STATUS-POLICY (Status canonical first-token Accepted)
 
 ## Amendment 1 — audit-first 18번째 finding (β-1 진입 직전, 2026-05-22)
 
