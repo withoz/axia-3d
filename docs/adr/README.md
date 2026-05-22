@@ -198,6 +198,11 @@ ADR-049 Amendments 1~4 참조.
 | [102](./102-pushpull-detach-on-arrangement.md) | Push/Pull Detach-on-Arrangement (Manifold Reconciliation) | Accepted |
 | [103](./103-z-up-coordinate-migration.md) | Z-up Coordinate Migration (Engine + Viewport) | Accepted |
 | [104](./104-path-b-expansion.md) | Path B Expansion (Sphere/Cone/Torus) | Accepted |
+| [106](./106-shadow-system-removal-and-redesign.md) | Shadow System Removal + Future Redesign (Placeholder) | Accepted |
+| [107](./107-as-shape-path-b-unification.md) | `*AsShape` → Path B Canonical Unification (Layer Separation) | Proposed (α spec) |
+| [108](./108-rect-line-layer-h-policy.md) | RECT/Line Layer H Policy (Layer Separation Sibling) | Proposed (α spec) |
+| [109](./109-arc-extrude-cylinder-promotion.md) | Arc Extrusion → Cylinder Surface Promotion | Proposed (α spec) |
+| [110](./110-boolean-path-b-compat.md) | Boolean Path B Compatibility (Pre-polygonize for Boolean Ops) | Accepted (spec + engine fix) |
 | [111](./111-bvh-defer-to-next-frame.md) | BVH Defer to Next Frame | Accepted |
 | [112](./112-edges-empty-explicit.md) | Edges Empty 명시 처리 | Accepted |
 | [113](./113-sphere-path-b.md) | Sphere Path B Production Wiring | Accepted |
@@ -207,27 +212,39 @@ ADR-049 Amendments 1~4 참조.
 | [117](./117-cylinder-direct-dispatch-torus-ui.md) | Cylinder Direct Dispatch + TorusTool UI | Accepted |
 | [118](./118-step-iges-prewarm-spec.md) | STEP/IGES Engine Pre-warm (α spec) | Accepted |
 | [119](./119-step-iges-prewarm-impl.md) | STEP/IGES Pre-warm (β implementation) | Accepted |
+| [120](./120-nurbs-aware-coplanar-intersect.md) | NURBS-Aware Coplanar Intersect (LOCKED #43 Priority #4) | Proposed (α spec) |
 | [121](./121-step-prewarm-libs-fix.md) | STEP Pre-warm lib fix + Path B area | Accepted |
+| [122](./122-gpu-instancing-for-repetitive-geometry.md) | GPU Instancing for Repetitive Geometry | Proposed (α spec) |
+| [123](./123-axia-native-optimization.md) | AxiA-Native Optimization Audit | Proposed (α spec) |
 | [124](./124-wasm-simd-activation.md) | WASM SIMD Activation | Accepted |
+| [125](./125-selection-rendering-audit-closure.md) | Selection Rendering Audit Closure (ADR-122 α-1 Pivot) | Accepted |
 | [126](./126-step-iges-merged-buffergeometry.md) | STEP/IGES Merged BufferGeometry | Accepted |
+| [127](./127-helper-lines-audit-closure.md) | Helper Lines Audit Closure (ADR-122 α-4 Pivot) | Accepted |
 | [128](./128-vertex-on-edge-fallback.md) | Vertex-on-edge Fallback | Accepted |
+| [129](./129-next-priority-audit.md) | Next Priority Audit (LOCKED #43 Successor Track) | Proposed (α spec) |
+| [130](./130-pillar-1-discoverability-audit.md) | Pillar 1 (Discoverability) Audit (LOCKED #X Priority #1) | Proposed (α spec) |
 | [131](./131-cmdk-already-exists-pivot.md) | CommandPalette Already Exists Pivot | Accepted |
 | [132](./132-dual-catalog-unification-audit.md) | Dual Catalog Unification Audit | Accepted |
 | [133](./133-adapter-layer-implementation.md) | Adapter Layer (Path E β) | Accepted |
+| [134](./134-rendering-performance-audit.md) | Rendering Performance Audit | Proposed (α spec) |
 | [135](./135-lod-chord-tol-implementation.md) | Distance-based LOD chord_tol | Accepted |
+| [136](./136-face-split-downstream-sync-coherence.md) | Face Split Downstream Sync Coherence | Proposed (α spec) |
+| [137](./137-guidance-only-snap.md) | Guidance-only Snap | Proposed (α spec) |
 | [138](./138-multi-loop-face-policy.md) | Multi-loop Face Policy (Path A vs B) | Superseded by ADR-139 |
 | [139](./139-boundary-tool-auto-cycle-deprecation.md) | Boundary Tool + Auto-cycle Deprecation | Accepted (β implementation 진행 중) |
 | [140](./140-surface-aware-get-draw-plane.md) | Surface-aware getDrawPlane (곡면 face 위 도구 정확도) | α spec (β 진행 중) |
 
-### 14. Sprint 외 hotfix (#162+, 별도 트랙)
+### 14. Sprint 외 hotfix + Governance (#162+, 별도 트랙)
 
 본 카테고리는 ADR-141 §3 (Sprint 1~6+4.5) reserve 외 별도 트랙 — 사용자
-facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
+facing critical hotfix (defer 부적합) + governance/sunset 정책. 회귀
++Sprint 외 누적.
 
 | # | 제목 | 상태 | Track |
 |---|------|------|---|
-| [162](./162-dwg-dxf-menu-wiring-hotfix.md) | DWG/DXF Menu Wiring Hotfix (Path A → Path B routing) | **α + β-1 closed** | Track 2 |
-| [163](./163-worktree-closure-audit.md) | Worktree Closure Audit (Sprint 0 γ 자연 후속) | α (β actual closure 사용자 결재 후) | Track 3 |
+| [162](./162-dwg-dxf-menu-wiring-hotfix.md) | DWG/DXF Menu Wiring Hotfix (Path A → Path B routing) | **α + β-1 closed** | Track 2 (Hotfix) |
+| [163](./163-worktree-closure-audit.md) | Worktree Closure Audit (Sprint 0 γ 자연 후속) | α (β actual closure 사용자 결재 후) | Track 3 (Audit) |
+| [164](./164-adr-sunset-policy.md) | ADR Sunset Policy (Standard 3-Status + Supersede 명시) | **Active** | Track 4 (Governance) |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
@@ -375,8 +392,9 @@ fundamental 이고 Face 는 closed edge cycle 의 derivation. 모든 후속
 | 63 | — | PR #101 z=0 Invariant Closure |
 | 64 | ADR-139 | Boundary-only Face Synthesis (Auto-cycle Deprecation) |
 | 65 | ADR-141 | Master Roadmap (Sprint 0 Foundation Sync, 21~29주 +330 회귀) |
+| 66 | ADR-164 | ADR Sunset Policy (Standard 3-Status + Supersede 명시) |
 
-자세한 LOCKED 정책 본문은 `CLAUDE.md` §1~§65 참조.
+자세한 LOCKED 정책 본문은 `CLAUDE.md` §1~§66 참조.
 
 ## 변경 규칙
 

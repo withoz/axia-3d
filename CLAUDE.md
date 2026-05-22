@@ -4818,6 +4818,98 @@ design). 회귀 자산은 Sprint 1~6 의 각 sub-step ADR 에서 단조 증가
 - ADR-139 (WHAT/WHEN layer 분리 + 메타-원칙 #16 anchor)
 - ADR-140 (Surface-aware getDrawPlane — S1 자연 후속 anchor)
 
+### 66. ADR-164 — ADR Sunset Policy (Standard 3-Status + Supersede 명시, 2026-05-22) ✅
+
+**Canonical anchor (1순위 cleanup, 2026-05-22)**:
+> "표준 3-Status (Active / Accepted, Superseded by ADR-YYY / Archived)
+> + Supersede 명시 4-layer 정합 (ADR 본문 / README catalog / CLAUDE.md
+> LOCKED / 후속 ADR Related) + Archive 절차 의 결정 layer. 향후 모든
+> ADR Status 표기의 single source of truth."
+
+ADR-164 (`docs/adr/164-adr-sunset-policy.md`) 의 LOCKED 안내. 본 LOCKED
+의 자세한 본문 / Rationale / Alternatives 는 ADR-164 참조.
+
+#### 표준 3-Status (canonical form)
+
+모든 ADR 본문의 `Status` 라인은 다음 3가지 form 중 **정확히 하나**:
+
+```
+**Status**: Active
+**Status**: Accepted, Superseded by ADR-YYY (YYYY-MM-DD)
+**Status**: Archived (moved to docs/adr/archive/, YYYY-MM-DD)
+```
+
+#### Supersede 명시 4-layer 정합 강제
+
+Supersede 관계는 다음 *모든* layer 에 정합 명시:
+
+1. ADR 본문 Status 라인 — `Accepted, Superseded by ADR-YYY (date)`
+2. README catalog 상태 column — `Superseded by ADR-YYY`
+3. CLAUDE.md LOCKED 본문 (해당 시) — 첫 줄 callout `> ⚠ Superseded by ADR-YYY`
+4. 후속 ADR `Related` section — `Supersedes ADR-XXX`
+
+4 layer drift 발견 시 hot-fix 권장.
+
+#### 본 PR scope (1순위 한정)
+
+- ✅ ADR-164 정책 정의 문서 신설
+- ✅ LOCKED #66 (본 LOCKED) 신설 — ADR-164 안내
+- ✅ LOCKED #1 / #12 / #41 callout supersede 명시 **검증** (모두 이미
+  명시 — 추가 작업 0, 메타-원칙 #10 ADR 불변 정합)
+- ✅ README catalog 15 missing ADR 등재 (drift 0)
+- ✅ CI 자동화 (`scripts/check-adr-catalog.mjs`, 선택)
+- ❌ 52개 비표준 Status 일괄 정정 — **2순위 deferred**
+- ❌ Superseded → archive/ 물리 이동 — **2순위 deferred**
+
+#### Lock-ins (L-66-1 ~ L-66-7)
+
+- **L-66-1** 모든 후속 ADR Status 라인은 표준 3 form 정확 일치
+- **L-66-2** Supersede 명시 4-layer 정합 (ADR / README / CLAUDE.md / 후속 ADR)
+- **L-66-3** 본 PR scope (1순위) = 정책 정의 + 핵심 3 LOCKED 검증 +
+  catalog 등재 + CI 자동화 (선택) only. 52 ADR 일괄 정정은 deferred
+- **L-66-4** Archive 물리 이동 (5,265 cross-refs) 별도 ADR (2순위 또는
+  별도 트랙) — redirect 스크립트 + cross-refs 자동 갱신 필요
+- **L-66-5** 메타-원칙 #10 (ADR 불변) 엄격 — Status 라인 갱신 +
+  callout 추가만 허용, ADR 본문 내용 변경 금지
+- **L-66-6** 표기 변형 허용 범위 — α/β/γ sub-step 진행 표기는 별도
+  `| Path | Status` table 또는 `§D Acceptance Log` 에 명시. `Status:`
+  라인 자체는 3 form 강제
+- **L-66-7** CI 자동화 (`scripts/check-adr-catalog.mjs`) 는 catalog
+  등재 check 우선. Status 표기 check 는 별도 ADR (Phase 4 자연 연장)
+
+#### Lessons (canonical for future governance ADRs)
+
+- **L1 Catalog audit-first** — 본 PR 의 사전 audit 결과 사용자 prompt
+  의 spot check (10개) 와 실제 (15개) drift 발견. audit 가 정책 정의
+  + 적용 의 pre-condition.
+- **L2 4-layer 동기화** — Supersede 관계가 한 layer 만 명시되면 drift
+  잠재. ADR / README / LOCKED / 후속 ADR 모두 동시 갱신 강제.
+- **L3 점진 적용 정책** — 52 ADR 일괄 정정은 1-2주 multi-week atomic.
+  본 PR 은 정책 정의 + 핵심 3 LOCKED 검증 만 — Sprint 1 진입 전
+  governance baseline 확보 (메타-원칙 #6 정합).
+- **L4 Archive 의 cross-refs 위험** — `docs/adr/archive/` 물리 이동
+  은 5,265 cross-refs 영향. redirect 스크립트 + 자동 갱신 필요. 본
+  ADR 의 *결정* layer 만 명시, *실행* layer 는 별도 ADR.
+
+#### 회귀 누적 (1순위 cleanup)
+
+- docs / config: ADR-164 + LOCKED #66 + README 15 등재 + `scripts/
+  check-adr-catalog.mjs` (선택) + `.github/workflows/` 통합 (선택)
+- axia-core / axia-geo / axia-wasm: **0** (docs only, 메타-원칙 #10)
+- vitest / Playwright: **0** (docs only)
+- CI: **+1** (선택, `check-adr-catalog.mjs` self-test 포함 시)
+
+#### Cross-link
+
+- ADR-164 본문 (`docs/adr/164-adr-sunset-policy.md`)
+- `reports/ADR_141_옵션4_6_TaskBrief.html` §1 (b) — 본 LOCKED 결재 anchor
+- `reports/ADR_정리_전략.html` §3 — 5,265 cross-refs source
+- ADR-141 / LOCKED #65 — Sprint 0 ε closure (본 PR 의 timeline 위치)
+- LOCKED #44 — Complete Meaning per Merge (본 PR 의 atomic 강제 anchor)
+- LOCKED #1 ADR-021 / #12 ADR-025 / #41 ADR-101 (callout supersede
+  검증 anchor — 모두 이미 명시 ✓)
+- 메타-원칙 #4 (SSOT) / #6 (Preventive over Curative) / #10 (ADR 불변)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

@@ -1,0 +1,56 @@
+# ADR-164 (LOCKED #66) — ADR Catalog Sync Check.
+#
+# Lightweight docs-only check: every ADR file (docs/adr/NNN-*.md) must
+# be referenced in docs/adr/README.md catalog. Missing entries fail CI.
+#
+# Anchor: reports/ADR_141_옵션4_6_TaskBrief.html §1 (c) + 메타-원칙 #6
+# (Preventive over Curative — drift 재발 방지) + LOCKED #44 (Complete
+# Meaning per Merge).
+#
+# Separation of concerns: this workflow is intentionally SEPARATE from
+# ci.yml (Rust/Playwright) and build.yml (vitest/Vite). No cargo, no
+# Playwright, no WASM build — pure Node script. Fast feedback loop
+# (~10s) on every PR / push.
+#
+# Cross-link:
+#   - scripts/check-adr-catalog.mjs (the check itself, with self-tests
+#     via diff output)
+#   - docs/adr/164-adr-sunset-policy.md (policy SSOT)
+#   - CLAUDE.md LOCKED #66 (LOCKED 안내)
+
+name: ADR Catalog Sync Check
+
+on:
+  push:
+    branches: [main, develop, 'claude/**', 'feature/**']
+    paths:
+      - 'docs/adr/**'
+      - 'scripts/check-adr-catalog.mjs'
+      - '.github/workflows/adr-catalog-check.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'docs/adr/**'
+      - 'scripts/check-adr-catalog.mjs'
+      - '.github/workflows/adr-catalog-check.yml'
+
+# Cancel stale runs on the same ref.
+concurrency:
+  group: adr-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-catalog:
+    name: Catalog sync (docs/adr/*.md ↔ README.md)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Run ADR catalog sync check
+        run: node scripts/check-adr-catalog.mjs
