@@ -1,6 +1,6 @@
 # ADR-162 — DWG/DXF Menu Wiring Hotfix (Path A 시각 only → Path B DCEL routing 정정)
 
-**Status**: α spec + β-1 closed (DXF dispatch routing 정정, 2026-05-22)
+**Status**: Accepted (α spec + β-1 closed — DXF dispatch routing 정정, 2026-05-22)
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Track**: Track 2 (사용자 결재 다중 트랙 병행 진행, 2026-05-22 휴식 후)

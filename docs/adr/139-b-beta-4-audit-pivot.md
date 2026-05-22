@@ -1,6 +1,6 @@
 # ADR-139 B-β-4 — audit pivot (DrawLine TS layer 자동 face 합성 폐기 audit 결과)
 
-**Status**: docs only — audit-first canonical 9번째 적용 (B-β-4 scope pivot)
+**Status**: Accepted (docs only — audit-first canonical 9번째 적용, B-β-4 scope pivot)
 **Date**: 2026-05-21
 **Author**: WYKO + Claude
 **관련 ADR**: ADR-139 §14 B-β-4 atomic sub-step

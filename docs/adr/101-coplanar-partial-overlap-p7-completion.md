@@ -2,10 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | **✅ Closed (2026-05-15)** — Phase A/B-1/B-2/B-3a/B-3b/B-3c/B-4 MVP/B-6/B-4b all merged (9 PRs). §2 canonical user trigger fully active across all 3 Draw entry points (RECT / Legacy Circle / Path B Circle). B-5 sweep matrix deferred — current coverage (Rust unit 8 + Playwright E2E 7) suffices. See Amendment 8 for closure summary. |
+| Status | **Accepted (2026-05-15) — ✅ Closed; Superseded by ADR-139 (2026-05-18, Q3=a 결재) — auto Draw trigger 폐기** — Phase A/B-1/B-2/B-3a/B-3b/B-3c/B-4 MVP/B-6/B-4b all merged (9 PRs). §2 canonical user trigger fully active across all 3 Draw entry points (RECT / Legacy Circle / Path B Circle). B-5 sweep matrix deferred — current coverage (Rust unit 8 + Playwright E2E 7) suffices. See Amendment 8 for closure summary. ADR-139 후속 정책 — *결과 invariant* (메타-원칙 #14 두 닫힌 경계 overlap → 3 sub-face) 보존, *Draw 자동 trigger* (B-4 Scene wiring, `auto_intersect_on_draw` default true) 만 supersede. Amendment 9 (메타-원칙 #15 HARD flag) 정책 자체는 **불변 보존**. Engine 본체 (`auto_intersect_coplanar` public API) 는 보존 — Boundary tool 호출 시 자산 재활용. LOCKED #41 / LOCKED #64 cross-reference. |
 | Date | 2026-05-14 |
 | Supersedes | — |
-| Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), LOCKED #40 (render chord_tol) |
+| Superseded by | ADR-139 (Boundary Tool + Auto-cycle Deprecation, 2026-05-18, Q3=a — *Draw 자동 trigger* 만) |
+| Related | ADR-021 (P7 "Closed Edge Cycle Divides Face"), ADR-051 (P7 strict reaffirmation), ADR-089 (closed-curve face Path B), ADR-094 (Path B production default), ADR-139 (Boundary Tool supersede trigger), LOCKED #40 (render chord_tol) |
 
 ## 1. Anchor 통찰 (canonical)
 
@@ -757,7 +758,7 @@ ADR-101 §2 시연 (2026-05-14):
 
 ## Amendment 10 — 메타-원칙 #15 Cross-cut HARD Flag Enforcement (2026-05-16)
 
-**Status**: ✅ Closed (engine fix + helper API + 3 회귀, base = origin/main)
+**Amendment Status**: Accepted (✅ Closed — engine fix + helper API + 3 회귀, base = origin/main)
 **Trigger**: ADR-101 Amendment 9 (PR #64) 의 §A9.4 cross-cut audit inventory — 메타-원칙 #15 위반 4 함수 (`split_face_by_chain` / `split_face_case_b/c/d` / `boolean.split_faces_by_intersections`) HARD flag 미부여 발견. 본 Amendment 10 으로 strict enforcement.
 
 ### A10.1 canonical anchor (메타-원칙 #15)

@@ -1,6 +1,8 @@
 # ADR-021: Closed Edge Loop Divides Face
 
-**Status**:
+**Status**: Superseded by ADR-139 (2026-05-18, Q3=a 결재)
+
+**History**:
 - Accepted (2026-04-29)
 - Locked as LOCKED #1 (CLAUDE.md §1)
 - Amended by ADR-051 (2026-05-05) — strict reaffirmation + verify_p7_manifold

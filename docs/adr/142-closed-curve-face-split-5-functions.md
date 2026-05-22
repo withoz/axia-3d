@@ -1,6 +1,6 @@
 # ADR-142 — Closed-curve face split 5 함수 hotfix (Sprint 1 첫 트랙)
 
-**Status**: α spec + Amendment 1 (audit-first 18번째 finding + scope reduce) + β-1 closed (split_face_by_chain K1)
+**Status**: Accepted (α spec + Amendment 1 — audit-first 18번째 finding + scope reduce + β-1 closed: split_face_by_chain K1; β-2 ~ β-5 별도 PR)
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Sprint**: S1 (ADR-141 §2 — 3~4주, 회귀 +55 분담 ~15~20)

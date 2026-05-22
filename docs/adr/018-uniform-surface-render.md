@@ -1,6 +1,6 @@
 # ADR-018: Uniform Surface Render Policy — Open vs Closed Manifold
 
-**Status**: 🔒 **Accepted & LOCKED** (2026-04-29)
+**Status**: Accepted (🔒 LOCKED, 2026-04-29)
 **Supersedes**: ADR-007 Phase 4 의 시각 노출 부분 (Winding 정책 자체는 유지)
 **Related**: ADR-007 (Face Orientation Policy), ADR-016 (Conditional B1)
 

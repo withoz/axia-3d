@@ -1,6 +1,6 @@
 # ADR-074 — Boolean Group Selection UX
 
-**Status**: **E.3 트랙 핵심 sub-step 완료 (U-1 / U-2 / U-3 / U-4 / U-6)** — 2026-05-05
+**Status**: Accepted (E.3 트랙 핵심 sub-step 완료 — U-1 / U-2 / U-3 / U-4 / U-6, 2026-05-05)
 **Last commit**: `7796487` (U-4 Playwright E2E) → 본 commit (U-6 회고)
 **Date**: 2026-05-04 (U-1 진입) → 2026-05-05 (U-6 완료)
 **Anchor**: ADR-066 §E.3 (사용자 명시 Group A/B 선택 UX 미해결) —

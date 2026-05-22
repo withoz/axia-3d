@@ -136,3 +136,23 @@ jobs:
           name: playwright-traces
           path: web/test-results/
           retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────
+  # ADR catalog drift check — Sprint 0 cleanup follow-up.
+  # 메타-원칙 #6 (Preventive over Curative) — README catalog ↔
+  # docs/adr/ drift 재발 방지. LOCKED #66 (STATUS-POLICY enforcement).
+  # ───────────────────────────────────────────────────────────────
+  adr-catalog-check:
+    name: ADR catalog drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Run ADR catalog check
+        run: node scripts/check-adr-catalog.mjs

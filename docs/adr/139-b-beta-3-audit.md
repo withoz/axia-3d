@@ -1,6 +1,6 @@
 # ADR-139 B-β-3 — audit (Step 4.95 second-pass + Phase 5/6 disable 사전 검토)
 
-**Status**: docs only — audit-first canonical 10번째 적용
+**Status**: Accepted (docs only — audit-first canonical 10번째 적용)
 **Date**: 2026-05-21
 **Author**: WYKO + Claude
 **관련 ADR**: ADR-139 §14 B-β-3 atomic sub-step

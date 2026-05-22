@@ -1,6 +1,6 @@
 # ADR-136 — Face Split Downstream Sync Coherence (α spec)
 
-**Status**: α spec only (β implementation deferred — multi-week atomic)
+**Status**: Draft (α spec only — β implementation deferred, multi-week atomic)
 **Date**: 2026-05-18
 **Author**: WYKO (사용자 결재) + Claude
 

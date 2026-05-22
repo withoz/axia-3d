@@ -1,9 +1,10 @@
 # ADR-025: Closed Edge Cycle MUST Synthesize Face (P11)
 
-**Status**: **Accepted** (2026-04-29) — Strict invariant
+**Status**: Accepted (2026-04-29) — Strict invariant; Superseded by ADR-139 (2026-05-18, Q3=a 결재) — *결과 invariant* (메타-원칙 #14 닫힌 경계 → 면) 보존, *자동 trigger* (DrawLine closed loop / Step 4.95 / 4.99 second-pass) 만 supersede. DrawRect / DrawCircle 같은 single explicit op 의 auto-face 는 보존 (Q2=a 결재). LOCKED #12 / LOCKED #64 cross-reference.
 **Strengthens**: ADR-021 P7 ("닫힌 라인은 면을 나눈다")
 **Supersedes**: 27-RECT 스트레스에서 발견된 sliver 미합성 한계
-**Related**: ADR-019 ("Line is Truth, Face is Byproduct"), ADR-008 (Axiom 1)
+**Superseded by**: ADR-139 (Boundary Tool + Auto-cycle Deprecation, 2026-05-18, trigger 정책만)
+**Related**: ADR-019 ("Line is Truth, Face is Byproduct"), ADR-008 (Axiom 1), ADR-139 (Boundary Tool — supersede trigger)
 
 ## Context
 

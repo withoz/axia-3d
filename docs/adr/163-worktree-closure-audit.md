@@ -1,6 +1,6 @@
 # ADR-163 — Worktree Closure Audit (elated-poitras + tender-chaum + nervous-bose)
 
-**Status**: spec (사용자 결재 후 actual closure 진행)
+**Status**: Draft (spec only — 사용자 결재 후 actual closure 진행)
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Track**: Track 3 (사용자 결재 다중 트랙 병행 진행, 2026-05-22 휴식 후)

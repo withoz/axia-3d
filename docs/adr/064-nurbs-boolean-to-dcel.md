@@ -1,6 +1,6 @@
 # ADR-064 — NURBS Boolean → DCEL Conversion
 
-**Status**: **Path Z 전 stack 완료 (Steps 1 / 2.A / 2.B+2.C / 3-α / 4 / 5 / 6-α/β/γ/δ)** — 2026-05-04
+**Status**: Accepted (Path Z 전 stack 완료 — Steps 1 / 2.A / 2.B+2.C / 3-α / 4 / 5 / 6-α/β/γ/δ, 2026-05-04)
 **Last commit**: `946e247` (Step 6-δ Undo cross-method 계약)
 **Date**: 2026-05-04 (Path Z 진입) → 2026-05-04 (Path Z 완료, 같은 세션)
 **Anchor**: ADR-052 master roadmap (Phase L₂ Boolean — ADR-067 Step 4 prerequisite)
