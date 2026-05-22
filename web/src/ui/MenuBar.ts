@@ -222,6 +222,29 @@ export function initMenuBar(deps: MenuBarDeps): void {
         break;
 
       // ── 가져오기 (Import) ──
+      //
+      // ADR-162 β-1 (2026-05-22) — DXF dispatch 정정 (Path A → Path B).
+      //   사용자 facing critical hotfix — DXF import 후 즉시 편집 가능
+      //   (단순 참조 메시 아닌 axia Engine DCEL face/edge entity).
+      //   DxfImportHandler.importDxfFile(deps) → bridge.importDxf(data)
+      //   → WASM Rust DCEL → normalizeForImport (ADR-007 invariant) →
+      //   toolManager.syncMesh() → Toast summary. unitScale UX 자연 활성.
+      //   DWG (case 'import-dwg') 는 β-2 별도 atomic PR — 현재는 Path A 임시 유지.
+      case 'import-dxf': {
+        import('./DxfImportHandler').then(({ importDxfFile }) => {
+          importDxfFile({ bridge, toolManager });
+        }).catch((err: Error) => {
+          console.error('[MenuBar] DXF Import 실패:', err);
+        });
+        break;
+      }
+
+      // ── 가져오기 — Path A (FileImporter, Three.js 참조 메시) ──
+      //   OBJ/STL/glTF/DAE/PLY/3DS — mesh 포맷, 편집 불가 참조용 (FileImporter.ts:9).
+      //   DWG — β-2 시점에 Path B 분리 예정 (ADR-162 §3 sub-step plan).
+      //   3DM/SKP — DCEL injection 가능성 별도 ADR scope.
+      //   STEP/IGES — ADR-035 P20.7 OCCT.js dynamic load (FileImporter
+      //     ImportFormat 'step'/'iges' 자동 dispatch).
       case 'import-all':
       case 'import-obj':
       case 'import-stl':
@@ -229,15 +252,12 @@ export function initMenuBar(deps: MenuBarDeps): void {
       case 'import-dae':
       case 'import-ply':
       case 'import-3ds':
-      case 'import-dxf':
       case 'import-dwg':
       case 'import-skp':
       case 'import-3dm':
       case 'import-step':
       case 'import-iges': {
         const format = act === 'import-all' ? undefined : act.replace('import-', '');
-        // ADR-035 P20.7 — STEP/IGES 는 OCCT.js dynamic load (FileImporter 가
-        // ImportFormat 타입에 'step'/'iges' 포함하므로 자동 dispatch).
         getFileImporter().then(fi => fi.openFileDialog(format as ImportFormat | undefined)).catch((err: Error) => {
           console.error(`[MenuBar] Import ${format || 'all'} 실패:`, err);
         });
