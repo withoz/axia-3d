@@ -228,7 +228,7 @@ ADR-141 (Master Roadmap) + ADR-142~161 (Sprint 1~6+4.5 worker ADRs).
 | # | 제목 | 상태 | Sprint |
 |---|------|------|---|
 | [141](./141-master-roadmap-sprint0-foundation-sync.md) | **Master Roadmap (Sprint 0 closure)** | **Accepted** | **S0** |
-| 142 (reserve) | Closed-curve face split 5 함수 hotfix | Reserved | S1 |
+| [142](./142-closed-curve-face-split-5-functions.md) | Closed-curve face split 5 함수 hotfix | **α spec (β 진행 중)** | S1 |
 | 143 (reserve) | Surface-aware getDrawPlane (ADR-140 β 자연 후속) | Reserved | S1 |
 | 144 (reserve) | Step 4.65 silent dissolve 회귀 자산 | Reserved | S1 |
 | 145 (reserve) | **Circle annulus 명시 활성 (옵션 B, 결재 1)** | Reserved | S1 |
