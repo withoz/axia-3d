@@ -578,6 +578,15 @@ pub fn split_face_by_chain(
     );
     ensure!(mesh.faces.contains(face_id), "Face {:?} not found", face_id);
 
+    // ADR-142 β-1 (K1 closed-curve hotfix, 2026-05-22) — split_face_by_line
+    // entry 의 K1 MVP (PR #143, line 301) 답습. closed-curve face (1 vert
+    // boundary loop, ADR-089 Phase 2 canonical) 가 chain_verts 의 endpoints
+    // 와 일치하지 않으면 `outer_boundary.len() >= 3` 검사 (line 583) 가
+    // pass 한다 해도 chain endpoint lookup (line 597 pos_on) 이 fail.
+    // → silent err 또는 invalid sub-face. K1 진입 시 closed-curve detect
+    // → polygonize 자동 호출 → polygon mode 변환 후 split 진행.
+    let face_id = polygonize_if_closed_curve(mesh, face_id)?;
+
     let outer_start = mesh.faces[face_id].outer().start;
     let outer_boundary = mesh.collect_loop_verts(outer_start)?;
     ensure!(outer_boundary.len() >= 3, "face boundary has <3 verts");
@@ -3526,5 +3535,138 @@ mod tests {
         let flags = m.hes[m.edges[chain_edge].any_he()].flags();
         assert!(flags.contains(HeFlags::HARD),
             "split_face_by_chain chain edge must be HARD (메타-원칙 #15)");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ADR-142 β-1 (K1 closed-curve hotfix, 2026-05-22)
+    //   split_face_by_chain entry 가 closed-curve face (1 vert outer boundary)
+    //   를 받으면 split_face_by_line K1 MVP (PR #143, face_split.rs:301)
+    //   답습으로 polygonize_if_closed_curve 자동 호출. 메타-원칙 #14 (WHAT
+    //   layer) 와 #15 (HARD contract) 의 closed-curve face first-class
+    //   first-class input 강제.
+    //
+    //   audit-first canonical 18번째 적용 evidence — ADR-142 α spec 작성
+    //   직후 발견된 ADR-101 Amendment 10 (`mark_chain_edges_hard` /
+    //   `mark_edges_hard`) 5/5 site 사전 활성 finding 후 scope 정정.
+    //   원안 (LOCKED #41 Amendment 9 §A9.4 기준) 의 HARD 부족 4 site →
+    //   이미 closure. β-1 실제 scope = K1 polygonize 2 site 만 (split_face_
+    //   by_chain + boolean::split_faces_by_intersections). β-2 (boolean) 는
+    //   별도 atomic PR per LOCKED #44.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// 회귀 guard — polygon face 가 K1 polygonize_if_closed_curve no-op 통과
+    /// 후 정상 split. 기존 split_face_by_chain 동작 보존 evidence.
+    #[test]
+    fn adr142_beta1_split_face_by_chain_polygon_face_regression() {
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let (fid, [v0, _v1, v2, _v3]) = make_square(&mut m);
+
+        let outer_start = m.faces[fid].outer().start;
+        assert_eq!(m.collect_loop_verts(outer_start).unwrap().len(), 4,
+            "pre: polygon face = 4 verts boundary");
+
+        let (_e_diag, _) = m.add_edge(v0, v2).expect("add_edge v0-v2 diagonal");
+
+        let result = split_face_by_chain(&mut m, fid, &[v0, v2], mat)
+            .expect("polygon split OK (K1 no-op path)");
+        assert_eq!(result.new_faces.len(), 2,
+            "diagonal split → 2 sub-faces (regression guard)");
+    }
+
+    /// closed-curve face (Path B Circle, 1 anchor + 1 self-loop) 가 split_face_
+    /// by_chain entry 도달 시 K1 polygonize 자동 fire → ensure! (outer_boundary
+    /// .len() >= 3) 통과. Pre-K1: ensure! 즉시 Err "face boundary has <3 verts".
+    /// Post-K1: 정상 polygonize 후 chain endpoint lookup → 정상 Err 또는 Ok.
+    #[test]
+    fn adr142_beta1_split_face_by_chain_polygonizes_closed_curve_face() {
+        use crate::curves::AnalyticCurve;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // Path B Circle (ADR-089 Phase 2 canonical) — 1 anchor + 1 self-loop
+        let anchor = m.add_vertex(DVec3::new(5.0, 0.0, 0.0));  // on circle θ=0
+        let circle = AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let circle_face = m.add_face_closed_curve(anchor, circle, mat).unwrap();
+
+        // Pre-condition: closed-curve face = 1 vert boundary
+        let pre_verts = m.collect_loop_verts(m.faces[circle_face].outer().start).unwrap();
+        assert_eq!(pre_verts.len(), 1, "pre: Path B Circle = 1 anchor vert");
+
+        // Chain endpoints arbitrary (not on circle boundary) — K1 fires polygonize
+        // first, then chain endpoint lookup may fail. The proof of K1 firing is
+        // that face boundary becomes polygonized (>= 3 verts) regardless.
+        let dummy_a = m.add_vertex(DVec3::new(10.0, 0.0, 0.0));
+        let dummy_b = m.add_vertex(DVec3::new(-10.0, 0.0, 0.0));
+        let _ = split_face_by_chain(&mut m, circle_face, &[dummy_a, dummy_b], mat);
+
+        // Post-condition: at least 1 active face has polygonized boundary (>=3 verts).
+        // K1 polygonize_if_closed_curve fired → original 1-vert face transformed.
+        let max_outer_verts: usize = m.faces.iter()
+            .filter(|(_, f)| f.is_active())
+            .filter_map(|(_, f)| {
+                m.collect_loop_verts(f.outer().start).ok().map(|v| v.len())
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(max_outer_verts >= 3,
+            "K1 polygonize fired → max active face boundary {} verts (expected >= 3)",
+            max_outer_verts);
+    }
+
+    /// polygonize_if_closed_curve helper unit — polygon face 는 same face_id 반환
+    /// (no-op contract, K1 MVP PR #143 답습).
+    #[test]
+    fn adr142_beta1_polygonize_if_closed_curve_polygon_noop() {
+        let mut m = Mesh::new();
+        let _mat = MaterialId::new(0);
+        let (fid, _verts) = make_square(&mut m);
+
+        let result_fid = polygonize_if_closed_curve(&mut m, fid).expect("polygon OK");
+        assert_eq!(result_fid, fid,
+            "polygon face → same face_id returned (no-op contract)");
+
+        // Verify boundary unchanged (4 verts)
+        assert_eq!(
+            m.collect_loop_verts(m.faces[fid].outer().start).unwrap().len(),
+            4,
+            "polygon boundary unchanged after K1 no-op",
+        );
+    }
+
+    /// polygonize_if_closed_curve helper unit — closed-curve face transforms to
+    /// polygon mode (>= 3 verts boundary). API contract evidence.
+    #[test]
+    fn adr142_beta1_polygonize_if_closed_curve_transforms_closed_curve() {
+        use crate::curves::AnalyticCurve;
+        let mut m = Mesh::new();
+        let mat = MaterialId::new(0);
+        let anchor = m.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let circle = AnalyticCurve::Circle {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+        };
+        let circle_face = m.add_face_closed_curve(anchor, circle, mat).unwrap();
+
+        // Pre: 1 vert
+        assert_eq!(
+            m.collect_loop_verts(m.faces[circle_face].outer().start).unwrap().len(),
+            1,
+        );
+
+        let result_fid = polygonize_if_closed_curve(&mut m, circle_face).expect("polygonize OK");
+
+        // Post: result face has >= 3 verts boundary
+        let post_verts = m.collect_loop_verts(m.faces[result_fid].outer().start).unwrap();
+        assert!(post_verts.len() >= 3,
+            "closed-curve polygonized to {} verts (expected >= 3)",
+            post_verts.len());
     }
 }
