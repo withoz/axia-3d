@@ -219,6 +219,16 @@ ADR-049 Amendments 1~4 참조.
 | [139](./139-boundary-tool-auto-cycle-deprecation.md) | Boundary Tool + Auto-cycle Deprecation | Accepted (β implementation 진행 중) |
 | [140](./140-surface-aware-get-draw-plane.md) | Surface-aware getDrawPlane (곡면 face 위 도구 정확도) | α spec (β 진행 중) |
 
+### 14. Sprint 외 hotfix (#162+, 별도 트랙)
+
+본 카테고리는 ADR-141 §3 (Sprint 1~6+4.5) reserve 외 별도 트랙 — 사용자
+facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
+
+| # | 제목 | 상태 | Track |
+|---|------|------|---|
+| [162](./162-dwg-dxf-menu-wiring-hotfix.md) | DWG/DXF Menu Wiring Hotfix (Path A → Path B routing) | **α + β-1 closed** | Track 2 |
+| [163](./163-worktree-closure-audit.md) | Worktree Closure Audit (Sprint 0 γ 자연 후속) | α (β actual closure 사용자 결재 후) | Track 3 |
+
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
 본 카테고리는 외부 에이전트 마스터 완성 계획 (5/5 결재 lock-in, 2026-05-22)

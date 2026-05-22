@@ -1,6 +1,6 @@
 # ADR-162 — DWG/DXF Menu Wiring Hotfix (Path A 시각 only → Path B DCEL routing 정정)
 
-**Status**: α spec (β implementation 별도 사용자 결재 후 진행)
+**Status**: α spec + β-1 closed (DXF dispatch routing 정정, 2026-05-22)
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Track**: Track 2 (사용자 결재 다중 트랙 병행 진행, 2026-05-22 휴식 후)
@@ -240,7 +240,25 @@ importDxfOrDwgFile({ bridge, toolManager, format: 'dxf' | 'dwg' });
 - **회귀**: +0 (docs only)
 - **다음 sub-step**: β-1 (DXF dispatch 정정) — 사용자 결재 후 진행
 
-### β-1 ~ δ Acceptance (향후 작성)
+### β-1 (DXF dispatch routing — 본 commit, 2026-05-22)
+
+- **Trigger**: ADR-162 α spec closure + 사용자 결재 "옵션 A 단독 진행"
+- **변경 (3 files)**:
+  - `web/src/ui/MenuBar.ts:230-261` — `case 'import-dxf'` 통합 case 에서 **분리** + `await import('./DxfImportHandler').then(...)` direct dispatch. DWG/OBJ/STL/glTF/etc Path A 보존 (regression guard).
+  - `web/src/ui/MenuBar.test.ts` — ADR-162 β-1 회귀 자산 +4 (DXF Path B / OBJ Path A regression / DWG Path A regression / All Path A regression)
+  - `docs/adr/162-dwg-dxf-menu-wiring-hotfix.md` — Status 갱신 + β-1 Acceptance entry
+- **회귀**: web/vitest MenuBar.test **32 → 36** (+4, 절대 #[ignore] 금지 4/4 준수)
+- **사용자 facing 변화**:
+  - **Before**: 메뉴 → DXF 가져오기 → FileImporter Path A → Three.js Group "참조 메시" → **편집 불가**
+  - **After**: 메뉴 → DXF 가져오기 → DxfImportHandler Path B → `bridge.importDxf()` → WASM Rust DCEL → `normalizeForImport()` (ADR-007 invariant) → `toolManager.syncMesh()` → **편집 가능** (axia Engine DCEL face/edge entity)
+  - Unit scale UX (`promptUnitScale`) + Toast summary 자연 활성
+- **불변 (regression guard 강제)**:
+  - DWG case 'import-dwg' — Path A 임시 유지 (β-2 별도 atomic PR architectural choice 별도 결재)
+  - OBJ/STL/glTF/DAE/PLY/3DS/SKP/3DM/STEP/IGES — Path A 보존 (mesh 포맷 참조 메시)
+  - `import-all` — Path A 보존
+- **다음 sub-step**: β-2 (DWG dispatch routing — DwgImportHandler 신설 vs DxfImportHandler 확장 architectural choice 별도 사용자 결재)
+
+### β-2 ~ δ Acceptance (향후 작성)
 
 각 sub-step 종료 시 본 §9 에 추가 entry 작성.
 

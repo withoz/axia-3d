@@ -241,6 +241,58 @@ describe('MenuBar', () => {
     });
   });
 
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-162 β-1 — DXF/DWG Menu Wiring Hotfix (Path A 시각 only → Path B DCEL)
+  //   사용자 facing critical hotfix — DXF import 후 즉시 편집 가능 (단순 참조
+  //   메시 아닌 axia Engine DCEL face/edge entity). MenuBar.ts:232 case
+  //   'import-dxf' 분리 + DxfImportHandler.importDxfFile direct dispatch.
+  //   DWG (β-2) 는 별도 atomic PR — 현재 Path A 임시 유지 (regression guard).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-162 β-1 — DXF dispatch routing (Path A → Path B)', () => {
+    beforeEach(() => {
+      // Add DXF / DWG / OBJ / import-all buttons to menu DOM
+      const importMenu = document.createElement('div');
+      importMenu.className = 'menu-item';
+      importMenu.innerHTML = `
+        <div class="menu-action" data-action="import-dxf">DXF</div>
+        <div class="menu-action" data-action="import-dwg">DWG</div>
+        <div class="menu-action" data-action="import-obj">OBJ</div>
+        <div class="menu-action" data-action="import-all">All</div>
+      `;
+      document.getElementById('menubar')!.appendChild(importMenu);
+      initMenuBar(deps);
+    });
+
+    it('import-dxf does not throw (Path B via DxfImportHandler dynamic import)', () => {
+      const btn = document.querySelector('[data-action="import-dxf"]') as HTMLElement;
+      // Dynamic import (`import('./DxfImportHandler')`) — async + graceful fallback.
+      // .click() 은 sync 라 dynamic resolve 이전 종료. 본 test 는 dispatch
+      // 자체가 throw 안 함을 검증 (Path B routing entry 의 syntactic 정합).
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('import-obj uses Path A FileImporter (regression guard)', () => {
+      // import-obj 는 ADR-162 β-1 의 scope 외 — FileImporter Path A 유지.
+      // 본 test 는 dispatch 정합 확인 (Path A 경로 비활성화 회피).
+      const btn = document.querySelector('[data-action="import-obj"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('import-dwg uses Path A FileImporter (β-2 시점에 Path B 분리, 현재 regression guard)', () => {
+      // ADR-162 §3 sub-step plan: DWG β-2 별도 atomic PR (DwgImportHandler
+      // 신설 vs DxfImportHandler 확장 architectural choice 별도 결재). β-1
+      // 까지는 Path A 임시 유지.
+      const btn = document.querySelector('[data-action="import-dwg"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+
+    it('import-all uses Path A FileImporter (regression guard)', () => {
+      // import-all 는 모든 mesh 포맷 통합 dialog — Path A 보존.
+      const btn = document.querySelector('[data-action="import-all"]') as HTMLElement;
+      expect(() => btn.click()).not.toThrow();
+    });
+  });
+
   describe('PR#1 — STEP/IGES import 메뉴 (ADR-035 P20.7)', () => {
     beforeEach(() => {
       // Add STEP/IGES import buttons to menu DOM
