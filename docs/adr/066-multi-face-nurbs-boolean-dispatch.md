@@ -1,6 +1,6 @@
 # ADR-066 — Multi-face NURBS Boolean Dispatch (Path Y)
 
-**Status**: **Path Y 전 stack 완료 (Y-1 / Y-2 / Y-3 / Y-4 / Y-5 / Y-6)** — 2026-05-04
+**Status**: Accepted (Path Y 전 stack 완료 — Y-1 / Y-2 / Y-3 / Y-4 / Y-5 / Y-6, 2026-05-04)
 **Last commit**: `08dcce1` (Y-5 Undo cross-method 계약) → 본 commit (Y-6 회고)
 **Date**: 2026-05-04 (Path Y 진입) → 2026-05-04 (Path Y 완료, 같은 세션)
 **Anchor**: ADR-064 §E.2 (Multi-face Boolean — 별도 ADR 미착수 항목)

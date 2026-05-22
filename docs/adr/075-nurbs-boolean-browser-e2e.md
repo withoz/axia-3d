@@ -1,6 +1,6 @@
 # ADR-075 — NURBS Boolean Browser E2E (Playwright)
 
-**Status**: **E.4 트랙 핵심 sub-step 완료 (E4-1 / E4-2 / E4-3 / E4-4 / E4-6 / E4-7)** — 2026-05-04
+**Status**: Accepted (E.4 트랙 핵심 sub-step 완료 — E4-1 / E4-2 / E4-3 / E4-4 / E4-6 / E4-7, 2026-05-04)
 **Last commit**: `c6184ba` (E4-6 CI workflow) → 본 commit (E4-7 회고)
 **Date**: 2026-05-04 (E4-1 진입 → E4-7 완료, 같은 세션)
 **Anchor**: ADR-064 §E.4 + ADR-066 §E.4 (Real browser-runtime E2E

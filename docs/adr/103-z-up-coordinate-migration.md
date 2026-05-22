@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **✅ Closed (Amendment 3, 2026-05-15)** — β/γ/δ/ε/ζ all atomic-merged. 4 post-merge hotfixes (axis+grid / orbit / shadow / mouse pick) absorbed. η visual baseline regenerate deferred to follow-up workflow. See §11 Acceptance Log. |
+| Status | **Accepted (Amendment 3, 2026-05-15) — ✅ Closed** — β/γ/δ/ε/ζ all atomic-merged. 4 post-merge hotfixes (axis+grid / orbit / shadow / mouse pick) absorbed. η visual baseline regenerate deferred to follow-up workflow. See §11 Acceptance Log. |
 | Date | 2026-05-15 |
 | Supersedes | — (5개월 누적 implicit Y-up 정책의 명시 결재) |
 | Related | ADR-021 P7, ADR-026 P12, ADR-035 P20 (STEP/IGES), ADR-036 P21 (round-trip 1e-3 mm), ADR-046 P31, ADR-049 P-5e-α (default-OFF flip pattern), ADR-077 V-4 (visual baseline regen), ADR-081 W-η (STEP/IGES import boundary), ADR-091 §E L1 (snapshot schema canonical), LOCKED #5 (1.5μm spatial-hash), LOCKED #7 (cardinal plane SSOT), LOCKED #41 (ADR-101 closure), LOCKED #26 (Two-Layer Citizenship Phase 1) |

@@ -1,6 +1,6 @@
 # ADR-139 B-β audit + 즉시 회피 가이드 (multi-hole connected inner)
 
-**Status**: Audit + workaround docs only (β implementation 별도 multi-session PR)
+**Status**: Accepted (Audit + workaround docs only — β implementation 별도 multi-session PR)
 **Date**: 2026-05-19
 **Author**: WYKO (사용자 시연 evidence + 결재) + Claude
 **Parent ADR**: ADR-139 (Boundary Tool + Auto-cycle Deprecation)

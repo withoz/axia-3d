@@ -1,6 +1,6 @@
 # ADR-009: Orphan Face Recovery Policy
 
-**Status**: Revised (2026-04-24) — Smart Auto
+**Status**: Accepted (Revised 2026-04-24 — Smart Auto)
 **Supersedes**: —
 **Related**: ADR-008 (Face Operation Axioms), Save/Load V2 (commit 9e2631d)
 

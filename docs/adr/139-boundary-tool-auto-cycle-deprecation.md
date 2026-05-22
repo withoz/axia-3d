@@ -1,6 +1,6 @@
 # ADR-139 — Boundary Tool + Auto-cycle Deprecation (α spec)
 
-**Status**: α spec only (β implementation 별도 사용자 결재 후 진행)
+**Status**: Accepted (α spec + B-β-1 ~ B-γ MVP closed — β implementation 진행 중, B-γ' / B-δ / B-ε / B-ζ / B-ι / B-μ 별도 PR)
 **Date**: 2026-05-18
 **Author**: WYKO (사용자 통찰) + Claude
 **Supersedes candidates**:

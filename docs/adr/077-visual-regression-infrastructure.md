@@ -1,6 +1,6 @@
 # ADR-077 — Visual Regression Infrastructure
 
-**Status**: **V-1 + V-2 + V-4 + V-5 완료** (V 트랙 인프라 + 자동화 closure, 2026-05-05)
+**Status**: Accepted (V-1 + V-2 + V-4 + V-5 완료 — V 트랙 인프라 + 자동화 closure, 2026-05-05)
 **Last commits**: V-1 (`dbfd65e`) + V-2 (`e9f7b30`) + V-5 (`8547520`) + **V-4 본 commit**
 **Date**: 2026-05-05 (V-1 진입 → V-5 회고 → **V-4 CI integration**)
 **Anchor**: ADR-075 §E.8 (Visual regression / screenshot diff —

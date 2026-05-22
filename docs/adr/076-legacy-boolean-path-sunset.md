@@ -1,6 +1,6 @@
 # ADR-076 — Legacy Boolean Path Sunset
 
-**Status**: Step 1 + Step 1.1 + **Step 2 완료** (Path Z atomic, 2026-05-04 ~ 2026-05-05)
+**Status**: Accepted (Step 1 + Step 1.1 + Step 2 완료 — Path Z atomic, 2026-05-04 ~ 2026-05-05)
 **Last commits**: Step 1 (`06e73a8`) + Step 1.1 (`580a64a`) + **Step 2 (본 commit)**
 **Anchor**: ADR-064 §E.5 + ADR-066 §E.5 (legacy single-face DCEL fast-path
 + NURBS probe deprecation) — **본 ADR Step 2 으로 surface 전체 닫음**

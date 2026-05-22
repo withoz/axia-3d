@@ -97,7 +97,7 @@ ADR-045 D1 SSOT policy 잠겼으나 UI binding 미완:
 
 ### 2.5 i18n 인프라
 
-**Status**: NO i18n infrastructure. Korean strings hardcoded throughout.
+**State**: NO i18n infrastructure. Korean strings hardcoded throughout.
 
 Samples:
 - CapabilityExplorerPanel:26-32 — `'Tier 0 — Read'` English only

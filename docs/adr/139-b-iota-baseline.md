@@ -1,6 +1,6 @@
 # ADR-139 B-ι — 사용자 시연 baseline (β implementation anchor)
 
-**Status**: docs only — anchor establish (ADR-087 K-ζ canonical 답습)
+**Status**: Accepted (docs only — anchor establish, ADR-087 K-ζ canonical 답습)
 **Date**: 2026-05-21
 **Author**: WYKO + Claude
 **관련 ADR**: ADR-139 §14 B-ι atomic sub-step (E2E + 사용자 시연 — 구멍 0 검증)

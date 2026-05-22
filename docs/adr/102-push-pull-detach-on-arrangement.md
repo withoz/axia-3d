@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **✅ Closed (2026-05-15)** — Phase α/β/γ/δ/ε all atomic-merged. See §D Acceptance Log. |
+| Status | **Accepted (2026-05-15) — ✅ Closed** — Phase α/β/γ/δ/ε all atomic-merged. See §D Acceptance Log. |
 | Date | 2026-05-15 |
 | Supersedes | — |
 | Related | ADR-007 (Face orientation policy), ADR-016 Q2 (multi-loop face restrictions), ADR-021 P7 (closed edge cycle divides face), ADR-022 P9 (vertex-shared pinch promote), ADR-079 (Create Solid surface-native), ADR-101 (Coplanar partial overlap auto-intersect), LOCKED #1 P7 manifold, LOCKED #41 ADR-101 closure |

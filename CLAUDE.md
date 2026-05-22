@@ -4818,6 +4818,64 @@ design). 회귀 자산은 Sprint 1~6 의 각 sub-step ADR 에서 단조 증가
 - ADR-139 (WHAT/WHEN layer 분리 + 메타-원칙 #16 anchor)
 - ADR-140 (Surface-aware getDrawPlane — S1 자연 후속 anchor)
 
+### 66. STATUS-POLICY Enforcement (Sprint 0 cleanup follow-up, 2026-05-22) ✅
+
+**Canonical anchor (사용자 결재, 2026-05-22)**:
+> "추천: (a) — 본 PR 의 governance 회복 가치를 완전 달성, Brief 정합도
+> 회복."
+
+LOCKED #65 ADR-141 Sprint 0 ε closure 직후, PR #151 (ADR-142 α spec)
+sweep 전 시점. README catalog drift 해소 + ADR sunset 정책 정립의 자연
+governance 회복.
+
+#### Lock-ins (canonical for future ADR Status governance)
+
+- **L-66-1 STATUS-POLICY.md = SSOT** (docs/adr/STATUS-POLICY.md). 5 canonical
+  state (Proposed / Draft / Accepted / Deferred / Superseded) + 3-tier
+  lifecycle (Active / Superseded / Archived).
+- **L-66-2 Status notation 3 format** 모두 허용 — heading / list / table.
+  단 동일 ADR 내 mixed 금지.
+- **L-66-3 First-token canonical 강제** — Status content 의 첫 token 이
+  반드시 5 canonical state 중 하나. Audit-grep tooling 자동화 anchor.
+- **L-66-4 CI 자동화** (`scripts/check-adr-catalog.mjs` + `.github/workflows/
+  ci.yml` 의 `adr-catalog-check` job) — 메타-원칙 #6 (Preventive over
+  Curative) 정합. PR 마다 자동 검증:
+  - docs/adr/*.md ⊆ README catalog (missing 0)
+  - catalog link → actual file (broken link 0)
+  - Status first-token canonical (drift 0)
+- **L-66-5 ADR-021 / ADR-025 / ADR-101 본문 Supersede 명시** — LOCKED #1
+  / #12 / #41 의 ADR body ↔ CLAUDE.md drift 해소. 본 PR 에서 atomic 적용.
+- **L-66-6 README catalog format** — `[NNN](./NNN-slug.md) | 제목 | Status`
+  3-column 정합. 향후 새 ADR 추가 시 catalog 동시 갱신 강제.
+- **L-66-7 Archived tier 별도 sweep** — Superseded → 물리 archive/ 이동은
+  본 PR scope 외 (2순위, 5,265 cross-refs 위험). LOCKED #44 정합.
+- **L-66-8 메타-원칙 #10 정합** — ADR 본문 retroactive 수정 금지, Status
+  field 갱신만 명시 예외. STATUS-POLICY §3.3 답습.
+
+#### 회귀 자산 (CI 자동 검증)
+
+- `scripts/check-adr-catalog.mjs` — Node script (절대 #[ignore] 금지, exit
+  1 on drift)
+- `.github/workflows/ci.yml` 의 `adr-catalog-check` job — PR 마다 자동
+  실행
+
+#### 사용자 facing 변화 (0)
+
+- 모든 기존 ADR 본문 보존 (Status field 만 canonical 정합 갱신)
+- 신규 ADR 작성 시 STATUS-POLICY §2 의 5-state 정합 강제
+- catalog 추가/변경 시 CI 자동 검증
+
+#### Cross-link
+
+- STATUS-POLICY.md (canonical SSOT)
+- LOCKED #44 (Complete Meaning per Merge — 본 PR scope 정합)
+- LOCKED #65 (ADR-141 Master Roadmap — Sprint 0 ε closure)
+- LOCKED #10 (ADR 불변 — Status field 예외 명시)
+- 메타-원칙 #6 (Preventive over Curative — CI 자동화 anchor)
+- ADR-021 (LOCKED #1) / ADR-025 (LOCKED #12) / ADR-101 (LOCKED #41) —
+  본문 Supersede 명시 적용
+- TaskBrief `reports/ADR_141_옵션4_6_TaskBrief.html` (사용자 결재 source)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")

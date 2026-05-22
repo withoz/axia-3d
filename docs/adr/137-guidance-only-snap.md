@@ -1,6 +1,6 @@
 # ADR-137 — Guidance-only Snap (α spec)
 
-**Status**: α spec only (β implementation 별도 사용자 결재 후 진행)
+**Status**: Draft (α spec only — β implementation 별도 사용자 결재 후 진행)
 **Date**: 2026-05-18
 **Author**: WYKO (사용자 결재) + Claude
 

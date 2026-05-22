@@ -1,6 +1,6 @@
 # ADR-139 B-ζ — 회귀 자산 update audit (β implementation 사전 검토)
 
-**Status**: docs only — β implementation 사전 검토 (audit-first canonical 8번째 적용)
+**Status**: Accepted (docs only — β implementation 사전 검토, audit-first canonical 8번째 적용)
 **Date**: 2026-05-18
 **Author**: WYKO + Claude
 **관련 ADR**: ADR-139 §14 B-ζ atomic sub-step

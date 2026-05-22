@@ -1,6 +1,6 @@
 # ADR-078 — Boolean Group Persistence
 
-**Status**: **P-1 ~ P-4 완료** (Path Z atomic 5-layer closure, 2026-05-05)
+**Status**: Accepted (P-1 ~ P-4 완료 — Path Z atomic 5-layer closure, 2026-05-05)
 **Date**: 2026-05-05
 **Anchor**: ADR-074 §E.5-3 (Persistence — session 만, project 저장
 별도 ADR)

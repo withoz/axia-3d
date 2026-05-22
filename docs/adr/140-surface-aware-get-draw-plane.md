@@ -1,6 +1,6 @@
 # ADR-140 — Surface-aware `getDrawPlane` (곡면 face 위 도구 정확도 본격 활성)
 
-**Status**: α spec (β implementation 별도 사용자 결재 후 진행)
+**Status**: Draft (α spec — β implementation 별도 사용자 결재 후 진행)
 **Date**: 2026-05-23
 **Author**: WYKO + Claude
 **Trigger**: 외부 에이전트 audit (사용자 공유 2026-05-23) P1 권장 +

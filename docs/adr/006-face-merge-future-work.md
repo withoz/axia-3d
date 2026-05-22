@@ -1,6 +1,6 @@
 # ADR-006: Face Merge 미지원 케이스 — Multi-loop / 비인접
 
-- **Status**: **Partially resolved** (C1 구현 완료 — 2026-04-20 Phase F)
+- **Status**: Accepted (Partially resolved — C1 구현 완료 2026-04-20 Phase F)
 - **Scope**: `axia-geo::mesh::merge_faces_by_edge`, face topology
 
 ## 업데이트 (2026-04-20 Phase F — C1 해결)

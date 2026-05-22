@@ -1,6 +1,6 @@
 # ADR-015: Stacked Inner RECT Topology — Manifold-First B1 Policy
 
-**Status**: ⛔ **Superseded by ADR-016** (2026-04-28)
+**Status**: Superseded by ADR-016 (2026-04-28)
 **Supersedes**: ADR-008 Phase E (B1 auto-promote, partial)
 **Superseded by**: ADR-016 (Conditional Auto Hole-Promote)
 **Related**: ADR-007 (Face Orientation Policy), ADR-008 (Face Operation Axioms), ADR-006 (Multi-loop Face)

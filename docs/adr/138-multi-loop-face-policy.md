@@ -1,6 +1,6 @@
 # ADR-138 — Multi-loop Face Policy Re-architecting (α spec)
 
-**Status**: ⚠ **Superseded by ADR-139** (2026-05-18, 사용자 결재 Q5=a)
+**Status**: Superseded by ADR-139 (2026-05-18, 사용자 결재 Q5=a)
   — Pure Boundary Tool 정책이 자동 trigger 폐기 → multi-loop face 자체
   안 생성 → ADR-138 Path B 자연 흡수. ADR-138 의 핵심 의도 (multi-loop
   회피) 는 ADR-139 의 자연 결과로 달성.

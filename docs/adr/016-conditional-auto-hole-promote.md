@@ -1,6 +1,6 @@
 # ADR-016: Conditional Auto Hole-Promote — SketchUp-style Inner-in-Outer
 
-**Status**: 🔒 **Accepted & LOCKED** (2026-04-28)
+**Status**: Accepted (🔒 LOCKED, 2026-04-28)
 **Supersedes**: ADR-015 (Stacked Inner RECT Manifold-First B1 Policy)
 **Related**: ADR-006 (Multi-loop Face), ADR-007 (Face Orientation Policy),
 ADR-008 (Face Operation Axioms)
