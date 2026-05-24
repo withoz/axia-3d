@@ -176,12 +176,25 @@ sub-step plan 답습.
 
 ## 7. Acceptance Log
 
-- **2026-05-24 α** (본 commit) — α spec + sub-step plan + lock-ins.
-- **(β-1 ~ β-5 + γ, ~3일 multi-day)** — atomic Path Z sub-step 별도
-  사용자 결재 후 진행.
+- **2026-05-24 α** (PR #165, fbf5791) — α spec + sub-step plan + lock-ins.
+- **2026-05-24 β-1** (본 commit) — Partial overlap + Single inner baseline.
+  `crates/axia-core/src/scene.rs` tests module 에 2 신규 회귀 자산
+  추가:
+  - `p2_step_4_65_partial_overlap_preserves_outer` — outer 10×10 +
+    inner 5×5 at (3,3,0) partial overlap. surround criterion false-
+    positive 차단. active >= 2 (outer 잔존 + overlap region).
+  - `p2_step_4_65_single_inner_baseline` — outer 10×10 + 단일 inner
+    5×5 fully contained (minimum case). surround 충분 조건 검증.
+    active >= 1.
+  PR #144 기존 회귀 2개 (surrounded total dissolve / disjoint inner) +
+  본 β-1 의 2개 = 누적 **4 회귀 자산**. ADR-144 §6 회귀 추정
+  +2/sub-step 정합. L-144-1/2 정합 — PR #144 hotfix code 보존, 회귀
+  자산 only. 사용자 facing 변화 0.
+- **(β-2 ~ β-5 + γ, ~5-6시간 multi-day)** — atomic Path Z sub-step
+  별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-1 진입 결재 (Partial overlap + Single inner baseline)
+**다음 trigger**: β-2 진입 결재 (Multi-level nested + Concentric)
 또는 우선순위 priority track 결정 (ADR-145 Circle annulus / 사용자 시연
 evidence / Future ADR 등).
