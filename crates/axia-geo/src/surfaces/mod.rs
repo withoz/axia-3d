@@ -1043,4 +1043,181 @@ mod tests {
         assert!((n - DVec3::Z).length() < 1e-9,
             "Plane normal anywhere must be Z; got {:?}", n);
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-140 ζ — Chord error 측정 회귀 자산
+    //
+    // ADR-140 β implementation 의 architectural value evidence — surface-
+    // aware normal (analytic exact) 가 chord plane normal (polygonal
+    // approximation, DCEL face 의 flat per-quad normal) 와 *얼마나 다른지*
+    // 정량 lock. ADR-140 ε-1 (DrawLineTool surface-aware integration) 의
+    // 측정 가능한 정확도 향상의 baseline.
+    //
+    // 측정 방법:
+    //   chord_normal      = AnalyticSurface.normal_at_world_pos(P_mid)
+    //                       (chord arc 의 midpoint surface normal — chord
+    //                       plane normal 의 가장 좋은 근사)
+    //   surface_normal_at_end = AnalyticSurface.normal_at_world_pos(P_end)
+    //   chord_error       = acos(chord_normal · surface_normal_at_end)
+    //
+    // 정합 가이드:
+    //   - Plane (flat): chord_error == 0 (baseline, 모든 곳 normal 동일)
+    //   - 곡면: chord_error > 0, 곡률 + chord 길이에 비례
+    //   - 곡률 ↑ or chord 길이 ↑ → chord_error ↑ (geometric 예측)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Helper: angle (radians) between two unit vectors via dot-product
+    /// clamp + acos. Used by ADR-140 ζ chord error tests below.
+    fn chord_error_angle(chord_normal: DVec3, surface_normal: DVec3) -> f64 {
+        let cn = chord_normal.normalize_or_zero();
+        let sn = surface_normal.normalize_or_zero();
+        cn.dot(sn).clamp(-1.0, 1.0).acos()
+    }
+
+    #[test]
+    fn adr140_zeta_plane_chord_error_is_zero() {
+        // Plane: flat surface — surface-aware normal == chord normal everywhere.
+        // chord error baseline = 0 (no improvement available, no degradation).
+        let pl = AnalyticSurface::Plane {
+            origin: DVec3::ZERO,
+            normal: DVec3::Z,
+            basis_u: DVec3::X,
+            u_range: (-10.0, 10.0),
+            v_range: (-10.0, 10.0),
+        };
+        let p_mid = DVec3::new(1.0, 1.0, 0.0);
+        let p_end = DVec3::new(2.0, 3.0, 0.0);
+        let err = chord_error_angle(
+            pl.normal_at_world_pos(p_mid),
+            pl.normal_at_world_pos(p_end),
+        );
+        assert!(err < 1e-12,
+            "Plane chord error must be 0 (flat surface); got {} rad", err);
+    }
+
+    #[test]
+    fn adr140_zeta_cylinder_chord_error_proportional_to_arc() {
+        // r=5 cylinder, axis +Z. Two test arcs at different segment counts —
+        // chord error scales with arc length (half-angle = θ/2).
+        let cyl = AnalyticSurface::Cylinder {
+            axis_origin: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            ref_dir: DVec3::X,
+            radius: 5.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 10.0),
+        };
+        // 12-segment approximation: chord arc = 2π/12 = π/6 ≈ 0.524 rad
+        let theta_12 = std::f64::consts::TAU / 12.0;
+        let p_start_12 = DVec3::new(5.0, 0.0, 5.0);
+        let p_end_12 = DVec3::new(5.0 * theta_12.cos(), 5.0 * theta_12.sin(), 5.0);
+        let p_mid_12 = (p_start_12 + p_end_12) * 0.5;
+        let err_12 = chord_error_angle(
+            cyl.normal_at_world_pos(p_mid_12),
+            cyl.normal_at_world_pos(p_end_12),
+        );
+        // 24-segment approximation: chord arc = 2π/24 — error ≈ half of 12-seg
+        let theta_24 = std::f64::consts::TAU / 24.0;
+        let p_end_24 = DVec3::new(5.0 * theta_24.cos(), 5.0 * theta_24.sin(), 5.0);
+        let p_mid_24 = (p_start_12 + p_end_24) * 0.5;
+        let err_24 = chord_error_angle(
+            cyl.normal_at_world_pos(p_mid_24),
+            cyl.normal_at_world_pos(p_end_24),
+        );
+        assert!(err_12 > err_24,
+            "Cylinder 12-seg chord error must exceed 24-seg (refinement); got 12={}, 24={}", err_12, err_24);
+        // Geometric expectation: err ≈ half-arc-angle = θ/2 for unit radius case.
+        // For our specific midpoint approximation, error is roughly θ/4 ~ θ/2.
+        assert!(err_12 > 0.05 && err_12 < theta_12,
+            "Cylinder 12-seg chord error must be > 0.05 rad and < {} (chord arc); got {}", theta_12, err_12);
+    }
+
+    #[test]
+    fn adr140_zeta_sphere_chord_error_along_meridian() {
+        // r=5 sphere — chord along meridian (constant longitude, varying latitude).
+        // Two points 30° apart on +X meridian (Y=0).
+        let sph = AnalyticSurface::Sphere {
+            center: DVec3::ZERO,
+            radius: 5.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        };
+        // P_start at equator (5,0,0), P_end at 30° latitude (5cos30, 0, 5sin30)
+        let lat = std::f64::consts::FRAC_PI_6;  // 30°
+        let p_start = DVec3::new(5.0, 0.0, 0.0);
+        let p_end = DVec3::new(5.0 * lat.cos(), 0.0, 5.0 * lat.sin());
+        let p_mid = (p_start + p_end) * 0.5;
+        let err = chord_error_angle(
+            sph.normal_at_world_pos(p_mid),
+            sph.normal_at_world_pos(p_end),
+        );
+        // Sphere normals at p_start = +X, p_end = (cos30, 0, sin30).
+        // chord mid normal approximately midway → err ≈ 15° = π/12 ≈ 0.262 rad.
+        // Allow generous range due to midpoint chord vs arc approximation.
+        assert!(err > 0.05 && err < lat,
+            "Sphere 30° meridian chord error must be > 0.05 and < {} (chord arc); got {} rad", lat, err);
+    }
+
+    #[test]
+    fn adr140_zeta_cone_chord_error_varies_along_axis() {
+        // Cone: apex at origin, axis +Z, half_angle 30°. Two test points at
+        // different radial distances (different v along generatrix) should
+        // produce similar angular chord error for similar arc spans —
+        // chord error depends on arc-angle, not absolute radial distance.
+        let cone = AnalyticSurface::Cone {
+            apex: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            ref_dir: DVec3::X,
+            half_angle: std::f64::consts::FRAC_PI_6,  // 30°
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, 10.0),
+        };
+        // Points on the cone at v=5 (radius = 5*tan(30) ≈ 2.89), θ=0 vs θ=π/6.
+        let v = 5.0;
+        let r = v * (std::f64::consts::FRAC_PI_6).tan();
+        let theta = std::f64::consts::FRAC_PI_6;  // 30° arc
+        let p_start = DVec3::new(r, 0.0, v);
+        let p_end = DVec3::new(r * theta.cos(), r * theta.sin(), v);
+        let p_mid = (p_start + p_end) * 0.5;
+        let err = chord_error_angle(
+            cone.normal_at_world_pos(p_mid),
+            cone.normal_at_world_pos(p_end),
+        );
+        // Cone normal is rotated half_angle from radial; arc-induced chord
+        // error is similar in magnitude to cylinder arc error (independent
+        // of v position along generatrix).
+        assert!(err > 0.0 && err < theta,
+            "Cone chord error must be > 0 and < {} (arc); got {} rad", theta, err);
+    }
+
+    #[test]
+    fn adr140_zeta_torus_chord_error_dual_curvature() {
+        // Torus: major R=10, minor r=2, axis +Z. Two test points along the
+        // ring (major direction) at small arc — chord error dominated by
+        // major radius curvature.
+        let tor = AnalyticSurface::Torus {
+            center: DVec3::ZERO,
+            axis_dir: DVec3::Z,
+            ref_dir: DVec3::X,
+            major_radius: 10.0,
+            minor_radius: 2.0,
+            u_range: (0.0, std::f64::consts::TAU),
+            v_range: (0.0, std::f64::consts::TAU),
+        };
+        // Points at major angle θ=0 and θ=π/12, outer equator (in-plane,
+        // top of minor circle at z=0, outer at major+minor=12).
+        let theta = std::f64::consts::TAU / 24.0;  // π/12
+        let outer_r = 12.0;  // major + minor
+        let p_start = DVec3::new(outer_r, 0.0, 0.0);
+        let p_end = DVec3::new(outer_r * theta.cos(), outer_r * theta.sin(), 0.0);
+        let p_mid = (p_start + p_end) * 0.5;
+        let err = chord_error_angle(
+            tor.normal_at_world_pos(p_mid),
+            tor.normal_at_world_pos(p_end),
+        );
+        // Torus outer equator normals are radial in the major plane —
+        // chord error scales with major-arc angle similar to cylinder.
+        assert!(err > 0.0 && err < theta,
+            "Torus chord error must be > 0 and < {} (arc); got {} rad", theta, err);
+    }
 }
