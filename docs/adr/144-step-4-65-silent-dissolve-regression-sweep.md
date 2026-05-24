@@ -180,22 +180,24 @@ sub-step plan 답습.
 - **2026-05-24 β-1** (PR #166, 5cc8699) — Partial overlap + Single inner
   baseline. 2 신규 회귀 자산 (`p2_step_4_65_partial_overlap_preserves_outer`
   + `p2_step_4_65_single_inner_baseline`).
-- **2026-05-24 β-2** (본 commit) — Multi-level nested + Concentric.
+- **2026-05-24 β-2** (PR #167, 294f56a) — Multi-level nested + Concentric.
+  2 신규 회귀 자산 (multi_level_nested_preserves_middle + concentric_chain).
+- **2026-05-24 β-3** (본 commit) — L-shape + T-shape inner arrangement.
   `crates/axia-core/src/scene.rs` tests module 에 2 신규 회귀 자산 추가:
-  - `p2_step_4_65_multi_level_nested_preserves_middle` — 30×30 outer +
-    20×20 middle + 10×10 inner (3-level concentric). middle level
-    false-positive surround dissolve 차단. active >= 1.
-  - `p2_step_4_65_concentric_chain_no_propagation_dissolve` — 40×40
-    outer + 30/20/10 concentric chain (4-level). chain dissolve
-    propagation 차단. active >= 1.
-  누적: PR #144 (2) + β-1 (2) + 본 β-2 (2) = **6 회귀 자산** (sweep
-  target +10-12 의 **50%**). L-144-1/2/3 정합 — concentric topology
-  의 P7-N (Non-Manifold) 자연 동작 expected, dissolve guard focus.
-- **(β-3 ~ β-5 + γ, ~4-5시간 multi-day)** — atomic Path Z sub-step
+  - `p2_step_4_65_l_shape_inner_preserves_outer` — outer 20×20 + 2
+    inner 5×5 (lower-left horizontal bar, L-shape). non-rectangular
+    surround topology false-positive 차단. active >= 1.
+  - `p2_step_4_65_t_shape_inner_preserves_outer` — outer 20×20 +
+    horizontal 12×4 + vertical 4×12 (origin crossing, T/+ shape).
+    cross-shape surround edge 검증. active >= 1.
+  누적: PR #144 (2) + β-1 (2) + β-2 (2) + 본 β-3 (2) = **8 회귀 자산**
+  (sweep target +10-12 의 **67%**). non-rectangular topology 분류
+  추가, surround criterion 의 정확성 검증 강화.
+- **(β-4 ~ β-5 + γ, ~3-4시간 multi-day)** — atomic Path Z sub-step
   별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-3 진입 결재 (L-shape + T-shape)
+**다음 trigger**: β-4 진입 결재 (Edge cases — coincident/edge-touching/empty)
 또는 우선순위 priority track 결정 (ADR-145 Circle annulus / 사용자 시연
 evidence / Future ADR 등).

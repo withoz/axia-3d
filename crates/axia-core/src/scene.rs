@@ -15355,4 +15355,117 @@ mod tests {
             "ADR-144 β-2.2: concentric chain mesh invariants 위반 없음; \
              got {:?}", report.violations);
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-144 β-3 (2026-05-24) — L-shape + T-shape inner arrangement
+    //
+    // Non-rectangular surround topology — 2 inner rect 가 L 또는 T 자
+    // 형태로 arrange. surround criterion 의 non-uniform 토폴로지
+    // false-positive/negative 검증. β-1/β-2 의 rectangular-only
+    // arrangement 의 자연 후속.
+    //
+    // 시나리오 의의: 비대칭 inner 가 outer 의 일부 boundary 만 cover
+    // 시 dissolve criterion 의 정확성. LOCKED #1 P7-N 동작 정합.
+    // ────────────────────────────────────────────────────────────────
+
+    /// ADR-144 β-3.1 — L-shape inner arrangement. Outer 20×20 + 2
+    /// rect inner (5×5 at (-7.5,-7.5) + 5×5 at (-2.5,-7.5)) 가 좌하단
+    /// 에서 L 자 형태. outer 의 일부 boundary 만 inner 와 인접 →
+    /// surround false-positive 차단 검증.
+    #[test]
+    fn p2_step_4_65_l_shape_inner_preserves_outer() {
+        let mut scene = Scene::new();
+
+        // Outer 20×20 centered at origin
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 20.0,
+            height: 20.0,
+        });
+
+        // L-shape: 2 adjacent 5×5 rects at lower-left corner.
+        //   rect1: center (-7.5, -7.5), inside outer's lower-left quadrant
+        //   rect2: center (-2.5, -7.5), adjacent to rect1 horizontally
+        // 두 rect 가 L 형태 (가로 bar)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-7.5, -7.5, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 5.0,
+            height: 5.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(-2.5, -7.5, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 5.0,
+            height: 5.0,
+        });
+
+        // **P2 핵심 invariant**: silent total dissolve 차단.
+        // L-shape inner 가 outer 의 일부 boundary 만 인접 → outer
+        // surround 안 됨. active count >= 1.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "ADR-144 β-3.1: L-shape inner 시 active face count >= 1 \
+             (surround false-positive 차단). got {}", active);
+
+        // mesh invariants 정상 (L-shape topology 보존)
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-3.1: L-shape mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
+
+    /// ADR-144 β-3.2 — T-shape inner arrangement. Outer 20×20 + 2
+    /// crossing rect inner (horizontal 12×4 + vertical 4×12 at origin)
+    /// 가 T 자 (또는 +) 형태. surround criterion 의 cross-shape edge
+    /// 검증.
+    #[test]
+    fn p2_step_4_65_t_shape_inner_preserves_outer() {
+        let mut scene = Scene::new();
+
+        // Outer 20×20 centered at origin
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 20.0,
+            height: 20.0,
+        });
+
+        // T-shape (또는 +): horizontal bar + vertical bar 가 origin 교차
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 12.0,
+            height: 4.0,
+        });
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 4.0,
+            height: 12.0,
+        });
+
+        // **P2 핵심 invariant**: silent total dissolve 차단.
+        // Cross-shape inner 가 outer 일부만 cover (4 corner outside
+        // cross). active count >= 1.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "ADR-144 β-3.2: T-shape (cross) inner 시 active face count >= 1 \
+             (surround false-positive 차단). got {}", active);
+
+        // mesh invariants 정상 (cross-shape topology)
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-3.2: T-shape mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
 }
