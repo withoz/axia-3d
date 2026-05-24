@@ -250,12 +250,27 @@ hit point P on NURBS surface
 
 ## 8. Acceptance Log
 
-- **2026-05-23 α** (본 commit) — α spec + sub-step plan + lock-ins.
-- **(β implementation, multi-day)** — atomic Path Z sub-step (140-β ~ 140-η)
-  별도 사용자 결재 후 진행.
+- **2026-05-23 α** (PR #145, 5df58ef) — α spec + sub-step plan + lock-ins.
+- **2026-05-23 β** (PR #147, 0eaa856) — `faceSurfaceNormalAtPos` WASM
+  export 신규 (axia-wasm). Rust signature: `(face_id, x, y, z) -> Vec<f64>`,
+  empty 또는 3-element `[nx, ny, nz]` 반환. Zero-normal degenerate
+  (length_squared < 1e-20) 자동 filter — 예: cone apex.
+- **2026-05-24 γ** (본 commit, ADR-140 γ 자연 진입) — TS bridge wrapper
+  `WasmBridge.faceSurfaceNormalAtPos(faceId, x, y, z): Float64Array | null`
+  추가. Graceful failure 5-case 회귀 (engine missing / export missing /
+  empty Float64Array / zero-normal / malformed length). `AxiaEngineExtended`
+  interface 에 optional method 선언. ADR-093 D-γ 패턴 답습 (defensive
+  guard + null fallback). 회귀 vitest +7 (WasmBridge.test.ts `ADR-140 γ`
+  block). 사용자 facing 변화 0 (140-δ 의 dispatch 진입 전).
+- **(140-δ 다음 sub-step)** — `getDrawPlane(faceId, hitPoint?)` signature
+  확장 + dispatch (kind ≤ 1 기존 / kind ≥ 2 surface-aware). 별도 사용자
+  결재 후 진행.
+- **(140-ε ~ 140-η, multi-day)** — 도구별 통합 (DrawLine / DrawRect /
+  DrawCircle / Sketch) + 회귀 자산 (Cylinder/Sphere/Cone/Torus chord error
+  측정) + E2E + 사용자 시연. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β implementation 진입 결재 (140-β WASM export 부터)
-또는 우선순위 priority track 결정 (Track A P7 / Track B β-3 등과의
+**다음 trigger**: 140-δ 진입 결재 (getDrawPlane signature 확장)
+또는 우선순위 priority track 결정 (Sprint 1 ADR-144 / ADR-145 등과의
 비교).

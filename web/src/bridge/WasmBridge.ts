@@ -588,6 +588,8 @@ type AxiaEngineExtended = AxiaEngine & {
   clearFaceSurface?(faceId: number): boolean;
   faceSurfaceKind?(faceId: number): number;
   tessellateFaceSurface?(faceId: number, chordTol: number): Float64Array;
+  // ADR-140 β — Surface-aware normal evaluation at world position
+  faceSurfaceNormalAtPos?(faceId: number, x: number, y: number, z: number): Float64Array;
   // ADR-086 O-γ — Inject external face (STEP/IGES Approach A)
   injectExternalFaceNoSurface?(positionsXyz: Float64Array): number;
   injectExternalFacePlane?(...args: number[]): number;
@@ -1910,6 +1912,45 @@ export class WasmBridge {
     }).tessellateFaceSurface;
     if (!fn) return new Float64Array(0);
     const result = fn.call(this.engine, faceId, chordTol);
+    return result instanceof Float64Array ? result : new Float64Array(result as number[]);
+  }
+
+  /**
+   * Surface-aware normal evaluation at world position (ADR-140 γ).
+   *
+   * Forwards to WASM `faceSurfaceNormalAtPos` export (ADR-140 β, PR #147).
+   * Enables surface-aware `getDrawPlane(faceId, hitPoint)` — the tool
+   * input layer 1:1 mirror of ADR-038 P23 surface-aware normals (render
+   * layer). Cylinder/Sphere/Cone/Torus/NURBS surface 위 사용자 click 의
+   * tangent plane evaluation (chord fallback 회피).
+   *
+   * Returns `null` in the following cases (graceful failure):
+   * - Engine is unavailable (`this.engine == null`)
+   * - WASM export missing (legacy build / mock — defensive guard)
+   * - Face has no analytic surface (`face_surface(fid) == None`)
+   * - Surface evaluation at position is degenerate (e.g., cone apex,
+   *   zero-normal — Rust filters via `length_squared() < 1e-20`)
+   * - WASM returns malformed length (defensive — must be exactly 3)
+   *
+   * @param faceId - axia FaceId
+   * @param x, y, z - World position (typically a raycast hit point on the face)
+   * @returns Unit normal `[nx, ny, nz]` (Float64Array of length 3), or
+   *   `null` on any failure mode above
+   */
+  faceSurfaceNormalAtPos(
+    faceId: number,
+    x: number,
+    y: number,
+    z: number,
+  ): Float64Array | null {
+    if (!this.engine) return null;
+    const fn = (this.engine as unknown as {
+      faceSurfaceNormalAtPos?: (id: number, x: number, y: number, z: number) => Float64Array;
+    }).faceSurfaceNormalAtPos;
+    if (!fn) return null;
+    const result = fn.call(this.engine, faceId, x, y, z);
+    if (!result || result.length === 0) return null;
+    if (result.length !== 3) return null;  // defensive — Rust always returns 0 or 3
     return result instanceof Float64Array ? result : new Float64Array(result as number[]);
   }
 

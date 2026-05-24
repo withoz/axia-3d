@@ -552,6 +552,97 @@ describe('WasmBridge', () => {
     });
 
     // ──────────────────────────────────────────────────────────────────
+    // ADR-140 γ — TS bridge wrapper for faceSurfaceNormalAtPos
+    // (β implementation 자연 후속 — surface-aware getDrawPlane unlock)
+    // ──────────────────────────────────────────────────────────────────
+
+    it('faceSurfaceNormalAtPos() returns parsed Float64Array when WASM returns 3 values', () => {
+      let capturedFaceId = -1;
+      let capturedPos: [number, number, number] | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        faceSurfaceNormalAtPos: (id: number, x: number, y: number, z: number) => {
+          capturedFaceId = id;
+          capturedPos = [x, y, z];
+          // Mock: Cylinder surface at radial position → unit radial normal
+          return new Float64Array([1, 0, 0]);
+        },
+      };
+      const result = bridge.faceSurfaceNormalAtPos(7, 5, 0, 0);
+      expect(result).not.toBeNull();
+      expect(result?.length).toBe(3);
+      expect(result?.[0]).toBe(1);
+      expect(result?.[1]).toBe(0);
+      expect(result?.[2]).toBe(0);
+      expect(capturedFaceId).toBe(7);
+      expect(capturedPos).toEqual([5, 0, 0]);
+    });
+
+    it('faceSurfaceNormalAtPos() returns null when engine missing', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = null;
+      const result = bridge.faceSurfaceNormalAtPos(0, 0, 0, 0);
+      expect(result).toBeNull();
+    });
+
+    it('faceSurfaceNormalAtPos() returns null when WASM export missing (legacy build / mock)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        // Method intentionally absent — defensive guard
+      };
+      const result = bridge.faceSurfaceNormalAtPos(0, 1, 2, 3);
+      expect(result).toBeNull();
+    });
+
+    it('faceSurfaceNormalAtPos() returns null when WASM returns empty (no surface)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        faceSurfaceNormalAtPos: (_id: number, _x: number, _y: number, _z: number) =>
+          new Float64Array(0),  // Rust returns empty when face.surface() == None
+      };
+      const result = bridge.faceSurfaceNormalAtPos(0, 0, 0, 0);
+      expect(result).toBeNull();
+    });
+
+    it('faceSurfaceNormalAtPos() returns null when WASM returns degenerate (zero-normal cone apex)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        faceSurfaceNormalAtPos: (_id: number, _x: number, _y: number, _z: number) =>
+          new Float64Array(0),  // Rust filters zero-normal via length_squared() < 1e-20
+      };
+      const result = bridge.faceSurfaceNormalAtPos(5, 0, 0, 0);
+      expect(result).toBeNull();
+    });
+
+    it('faceSurfaceNormalAtPos() returns null when WASM returns malformed length (defensive)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        // Pathological case — should never occur per Rust contract (always 0 or 3),
+        // but defensive guard catches future ABI drift
+        faceSurfaceNormalAtPos: (_id: number, _x: number, _y: number, _z: number) =>
+          new Float64Array([1, 0]),  // length 2 — not 3
+      };
+      const result = bridge.faceSurfaceNormalAtPos(0, 0, 0, 0);
+      expect(result).toBeNull();
+    });
+
+    it('faceSurfaceNormalAtPos() handles Sphere radial normal (radius=5 at +X)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {
+        faceSurfaceNormalAtPos: (_id: number, x: number, y: number, z: number) => {
+          // Mock: Sphere centered at origin, radius 5 → unit radial = (x,y,z) / |.|
+          const len = Math.sqrt(x * x + y * y + z * z);
+          return new Float64Array([x / len, y / len, z / len]);
+        },
+      };
+      const result = bridge.faceSurfaceNormalAtPos(0, 5, 0, 0);
+      expect(result).not.toBeNull();
+      expect(result?.[0]).toBeCloseTo(1, 6);
+      expect(result?.[1]).toBeCloseTo(0, 6);
+      expect(result?.[2]).toBeCloseTo(0, 6);
+    });
+
+    // ──────────────────────────────────────────────────────────────────
     // ADR-086 O-γ — inject external face (STEP/IGES Approach A) tests
     // ──────────────────────────────────────────────────────────────────
 
