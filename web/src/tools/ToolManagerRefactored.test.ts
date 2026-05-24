@@ -184,6 +184,11 @@ function mockBridge() {
     getVertexPos: vi.fn().mockReturnValue(null),
     // ADR-038 P23.4 — analytic surface 여부 (mock: 모두 non-analytic)
     faceHasAnalyticSurface: vi.fn().mockReturnValue(false),
+    // ADR-140 γ/δ — surface-aware getDrawPlane dispatch defaults
+    //   default kind=1 (Plane) → legacy DCEL face normal path (회귀 0)
+    //   default normal=null → graceful fallback if kind ≥ 2 ever set in test
+    faceSurfaceKind: vi.fn().mockReturnValue(1),
+    faceSurfaceNormalAtPos: vi.fn().mockReturnValue(null),
   } as any;
 }
 
@@ -910,6 +915,152 @@ describe('ToolManager', () => {
     it('reflects tool busy state', () => {
       tm.setTool('line');
       expect(tm.isToolBusy()).toBe(false);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // ADR-140 δ — getDrawPlane surface-aware dispatch
+  // (β WASM export + γ TS wrapper 의 자연 후속 — kind ≤ 1 unchanged,
+  //  kind ≥ 2 tangent plane at hit point with graceful fallback)
+  // ──────────────────────────────────────────────────────────────────
+  describe('ADR-140 δ — getDrawPlane surface-aware dispatch', () => {
+    // ToolManager's internal faceMap (Uint32Array) maps mesh triangle face
+    // indices → axia FaceIds. In real flow it's populated by syncMesh()
+    // after WASM rebuild. For these unit tests we inject directly so
+    // `getFaceId(0)` returns a valid fid (7) and the dispatch path runs.
+    beforeEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tm as any).faceMap = new Uint32Array([7]);
+    });
+
+    // Mock event helper — pick returns a hit at world origin with face index 0
+    function mockMouseEvent(): MouseEvent {
+      return { clientX: 100, clientY: 100 } as MouseEvent;
+    }
+
+    function mockHit(faceIndex: number, point: { x: number; y: number; z: number } | null) {
+      const hit: Record<string, unknown> = { faceIndex };
+      if (point) {
+        // Three.js Vector3-like with clone()
+        hit.point = {
+          x: point.x, y: point.y, z: point.z,
+          clone: () => ({ x: point.x, y: point.y, z: point.z, clone: () => null }),
+        };
+      }
+      return hit;
+    }
+
+    it('kind ≤ 1 (Plane) uses DCEL face normal — legacy path unchanged', () => {
+      // Setup: pick returns hit on face 0, kind=1 (Plane), DCEL normal=+Y
+      viewport.pick.mockReturnValue(mockHit(0, { x: 1, y: 2, z: 3 }));
+      bridge.faceSurfaceKind.mockReturnValue(1);
+      bridge.getFaceNormal.mockReturnValue([0, 1, 0]);
+
+      // Use ToolManager getDrawPlane via ITool context (DrawLineTool passes it)
+      tm.setTool('line');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(plane.onFace).toBe(true);
+      expect(plane.normal.y).toBeCloseTo(1, 6);
+      expect(plane.surfaceKind).toBe(1);
+      // Plane kind → no surface-aware origin set
+      expect(plane.origin).toBeUndefined();
+      // Surface-aware path NOT called for kind ≤ 1
+      expect(bridge.faceSurfaceNormalAtPos).not.toHaveBeenCalled();
+    });
+
+    it('kind ≥ 2 (Cylinder) uses surface-aware tangent plane at hit point', () => {
+      // Setup: pick returns hit on cylinder face, kind=2, surface normal at hit = +X
+      viewport.pick.mockReturnValue(mockHit(0, { x: 5, y: 0, z: 0 }));
+      bridge.faceSurfaceKind.mockReturnValue(2);  // Cylinder
+      bridge.faceSurfaceNormalAtPos.mockReturnValue(new Float64Array([1, 0, 0]));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(plane.onFace).toBe(true);
+      expect(plane.normal.x).toBeCloseTo(1, 6);
+      expect(plane.normal.y).toBeCloseTo(0, 6);
+      expect(plane.normal.z).toBeCloseTo(0, 6);
+      expect(plane.surfaceKind).toBe(2);
+      // Surface-aware origin = hit point (Cylinder tangent anchor)
+      expect(plane.origin).toBeDefined();
+      expect(plane.origin.x).toBe(5);
+      // Surface-aware path WAS called with hit point coordinates
+      // (faceMap[0] = 7 per ADR-140 δ beforeEach setup, so fid = 7)
+      expect(bridge.faceSurfaceNormalAtPos).toHaveBeenCalledWith(7, 5, 0, 0);
+      // Legacy DCEL face normal NOT consulted on surface-aware success
+      expect(bridge.getFaceNormal).not.toHaveBeenCalled();
+    });
+
+    it('kind ≥ 2 falls back to DCEL when faceSurfaceNormalAtPos returns null (graceful)', () => {
+      // Setup: kind ≥ 2 but surface evaluation returns null (e.g. degenerate point)
+      viewport.pick.mockReturnValue(mockHit(0, { x: 0, y: 0, z: 0 }));
+      bridge.faceSurfaceKind.mockReturnValue(4);  // Cone (apex 가능)
+      bridge.faceSurfaceNormalAtPos.mockReturnValue(null);  // degenerate
+      bridge.getFaceNormal.mockReturnValue([0, 0, 1]);  // fallback DCEL normal
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(plane.onFace).toBe(true);
+      // Fallback used DCEL face normal
+      expect(plane.normal.z).toBeCloseTo(1, 6);
+      expect(plane.surfaceKind).toBe(4);
+      // No surface-aware origin (fallback path)
+      expect(plane.origin).toBeUndefined();
+      // Both paths attempted (surface first, fallback second)
+      expect(bridge.faceSurfaceNormalAtPos).toHaveBeenCalled();
+      expect(bridge.getFaceNormal).toHaveBeenCalled();
+    });
+
+    it('kind ≥ 2 without hit.point falls back to DCEL (defensive — pick missing point)', () => {
+      // Pathological: kind ≥ 2 but viewport.pick returned faceIndex without point
+      viewport.pick.mockReturnValue(mockHit(0, null));
+      bridge.faceSurfaceKind.mockReturnValue(3);  // Sphere
+      bridge.getFaceNormal.mockReturnValue([0, 1, 0]);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(plane.onFace).toBe(true);
+      expect(plane.normal.y).toBeCloseTo(1, 6);
+      expect(plane.surfaceKind).toBe(3);
+      expect(plane.origin).toBeUndefined();
+      // Surface-aware path NOT called without hit.point
+      expect(bridge.faceSurfaceNormalAtPos).not.toHaveBeenCalled();
+      // DCEL fallback used
+      expect(bridge.getFaceNormal).toHaveBeenCalled();
+    });
+
+    it('returns surfaceKind in DrawPlaneInfo for downstream tool dispatch', () => {
+      // Verify that kind metadata flows through to caller (140-ε pre-condition)
+      viewport.pick.mockReturnValue(mockHit(0, { x: 0, y: 5, z: 0 }));
+      bridge.faceSurfaceKind.mockReturnValue(5);  // Torus
+      bridge.faceSurfaceNormalAtPos.mockReturnValue(new Float64Array([0, 1, 0]));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(plane.surfaceKind).toBe(5);
+      // Caller (e.g. DrawLineTool) can now branch on surfaceKind for
+      // surface-aware visualization (e.g. tangent guide line)
+    });
+
+    it('default ground plane (no face hit) has no surfaceKind / origin', () => {
+      // Setup: pick returns null (empty space click)
+      viewport.pick.mockReturnValue(null);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(plane.onFace).toBe(false);
+      expect(plane.surfaceKind).toBeUndefined();
+      expect(plane.origin).toBeUndefined();
+      // No surface dispatch attempted
+      expect(bridge.faceSurfaceKind).not.toHaveBeenCalled();
+      expect(bridge.faceSurfaceNormalAtPos).not.toHaveBeenCalled();
     });
   });
 });

@@ -83,6 +83,26 @@ export interface DrawPlaneInfo {
   right: THREE.Vector3;
   /** Whether this came from an existing face (true) or default plane (false) */
   onFace: boolean;
+  /**
+   * ADR-140 δ — Surface-aware tangent plane origin (raycast hit point on
+   * the curved surface). Set only when `surfaceKind >= 2` AND the
+   * `faceSurfaceNormalAtPos` bridge call succeeded. `undefined` for kind ≤ 1
+   * (Plane/None) — backward-compatible with all legacy callers.
+   *
+   * Background: Surface-aware tangent plane is anchored at the hit point P
+   * with normal evaluated via `AnalyticSurface::normal_at_world_pos(P)`.
+   * Cylinder/Sphere/Cone/Torus/NURBS surface 위 사용자 click 의 정확한
+   * tangent plane (chord substitute 회피).
+   */
+  origin?: THREE.Vector3;
+  /**
+   * ADR-140 δ — Surface kind from `faceSurfaceKind` (0=None, 1=Plane,
+   * 2=Cylinder, 3=Sphere, 4=Cone, 5=Torus, 6=BezierPatch, 7=BSplineSurface,
+   * 8=NURBSSurface). `undefined` when not on a face (default ground plane
+   * or sketch mode). Caller may use this to dispatch surface-aware tool
+   * behavior (e.g., tangent visualization, dimension labels).
+   */
+  surfaceKind?: number;
 }
 
 /**
