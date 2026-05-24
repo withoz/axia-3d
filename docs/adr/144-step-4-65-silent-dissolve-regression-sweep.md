@@ -182,22 +182,28 @@ sub-step plan 답습.
   + `p2_step_4_65_single_inner_baseline`).
 - **2026-05-24 β-2** (PR #167, 294f56a) — Multi-level nested + Concentric.
   2 신규 회귀 자산 (multi_level_nested_preserves_middle + concentric_chain).
-- **2026-05-24 β-3** (본 commit) — L-shape + T-shape inner arrangement.
-  `crates/axia-core/src/scene.rs` tests module 에 2 신규 회귀 자산 추가:
-  - `p2_step_4_65_l_shape_inner_preserves_outer` — outer 20×20 + 2
-    inner 5×5 (lower-left horizontal bar, L-shape). non-rectangular
-    surround topology false-positive 차단. active >= 1.
-  - `p2_step_4_65_t_shape_inner_preserves_outer` — outer 20×20 +
-    horizontal 12×4 + vertical 4×12 (origin crossing, T/+ shape).
-    cross-shape surround edge 검증. active >= 1.
-  누적: PR #144 (2) + β-1 (2) + β-2 (2) + 본 β-3 (2) = **8 회귀 자산**
-  (sweep target +10-12 의 **67%**). non-rectangular topology 분류
-  추가, surround criterion 의 정확성 검증 강화.
-- **(β-4 ~ β-5 + γ, ~3-4시간 multi-day)** — atomic Path Z sub-step
-  별도 사용자 결재 후 진행.
+- **2026-05-24 β-3** (PR #168, 1dee4d0) — L-shape + T-shape inner
+  arrangement. 2 신규 회귀 자산 (l_shape_inner + t_shape_inner).
+- **2026-05-24 β-4** (본 commit) — Edge cases (coincident + edge-
+  touching + empty mesh). `crates/axia-core/src/scene.rs` tests module
+  에 3 신규 회귀 자산 추가:
+  - `p2_step_4_65_coincident_outer_inner_no_silent_total_dissolve` —
+    outer 10×10 + inner 10×10 정확 coincident (boundary fully matched).
+    surround criterion 즉시 충족 case, dedup 또는 dissolve OK, 단
+    silent total dissolve 차단. active >= 1.
+  - `p2_step_4_65_edge_touching_corner_preserves_both` — outer 10×10
+    at origin + inner 5×5 at (7.5,7.5) corner shared at (5,5).
+    boundary disjoint (corner 한 점 touch) → surround false-positive
+    차단. active >= 1.
+  - `p2_step_4_65_empty_mesh_no_panic` — Scene::new() 만, no DrawRect.
+    Step 4.65 trigger 미호출 + empty mesh state invariants 검증.
+    active == 0 정합, verify_face_invariants 미위반.
+  누적: PR #144 (2) + β-1 (2) + β-2 (2) + β-3 (2) + 본 β-4 (3) =
+  **11 회귀 자산** (sweep target +10-12 의 **92%**). degenerate /
+  trivial / boundary edge cases coverage 완료.
+- **(β-5 + γ, ~2시간)** — 3×3 grid stress + closure docs.
 
 ---
 
-**다음 trigger**: β-4 진입 결재 (Edge cases — coincident/edge-touching/empty)
-또는 우선순위 priority track 결정 (ADR-145 Circle annulus / 사용자 시연
-evidence / Future ADR 등).
+**다음 trigger**: β-5 진입 결재 (3×3 grid stress, ~1시간 + γ closure docs ~30분)
+또는 우선순위 priority track 결정.
