@@ -2746,9 +2746,42 @@ export class ToolManager {
     const fid = this.getFaceId(hit.faceIndex);
     if (fid < 0) return defaultPlane;
 
-    // Get DCEL face normal (more accurate than Three.js interpolated normal)
-    const [nx, ny, nz] = this.bridge.getFaceNormal(fid);
-    const normal = new THREE.Vector3(nx, ny, nz);
+    // ADR-140 δ — Surface-aware dispatch (kind ≤ 1 unchanged / kind ≥ 2 tangent plane)
+    //
+    // Reads `faceSurfaceKind` to decide whether to use the legacy DCEL
+    // face normal (chord plane, suitable for Plane/None) or the surface-
+    // aware tangent plane (Cylinder/Sphere/Cone/Torus/NURBS). The surface-
+    // aware path requires both a non-empty hit point (`hit.point`) and a
+    // successful `faceSurfaceNormalAtPos` evaluation; either failure mode
+    // gracefully falls back to the DCEL normal (preserving legacy behavior).
+    //
+    // This is the central dispatch site for ADR-140 (the entire β/γ/δ chain
+    // ends here). Tools that consume DrawPlaneInfo automatically benefit
+    // when they sample DrawPlaneInfo.normal/origin on every interaction.
+    const kind = this.bridge.faceSurfaceKind(fid);
+    let normal: THREE.Vector3;
+    let surfaceAwareOrigin: THREE.Vector3 | undefined;
+    if (kind >= 2 && hit.point) {
+      // Surface-aware path: tangent plane at hit point P
+      const tangentNormal = this.bridge.faceSurfaceNormalAtPos(
+        fid,
+        hit.point.x,
+        hit.point.y,
+        hit.point.z,
+      );
+      if (tangentNormal !== null) {
+        normal = new THREE.Vector3(tangentNormal[0], tangentNormal[1], tangentNormal[2]);
+        surfaceAwareOrigin = hit.point.clone();
+      } else {
+        // Fallback: graceful degradation to DCEL face normal (legacy chord plane)
+        const [nx, ny, nz] = this.bridge.getFaceNormal(fid);
+        normal = new THREE.Vector3(nx, ny, nz);
+      }
+    } else {
+      // Plane/None (kind ≤ 1) — DCEL face normal (legacy behavior, unchanged)
+      const [nx, ny, nz] = this.bridge.getFaceNormal(fid);
+      normal = new THREE.Vector3(nx, ny, nz);
+    }
     if (normal.lengthSq() < 0.001) return defaultPlane;
     normal.normalize();
 
@@ -2770,7 +2803,16 @@ export class ToolManager {
     const right = new THREE.Vector3().crossVectors(ref, normal).normalize();
     const up = new THREE.Vector3().crossVectors(normal, right).normalize();
 
-    return { normal, up, right, onFace: true };
+    return {
+      normal,
+      up,
+      right,
+      onFace: true,
+      // ADR-140 δ — Optional surface-aware metadata (undefined for kind ≤ 1
+      // or fallback path, backward-compatible with all legacy DrawPlaneInfo callers)
+      origin: surfaceAwareOrigin,
+      surfaceKind: kind,
+    };
   }
 
   private getFaceId(faceIndex: number): number {

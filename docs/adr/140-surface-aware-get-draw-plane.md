@@ -255,22 +255,38 @@ hit point P on NURBS surface
   export 신규 (axia-wasm). Rust signature: `(face_id, x, y, z) -> Vec<f64>`,
   empty 또는 3-element `[nx, ny, nz]` 반환. Zero-normal degenerate
   (length_squared < 1e-20) 자동 filter — 예: cone apex.
-- **2026-05-24 γ** (본 commit, ADR-140 γ 자연 진입) — TS bridge wrapper
+- **2026-05-24 γ** (PR #160, 9305cfc) — TS bridge wrapper
   `WasmBridge.faceSurfaceNormalAtPos(faceId, x, y, z): Float64Array | null`
   추가. Graceful failure 5-case 회귀 (engine missing / export missing /
   empty Float64Array / zero-normal / malformed length). `AxiaEngineExtended`
   interface 에 optional method 선언. ADR-093 D-γ 패턴 답습 (defensive
   guard + null fallback). 회귀 vitest +7 (WasmBridge.test.ts `ADR-140 γ`
-  block). 사용자 facing 변화 0 (140-δ 의 dispatch 진입 전).
-- **(140-δ 다음 sub-step)** — `getDrawPlane(faceId, hitPoint?)` signature
-  확장 + dispatch (kind ≤ 1 기존 / kind ≥ 2 surface-aware). 별도 사용자
-  결재 후 진행.
-- **(140-ε ~ 140-η, multi-day)** — 도구별 통합 (DrawLine / DrawRect /
-  DrawCircle / Sketch) + 회귀 자산 (Cylinder/Sphere/Cone/Torus chord error
-  측정) + E2E + 사용자 시연. 별도 사용자 결재 후 진행.
+  block). 사용자 facing 변화 0.
+- **2026-05-24 δ** (본 commit, ADR-140 δ 자연 진입) —
+  `ToolManagerRefactored.getDrawPlane` 의 내부 surface-aware dispatch
+  활성. `DrawPlaneInfo` 확장 (optional `origin?: THREE.Vector3` +
+  `surfaceKind?: number`, backward-compatible). Dispatch 규칙:
+  - kind ≤ 1 (Plane/None) → 기존 DCEL face normal (chord plane, legacy
+    behavior 불변)
+  - kind ≥ 2 (Cylinder/Sphere/Cone/Torus/NURBS) + `hit.point` 있음 →
+    `bridge.faceSurfaceNormalAtPos(fid, P)` 평가 → tangent plane at P
+    (origin=P, normal=evaluated)
+  - kind ≥ 2 but degenerate (faceSurfaceNormalAtPos returns null) →
+    graceful fallback to DCEL face normal (L-140-5 정합)
+  - kind ≥ 2 but hit.point missing (defensive) → DCEL fallback
+  회귀 vitest +6 (ToolManagerRefactored.test.ts `ADR-140 δ` block):
+  legacy path / surface-aware success / null fallback / no-point fallback /
+  metadata propagation / default ground plane. 사용자 facing 변화 0
+  (caller 가 `origin/surfaceKind` 사용 전 — 140-ε 진입 전).
+- **(140-ε 다음 sub-step)** — 도구별 통합 (DrawLine / DrawRect / DrawCircle
+  / Sketch). DrawLineTool 의 두 번째 click 이 `plane.origin` 기준 tangent
+  chord 사용 → Cylinder/Sphere surface 위 자연 근사. 별도 사용자 결재 후
+  진행.
+- **(140-ζ ~ 140-η, multi-day)** — 회귀 자산 (Cylinder/Sphere/Cone/Torus
+  chord error 측정) + E2E + 사용자 시연. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: 140-δ 진입 결재 (getDrawPlane signature 확장)
+**다음 trigger**: 140-ε 진입 결재 (도구별 통합 — DrawLine 부터)
 또는 우선순위 priority track 결정 (Sprint 1 ADR-144 / ADR-145 등과의
 비교).
