@@ -54,6 +54,15 @@ function mockToolContext() {
     axisLock: null as string | null,
     inferredAxis: 'free' as string | null,
     faceMap: new Uint32Array([0, 1, 2]),
+    // ADR-140 ε-1: DrawLineTool now uses ctx.getDrawPlane SSOT for face-hit
+    // drawing plane. Default returns legacy-equivalent DCEL fallback (no
+    // surface-aware origin). Tests override .mockReturnValue as needed.
+    getDrawPlane: vi.fn().mockReturnValue({
+      normal: new THREE.Vector3(0, 0, 1),
+      up: new THREE.Vector3(0, 1, 0),
+      right: new THREE.Vector3(1, 0, 0),
+      onFace: false,
+    }),
   } as any;
 }
 
@@ -326,6 +335,121 @@ describe('DrawLineTool', () => {
 
       expect(ctx.bridge.drawLineAsShape).toHaveBeenCalledTimes(1);
       expect(ctx.bridge.drawLine).not.toHaveBeenCalled();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-140 ε-1 — DrawLineTool surface-aware drawing plane integration
+  // (140-δ getDrawPlane SSOT 통합 — face-hit branch 가 ctx.getDrawPlane
+  //  결과 사용. Cylinder/Sphere surface 위 사용자 click 의 정확한 tangent
+  //  plane chord substitute 회피.)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-140 ε-1 — surface-aware drawing plane integration', () => {
+    // Mock event helper — same coords as elsewhere in this file
+    function mockEvent(): MouseEvent {
+      return { clientX: 100, clientY: 100 } as MouseEvent;
+    }
+
+    // Build a face hit with world point + face normal (Three.js shape).
+    // Note: hit.object intentionally omitted to skip the matrixWorld transform
+    // path in the defensive fallback branch (Three.js mock has no Matrix4).
+    // This is sound because:
+    //   - tests 1, 2 use dp.onFace:true → defensive branch never entered
+    //   - test 3 uses dp.onFace:false → defensive branch entered, but
+    //     `if (hit.object && hit.object.matrixWorld)` evaluates false →
+    //     skips matrixWorld transform → worldNormal = hit.face.normal directly
+    function mockFaceHit(point: { x: number; y: number; z: number }, normal: { x: number; y: number; z: number }) {
+      return {
+        faceIndex: 0,
+        point: new THREE.Vector3(point.x, point.y, point.z),
+        face: { normal: new THREE.Vector3(normal.x, normal.y, normal.z) },
+      };
+    }
+
+    it('uses ctx.getDrawPlane SSOT when face is hit (Plane kind ≤ 1 — DCEL legacy equivalent)', () => {
+      ctx.viewport.pick.mockReturnValue(mockFaceHit({ x: 1, y: 2, z: 0 }, { x: 0, y: 0, z: 1 }));
+      ctx.getDrawPlane.mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1),  // DCEL face normal (Plane)
+        up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3(1, 0, 0),
+        onFace: true,
+        surfaceKind: 1,  // Plane — no surface-aware origin
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tool as any).establishDrawingPlane(mockEvent());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tool as any).drawingPlane as THREE.Plane;
+      expect(plane).toBeDefined();
+      // SSOT dispatch consulted exactly once for face-hit branch
+      expect(ctx.getDrawPlane).toHaveBeenCalledTimes(1);
+      // Plane normal = DCEL face normal (Z-up)
+      expect(plane.normal.z).toBeCloseTo(1, 6);
+      // Legacy fallback origin = hit.point (no surface-aware origin for kind ≤ 1)
+      // Plane equation: n·x + d = 0 → for normal=(0,0,1), origin=(1,2,0): d = -(0*1 + 0*2 + 1*0) = 0
+      expect(plane.constant).toBeCloseTo(0, 6);
+    });
+
+    it('uses surface-aware tangent plane when getDrawPlane returns origin (Cylinder kind ≥ 2)', () => {
+      // Hit on Cylinder surface at world (5, 0, 0) — radial normal +X
+      ctx.viewport.pick.mockReturnValue(mockFaceHit({ x: 5, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }));
+      ctx.getDrawPlane.mockReturnValue({
+        normal: new THREE.Vector3(1, 0, 0),  // Surface-aware radial normal
+        up: new THREE.Vector3(0, 0, 1),
+        right: new THREE.Vector3(0, 1, 0),
+        onFace: true,
+        origin: new THREE.Vector3(5, 0, 0),  // ADR-140 δ surface-aware tangent origin
+        surfaceKind: 2,  // Cylinder
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tool as any).establishDrawingPlane(mockEvent());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tool as any).drawingPlane as THREE.Plane;
+      expect(plane).toBeDefined();
+      // Surface-aware normal (radial)
+      expect(plane.normal.x).toBeCloseTo(1, 6);
+      // Surface-aware origin (hit point P on cylinder)
+      // Plane equation: n·x + d = 0 → for normal=(1,0,0), origin=(5,0,0): d = -5
+      expect(plane.constant).toBeCloseTo(-5, 6);
+    });
+
+    it('falls back to legacy hit.face.normal when getDrawPlane returns onFace=false (defensive)', () => {
+      // Pathological case: viewport hit OK, but getDrawPlane fails to recognize face
+      // (e.g. mid-syncMesh stale state, no axia FaceId). Should not throw.
+      ctx.viewport.pick.mockReturnValue(mockFaceHit({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }));
+      ctx.getDrawPlane.mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1),  // Default ground plane (Z-up)
+        up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3(1, 0, 0),
+        onFace: false,  // ← getDrawPlane failed to recognize face
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tool as any).establishDrawingPlane(mockEvent());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tool as any).drawingPlane as THREE.Plane;
+      expect(plane).toBeDefined();
+      // Defensive: legacy hit.face.normal used (matrixWorld is identity in mock → +Y)
+      expect(plane.normal.y).toBeCloseTo(1, 6);
+    });
+
+    it('does not call ctx.getDrawPlane in no-face workplane fallback (existing path unchanged)', () => {
+      // Empty space click (pick returns null) — should use workplane logic only
+      ctx.viewport.pick.mockReturnValue(null);
+      ctx.get3DPoint.mockReturnValue(new THREE.Vector3(0, 0, 0));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tool as any).establishDrawingPlane(mockEvent());
+
+      // ADR-140 ε-1 face-hit branch NOT entered → getDrawPlane never called
+      expect(ctx.getDrawPlane).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tool as any).drawingPlane as THREE.Plane;
+      expect(plane).toBeDefined();
     });
   });
 });

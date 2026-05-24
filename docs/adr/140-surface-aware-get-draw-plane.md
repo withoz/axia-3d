@@ -262,7 +262,7 @@ hit point P on NURBS surface
   interface 에 optional method 선언. ADR-093 D-γ 패턴 답습 (defensive
   guard + null fallback). 회귀 vitest +7 (WasmBridge.test.ts `ADR-140 γ`
   block). 사용자 facing 변화 0.
-- **2026-05-24 δ** (본 commit, ADR-140 δ 자연 진입) —
+- **2026-05-24 δ** (PR #161, 1126dde) —
   `ToolManagerRefactored.getDrawPlane` 의 내부 surface-aware dispatch
   활성. `DrawPlaneInfo` 확장 (optional `origin?: THREE.Vector3` +
   `surfaceKind?: number`, backward-compatible). Dispatch 규칙:
@@ -274,19 +274,33 @@ hit point P on NURBS surface
   - kind ≥ 2 but degenerate (faceSurfaceNormalAtPos returns null) →
     graceful fallback to DCEL face normal (L-140-5 정합)
   - kind ≥ 2 but hit.point missing (defensive) → DCEL fallback
-  회귀 vitest +6 (ToolManagerRefactored.test.ts `ADR-140 δ` block):
-  legacy path / surface-aware success / null fallback / no-point fallback /
-  metadata propagation / default ground plane. 사용자 facing 변화 0
-  (caller 가 `origin/surfaceKind` 사용 전 — 140-ε 진입 전).
-- **(140-ε 다음 sub-step)** — 도구별 통합 (DrawLine / DrawRect / DrawCircle
-  / Sketch). DrawLineTool 의 두 번째 click 이 `plane.origin` 기준 tangent
-  chord 사용 → Cylinder/Sphere surface 위 자연 근사. 별도 사용자 결재 후
-  진행.
+  회귀 vitest +6. 사용자 facing 변화 0 (caller 가 origin/surfaceKind 사용
+  전 — ε 진입 전). **Fix-cycle**: 첫 CI run 시 5/5 회귀 fail (faceMap
+  empty → getFaceId -1 → defaultPlane early return) → `beforeEach((tm as any).faceMap = new Uint32Array([7]))` setup
+  추가 + fid=7 expectation 정합 → force-push 후 6/6 PASS.
+- **2026-05-24 ε-1** (본 commit, DrawLineTool integration) —
+  `DrawLineTool.establishDrawingPlane` 의 face-hit branch 가
+  `ctx.getDrawPlane` SSOT 통합. 변경 요약:
+  - kind ≤ 1 (Plane/None) → `dp.normal` (DCEL face normal) +
+    `hit.point` (legacy fallback origin) — **legacy 동등**
+  - kind ≥ 2 (Cylinder/Sphere/Cone/Torus/NURBS) → `dp.normal` (tangent
+    normal) + `dp.origin` (surface-aware hit point P) — **사용자
+    facing 변화 시작** (Cylinder/Sphere surface 위 DrawLine chord
+    substitute 회피)
+  - dp.onFace=false (defensive) → 기존 hit.face.normal + matrixWorld
+    transform path (legacy behavior 100% 보존)
+  회귀 vitest +4 (DrawLineTool.test.ts `ADR-140 ε-1` block):
+  Plane legacy / Cylinder surface-aware / defensive fallback / no-face
+  branch unchanged. `mockToolContext` 에 `getDrawPlane` mock 추가
+  (default returns onFace:false — 기존 테스트 회귀 0).
+- **(140-ε-2 ~ 140-ε-4 다음 sub-steps)** — DrawRectTool / DrawCircleTool /
+  Sketch session integration. DrawLine 1:1 pattern 답습 (face-hit branch
+  의 ctx.getDrawPlane SSOT 통합). 별도 사용자 결재 후 진행.
 - **(140-ζ ~ 140-η, multi-day)** — 회귀 자산 (Cylinder/Sphere/Cone/Torus
   chord error 측정) + E2E + 사용자 시연. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: 140-ε 진입 결재 (도구별 통합 — DrawLine 부터)
+**다음 trigger**: 140-ε-2 진입 결재 (DrawRectTool 통합)
 또는 우선순위 priority track 결정 (Sprint 1 ADR-144 / ADR-145 등과의
-비교).
+비교) 또는 사용자 시연 (Cylinder primitive 생성 → DrawLine on side face).
