@@ -235,7 +235,7 @@ ADR-049 Amendments 1~4 참조.
 | [137](./137-guidance-only-snap.md) | Guidance-only Snap (α spec) | Draft |
 | [138](./138-multi-loop-face-policy.md) | Multi-loop Face Policy (Path A vs B) | Superseded by ADR-139 |
 | [139](./139-boundary-tool-auto-cycle-deprecation.md) | Boundary Tool + Auto-cycle Deprecation | Accepted (β implementation 진행 중) |
-| [140](./140-surface-aware-get-draw-plane.md) | Surface-aware getDrawPlane (곡면 face 위 도구 정확도) | Draft |
+| [140](./140-surface-aware-get-draw-plane.md) | Surface-aware getDrawPlane (곡면 face 위 도구 정확도) | Accepted |
 
 ### 14. Sprint 외 hotfix (#162+, 별도 트랙)
 
