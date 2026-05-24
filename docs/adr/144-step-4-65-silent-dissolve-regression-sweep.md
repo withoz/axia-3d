@@ -177,24 +177,25 @@ sub-step plan 답습.
 ## 7. Acceptance Log
 
 - **2026-05-24 α** (PR #165, fbf5791) — α spec + sub-step plan + lock-ins.
-- **2026-05-24 β-1** (본 commit) — Partial overlap + Single inner baseline.
-  `crates/axia-core/src/scene.rs` tests module 에 2 신규 회귀 자산
-  추가:
-  - `p2_step_4_65_partial_overlap_preserves_outer` — outer 10×10 +
-    inner 5×5 at (3,3,0) partial overlap. surround criterion false-
-    positive 차단. active >= 2 (outer 잔존 + overlap region).
-  - `p2_step_4_65_single_inner_baseline` — outer 10×10 + 단일 inner
-    5×5 fully contained (minimum case). surround 충분 조건 검증.
-    active >= 1.
-  PR #144 기존 회귀 2개 (surrounded total dissolve / disjoint inner) +
-  본 β-1 의 2개 = 누적 **4 회귀 자산**. ADR-144 §6 회귀 추정
-  +2/sub-step 정합. L-144-1/2 정합 — PR #144 hotfix code 보존, 회귀
-  자산 only. 사용자 facing 변화 0.
-- **(β-2 ~ β-5 + γ, ~5-6시간 multi-day)** — atomic Path Z sub-step
+- **2026-05-24 β-1** (PR #166, 5cc8699) — Partial overlap + Single inner
+  baseline. 2 신규 회귀 자산 (`p2_step_4_65_partial_overlap_preserves_outer`
+  + `p2_step_4_65_single_inner_baseline`).
+- **2026-05-24 β-2** (본 commit) — Multi-level nested + Concentric.
+  `crates/axia-core/src/scene.rs` tests module 에 2 신규 회귀 자산 추가:
+  - `p2_step_4_65_multi_level_nested_preserves_middle` — 30×30 outer +
+    20×20 middle + 10×10 inner (3-level concentric). middle level
+    false-positive surround dissolve 차단. active >= 1.
+  - `p2_step_4_65_concentric_chain_no_propagation_dissolve` — 40×40
+    outer + 30/20/10 concentric chain (4-level). chain dissolve
+    propagation 차단. active >= 1.
+  누적: PR #144 (2) + β-1 (2) + 본 β-2 (2) = **6 회귀 자산** (sweep
+  target +10-12 의 **50%**). L-144-1/2/3 정합 — concentric topology
+  의 P7-N (Non-Manifold) 자연 동작 expected, dissolve guard focus.
+- **(β-3 ~ β-5 + γ, ~4-5시간 multi-day)** — atomic Path Z sub-step
   별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-2 진입 결재 (Multi-level nested + Concentric)
+**다음 trigger**: β-3 진입 결재 (L-shape + T-shape)
 또는 우선순위 priority track 결정 (ADR-145 Circle annulus / 사용자 시연
 evidence / Future ADR 등).
