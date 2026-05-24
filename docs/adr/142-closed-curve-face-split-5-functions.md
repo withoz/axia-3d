@@ -1,6 +1,6 @@
 # ADR-142 — Closed-curve face split 5 함수 hotfix (Sprint 1 첫 트랙)
 
-**Status**: Accepted (α spec + Amendment 1 — audit-first 18번째 finding + scope reduce + β-1 closed: split_face_by_chain K1; β-2 ~ β-5 별도 PR)
+**Status**: Accepted (α spec + Amendment 1 — audit-first 18번째 finding + scope reduce + β-1 closed: split_face_by_chain K1 + Amendment 2 — audit-first 19번째 finding: β-2 CANCEL as ADR-110 redundant, γ/δ/ε scope reallocated)
 **Date**: 2026-05-22
 **Author**: WYKO + Claude
 **Sprint**: S1 (ADR-141 §2 — 3~4주, 회귀 +55 분담 ~15~20)
@@ -276,9 +276,19 @@ Sprint 1 누적 회귀 추세: ADR-142 (+18) + ADR-143 (+15) + ADR-144 (+5) + AD
   - `adr142_beta1_split_face_by_chain_polygonizes_closed_curve_face` — Path B Circle face K1 fire evidence
   - `adr142_beta1_polygonize_if_closed_curve_polygon_noop` — helper API contract (no-op)
   - `adr142_beta1_polygonize_if_closed_curve_transforms_closed_curve` — helper API contract (transform)
-- **다음 sub-step**: β-2 (`boolean::split_faces_by_intersections` K1) — Amendment 1 §B 참조
+- **다음 sub-step**: β-2 (`boolean::split_faces_by_intersections` K1) — Amendment 1 §B 참조 → ⚠ **Amendment 2 에서 CANCEL** (audit-first 19번째 — ADR-110 redundant). γ 로 직접 진입.
 
-### β-2 ~ η Acceptance (향후 작성)
+### β-2 (CANCEL — 본 commit Amendment 2)
+
+- **Trigger**: Sprint 1 progression 진입 결재 (2026-05-22 cowork sweep 후)
+- **시도**: boolean.rs:477 `split_faces_by_intersections` entry K1 pre-pass + `original_fid`/`fid` split_map key 분리 implementation
+- **컴파일**: PASS, baseline 1419/1419 보존 (회귀 0)
+- **Audit-first 19번째 finding**: ADR-110 π-β (이미 main 통합) 가 `Mesh::boolean` *entry* 에서 모든 input face 의 closed-curve pre-polygonize 수행 → split_faces_by_intersections 도달 시점에 input 이미 polygonal. β-2 per-face pre-pass = redundant.
+- **결정**: implementation revert (`git checkout HEAD --`) + Amendment 2 docs 작성 (본 commit)
+- **회귀**: +0 (docs only — boolean.rs 변경 0)
+- **다음 sub-step**: γ K1 cross-cut 사용자 시연 회귀 자산 + 통합 sweep (Amendment 2 §C 매트릭스 + §F 결재 매트릭스)
+
+### γ ~ ε Acceptance (향후 작성)
 
 각 sub-step 종료 시 본 §10 에 추가 entry 작성 — commit hash + 산출물 +
 회귀 카운트 + 사용자 시연 evidence (해당 시).
@@ -371,3 +381,140 @@ Amendment 9 audit 참조 (2026-05-16) 는 **2주 이상 stale**. main 진화
 by_chain 의 chain endpoint lookup 과 boolean::split_faces_by_intersections
 의 per-face pre-pass 는 별개 architectural path. LOCKED #44 (Complete
 Meaning per Merge) 정합 — 각 PR 단일 의미 단위.
+
+> ⚠ **L5 정정 (Amendment 2, 2026-05-22)**: 본 lesson 의 가정 ("β-2 가
+> 별개 architectural path") 자체가 audit-first 19번째 적용 (Amendment 2
+> §A) 에서 무효화 — ADR-110 π-β 가 이미 `Mesh::boolean` entry 에서
+> 모든 input face 의 closed-curve pre-polygonize 수행 → β-2 의 per-face
+> pre-pass 는 redundant. β-2 cancel + scope re-allocate to γ/δ/ε.
+> 자세한 finding 은 Amendment 2 §A 참조.
+
+---
+
+## Amendment 2 — audit-first 19번째 finding (β-2 진입 직전, 2026-05-22)
+
+### §A. Trigger — ADR-110 π-β entry-level pre-polygonize 발견
+
+본 세션 cowork sweep (PR #151 audit 직후, Sprint 1 progression) Step 3
+진입 결재 후 β-2 implementation 진입. boolean.rs:477 `split_faces_by_
+intersections` entry 에 `polygonize_if_closed_curve` pre-pass 추가 (β-1
+의 `split_face_by_chain:588` 1:1 mirror) 시도. 컴파일 PASS, baseline
+1419/1419 보존 직후 *재audit* 진행 (메타-원칙 #6 정합).
+
+**Finding** (`Mesh::boolean` line 67-100):
+
+```rust
+// ── ADR-110 π-β — Pre-polygonize Path B closed-curve faces ──
+let faces_a_resolved: Vec<FaceId> = faces_a.iter()
+    .map(|&fid| match self.polygonize_closed_curve_face(fid, material) {
+        Ok(Some(new_fid)) => new_fid,
+        _ => fid,
+    })
+    .collect();
+let faces_b_resolved: Vec<FaceId> = faces_b.iter()
+    .map(|&fid| match self.polygonize_closed_curve_face(fid, material) {
+        Ok(Some(new_fid)) => new_fid,
+        _ => fid,
+    })
+    .collect();
+```
+
+ADR-110 π-β (이미 main 통합) 가 `Mesh::boolean` *entry* 에서 모든 input
+face 에 대해 `polygonize_closed_curve_face` 직접 호출 — Path B closed-
+curve → polygonal substitute. `split_faces_by_intersections` 도달 시점에
+input face 들은 *이미 polygonal*.
+
+### §B. 호출 chain 매트릭스
+
+| Caller | Path B 처리 |
+|---|---|
+| `Mesh::boolean` Union (line 67) → entry pre-polygonize → `prepare_solid` → `split_faces_by_intersections` (line 140/146) | ✅ ADR-110 이 cover |
+| `Mesh::boolean` Subtract (line 290) | ✅ ADR-110 이 cover |
+| `Mesh::boolean` Intersect (동일 entry) | ✅ ADR-110 이 cover |
+| `split_faces_by_intersections` 외부 직접 호출 | ❌ **0 외부 caller** (private fn, only 4 internal sites in `Mesh::boolean`) |
+
+**결론**: β-2 per-face K1 pre-pass 의 architectural value = 0.
+
+### §C. β scope 재정정 (Amendment 1 §B → Amendment 2)
+
+**Amendment 1 §B 의 정정 후 scope** (β-2 보존):
+
+| Sub-step | scope | 회귀 | 소요 |
+|---|---|---|---|
+| β-1 (PR #152) | split_face_by_chain K1 polygonize 적용 | **+4 (closed)** | **30분 (closed)** |
+| β-2 (다음 PR) | boolean K1 polygonize 적용 (per-face pre-pass) | +5~6 | 1~2시간 |
+| γ (선택) | K1 cross-cut 사용자 시연 회귀 자산 + 통합 sweep | +2~3 | 30분 |
+| δ | 사용자 시연 게이트 | +0 | 30분 |
+| ε | closure docs | +0 | 15분 |
+| 합계 | — | +11~13 | 2~4시간 |
+
+**Amendment 2 의 재정정** (β-2 cancel — redundant):
+
+| Sub-step | scope | 회귀 | 소요 | 상태 |
+|---|---|---|---|---|
+| β-1 (PR #152) | split_face_by_chain K1 | +4 | 30분 | ✅ closed |
+| **β-2** | ~~boolean K1~~ — **ADR-110 redundant, CANCEL** | **+0** | **0분** | **🗑 cancel** |
+| γ | K1 cross-cut 사용자 시연 회귀 자산 + 통합 sweep (Path B Circle × Path B Circle Boolean — ADR-110 cover 검증 + β-1 chain split — 통합 evidence) | +3~5 | 30~60분 | ⏭ next |
+| δ | 사용자 시연 게이트 | +0 | 30분 | ⏭ |
+| ε | closure docs (Amendment 1 + 2 synthesis) | +0 | 15분 | ⏭ |
+| **합계** | **— Amendment 2 정정** | **+7~9** | **1.5~2.5시간** | — |
+
+**회귀 단조 감소**: 원안 +18 → Amendment 1 +11~13 → Amendment 2 **+7~9**.
+Sprint 1 target +55 의 ADR-142 share 자동 reduce. ADR-141 §6 share 재
+분배 — ADR-143/144/145 자연 증가 또는 Sprint 1 total +55 → +47 조정.
+
+### §D. β-2 implementation revert evidence
+
+본 PR (Amendment 2) 진행 중:
+- boolean.rs 에 `use super::face_split::polygonize_if_closed_curve;` import +
+  `split_faces_by_intersections` entry 의 K1 pre-pass + `original_fid` /
+  `fid` split_map key 분리 변경 시도
+- 컴파일 PASS + baseline 1419/1419 보존 (회귀 0, 정합 OK)
+- Audit-first 19번째 적용 후 **모두 revert** (`git checkout HEAD --
+  crates/axia-geo/src/operations/boolean.rs`)
+- Baseline 1419/1419 재확인
+
+→ implementation 정확성 자체는 OK, **redundancy 가 cancel 사유**. ADR-110
+이 이미 cover 하는 의미 단위 (메타-원칙 #6 + LOCKED #44).
+
+### §E. Lessons (audit-first canonical 19번째 적용 evidence)
+
+**L1 — 자체 코드 base 의 audit 빈도 = 메타-원칙 #6 의 implementation**:
+β-1 의 audit-first 18번째 (LOCKED #41 Amendment 9 §A9.4 staleness) 처럼
+α spec 의 ADR-110 cross-cut 미확인 → β-2 진입 직전 audit 으로 cover
+발견. 매 sub-step β implementation 진입 시 **main codebase 의 직접 audit**
+(이전 ADR + main 통합 상태) 강제.
+
+**L2 — Architectural redundancy = anti-pattern**: ADR-110 이 entry-level
+pre-polygonize 로 *모든 caller* cover 시, per-face pre-pass 추가는 defense
+in depth 가치 0 + code 가독성 감소 + 미래 외부 caller 0 (private fn).
+LOCKED #44 (Complete Meaning per Merge) 정합 — *redundant meaning* 도
+single PR scope 위반.
+
+**L3 — Amendment cascading 의 architectural value**: ADR-142 본문 보존 +
+Amendment 1 (18번째) → Amendment 2 (19번째) 누적. 각 amendment 가 단계
+적 scope reduce + lesson 누적. **supersede 회피** — ADR 본 의도 (closed-
+curve face 5 site first-class input) 는 여전히 valid, 운영 scope 만 자
+연 진화.
+
+**L4 — Cross-ADR awareness gap**: α spec 작성 시 ADR-101 Amendment 9 의
+cross-ADR (ADR-110) 영향 미인식. ADR catalog 의 cross-link 가 부족 →
+ADR 본문 §관련 문서 sections 의 cross-cut audit 권장 (future cleanup).
+
+**L5 — Sprint 회귀 +55 target 조정 cascade**: Amendment 1 (+18 → +11~13)
++ Amendment 2 (+11~13 → +7~9). Sprint 1 total target ADR-141 §6 +55 의
+재분배 + γ 의 가치 증가 (β-2 cover 영역 부분 흡수). Sprint 1 종료 cowork
+sweep 결재 시 target 정정 결재 가능.
+
+### §F. 다음 sub-step 결재 매트릭스 (γ 진입 결재)
+
+본 Amendment 2 PR closure 후 γ + δ + ε 별도 PR 진입.
+
+| Sub-step | 가치 | 소요 | 회귀 |
+|---|---|---|---|
+| γ K1 cross-cut 사용자 시연 회귀 자산 | Path B Circle × Path B Circle Boolean (ADR-110 cover) + Path B Circle + DrawLine chord (β-1 cover) 통합 evidence | 30~60분 | +3~5 |
+| δ 사용자 시연 게이트 | ADR-087 K-ζ canonical — Path B Circle Boolean / chain split 실 demo | 30분 (사용자 action) | +0 |
+| ε closure docs | Amendment 1 + 2 synthesis + Sprint 1 ADR-142 closure | 15분 | +0 |
+
+추천: γ + δ + ε 묶음 single atomic PR (LOCKED #44 정합) — Sprint 1
+ADR-142 closure 단일 의미 단위.
