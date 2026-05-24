@@ -703,16 +703,35 @@ export class DrawLineTool implements ITool {
   private establishDrawingPlane(e: MouseEvent): void {
     const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
     if (hit && hit.point && hit.face) {
-      // Use face-pick: world-space normal from the mesh's world matrix
-      const worldNormal = hit.face.normal.clone();
-      if (hit.object && hit.object.matrixWorld) {
-        // Transform local normal to world (rotation only — no translation)
-        const m = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
-        worldNormal.applyMatrix3(m).normalize();
+      // ADR-140 ε-1: Use ctx.getDrawPlane SSOT for face-hit drawing plane
+      // (140-δ dispatch with surface-aware support):
+      //   kind ≤ 1 (Plane/None) → dp.normal = DCEL face normal (numerically
+      //     equivalent to legacy hit.face.normal + matrixWorld transform),
+      //     dp.origin = undefined → planeOrigin = hit.point (legacy 동등)
+      //   kind ≥ 2 (Cylinder/Sphere/Cone/Torus/NURBS) → dp.normal = tangent
+      //     plane normal at hit point P, dp.origin = P (surface-aware
+      //     chord substitute 회피)
+      //   Defensive fallback (dp.onFace=false): legacy hit.face.normal path
+      const dp = this.ctx.getDrawPlane(e);
+      let worldNormal: THREE.Vector3;
+      let planeOrigin: THREE.Vector3;
+      if (dp.onFace) {
+        worldNormal = dp.normal.clone();
+        // ADR-140 δ origin (surface-aware) OR legacy hit.point fallback
+        planeOrigin = dp.origin ? dp.origin.clone() : hit.point.clone();
+      } else {
+        // Defensive: ctx.getDrawPlane didn't recognize face — legacy path
+        worldNormal = hit.face.normal.clone();
+        if (hit.object && hit.object.matrixWorld) {
+          const m = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+          worldNormal.applyMatrix3(m).normalize();
+        }
+        planeOrigin = hit.point.clone();
       }
       this.drawingPlane = new THREE.Plane()
-        .setFromNormalAndCoplanarPoint(worldNormal, hit.point.clone());
-      debugLog('[Line] Drawing plane locked from face pick, normal=',
+        .setFromNormalAndCoplanarPoint(worldNormal, planeOrigin);
+      debugLog('[Line] Drawing plane locked from face pick (ADR-140 ε-1), surfaceKind=',
+        dp.surfaceKind, 'normal=',
         worldNormal.toArray().map(v => v.toFixed(3)));
     } else {
       // Fall back to view-based workplane through the computed click point.
