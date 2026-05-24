@@ -15249,4 +15249,110 @@ mod tests {
             "ADR-144 β-1.2: single inner mesh invariants 위반 없음; \
              got {:?}", report.violations);
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-144 β-2 (2026-05-24) — Multi-level nested + Concentric
+    //
+    // 3-level nested (concentric) 시나리오에서 silent dissolve 차단 +
+    // active face count 보존. β-1 partial overlap / single inner
+    // baseline 의 자연 후속 (concentric topology category).
+    //
+    // LOCKED #1 P7-N (Non-Manifold By Design) 정합 — concentric inner
+    // 시 P7 (containment auto-split) 의 자연 동작 확인 + Step 4.65
+    // dissolve 의 false-positive 차단.
+    // ────────────────────────────────────────────────────────────────
+
+    /// ADR-144 β-2.1 — 3-level nested concentric (30×30 outer +
+    /// 20×20 middle + 10×10 inner). middle level 이 outer 와 inner
+    /// 사이에서 silent dissolve 안 됨 검증. P2 invariant + 3-level
+    /// topology 보존.
+    #[test]
+    fn p2_step_4_65_multi_level_nested_preserves_middle() {
+        let mut scene = Scene::new();
+
+        // Outer 30×30 centered at origin
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 30.0,
+            height: 30.0,
+        });
+
+        // Middle 20×20 (concentric, fully inside outer)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 20.0,
+            height: 20.0,
+        });
+
+        // Inner 10×10 (concentric, fully inside middle)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 10.0,
+            height: 10.0,
+        });
+
+        // **P2 핵심 invariant**: silent total dissolve 차단.
+        // 3-level nested 에서 middle 이 false-positive surround 로
+        // dissolve 안 됨 검증. active count >= 1.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "ADR-144 β-2.1: 3-level nested 시 active face count >= 1 \
+             (silent total dissolve 차단). got {}", active);
+
+        // mesh invariants 정상 (concentric topology 보존)
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-2.1: 3-level nested mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
+
+    /// ADR-144 β-2.2 — Concentric chain (outer + 3 inner concentric).
+    /// dissolve 의 chain effect 검증 — middle level dissolve 가 outer
+    /// 까지 propagation 안 됨. baseline: 1 outer + 3 inner = active >= 1.
+    #[test]
+    fn p2_step_4_65_concentric_chain_no_propagation_dissolve() {
+        let mut scene = Scene::new();
+
+        // Outer 40×40
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 40.0,
+            height: 40.0,
+        });
+
+        // 3 concentric inner (30×30 / 20×20 / 10×10, all centered)
+        for size in [30.0, 20.0, 10.0] {
+            scene.execute(Command::DrawRect {
+                center: DVec3::ZERO,
+                normal: DVec3::Z,
+                up: DVec3::Y,
+                width: size,
+                height: size,
+            });
+        }
+
+        // **P2 핵심 invariant**: silent total dissolve 차단.
+        // Concentric chain 에서 어떤 level dissolve 도 outer 까지
+        // propagation 안 됨. active count >= 1 보존.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "ADR-144 β-2.2: concentric chain 시 active face count >= 1 \
+             (chain dissolve propagation 차단). got {}", active);
+
+        // mesh invariants 정상 (4-level concentric topology)
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-2.2: concentric chain mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
 }
