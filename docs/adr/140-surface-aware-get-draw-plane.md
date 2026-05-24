@@ -1,7 +1,7 @@
 # ADR-140 — Surface-aware `getDrawPlane` (곡면 face 위 도구 정확도 본격 활성)
 
-**Status**: Draft (α spec — β implementation 별도 사용자 결재 후 진행)
-**Date**: 2026-05-23
+**Status**: Accepted (β implementation 자연 closure 2026-05-24 — α/β/γ/δ/ε-1/ζ 6 sub-step merged + ε-2/ε-3/ε-4 LOCKED #63 strict 거부 후 future ADR, η 사용자 시연 deferred)
+**Date**: 2026-05-23 (α) ~ 2026-05-24 (ζ closure)
 **Author**: WYKO + Claude
 **Trigger**: 외부 에이전트 audit (사용자 공유 2026-05-23) P1 권장 +
   본 세션 chain (PR #140 K3 / PR #141 demo / PR #142 Path B annulus
@@ -328,14 +328,112 @@ hit point P on NURBS surface
   evidence* — surface-aware normal 가 chord plane normal 와 얼마나
   다른지 정량 lock. ε-1 (DrawLine) 통합의 측정 가능한 정확도 향상의
   baseline. 사용자 facing 변화 0.
-- **(140-η 다음 sub-step)** — E2E (Playwright) + 사용자 시연
-  (ADR-087 K-ζ canonical). DrawLine + Cylinder side face 의 chord vs
-  tangent 시연 evidence. 별도 사용자 결재 후 진행.
+- **2026-05-24 closure** (본 commit) — ADR-140 β implementation 자연
+  closure marker. Status: **Draft → Accepted**. 6 sub-step merged
+  (α/β/γ/δ/ε-1/ζ, 4 PR by 본 session — #160/#161/#162/#163). ε-2/ε-3/
+  ε-4 LOCKED #63 strict 충돌 finding 으로 future ADR (가칭 "Surface-
+  aware on cardinal-force tools — architectural reconciliation"). 140-η
+  사용자 시연 deferred (ADR-087 K-ζ canonical, 별도 manual trigger).
+  README catalog Status canonical "Accepted" 동시 갱신. §9 Lessons
+  추가.
 
 ---
 
-**다음 trigger**: 140-η 진입 결재 (E2E + 사용자 시연)
-또는 ADR-140 closure ADR (전체 β implementation 자연 closure + LOCKED
-#63 finding 명시 + future ADR anchor)
-또는 우선순위 priority track 결정 (Sprint 1 ADR-144 / ADR-145 등과의
-비교).
+**다음 trigger**: 사용자 시연 evidence (Cylinder + DrawLine on side
+face — chord vs tangent 검증, η deferred slot)
+또는 future ADR (surface-aware on cardinal-force tools)
+또는 Sprint 1 priority track (ADR-144 Step 4.65 / ADR-145 Circle annulus).
+
+## 9. Lessons (canonical for future Path Z atomic β implementations)
+
+본 ADR 의 β implementation 진행에서 도출된 canonical lessons. 향후
+multi-week atomic Path Z ADR 작성 시 참조.
+
+### L1 — Audit-first canonical 2번째 적용 (LOCKED #63 strict 충돌 발견)
+
+ε track 진행 직전 audit (DrawRect/DrawCircle/Sketch plane source
+분석) → LOCKED #63 cardinal force strict 와 surface-aware origin 의
+architectural 충돌 발견:
+
+| 도구 | Plane source | LOCKED #63 정합 | 결정 |
+|---|---|---|---|
+| DrawLineTool | `establishDrawingPlane` (자체) | ✅ 직교 | ε-1 ✅ |
+| DrawRectTool | `resolveCardinalPlane()` only | ❌ strict 충돌 | 거부 |
+| DrawCircleTool | cardinal-forced `circleCenter` | ⚠ origin 사용 불가 | 거부 |
+| Sketch | user explicit (L-63-7 예외) | future ADR | future |
+
+→ silent 진행 회피 (LOCKED #63 위반 위험). ε track 자연 closure
++ future ADR anchor. 본 audit 가 architectural correctness 의 가치.
+
+### L2 — Verification 3-layer 직접 evidence (BEFORE merge fail-cycle)
+
+본 세션 4 PR 중 2 PR 에서 BEFORE merge CI fail 감지 → 자동 진행 중단
++ atomic fix-cycle. silent merge 회귀 차단 evidence:
+
+| PR | Sub-step | Fix-cycle | 원인 |
+|---|---|---|---|
+| #160 | γ | 0 | 즉시 PASS |
+| #161 | δ | 1회 | `faceMap` empty (test setup 미비) |
+| #162 | ε-1 | 1회 | `Matrix4` mock 미정의 |
+| #163 | ζ | 0 | 즉시 PASS (Rust-only, mock 함정 회피) |
+
+→ BEFORE merge verification 의 직접 evidence. 2/4 PR 에서 fail 감지
++ fix-cycle. 자동 머지 + verification 강화 정책의 architectural value.
+
+### L3 — Sub-step atomic 분할 의 가치 (LOCKED #44 정합)
+
+α/β/γ/δ/ε-1/ζ 각각 단일 atomic PR (LOCKED #44 Complete Meaning per
+Merge). 큰 atomic (전체 β implementation single PR) 대신 sub-step
+분할로:
+- 각 sub-step 별 회귀 자산 독립 (Plane vs Cylinder 등)
+- CI fail 시 fix scope 작음 (BEFORE merge layer 효과)
+- LOCKED #63 finding 같은 audit-first finding 도 sub-step 분할로
+  점진 발견 (ε 진입 직전 audit)
+
+### L4 — 자연 closure vs forced closure
+
+ε track 가 LOCKED #63 strict 로 ε-1 만 merge 되고 ε-2/ε-3/ε-4 거부
+→ "자연 closure" (architectural reality 가 spec 보다 우선). spec
+원안 (모든 도구 통합) 의 forced closure 회피, future ADR anchor 명시.
+메타-원칙 #5 (사용자 편의 — 명확하면 자동, 모호하면 명시 동의)
+정합 — 모호한 architectural 충돌은 명시 finding 으로 transparent.
+
+### L5 — chord error 회귀 자산 의 architectural value (ζ)
+
+surface-aware normal 와 chord plane normal 의 정량 차이 lock (5
+회귀 — Plane baseline 0 + Cylinder/Sphere/Cone/Torus arc-induced).
+ADR-140 β implementation 의 architectural value evidence — surface-
+aware path 가 실제로 chord substitute 와 다른지 정량 측정. 향후
+ε-2/ε-3/ε-4 future ADR 작성 시 baseline reference.
+
+## 10. Cross-link (full Acceptance chain)
+
+- **α spec** — PR #145, 5df58ef
+- **β WASM export** — PR #147, 0eaa856
+- **γ TS wrapper** — PR #160, 9305cfc
+- **δ getDrawPlane dispatch** — PR #161, 1126dde
+- **ε-1 DrawLineTool** — PR #162, e5e5970
+- **ζ chord error** — PR #163, 590af1c
+- **closure (본 PR)** — (Phase 5 commit hash, docs only)
+- LOCKED #63 (z=0 invariant — ε-2/ε-3/ε-4 거부 정합)
+- LOCKED #65 (ADR-141 Master Roadmap — Sprint 1 ADR-143 share)
+- LOCKED #66 (ADR-164 Sunset Policy — Status canonical "Accepted")
+- 메타-원칙 #6 (Preventive over Curative — audit-first canonical 2회)
+- 메타-원칙 #14 (WHAT 결과 invariant — surface tangent 정확성)
+
+## 11. Future ADR anchor (deferred work)
+
+본 ADR closure 후 자연 follow-up ADRs:
+
+1. **(가칭) "Surface-aware on cardinal-force tools — architectural
+   reconciliation"** — LOCKED #63 cardinal force ↔ surface-aware
+   origin 의 reconciliation. DrawRect / DrawCircle / Sketch 에
+   surface-aware 적용 가능한 architectural 결정.
+
+2. **(가칭) "ADR-140 η — E2E + 사용자 시연"** — Playwright spec for
+   DrawLine on Cylinder side face. 사용자 manual demo (ADR-087 K-ζ
+   canonical) 후 separate ADR.
+
+3. **(가칭) "Chord error tessellation budget"** — ζ chord error
+   baseline 위에 tessellation chord_tol 의 dynamic adjustment.
+   사용자 시연 evidence 의 quantitative validation.
