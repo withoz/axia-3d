@@ -15146,4 +15146,107 @@ mod tests {
             "P2: disjoint inner mesh invariants 위반 없음; got {:?}",
             report.violations);
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-144 β-1 (2026-05-24) — Partial overlap + Single inner baseline
+    //
+    // PR #144 hotfix 의 회귀 자산 sweep 확장 (ADR-144 §6 sub-step plan).
+    // partial overlap 시나리오 (outer 의 일부만 inner 가 cover) 에서
+    // surround criterion 의 false-positive 차단 + single inner minimum
+    // baseline (1 outer + 1 inner) 정합 검증.
+    //
+    // 두 시나리오 모두 P2 invariant (active face count >= 1) 보존.
+    // ADR-144 §3 L-144-1/2 정합 — PR #144 hotfix code 보존, 회귀
+    // 자산 only.
+    // ────────────────────────────────────────────────────────────────
+
+    /// ADR-144 β-1.1 — Partial overlap scenario. Outer 10×10, inner 5×5
+    /// at (3, 3, 0) 으로 outer 의 우상단 일부 만 cover. outer 의 모든
+    /// boundary HE 가 inner 의 새 face 와 surround 되지 *않음* — surround
+    /// criterion false-positive 차단. dissolve 잘못 fire 시 outer 사라짐.
+    #[test]
+    fn p2_step_4_65_partial_overlap_preserves_outer() {
+        let mut scene = Scene::new();
+
+        // Outer 10×10 centered at origin
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 10.0,
+            height: 10.0,
+        });
+
+        // Inner 5×5 partially overlapping (center at (3, 3, 0) — only
+        // 우상단 일부만 outer 위에 cover, 나머지는 outer 밖)
+        scene.execute(Command::DrawRect {
+            center: DVec3::new(3.0, 3.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 5.0,
+            height: 5.0,
+        });
+
+        // **P2 핵심 invariant**: silent total dissolve 차단.
+        // Partial overlap 에서 dissolve 잘못 fire 안 됨 (surround
+        // criterion false-positive 검증). outer 의 잔존 region 보존.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 2,
+            "ADR-144 β-1.1: partial overlap 시 active face count >= 2 \
+             (outer 잔존 + overlap region 등). got {}", active);
+
+        // mesh invariants 정상 (verify_face_invariants 미위반)
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-1.1: partial overlap mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
+
+    /// ADR-144 β-1.2 — Single inner baseline (minimum case). 1 outer +
+    /// 1 inner (containment). LOCKED #1 P7-N 정합 — 인접/포함 시 dissolve
+    /// criterion 의 가장 작은 case. surround 판정의 baseline.
+    /// PR #144 의 4-inner case (surrounded_dissolve) 보다 작은 minimum
+    /// scenario — single inner 가 surround 충분 조건인지 검증.
+    #[test]
+    fn p2_step_4_65_single_inner_baseline() {
+        let mut scene = Scene::new();
+
+        // Outer 10×10 centered at origin
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 10.0,
+            height: 10.0,
+        });
+
+        // Single inner 5×5 fully contained (center origin)
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 5.0,
+            height: 5.0,
+        });
+
+        // **P2 핵심 invariant**: silent total dissolve 차단. Single inner
+        // 만으로 outer surround 안 됨 (boundary HE 가 inner 의 새 face 와
+        // partial 일치 only — outer 의 일부 boundary 는 inner edge 가
+        // 아닌 outer edge 그대로). active count >= 1 보존.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "ADR-144 β-1.2: single inner baseline 시 active face count \
+             >= 1 (silent total dissolve 차단). got {}", active);
+
+        // mesh invariants 정상 (verify_face_invariants 미위반).
+        // L-144-3 정합 — P7-N (Non-Manifold) edge 발생 가능하나 본 test
+        // focus 아님. invariants_report 의 winding/dangling/topology
+        // 정합만 검증.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-1.2: single inner mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
 }
