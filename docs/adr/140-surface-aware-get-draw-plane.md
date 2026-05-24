@@ -293,14 +293,49 @@ hit point P on NURBS surface
   Plane legacy / Cylinder surface-aware / defensive fallback / no-face
   branch unchanged. `mockToolContext` 에 `getDrawPlane` mock 추가
   (default returns onFace:false — 기존 테스트 회귀 0).
-- **(140-ε-2 ~ 140-ε-4 다음 sub-steps)** — DrawRectTool / DrawCircleTool /
-  Sketch session integration. DrawLine 1:1 pattern 답습 (face-hit branch
-  의 ctx.getDrawPlane SSOT 통합). 별도 사용자 결재 후 진행.
-- **(140-ζ ~ 140-η, multi-day)** — 회귀 자산 (Cylinder/Sphere/Cone/Torus
-  chord error 측정) + E2E + 사용자 시연. 별도 사용자 결재 후 진행.
+- **2026-05-24 ε track audit-first finding (LOCKED #63 strict 충돌)** —
+  audit-first canonical 적용으로 다음 finding 명시 (silent 진행 회피):
+  - **ε-2 (DrawRectTool)**: `resolveCardinalPlane()` 만 사용 — LOCKED #63
+    cardinal plane only strict 정합. surface-aware 적용 시 RECT 가
+    cylinder surface 위 그려질 가능 → LOCKED #63 위반. **거부**.
+  - **ε-3 (DrawCircleTool)**: 이미 `ctx.getDrawPlane(e)` 사용하나
+    `circleCenter = point.clone()` (get3DPoint cardinal-forced).
+    `dp.origin` 활용 시 cardinal force 와 architectural 충돌. **거부**
+    (origin 사용 불가).
+  - **ε-4 (Sketch session)**: SketchSession plane = user explicit
+    (LOCKED #63 §L-63-7 예외). surface-aware sketch session 은 별도
+    architectural ADR 필요 (LOCKED #63 cardinal force ↔ surface-aware
+    origin 의 reconciliation).
+  → **ADR-140 ε track 자연 closure** (ε-1 only). ε-2/ε-3/ε-4 는 별도
+  ADR (가칭 "Surface-aware on cardinal-force tools — architectural
+  reconciliation") future work.
+- **2026-05-24 ζ** (본 commit) — chord error 회귀 자산 (Cylinder/Sphere/
+  Cone/Torus + Plane baseline). `crates/axia-geo/src/surfaces/mod.rs`
+  tests block 에 ADR-140 ζ block 추가 (+5 회귀):
+  - `chord_error_angle` helper — surface normal 와 chord normal 의
+    angular difference 측정 (acos of dot product)
+  - `adr140_zeta_plane_chord_error_is_zero` — baseline (flat surface
+    → error 0, surface-aware == chord)
+  - `adr140_zeta_cylinder_chord_error_proportional_to_arc` — 12-seg vs
+    24-seg refinement, geometric expectation lock (err > 0.05 rad,
+    err < chord arc)
+  - `adr140_zeta_sphere_chord_error_along_meridian` — 30° meridian arc
+  - `adr140_zeta_cone_chord_error_varies_along_axis` — 30° half-angle
+    + 30° azimuth
+  - `adr140_zeta_torus_chord_error_dual_curvature` — major R=10 +
+    minor r=2, outer equator 15° arc
+  본 회귀 자산은 ADR-140 β implementation 의 *architectural value
+  evidence* — surface-aware normal 가 chord plane normal 와 얼마나
+  다른지 정량 lock. ε-1 (DrawLine) 통합의 측정 가능한 정확도 향상의
+  baseline. 사용자 facing 변화 0.
+- **(140-η 다음 sub-step)** — E2E (Playwright) + 사용자 시연
+  (ADR-087 K-ζ canonical). DrawLine + Cylinder side face 의 chord vs
+  tangent 시연 evidence. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: 140-ε-2 진입 결재 (DrawRectTool 통합)
+**다음 trigger**: 140-η 진입 결재 (E2E + 사용자 시연)
+또는 ADR-140 closure ADR (전체 β implementation 자연 closure + LOCKED
+#63 finding 명시 + future ADR anchor)
 또는 우선순위 priority track 결정 (Sprint 1 ADR-144 / ADR-145 등과의
-비교) 또는 사용자 시연 (Cylinder primitive 생성 → DrawLine on side face).
+비교).
