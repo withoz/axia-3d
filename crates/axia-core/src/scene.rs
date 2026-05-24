@@ -15598,4 +15598,63 @@ mod tests {
             "ADR-144 β-4.3: empty mesh invariants violation 0; \
              got {:?}", report.violations);
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // ADR-144 β-5 (2026-05-24) — 3×3 grid stress baseline
+    //
+    // Mass dissolve stress baseline — outer 30×30 + 9 inner cells
+    // (3×3 grid of 8×8 rects). β-1~β-4 의 자연 후속 — 다수 inner 가
+    // mass dissolve trigger 시 silent total dissolve 차단 + invariants
+    // 보존. ADR-144 sweep 의 stress benchmark.
+    //
+    // PR #144 hotfix 의 4-inner case 와 비교 — 9 inner = 더 큰 stress.
+    // L-144-3 (P7-N OK) 정합 — 인접 inner 시 NM expected, 본 test focus
+    // 는 dissolve guard 만.
+    // ────────────────────────────────────────────────────────────────
+
+    /// ADR-144 β-5 — 3×3 grid stress (9 inner cells in outer).
+    /// Outer 30×30 + 9 inner 8×8 cells (3 rows × 3 cols, gap 2).
+    /// mass dissolve baseline — silent total dissolve 차단 + invariants
+    /// 보존 검증.
+    #[test]
+    fn p2_step_4_65_3x3_grid_stress_baseline() {
+        let mut scene = Scene::new();
+
+        // Outer 30×30 centered at origin
+        scene.execute(Command::DrawRect {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 30.0,
+            height: 30.0,
+        });
+
+        // 3×3 grid of 8×8 inner cells (centers at -10, 0, +10 on both x/y)
+        for cx in [-10.0, 0.0, 10.0] {
+            for cy in [-10.0, 0.0, 10.0] {
+                scene.execute(Command::DrawRect {
+                    center: DVec3::new(cx, cy, 0.0),
+                    normal: DVec3::Z,
+                    up: DVec3::Y,
+                    width: 8.0,
+                    height: 8.0,
+                });
+            }
+        }
+
+        // **P2 핵심 invariant**: silent total dissolve 차단 (stress).
+        // 9 inner 가 outer 를 mass surround 가능, 단 active count == 0
+        // silent 는 차단.
+        let active = scene.mesh.faces.iter()
+            .filter(|(_, f)| f.is_active()).count();
+        assert!(active >= 1,
+            "ADR-144 β-5: 3×3 grid stress 시 active face count >= 1 \
+             (mass dissolve silent total 차단). got {}", active);
+
+        // mesh invariants 정상 (9-inner grid topology — large topology)
+        let report = scene.mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-144 β-5: 3×3 grid stress mesh invariants 위반 없음; \
+             got {:?}", report.violations);
+    }
 }
