@@ -154,6 +154,15 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
           };
         }
 
+        // BEFORE promote — canonical L-145-8 baseline (both faces simple,
+        // 0 inner loops). faceInnerLoopCount exposed via WASM with
+        // js_name = "faceInnerLoopCount" — bridge.engine direct access
+        // (TS bridge has no wrapper yet, deferred to follow-up ADR).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const engine = (bridge as any).engine;
+        const outerInnerLoopsBefore = engine.faceInnerLoopCount(outerFaceId);
+        const innerInnerLoopsBefore = engine.faceInnerLoopCount(innerFaceId);
+
         // Step 3: bridge.promoteCirclesToAnnulus(outer, inner).
         let promoteSucceeded = false;
         let promoteError = '';
@@ -164,7 +173,12 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
           promoteError = e instanceof Error ? e.message : String(e);
         }
 
-        const facesAfterPromote = bridge.getStats().faces;
+        // AFTER promote — canonical L-145-8 evidence:
+        //   - outer face: 1 inner loop added (hole topology)
+        //   - inner face: deactivated → faceInnerLoopCount returns u32::MAX
+        //     (4294967295) sentinel
+        const outerInnerLoopsAfter = engine.faceInnerLoopCount(outerFaceId);
+        const innerInnerLoopsAfter = engine.faceInnerLoopCount(innerFaceId);
 
         return {
           step: 'promote',
@@ -178,8 +192,11 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
           innerFaceCount: innerFaceIds.length,
           bothDrawn,
           promoteSucceeded,
-          facesAfterPromote,
           promoteError,
+          outerInnerLoopsBefore,
+          innerInnerLoopsBefore,
+          outerInnerLoopsAfter,
+          innerInnerLoopsAfter,
         };
       },
       { outer: CIRCLE_OUTER, inner: CIRCLE_INNER },
@@ -196,14 +213,19 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
       result.facesBefore + 2,
     );
 
+    // Evidence — baseline (both Circle faces simple, 0 inner loops).
+    expect(result.outerInnerLoopsBefore, 'γ-2: outer 시작 시 simple face').toBe(0);
+    expect(result.innerInnerLoopsBefore, 'γ-2: inner 시작 시 simple face').toBe(0);
+
     // Evidence — promote succeeded (no error).
     expect(result.promoteSucceeded, `γ-2: promote OK (error: ${result.promoteError})`).toBe(true);
 
-    // Evidence — β-1+ L-145-8: inner face deactivated, outer still active.
-    // getStats().faces returns active face count → should DECREASE by 1
-    // (inner deactivated). Outer face still active with new inner hole loop.
-    expect(result.facesAfterPromote, 'γ-2: inner face deactivated').toBe(
-      result.facesAfterDraw - 1,
+    // Evidence — β-1+ L-145-8 (canonical): outer face has 1 inner loop
+    // (hole topology), inner face deactivated.
+    // faceInnerLoopCount returns u32::MAX (4294967295) for inactive face.
+    expect(result.outerInnerLoopsAfter, 'γ-2: outer 가 annulus (1 hole) 됨').toBe(1);
+    expect(result.innerInnerLoopsAfter, 'γ-2: inner deactivated (u32::MAX sentinel)').toBe(
+      4294967295,
     );
   });
 });
