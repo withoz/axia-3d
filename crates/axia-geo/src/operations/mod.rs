@@ -9,6 +9,7 @@ pub mod create_solid;
 pub mod boolean_geo;
 pub mod boolean;
 pub mod coplanar;
+pub mod annulus;  // ADR-145 — Circle annulus 명시 promote (β-1 validation only)
 pub mod boolean_dispatch;
 pub mod boolean_nurbs_dcel;
 pub mod transform;
