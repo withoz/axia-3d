@@ -34,6 +34,7 @@
 
 import * as THREE from 'three';
 import { debugLog } from '../utils/debug';
+import { telemetry } from '../core/telemetry';
 
 // ═══ Snap Types ═══
 export type SnapType =
@@ -788,6 +789,11 @@ export class SnapManager {
     groundPoint?: THREE.Vector3 | null,
     faceHitPoint?: THREE.Vector3 | null,
   ): SnapPoint | null {
+    // ADR-146 β-2 (Q2=a) — Direct latency measurement.
+    // PickingRouter wrap 외 findSnap 진입~출구 직접 측정. Hover 16ms
+    // budget 의 sub-component (메타-원칙 #11 정합). telemetry.measure
+    // captures elapsed on both success and exception paths.
+    return telemetry.measure('findSnap', (): SnapPoint | null => {
     if (!this.config.enabled) {
       this.setResult(null);
       return null;
@@ -1133,6 +1139,7 @@ export class SnapManager {
     this.setResult(best);
     this._lastSnapTime = now;
     return best;
+    }); // end telemetry.measure (ADR-146 β-2)
   }
 
   /**
