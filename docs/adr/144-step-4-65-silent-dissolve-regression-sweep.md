@@ -1,7 +1,7 @@
 # ADR-144 — Step 4.65 Silent Dissolve 회귀 자산 Sweep (PR #144 이어서)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
-**Date**: 2026-05-24
+**Status**: Accepted (β implementation 자연 closure 2026-05-24 — α/β-1/β-2/β-3/β-4/β-5/γ 7 sub-step closed, 회귀 +12 sweep target 도달, sweep 100% 완료)
+**Date**: 2026-05-24 (α) ~ 2026-05-24 (γ closure)
 **Author**: WYKO + Claude
 **Trigger**: LOCKED #65 (ADR-141 Master Roadmap S1) 의 ADR-144 reserve.
 PR #144 (`b3cfbf4`, 2026-05-23) hotfix 의 자연 후속 — silent dissolve
@@ -184,26 +184,99 @@ sub-step plan 답습.
   2 신규 회귀 자산 (multi_level_nested_preserves_middle + concentric_chain).
 - **2026-05-24 β-3** (PR #168, 1dee4d0) — L-shape + T-shape inner
   arrangement. 2 신규 회귀 자산 (l_shape_inner + t_shape_inner).
-- **2026-05-24 β-4** (본 commit) — Edge cases (coincident + edge-
-  touching + empty mesh). `crates/axia-core/src/scene.rs` tests module
-  에 3 신규 회귀 자산 추가:
-  - `p2_step_4_65_coincident_outer_inner_no_silent_total_dissolve` —
-    outer 10×10 + inner 10×10 정확 coincident (boundary fully matched).
-    surround criterion 즉시 충족 case, dedup 또는 dissolve OK, 단
-    silent total dissolve 차단. active >= 1.
-  - `p2_step_4_65_edge_touching_corner_preserves_both` — outer 10×10
-    at origin + inner 5×5 at (7.5,7.5) corner shared at (5,5).
-    boundary disjoint (corner 한 점 touch) → surround false-positive
-    차단. active >= 1.
-  - `p2_step_4_65_empty_mesh_no_panic` — Scene::new() 만, no DrawRect.
-    Step 4.65 trigger 미호출 + empty mesh state invariants 검증.
-    active == 0 정합, verify_face_invariants 미위반.
-  누적: PR #144 (2) + β-1 (2) + β-2 (2) + β-3 (2) + 본 β-4 (3) =
-  **11 회귀 자산** (sweep target +10-12 의 **92%**). degenerate /
-  trivial / boundary edge cases coverage 완료.
-- **(β-5 + γ, ~2시간)** — 3×3 grid stress + closure docs.
+- **2026-05-24 β-4** (PR #169, 74c5f9e) — Edge cases (coincident +
+  edge-touching + empty mesh). 3 신규 회귀 자산.
+- **2026-05-24 β-5** (본 commit) — 3×3 grid stress baseline. `crates/
+  axia-core/src/scene.rs` tests module 에 1 신규 회귀 자산 추가:
+  - `p2_step_4_65_3x3_grid_stress_baseline` — outer 30×30 + 9 inner
+    8×8 cells (3 rows × 3 cols, gap 2). mass dissolve stress baseline
+    — silent total dissolve 차단 + invariants 보존.
+- **2026-05-24 γ closure** (본 commit) — ADR-144 sweep 100% closure
+  marker. Status: **Proposed → Accepted**. PR #144 (2) + β-1 (2) +
+  β-2 (2) + β-3 (2) + β-4 (3) + β-5 (1) = **12 회귀 자산** (sweep
+  target +10-12 의 **100%**). 5 topology category coverage 완료:
+  - **Rectangular** (β-1: partial overlap + single inner)
+  - **Concentric** (β-2: 3-level nested + chain)
+  - **Non-rectangular** (β-3: L-shape + T-shape)
+  - **Degenerate** (β-4: coincident + edge-touching + empty)
+  - **Stress** (β-5: 3×3 grid)
+  README catalog Status canonical "Accepted" 갱신. §9 Lessons (5 canonical)
+  + §10 Cross-link 추가.
 
 ---
 
-**다음 trigger**: β-5 진입 결재 (3×3 grid stress, ~1시간 + γ closure docs ~30분)
-또는 우선순위 priority track 결정.
+**다음 trigger**: 우선순위 priority track 결정 (Sprint 1 ADR-145 Circle
+annulus / 사용자 시연 evidence / Future ADR 등). ADR-144 sweep 자연 완료.
+
+## 9. Lessons (canonical for future Path Z atomic regression sweep ADRs)
+
+본 ADR 의 β-1 ~ β-5 sweep 진행에서 도출된 canonical lessons. 향후
+multi-sub-step regression 자산 sweep ADR 작성 시 참조.
+
+### L1 — Topology category 분할로 sub-step atomic 단위 결정
+
+5 category × ~2 회귀 = 10-12 sub-step 분배 — LOCKED #44 (Complete
+Meaning per Merge) 의 자연 적용. 같은 topology category 의 회귀는
+single atomic PR (β-1 = rectangular / β-2 = concentric / β-3 = non-
+rectangular / β-4 = degenerate edges / β-5 = stress).
+
+### L2 — Hotfix PR + sweep ADR pattern
+
+PR #144 hotfix (실제 silent guard fix, 2 회귀) → ADR-144 sweep (회귀
+자산 +10 정량 확장). PR-level hotfix vs sweep-level architectural
+guarantee 의 자연 분리. 본 PR + sweep ADR 의 양립 — hotfix 의 즉시 fix
++ sweep 의 영구 보장.
+
+### L3 — Pattern reuse (verify_face_invariants + active >= 1)
+
+PR #144 의 2 기존 회귀 pattern (active count + verify_face_invariants)
+을 β-1 ~ β-5 의 12 신규 회귀에 1:1 답습. 새 회귀 자산 작성 시 기존
+pattern 참조 → 일관성 + 작성 시간 단축. 모든 12 tests 가 동일 구조
+(setup DrawRect + assert active >= 1 + assert invariants empty).
+
+### L4 — P2 invariant (silent total dissolve 차단) 의 canonical 강제
+
+12 회귀 모두 동일 P2 invariant — `active >= 1` (silent total dissolve
+차단). 시나리오별 추가 invariant (예: empty mesh 의 active == 0)
+가능하지만 P2 가 최상위. PR #144 hotfix 의 architectural guarantee 의
+직접 evidence.
+
+### L5 — 0 fix-cycle 의 architectural value (β-1 ~ β-5 모두)
+
+β-1/β-2/β-3/β-4/β-5 모두 0 fix-cycle (즉시 CI PASS). axia-core Rust
+test 는 mock 함정 회피 + production-like setup. ADR-140 β chain 의
+2 fix-cycle (faceMap mock + Matrix4 mock) 과 대비 — Rust integration
+test 의 robustness evidence.
+
+## 10. Cross-link (full Acceptance chain)
+
+- **α spec** — PR #165, fbf5791
+- **β-1 partial overlap + single inner** — PR #166, 5cc8699
+- **β-2 multi-level nested + concentric** — PR #167, 294f56a
+- **β-3 L-shape + T-shape** — PR #168, 1dee4d0
+- **β-4 edge cases** — PR #169, 74c5f9e
+- **β-5 + γ (본 PR)** — 3×3 stress + closure
+- PR #144 (b3cfbf4) — hotfix source
+- LOCKED #1 P7-N (Non-Manifold By Design — concentric/inner 자연 동작)
+- LOCKED #44 (Complete Meaning per Merge — sub-step atomic 분할)
+- LOCKED #65 (ADR-141 Master Roadmap — Sprint 1 ADR-144 reserve)
+- LOCKED #66 (ADR-164 Sunset Policy — Status canonical)
+- 메타-원칙 #6 (Preventive over Curative — 회귀 자산 sweep)
+- 메타-원칙 #9 (회귀 없음)
+- 메타-원칙 #14 (WHAT 결과 invariant)
+
+## 11. Future ADR anchor (deferred work)
+
+본 ADR closure 후 자연 follow-up:
+
+1. **(가칭) "Step 4.65 alternative dissolve criterion"** — 현재 surround
+   criterion (모든 boundary HE 가 created face 와 partnership) 대신
+   더 정확한 criterion (e.g., interior containment) — architectural
+   ADR.
+
+2. **(가칭) "Step 4.6 / 4.7 / 4.8 / 4.9 silent guard sweep"** — 다른
+   pipeline step 들의 silent guard 보완 — Step 4.65 와 동일 pattern.
+
+3. **(가칭) "ADR-151 Connected Stacked-inner Component-Merge Resolver"**
+   — LOCKED #1 P7-N closure (concentric inner manifold). ADR-141 Sprint
+   3 reserve.
