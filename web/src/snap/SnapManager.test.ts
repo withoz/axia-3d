@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { SnapManager, SNAP_MARKERS } from './SnapManager';
+import { SnapManager, SNAP_MARKERS, DEPRECATED_SNAP_TYPES } from './SnapManager';
 import type { SnapType } from './SnapManager';
 
 describe('SnapManager', () => {
@@ -333,6 +333,79 @@ describe('SnapManager', () => {
 
     it('resetTentative does not throw with no candidates', () => {
       expect(() => snap.resetTentative()).not.toThrow();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // ADR-146 β-1 — node SnapType deprecate 분기 (Q1=(b) 의식적 deprecate)
+  //
+  // External anchor: reports/입력보정파이프라인_적용계획.html §2.2 P8.
+  // Canonical anchor: ADR-146 §2.1 Q1=(b) — "'node' SnapType union 보존
+  //   + findSnap 진입 시 명시 warning + 향후 unfreeze 가능."
+  //
+  // Lock-ins:
+  //   - L-146-1: 메타-원칙 #16 정합 (silent removal 차단)
+  //   - L-146-4: ADR-046 P31 #4 additive only (API surface UNCHANGED)
+  // ═══════════════════════════════════════════════════════════════
+  describe('ADR-146 β-1 — node SnapType deprecate', () => {
+    it('node ∈ DEPRECATED_SNAP_TYPES (의식적 deprecate 정합)', () => {
+      // Canonical evidence: 'node' is the (currently) sole deprecated
+      // SnapType per ADR-146 Q1=(b) 결재. External introspection 가능.
+      expect(DEPRECATED_SNAP_TYPES.has('node' as SnapType)).toBe(true);
+      // L-146-4 additive only — union 보존 + visual config 보존.
+      expect(SNAP_MARKERS.node).toBeDefined();
+      expect(SNAP_MARKERS.node.label).toBe('노드');
+    });
+
+    it('enabling node mode produces 0 candidates (silent skip 보존, behavior unchanged)', () => {
+      // 사용자가 deprecated mode 활성화하더라도 candidates 0 — 현재
+      // behavior 변경 없음 (메타-원칙 #16 자동 unfreeze 차단).
+      snap.setMode('node', true);
+
+      // Reset other modes to isolate node — mimic minimal config.
+      // We don't disable other modes; just verify that node alone
+      // does not contribute candidates. Empty mesh scenario suffices.
+      const mockCamera = new THREE.PerspectiveCamera();
+      const mockCanvas = {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      } as unknown as HTMLCanvasElement;
+
+      // No mesh data registered → no edges/verts/faces. node mode
+      // remains a no-op (findSnap 분기 0).
+      const result = snap.findSnap(400, 300, mockCamera, mockCanvas, null, null);
+      // result may be null (no candidates) or grid (if active) — but
+      // NOT a 'node' snap.
+      expect(result?.type).not.toBe('node');
+    });
+
+    it('node mode activation triggers debug warning once per session', () => {
+      // L-146-1 메타-원칙 #16 — silent skip 차단 강제 evidence.
+      // 사용자가 deprecated mode 활성 → warning 발생 (debugLog gated
+      // by window.__AXIA_DEBUG, default off).
+      snap.resetDeprecationWarnings();
+      expect(snap.getDeprecationWarned().has('node' as SnapType)).toBe(false);
+
+      // Activate deprecated mode + trigger findSnap.
+      snap.setMode('node', true);
+      const mockCamera = new THREE.PerspectiveCamera();
+      const mockCanvas = {
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      } as unknown as HTMLCanvasElement;
+      snap.findSnap(400, 300, mockCamera, mockCanvas, null, null);
+
+      // Warning state recorded.
+      expect(snap.getDeprecationWarned().has('node' as SnapType)).toBe(true);
+
+      // Idempotent — 2nd call does NOT re-warn (once per session).
+      // We verify by capturing set size before/after.
+      const sizeBefore = snap.getDeprecationWarned().size;
+      snap.findSnap(400, 300, mockCamera, mockCanvas, null, null);
+      const sizeAfter = snap.getDeprecationWarned().size;
+      expect(sizeAfter).toBe(sizeBefore);
+
+      // resetDeprecationWarnings clears state — test helper integrity.
+      snap.resetDeprecationWarnings();
+      expect(snap.getDeprecationWarned().has('node' as SnapType)).toBe(false);
     });
   });
 });

@@ -33,6 +33,7 @@
  */
 
 import * as THREE from 'three';
+import { debugLog } from '../utils/debug';
 
 // ═══ Snap Types ═══
 export type SnapType =
@@ -66,6 +67,31 @@ export type SnapType =
   | 'from'            // 시작점 (기준점)
   | 'mid2p'           // 2점 사이의 중간
   | 'loopClose';      // 루프 닫기 (녹색)
+
+/**
+ * ADR-146 β-1 — Deprecated SnapTypes (Q1=(b) 의식적 deprecate).
+ *
+ * External anchor: `reports/입력보정파이프라인_적용계획.html` §2.2 P8 +
+ * ADR-146 §2.1 Q1=(b) 결재 (2026-05-26).
+ *
+ * Canonical: `'node'` SnapType (DXF POINT primitive vertex 의미) 는 currently
+ * findSnap 분기 0 — silent skip. AxiA 의 vertex snap 은 모두 `'endpoint'`
+ * 가 처리 (edge endpoint + vertex/anchor). 별도 `'node'` 의 architectural
+ * 의미 미정의.
+ *
+ * Policy (ADR-146 L-146-1 메타-원칙 #16 정합):
+ * - SnapType union 보존 (legacy localStorage / 외부 caller 호환)
+ * - SnapMarkerDef visual config 보존 (Line 118)
+ * - findSnap 진입 시 deprecated mode 활성 → 명시 telemetry +
+ *   debug log (silent skip 차단, 메타-원칙 #4 SSOT 정합)
+ * - 향후 DrawPoint 도구 활성 시 별도 ADR 에서 unfreeze 가능
+ *
+ * Re-introduction requires: 새 ADR + DrawPoint primitive tool + node snap
+ * 분기 (findSnap branch + getNodeSnapPositions API).
+ */
+export const DEPRECATED_SNAP_TYPES: ReadonlySet<SnapType> = new Set<SnapType>([
+  'node',
+]);
 
 // ═══ Snap marker shape definitions ═══
 export interface SnapMarkerDef {
@@ -217,6 +243,15 @@ export class SnapManager {
   /** performance.now() of the last snap — for A4 recency bonus */
   private _lastSnapTime: number = 0;
 
+  /**
+   * ADR-146 β-1 — Deprecated SnapType warning state.
+   *
+   * Records which deprecated modes have been warned about (once per session
+   * per type). Prevents log spam on every findSnap call. Cleared by
+   * `resetDeprecationWarnings()` (test helper).
+   */
+  private _deprecationWarned: Set<SnapType> = new Set();
+
   // ═══ Phase B1: Inference Lock ═══
   /**
    * When set, findSnap projects the cursor onto this snap's constraint and
@@ -306,6 +341,27 @@ export class SnapManager {
     const v = this._snapOverride;
     this._snapOverride = undefined;
     return v;
+  }
+
+  /**
+   * ADR-146 β-1 — Reset deprecation warning state (test helper).
+   *
+   * Allows test runners to verify the "once-per-session" behavior by
+   * clearing the warning record between assertions. Not intended for
+   * production use.
+   */
+  resetDeprecationWarnings(): void {
+    this._deprecationWarned.clear();
+  }
+
+  /**
+   * ADR-146 β-1 — Inspect deprecation warning state (test helper).
+   *
+   * Returns a read-only snapshot of which deprecated SnapTypes have already
+   * been warned about in the current session.
+   */
+  getDeprecationWarned(): ReadonlySet<SnapType> {
+    return this._deprecationWarned;
   }
 
   toggleMode(mode: SnapType): boolean {
@@ -746,6 +802,20 @@ export class SnapManager {
       );
       this.setResult(projected);
       return projected;
+    }
+
+    // ADR-146 β-1 — Deprecated SnapType warning (once per session per type).
+    // Q1=(b) 의식적 deprecate path — silent skip 차단 (메타-원칙 #4 SSOT).
+    // 사용자가 deprecated mode 활성 시 debugLog + state mark.
+    // 향후 ADR (DrawPoint primitive tool) 에서 unfreeze 가능.
+    for (const depType of DEPRECATED_SNAP_TYPES) {
+      if (this.config.modes.has(depType) && !this._deprecationWarned.has(depType)) {
+        this._deprecationWarned.add(depType);
+        debugLog(
+          `[ADR-146 β-1] SnapType '${depType}' is deprecated (no findSnap branch). ` +
+          `Use 'endpoint' instead. Re-introduction requires new ADR.`,
+        );
+      }
     }
 
     const rect = canvas.getBoundingClientRect();
