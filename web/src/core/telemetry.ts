@@ -66,7 +66,11 @@ export type BudgetKey =
   // ── Picking router (ADR-012 §4) ──
   | 'picking.face'
   | 'picking.edge'
-  | 'picking.snap';
+  | 'picking.snap'
+  // ── ADR-146 β-2 — SnapManager.findSnap direct latency (Q2=a) ──
+  // PickingRouter wrap 외 findSnap 진입~출구 직접 측정. Hover 16ms budget
+  // 의 sub-component 관찰성 (메타-원칙 #11 정합).
+  | 'findSnap';
 
 /** ADR-012 §3 — frame 당 WASM crossing 상한.
  *   "1 Command = 1 입력 + 1 mesh 결과 = 2회" 가 ideal,
@@ -106,6 +110,10 @@ export const BUDGETS: Record<BudgetKey, number> = {
   'picking.face': 8,
   'picking.edge': 8,
   'picking.snap': 8,
+  // ADR-146 β-2 — SnapManager.findSnap 직접 측정 budget (picking.snap 동급).
+  // Hover budget 16ms 의 sub-component. PickingRouter wrap 은 외부 측정,
+  // findSnap entry~exit 직접 관찰성 분리 (메타-원칙 #11).
+  findSnap: 8,
 };
 
 // ── Data shapes ───────────────────────────────────────────────────
