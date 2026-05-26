@@ -238,11 +238,27 @@ ADR-141 share +55 의 ~10-15 = 18-27% (Sprint 1 share table 정합).
   - **사용자 facing 변화**: 사용자가 명시 trigger (β-4 ContextMenu)
     호출 시 outer face 가 annulus topology (hole 1) 로 변환. inner face
     deactivate. dev server 에서 검증 가능 (β-4 후).
-- **(β-2 ~ γ, ~3-4시간 multi-day)** — WASM bridge + TS wrapper + ContextMenu
-  integration + E2E + closure. 별도 사용자 결재 후 진행.
+- **2026-05-26 β-2** (본 commit) — WASM bridge export `promoteCirclesToAnnulus`.
+  `crates/axia-wasm/src/lib.rs` 에 transaction-wrapped endpoint 추가
+  (promote_shape_to_xia pattern 1:1 답습):
+  - signature: `(outer_face_id: u32, inner_face_id: u32) -> Result<(), JsValue>`
+  - Engine call: `axia_geo::operations::annulus::promote_circles_to_annulus`
+  - Transaction: begin → set_before_snapshot → match Ok/Err → commit / cancel
+  - Error format: `promoteCirclesToAnnulus: <AnnulusError Display>` (silent
+    skip 차단, ADR-091 D-γ pattern 답습)
+  회귀 axia-wasm **+2** (step6_additive_only.rs `adr145_beta2_*` block):
+  - `adr145_beta2_promote_circles_to_annulus_endpoint_wired` — js_name +
+    signature + Engine delegation 검증
+  - `adr145_beta2_promote_uses_transaction_with_cancel_on_error` — begin
+    + commit + cancel + 'promoteCirclesToAnnulus:' error prefix
+  + `export_baseline.txt` 갱신 (promoteCirclesToAnnulus entry alphabetical
+  insertion 전 promoteShapeToXia). `wasm_export_baseline_unchanged` test
+  자동 PASS.
+- **(β-3 ~ γ, ~2-3시간)** — TS bridge wrapper + ContextMenu integration
+  + E2E + closure docs. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-2 진입 결재 (WASM bridge export, ~30분 atomic)
-또는 β-2 ~ γ 묶음 (~3-4시간 multi)
+**다음 trigger**: β-3 진입 결재 (TS bridge wrapper, ~30분 atomic)
+또는 β-3 ~ γ 묶음 (~2-3시간 multi)
 또는 우선순위 priority track 결정.

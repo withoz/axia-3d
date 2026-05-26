@@ -989,6 +989,60 @@ fn adr091_d_gamma_demote_uses_transaction_with_cancel_on_error() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-145 β-2 — Circle annulus WASM bridge invariants.
+//
+// Mirrors the source-inspection pattern of ADR-091 D-γ (promote_shape_to_xia
+// / demote_xia_to_shape). Tests verify wiring contracts — function
+// existence, signature shape (Result<(), JsValue> strict throw), and
+// transaction-wrapped rollback on error.
+// ════════════════════════════════════════════════════════════════════════
+
+/// β-2 #1 — `promoteCirclesToAnnulus` endpoint is wired with correct
+/// js_name and Result<(), JsValue> strict throw signature.
+#[test]
+fn adr145_beta2_promote_circles_to_annulus_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn promote_circles_to_annulus"),
+        "ADR-145 β-2: missing Rust function promote_circles_to_annulus");
+    assert!(l.contains("js_name = \"promoteCirclesToAnnulus\""),
+        "ADR-145 β-2: missing js_name = \"promoteCirclesToAnnulus\"");
+    let idx = l.find("pub fn promote_circles_to_annulus")
+        .expect("promote_circles_to_annulus");
+    let body = char_safe_slice(&l, idx, 1500);
+    assert!(body.contains("-> Result<(), JsValue>"),
+        "ADR-145 β-2: promoteCirclesToAnnulus must return Result<(), JsValue> \
+         (no JSON on success — silent promote OK, throw on error per AnnulusError)");
+    // Signature: 두 face_id parameter
+    assert!(body.contains("outer_face_id: u32"),
+        "ADR-145 β-2: signature must include outer_face_id: u32");
+    assert!(body.contains("inner_face_id: u32"),
+        "ADR-145 β-2: signature must include inner_face_id: u32");
+    // Engine API delegation
+    assert!(body.contains("annulus::promote_circles_to_annulus"),
+        "ADR-145 β-2: body must delegate to axia_geo::operations::annulus");
+}
+
+/// β-2 #2 — Annulus endpoint wraps in a transaction (Undo restores
+/// the pre-promote state) and cancels on failure (no state change).
+#[test]
+fn adr145_beta2_promote_uses_transaction_with_cancel_on_error() {
+    let l = lib_src();
+    let idx = l.find("pub fn promote_circles_to_annulus")
+        .expect("promote_circles_to_annulus");
+    let body = char_safe_slice(&l, idx, 1500);
+    assert!(body.contains("transactions.begin"),
+        "ADR-145 β-2: promote must begin transaction");
+    assert!(body.contains("transactions.commit"),
+        "ADR-145 β-2: success path must commit transaction");
+    assert!(body.contains("transactions.cancel"),
+        "ADR-145 β-2: failure path must cancel transaction (no side effects on rejection)");
+    // 명시 error format (silent skip 차단)
+    assert!(body.contains("promoteCirclesToAnnulus:"),
+        "ADR-145 β-2: error message must prefix with 'promoteCirclesToAnnulus:' \
+         for caller-side identification");
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-050 P-5c — As-Shape Draw command WASM bridge invariants.
 //
 // Mirrors the source-inspection pattern of P-4. Tests verify wiring
