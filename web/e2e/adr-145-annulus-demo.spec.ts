@@ -106,32 +106,47 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
 
         const facesBefore = bridge.getStats().faces;
 
-        // Step 1: Draw outer Circle (radius 5).
-        const outerFaceId = bridge.drawCircleAsCurve(
+        // Step 1: Draw outer Circle (radius 5). drawCircleAsCurve
+        // returns ShapeId (NOT FaceId per ADR-050 P-4 Two-Layer
+        // Citizenship — Shape owns Face).
+        const outerShapeId = bridge.drawCircleAsCurve(
           args.outer.cx, args.outer.cy, args.outer.cz,
           args.outer.nx, args.outer.ny, args.outer.nz,
           args.outer.radius,
         );
 
         // Step 2: Draw inner Circle (radius 2, same center, same plane).
-        const innerFaceId = bridge.drawCircleAsCurve(
+        const innerShapeId = bridge.drawCircleAsCurve(
           args.inner.cx, args.inner.cy, args.inner.cz,
           args.inner.nx, args.inner.ny, args.inner.nz,
           args.inner.radius,
         );
 
         const facesAfterDraw = bridge.getStats().faces;
+
+        // ShapeId → FaceId conversion via bridge.getShapeFaceIds.
+        // Each Path B Circle owns exactly 1 face (closed-curve self-loop
+        // canonical, ADR-089 Phase 2).
+        const outerFaceIds = bridge.getShapeFaceIds(outerShapeId);
+        const innerFaceIds = bridge.getShapeFaceIds(innerShapeId);
+        const outerFaceId = outerFaceIds.length === 1 ? outerFaceIds[0] : -1;
+        const innerFaceId = innerFaceIds.length === 1 ? innerFaceIds[0] : -1;
+
         const bothDrawn =
-          outerFaceId !== null && outerFaceId !== undefined &&
-          innerFaceId !== null && innerFaceId !== undefined;
+          outerShapeId >= 0 && innerShapeId >= 0 &&
+          outerFaceId >= 0 && innerFaceId >= 0;
 
         if (!bothDrawn) {
           return {
             step: 'draw',
             facesBefore,
             facesAfterDraw,
+            outerShapeId,
+            innerShapeId,
             outerFaceId,
             innerFaceId,
+            outerFaceCount: outerFaceIds.length,
+            innerFaceCount: innerFaceIds.length,
             bothDrawn,
             promoteSucceeded: false,
             facesAfterPromote: -1,
@@ -155,8 +170,12 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
           step: 'promote',
           facesBefore,
           facesAfterDraw,
+          outerShapeId,
+          innerShapeId,
           outerFaceId,
           innerFaceId,
+          outerFaceCount: outerFaceIds.length,
+          innerFaceCount: innerFaceIds.length,
           bothDrawn,
           promoteSucceeded,
           facesAfterPromote,
@@ -166,8 +185,13 @@ test.describe('ADR-145 γ — Circle annulus 명시 promote E2E', () => {
       { outer: CIRCLE_OUTER, inner: CIRCLE_INNER },
     );
 
-    // Evidence — 2 Path B Circle faces drawn.
-    expect(result.bothDrawn, 'γ-2: 2 Circle faces drawn').toBe(true);
+    // Evidence — 2 Path B Circle Shapes drawn + each owns 1 face.
+    expect(result.bothDrawn,
+      `γ-2: 2 Circle drawn — outerShape=${result.outerShapeId}, innerShape=${result.innerShapeId}, ` +
+      `outerFaces=${result.outerFaceCount}, innerFaces=${result.innerFaceCount}`,
+    ).toBe(true);
+    expect(result.outerFaceCount, 'γ-2: outer Shape owns 1 face').toBe(1);
+    expect(result.innerFaceCount, 'γ-2: inner Shape owns 1 face').toBe(1);
     expect(result.facesAfterDraw, 'γ-2: face count progressed by 2').toBeGreaterThanOrEqual(
       result.facesBefore + 2,
     );
