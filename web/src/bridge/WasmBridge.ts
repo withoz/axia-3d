@@ -488,6 +488,13 @@ type AxiaEngineExtended = AxiaEngine & {
   demoteXiaToShape?(xiaId: number): string;
   // ADR-145 β-2 — Circle annulus 명시 promote
   promoteCirclesToAnnulus?(outerFaceId: number, innerFaceId: number): void;
+  // ADR-148 β-3 — Point-Localized BoundaryTool (returns face_id)
+  boundaryFromPoint?(
+    px: number, py: number, pz: number,
+    nx: number, ny: number, nz: number,
+    planeDist: number,
+    searchRadiusMm: number,
+  ): number;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1261,6 +1268,53 @@ export class WasmBridge {
     }
     this.markDirty();
     this.engine.promoteCirclesToAnnulus(outerFaceId, innerFaceId);
+  }
+
+  /**
+   * ADR-148 β-3 — Point-Localized BoundaryTool TS wrapper.
+   *
+   * CAD 표준 BOUNDARY 명령 equivalent — 사용자가 영역 내부의 한 점을
+   * 클릭하면 그 점을 둘러싼 가장 작은 boundary loop 검출 → face 합성.
+   *
+   * **사용자 명시 trigger only** (메타-원칙 #16) — 휴리스틱 자동
+   * activation 0. UI BoundaryTool (β-4, Ctrl+B) 클릭 후 호출.
+   *
+   * Engine API: `axia_geo::operations::boundary::boundary_from_point`
+   * (β-1 skeleton, PR #184 + β-2 algorithm, PR #185).
+   *
+   * @param px - World-space X
+   * @param py - World-space Y
+   * @param pz - World-space Z
+   * @param nx - Plane normal X
+   * @param ny - Plane normal Y
+   * @param nz - Plane normal Z
+   * @param planeDist - Plane equation `normal · p = dist` (signed)
+   * @param searchRadiusMm - BVH/linear scan radius (mm). ≤0 → default 1000mm
+   * @returns face_id of synthesized boundary face
+   * @throws Error on validation failure:
+   *   - "boundaryFromPoint: PointNotOnPlane (distance Nmm)"
+   *   - "boundaryFromPoint: NoOrphanEdgesInRadius (radius Rmm)"
+   *   - "boundaryFromPoint: NoEnclosingCycle"
+   *   - "boundaryFromPoint: CycleAlreadyFaced (face N)"
+   *
+   * Caller wraps in try/catch and surfaces error text to Toast.
+   *
+   * Transaction-wrapped (Engine layer, axia-wasm) — Undo restores the
+   * pre-synthesis state.
+   */
+  boundaryFromPoint(
+    px: number, py: number, pz: number,
+    nx: number, ny: number, nz: number,
+    planeDist: number,
+    searchRadiusMm: number,
+  ): number {
+    if (!this.engine || !this.engine.boundaryFromPoint) {
+      throw new Error('boundaryFromPoint: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    return this.engine.boundaryFromPoint(
+      px, py, pz, nx, ny, nz, planeDist, searchRadiusMm,
+    );
   }
 
 

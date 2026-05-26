@@ -7805,6 +7805,81 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-148 β-3 — Point-Localized BoundaryTool WASM endpoint.
+    ///
+    /// **사용자 명시 trigger only** (메타-원칙 #16) — 휴리스틱 자동
+    /// activation 0. UI BoundaryTool 클릭 후 호출 (β-4).
+    ///
+    /// Given a 3D world-space click point + plane (cardinal projection
+    /// or face plane), find the smallest enclosing orphan edge cycle
+    /// containing the point and synthesize a boundary face.
+    ///
+    /// CAD 표준 BOUNDARY 명령 equivalent (AutoCAD BPOLY).
+    ///
+    /// Engine API: `axia_geo::operations::boundary::boundary_from_point`
+    /// (β-1 skeleton, PR #184 + β-2 algorithm, PR #185).
+    ///
+    /// # Parameters
+    /// - `px`, `py`, `pz`: 3D world-space click point
+    /// - `nx`, `ny`, `nz`: plane normal (unit vector recommended; normalized
+    ///   internally)
+    /// - `plane_dist`: plane equation `normal · p = dist` (signed distance
+    ///   from world origin)
+    /// - `search_radius_mm`: BVH/linear scan radius. ≤0 → default 1000mm
+    ///
+    /// # Returns
+    /// - `Ok(face_id: u32)`: 새로 합성된 boundary face
+    /// - `Err(JsValue)`: 4 validation failure (PointNotOnPlane /
+    ///   NoOrphanEdgesInRadius / NoEnclosingCycle / CycleAlreadyFaced)
+    ///
+    /// Transaction-wrapped — Undo restores the pre-synthesis state.
+    #[wasm_bindgen(js_name = "boundaryFromPoint")]
+    pub fn boundary_from_point(
+        &mut self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+        plane_dist: f64,
+        search_radius_mm: f64,
+    ) -> Result<u32, JsValue> {
+        use axia_geo::operations::boundary;
+        use axia_geo::operations::boolean_geo::Plane;
+        use glam::DVec3;
+
+        let point = DVec3::new(px, py, pz);
+        let plane = Plane {
+            normal: DVec3::new(nx, ny, nz).normalize(),
+            dist: plane_dist,
+        };
+
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        match boundary::boundary_from_point(
+            &mut self.scene.mesh,
+            point,
+            plane,
+            search_radius_mm,
+        ) {
+            Ok(face_id) => {
+                self.scene
+                    .transactions
+                    .set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                Ok(face_id.raw())
+            }
+            Err(err) => {
+                self.scene.transactions.cancel();
+                Err(JsValue::from_str(&format!("boundaryFromPoint: {}", err)))
+            }
+        }
+    }
+
     /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
     /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
     ///

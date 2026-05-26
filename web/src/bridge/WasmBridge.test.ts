@@ -1750,6 +1750,46 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-148 β-3 — Point-Localized BoundaryTool TS bridge wrapper
+    // (메타-원칙 #16 정합 — 휴리스틱 자동 activation 0, 사용자 명시
+    // trigger only. ADR-139 직계 후속.)
+    // ────────────────────────────────────────────────────────────────
+
+    it('boundaryFromPoint calls engine with 8 parameters and returns face_id (β-3 success)', () => {
+      const fn = vi.fn(() => 42);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { boundaryFromPoint: fn };
+      const result = bridge.boundaryFromPoint(
+        5, 5, 0,        // point
+        0, 0, 1,        // normal (Z up)
+        0,              // plane dist
+        1000,           // search radius
+      );
+      expect(result).toBe(42);
+      expect(fn).toHaveBeenCalledWith(5, 5, 0, 0, 0, 1, 0, 1000);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('boundaryFromPoint propagates engine throw (strict — silent skip 차단)', () => {
+      const errFn = vi.fn(() => {
+        throw new Error(
+          'boundaryFromPoint: NoEnclosingCycle'
+        );
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { boundaryFromPoint: errFn };
+      expect(() => bridge.boundaryFromPoint(15, 5, 0, 0, 0, 1, 0, 100))
+        .toThrow(/NoEnclosingCycle/);
+    });
+
+    it('boundaryFromPoint throws when WASM endpoint missing (feature gate)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.boundaryFromPoint(0, 0, 0, 0, 0, 1, 0, 1000))
+        .toThrow(/WASM endpoint missing/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
     // ────────────────────────────────────────────────────────────────
 
