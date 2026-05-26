@@ -2602,6 +2602,9 @@
       <div class="ctx-item ctx-face-item" data-action="merge-xia-coplanar">XIA 내 Coplanar 면 일괄 통합</div>
       <div class="ctx-item ctx-face-item" data-action="merge-faces-force">🫧 강제 통합 (비평면, 내부 엣지 숨김)</div>
       <div class="ctx-item ctx-face-item" data-action="merge-as-hole">🕳 수동: 내부 면을 구멍으로 (레거시 · 신규 그리기는 자동)</div>
+      <!-- ADR-145 β-4 — Circle annulus 명시 trigger (메타-원칙 #16 정합) -->
+      <!-- 가시성: exactly 2 face 선택. Engine 4-validation 으로 최종 검증. -->
+      <div class="ctx-item ctx-annulus-item" data-action="promote-circles-to-annulus">⭕ Annulus 만들기 (2개 원, 내부 ⊂ 외부)</div>
       <!-- ADR-074 U-2 — Boolean Group A/B selection (E.3 트랙) -->
       <!-- selection 있을 때 set A/B; group tag 있을 때 clear -->
       <!-- ADR-074 §E.5-4 단축키 (Alt+A / Alt+B / Alt+0) — KeyboardShortcuts 통합 -->
