@@ -1,6 +1,7 @@
 # ADR-145 — Circle Annulus 명시 활성 (옵션 B, ContextMenu)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: Accepted (γ closure 2026-05-26 — Path Z atomic 7 sub-step
+α + β-1 + β-1+ + β-2 + β-3 + β-4 + γ 모두 closure)
 **Date**: 2026-05-26
 **Author**: WYKO + Claude
 **Trigger**: LOCKED #65 (ADR-141 Master Roadmap S1) 의 ADR-145 reserve.
@@ -285,9 +286,86 @@ ADR-141 share +55 의 ~10-15 = 18-27% (Sprint 1 share table 정합).
   - error toast — NotCoplanar (non-InnerNotContained) Error → 1회 호출만,
     Toast.error 메시지 전달
   - 합계 27/27 PASS (기존 24 + 신규 4 — spec 의 +3 보다 1개 추가)
-- **(γ, ~1시간)** — E2E (Playwright) + 사용자 시연 evidence + closure docs.
+- **2026-05-26 γ** (본 commit) — Closure: E2E + Status flip + Lessons.
+  - `web/e2e/adr-145-annulus-demo.spec.ts` 신규 (Playwright + 2 specs):
+    * **γ-1**: `promoteCirclesToAnnulus` WASM endpoint smoke (strict throw
+      on InactiveFace) — ADR-091 D-ζ smoke 패턴 1:1 mirror. β-1
+      validation #1 의 browser-runtime evidence.
+    * **γ-2**: Concentric Circles happy-path round-trip — `drawCircleAsCurve
+      × 2 (outer r=5, inner r=2)` + `promoteCirclesToAnnulus` →
+      `getStats().faces` decreases by 1 (β-1+ L-145-8 inner deactivation
+      evidence). β-1+ Rust integration test 의 browser counterpart.
+  - **§9 Lessons** 신규 — 4-항목 회고 (Path Z 7-sub-step 효율성 + atomic
+    splitting + LOCKED #44 정합 + 메타-원칙 #16 enforcement).
+  - **Status**: Proposed → **Accepted** (header).
+  - **README catalog** (`docs/adr/README.md`) — Sprint 1 row 의 ADR-145
+    entry Status: `Proposed` → `Accepted`.
+  - 회귀 Playwright **+2** (`adr-145-annulus-demo.spec.ts`). 합계 — 절대
+    #[ignore] 금지 2/2 준수.
 
 ---
 
-**다음 trigger**: γ 진입 결재 (E2E + 사용자 시연 + closure)
-또는 sample/ 문서 학습 자료 ADR 결정 (ADR-141 외부 anchor).
+**ADR-145 closure**: Path Z atomic 7 sub-step 완료. 사용자 facing 즉시
+가치 — DrawCircle × 2 → 우클릭 → "Annulus 만들기" → 정확 annulus topology
+(outer with inner hole, LOCKED #1 P7 manifold). 휴리스틱 자동 promote 0
+(메타-원칙 #16 정합). 다음 trigger: Sprint 1 잔존 ADRs (ADR-141 §3 매트릭스
+participation) 또는 sample/ 문서 학습 자료 ADR (별도 anchor).
+
+## 9. Lessons (canonical for future "사용자 명시 promote" ADRs)
+
+ADR-145 Path Z atomic 7-sub-step closure 의 4개 회고 항목:
+
+### L1 — Path Z atomic 7-sub-step 의 사용자 결재 효율성
+
+α spec → β-1 / β-1+ / β-2 / β-3 / β-4 → γ closure. 각 sub-step single
+atomic PR (LOCKED #44 정합). 본 ADR 은 ADR-139 (Boundary tool) 패턴
+1:1 mirror 의 *명시 promote 변형* — 7 sub-step 각각이 self-contained
+PR 로 사용자 결재 cycle 최소화 (β-1 후 β-1+ 의 logic split 자연 흡수).
+
+향후 "사용자 명시 promote" ADR 가이드 — α (spec) → β-1 (Engine API
+skeleton + validation) → β-1+ (full logic, if separable) → β-2 (WASM
+bridge) → β-3 (TS wrapper) → β-4 (UI integration) → γ (E2E + closure)
+의 canonical 7-step.
+
+### L2 — Engine validation 의 UI 단순화 가치
+
+β-4 UI 에서 *사전 검출* (Circle face 인지 / coplanar 인지 / contained
+인지) 안 함 — Engine 4-validation 에 위임. 결과: ContextMenu 가시성
+로직 *단순* (`selected.length === 2`), 사용자 facing failure mode 명시
+(Toast.error with Engine error message). 향후 명시 trigger UI 가이드 —
+*검증 책임은 Engine*, *UI 는 시도 + error toast*.
+
+예외 — UX 한 단계: InnerNotContained Error 시 swap retry. 두 ordering
+모두 실패만 final error. 사용자 facing "어느 게 outer 인지 신경 쓸 필요
+없음" 가치.
+
+### L3 — 메타-원칙 #16 정합 강화 (ADR-139 후속 evidence)
+
+ADR-139 (Boundary tool 명시 only) 의 자연 후속. ADR-145 가 *명시 promote*
+의 첫 follow-up ADR. 결과 — *큰 Circle + 작은 Circle 자동 annulus 안
+됨* (휴리스틱 회피) + *사용자 우클릭 명시 trigger 만 promote* (의도
+명확).
+
+향후 메타-원칙 #16 정합 ADR 가이드 — 자동 trigger 거부 + 명시 UI entry
+(우클릭 / 메뉴 / 단축키) 분리. ADR-145 의 ContextMenu integration 이
+canonical entry pattern.
+
+### L4 — LOCKED #1 P7 manifold 보존 (β-1+ L-145-8 evidence)
+
+`promote_circles_to_annulus` 의 promote logic 5단계 (HE reparent +
+LoopRef add_inner + face deactivate) 가 LOCKED #1 P7 manifold invariant
+보존. β-1+ 의 `adr145_beta1plus_annulus_preserves_manifold_invariants`
+회귀가 `verify_face_invariants` 미위반 evidence — 향후 hole inheritance
+ADR 가이드 — `create_solid.rs` 의 `annulus_face` 패턴 1:1 mirror 답습.
+
+### L5 — Sprint 1 자연 진행 (사용자 결재 직계 evidence)
+
+본 ADR closure 후 사용자 결재 anchor — *sample/ 문서 학습 자료 반영
+이 더 가치 있다* 가 별도 ADR trigger 가능. LOCKED #65 ADR-141 Sprint 1
+ADR-145 reserve 의 자연 closure 완료 — Sprint 1 잔존 ADRs (ADR-141 §3
+매트릭스) 또는 외부 anchor (sample/ 5 학습 문서) 모두 candidate.
+
+향후 Sprint scope 결정 가이드 — 사용자 명시 결재 anchor (사용자
+"무엇이 가장 가치 있는가" 응답) 우선. 본 ADR 의 trigger 결재 (옵션 B
+2026-05-22) 가 spec 작성 → β implementation → γ closure → 다음 결재
+cycle 의 canonical evidence.
