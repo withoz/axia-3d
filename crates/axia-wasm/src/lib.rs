@@ -7751,6 +7751,60 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-145 β-2 — Circle annulus 명시 promote.
+    ///
+    /// 두 coplanar Circle face (outer + inner) 를 annulus (outer with
+    /// inner hole) 로 명시 promote. inner face deactivate.
+    ///
+    /// **사용자 명시 trigger only** (메타-원칙 #16) — 휴리스틱 자동
+    /// detect 안 됨. ContextMenu "annulus 만들기" 우클릭 후 호출 (β-4).
+    ///
+    /// Engine API: `axia_geo::operations::annulus::promote_circles_to_annulus`
+    /// (β-1 validation + β-1+ promote logic full implementation, PR #173).
+    ///
+    /// # Errors (matching `AnnulusError`)
+    /// - `InactiveFace` — outer 또는 inner not found / inactive
+    /// - `NotCircleFace` — 둘 다 closed-curve Circle face 아님
+    ///   (1 self-loop edge with `AnalyticCurve::Circle`)
+    /// - `NotCoplanar` — 다른 평면 (normal parity + plane distance,
+    ///   LOCKED #5 1.5μm tolerance)
+    /// - `InnerNotContained` — inner Circle 이 outer 안 contained 안 됨
+    ///   (center_distance + inner.radius > outer.radius)
+    ///
+    /// Transaction-wrapped — Undo restores the pre-promote state
+    /// (inner face active + outer face hole 0).
+    #[wasm_bindgen(js_name = "promoteCirclesToAnnulus")]
+    pub fn promote_circles_to_annulus(
+        &mut self,
+        outer_face_id: u32,
+        inner_face_id: u32,
+    ) -> Result<(), JsValue> {
+        use axia_geo::FaceId;
+        use axia_geo::operations::annulus;
+        let outer_fid = FaceId::new(outer_face_id);
+        let inner_fid = FaceId::new(inner_face_id);
+
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        match annulus::promote_circles_to_annulus(&mut self.scene.mesh, outer_fid, inner_fid) {
+            Ok(()) => {
+                self.scene
+                    .transactions
+                    .set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                Ok(())
+            }
+            Err(err) => {
+                // Failure rolls back the transaction (no state change).
+                self.scene.transactions.cancel();
+                Err(JsValue::from_str(&format!("promoteCirclesToAnnulus: {}", err)))
+            }
+        }
+    }
+
     /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
     /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
     ///
