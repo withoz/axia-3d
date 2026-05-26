@@ -215,11 +215,35 @@ ADR-141 share +55 의 ~10-15 = 18-27% (Sprint 1 share table 정합).
 
 ## 8. Acceptance Log
 
-- **2026-05-26 α** (본 commit) — α spec + sub-step plan + lock-ins.
-- **(β-1 ~ γ, ~3-5일 multi-day)** — atomic Path Z sub-step 별도
-  사용자 결재 후 진행.
+- **2026-05-26 α** (PR #171, 4c79636) — α spec + sub-step plan + lock-ins.
+- **2026-05-26 β-1** (본 commit) — Engine API skeleton (validation + promote
+  stub). `crates/axia-geo/src/operations/annulus.rs` 신설:
+  - `AnnulusError` enum (5 variant): InactiveFace / NotCircleFace /
+    NotCoplanar / InnerNotContained / **PromoteLogicDeferred** (β-1 scope
+    placeholder)
+  - `promote_circles_to_annulus(mesh, outer_fid, inner_fid) -> Result<(), AnnulusError>`
+    함수 — 4 validation full implementation + promote logic placeholder
+    (별도 atomic)
+  - `extract_circle` helper — closed-curve Circle face 의 Circle metadata
+    추출 (`Mesh::edge_curve` + `AnalyticCurve::Circle` match)
+  - `CircleData` private struct — center / radius / normal
+  - Tolerances: `COPLANAR_TOL = 1.5e-3` (LOCKED #5) + `NORMAL_PARITY_TOL = 1e-6`
+  회귀 vitest 0 / **axia-geo +5** (5/5 PASS):
+  - `adr145_beta1_validation_passes_with_concentric_circles` (happy path →
+    PromoteLogicDeferred 반환, silent success 차단 evidence)
+  - `adr145_beta1_rejects_inactive_outer`
+  - `adr145_beta1_rejects_not_coplanar`
+  - `adr145_beta1_rejects_inner_not_contained_off_center`
+  - `adr145_beta1_rejects_inner_larger_than_outer`
+  사용자 facing 변화 0 (Engine layer only, promote 미구현).
+- **(β-1+ amendment 또는 β-1.5 — promote logic full implementation)** —
+  inner self-loop edge HE reparent (face() → outer_face_id) + outer face
+  `add_inner(LoopRef)` + inner face deactivate. 별도 atomic sub-step.
+- **(β-2 ~ γ, ~3-4시간 multi-day)** — WASM bridge + TS wrapper + ContextMenu
+  integration + E2E + closure. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-1 진입 결재 (Engine API `promote_circles_to_annulus`
-+ AnnulusError + 5 회귀) 또는 우선순위 priority track 결정.
+**다음 trigger**: β-1+ promote logic full implementation (~1시간 atomic)
+또는 β-2 WASM bridge (promote stub 활용, ~30분)
+또는 우선순위 priority track 결정.
