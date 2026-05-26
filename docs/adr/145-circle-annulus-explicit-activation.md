@@ -266,11 +266,28 @@ ADR-141 share +55 의 ~10-15 = 18-27% (Sprint 1 share table 정합).
   - success path — `expect(fn).toHaveBeenCalledWith(10, 20)`
   - engine throw propagation — silent skip 차단 evidence
   - WASM endpoint missing feature gate
-- **(β-4 + γ, ~2시간)** — ContextMenu "annulus 만들기" UI integration
-  + E2E + closure docs. 별도 사용자 결재 후 진행.
+- **2026-05-26 β-4** (본 commit) — ContextMenu "Annulus 만들기" UI integration.
+  - `web/index.html` 의 context menu 에 `.ctx-annulus-item` (data-action
+    `promote-circles-to-annulus`) 추가 (`merge-as-hole` 직후).
+  - `web/src/ui/ContextMenu.ts`:
+    * Visibility — `selected.length === 2` 일 때만 표시 (Engine 4-validation
+      이 Circle face / coplanar / contained 최종 검증, UI 사전 검출은 별도 ADR)
+    * Click handler — `bridge.promoteCirclesToAnnulus(faceA, faceB)` 호출.
+      `InnerNotContained` Error 시 swap retry `(faceB, faceA)`. 두 ordering
+      모두 실패 → `Toast.error` (Engine error message). 성공 시 `Toast.success`
+      + `clearSelection()` + `syncMesh()`.
+  회귀 vitest **+4** (ContextMenu.test.ts `ADR-145 β-4 Annulus 만들기` block):
+  - visibility — 0/1/2/3 face selected 4가지 path 검증
+  - dispatch — bridge.promoteCirclesToAnnulus(10, 20) 정확 호출 + success
+    Toast + clearSelection + syncMesh
+  - InnerNotContained swap retry — 첫 (A,B) 실패 시 (B,A) 재시도, 두 번째
+    성공 → Toast.success
+  - error toast — NotCoplanar (non-InnerNotContained) Error → 1회 호출만,
+    Toast.error 메시지 전달
+  - 합계 27/27 PASS (기존 24 + 신규 4 — spec 의 +3 보다 1개 추가)
+- **(γ, ~1시간)** — E2E (Playwright) + 사용자 시연 evidence + closure docs.
 
 ---
 
-**다음 trigger**: β-4 진입 결재 (ContextMenu "annulus 만들기" UI integration)
-또는 β-4 + γ 묶음 (~2시간 multi)
-또는 우선순위 priority track 결정.
+**다음 trigger**: γ 진입 결재 (E2E + 사용자 시연 + closure)
+또는 sample/ 문서 학습 자료 ADR 결정 (ADR-141 외부 anchor).

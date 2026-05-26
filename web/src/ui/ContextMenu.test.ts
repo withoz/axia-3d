@@ -2,6 +2,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { initContextMenu, ContextMenuDeps } from './ContextMenu';
 
 vi.mock('../utils/debug', () => ({ debugLog: vi.fn() }));
+vi.mock('./Toast', () => ({
+  Toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
+}));
 
 function createDOM(): void {
   document.body.innerHTML = `
@@ -22,6 +30,8 @@ function createDOM(): void {
       <div class="ctx-item ctx-bool-group-item" data-action="set-group-a">Set Group A</div>
       <div class="ctx-item ctx-bool-group-item" data-action="set-group-b">Set Group B</div>
       <div class="ctx-item ctx-bool-group-clear" data-action="clear-group-tags">Clear Group Tags</div>
+      <!-- ADR-145 β-4 — Annulus 만들기 -->
+      <div class="ctx-item ctx-annulus-item" data-action="promote-circles-to-annulus">Annulus 만들기</div>
       <div class="ctx-item" data-action="view-top">Top</div>
       <div class="ctx-item" data-action="view-front">Front</div>
       <div class="ctx-item" data-action="view-3d">3D</div>
@@ -50,6 +60,8 @@ function mockDeps(): ContextMenuDeps {
     bridge: {
       toggleGroupLock: vi.fn(),
       toggleGroupVisibility: vi.fn(),
+      // ADR-145 β-4 — Engine 4-validation 통과 시 success (default).
+      promoteCirclesToAnnulus: vi.fn(),
     } as any,
     toolManager: {
       currentTool: 'select',
@@ -62,6 +74,7 @@ function mockDeps(): ContextMenuDeps {
       },
       selection: {
         getSelectedFaces: vi.fn().mockReturnValue([]),
+        getSelectedEdges: vi.fn().mockReturnValue([]),
         getGroupId: vi.fn().mockReturnValue(undefined),
         isInGroupEditMode: vi.fn().mockReturnValue(false),
         clearSelection: vi.fn(),
@@ -283,6 +296,135 @@ describe('ContextMenu', () => {
 
       expect((deps.toolManager.selection as any).setGroupTag)
         .not.toHaveBeenCalled();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-145 β-4 — Circle annulus 명시 promote (메타-원칙 #16 정합).
+  //
+  // 사용자 우클릭 → "Annulus 만들기" → bridge.promoteCirclesToAnnulus.
+  // Visibility: exactly 2 face 선택. Engine 4-validation 최종 검증.
+  // InnerNotContained 시 swap 후 retry — 두 ordering 모두 실패 → Toast.error.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-145 β-4 Annulus 만들기', () => {
+    it('visibility — promote-circles-to-annulus item shown only when 2 faces selected', async () => {
+      const { Toast } = await import('./Toast');
+
+      // Path 1: 2 face selected → item shown
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20]);
+
+      // Trigger context menu callback to apply visibility logic.
+      const cb = (deps.viewport.onContextMenu as any).mock.calls[0][0];
+      cb(100, 100);
+
+      const item = document.querySelector(
+        '[data-action="promote-circles-to-annulus"]',
+      ) as HTMLElement;
+      expect(item.style.display).not.toBe('none');
+
+      // Path 2: 1 face selected → item hidden
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10]);
+      cb(100, 100);
+      expect(item.style.display).toBe('none');
+
+      // Path 3: 0 face selected → item hidden
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([]);
+      cb(100, 100);
+      expect(item.style.display).toBe('none');
+
+      // Path 4: 3 face selected → item hidden (exactly 2 required)
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20, 30]);
+      cb(100, 100);
+      expect(item.style.display).toBe('none');
+
+      void Toast; // silence unused
+    });
+
+    it('dispatch — click promotes (outer, inner) via bridge with selected face IDs', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.success as any).mockClear();
+
+      // 2 face selected.
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20]);
+      // Bridge succeeds on first ordering — no swap retry.
+      (deps.bridge.promoteCirclesToAnnulus as any).mockImplementation(() => {
+        /* success: no throw */
+      });
+
+      const item = document.querySelector(
+        '[data-action="promote-circles-to-annulus"]',
+      ) as HTMLElement;
+      item.click();
+
+      // Bridge called exactly once with selected face IDs.
+      expect(deps.bridge.promoteCirclesToAnnulus).toHaveBeenCalledWith(10, 20);
+      expect(deps.bridge.promoteCirclesToAnnulus).toHaveBeenCalledTimes(1);
+      // Success Toast + selection cleared + mesh sync.
+      expect(Toast.success).toHaveBeenCalledWith('Annulus 생성 완료');
+      expect(deps.toolManager.selection.clearSelection).toHaveBeenCalled();
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+    });
+
+    it('InnerNotContained swap retry — first call (A,B) fails, second (B,A) succeeds', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.success as any).mockClear();
+      (Toast.error as any).mockClear();
+
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20]);
+
+      // First call (10, 20) fails with InnerNotContained — swap retry succeeds.
+      let callCount = 0;
+      (deps.bridge.promoteCirclesToAnnulus as any).mockImplementation(() => {
+        callCount += 1;
+        if (callCount === 1) {
+          throw new Error('promoteCirclesToAnnulus: InnerNotContained');
+        }
+        // Second call (20, 10) succeeds.
+      });
+
+      const item = document.querySelector(
+        '[data-action="promote-circles-to-annulus"]',
+      ) as HTMLElement;
+      item.click();
+
+      // Two calls: (10,20) then (20,10).
+      expect(deps.bridge.promoteCirclesToAnnulus).toHaveBeenCalledTimes(2);
+      expect(deps.bridge.promoteCirclesToAnnulus).toHaveBeenNthCalledWith(1, 10, 20);
+      expect(deps.bridge.promoteCirclesToAnnulus).toHaveBeenNthCalledWith(2, 20, 10);
+      expect(Toast.success).toHaveBeenCalledWith('Annulus 생성 완료');
+      expect(Toast.error).not.toHaveBeenCalled();
+    });
+
+    it('error toast — bridge throws non-InnerNotContained → Toast.error (no swap retry)', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.error as any).mockClear();
+      (Toast.success as any).mockClear();
+
+      (deps.toolManager.selection.getSelectedFaces as any)
+        .mockReturnValue([10, 20]);
+
+      // NotCoplanar error — no swap retry (only InnerNotContained triggers swap).
+      (deps.bridge.promoteCirclesToAnnulus as any).mockImplementation(() => {
+        throw new Error('promoteCirclesToAnnulus: NotCoplanar');
+      });
+
+      const item = document.querySelector(
+        '[data-action="promote-circles-to-annulus"]',
+      ) as HTMLElement;
+      item.click();
+
+      // Bridge called once (no swap retry).
+      expect(deps.bridge.promoteCirclesToAnnulus).toHaveBeenCalledTimes(1);
+      expect(Toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('NotCoplanar'),
+      );
+      expect(Toast.success).not.toHaveBeenCalled();
     });
   });
 });

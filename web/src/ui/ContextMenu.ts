@@ -9,6 +9,7 @@
 import { Viewport, ViewMode } from '../viewport/Viewport';
 import { WasmBridge } from '../bridge/WasmBridge';
 import { ToolManager } from '../tools/ToolManagerRefactored';
+import { Toast } from './Toast';
 import { debugLog } from '../utils/debug';
 import type { SnapType } from '../snap/SnapManager';
 
@@ -76,6 +77,15 @@ export function initContextMenu(deps: ContextMenuDeps): void {
     const faceItems = ctxMenu.querySelectorAll('.ctx-face-item');
     faceItems.forEach(item => {
       (item as HTMLElement).style.display = hasSelection ? '' : 'none';
+    });
+
+    // ── ADR-145 β-4 — Annulus 만들기 항목 가시성 ──
+    // 가시성: exactly 2 face 선택 (Engine 4-validation 으로 Circle face /
+    // coplanar / contained 최종 검증). UI 단순화 — Circle face 사전 검출은
+    // bridge API 추가 필요하므로 deferred.
+    const annulusItems = ctxMenu.querySelectorAll('.ctx-annulus-item');
+    annulusItems.forEach(item => {
+      (item as HTMLElement).style.display = selected.length === 2 ? '' : 'none';
     });
 
     // ── ADR-074 U-2 — Boolean Group A/B 항목 가시성 ──
@@ -146,6 +156,45 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       case 'merge-xia-coplanar': toolManager.executeAction('merge-xia-coplanar'); break;
       case 'merge-faces-force': toolManager.executeAction('merge-faces-force'); break;
       case 'merge-as-hole': toolManager.executeAction('merge-as-hole'); break;
+      // ─ ADR-145 β-4 — Circle annulus 명시 promote (메타-원칙 #16 정합) ─
+      // 사용자 워크플로우 (ADR-145 §2.1):
+      //   1. DrawCircle × 2 (큰 + 작은, concentric)
+      //   2. Ctrl+click 으로 두 face 선택
+      //   3. 우클릭 → "Annulus 만들기"
+      //   4. Engine 4-validation (active / Circle face / coplanar / contained)
+      //   5. 통과 시 outer face 의 hole 로 inner 추가, inner face deactivate
+      //
+      // Inner/outer 판정 — Engine 이 InnerNotContained 반환 시 swap 후 retry.
+      // 두 ordering 모두 실패 → Toast.error (Engine error message).
+      case 'promote-circles-to-annulus': {
+        const faces = toolManager.selection.getSelectedFaces();
+        if (faces.length !== 2) {
+          Toast.error('Annulus: 정확히 2개의 면을 선택해야 합니다');
+          break;
+        }
+        const [faceA, faceB] = faces;
+        // Try (A as outer, B as inner). If InnerNotContained, swap retry.
+        const tryPromote = (outer: number, inner: number): string | null => {
+          try {
+            bridge.promoteCirclesToAnnulus(outer, inner);
+            return null;
+          } catch (err) {
+            return err instanceof Error ? err.message : String(err);
+          }
+        };
+        let err = tryPromote(faceA, faceB);
+        if (err && err.includes('InnerNotContained')) {
+          err = tryPromote(faceB, faceA);
+        }
+        if (err) {
+          Toast.error(`Annulus 만들기 실패: ${err}`);
+        } else {
+          Toast.success('Annulus 생성 완료');
+          toolManager.selection.clearSelection();
+          toolManager.syncMesh();
+        }
+        break;
+      }
       case 'mirror-x': toolManager.executeAction('mirror-x'); break;
       case 'mirror-y': toolManager.executeAction('mirror-y'); break;
       case 'mirror-z': toolManager.executeAction('mirror-z'); break;
