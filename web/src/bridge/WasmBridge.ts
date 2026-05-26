@@ -486,6 +486,8 @@ type AxiaEngineExtended = AxiaEngine & {
   clearShapes?(): void;
   promoteShapeToXia?(shapeId: number, materialId: number): number;
   demoteXiaToShape?(xiaId: number): string;
+  // ADR-145 β-2 — Circle annulus 명시 promote
+  promoteCirclesToAnnulus?(outerFaceId: number, innerFaceId: number): void;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1224,6 +1226,41 @@ export class WasmBridge {
       shapeId: parsed.shape_id,
       originalIdRestored: parsed.original_id_restored,
     };
+  }
+
+  /**
+   * ADR-145 β-3 — Promote two coplanar Circle faces (outer + inner) to an
+   * annulus (outer with inner hole).
+   *
+   * **사용자 명시 trigger only** (메타-원칙 #16) — 휴리스틱 자동 detect
+   * 안 됨. 우클릭 ContextMenu "annulus 만들기" 후 호출 (β-4 pending).
+   *
+   * WASM endpoint: `promoteCirclesToAnnulus(outerFaceId, innerFaceId)`
+   *   - Returns `void` on success (silent promote OK)
+   *   - Throws on failure (AnnulusError Display, e.g. "promoteCirclesToAnnulus:
+   *     inner Circle not fully contained in outer Circle ...")
+   *
+   * Throws (strict — silent skip 차단, ADR-091 D-γ pattern 답습):
+   *   - WASM endpoint missing (legacy build) — feature gate, not graceful no-op
+   *   - InactiveFace — outer 또는 inner not found / inactive
+   *   - NotCircleFace — 둘 다 closed-curve Circle face 아님
+   *   - NotCoplanar — 다른 평면 (LOCKED #5 1.5μm tolerance)
+   *   - InnerNotContained — inner Circle 이 outer 안 contained 안 됨
+   *
+   * Caller wraps in try/catch and surfaces error text to Toast.
+   *
+   * Transaction-wrapped (Engine layer, axia-wasm) — Undo restores the
+   * pre-promote state (inner face active + outer face 0 holes).
+   *
+   * @param outerFaceId - The larger Circle face (will become the annulus outer)
+   * @param innerFaceId - The smaller Circle face (will become the annulus hole)
+   */
+  promoteCirclesToAnnulus(outerFaceId: number, innerFaceId: number): void {
+    if (!this.engine || !this.engine.promoteCirclesToAnnulus) {
+      throw new Error('promoteCirclesToAnnulus: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    this.engine.promoteCirclesToAnnulus(outerFaceId, innerFaceId);
   }
 
 

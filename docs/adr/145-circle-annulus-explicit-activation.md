@@ -254,11 +254,23 @@ ADR-141 share +55 의 ~10-15 = 18-27% (Sprint 1 share table 정합).
   + `export_baseline.txt` 갱신 (promoteCirclesToAnnulus entry alphabetical
   insertion 전 promoteShapeToXia). `wasm_export_baseline_unchanged` test
   자동 PASS.
-- **(β-3 ~ γ, ~2-3시간)** — TS bridge wrapper + ContextMenu integration
+- **2026-05-26 β-3** (본 commit) — TS bridge wrapper 추가.
+  `web/src/bridge/WasmBridge.ts` 갱신 (ADR-091 D-γ pattern 1:1 답습):
+  - `AxiaEngineExtended` interface 에 optional `promoteCirclesToAnnulus?(outerFaceId, innerFaceId): void` 선언
+  - `WasmBridge.promoteCirclesToAnnulus(outerFaceId, innerFaceId): void`
+    typed wrapper — strict throw on error (WASM endpoint missing /
+    AnnulusError Display)
+  - `markDirty()` 호출 (cache invalidation)
+  - Engine call: `this.engine.promoteCirclesToAnnulus(outerFaceId, innerFaceId)`
+  회귀 vitest **+3** (WasmBridge.test.ts `ADR-145 β-3` block):
+  - success path — `expect(fn).toHaveBeenCalledWith(10, 20)`
+  - engine throw propagation — silent skip 차단 evidence
+  - WASM endpoint missing feature gate
+- **(β-4 + γ, ~2시간)** — ContextMenu "annulus 만들기" UI integration
   + E2E + closure docs. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-3 진입 결재 (TS bridge wrapper, ~30분 atomic)
-또는 β-3 ~ γ 묶음 (~2-3시간 multi)
+**다음 trigger**: β-4 진입 결재 (ContextMenu "annulus 만들기" UI integration)
+또는 β-4 + γ 묶음 (~2시간 multi)
 또는 우선순위 priority track 결정.
