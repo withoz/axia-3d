@@ -1716,6 +1716,40 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-145 β-3 — Circle annulus 명시 promote TS bridge wrapper
+    // (메타-원칙 #16 정합 — 휴리스틱 자동 detect 폐기, 사용자 명시 trigger only)
+    // ────────────────────────────────────────────────────────────────
+
+    it('promoteCirclesToAnnulus calls engine with outer + inner face ids (β-3 success path)', () => {
+      const fn = vi.fn();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { promoteCirclesToAnnulus: fn };
+      bridge.promoteCirclesToAnnulus(10, 20);
+      expect(fn).toHaveBeenCalledWith(10, 20);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('promoteCirclesToAnnulus propagates engine throw (strict — silent skip 차단)', () => {
+      const errFn = vi.fn(() => {
+        throw new Error(
+          'promoteCirclesToAnnulus: inner Circle not fully contained in outer Circle ' +
+          '(center_distance=8.0 + inner_radius=5.0 > outer_radius=10.0)'
+        );
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { promoteCirclesToAnnulus: errFn };
+      expect(() => bridge.promoteCirclesToAnnulus(10, 20))
+        .toThrow(/inner Circle not fully contained/);
+    });
+
+    it('promoteCirclesToAnnulus throws when WASM endpoint missing (feature gate)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.promoteCirclesToAnnulus(10, 20))
+        .toThrow(/WASM endpoint missing/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
     // ────────────────────────────────────────────────────────────────
 
