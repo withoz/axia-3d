@@ -216,34 +216,33 @@ ADR-141 share +55 의 ~10-15 = 18-27% (Sprint 1 share table 정합).
 ## 8. Acceptance Log
 
 - **2026-05-26 α** (PR #171, 4c79636) — α spec + sub-step plan + lock-ins.
-- **2026-05-26 β-1** (본 commit) — Engine API skeleton (validation + promote
-  stub). `crates/axia-geo/src/operations/annulus.rs` 신설:
-  - `AnnulusError` enum (5 variant): InactiveFace / NotCircleFace /
-    NotCoplanar / InnerNotContained / **PromoteLogicDeferred** (β-1 scope
-    placeholder)
-  - `promote_circles_to_annulus(mesh, outer_fid, inner_fid) -> Result<(), AnnulusError>`
-    함수 — 4 validation full implementation + promote logic placeholder
-    (별도 atomic)
-  - `extract_circle` helper — closed-curve Circle face 의 Circle metadata
-    추출 (`Mesh::edge_curve` + `AnalyticCurve::Circle` match)
-  - `CircleData` private struct — center / radius / normal
-  - Tolerances: `COPLANAR_TOL = 1.5e-3` (LOCKED #5) + `NORMAL_PARITY_TOL = 1e-6`
-  회귀 vitest 0 / **axia-geo +5** (5/5 PASS):
-  - `adr145_beta1_validation_passes_with_concentric_circles` (happy path →
-    PromoteLogicDeferred 반환, silent success 차단 evidence)
-  - `adr145_beta1_rejects_inactive_outer`
-  - `adr145_beta1_rejects_not_coplanar`
-  - `adr145_beta1_rejects_inner_not_contained_off_center`
-  - `adr145_beta1_rejects_inner_larger_than_outer`
-  사용자 facing 변화 0 (Engine layer only, promote 미구현).
-- **(β-1+ amendment 또는 β-1.5 — promote logic full implementation)** —
-  inner self-loop edge HE reparent (face() → outer_face_id) + outer face
-  `add_inner(LoopRef)` + inner face deactivate. 별도 atomic sub-step.
+- **2026-05-26 β-1** (PR #172, ba43537) — Engine API skeleton (validation +
+  promote stub). 5 회귀 자산.
+- **2026-05-26 β-1+** (본 commit) — Promote logic full implementation.
+  `create_solid.rs` 의 annulus_face 패턴 1:1 답습:
+  - **signature 변경**: `&Mesh` → `&mut Mesh` (mutation 필요)
+  - **`AnnulusError::PromoteLogicDeferred` variant 제거** (β-1 scope 완료)
+  - **Promote logic 5단계**:
+    1. inner face 의 outer LoopRef HEs collect (1 self-loop HE)
+    2. inner outer LoopRef Copy (Face::outer())
+    3. HEs reparent (`set_face(outer_face)` + `set_outer(false)`)
+    4. outer face `add_inner(inner_outer_loop)` (Face::add_inner → bumps
+       boundary_version + invalidates normal_cache, ADR-061 Step 2)
+    5. inner face `set_active(false)` (HE/edge/vert 보존, manifold safe)
+  - **회귀 갱신 + 추가**: axia-geo **+1** (β-1 의 5 → 6 net):
+    * `adr145_beta1plus_promote_concentric_circles_succeeds` (happy path
+      `Ok(())` + outer.inners().len() == 1 + inner.is_active() == false)
+    * `adr145_beta1_rejects_*` 4 tests 그대로 보존
+    * **`adr145_beta1plus_annulus_preserves_manifold_invariants`** (신규)
+      — `verify_face_invariants` 미위반 검증 (L-145-8 정합 evidence)
+  - **사용자 facing 변화**: 사용자가 명시 trigger (β-4 ContextMenu)
+    호출 시 outer face 가 annulus topology (hole 1) 로 변환. inner face
+    deactivate. dev server 에서 검증 가능 (β-4 후).
 - **(β-2 ~ γ, ~3-4시간 multi-day)** — WASM bridge + TS wrapper + ContextMenu
   integration + E2E + closure. 별도 사용자 결재 후 진행.
 
 ---
 
-**다음 trigger**: β-1+ promote logic full implementation (~1시간 atomic)
-또는 β-2 WASM bridge (promote stub 활용, ~30분)
+**다음 trigger**: β-2 진입 결재 (WASM bridge export, ~30분 atomic)
+또는 β-2 ~ γ 묶음 (~3-4시간 multi)
 또는 우선순위 priority track 결정.
