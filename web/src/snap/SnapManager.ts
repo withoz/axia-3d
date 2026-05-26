@@ -182,6 +182,48 @@ interface EdgeSegment {
 const MAX_EDGES_PER_MODE = 500;
 const MAX_FACES_PER_MODE = 300;
 
+/**
+ * ADR-146 β-3 — Recency (A4) module-level constants.
+ *
+ * Canonical anchor: CLAUDE.md "SketchUp-style Inference Engine §Scoring":
+ *   "priority × 1000 - pixel distance ... Recency bonus (A4): 400ms 이내
+ *    같은 타입 재등장 시 -0.5 보정"
+ *
+ * Behavior contract:
+ *   - 같은 타입 SnapPoint 가 RECENCY_MS 이내 재등장 시 -RECENCY_BONUS_MAGNITUDE
+ *     (priority 감소 = 우선순위 상승)
+ *   - 다른 타입 → no bonus
+ *   - RECENCY_MS 초과 → no bonus
+ *
+ * Changing these constants requires a new ADR (LOCKED #66 Sunset Policy
+ * — Recency contract is part of the canonical user-facing UX).
+ */
+export const RECENCY_MS = 400;
+export const RECENCY_BONUS_MAGNITUDE = 0.5;
+
+/**
+ * ADR-146 β-3 — Pure Recency bonus computation (extracted for testability).
+ *
+ * @param lastSnap - The previous snap result (or null if none).
+ * @param lastSnapTime - performance.now() of the previous snap.
+ * @param candidateType - Type of the candidate being scored.
+ * @param now - Current performance.now() value.
+ * @returns Negative bonus (priority reduction = higher rank) when recency
+ *   conditions met, 0 otherwise.
+ */
+export function computeRecencyBonus(
+  lastSnap: SnapPoint | null,
+  lastSnapTime: number,
+  candidateType: SnapType,
+  now: number,
+): number {
+  if (!lastSnap) return 0;
+  if (lastSnap.type !== candidateType) return 0;
+  const age = now - (lastSnapTime || 0);
+  if (age > RECENCY_MS) return 0;
+  return -RECENCY_BONUS_MAGNITUDE;
+}
+
 // ═══ Priority (lower = higher priority) ═══
 const SNAP_PRIORITY: Record<SnapType, number> = {
   endpoint: 0,
@@ -1110,22 +1152,17 @@ export class SnapManager {
       return null;
     }
 
-    // A4: Recency bonus — 최근 N ms 내 같은 타입이 이겼으면 약간의 우선순위 가산.
-    // 사용자가 연속 작업 중 같은 스냅 타입을 선호하는 경향을 반영.
-    const RECENCY_MS = 400;
+    // A4: Recency bonus — 최근 RECENCY_MS 이내 같은 타입이 이겼으면 약간의
+    // 우선순위 가산. 사용자가 연속 작업 중 같은 스냅 타입을 선호하는 경향
+    // 반영. ADR-146 β-3 에서 module-level `computeRecencyBonus()` 로 추출.
     const now = performance.now();
-    const recentBonus = (t: SnapType): number => {
-      if (!this._lastSnap) return 0;
-      if (this._lastSnap.type !== t) return 0;
-      const age = now - (this._lastSnapTime || 0);
-      if (age > RECENCY_MS) return 0;
-      return -0.5; // priority 소폭 인하 = 살짝 유리하게
-    };
 
     // Sort: (priority + recency), then screen distance
     candidates.sort((a, b) => {
-      const pa = SNAP_PRIORITY[a.type] + recentBonus(a.type);
-      const pb = SNAP_PRIORITY[b.type] + recentBonus(b.type);
+      const pa = SNAP_PRIORITY[a.type]
+        + computeRecencyBonus(this._lastSnap, this._lastSnapTime, a.type, now);
+      const pb = SNAP_PRIORITY[b.type]
+        + computeRecencyBonus(this._lastSnap, this._lastSnapTime, b.type, now);
       if (pa !== pb) return pa - pb;
       return (a.distance || 0) - (b.distance || 0);
     });

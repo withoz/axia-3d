@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { SnapManager, SNAP_MARKERS, DEPRECATED_SNAP_TYPES } from './SnapManager';
-import type { SnapType } from './SnapManager';
+import {
+  SnapManager,
+  SNAP_MARKERS,
+  DEPRECATED_SNAP_TYPES,
+  RECENCY_MS,
+  RECENCY_BONUS_MAGNITUDE,
+  computeRecencyBonus,
+} from './SnapManager';
+import type { SnapType, SnapPoint } from './SnapManager';
 
 describe('SnapManager', () => {
   let snap: SnapManager;
@@ -406,6 +413,58 @@ describe('SnapManager', () => {
       expect(BUDGETS.findSnap).toBe(8);
       // Strictly less than Hover budget — Hover 가 더 큰 wrapper.
       expect(BUDGETS.findSnap).toBeLessThanOrEqual(BUDGETS.hover);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // ADR-146 β-3 — Recency A4 회귀 자산 강화 (4 tests)
+  //
+  // Canonical anchor: CLAUDE.md "SketchUp-style Inference Engine §Scoring"
+  //   "priority × 1000 - pixel distance ... Recency bonus (A4): 400ms 이내
+  //    같은 타입 재등장 시 -0.5 보정"
+  //
+  // β-3 refactor: inline closure → module-level exported function +
+  //   constants (RECENCY_MS / RECENCY_BONUS_MAGNITUDE / computeRecencyBonus).
+  //   Lock-ins L-146-8: Changing these constants requires a new ADR.
+  // ═══════════════════════════════════════════════════════════════
+  describe('ADR-146 β-3 — Recency A4 (보강)', () => {
+    // Helper — construct a synthetic SnapPoint for purity tests.
+    const makeSnap = (type: SnapType): SnapPoint => ({
+      type,
+      position: new THREE.Vector3(0, 0, 0),
+    });
+
+    it('400ms 이내 같은 타입 재등장 → -0.5 bonus 적용', () => {
+      const lastSnap = makeSnap('endpoint');
+      const bonus = computeRecencyBonus(lastSnap, 100, 'endpoint', 200);
+      expect(bonus).toBe(-RECENCY_BONUS_MAGNITUDE);
+      expect(bonus).toBe(-0.5);
+    });
+
+    it('400ms 초과 → bonus 미적용 (0 반환)', () => {
+      const lastSnap = makeSnap('midpoint');
+      expect(computeRecencyBonus(lastSnap, 0, 'midpoint', 500)).toBe(0);
+    });
+
+    it('다른 타입 재등장 → bonus 미적용 (0 반환)', () => {
+      const lastSnap = makeSnap('endpoint');
+      expect(computeRecencyBonus(lastSnap, 100, 'midpoint', 200)).toBe(0);
+    });
+
+    it('Bonus 비율 명시 (-0.5 score, RECENCY_MS=400) + null lastSnap → 0', () => {
+      // L-146-8 — Recency contract lock-in. Changing requires new ADR.
+      expect(RECENCY_MS).toBe(400);
+      expect(RECENCY_BONUS_MAGNITUDE).toBe(0.5);
+
+      // null lastSnap → no bonus
+      expect(computeRecencyBonus(null, 0, 'endpoint', 1000)).toBe(0);
+
+      // Exactly at boundary (age === RECENCY_MS) → still in window
+      const lastSnap = makeSnap('center');
+      expect(computeRecencyBonus(lastSnap, 0, 'center', RECENCY_MS))
+        .toBe(-RECENCY_BONUS_MAGNITUDE);
+      // 1ms past boundary → 0
+      expect(computeRecencyBonus(lastSnap, 0, 'center', RECENCY_MS + 1)).toBe(0);
     });
   });
 });
