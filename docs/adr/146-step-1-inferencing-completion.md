@@ -1,6 +1,7 @@
 # ADR-146 — Step 1 Inferencing 보강 (node, latency, Recency)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: Accepted (γ closure 2026-05-26 — Path Z atomic 5 sub-step
+α + β-1 + β-2 + β-3 + γ 모두 closure)
 **Date**: 2026-05-26
 **Author**: WYKO + Claude
 **Trigger**: LOCKED #65 (ADR-141 Master Roadmap) Sprint 2 첫 ADR.
@@ -194,11 +195,95 @@ vitest +10 (ADR-141 §3 Sprint 2 share +30 의 ~33%, ADR-147/148 자연
 
 ## 8. Acceptance Log
 
-- **2026-05-26 α** (본 commit) — α spec + Q1/Q2 결재 anchor + sub-step
-  plan + lock-ins.
-- **(β-1 ~ γ, ~3-5일)** — 별도 사용자 결재 후 진행 (Q1 결정 + Q2 결정).
+- **2026-05-26 α** (PR #178, merged) — α spec + Q1/Q2 결재 anchor +
+  sub-step plan + lock-ins.
+- **2026-05-26 β-1** (PR #179, merged) — Q1=(b) node SnapType 의식적
+  deprecate. `DEPRECATED_SNAP_TYPES: ReadonlySet<SnapType>` 상수 export +
+  `findSnap()` 진입 시 deprecated mode 검사 → debug log once-per-session
+  + `_deprecationWarned` state (silent skip 차단, 메타-원칙 #4 SSOT).
+  `resetDeprecationWarnings()` / `getDeprecationWarned()` test helpers.
+  회귀 vitest **+3** (`ADR-146 β-1 — node SnapType deprecate` describe
+  block).
+- **2026-05-26 β-2** (PR #180) — Q2=(a) findSnap latency 직접 wrap.
+  `BudgetKey` union 에 `'findSnap'` 추가 + `BUDGETS.findSnap = 8` (picking.
+  snap 동급, Hover 16ms sub-component). `findSnap()` body 를 `telemetry.
+  measure('findSnap', () => ...)` 으로 wrap. 회귀 vitest **+3**
+  (`ADR-146 β-2 — findSnap latency telemetry` describe block).
+- **2026-05-26 β-3** (PR #181) — Recency A4 회귀 자산 강화. Inline
+  closure → module-level export: `RECENCY_MS = 400` /
+  `RECENCY_BONUS_MAGNITUDE = 0.5` / `computeRecencyBonus(lastSnap,
+  lastSnapTime, candidateType, now): number` 순수 함수. findSnap 내부
+  refactor (의미적 변경 0). 회귀 vitest **+4** (`ADR-146 β-3 — Recency A4
+  (보강)` describe block + boundary edge cases).
+- **2026-05-26 γ** (본 commit) — Closure: Status flip + §9 Lessons +
+  README catalog Status update.
+  - **Status**: Proposed → **Accepted** (header).
+  - **README catalog** (`docs/adr/README.md`) — Sprint 2 row 의 ADR-146
+    entry Status: `Proposed` → `Accepted`.
+  - §9 Lessons 신규 — 5-항목 회고.
+
+## 9. Lessons (canonical for future "deprecate + telemetry + refactor" ADRs)
+
+ADR-146 Path Z atomic 5-sub-step closure 의 5개 회고 항목:
+
+### L1 — Path Z atomic 5-sub-step 의 사용자 결재 효율성
+
+α spec → β-1 / β-2 / β-3 → γ closure. 각 sub-step single atomic PR
+(LOCKED #44 정합). 본 ADR 의 sub-step 들은 *완전 independent* —
+β-1 (node deprecate), β-2 (latency wrap), β-3 (Recency refactor) 가 각각
+다른 코드 영역 + 다른 의미 단위. 결과: parallel PR 가능 + CI 동시 실행 +
+사용자 결재 cycle 최소화.
+
+향후 "보강 / 강화 / 정합" ADR 가이드 — sub-step 별 의미 독립성 우선 검토,
+parallel atomic PR 가능 시 적극 활용.
+
+### L2 — 의식적 deprecate 패턴 (Q1=b canonical)
+
+`'node'` SnapType union 보존 + `findSnap` 명시 분기 + once-per-session
+warning. *Silent skip 차단* = 메타-원칙 #4 SSOT 정합. *Re-introduction
+path* (DrawPoint 도구 활성 시 별도 ADR) 명시 — 향후 unfreeze 가능성
+보존.
+
+향후 deprecate ADR 가이드 — *명시 분기 + 명시 warning + Re-introduction
+path 문서화* 의 3-layer 답습. Silent removal (메타-원칙 #16 위반) 금지.
+
+### L3 — 직접 wrap vs 외부 wrap 의 관찰성 분리 (Q2=a canonical)
+
+PickingRouter wrap = *외부* 측정 (라우터 진입~종료). findSnap entry/exit
+= *내부* 측정 (메서드 진입~출구). 둘이 분리되어야 budget 위반 source
+정확 진단 가능. 향후 nested measurement 가이드 — *budget hierarchy*
+(Hover 16ms > picking.snap 8ms > findSnap 8ms) 의 sub-component 별
+독립 측정 keys.
+
+### L4 — Inline closure → module-level pure function refactor pattern
+
+β-3 refactor pattern (canonical for future test-driven extraction):
+1. Inline closure 의 constants 를 module-level `export const` 로 추출
+2. Inline closure body 를 module-level `export function` 으로 추출
+3. 호출부에서 module-level function 호출로 교체 (의미적 변경 0)
+4. 테스트 — pure function unit test + boundary edge cases
+
+향후 *"behavior 테스트가 어려운 inline 로직"* 처리 가이드 — 본 pattern
+답습. ADR-146 §2.3 fixed scope 의 canonical evidence.
+
+### L5 — Sprint 2 첫 ADR closure → Sprint 2 잔존 자연 진행
+
+본 ADR closure 후 Sprint 2 ADR-147 (Step 2 Scenario B1 — spatial-hash
+1μm → 0.1μm) 또는 ADR-148 (B-γ' Point-Localized BoundaryTool) 진입
+가능. ADR-141 §3 Sprint 2 reserve 2~3주 / 회귀 +30 share.
+
+ADR-146 누적 회귀 vitest **+13** (3 + 3 + 4 + 3 β-2 wrap)— Sprint 2
+share +30 의 ~43%. ADR-147/148 자연 분담 +17.
+
+향후 Sprint scope 결정 가이드 — Sprint 내 ADR 간 회귀 share 분배 +
+사용자 결재 anchor (사용자 "다음 진행" / "권장으로 진행" 응답) 우선.
 
 ---
 
-**다음 trigger**: β-1 진입 결재 (Q1 → 옵션 (b) 권장 / Q2 → 옵션 (a) 권장)
-또는 우선순위 priority track 결정 (Sprint 2 ADR-147 / ADR-148).
+**ADR-146 closure**: Path Z atomic 5 sub-step 완료. 사용자 facing 즉시
+가치 — node SnapType 명시 deprecate (silent skip 차단) + findSnap
+direct latency 관찰성 (Hover 16ms budget sub-component) + Recency
+contract 명시 (RECENCY_MS=400, BONUS=-0.5).
+
+다음 trigger: Sprint 2 잔존 ADRs (ADR-147 / ADR-148) 또는 외부 anchor
+(sample/ 5 학습 문서 ADR).
