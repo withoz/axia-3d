@@ -6,11 +6,11 @@
 //! **메타-원칙 #16 정합**: 휴리스틱 자동 annulus promote 폐기, 사용자
 //! 명시 의도 canonical. ADR-139 (Boundary tool 명시) pattern 1:1 mirror.
 //!
-//! # β-1 scope (current commit)
+//! # β-1+ scope (current commit — promote logic 활성)
 //!
-//! - `AnnulusError` enum (5 variant — 4 validation + 1 promote stub)
-//! - `promote_circles_to_annulus` 함수 — 4 validation full implementation
-//! - Promote logic = `bail!` placeholder (별도 atomic sub-step)
+//! - `AnnulusError` enum (4 variant — validation only, PromoteLogicDeferred 제거)
+//! - `promote_circles_to_annulus(&mut Mesh, ...)` — 4 validation +
+//!   promote logic full implementation
 //!
 //! Validation 4단계:
 //! 1. outer + inner 둘 다 active face
@@ -20,11 +20,11 @@
 //! 4. inner Circle fully contained in outer Circle (center distance +
 //!    inner.radius <= outer.radius)
 //!
-//! # Future sub-step (β-1+ amendment 또는 별도 atomic)
-//!
-//! - Promote logic — outer face 의 inner LoopRef 로 inner self-loop
-//!   reparent + inner face deactivate. HE.face() pointer 변경 +
-//!   `Face::add_inner` 사용.
+//! Promote logic (`create_solid.rs` annulus_face pattern 1:1 답습):
+//! 1. inner face 의 outer LoopRef + HEs collect
+//! 2. HEs reparent (face pointer → outer_face_id, set_outer(false))
+//! 3. outer face 에 `add_inner(inner_outer_loop)` 호출
+//! 4. inner face `set_active(false)` (HE/edge/vert 보존)
 //!
 //! # Cross-link
 //!
@@ -68,10 +68,6 @@ pub enum AnnulusError {
         inner_radius: f64,
         outer_radius: f64,
     },
-
-    /// Promote logic 미구현 (β-1 scope — validation only). 별도 atomic
-    /// sub-step (β-1+ amendment 또는 β-1.5) 후 active.
-    PromoteLogicDeferred,
 }
 
 impl std::fmt::Display for AnnulusError {
@@ -108,11 +104,6 @@ impl std::fmt::Display for AnnulusError {
                  (center_distance={:.3} + inner_radius={:.3} > outer_radius={:.3})",
                 center_distance, inner_radius, outer_radius,
             ),
-            Self::PromoteLogicDeferred => write!(
-                f,
-                "ADR-145 β-1: promote logic deferred to next atomic sub-step \
-                 (β-1+ amendment or β-1.5). Validation passed; promote not yet implemented.",
-            ),
         }
     }
 }
@@ -132,12 +123,11 @@ const NORMAL_PARITY_TOL: f64 = 1e-6;
 /// **사용자 명시 trigger only** (메타-원칙 #16) — 휴리스틱 자동 detect
 /// 안 됨. ContextMenu "annulus 만들기" 우클릭 후 호출 (β-4).
 ///
-/// # β-1 scope (current)
+/// # β-1+ scope (current — promote logic 활성)
 ///
-/// Validation 4단계 full implementation + promote logic placeholder.
-/// 본 commit 후 validation pass 시 `AnnulusError::PromoteLogicDeferred`
-/// 반환 (silent success 차단). 별도 atomic sub-step (β-1+ amendment 또는
-/// β-1.5) 에서 promote logic 활성.
+/// Validation 4단계 + promote logic full implementation. `create_solid.rs`
+/// 의 annulus_face 패턴 1:1 답습 — HE reparent (set_face/set_outer) +
+/// outer face `add_inner(LoopRef)` + inner face deactivate.
 ///
 /// # Errors
 ///
@@ -145,9 +135,8 @@ const NORMAL_PARITY_TOL: f64 = 1e-6;
 /// - `NotCircleFace` — outer 또는 inner 가 closed-curve Circle 아님
 /// - `NotCoplanar` — 다른 평면
 /// - `InnerNotContained` — inner Circle 이 outer 안 contained 안 됨
-/// - `PromoteLogicDeferred` — validation 통과, promote 미구현 (β-1 scope)
 pub fn promote_circles_to_annulus(
-    mesh: &Mesh,
+    mesh: &mut Mesh,
     outer_face: FaceId,
     inner_face: FaceId,
 ) -> Result<(), AnnulusError> {
@@ -214,16 +203,34 @@ pub fn promote_circles_to_annulus(
         });
     }
 
-    // === Promote logic (β-1 scope — deferred) ===
-    //
-    // β-1+ amendment 또는 β-1.5 별도 atomic sub-step:
-    //   1. inner face 의 outer LoopRef 의 HEs reparent (face() → outer_face_id)
-    //   2. outer face 의 add_inner(inner_outer_loop) 호출
-    //   3. inner face deactivate
-    //
-    // 본 β-1 commit 은 validation only — silent success 차단을 위해
-    // PromoteLogicDeferred 반환 (caller 가 명시 추적 가능).
-    Err(AnnulusError::PromoteLogicDeferred)
+    // === Promote logic (β-1+ — create_solid.rs annulus_face pattern 1:1 답습) ===
+
+    // 1. Collect inner face 의 outer loop HEs (Circle face = 1 self-loop HE)
+    //    Validation 2 (extract_circle) 가 이미 보장 — collect_loop_hes safe.
+    let inner_outer_start = mesh.faces[inner_face].outer().start;
+    let hes = mesh.collect_loop_hes(inner_outer_start)
+        .expect("ADR-145 β-1+: validation 2 (Circle face) guarantees collect_loop_hes OK");
+
+    // 2. Get inner outer LoopRef (Copy — LoopRef is small struct)
+    let inner_outer_loop = mesh.faces[inner_face].outer();
+
+    // 3. Reparent HEs (face pointer → outer_face_id, set_outer(false))
+    //    create_solid.rs:917-928 pattern 답습.
+    for he_id in &hes {
+        mesh.hes[*he_id].set_face(outer_face);
+        mesh.hes[*he_id].set_outer(false);  // 이제 inner loop (hole)
+    }
+
+    // 4. Add inner loop to outer face (Face::add_inner — ADR-061 Step 2:
+    //    bumps boundary_version + invalidates normal_cache)
+    mesh.faces[outer_face].add_inner(inner_outer_loop);
+
+    // 5. Deactivate inner face (HE/edge/vert 보존 — manifold safe).
+    //    inner face 의 outer LoopRef 가 outer face 의 inner 로 reparent 된
+    //    상태이므로 inner face 자체는 dangling outer ref 가 있으나 inactive.
+    mesh.faces[inner_face].set_active(false);
+
+    Ok(())
 }
 
 /// Helper: face 가 closed-curve Circle face 인지 확인 + Circle 메타데이터 반환.
@@ -295,15 +302,25 @@ mod tests {
     }
 
     #[test]
-    fn adr145_beta1_validation_passes_with_concentric_circles() {
+    fn adr145_beta1plus_promote_concentric_circles_succeeds() {
         let mut mesh = Mesh::new();
         let outer = build_circle_face(&mut mesh, DVec3::ZERO, 10.0, DVec3::Z);
         let inner = build_circle_face(&mut mesh, DVec3::ZERO, 5.0, DVec3::Z);
 
-        // Validation 통과 → β-1 scope 의 PromoteLogicDeferred 반환
-        let result = promote_circles_to_annulus(&mesh, outer, inner);
-        assert_eq!(result, Err(AnnulusError::PromoteLogicDeferred),
-            "Validation passed; expected PromoteLogicDeferred (β-1 scope)");
+        // Pre-promote state
+        assert_eq!(mesh.faces[outer].inners().len(), 0,
+            "Pre-promote: outer has no inner loops");
+        assert!(mesh.faces[inner].is_active(), "Pre-promote: inner is active");
+
+        // Promote
+        let result = promote_circles_to_annulus(&mut mesh, outer, inner);
+        assert!(result.is_ok(), "expected Ok; got {:?}", result);
+
+        // Post-promote: outer has 1 inner loop (hole), inner face deactivated
+        assert_eq!(mesh.faces[outer].inners().len(), 1,
+            "Post-promote: outer has 1 inner loop (annulus hole)");
+        assert!(!mesh.faces[inner].is_active(),
+            "Post-promote: inner face is deactivated");
     }
 
     #[test]
@@ -315,7 +332,7 @@ mod tests {
         // Deactivate outer
         mesh.faces[outer].set_active(false);
 
-        let result = promote_circles_to_annulus(&mesh, outer, inner);
+        let result = promote_circles_to_annulus(&mut mesh, outer, inner);
         assert!(matches!(result, Err(AnnulusError::InactiveFace { role: "outer", .. })),
             "expected InactiveFace(outer); got {:?}", result);
     }
@@ -327,7 +344,7 @@ mod tests {
         // Inner on Y-up plane (different normal)
         let inner = build_circle_face(&mut mesh, DVec3::ZERO, 5.0, DVec3::Y);
 
-        let result = promote_circles_to_annulus(&mesh, outer, inner);
+        let result = promote_circles_to_annulus(&mut mesh, outer, inner);
         assert!(matches!(result, Err(AnnulusError::NotCoplanar { .. })),
             "expected NotCoplanar; got {:?}", result);
     }
@@ -339,7 +356,7 @@ mod tests {
         // Inner at (8, 0, 0) with radius 5 — center_distance 8 + radius 5 = 13 > outer.radius 10
         let inner = build_circle_face(&mut mesh, DVec3::new(8.0, 0.0, 0.0), 5.0, DVec3::Z);
 
-        let result = promote_circles_to_annulus(&mesh, outer, inner);
+        let result = promote_circles_to_annulus(&mut mesh, outer, inner);
         assert!(matches!(result, Err(AnnulusError::InnerNotContained { .. })),
             "expected InnerNotContained; got {:?}", result);
     }
@@ -351,8 +368,25 @@ mod tests {
         // Inner radius 10 > outer radius 5
         let inner = build_circle_face(&mut mesh, DVec3::ZERO, 10.0, DVec3::Z);
 
-        let result = promote_circles_to_annulus(&mesh, outer, inner);
+        let result = promote_circles_to_annulus(&mut mesh, outer, inner);
         assert!(matches!(result, Err(AnnulusError::InnerNotContained { .. })),
             "expected InnerNotContained (inner > outer); got {:?}", result);
+    }
+
+    /// ADR-145 β-1+ — annulus 가 manifold safe (verify_face_invariants 통과).
+    /// promote 후 outer face 의 hole topology 가 LOCKED #1 P7 정합 검증.
+    #[test]
+    fn adr145_beta1plus_annulus_preserves_manifold_invariants() {
+        let mut mesh = Mesh::new();
+        let outer = build_circle_face(&mut mesh, DVec3::ZERO, 10.0, DVec3::Z);
+        let inner = build_circle_face(&mut mesh, DVec3::ZERO, 5.0, DVec3::Z);
+
+        promote_circles_to_annulus(&mut mesh, outer, inner).expect("promote OK");
+
+        // ADR-145 L-145-8 — hole inheritance manifold-safe
+        let report = mesh.verify_face_invariants();
+        assert!(report.violations.is_empty(),
+            "ADR-145 β-1+: annulus topology must preserve manifold invariants; \
+             got {:?}", report.violations);
     }
 }
