@@ -50,6 +50,7 @@ import { CylinderTool } from '../primitives/CylinderTool';
 import { ConeTool } from '../primitives/ConeTool';
 import { TorusTool } from '../primitives/TorusTool';
 import { BoxTool } from './BoxTool';
+import { BoundaryTool } from './BoundaryTool';  // ADR-148 β-4
 import { SliceTool } from './SliceTool';
 import {
   mergeFaces, mergeFacesGeometric, mergeFacesForce,
@@ -266,6 +267,8 @@ export class ToolManager {
     this.tools.set('torus', new TorusTool(this.toolContext));
     this.tools.set('box', new BoxTool(this.toolContext));
     this.tools.set('slice', new SliceTool(this.toolContext));
+    // ADR-148 β-4 — Point-Localized BoundaryTool (Ctrl+B)
+    this.tools.set('boundary', new BoundaryTool(this.toolContext));
 
     this.setupMouseHandlers();
     this.setupKeyboardHandlers();

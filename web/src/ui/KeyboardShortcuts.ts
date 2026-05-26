@@ -339,6 +339,14 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       return;
     }
 
+    // Ctrl+B: ADR-148 β-4 — Point-Localized BoundaryTool.
+    // (bottom view 'b' 충돌 회피, CAD 관습 정합)
+    if (e.ctrlKey && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault();
+      toolManager.setTool('boundary');
+      return;
+    }
+
     // ── Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D — Windows 표준 클립보드 ──
     // 입력 필드가 아닌 뷰포트 포커스에서만 동작 (isTypingInInput 가드 상단).
     // 도구 작업 중(isBusy)이면 클립보드 조작도 차단 — 그리기 중 Ctrl+V가
