@@ -497,6 +497,11 @@ type AxiaEngineExtended = AxiaEngine & {
     planeDist: number,
     searchRadiusMm: number,
   ): number;
+  // ADR-149 β-3 — T-junction Sweep 명시 도구
+  /** Detect all mesh-level T-junctions (read-only). Returns JSON array. */
+  detectTJunctions?(tolMm: number): string;
+  /** Heal a single T-junction. Returns JSON HealReport or throws. */
+  healTJunction?(reportJson: string, tolMm: number): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1317,6 +1322,108 @@ export class WasmBridge {
     return this.engine.boundaryFromPoint(
       px, py, pz, nx, ny, nz, planeDist, searchRadiusMm,
     );
+  }
+
+  // ==========================================================================
+  // ADR-149 β-3 — T-junction Sweep 명시 도구
+  // ==========================================================================
+
+  /**
+   * ADR-149 β-3 — Detect all mesh-level T-junctions (read-only).
+   *
+   * Vertex V on edge E interior where V is NOT in face F's boundary loop.
+   * Result of LOCKED #1 P7 manifold artifacts + LOCKED #16 ADR-038 P23
+   * normal drift. Detection layer of the T-junction Sweep tool.
+   *
+   * **사용자 명시 trigger only** (메타-원칙 #16) — 자동 sweep 0.
+   * UI ContextMenu "T-junction 정리" (β-4) 클릭 시 detect → heal 시퀀스
+   * 의 첫 단계.
+   *
+   * Engine API: `axia_geo::operations::t_junction::detect_t_junctions`
+   * (β-1 detection, PR #197 merged 0ea83da).
+   *
+   * @param tolMm - Vertex-on-edge distance threshold (mm). ≤0 → engine
+   *   default `T_JUNCTION_TOL = 1.5e-4` (LOCKED #5 0.15μm 답습).
+   * @returns Array of T-junction reports. Empty = clean mesh.
+   * @throws Error if WASM endpoint missing (graceful — returns []).
+   *
+   * Read-only — no transaction wrap.
+   */
+  detectTJunctions(tolMm: number = 0): TJunctionReport[] {
+    if (!this.engine || !this.engine.detectTJunctions) {
+      // Graceful fallback — no WASM endpoint → empty array (caller surfaces
+      // missing-rebuild message via β-4 UI).
+      return [];
+    }
+    const raw = this.engine.detectTJunctions(tolMm);
+    try {
+      const parsed = JSON.parse(raw) as Array<{
+        face_id: number;
+        edge_id: number;
+        vertex_id: number;
+        t_along_edge: number;
+      }>;
+      // Map snake_case (WASM) → camelCase (TS) per house style.
+      return parsed.map((r) => ({
+        faceId: r.face_id,
+        edgeId: r.edge_id,
+        vertexId: r.vertex_id,
+        tAlongEdge: r.t_along_edge,
+      }));
+    } catch (e) {
+      throw new Error(`detectTJunctions: invalid JSON from WASM (${e})`);
+    }
+  }
+
+  /**
+   * ADR-149 β-3 — Heal a single T-junction (split edge + HARD flag).
+   *
+   * Caller supplies a report (typically from a prior `detectTJunctions`).
+   * Strict validation — stale/drifted reports → Error (silent skip 차단,
+   * 메타-원칙 #16).
+   *
+   * Engine API: `axia_geo::operations::t_junction::heal_t_junction`
+   * (β-2 healing, PR #198 merged f35523b).
+   *
+   * @param report - TJunctionReport from `detectTJunctions`.
+   * @param tolMm - Drift re-verification tolerance (mm). ≤0 → default.
+   * @returns HealReport with new vertex/edge IDs.
+   * @throws Error on validation failure:
+   *   - "healTJunction: InvalidReport (...)"
+   *   - "healTJunction: VertexNotOnEdge (drift ...mm)"
+   *   - "healTJunction: SplitEdgeFailed (...)"
+   *
+   * Transaction-wrapped (Engine layer, axia-wasm) — Undo restores pre-heal.
+   */
+  healTJunction(report: TJunctionReport, tolMm: number = 0): TJunctionHealReport {
+    if (!this.engine || !this.engine.healTJunction) {
+      throw new Error('healTJunction: WASM endpoint missing (rebuild required)');
+    }
+    // Serialize camelCase → snake_case for WASM.
+    const reportJson = JSON.stringify({
+      face_id: report.faceId,
+      edge_id: report.edgeId,
+      vertex_id: report.vertexId,
+      t_along_edge: report.tAlongEdge,
+    });
+    this.markDirty();
+    const raw = this.engine.healTJunction(reportJson, tolMm);
+    try {
+      const parsed = JSON.parse(raw) as {
+        healed_count: number;
+        new_vertex_id: number;
+        new_edge_a: number;
+        new_edge_b: number;
+      };
+      return {
+        healedCount: parsed.healed_count,
+        newVertexId: parsed.new_vertex_id,
+        newEdgeA: parsed.new_edge_a,
+        newEdgeB: parsed.new_edge_b,
+      };
+    } catch (e) {
+      throw new Error(`healTJunction: invalid JSON from WASM (${e})`);
+    }
   }
 
 
@@ -5061,4 +5168,39 @@ export interface DxfImportResult {
   errors?: number;
   totalVerts?: number;
   totalFaces?: number;
+}
+
+// ============================================================================
+// ADR-149 β-3 — T-junction Sweep typed interfaces
+// ============================================================================
+
+/**
+ * ADR-149 — Single T-junction detection report.
+ *
+ * One T-junction = one (face, edge, vertex) triple where vertex V lies on
+ * edge E interior but is NOT in face F's boundary loop. Returned by
+ * `detectTJunctions`; consumed by `healTJunction`.
+ *
+ * `tAlongEdge` is the normalized parameter along edge (0 < t < 1, strict
+ * interior).
+ */
+export interface TJunctionReport {
+  faceId: number;
+  edgeId: number;
+  vertexId: number;
+  tAlongEdge: number;
+}
+
+/**
+ * ADR-149 — T-junction healing success report.
+ *
+ * Returned by `healTJunction` on successful split + HARD flag.
+ * `newVertexId` is the fresh vertex inserted by `split_edge` at the
+ * T-junction position. The original V remains as orphan vertex (β-2 MVP).
+ */
+export interface TJunctionHealReport {
+  healedCount: number;
+  newVertexId: number;
+  newEdgeA: number;
+  newEdgeB: number;
 }

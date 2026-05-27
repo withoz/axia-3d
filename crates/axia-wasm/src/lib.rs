@@ -7880,6 +7880,133 @@ impl AxiaEngine {
         }
     }
 
+    // ========================================================================
+    // ADR-149 — T-junction Sweep 명시 도구 (β-3 WASM bridge)
+    // ========================================================================
+
+    /// ADR-149 β-3 — Detect all mesh-level T-junctions.
+    ///
+    /// **사용자 명시 trigger only** (메타-원칙 #16) — 자동 sweep 0.
+    /// UI ContextMenu "T-junction 정리" 클릭 (β-4) 시 detect → heal 시퀀스
+    /// 의 첫 단계.
+    ///
+    /// Vertex V on edge E interior where V ∉ face F's boundary loop.
+    /// LOCKED #1 P7 manifold artifacts + LOCKED #16 ADR-038 P23 normal
+    /// drift 의 detection layer.
+    ///
+    /// Engine API: `axia_geo::operations::t_junction::detect_t_junctions`
+    /// (β-1 detection, ADR-149 PR #197 merged 0ea83da).
+    ///
+    /// # Parameters
+    /// - `tol_mm`: vertex-on-edge distance threshold. ≤0 → default
+    ///   `T_JUNCTION_TOL = 1.5e-4` (LOCKED #5 0.15μm 답습).
+    ///
+    /// # Returns
+    /// JSON-serialized `Vec<TJunctionReport>`:
+    /// ```json
+    /// [
+    ///   {"face_id": 0, "edge_id": 4, "vertex_id": 5, "t_along_edge": 0.5},
+    ///   ...
+    /// ]
+    /// ```
+    /// Empty array = clean mesh (0 T-junctions detected).
+    ///
+    /// Read-only — no transaction wrap needed.
+    #[wasm_bindgen(js_name = "detectTJunctions")]
+    pub fn detect_t_junctions(&self, tol_mm: f64) -> Result<String, JsValue> {
+        use axia_geo::operations::t_junction;
+        let tol = if tol_mm > 0.0 { tol_mm } else { t_junction::T_JUNCTION_TOL };
+        let reports = t_junction::detect_t_junctions(&self.scene.mesh, tol);
+
+        // Manual JSON serialization (no serde dependency on TJunctionReport — it's
+        // a plain struct without #[derive(Serialize)]).
+        let items: Vec<String> = reports
+            .iter()
+            .map(|r| {
+                format!(
+                    "{{\"face_id\":{},\"edge_id\":{},\"vertex_id\":{},\"t_along_edge\":{}}}",
+                    r.face_id.raw(),
+                    r.edge_id.raw(),
+                    r.vertex_id.raw(),
+                    r.t_along_edge
+                )
+            })
+            .collect();
+        Ok(format!("[{}]", items.join(",")))
+    }
+
+    /// ADR-149 β-3 — Heal a single T-junction by splitting the edge and
+    /// applying HARD flag.
+    ///
+    /// Caller supplies a JSON-encoded `TJunctionReport` (typically from
+    /// a prior `detectTJunctions` call). Strict validation — stale or
+    /// drifted reports → `JsError` (silent skip 차단, 메타-원칙 #16).
+    ///
+    /// Engine API: `axia_geo::operations::t_junction::heal_t_junction`
+    /// (β-2 healing, ADR-149 PR #198 merged f35523b).
+    ///
+    /// # Parameters
+    /// - `report_json`: JSON string matching the schema returned by
+    ///   `detectTJunctions` (single element). Fields: `face_id`, `edge_id`,
+    ///   `vertex_id`, `t_along_edge`.
+    /// - `tol_mm`: drift re-verification tolerance. ≤0 → default
+    ///   `T_JUNCTION_TOL = 1.5e-4`.
+    ///
+    /// # Returns
+    /// - `Ok(json: String)`: `{"healed_count": 1, "new_vertex_id": u32,
+    ///   "new_edge_a": u32, "new_edge_b": u32}`
+    /// - `Err(JsValue)`: validation failure (InvalidReport / VertexNotOnEdge
+    ///   / SplitEdgeFailed) — caller must re-detect.
+    ///
+    /// Transaction-wrapped — Undo restores the pre-heal state.
+    #[wasm_bindgen(js_name = "healTJunction")]
+    pub fn heal_t_junction(
+        &mut self,
+        report_json: &str,
+        tol_mm: f64,
+    ) -> Result<String, JsValue> {
+        use axia_geo::operations::t_junction::{self, TJunctionReport};
+        use axia_geo::{FaceId, EdgeId, VertId};
+
+        // Parse JSON manually — 4 fields, plain integers + 1 float.
+        let parsed = parse_t_junction_report(report_json)
+            .map_err(|e| JsValue::from_str(&format!("healTJunction: invalid JSON: {}", e)))?;
+
+        let report = TJunctionReport {
+            face_id: FaceId::new(parsed.face_id),
+            edge_id: EdgeId::new(parsed.edge_id),
+            vertex_id: VertId::new(parsed.vertex_id),
+            t_along_edge: parsed.t_along_edge,
+        };
+
+        let tol = if tol_mm > 0.0 { tol_mm } else { t_junction::T_JUNCTION_TOL };
+
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        match t_junction::heal_t_junction(&mut self.scene.mesh, &report, tol) {
+            Ok(heal) => {
+                self.scene
+                    .transactions
+                    .set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+                Ok(format!(
+                    "{{\"healed_count\":{},\"new_vertex_id\":{},\"new_edge_a\":{},\"new_edge_b\":{}}}",
+                    heal.healed_count,
+                    heal.new_vertex_id.raw(),
+                    heal.new_edge_a.raw(),
+                    heal.new_edge_b.raw()
+                ))
+            }
+            Err(err) => {
+                self.scene.transactions.cancel();
+                Err(JsValue::from_str(&format!("healTJunction: {}", err)))
+            }
+        }
+    }
+
     /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
     /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
     ///
@@ -8071,5 +8198,129 @@ impl AxiaEngine {
         self.mark_topology_changed();
         self.invalidate_cache();
         step6_json::fillet_dispatch_result_json(&dispatch_result)
+    }
+}
+
+// ============================================================================
+// ADR-149 β-3 — TJunctionReport JSON parsing helper
+// ============================================================================
+
+/// Parsed TJunctionReport fields from JSON (helper for `healTJunction`).
+#[derive(Debug)]
+struct ParsedTJunctionReport {
+    face_id: u32,
+    edge_id: u32,
+    vertex_id: u32,
+    t_along_edge: f64,
+}
+
+/// Minimal JSON parser for `TJunctionReport`. Accepts strict shape:
+/// `{"face_id": N, "edge_id": N, "vertex_id": N, "t_along_edge": F}`
+///
+/// Field order is flexible but all 4 fields are required.
+/// Whitespace within JSON tokens is preserved by serde_json semantics;
+/// we use a minimal regex-free hand parser to avoid serde dependency on
+/// `TJunctionReport` (engine struct has no `#[derive(Serialize/Deserialize)]`
+/// — keeping serde out of `axia-geo::operations::t_junction`).
+fn parse_t_junction_report(json: &str) -> Result<ParsedTJunctionReport, String> {
+    fn find_field_u32(json: &str, field: &str) -> Result<u32, String> {
+        let needle = format!("\"{}\"", field);
+        let idx = json
+            .find(&needle)
+            .ok_or_else(|| format!("missing field '{}'", field))?;
+        let rest = &json[idx + needle.len()..];
+        let colon = rest.find(':').ok_or_else(|| format!("malformed '{}'", field))?;
+        let after_colon = &rest[colon + 1..];
+        // Skip whitespace
+        let val_start = after_colon
+            .find(|c: char| !c.is_whitespace())
+            .ok_or_else(|| format!("no value for '{}'", field))?;
+        let val_rest = &after_colon[val_start..];
+        // Read digits
+        let end = val_rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(val_rest.len());
+        if end == 0 {
+            return Err(format!("expected integer for '{}'", field));
+        }
+        val_rest[..end]
+            .parse::<u32>()
+            .map_err(|e| format!("invalid u32 for '{}': {}", field, e))
+    }
+
+    fn find_field_f64(json: &str, field: &str) -> Result<f64, String> {
+        let needle = format!("\"{}\"", field);
+        let idx = json
+            .find(&needle)
+            .ok_or_else(|| format!("missing field '{}'", field))?;
+        let rest = &json[idx + needle.len()..];
+        let colon = rest.find(':').ok_or_else(|| format!("malformed '{}'", field))?;
+        let after_colon = &rest[colon + 1..];
+        let val_start = after_colon
+            .find(|c: char| !c.is_whitespace())
+            .ok_or_else(|| format!("no value for '{}'", field))?;
+        let val_rest = &after_colon[val_start..];
+        // Read number (digits, '.', '-', '+', 'e', 'E')
+        let end = val_rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E'))
+            .unwrap_or(val_rest.len());
+        if end == 0 {
+            return Err(format!("expected number for '{}'", field));
+        }
+        val_rest[..end]
+            .parse::<f64>()
+            .map_err(|e| format!("invalid f64 for '{}': {}", field, e))
+    }
+
+    Ok(ParsedTJunctionReport {
+        face_id: find_field_u32(json, "face_id")?,
+        edge_id: find_field_u32(json, "edge_id")?,
+        vertex_id: find_field_u32(json, "vertex_id")?,
+        t_along_edge: find_field_f64(json, "t_along_edge")?,
+    })
+}
+
+#[cfg(test)]
+mod adr149_tests {
+    use super::*;
+
+    #[test]
+    fn adr149_beta3_parse_tjunction_report_canonical() {
+        let json = r#"{"face_id":0,"edge_id":4,"vertex_id":5,"t_along_edge":0.5}"#;
+        let parsed = parse_t_junction_report(json).unwrap();
+        assert_eq!(parsed.face_id, 0);
+        assert_eq!(parsed.edge_id, 4);
+        assert_eq!(parsed.vertex_id, 5);
+        assert!((parsed.t_along_edge - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adr149_beta3_parse_tjunction_report_with_whitespace() {
+        let json = r#"{ "face_id" : 42, "edge_id" : 7, "vertex_id" : 13, "t_along_edge" : 0.25 }"#;
+        let parsed = parse_t_junction_report(json).unwrap();
+        assert_eq!(parsed.face_id, 42);
+        assert_eq!(parsed.edge_id, 7);
+        assert_eq!(parsed.vertex_id, 13);
+        assert!((parsed.t_along_edge - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adr149_beta3_parse_tjunction_report_missing_field() {
+        let json = r#"{"face_id":0,"edge_id":4,"vertex_id":5}"#;  // missing t_along_edge
+        let result = parse_t_junction_report(json);
+        assert!(result.is_err(), "expected error for missing field");
+        let err = result.unwrap_err();
+        assert!(err.contains("t_along_edge"), "error should mention missing field, got: {}", err);
+    }
+
+    #[test]
+    fn adr149_beta3_parse_tjunction_report_field_order_flexible() {
+        // Reverse order — parser should still find all fields
+        let json = r#"{"t_along_edge":0.75,"vertex_id":99,"edge_id":88,"face_id":77}"#;
+        let parsed = parse_t_junction_report(json).unwrap();
+        assert_eq!(parsed.face_id, 77);
+        assert_eq!(parsed.edge_id, 88);
+        assert_eq!(parsed.vertex_id, 99);
+        assert!((parsed.t_along_edge - 0.75).abs() < 1e-12);
     }
 }
