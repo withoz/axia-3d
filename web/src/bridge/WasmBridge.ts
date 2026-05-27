@@ -25,7 +25,9 @@ import type { LayeredChannelName } from '../viewport/LayeredMaterialBinding';
 // LOCKED #7 의 적용 범위 확장 (도구 → 모든 호출 경로).
 
 const CARDINAL_THRESHOLD = 0.999;
-const CARDINAL_SNAP_TOL = 1e-3;  // 1μm — engine 1.5μm spatial-hash 미만
+// ADR-147 Scenario B1 (2026-05-27) — 1e-3 (1μm) → 1e-4 (0.1μm), 10× precision.
+// Engine SPATIAL_HASH_CELL * 1.5 = 0.15μm dedup_tol 정합 (mesh.rs:27 β-1).
+const CARDINAL_SNAP_TOL = 1e-4;  // 0.1μm — engine 0.15μm spatial-hash 미만 (ADR-147 β-1)
 
 /** Returns the cardinal axis index (0=x, 1=y, 2=z) if normal is axis-aligned, else -1. */
 function cardinalAxis(nx: number, ny: number, nz: number): number {

@@ -18,7 +18,7 @@
  *   tool.onMouseDown(e, snappedPoint)
  *     ↓ tool state machine
  *   bridge.drawRectAsShape/drawLineAsShape/drawCircleAsShape
- *     ↓ LOCKED #7 cardinal snap (|z| < 1e-3 → exact 0)
+ *     ↓ LOCKED #7 cardinal snap (|z| < 1e-4 → exact 0, ADR-147 B1)
  *   Engine vertex with z = 0 exact
  *
  * Anchor:
@@ -241,7 +241,7 @@ test.describe('User mouse-drawing z=0 invariant (real interaction path)', () => 
     const mesh = await inspectMesh(page);
     expect(mesh.faces, `3d Rect → expected face >= 1, got ${mesh.faces}`).toBeGreaterThanOrEqual(1);
     // CRITICAL: 3d view ray-plane intersect 결과 z 가 floating drift 가지더라도
-    // LOCKED #7 cardinal snap (|z| < 1e-3) 가 exact 0 강제.
+    // LOCKED #7 cardinal snap (|z| < 1e-4, ADR-147 B1) 가 exact 0 강제.
     expect(mesh.allZeroExact, `3d view drawing z!=0: maxAbsZ=${mesh.maxAbsZ}, uniqueZ=${mesh.uniqueZ.join(',')}`).toBe(true);
     expect(mesh.uniqueZ).toEqual([0]);
   });

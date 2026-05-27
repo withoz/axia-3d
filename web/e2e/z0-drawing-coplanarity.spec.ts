@@ -18,8 +18,8 @@
  * (Z-up — XY ground = Z=0 plane).
  *
  * 정확성 기준: positionsF64 (CAD-grade precision) 의 z 좌표가 *정확히*
- * 0.0 (== 0, not approximate). Cardinal snap (`|z| < 1e-3 → z = 0`)
- * 이 모든 draw API 에 적용되어야.
+ * 0.0 (== 0, not approximate). Cardinal snap (`|z| < 1e-4 → z = 0`,
+ * ADR-147 Scenario B1) 이 모든 draw API 에 적용되어야.
  */
 import { test, expect } from '@playwright/test';
 
@@ -323,15 +323,17 @@ test.describe('z=0 plane drawing coplanarity (LOCKED #7 + #43)', () => {
     expect(result.uniqueZ).toEqual([0]);
   });
 
-  test('Sub-tol input (z=0.0005mm) gets snapped to exact 0', async ({ page }) => {
+  test('Sub-tol input (z=0.00005mm) gets snapped to exact 0', async ({ page }) => {
     test.setTimeout(30_000);
     // Verify cardinal snap actually works — input slightly off (within
-    // 1e-3 mm tol) → output exactly 0. This is the SSOT contract.
+    // 1e-4 mm tol, ADR-147 Scenario B1) → output exactly 0. This is the
+    // SSOT contract. Pre-ADR-147 fixture used z=0.0005 (0.5μm) within old
+    // 1μm tol; updated to z=0.00005 (0.05μm) within new 0.1μm tol.
     const result = await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const bridge = (window as any).__axia.get('bridge') as BridgeShim;
       const shapeRaw = bridge.drawRectAsShape(
-        0, 0, 0.0005,   // z = 0.5μm (sub-tol)
+        0, 0, 0.00005,  // z = 0.05μm (sub-tol, ADR-147 Scenario B1)
         0, 0, 1,        // normal +Z
         1, 0, 0,
         1000, 1000,
@@ -355,7 +357,8 @@ test.describe('z=0 plane drawing coplanarity (LOCKED #7 + #43)', () => {
     expect(result.ok, JSON.stringify(result)).toBe(true);
     if (!result.ok) return;
     expect(result.shapeRaw).toBeGreaterThanOrEqual(0);
-    // Sub-tol z=0.0005 should snap to exactly 0
+    // Sub-tol z=0.00005 (0.05μm) should snap to exactly 0 — within new
+    // 0.1μm CARDINAL_SNAP_TOL (ADR-147 Scenario B1).
     expect(result.allZeroExact, `cardinal snap failed: maxAbsZ=${result.maxAbsZ}`).toBe(true);
     expect(result.maxAbsZ).toBe(0);
   });
