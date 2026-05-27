@@ -261,7 +261,7 @@ ADR-141 (Master Roadmap) + ADR-142~161 (Sprint 1~6+4.5 worker ADRs).
 | [144](./144-step-4-65-silent-dissolve-regression-sweep.md) | Step 4.65 silent dissolve 회귀 자산 sweep | Accepted | S1 |
 | [145](./145-circle-annulus-explicit-activation.md) | Circle annulus 명시 활성 (옵션 B, 결재 1) | Accepted | S1 |
 | [146](./146-step-1-inferencing-completion.md) | Step 1 Inferencing 보강 (node, latency, Recency) | Accepted | S2 |
-| [147](./147-step-2-scenario-b1-spatial-hash-precision.md) | Step 2 Scenario B1 (spatial-hash 1μm → 0.1μm, 10× precision) | Proposed | S2 |
+| [147](./147-step-2-scenario-b1-spatial-hash-precision.md) | Step 2 Scenario B1 (spatial-hash 1μm → 0.1μm, 10× precision) | Accepted | S2 |
 | [148](./148-point-localized-boundary-tool.md) | B-γ' Point-Localized BoundaryTool (ADR-139 자연 후속) | Accepted | S2 |
 | 149 (reserve) | T-junction Sweep 명시 도구 | Reserved | S3 |
 | 150 (reserve) | 자동 Coplanar Face Merge (opt-in) | Reserved | S3 |

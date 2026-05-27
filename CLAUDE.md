@@ -79,11 +79,16 @@
 - True connector: 한 vert 는 outer-only, 다른 vert 는 inner-only.
 - shared corner (양쪽 boundary 모두에 속함) 는 connector 가 아님.
 
-### 5. 엔진 허용오차 정책 (사용자 정책 2026-04-27)
+### 5. 엔진 허용오차 정책 (사용자 정책 2026-04-27, ADR-147 amendment 2026-05-27)
 - Mesh 층은 **exact input** 만 처리. mm 단위 fuzzy snap 금지.
-- 1.5μm spatial-hash dedup 만 허용 (f32 drift 흡수용).
+- **0.15μm** spatial-hash dedup 만 허용 (f32 drift 흡수용). **ADR-147
+  Scenario B1 amendment (2026-05-27)** — 기존 1.5μm 에서 10× precision
+  강화 (SPATIAL_HASH_CELL: 1e-3 → 1e-4 mm). 산업 표준 mm 단위 3-4
+  decimal place 정합. ExactVec3 보고서 §B1 권장.
 - UI Snap (osnap) 이 정렬 책임 — 입력 단계에서 해소.
 - `add_vertex_with_snap` 같은 mesh-level 허용오차 함수 추가 금지.
+- **Future**: ExactVec3 자료형 (B2/B3) — AxiA Phase 0~3 안정성 확인
+  후 별도 ADR.
 
 ### 6. ADR-018 — Uniform Surface Render Policy (2026-04-29)
 - **Open mesh 의 sheet face**: 양면 동일 white (#e8e8e8). BackSide 도
