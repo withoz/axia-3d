@@ -1,6 +1,6 @@
 # ADR-149 — T-junction Sweep 명시 도구 (Sprint 3 첫 ADR)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: **Accepted** (γ closure 2026-05-27 — Path Z atomic 6 sub-step 완료)
 **Date**: 2026-05-27
 **Author**: WYKO + Claude
 **Trigger**: LOCKED #65 (ADR-141 Master Roadmap) Sprint 3 첫 ADR.
@@ -255,22 +255,107 @@ const T_JUNCTION_TOL: f64 = 1.5e-4; // 0.15μm
   - Q3=(a) ContextMenu "T-junction 정리" ✅
   - Q4=(a) Default OFF + 명시 호출 only ✅
   - Q5=(a) LOCKED #5 0.15μm 답습 ✅
-- **2026-05-27 α** (본 commit) — ADR-149 spec only PR
-- **TBD β-1** — Engine detection skeleton + 6 회귀
-- **TBD β-2** — Engine healing + 6 회귀
-- **TBD β-3** — WASM bridge + TS wrapper + 2 회귀
-- **TBD β-4** — UI ContextMenu integration + 4 회귀
-- **TBD γ** — E2E + closure docs + §9 Lessons
+- **2026-05-27 α** (PR #196, merged `86dac6d`) — ADR-149 spec only PR
+- **2026-05-27 β-1** (PR #197, merged `0ea83da`) — Engine
+  `Mesh::detect_t_junctions` + `TJunctionReport` + `T_JUNCTION_TOL`.
+  `operations/t_junction.rs` 신설 (mesh.rs 추가 0, 정책 (B) hybrid).
+  회귀 axia-geo **+6** (baseline / canonical / endpoint exclude /
+  multi-vertex / tolerance boundary / spatial-hash performance).
+- **2026-05-27 β-2** (PR #198, merged `f35523b`) — Engine
+  `heal_t_junction` + `TJunctionError` + `HealReport`. `mesh.split_edge`
+  위임 + `mesh.mark_edges_hard` HARD flag 부여 (메타-원칙 #15 정합 +
+  ADR-101 Amendment 10 canonical 답습). 회귀 axia-geo **+6**
+  (canonical heal / HARD flag / manifold post-heal / invalid report
+  reject / vertex drift reject / multi-heal sequence).
+- **2026-05-27 β-3** (PR #199, merged `57bc009`) — WASM bridge
+  `detectTJunctions` + `healTJunction` exports + `parse_t_junction_
+  report` helper. TS bridge `TJunctionReport` + `TJunctionHealReport`
+  interfaces + `detectTJunctions(tolMm = 0)` (graceful fallback) +
+  `healTJunction(report, tolMm = 0)` (strict throw). 회귀 axia-wasm
+  **+4** (parser) + vitest **+6** (TS wrapper).
+- **2026-05-27 β-4** (PR #200, merged `c4ed621`) — UI ContextMenu
+  `heal-t-junctions` 메뉴 entry + handler. detect → heal sequence
+  + 3-way Toast feedback (success / info / error). 회귀 vitest **+4**
+  (zero / detect throw / canonical heal / partial failure).
+- **2026-05-27 γ** (본 commit) — Closure: Status flip + Acceptance Log
+  + §9 Lessons + README catalog Status update + E2E spec.
+  - **Status**: Proposed → **Accepted** (header).
+  - **README catalog** — ADR-149 row Status: `Proposed` → `Accepted`.
+  - **E2E spec** (`web/e2e/adr-149-t-junction-demo.spec.ts`) — Real
+    Chromium 3 회귀: detectTJunctions empty / healTJunction invalid
+    throw / ContextMenu wiring. ADR-148 γ pattern 1:1 mirror.
+  - §9 Lessons 신규 — 5-항목 회고.
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (canonical for future Sprint 3 ADRs)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. Sprint 1+2 의
-canonical pattern (ADR-145 / 146 / 147 / 148 §9 Lessons 답습) 위에 Sprint 3
-첫 ADR 의 architectural lessons 누적.
+ADR-149 Path Z atomic 6-sub-step closure 의 5개 회고 항목:
 
-후보 lessons (β implementation 완료 시 확정):
-- Sprint 3 첫 ADR — Topology Cleanup 의 *명시 trigger only* 정합 evidence
-- 메타-원칙 #16 정합의 9번째 적용 (Sprint 1+2 의 ADR-139/145/148 답습 +
-  Sprint 3 ADR-149 확장)
-- Mesh-level vs intersection-time T-junction 분리 (ADR-128 vs ADR-149)
-- ADR-148 Hybrid pattern 1:1 mirror reproducibility 증명
+### L1 — Path Z atomic 6-sub-step 의 사용자 결재 효율성
+
+α spec → β-1 / β-2 / β-3 / β-4 → γ closure. 각 sub-step single atomic PR
+(LOCKED #44 정합). 본 ADR 의 sub-step 들은 *layered dependency* —
+β-1 (engine detect) → β-2 (engine heal, β-1 자산 활용) → β-3 (WASM bridge
++ TS wrapper, β-1+β-2 자산 export) → β-4 (UI, β-3 wrapper 활용).
+ADR-146 의 parallel sub-step 과 대조 — *bridge/UI stack* ADR 은 sequential
+가 자연.
+
+향후 *engine → bridge → UI* 3-layer ADR 가이드 — sequential atomic 가
+canonical. parallel 시도는 의존성 graph audit 우선.
+
+### L2 — 정책 (B) hybrid 답습 — mesh.rs 추가 0 일관 적용
+
+본 ADR β-1 진입 시 사용자가 "과부하 상태를 최적화하는 방법은?" 질문 →
+audit-first canonical 9번째 적용 → 4 옵션 매트릭스 → 정책 (B) hybrid
+선택 (Sprint 3 진행 + 별도 audit ADR 예약). β-1 부터 β-4 까지 *mesh.rs
+추가 0* 강제 일관 적용 — `operations/t_junction.rs` 신설.
+
+향후 architectural debt 해결 가이드 — *Sprint 진행 중에는 hybrid 정책,
+별도 audit ADR* 패턴. β-1 sub-step 진입 직전 panel 결재 anchor 가 향후
+Sprint 4/5 진입 시에도 유효.
+
+### L3 — ADR-148 1:1 mirror reproducibility 증명 (Sprint 2 → Sprint 3)
+
+ADR-148 (point-localized BoundaryTool) 의 6-step closure 패턴 (α / β-1 /
+β-2 / β-3 / β-4 / γ) 이 ADR-149 (T-junction sweep) 에 거의 *1:1 transfer*
+됨:
+- α: spec docs + 결재 anchor
+- β-1: engine detection (read-only API)
+- β-2: engine algorithm (mutation API + HARD flag)
+- β-3: WASM bridge + TS wrapper (graceful read / strict mutate)
+- β-4: UI ContextMenu entry + handler
+- γ: E2E + Status flip + §9 Lessons
+
+향후 Sprint 3 ADR-150 / 151 + Sprint 4 + 5 *명시 trigger 도구* ADR 가이드
+— 본 6-step template 답습. 사용자 결재 cycle 최소화.
+
+### L4 — Read-only vs Mutate API 의 graceful vs strict 분리
+
+β-3 TS wrapper 의 의도된 패턴:
+- `detectTJunctions()` — **graceful fallback** (WASM 없을 시 `[]` 반환)
+- `healTJunction(report)` — **strict throw** (WASM 없을 시 Error)
+
+read-only API 는 UI 가 "메뉴 표시 여부" 결정에 사용 → graceful 가 자연
+(예: clean mesh / WASM 미로드 모두 동일 "T-junction 없음" UX). mutate API
+는 silent skip 위험 = 메타-원칙 #16 위반 → strict throw 필수.
+
+향후 *engine 호출 wrapper* 가이드 — read vs mutate 의미 분리 후 errcase
+policy 별도 결정.
+
+### L5 — Sprint 3 첫 ADR closure → Sprint 3 잔존 자연 진행
+
+본 ADR closure 후 Sprint 3 ADR-150 (자동 Coplanar Face Merge, opt-in)
+또는 ADR-151 (Connected Stacked-inner Component-Merge Resolver) 진입
+가능. ADR-141 §3 Sprint 3 reserve 3~4주 / 회귀 +50 share.
+
+ADR-149 누적 회귀 **+26** (axia-geo +12 + axia-wasm +4 + vitest +10 +
+Playwright +3) — Sprint 3 share +50 의 ~52%. ADR-150/151 자연 분담 +24.
+
+향후 Sprint scope 결정 가이드 — Sprint 내 ADR 간 회귀 share 분배 +
+사용자 결재 anchor (사용자 "다음 진행" / "추천 승인" 응답) 우선.
+
+---
+
+**ADR-149 closure**: Path Z atomic 6 sub-step 완료. 사용자 facing 즉시
+가치 — T-junction Sweep 명시 도구 활성 (ContextMenu "T-junction 정리").
+메타-원칙 #16 정합의 9번째 적용 (휴리스틱 자동 sweep 폐기 + 사용자 명시
+호출 only). Sprint 3 진행 +52% (회귀 share).
