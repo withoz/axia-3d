@@ -17,14 +17,21 @@ use crate::tolerances::*;
 
 /// Spatial hash cell key for fast vertex coincidence queries.
 ///
-/// 셀 크기: 1 μm (1e-3 mm). 마우스 기반 좌표의 f32 drift(~1e-4 mm)와
-/// snap 오차를 흡수하기에 적절한 크기. VERTEX_TOLERANCE(1e-7)은 정밀한
-/// coincidence 판정용으로 유지되지만, 공간 해시는 조금 더 관대한 셀을 사용.
+/// 셀 크기: 0.1 μm (1e-4 mm, ADR-147 Scenario B1, 2026-05-27 amendment).
+/// 마우스 기반 좌표의 f32 drift(~1e-4 mm)와 snap 오차를 흡수하기에 적절한
+/// 크기. VERTEX_TOLERANCE(1e-7)은 정밀한 coincidence 판정용으로 유지되지만,
+/// 공간 해시는 조금 더 관대한 셀을 사용.
+///
+/// ADR-147 amendment: 1e-3 (1μm) → 1e-4 (0.1μm) — 10× precision. ExactVec3
+/// 보고서 §B1 권장. 산업 표준 mm 단위 3-4 decimal place 정합. dedup_tol =
+/// SPATIAL_HASH_CELL * 1.5 자연 0.15μm 강화.
 type SpatialKey = (i64, i64, i64);
 
 /// 공간 해시 셀 크기. VERTEX_TOLERANCE보다 크게 해서 근접 vertex 후보를
 /// 넉넉히 수집한다. 실제 coincidence 판정은 Vertex::coincident의 tolerance.
-const SPATIAL_HASH_CELL: f64 = 1e-3; // 1 μm
+///
+/// ADR-147 Scenario B1 — 2026-05-27 — 1e-3 → 1e-4 (10× precision).
+const SPATIAL_HASH_CELL: f64 = 1e-4; // 0.1 μm (ADR-147 Scenario B1)
 
 /// Convert a position to a spatial hash key.
 #[inline]
