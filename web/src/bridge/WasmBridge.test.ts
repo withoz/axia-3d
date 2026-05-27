@@ -1790,6 +1790,117 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-149 β-3 — T-junction Sweep TS bridge wrappers
+    // (메타-원칙 #16 정합 — 휴리스틱 자동 sweep 0, 사용자 명시 trigger
+    // only. ADR-148 1:1 mirror pattern.)
+    // ────────────────────────────────────────────────────────────────
+
+    it('detectTJunctions parses JSON array and maps snake_case → camelCase', () => {
+      const fn = vi.fn(
+        () =>
+          '[{"face_id":0,"edge_id":4,"vertex_id":5,"t_along_edge":0.5},' +
+          '{"face_id":1,"edge_id":7,"vertex_id":8,"t_along_edge":0.25}]'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { detectTJunctions: fn };
+      const result = bridge.detectTJunctions(1.5e-4);
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        faceId: 0,
+        edgeId: 4,
+        vertexId: 5,
+        tAlongEdge: 0.5,
+      });
+      expect(result[1].tAlongEdge).toBe(0.25);
+      expect(fn).toHaveBeenCalledWith(1.5e-4);
+    });
+
+    it('detectTJunctions returns empty array on clean mesh (no T-junctions)', () => {
+      const fn = vi.fn(() => '[]');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { detectTJunctions: fn };
+      const result = bridge.detectTJunctions();
+      expect(result).toEqual([]);
+    });
+
+    it('detectTJunctions returns [] when WASM endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      // No throw — graceful fallback per L-β3-1 (UI is responsible for the
+      // "missing rebuild" message, not the bridge).
+      expect(bridge.detectTJunctions()).toEqual([]);
+    });
+
+    it('detectTJunctions throws on invalid JSON from WASM (corruption guard)', () => {
+      const fn = vi.fn(() => 'not valid json');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { detectTJunctions: fn };
+      expect(() => bridge.detectTJunctions()).toThrow(/invalid JSON/);
+    });
+
+    it('healTJunction serializes camelCase → snake_case and parses response', () => {
+      const fn = vi.fn(
+        () =>
+          '{"healed_count":1,"new_vertex_id":42,"new_edge_a":7,"new_edge_b":8}'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { healTJunction: fn };
+      const report = {
+        faceId: 0,
+        edgeId: 4,
+        vertexId: 5,
+        tAlongEdge: 0.5,
+      };
+      const result = bridge.healTJunction(report, 1.5e-4);
+      expect(result).toEqual({
+        healedCount: 1,
+        newVertexId: 42,
+        newEdgeA: 7,
+        newEdgeB: 8,
+      });
+      // Verify WASM was called with snake_case JSON
+      const callJson = fn.mock.calls[0][0] as string;
+      const callTol = fn.mock.calls[0][1] as number;
+      expect(JSON.parse(callJson)).toEqual({
+        face_id: 0,
+        edge_id: 4,
+        vertex_id: 5,
+        t_along_edge: 0.5,
+      });
+      expect(callTol).toBe(1.5e-4);
+    });
+
+    it('healTJunction propagates engine throw (strict — silent skip 차단)', () => {
+      const errFn = vi.fn(() => {
+        throw new Error(
+          'healTJunction: VertexNotOnEdge (drift 0.500000mm)'
+        );
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { healTJunction: errFn };
+      const report = {
+        faceId: 0,
+        edgeId: 4,
+        vertexId: 5,
+        tAlongEdge: 0.5,
+      };
+      expect(() => bridge.healTJunction(report)).toThrow(/VertexNotOnEdge/);
+    });
+
+    it('healTJunction throws when WASM endpoint missing (feature gate)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      const report = {
+        faceId: 0,
+        edgeId: 4,
+        vertexId: 5,
+        tAlongEdge: 0.5,
+      };
+      expect(() => bridge.healTJunction(report))
+        .toThrow(/WASM endpoint missing/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
     // ────────────────────────────────────────────────────────────────
 
