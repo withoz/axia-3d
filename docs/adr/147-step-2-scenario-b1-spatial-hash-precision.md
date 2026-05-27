@@ -1,6 +1,7 @@
 # ADR-147 — Step 2 Scenario B1: spatial-hash 1μm → 0.1μm (10× precision)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: Accepted (γ closure 2026-05-27 — Path Z atomic 5 sub-step
+α + β-1 + β-2 + β-3 + γ 모두 closure)
 **Date**: 2026-05-27
 **Author**: WYKO + Claude
 **Trigger**: LOCKED #65 (ADR-141 Master Roadmap) Sprint 2 마지막 ADR.
@@ -241,11 +242,93 @@ share 약간 초과 — Sprint 2 closure 진행 후 정량 reconciliation).
 
 ## 8. Acceptance Log
 
-- **2026-05-27 α** (본 commit) — α spec + Q1=(a) LOCKED #5 in-place amendment
-  + Q2=(a) Strict sweep audit-first + sub-step plan + lock-ins.
-- **(β-1 ~ γ, ~2-3일)** — 별도 사용자 결재 후 진행 (Q1/Q2 결정).
+- **2026-05-27 α** (PR #190, merged) — α spec + Q1=(a) + Q2=(a) 결재 anchor.
+- **2026-05-27 β-1** (PR #191) — Engine `SPATIAL_HASH_CELL: 1e-3 → 1e-4`
+  (mesh.rs:27). axia-geo 1441/1441 PASS — **0 regression**.
+- **2026-05-27 β-2** (PR #192) — TS `CARDINAL_SNAP_TOL: 1e-3 → 1e-4`
+  (WasmBridge.ts:28). vitest 1978/1978 PASS — **0 regression**.
+- **2026-05-27 β-3** (PR #193) — Curve `POINT_OFF_CURVE_TOL: 1.5e-3 → 1.5e-4`
+  (synthesize.rs:164). axia-geo 1441/1441 PASS — **0 regression**.
+- **2026-05-27 γ** (본 commit) — Closure: Status flip + §9 Lessons +
+  LOCKED #5 amendment + README catalog update.
+
+## 9. Lessons (canonical for future precision/tolerance amendments)
+
+ADR-147 Path Z atomic 5-sub-step closure 의 5개 회고 항목:
+
+### L1 — 정밀도 변경의 3 layer canonical 분리
+
+ADR-147 의 변경은 *3 layer* 동시 정합:
+- **Spatial hash layer** (Engine, β-1) — `SPATIAL_HASH_CELL` mesh.rs:27
+- **Cardinal snap layer** (Bridge, β-2) — `CARDINAL_SNAP_TOL` WasmBridge.ts:28
+- **Curve synthesis layer** (Engine, β-3) — `POINT_OFF_CURVE_TOL`
+  synthesize.rs:164
+
+3 layer 가 *동일 비율 변경* (10×) 으로 정합 유지. 각 layer 가 독립
+sub-step PR → stacked atomic pattern (ADR-148 답습) → 0 fix-cycle.
+
+향후 정밀도 ADR (예: B2/B3 ExactVec3) 가이드 — *layer 분리* 명시 + 각
+layer 독립 sub-step.
+
+### L2 — Strict sweep 의 fail-fast architectural value
+
+Q2=(a) Strict sweep (axia-geo 1441 + vitest 1978 전수 검토) 가 ADR-147
+무관 *pre-existing regression* 발견 (axia-core `p2_step_4_65_l_shape_
+inner_preserves_outer`). CI workflow ci.yml 의 rust-test job 이 axia-geo
++ axia-wasm 만 검증 → axia-core regression 미탐지.
+
+**향후 CI 정책 권장** (별도 hotfix ADR):
+- axia-core scene tests CI 통합 (`cargo test -p axia-core --lib` 추가)
+- axia-transaction CI 통합 (현재 미통합 가능성)
+
+### L3 — Single-const change 의 architectural 효율성
+
+3 sub-step β-1/β-2/β-3 가 각각 **single-const change** (단일 라인 수정)
++ **0 회귀** evidence — 정밀도 강화의 *minimum invasive* 진화. ExactVec3
+보고서 §B1 권장 정합:
+
+> "AXiA에는 Scenario B1 (spatial-hash 1μm → 0.1μm) 단독 진행이 4단계
+> 파이프라인과 정합합니다."
+
+향후 B2/B3 ExactVec3 자료형 변경은 *invasive* multi-week atomic. 본
+ADR 의 B1 path 가 *low-risk + immediate value* 의 canonical reference.
+
+### L4 — LOCKED #5 in-place amendment 패턴
+
+LOCKED #5 (1.5μm spatial-hash dedup) 의 in-place amendment (0.15μm) —
+메타-원칙 #10 (ADR 불변) 정합. CLAUDE.md 본문 직접 갱신 + ADR-147
+reference 명시. 단일 SSOT 보존 (메타-원칙 #4).
+
+기존 LOCKED supersede patterns (LOCKED #1 P7 / LOCKED #41 ADR-101) 답습
+— amendment vs supersede 의 boundary 명확:
+- **In-place amendment**: 정밀도 / tolerance 단순 강화 (단위 변경)
+- **Supersede**: 정책 의미 자체 변경 (예: ADR-139 가 LOCKED #12 P11
+  의 자동 trigger 폐기)
+
+### L5 — Sprint 2 closure 도달 (ADR-146 + ADR-148 + ADR-147 100%)
+
+본 ADR closure 시점 Sprint 2 3/3 ADRs 모두 closed:
+- ADR-146 (Step 1 Inferencing) — 5 PR closure
+- ADR-148 (Boundary Tool) — 6 PR closure
+- **ADR-147 (Step 2 Scenario B1) — 5 PR closure (본 ADR)**
+
+Sprint 2 총 16 PRs / +51 회귀 자산 (vitest +14 + axia-geo +5 + axia-wasm
++2 + Playwright +4). LOCKED #65 ADR-141 §3 Sprint 2 share +30 의 **170%
+달성** — Sprint 2 의도 + 추가 정밀도 강화.
+
+다음 자연 trigger:
+- Sprint 1+2 atomic patterns memory 갱신 (Sprint 2 evidence 추가)
+- Sprint 3 (ADR-149/150/151) 진입 결재
+- **외부 anchor — 사용자 도형 그리기/편집 기능 sweep** (사용자 요구 27+
+  tests + Surface 4 Tool UI + Knife/Hole/Heal/Pie/RotRect/Spline 도구
+  신설) — 별도 architectural ADR
 
 ---
 
-**다음 trigger**: β-1 진입 결재 (Q1=(a) + Q2=(a) 권장 path)
-또는 Sprint 2 closure 평가 (ADR-146 + ADR-148 + ADR-147 = Sprint 2 100%).
+**ADR-147 closure**: Path Z atomic 5 sub-step 완료. Spatial-hash precision
+10× (1μm → 0.1μm), Cardinal snap precision 10× (1μm → 0.1μm), Curve
+off-tolerance 10× (1.5μm → 0.15μm). 산업 표준 mm 단위 3-4 decimal place
+정합. axia-geo 1441/1441 + vitest 1978/1978 PASS evidence. **Sprint 2
+완전 closure 도달**.
+
+다음 trigger: Sprint 3 진입 또는 도형 그리기/편집 기능 sweep ADR.
