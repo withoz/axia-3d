@@ -11,6 +11,7 @@ pub mod boolean;
 pub mod coplanar;
 pub mod annulus;  // ADR-145 — Circle annulus 명시 promote (β-1 validation only)
 pub mod boundary;  // ADR-148 — B-γ' Point-Localized BoundaryTool (β-1 skeleton)
+pub mod t_junction;  // ADR-149 — T-junction Sweep 명시 도구 (β-1 detection)
 pub mod boolean_dispatch;
 pub mod boolean_nurbs_dcel;
 pub mod transform;
