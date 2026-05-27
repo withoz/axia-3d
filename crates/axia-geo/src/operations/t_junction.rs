@@ -1,4 +1,4 @@
-//! ADR-149 — T-junction Sweep 명시 도구 (β-1 detection skeleton).
+//! ADR-149 — T-junction Sweep 명시 도구 (β-1 detection + β-2 healing).
 //!
 //! Mesh-level T-junction: vertex V 가 face F 의 edge E interior 에 위치하지만,
 //! E 는 V 를 endpoint 로 갖지 않음 (F 의 boundary loop 에 V 미포함). T 모양
@@ -8,7 +8,7 @@
 //! **메타-원칙 #16 정합**: 휴리스틱 자동 sweep 0, 사용자 명시 ContextMenu
 //! 호출 only (ADR-139 / 145 / 148 canonical 답습).
 //!
-//! # β-1 scope (current commit — detection skeleton + 6 회귀)
+//! # β-1 scope (detection)
 //!
 //! - `TJunctionReport` struct (검출 결과 — face/edge/vertex/t_along_edge)
 //! - `detect_t_junctions(&Mesh, tol)` free function:
@@ -18,10 +18,19 @@
 //! - 회귀 6개 (baseline + canonical + endpoint exclude + multi-vertex +
 //!   tolerance boundary + spatial-hash performance)
 //!
-//! # β-2 scope (다음 sub-step, future commit)
+//! # β-2 scope (current commit — healing)
 //!
-//! - `heal_t_junction(&mut Mesh, report)` — `split_edge` at V + loop reparent
-//!   + HARD flag 부여 (메타-원칙 #15 정합)
+//! - `TJunctionError` enum (3 variants — InvalidReport / VertexNotOnEdge /
+//!   SplitEdgeFailed)
+//! - `HealReport` struct (healed_count / new_vertex_id / new_edges)
+//! - `heal_t_junction(&mut Mesh, &TJunctionReport) -> Result<HealReport>`:
+//!   - report validation (face/edge/vertex 모두 active)
+//!   - vertex 가 edge interior 에 *여전히* 위치 재검증 (drift 대비)
+//!   - `mesh.split_edge(edge_id, V.position)` 호출 — DCEL surgery 위임
+//!   - `mesh.mark_edges_hard(&[e1, e2])` — split-induced edges HARD flag
+//!     (메타-원칙 #15 정합, ADR-101 Amendment 10 canonical 답습)
+//! - 회귀 6개 (canonical heal + HARD flag + manifold post-heal +
+//!   spatial-hash dedup + invalid report reject + multi-heal in sequence)
 //!
 //! # Algorithm (Q1=a Full mesh sweep + spatial-hash candidate)
 //!
@@ -218,11 +227,178 @@ pub fn detect_t_junctions(mesh: &Mesh, tol: f64) -> Vec<TJunctionReport> {
     reports
 }
 
+// ============================================================================
+// ADR-149 β-2 — Healing (split_edge + HARD flag)
+// ============================================================================
+
+/// ADR-149 β-2 — T-junction healing errors.
+///
+/// Returned by `heal_t_junction` on validation/operation failure.
+/// All errors halt the heal operation without partial mutation — caller
+/// responsibility 명시 (silent skip 차단, 메타-원칙 #16 정합).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TJunctionError {
+    /// Report references inactive entity (face / edge / vertex) — likely
+    /// stale report after intervening mutation. Caller should re-run
+    /// `detect_t_junctions` for fresh reports.
+    InvalidReport {
+        face_active: bool,
+        edge_active: bool,
+        vertex_active: bool,
+    },
+
+    /// Vertex no longer on edge interior within tolerance — geometry
+    /// changed between detection and healing (e.g., transform moved the
+    /// vertex). Returns drift distance for diagnostic.
+    VertexNotOnEdge { drift_mm: f64 },
+
+    /// `mesh.split_edge` internal failure (DCEL corruption or unexpected
+    /// topology). Preserves underlying error message.
+    SplitEdgeFailed { reason: String },
+}
+
+impl std::fmt::Display for TJunctionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TJunctionError::InvalidReport { face_active, edge_active, vertex_active } => {
+                write!(
+                    f,
+                    "InvalidReport (face_active={}, edge_active={}, vertex_active={})",
+                    face_active, edge_active, vertex_active
+                )
+            }
+            TJunctionError::VertexNotOnEdge { drift_mm } => {
+                write!(f, "VertexNotOnEdge (drift {:.6}mm)", drift_mm)
+            }
+            TJunctionError::SplitEdgeFailed { reason } => {
+                write!(f, "SplitEdgeFailed ({})", reason)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TJunctionError {}
+
+/// ADR-149 β-2 — T-junction healing success report.
+///
+/// Returned by `heal_t_junction` on successful split + HARD flag.
+/// `new_vertex_id` is the vertex inserted by `split_edge` at the
+/// T-junction position. Note: in β-2 MVP this is a *fresh* vertex
+/// (not the original V from the report) — the original V remains as
+/// an orphan vertex at the same position (β-3+ may merge via spatial-
+/// hash dedup).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HealReport {
+    /// Number of T-junctions healed in this call (β-2 MVP = always 1
+    /// per call; batch healing is β-2-extension).
+    pub healed_count: u32,
+    /// The new vertex inserted by `split_edge` at the T-junction
+    /// position.
+    pub new_vertex_id: VertId,
+    /// The two new edges replacing the split edge — `e1` = v_small ↔
+    /// new_vertex_id, `e2` = new_vertex_id ↔ v_large.
+    pub new_edge_a: EdgeId,
+    pub new_edge_b: EdgeId,
+}
+
+/// ADR-149 β-2 — Heal a single T-junction by splitting the edge and
+/// applying HARD flag to split-induced edges.
+///
+/// # Algorithm (Q2=a, ADR-101 Amendment 10 canonical 답습)
+///
+/// 1. **Validate report** — face/edge/vertex 모두 active. 하나라도
+///    inactive 면 `InvalidReport` (stale report 차단).
+/// 2. **Re-verify drift** — vertex position 이 edge interior 에서
+///    `tol` 이내인지 재검증. drift 시 `VertexNotOnEdge` (mutation 후
+///    geometry 변경 차단).
+/// 3. **split_edge call** — `mesh.split_edge(edge_id, V.position())`
+///    → 새 vertex + 두 edge (e1, e2). DCEL surgery 위임 (mesh.rs:4337
+///    의 검증된 API). Face boundary loop 자동 갱신.
+/// 4. **HARD flag** — `mesh.mark_edges_hard(&[e1, e2])` 호출. 메타-원칙
+///    #15 정합 (동일 split = 동일 contract) + render path coplanar hide
+///    회피 (LOCKED #16 K-ε hotfix 답습).
+///
+/// # Lock-ins (β-2)
+///
+/// - **L-β2-1**: report validation 명시 (silent skip 0, 메타-원칙 #16)
+/// - **L-β2-2**: drift 재검증 (detection ↔ healing 사이 mutation 대비)
+/// - **L-β2-3**: `split_edge` 위임 (custom DCEL surgery 회피 — mesh.rs
+///   의 검증된 path 활용, 메타-원칙 #4 SSOT 정합)
+/// - **L-β2-4**: HARD flag 부여 (ADR-101 Amendment 10 + 메타-원칙 #15)
+/// - **L-β2-5**: 원본 V 는 *별도 처리 없음* — orphan vertex 로 남음
+///   (β-2 MVP scope, vertex dedup 은 별도 sub-step 또는 ADR-150 cross-cut)
+/// - **L-β2-6**: 단일 healing per call (batch 는 β-2-extension)
+pub fn heal_t_junction(
+    mesh: &mut crate::mesh::Mesh,
+    report: &TJunctionReport,
+    tol: f64,
+) -> Result<HealReport, TJunctionError> {
+    // ── L-β2-1: Validate report (face/edge/vertex 모두 active) ──────────
+    let face_active = mesh.faces.get(report.face_id).map(|f| f.is_active()).unwrap_or(false);
+    let edge_active = mesh.edges.get(report.edge_id).map(|e| e.is_active()).unwrap_or(false);
+    let vertex_active = mesh.verts.get(report.vertex_id).map(|v| v.is_active()).unwrap_or(false);
+    if !(face_active && edge_active && vertex_active) {
+        return Err(TJunctionError::InvalidReport {
+            face_active,
+            edge_active,
+            vertex_active,
+        });
+    }
+
+    // ── L-β2-2: Re-verify drift (vertex still on edge interior?) ────────
+    let edge = &mesh.edges[report.edge_id];
+    let v_small = edge.v_small();
+    let v_large = edge.v_large();
+    let p_small = mesh.vertex_pos(v_small)
+        .map_err(|_| TJunctionError::InvalidReport {
+            face_active, edge_active, vertex_active: false,
+        })?;
+    let p_large = mesh.vertex_pos(v_large)
+        .map_err(|_| TJunctionError::InvalidReport {
+            face_active, edge_active, vertex_active: false,
+        })?;
+    let p_v = mesh.vertex_pos(report.vertex_id)
+        .map_err(|_| TJunctionError::InvalidReport {
+            face_active, edge_active, vertex_active: false,
+        })?;
+
+    let (drift, t) = match point_to_segment(p_v, p_small, p_large) {
+        Some(x) => x,
+        None => return Err(TJunctionError::VertexNotOnEdge { drift_mm: f64::INFINITY }),
+    };
+    if drift > tol {
+        return Err(TJunctionError::VertexNotOnEdge { drift_mm: drift });
+    }
+    // Strict interior — exclude endpoint coincidence
+    let seg_len = (p_large - p_small).length();
+    if t * seg_len < tol || (1.0 - t) * seg_len < tol {
+        return Err(TJunctionError::VertexNotOnEdge {
+            drift_mm: drift.min(t * seg_len).min((1.0 - t) * seg_len),
+        });
+    }
+
+    // ── L-β2-3: split_edge call (delegate DCEL surgery to mesh.rs) ─────
+    let (new_vertex_id, new_edge_a, new_edge_b) = mesh
+        .split_edge(report.edge_id, p_v)
+        .map_err(|e| TJunctionError::SplitEdgeFailed { reason: e.to_string() })?;
+
+    // ── L-β2-4: HARD flag on split-induced edges (메타-원칙 #15) ───────
+    mesh.mark_edges_hard(&[new_edge_a, new_edge_b]);
+
+    Ok(HealReport {
+        healed_count: 1,
+        new_vertex_id,
+        new_edge_a,
+        new_edge_b,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mesh::Mesh;
     use crate::MaterialId;
+    use crate::entities::HeFlags;
     use glam::DVec3;
 
     /// Helper — build a planar quad face (4 verts CCW).
@@ -399,5 +575,213 @@ mod tests {
             "detection took {}ms (expected < 500ms for 100-quad mesh)",
             elapsed.as_millis()
         );
+    }
+
+    // ========================================================================
+    // β-2 Healing tests (6 회귀)
+    // ========================================================================
+
+    /// Helper — build mesh with single T-junction and return the report.
+    fn build_single_tjunction_mesh() -> (Mesh, TJunctionReport) {
+        let mut mesh = Mesh::new();
+        let f_a = build_quad_face(
+            &mut mesh,
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(10.0, 10.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+        );
+        let v_tjunction = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        // Build report manually — detection is already tested
+        let reports = detect_t_junctions(&mesh, T_JUNCTION_TOL);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].face_id, f_a);
+        assert_eq!(reports[0].vertex_id, v_tjunction);
+        (mesh, reports[0].clone())
+    }
+
+    // ========================================================================
+    // Test 7: canonical heal — single T-junction
+    // ========================================================================
+    #[test]
+    fn adr149_heal_canonical_single_tjunction() {
+        let (mut mesh, report) = build_single_tjunction_mesh();
+
+        // Pre-heal: 1 T-junction detected
+        let reports_before = detect_t_junctions(&mesh, T_JUNCTION_TOL);
+        assert_eq!(reports_before.len(), 1);
+
+        // Heal
+        let result = heal_t_junction(&mut mesh, &report, T_JUNCTION_TOL);
+        assert!(result.is_ok(), "heal should succeed, got {:?}", result);
+        let heal = result.unwrap();
+        assert_eq!(heal.healed_count, 1);
+
+        // Post-heal: face's boundary loop should now include the split position
+        // (the *new* vertex from split_edge sits at the T-junction position).
+        // The original V remains as orphan vertex at same position.
+        let post = detect_t_junctions(&mesh, T_JUNCTION_TOL);
+        // Original V is now floating at same position as new_vertex_id — both
+        // pass distance check on the (now non-existent) edge interior. But
+        // the original edge was split into two new edges — neither has the
+        // original V on its strict interior anymore. Post-heal should detect
+        // 0 (or possibly the original V if it falls on one of the new edges
+        // due to tolerance — but at t=0.5 on a 10mm edge, the new edges are
+        // [0..5] and [5..10] and V is at endpoint (5,0,0), not interior).
+        assert_eq!(
+            post.len(), 0,
+            "expected 0 T-junctions post-heal, got {} ({:?})",
+            post.len(), post
+        );
+    }
+
+    // ========================================================================
+    // Test 8: HARD flag applied to split-induced edges (메타-원칙 #15)
+    // ========================================================================
+    #[test]
+    fn adr149_heal_assigns_hard_flag() {
+        let (mut mesh, report) = build_single_tjunction_mesh();
+
+        let heal = heal_t_junction(&mut mesh, &report, T_JUNCTION_TOL).unwrap();
+
+        // Verify both new edges have HARD flag on all radial twin HEs
+        for &edge_id in &[heal.new_edge_a, heal.new_edge_b] {
+            let edge = mesh.edges.get(edge_id).expect("new edge should exist");
+            assert!(edge.is_active(), "new edge {:?} should be active", edge_id);
+            let start_he = edge.any_he();
+            assert!(!start_he.is_null(), "new edge {:?} has no half-edges", edge_id);
+
+            // Walk radial chain — every HE should have HARD flag
+            let mut he = start_he;
+            for _ in 0..32 {
+                let flags = mesh.hes[he].flags();
+                assert!(
+                    flags.contains(HeFlags::HARD),
+                    "HE {:?} on new edge {:?} missing HARD flag (flags={:?})",
+                    he, edge_id, flags
+                );
+                he = mesh.hes[he].next_rad();
+                if he == start_he { break; }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Test 9: manifold post-heal (LOCKED #1 P7 invariant)
+    // ========================================================================
+    #[test]
+    fn adr149_heal_manifold_safe_post_healing() {
+        let (mut mesh, report) = build_single_tjunction_mesh();
+
+        let _heal = heal_t_junction(&mut mesh, &report, T_JUNCTION_TOL).unwrap();
+
+        // Verify mesh invariants — no non-manifold edges introduced
+        let invariants = mesh.verify_face_invariants();
+        assert!(
+            invariants.is_valid(),
+            "manifold invariants violated post-heal: {} violations",
+            invariants.violations.len()
+        );
+    }
+
+    // ========================================================================
+    // Test 10: invalid report rejection (inactive entity)
+    // ========================================================================
+    #[test]
+    fn adr149_heal_rejects_invalid_report() {
+        let (mut mesh, report) = build_single_tjunction_mesh();
+
+        // Construct a report with fake (out-of-range) face_id
+        let fake_face_id = FaceId::new(999_999);
+        let invalid_report = TJunctionReport {
+            face_id: fake_face_id,
+            edge_id: report.edge_id,
+            vertex_id: report.vertex_id,
+            t_along_edge: report.t_along_edge,
+        };
+
+        let result = heal_t_junction(&mut mesh, &invalid_report, T_JUNCTION_TOL);
+        assert!(result.is_err(), "expected InvalidReport error");
+        match result.unwrap_err() {
+            TJunctionError::InvalidReport { face_active, .. } => {
+                assert!(!face_active, "face_active should be false for out-of-range face_id");
+            }
+            other => panic!("expected InvalidReport, got {:?}", other),
+        }
+    }
+
+    // ========================================================================
+    // Test 11: vertex drifted off edge — VertexNotOnEdge rejection
+    // ========================================================================
+    #[test]
+    fn adr149_heal_rejects_drifted_vertex() {
+        let mut mesh = Mesh::new();
+        let f_a = build_quad_face(
+            &mut mesh,
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(10.0, 10.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+        );
+        // Add a vertex that's NOT on the edge (drift far above tolerance)
+        let v_far = mesh.add_vertex(DVec3::new(5.0, 5.0, 0.0));  // mid-face, not on edge
+
+        // Find any edge of f_a via outer loop's start HE
+        let edge_id_real = {
+            let face = &mesh.faces[f_a];
+            mesh.hes[face.outer().start].edge()
+        };
+
+        let bad_report = TJunctionReport {
+            face_id: f_a,
+            edge_id: edge_id_real,
+            vertex_id: v_far,
+            t_along_edge: 0.5,  // claimed, but vertex is not on edge
+        };
+
+        let result = heal_t_junction(&mut mesh, &bad_report, T_JUNCTION_TOL);
+        assert!(result.is_err(), "expected VertexNotOnEdge error");
+        match result.unwrap_err() {
+            TJunctionError::VertexNotOnEdge { drift_mm } => {
+                assert!(drift_mm > T_JUNCTION_TOL, "drift {} should exceed tol {}", drift_mm, T_JUNCTION_TOL);
+            }
+            other => panic!("expected VertexNotOnEdge, got {:?}", other),
+        }
+    }
+
+    // ========================================================================
+    // Test 12: multi-heal in sequence (3 T-junctions on one edge)
+    // ========================================================================
+    #[test]
+    fn adr149_heal_multi_tjunction_in_sequence() {
+        let mut mesh = Mesh::new();
+        let _f_a = build_quad_face(
+            &mut mesh,
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(10.0, 10.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+        );
+        let _v1 = mesh.add_vertex(DVec3::new(2.5, 0.0, 0.0));
+        let _v2 = mesh.add_vertex(DVec3::new(5.0, 0.0, 0.0));
+        let _v3 = mesh.add_vertex(DVec3::new(7.5, 0.0, 0.0));
+
+        // Heal them one at a time. After each heal, detection on remaining
+        // T-junctions should still find the others.
+        let mut total_healed = 0u32;
+        for _round in 0..10 {  // safety bound
+            let reports = detect_t_junctions(&mesh, T_JUNCTION_TOL);
+            if reports.is_empty() { break; }
+            // Heal the first one
+            let r = heal_t_junction(&mut mesh, &reports[0], T_JUNCTION_TOL);
+            assert!(r.is_ok(), "heal #{} failed: {:?}", total_healed + 1, r);
+            total_healed += r.unwrap().healed_count;
+        }
+
+        assert_eq!(total_healed, 3, "expected 3 heals, got {}", total_healed);
+
+        // Final detection should be 0
+        let final_reports = detect_t_junctions(&mesh, T_JUNCTION_TOL);
+        assert_eq!(final_reports.len(), 0, "expected 0 final T-junctions, got {}", final_reports.len());
     }
 }
