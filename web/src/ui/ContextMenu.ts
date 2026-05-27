@@ -195,6 +195,62 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         }
         break;
       }
+      // ─ ADR-149 β-4 — T-junction Sweep 명시 trigger (메타-원칙 #16 정합) ─
+      // 사용자 워크플로우 (ADR-149 §2):
+      //   1. 우클릭 → "T-junction 정리"
+      //   2. bridge.detectTJunctions() — 모든 T-junction 검출
+      //   3. empty → Toast.info "T-junction 없음" + return
+      //   4. 각 report 에 대해 bridge.healTJunction(report) 호출
+      //      (각 healing 후 새 vertex 가 mesh 에 추가되므로 detection 재실행
+      //      필요. β-4 MVP — single-pass detection + serial healing. multi-
+      //      pass batch 는 β-4-extension 또는 별도 sub-step.)
+      //   5. Toast.success "N개 정리" 또는 partial failure 시 mixed Toast
+      case 'heal-t-junctions': {
+        let reports;
+        try {
+          reports = bridge.detectTJunctions();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          Toast.error(`T-junction 검출 실패: ${msg}`);
+          break;
+        }
+        if (reports.length === 0) {
+          Toast.info('T-junction 없음 (mesh 정상)');
+          break;
+        }
+        // β-4 MVP: serial heal — re-detect 필요한 경우 사용자가 재호출 가능.
+        // Engine 의 split_edge 는 face boundary loop 를 갱신하므로 다른
+        // reports 의 face_id / edge_id / vertex_id 가 stale 될 수 있음.
+        // InvalidReport / VertexNotOnEdge 시 skip + 다음 report 진행.
+        let healed = 0;
+        let skipped = 0;
+        const firstError: { msg: string } | null = null;
+        for (const report of reports) {
+          try {
+            bridge.healTJunction(report);
+            healed++;
+          } catch (err) {
+            skipped++;
+            // First error 만 기록 (Toast 길이 제한)
+            if (firstError === null) {
+              const msg = err instanceof Error ? err.message : String(err);
+              debugLog('T-junction skip:', msg);
+            }
+          }
+        }
+        // syncMesh + selection clear (healing 후 mesh state 변경)
+        toolManager.selection.clearSelection();
+        toolManager.syncMesh();
+
+        if (healed > 0 && skipped === 0) {
+          Toast.success(`T-junction ${healed}개 정리 완료`);
+        } else if (healed > 0 && skipped > 0) {
+          Toast.info(`T-junction ${healed}개 정리, ${skipped}개 skip (재시도 가능)`);
+        } else {
+          Toast.error(`T-junction 정리 실패 (${skipped}개 skip)`);
+        }
+        break;
+      }
       case 'mirror-x': toolManager.executeAction('mirror-x'); break;
       case 'mirror-y': toolManager.executeAction('mirror-y'); break;
       case 'mirror-z': toolManager.executeAction('mirror-z'); break;
