@@ -161,7 +161,7 @@ impl AnalyticCurve {
     pub fn parameter_at_3d_point(
         &self, p: DVec3, mesh: &Mesh,
     ) -> std::result::Result<f64, SplitParameterError> {
-        const POINT_OFF_CURVE_TOL: f64 = 1.5e-3; // LOCKED #5
+        const POINT_OFF_CURVE_TOL: f64 = 1.5e-4; // LOCKED #5 (ADR-147 Scenario B1: 1.5μm → 0.15μm)
         match self {
             AnalyticCurve::Line { start, end } => {
                 let pa = mesh.vertex_pos(*start)
