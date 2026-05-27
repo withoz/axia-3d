@@ -32,6 +32,8 @@ function createDOM(): void {
       <div class="ctx-item ctx-bool-group-clear" data-action="clear-group-tags">Clear Group Tags</div>
       <!-- ADR-145 β-4 — Annulus 만들기 -->
       <div class="ctx-item ctx-annulus-item" data-action="promote-circles-to-annulus">Annulus 만들기</div>
+      <!-- ADR-149 β-4 — T-junction 정리 -->
+      <div class="ctx-item" data-action="heal-t-junctions">T-junction 정리</div>
       <div class="ctx-item" data-action="view-top">Top</div>
       <div class="ctx-item" data-action="view-front">Front</div>
       <div class="ctx-item" data-action="view-3d">3D</div>
@@ -62,6 +64,14 @@ function mockDeps(): ContextMenuDeps {
       toggleGroupVisibility: vi.fn(),
       // ADR-145 β-4 — Engine 4-validation 통과 시 success (default).
       promoteCirclesToAnnulus: vi.fn(),
+      // ADR-149 β-4 — T-junction Sweep (default empty = clean mesh).
+      detectTJunctions: vi.fn().mockReturnValue([]),
+      healTJunction: vi.fn().mockReturnValue({
+        healedCount: 1,
+        newVertexId: 100,
+        newEdgeA: 200,
+        newEdgeB: 201,
+      }),
     } as any,
     toolManager: {
       currentTool: 'select',
@@ -425,6 +435,112 @@ describe('ContextMenu', () => {
         expect.stringContaining('NotCoplanar'),
       );
       expect(Toast.success).not.toHaveBeenCalled();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-149 β-4 — T-junction Sweep 명시 도구 (메타-원칙 #16 정합).
+  //
+  // 사용자 우클릭 → "T-junction 정리" → bridge.detectTJunctions →
+  //   reports loop bridge.healTJunction → Toast 보고.
+  // No selection-based visibility — menu always visible (clean mesh 안내 포함).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-149 β-4 T-junction 정리', () => {
+    it('zero T-junctions → Toast.info "T-junction 없음" + bridge.heal not called', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.info as any).mockClear();
+
+      // Default mock: detectTJunctions returns [].
+      (deps.bridge.detectTJunctions as any).mockReturnValue([]);
+
+      const item = document.querySelector(
+        '[data-action="heal-t-junctions"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.detectTJunctions).toHaveBeenCalledTimes(1);
+      expect(deps.bridge.healTJunction).not.toHaveBeenCalled();
+      expect(Toast.info).toHaveBeenCalledWith(expect.stringContaining('T-junction 없음'));
+      // No mesh sync needed when nothing healed.
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+    });
+
+    it('detect throws → Toast.error + bridge.heal not called', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.error as any).mockClear();
+
+      (deps.bridge.detectTJunctions as any).mockImplementation(() => {
+        throw new Error('detectTJunctions: WASM unavailable');
+      });
+
+      const item = document.querySelector(
+        '[data-action="heal-t-junctions"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.healTJunction).not.toHaveBeenCalled();
+      expect(Toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('T-junction 검출 실패'),
+      );
+    });
+
+    it('canonical heal — 3 T-junctions all heal → Toast.success "3개 정리 완료"', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.success as any).mockClear();
+
+      (deps.bridge.detectTJunctions as any).mockReturnValue([
+        { faceId: 0, edgeId: 4, vertexId: 5, tAlongEdge: 0.5 },
+        { faceId: 0, edgeId: 6, vertexId: 7, tAlongEdge: 0.25 },
+        { faceId: 1, edgeId: 8, vertexId: 9, tAlongEdge: 0.75 },
+      ]);
+      (deps.bridge.healTJunction as any).mockReturnValue({
+        healedCount: 1,
+        newVertexId: 100,
+        newEdgeA: 200,
+        newEdgeB: 201,
+      });
+
+      const item = document.querySelector(
+        '[data-action="heal-t-junctions"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.healTJunction).toHaveBeenCalledTimes(3);
+      expect(Toast.success).toHaveBeenCalledWith(
+        expect.stringContaining('3개 정리'),
+      );
+      // syncMesh + selection clear after healing.
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect(deps.toolManager.selection.clearSelection).toHaveBeenCalled();
+    });
+
+    it('partial failure — some heal fail (stale report) → Toast.info "N 정리, M skip"', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.info as any).mockClear();
+
+      (deps.bridge.detectTJunctions as any).mockReturnValue([
+        { faceId: 0, edgeId: 4, vertexId: 5, tAlongEdge: 0.5 },
+        { faceId: 0, edgeId: 6, vertexId: 7, tAlongEdge: 0.5 },
+      ]);
+      // First heal succeeds, second throws (stale after first split).
+      let callCount = 0;
+      (deps.bridge.healTJunction as any).mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return { healedCount: 1, newVertexId: 100, newEdgeA: 200, newEdgeB: 201 };
+        }
+        throw new Error('healTJunction: InvalidReport (...)');
+      });
+
+      const item = document.querySelector(
+        '[data-action="heal-t-junctions"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.healTJunction).toHaveBeenCalledTimes(2);
+      expect(Toast.info).toHaveBeenCalledWith(
+        expect.stringMatching(/1개 정리.*1개 skip/),
+      );
     });
   });
 });
