@@ -1043,6 +1043,62 @@ fn adr145_beta2_promote_uses_transaction_with_cancel_on_error() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ADR-148 β-3 — Point-Localized BoundaryTool WASM bridge invariants.
+//
+// Mirrors ADR-145 β-2 source-inspection pattern. Tests verify wiring:
+// js_name, signature, transaction wrap, Engine delegation, error prefix.
+// ════════════════════════════════════════════════════════════════════════
+
+/// β-3 #1 — `boundaryFromPoint` endpoint is wired with correct js_name
+/// and Result<u32, JsValue> signature (returns face_id on success).
+#[test]
+fn adr148_beta3_boundary_from_point_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn boundary_from_point"),
+        "ADR-148 β-3: missing Rust function boundary_from_point");
+    assert!(l.contains("js_name = \"boundaryFromPoint\""),
+        "ADR-148 β-3: missing js_name = \"boundaryFromPoint\"");
+    let idx = l.find("pub fn boundary_from_point")
+        .expect("boundary_from_point");
+    let body = char_safe_slice(&l, idx, 2000);
+    assert!(body.contains("-> Result<u32, JsValue>"),
+        "ADR-148 β-3: boundaryFromPoint must return Result<u32, JsValue> \
+         (face_id on success, throw on error per BoundaryError)");
+    // Signature: 8 f64 parameters (point xyz + normal xyz + plane_dist + search_radius)
+    for param in [
+        "px: f64", "py: f64", "pz: f64",
+        "nx: f64", "ny: f64", "nz: f64",
+        "plane_dist: f64", "search_radius_mm: f64",
+    ] {
+        assert!(body.contains(param),
+            "ADR-148 β-3: signature must include {}", param);
+    }
+    // Engine API delegation
+    assert!(body.contains("boundary::boundary_from_point"),
+        "ADR-148 β-3: body must delegate to axia_geo::operations::boundary");
+}
+
+/// β-3 #2 — Boundary endpoint wraps in a transaction (Undo restores
+/// pre-synthesis state) and cancels on failure.
+#[test]
+fn adr148_beta3_boundary_uses_transaction_with_cancel_on_error() {
+    let l = lib_src();
+    let idx = l.find("pub fn boundary_from_point")
+        .expect("boundary_from_point");
+    let body = char_safe_slice(&l, idx, 2000);
+    assert!(body.contains("transactions.begin"),
+        "ADR-148 β-3: boundary must begin transaction");
+    assert!(body.contains("transactions.commit"),
+        "ADR-148 β-3: success path must commit transaction");
+    assert!(body.contains("transactions.cancel"),
+        "ADR-148 β-3: failure path must cancel transaction (no side effects on rejection)");
+    // 명시 error format (silent skip 차단, 메타-원칙 #16 정합)
+    assert!(body.contains("boundaryFromPoint:"),
+        "ADR-148 β-3: error message must prefix with 'boundaryFromPoint:' \
+         for caller-side identification");
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ADR-050 P-5c — As-Shape Draw command WASM bridge invariants.
 //
 // Mirrors the source-inspection pattern of P-4. Tests verify wiring
