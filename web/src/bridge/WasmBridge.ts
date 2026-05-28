@@ -502,6 +502,11 @@ type AxiaEngineExtended = AxiaEngine & {
   detectTJunctions?(tolMm: number): string;
   /** Heal a single T-junction. Returns JSON HealReport or throws. */
   healTJunction?(reportJson: string, tolMm: number): string;
+  // ADR-150 β-3 — Coplanar Face Merge Sweep
+  /** Sweep coplanar mergeable pairs (read-only). Returns JSON array. */
+  sweepCoplanarPairs?(tolDeg: number): string;
+  /** Batch merge coplanar pairs. Returns JSON BatchMergeReport or throws. */
+  mergeCoplanarPairBatch?(pairsJson: string, tolDeg: number): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1423,6 +1428,100 @@ export class WasmBridge {
       };
     } catch (e) {
       throw new Error(`healTJunction: invalid JSON from WASM (${e})`);
+    }
+  }
+
+  // ==========================================================================
+  // ADR-150 β-3 — Coplanar Face Merge Sweep
+  // ==========================================================================
+
+  /**
+   * ADR-150 β-3 — Sweep all coplanar mergeable pairs (read-only).
+   *
+   * Coplanar faces that share a collinear boundary segment but not
+   * necessarily a shared DCEL edge. Detection layer of the Coplanar
+   * Face Merge Sweep tool (β-4 UI integration).
+   *
+   * **사용자 명시 trigger only** (메타-원칙 #16) — 자동 sweep 0.
+   *
+   * Engine API: `axia_geo::operations::geometric_merge::sweep_coplanar_pairs`
+   * (β-1 detection, PR #203 merged `ad0ca3e`).
+   *
+   * @param tolDeg - Coplanar normal angle threshold (deg). ≤0 → engine
+   *   default `COPLANAR_PAIR_TOL_DEG = 1.0`.
+   * @returns Array of coplanar pair reports. Empty = clean mesh.
+   * @throws Error on invalid JSON from WASM (rare — graceful fallback
+   *   for missing WASM returns []).
+   */
+  sweepCoplanarPairs(tolDeg: number = 0): CoplanarPairReport[] {
+    if (!this.engine || !this.engine.sweepCoplanarPairs) {
+      // Graceful fallback — no WASM endpoint → empty array.
+      return [];
+    }
+    const raw = this.engine.sweepCoplanarPairs(tolDeg);
+    try {
+      const parsed = JSON.parse(raw) as Array<{
+        face_a: number;
+        face_b: number;
+        plane_normal: { x: number; y: number; z: number };
+      }>;
+      return parsed.map((r) => ({
+        faceA: r.face_a,
+        faceB: r.face_b,
+        planeNormal: r.plane_normal,
+      }));
+    } catch (e) {
+      throw new Error(`sweepCoplanarPairs: invalid JSON from WASM (${e})`);
+    }
+  }
+
+  /**
+   * ADR-150 β-3 — Batch merge coplanar pairs (cascade A-B → AB-C
+   * handling + skip-on-error).
+   *
+   * Caller supplies pairs (typically from `sweepCoplanarPairs`). Skipped
+   * pair count exposed via `BatchMergeReport.skippedCount` (silent skip
+   * 차단, 메타-원칙 #16).
+   *
+   * Engine API: `axia_geo::operations::geometric_merge::merge_coplanar_
+   * pair_batch` (β-2 mutation, PR #204 merged `1de92ae`).
+   *
+   * @param pairs - Array of CoplanarPairReport from `sweepCoplanarPairs`.
+   * @param tolDeg - Drift re-verification tolerance. ≤0 → default.
+   * @returns BatchMergeReport with merged/skipped counts + new face IDs.
+   * @throws Error on JSON parse failure (corruption guard) or missing
+   *   WASM endpoint (strict — silent skip 차단 for mutation).
+   */
+  mergeCoplanarPairBatch(
+    pairs: CoplanarPairReport[],
+    tolDeg: number = 0,
+  ): BatchMergeReport {
+    if (!this.engine || !this.engine.mergeCoplanarPairBatch) {
+      throw new Error('mergeCoplanarPairBatch: WASM endpoint missing (rebuild required)');
+    }
+    // Serialize camelCase → snake_case for WASM.
+    const pairsJson = JSON.stringify(
+      pairs.map((p) => ({
+        face_a: p.faceA,
+        face_b: p.faceB,
+        plane_normal: { x: p.planeNormal.x, y: p.planeNormal.y, z: p.planeNormal.z },
+      })),
+    );
+    this.markDirty();
+    const raw = this.engine.mergeCoplanarPairBatch(pairsJson, tolDeg);
+    try {
+      const parsed = JSON.parse(raw) as {
+        merged_count: number;
+        skipped_count: number;
+        new_face_ids: number[];
+      };
+      return {
+        mergedCount: parsed.merged_count,
+        skippedCount: parsed.skipped_count,
+        newFaceIds: parsed.new_face_ids,
+      };
+    } catch (e) {
+      throw new Error(`mergeCoplanarPairBatch: invalid JSON from WASM (${e})`);
     }
   }
 
@@ -5203,4 +5302,35 @@ export interface TJunctionHealReport {
   newVertexId: number;
   newEdgeA: number;
   newEdgeB: number;
+}
+
+// ============================================================================
+// ADR-150 β-3 — Coplanar Face Merge Sweep typed interfaces
+// ============================================================================
+
+/**
+ * ADR-150 — Single coplanar mergeable pair detection report.
+ *
+ * Returned by `sweepCoplanarPairs`; consumed by `mergeCoplanarPairBatch`.
+ * `faceA.raw() < faceB.raw()` invariant (deterministic, no duplicate
+ * (f1, f2) ↔ (f2, f1) pair).
+ */
+export interface CoplanarPairReport {
+  faceA: number;
+  faceB: number;
+  planeNormal: { x: number; y: number; z: number };
+}
+
+/**
+ * ADR-150 — Batch merge success report.
+ *
+ * Returned by `mergeCoplanarPairBatch`. `mergedCount` + `skippedCount`
+ * tracks per-pair outcome (silent skip 차단 via skipped exposure).
+ * `newFaceIds` may contain intermediate IDs consumed by cascading merges
+ * — caller may inspect mesh state to find final live faces.
+ */
+export interface BatchMergeReport {
+  mergedCount: number;
+  skippedCount: number;
+  newFaceIds: number[];
 }

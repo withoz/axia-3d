@@ -1901,6 +1901,75 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-150 β-3 — Coplanar Face Merge Sweep TS bridge wrappers
+    // (메타-원칙 #16 정합 — 휴리스틱 자동 sweep 0, 사용자 명시 trigger
+    // only. ADR-149 β-3 1:1 mirror pattern.)
+    // ────────────────────────────────────────────────────────────────
+
+    it('sweepCoplanarPairs parses JSON array and maps snake_case → camelCase', () => {
+      const fn = vi.fn(
+        () =>
+          '[{"face_a":0,"face_b":1,"plane_normal":{"x":0,"y":1,"z":0}},' +
+          '{"face_a":2,"face_b":3,"plane_normal":{"x":1,"y":0,"z":0}}]'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { sweepCoplanarPairs: fn };
+      const result = bridge.sweepCoplanarPairs(1.0);
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        faceA: 0,
+        faceB: 1,
+        planeNormal: { x: 0, y: 1, z: 0 },
+      });
+      expect(result[1].faceA).toBe(2);
+      expect(fn).toHaveBeenCalledWith(1.0);
+    });
+
+    it('sweepCoplanarPairs returns [] when WASM endpoint missing (graceful)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      // No throw — graceful fallback (read-only API canonical, ADR-149 β-3 답습).
+      expect(bridge.sweepCoplanarPairs()).toEqual([]);
+    });
+
+    it('mergeCoplanarPairBatch serializes camelCase → snake_case + parses response', () => {
+      const fn = vi.fn(
+        () =>
+          '{"merged_count":2,"skipped_count":1,"new_face_ids":[42,43]}'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { mergeCoplanarPairBatch: fn };
+      const pairs = [
+        { faceA: 0, faceB: 1, planeNormal: { x: 0, y: 1, z: 0 } },
+        { faceA: 1, faceB: 2, planeNormal: { x: 0, y: 1, z: 0 } },
+      ];
+      const result = bridge.mergeCoplanarPairBatch(pairs, 1.0);
+      expect(result).toEqual({
+        mergedCount: 2,
+        skippedCount: 1,
+        newFaceIds: [42, 43],
+      });
+      // Verify WASM was called with snake_case JSON
+      const callJson = fn.mock.calls[0][0] as string;
+      const callTol = fn.mock.calls[0][1] as number;
+      const parsed = JSON.parse(callJson);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0]).toEqual({
+        face_a: 0,
+        face_b: 1,
+        plane_normal: { x: 0, y: 1, z: 0 },
+      });
+      expect(callTol).toBe(1.0);
+    });
+
+    it('mergeCoplanarPairBatch throws when WASM endpoint missing (feature gate)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.mergeCoplanarPairBatch([], 1.0))
+        .toThrow(/WASM endpoint missing/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
     // ────────────────────────────────────────────────────────────────
 
