@@ -207,6 +207,167 @@ impl P7ManifoldReport {
     }
 }
 
+/// ADR-152 β-2 — Mesh topology report (Euler characteristic + Genus +
+/// boundary loop count). Computed by `compute_topology` over a mesh's
+/// active DCEL elements.
+///
+/// Mathematical anchor (canonical for ADR-152 §1.2):
+/// - **Euler characteristic** `χ = V - E + F` (active filter)
+/// - **Genus** `g = (2 - χ) / 2` (closed orientable 2-manifold only)
+/// - **Boundary loop count** = number of distinct face=null HE cycles
+///   (each cycle is one boundary)
+///
+/// For an open manifold (boundary_loop_count > 0), `genus` is `None`
+/// (closed-manifold formula doesn't apply directly — would need
+/// `χ = 2 - 2g - b` where b = boundary count for the open case;
+/// reported via raw χ + boundary_loop_count instead).
+#[derive(Debug, Clone)]
+pub struct MeshTopologyReport {
+    /// Number of active vertices in the mesh.
+    pub vertex_count: usize,
+    /// Number of active edges in the mesh.
+    pub edge_count: usize,
+    /// Number of active faces in the mesh.
+    pub face_count: usize,
+    /// Euler characteristic χ = V - E + F (signed integer; may be
+    /// negative for high-genus / multi-component meshes).
+    pub euler_characteristic: i64,
+    /// Genus g = (2 - χ) / 2 for closed orientable 2-manifolds.
+    /// `None` when the mesh has boundary loops (open manifold) — the
+    /// closed-manifold formula doesn't directly apply.
+    pub genus: Option<i64>,
+    /// Number of distinct boundary loops (face=null HE cycles).
+    /// Closed manifold → 0. Open disk → 1. Open cylinder → 2. etc.
+    pub boundary_loop_count: usize,
+    /// True iff `boundary_loop_count == 0` (closed manifold).
+    pub is_closed: bool,
+}
+
+impl MeshTopologyReport {
+    /// Human-readable single-line summary.
+    pub fn summary(&self) -> String {
+        let genus_str = match self.genus {
+            Some(g) => format!("g={g}"),
+            None => "g=N/A (open)".to_string(),
+        };
+        format!(
+            "MeshTopology: V={} E={} F={} χ={} {} boundary_loops={} closed={}",
+            self.vertex_count,
+            self.edge_count,
+            self.face_count,
+            self.euler_characteristic,
+            genus_str,
+            self.boundary_loop_count,
+            self.is_closed,
+        )
+    }
+}
+
+/// ADR-152 β-2 — Compute the mesh's topological invariants (Euler χ +
+/// Genus g + boundary loop count) over **active** DCEL elements.
+///
+/// Algorithm (audit-first canonical 13번째 evidence — 단순 카운팅):
+/// 1. Count active verts / edges / faces via SlotStorage iteration
+/// 2. Compute χ = V - E + F (signed)
+/// 3. Walk face=null HE chains to count distinct boundary loops (BFS
+///    with visited set on half-edges via radial next_rad twin)
+/// 4. is_closed = (boundary_loop_count == 0)
+/// 5. genus = Some((2 - χ) / 2) iff closed AND χ even (orientable
+///    2-manifold), else None
+///
+/// **No mutation.** Pure inspection — takes `&Mesh` borrow only.
+///
+/// **Active filter** (Q1=a default per ADR-152 §2):
+/// - vert.is_active()
+/// - edge.is_active()
+/// - face.is_active()
+/// - he.is_active()
+///
+/// **Boundary loop walking** (Q2=a default):
+/// - For each active HE with face=null, walk `he.next` until back to
+///   start (using visited set on HE IDs to dedup)
+/// - Each distinct start → 1 boundary loop
+pub fn compute_topology(mesh: &Mesh) -> MeshTopologyReport {
+    // Step 1: count active V / E / F via SlotStorage iter
+    let vertex_count = mesh.verts.iter().filter(|(_, v)| v.is_active()).count();
+    let edge_count = mesh.edges.iter().filter(|(_, e)| e.is_active()).count();
+    let face_count = mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+
+    // Step 2: Euler χ = V - E + F (signed i64 to handle high-genus)
+    let euler_characteristic =
+        vertex_count as i64 - edge_count as i64 + face_count as i64;
+
+    // Step 3: Boundary loop count (Q2=a — face=null HE BFS via "twin →
+    // next → twin" canonical boundary walk).
+    //
+    // For DCEL with `next_rad` (radial twin) + `next` (face loop):
+    //   boundary HE b → twin t (face-bearing) = b.next_rad()
+    //   t.next = next face HE in face loop direction
+    //   next boundary HE = next_face_he.next_rad()
+    //
+    // Each distinct face=null HE that wasn't already visited via this
+    // walk → starts a new boundary loop.
+    let mut visited: std::collections::HashSet<HeId> = Default::default();
+    let mut boundary_loop_count = 0usize;
+    for (he_id, he_data) in mesh.hes.iter() {
+        if !he_data.is_active() {
+            continue;
+        }
+        if !he_data.face().is_null() {
+            continue;
+        }
+        if visited.contains(&he_id) {
+            continue;
+        }
+        // Walk this boundary loop via twin → next → twin
+        boundary_loop_count += 1;
+        let mut cur = he_id;
+        for _ in 0..(mesh.hes.len() + 1) {
+            if !visited.insert(cur) {
+                // Already visited → cycle closed
+                break;
+            }
+            let Some(cur_data) = mesh.hes.get(cur) else { break };
+            // Get face-bearing twin
+            let twin = cur_data.next_rad();
+            if twin.is_null() || twin == cur {
+                break;
+            }
+            let Some(twin_data) = mesh.hes.get(twin) else { break };
+            // Walk face loop to next HE
+            let face_next = twin_data.next();
+            if face_next.is_null() {
+                break;
+            }
+            let Some(face_next_data) = mesh.hes.get(face_next) else { break };
+            // Boundary HE of next edge = twin of face_next
+            let nxt = face_next_data.next_rad();
+            if nxt.is_null() || nxt == face_next {
+                break;
+            }
+            cur = nxt;
+        }
+    }
+
+    // Step 4-5: closed + genus
+    let is_closed = boundary_loop_count == 0;
+    let genus = if is_closed && euler_characteristic % 2 == 0 {
+        Some((2 - euler_characteristic) / 2)
+    } else {
+        None
+    };
+
+    MeshTopologyReport {
+        vertex_count,
+        edge_count,
+        face_count,
+        euler_characteristic,
+        genus,
+        boundary_loop_count,
+        is_closed,
+    }
+}
+
 /// Walk the radial half-edge chain of an edge and collect (he_id, face)
 /// pairs for every **active** half-edge. The radial chain is a cyclic
 /// linked list via `HalfEdge.next_rad`. For a manifold edge the chain
@@ -826,5 +987,174 @@ mod tests {
         // positives on canonical topology)
         assert_eq!(report1.violations.len(), 0);
         assert_eq!(report2.violations.len(), 0);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // ADR-152 β-2 — MeshTopologyReport + compute_topology
+    // ────────────────────────────────────────────────────────────────────
+
+    /// β-2 #1 — Empty mesh baseline. χ = 0 - 0 + 0 = 0 (degenerate),
+    /// boundary_loops = 0, is_closed = true (vacuously), genus = Some(1)
+    /// (since χ=0 even). Edge case — guards against panic on empty
+    /// SlotStorage iter.
+    #[test]
+    fn adr152_compute_topology_empty_mesh_baseline() {
+        let mesh = Mesh::new();
+        let report = compute_topology(&mesh);
+        assert_eq!(report.vertex_count, 0);
+        assert_eq!(report.edge_count, 0);
+        assert_eq!(report.face_count, 0);
+        assert_eq!(report.euler_characteristic, 0);
+        assert_eq!(report.boundary_loop_count, 0);
+        assert!(report.is_closed, "empty mesh is vacuously closed");
+    }
+
+    /// β-2 #2 — Open disk (single face) has 1 boundary loop. χ = 4-4+1
+    /// = 1 (canonical disk). genus = None (open). is_closed = false.
+    #[test]
+    fn adr152_compute_topology_open_disk_boundary_loop_count() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f = mesh.add_face(&[v0, v1, v2, v3], mat).expect("disk face");
+
+        let report = compute_topology(&mesh);
+        assert_eq!(report.vertex_count, 4);
+        assert_eq!(report.edge_count, 4);
+        assert_eq!(report.face_count, 1);
+        // χ = V - E + F = 4 - 4 + 1 = 1
+        assert_eq!(report.euler_characteristic, 1, "disk χ = 1");
+        // Open disk has 1 boundary loop
+        assert_eq!(
+            report.boundary_loop_count, 1,
+            "open disk has exactly 1 boundary loop. Got report: {}",
+            report.summary()
+        );
+        assert!(!report.is_closed, "disk is open");
+        assert_eq!(report.genus, None, "open manifold genus is None");
+    }
+
+    /// β-2 #3 — Euler formula `χ = V - E + F` regression guard.
+    /// Tests the formula on the ring-with-inner topology (single
+    /// container ring + one inner sub-face).
+    #[test]
+    fn adr152_compute_topology_euler_v_minus_e_plus_f() {
+        let (mesh, _container, _inner) = build_ring_with_one_inner();
+        let report = compute_topology(&mesh);
+        // Verify χ = V - E + F directly (regression guard)
+        let computed_chi =
+            report.vertex_count as i64 - report.edge_count as i64 + report.face_count as i64;
+        assert_eq!(
+            report.euler_characteristic, computed_chi,
+            "euler_characteristic must equal V - E + F. Got report: {}",
+            report.summary()
+        );
+    }
+
+    /// β-2 #4 — Genus only for closed manifold (open manifold → None).
+    /// Single face (open disk) → genus None even though χ % 2 == 0
+    /// would compute g=1.
+    #[test]
+    fn adr152_compute_topology_genus_only_for_closed_manifold() {
+        // Open disk: χ = 1, but boundary_loop_count = 1 → genus None
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(1.0, 0.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(1.0, 1.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(0.0, 1.0, 0.0));
+        let _f = mesh.add_face(&[v0, v1, v2, v3], mat).expect("disk face");
+
+        let report = compute_topology(&mesh);
+        assert!(!report.is_closed, "single face is open");
+        assert_eq!(
+            report.genus, None,
+            "open manifold genus must be None regardless of χ parity"
+        );
+
+        // Empty mesh (vacuously closed): genus = Some(1) since χ=0 even
+        let empty = Mesh::new();
+        let empty_report = compute_topology(&empty);
+        assert!(empty_report.is_closed);
+        assert_eq!(
+            empty_report.genus,
+            Some(1),
+            "empty mesh (χ=0, closed) → genus=Some(1) per formula"
+        );
+    }
+
+    /// β-2 #5 — Active filter excludes inactive elements. Add a face
+    /// then "remove" by deactivating, verify count reflects only active.
+    /// Tests Q1=a (active filter) lock-in.
+    #[test]
+    fn adr152_compute_topology_active_filter_excludes_inactive() {
+        let (mesh_before, container, inner) = build_ring_with_one_inner();
+        let report_before = compute_topology(&mesh_before);
+        let v_before = report_before.vertex_count;
+        let e_before = report_before.edge_count;
+        let f_before = report_before.face_count;
+
+        // Now deactivate the inner sub-face via remove_face (existing API)
+        let mut mesh_after = mesh_before;
+        mesh_after.remove_face(inner);
+
+        let report_after = compute_topology(&mesh_after);
+        // After removing inner, face count drops by 1 (container still active)
+        assert_eq!(
+            report_after.face_count,
+            f_before - 1,
+            "Removed face must be excluded from active count. Got: {}",
+            report_after.summary()
+        );
+        // Container preserved
+        assert!(
+            mesh_after.faces.get(container).is_some_and(|f| f.is_active()),
+            "Container should remain active"
+        );
+        // Verts and edges shared with container may persist (no immediate
+        // dedup); only assert face drop
+        assert!(report_after.vertex_count <= v_before);
+        assert!(report_after.edge_count <= e_before);
+    }
+
+    /// β-2 #6 — MeshTopologyReport summary format guard. Display drift
+    /// detection for the human-readable summary.
+    #[test]
+    fn adr152_compute_topology_summary_format_locked() {
+        let report = MeshTopologyReport {
+            vertex_count: 8,
+            edge_count: 12,
+            face_count: 6,
+            euler_characteristic: 2,
+            genus: Some(0),
+            boundary_loop_count: 0,
+            is_closed: true,
+        };
+        let s = report.summary();
+        // Lock-in format pieces (drift detection)
+        assert!(s.contains("V=8"));
+        assert!(s.contains("E=12"));
+        assert!(s.contains("F=6"));
+        assert!(s.contains("χ=2"));
+        assert!(s.contains("g=0"));
+        assert!(s.contains("boundary_loops=0"));
+        assert!(s.contains("closed=true"));
+
+        // Open manifold variant
+        let open_report = MeshTopologyReport {
+            vertex_count: 4,
+            edge_count: 4,
+            face_count: 1,
+            euler_characteristic: 1,
+            genus: None,
+            boundary_loop_count: 1,
+            is_closed: false,
+        };
+        let s2 = open_report.summary();
+        assert!(s2.contains("g=N/A"));
+        assert!(s2.contains("closed=false"));
     }
 }
