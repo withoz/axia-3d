@@ -150,6 +150,17 @@ export class DrawArcTool implements ITool {
       this.ctx.bridge.drawPolylineAsShape(flat);
     }
 
+    // ADR-164 β-2 — Sticky last drawn plane (arc plane = planeNormal + xAxis).
+    const arcNormal = new THREE.Vector3(arc.planeNormal[0], arc.planeNormal[1], arc.planeNormal[2]);
+    const arcUp = new THREE.Vector3(arc.xAxis[0], arc.xAxis[1], arc.xAxis[2]);
+    const arcOrigin = new THREE.Vector3(arc.center[0], arc.center[1], arc.center[2]);
+    this.ctx.setLastDrawnPlane?.({
+      origin: arcOrigin,
+      normal: arcNormal,
+      up: arcUp,
+      source: 'view',
+    });
+
     this.ctx.syncMesh();
     debugLog(
       `[Arc] R=${arc.radius.toFixed(2)} angle=${((arc.endAngle - arc.startAngle) * 180 / Math.PI).toFixed(1)}°` +

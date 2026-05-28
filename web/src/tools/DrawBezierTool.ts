@@ -131,6 +131,16 @@ export class DrawBezierTool implements ITool {
       ctrlFlat[13] = p0.y;
       ctrlFlat[14] = p0.z;
       const ok = this.ctx.bridge.drawClosedBezierAsCurve(ctrlFlat);
+      // ADR-164 β-2 — Sticky last drawn plane (closed Bezier face 합성
+      // success only — Q1=a strict). Open Bezier (face 없음) 는 skip.
+      if (this.plane && (typeof ok !== 'number' || ok >= 0)) {
+        this.ctx.setLastDrawnPlane?.({
+          origin: p0,
+          normal: this.plane.normal,
+          up: this.plane.up,
+          source: 'view',
+        });
+      }
       this.ctx.syncMesh();
       debugLog(
         `[Bezier/Closed] gap=${closureGap.toExponential(2)}mm → ` +

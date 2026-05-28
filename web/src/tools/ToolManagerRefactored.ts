@@ -254,6 +254,11 @@ export class ToolManager {
         const info = this.getSketchInfo();
         return info ? { origin: info.origin, normal: info.normal } : null;
       },
+      setLastDrawnPlane: (plane) => {
+        // ADR-164 β-2 — Draw 도구 face 합성 후 sticky 저장.
+        // β-1 API `setLastDrawnPlane` delegate.
+        this.setLastDrawnPlane(plane);
+      },
     };
 
     // Register all tools
