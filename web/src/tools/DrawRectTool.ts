@@ -123,6 +123,16 @@ export class DrawRectTool implements ITool {
           console.warn(`[DrawRectTool] drawRectAsShape returned ${shapeRaw} — engine rejected. center=(${center.x},${center.y},${center.z}), normal=(${n.x},${n.y},${n.z}), size=${absW}×${absH}`);
         } else {
           debugLog(`[Rect] Created on ${this.plane!.isSketch ? 'sketch' : 'cardinal'} plane (axis=${this.plane!.zeroAxis}=${this.plane!.zeroValue}): ${absW.toFixed(2)} × ${absH.toFixed(2)}`);
+          // ADR-164 β-2 — Sticky last drawn plane (Q1=a default — face
+          // 합성 *성공* 후만 호출). Source = 'sketch' if sketch mode,
+          // else 'view' (cardinal plane). 'face' source는 sketch-aware
+          // 도구들이 미래에 향상 가능.
+          this.ctx.setLastDrawnPlane?.({
+            origin: center,
+            normal: n,
+            up: u,
+            source: this.plane!.isSketch ? 'sketch' : 'view',
+          });
         }
         this.ctx.syncMesh();
       } else {

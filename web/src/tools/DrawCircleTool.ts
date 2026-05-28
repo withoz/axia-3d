@@ -96,6 +96,13 @@ export class DrawCircleTool implements ITool {
           );
           debugLog(`[Circle] Created on plane (${n.x.toFixed(2)},${n.y.toFixed(2)},${n.z.toFixed(2)}): R=${radius.toFixed(2)}`);
         }
+        // ADR-164 β-2 — Sticky last drawn plane (Q1=a face 합성 성공 후).
+        this.ctx.setLastDrawnPlane?.({
+          origin: this.circleCenter,
+          normal: n,
+          up: this.plane.up,
+          source: 'view',
+        });
         this.ctx.syncMesh();
       }
       this.cleanup();

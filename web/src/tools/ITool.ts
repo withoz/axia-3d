@@ -71,6 +71,28 @@ export interface ToolContext {
    * when V-δ-α (wire planarity) fails (single edge, collinear, non-planar).
    */
   getSketchInfo: () => { origin: THREE.Vector3; normal: THREE.Vector3 } | null;
+
+  /**
+   * ADR-164 β-2 — Sticky Last Drawn Plane writer.
+   *
+   * Called by Draw tools (Rect/Circle/Line/Arc/Bezier/Freehand) *after*
+   * successful face synthesis to remember the plane for the next draw
+   * commit. `getDrawPlane()` priority #3 (β-3 wiring) will use this as
+   * fallback when cursor is NOT on a face.
+   *
+   * Q1=a default per ADR-164 §2 — face 합성 *성공* 후만 호출 (실패 시 skip).
+   * Q3=a default — `source` 분리 ('face' | 'view' | 'sketch') for β-3
+   * Status display.
+   *
+   * Optional in interface — test mocks 호환. Real ToolManager 가 항상
+   * 제공.
+   */
+  setLastDrawnPlane?: (plane: {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+    source?: 'face' | 'view' | 'sketch';
+  }) => void;
 }
 
 /** Drawing plane information for Rect/Circle tools */

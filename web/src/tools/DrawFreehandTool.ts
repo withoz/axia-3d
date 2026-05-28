@@ -136,6 +136,19 @@ export class DrawFreehandTool implements ITool {
         n ? { x: n.x, y: n.y, z: n.z } : undefined,
       );
       edgeCount = filtered.length - 1;
+
+      // ADR-164 β-2 — Sticky last drawn plane (drawPolylineAsShape 호출
+      // 후 — closed loop 시 face 합성, open 시 wire 만. Q1=a 정합 위해
+      // plane 정보가 있을 때만 저장. Open vs closed branch 구분은 engine
+      // 책임, 본 hook 은 plane intent 만 기록).
+      if (this.plane) {
+        this.ctx.setLastDrawnPlane?.({
+          origin: filtered[0] as THREE.Vector3,
+          normal: this.plane.normal,
+          up: this.plane.up,
+          source: 'view',
+        });
+      }
     }
 
     this.ctx.syncMesh();
