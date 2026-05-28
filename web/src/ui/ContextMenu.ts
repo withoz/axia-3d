@@ -88,6 +88,16 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = selected.length === 2 ? '' : 'none';
     });
 
+    // ── ADR-151 β-4 — Connected Inner Merge 항목 가시성 ──
+    // 가시성: ≥2 face 선택 (1 container + ≥1 inner). Engine 가 container
+    // 자동 식별 + component grouping + P7 manifold 검증. UI 단순화 —
+    // container designation 은 first face (largest by area heuristic
+    // deferred to caller; β-4 MVP 는 first selected 를 container 로 가정).
+    const p7ResolverItems = ctxMenu.querySelectorAll('.ctx-p7-resolver-item');
+    p7ResolverItems.forEach(item => {
+      (item as HTMLElement).style.display = selected.length >= 2 ? '' : 'none';
+    });
+
     // ── ADR-074 U-2 — Boolean Group A/B 항목 가시성 ──
     // Set A / Set B: 선택된 face 가 1개 이상일 때 표시 (사용자가
     //   현재 selection 을 group 으로 지정 가능).
@@ -291,6 +301,44 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           Toast.error(`Coplanar 정리 실패: ${msg}`);
+        }
+        break;
+      }
+      // ─ ADR-151 β-4 — Connected Stacked-inner Component-Merge Resolver (메타-원칙 #16 정합) ─
+      // 사용자 워크플로우 (ADR-151 §2):
+      //   1. 큰 face (container) + 작은 face들 (inners) 선택 (≥2개)
+      //   2. 우클릭 → "🔗 Connected Inner Merge"
+      //   3. β-4 MVP: first selected = container, 나머지 = inners
+      //      (큰/작은 area 자동 판정은 future ADR — container designation UI)
+      //   4. bridge.enforceP7Canonical(container, inners) — engine 가
+      //      component grouping + ring-with-hole rebuild + P7 manifold 검증
+      //   5. Toast 3-way (success / info (with violations) / error)
+      //
+      // ADR-149/150 β-4 패턴 1:1 mirror — single engine call. Engine
+      // 가 transaction wrap + Undo single step.
+      case 'enforce-p7-canonical': {
+        const faces = toolManager.selection.getSelectedFaces();
+        if (faces.length < 2) {
+          Toast.error('Connected Inner Merge: container + ≥1 inner (총 ≥2 face) 선택 필요');
+          break;
+        }
+        // β-4 MVP: first selected = container, 나머지 = inners
+        const [container, ...inners] = faces;
+        try {
+          const result = bridge.enforceP7Canonical(container, inners);
+          // syncMesh + selection clear (rebuild 후 mesh state 변경)
+          toolManager.selection.clearSelection();
+          toolManager.syncMesh();
+
+          if (result.isValid) {
+            Toast.success(`P7 canonical 정합: ${result.componentCount}개 component → ring-with-hole`);
+          } else {
+            // ADR-051 §2.5 deferred boundary — ≤1 violation 정상.
+            Toast.info(`P7 canonical (${result.componentCount}개 component, ${result.violationCount}개 violation — ADR-051 §2.5 deferred boundary 가능)`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          Toast.error(`Connected Inner Merge 실패: ${msg}`);
         }
         break;
       }
