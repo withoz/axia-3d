@@ -34,6 +34,8 @@ function createDOM(): void {
       <div class="ctx-item ctx-annulus-item" data-action="promote-circles-to-annulus">Annulus 만들기</div>
       <!-- ADR-149 β-4 — T-junction 정리 -->
       <div class="ctx-item" data-action="heal-t-junctions">T-junction 정리</div>
+      <!-- ADR-150 β-4 — Coplanar Face Merge Sweep -->
+      <div class="ctx-item" data-action="heal-coplanar-pairs">Coplanar 일괄 정리</div>
       <div class="ctx-item" data-action="view-top">Top</div>
       <div class="ctx-item" data-action="view-front">Front</div>
       <div class="ctx-item" data-action="view-3d">3D</div>
@@ -71,6 +73,13 @@ function mockDeps(): ContextMenuDeps {
         newVertexId: 100,
         newEdgeA: 200,
         newEdgeB: 201,
+      }),
+      // ADR-150 β-4 — Coplanar Face Merge Sweep (default empty = clean mesh).
+      sweepCoplanarPairs: vi.fn().mockReturnValue([]),
+      mergeCoplanarPairBatch: vi.fn().mockReturnValue({
+        mergedCount: 1,
+        skippedCount: 0,
+        newFaceIds: [100],
       }),
     } as any,
     toolManager: {
@@ -540,6 +549,105 @@ describe('ContextMenu', () => {
       expect(deps.bridge.healTJunction).toHaveBeenCalledTimes(2);
       expect(Toast.info).toHaveBeenCalledWith(
         expect.stringMatching(/1개 정리.*1개 skip/),
+      );
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-150 β-4 — Coplanar Face Merge Sweep 명시 도구 (메타-원칙 #16 정합).
+  //
+  // 사용자 우클릭 → "🧹 Coplanar 면 일괄 자동 정리" → bridge.sweepCoplanarPairs
+  //   → empty → Toast.info / non-empty → bridge.mergeCoplanarPairBatch.
+  // ADR-149 β-4 패턴 1:1 mirror — single batch call (engine cascade handling).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-150 β-4 Coplanar 일괄 정리', () => {
+    it('zero pairs → Toast.info "정리 대상 없음" + bridge.merge not called', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.info as any).mockClear();
+
+      (deps.bridge.sweepCoplanarPairs as any).mockReturnValue([]);
+
+      const item = document.querySelector(
+        '[data-action="heal-coplanar-pairs"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.sweepCoplanarPairs).toHaveBeenCalledTimes(1);
+      expect(deps.bridge.mergeCoplanarPairBatch).not.toHaveBeenCalled();
+      expect(Toast.info).toHaveBeenCalledWith(expect.stringContaining('정리 대상 없음'));
+      // No mesh sync when nothing to merge.
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
+    });
+
+    it('sweep throws → Toast.error + bridge.merge not called', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.error as any).mockClear();
+
+      (deps.bridge.sweepCoplanarPairs as any).mockImplementation(() => {
+        throw new Error('sweepCoplanarPairs: WASM unavailable');
+      });
+
+      const item = document.querySelector(
+        '[data-action="heal-coplanar-pairs"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.mergeCoplanarPairBatch).not.toHaveBeenCalled();
+      expect(Toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('Coplanar 검출 실패'),
+      );
+    });
+
+    it('canonical batch — all pairs merge → Toast.success + syncMesh + selection clear', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.success as any).mockClear();
+
+      (deps.bridge.sweepCoplanarPairs as any).mockReturnValue([
+        { faceA: 0, faceB: 1, planeNormal: { x: 0, y: 1, z: 0 } },
+        { faceA: 2, faceB: 3, planeNormal: { x: 0, y: 1, z: 0 } },
+        { faceA: 4, faceB: 5, planeNormal: { x: 0, y: 1, z: 0 } },
+      ]);
+      (deps.bridge.mergeCoplanarPairBatch as any).mockReturnValue({
+        mergedCount: 3,
+        skippedCount: 0,
+        newFaceIds: [100, 101, 102],
+      });
+
+      const item = document.querySelector(
+        '[data-action="heal-coplanar-pairs"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.mergeCoplanarPairBatch).toHaveBeenCalledTimes(1);
+      expect(Toast.success).toHaveBeenCalledWith(
+        expect.stringContaining('3쌍 정리'),
+      );
+      // syncMesh + selection clear post-merge.
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect(deps.toolManager.selection.clearSelection).toHaveBeenCalled();
+    });
+
+    it('partial failure — some pairs skip → Toast.info "N 정리, M skip"', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.info as any).mockClear();
+
+      (deps.bridge.sweepCoplanarPairs as any).mockReturnValue([
+        { faceA: 0, faceB: 1, planeNormal: { x: 0, y: 1, z: 0 } },
+        { faceA: 2, faceB: 3, planeNormal: { x: 0, y: 1, z: 0 } },
+      ]);
+      (deps.bridge.mergeCoplanarPairBatch as any).mockReturnValue({
+        mergedCount: 1,
+        skippedCount: 1,
+        newFaceIds: [100],
+      });
+
+      const item = document.querySelector(
+        '[data-action="heal-coplanar-pairs"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(Toast.info).toHaveBeenCalledWith(
+        expect.stringMatching(/1쌍 정리.*1쌍 skip/),
       );
     });
   });

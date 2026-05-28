@@ -2605,6 +2605,9 @@
       <!-- ADR-149 β-4 — T-junction Sweep 명시 trigger (메타-원칙 #16 정합) -->
       <!-- 가시성: always (선택 무관). 메뉴 클릭 시 detect → heal sequence. -->
       <div class="ctx-item" data-action="heal-t-junctions">🔧 T-junction 정리 (vertex on edge interior → split + heal)</div>
+      <!-- ADR-150 β-4 — Coplanar Face Merge Sweep 명시 trigger (메타-원칙 #16 정합) -->
+      <!-- 가시성: always (선택 무관). 메뉴 클릭 시 sweep → batch merge sequence. -->
+      <div class="ctx-item" data-action="heal-coplanar-pairs">🧹 Coplanar 면 일괄 자동 정리 (mergeable pair sweep → batch merge)</div>
       <!-- ADR-145 β-4 — Circle annulus 명시 trigger (메타-원칙 #16 정합) -->
       <!-- 가시성: exactly 2 face 선택. Engine 4-validation 으로 최종 검증. -->
       <div class="ctx-item ctx-annulus-item" data-action="promote-circles-to-annulus">⭕ Annulus 만들기 (2개 원, 내부 ⊂ 외부)</div>
