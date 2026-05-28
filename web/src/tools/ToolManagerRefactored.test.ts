@@ -1063,4 +1063,115 @@ describe('ToolManager', () => {
       expect(bridge.faceSurfaceNormalAtPos).not.toHaveBeenCalled();
     });
   });
+
+  // ────────────────────────────────────────────────────────────────────
+  // ADR-164 β-1 — Sticky Last Drawn Plane (Auto Plane Detection)
+  // ADR-149/150/151 6-step template 1:1 mirror (5-step TS only).
+  // ADR-141 §3 Sprint scope 외부 — 사용자 작업지시 trigger.
+  //
+  // Lock-ins:
+  //   L-164-1: in-memory only (no localStorage), session-only
+  //   L-164-2: reset triggers — view mode change / sketch enter+exit /
+  //            Esc (via cancelCurrentTool) / explicit reset
+  //   L-164-6: Engine 변경 0 — TS only
+  //   L-164-9: localStorage 미사용
+  //   L-164-10: 절대 #[ignore] 금지
+  // ────────────────────────────────────────────────────────────────────
+  describe('ADR-164 β-1 Sticky Last Drawn Plane', () => {
+    it('adr164_last_drawn_plane_initial_undefined — null on fresh init (L-164-1)', () => {
+      // L-164-1: in-memory session-only, starts null
+      expect(tm.getLastDrawnPlane()).toBeNull();
+    });
+
+    it('adr164_last_drawn_plane_setter_stores_value — setLastDrawnPlane persists deep clone', async () => {
+      const THREE = await import('three');
+      const origin = new THREE.Vector3(1, 2, 3);
+      const normal = new THREE.Vector3(0, 0, 1);
+      const up = new THREE.Vector3(0, 1, 0);
+      tm.setLastDrawnPlane({ origin, normal, up, source: 'face' });
+
+      const retrieved = tm.getLastDrawnPlane();
+      expect(retrieved).not.toBeNull();
+      expect(retrieved!.origin.x).toBe(1);
+      expect(retrieved!.origin.y).toBe(2);
+      expect(retrieved!.origin.z).toBe(3);
+      expect(retrieved!.normal.z).toBe(1);
+      expect(retrieved!.source).toBe('face');
+
+      // Deep clone — mutating the original should NOT mutate stored value
+      origin.x = 999;
+      expect(tm.getLastDrawnPlane()!.origin.x).toBe(1);
+    });
+
+    it('adr164_last_drawn_plane_reset_on_sketch_enter_and_exit — L-164-2 trigger', async () => {
+      const THREE = await import('three');
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(5, 5, 5),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      expect(tm.getLastDrawnPlane()).not.toBeNull();
+
+      // Sketch enter → reset (sketch lock-in 으로 sticky 자연 무효)
+      tm.enterSketch({
+        label: 'XY 바닥',
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      expect(tm.getLastDrawnPlane()).toBeNull();
+
+      // Set again during sketch (e.g. via Draw tool inside sketch)
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(1, 1, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      expect(tm.getLastDrawnPlane()).not.toBeNull();
+
+      // Sketch exit → reset again (user intent shift signal)
+      tm.exitSketch();
+      expect(tm.getLastDrawnPlane()).toBeNull();
+    });
+
+    it('adr164_last_drawn_plane_reset_on_view_mode_change_and_cancel — L-164-2 explicit triggers', async () => {
+      const THREE = await import('three');
+
+      // Setup: sticky plane present
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(1, 0, 0),
+      });
+      expect(tm.getLastDrawnPlane()).not.toBeNull();
+
+      // View mode change reset hook (called by Viewport.setViewMode in β-3)
+      tm.notifyViewModeChange();
+      expect(tm.getLastDrawnPlane()).toBeNull();
+
+      // Re-set
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(1, 0, 0),
+      });
+      expect(tm.getLastDrawnPlane()).not.toBeNull();
+
+      // Esc / global cancel reset hook
+      tm.cancelCurrentTool();
+      expect(tm.getLastDrawnPlane()).toBeNull();
+
+      // Re-set
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(1, 0, 0),
+      });
+      expect(tm.getLastDrawnPlane()).not.toBeNull();
+
+      // Explicit reset API
+      tm.clearLastDrawnPlane();
+      expect(tm.getLastDrawnPlane()).toBeNull();
+    });
+  });
 });
