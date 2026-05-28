@@ -134,7 +134,64 @@ Investigation test 작성: `crates/axia-core/tests/investigation_circle_in_circl
 
 회귀 자산 가치는 *future* 별도 ADR (옵션 B 또는 D 진입 시) baseline 으로 활용.
 
-## 9. Cross-link
+## 9. Production-evidence amendment (2026-05-28 후속)
+
+**Trigger**: 사용자 스크린샷 evidence "면이 안잘림" + 직접 시연 요청
+("직접 테스트") 후 Playwright Chromium production-like build E2E 진행.
+
+### 9.1 Production E2E 결과
+
+`web/e2e/direct-test-circle-in-circle-annulus.spec.ts` (diagnostic only,
+실행 후 삭제) — production build 에서 3 시나리오 측정:
+
+| 시나리오 | 결과 |
+|---|---|
+| **S1** drawCircle × 2 concentric (containment) | ✅ 2 active faces (Investigation S1 정합) |
+| **S2** promoteCirclesToAnnulus 명시 호출 | ⚠️ **첫 진단**: silent failure 의심 (`faceCount`=2 그대로) → ✅ **재해석**: 실제 동작 정상 (face 1 deactivated, slot 보존) |
+| **S3** ContextMenu "Annulus 만들기" DOM 항목 | ✅ exists + correct className + text |
+
+### 9.2 False alarm 정정 evidence
+
+`bridge.faceCount()` = `Mesh::face_count()` = `self.faces.len()` —
+**total SlotStorage slot count** (active+inactive 모두 포함).
+
+`set_active(false)` 는 slot 그대로 보존 + active flag 만 변경 →
+`face_count()` 변화 없음.
+
+**증거 (production E2E diagnostic)**:
+```
+attempts[0]: (0, 1) → error="" ✅ promote 성공
+attempts[1]: (1, 0) → "outer face 1 is inactive or not found"
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                       → 첫 promote 가 face 1 (inner) deactivate 완료 evidence
+afterStats: { faces: 2 (slot count), verts: 2, edges: 2 }
+triangleCount: 50 (mesh tessellation 정상)
+```
+
+→ **ADR-145 `promoteCirclesToAnnulus` 가 production 에서 정상 동작** ✅
+
+### 9.3 사용자 실제 워크플로우 재해석
+
+사용자 스크린샷:
+- 큰 원 + 작은 원 그림 ✅
+- 빨간색 outline = hover/selection
+- **ContextMenu "Annulus 만들기" 명시 호출 안 함** → 면분할 안 됨 (정상)
+
+→ Investigation **P3 UX gap 실증 confirmed** — 사용자가 명시 trigger
+인지 못 함.
+
+### 9.4 미해결 architectural 의문 (별도 ADR future)
+
+| 의문 | 우선순위 |
+|---|---|
+| **`bridge.faceCount()` semantic** — slot count vs active count? 별도 `activeFaceCount()` 추가? | 🟡 low (binary export 등 활용 cross-cut audit 필요) |
+| **UX hint 강화** (옵션 A1/A2 from investigation) — 단축키 + Toast | 🟢 high → **ADR-165 진입** |
+| **자동 hole detect opt-in** (옵션 B) — 메타-원칙 #16 보완 | 🟡 medium |
+
+→ **ADR-165 (Containment Annulus UX Hint)** 진입 결재 (별도 ADR α spec
+동시 commit, 5-step variant TS-only — ADR-164 답습).
+
+## 10. Cross-link
 
 - ADR-021 P7 LOCKED #1 (canonical anchor — closed edge loop divides face)
 - ADR-101 LOCKED #41 (coplanar partial overlap auto-intersect)
