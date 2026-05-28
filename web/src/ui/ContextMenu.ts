@@ -251,6 +251,49 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         }
         break;
       }
+      // ─ ADR-150 β-4 — Coplanar Face Merge Sweep 명시 trigger (메타-원칙 #16 정합) ─
+      // 사용자 워크플로우 (ADR-150 §2):
+      //   1. 우클릭 → "🧹 Coplanar 면 일괄 자동 정리"
+      //   2. bridge.sweepCoplanarPairs() — 모든 coplanar mergeable pair 검출
+      //   3. empty → Toast.info "정리 대상 없음" + return
+      //   4. bridge.mergeCoplanarPairBatch(pairs) — single batch call
+      //      (cascade A-B → AB-C handling은 engine 책임)
+      //   5. Toast 3-way (success / info (partial) / error)
+      //
+      // ADR-149 β-4 패턴 1:1 mirror — single batch call 이라 serial loop
+      // 없음 (engine 의 cascade handling 위임).
+      case 'heal-coplanar-pairs': {
+        let pairs;
+        try {
+          pairs = bridge.sweepCoplanarPairs();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          Toast.error(`Coplanar 검출 실패: ${msg}`);
+          break;
+        }
+        if (pairs.length === 0) {
+          Toast.info('Coplanar 정리 대상 없음 (mesh 정상)');
+          break;
+        }
+        try {
+          const report = bridge.mergeCoplanarPairBatch(pairs);
+          // syncMesh + selection clear (merge 후 mesh state 변경)
+          toolManager.selection.clearSelection();
+          toolManager.syncMesh();
+
+          if (report.mergedCount > 0 && report.skippedCount === 0) {
+            Toast.success(`Coplanar ${report.mergedCount}쌍 정리 완료`);
+          } else if (report.mergedCount > 0 && report.skippedCount > 0) {
+            Toast.info(`Coplanar ${report.mergedCount}쌍 정리, ${report.skippedCount}쌍 skip`);
+          } else {
+            Toast.error(`Coplanar 정리 실패 (${report.skippedCount}쌍 skip)`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          Toast.error(`Coplanar 정리 실패: ${msg}`);
+        }
+        break;
+      }
       case 'mirror-x': toolManager.executeAction('mirror-x'); break;
       case 'mirror-y': toolManager.executeAction('mirror-y'); break;
       case 'mirror-z': toolManager.executeAction('mirror-z'); break;
