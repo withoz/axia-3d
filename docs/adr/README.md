@@ -246,7 +246,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 |---|------|------|---|
 | [162](./162-dwg-dxf-menu-wiring-hotfix.md) | DWG/DXF Menu Wiring Hotfix (Path A → Path B routing) | **α + β-1 closed** | Track 2 |
 | [163](./163-worktree-closure-audit.md) | Worktree Closure Audit (Sprint 0 γ 자연 후속) | α (β actual closure 사용자 결재 후) | Track 3 |
-| [164](./164-auto-plane-detection-sticky-last-drawn.md) | Auto Plane Detection (Sticky Last Drawn Plane) — 사용자 작업지시 | Proposed | Track 4 |
+| [164](./164-auto-plane-detection-sticky-last-drawn.md) | Auto Plane Detection (Sticky Last Drawn Plane) — 사용자 작업지시 | Accepted | Track 4 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 

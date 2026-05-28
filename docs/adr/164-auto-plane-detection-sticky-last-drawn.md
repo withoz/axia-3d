@@ -1,6 +1,6 @@
 # ADR-164 — Auto Plane Detection (Sticky Last Drawn Plane)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: Accepted (2026-05-28 γ closure — α + β-1 + β-2 + β-3 + γ 모두 완료, +17 회귀, 절대 #[ignore] 금지 17/17 준수)
 **Date**: 2026-05-27
 **Author**: WYKO + Claude
 **Trigger**: 사용자 작업지시 (2026-05-27, canonical):
@@ -223,28 +223,118 @@ Sprint 3 의 ADR-151 closure 후 진입.
   - Q3=(a) Status display 동시 (β-extension) ✅
   - Q4=(a) 신규 ADR 작성 ✅
   - Q5=(b) ADR-151 closure 후 진입 ✅
-- **2026-05-27 α** (본 commit) — ADR-164 spec only PR
-- **TBD β-1** — ToolManager `_lastDrawnPlane` 멤버 + 4 회귀
-- **TBD β-2** — Draw 도구 6개 hook + 6 회귀
-- **TBD β-3** — UI Status display + ContextMenu reset + 4 회귀
-- **TBD γ** — E2E + closure docs + §9 Lessons
+- **2026-05-27 α** (PR #211) — ADR-164 spec only PR
+- **2026-05-28 β-1** (PR #218) — ToolManager `_lastDrawnPlane` 멤버 +
+  setter/getter/clear API + notifyViewModeChange + 3 reset hooks
+  (enterSketch / exitSketch / cancelCurrentTool) + 4 회귀
+- **2026-05-28 β-2** (PR #220) — Draw 도구 6개 setLastDrawnPlane hook
+  (Rect/Circle/Line/Arc/Bezier/Freehand) + ITool.ToolContext callback
+  + 6 회귀 (source-level wiring verification)
+- **2026-05-28 β-3** (PR #221) — getDrawPlane priority #3 fallback
+  (applyStickyOrDefault helper) + Viewport.onViewModeChange wiring
+  + #sb-plane-badge StatusBar + ContextMenu "📐 기본 평면으로" reset
+  + 4 회귀
+- **2026-05-28 γ** (본 commit) — Playwright E2E (3 specs) + Status
+  Proposed → Accepted + §9 Lessons + LOCKED 등재 + README catalog
+  갱신 + 3 회귀
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (canonical for non-Engine TS-only ADRs)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. ADR-149 / 150
-/ 151 §9 Lessons (canonical for Sprint 3 ADRs) 답습 + ADR-164 의 추가
-lessons 누적.
+ADR-149 / ADR-150 / ADR-151 §9 Lessons (Sprint 3 6-step template) 의
+자연 연장 — ADR-164 의 TS-only 5-step 변형 patterns + audit-first 12번째
+적용의 정량 evidence.
 
-후보 lessons (β implementation 완료 시 확정):
-- **audit-first canonical 12번째 가치** — 사용자 작업지시 → 사전검토 →
-  4 옵션 매트릭스 → Option A 추천 (multi-week 회피)
-- ADR-149 → ADR-150 → ADR-151 → ADR-164 4-ADR template reproducibility
-  (Sprint 3 cumulative pattern, 단 ADR-164 는 TS only 5-step 단순화)
-- 메타-원칙 #5 정합 — 명확하면 자동 (sticky), 모호하면 명시 (reset
-  trigger)
-- 메타-원칙 #16 보완 — 자동화 trigger 의 *명시 reset path* 가 antipattern
-  완화 (view mode / Sketch / Esc — 사용자 의도 변경 명시 신호)
-- Sketch mode lastPlane 패턴을 non-sketch Draw 도구에 답습 — 기존 자산
-  의 architectural reuse
-- TS only 5-step (vs Sprint 3 6-step) — Engine/WASM 변경 0 시 β-3 가
-  UI integration 직접 포함 가능
+### L-164-1 — audit-first canonical 12번째의 정량 가치
+
+ADR-164 audit (PR #210, `docs/audits/2026-05-27-auto-plane-detection-
+precheck.md`) 가 사용자 작업지시를 4 옵션 매트릭스로 분해 후 Option A
+("Sticky last drawn plane") 추천. 핵심 finding:
+- 자동 평면 감지 자산 *부분 존재* — Sketch mode 의 `axia.sketch.lastPlane`
+  (localStorage) 가 non-sketch Draw 도구로 재사용 가능 (architectural
+  reuse)
+- Option A vs Option B (proximity match) vs Option C (selection-driven)
+  vs Option D (layered priority) 비교 → A 의 단순성 + 메타-원칙 #5/#16
+  정합 evidence
+
+본 ADR 진행 시간 (α PR #211 → γ closure) = **약 1일** (실제 work 시간 약
+3시간). audit-first 가 없었다면 multi-week atomic 인 ADR이었을 작업이
+**1-day 5-step TS-only** 으로 closure.
+
+→ **향후 ADR 가이드**: 사용자 작업지시 → 즉시 4 옵션 매트릭스 audit →
+default 추천 → 사용자 결재 → ADR 진행. 시간 50%+ 감소 default 기대.
+
+### L-164-2 — TS-only 5-step vs Engine 포함 6-step (template 변형)
+
+Sprint 3 ADR-149/150/151 의 6-step template 은:
+- α spec
+- β-1 engine skeleton (Read-only API)
+- β-2 engine mutation
+- β-3 WASM bridge + TS wrapper
+- β-4 UI ContextMenu
+- γ closure
+
+ADR-164 는 Engine 변경 0 (L-164-6, TS only) 이므로 5-step 으로 단순화:
+- α spec
+- β-1 foundation (API + reset hooks)
+- β-2 Draw 도구 hook
+- **β-3** (priority #3 + Viewport hook + StatusBar + ContextMenu reset
+  — 4 작업 묶음)
+- γ closure
+
+→ **향후 ADR 가이드**: Engine 변경 0 일 때 5-step template 사용. β-3 의
+UI integration 자체가 wiring + 사용자 인지 강화 동시 포함.
+
+### L-164-3 — 메타-원칙 #5 정합 (사용자 편의 = 명확하면 자동)
+
+ADR-164 가 메타-원칙 #5 의 *실제 사용자 facing 구현* — "마지막 그린
+평면" 은 *명확한 default* (사용자가 같은 작업 흐름을 계속할 가능성 높음).
+이전에는 sketch mode 만 lock-in, non-sketch 는 매번 view-mode default
+로 fallback — 사용자 미스 evidence (cursor 약간 빗나가도 갑자기 바닥에
+그려짐).
+
+→ **canonical pattern**: 사용자 의도가 *명확* 한 default 가 있으면 자동
+적용 (메타-원칙 #5). *모호* 할 때만 명시 trigger (메타-원칙 #16).
+
+### L-164-4 — 메타-원칙 #16 보완 (reset trigger 명시 = antipattern 완화)
+
+Sticky 자체는 *자동화* 이지만, **reset trigger 가 명시** 되어 있어
+cascading 부작용 차단:
+- view mode 변경 → 사용자 의도 변경 명시 신호
+- Sketch enter/exit → 다른 plane 정책 활성/해제 명시 신호
+- Esc / cancelCurrentTool → global cancel 명시 신호
+- ContextMenu "📐 기본 평면으로" → 명시 사용자 결재
+
+→ **canonical pattern**: 자동화 + 명시 reset path 결합이 P5/P16 의
+balance.
+
+### L-164-5 — Sketch mode 패턴의 architectural reuse
+
+`axia.sketch.lastPlane` (localStorage, sketch mode 전용) 의 in-memory
+mirror 가 non-sketch Draw 도구의 sticky 로 자연 적용. 코드 중복 없이
+아키텍처 reuse — `_sketch` field 옆에 `_lastDrawnPlane` field 추가만.
+
+→ **향후 ADR 가이드**: 새 architectural pattern 도입 전 기존 자산 inventory
+필수. Reuse가 가능하면 prefer.
+
+### L-164-6 — Source-level wiring verification pattern (β-2)
+
+ADR-164 β-2 가 ADR-149/150/151 β-3 의 source-level endpoint-wired test
+패턴을 *6 도구 × 1 test = 6 회귀* 으로 적용. 각 도구의 commit branch
+deep mocking 회피 — `setLastDrawnPlane` 호출 + provenance comment
+(`ADR-164 β-2`) 만 source-level 검증.
+
+→ **canonical pattern**: Cross-cutting wiring 회귀는 *deep mocking* 보다
+*source-level evidence* 가 robust + maintainable.
+
+## 10. Cross-link
+
+- ADR-141 Master Roadmap §3 (Sprint 3 외부 — 사용자 작업지시 trigger)
+- ADR-149 / ADR-150 / ADR-151 §9 Lessons (canonical for Sprint 3 6-step,
+  ADR-164 5-step 변형의 anchor)
+- ADR-140 (Surface-Aware getDrawPlane — 우선순위 #2 보존)
+- ADR-103-δ (Z-up default plane mapping — 우선순위 #4)
+- ADR-026 P12 (Cardinal snap SSOT)
+- ADR-046 P31 #4 (additive only)
+- LOCKED #44 (Complete Meaning per Merge)
+- LOCKED #65 메타-원칙 #5 (사용자 편의) + #16 (자동화 antipattern 보완)
+- LOCKED #66 STATUS-POLICY
