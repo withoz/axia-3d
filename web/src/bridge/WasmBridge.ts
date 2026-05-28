@@ -507,6 +507,9 @@ type AxiaEngineExtended = AxiaEngine & {
   sweepCoplanarPairs?(tolDeg: number): string;
   /** Batch merge coplanar pairs. Returns JSON BatchMergeReport or throws. */
   mergeCoplanarPairBatch?(pairsJson: string, tolDeg: number): string;
+  // ADR-151 β-3 — Connected Stacked-inner Component-Merge Resolver
+  /** Enforce P7 canonical topology on container + inners. Returns JSON or throws. */
+  enforceP7Canonical?(containerId: number, innerIds: Uint32Array): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1525,6 +1528,55 @@ export class WasmBridge {
     }
   }
 
+  /**
+   * ADR-151 β-3 — Enforce P7 canonical topology on a container + inners
+   * (Sprint 3 셋째 ADR, Connected Stacked-inner Component-Merge Resolver).
+   *
+   * Calls the engine `enforce_p7_canonical` mutation (β-2 active per
+   * PR #213). On success: container is rebuilt as a ring-with-hole face
+   * with one hole loop per connected inner component. Manifold report
+   * (P7-M1/M2/M3) returned for caller inspection.
+   *
+   * **명시 호출 only** — Draw 도구의 자동 trigger 없음 (메타-원칙 #16
+   * + LOCKED #64 정합).
+   *
+   * @param containerId - Ring face that will own the inner sub-faces.
+   * @param innerIds - Connected/disjoint stacked-inner face IDs.
+   * @returns P7EnforceResult on success.
+   * @throws Error with `enforceP7Canonical: <P7EnforceError msg>` on
+   *   InvalidInput / NoComponents / PerimeterFailed / RebuildFailed
+   *   (strict throw; silent skip 차단 per Q1=a default).
+   *
+   * # Graceful fallback
+   * - Missing engine method (legacy WASM build) → throws with
+   *   "WASM endpoint missing (rebuild required)". ADR-149/150 β-3
+   *   답습 패턴.
+   */
+  enforceP7Canonical(
+    containerId: number,
+    innerIds: number[],
+  ): P7EnforceResult {
+    if (!this.engine || !this.engine.enforceP7Canonical) {
+      throw new Error('enforceP7Canonical: WASM endpoint missing (rebuild required)');
+    }
+    this.markDirty();
+    const innerArray = new Uint32Array(innerIds);
+    const raw = this.engine.enforceP7Canonical(containerId, innerArray);
+    try {
+      const parsed = JSON.parse(raw) as {
+        component_count: number;
+        is_valid: boolean;
+        violation_count: number;
+      };
+      return {
+        componentCount: parsed.component_count,
+        isValid: parsed.is_valid,
+        violationCount: parsed.violation_count,
+      };
+    } catch (e) {
+      throw new Error(`enforceP7Canonical: invalid JSON from WASM (${e})`);
+    }
+  }
 
   /**
    * Set an Arc curve on an existing edge. Returns true if successful.
@@ -5333,4 +5385,21 @@ export interface BatchMergeReport {
   mergedCount: number;
   skippedCount: number;
   newFaceIds: number[];
+}
+
+/**
+ * ADR-151 β-3 — P7 canonical enforcement result.
+ *
+ * Returned by `enforceP7Canonical`. `componentCount` = number of
+ * connected components processed (= number of hole loops created in
+ * the resulting ring-with-hole topology). `isValid` reflects
+ * `P7ManifoldReport::is_valid()` after rebuild (≤1 deferred-boundary
+ * non-manifold edge per ADR-051 §2.5 may still violate strictly).
+ * `violationCount` exposes raw P7-M1/M2/M3 invariant violation total
+ * (silent skip 차단 via explicit count).
+ */
+export interface P7EnforceResult {
+  componentCount: number;
+  isValid: boolean;
+  violationCount: number;
 }

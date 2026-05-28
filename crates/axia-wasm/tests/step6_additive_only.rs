@@ -1405,3 +1405,68 @@ fn create_solid_extrude_handler_is_solidkind_agnostic() {
         "W-2-β: handler must not filter on SolidKind::Box specifically"
     );
 }
+
+// ── ADR-151 β-3 — Connected Stacked-inner Component-Merge Resolver ──
+// Sprint 3 셋째 ADR. Engine `enforce_p7_canonical` (β-2 PR #213 merged)
+// dispatch + transaction wrap. ADR-149/150 β-3 답습 패턴.
+
+/// β-3 #1 — enforceP7Canonical endpoint wired (signature + delegation).
+#[test]
+fn adr151_beta3_enforce_p7_canonical_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn enforce_p7_canonical"),
+        "ADR-151 β-3: missing Rust function enforce_p7_canonical");
+    assert!(l.contains("js_name = \"enforceP7Canonical\""),
+        "ADR-151 β-3: missing js_name = \"enforceP7Canonical\"");
+    let idx = l.find("pub fn enforce_p7_canonical")
+        .expect("enforce_p7_canonical");
+    let body = char_safe_slice(&l, idx, 2500);
+    assert!(body.contains("-> Result<String, JsValue>"),
+        "ADR-151 β-3: enforceP7Canonical must return Result<String, JsValue>");
+    // Signature: container_id + inner_ids (Vec<u32> per Q1=a default)
+    assert!(body.contains("container_id: u32"),
+        "ADR-151 β-3: signature must include container_id: u32");
+    assert!(body.contains("inner_ids: Vec<u32>"),
+        "ADR-151 β-3: signature must include inner_ids: Vec<u32>");
+    // Engine API delegation
+    assert!(body.contains("p7_canonical_resolver::enforce_p7_canonical"),
+        "ADR-151 β-3: body must delegate to axia_geo::operations::p7_canonical_resolver");
+}
+
+/// β-3 #2 — enforceP7Canonical wraps in a transaction (Undo restores
+/// pre-rebuild state) per ADR-149/150 β-3 답습.
+#[test]
+fn adr151_beta3_enforce_p7_uses_transaction() {
+    let l = lib_src();
+    let idx = l.find("pub fn enforce_p7_canonical")
+        .expect("enforce_p7_canonical");
+    let body = char_safe_slice(&l, idx, 2500);
+    assert!(body.contains("transactions.begin"),
+        "ADR-151 β-3: must wrap in transaction (begin)");
+    assert!(body.contains("set_before_snapshot"),
+        "ADR-151 β-3: must capture before snapshot");
+    assert!(body.contains("set_after_snapshot"),
+        "ADR-151 β-3: must capture after snapshot on success");
+    assert!(body.contains("transactions.commit"),
+        "ADR-151 β-3: must commit transaction");
+}
+
+/// β-3 #3 — enforceP7Canonical JSON response schema lock-in
+/// (component_count + is_valid + violation_count per L-β3-1).
+#[test]
+fn adr151_beta3_enforce_p7_json_schema_locked() {
+    let l = lib_src();
+    let idx = l.find("pub fn enforce_p7_canonical")
+        .expect("enforce_p7_canonical");
+    let body = char_safe_slice(&l, idx, 2500);
+    // Required JSON keys (silent skip 차단 evidence)
+    assert!(body.contains("component_count"),
+        "ADR-151 β-3: JSON must include component_count");
+    assert!(body.contains("is_valid"),
+        "ADR-151 β-3: JSON must include is_valid");
+    assert!(body.contains("violation_count"),
+        "ADR-151 β-3: JSON must include violation_count");
+    // Strict throw on error (메타-원칙 #16 정합, Q1=a default)
+    assert!(body.contains("Err(JsValue::from_str"),
+        "ADR-151 β-3: must throw JsValue on P7EnforceError (silent skip 차단)");
+}
