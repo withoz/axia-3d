@@ -1174,4 +1174,111 @@ describe('ToolManager', () => {
       expect(tm.getLastDrawnPlane()).toBeNull();
     });
   });
+
+  // ────────────────────────────────────────────────────────────────────
+  // ADR-164 β-3 — Sticky 소비 + UI integration
+  // L-164-Q1=a — face hit miss 후 sticky → fallback view-mode default
+  // ────────────────────────────────────────────────────────────────────
+  describe('ADR-164 β-3 Sticky consume + UI integration', () => {
+    // Local mockMouseEvent (shared one in ADR-140 δ block, repeat here for clarity)
+    function mockMouseEvent(): MouseEvent {
+      return { clientX: 100, clientY: 100 } as MouseEvent;
+    }
+
+    beforeEach(() => {
+      // β-3 priority #3 needs faceMap for face hit branch ADR-140 cross
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tm as any).faceMap = new Uint32Array([7]);
+    });
+
+    it('adr164_beta3_getdrawplane_priority3_uses_sticky_when_face_miss — sticky 소비 활성', async () => {
+      const THREE = await import('three');
+
+      // β-2 setLastDrawnPlane 으로 sticky 설정 (e.g., 사용자가 face 위에서 RECT 그림)
+      const stickyNormal = new THREE.Vector3(0, 1, 0); // Y-axis (XZ wall)
+      const stickyUp = new THREE.Vector3(0, 0, 1);
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(10, 20, 30),
+        normal: stickyNormal,
+        up: stickyUp,
+        source: 'view',
+      });
+
+      // viewport.pick 이 null 반환 (cursor on empty space, face hit miss)
+      viewport.pick.mockReturnValue(null);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // Priority #3 활성: sticky plane 사용 (view-mode default 가 아닌)
+      expect(plane.normal.y).toBeCloseTo(1, 5);  // sticky XZ wall (not XY ground)
+      expect(plane.up.z).toBeCloseTo(1, 5);
+      expect(plane.onFace).toBe(false);
+      expect(plane.origin).toBeDefined();
+      expect(plane.origin?.x).toBe(10);
+    });
+
+    it('adr164_beta3_getdrawplane_falls_back_to_default_when_no_sticky — view-mode default 보존', () => {
+      // No sticky plane set
+      expect(tm.getLastDrawnPlane()).toBeNull();
+
+      // viewport.pick null + view mode default
+      viewport.pick.mockReturnValue(null);
+      viewport.viewMode = '3d';
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // 3d default = XY ground (Z=0), normal +Z (ADR-103-δ)
+      expect(plane.normal.z).toBeCloseTo(1, 5);
+      expect(plane.onFace).toBe(false);
+      expect(plane.origin).toBeUndefined();  // view-mode default 은 origin 없음
+    });
+
+    it('adr164_beta3_face_hit_unchanged — Cursor on face 우선순위 #2 보존 (L-164-7 additive)', async () => {
+      const THREE = await import('three');
+
+      // Set sticky
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(99, 99, 99),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(0, 0, 1),
+      });
+
+      // viewport.pick returns face hit
+      viewport.pick.mockReturnValue({
+        faceIndex: 0,
+        point: new THREE.Vector3(1, 0, 1),
+      });
+      bridge.faceSurfaceKind.mockReturnValue(1);  // Plane
+      bridge.getFaceNormal.mockReturnValue([1, 0, 0]);  // YZ wall
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // face hit normal used, NOT sticky (priority #2 > #3)
+      expect(plane.normal.x).toBeCloseTo(1, 5);  // face YZ wall, not sticky XZ wall
+      expect(plane.onFace).toBe(true);
+    });
+
+    it('adr164_beta3_badge_update_called_on_set_and_clear — UI integration smoke', async () => {
+      const THREE = await import('three');
+
+      // updateLastDrawnPlaneBadge 는 document 미존재 시 no-op (jsdom env
+      // 에서는 document 가 있으므로 실제 호출됨). 단순히 set/clear 가
+      // throw 없이 동작함을 검증 (DOM helper smoke).
+      expect(() => {
+        tm.setLastDrawnPlane({
+          origin: new THREE.Vector3(0, 0, 0),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+          source: 'view',
+        });
+      }).not.toThrow();
+      expect(tm.getLastDrawnPlane()).not.toBeNull();
+
+      expect(() => tm.clearLastDrawnPlane()).not.toThrow();
+      expect(tm.getLastDrawnPlane()).toBeNull();
+    });
+  });
 });
