@@ -1470,3 +1470,80 @@ fn adr151_beta3_enforce_p7_json_schema_locked() {
     assert!(body.contains("Err(JsValue::from_str"),
         "ADR-151 β-3: must throw JsValue on P7EnforceError (silent skip 차단)");
 }
+
+// ── ADR-152 β-3 — P7-M4/M5 + Euler/Genus WASM bridge ────────────────────
+// Sprint 4 첫째 ADR. verifyP7ManifoldExtended + computeTopology JSON
+// exports + TS wrapper. ADR-149/150/151 β-3 답습.
+
+/// β-3 #1 — verifyP7ManifoldExtended endpoint wired.
+#[test]
+fn adr152_beta3_verify_p7_manifold_extended_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn verify_p7_manifold_extended"),
+        "ADR-152 β-3: missing Rust function verify_p7_manifold_extended");
+    assert!(l.contains("js_name = \"verifyP7ManifoldExtended\""),
+        "ADR-152 β-3: missing js_name = \"verifyP7ManifoldExtended\"");
+    let idx = l.find("pub fn verify_p7_manifold_extended")
+        .expect("verify_p7_manifold_extended");
+    let body = char_safe_slice(&l, idx, 3000);
+    // Signature: (container_id: u32, inner_ids: Vec<u32>) -> String
+    assert!(body.contains("container_id: u32"),
+        "ADR-152 β-3: signature must include container_id: u32");
+    assert!(body.contains("inner_ids: Vec<u32>"),
+        "ADR-152 β-3: signature must include inner_ids: Vec<u32>");
+    assert!(body.contains("-> String"),
+        "ADR-152 β-3: must return String (JSON, read-only)");
+    // Engine API delegation
+    assert!(body.contains("p7_manifold::verify_p7_manifold"),
+        "ADR-152 β-3: body must delegate to axia_geo::p7_manifold::verify_p7_manifold");
+}
+
+/// β-3 #2 — computeTopology endpoint wired.
+#[test]
+fn adr152_beta3_compute_topology_endpoint_wired() {
+    let l = lib_src();
+    assert!(l.contains("pub fn compute_topology"),
+        "ADR-152 β-3: missing Rust function compute_topology");
+    assert!(l.contains("js_name = \"computeTopology\""),
+        "ADR-152 β-3: missing js_name = \"computeTopology\"");
+    let idx = l.find("pub fn compute_topology")
+        .expect("compute_topology");
+    let body = char_safe_slice(&l, idx, 1500);
+    assert!(body.contains("-> String"),
+        "ADR-152 β-3: computeTopology must return String (JSON, read-only)");
+    // Engine API delegation
+    assert!(body.contains("p7_manifold::compute_topology"),
+        "ADR-152 β-3: body must delegate to axia_geo::p7_manifold::compute_topology");
+}
+
+/// β-3 #3 — JSON schema lock-in (both endpoints).
+#[test]
+fn adr152_beta3_json_schema_locked() {
+    let l = lib_src();
+
+    // verifyP7ManifoldExtended schema (silent skip 차단 evidence)
+    let v_idx = l.find("pub fn verify_p7_manifold_extended")
+        .expect("verify_p7_manifold_extended");
+    let v_body = char_safe_slice(&l, v_idx, 3000);
+    assert!(v_body.contains("container"),
+        "ADR-152 β-3: verifyP7ManifoldExtended JSON must include container");
+    assert!(v_body.contains("is_valid"),
+        "ADR-152 β-3: verifyP7ManifoldExtended JSON must include is_valid");
+    assert!(v_body.contains("violations"),
+        "ADR-152 β-3: verifyP7ManifoldExtended JSON must include violations array");
+    // M4/M5 kind labels (β-1 extension exposed)
+    assert!(v_body.contains("\"M4\""),
+        "ADR-152 β-3: must label VertexValencePathology as M4");
+    assert!(v_body.contains("\"M5\""),
+        "ADR-152 β-3: must label FaceOrientationInconsistent as M5");
+
+    // computeTopology schema (β-2 fields)
+    let c_idx = l.find("pub fn compute_topology")
+        .expect("compute_topology");
+    let c_body = char_safe_slice(&l, c_idx, 1500);
+    for key in ["vertex_count", "edge_count", "face_count",
+                "euler_characteristic", "genus", "boundary_loop_count", "is_closed"] {
+        assert!(c_body.contains(key),
+            "ADR-152 β-3: computeTopology JSON must include {key}");
+    }
+}

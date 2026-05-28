@@ -510,6 +510,11 @@ type AxiaEngineExtended = AxiaEngine & {
   // ADR-151 β-3 — Connected Stacked-inner Component-Merge Resolver
   /** Enforce P7 canonical topology on container + inners. Returns JSON or throws. */
   enforceP7Canonical?(containerId: number, innerIds: Uint32Array): string;
+  // ADR-152 β-3 — P7-M4/M5 + Euler/Genus topology inspection
+  /** Verify P7 manifold extended (M1/M2/M3 + M4/M5). Returns JSON. */
+  verifyP7ManifoldExtended?(containerId: number, innerIds: Uint32Array): string;
+  /** Compute mesh topology (Euler χ + Genus + boundary loops). Returns JSON. */
+  computeTopology?(): string;
   setEdgeArcCurve?(
     edgeId: number,
     cx: number, cy: number, cz: number,
@@ -1575,6 +1580,100 @@ export class WasmBridge {
       };
     } catch (e) {
       throw new Error(`enforceP7Canonical: invalid JSON from WASM (${e})`);
+    }
+  }
+
+  /**
+   * ADR-152 β-3 — Verify P7 manifold extended (M1/M2/M3 + M4/M5).
+   *
+   * Engine API `axia_geo::p7_manifold::verify_p7_manifold` (β-1
+   * extension, PR #225). Read-only inspection — returns the full
+   * violation list. M4 = VertexValencePathology, M5 = FaceOrientation
+   * Inconsistent.
+   *
+   * 명시 호출 only — 진단/QA 도구 entry. ADR-046 P31 #4 additive only.
+   *
+   * @param containerId - Ring face that contains the inner sub-faces.
+   * @param innerIds - Connected/disjoint stacked-inner face IDs.
+   * @returns P7ManifoldExtendedReport (camelCase mapped).
+   * @throws Error with "verifyP7ManifoldExtended: WASM endpoint missing"
+   *   on legacy WASM build, or "invalid JSON from WASM" on parse failure.
+   *
+   * Graceful fallback (ADR-149/150/151 β-3 답습):
+   * - Missing engine method → throws (feature gate)
+   */
+  verifyP7ManifoldExtended(
+    containerId: number,
+    innerIds: number[],
+  ): P7ManifoldExtendedReport {
+    if (!this.engine || !this.engine.verifyP7ManifoldExtended) {
+      throw new Error('verifyP7ManifoldExtended: WASM endpoint missing (rebuild required)');
+    }
+    const innerArray = new Uint32Array(innerIds);
+    const raw = this.engine.verifyP7ManifoldExtended(containerId, innerArray);
+    try {
+      const parsed = JSON.parse(raw) as {
+        container: number;
+        inner_count: number;
+        edges_checked: number;
+        is_valid: boolean;
+        violation_count: number;
+        violations: Array<{ kind: 'M1' | 'M2' | 'M3' | 'M4' | 'M5'; detail: string }>;
+      };
+      return {
+        container: parsed.container,
+        innerCount: parsed.inner_count,
+        edgesChecked: parsed.edges_checked,
+        isValid: parsed.is_valid,
+        violationCount: parsed.violation_count,
+        violations: parsed.violations,
+      };
+    } catch (e) {
+      throw new Error(`verifyP7ManifoldExtended: invalid JSON from WASM (${e})`);
+    }
+  }
+
+  /**
+   * ADR-152 β-3 — Compute mesh topology (Euler χ + Genus + boundary loops).
+   *
+   * Engine API `axia_geo::p7_manifold::compute_topology` (β-2, PR #226).
+   * Read-only inspection — returns the full topology report.
+   *
+   * 명시 호출 only — 진단/QA 도구 entry.
+   *
+   * @returns MeshTopologyReport (camelCase mapped, genus null on open manifold).
+   * @throws Error with "computeTopology: WASM endpoint missing" on legacy
+   *   WASM build, or "invalid JSON from WASM" on parse failure.
+   *
+   * Graceful fallback (ADR-149/150/151 β-3 답습):
+   * - Missing engine method → throws (feature gate)
+   */
+  computeTopology(): MeshTopologyReport {
+    if (!this.engine || !this.engine.computeTopology) {
+      throw new Error('computeTopology: WASM endpoint missing (rebuild required)');
+    }
+    const raw = this.engine.computeTopology();
+    try {
+      const parsed = JSON.parse(raw) as {
+        vertex_count: number;
+        edge_count: number;
+        face_count: number;
+        euler_characteristic: number;
+        genus: number | null;
+        boundary_loop_count: number;
+        is_closed: boolean;
+      };
+      return {
+        vertexCount: parsed.vertex_count,
+        edgeCount: parsed.edge_count,
+        faceCount: parsed.face_count,
+        eulerCharacteristic: parsed.euler_characteristic,
+        genus: parsed.genus,
+        boundaryLoopCount: parsed.boundary_loop_count,
+        isClosed: parsed.is_closed,
+      };
+    } catch (e) {
+      throw new Error(`computeTopology: invalid JSON from WASM (${e})`);
     }
   }
 
@@ -5402,4 +5501,38 @@ export interface P7EnforceResult {
   componentCount: number;
   isValid: boolean;
   violationCount: number;
+}
+
+/**
+ * ADR-152 β-3 — P7 manifold extended verification report (M1/M2/M3 +
+ * M4/M5 details).
+ *
+ * Returned by `verifyP7ManifoldExtended`. `violations` lists each
+ * detected invariant violation with `kind` ("M1"-"M5") + `detail`
+ * (engine Display formatted message). Empty violations → `isValid=true`.
+ */
+export interface P7ManifoldExtendedReport {
+  container: number;
+  innerCount: number;
+  edgesChecked: number;
+  isValid: boolean;
+  violationCount: number;
+  violations: Array<{ kind: 'M1' | 'M2' | 'M3' | 'M4' | 'M5'; detail: string }>;
+}
+
+/**
+ * ADR-152 β-3 — Mesh topology quantitative report (β-2 export).
+ *
+ * Returned by `computeTopology`. Euler χ = V-E+F, Genus g = (2-χ)/2
+ * (closed manifold only), boundary_loop_count = face=null HE cycle count.
+ * `genus` is `null` for open manifolds (boundary_loop_count > 0).
+ */
+export interface MeshTopologyReport {
+  vertexCount: number;
+  edgeCount: number;
+  faceCount: number;
+  eulerCharacteristic: number;
+  genus: number | null;
+  boundaryLoopCount: number;
+  isClosed: boolean;
 }
