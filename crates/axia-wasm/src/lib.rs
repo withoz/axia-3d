@@ -8007,6 +8007,150 @@ impl AxiaEngine {
         }
     }
 
+    // ========================================================================
+    // ADR-150 — Coplanar Face Merge Sweep (β-3 WASM bridge)
+    // ========================================================================
+
+    /// ADR-150 β-3 — Sweep all coplanar mergeable pairs in the mesh.
+    ///
+    /// **사용자 명시 trigger only** (메타-원칙 #16) — 자동 sweep 0.
+    /// UI ContextMenu "🧹 Coplanar 면 일괄 자동 정리" 클릭 (β-4) 시
+    /// sweep → batch merge 시퀀스의 첫 단계.
+    ///
+    /// Coplanar faces that share a collinear boundary segment but not
+    /// necessarily a shared DCEL edge. Each pair satisfies:
+    /// 1. Both faces active
+    /// 2. Normals coplanar within `tol_deg` (same or opposite direction)
+    /// 3. `would_geometric_merge_succeed` dry-run pass
+    /// 4. `face_a.raw() < face_b.raw()` (deterministic, no duplicates)
+    ///
+    /// Engine API: `axia_geo::operations::geometric_merge::
+    /// sweep_coplanar_pairs` (β-1 detection, ADR-150 PR #203 merged
+    /// `ad0ca3e`).
+    ///
+    /// # Parameters
+    /// - `tol_deg`: coplanar normal angle threshold (deg). ≤0 → default
+    ///   `COPLANAR_PAIR_TOL_DEG = 1.0` (ADR-150 §2 Q3=a).
+    ///
+    /// # Returns
+    /// JSON-serialized `Vec<CoplanarPairReport>`:
+    /// ```json
+    /// [
+    ///   {"face_a": 0, "face_b": 1, "plane_normal": {"x": 0, "y": 1, "z": 0}},
+    ///   ...
+    /// ]
+    /// ```
+    /// Empty array = clean mesh (0 mergeable pairs).
+    ///
+    /// Read-only — no transaction wrap needed.
+    #[wasm_bindgen(js_name = "sweepCoplanarPairs")]
+    pub fn sweep_coplanar_pairs(&self, tol_deg: f64) -> Result<String, JsValue> {
+        use axia_geo::operations::geometric_merge;
+        let tol = if tol_deg > 0.0 { tol_deg } else { geometric_merge::COPLANAR_PAIR_TOL_DEG };
+        let reports = geometric_merge::sweep_coplanar_pairs(&self.scene.mesh, tol);
+
+        let items: Vec<String> = reports
+            .iter()
+            .map(|r| {
+                format!(
+                    "{{\"face_a\":{},\"face_b\":{},\"plane_normal\":{{\"x\":{},\"y\":{},\"z\":{}}}}}",
+                    r.face_a.raw(),
+                    r.face_b.raw(),
+                    r.plane_normal.x,
+                    r.plane_normal.y,
+                    r.plane_normal.z,
+                )
+            })
+            .collect();
+        Ok(format!("[{}]", items.join(",")))
+    }
+
+    /// ADR-150 β-3 — Batch merge coplanar pairs (cascade A-B → AB-C
+    /// handling) with skip-on-error.
+    ///
+    /// Caller supplies a JSON-encoded array of `CoplanarPairReport`s
+    /// (typically from a prior `sweepCoplanarPairs` call). Strict per-
+    /// pair validation — stale pairs / inactive faces / drift → skipped
+    /// (silent skip 차단 via `skipped_count` field).
+    ///
+    /// Engine API: `axia_geo::operations::geometric_merge::
+    /// merge_coplanar_pair_batch` (β-2 mutation, ADR-150 PR #204 merged
+    /// `1de92ae`).
+    ///
+    /// # Parameters
+    /// - `pairs_json`: JSON array of pairs (schema matches `sweepCoplanar
+    ///   Pairs` output). Empty array → no-op (merged=0, skipped=0).
+    /// - `tol_deg`: drift re-verification tolerance. ≤0 → default
+    ///   `COPLANAR_PAIR_TOL_DEG = 1.0`.
+    ///
+    /// # Returns
+    /// - `Ok(json: String)`: `{"merged_count": N, "skipped_count": M,
+    ///   "new_face_ids": [...]}`. `new_face_ids` may contain intermediate
+    ///   IDs consumed by cascading merges — caller may inspect mesh state
+    ///   to find final live faces.
+    /// - `Err(JsValue)`: JSON parse failure (invalid input format).
+    ///
+    /// Transaction-wrapped — Undo restores the pre-batch state (single
+    /// undo step for entire batch).
+    #[wasm_bindgen(js_name = "mergeCoplanarPairBatch")]
+    pub fn merge_coplanar_pair_batch(
+        &mut self,
+        pairs_json: &str,
+        tol_deg: f64,
+    ) -> Result<String, JsValue> {
+        use axia_geo::operations::geometric_merge::{
+            self, CoplanarPairReport,
+        };
+        use axia_geo::FaceId;
+        use glam::DVec3;
+
+        // Parse JSON array of CoplanarPairReport.
+        let pairs = parse_coplanar_pair_array(pairs_json)
+            .map_err(|e| JsValue::from_str(&format!("mergeCoplanarPairBatch: invalid JSON: {}", e)))?;
+        let reports: Vec<CoplanarPairReport> = pairs
+            .into_iter()
+            .map(|p| CoplanarPairReport {
+                face_a: FaceId::new(p.face_a),
+                face_b: FaceId::new(p.face_b),
+                plane_normal: DVec3::new(p.nx, p.ny, p.nz),
+            })
+            .collect();
+
+        let tol = if tol_deg > 0.0 {
+            tol_deg
+        } else {
+            geometric_merge::COPLANAR_PAIR_TOL_DEG
+        };
+
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        let report = geometric_merge::merge_coplanar_pair_batch(
+            &mut self.scene.mesh,
+            &reports,
+            tol,
+        );
+
+        self.scene
+            .transactions
+            .set_after_snapshot(self.scene.scene_snapshot());
+        self.scene.transactions.commit();
+
+        let new_ids: Vec<String> = report
+            .new_face_ids
+            .iter()
+            .map(|f| f.raw().to_string())
+            .collect();
+        Ok(format!(
+            "{{\"merged_count\":{},\"skipped_count\":{},\"new_face_ids\":[{}]}}",
+            report.merged_count,
+            report.skipped_count,
+            new_ids.join(","),
+        ))
+    }
+
     /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
     /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
     ///
@@ -8280,6 +8424,138 @@ fn parse_t_junction_report(json: &str) -> Result<ParsedTJunctionReport, String> 
     })
 }
 
+// ============================================================================
+// ADR-150 β-3 — CoplanarPairReport JSON parsing helper
+// ============================================================================
+
+/// Parsed CoplanarPairReport fields from JSON (helper for
+/// `mergeCoplanarPairBatch`). Mirrors `axia_geo::operations::geometric_
+/// merge::CoplanarPairReport` shape.
+#[derive(Debug)]
+struct ParsedCoplanarPair {
+    face_a: u32,
+    face_b: u32,
+    nx: f64,
+    ny: f64,
+    nz: f64,
+}
+
+/// Minimal JSON parser for an array of CoplanarPairReport. Accepts the
+/// strict schema emitted by `sweepCoplanarPairs`:
+/// `[{"face_a": N, "face_b": N, "plane_normal": {"x": F, "y": F, "z": F}}, ...]`
+///
+/// Empty array `[]` returns empty Vec (no-op caller can dispatch).
+///
+/// Field order is flexible within each pair object. Whitespace tolerant.
+fn parse_coplanar_pair_array(json: &str) -> Result<Vec<ParsedCoplanarPair>, String> {
+    let trimmed = json.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Err(format!("expected array, got: {}", &trimmed[..trimmed.len().min(40)]));
+    }
+    let inner = &trimmed[1..trimmed.len() - 1].trim();
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Split top-level objects via brace-depth tracking (handles nested
+    // plane_normal {x,y,z} object).
+    let mut pairs: Vec<ParsedCoplanarPair> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let bytes = inner.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => {
+                if depth == 0 { start = i; }
+                depth += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let obj = &inner[start..=i];
+                    pairs.push(parse_one_coplanar_pair(obj)?);
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return Err("unbalanced braces in array".into());
+    }
+    Ok(pairs)
+}
+
+fn parse_one_coplanar_pair(obj: &str) -> Result<ParsedCoplanarPair, String> {
+    let face_a = find_field_u32_in(obj, "face_a")?;
+    let face_b = find_field_u32_in(obj, "face_b")?;
+    // plane_normal is a nested object {"x": F, "y": F, "z": F} — locate it
+    // and parse 3 floats within its braces.
+    let pn_idx = obj
+        .find("\"plane_normal\"")
+        .ok_or_else(|| "missing 'plane_normal'".to_string())?;
+    let pn_rest = &obj[pn_idx..];
+    let pn_obj_start = pn_rest
+        .find('{')
+        .ok_or_else(|| "malformed 'plane_normal'".to_string())?;
+    let pn_obj_end = pn_rest[pn_obj_start..]
+        .find('}')
+        .ok_or_else(|| "malformed 'plane_normal' (no closing brace)".to_string())?;
+    let pn_obj = &pn_rest[pn_obj_start..=pn_obj_start + pn_obj_end];
+    let nx = find_field_f64_in(pn_obj, "x")?;
+    let ny = find_field_f64_in(pn_obj, "y")?;
+    let nz = find_field_f64_in(pn_obj, "z")?;
+    Ok(ParsedCoplanarPair { face_a, face_b, nx, ny, nz })
+}
+
+// Re-export helpers from parse_t_junction_report scope as standalone
+// versions (avoid duplicate definition while keeping clean inputs to each
+// schema).
+fn find_field_u32_in(json: &str, field: &str) -> Result<u32, String> {
+    let needle = format!("\"{}\"", field);
+    let idx = json
+        .find(&needle)
+        .ok_or_else(|| format!("missing field '{}'", field))?;
+    let rest = &json[idx + needle.len()..];
+    let colon = rest.find(':').ok_or_else(|| format!("malformed '{}'", field))?;
+    let after_colon = &rest[colon + 1..];
+    let val_start = after_colon
+        .find(|c: char| !c.is_whitespace())
+        .ok_or_else(|| format!("no value for '{}'", field))?;
+    let val_rest = &after_colon[val_start..];
+    let end = val_rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(val_rest.len());
+    if end == 0 {
+        return Err(format!("expected integer for '{}'", field));
+    }
+    val_rest[..end]
+        .parse::<u32>()
+        .map_err(|e| format!("invalid u32 for '{}': {}", field, e))
+}
+
+fn find_field_f64_in(json: &str, field: &str) -> Result<f64, String> {
+    let needle = format!("\"{}\"", field);
+    let idx = json
+        .find(&needle)
+        .ok_or_else(|| format!("missing field '{}'", field))?;
+    let rest = &json[idx + needle.len()..];
+    let colon = rest.find(':').ok_or_else(|| format!("malformed '{}'", field))?;
+    let after_colon = &rest[colon + 1..];
+    let val_start = after_colon
+        .find(|c: char| !c.is_whitespace())
+        .ok_or_else(|| format!("no value for '{}'", field))?;
+    let val_rest = &after_colon[val_start..];
+    let end = val_rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E'))
+        .unwrap_or(val_rest.len());
+    if end == 0 {
+        return Err(format!("expected number for '{}'", field));
+    }
+    val_rest[..end]
+        .parse::<f64>()
+        .map_err(|e| format!("invalid f64 for '{}': {}", field, e))
+}
+
 #[cfg(test)]
 mod adr149_tests {
     use super::*;
@@ -8322,5 +8598,50 @@ mod adr149_tests {
         assert_eq!(parsed.edge_id, 88);
         assert_eq!(parsed.vertex_id, 99);
         assert!((parsed.t_along_edge - 0.75).abs() < 1e-12);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // ADR-150 β-3 — parse_coplanar_pair_array tests (4)
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn adr150_beta3_parse_coplanar_pair_array_empty() {
+        let parsed = parse_coplanar_pair_array("[]").unwrap();
+        assert_eq!(parsed.len(), 0);
+    }
+
+    #[test]
+    fn adr150_beta3_parse_coplanar_pair_array_single() {
+        let json = r#"[{"face_a":0,"face_b":1,"plane_normal":{"x":0,"y":1,"z":0}}]"#;
+        let parsed = parse_coplanar_pair_array(json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].face_a, 0);
+        assert_eq!(parsed[0].face_b, 1);
+        assert!((parsed[0].nx - 0.0).abs() < 1e-12);
+        assert!((parsed[0].ny - 1.0).abs() < 1e-12);
+        assert!((parsed[0].nz - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adr150_beta3_parse_coplanar_pair_array_multiple() {
+        let json = r#"[{"face_a":0,"face_b":1,"plane_normal":{"x":1,"y":0,"z":0}},{"face_a":2,"face_b":3,"plane_normal":{"x":0,"y":0,"z":1}}]"#;
+        let parsed = parse_coplanar_pair_array(json).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].face_a, 0);
+        assert_eq!(parsed[0].face_b, 1);
+        assert!((parsed[0].nx - 1.0).abs() < 1e-12);
+        assert_eq!(parsed[1].face_a, 2);
+        assert_eq!(parsed[1].face_b, 3);
+        assert!((parsed[1].nz - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adr150_beta3_parse_coplanar_pair_array_invalid() {
+        // Not an array
+        let r1 = parse_coplanar_pair_array(r#"{"face_a":0}"#);
+        assert!(r1.is_err(), "non-array should error");
+        // Missing plane_normal field
+        let r2 = parse_coplanar_pair_array(r#"[{"face_a":0,"face_b":1}]"#);
+        assert!(r2.is_err(), "missing plane_normal should error");
     }
 }
