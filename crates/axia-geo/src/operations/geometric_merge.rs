@@ -828,6 +828,188 @@ fn aabb_overlap(
         && a.min.z <= b.max.z && a.max.z >= b.min.z
 }
 
+// ============================================================================
+// ADR-150 β-2 — Batch merge coplanar pairs (mutation API)
+// ============================================================================
+
+/// ADR-150 β-2 — Batch merge success report.
+///
+/// Returned by `merge_coplanar_pair_batch`. Tracks merged count + skipped
+/// count (silent skip 차단, 메타-원칙 #16 정합) + new face IDs produced
+/// across all successful merges in the batch.
+///
+/// `new_face_ids` may contain *intermediate* face IDs that are themselves
+/// later consumed by cascading merges (e.g., A-B merge produces face_ab,
+/// then face_ab-C merge consumes face_ab and produces face_abc). Both
+/// face_ab and face_abc appear in `new_face_ids`, but only face_abc is
+/// active in the final mesh.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BatchMergeReport {
+    /// Number of `merge_coplanar_faces_geometric` calls that succeeded.
+    pub merged_count: u32,
+    /// Number of pairs that were skipped (already merged / inactive /
+    /// drifted post-detection / underlying merge failure).
+    pub skipped_count: u32,
+    /// All new face IDs produced by successful merges (intermediate +
+    /// final). Caller may inspect `mesh.faces[fid].is_active()` to
+    /// distinguish final vs intermediate.
+    pub new_face_ids: Vec<FaceId>,
+}
+
+/// ADR-150 β-2 — Batch merge coplanar pairs with face_id remapping
+/// (cascade A-B → AB-C handling).
+///
+/// Caller supplies `pairs` (typically from a prior `sweep_coplanar_pairs`
+/// call). Strict per-pair validation — stale pairs (face already merged /
+/// inactive / drift) are skipped, not silent. `BatchMergeReport.skipped_
+/// count` exposes skip count (메타-원칙 #16 정합).
+///
+/// # Cascade handling
+///
+/// When pair (A, B) merges into face_ab, subsequent pairs referencing
+/// either A or B are remapped to face_ab via `remap` table. Example:
+///   - sweep returns: [(f1, f2), (f2, f3)]
+///   - merge (f1, f2) → f12. remap: f1 → f12, f2 → f12.
+///   - second pair (f2, f3): resolve f2 → f12, f3 → f3. merge (f12, f3)
+///     → f123. remap: f12 → f123, f3 → f123 (transitive update).
+///   - Result: merged_count=2, skipped_count=0, new_face_ids=[f12, f123].
+///     Final mesh has 1 face (f123 active, f1/f2/f3/f12 inactive).
+///
+/// # Skip-on-error policy (L-β2-3)
+///
+/// `merge_coplanar_faces_geometric` may fail post-detection due to:
+///   - Geometric drift between sweep ↔ batch (unlikely in single-thread
+///     batch but possible if external mutation between calls)
+///   - Edge cases not caught by `would_geometric_merge_succeed` dry-run
+///     (rare but documented in geometric_merge.rs:449-456 "false positives
+///     from this dry-run are therefore rare")
+///   - Cascading merge of A-B-C where A-B succeeds but AB-C has non-convex
+///     boundary that the merge cannot handle.
+///
+/// In all skip cases, the underlying error is silently absorbed into
+/// `skipped_count`. Per-pair detailed error reporting deferred to β-2-
+/// extension or separate diagnostic API.
+///
+/// # Lock-ins (β-2)
+///
+/// - **L-β2-1**: face_id remap table (cascade A-B → AB-C handling) —
+///   path compression on update (O(1) resolve after first traversal)
+/// - **L-β2-2**: Per-pair `would_geometric_merge_succeed` re-check
+///   (drift between sweep ↔ batch defense)
+/// - **L-β2-3**: Skip-on-error policy (silent skip 차단 — `skipped_count`
+///   noted, 메타-원칙 #16 정합)
+/// - **L-β2-4**: 기존 `merge_coplanar_faces_geometric` dispatch (새 merge
+///   알고리즘 0)
+/// - **L-β2-5**: Self-merge guard (resolved_a == resolved_b → skip,
+///   "both pairs already merged into same face" case)
+/// - **L-β2-6**: Deterministic ordering — pairs processed in input order
+///   (caller's sweep ordering preserved)
+pub fn merge_coplanar_pair_batch(
+    mesh: &mut Mesh,
+    pairs: &[CoplanarPairReport],
+    tol_deg: f64,
+) -> BatchMergeReport {
+    use rustc_hash::FxHashMap;
+
+    let mut report = BatchMergeReport::default();
+    let mut remap: FxHashMap<FaceId, FaceId> = FxHashMap::default();
+
+    for pair in pairs {
+        // L-β2-1: Resolve face IDs via remap (cascade chain follow + path
+        // compression).
+        let resolved_a = resolve_face_remap(&mut remap, pair.face_a);
+        let resolved_b = resolve_face_remap(&mut remap, pair.face_b);
+
+        // L-β2-5: Self-merge guard
+        if resolved_a == resolved_b {
+            report.skipped_count += 1;
+            continue;
+        }
+
+        // Verify both faces still active
+        let a_active = mesh.faces.get(resolved_a).map(|f| f.is_active()).unwrap_or(false);
+        let b_active = mesh.faces.get(resolved_b).map(|f| f.is_active()).unwrap_or(false);
+        if !a_active || !b_active {
+            report.skipped_count += 1;
+            continue;
+        }
+
+        // L-β2-2: Re-verify mergeable (drift defense)
+        if !mesh.would_geometric_merge_succeed(resolved_a, resolved_b, tol_deg) {
+            report.skipped_count += 1;
+            continue;
+        }
+
+        // L-β2-4: Dispatch existing merge
+        match mesh.merge_coplanar_faces_geometric(resolved_a, resolved_b, tol_deg) {
+            Ok(new_face) => {
+                report.merged_count += 1;
+                report.new_face_ids.push(new_face);
+                // L-β2-1: Update remap (transitive — existing entries
+                // pointing to resolved_a or resolved_b also redirect to new_face).
+                update_remap_transitive(&mut remap, resolved_a, new_face);
+                update_remap_transitive(&mut remap, resolved_b, new_face);
+            }
+            Err(_) => {
+                // L-β2-3: Skip-on-error (silent skip count, error detail
+                // absorbed — per-pair diagnostic is β-2-extension scope).
+                report.skipped_count += 1;
+            }
+        }
+    }
+
+    report
+}
+
+/// Internal helper — Resolve face_id via remap table with path compression.
+///
+/// Walks the remap chain until reaching a fixed point (face_id not in
+/// remap). Compresses the path so subsequent lookups are O(1).
+fn resolve_face_remap(
+    remap: &mut rustc_hash::FxHashMap<FaceId, FaceId>,
+    id: FaceId,
+) -> FaceId {
+    let mut cur = id;
+    let mut visited: Vec<FaceId> = Vec::new();
+    loop {
+        match remap.get(&cur) {
+            Some(&next) if next != cur => {
+                visited.push(cur);
+                cur = next;
+            }
+            _ => break,
+        }
+        // Safety bound (corrupted cycle defense)
+        if visited.len() > 1000 { break; }
+    }
+    // Path compression — all visited entries now point directly to root.
+    for v in visited {
+        remap.insert(v, cur);
+    }
+    cur
+}
+
+/// Internal helper — Update remap so `old` (and all entries pointing to
+/// `old`) now redirect to `new`. Transitive update — caller relies on
+/// `resolve_face_remap` to follow chains but this eagerly redirects.
+fn update_remap_transitive(
+    remap: &mut rustc_hash::FxHashMap<FaceId, FaceId>,
+    old: FaceId,
+    new: FaceId,
+) {
+    if old == new { return; }
+    // Direct entry: old → new
+    remap.insert(old, new);
+    // Transitive: any existing key whose value == old should redirect to new
+    let to_update: Vec<FaceId> = remap
+        .iter()
+        .filter_map(|(k, v)| if *v == old { Some(*k) } else { None })
+        .collect();
+    for k in to_update {
+        remap.insert(k, new);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,6 +1463,122 @@ mod tests {
         // tol = 5° — should find pair (2° angle < 5° tol, plane dist 1.75 < 5mm)
         let reports_loose = sweep_coplanar_pairs(&mesh, 5.0);
         assert_eq!(reports_loose.len(), 1, "5° tol should accept 2° tilt, got {}", reports_loose.len());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // ADR-150 β-2 — merge_coplanar_pair_batch (4 회귀)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Test 7 (β-2): canonical single-pair batch merge success
+    #[test]
+    fn adr150_batch_merge_single_pair_success() {
+        let mut mesh = Mesh::new();
+        let f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        let f2 = build_quad_y0(&mut mesh, 1000.0, 2000.0, 0.0, 1000.0);
+
+        let pairs = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+        assert_eq!(pairs.len(), 1, "sweep should find 1 pair");
+
+        let report = merge_coplanar_pair_batch(&mut mesh, &pairs, COPLANAR_PAIR_TOL_DEG);
+
+        assert_eq!(report.merged_count, 1, "expected 1 merge, got {}", report.merged_count);
+        assert_eq!(report.skipped_count, 0, "expected 0 skip");
+        assert_eq!(report.new_face_ids.len(), 1, "expected 1 new face_id");
+        // Both original faces consumed (storage-removed OR inactive — both
+        // valid post-merge states. Use .get() to handle storage removal.)
+        let f1_state = mesh.faces.get(f1).map(|f| f.is_active()).unwrap_or(false);
+        let f2_state = mesh.faces.get(f2).map(|f| f.is_active()).unwrap_or(false);
+        assert!(!f1_state, "f1 should be consumed (merged)");
+        assert!(!f2_state, "f2 should be consumed (merged)");
+        // New face active
+        let new_face = report.new_face_ids[0];
+        assert!(mesh.faces.get(new_face).map(|f| f.is_active()).unwrap_or(false),
+            "new face should be active");
+    }
+
+    /// Test 8 (β-2): cascading merge — A-B → AB-C handling
+    #[test]
+    fn adr150_batch_merge_cascade_three_rects() {
+        let mut mesh = Mesh::new();
+        let f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        let f2 = build_quad_y0(&mut mesh, 1000.0, 2000.0, 0.0, 1000.0);
+        let f3 = build_quad_y0(&mut mesh, 2000.0, 3000.0, 0.0, 1000.0);
+
+        let pairs = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+        assert_eq!(pairs.len(), 2, "sweep should find 2 pairs (f1-f2 + f2-f3)");
+
+        let report = merge_coplanar_pair_batch(&mut mesh, &pairs, COPLANAR_PAIR_TOL_DEG);
+
+        // Both pairs should merge (cascade via remap): (f1+f2) then (f12+f3)
+        assert_eq!(report.merged_count, 2, "expected 2 merges (cascade), got {}", report.merged_count);
+        assert_eq!(report.skipped_count, 0, "expected 0 skip in cascade");
+        // 2 intermediate/final new faces
+        assert_eq!(report.new_face_ids.len(), 2);
+        // All 3 original faces consumed (storage-removed OR inactive)
+        let active_or = |fid: FaceId| mesh.faces.get(fid).map(|f| f.is_active()).unwrap_or(false);
+        assert!(!active_or(f1));
+        assert!(!active_or(f2));
+        assert!(!active_or(f3));
+        // Only the *final* new_face_id should be active in mesh
+        let final_face = report.new_face_ids[1];
+        assert!(active_or(final_face), "final cascade face should be active");
+        // Intermediate face (f12) should be consumed by second merge
+        let intermediate_face = report.new_face_ids[0];
+        assert!(!active_or(intermediate_face),
+            "intermediate cascade face should be consumed");
+    }
+
+    /// Test 9 (β-2): skip-on-self-merge guard (L-β2-5) — pair where both
+    /// already merged into same face via cascade
+    #[test]
+    fn adr150_batch_merge_skip_self_merge() {
+        let mut mesh = Mesh::new();
+        let f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        let f2 = build_quad_y0(&mut mesh, 1000.0, 2000.0, 0.0, 1000.0);
+
+        // Construct 2 duplicate pairs (same face_a/face_b) to force
+        // self-merge guard. Real sweep wouldn't produce duplicates but
+        // tests guard isolation.
+        let pair = CoplanarPairReport {
+            face_a: f1,
+            face_b: f2,
+            plane_normal: DVec3::new(0.0, 1.0, 0.0),
+        };
+        let pairs = vec![pair.clone(), pair.clone()];
+
+        let report = merge_coplanar_pair_batch(&mut mesh, &pairs, COPLANAR_PAIR_TOL_DEG);
+
+        // First pair merges (f1, f2) → new_face. Second pair (f1, f2) →
+        // both resolve to same new_face (via remap) → L-β2-5 self-merge guard
+        // skips.
+        assert_eq!(report.merged_count, 1, "expected 1 merge, got {}", report.merged_count);
+        assert_eq!(report.skipped_count, 1, "expected 1 skip (self-merge), got {}", report.skipped_count);
+    }
+
+    /// Test 10 (β-2): manifold post-batch invariant (LOCKED #1 P7)
+    #[test]
+    fn adr150_batch_merge_manifold_safe_post_batch() {
+        let mut mesh = Mesh::new();
+        // 4 adjacent rects in row → 3 pairs → cascade into 1 face
+        let _f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        let _f2 = build_quad_y0(&mut mesh, 1000.0, 2000.0, 0.0, 1000.0);
+        let _f3 = build_quad_y0(&mut mesh, 2000.0, 3000.0, 0.0, 1000.0);
+        let _f4 = build_quad_y0(&mut mesh, 3000.0, 4000.0, 0.0, 1000.0);
+
+        let pairs = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+        assert_eq!(pairs.len(), 3, "sweep should find 3 pairs (adjacent 4-row)");
+
+        let report = merge_coplanar_pair_batch(&mut mesh, &pairs, COPLANAR_PAIR_TOL_DEG);
+
+        assert_eq!(report.merged_count, 3, "expected 3 cascade merges, got {}", report.merged_count);
+
+        // LOCKED #1 P7 invariant: verify_face_invariants passes
+        let invariants = mesh.verify_face_invariants();
+        assert!(
+            invariants.is_valid(),
+            "manifold invariants violated post-batch: {} violations",
+            invariants.violations.len()
+        );
     }
 
     // ────────────────────────────────────────────────────────────────────────
