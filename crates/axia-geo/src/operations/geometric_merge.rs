@@ -25,6 +25,34 @@ use glam::DVec3;
 use crate::entities::*;
 use crate::mesh::Mesh;
 
+/// ADR-150 β-1 — Default coplanar tolerance (degrees) for sweep + batch
+/// merge dispatch. Matches existing `merge_coplanar_faces_geometric`
+/// default (1.0°) — Sprint 3 audit-first canonical 10번째 적용 (기존
+/// manual 자산 활용 — `geometric_merge.rs:49` impl).
+///
+/// Anchor: ADR-150 §2 Q3=(a) (default 답습), LOCKED #65 메타-원칙 #16
+/// (휴리스틱 차단 — 사용자 명시 호출 only).
+pub const COPLANAR_PAIR_TOL_DEG: f64 = 1.0;
+
+/// ADR-150 β-1 — Single coplanar mergeable pair detection report.
+///
+/// One pair = (face_a, face_b) where both are active + coplanar (within
+/// `tol_deg`) + `would_geometric_merge_succeed` dry-run pass. Returned
+/// by `sweep_coplanar_pairs`; consumed by `merge_coplanar_pair_batch`
+/// (β-2).
+///
+/// `face_a.raw() < face_b.raw()` invariant (deterministic ordering —
+/// duplicate (f1, f2) ↔ (f2, f1) pair 차단).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoplanarPairReport {
+    pub face_a: FaceId,
+    pub face_b: FaceId,
+    /// Plane normal (face_a.normal(), normalized). face_b 의 normal 은
+    /// 같은 방향 OR 반대 방향 (`merge_coplanar_faces_geometric` 의
+    /// `opposite_normal` flag 정합).
+    pub plane_normal: DVec3,
+}
+
 /// Overlap 정보: f1 edge i 와 f2 edge j 가 같은 무한직선 위에서 t 구간 [t_lo, t_hi]
 /// 만큼 겹침. 파라미터는 f1 edge (vertex i → vertex i+1) 방향을 기준으로 한다.
 struct Overlap {
@@ -697,6 +725,109 @@ fn build_merged_boundary(
     Ok(out)
 }
 
+// ============================================================================
+// ADR-150 β-1 — Sweep coplanar mergeable pairs (read-only detection)
+// ============================================================================
+
+/// ADR-150 β-1 — Sweep all coplanar mergeable pairs in the mesh.
+///
+/// Read-only API — no mutation. Returns a Vec of `CoplanarPairReport`s
+/// — one per (face_a, face_b) pair satisfying:
+///   1. Both faces active
+///   2. Normals coplanar within `tol_deg` (same or opposite direction)
+///   3. `would_geometric_merge_succeed` dry-run pass (AABB overlap +
+///      plane distance + collinear edge overlap)
+///   4. `face_a.raw() < face_b.raw()` (deterministic ordering, no
+///      duplicates)
+///
+/// Empty Vec = clean mesh (0 mergeable pairs).
+///
+/// # Algorithm (Q2=a Full mesh sweep + AABB overlap pre-filter)
+///
+/// β-1 MVP: O(N²) naive pair iteration with AABB overlap pre-filter.
+/// AABB overlap check eliminates most non-mergeable pairs early —
+/// `would_geometric_merge_succeed` only invoked for AABB-overlapping
+/// pairs. Acceptable for typical mesh scales (< 200 active faces).
+/// β-1-extension or perf ADR may add spatial-hash bucketing for
+/// large-mesh perf.
+///
+/// # Parameters
+///
+/// - `tol_deg`: coplanar normal angle threshold. Recommended default =
+///   `COPLANAR_PAIR_TOL_DEG` (1.0°, ADR-150 §2 Q3=a).
+///
+/// # Lock-ins (β-1)
+///
+/// - **L-β1-1**: `face_a.raw() < face_b.raw()` invariant (no duplicate
+///   (f1, f2) ↔ (f2, f1) pair, deterministic ordering)
+/// - **L-β1-2**: AABB overlap pre-filter — `would_geometric_merge_succeed`
+///   호출 횟수 minimize (perf optimization, β-1 MVP)
+/// - **L-β1-3**: 기존 `would_geometric_merge_succeed` 활용 (geometric_
+///   merge.rs:461) — 새 검증 알고리즘 0
+/// - **L-β1-4**: read-only (mutation 0) — β-2 batch merge 가 mutation
+/// - **L-β1-5**: inactive face / face without AABB silent skip (β-2
+///   batch 책임)
+pub fn sweep_coplanar_pairs(mesh: &Mesh, tol_deg: f64) -> Vec<CoplanarPairReport> {
+    use crate::operations::coplanar::face_world_aabb;
+
+    let mut reports = Vec::new();
+
+    // Snapshot active faces' AABBs + normals (single pass).
+    struct FaceSnapshot {
+        id: FaceId,
+        aabb: crate::operations::coplanar::Aabb3,
+        normal: DVec3,
+    }
+    let mut snapshots: Vec<FaceSnapshot> = Vec::new();
+    for (fid, face) in mesh.faces.iter() {
+        if !face.is_active() { continue; }
+        let Some(aabb) = face_world_aabb(mesh, fid) else { continue; };
+        let normal = face.normal().normalize_or_zero();
+        if normal.length_squared() < 1e-20 { continue; }
+        snapshots.push(FaceSnapshot { id: fid, aabb, normal });
+    }
+
+    let n = snapshots.len();
+    if n < 2 { return reports; }
+
+    // O(N²) pair iteration with AABB pre-filter + dry-run dispatch.
+    // L-β1-1: face_a.raw() < face_b.raw() invariant via i < j loop.
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let a = &snapshots[i];
+            let b = &snapshots[j];
+
+            // L-β1-2: AABB overlap pre-filter (cheap)
+            if !aabb_overlap(&a.aabb, &b.aabb) { continue; }
+
+            // L-β1-3: would_geometric_merge_succeed dispatch (full check)
+            if !mesh.would_geometric_merge_succeed(a.id, b.id, tol_deg) { continue; }
+
+            // Emit deterministic pair (smaller id first, already i < j so
+            // a.id < b.id is NOT guaranteed — face_id ordering is insertion
+            // order, not numeric. Sort explicit.)
+            let (face_a, face_b, plane_normal) = if a.id.raw() < b.id.raw() {
+                (a.id, b.id, a.normal)
+            } else {
+                (b.id, a.id, b.normal)
+            };
+            reports.push(CoplanarPairReport { face_a, face_b, plane_normal });
+        }
+    }
+
+    reports
+}
+
+/// Internal helper — AABB overlap check (touching = overlap).
+fn aabb_overlap(
+    a: &crate::operations::coplanar::Aabb3,
+    b: &crate::operations::coplanar::Aabb3,
+) -> bool {
+    a.min.x <= b.max.x && a.max.x >= b.min.x
+        && a.min.y <= b.max.y && a.max.y >= b.min.y
+        && a.min.z <= b.max.z && a.max.z >= b.min.z
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1023,5 +1154,164 @@ mod tests {
         let bogus = FaceId::new(9999);
         assert!(!mesh.would_geometric_merge_succeed(f1, bogus, 1.0));
         assert!(!mesh.would_geometric_merge_succeed(f1, f1, 1.0));
+    }
+
+    // ========================================================================
+    // ADR-150 β-1 — sweep_coplanar_pairs (6 회귀)
+    // ========================================================================
+
+    /// Helper — build an axis-aligned quad face on Y=0 plane (xz extent).
+    fn build_quad_y0(
+        mesh: &mut Mesh,
+        x_min: f64, x_max: f64, z_min: f64, z_max: f64,
+    ) -> FaceId {
+        let a = mesh.add_vertex(DVec3::new(x_min, 0.0, z_min));
+        let b = mesh.add_vertex(DVec3::new(x_max, 0.0, z_min));
+        let c = mesh.add_vertex(DVec3::new(x_max, 0.0, z_max));
+        let d = mesh.add_vertex(DVec3::new(x_min, 0.0, z_max));
+        mesh.add_face_with_holes(&[a, d, c, b], &[], MaterialId::new(0)).unwrap()
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test 1: baseline clean mesh (no mergeable pairs)
+    // ────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn adr150_sweep_no_pairs_on_empty_mesh() {
+        let mesh = Mesh::new();
+        let reports = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+        assert_eq!(reports.len(), 0, "empty mesh should have 0 pairs");
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test 2: canonical adjacent coplanar pair (same-size shared edge)
+    // ────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn adr150_sweep_finds_adjacent_coplanar_pair() {
+        let mut mesh = Mesh::new();
+        let f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        let f2 = build_quad_y0(&mut mesh, 1000.0, 2000.0, 0.0, 1000.0);
+
+        let reports = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+
+        // Should find exactly 1 pair (f1, f2 — both Y=0, adjacent at x=1000)
+        assert_eq!(reports.len(), 1, "expected 1 mergeable pair, got {}", reports.len());
+        let r = &reports[0];
+        // L-β1-1: face_a.raw() < face_b.raw() invariant
+        assert!(r.face_a.raw() < r.face_b.raw());
+        // Both faces should be in pair
+        assert!(
+            (r.face_a == f1 && r.face_b == f2) || (r.face_a == f2 && r.face_b == f1),
+            "pair should contain f1 + f2, got ({:?}, {:?})", r.face_a, r.face_b
+        );
+        // Normal Y direction (Y=0 plane)
+        assert!(r.plane_normal.y.abs() > 0.99, "normal should be Y-axis, got {:?}", r.plane_normal);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test 3: non-coplanar pair excluded (regression guard)
+    // ────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn adr150_sweep_excludes_non_coplanar() {
+        let mut mesh = Mesh::new();
+        // Face on Y=0
+        let _f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        // Face on Z=0 (perpendicular)
+        let a = mesh.add_vertex(DVec3::new(0.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(1000.0, 0.0, 0.0));
+        let c = mesh.add_vertex(DVec3::new(1000.0, 1000.0, 0.0));
+        let d = mesh.add_vertex(DVec3::new(0.0, 1000.0, 0.0));
+        let _f2 = mesh.add_face_with_holes(&[a, b, c, d], &[], MaterialId::new(0)).unwrap();
+
+        let reports = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+
+        // Perpendicular faces — no coplanar pair
+        assert_eq!(reports.len(), 0, "perpendicular faces should not be a pair, got {}", reports.len());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test 4: multiple coplanar mergeable pairs (3 adjacent rects)
+    // ────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn adr150_sweep_finds_multiple_pairs() {
+        let mut mesh = Mesh::new();
+        // 3 faces in a row: f1 [0..1000], f2 [1000..2000], f3 [2000..3000]
+        let _f1 = build_quad_y0(&mut mesh, 0.0, 1000.0, 0.0, 1000.0);
+        let _f2 = build_quad_y0(&mut mesh, 1000.0, 2000.0, 0.0, 1000.0);
+        let _f3 = build_quad_y0(&mut mesh, 2000.0, 3000.0, 0.0, 1000.0);
+
+        let reports = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+
+        // Expected pairs: (f1, f2) shared edge x=1000, (f2, f3) shared edge x=2000.
+        // (f1, f3) NOT adjacent (gap at x=1000..2000 of f2 — no collinear overlap).
+        // So 2 pairs expected.
+        assert_eq!(reports.len(), 2, "expected 2 mergeable pairs, got {}", reports.len());
+        // L-β1-1: all reports respect ordering invariant
+        for r in &reports {
+            assert!(r.face_a.raw() < r.face_b.raw(),
+                "ordering violation: ({:?}, {:?})", r.face_a, r.face_b);
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test 5: tolerance boundary case (1° same vs 5° different)
+    // ────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn adr150_sweep_respects_tolerance() {
+        // NOTE: `would_geometric_merge_succeed` has TWO independent checks:
+        //   1. Normal angle (`tol_deg`) — what we test here
+        //   2. Plane distance (≤ 5mm, hard-coded) — must stay within for tilt test
+        // Use small face (50mm) + small tilt (2°) so plane drift (50·tan(2°)
+        // ≈ 1.75mm) stays well within 5mm, isolating the normal tol behavior.
+        let mut mesh = Mesh::new();
+        // Face on Y=0 (50mm × 50mm)
+        let _f1 = build_quad_y0(&mut mesh, 0.0, 50.0, 0.0, 50.0);
+        // Face tilted 2° around Z axis — adjacent at x=50 (face2: x=50..100)
+        let tilt_rad: f64 = 2.0_f64.to_radians();
+        let y_at_x100 = 50.0 * tilt_rad.tan();  // ≈ 1.75mm (within 5mm)
+        let a = mesh.add_vertex(DVec3::new(50.0, 0.0, 0.0));
+        let b = mesh.add_vertex(DVec3::new(100.0, y_at_x100, 0.0));
+        let c = mesh.add_vertex(DVec3::new(100.0, y_at_x100, 50.0));
+        let d = mesh.add_vertex(DVec3::new(50.0, 0.0, 50.0));
+        let _f2 = mesh.add_face_with_holes(&[a, d, c, b], &[], MaterialId::new(0)).unwrap();
+
+        // tol = 1° — should NOT find pair (2° angle > 1° tol)
+        let reports_strict = sweep_coplanar_pairs(&mesh, 1.0);
+        assert_eq!(reports_strict.len(), 0, "1° tol should reject 2° tilt, got {}", reports_strict.len());
+
+        // tol = 5° — should find pair (2° angle < 5° tol, plane dist 1.75 < 5mm)
+        let reports_loose = sweep_coplanar_pairs(&mesh, 5.0);
+        assert_eq!(reports_loose.len(), 1, "5° tol should accept 2° tilt, got {}", reports_loose.len());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Test 6: AABB pre-filter performance (large mesh sanity)
+    // ────────────────────────────────────────────────────────────────────────
+    #[test]
+    fn adr150_sweep_aabb_prefilter_performance() {
+        let mut mesh = Mesh::new();
+        // Build 8×8 grid of disjoint quads (64 faces, no adjacency)
+        // Each quad isolated by 100mm gap (AABB pre-filter eliminates all
+        // non-adjacent pairs cheaply).
+        for ix in 0..8 {
+            for iy in 0..8 {
+                let x0 = (ix * 1100) as f64;
+                let z0 = (iy * 1100) as f64;
+                build_quad_y0(&mut mesh, x0, x0 + 1000.0, z0, z0 + 1000.0);
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let reports = sweep_coplanar_pairs(&mesh, COPLANAR_PAIR_TOL_DEG);
+        let elapsed = start.elapsed();
+
+        // Disjoint grid — 0 mergeable pairs.
+        assert_eq!(reports.len(), 0, "disjoint 8x8 grid should have 0 pairs, got {}", reports.len());
+        // Performance — should complete well under 500ms (64 face × 63 / 2 =
+        // 2016 AABB checks, all reject).
+        assert!(
+            elapsed.as_millis() < 500,
+            "sweep took {}ms (expected < 500ms for 64-face grid)",
+            elapsed.as_millis()
+        );
     }
 }
