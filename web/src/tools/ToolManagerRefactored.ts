@@ -132,6 +132,26 @@ export class ToolManager {
     up: THREE.Vector3;         // unit, perpendicular to normal
   } | null = null;
 
+  // ═══ ADR-164 β-1 — Sticky Last Drawn Plane (Auto Plane Detection) ═══
+  // Session-only in-memory cache of the last face/face-synthesis plane.
+  // Used by getDrawPlane() as fallback (priority #3, before view-mode
+  // default) when cursor is NOT on a face. Reset triggers: view mode
+  // change / sketch enter+exit / Esc / explicit reset action.
+  //
+  // 메타-원칙 #5 정합 (사용자 편의 — 명확하면 자동) + #16 보완
+  // (reset trigger 명시).
+  //
+  // localStorage 미사용 — session-only (L-164-9). Cross-session sticky
+  // 는 별도 ADR.
+  //
+  // ADR-149/150/151 6-step template 1:1 mirror — 5-step (TS only).
+  private _lastDrawnPlane: {
+    origin: THREE.Vector3;     // any point on the plane
+    normal: THREE.Vector3;     // unit
+    up: THREE.Vector3;         // unit, perpendicular to normal
+    source: 'face' | 'view' | 'sketch';  // origin of this plane
+  } | null = null;
+
   constructor(
     viewport: Viewport,
     bridge: WasmBridge,
@@ -2227,6 +2247,9 @@ export class ToolManager {
       normal: opts.normal.clone().normalize(),
       up: opts.up.clone().normalize(),
     };
+    // ADR-164 β-1 — Reset sticky last drawn plane on sketch enter
+    // (sketch lock-in 으로 sticky 자연 무효, L-164-2).
+    this.clearLastDrawnPlane();
     this.viewport.setSketchPlaneVisual(this._sketch);
     // 툴바 배지 (DOM status bar 내부 요소) 갱신.
     this.updateSketchStatusBadge();
@@ -2305,6 +2328,79 @@ export class ToolManager {
     this._sketch = null;
     this.viewport.setSketchPlaneVisual(null);
     this.updateSketchStatusBadge();
+    // ADR-164 β-1 — Reset sticky last drawn plane on sketch exit
+    // (사용자 의도 변경 명시 신호, L-164-2).
+    this.clearLastDrawnPlane();
+  }
+
+  // ═══ ADR-164 β-1 — Sticky Last Drawn Plane API ═══
+
+  /**
+   * ADR-164 β-1 — Record the plane just drawn on (called by Draw tools
+   * after face synthesis). Future `getDrawPlane()` calls will use this
+   * as fallback (priority #3, before view-mode default) when cursor is
+   * NOT on a face.
+   *
+   * Session-only (in-memory, no localStorage per L-164-9). Vectors
+   * cloned defensively (caller may mutate input).
+   *
+   * 메타-원칙 #5 정합 (사용자 편의 — 명확하면 자동).
+   */
+  setLastDrawnPlane(plane: {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+    source?: 'face' | 'view' | 'sketch';
+  }): void {
+    this._lastDrawnPlane = {
+      origin: plane.origin.clone(),
+      normal: plane.normal.clone().normalize(),
+      up: plane.up.clone().normalize(),
+      source: plane.source ?? 'view',
+    };
+  }
+
+  /**
+   * ADR-164 β-1 — Read the current sticky plane (null if reset / never
+   * set). Returns a deep clone to prevent external mutation.
+   */
+  getLastDrawnPlane(): {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+    source: 'face' | 'view' | 'sketch';
+  } | null {
+    if (!this._lastDrawnPlane) return null;
+    return {
+      origin: this._lastDrawnPlane.origin.clone(),
+      normal: this._lastDrawnPlane.normal.clone(),
+      up: this._lastDrawnPlane.up.clone(),
+      source: this._lastDrawnPlane.source,
+    };
+  }
+
+  /**
+   * ADR-164 β-1 — Reset the sticky plane. Called automatically on:
+   *   - sketch enter / exit (L-164-2)
+   *   - view mode change (via `notifyViewModeChange`, L-164-2)
+   *   - Esc cancel (via `cancelCurrentTool`, L-164-2)
+   *   - explicit user reset (ContextMenu "기본 평면으로", β-3 scope)
+   *
+   * 메타-원칙 #16 보완 (자동화 antipattern — 사용자 의도 변경 명시 신호
+   * 시 즉시 reset, cascading 부작용 차단).
+   */
+  clearLastDrawnPlane(): void {
+    this._lastDrawnPlane = null;
+  }
+
+  /**
+   * ADR-164 β-1 — Notify ToolManager of a view-mode change (called by
+   * Viewport.setViewMode in β-3 wiring). Resets the sticky plane —
+   * view mode change is a clear signal of user intent shift away from
+   * the previous drawing context.
+   */
+  notifyViewModeChange(): void {
+    this.clearLastDrawnPlane();
   }
 
   /** Update the status-bar badge to reflect sketch state.
@@ -2837,6 +2933,9 @@ export class ToolManager {
     this.snap.clearTrackPoints();
     this.axisLock = null;
     this.inferredAxis = 'free';
+    // ADR-164 β-1 — Esc / global cancel resets sticky last drawn plane
+    // (L-164-2 — 사용자 의도 변경 명시 신호).
+    this.clearLastDrawnPlane();
   }
 
   // ═══════════════════════════════════════════════════
