@@ -152,6 +152,38 @@ export class ToolManager {
     source: 'face' | 'view' | 'sketch';  // origin of this plane
   } | null = null;
 
+  // ═══════════════════════════════════════════════════════════════
+  //  ADR-166 β-1 — Active Sketch Plane Session Lock
+  //
+  //  Strong cross-tool plane lock — first_click 시 set, 명시 release
+  //  까지 지속 (도구 전환, face hit 무관).
+  //
+  //  ADR-164 와 coexist:
+  //  - `_planeLock` ≠ null → strong lock 활성 (priority #1 in
+  //    getDrawPlane, face hit / sticky 무시 — β-3 scope)
+  //  - `_planeLock` = null → ADR-164 sticky fallback 자연 활성
+  //
+  //  Reset hooks (L-166-2 cross-tool 유지 + 명시 release only):
+  //  - Ctrl+Shift+P 단축키 (β-3 scope)
+  //  - notifyViewModeChange (view 변경 = 사용자 의도 변경 명시 신호)
+  //  - enterSketch / exitSketch (sketch lock-in 우선)
+  //  - cancelCurrentTool (Esc — 사용자 의도 변경 명시 신호)
+  //  - ContextMenu "🔓 평면 잠금 해제" (β-3 scope)
+  //
+  //  **setTool() 는 reset 안 함** (cross-tool 유지가 본 ADR 핵심 가치).
+  //
+  //  메타-원칙 #5 정합 (사용자 편의 — 명확하면 자동 plane lock) +
+  //  #16 정합 (자동화 antipattern — 명시 release path 보존).
+  //
+  //  ADR-164 5-step variant 3번째 reproducibility — TS only, Engine
+  //  변경 0.
+  private _planeLock: {
+    origin: THREE.Vector3;     // any point on the plane
+    normal: THREE.Vector3;     // unit
+    up: THREE.Vector3;         // unit, perpendicular to normal
+    source: 'first_click' | 'sketch' | 'manual';  // origin of this lock
+  } | null = null;
+
   constructor(
     viewport: Viewport,
     bridge: WasmBridge,
@@ -2255,6 +2287,9 @@ export class ToolManager {
     // ADR-164 β-1 — Reset sticky last drawn plane on sketch enter
     // (sketch lock-in 으로 sticky 자연 무효, L-164-2).
     this.clearLastDrawnPlane();
+    // ADR-166 β-1 — Reset plane lock on sketch enter (sketch lock-in
+    // 우선, plane lock 자연 무효, L-166-2).
+    this.unlockPlane();
     this.viewport.setSketchPlaneVisual(this._sketch);
     // 툴바 배지 (DOM status bar 내부 요소) 갱신.
     this.updateSketchStatusBadge();
@@ -2336,6 +2371,9 @@ export class ToolManager {
     // ADR-164 β-1 — Reset sticky last drawn plane on sketch exit
     // (사용자 의도 변경 명시 신호, L-164-2).
     this.clearLastDrawnPlane();
+    // ADR-166 β-1 — Reset plane lock on sketch exit (사용자 의도 변경
+    // 명시 신호, L-166-2).
+    this.unlockPlane();
   }
 
   // ═══ ADR-164 β-1 — Sticky Last Drawn Plane API ═══
@@ -2402,6 +2440,86 @@ export class ToolManager {
     this.updateLastDrawnPlaneBadge();
   }
 
+  // ═══ ADR-166 β-1 — Active Sketch Plane Session Lock API ═══
+
+  /**
+   * ADR-166 β-1 — Lock the active drawing plane (called by Draw tools
+   * on first_click when no lock active, or by manual user trigger).
+   *
+   * Strong cross-tool lock — face hit (ADR-140) / sticky (ADR-164)
+   * 우선순위 lock 활성 시 무시 (β-3 scope: getDrawPlane priority #1).
+   *
+   * Idempotent — 이미 lock 활성 시 *no-op* (사용자 명시 unlock 후
+   * 새 lock 만 활성). 메타-원칙 #16 정합 (자동 override 차단).
+   *
+   * Vectors cloned defensively (caller may mutate input).
+   */
+  lockPlane(plane: {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+    source?: 'first_click' | 'sketch' | 'manual';
+  }): void {
+    // L-166-2 idempotent: 이미 lock 활성 시 no-op (사용자 명시 unlock 필요)
+    if (this._planeLock) return;
+    this._planeLock = {
+      origin: plane.origin.clone(),
+      normal: plane.normal.clone().normalize(),
+      up: plane.up.clone().normalize(),
+      source: plane.source ?? 'first_click',
+    };
+    // β-3 scope: StatusBar badge upgrade (🔒 lock icon) — placeholder
+    // call. updateLastDrawnPlaneBadge() 의 lock-aware variant 는 β-3
+    // 에서 implementation.
+    this.updateLastDrawnPlaneBadge();
+  }
+
+  /**
+   * ADR-166 β-1 — Read current plane lock (null if not locked).
+   * Returns deep clone to prevent external mutation.
+   */
+  getPlaneLock(): {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+    source: 'first_click' | 'sketch' | 'manual';
+  } | null {
+    if (!this._planeLock) return null;
+    return {
+      origin: this._planeLock.origin.clone(),
+      normal: this._planeLock.normal.clone(),
+      up: this._planeLock.up.clone(),
+      source: this._planeLock.source,
+    };
+  }
+
+  /**
+   * ADR-166 β-1 — Predicate check (boolean) for lock state.
+   * Convenience wrapper over `getPlaneLock() !== null`.
+   */
+  isPlaneLocked(): boolean {
+    return this._planeLock !== null;
+  }
+
+  /**
+   * ADR-166 β-1 — Release plane lock. Called automatically on:
+   *   - sketch enter / exit (sketch lock-in 우선)
+   *   - view mode change (via `notifyViewModeChange`)
+   *   - Esc cancel (via `cancelCurrentTool`)
+   *   - 명시 user trigger:
+   *     * Ctrl+Shift+P 단축키 (β-3 scope)
+   *     * ContextMenu "🔓 평면 잠금 해제" (β-3 scope)
+   *
+   * **setTool() 는 호출 안 함** (cross-tool 유지가 본 ADR 핵심 가치).
+   *
+   * 메타-원칙 #16 정합 (명시 release path 보존).
+   */
+  unlockPlane(): void {
+    this._planeLock = null;
+    // β-3 scope: StatusBar badge update.
+    this.updateLastDrawnPlaneBadge();
+  }
+
   /**
    * ADR-164 β-3 — Update the #sb-plane-badge visibility + label based
    * on the current `_lastDrawnPlane` state. Hides when null, shows
@@ -2446,6 +2564,9 @@ export class ToolManager {
    */
   notifyViewModeChange(): void {
     this.clearLastDrawnPlane();
+    // ADR-166 β-1 — Reset plane lock on view mode change (view 변경
+    // = 사용자 의도 변경 명시 신호, L-166-2).
+    this.unlockPlane();
   }
 
   /** Update the status-bar badge to reflect sketch state.
@@ -3013,6 +3134,9 @@ export class ToolManager {
     // ADR-164 β-1 — Esc / global cancel resets sticky last drawn plane
     // (L-164-2 — 사용자 의도 변경 명시 신호).
     this.clearLastDrawnPlane();
+    // ADR-166 β-1 — Esc / global cancel resets plane lock
+    // (L-166-2 — 사용자 의도 변경 명시 신호).
+    this.unlockPlane();
   }
 
   // ═══════════════════════════════════════════════════
