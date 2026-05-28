@@ -2363,6 +2363,8 @@ export class ToolManager {
       up: plane.up.clone().normalize(),
       source: plane.source ?? 'view',
     };
+    // ADR-164 β-3 — StatusBar badge update (사용자 인지 강화).
+    this.updateLastDrawnPlaneBadge();
   }
 
   /**
@@ -2396,6 +2398,44 @@ export class ToolManager {
    */
   clearLastDrawnPlane(): void {
     this._lastDrawnPlane = null;
+    // ADR-164 β-3 — StatusBar badge update.
+    this.updateLastDrawnPlaneBadge();
+  }
+
+  /**
+   * ADR-164 β-3 — Update the #sb-plane-badge visibility + label based
+   * on the current `_lastDrawnPlane` state. Hides when null, shows
+   * with source-aware label when set.
+   *
+   * Label format:
+   *   - sketch source: "📐 평면: 스케치"
+   *   - face source: "📐 평면: 면 (Z 법선)"
+   *   - view source: "📐 평면: 마지막 (XY)" / "(XZ)" / "(YZ)" / "(자유)"
+   *
+   * DOM-free in test environment (`document` missing → no-op).
+   */
+  private updateLastDrawnPlaneBadge(): void {
+    if (typeof document === 'undefined') return;
+    const badge = document.getElementById('sb-plane-badge') as HTMLElement | null;
+    if (!badge) return;
+    const sticky = this._lastDrawnPlane;
+    if (!sticky) {
+      badge.style.display = 'none';
+      return;
+    }
+    // Detect cardinal axis label from normal
+    const n = sticky.normal;
+    const labelAxis = Math.abs(n.z) > 0.99 ? 'XY'
+      : Math.abs(n.y) > 0.99 ? 'XZ'
+      : Math.abs(n.x) > 0.99 ? 'YZ'
+      : '자유';
+    const srcLabel = sticky.source === 'sketch'
+      ? '스케치'
+      : sticky.source === 'face'
+        ? '면'
+        : '마지막';
+    badge.textContent = `📐 평면: ${srcLabel} (${labelAxis})`;
+    badge.style.display = '';
   }
 
   /**
@@ -2792,14 +2832,46 @@ export class ToolManager {
   }
 
   /**
+   * ADR-164 β-3 — Apply sticky last drawn plane if present, else fall
+   * back to the view-mode default.
+   *
+   * Priority #3 of `getDrawPlane`:
+   *   1. Sketch mode (handled in caller — returns early)
+   *   2. Cursor on face (caller returns face plane)
+   *   3. **`_lastDrawnPlane` if set** (사용자 facing sticky 활성)
+   *   4. View-mode default (XY ground / XZ wall / YZ wall)
+   *
+   * Q1=a default per ADR-164 §2 — face hit miss 후 sticky → fallback
+   * view-mode. Sticky 가 없을 때만 view-mode default 사용.
+   */
+  private applyStickyOrDefault(defaultPlane: DrawPlaneInfo): DrawPlaneInfo {
+    const sticky = this._lastDrawnPlane;
+    if (sticky) {
+      const right = new THREE.Vector3().crossVectors(sticky.up, sticky.normal).normalize();
+      return {
+        normal: sticky.normal.clone(),
+        up: sticky.up.clone(),
+        right,
+        onFace: false,
+        origin: sticky.origin.clone(),
+      };
+    }
+    return defaultPlane;
+  }
+
+  /**
    * Detect drawing plane from mouse position.
    * If cursor is on an existing face → use that face's DCEL normal.
-   * If cursor is on empty space → use default ground plane.
+   * If cursor is on empty space + sticky present → use sticky (ADR-164 β-3).
+   * Otherwise → use default ground plane.
    *
    * ADR-103-δ (Z-up): default plane mapping per view mode —
    *   3d/top/bottom → XY ground (Z=0), normal +Z, up +Y
    *   front/back    → XZ wall (Y=0), normal +Y, up +Z
    *   right/left    → YZ wall (X=0), normal +X, up +Z
+   *
+   * ADR-164 β-3: face hit miss 시 `_lastDrawnPlane` fallback before
+   * view-mode default (priority #3, sticky 활성).
    */
   private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
     // Sketch mode: lock to the sketch plane irrespective of cursor face hit.
@@ -2845,10 +2917,10 @@ export class ToolManager {
     }
 
     const hit = this.viewport.pick(e.clientX, e.clientY);
-    if (!hit || hit.faceIndex == null) return defaultPlane;
+    if (!hit || hit.faceIndex == null) return this.applyStickyOrDefault(defaultPlane);
 
     const fid = this.getFaceId(hit.faceIndex);
-    if (fid < 0) return defaultPlane;
+    if (fid < 0) return this.applyStickyOrDefault(defaultPlane);
 
     // ADR-140 δ — Surface-aware dispatch (kind ≤ 1 unchanged / kind ≥ 2 tangent plane)
     //

@@ -98,6 +98,16 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = selected.length >= 2 ? '' : 'none';
     });
 
+    // ── ADR-164 β-3 — Sticky last drawn plane reset 항목 가시성 ──
+    // 가시성: _lastDrawnPlane 활성 시만. Selection 무관 (도형 그리기 전
+    // 사용자가 sticky 해제 의도).
+    const planeResetItems = ctxMenu.querySelectorAll('.ctx-plane-reset-item');
+    const hasStickyPlane = typeof (toolManager as { getLastDrawnPlane?: () => unknown }).getLastDrawnPlane === 'function'
+      && (toolManager as { getLastDrawnPlane: () => unknown }).getLastDrawnPlane() !== null;
+    planeResetItems.forEach(item => {
+      (item as HTMLElement).style.display = hasStickyPlane ? '' : 'none';
+    });
+
     // ── ADR-074 U-2 — Boolean Group A/B 항목 가시성 ──
     // Set A / Set B: 선택된 face 가 1개 이상일 때 표시 (사용자가
     //   현재 selection 을 group 으로 지정 가능).
@@ -301,6 +311,20 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           Toast.error(`Coplanar 정리 실패: ${msg}`);
+        }
+        break;
+      }
+      // ─ ADR-164 β-3 — Sticky last drawn plane reset (메타-원칙 #16 보완) ─
+      // 사용자 워크플로우:
+      //   1. Draw 도구로 도형 그림 → sticky 활성 (β-2)
+      //   2. 의도 변경: 다른 평면으로 그리고 싶음
+      //   3. 우클릭 → "📐 기본 평면으로" → clearLastDrawnPlane 호출
+      //   4. 다음 도형은 view-mode default plane 으로 fallback
+      case 'reset-last-drawn-plane': {
+        const tm = toolManager as { clearLastDrawnPlane?: () => void };
+        if (typeof tm.clearLastDrawnPlane === 'function') {
+          tm.clearLastDrawnPlane();
+          Toast.info('기본 평면으로 복귀 (sticky 해제)', 2000);
         }
         break;
       }

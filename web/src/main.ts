@@ -426,6 +426,16 @@ async function main() {
     // 기존 stat-sel-wrap은 숨김 유지 (legacy 호환 목적으로 DOM은 유지)
   });
 
+  // ═══ ADR-164 β-3 — Viewport.setViewMode → ToolManager reset hook ═══
+  // L-164-2 — view mode change is a clear signal of user intent shift
+  // away from the previous drawing context. Calls
+  // `toolManager.notifyViewModeChange()` which resets `_lastDrawnPlane`
+  // (β-1 API). Sticky plane re-acquires on next Draw tool face commit
+  // (β-2).
+  viewport.onViewModeChange(() => {
+    toolManager.notifyViewModeChange();
+  });
+
   // 5a. OSNAP toggle — 레거시(stat-osnap) 유지 + 새 StatusBar 연동
   const osnapToggle = document.getElementById('osnap-toggle');
   const statOsnap = document.getElementById('stat-osnap');

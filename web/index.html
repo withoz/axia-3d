@@ -2614,6 +2614,9 @@
       <!-- ADR-151 β-4 — Connected Stacked-inner Component-Merge Resolver (메타-원칙 #16 정합) -->
       <!-- 가시성: ≥2 face 선택 (1 container + ≥1 inner). Engine 가 component grouping + P7 manifold 검증. -->
       <div class="ctx-item ctx-p7-resolver-item" data-action="enforce-p7-canonical">🔗 Connected Inner Merge (P7 canonical, container + inners → ring-with-hole)</div>
+      <!-- ADR-164 β-3 — Sticky last drawn plane reset (메타-원칙 #16 보완) -->
+      <!-- 가시성: ctx-plane-reset-item — _lastDrawnPlane 활성 시만 표시. -->
+      <div class="ctx-item ctx-plane-reset-item" data-action="reset-last-drawn-plane">📐 기본 평면으로 (sticky 해제)</div>
       <!-- ADR-074 U-2 — Boolean Group A/B selection (E.3 트랙) -->
       <!-- selection 있을 때 set A/B; group tag 있을 때 clear -->
       <!-- ADR-074 §E.5-4 단축키 (Alt+A / Alt+B / Alt+0) — KeyboardShortcuts 통합 -->
@@ -2729,6 +2732,16 @@
                      font-size:11px; font-weight:600;
                      box-shadow:0 0 8px rgba(255,165,0,0.5);"
               title="스케치 모드 활성 — 모든 드로잉이 평면에 고정됩니다">✏️</span>
+        <!-- ADR-164 β-3 — Sticky last drawn plane 배지. setLastDrawnPlane
+             / clearLastDrawnPlane 호출 시 ToolManager 에서 display 토글.
+             메타-원칙 #5 (사용자 편의 — 명확하면 자동) + 사용자 인지 강화. -->
+        <span id="sb-plane-badge"
+              style="display:none; margin-left:8px; padding:3px 10px;
+                     background:#2196f3; color:#fff; border-radius:12px;
+                     font-size:11px; font-weight:600;
+                     box-shadow:0 0 8px rgba(33,150,243,0.5);"
+              title="마지막 그린 평면 기억 활성 — 다음 도형이 같은 평면에 그려집니다 (ADR-164 sticky)"
+              data-adr="164">📐 평면</span>
       </div>
 
       <!-- 백워드 호환용 숨김 요소들 -->
