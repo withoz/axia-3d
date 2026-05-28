@@ -267,7 +267,7 @@ ADR-141 (Master Roadmap) + ADR-142~161 (Sprint 1~6+4.5 worker ADRs).
 | [149](./149-t-junction-sweep-explicit-tool.md) | T-junction Sweep 명시 도구 | Accepted | S3 |
 | [150](./150-auto-coplanar-face-merge-sweep.md) | 자동 Coplanar Face Merge Sweep (opt-in) | Accepted | S3 |
 | [151](./151-connected-stacked-inner-component-merge-resolver.md) | Connected Stacked-inner Component-Merge Resolver | Accepted | S3 |
-| [152](./152-p7-m4-m5-euler-genus.md) | P7-M4/M5 + Euler/Genus 모듈 | Proposed | S4 |
+| [152](./152-p7-m4-m5-euler-genus.md) | P7-M4/M5 + Euler/Genus 모듈 | Accepted | S4 |
 | 153 (reserve) | Best-fit Plane SVD + Pullback | Reserved | S4 |
 | 154 (reserve) | Mesh::heal() 통합 entry | Reserved | S4 |
 | 155 (reserve) | **Curve-to-Curve Face Split (10 sub-step, 4~6주)** | Reserved | S4.5 |
