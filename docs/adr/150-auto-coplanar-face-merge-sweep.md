@@ -1,6 +1,6 @@
 # ADR-150 — 자동 Coplanar Face Merge Sweep (opt-in, Sprint 3 둘째 ADR)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: **Accepted** (γ closure 2026-05-27 — Path Z atomic 6 sub-step 완료)
 **Date**: 2026-05-27
 **Author**: WYKO + Claude
 **Trigger**: LOCKED #65 (ADR-141 Master Roadmap) Sprint 3 둘째 ADR.
@@ -234,24 +234,99 @@ share 도달.
   - Q3=(a) COPLANAR_PAIR_TOL_DEG = 1.0 (기존 default) ✅
   - Q4=(a) ContextMenu "🧹 Coplanar 면 일괄 자동 정리" ✅
   - Q5=(a) Default OFF + 명시 호출 only ✅
-- **2026-05-27 α** (본 commit) — ADR-150 spec only PR
-- **TBD β-1** — Engine sweep_coplanar_pairs + 6 회귀
-- **TBD β-2** — Engine merge_coplanar_pair_batch + 4 회귀
-- **TBD β-3** — WASM bridge + TS wrapper + 8 회귀
-- **TBD β-4** — UI ContextMenu integration + 4 회귀
-- **TBD γ** — E2E + closure docs + §9 Lessons
+- **2026-05-27 α** (PR #202, merged `3a3c453`) — ADR-150 spec only PR
+- **2026-05-27 β-1** (PR #203, merged `ad0ca3e`) — Engine
+  `sweep_coplanar_pairs` + `CoplanarPairReport` + `COPLANAR_PAIR_TOL_DEG`.
+  `geometric_merge.rs` 확장 (mesh.rs 추가 0, 정책 B-hybrid).
+  회귀 axia-geo **+6** (baseline / canonical pair / non-coplanar exclude /
+  multi-pair / tolerance boundary / AABB pre-filter perf).
+- **2026-05-27 β-2** (PR #204, merged `1de92ae`) — Engine
+  `merge_coplanar_pair_batch` + `BatchMergeReport` + face_id remap
+  (cascade A-B → AB-C handling). 기존 `merge_coplanar_faces_geometric`
+  dispatch + path compression remap + skip-on-error. 회귀 axia-geo
+  **+4** (canonical 1-pair / cascade 3 rects / skip self-merge / manifold
+  post-batch).
+- **2026-05-27 β-3** (PR #205, merged `6ada53f`) — WASM bridge
+  `sweepCoplanarPairs` + `mergeCoplanarPairBatch` exports + nested
+  `plane_normal` JSON parser. TS bridge `CoplanarPairReport` +
+  `BatchMergeReport` interfaces + `sweepCoplanarPairs(tolDeg = 0)`
+  (graceful) + `mergeCoplanarPairBatch(pairs, tolDeg = 0)` (strict).
+  회귀 axia-wasm **+4** (parser) + vitest **+4** (TS wrapper).
+- **2026-05-27 β-4** (PR #206, merged `51df0f7`) — UI ContextMenu
+  `heal-coplanar-pairs` 메뉴 entry + handler. sweep → batch merge
+  sequence + 3-way Toast feedback. ADR-149 β-4 패턴 1:1 mirror with
+  single batch call (engine cascade handling 위임). 회귀 vitest **+4**
+  (zero pairs / sweep throws / canonical batch / partial failure).
+- **2026-05-27 γ** (본 commit) — Closure: Status flip + Acceptance Log
+  + §9 Lessons + README catalog Status update + E2E spec.
+  - **Status**: Proposed → **Accepted** (header).
+  - **README catalog** — ADR-150 row Status: `Proposed` → `Accepted`.
+  - **E2E spec** (`web/e2e/adr-150-coplanar-merge-demo.spec.ts`) — Real
+    Chromium 3 회귀: sweepCoplanarPairs empty / mergeCoplanarPairBatch
+    empty input no-op / ContextMenu wiring. ADR-149 γ pattern 1:1 mirror.
+  - §9 Lessons 신규 — 5-항목 회고.
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (canonical for Sprint 3 patterns)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. ADR-149 §9
-Lessons (canonical for Sprint 3 ADRs) 답습 + Sprint 3 둘째 ADR 의 추가
-lessons 누적.
+ADR-150 Path Z atomic 6-sub-step closure 의 5개 회고 항목:
 
-후보 lessons (β implementation 완료 시 확정):
-- ADR-149 1:1 mirror reproducibility 증명 (Sprint 3 reproducibility)
-- 기존 manual 자산 활용 + 신규 sweep API 만 신설 (정책 (B) hybrid
-  답습 — `operations/geometric_merge.rs` 확장 + mesh.rs 0 line)
-- 메타-원칙 #16 정합의 10번째 적용 (Sprint 1+2+3 모든 explicit-trigger
-  ADRs 누적)
-- Sweep + batch + ordering + skip canonical pattern (향후 batch op ADRs
-  에 답습 가능)
+### L1 — ADR-149 6-step template 1:1 mirror reproducibility 증명
+
+Sprint 3 첫 ADR (ADR-149) 의 α/β-1~β-4/γ 6-step Path Z atomic 패턴이
+ADR-150 에서 *1:1 transfer* 됨:
+- α: spec docs + 결재 anchor
+- β-1: engine detection (read-only API)
+- β-2: engine algorithm (mutation API + 정책 정합)
+- β-3: WASM bridge + TS wrapper (graceful read / strict mutate)
+- β-4: UI ContextMenu entry + handler
+- γ: E2E + Status flip + §9 Lessons
+
+ADR-148 → ADR-149 → ADR-150 3-ADR 누적 reproducibility 증명. 향후
+Sprint 3 ADR-151 + 향후 *명시 trigger 도구* ADR 가이드 — 본 6-step
+template 답습. 사용자 결재 cycle 최소화.
+
+### L2 — 정책 (B) hybrid 일관 적용 — mesh.rs 추가 0
+
+ADR-149 (operations/t_junction.rs 신설) + ADR-150 (operations/geometric_
+merge.rs 확장) 모두 mesh.rs 추가 0 강제. Sprint 3 진행 중에는 hybrid
+정책 유지 — architectural debt 해소는 별도 audit ADR 예약. ADR-149
+β-1 진입 시점 사용자 결재 anchor "정책 (B) hybrid 답습" 가 ADR-150
+까지 일관 적용.
+
+### L3 — 기존 자산 활용 + 신규 API minimize
+
+ADR-150 audit-first canonical 10번째 결과: 이미 `geometric_merge.rs`
+(1027 LoC) + 4 manual ContextMenu entries 존재. 신규 scope = batch
+sweep (manual single-pair 자산 활용 + dispatch loop 만 신설). β-2 의
+`merge_coplanar_pair_batch` 가 기존 `merge_coplanar_faces_geometric`
+호출 + cascade handling 만 추가. 새 merge 알고리즘 0.
+
+### L4 — Engine cascade handling vs UI serial loop
+
+ADR-149 β-4 (T-junction): UI serial heal loop (각 report 마다 healTJunction)
+ADR-150 β-4 (Coplanar): UI single batch call (engine cascade A-B → AB-C 자동)
+
+→ ADR-150 β-4 implementation 더 단순 + cascade error handling engine
+위임. 향후 batch op ADR 가이드 — *engine cascade handling* 우선 검토,
+UI 가 simple single call 로 단순화.
+
+### L5 — Sprint 3 두번째 ADR closure — ADR-151 자연 진행
+
+본 ADR closure 후 Sprint 3 ADR-151 (Connected Stacked-inner Component-
+Merge Resolver, 2주 multi-week atomic) 진입 가능. ADR-141 §3 Sprint 3
+reserve 3~4주 / 회귀 +50 share.
+
+ADR-150 누적 회귀 **+25** (axia-geo +10 + axia-wasm +4 + vitest +8 +
+Playwright +3) — Sprint 3 share +50 의 ~50%. ADR-149 +29 + ADR-150 +25
+= **+54** (Sprint 3 share 108%, share 도달 후 ADR-151 자연 +12).
+
+향후 Sprint scope 결정 가이드 — Sprint 내 ADR 간 회귀 share 정확 분배
++ 사용자 결재 anchor ("추천으로 진행" 응답) 우선.
+
+---
+
+**ADR-150 closure**: Path Z atomic 6 sub-step 완료. 사용자 facing 즉시
+가치 — Coplanar Face Merge Sweep 명시 도구 활성 (ContextMenu "🧹
+Coplanar 면 일괄 자동 정리"). 메타-원칙 #16 정합의 10번째 적용
+(휴리스틱 자동 sweep 폐기 + 사용자 명시 호출 only). Sprint 3 진행
++108% (회귀 share).
