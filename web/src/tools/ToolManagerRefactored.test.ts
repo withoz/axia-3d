@@ -1176,6 +1176,154 @@ describe('ToolManager', () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
+  // ADR-166 β-1 — Active Sketch Plane Session Lock (field + API + reset hooks)
+  //   L-166-1: Q1=a first_click trigger (β-2 scope — 본 block 은 API 만)
+  //   L-166-2: Q2=a cross-tool 유지 (명시 release 까지)
+  //   L-166-6: Engine 변경 0 — TS only
+  //   L-166-7: ADR-164 자산 재활용
+  //   L-166-9: ADR-164 동작 보존 (sticky + lock coexist, additive)
+  //   L-166-10: ADR-164 답습 패턴 (API mirror)
+  //   L-166-11: 절대 #[ignore] 금지
+  // ────────────────────────────────────────────────────────────────────
+  describe('ADR-166 β-1 Plane Lock Session', () => {
+    it('adr166_plane_lock_initial_null — null on fresh init (L-166-1 default state)', () => {
+      // L-166-1: in-memory session-only, starts null
+      expect(tm.getPlaneLock()).toBeNull();
+      expect(tm.isPlaneLocked()).toBe(false);
+    });
+
+    it('adr166_plane_lock_set_unlock_round_trip — lockPlane / unlockPlane symmetry + idempotent set', async () => {
+      const THREE = await import('three');
+      const origin = new THREE.Vector3(7, 8, 9);
+      const normal = new THREE.Vector3(0, 0, 1);
+      const up = new THREE.Vector3(0, 1, 0);
+      tm.lockPlane({ origin, normal, up, source: 'first_click' });
+
+      const lock = tm.getPlaneLock();
+      expect(lock).not.toBeNull();
+      expect(tm.isPlaneLocked()).toBe(true);
+      expect(lock!.origin.x).toBe(7);
+      expect(lock!.origin.y).toBe(8);
+      expect(lock!.origin.z).toBe(9);
+      expect(lock!.normal.z).toBe(1);
+      expect(lock!.source).toBe('first_click');
+
+      // Deep clone — mutating original should NOT mutate stored value
+      origin.x = 999;
+      expect(tm.getPlaneLock()!.origin.x).toBe(7);
+
+      // Idempotent: second lockPlane is no-op while locked (L-166-2 명시
+      // release 까지 보존)
+      tm.lockPlane({
+        origin: new THREE.Vector3(100, 100, 100),
+        normal: new THREE.Vector3(1, 0, 0),
+        up: new THREE.Vector3(0, 0, 1),
+      });
+      // First lock preserved (no override)
+      expect(tm.getPlaneLock()!.origin.x).toBe(7);
+      expect(tm.getPlaneLock()!.normal.z).toBe(1);
+
+      // unlockPlane — explicit release
+      tm.unlockPlane();
+      expect(tm.getPlaneLock()).toBeNull();
+      expect(tm.isPlaneLocked()).toBe(false);
+
+      // Re-lock works after unlock
+      tm.lockPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(1, 0, 0),
+        up: new THREE.Vector3(0, 0, 1),
+      });
+      expect(tm.getPlaneLock()!.normal.x).toBe(1);
+    });
+
+    it('adr166_plane_lock_preserved_on_tool_change — cross-tool 유지 (L-166-2 핵심)', async () => {
+      const THREE = await import('three');
+
+      // Lock plane while in 'select' tool
+      tm.lockPlane({
+        origin: new THREE.Vector3(1, 2, 3),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      expect(tm.isPlaneLocked()).toBe(true);
+
+      // Switch to a different tool — lock MUST persist (cross-tool 핵심
+      // 가치, ADR-164 sticky 와 동일 semantic 보존)
+      tm.setTool('rect');
+      expect(tm.isPlaneLocked()).toBe(true);
+      expect(tm.getPlaneLock()!.origin.x).toBe(1);
+
+      tm.setTool('circle');
+      expect(tm.isPlaneLocked()).toBe(true);
+      expect(tm.getPlaneLock()!.origin.x).toBe(1);
+
+      tm.setTool('line');
+      expect(tm.isPlaneLocked()).toBe(true);
+      expect(tm.getPlaneLock()!.origin.x).toBe(1);
+
+      // ADR-164 sticky 도 같은 cross-tool semantic 보존 (additive coexist)
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(5, 5, 5),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      tm.setTool('select');
+      expect(tm.isPlaneLocked()).toBe(true);  // lock 보존
+      expect(tm.getLastDrawnPlane()).not.toBeNull();  // sticky 도 보존
+    });
+
+    it('adr166_plane_lock_reset_on_view_mode_change_and_sketch_and_esc — 4 reset hooks (L-166-2)', async () => {
+      const THREE = await import('three');
+
+      function setupLock() {
+        tm.lockPlane({
+          origin: new THREE.Vector3(0, 0, 0),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+        });
+        expect(tm.isPlaneLocked()).toBe(true);
+      }
+
+      // (1) notifyViewModeChange — view 변경은 사용자 의도 변경 명시 신호
+      setupLock();
+      tm.notifyViewModeChange();
+      expect(tm.isPlaneLocked()).toBe(false);
+
+      // (2) enterSketch — sketch lock-in 우선
+      setupLock();
+      tm.enterSketch({
+        label: 'XY 바닥',
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      expect(tm.isPlaneLocked()).toBe(false);
+
+      // (3) exitSketch — sketch lock-in 해제 + 사용자 의도 변경 명시 신호
+      // (lock 은 enterSketch 시 이미 해제됨, sketch 중 새 lock 시도 → reset)
+      tm.lockPlane({  // sketch 중에 lock 시도 (가능 — 별개 mechanism)
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+      });
+      expect(tm.isPlaneLocked()).toBe(true);
+      tm.exitSketch();
+      expect(tm.isPlaneLocked()).toBe(false);
+
+      // (4) cancelCurrentTool — Esc / global cancel
+      setupLock();
+      tm.cancelCurrentTool();
+      expect(tm.isPlaneLocked()).toBe(false);
+
+      // (5) Explicit unlockPlane API (사용자 명시 release path, β-3 Ctrl+Shift+P 의 base)
+      setupLock();
+      tm.unlockPlane();
+      expect(tm.isPlaneLocked()).toBe(false);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
   // ADR-164 β-3 — Sticky 소비 + UI integration
   // L-164-Q1=a — face hit miss 후 sticky → fallback view-mode default
   // ────────────────────────────────────────────────────────────────────
