@@ -176,6 +176,26 @@ export class SliceTool implements ITool {
 
   private commitWithNormal(origin: THREE.Vector3, normal: THREE.Vector3): void {
     const bridge = this.ctx.bridge;
+
+    // Hotfix (2026-05-28) — pre-check empty volume face set.
+    // Root cause: SliceTool.onActivate() 가 face 미선택 시 Toast.warning +
+    // phase='idle' 만 set 하고 종료 — 그러나 onMouseDown('idle') 이 phase 를
+    // 'awaiting_p2' 로 전이시킴. 사용자 3 클릭 → commit 도달 → engine
+    // "empty face set" error.
+    //
+    // 사용자 facing: "솔리드(volume) 가 없습니다" 한국어 안내 +
+    // 도구 자동 비활성 → 다음 클릭 무시.
+    if (this.volumeFaceIds.length === 0) {
+      Toast.error(
+        '⚠️ Slice 불가 — 솔리드(volume) 가 선택되지 않았습니다.\n' +
+        '먼저 Push/Pull 로 입체를 만들고, 그 면을 선택한 후 Slice 도구 사용',
+        7000,
+      );
+      debugLog('[Slice] empty volumeFaceIds — hotfix pre-check 차단');
+      this.cleanup();
+      return;
+    }
+
     if (!bridge.engine?.sliceVolumeByPlane) {
       Toast.error('Slice: WASM 엔진에 sliceVolumeByPlane 함수가 없습니다 (rebuild 필요)');
       this.cleanup();
@@ -196,8 +216,11 @@ export class SliceTool implements ITool {
       return;
     }
     if (!result.ok) {
-      Toast.error(`Slice 실패: ${result.error ?? '알 수 없는 오류'}`, 6000);
-      debugLog('[Slice] error:', result.error);
+      // Engine error 한국어 mapping (사용자 시연 evidence 2026-05-28).
+      const engineErr = result.error ?? '알 수 없는 오류';
+      const userMsg = this.translateEngineError(engineErr);
+      Toast.error(`Slice 실패: ${userMsg}`, 7000);
+      debugLog('[Slice] error:', engineErr);
       this.cleanup();
       return;
     }
@@ -205,6 +228,29 @@ export class SliceTool implements ITool {
     bridge.markDirty();
     this.ctx.syncMesh();
     this.cleanup();
+  }
+
+  /**
+   * Engine error 메시지 한국어 사용자 facing translation.
+   *
+   * Hotfix (2026-05-28) — production user reporting trigger
+   * (`empty face set` 영어 메시지가 사용자 인지 어려움).
+   */
+  private translateEngineError(engineErr: string): string {
+    if (engineErr.includes('empty face set')) {
+      return '솔리드(volume) 가 없습니다. Push/Pull 로 입체 먼저 만들기';
+    }
+    if (engineErr.includes('span multiple XIAs')) {
+      return '여러 볼륨 동시 자르기 불가 — 단일 솔리드의 면을 선택하세요';
+    }
+    if (engineErr.includes('has no owning XIA')) {
+      return '선택된 면에 소속 볼륨이 없습니다 (Sheet face — Push/Pull 필요)';
+    }
+    if (engineErr.includes('cannot determine source XIA')) {
+      return '소속 볼륨을 결정할 수 없습니다';
+    }
+    // Default fallback — engine 메시지 그대로
+    return engineErr;
   }
 
   // ── Preview helpers ─────────────────────────────────────────────
