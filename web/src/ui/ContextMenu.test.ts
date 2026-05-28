@@ -36,6 +36,8 @@ function createDOM(): void {
       <div class="ctx-item" data-action="heal-t-junctions">T-junction 정리</div>
       <!-- ADR-150 β-4 — Coplanar Face Merge Sweep -->
       <div class="ctx-item" data-action="heal-coplanar-pairs">Coplanar 일괄 정리</div>
+      <!-- ADR-151 β-4 — Connected Inner Merge -->
+      <div class="ctx-item ctx-p7-resolver-item" data-action="enforce-p7-canonical">Connected Inner Merge</div>
       <div class="ctx-item" data-action="view-top">Top</div>
       <div class="ctx-item" data-action="view-front">Front</div>
       <div class="ctx-item" data-action="view-3d">3D</div>
@@ -80,6 +82,12 @@ function mockDeps(): ContextMenuDeps {
         mergedCount: 1,
         skippedCount: 0,
         newFaceIds: [100],
+      }),
+      // ADR-151 β-4 — Connected Inner Merge (default canonical success).
+      enforceP7Canonical: vi.fn().mockReturnValue({
+        componentCount: 1,
+        isValid: true,
+        violationCount: 0,
       }),
     } as any,
     toolManager: {
@@ -649,6 +657,98 @@ describe('ContextMenu', () => {
       expect(Toast.info).toHaveBeenCalledWith(
         expect.stringMatching(/1쌍 정리.*1쌍 skip/),
       );
+    });
+  });
+
+  // ── ADR-151 β-4 — Connected Stacked-inner Component-Merge Resolver ──
+  // ADR-149/150 β-4 답습 패턴. 사용자 워크플로우:
+  //   1. ≥2 face 선택 (1 container + ≥1 inner)
+  //   2. 우클릭 → "Connected Inner Merge"
+  //   3. β-4 MVP: first selected = container, 나머지 = inners
+  //   4. bridge.enforceP7Canonical(container, inners) — engine 검증 + rebuild
+  describe('ADR-151 β-4 Connected Inner Merge', () => {
+    it('< 2 faces selected → Toast.error + bridge.enforce not called', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.error as any).mockClear();
+      (deps.toolManager.selection.getSelectedFaces as any).mockReturnValue([42]); // only 1
+
+      const item = document.querySelector(
+        '[data-action="enforce-p7-canonical"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(deps.bridge.enforceP7Canonical).not.toHaveBeenCalled();
+      expect(Toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('container + ≥1 inner'),
+      );
+    });
+
+    it('canonical — engine returns isValid=true → Toast.success + syncMesh + selection clear', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.success as any).mockClear();
+      (deps.toolManager.selection.getSelectedFaces as any).mockReturnValue([0, 1, 2]);
+      (deps.bridge.enforceP7Canonical as any).mockReturnValue({
+        componentCount: 2,
+        isValid: true,
+        violationCount: 0,
+      });
+
+      const item = document.querySelector(
+        '[data-action="enforce-p7-canonical"]',
+      ) as HTMLElement;
+      item.click();
+
+      // First face = container, rest = inners
+      expect(deps.bridge.enforceP7Canonical).toHaveBeenCalledWith(0, [1, 2]);
+      expect(Toast.success).toHaveBeenCalledWith(
+        expect.stringMatching(/2개 component.*ring-with-hole/),
+      );
+      // syncMesh + selection clear post-rebuild.
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+      expect(deps.toolManager.selection.clearSelection).toHaveBeenCalled();
+    });
+
+    it('partial valid — isValid=false with violations → Toast.info (ADR-051 §2.5 deferred boundary)', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.info as any).mockClear();
+      (deps.toolManager.selection.getSelectedFaces as any).mockReturnValue([0, 1, 2, 3]);
+      (deps.bridge.enforceP7Canonical as any).mockReturnValue({
+        componentCount: 1,
+        isValid: false,
+        violationCount: 1,
+      });
+
+      const item = document.querySelector(
+        '[data-action="enforce-p7-canonical"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(Toast.info).toHaveBeenCalledWith(
+        expect.stringMatching(/1개 component.*1개 violation.*deferred boundary/),
+      );
+      // syncMesh still called (mutation succeeded even with manifold warnings)
+      expect(deps.toolManager.syncMesh).toHaveBeenCalled();
+    });
+
+    it('engine throws (P7EnforceError) → Toast.error + no syncMesh', async () => {
+      const { Toast } = await import('./Toast');
+      (Toast.error as any).mockClear();
+      (deps.toolManager.syncMesh as any).mockClear();
+      (deps.toolManager.selection.getSelectedFaces as any).mockReturnValue([0, 1]);
+      (deps.bridge.enforceP7Canonical as any).mockImplementation(() => {
+        throw new Error('enforceP7Canonical: InvalidInput (container_active=false)');
+      });
+
+      const item = document.querySelector(
+        '[data-action="enforce-p7-canonical"]',
+      ) as HTMLElement;
+      item.click();
+
+      expect(Toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('Connected Inner Merge 실패'),
+      );
+      // syncMesh NOT called on error (silent skip 차단)
+      expect(deps.toolManager.syncMesh).not.toHaveBeenCalled();
     });
   });
 });
