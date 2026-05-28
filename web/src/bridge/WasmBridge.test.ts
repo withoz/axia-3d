@@ -2014,6 +2014,78 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-152 β-3 — P7-M4/M5 + Euler/Genus WASM bridge wrappers
+    // (Sprint 4 첫째 ADR, ADR-149/150/151 β-3 답습 패턴)
+    // ────────────────────────────────────────────────────────────────
+
+    it('verifyP7ManifoldExtended parses JSON + maps snake_case → camelCase + violation kinds', () => {
+      const fn = vi.fn(
+        () =>
+          '{"container":7,"inner_count":2,"edges_checked":12,"is_valid":false,"violation_count":3,"violations":[{"kind":"M1","detail":"P7-M1: edge 42 shared by 3 active face-bearing HE(s)"},{"kind":"M4","detail":"P7-M4: vertex 99 has Isolated valence (0 active incident edges)"},{"kind":"M5","detail":"P7-M5: faces 1 and 2 share edge 10 but normals are inconsistent (dot=-0.9500)"}]}'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { verifyP7ManifoldExtended: fn };
+      const result = bridge.verifyP7ManifoldExtended(7, [1, 2]);
+
+      expect(result.container).toBe(7);
+      expect(result.innerCount).toBe(2);
+      expect(result.edgesChecked).toBe(12);
+      expect(result.isValid).toBe(false);
+      expect(result.violationCount).toBe(3);
+      expect(result.violations).toHaveLength(3);
+      // M1/M4/M5 kinds preserved (β-1 extension exposed)
+      expect(result.violations[0].kind).toBe('M1');
+      expect(result.violations[1].kind).toBe('M4');
+      expect(result.violations[2].kind).toBe('M5');
+      // detail strings preserved verbatim (silent skip 차단 evidence)
+      expect(result.violations[1].detail).toContain('Isolated');
+      expect(result.violations[2].detail).toContain('-0.9500');
+
+      // Verify WASM called with (containerId, Uint32Array(innerIds))
+      const callContainer = fn.mock.calls[0][0] as number;
+      const callInners = fn.mock.calls[0][1] as Uint32Array;
+      expect(callContainer).toBe(7);
+      expect(callInners).toBeInstanceOf(Uint32Array);
+      expect(Array.from(callInners)).toEqual([1, 2]);
+    });
+
+    it('computeTopology parses JSON + maps snake_case → camelCase + genus null', () => {
+      // Open manifold case (genus null)
+      const fn = vi.fn(
+        () =>
+          '{"vertex_count":4,"edge_count":4,"face_count":1,"euler_characteristic":1,"genus":null,"boundary_loop_count":1,"is_closed":false}'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { computeTopology: fn };
+      const result = bridge.computeTopology();
+
+      expect(result.vertexCount).toBe(4);
+      expect(result.edgeCount).toBe(4);
+      expect(result.faceCount).toBe(1);
+      expect(result.eulerCharacteristic).toBe(1);
+      expect(result.genus).toBeNull();
+      expect(result.boundaryLoopCount).toBe(1);
+      expect(result.isClosed).toBe(false);
+
+      // Closed cube case (genus 0)
+      const fn2 = vi.fn(
+        () =>
+          '{"vertex_count":8,"edge_count":12,"face_count":6,"euler_characteristic":2,"genus":0,"boundary_loop_count":0,"is_closed":true}'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { computeTopology: fn2 };
+      const cube = bridge.computeTopology();
+      expect(cube.eulerCharacteristic).toBe(2);
+      expect(cube.genus).toBe(0);
+      expect(cube.isClosed).toBe(true);
+
+      // Missing endpoint feature gate (ADR-149/150/151 β-3 답습)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.computeTopology()).toThrow(/WASM endpoint missing/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
     // ────────────────────────────────────────────────────────────────
 

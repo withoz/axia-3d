@@ -8216,6 +8216,101 @@ impl AxiaEngine {
         }
     }
 
+    /// ADR-152 β-3 — Verify P7 manifold extended (M1/M2/M3 + M4/M5).
+    ///
+    /// Engine API: `axia_geo::p7_manifold::verify_p7_manifold` (β-1
+    /// extension, PR #225 merged). Read-only inspection — returns the
+    /// full violation list as JSON.
+    ///
+    /// # Parameters
+    /// - `container_id`: ring face that contains the inner sub-faces.
+    /// - `inner_ids`: connected/disjoint stacked-inner sub-faces.
+    ///
+    /// # Returns
+    /// JSON: `{
+    ///   "container": u32, "inner_count": N, "edges_checked": N,
+    ///   "is_valid": bool, "violation_count": N,
+    ///   "violations": [
+    ///     { "kind": "M1" | "M2" | "M3" | "M4" | "M5", "detail": "..." }
+    ///   ]
+    /// }`
+    /// (Display 형식 string 으로 detail 통일 — silent skip 차단, 사용자
+    /// facing 검사 시점에서 문자열 그대로 표시 가능)
+    #[wasm_bindgen(js_name = "verifyP7ManifoldExtended")]
+    pub fn verify_p7_manifold_extended(
+        &self,
+        container_id: u32,
+        inner_ids: Vec<u32>,
+    ) -> String {
+        use axia_geo::p7_manifold::verify_p7_manifold;
+        use axia_geo::FaceId;
+
+        let container = FaceId::new(container_id);
+        let inners: Vec<FaceId> = inner_ids.iter().map(|&i| FaceId::new(i)).collect();
+        let report = verify_p7_manifold(&self.scene.mesh, container, &inners);
+
+        let is_valid = report.is_valid();
+        let violation_count = report.violations.len();
+        let violations_json: Vec<String> = report
+            .violations
+            .iter()
+            .map(|v| {
+                let kind = match v {
+                    axia_geo::p7_manifold::P7Violation::EdgeSharedByWrongCount { .. } => "M1",
+                    axia_geo::p7_manifold::P7Violation::HoleLoopMissingContainer { .. } => "M2",
+                    axia_geo::p7_manifold::P7Violation::BoundaryEdgeMalformed { .. } => "M3",
+                    axia_geo::p7_manifold::P7Violation::VertexValencePathology { .. } => "M4",
+                    axia_geo::p7_manifold::P7Violation::FaceOrientationInconsistent { .. } => "M5",
+                };
+                let detail = v.to_string().replace('"', "\\\"");
+                format!("{{\"kind\":\"{}\",\"detail\":\"{}\"}}", kind, detail)
+            })
+            .collect();
+
+        format!(
+            "{{\"container\":{},\"inner_count\":{},\"edges_checked\":{},\"is_valid\":{},\"violation_count\":{},\"violations\":[{}]}}",
+            container_id,
+            report.inner_count,
+            report.edges_checked,
+            is_valid,
+            violation_count,
+            violations_json.join(","),
+        )
+    }
+
+    /// ADR-152 β-3 — Compute mesh topology (Euler + Genus + boundary loops).
+    ///
+    /// Engine API: `axia_geo::p7_manifold::compute_topology` (β-2, PR
+    /// #226 merged). Read-only inspection — returns the full topology
+    /// report as JSON.
+    ///
+    /// # Returns
+    /// JSON: `{
+    ///   "vertex_count": N, "edge_count": N, "face_count": N,
+    ///   "euler_characteristic": i64,
+    ///   "genus": i64 | null,  (null when open manifold)
+    ///   "boundary_loop_count": N, "is_closed": bool
+    /// }`
+    #[wasm_bindgen(js_name = "computeTopology")]
+    pub fn compute_topology(&self) -> String {
+        use axia_geo::p7_manifold::compute_topology;
+        let report = compute_topology(&self.scene.mesh);
+        let genus_json = match report.genus {
+            Some(g) => g.to_string(),
+            None => "null".to_string(),
+        };
+        format!(
+            "{{\"vertex_count\":{},\"edge_count\":{},\"face_count\":{},\"euler_characteristic\":{},\"genus\":{},\"boundary_loop_count\":{},\"is_closed\":{}}}",
+            report.vertex_count,
+            report.edge_count,
+            report.face_count,
+            report.euler_characteristic,
+            genus_json,
+            report.boundary_loop_count,
+            report.is_closed,
+        )
+    }
+
     /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
     /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
     ///
