@@ -480,6 +480,23 @@ export class DrawLineTool implements ITool {
     if (faceCreated) {
       debugLog(`[Line] Closed loop → face created! (${len.toFixed(2)} mm, kind=${this.lastCloseKind})`);
       Toast.info('루프 닫힘 — 면 생성됨', 1800);
+      // ADR-164 β-2 — Sticky last drawn plane on face synthesis success
+      // (Q1=a — face created branch only). THREE.Plane has no `up` field,
+      // so we derive an orthogonal up from the normal (canonical pattern:
+      // pick world +Z, fall back to +Y if parallel to normal).
+      if (this.drawingPlane) {
+        const planeNormal = this.drawingPlane.normal.clone().normalize();
+        const candidate = Math.abs(planeNormal.z) > 0.9
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1);
+        const up = candidate.sub(planeNormal.clone().multiplyScalar(candidate.dot(planeNormal))).normalize();
+        this.ctx.setLastDrawnPlane?.({
+          origin: this.startPoint,
+          normal: planeNormal,
+          up,
+          source: 'view',
+        });
+      }
     } else if (isLoopClose) {
       // Loop close fired but face wasn't created (likely non-planar or self-intersect)
       Toast.warning('루프 닫힘 — 면 생성 실패 (비평면 또는 자체교차)', 2500);
