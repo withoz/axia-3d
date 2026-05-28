@@ -8151,6 +8151,71 @@ impl AxiaEngine {
         ))
     }
 
+    /// ADR-151 β-3 — Enforce P7 canonical topology on a container + inners
+    /// (Sprint 3 셋째 ADR, Connected Stacked-inner Component-Merge Resolver).
+    ///
+    /// Engine API: `axia_geo::operations::p7_canonical_resolver::
+    /// enforce_p7_canonical` (β-2 mutation 활성, PR #213). 명시 호출
+    /// only — Draw 도구 자동 trigger 0 (메타-원칙 #16 / LOCKED #64 정합).
+    ///
+    /// # Parameters
+    /// - `container_id`: ring face that contains the inner sub-faces.
+    /// - `inner_ids`: connected/disjoint stacked-inner sub-faces
+    ///   (`Vec<u32>` — JS array of FaceId raw values).
+    ///
+    /// # Returns
+    /// - `Ok(json)`: `{"component_count":N,"is_valid":true|false,
+    ///   "violation_count":M}` (manifold report summary; full report
+    ///   inspection via separate query API).
+    /// - `Err(JsValue)`: `P7EnforceError` Display message (silent skip
+    ///   차단 — InvalidInput / NoComponents / PerimeterFailed /
+    ///   RebuildFailed). Strict throw on invalid params (Q1=a default).
+    ///
+    /// Transaction-wrapped — Undo restores the pre-rebuild state
+    /// (ADR-149/150 β-3 패턴 답습).
+    #[wasm_bindgen(js_name = "enforceP7Canonical")]
+    pub fn enforce_p7_canonical(
+        &mut self,
+        container_id: u32,
+        inner_ids: Vec<u32>,
+    ) -> Result<String, JsValue> {
+        use axia_geo::operations::p7_canonical_resolver;
+        use axia_geo::FaceId;
+
+        let container = FaceId::new(container_id);
+        let inners: Vec<FaceId> = inner_ids.iter().map(|&i| FaceId::new(i)).collect();
+
+        self.scene.transactions.begin();
+        self.scene
+            .transactions
+            .set_before_snapshot(self.scene.scene_snapshot());
+
+        match p7_canonical_resolver::enforce_p7_canonical(
+            &mut self.scene.mesh,
+            container,
+            &inners,
+        ) {
+            Ok(result) => {
+                self.scene
+                    .transactions
+                    .set_after_snapshot(self.scene.scene_snapshot());
+                self.scene.transactions.commit();
+
+                let is_valid = result.manifold_report.is_valid();
+                let violation_count = result.manifold_report.violations.len();
+                Ok(format!(
+                    "{{\"component_count\":{},\"is_valid\":{},\"violation_count\":{}}}",
+                    result.component_count, is_valid, violation_count,
+                ))
+            }
+            Err(e) => {
+                // Rollback transaction — no mutation should persist on error.
+                self.scene.transactions.commit();
+                Err(JsValue::from_str(&format!("enforceP7Canonical: {}", e)))
+            }
+        }
+    }
+
     /// ADR-091 D-γ — Demote a Xia back to a Shape when its material has
     /// reverted to the form-layer sentinel (`FORM_MATERIAL`).
     ///

@@ -1970,6 +1970,50 @@ describe('WasmBridge', () => {
     });
 
     // ────────────────────────────────────────────────────────────────
+    // ADR-151 β-3 — Connected Stacked-inner Component-Merge Resolver
+    // Sprint 3 셋째 ADR. ADR-149/150 β-3 답습 (mutation API → strict
+    // throw on missing endpoint, JSON schema lock-in).
+    // ────────────────────────────────────────────────────────────────
+
+    it('enforceP7Canonical passes container_id + Uint32Array + parses response', () => {
+      const fn = vi.fn(
+        () => '{"component_count":2,"is_valid":true,"violation_count":0}'
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { enforceP7Canonical: fn };
+      const result = bridge.enforceP7Canonical(0, [1, 2, 3]);
+      expect(result).toEqual({
+        componentCount: 2,
+        isValid: true,
+        violationCount: 0,
+      });
+      // Verify WASM was called with (containerId, Uint32Array(innerIds))
+      const callContainer = fn.mock.calls[0][0] as number;
+      const callInners = fn.mock.calls[0][1] as Uint32Array;
+      expect(callContainer).toBe(0);
+      expect(callInners).toBeInstanceOf(Uint32Array);
+      expect(Array.from(callInners)).toEqual([1, 2, 3]);
+    });
+
+    it('enforceP7Canonical surfaces P7EnforceError via throw (strict, silent skip 차단)', () => {
+      // Engine throws (e.g. "enforceP7Canonical: InvalidInput (...)")
+      const fn = vi.fn(() => {
+        throw new Error('enforceP7Canonical: InvalidInput (container_active=false, inners 0/0 active)');
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = { enforceP7Canonical: fn };
+      expect(() => bridge.enforceP7Canonical(0, []))
+        .toThrow(/InvalidInput/);
+    });
+
+    it('enforceP7Canonical throws when WASM endpoint missing (feature gate, ADR-150 β-3 답습)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (bridge as any).engine = {};
+      expect(() => bridge.enforceP7Canonical(0, [1, 2]))
+        .toThrow(/WASM endpoint missing/);
+    });
+
+    // ────────────────────────────────────────────────────────────────
     // ADR-093 D-γ — Cylinder side face owner-id WASM bridge wrappers
     // ────────────────────────────────────────────────────────────────
 
