@@ -266,7 +266,7 @@ ADR-141 (Master Roadmap) + ADR-142~161 (Sprint 1~6+4.5 worker ADRs).
 | [148](./148-point-localized-boundary-tool.md) | B-γ' Point-Localized BoundaryTool (ADR-139 자연 후속) | Accepted | S2 |
 | [149](./149-t-junction-sweep-explicit-tool.md) | T-junction Sweep 명시 도구 | Accepted | S3 |
 | [150](./150-auto-coplanar-face-merge-sweep.md) | 자동 Coplanar Face Merge Sweep (opt-in) | Accepted | S3 |
-| [151](./151-connected-stacked-inner-component-merge-resolver.md) | Connected Stacked-inner Component-Merge Resolver | Proposed | S3 |
+| [151](./151-connected-stacked-inner-component-merge-resolver.md) | Connected Stacked-inner Component-Merge Resolver | Accepted | S3 |
 | 152 (reserve) | P7-M4/M5 + Euler/Genus 모듈 | Reserved | S4 |
 | 153 (reserve) | Best-fit Plane SVD + Pullback | Reserved | S4 |
 | 154 (reserve) | Mesh::heal() 통합 entry | Reserved | S4 |
