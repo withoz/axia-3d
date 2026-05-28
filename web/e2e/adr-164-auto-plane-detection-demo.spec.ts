@@ -63,13 +63,31 @@ test.describe('ADR-164 γ — Auto Plane Detection (Sticky Last Drawn Plane) E2E
       const initialNull = tm.getLastDrawnPlane() === null;
 
       // 3. setLastDrawnPlane → getLastDrawnPlane round-trip
+      // Use viewport to obtain THREE.Vector3 (viewport.activeCamera.position
+      // is a real Vector3 — clone() returns proper Vector3 instance).
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const THREE = (w.__axia!.get<any>('three') ?? (window as any).THREE);
-      // Defensive: use plain objects with required fields
+      const viewport = w.__axia!.get<any>('viewport');
+      const sample = viewport?.activeCamera?.position;
+      if (!sample || typeof sample.clone !== 'function') {
+        return {
+          hasToolManager: true,
+          apiPresent,
+          initialNull,
+          afterSet: false,
+          afterClear: false,
+          missingVector3: true,
+        };
+      }
+      // Construct three Vector3-like by cloning the camera position
+      const makeVec = (x: number, y: number, z: number) => {
+        const v = sample.clone();
+        v.set(x, y, z);
+        return v;
+      };
       tm.setLastDrawnPlane({
-        origin: { x: 5, y: 5, z: 5, clone() { return { x: 5, y: 5, z: 5 }; } },
-        normal: { x: 0, y: 0, z: 1, clone() { return { x: 0, y: 0, z: 1, normalize() { return this; } }; }, normalize() { return this; } },
-        up: { x: 0, y: 1, z: 0, clone() { return { x: 0, y: 1, z: 0, normalize() { return this; } }; }, normalize() { return this; } },
+        origin: makeVec(5, 5, 5),
+        normal: makeVec(0, 0, 1),
+        up: makeVec(0, 1, 0),
         source: 'view',
       });
       const afterSet = tm.getLastDrawnPlane() !== null;
@@ -84,8 +102,7 @@ test.describe('ADR-164 γ — Auto Plane Detection (Sticky Last Drawn Plane) E2E
         initialNull,
         afterSet,
         afterClear,
-        // unused but documents 3-import context
-        THREE_check: typeof THREE,
+        missingVector3: false,
       };
     });
 
