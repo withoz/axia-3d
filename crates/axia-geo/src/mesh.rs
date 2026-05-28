@@ -4931,7 +4931,11 @@ impl Mesh {
 
     /// Count distinct active edges incident to a vertex.
     /// Walks the radial v_next chain from the vertex's outgoing half-edge.
-    fn count_incident_edges(&self, vid: VertId) -> usize {
+    ///
+    /// ADR-152 β-1 — exposed as `pub(crate)` for `p7_manifold::verify_p7_manifold`
+    /// M4 (VertexValencePathology) detection. mesh.rs LoC addition = 1 line
+    /// (visibility only, no logic change). Policy B-hybrid 정합.
+    pub(crate) fn count_incident_edges(&self, vid: VertId) -> usize {
         let v = match self.verts.get(vid) {
             Some(v) if v.is_active() => v,
             _ => return 0,
