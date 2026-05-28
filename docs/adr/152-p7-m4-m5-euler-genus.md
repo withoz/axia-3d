@@ -1,6 +1,6 @@
 # ADR-152 — P7-M4/M5 + Euler/Genus 모듈 (Sprint 4 첫째 ADR)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
+**Status**: Accepted (2026-05-28 γ closure — α + β-1 + β-2 + β-3 + γ 모두 완료, +20 회귀, 절대 #[ignore] 금지 20/20 준수, audit-first canonical 13번째 정량 evidence 1-day single-day closure)
 **Date**: 2026-05-28
 **Author**: WYKO + Claude
 **Trigger**: ADR-141 §3 Sprint 4 (Healing Pipeline Step 4) 첫째 ADR.
@@ -221,25 +221,115 @@ pub fn compute_topology(mesh: &Mesh) -> MeshTopologyReport;
   - Q3=(a) p7_manifold.rs 확장 (별도 파일 안 만듦) ✅
   - Q4=(a) 5-step template (UI 없음) ✅
   - Q5=(a) +20 회귀 ADR-141 spec ✅
-- **2026-05-28 α** (본 commit) — ADR-152 spec only PR
-- **TBD β-1** — P7Violation M4/M5 extension + 6 회귀
-- **TBD β-2** — compute_topology + 6 회귀
-- **TBD β-3** — WASM bridge + TS wrapper + 5 회귀
-- **TBD γ** — E2E + closure docs + §9 Lessons
+- **2026-05-28 α** (PR #223) — ADR-152 spec only PR + Sprint 4 audit doc
+- **2026-05-28 β-1** (PR #225) — P7Violation M4/M5 enum + verify_p7_manifold
+  extension (vertex valence + face orientation 2 loops) + 6 회귀
+- **2026-05-28 β-2** (PR #226) — MeshTopologyReport struct + compute_topology
+  (Euler χ + Genus + boundary loop count via twin→next→twin walk) + 6 회귀
+- **2026-05-28 β-3** (PR #227) — WASM exports (verifyP7ManifoldExtended +
+  computeTopology JSON) + TS wrapper (graceful/strict + camelCase 변환) +
+  5 회귀
+- **2026-05-28 γ** (본 commit) — Playwright E2E (3 specs) + Status
+  Accepted + §9 Lessons + LOCKED 등재 + README catalog + 3 회귀
+- **2026-05-28 D-1 사용자 시연** — Closed cube genus 0 + Open disk
+  boundary 1 + Ring-with-hole P7 0 violations (3/3 PASS, audit-first 13번째
+  evidence 실증)
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (canonical for Sprint 4 + 5-step UI-없는 변형)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. ADR-149 / 150
-/ 151 / 164 §9 Lessons (canonical for Sprint 3 + ADR-164) 답습 +
-Sprint 4 첫째 ADR 의 추가 lessons 누적.
+ADR-149/150/151 §9 Lessons (Sprint 3 6-step) + ADR-164 §9 Lessons (5-step
+TS-only variant) 의 자연 연장 — Sprint 4 첫째 ADR 의 *5-step UI-없는*
+변형 + audit-first 13번째 정량 evidence 누적.
 
-후보 lessons (β implementation 완료 시 확정):
-- **audit-first canonical 13번째 가치** — multi-week 추정 50% 감소 evidence
-  (2주 → 1주)
-- ADR-148 → ADR-149 → ADR-150 → ADR-151 → ADR-164 → ADR-152 6-step template
-  reproducibility (Sprint 1+2+3+4 cumulative pattern)
-- enum extension via P7Violation (Sprint 4 의 architectural 가치 — *원본
-  API 변경 0, 확장 only*)
-- 메타-원칙 #14 (면 = closed boundary byproduct) 의 *quantitative*
-  expression — Euler/Genus 모듈이 architectural anchor
-- Sprint 4 closure → Sprint 4.5 / Sprint 5 자연 진행
+### L-152-1 — audit-first canonical 13번째의 정량 가치
+
+ADR-141 §3 reserve "ADR-152 = 2주" 추정.
+Audit (`docs/audits/2026-05-28-sprint-4-precheck.md`) 핵심 finding:
+- P7Violation enum 의 3 variants 위에 M4/M5 = **enum extension** (새 알고리즘 0)
+- Euler χ = V - E + F = 단순 카운팅 (기존 DCEL `SlotStorage::iter` 활용)
+- Boundary loop count = "twin → next → twin" canonical walk (DCEL standard)
+
+**Actual progress**: α + β-1 + β-2 + β-3 + γ = **1일 single-day** (12시간
+이내). audit-first 가 없었다면 multi-week atomic 이었을 ADR이 1-day
+**5-step closure**. ADR-151 (Sprint 3 셋째, 1-day) reproducibility 정량
+증명.
+
+→ **canonical**: multi-week 추정 ADR 진입 전 audit-first 강제. 50%+ 감소
+가능성 기본 default.
+
+### L-152-2 — 5-step template (UI 없음) 의 2번째 reproducibility
+
+ADR-164 (TS-only 5-step) + ADR-152 (Engine + WASM/TS 5-step) 의 2 ADRs
+가 **UI ContextMenu β-4 없는** 5-step variant 답습.
+
+| Sub-step | 6-step (ADR-148~151) | 5-step (ADR-152/164) |
+|---|---|---|
+| α | spec docs only | spec docs only |
+| β-1 | engine read-only | engine read-only / foundation |
+| β-2 | engine mutate | engine mutate / wiring |
+| β-3 | WASM + TS bridge | WASM + TS bridge **+ UI (if needed)** |
+| β-4 | UI ContextMenu | (없음) |
+| γ | E2E + closure | E2E + closure |
+
+→ **canonical**: Engine 진단 도구 (UI menu entry 불필요) OR TS-only ADR
+은 5-step variant. β-4 가 β-3 에 흡수.
+
+### L-152-3 — 정책 B-hybrid 5번째 명시 답습 (mesh.rs LoC 0)
+
+mesh.rs LoC 추가:
+- β-1: **1 line** (count_incident_edges 가시성 `fn` → `pub(crate)`)
+- β-2: **0** (compute_topology 는 p7_manifold.rs 확장)
+- β-3: **0** (WASM bridge 만)
+- 합계: **1 line** 만 추가 — 정책 B-hybrid spirit 정합
+
+→ **canonical**: 새 invariant 추가 시 *기존 자산 visibility 변경 0~1 line*
+이내. operations/*.rs 또는 p7_manifold.rs 등 별도 모듈 신설.
+
+### L-152-4 — 메타-원칙 #14 의 quantitative expression
+
+ADR-021 P7 의 *qualitative* invariant (M1-M5) 위에 **quantitative**
+expression (Euler χ + Genus + boundary loop count) 추가. 메타-원칙 #14
+("면 = closed boundary byproduct") 의 수학적 정량화:
+- 평면적 닫힌 단순 boundary → disk-topology face (qualitative)
+- χ = V - E + F = 2 - 2g, 닫힌 manifold → integer genus 명시 (quantitative)
+- 두 layer 가 healing pipeline (ADR-154) 의 invariant 강화 anchor
+
+### L-152-5 — Sprint 4 진입 패턴 (multi-ADR Sprint 의 자연 시작)
+
+ADR-141 §3 Sprint 4 (Healing Pipeline Step 4) 3 ADRs 중 첫째. 진입 패턴:
+1. Sprint 사전 audit (audit-first 13번째)
+2. 첫째 ADR α spec (본 ADR-152)
+3. β-1 ~ γ atomic single PR per sub-step
+4. ADR-153 (SVD + Pullback) + ADR-154 (Mesh::heal()) 자연 진행
+5. Sprint 4 closure 시점 — 3 ADRs γ 완료 후 LOCKED 등재 검토
+
+→ **canonical**: 향후 Sprint 진입 시 audit-first → 첫째 ADR α → atomic
+sub-step → Sprint closure 매트릭스 정합.
+
+### L-152-6 — Sprint 1+2+3+4 누적 reproducibility 정량 증명
+
+| Sprint | ADRs | PRs | 회귀 | 1-day closure |
+|---|---|---|---|---|
+| S1 | ADR-142~145 | 17 | +59 | partial |
+| S2 | ADR-146~148 | 13 | +39 | partial |
+| S3 | ADR-149/150/151 | 18 | +77 | ADR-151 single-day ✅ |
+| ADR-164 (별도) | 1 | 5 | +17 | 1-day ✅ |
+| **S4 (진행)** | **ADR-152** | **5** | **+20** | **1-day** ✅ |
+
+audit-first canonical 의 13번째 적용 — 누적 evidence (Sprint 3 ADR-151
++ ADR-164 + Sprint 4 ADR-152 = 3 ADRs 1-day closure) 가 pattern
+정착.
+
+## 10. Cross-link
+
+- ADR-141 §3 (Sprint 4 reserve anchor)
+- ADR-051 §2.2 (P7-M1/M2/M3 source — M4/M5 자연 확장)
+- ADR-149/150/151 (Sprint 3 6-step template + audit-first 11번째)
+- ADR-164 (5-step variant precedent — TS-only)
+- ADR-148 (BoundaryTool 6-step template source)
+- ADR-021 P7 LOCKED #1 (canonical anchor)
+- ADR-046 P31 #4 (additive only)
+- LOCKED #1 (P7) / #44 (atomic per merge) / #65 메타-원칙 #14/#15/#16
+  / #66 STATUS-POLICY
+- 메타-원칙 #14 (면 = closed boundary byproduct) — Euler/Genus 의
+  *quantitative* expression
