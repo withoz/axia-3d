@@ -1,7 +1,7 @@
 # ADR-166 — Active Sketch Plane Session Lock (사용자 작업지시 trigger)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
-**Date**: 2026-05-28
+**Status**: Accepted (γ closure 2026-05-29 — 5-step variant 3번째 reproducibility, 1-day single-day closure)
+**Date**: 2026-05-28 (α) / 2026-05-29 (β-1 / β-2 / β-3 / γ closure)
 **Author**: WYKO + Claude
 **Trigger**: 사용자 작업지시 (2026-05-28, canonical):
 > "도형을 만들때 같은 plane에 그릴 확률을 높이는 방향으로 개선
@@ -236,29 +236,104 @@ ADR-166 closure 후 ADR-167 α 진입, ADR-167 closure 후 ADR-168 α 진입.
   + 시퀀스 후 fresh 결재 (β-1 진입 시)
 - **2026-05-28 α** (본 commit) — ADR-166 spec only PR + ADR-167/168
   sequence anchor 명시
-- **TBD β-1** — `_planeLock` field + API + reset hooks + 4 회귀
-- **TBD β-2** — 6 Draw 도구 first_click hook + 6 회귀
-- **TBD β-3** — getDrawPlane priority + UI badge + Ctrl+Shift+P + 4 회귀
-- **TBD γ** — E2E + closure docs + §9 Lessons + LOCKED 등재
+- **2026-05-29 β-1** (PR #233 merged `c808bd4`) — `_planeLock` field +
+  `lockPlane/unlockPlane/isPlaneLocked/getPlaneLock` API + 4 reset hooks
+  (notifyViewModeChange / enterSketch / exitSketch / cancelCurrentTool)
+  + **vitest +4** (절대 #[ignore] 금지 4/4)
+- **2026-05-29 β-2** (PR #234 merged `091bb4e`) — ToolContext `lockPlane?`
+  + `isPlaneLocked?` 확장 + 6 Draw 도구 first_click hook (idempotent
+  source='first_click') + **vitest +6** (절대 #[ignore] 금지 6/6).
+  Hotfix: DrawLineTool origin extraction via `normal * (-constant)`
+  (THREE.Plane canonical, mock-friendly — 향후 답습 권장).
+- **2026-05-29 β-3** (PR #235 merged `e7b9257`) — `getDrawPlane()`
+  priority #1 lock dispatch (strong, face hit 무시) + 3-state badge
+  (🔒 lock / 📐 sticky / hidden) + Ctrl+Shift+P unlock 단축키
+  + ContextMenu "🔓 평면 잠금 해제" + **vitest +4** (절대 #[ignore]
+  금지 4/4)
+- **2026-05-29 γ** (본 commit) — Playwright E2E 3 spec (API smoke +
+  cross-tool 유지 evidence / ContextMenu DOM / Ctrl+Shift+P 단축키
+  real-browser dispatch) + Status Proposed → Accepted + §9 Lessons +
+  LOCKED entry + README catalog Status 갱신 + **Playwright +3**
+  (절대 #[ignore] 금지 3/3)
 - **TBD ADR-167 α** — ADR-166 closure 후 진입 (EPS_PLANE SSOT)
 - **TBD ADR-168 α** — ADR-167 closure 후 진입 (Face plane drift snap)
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (γ closure 2026-05-29)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. ADR-164 §9
-Lessons (5-step variant pattern) 답습 + ADR-166 의 *사용자 8-layer 비교
-audit + 단계적 sequence 결재* 가치 명시.
+ADR-164 §9 Lessons (5-step variant pattern) 답습 + 사용자 8-layer 비교
+매트릭스 audit + 단계적 sequence 결재 가치 명시. 5-step variant 3번째
+reproducibility (ADR-164 / ADR-152 답습) — 1-day single-day closure
+명시 evidence.
 
-후보 lessons (β implementation 완료 시 확정):
-- **사용자 8-layer 비교 매트릭스 audit 의 architectural 가치** —
-  다른 엔진 spec 을 답습/거부 결정 매트릭스로 정확 활용
-- ADR-164 → ADR-166 5-step variant 3번째 reproducibility (TS-only,
-  Engine 변경 0)
-- **메타-원칙 #5 + #16 정합 balance 강화** — strong auto-lock + 명시
-  unlock = "명확하면 자동, 모호하면 명시" 의 최강 형태
-- ADR-167/168 sequence anchor in spec — 단계적 architectural debt 해소
-  의 명시 lock-in
-- *cross-tool* state semantics — ADR-164 sticky (per-tool) → ADR-166
-  lock (cross-tool) 의 자연 진화
-- ADR-145 ContextMenu unlock + ADR-166 ContextMenu unlock 패턴 일관성
-  (사용자 명시 trigger UX canonical)
+### L1 — 사용자 8-layer 비교 매트릭스 audit의 architectural 가치
+
+사용자 다른 엔진 plane management 8-layer 매트릭스를 직접 evidence
+로 받아서, AxiA 의 현재 4-layer 와 비교 후 *답습/거부 결정 매트릭스*
+로 활용. audit-first canonical 15번째 적용 (ADR-125/126/127/131 답습).
+
+**Lock-in (canonical for external-spec integration)**: 다른 엔진의
+spec 통합 시 단순 답습이 아닌 *매트릭스 비교 + 결정 명시* 가 본 ADR
+의 정수. 향후 외부 spec 도입 시 답습.
+
+### L2 — ADR-164 → ADR-166 5-step variant 3번째 reproducibility (TS-only)
+
+ADR-152 (Sprint 4 첫째, 1-day single-day) + ADR-164 (auto plane sticky)
++ ADR-166 (plane lock) — 3번째 1-day single-day 5-step variant closure.
+TS-only (Engine 변경 0). audit-first canonical 의 50% time reduction
+evidence 누적.
+
+**Lock-in**: 5-step variant (α + β-1 + β-2 + β-3 + γ) 의
+*TS-only Engine 변경 0* 패턴은 향후 모든 UI-only architectural ADR
+의 default template.
+
+### L3 — 메타-원칙 #5 + #16 정합 balance 강화
+
+ADR-164 sticky (weak fallback) 는 메타-원칙 #5 (사용자 편의) 약형.
+ADR-166 lock (strong cross-tool, 명시 release) 가 메타-원칙 #5 +
+#16 의 *강한 balance* — *명확하면 자동* (first_click 자동 lock,
+같은 plane 그리기 확률↑) + *모호하면 명시* (cross-tool 유지, 명시
+unlock).
+
+**Lock-in (canonical for #5+#16 balance)**: strong auto-trigger +
+명시 release path 가 두 메타-원칙의 가장 깊은 실현. *자동/명시
+의사결정 매트릭스* 의 future ADR 의 anchor pattern.
+
+### L4 — Cross-tool state semantics — ADR-164 sticky → ADR-166 lock 자연 진화
+
+ADR-164 sticky 는 per-tool (post-commit only). ADR-166 lock 은
+cross-tool (pre-commit + 모든 도구). 두 mechanism *coexist* —
+sticky 는 lock 없을 때 fallback. 자연 진화 패턴.
+
+**Lock-in**: per-X → cross-X state semantics 진화는 *coexist* 패턴
+default. 기존 mechanism 제거 안 함 — fallback 으로 통합.
+
+### L5 — ADR-167/168 sequence anchor in spec (단계적 architectural debt 해소)
+
+α spec 작성 시점에 ADR-167 (EPS_PLANE SSOT, P1) + ADR-168 (Face plane
+drift snap, P1) 의 **sequence anchor 명시** — closure 후 자연 진입.
+multi-ADR roadmap canonical.
+
+**Lock-in**: 큰 architectural debt (8-layer 비교의 잔여 layer 등) 의
+단계적 해소는 *sequence anchor in spec* 으로 lock-in. 사용자 결재
+없이 진입 안 함 (사용자 명시 결재 후만 ADR-167 α 진입).
+
+### L6 — ContextMenu unlock 패턴 canonical (사용자 명시 trigger UX)
+
+ADR-145 (annulus 명시 promote ContextMenu) + ADR-166 (plane lock
+unlock ContextMenu) — 사용자 명시 trigger UX 의 ContextMenu pattern
+일관 답습. *ctx-*-item* class + visibility + dispatch handler*
+3-layer template.
+
+**Lock-in**: 사용자 명시 trigger UX 는 ContextMenu pattern default.
+3-layer template (HTML data-action + visibility class + dispatch
+case) 모든 명시 trigger ADR 의 답습 anchor.
+
+### L7 — Audit-first canonical 15번째 적용 (50% time reduction evidence)
+
+ADR-152 (Sprint 4 첫째, 1-day) + ADR-164 (auto plane, 1-day) +
+ADR-166 (plane lock, 1-day) — audit-first canonical 의 누적 evidence.
+50% time reduction (vs Sprint 1 평균 multi-day) 누적.
+
+**Lock-in**: audit-first canonical 의 architectural 가치 lock-in.
+ADR 진입 전 사전 audit (사용자 evidence + 매트릭스) 이 implementation
+time 의 50% 절감.

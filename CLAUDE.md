@@ -4881,6 +4881,83 @@ governance 회복.
   본문 Supersede 명시 적용
 - TaskBrief `reports/ADR_141_옵션4_6_TaskBrief.html` (사용자 결재 source)
 
+### 67. ADR-166 — Active Sketch Plane Session Lock (γ closure, 2026-05-29) ✅
+
+**Canonical anchor (사용자 작업지시, 2026-05-28)**:
+> "도형을 만들때 같은 plane에 그릴 확률을 높이는 방향으로 개선
+> Sticky plane lock — 첫 도형 first_click 시점에 active_sketch_plane
+> 자동 set. 후속 도구도 그 plane 유지 (명시 release 까지)."
+
+ADR-164 (sticky last drawn plane, weak fallback) 의 자연 진화 — 사용자
+8-layer 비교 매트릭스 audit 후 *strong cross-tool lock* 활성. ADR-164
+sticky 와 coexist (lock 없을 때 sticky fallback).
+
+**5-step variant 3번째 1-day single-day closure** (α + β-1 + β-2 + β-3
++ γ). ADR-152 (Sprint 4 첫째) + ADR-164 답습. TS-only, Engine 변경 0.
+
+**핵심 아키텍처 변경**:
+- `ToolManager._planeLock` field + `lockPlane / unlockPlane /
+  isPlaneLocked / getPlaneLock` API (idempotent + deep clone)
+- 4 reset hooks: `notifyViewModeChange / enterSketch / exitSketch /
+  cancelCurrentTool` (L-166-2 — **`setTool()` 는 reset 안 함**,
+  cross-tool 유지가 핵심 가치)
+- 6 Draw 도구 first_click hook (Rect/Circle/Line/Arc/Bezier/Freehand)
+  — idempotent `ctx.lockPlane?.({ source: 'first_click' })`
+- `getDrawPlane()` priority #1 — **lock > sketch > face hit > sticky >
+  view default** (Q3=a strong: face hit 무시)
+- 3-state badge: 🔒 lock (빨강) / 📐 sticky / hidden
+- Ctrl+Shift+P unlock 단축키 + ContextMenu "🔓 평면 잠금 해제"
+
+**Lock-ins (canonical for ADR-166)**:
+- **L-166-1** Q1=(a) first_click trigger (사용자 작업지시 정합)
+- **L-166-2** Q2=(a) cross-tool 유지 (명시 release 까지) — `setTool()`
+  reset 안 함 (회귀 명시 검증)
+- **L-166-3** Q3=(a) strong lock (face hit 무시, 메타-원칙 #5)
+- **L-166-4** Q4=(a) `Ctrl+Shift+P` unlock 단축키 + ContextMenu menu
+- **L-166-5** Q5=(a) 🔒 badge upgrade (sticky → lock visual transition)
+- **L-166-6** Engine 변경 0 — TypeScript only
+- **L-166-7** ADR-164 자산 재활용 — 별도 file 신설 안 함
+- **L-166-8** 메타-원칙 #16 정합 — 명시 unlock path 3중 (Ctrl+Shift+P
+  / view change / ContextMenu)
+- **L-166-9** ADR-046 P31 #4 additive only — ADR-164 sticky 동작 보존
+  (coexist)
+- **L-166-10** ADR-164 답습 패턴 — `_planeLock` field naming + API
+  consistency
+- **L-166-11** 절대 #[ignore] 금지 17/17 (β-1 4 + β-2 6 + β-3 4 + γ 3)
+
+**회귀 매트릭스 (실측, 5-step closure)**:
+
+| Sub-step | 회귀 | Cumulative |
+|---|---|---|
+| α (spec) | +0 | 0 |
+| β-1 (API + reset hooks) | +4 vitest | 4 |
+| β-2 (6 Draw tools first_click hook) | +6 vitest | 10 |
+| β-3 (priority + badge + Ctrl+Shift+P + ContextMenu) | +4 vitest | 14 |
+| **γ (E2E + closure docs)** | **+3 Playwright** | **17** |
+| **합계** | **+17** | 절대 #[ignore] 금지 17/17 |
+
+**Cross-link**:
+- **ADR-166** (본 ADR — α PR #231 / β-1 PR #233 / β-2 PR #234 / β-3 PR
+  #235 / γ 본 PR)
+- **ADR-164** (Sticky Last Drawn Plane) — direct predecessor + coexist
+  (weak fallback)
+- **ADR-167 (가칭)** — EPS_PLANE SSOT (본 ADR closure 후 자연 진입)
+- **ADR-168 (가칭)** — Face plane drift snap (ADR-167 자연 후속)
+- **ADR-140** (Surface-Aware getDrawPlane) — priority #2 (face hit)
+- **ADR-103-δ** (Z-up default plane) — priority #4 fallback
+- **ADR-026 P12** (Cardinal plane SSOT) — 보존
+- **ADR-046 P31 #4** (additive only)
+- **메타-원칙 #5** (사용자 편의 — 명확하면 자동) + **#16** (자동화
+  antipattern — 명시 release path)
+- **LOCKED #44** (Complete Meaning per Merge) / **LOCKED #65**
+  메타-원칙 / **LOCKED #66** STATUS-POLICY
+
+**사용자 facing 변화 (canonical, demo-ready)**:
+- 첫 RECT 그림 → 자동 plane lock + 🔒 badge 표시
+- DrawCircle / DrawLine 등 도구 전환 → same plane 강제 (cross-tool 유지)
+- 다른 plane 그리고 싶음 → Ctrl+Shift+P 또는 우클릭 → "🔓 평면 잠금
+  해제" → 다음 도형이 자유 평면
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
