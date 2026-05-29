@@ -318,6 +318,21 @@ export function initKeyboardShortcuts(deps: KeyboardShortcutsDeps): void {
       toolManager.executeAction('ungroup');
       return;
     }
+    // Ctrl+Shift+P: ADR-166 β-3 — 평면 잠금 해제 (Plane lock unlock).
+    // Strong cross-tool plane lock 의 명시 release 단축키.
+    // Mnemonic: P = Plane. 단축키 충돌 audit 통과 (P 단독 = Polygon /
+    // PushPull 미배정 영역).
+    if (e.ctrlKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+      e.preventDefault();
+      if (toolManager.isPlaneLocked()) {
+        toolManager.unlockPlane();
+        Toast.info('평면 잠금 해제 (다음 도구가 자유 평면 선택)', 2000);
+      } else {
+        // 사용자 인지 강화 — 이미 unlocked 상태 명시
+        Toast.info('평면 잠금 비활성 상태', 1500);
+      }
+      return;
+    }
     // Ctrl+G: 그룹
     if (e.ctrlKey && (e.key === 'g' || e.key === 'G')) {
       e.preventDefault();
