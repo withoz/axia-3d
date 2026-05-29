@@ -95,6 +95,27 @@ export class BoundaryTool implements ITool {
       return;
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ADR-170 β-3 — normalizeDrawInput SSOT migration (Phase 1)
+    // ════════════════════════════════════════════════════════════════
+    // Single chokepoint normalization (5-step routine):
+    //   Step 1 Cardinal axis force (LOCKED #63 z=0)
+    //   Step 2 Face plane projection (skipped — no faceId here)
+    //   Step 3 Vertex_at silent dedup (LOCKED #5)
+    //   Step 4 10mm short-circuit (skipped — no chainStart)
+    //   Step 5 Plane lock validation (skipped — no targetNormal)
+    //
+    // Graceful fallback: if ctx.normalizeDrawInput? not available (legacy
+    // test mocks), use raw point directly (L-170-6 backward compat).
+    // ════════════════════════════════════════════════════════════════
+    const normalized = this.ctx.normalizeDrawInput?.(point) ?? { point };
+    const pt = normalized.point;
+
+    if (normalized.skipReason === 'DegenerateBelowEpsilon') {
+      Toast.warning('Boundary: 입력 위치가 너무 작은 영역');
+      return;
+    }
+
     // LOCKED #63 z=0 invariant: default plane = Z=0 ground (XY plane,
     // normal = +Z). Future ADR may infer plane from snapped face.
     const planeNormal = new THREE.Vector3(0, 0, 1);
@@ -102,7 +123,7 @@ export class BoundaryTool implements ITool {
 
     debugLog(
       '[BoundaryTool] click point',
-      point.toArray(),
+      pt.toArray(),
       'normal',
       planeNormal.toArray(),
       'planeDist',
@@ -111,7 +132,7 @@ export class BoundaryTool implements ITool {
 
     try {
       const faceId = this.ctx.bridge.boundaryFromPoint(
-        point.x, point.y, point.z,
+        pt.x, pt.y, pt.z,
         planeNormal.x, planeNormal.y, planeNormal.z,
         planeDist,
         DEFAULT_SEARCH_RADIUS_MM,

@@ -118,6 +118,99 @@ describe('BoundaryTool (ADR-148 β-4)', () => {
     });
   });
 
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-170 β-3 — normalizeDrawInput SSOT migration verification
+  // ════════════════════════════════════════════════════════════════════
+  describe('ADR-170 β-3 — normalizeDrawInput SSOT routing', () => {
+    it('calls ctx.normalizeDrawInput when available (SSOT routing)', () => {
+      const normalizeFn = vi.fn((pt: THREE.Vector3) => ({ point: pt.clone() }));
+      const ctxWithNormalize = {
+        ...ctx,
+        normalizeDrawInput: normalizeFn,
+      } as unknown as ToolContext;
+      const toolWithSSOT = new BoundaryTool(ctxWithNormalize);
+
+      const point = new THREE.Vector3(5, 5, 0);
+      toolWithSSOT.onMouseDown({} as MouseEvent, point);
+
+      expect(normalizeFn).toHaveBeenCalledTimes(1);
+      expect(normalizeFn).toHaveBeenCalledWith(point);
+    });
+
+    it('uses normalized point (not raw) for bridge.boundaryFromPoint call', () => {
+      // Normalize returns a different point (simulating cardinal force / projection)
+      const normalizedPoint = new THREE.Vector3(5.0, 5.0, 0); // exactly 0 z
+      const ctxWithNormalize = {
+        ...ctx,
+        normalizeDrawInput: vi.fn(() => ({ point: normalizedPoint })),
+      } as unknown as ToolContext;
+      const toolWithSSOT = new BoundaryTool(ctxWithNormalize);
+
+      const rawPoint = new THREE.Vector3(5.0, 5.0, 0.000001); // drift z
+      toolWithSSOT.onMouseDown({} as MouseEvent, rawPoint);
+
+      // bridge should receive normalized (exact 0), not raw (0.000001)
+      expect(ctx.bridge.boundaryFromPoint).toHaveBeenCalledWith(
+        5.0, 5.0, 0,  // normalized point (z = exact 0)
+        0, 0, 1,
+        0,
+        1000,
+      );
+    });
+
+    it('skipReason=DegenerateBelowEpsilon → Toast.warning + skip dispatch', async () => {
+      const { Toast } = await import('../ui/Toast');
+      const ctxWithSkip = {
+        ...ctx,
+        normalizeDrawInput: vi.fn(() => ({
+          point: new THREE.Vector3(0, 0, 0),
+          skipReason: 'DegenerateBelowEpsilon' as const,
+        })),
+      } as unknown as ToolContext;
+      const toolWithSSOT = new BoundaryTool(ctxWithSkip);
+
+      toolWithSSOT.onMouseDown({} as MouseEvent, new THREE.Vector3(0, 0, 0));
+
+      expect(ctx.bridge.boundaryFromPoint).not.toHaveBeenCalled();
+      expect(ctx.syncMesh).not.toHaveBeenCalled();
+      expect(Toast.warning).toHaveBeenCalledWith(
+        expect.stringContaining('너무 작은 영역'),
+      );
+    });
+
+    it('graceful fallback when ctx.normalizeDrawInput absent (L-170-6 backward compat)', () => {
+      // ctx (default from beforeEach) has NO normalizeDrawInput
+      const point = new THREE.Vector3(5, 5, 0);
+      tool.onMouseDown({} as MouseEvent, point);
+
+      // Should still dispatch with raw point (backward compat)
+      expect(ctx.bridge.boundaryFromPoint).toHaveBeenCalledWith(
+        5, 5, 0,
+        0, 0, 1,
+        0,
+        1000,
+      );
+      expect(ctx.syncMesh).toHaveBeenCalledTimes(1);
+    });
+
+    it('no skipReason → normal dispatch flow continues', async () => {
+      const { Toast } = await import('../ui/Toast');
+      const ctxWithNormalize = {
+        ...ctx,
+        normalizeDrawInput: vi.fn((pt: THREE.Vector3) => ({
+          point: pt.clone(),
+          // No skipReason — normal flow
+        })),
+      } as unknown as ToolContext;
+      const toolWithSSOT = new BoundaryTool(ctxWithNormalize);
+
+      toolWithSSOT.onMouseDown({} as MouseEvent, new THREE.Vector3(5, 5, 0));
+
+      expect(ctx.bridge.boundaryFromPoint).toHaveBeenCalledTimes(1);
+      expect(Toast.success).toHaveBeenCalled();
+    });
+  });
+
   describe('lifecycle', () => {
     it('isBusy always returns false (single-click tool)', () => {
       expect(tool.isBusy()).toBe(false);
