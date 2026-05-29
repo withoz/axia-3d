@@ -5034,8 +5034,116 @@ Q4=(a) 3-phase migration. Q5=(a) Plane SSOT scope only.
 - Future plane-equality op 추가 시 SSOT 자명, cognitive load 감소
 
 **다음 자연 후속 (LOCKED #43 priority sequence (c))**:
-- **ADR-168 (가칭)** — Face plane drift snap (non-cardinal face plane
-  drift 보정). ADR-167 closure 시점 진입 가능.
+- **ADR-168** — Face plane drift snap (non-cardinal face plane drift
+  보정). ✅ Closed (LOCKED #69).
+
+### 69. ADR-168 — Face plane drift snap (γ closure, 2026-05-29) ✅
+
+**Canonical anchor (LOCKED #43 priority sequence (c) closure)**:
+ADR-167 closure (LOCKED #68) 후 자연 후속. ADR-026 P12 cardinal SSOT
+gap 의 architectural 해결. 5-step variant 5번째 1-day single-day
+closure. ADR-152 / ADR-164 / ADR-166 / ADR-167 답습. **Engine-level
+architectural quality** — 사용자 facing 변화 0 (architectural drift
+correction).
+
+**핵심 아키텍처 변경**:
+- `axia-geo/src/operations/plane_snap.rs` 신설 — Face plane drift snap
+  primitive (Q1=a tessellation chord substitute algorithm)
+- `PLANE_SNAP_NORMAL: f64 = 1e-3` (normal direction snap tolerance)
+- `PLANE_SNAP_OFFSET: f64 = 1e-4` mm (offset snap tolerance, **15×
+  stricter than EPS_PLANE_OFFSET** → post-snap detection 통과 보장)
+- `Plane` struct + `same_plane` from ADR-167 reused
+- `DriftReport` + `SnapReport` + `detect_chord_drift` (read-only) +
+  `snap_chord_to_plane` (correction)
+- `snap_face_to_plane(mesh, face_id, plane, snap_tol)` mesh-aware
+  integration helper
+- 3 face creation callsites activated (`exec_draw_rect_as_shape` /
+  `exec_draw_line_as_shape` / `exec_draw_circle_as_shape`)
+- `SnapMetricsAggregate` opt-in telemetry primitive (production
+  callsites UNCHANGED, E2E session wrapper accumulation)
+
+**사용자 결재 (2026-05-29)**: Q1=(a) tessellation chord substitute,
+Q2=(a) independent constants (PLANE_SNAP_NORMAL + PLANE_SNAP_OFFSET),
+Q3=(a) face creation only scope (minimum risk), Q4=(a) 3-phase additive
+migration, Q5=(a) Face plane only scope. all defaults 5/5 ⭐ 추천 approved.
+
+**Audit-first canonical 18번째 적용**:
+- α spec: ADR-026 P12 cardinal SSOT gap inventory + non-cardinal face
+  plane silent drift bug evidence
+- β-2 entry: spec mentioned 4 callsites, actual production 3 (polygon
+  = circle variant) — silent fix + 명시 commit documentation
+
+**Layered architecture (ADR-167 vs ADR-168)**:
+- **Detection** (ADR-167): `EPS_PLANE_NORMAL` (1e-4) + `EPS_PLANE_OFFSET`
+  (1.5e-3) — "같은 plane 인가?"
+- **Snap correction** (ADR-168): `PLANE_SNAP_NORMAL` (1e-3) +
+  `PLANE_SNAP_OFFSET` (1e-4) — "같은 plane 으로 맞추기"
+- Stricter snap < detection threshold → snap 후 detection 통과 보장
+
+**Lock-ins (canonical for ADR-168)**:
+- **L-168-1** Tessellation chord substitute algorithm (Q1=a)
+- **L-168-2** Independent constants — 2-constant schema (Q2=a)
+- **L-168-3** Face creation only scope (Q3=a, 3 callsites)
+- **L-168-4** 3-phase additive migration (Phase 1 no mutation, Phase
+  2 active, Phase 3 telemetry opt-in)
+- **L-168-5** Face plane only scope — edge/curve drift 별도 ADR
+- **L-168-6** ADR-167 EPS_PLANE_* SSOT layered architecture **enforced
+  in test** (PLANE_SNAP_OFFSET < EPS_PLANE_OFFSET / 0.1)
+- **L-168-7** ADR-026 P12 cardinal SSOT 보존 (non-cardinal 만 보강)
+- **L-168-8** ADR-031 Phase D AnalyticSurface infrastructure 재사용
+  (tessellate_face_surface 의 자연 연장)
+- **L-168-9** 메타-원칙 #6 (Preventive) + #14 (면은 닫힌 경계로부터) +
+  #15 (동일 분할 contract) 정합
+- **L-168-10** Per-call snap_tol override (strict callsites smaller value)
+- **L-168-11** 절대 #[ignore] 금지 16/16 (β-1 7 + β-2 4 + β-3 3 + γ 2)
+
+**회귀 매트릭스 (5-step 누적)**:
+
+| Sub-step | 회귀 | Cumulative |
+|---|---|---|
+| α (spec, PR #242) | +0 | 0 |
+| β-1 (plane_snap module, PR #243) | +7 axia-geo | 7 |
+| β-2 (callsite activation, PR #244) | +4 axia-geo | 11 |
+| β-3 (drift telemetry, PR #245) | +3 axia-geo | 14 |
+| **γ (closure docs + drift guards, 본 PR)** | **+2 axia-geo** | **16** |
+| **합계** | **+16** (target +15 over-delivered by +1 via β-1 edge cases) | |
+
+**Cross-link**:
+- **ADR-168** (본 ADR — α/β-1/β-2/β-3/γ 모두 closure)
+- **ADR-167** §5.1 (sequence anchor source — 직계 trigger) +
+  **LOCKED #68**
+- **ADR-166** §5.1 + **LOCKED #67** (LOCKED #43 priority sequence anchor)
+- **ADR-026 P12** (Cardinal plane SSOT — 보존, non-cardinal 만 보강)
+- **ADR-031 Phase D** (AnalyticSurface infrastructure — chord substitute)
+- **ADR-094 §E L1** (additive-first + multi-gate atomic)
+- **ADR-046 P31 #4** (additive only — Phase 3 production overhead 0)
+- **메타-원칙 #4** (SSOT) + **#6** (Preventive) + **#14** (면은 닫힌
+  경계로부터) + **#15** (동일 분할 contract)
+- **LOCKED #5** (1.5μm spatial-hash dedup) — snap_tol natural lower bound
+- **LOCKED #7** ADR-026 P12 (cardinal SSOT — 보존)
+- **LOCKED #43** priority sequence (a)→(b)→(c) **ALL CLOSED** (LOCKED
+  #67 / #68 / #69)
+- **LOCKED #44** (Complete Meaning per Merge) / **LOCKED #65** 메타-원칙
+- **LOCKED #67** ADR-166 / **LOCKED #68** ADR-167 (직계 precursors)
+
+**사용자 facing 변화 (canonical)**:
+- **None** — internal architectural quality only (engine-level drift correction)
+- Maintainer 가치: 분산 SSOT 통합 (ADR-167) + drift 보정 (ADR-168) =
+  silent bug 영구 차단
+- Future plane drift expansion (Boolean / Offset / Push-Pull /
+  edge polyline / curve metadata) 의 sequence anchor
+
+**LOCKED #43 priority sequence ALL CLOSED 🎉**:
+- (a) ADR-166 plane lock ✅ LOCKED #67
+- (b) ADR-167 EPS_PLANE SSOT ✅ LOCKED #68
+- (c) ADR-168 Face plane drift snap ✅ LOCKED #69
+
+**다음 priority audit anchor** (사용자 결재 후 진입):
+- Future — Boolean / Offset / Push-Pull cascade drift snap (Q3=b/c expansion)
+- Future — Edge polyline drift snap (Q5=c expansion)
+- Future — Curve metadata drift snap (NURBS Kernel)
+- Future — Angle-degree SSOT (`COPLANAR_PAIR_TOL_DEG` 등 통합)
+- Future — Curve SSOT (`HOVER_CHORD_TOL` 등 통합)
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:

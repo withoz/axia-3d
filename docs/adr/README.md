@@ -250,7 +250,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [165](./165-containment-annulus-ux-hint.md) | Containment Annulus UX Hint + 단축키 — 사용자 시연 trigger | Proposed | Track 5 |
 | [166](./166-active-sketch-plane-session-lock.md) | Active Sketch Plane Session Lock — 사용자 작업지시 trigger | Accepted | Track 5 |
 | [167](./167-eps-plane-ssot-and-same-plane-helper.md) | EPS_PLANE SSOT + same_plane() helper — ADR-166 자연 후속 | Accepted | Track 5 |
-| [168](./168-face-plane-drift-snap.md) | Face plane drift snap — ADR-167 자연 후속 | Proposed | Track 5 |
+| [168](./168-face-plane-drift-snap.md) | Face plane drift snap — ADR-167 자연 후속 | Accepted | Track 5 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
