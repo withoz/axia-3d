@@ -21,8 +21,10 @@ pub mod constraint;
 pub mod orphan_recovery;
 pub mod promote;
 pub mod boolean_group;
+pub mod plane;  // ADR-167 β-1 — Plane SSOT (EPS_PLANE_NORMAL/OFFSET + Plane + same_plane)
 
 pub use xia::{Xia, XiaState};
+pub use plane::{Plane, same_plane, EPS_PLANE_NORMAL, EPS_PLANE_OFFSET};  // ADR-167 β-1
 pub use shape::{Shape, ShapeId};
 pub use reference::{Reference, ReferenceCategory, ReferenceId};
 pub use boolean_group::BooleanGroupTag;
