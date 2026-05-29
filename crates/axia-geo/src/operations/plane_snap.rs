@@ -34,7 +34,9 @@
 //! - **L-168-11** 절대 #[ignore] 금지 — 회귀 자산 강제
 
 use glam::DVec3;
+#[allow(unused_imports)]  // EPS_PLANE_NORMAL referenced from docs + tests
 use crate::plane::{Plane, EPS_PLANE_NORMAL, EPS_PLANE_OFFSET};
+use crate::{FaceId, mesh::Mesh};
 
 // ═══════════════════════════════════════════════════════════════════════
 // Constants (canonical SSOT, ADR-168 Q2=a independent + stricter than ADR-167)
@@ -182,6 +184,90 @@ pub fn snap_chord_to_plane(
         snap_applied: vertices_snapped > 0,
         post_max_drift,
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// β-2 — Mesh-aware integration (face creation callsites)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Snap a face's outer-loop boundary vertices to the target plane
+/// (ADR-168 β-2 integration helper, Q3=a face creation only scope).
+///
+/// Per L-168-4 Phase 2 production-active semantic — mesh vertices are
+/// mutated in place via `Vertex::set_pos`. Caller is responsible for
+/// downstream side effects (normal recomputation, affected face refresh).
+///
+/// **β-2 callsite pattern** (scene.rs::exec_draw_*_as_shape):
+/// ```ignore
+/// // After set_face_surface(fid, Some(plane)) attaches AnalyticSurface::Plane
+/// let target_plane = Plane::from_point_normal(origin, normal);
+/// snap_face_to_plane(mesh, fid, &target_plane, PLANE_SNAP_OFFSET);
+/// ```
+///
+/// Returns `SnapReport { pre_drift, vertices_snapped, snap_applied,
+/// post_max_drift }`. Empty return (no-op) if face is inactive or
+/// missing.
+pub fn snap_face_to_plane(
+    mesh: &mut Mesh,
+    face_id: FaceId,
+    plane: &Plane,
+    snap_tol: f64,
+) -> SnapReport {
+    // 1. Collect outer-loop vertex IDs (defensive: skip inactive/missing)
+    let face = match mesh.faces.get(face_id) {
+        Some(f) if f.is_active() => f,
+        _ => {
+            return SnapReport {
+                pre_drift: DriftReport {
+                    vertex_count: 0,
+                    max_drift: 0.0,
+                    mean_drift: 0.0,
+                    drift_exceeds_snap_tol: false,
+                    drift_exceeds_detection_tol: false,
+                },
+                vertices_snapped: 0,
+                snap_applied: false,
+                post_max_drift: 0.0,
+            };
+        }
+    };
+    let outer_start = face.outer().start;
+    let vert_ids = match mesh.collect_loop_verts(outer_start) {
+        Ok(v) => v,
+        Err(_) => {
+            return SnapReport {
+                pre_drift: DriftReport {
+                    vertex_count: 0,
+                    max_drift: 0.0,
+                    mean_drift: 0.0,
+                    drift_exceeds_snap_tol: false,
+                    drift_exceeds_detection_tol: false,
+                },
+                vertices_snapped: 0,
+                snap_applied: false,
+                post_max_drift: 0.0,
+            };
+        }
+    };
+
+    // 2. Collect current positions, snap them, and write back
+    let mut chord: Vec<DVec3> = vert_ids
+        .iter()
+        .filter_map(|&vid| mesh.verts.get(vid).map(|v| v.pos()))
+        .collect();
+
+    let report = snap_chord_to_plane(&mut chord, plane, snap_tol);
+
+    // 3. Write snapped positions back to mesh
+    for (i, &vid) in vert_ids.iter().enumerate() {
+        if let Some(vert) = mesh.verts.get_mut(vid) {
+            if i < chord.len() {
+                vert.set_pos(chord[i]);
+            }
+        }
+    }
+
+    report
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -348,6 +434,113 @@ mod tests {
         // Both snapped to z = 5 (same physical plane)
         assert!((chord_plus[0].z - 5.0).abs() < 1e-12);
         assert!((chord_minus[0].z - 5.0).abs() < 1e-12);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ADR-168 β-2 — Face creation callsite integration evidence (4 tests)
+    //
+    // β-2 wires `snap_face_to_plane` into 3 face creation callsites in
+    // axia-core::scene (rect / line / circle as_shape). These tests
+    // validate the mesh-aware helper boundary semantics.
+    // ══════════════════════════════════════════════════════════════════
+
+    /// β-2 defensive — snap_face_to_plane on missing face returns empty
+    /// report (no panic, no mutation).
+    #[test]
+    fn adr168_b2_snap_face_missing_face_no_op() {
+        let mut mesh = Mesh::new();
+        let plane = Plane::from_point_normal(DVec3::ZERO, DVec3::Z);
+        // FaceId::new(999) — slot does not exist
+        let nonexistent = crate::FaceId::new(999);
+        let report = super::snap_face_to_plane(&mut mesh, nonexistent, &plane, PLANE_SNAP_OFFSET);
+
+        assert_eq!(report.pre_drift.vertex_count, 0);
+        assert_eq!(report.vertices_snapped, 0);
+        assert!(!report.snap_applied);
+    }
+
+    /// β-2 architectural invariant — snap tolerance is stricter than
+    /// detection tolerance. Post-snap chord always passes ADR-167
+    /// detection. Re-asserts β-1 layered architecture from sunset
+    /// perspective.
+    #[test]
+    fn adr168_b2_snap_strictly_less_than_detection_invariant() {
+        // PLANE_SNAP_OFFSET (1e-4) < EPS_PLANE_OFFSET (1.5e-3)
+        assert!(PLANE_SNAP_OFFSET < EPS_PLANE_OFFSET);
+        // The 15× ratio is the architectural margin — post-snap drift
+        // is well within detection threshold (0.067 of detection eps).
+        assert!(PLANE_SNAP_OFFSET / EPS_PLANE_OFFSET < 0.1);
+    }
+
+    /// β-2 chord drift round-trip evidence — when chord vertices are
+    /// projected onto the target plane, ALL post-snap signed distances
+    /// must be below machine epsilon. This is the core β-2 contract
+    /// (downstream coplanarity detection always passes post-snap).
+    #[test]
+    fn adr168_b2_chord_round_trip_post_snap_drift_zero() {
+        let plane = Plane::from_point_normal(DVec3::new(0.0, 0.0, 5.0), DVec3::Z);
+        // Simulate drifted RECT corner vertices (Z slightly off plane)
+        let mut chord = vec![
+            DVec3::new(-1.0, -1.0, 5.0 + 1e-3),  // 10× snap_tol drift
+            DVec3::new( 1.0, -1.0, 5.0 - 1e-3),
+            DVec3::new( 1.0,  1.0, 5.0 + 5e-4),
+            DVec3::new(-1.0,  1.0, 5.0 - 2e-3),
+        ];
+        let report = super::snap_chord_to_plane(&mut chord, &plane, PLANE_SNAP_OFFSET);
+
+        // All 4 vertices snapped
+        assert_eq!(report.vertices_snapped, 4);
+        assert!(report.snap_applied);
+
+        // Post-snap: ALL chord vertices lie on plane within machine eps
+        for v in &chord {
+            let d = plane.signed_distance(*v);
+            assert!(
+                d.abs() < 1e-12,
+                "post-snap drift {:.3e} exceeds machine eps for vertex {:?}",
+                d.abs(),
+                v
+            );
+        }
+
+        // β-2 architectural invariant: post-snap drift well below
+        // EPS_PLANE_OFFSET (downstream detection passes)
+        for v in &chord {
+            assert!(plane.signed_distance(*v).abs() < EPS_PLANE_OFFSET);
+        }
+    }
+
+    /// β-2 X/Y coordinate preservation — snap only moves vertices along
+    /// the *normal* direction. In-plane coordinates (X/Y for a Z-normal
+    /// plane) are untouched. This is the core geometric semantic — snap
+    /// does not distort polygon shape, only flattens it.
+    #[test]
+    fn adr168_b2_snap_preserves_in_plane_coordinates() {
+        let plane = Plane::from_point_normal(DVec3::ZERO, DVec3::Z);
+        let original_xy = vec![
+            (1.0, 2.0),
+            (-3.0, 4.0),
+            (5.0, -6.0),
+        ];
+        let mut chord: Vec<DVec3> = original_xy
+            .iter()
+            .map(|&(x, y)| DVec3::new(x, y, 1e-3))  // Z drift = 1e-3 > snap_tol
+            .collect();
+
+        let _report = super::snap_chord_to_plane(&mut chord, &plane, PLANE_SNAP_OFFSET);
+
+        // X/Y coordinates UNCHANGED — only Z snapped to 0
+        for (i, v) in chord.iter().enumerate() {
+            assert_eq!(
+                v.x, original_xy[i].0,
+                "snap mutated X coord at vertex {}", i
+            );
+            assert_eq!(
+                v.y, original_xy[i].1,
+                "snap mutated Y coord at vertex {}", i
+            );
+            assert!(v.z.abs() < 1e-12, "Z not snapped to 0 at vertex {}", i);
+        }
     }
 
     /// Edge cases — empty chord, single vertex, exact on plane, huge drift.
