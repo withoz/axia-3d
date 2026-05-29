@@ -4831,11 +4831,15 @@ impl Mesh {
     }
 
     /// Check if two faces are coplanar (same plane within tolerance).
+    ///
+    /// ADR-167 β-3 — Migrated from `tolerances::COPLANAR_TOLERANCE` to
+    /// canonical `crate::plane::EPS_PLANE_NORMAL` SSOT. Identical value
+    /// (1e-4), identical semantic.
     pub fn are_coplanar(&self, f1: FaceId, f2: FaceId) -> bool {
         let n1 = self.faces[f1].normal();
         let n2 = self.faces[f2].normal();
         let dot = n1.dot(n2).abs();
-        dot > 1.0 - COPLANAR_TOLERANCE
+        dot > 1.0 - crate::plane::EPS_PLANE_NORMAL
     }
 
     // ========================================================================

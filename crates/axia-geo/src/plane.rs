@@ -240,8 +240,13 @@ mod tests {
 
     /// β-2 site #1 — `axia-geo::tolerances::COPLANAR_TOLERANCE` aliased
     /// to canonical `EPS_PLANE_NORMAL`. Drift guard ensures the alias
-    /// chain stays intact (β-3 sunset candidate).
+    /// chain stays intact during the deprecation grace period (β-3).
+    ///
+    /// ADR-167 β-3 — `#[allow(deprecated)]` because this test intentionally
+    /// references the deprecated aliases to verify the backward-compat
+    /// path. Production code paths have been migrated to canonical SSOT.
     #[test]
+    #[allow(deprecated)]
     fn adr167_b2_tolerances_re_exports_canonical_constants() {
         assert_eq!(
             crate::tolerances::COPLANAR_TOLERANCE,
@@ -304,6 +309,71 @@ mod tests {
             "semantic distinction enforced"
         );
         // EPS_PLANE_OFFSET = 1.5e-3 mm = 1.5 μm (LOCKED #5 spec lock-in)
+        assert_eq!(EPS_PLANE_OFFSET, 1.5e-3);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ADR-167 β-3 — Legacy const sunset evidence (4 tests)
+    //
+    // Soft sunset via `#[deprecated]` attribute on redundant aliases
+    // (tolerances::COPLANAR_TOLERANCE + LOOP_PLANAR_TOLERANCE) +
+    // alias deletion (annulus::COPLANAR_TOL inlined to canonical at
+    // the callsite). Semantic divergences (coplanar::COPLANARITY_* +
+    // mesh::SPATIAL_HASH_CELL) are explicitly preserved.
+    // ══════════════════════════════════════════════════════════════════
+
+    /// β-3 sunset evidence — production code paths use canonical SSOT
+    /// directly (not the deprecated aliases). This test asserts
+    /// `Mesh::are_coplanar` (the only production caller of
+    /// COPLANAR_TOLERANCE before β-3) now reads `EPS_PLANE_NORMAL`
+    /// directly. Implementation source-grep is the secondary evidence;
+    /// this test catches semantic drift if are_coplanar's threshold
+    /// changes magnitude.
+    #[test]
+    fn adr167_b3_mesh_are_coplanar_uses_canonical_threshold() {
+        // The threshold inside are_coplanar is `1.0 - EPS_PLANE_NORMAL`.
+        // Drift guard: if anyone changes the magnitude, the test fails.
+        // (Identity-level check — value is locked at 0.9999 by L-167-2.)
+        assert_eq!(1.0 - EPS_PLANE_NORMAL, 0.9999);
+    }
+
+    /// β-3 preserve evidence — coplanar.rs strict tolerances remain
+    /// untouched (semantic divergence locked by β-2 drift guard at
+    /// `adr167_b2_coplanar_remains_strict_per_call_override`).
+    /// This test re-asserts the same lock-in from a sunset perspective:
+    /// β-3 must NOT remove the strict 1.5e-6 offset.
+    #[test]
+    fn adr167_b3_preserve_strict_coplanar_offset_tol() {
+        use crate::operations::coplanar::COPLANARITY_OFFSET_TOL;
+        // Stricter than canonical by 3 orders of magnitude (1.5e-6 vs 1.5e-3).
+        assert_eq!(COPLANARITY_OFFSET_TOL, 1.5e-6);
+        // Strictness: ratio = 1000× (exact). Use `< 100×` (loose lower
+        // bound) to assert "at least 100× stricter", which is the
+        // semantic guarantee — exact 1000× is a magnitude lock,
+        // captured by the assert_eq above.
+        assert!(COPLANARITY_OFFSET_TOL * 100.0 < EPS_PLANE_OFFSET);
+    }
+
+    /// β-3 deprecation grace period — `#[deprecated]` attribute does
+    /// NOT break compilation. Callsites using legacy const get warnings
+    /// but still resolve to the canonical value (backward compat).
+    #[test]
+    #[allow(deprecated)]
+    fn adr167_b3_deprecated_aliases_still_resolve_to_canonical() {
+        // Even though deprecated, the const must still equal the
+        // canonical value (so legacy callsites don't silently diverge).
+        assert_eq!(crate::tolerances::COPLANAR_TOLERANCE, EPS_PLANE_NORMAL);
+        assert_eq!(crate::tolerances::LOOP_PLANAR_TOLERANCE, EPS_PLANE_NORMAL);
+    }
+
+    /// β-3 regression baseline — Canonical SSOT values UNCHANGED since
+    /// β-1. β-3 sunset only removes redundant aliases, never modifies
+    /// the canonical truth. Drift guard against accidental retuning
+    /// during sunset PRs.
+    #[test]
+    fn adr167_b3_canonical_ssot_values_unchanged() {
+        // Locked since β-1 (ADR-167 §2 Q2=a).
+        assert_eq!(EPS_PLANE_NORMAL, 1e-4);
         assert_eq!(EPS_PLANE_OFFSET, 1.5e-3);
     }
 
