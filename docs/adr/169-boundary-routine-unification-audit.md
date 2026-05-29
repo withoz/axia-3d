@@ -1,7 +1,7 @@
 # ADR-169 — Boundary-Routine Unification Audit (Phase 0)
 
-**Status**: Proposed (α spec, 2026-05-29)
-**Date**: 2026-05-29
+**Status**: Accepted (γ closure 2026-05-29 — 5-step variant 6번째 reproducibility, β-1/β-2/β-3 audit closure)
+**Date**: 2026-05-29 (α / β-1 / β-2 / β-3 / γ — same-day closure)
 **Author**: WYKO + Claude
 **Trigger**: 사용자 비전 (2026-05-29):
 > "면생성 경계를 이루는 요소 : 라인, 도형의 모든 모서리, 꼭지점, 곡면의
@@ -392,26 +392,139 @@ cause 분류 (drift / dedup / validation / architectural).
 
 ## 9. Acceptance Log
 
-### 9.1 α (본 PR)
-- spec 작성 + 결재 anchor 명시
+### 9.1 α (PR #249, merged 2026-05-29)
+- spec 작성 + 결재 anchor 명시 (D-Then-C, 사용자 결재)
 - 5-step roadmap (α / β-1 / β-2 / β-3 / γ)
 - Lock-ins 12개 명시
 - Phase 1-4 ADR sequence 예고
 
-### 9.2 β-1 (별도 PR)
-- Boundary element type matrix → `docs/audits/2026-05-29-boundary-element-
-  matrix.md`
+### 9.2 β-1 (PR #250, merged 2026-05-29)
+- Boundary element type matrix → `docs/audits/2026-05-29-boundary-element-matrix.md` (~478 lines)
+- 6 type × 4-column gap analysis: Line / Polyline / Arc-Circle / Bezier-NURBS / Vertex / Solid face edge
+- 6 type 중 완전 작동 = 0개, 부분 작동 = 3개, 미참여 = 3개
+- (C) Full architectural unification 결재 정합 확인
+- Phase 1-4 회귀 자산 +240 추정 (refined)
 
-### 9.3 β-2 (별도 PR)
-- Drift propagation chain matrix → `docs/audits/2026-05-29-drift-
-  propagation-chain.md`
+### 9.3 β-2 (PR #251, merged 2026-05-29)
+- Drift propagation chain matrix → `docs/audits/2026-05-29-drift-propagation-chain.md` (~465 lines)
+- 11-Layer ε propagation: Mouse → Engine
+- 11 layer 중 ε 흡수 = 8, 증폭 = 3 (Layer 7 Tool-specific 가장 큰 gap)
+- 모든 SSOT 이미 존재, 위치만 분산 — Phase 1+2 통합 chokepoint 필요
+- ε accumulation worst-case: stacked transform N=5 + non-cardinal = 110μm > strict 1.5μm → bail!
 
-### 9.4 β-3 (별도 PR)
-- 사용자 시연 evidence 12 scenario → `docs/audits/2026-05-29-user-demo-
-  evidence-matrix.md`
+### 9.4 β-3 (PR #252, merged 2026-05-29)
+- 사용자 시연 evidence 12 scenario → `docs/audits/2026-05-29-user-demo-evidence-matrix.md` (~430 lines)
+- 12 scenario = 4 tool × 3 surface
+- ★ Verified 3건 (S2 PR #248 anchor + cross-cut + ADR-168 closure)
+- ⚙ Inferred 6건 (Phase 0 audit + β-1/β-2 cross-link)
+- ⏸ Pending 3건 (S11 Phase 3 target + S6/S9/S12 future ADR)
+- Root cause: drift 33% + dedup 8% + validation 33% + architectural 42%
+- 75% = Phase 1+2 SSOT 통합 흡수
 
-### 9.5 γ (별도 PR)
+### 9.5 γ (본 PR)
 - audit summary + Phase 1-4 scope 정확화 + 사용자 결재
 - Status Proposed → Accepted
-- §10 Lessons (audit-first canonical 19번째 + Phase 1-4 sequence 추출)
-- LOCKED entry candidate + README catalog 갱신
+- §10 Lessons 9개 (canonical for future audit ADRs)
+- LOCKED entry candidate (LOCKED #70 anchor)
+- README catalog 갱신 (Proposed → Accepted)
+
+---
+
+## 10. Lessons (canonical for future audit ADRs)
+
+본 ADR 의 audit-first canonical **19번째 적용** evidence. 5개월 누적
+LOCKED #66 Audit-First Canonical 패턴의 architectural depth 측정 결과.
+
+### L1 — Multi-deliverable audit 분할 패턴 (Path Z atomic 의 audit 변형)
+
+ADR-169 은 single audit ADR 이 아닌 **5-step variant 6번째 reproducibility**
+(ADR-152 / ADR-164 / ADR-166 / ADR-167 / ADR-168 의 6번째 답습) 의 audit
+변형. α (spec) / β-1 (type matrix) / β-2 (drift chain) / β-3 (evidence)
+/ γ (closure) 의 5-step 가 audit deliverable 의 **자연 분할**. 향후
+multi-deliverable audit ADR 의 canonical 패턴.
+
+### L2 — Cross-validation through independent deliverables
+
+3 β deliverables 가 *독립* 진행 (별도 PR, 별도 perspective) → 모두 (C)
+결재 정합 확인. 단일 audit deliverable 보다 **architectural confidence**
+가 높음. β-1 (boundary type) ↔ β-2 (ε chain) ↔ β-3 (scenario evidence)
+의 **3-axis triangulation** 패턴.
+
+### L3 — Phase 0 3-agent audit 산출물의 architectural reuse
+
+ADR 작성 직전 Phase 0 audit (mesh+face_split+create_solid 130 / operations
+193 / curves+surfaces+scene 124 = 447 bail!) 가 본 ADR 의 *cross-cut
+source* 로 100% 재사용. 향후 architectural ADR 진입 전 *bail! 분류 audit*
+이 가장 효율적 sub-step. NURBS kernel carve-out (L-169-11) 도 본 audit
+finding 에서 자연 도출 (Part 3 91/124 F-category).
+
+### L4 — Audit-first canonical 의 self-applying pattern (ADR-131 답습)
+
+본 ADR 자체가 audit-first canonical → audit ADR 도 자기 검증 적용
+(메타-finding). ADR-131 의 audit ADR self-application 패턴 답습 — audit
+ADR 가 *자신* 의 architectural reality 도 검증.
+
+### L5 — 사용자 비전 → architectural ADR transition 패턴
+
+사용자 비전 ("선만 그려, 케이크는 알아서 나뉜다") 가 Phase 0 audit 의
+finding (cascading hotfix pattern PR #247/248 = P5.UX.39-45 reappear) 과
+정합 → 본 ADR 의 architectural 정당화. 사용자 비전을 *직접 구현* 보다
+*architectural transition 의 anchor* 로 활용하는 패턴 — 향후 사용자
+비전 trigger 시 답습.
+
+### L6 — D-Then-C 결재 패턴 (audit + multi-phase atomic)
+
+사용자 결재 (D-Then-C) = audit 결재 + Phase 1-4 본격 결재 의 *분리*.
+"audit 만으로는 implementation 결재가 아니다" 정합. 향후 multi-phase
+atomic architectural ADR 진입 시 D-Then-X 패턴 답습 권장.
+
+### L7 — SSOT 통합 시점의 architectural value 정량화
+
+β-2 finding: 11 layer 중 7-8 SSOT 가 *이미 존재*, 위치만 분산. Phase
+1+2 통합 의 architectural value = "**새 SSOT 도입 0, 기존 SSOT 위치
+통합만**". 향후 SSOT 관련 ADR 진입 시 *기존 SSOT inventory* 가 audit
+필수.
+
+### L8 — 메타-원칙 #14 (WHAT) ↔ #16 (WHEN) 직교 분리 정합
+
+본 ADR 은 *routine layer (HOW)* 정착. ADR-139 의 WHEN layer (Boundary
+tool trigger 정책) 보존 + 메타-원칙 #14 의 WHAT layer (결과 invariant)
+보존 — 두 메타-원칙의 *수직 hierarchy* 확인. 향후 architectural ADR 진입
+시 WHAT/WHEN/HOW 3-axis 분리 권장.
+
+### L9 — Phase 1-4 sequence atomic decomposition
+
+Phase 1 (Tool layer) / Phase 2 (Engine routine) / Phase 3 (Edge Register)
+/ Phase 4 (User vision) 의 *명확한 layer 분리*. 각 Phase = 별도 ADR =
+LOCKED #44 Complete Meaning per Merge 정합. 사용자 시연 가치 누적
+패턴 — Phase 1 alone (50%) → Phase 2 cumulative (75%) → Phase 3 (Type 4
+Bezier, 90%) → Phase 4 (12 시연 PASS, full closure). 향후 multi-phase
+ADR 진입 시 cumulative value chain 명시 권장.
+
+---
+
+## 11. LOCKED #70 candidate (사용자 결재 별도)
+
+**Proposed LOCKED entry** (사용자 결재 후 CLAUDE.md 등재):
+
+> **LOCKED #70 — ADR-169 Boundary-Routine Unification Audit closure
+> (Phase 1-4 anchor)**
+>
+> Phase 0 audit (α + β-1 + β-2 + β-3 + γ) 완료. Phase 1-4 (ADR-170~173,
+> 6-8주, +240 회귀) 의 sole architectural anchor.
+>
+> **불변 lock-in**:
+> - 6 boundary element type 통합 처리 (Line / Polyline / Arc-Circle /
+>   Bezier-NURBS / Vertex / Solid face edge)
+> - 11 layer ε chain 통합 chokepoint (Phase 1 normalizeDrawInput +
+>   Phase 2 absorb_boundary_input + Phase 3 register_boundary_element)
+> - 12 시연 scenario (★ 3 verified + ⚙ 6 inferred + ⏸ 3 pending) 매트릭스
+> - NURBS kernel silent-skip 금지 (curves/ + surfaces/ carve-out, L-169-11)
+> - 메타-원칙 #14 WHAT + #16 WHEN layer 보존, Phase 1-4 는 HOW layer 만 변경
+>
+> **회귀 자산**: γ closure (본 ADR) 0, Phase 1-4 누적 +240 (Phase 1:
+> +50, Phase 2: +70, Phase 3: +90, Phase 4: +30, 절대 #[ignore] 금지
+> 240/240).
+
+본 LOCKED entry 는 γ closure PR (본 PR) 의 별도 사용자 결재 후 CLAUDE.md
+에 등재. ADR-169 자체는 본 PR 으로 closure.
