@@ -570,12 +570,59 @@ export class DrawLineTool implements ITool {
    */
   private tryFaceSplit(faceId: number, start: THREE.Vector3, end: THREE.Vector3, len: number): boolean {
     try {
-      debugLog(`[FaceSplit] Attempting: face=${faceId}, start=(${start.x.toFixed(2)},${start.y.toFixed(2)},${start.z.toFixed(2)}), end=(${end.x.toFixed(2)},${end.y.toFixed(2)},${end.z.toFixed(2)}), len=${len.toFixed(2)}`);
+      // ADR-166 hotfix 2 (사용자 시연 trigger 2026-05-29) — Pre-project
+      // start/end onto face plane BEFORE engine call.
+      //
+      // **Root cause**: `get3DPoint` forces cardinal axis = 0 (system-wide
+      // policy 사용자 결재 2026-05-18), so click points have Z=0 (or Y=0
+      // / X=0). But face may NOT be at Z=0 (e.g., Push/Pulled box top
+      // face at Z=3000, or face drifted from numerical operations). Engine
+      // `project_to_plane` rejects with "Point is X from face plane (max
+      // allowed: Y)" error when perpendicular distance > face diagonal.
+      //
+      // **Fix**: Get face normal from engine. Project both start/end onto
+      // face plane (using start as reference if start is on plane, else
+      // use first boundary vertex via face centroid). Guarantees engine
+      // gets coplanar points → no "Point is X from face plane" error.
+      //
+      // Reference: face_split.rs::project_to_plane (max_distance = face
+      // bbox diagonal). TS-side projection ensures distance = 0 always.
+      let projStart = start;
+      let projEnd = end;
+      try {
+        const normalArr = this.ctx.bridge.getFaceNormal(faceId);
+        if (normalArr && Number.isFinite(normalArr[0]) && Number.isFinite(normalArr[1]) && Number.isFinite(normalArr[2])) {
+          const n = new THREE.Vector3(normalArr[0], normalArr[1], normalArr[2]);
+          if (n.lengthSq() > 0.5) {
+            n.normalize();
+            // Use face centroid as plane reference (guaranteed on plane).
+            // Fallback: use start point if centroid unavailable.
+            let planeOrigin: THREE.Vector3 | null = null;
+            try {
+              const centroid = this.ctx.bridge.facesCentroid?.([faceId]);
+              if (centroid) planeOrigin = centroid;
+            } catch { /* ignore */ }
+            if (!planeOrigin) planeOrigin = start.clone();
+            // Project: p_proj = p - n * ((p - origin) · n)
+            const dStart = start.clone().sub(planeOrigin).dot(n);
+            projStart = start.clone().sub(n.clone().multiplyScalar(dStart));
+            const dEnd = end.clone().sub(planeOrigin).dot(n);
+            projEnd = end.clone().sub(n.clone().multiplyScalar(dEnd));
+            if (Math.abs(dStart) > 0.5 || Math.abs(dEnd) > 0.5) {
+              debugLog(`[FaceSplit hotfix] Reprojected: dStart=${dStart.toFixed(3)}, dEnd=${dEnd.toFixed(3)}, face plane normal=(${n.x.toFixed(3)},${n.y.toFixed(3)},${n.z.toFixed(3)})`);
+            }
+          }
+        }
+      } catch (e) {
+        debugLog(`[FaceSplit hotfix] Projection failed (using raw points): ${e}`);
+      }
+
+      debugLog(`[FaceSplit] Attempting: face=${faceId}, start=(${projStart.x.toFixed(2)},${projStart.y.toFixed(2)},${projStart.z.toFixed(2)}), end=(${projEnd.x.toFixed(2)},${projEnd.y.toFixed(2)},${projEnd.z.toFixed(2)}), len=${len.toFixed(2)}`);
 
       const resultJson = this.ctx.bridge.splitFaceByLine(
         faceId,
-        [start.x, start.y, start.z],
-        [end.x, end.y, end.z],
+        [projStart.x, projStart.y, projStart.z],
+        [projEnd.x, projEnd.y, projEnd.z],
       );
 
       // Empty string means WASM method not available (older WASM build)
