@@ -336,6 +336,12 @@ export class ToolManager {
         // ADR-166 β-2 — Draw 도구 first_click guard helper.
         return this.isPlaneLocked();
       },
+      normalizeDrawInput: (rawPoint, context) => {
+        // ADR-170 β-2 — Tool layer SSOT 노출 (Phase 1).
+        // Single chokepoint for 7 Draw + SelectTool + BoundaryTool input
+        // normalization. β-2 SSOT exposure; tool 별 adoption 은 β-3 + γ.
+        return this.normalizeDrawInput(rawPoint, context ?? {});
+      },
     };
 
     // Register all tools
