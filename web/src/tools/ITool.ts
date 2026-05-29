@@ -122,6 +122,64 @@ export interface ToolContext {
    * Optional in interface — test mocks 호환.
    */
   isPlaneLocked?: () => boolean;
+
+  /**
+   * ADR-170 β-2 — normalizeDrawInput SSOT (Phase 1 of Phase 1-4).
+   *
+   * Single chokepoint for input normalization. Applies 5-step routine:
+   *   1. Cardinal axis force      (LOCKED #63 + #7)
+   *   2. Face plane projection    (LOCKED #69 ADR-168, PR #248 흡수)
+   *   3. Vertex_at silent dedup   (LOCKED #5 1.5μm spatial-hash)
+   *   4. 10mm short-circuit       (axia-sketch pattern 1)
+   *   5. Plane lock validation    (LOCKED #67 ADR-166 soft lock)
+   *
+   * Migration recipe for Draw tools (DrawLineTool / RECT / CIRCLE / Polygon /
+   * Bezier / Arc / Freehand):
+   *
+   * ```typescript
+   * onMouseDown(e: MouseEvent, ctx: ToolContext) {
+   *   const raw = ctx.get3DPoint(e);
+   *   if (!raw) return;
+   *
+   *   const normalized = ctx.normalizeDrawInput?.(raw, {
+   *     faceId: hitFaceId,        // optional, from raycast
+   *     chainStart: this.firstPt, // optional, for 10mm short-circuit
+   *   });
+   *
+   *   const pt = normalized?.point ?? raw;
+   *   if (normalized?.skipReason === 'DegenerateBelowEpsilon') {
+   *     Toast.warning('너무 짧은 선 (10mm 미만)');
+   *     return;
+   *   }
+   *
+   *   // ... use pt for commit
+   * }
+   * ```
+   *
+   * Returns `NormalizedDrawInput` typed envelope:
+   *   - `point` — normalized 3D point
+   *   - `vertId?` — existing vertex if dedup matched
+   *   - `faceId?` — passed-through face context
+   *   - `skipReason?` — typed enum if input below absorption threshold
+   *
+   * Optional in interface — test mocks 호환. Real ToolManager 가 항상
+   * 제공.
+   */
+  normalizeDrawInput?: (
+    rawPoint: THREE.Vector3,
+    context?: {
+      viewMode?: 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | '3d';
+      faceId?: number;
+      targetNormal?: THREE.Vector3;
+      chainStart?: THREE.Vector3;
+      sketchPlane?: { origin: THREE.Vector3; normal: THREE.Vector3; up?: THREE.Vector3 };
+    },
+  ) => {
+    point: THREE.Vector3;
+    vertId?: number;
+    faceId?: number;
+    skipReason?: 'DegenerateBelowEpsilon' | 'DriftBeyondTolerance' | 'VertexCollapse';
+  };
 }
 
 /** Drawing plane information for Rect/Circle tools */
