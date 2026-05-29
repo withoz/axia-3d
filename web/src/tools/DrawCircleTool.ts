@@ -66,6 +66,15 @@ export class DrawCircleTool implements ITool {
       );
 
       this.ctx.snap.setReferencePoint(point);
+
+      // ADR-166 β-2 — first_click plane lock (idempotent: no-op when
+      // already locked, L-166-2). Cross-tool 유지 활성화.
+      this.ctx.lockPlane?.({
+        origin: this.circleCenter,
+        normal: this.plane.normal,
+        up: this.plane.up,
+        source: 'first_click',
+      });
     } else {
       // ═══ Second click: intersect ray with drawing plane → create circle ═══
       const planePoint = this.getPointOnDrawPlane(e);

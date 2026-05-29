@@ -51,6 +51,13 @@ export class DrawArcTool implements ITool {
         this.plane.normal, this.startPoint,
       );
       this.ctx.snap.setReferencePoint(point);
+      // ADR-166 β-2 — first_click plane lock (idempotent, L-166-2).
+      this.ctx.lockPlane?.({
+        origin: this.startPoint,
+        normal: this.plane.normal,
+        up: this.plane.up,
+        source: 'first_click',
+      });
       return;
     }
 

@@ -159,6 +159,28 @@ export class DrawLineTool implements ITool {
       }
       // Lock the drawing plane based on this click (pick hit or workplane)
       this.establishDrawingPlane(e);
+      // ADR-166 β-2 — first_click plane lock (idempotent: no-op when
+      // already locked, L-166-2). DrawingPlane (THREE.Plane) → origin
+      // + normal + up extraction. Closest-to-world-origin point on
+      // plane = normal * (-constant) (canonical anchor, avoids
+      // projectPoint dependency for test mock compatibility).
+      if (this.drawingPlane) {
+        const planeNormal = this.drawingPlane.normal.clone().normalize();
+        const planeOrigin = planeNormal.clone().multiplyScalar(-this.drawingPlane.constant);
+        // Up = orthogonal to normal (canonical pattern: world +Z fallback +Y)
+        const candidate = Math.abs(planeNormal.z) > 0.9
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1);
+        const up = candidate.sub(
+          planeNormal.clone().multiplyScalar(candidate.dot(planeNormal))
+        ).normalize();
+        this.ctx.lockPlane?.({
+          origin: planeOrigin,
+          normal: planeNormal,
+          up,
+          source: 'first_click',
+        });
+      }
     } else if (this.state === LineDrawState.Drawing) {
       // Second+ click: remember end face
       this.endFaceId = pickedFaceId;

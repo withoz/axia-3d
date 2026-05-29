@@ -291,6 +291,15 @@ export class ToolManager {
         // β-1 API `setLastDrawnPlane` delegate.
         this.setLastDrawnPlane(plane);
       },
+      lockPlane: (plane) => {
+        // ADR-166 β-2 — Draw 도구 first_click 시 plane lock 활성 (no-op
+        // when already locked, L-166-2 idempotent).
+        this.lockPlane(plane);
+      },
+      isPlaneLocked: () => {
+        // ADR-166 β-2 — Draw 도구 first_click guard helper.
+        return this.isPlaneLocked();
+      },
     };
 
     // Register all tools

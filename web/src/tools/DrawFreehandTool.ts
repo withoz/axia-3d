@@ -49,6 +49,13 @@ export class DrawFreehandTool implements ITool {
     this.drawing = true;
     this.rawPoints = [point.clone()];
     this.ctx.snap.setReferencePoint(point);
+    // ADR-166 β-2 — first_click plane lock (idempotent, L-166-2).
+    this.ctx.lockPlane?.({
+      origin: point,
+      normal: this.plane.normal,
+      up: this.plane.up,
+      source: 'first_click',
+    });
   }
 
   onMouseMove(e: MouseEvent, _point: THREE.Vector3 | null): void {
