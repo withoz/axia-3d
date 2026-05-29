@@ -41,3 +41,4 @@ pub mod planar_walk;
 pub mod erase_resynth;
 pub mod import_mesh;
 pub mod cleave;
+pub mod plane_snap;  // ADR-168 β-1 — Face plane drift snap (Q1=a tessellation chord substitute, layered on ADR-167)
