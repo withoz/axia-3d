@@ -1,7 +1,7 @@
 # ADR-167 — EPS_PLANE SSOT + same_plane() helper (ADR-166 자연 후속)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
-**Date**: 2026-05-29
+**Status**: Accepted (γ closure 2026-05-29 — 5-step variant 4번째 reproducibility, audit-corrected at β-2)
+**Date**: 2026-05-29 (α / β-1 / β-2 / β-3 / γ — same-day closure)
 **Author**: WYKO + Claude
 **Trigger**: ADR-166 §5.1 sequence anchor + LOCKED #43 priority sequence
 (a)→(b)→(c) 결재. ADR-166 closure (LOCKED #67) 후 자연 진입.
@@ -287,25 +287,117 @@ ADR-167 closure 후 ADR-168 α 진입.
 - **2026-05-29 α** (본 PR) — ADR-167 spec only + 분산 constants inventory
   (audit-first canonical 16번째 적용) + Q1~Q5 결재 default 5/5 + ADR-168
   sequence anchor 명시
-- **TBD β-1** — `axia-core/src/plane.rs` + 2-constant + `Plane` + `same_plane`
-  + 6 회귀
-- **TBD β-2** — 5 file callsites migrate + 4 회귀
-- **TBD β-3** — Legacy const sunset + 4 회귀
-- **TBD γ** — closure docs + 사용자 시연 + 2 회귀
-- **TBD ADR-168 α** — ADR-167 closure 후 진입 (Face plane drift snap)
+- **2026-05-29 β-1** (PR #238 merged `e141344`) — `axia-core/src/plane.rs`
+  신설 + `EPS_PLANE_NORMAL` (1e-4) + `EPS_PLANE_OFFSET` (1.5e-3) +
+  `Plane` struct + `same_plane` helper (anti-parallel safe) + **+7 회귀**
+  (절대 #[ignore] 금지 7/7).
+- **2026-05-29 β-2** (PR #239 merged `eb7e6ee`) — **audit-first canonical
+  17번째 적용**: β-1 Q1=a (axia-core/src/plane.rs) discovered to violate
+  Cargo dep direction (axia-core → axia-geo) → silent architectural
+  fix: relocate to `axia-geo/src/plane.rs` + axia-core re-export for
+  backward compat. 5 file callsites migrated (tolerances/annulus aliased
+  to canonical; coplanar/cleave/mesh preserved with annotation per
+  semantic divergence). **+4 회귀 net** (11 in axia-geo plane module).
+- **2026-05-29 β-3** (PR #240 merged `b953a1e`) — Legacy const sunset.
+  Production callsites (`mesh.rs::are_coplanar` + `annulus.rs::promote_
+  circles_to_annulus`) migrated to canonical SSOT direct use. Soft
+  sunset via `#[deprecated]` on `tolerances::COPLANAR_TOLERANCE` +
+  `LOOP_PLANAR_TOLERANCE`. `annulus::COPLANAR_TOL` module-private const
+  removed. **+4 회귀** (sunset evidence + preserve + grace + drift guard).
+  Build clean — 0 production deprecation warnings.
+- **2026-05-29 γ** (본 PR) — Status Proposed → Accepted + §8 결재 cycle
+  log + §9 Lessons (7 lessons) + LOCKED #68 entry + README catalog
+  Status 갱신 + **+2 회귀** (canonical SSOT direct invocation drift
+  guard + 사용자 facing none — internal architectural quality).
+- **TBD ADR-168 α** — ADR-167 closure 후 진입 (Face plane drift snap, LOCKED #43 priority sequence c)
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (γ closure 2026-05-29)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. ADR-166 §9
-Lessons (5-step variant pattern) 답습 + ADR-167 의 *분산 constants
-SSOT 통합 + Phase migration pattern* 가치 명시.
+ADR-152 / ADR-164 / ADR-166 §9 Lessons 답습 + ADR-167 의 *분산 constants
+SSOT 통합 + audit-first 17번째 적용 (β-2 silent fix)* 가치 명시. 5-step
+variant 4번째 1-day single-day reproducibility — engine-level (axia-geo)
+architectural refactor 의 자연 답습 패턴.
 
-후보 lessons (β implementation 완료 시 확정):
-- audit-first canonical 16번째 적용 (분산 constants inventory)
-- 5-step variant 4번째 reproducibility (ADR-152/164/166 답습)
-- 2-constant schema vs 1-constant (semantic clarity 가치)
-- Anti-parallel normal handling 명시 (flipped face = same plane) 의
-  silent bug 차단 가치
-- 3-phase migration 의 additive-first 위험 격리 패턴
-- Legacy const sunset via re-export — backward compat path
-- ADR-094 §E L1 multi-gate atomic 답습 — 분산 callsites 1-by-1 migrate
+### L1 — audit-first canonical 16번째 + 17번째 누적 적용 (β-2 silent fix evidence)
+
+- **16번째 (α spec)**: 분산 plane-equality constants 6+ inventory.
+  매트릭스 audit 명시 — 3 different normal conventions + 3 magnitudes
+  apart offset tolerances. 메타-원칙 #4 SSOT 위반 evidence.
+- **17번째 (β-2 entry)**: β-1 Q1=a (axia-core/src/plane.rs) Cargo dep
+  direction violation 발견 (axia-core → axia-geo). silent architectural
+  fix (relocate to axia-geo) — Q1=a *intent* (canonical SSOT) 보존 +
+  *위치* 정정.
+
+**Lock-in (canonical for audit-first robustness)**: audit-first의 진정
+한 robustness 는 *β-1 결재 후 β-2 진입 시점에도 audit이 자동 발동*.
+사용자 결재 default 가 architectural reality 와 부딪힐 때 silent fix
++ 명시 commit documentation. 단순 revert 회피.
+
+### L2 — 5-step variant 4번째 1-day single-day reproducibility
+
+ADR-152 (Sprint 4 첫째) + ADR-164 + ADR-166 + ADR-167 = 4 1-day
+closures. audit-first canonical 의 50% time reduction evidence 누적.
+
+**Lock-in**: 향후 architectural refactor ADR 의 default cadence —
+α (sub-day) → β-1/2/3 (sub-day each) → γ closure (sub-day). 사용자
+결재 cycle 의 1-day default 패턴.
+
+### L3 — 2-constant schema vs 1-constant (semantic clarity 가치)
+
+ADR-166 §5.1 spec 원안은 1-constant `EPS_PLANE`. α spec audit 시 *normal
+parallelism vs offset* 의 2-dimensional 본질 발견 → 2-constant
+(`EPS_PLANE_NORMAL` + `EPS_PLANE_OFFSET`) Q2=a default. 결과: 사용자
+혼란 0 (어느 dimension 완화 가능 자명).
+
+**Lock-in**: 다차원 invariant 의 SSOT 는 각 dimension *별도 constant*.
+semantic ambiguity > naming brevity.
+
+### L4 — Anti-parallel normal handling 명시 (silent bug 차단 가치)
+
+`same_plane` 의 `dot < 0` flipped-normal handling — face winding
+flipped (CCW vs CW) 시에도 plane equality 유지. β-1 test #5
+(`adr167_same_plane_anti_parallel_flipped_normal_same_plane`) 가
+canonical evidence.
+
+**Lock-in (canonical for face-equality helpers)**: face-related equality
+predicates는 anti-parallel handling **항상 명시**. silent winding bug
+의 가장 흔한 source — test 로 명시 lock-in.
+
+### L5 — 3-phase migration 의 additive-first 위험 격리 (β-3 sunset 결정)
+
+- Phase 1 (β-1): SSOT 신설 (additive only) — 회귀 risk 0
+- Phase 2 (β-2): 5 callsite migrate (alias chain) — 회귀 risk 낮음
+  (alias semantic identical)
+- Phase 3 (β-3): production migration + `#[deprecated]` (soft sunset)
+  + 일부 alias deletion. 회귀 risk medium — 그러나 β-2 drift guards
+  가 semantic divergence 명시 lock-in.
+
+**Lock-in**: legacy const sunset 의 default approach — soft `#[deprecated]`
+(backward compat 보존) + production migration + semantic divergence
+preserve. β-2 drift guards 가 *β-3 sunset boundary* 의 자연 anchor.
+
+### L6 — Semantic divergence preservation via test lock-in
+
+β-2 drift guards 가 β-3 sunset 의 *not* boundary 명시:
+- `adr167_b2_coplanar_remains_strict_per_call_override` — coplanar.rs
+  1.5e-6 strict 보존 evidence
+- `adr167_b2_mesh_spatial_hash_semantic_distinction` — mesh.rs vertex
+  dedup (different concept) 보존 evidence
+
+향후 maintainer 가 sunset 추가 검토 시 — 이 두 test 가 *명시 boundary*
+역할. silent removal 차단.
+
+**Lock-in**: SSOT 통합 ADR 의 sunset 결정 default — *값 같다 ≠ sunset
+가능*. *의미 같다* 인 경우만 sunset. 명시 test lock-in.
+
+### L7 — Engine-level architectural refactor의 user-facing impact = 0
+
+ADR-167 5-step closure 의 사용자 facing 변화 = 0 (internal architectural
+quality only). 그러나 미래 maintainer cognitive load 감소, new
+plane-equality op 추가 시 SSOT 자명, drift 위험 영구 차단.
+
+**Lock-in**: engine-level architectural refactor 는 사용자 facing 가치
+*0* 가 default — 측정 가능한 가치 는 maintainer 시간 절감 + drift 차단.
+γ closure 시 사용자 시연 gate (ADR-087 K-ζ) 대신 *architectural
+quality gate* (test sweep + build clean + 0 deprecation warnings) 가
+canonical.
