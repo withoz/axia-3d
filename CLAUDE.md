@@ -5145,6 +5145,131 @@ migration, Q5=(a) Face plane only scope. all defaults 5/5 ⭐ 추천 approved.
 - Future — Angle-degree SSOT (`COPLANAR_PAIR_TOL_DEG` 등 통합)
 - Future — Curve SSOT (`HOVER_CHORD_TOL` 등 통합)
 
+### 70. ADR-169 — Boundary-Routine Unification Audit closure (Phase 1-4 anchor, 2026-05-29) ✅
+
+**Canonical anchor (사용자 비전, 2026-05-29)**:
+> "axia-sketch — '선만 그려, 케이크는 알아서 나뉜다' 처럼 우리엔진으로
+> 루틴구성. 우리엔진으로는 불가능한 것인가?"
+
+**사용자 결재 (D-Then-C, 2026-05-29)**:
+- D: Audit-first canonical 19번째 적용 (ADR-169, 3-5일)
+- C: Phase 1-4 본격 (6-8주, ADR-170~173)
+
+ADR-169 Phase 0 audit closure (α + β-1 + β-2 + β-3 + γ same-day) =
+Phase 1-4 (ADR-170~173, 6-8주, +240 회귀) 의 sole architectural anchor.
+5-step variant **6번째** reproducibility (ADR-152/164/166/167/168 답습).
+
+**5 PRs same-day sequence (2026-05-29)**:
+- PR #249 α spec (Status: Proposed → 결재 anchor 명시)
+- PR #250 β-1 — Boundary element type matrix (6 type × 4-column gap, ~478 lines)
+- PR #251 β-2 — Drift propagation chain matrix (11-layer ε, ~465 lines)
+- PR #252 β-3 — User demo evidence matrix (12 scenarios × 4 tool × 3 surface, ~430 lines)
+- PR #253 γ closure (Status: Accepted + §10 Lessons 9개 + LOCKED #70)
+
+**3-axis triangulation findings (β-1/β-2/β-3 모두 (C) 정합)**:
+- β-1 — 6 type 중 완전 작동 = 0개, 부분 작동 = 3개, 미참여 = 3개
+- β-2 — 11 layer 중 ε 흡수 = 8, 증폭 = 3 (Layer 7 Tool-specific 가장
+  큰 single gap)
+- β-3 — 12 scenarios: ★ verified = 3 + ⚙ inferred = 6 + ⏸ pending = 3
+- Root cause: drift 33% + dedup 8% + validation 33% + architectural 42%
+- **75% = Phase 1+2 SSOT 통합 흡수**
+
+#### 불변 lock-in (canonical for ADR-170~173)
+
+- **L-70-1** D-Then-C 결재 anchor (사용자 결재 2026-05-29) — Phase 1-4
+  본격 진입 sole architectural anchor
+- **L-70-2** 6 boundary element type 통합 처리 강제 (Line / Polyline /
+  Arc-Circle / Bezier-NURBS / Vertex / Solid face edge)
+- **L-70-3** 11 layer ε chain 통합 chokepoint 강제 (Phase 1
+  normalizeDrawInput + Phase 2 absorb_boundary_input + Phase 3
+  register_boundary_element)
+- **L-70-4** 12 시연 scenario 매트릭스 (★ 3 verified + ⚙ 6 inferred +
+  ⏸ 3 pending) — Phase 4 closure 게이트 강제
+- **L-70-5** NURBS kernel silent-skip 금지 (curves/ + surfaces/ 영구
+  carve-out, L-169-11) — Piegl & Tiller precondition 보존
+- **L-70-6** 메타-원칙 #14 WHAT layer + #16 WHEN layer 보존 강제 —
+  Phase 1-4 는 HOW layer 만 변경 (결과 invariant + trigger 정책 변경 0)
+- **L-70-7** Phase 0 3-agent audit 산출물 (447 bail! 분류 매트릭스) 의
+  architectural reuse — 새 audit 0
+- **L-70-8** SSOT 통합 시점의 architectural value — 7-8 SSOT 가 *이미
+  존재*, 위치 통합만 (β-2 finding)
+- **L-70-9** Phase 1-4 회귀 자산 누적 매트릭스 (Phase 1 +50 → Phase 2
+  +70 → Phase 3 +90 → Phase 4 +30 = +240, 절대 #[ignore] 금지)
+- **L-70-10** LOCKED #44 정합 — Phase 1-4 각 별도 ADR + 별도 atomic PR
+  (Complete Meaning per Merge)
+- **L-70-11** 사용자 시연 게이트 (ADR-087 K-ζ canonical) — Phase 4 closure
+  강제
+
+#### Lessons (canonical for future audit ADRs, 9개)
+
+ADR-169 §10 Lessons 정합 (audit-first canonical 19번째 적용 evidence):
+
+- **L1** Multi-deliverable audit 분할 패턴 (Path Z atomic 의 audit 변형)
+- **L2** Cross-validation through independent deliverables (β-1 ↔ β-2 ↔
+  β-3 의 3-axis triangulation)
+- **L3** Phase 0 3-agent audit 산출물의 architectural reuse (447 bail!
+  100% 재사용)
+- **L4** Audit-first canonical 의 self-applying pattern (ADR-131 답습)
+- **L5** 사용자 비전 → architectural ADR transition 패턴
+- **L6** D-Then-C 결재 패턴 (audit + multi-phase atomic 분리)
+- **L7** SSOT 통합 시점의 architectural value 정량화 (β-2 finding)
+- **L8** 메타-원칙 #14 (WHAT) ↔ #16 (WHEN) 직교 분리 정합
+- **L9** Phase 1-4 sequence atomic decomposition (cumulative value chain)
+
+#### Phase 1-4 sequence anchor
+
+| Phase | ADR | Title | 기간 | 회귀 |
+|---|---|---|---|---|
+| 1 | ADR-170 | Tool layer `normalizeDrawInput` SSOT | 1주 | +50 |
+| 2 | ADR-171 | Engine `absorb_boundary_input` SSOT | 2주 | +70 |
+| 3 | ADR-172 | DCEL `register_boundary_element` Edge Register canonical | 2-3주 | +90 |
+| 4 | ADR-173 | User vision realization + 12 시연 PASS | 1주 | +30 |
+| **합계** | **4 ADRs** | | **6-8주** | **+240** |
+
+각 Phase 는 별도 ADR + 별도 atomic PR (LOCKED #44).
+
+#### Cross-link
+
+**LOCKED 정책 정합**:
+- LOCKED #1/12/41 (SUPERSEDED by ADR-139, 결과 invariant 보존)
+- LOCKED #5 spatial-hash 1.5μm (Phase 2 Step 2 vertex dedup)
+- LOCKED #7 ADR-026 P12 cardinal SSOT (Phase 1 Step 1)
+- LOCKED #14/15/16 메타-원칙 #14/15/16
+- LOCKED #43 priority sequence ALL CLOSED (foundation)
+- LOCKED #44 Complete Meaning per Merge (Phase 1-4 분할 anchor)
+- LOCKED #63 z=0 invariant (Phase 1 Step 1)
+- LOCKED #66 STATUS-POLICY (Status field canonical)
+- LOCKED #67 ADR-166 plane lock (Phase 1 Step 5)
+- LOCKED #68 ADR-167 EPS_PLANE (Phase 2 Step 1 detection)
+- LOCKED #69 ADR-168 PLANE_SNAP (Phase 2 Step 1 correction)
+
+**ADR cross-link**:
+- ADR-021 P7 / ADR-025 P11 / ADR-101 (SUPERSEDED by ADR-139, 결과 invariant 보존)
+- ADR-027/028/029/030 NURBS Kernel (L-169-11 carve-out 강제)
+- ADR-064/066 NURBS Boolean DCEL
+- ADR-088 curve_owner_id (Phase 3 metadata)
+- ADR-089 Phase 2 closed-curve face (1 anchor + 1 self-loop)
+- ADR-101 Amendment 9 HARD flag (Phase 2 Step 4 contract)
+- ADR-139 Boundary tool only (메타-원칙 #16 WHEN layer)
+- ADR-140 surface-aware getDrawPlane (Phase 1 Step 2 face plane)
+- ADR-148 BoundaryTool point-localized (Phase 3 register API 연장)
+- ADR-149 T-junction sweep / ADR-150 Coplanar merge / ADR-151 Connected stacked-inner
+- ADR-166 plane lock (Phase 1 Step 5) / ADR-167 EPS_PLANE / ADR-168 drift snap
+- ADR-169 Phase 0 audit (canonical anchor)
+- ADR-170 Phase 1 Tool layer normalizeDrawInput SSOT (활성 중, PR #254)
+- ADR-171/172/173 Phase 2-4 (별도 ADR, 별도 atomic PR)
+
+**axia-sketch 5 patterns reference**:
+- Pattern 1 (Tool 10mm short-circuit) → Phase 1 Step 4
+- Pattern 2 (vertex_at silent dedup) → Phase 2 Step 2
+- Pattern 3 (add_edge_with_intersections always succeeds) → Phase 3 register API
+- Pattern 4 (Plane is tool-context) → Phase 1 Step 5
+- Pattern 5 (Edge Register at DCEL) → Phase 3 register_boundary_element
+
+**메타-원칙 정합**:
+- #4 SSOT / #5 사용자 편의 / #6 Preventive / #11 Latency Budget
+- #14 WHAT (결과 invariant 보존) / #15 split contract / #16 WHEN (trigger 정책 보존)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
