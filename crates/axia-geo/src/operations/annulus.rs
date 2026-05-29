@@ -110,12 +110,11 @@ impl std::fmt::Display for AnnulusError {
 
 impl std::error::Error for AnnulusError {}
 
-/// Coplanarity tolerance (1.5 μm, LOCKED #5 spatial-hash dedup tolerance).
-///
-/// ADR-167 β-2 — Aliased to canonical `EPS_PLANE_OFFSET` SSOT
-/// (`axia_geo::plane::EPS_PLANE_OFFSET = 1.5e-3`). Value identical;
-/// keep alias for grep ergonomics and code-reading clarity.
-const COPLANAR_TOL: f64 = crate::plane::EPS_PLANE_OFFSET;
+// ADR-167 β-3 — `COPLANAR_TOL` alias removed; callsite now imports
+// `crate::plane::EPS_PLANE_OFFSET` directly (canonical SSOT, 1.5μm,
+// LOCKED #5 spatial-hash dedup). Pre-β-3 alias was `const COPLANAR_TOL:
+// f64 = crate::plane::EPS_PLANE_OFFSET;` — identical value, redundant
+// indirection sunset.
 /// Normal direction parity tolerance (parallel — 1 - |dot| < 1e-6 = nearly parallel).
 ///
 /// ADR-167 β-2 — *Stricter than* canonical `EPS_PLANE_NORMAL` (1e-4) —
@@ -195,7 +194,8 @@ pub fn promote_circles_to_annulus(
     }
     // Plane equation distance: (inner.center - outer.center) · outer.normal
     let plane_distance = (inner_circle.center - outer_circle.center).dot(n_outer).abs();
-    if plane_distance > COPLANAR_TOL {
+    // ADR-167 β-3 — canonical SSOT (EPS_PLANE_OFFSET = 1.5μm).
+    if plane_distance > crate::plane::EPS_PLANE_OFFSET {
         return Err(AnnulusError::NotCoplanar {
             outer_normal: n_outer,
             inner_normal: n_inner,

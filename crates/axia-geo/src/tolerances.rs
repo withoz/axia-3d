@@ -52,18 +52,25 @@ pub const FACE_TOLERANCE: f64 = 1e-6;
 
 /// Coplanarity test tolerance (dot product threshold).
 ///
-/// ADR-167 β-2 — Aliased to canonical `EPS_PLANE_NORMAL` SSOT
-/// (`crate::plane::EPS_PLANE_NORMAL = 1e-4`). Identical value, identical
-/// semantic (`1.0 - |dot| > eps` ⇒ "not parallel"). Use canonical name
-/// in new code; this alias kept for backward compat (β-3 may sunset).
+/// **ADR-167 β-3 — DEPRECATED**: use `crate::plane::EPS_PLANE_NORMAL`
+/// (the canonical SSOT). Identical value, identical semantic. This
+/// alias kept for backward compat; new code MUST use canonical name.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `crate::plane::EPS_PLANE_NORMAL` (ADR-167 β-3 sunset)"
+)]
 pub const COPLANAR_TOLERANCE: f64 = crate::plane::EPS_PLANE_NORMAL;
 
 /// Loop planarity enforcement tolerance.
 ///
-/// ADR-167 β-2 — Aliased to canonical `EPS_PLANE_NORMAL` SSOT.
-/// Loop planarity is a normal-parallelism check (all loop vertices must
-/// lie in a single plane — equivalent to all triangle normals being
-/// parallel to the loop's plane normal).
+/// **ADR-167 β-3 — DEPRECATED**: use `crate::plane::EPS_PLANE_NORMAL`
+/// (canonical SSOT). Loop planarity is a normal-parallelism check
+/// (all loop vertices must lie in a single plane — equivalent to all
+/// triangle normals being parallel to the loop's plane normal).
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `crate::plane::EPS_PLANE_NORMAL` (ADR-167 β-3 sunset)"
+)]
 pub const LOOP_PLANAR_TOLERANCE: f64 = crate::plane::EPS_PLANE_NORMAL;
 
 /// Minimum face area difference for merge operations
