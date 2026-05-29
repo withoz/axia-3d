@@ -1618,4 +1618,219 @@ describe('ToolManager', () => {
       expect(tm.getLastDrawnPlane()).toBeNull();
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-170 β-1 — normalizeDrawInput SSOT (5-step routine)
+  // ════════════════════════════════════════════════════════════════════
+  describe('ADR-170 β-1 — normalizeDrawInput SSOT', () => {
+    const THREE = require('three') as typeof import('three');
+
+    describe('Step 1: Cardinal axis force (LOCKED #63 + #7)', () => {
+      it('3d / top / bottom viewMode forces z = 0', () => {
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1.5, 2.5, 99.7));
+        expect(result.point.z).toBe(0);
+        expect(result.point.x).toBe(1.5);
+        expect(result.point.y).toBe(2.5);
+        expect(result.skipReason).toBeUndefined();
+      });
+
+      it('front / back viewMode forces y = 0', () => {
+        viewport.viewMode = 'front';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1.5, 99.7, 2.5));
+        expect(result.point.y).toBe(0);
+        expect(result.point.x).toBe(1.5);
+        expect(result.point.z).toBe(2.5);
+      });
+
+      it('right / left viewMode forces x = 0', () => {
+        viewport.viewMode = 'left';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(99.7, 1.5, 2.5));
+        expect(result.point.x).toBe(0);
+        expect(result.point.y).toBe(1.5);
+        expect(result.point.z).toBe(2.5);
+      });
+
+      it('sketchPlane context skips cardinal force (user explicit plane)', () => {
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1, 2, 3), {
+          sketchPlane: {
+            origin: new THREE.Vector3(0, 0, 0),
+            normal: new THREE.Vector3(1, 0, 0),
+          },
+        });
+        // Z should NOT be forced to 0 because sketchPlane overrides cardinal.
+        expect(result.point.z).toBe(3);
+      });
+    });
+
+    describe('Step 2: Face plane projection (LOCKED #69 ADR-168, PR #248 흡수)', () => {
+      it('projects point to face plane when faceId given', () => {
+        // Mock face normal = +Z, no centroid → planeOrigin = point itself
+        // → projection = (x, y, 0) since point is its own origin and normal=+Z
+        bridge.getFaceNormal.mockReturnValue([0, 0, 1]);
+        bridge.facesCentroid = vi.fn().mockReturnValue(new THREE.Vector3(0, 0, 0));
+
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(5, 5, 10), {
+          faceId: 0,
+        });
+        // Step 1 forces z=0, Step 2 face projection preserves (5, 5, 0).
+        expect(result.point.z).toBeCloseTo(0, 6);
+        expect(result.faceId).toBe(0);
+      });
+
+      it('graceful when bridge.getFaceNormal missing', () => {
+        bridge.getFaceNormal = undefined as any;
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(5, 5, 10), {
+          faceId: 0,
+        });
+        // Step 1 still forces z=0, Step 2 graceful no-op.
+        expect(result.point.z).toBe(0);
+        expect(result.skipReason).toBeUndefined();
+      });
+
+      it('graceful when face normal is degenerate (zero vector)', () => {
+        bridge.getFaceNormal.mockReturnValue([0, 0, 0]);
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(5, 5, 10), {
+          faceId: 0,
+        });
+        // lengthSq() < 0.5 → skipped, Step 1 result preserved.
+        expect(result.point.z).toBe(0);
+      });
+    });
+
+    describe('Step 3: Vertex_at silent dedup (LOCKED #5 1.5μm)', () => {
+      it('returns vertId when bridge.vertex_at matches existing vertex', () => {
+        (bridge as any).vertex_at = vi.fn().mockReturnValue(42);
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1, 2, 0));
+        expect(result.vertId).toBe(42);
+      });
+
+      it('graceful when bridge.vertex_at missing (returns undefined)', () => {
+        delete (bridge as any).vertex_at;
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1, 2, 0));
+        expect(result.vertId).toBeUndefined();
+      });
+
+      it('graceful when vertex_at returns -1 (no match)', () => {
+        (bridge as any).vertex_at = vi.fn().mockReturnValue(-1);
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1, 2, 0));
+        expect(result.vertId).toBeUndefined();
+      });
+    });
+
+    describe('Step 4: 10mm short-circuit (axia-sketch pattern 1)', () => {
+      it('returns skipReason when chainStart distance < 10mm', () => {
+        viewport.viewMode = '3d';
+        const chainStart = new THREE.Vector3(0, 0, 0);
+        const result = tm.normalizeDrawInput(new THREE.Vector3(5, 0, 0), {
+          chainStart,
+        });
+        expect(result.skipReason).toBe('DegenerateBelowEpsilon');
+      });
+
+      it('no skipReason when chainStart distance >= 10mm', () => {
+        viewport.viewMode = '3d';
+        const chainStart = new THREE.Vector3(0, 0, 0);
+        const result = tm.normalizeDrawInput(new THREE.Vector3(15, 0, 0), {
+          chainStart,
+        });
+        expect(result.skipReason).toBeUndefined();
+      });
+
+      it('no chainStart → no short-circuit check (first click)', () => {
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1, 0, 0));
+        expect(result.skipReason).toBeUndefined();
+      });
+    });
+
+    describe('Step 5: Plane lock validation (LOCKED #67 ADR-166)', () => {
+      it('soft unlocks plane when targetNormal differs (PR #247 pattern)', () => {
+        tm.lockPlane({
+          origin: new THREE.Vector3(0, 0, 0),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+          source: 'first_click',
+        });
+        expect(tm.isPlaneLocked()).toBe(true);
+
+        // Different plane normal (X axis) → soft unlock
+        tm.normalizeDrawInput(new THREE.Vector3(0, 0, 0), {
+          targetNormal: new THREE.Vector3(1, 0, 0),
+        });
+        expect(tm.isPlaneLocked()).toBe(false);
+      });
+
+      it('preserves lock when targetNormal matches (same plane)', () => {
+        tm.lockPlane({
+          origin: new THREE.Vector3(0, 0, 0),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+          source: 'first_click',
+        });
+
+        // Same plane normal (Z axis) → lock preserved
+        tm.normalizeDrawInput(new THREE.Vector3(0, 0, 0), {
+          targetNormal: new THREE.Vector3(0, 0, 1),
+        });
+        expect(tm.isPlaneLocked()).toBe(true);
+      });
+
+      it('anti-parallel normal preserves lock (same plane, flipped)', () => {
+        tm.lockPlane({
+          origin: new THREE.Vector3(0, 0, 0),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+          source: 'first_click',
+        });
+
+        // Anti-parallel (–Z) is geometrically same plane
+        tm.normalizeDrawInput(new THREE.Vector3(0, 0, 0), {
+          targetNormal: new THREE.Vector3(0, 0, -1),
+        });
+        expect(tm.isPlaneLocked()).toBe(true);
+      });
+
+      it('no targetNormal → lock unchanged (no validation)', () => {
+        tm.lockPlane({
+          origin: new THREE.Vector3(0, 0, 0),
+          normal: new THREE.Vector3(0, 0, 1),
+          up: new THREE.Vector3(0, 1, 0),
+          source: 'first_click',
+        });
+
+        tm.normalizeDrawInput(new THREE.Vector3(0, 0, 0));
+        expect(tm.isPlaneLocked()).toBe(true);
+      });
+    });
+
+    describe('Backward compat (L-170-6 additive only)', () => {
+      it('no context arg → default empty context, no errors', () => {
+        viewport.viewMode = '3d';
+        expect(() => tm.normalizeDrawInput(new THREE.Vector3(1, 2, 3))).not.toThrow();
+      });
+
+      it('returns clone (does not mutate rawPoint)', () => {
+        viewport.viewMode = '3d';
+        const raw = new THREE.Vector3(1, 2, 99);
+        const result = tm.normalizeDrawInput(raw);
+        // raw should be unchanged (z still 99)
+        expect(raw.z).toBe(99);
+        // result.point.z forced to 0
+        expect(result.point.z).toBe(0);
+      });
+
+      it('faceId pass-through to result envelope', () => {
+        viewport.viewMode = '3d';
+        const result = tm.normalizeDrawInput(new THREE.Vector3(1, 2, 3), {
+          faceId: 7,
+        });
+        expect(result.faceId).toBe(7);
+      });
+    });
+  });
 });
