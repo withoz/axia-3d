@@ -1342,8 +1342,16 @@ describe('ToolManager', () => {
       (tm as any).faceMap = new Uint32Array([7]);
     });
 
-    it('adr166_getdrawplane_priority_lock_over_face_hit — strong lock 활성 시 face hit 무시', async () => {
+    it('adr166_hotfix_soft_lock_auto_releases_on_different_plane_face_hit — 사용자 시연 trigger 2026-05-29', async () => {
       const THREE = await import('three');
+
+      // LOCKED #67 amendment: face hit normal 이 lock plane 과 다르면
+      // (cos|dot| < 0.9999) 자동 unlock + face hit logic 으로 fall through.
+      //
+      // 사용자 시연 evidence: "입체면에 라인을 생성할수 없습니다" —
+      // RECT (XY ground) → Push/Pull → box 측면 (YZ wall) DrawLine 시
+      // lock(XY) 이 face hit(YZ) 무시 → 사용자 의도 어긋남.
+      // Amendment: 다른 plane face hit → auto-unlock.
 
       // (1) Set plane lock (XZ wall — normal +Y)
       tm.lockPlane({
@@ -1354,24 +1362,92 @@ describe('ToolManager', () => {
       });
       expect(tm.isPlaneLocked()).toBe(true);
 
-      // (2) Simulate face hit (face surface kind = 1 Plane, normal +X)
+      // (2) Simulate face hit on DIFFERENT plane (YZ wall — normal +X)
       viewport.pick.mockReturnValue({
         faceIndex: 0,
         point: new THREE.Vector3(5, 5, 5),
       });
       bridge.faceSurfaceKind.mockReturnValue(1);  // Plane
-      bridge.getFaceNormal.mockReturnValue([1, 0, 0]);  // YZ wall (face normal)
+      bridge.getFaceNormal.mockReturnValue([1, 0, 0]);  // YZ wall (DIFFERENT from lock +Y)
 
-      // (3) Call getDrawPlane — strong lock 활성 시 face hit 무시
+      // (3) Call getDrawPlane — auto-unlock + face hit logic
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const plane = (tm as any).getDrawPlane(mockMouseEvent());
 
-      // Lock plane (XZ wall, normal +Y) used, NOT face hit (YZ wall, normal +X)
-      expect(plane.normal.y).toBeCloseTo(1, 5);  // lock plane normal
-      expect(plane.normal.x).toBeCloseTo(0, 5);  // NOT face normal
-      expect(plane.up.z).toBeCloseTo(1, 5);  // lock plane up
-      expect(plane.onFace).toBe(false);  // strong lock → onFace false
+      // Lock auto-released because face normal differs from lock normal
+      expect(tm.isPlaneLocked()).toBe(false);
+      // Face hit (YZ wall, normal +X) used — NOT lock (XZ wall, normal +Y)
+      expect(plane.normal.x).toBeCloseTo(1, 5);  // face normal
+      expect(plane.normal.y).toBeCloseTo(0, 5);  // NOT lock normal
+      expect(plane.onFace).toBe(true);  // face hit branch returned onFace=true
+    });
+
+    it('adr166_hotfix_lock_preserved_when_face_hit_same_plane — ADR-166 핵심 가치 보존', async () => {
+      const THREE = await import('three');
+
+      // LOCKED #67 amendment: face hit normal 이 lock plane 과 동일한
+      // plane (cos|dot| > 0.9999) 이면 lock 유지. ADR-166 의 핵심 가치
+      // "같은 plane 반복 그리기" 보존 evidence.
+
+      // (1) Set plane lock (XY ground — normal +Z)
+      tm.lockPlane({
+        origin: new THREE.Vector3(10, 20, 0),
+        normal: new THREE.Vector3(0, 0, 1),  // Z-axis (XY ground)
+        up: new THREE.Vector3(0, 1, 0),
+        source: 'first_click',
+      });
+      expect(tm.isPlaneLocked()).toBe(true);
+
+      // (2) Simulate face hit on SAME plane (also XY ground — normal +Z)
+      viewport.pick.mockReturnValue({
+        faceIndex: 0,
+        point: new THREE.Vector3(5, 5, 0),
+      });
+      bridge.faceSurfaceKind.mockReturnValue(1);  // Plane
+      bridge.getFaceNormal.mockReturnValue([0, 0, 1]);  // XY ground (SAME as lock)
+
+      // (3) Call getDrawPlane — lock preserved + lock plane used
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // Lock preserved
+      expect(tm.isPlaneLocked()).toBe(true);
+      // Lock plane (XY ground, normal +Z) used + onFace=false (lock branch)
+      expect(plane.normal.z).toBeCloseTo(1, 5);
+      expect(plane.onFace).toBe(false);  // lock branch → onFace=false
       expect(plane.origin?.x).toBe(10);  // lock origin (not face hit point)
+    });
+
+    it('adr166_hotfix_anti_parallel_normal_same_plane_lock_preserved — L-167-10 답습', async () => {
+      const THREE = await import('three');
+
+      // ADR-167 L-167-10 anti-parallel handling: flipped face winding
+      // (face normal = -lock normal, |dot| = 1.0) is still "same plane".
+      // Lock preserved (no spurious auto-unlock on legitimate same-plane hit).
+
+      // (1) Lock at XY ground normal +Z
+      tm.lockPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+        source: 'first_click',
+      });
+
+      // (2) Face hit with ANTI-PARALLEL normal (flipped face winding)
+      viewport.pick.mockReturnValue({
+        faceIndex: 0,
+        point: new THREE.Vector3(5, 5, 0),
+      });
+      bridge.faceSurfaceKind.mockReturnValue(1);
+      bridge.getFaceNormal.mockReturnValue([0, 0, -1]);  // Anti-parallel: -Z
+
+      // (3) Lock preserved (|dot| = 1.0 > 0.9999 → same plane)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      expect(tm.isPlaneLocked()).toBe(true);  // Lock preserved
+      expect(plane.normal.z).toBeCloseTo(1, 5);  // Lock plane (normal +Z) used
+      expect(plane.onFace).toBe(false);  // Lock branch
     });
 
     it('adr166_getdrawplane_unlocked_falls_back_to_sticky_or_default — ADR-164 priority 보존', async () => {
