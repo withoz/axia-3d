@@ -91,6 +91,15 @@ export class DrawRectTool implements ITool {
       this.plane = plane;
       this.rectStart = start;
       this.ctx.snap.setReferencePoint(start);
+      // ADR-166 β-2 — first_click plane lock (idempotent: no-op when
+      // already locked, L-166-2). Cross-tool 유지 활성화: 후속 도구
+      // (DrawCircle / DrawLine 등) 가 같은 plane 강제 사용.
+      this.ctx.lockPlane?.({
+        origin: start,
+        normal: plane.normal,
+        up: plane.up,
+        source: 'first_click',
+      });
     } else {
       // ═══ Second click: project to cardinal plane + commit ═══
       const planePoint = this.projectClickToCardinalPlane(e, point, this.plane!);

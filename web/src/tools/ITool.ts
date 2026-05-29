@@ -93,6 +93,35 @@ export interface ToolContext {
     up: THREE.Vector3;
     source?: 'face' | 'view' | 'sketch';
   }) => void;
+
+  /**
+   * ADR-166 β-2 — Plane lock activation hook (called by Draw tools on
+   * first_click when no lock active). Strong cross-tool plane lock
+   * preserved until explicit release (Ctrl+Shift+P / view change /
+   * sketch enter/exit / Esc — L-166-2).
+   *
+   * **Idempotent**: ToolManager.lockPlane is a no-op when already
+   * locked. Draw tools may call unconditionally without checking, but
+   * `isPlaneLocked()` predicate is provided for explicit guard.
+   *
+   * Optional in interface — test mocks 호환. Real ToolManager 가 항상
+   * 제공.
+   */
+  lockPlane?: (plane: {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    up: THREE.Vector3;
+    source?: 'first_click' | 'sketch' | 'manual';
+  }) => void;
+
+  /**
+   * ADR-166 β-2 — Predicate for plane lock state. Draw tools use this
+   * to guard `lockPlane()` calls (avoid redundant idempotent no-ops in
+   * test environments where lockPlane may not be mocked).
+   *
+   * Optional in interface — test mocks 호환.
+   */
+  isPlaneLocked?: () => boolean;
 }
 
 /** Drawing plane information for Rect/Circle tools */
