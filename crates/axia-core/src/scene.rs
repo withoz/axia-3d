@@ -4863,6 +4863,26 @@ impl Scene {
                 for &fid in &face_ids {
                     self.mesh.set_face_surface(fid, Some(plane.clone()));
                 }
+
+                // ADR-168 β-2 — Face plane drift snap (Q3=a face creation
+                // only scope). Chord vertices may drift from the exact
+                // analytic plane due to f32 ray-plane intersection
+                // precision (ADR-026 P12 cardinal SSOT covers cardinal
+                // axes; non-cardinal face planes need explicit snap).
+                //
+                // Layered architecture (LOCKED #68): detection tolerance
+                // is EPS_PLANE_OFFSET (1.5e-3 mm), snap tolerance is
+                // PLANE_SNAP_OFFSET (1e-4 mm, 15× stricter) → post-snap
+                // vertices always pass downstream coplanarity detection.
+                let snap_plane = axia_geo::Plane::from_point_normal(center, n_norm);
+                for &fid in &face_ids {
+                    axia_geo::operations::plane_snap::snap_face_to_plane(
+                        &mut self.mesh,
+                        fid,
+                        &snap_plane,
+                        axia_geo::operations::plane_snap::PLANE_SNAP_OFFSET,
+                    );
+                }
             }
         }
 
@@ -4976,6 +4996,19 @@ impl Scene {
                         };
                         for &fid in &face_ids {
                             self.mesh.set_face_surface(fid, Some(plane.clone()));
+                        }
+
+                        // ADR-168 β-2 — Face plane drift snap (Q3=a face
+                        // creation only scope, LOCKED #43 sequence c).
+                        // See exec_draw_rect_as_shape for full rationale.
+                        let snap_plane = axia_geo::Plane::from_point_normal(origin, n_norm);
+                        for &fid in &face_ids {
+                            axia_geo::operations::plane_snap::snap_face_to_plane(
+                                &mut self.mesh,
+                                fid,
+                                &snap_plane,
+                                axia_geo::operations::plane_snap::PLANE_SNAP_OFFSET,
+                            );
                         }
                     }
                 }
@@ -5222,6 +5255,19 @@ impl Scene {
                 };
                 for &fid in &face_ids {
                     self.mesh.set_face_surface(fid, Some(plane.clone()));
+                }
+
+                // ADR-168 β-2 — Face plane drift snap (Q3=a face creation
+                // only scope, LOCKED #43 sequence c). Polygonal Circle face
+                // chord vertices may drift from the analytic plane.
+                let snap_plane = axia_geo::Plane::from_point_normal(center, n_norm);
+                for &fid in &face_ids {
+                    axia_geo::operations::plane_snap::snap_face_to_plane(
+                        &mut self.mesh,
+                        fid,
+                        &snap_plane,
+                        axia_geo::operations::plane_snap::PLANE_SNAP_OFFSET,
+                    );
                 }
             }
         }
