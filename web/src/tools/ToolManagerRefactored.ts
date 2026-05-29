@@ -3022,25 +3022,65 @@ export class ToolManager {
    * view-mode default (priority #3, sticky 활성).
    */
   private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
-    // ADR-166 β-3 — priority #1: Active plane lock overrides everything
-    // (face hit, sticky, view-mode default). Strong cross-tool lock 의
-    // 정합 — 사용자가 명시 unlock (Ctrl+Shift+P / view change / sketch
-    // enter/exit / Esc / ContextMenu) 까지 강제 유지.
+    // ADR-166 β-3 + LOCKED #67 amendment (사용자 시연 hotfix 2026-05-29)
+    // — Soft lock semantic.
     //
-    // Q3=a strong semantic — face hit 무시. ADR-140 surface-aware
-    // tangent plane (curved face) 도 lock 활성 시 비활성. 사용자 의도:
-    // "다른 face plane 그리고 싶음" → 명시 unlock 후 face hit 활성.
+    // **Original Q3=a strong lock** (ADR-166 β-3): face hit 무시, lock
+    // plane 강제 사용. 사용자 시연 evidence "입체면에 라인을 생성할수
+    // 없습니다" — RECT → Push/Pull → box 측면 face 클릭 시 lock (XY)
+    // 이 face (YZ wall) 무시 → 사용자 의도 어긋남.
+    //
+    // **Amendment (Option B Auto-unlock on different-plane face hit)**:
+    // 사용자가 명시적으로 다른 plane 의 face 위에 클릭한 경우 = 그
+    // face plane 사용 의도 명확. lock 자동 해제 + fall through 으로
+    // face hit logic 활용.
+    //
+    // - **같은 plane face hit** (cos|dot| > 0.9999 = ADR-167
+    //   EPS_PLANE_NORMAL anti-parallel safe equivalent) → lock 유지
+    //   (ADR-166 핵심 가치 "같은 plane 반복 그리기" 보존)
+    // - **다른 plane face hit** (cos|dot| < 0.9999) → 자동 unlock +
+    //   face hit logic 으로 fall through (사용자 의도 반영)
+    // - **No face hit** (empty space) → lock 유지 (기존 동작)
+    //
+    // ADR-167 L-167-10 anti-parallel handling 답습 — flipped face
+    // winding (cos < 0) 도 |dot| 기준으로 same plane 판정.
     if (this._planeLock) {
-      const right = new THREE.Vector3()
-        .crossVectors(this._planeLock.up, this._planeLock.normal)
-        .normalize();
-      return {
-        normal: this._planeLock.normal.clone(),
-        up: this._planeLock.up.clone(),
-        right,
-        onFace: false,
-        origin: this._planeLock.origin.clone(),
-      };
+      const lockHit = this.viewport.pick(e.clientX, e.clientY);
+      let lockOverriddenByFaceHit = false;
+      if (lockHit && lockHit.faceIndex != null) {
+        const lockFid = this.getFaceId(lockHit.faceIndex);
+        if (lockFid >= 0) {
+          const [nx, ny, nz] = this.bridge.getFaceNormal(lockFid);
+          if (Number.isFinite(nx) && Number.isFinite(ny) && Number.isFinite(nz)) {
+            const faceNormal = new THREE.Vector3(nx, ny, nz).normalize();
+            const lockNormal = this._planeLock.normal;
+            // ADR-167 EPS_PLANE_NORMAL = 1e-4 → cos threshold 0.9999.
+            // Anti-parallel safe: use |dot| (L-167-10).
+            const dotMag = Math.abs(faceNormal.dot(lockNormal));
+            const SAME_PLANE_COS_THRESHOLD = 0.9999;
+            if (dotMag < SAME_PLANE_COS_THRESHOLD) {
+              // Different plane — auto-unlock and fall through to face
+              // hit logic below.
+              this.unlockPlane();
+              lockOverriddenByFaceHit = true;
+            }
+          }
+        }
+      }
+      if (!lockOverriddenByFaceHit) {
+        // Same plane face hit OR no face hit → keep lock active
+        const right = new THREE.Vector3()
+          .crossVectors(this._planeLock!.up, this._planeLock!.normal)
+          .normalize();
+        return {
+          normal: this._planeLock!.normal.clone(),
+          up: this._planeLock!.up.clone(),
+          right,
+          onFace: false,
+          origin: this._planeLock!.origin.clone(),
+        };
+      }
+      // Fall through — this._planeLock is now null after unlockPlane()
     }
     // Sketch mode: lock to the sketch plane irrespective of cursor face hit.
     if (this._sketch) {
