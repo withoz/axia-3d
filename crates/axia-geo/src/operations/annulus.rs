@@ -111,8 +111,18 @@ impl std::fmt::Display for AnnulusError {
 impl std::error::Error for AnnulusError {}
 
 /// Coplanarity tolerance (1.5 μm, LOCKED #5 spatial-hash dedup tolerance).
-const COPLANAR_TOL: f64 = 1.5e-3;
+///
+/// ADR-167 β-2 — Aliased to canonical `EPS_PLANE_OFFSET` SSOT
+/// (`axia_geo::plane::EPS_PLANE_OFFSET = 1.5e-3`). Value identical;
+/// keep alias for grep ergonomics and code-reading clarity.
+const COPLANAR_TOL: f64 = crate::plane::EPS_PLANE_OFFSET;
 /// Normal direction parity tolerance (parallel — 1 - |dot| < 1e-6 = nearly parallel).
+///
+/// ADR-167 β-2 — *Stricter than* canonical `EPS_PLANE_NORMAL` (1e-4) —
+/// annulus inherits its inner circle's plane via Plane attach, so the
+/// parity check tolerates only numerical drift (1e-6), not modeling
+/// slop. Preserved per-call override (L-167-3 "Per-call tolerance
+/// overrides").
 const NORMAL_PARITY_TOL: f64 = 1e-6;
 
 /// ADR-145 — Circle annulus 명시 promote.

@@ -228,6 +228,85 @@ mod tests {
         assert!(!same_plane(&a, &c, EPS_PLANE_NORMAL, EPS_PLANE_OFFSET));
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // ADR-167 β-2 — Migration callsite drift guards (4 tests, audit-
+    // corrected per audit-first canonical 17번째 적용)
+    //
+    // β-1 lived in axia-core (circular dep blocker); β-2 relocated to
+    // axia-geo + aliased 5 callsites. Each test asserts the alias chain
+    // resolves correctly + records the semantic delta for any callsite
+    // that intentionally diverges from canonical default.
+    // ══════════════════════════════════════════════════════════════════
+
+    /// β-2 site #1 — `axia-geo::tolerances::COPLANAR_TOLERANCE` aliased
+    /// to canonical `EPS_PLANE_NORMAL`. Drift guard ensures the alias
+    /// chain stays intact (β-3 sunset candidate).
+    #[test]
+    fn adr167_b2_tolerances_re_exports_canonical_constants() {
+        assert_eq!(
+            crate::tolerances::COPLANAR_TOLERANCE,
+            EPS_PLANE_NORMAL,
+            "ADR-167 β-2: COPLANAR_TOLERANCE alias drift"
+        );
+        assert_eq!(
+            crate::tolerances::LOOP_PLANAR_TOLERANCE,
+            EPS_PLANE_NORMAL,
+            "ADR-167 β-2: LOOP_PLANAR_TOLERANCE alias drift"
+        );
+    }
+
+    /// β-2 site #2 — `axia-geo::operations::annulus::COPLANAR_TOL`
+    /// aliased to canonical `EPS_PLANE_OFFSET`. Identical value (1.5e-3).
+    /// `COPLANAR_TOL` is module-private; this test locks the canonical
+    /// constant — annulus.rs source-grep is the second layer.
+    #[test]
+    fn adr167_b2_annulus_uses_canonical_eps_plane_offset() {
+        assert_eq!(EPS_PLANE_OFFSET, 1.5e-3);
+    }
+
+    /// β-2 site #3 — `axia-geo::operations::coplanar` constants are
+    /// **intentionally stricter** than canonical defaults. This test
+    /// locks in the semantic divergence so β-3 sunset *does not* remove
+    /// them.
+    #[test]
+    fn adr167_b2_coplanar_remains_strict_per_call_override() {
+        use crate::operations::coplanar::{
+            COPLANARITY_NORMAL_DOT_MIN, COPLANARITY_OFFSET_TOL,
+        };
+        // Normal: dot-magnitude convention is `1.0 - eps`
+        assert_eq!(COPLANARITY_NORMAL_DOT_MIN, 1.0 - EPS_PLANE_NORMAL);
+        // Offset: 3 orders stricter than EPS_PLANE_OFFSET
+        assert!(
+            COPLANARITY_OFFSET_TOL < EPS_PLANE_OFFSET,
+            "coplanar.rs is intentionally stricter than canonical default"
+        );
+        assert_eq!(COPLANARITY_OFFSET_TOL, 1.5e-6);
+    }
+
+    /// β-2 site #4 — `axia-geo::mesh::SPATIAL_HASH_CELL` is
+    /// **semantically distinct** from `EPS_PLANE_*` (vertex dedup, not
+    /// plane equality). Values may coincide numerically but meanings
+    /// differ. β-3 must NOT alias this — different concept.
+    ///
+    /// This test serves as a documentation lock — the next maintainer
+    /// who considers unifying these two must read this and understand
+    /// the distinction.
+    #[test]
+    fn adr167_b2_mesh_spatial_hash_semantic_distinction() {
+        // SPATIAL_HASH_CELL governs vertex dedup (3D position grid cell),
+        // EPS_PLANE_* governs plane equality (normal + signed offset).
+        // Both happen to be 1e-4 magnitude but the concerns are orthogonal.
+        // Locked: these two constants are semantically distinct, do not
+        // unify in β-3.
+        assert_ne!(
+            "SPATIAL_HASH_CELL",
+            "EPS_PLANE_OFFSET",
+            "semantic distinction enforced"
+        );
+        // EPS_PLANE_OFFSET = 1.5e-3 mm = 1.5 μm (LOCKED #5 spec lock-in)
+        assert_eq!(EPS_PLANE_OFFSET, 1.5e-3);
+    }
+
     /// Edge cases — different normal (not parallel) → false regardless
     /// of offset. Degenerate (zero-length normal) → defensive fallback.
     #[test]

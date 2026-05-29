@@ -50,11 +50,21 @@ pub const EDGE_TOLERANCE: f64 = 1e-7;
 /// Face tolerance (점이 평면 위에 있다고 볼 거리)
 pub const FACE_TOLERANCE: f64 = 1e-6;
 
-/// Coplanarity test tolerance (dot product threshold)
-pub const COPLANAR_TOLERANCE: f64 = 1e-4;
+/// Coplanarity test tolerance (dot product threshold).
+///
+/// ADR-167 β-2 — Aliased to canonical `EPS_PLANE_NORMAL` SSOT
+/// (`crate::plane::EPS_PLANE_NORMAL = 1e-4`). Identical value, identical
+/// semantic (`1.0 - |dot| > eps` ⇒ "not parallel"). Use canonical name
+/// in new code; this alias kept for backward compat (β-3 may sunset).
+pub const COPLANAR_TOLERANCE: f64 = crate::plane::EPS_PLANE_NORMAL;
 
-/// Loop planarity enforcement tolerance
-pub const LOOP_PLANAR_TOLERANCE: f64 = 1e-4;
+/// Loop planarity enforcement tolerance.
+///
+/// ADR-167 β-2 — Aliased to canonical `EPS_PLANE_NORMAL` SSOT.
+/// Loop planarity is a normal-parallelism check (all loop vertices must
+/// lie in a single plane — equivalent to all triangle normals being
+/// parallel to the loop's plane normal).
+pub const LOOP_PLANAR_TOLERANCE: f64 = crate::plane::EPS_PLANE_NORMAL;
 
 /// Minimum face area difference for merge operations
 pub const FACE_AREA_TOLERANCE: f64 = 1e-4;

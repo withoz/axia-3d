@@ -35,10 +35,22 @@ use super::polygon_geom::{PlaneBasis, face_unit_normal, sutherland_hodgman};
 
 /// Two coplanar normals must agree within ~0.81° (cos ≥ 0.9999).
 /// ADR-101 §B-1 L-B1-3.
+///
+/// ADR-167 β-2 — Canonical equivalent: `1.0 - crate::plane::EPS_PLANE_NORMAL`
+/// (`1.0 - 1e-4 = 0.9999`). Identical value, identical semantic
+/// (`|dot| > THIS` ⇔ `1.0 - |dot| < EPS_PLANE_NORMAL`). Kept as
+/// dot-magnitude convention for ADR-101 callsite readability.
 pub const COPLANARITY_NORMAL_DOT_MIN: f64 = 0.9999;
 
 /// LOCKED #5 — spatial-hash dedup tolerance, 1.5μm.
 /// Used here as plane-offset tolerance.
+///
+/// ADR-167 β-2 — *Stricter than* canonical `EPS_PLANE_OFFSET` (1.5e-3
+/// = 1.5μm). This callsite uses 1.5e-6 (1.5nm) — 3 orders stricter,
+/// because coplanar intersection requires the two faces to be coincident
+/// at numerical precision (not modeling slop). Preserved per-call
+/// override (L-167-3 "Per-call tolerance overrides"). **Do not** sunset
+/// in β-3 — semantically distinct.
 pub const COPLANARITY_OFFSET_TOL: f64 = 1.5e-6;
 
 /// 2D dedup tolerance for crossings + lens vertices (project space).
