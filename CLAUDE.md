@@ -4958,6 +4958,85 @@ sticky 와 coexist (lock 없을 때 sticky fallback).
 - 다른 plane 그리고 싶음 → Ctrl+Shift+P 또는 우클릭 → "🔓 평면 잠금
   해제" → 다음 도형이 자유 평면
 
+### 68. ADR-167 — EPS_PLANE SSOT + same_plane() helper (γ closure, 2026-05-29) ✅
+
+**Canonical anchor (LOCKED #43 priority sequence (b) closure)**:
+ADR-166 closure (LOCKED #67) 후 자연 후속. 분산 plane-equality
+constants 6+ 통합의 5-step variant 4번째 1-day single-day closure.
+ADR-152 / ADR-164 / ADR-166 답습. **Engine-level architectural quality**
+— 사용자 facing 변화 0.
+
+**핵심 아키텍처 변경**:
+- `axia-geo/src/plane.rs` 신설 — canonical SSOT (mesh-free pure module)
+- `EPS_PLANE_NORMAL: f64 = 1e-4` (normal parallelism, ADR-147 정합)
+- `EPS_PLANE_OFFSET: f64 = 1.5e-3` mm (LOCKED #5 spatial-hash 정합)
+- `Plane { normal: DVec3, offset: f64 }` struct + `from_point_normal`
+  (defensive normalization) + `signed_distance`
+- `same_plane(a, b, eps_normal, eps_offset)` helper — **anti-parallel safe**
+  (flipped face = same plane, L-167-10)
+- `axia-core` re-exports for backward compat (axia-core → axia-geo
+  dep direction)
+
+**사용자 결재 (2026-05-29)**: Q1=(a) `axia-core/src/plane.rs` → β-2 audit-
+fix to `axia-geo/src/plane.rs` (canonical SSOT intent 보존 + 위치 정정).
+Q2=(a) 2-constant schema. Q3=(a) Plane struct + same_plane helper.
+Q4=(a) 3-phase migration. Q5=(a) Plane SSOT scope only.
+
+**Audit-first canonical 17번째 적용 (β-2 silent fix evidence)**:
+- α spec 시점: 분산 constants 6+ inventory matrix
+- β-2 entry 시점: Cargo dep direction violation 발견 → silent
+  architectural fix (relocate axia-core → axia-geo). Q1=a *intent*
+  보존, *위치* 정정.
+
+**Lock-ins (canonical for ADR-167)**:
+- **L-167-1** SSOT 위치 — `axia-geo/src/plane.rs` (β-2 amendment)
+- **L-167-2** 2-constant schema — `EPS_PLANE_NORMAL` + `EPS_PLANE_OFFSET`
+- **L-167-3** Struct `Plane` + `same_plane` helper + per-call override
+- **L-167-4** 3-phase migration (additive-first)
+- **L-167-5** Plane SSOT scope only — angle/curve 별도 ADR
+- **L-167-6** ADR-147 precision 답습
+- **L-167-7** LOCKED #5 (1.5μm spatial-hash) 자연 lock-in
+- **L-167-8** 메타-원칙 #4 (SSOT) + #6 (Preventive) 정합
+- **L-167-9** ADR-046 P31 #4 additive only — soft sunset via `#[deprecated]`,
+  no breaking changes
+- **L-167-10** Anti-parallel normal handling (flipped face = same plane)
+- **L-167-11** 절대 #[ignore] 금지 17/17 (β-1 7 + β-2 4 + β-3 4 + γ 2)
+- **L-167-17 (META)** Audit-first canonical 17번째 적용 — β-2 silent
+  architectural fix evidence
+
+**회귀 매트릭스 (5-step 누적)**:
+
+| Sub-step | 회귀 | Cumulative |
+|---|---|---|
+| α (spec, PR #237) | +0 | 0 |
+| β-1 (SSOT module, PR #238) | +7 axia-core | 7 |
+| β-2 (relocate + 5 callsites, PR #239) | +4 net (11 in axia-geo) | 11 |
+| β-3 (legacy sunset, PR #240) | +4 axia-geo | 15 |
+| **γ (closure docs + drift guards, 본 PR)** | **+2 axia-geo** | **17** |
+| **합계** | **+17** (절대 #[ignore] 금지 17/17 준수) | |
+
+**Cross-link**:
+- **ADR-167** (본 ADR — α/β-1/β-2/β-3/γ 모두 closure)
+- **ADR-166** §5.1 (sequence anchor source — 직계 trigger)
+- **ADR-147** (Spatial-hash precision strict, Scenario B1)
+- **ADR-076 §C-amendment-1** (legacy cleanup pattern)
+- **ADR-094 §E L1** (additive-first + multi-gate atomic)
+- **ADR-046 P31 #4** (additive only)
+- **메타-원칙 #4** (SSOT) + **#6** (Preventive) + **#14** (면은 닫힌 경계로부터)
+- **LOCKED #5** (1.5μm spatial-hash dedup) — offset tolerance canonical
+- **LOCKED #43** priority sequence (b) closure → **(c) ADR-168 anchor**
+- **LOCKED #44** (Complete Meaning per Merge) / **LOCKED #65** 메타-원칙
+- **LOCKED #66** STATUS-POLICY / **LOCKED #67** ADR-166 (direct precursor)
+
+**사용자 facing 변화 (canonical)**:
+- **None** — internal architectural quality only (engine-level refactor)
+- Maintainer 가치: 분산 6+ const → 단일 canonical SSOT, drift 영구 차단
+- Future plane-equality op 추가 시 SSOT 자명, cognitive load 감소
+
+**다음 자연 후속 (LOCKED #43 priority sequence (c))**:
+- **ADR-168 (가칭)** — Face plane drift snap (non-cardinal face plane
+  drift 보정). ADR-167 closure 시점 진입 가능.
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
