@@ -1324,6 +1324,119 @@ describe('ToolManager', () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
+  // ADR-166 β-3 — getDrawPlane priority #1 lock + UI badge
+  //   L-166-Q3=a — strong lock semantic (face hit 무시)
+  //   L-166-Q5=a — 🔒 badge upgrade (sticky → lock visual transition)
+  //   L-166-6 Engine 변경 0
+  //   L-166-9 ADR-164 동작 보존 (sticky badge fallback)
+  //   L-166-11 절대 #[ignore] 금지
+  // ────────────────────────────────────────────────────────────────────
+  describe('ADR-166 β-3 getDrawPlane priority + UI badge', () => {
+    function mockMouseEvent(): MouseEvent {
+      return { clientX: 100, clientY: 100 } as MouseEvent;
+    }
+
+    beforeEach(() => {
+      // β-3 priority test needs faceMap for face hit branch
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tm as any).faceMap = new Uint32Array([7]);
+    });
+
+    it('adr166_getdrawplane_priority_lock_over_face_hit — strong lock 활성 시 face hit 무시', async () => {
+      const THREE = await import('three');
+
+      // (1) Set plane lock (XZ wall — normal +Y)
+      tm.lockPlane({
+        origin: new THREE.Vector3(10, 20, 30),
+        normal: new THREE.Vector3(0, 1, 0),  // Y-axis (XZ wall)
+        up: new THREE.Vector3(0, 0, 1),
+        source: 'first_click',
+      });
+      expect(tm.isPlaneLocked()).toBe(true);
+
+      // (2) Simulate face hit (face surface kind = 1 Plane, normal +X)
+      viewport.pick.mockReturnValue({
+        faceIndex: 0,
+        point: new THREE.Vector3(5, 5, 5),
+      });
+      bridge.faceSurfaceKind.mockReturnValue(1);  // Plane
+      bridge.getFaceNormal.mockReturnValue([1, 0, 0]);  // YZ wall (face normal)
+
+      // (3) Call getDrawPlane — strong lock 활성 시 face hit 무시
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // Lock plane (XZ wall, normal +Y) used, NOT face hit (YZ wall, normal +X)
+      expect(plane.normal.y).toBeCloseTo(1, 5);  // lock plane normal
+      expect(plane.normal.x).toBeCloseTo(0, 5);  // NOT face normal
+      expect(plane.up.z).toBeCloseTo(1, 5);  // lock plane up
+      expect(plane.onFace).toBe(false);  // strong lock → onFace false
+      expect(plane.origin?.x).toBe(10);  // lock origin (not face hit point)
+    });
+
+    it('adr166_getdrawplane_unlocked_falls_back_to_sticky_or_default — ADR-164 priority 보존', async () => {
+      const THREE = await import('three');
+
+      // No lock active, set sticky (ADR-164 β-3 priority #3 path)
+      expect(tm.isPlaneLocked()).toBe(false);
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(7, 8, 9),
+        normal: new THREE.Vector3(0, 0, 1),  // XY ground
+        up: new THREE.Vector3(0, 1, 0),
+        source: 'view',
+      });
+
+      // viewport.pick null (cursor on empty space)
+      viewport.pick.mockReturnValue(null);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // Sticky used (ADR-164 β-3 priority #3 — lock unactive → sticky fallback)
+      expect(plane.normal.z).toBeCloseTo(1, 5);
+      expect(plane.origin?.x).toBe(7);
+    });
+
+    it('adr166_badge_lock_overrides_sticky — 🔒 lock badge 우선 표시 (UI integration smoke)', async () => {
+      const THREE = await import('three');
+
+      // (1) Set both sticky + lock — lock should win (β-3 badge priority)
+      tm.setLastDrawnPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+        source: 'view',
+      });
+      tm.lockPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(1, 0, 0),  // YZ wall
+        up: new THREE.Vector3(0, 0, 1),
+      });
+
+      // (2) Verify lock is active (badge would display 🔒 — DOM smoke test
+      // not feasible without document, but state is checked)
+      expect(tm.isPlaneLocked()).toBe(true);
+      expect(tm.getLastDrawnPlane()).not.toBeNull();  // sticky 도 coexist
+
+      // (3) Unlock — sticky should still be present (additive coexist)
+      tm.unlockPlane();
+      expect(tm.isPlaneLocked()).toBe(false);
+      expect(tm.getLastDrawnPlane()).not.toBeNull();  // sticky 보존
+    });
+
+    it('adr166_unlock_idempotent — unlockPlane 반복 호출 안전', () => {
+      // No lock — unlockPlane should be no-op (no throw)
+      expect(tm.isPlaneLocked()).toBe(false);
+      expect(() => tm.unlockPlane()).not.toThrow();
+      expect(tm.isPlaneLocked()).toBe(false);
+
+      // Repeat — still safe
+      expect(() => tm.unlockPlane()).not.toThrow();
+      expect(() => tm.unlockPlane()).not.toThrow();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
   // ADR-164 β-3 — Sticky 소비 + UI integration
   // L-164-Q1=a — face hit miss 후 sticky → fallback view-mode default
   // ────────────────────────────────────────────────────────────────────

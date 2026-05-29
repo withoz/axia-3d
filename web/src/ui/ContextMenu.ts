@@ -108,6 +108,16 @@ export function initContextMenu(deps: ContextMenuDeps): void {
       (item as HTMLElement).style.display = hasStickyPlane ? '' : 'none';
     });
 
+    // ── ADR-166 β-3 — Plane lock unlock 항목 가시성 ──
+    // 가시성: _planeLock 활성 시만. Strong cross-tool lock 의 명시
+    // release path (Ctrl+Shift+P 와 동일 entry). Selection 무관.
+    const planeLockItems = ctxMenu.querySelectorAll('.ctx-plane-lock-unlock-item');
+    const hasPlaneLock = typeof (toolManager as { isPlaneLocked?: () => boolean }).isPlaneLocked === 'function'
+      && (toolManager as { isPlaneLocked: () => boolean }).isPlaneLocked();
+    planeLockItems.forEach(item => {
+      (item as HTMLElement).style.display = hasPlaneLock ? '' : 'none';
+    });
+
     // ── ADR-074 U-2 — Boolean Group A/B 항목 가시성 ──
     // Set A / Set B: 선택된 face 가 1개 이상일 때 표시 (사용자가
     //   현재 selection 을 group 으로 지정 가능).
@@ -325,6 +335,22 @@ export function initContextMenu(deps: ContextMenuDeps): void {
         if (typeof tm.clearLastDrawnPlane === 'function') {
           tm.clearLastDrawnPlane();
           Toast.info('기본 평면으로 복귀 (sticky 해제)', 2000);
+        }
+        break;
+      }
+      // ─ ADR-166 β-3 — Plane lock 명시 release (Ctrl+Shift+P 와 동일 entry) ─
+      // 사용자 워크플로우:
+      //   1. Draw 도구 first_click → plane lock 자동 활성 (β-2)
+      //   2. 후속 도구 (다른 Draw / 후속 click) 가 strong cross-tool lock
+      //      유지 (priority #1)
+      //   3. 의도 변경: 다른 평면으로 그리고 싶음
+      //   4. 우클릭 → "🔓 평면 잠금 해제" → unlockPlane 호출
+      //   5. 다음 first_click 이 새 plane 으로 lock 활성
+      case 'unlock-plane-lock': {
+        const tm = toolManager as { unlockPlane?: () => void; isPlaneLocked?: () => boolean };
+        if (typeof tm.unlockPlane === 'function') {
+          tm.unlockPlane();
+          Toast.info('평면 잠금 해제 (다음 도형이 자유 평면 선택)', 2000);
         }
         break;
       }

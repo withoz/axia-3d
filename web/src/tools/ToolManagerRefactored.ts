@@ -2545,23 +2545,41 @@ export class ToolManager {
     if (typeof document === 'undefined') return;
     const badge = document.getElementById('sb-plane-badge') as HTMLElement | null;
     if (!badge) return;
+    // Helper — detect cardinal axis label from normal
+    const axisLabel = (n: THREE.Vector3): string =>
+      Math.abs(n.z) > 0.99 ? 'XY'
+        : Math.abs(n.y) > 0.99 ? 'XZ'
+        : Math.abs(n.x) > 0.99 ? 'YZ'
+        : '자유';
+
+    // ADR-166 β-3 — Lock 활성 시 🔒 lock badge (strong cross-tool
+    // lock visual indicator). 사용자 명시 unlock 까지 유지.
+    if (this._planeLock) {
+      const lock = this._planeLock;
+      badge.textContent = `🔒 평면 잠금 (${axisLabel(lock.normal)})`;
+      badge.style.color = '#d94545';  // 빨강 — strong lock 표시
+      badge.title = 'Ctrl+Shift+P 또는 우클릭 → 평면 잠금 해제';
+      badge.style.display = '';
+      return;
+    }
+
+    // ADR-164 β-3 — Sticky last drawn plane (weak fallback).
     const sticky = this._lastDrawnPlane;
     if (!sticky) {
       badge.style.display = 'none';
+      // Reset color override (lock 해제 후 다음 sticky 표시 시 normal color)
+      badge.style.color = '';
+      badge.title = '';
       return;
     }
-    // Detect cardinal axis label from normal
-    const n = sticky.normal;
-    const labelAxis = Math.abs(n.z) > 0.99 ? 'XY'
-      : Math.abs(n.y) > 0.99 ? 'XZ'
-      : Math.abs(n.x) > 0.99 ? 'YZ'
-      : '자유';
     const srcLabel = sticky.source === 'sketch'
       ? '스케치'
       : sticky.source === 'face'
         ? '면'
         : '마지막';
-    badge.textContent = `📐 평면: ${srcLabel} (${labelAxis})`;
+    badge.textContent = `📐 평면: ${srcLabel} (${axisLabel(sticky.normal)})`;
+    badge.style.color = '';  // default color (ADR-164 normal)
+    badge.title = '';
     badge.style.display = '';
   }
 
@@ -3004,6 +3022,26 @@ export class ToolManager {
    * view-mode default (priority #3, sticky 활성).
    */
   private getDrawPlane(e: MouseEvent): DrawPlaneInfo {
+    // ADR-166 β-3 — priority #1: Active plane lock overrides everything
+    // (face hit, sticky, view-mode default). Strong cross-tool lock 의
+    // 정합 — 사용자가 명시 unlock (Ctrl+Shift+P / view change / sketch
+    // enter/exit / Esc / ContextMenu) 까지 강제 유지.
+    //
+    // Q3=a strong semantic — face hit 무시. ADR-140 surface-aware
+    // tangent plane (curved face) 도 lock 활성 시 비활성. 사용자 의도:
+    // "다른 face plane 그리고 싶음" → 명시 unlock 후 face hit 활성.
+    if (this._planeLock) {
+      const right = new THREE.Vector3()
+        .crossVectors(this._planeLock.up, this._planeLock.normal)
+        .normalize();
+      return {
+        normal: this._planeLock.normal.clone(),
+        up: this._planeLock.up.clone(),
+        right,
+        onFace: false,
+        origin: this._planeLock.origin.clone(),
+      };
+    }
     // Sketch mode: lock to the sketch plane irrespective of cursor face hit.
     if (this._sketch) {
       const normal = this._sketch.normal.clone();
