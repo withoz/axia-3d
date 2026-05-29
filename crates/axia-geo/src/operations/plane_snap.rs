@@ -187,6 +187,77 @@ pub fn snap_chord_to_plane(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// β-3 — Drift telemetry aggregate (ADR-087 K-ζ canonical 사용자 시연 gate)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Aggregate snap statistics across multiple `SnapReport` outcomes.
+///
+/// **Phase 3 telemetry primitive** (ADR-168 §3 β-3 scope) — callers
+/// accumulate snap reports from production callsites (`exec_draw_*_as_shape`)
+/// to observe drift distribution and silent bug evidence over a session.
+///
+/// **Default = empty (no overhead)**. Production code paths do NOT
+/// instantiate or accumulate by default — Phase 3 is opt-in via E2E
+/// session wrappers (e.g., real-Chromium Playwright demo, dev `__axia
+/// .snapMetrics` API).
+///
+/// # Phase 3 sequence (canonical for 사용자 시연 gate)
+///
+/// 1. E2E session start: `let mut agg = SnapMetricsAggregate::default();`
+/// 2. For each `snap_face_to_plane(...)` outcome: `agg.accumulate(&report)`
+/// 3. Session end: inspect `agg.max_drift` / `agg.total_vertices_snapped`
+///    for silent bug evidence (ADR-026 P12 cardinal gap → ADR-168
+///    coverage validation).
+///
+/// # Design rationale (L-168-4 Phase 3 additive)
+///
+/// - Production scene.rs callsites UNCHANGED (no telemetry overhead)
+/// - Telemetry instrumentation purely additive — caller manages
+///   accumulation lifecycle
+/// - Mesh struct NOT modified (no serialization risk)
+/// - No thread-local hidden state (explicit caller intent)
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SnapMetricsAggregate {
+    /// Total number of `snap_face_to_plane` calls accumulated.
+    pub face_calls: usize,
+    /// Total chord vertices examined (sum of `pre_drift.vertex_count`).
+    pub total_vertices_examined: usize,
+    /// Total vertices actually moved (sum of `vertices_snapped`).
+    pub total_vertices_snapped: usize,
+    /// Maximum drift observed (across all `pre_drift.max_drift` reports).
+    pub max_drift: f64,
+    /// Cumulative count of reports where `drift_exceeds_snap_tol`.
+    /// Indicates how often snap correction was non-trivial.
+    pub snap_triggered_count: usize,
+    /// Cumulative count of reports where `drift_exceeds_detection_tol`.
+    /// **Critical metric** — silent bug evidence (ADR-026 P12 cardinal
+    /// gap). High value = β-3 telemetry confirmed production drift > ADR-167
+    /// detection threshold.
+    pub silent_bug_evidence_count: usize,
+}
+
+impl SnapMetricsAggregate {
+    /// Accumulate a single `SnapReport` outcome into this aggregate.
+    ///
+    /// Idempotent: calling with an empty report (vertex_count = 0) is a
+    /// no-op except for `face_calls += 1`.
+    pub fn accumulate(&mut self, report: &SnapReport) {
+        self.face_calls += 1;
+        self.total_vertices_examined += report.pre_drift.vertex_count;
+        self.total_vertices_snapped += report.vertices_snapped;
+        if report.pre_drift.max_drift > self.max_drift {
+            self.max_drift = report.pre_drift.max_drift;
+        }
+        if report.pre_drift.drift_exceeds_snap_tol {
+            self.snap_triggered_count += 1;
+        }
+        if report.pre_drift.drift_exceeds_detection_tol {
+            self.silent_bug_evidence_count += 1;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // β-2 — Mesh-aware integration (face creation callsites)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -541,6 +612,100 @@ mod tests {
             );
             assert!(v.z.abs() < 1e-12, "Z not snapped to 0 at vertex {}", i);
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ADR-168 β-3 — Drift telemetry aggregate (3 tests, ADR-087 K-ζ gate)
+    //
+    // β-3 adds `SnapMetricsAggregate` opt-in telemetry primitive. Production
+    // callsites UNCHANGED — Phase 3 callers manage accumulation lifecycle
+    // (E2E session wrapper, dev `__axia.snapMetrics` API, etc.).
+    // ══════════════════════════════════════════════════════════════════
+
+    /// β-3 default aggregate — empty, no overhead. Production code paths
+    /// do NOT instantiate by default (L-168-4 Phase 3 additive principle).
+    #[test]
+    fn adr168_b3_metrics_aggregate_default_empty_no_overhead() {
+        let agg = SnapMetricsAggregate::default();
+        assert_eq!(agg.face_calls, 0);
+        assert_eq!(agg.total_vertices_examined, 0);
+        assert_eq!(agg.total_vertices_snapped, 0);
+        assert_eq!(agg.max_drift, 0.0);
+        assert_eq!(agg.snap_triggered_count, 0);
+        assert_eq!(agg.silent_bug_evidence_count, 0);
+    }
+
+    /// β-3 accumulation — multiple reports aggregate correctly into the
+    /// telemetry struct. Max drift = max over all reports, counts sum,
+    /// vertex counts sum.
+    #[test]
+    fn adr168_b3_metrics_aggregate_accumulates_correctly() {
+        let plane = Plane::from_point_normal(DVec3::ZERO, DVec3::Z);
+        let mut agg = SnapMetricsAggregate::default();
+
+        // Report 1: no drift (vertices in plane)
+        let mut chord1 = vec![DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)];
+        let report1 = super::snap_chord_to_plane(&mut chord1, &plane, PLANE_SNAP_OFFSET);
+        agg.accumulate(&report1);
+
+        // Report 2: minor drift (within snap_tol — detected but not snapped)
+        let mut chord2 = vec![DVec3::new(1.0, 0.0, 5e-5)];  // below snap_tol
+        let report2 = super::snap_chord_to_plane(&mut chord2, &plane, PLANE_SNAP_OFFSET);
+        agg.accumulate(&report2);
+
+        // Report 3: significant drift (triggers snap + exceeds detection tol)
+        let mut chord3 = vec![
+            DVec3::new(1.0, 0.0, 2e-3),  // > EPS_PLANE_OFFSET = 1.5e-3 → silent bug evidence
+            DVec3::new(0.0, 1.0, 5e-3),
+        ];
+        let report3 = super::snap_chord_to_plane(&mut chord3, &plane, PLANE_SNAP_OFFSET);
+        agg.accumulate(&report3);
+
+        // Aggregate verification
+        assert_eq!(agg.face_calls, 3);
+        assert_eq!(agg.total_vertices_examined, 5);  // 2 + 1 + 2
+        assert_eq!(agg.total_vertices_snapped, 2);  // only report3's 2 vertices
+        assert!((agg.max_drift - 5e-3).abs() < 1e-12);  // report3's worst case
+        assert_eq!(agg.snap_triggered_count, 1);  // only report3 (drift_exceeds_snap_tol)
+        // Report 3's drift (5e-3) > EPS_PLANE_OFFSET (1.5e-3) = silent bug evidence
+        assert_eq!(agg.silent_bug_evidence_count, 1);
+    }
+
+    /// β-3 architectural invariant — accumulation never decreases counters
+    /// (monotonic). Re-accumulating empty reports leaves max_drift
+    /// untouched. Order independence — adding report A then B yields
+    /// same aggregate as B then A.
+    #[test]
+    fn adr168_b3_metrics_aggregate_monotonic_and_order_independent() {
+        let plane = Plane::from_point_normal(DVec3::ZERO, DVec3::Z);
+
+        // Build 3 reports with distinct drift levels
+        let mut chord_a = vec![DVec3::new(1.0, 0.0, 1e-3)];
+        let report_a = super::snap_chord_to_plane(&mut chord_a, &plane, PLANE_SNAP_OFFSET);
+
+        let mut chord_b = vec![DVec3::new(0.0, 1.0, 5e-3)];
+        let report_b = super::snap_chord_to_plane(&mut chord_b, &plane, PLANE_SNAP_OFFSET);
+
+        let mut chord_c = vec![DVec3::new(0.0, 0.0, 3e-3)];
+        let report_c = super::snap_chord_to_plane(&mut chord_c, &plane, PLANE_SNAP_OFFSET);
+
+        // Order 1: A → B → C
+        let mut agg_abc = SnapMetricsAggregate::default();
+        agg_abc.accumulate(&report_a);
+        let max_drift_after_a = agg_abc.max_drift;
+        agg_abc.accumulate(&report_b);
+        // Monotonic: max_drift never decreases
+        assert!(agg_abc.max_drift >= max_drift_after_a);
+        agg_abc.accumulate(&report_c);
+
+        // Order 2: C → B → A (reverse order)
+        let mut agg_cba = SnapMetricsAggregate::default();
+        agg_cba.accumulate(&report_c);
+        agg_cba.accumulate(&report_b);
+        agg_cba.accumulate(&report_a);
+
+        // Order independence: same final aggregate
+        assert_eq!(agg_abc, agg_cba);
     }
 
     /// Edge cases — empty chord, single vertex, exact on plane, huge drift.
