@@ -58,6 +58,42 @@ import {
   type MergeActionContext,
 } from './actions/MergeActions';
 
+// ════════════════════════════════════════════════════════════════════
+// ADR-170 β-1 — normalizeDrawInput SSOT (Phase 1 of Phase 1-4)
+// ════════════════════════════════════════════════════════════════════
+
+/** Minimum draw length (mm) — axia-sketch pattern 1 (10mm short-circuit). */
+export const MIN_DRAW_LENGTH_MM = 10.0;
+
+/** Same-plane cos threshold (anti-parallel safe, ADR-167 EPS_PLANE_NORMAL). */
+const SAME_PLANE_COS_THRESHOLD = 0.9999;
+
+/** ADR-170 NormalizedDrawInput — typed envelope of Tool layer SSOT output. */
+export interface NormalizedDrawInput {
+  /** Normalized 3D point (cardinal force + face projection applied). */
+  point: THREE.Vector3;
+  /** Existing vertex ID if LOCKED #5 spatial-hash matched (silent dedup). */
+  vertId?: number;
+  /** Active face context (face hit OR locked plane face). */
+  faceId?: number;
+  /** Skip reason if input below absorption threshold (silent skip 차단). */
+  skipReason?: 'DegenerateBelowEpsilon' | 'DriftBeyondTolerance' | 'VertexCollapse';
+}
+
+/** ADR-170 NormalizeContext — caller-supplied normalize context. */
+export interface NormalizeContext {
+  /** Active view mode (3d / top / bottom / front / back / left / right). */
+  viewMode?: 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right' | '3d';
+  /** Face ID under cursor (raycaster hit OR ADR-140 surface-aware). */
+  faceId?: number;
+  /** Target face normal for plane lock validation (ADR-166). */
+  targetNormal?: THREE.Vector3;
+  /** Chain start vertex for 10mm short-circuit (DrawLine 2nd click etc.). */
+  chainStart?: THREE.Vector3;
+  /** Active sketch plane (ADR-166 plane lock OR sketch session). */
+  sketchPlane?: { origin: THREE.Vector3; normal: THREE.Vector3; up?: THREE.Vector3 };
+}
+
 export class ToolManager {
   // 2026-04-23: private→public. KeyboardShortcuts/SnapVisual 등 외부 소비자가
   //   activeCamera/scene/renderer를 읽기 위함. 쓰기용 encapsulation은
@@ -2527,6 +2563,147 @@ export class ToolManager {
     this._planeLock = null;
     // β-3 scope: StatusBar badge update.
     this.updateLastDrawnPlaneBadge();
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // ADR-170 β-1 — normalizeDrawInput SSOT (Phase 1 of Phase 1-4)
+  // ════════════════════════════════════════════════════════════════════
+  //
+  // Single chokepoint for 7 Draw 도구 + SelectTool + BoundaryTool input
+  // normalization. Replaces fragmented per-tool routines (β-2 finding).
+  //
+  // 5-step routine (canonical, ADR-170 §2.1):
+  //   Step 1: Cardinal axis force      (LOCKED #63 z=0 + LOCKED #7)
+  //   Step 2: Face plane projection    (LOCKED #69 ADR-168, PR #248 흡수)
+  //   Step 3: Vertex_at silent dedup   (LOCKED #5 1.5μm spatial-hash)
+  //   Step 4: 10mm short-circuit       (axia-sketch pattern 1)
+  //   Step 5: Plane lock validation    (LOCKED #67 ADR-166 soft lock)
+  //
+  // Returns NormalizedDrawInput typed envelope. `skipReason` ≠ undefined
+  // → caller should NOT commit (silent skip 차단).
+  //
+  // Lock-ins (ADR-170 §4):
+  //   L-170-1 Single chokepoint SSOT
+  //   L-170-4 LOCKED #5/7/63/67/69 SSOT consume (새 SSOT 도입 0)
+  //   L-170-6 Backward compat additive (getSnappedPoint/get3DPoint 보존)
+  //   L-170-7 Engine 변경 0 (Phase 2 ADR-171 별도)
+  //   L-170-9 메타-원칙 #14 WHAT + #16 WHEN layer 보존 강제
+  // ════════════════════════════════════════════════════════════════════
+  public normalizeDrawInput(
+    rawPoint: THREE.Vector3,
+    context: NormalizeContext = {},
+  ): NormalizedDrawInput {
+    const point = rawPoint.clone();
+
+    // ─────────────────────────────────────────────────────────────
+    // Step 1: Cardinal axis force (LOCKED #63 z=0 invariant)
+    // sketch plane 이 명시되면 스킵 (user explicit plane).
+    // ─────────────────────────────────────────────────────────────
+    if (!context.sketchPlane) {
+      const vm = context.viewMode ?? this.viewport.viewMode;
+      switch (vm) {
+        case 'front':
+        case 'back':
+          point.y = 0;
+          break;
+        case 'right':
+        case 'left':
+          point.x = 0;
+          break;
+        default: // '3d', 'top', 'bottom'
+          point.z = 0;
+          break;
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Step 2: Face plane projection (LOCKED #69 ADR-168, PR #248 흡수)
+    // faceId 가 명시되면 face plane 위로 정확 projection.
+    // ─────────────────────────────────────────────────────────────
+    if (context.faceId != null) {
+      try {
+        const normalArr = this.bridge.getFaceNormal?.(context.faceId);
+        if (
+          normalArr &&
+          Number.isFinite(normalArr[0]) &&
+          Number.isFinite(normalArr[1]) &&
+          Number.isFinite(normalArr[2])
+        ) {
+          const n = new THREE.Vector3(normalArr[0], normalArr[1], normalArr[2]);
+          if (n.lengthSq() > 0.5) {
+            n.normalize();
+            // Face centroid as plane origin (best estimate)
+            let planeOrigin: THREE.Vector3 | null = null;
+            try {
+              const c = this.bridge.facesCentroid?.([context.faceId]);
+              if (c && typeof c.x === 'number') planeOrigin = c;
+            } catch {
+              /* graceful fallback */
+            }
+            if (!planeOrigin) planeOrigin = point.clone();
+            const dist = point.clone().sub(planeOrigin).dot(n);
+            point.sub(n.multiplyScalar(dist));
+          }
+        }
+      } catch {
+        /* graceful: face plane query failed, retain Step 1 result */
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Step 3: Vertex_at silent dedup (LOCKED #5 1.5μm spatial-hash)
+    // bridge.vertex_at 가 있으면 query, 없으면 undefined.
+    // ─────────────────────────────────────────────────────────────
+    let vertId: number | undefined;
+    try {
+      const va = (this.bridge as unknown as {
+        vertex_at?: (x: number, y: number, z: number) => number;
+      }).vertex_at;
+      if (typeof va === 'function') {
+        const result = va.call(this.bridge, point.x, point.y, point.z);
+        if (Number.isInteger(result) && result >= 0) vertId = result;
+      }
+    } catch {
+      /* graceful: vertex_at not yet exposed, undefined fallthrough */
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Step 4: 10mm short-circuit (axia-sketch pattern 1)
+    // chainStart 가 명시되고 거리 < MIN_DRAW_LENGTH_MM → skip.
+    // ─────────────────────────────────────────────────────────────
+    if (context.chainStart) {
+      const dist = point.distanceTo(context.chainStart);
+      if (dist < MIN_DRAW_LENGTH_MM) {
+        return {
+          point,
+          vertId,
+          faceId: context.faceId,
+          skipReason: 'DegenerateBelowEpsilon',
+        };
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Step 5: Plane lock validation (LOCKED #67 ADR-166 soft lock)
+    // targetNormal 이 plane lock normal 과 anti-parallel safe 비교.
+    // 다른 plane 의 face hit → soft unlock (PR #247 패턴).
+    // ─────────────────────────────────────────────────────────────
+    if (this._planeLock && context.targetNormal) {
+      const tn = context.targetNormal.clone().normalize();
+      const lockN = this._planeLock.normal;
+      const dotMag = Math.abs(tn.dot(lockN));
+      if (dotMag < SAME_PLANE_COS_THRESHOLD) {
+        // Soft unlock semantic (ADR-166 amendment, PR #247)
+        this.unlockPlane();
+      }
+    }
+
+    return {
+      point,
+      vertId,
+      faceId: context.faceId,
+      skipReason: undefined,
+    };
   }
 
   /**
