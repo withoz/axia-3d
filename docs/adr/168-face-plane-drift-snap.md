@@ -1,7 +1,7 @@
 # ADR-168 — Face plane drift snap (ADR-167 자연 후속)
 
-**Status**: Proposed (α spec — β implementation 별도 사용자 결재 후 진행)
-**Date**: 2026-05-29
+**Status**: Accepted (γ closure 2026-05-29 — 5-step variant 5번째 reproducibility, LOCKED #43 priority sequence (c) closure)
+**Date**: 2026-05-29 (α / β-1 / β-2 / β-3 / γ — same-day closure)
 **Author**: WYKO + Claude
 **Trigger**: ADR-167 §5.1 sequence anchor + LOCKED #43 priority sequence
 (a)→(b)→(c) 결재. ADR-167 closure (LOCKED #68) 후 자연 진입.
@@ -251,24 +251,109 @@ ADR-168 closure 후 next priority audit.
 
 - **2026-05-29 α** (본 PR) — ADR-168 spec only + ADR-026 P12 cardinal SSOT
   gap audit + Q1~Q5 결재 default 5/5 (사용자 결재 2026-05-29)
-- **TBD β-1** — `axia-geo/src/operations/plane_snap.rs` + 2-constant +
-  helper + detect + 6 회귀
-- **TBD β-2** — 4 face creation callsites 활성 + 4 회귀
-- **TBD β-3** — Drift telemetry + 사용자 시연 + 3 회귀
-- **TBD γ** — closure docs + 2 회귀
+- **2026-05-29 β-1** (PR #243 merged `8d115f1`) — `axia-geo/src/operations/
+  plane_snap.rs` 신설 + `PLANE_SNAP_NORMAL` (1e-3) + `PLANE_SNAP_OFFSET`
+  (1e-4 mm) + `DriftReport` + `SnapReport` + `detect_chord_drift`
+  (read-only) + `snap_chord_to_plane` (correction) + **+7 회귀**
+  (over-delivered vs 6 target).
+- **2026-05-29 β-2** (PR #244 merged `2e086d9`) — **Audit-first finding**:
+  spec mentioned 4 callsites, actual production code has **3** (rect/line/
+  circle; polygon = circle with N segments). Mesh-aware helper `snap_face_
+  to_plane(mesh, face_id, plane, snap_tol)` 신설 + 3 production callsites
+  activated in `scene.rs::exec_draw_{rect,line,circle}_as_shape` after
+  `set_face_surface(plane)`. **+4 회귀**.
+- **2026-05-29 β-3** (PR #245 merged `6d9124d`) — `SnapMetricsAggregate`
+  drift telemetry primitive. **Production scene.rs callsites UNCHANGED**
+  (no overhead). Opt-in accumulation by E2E sessions. Critical metric:
+  `silent_bug_evidence_count` (drift > EPS_PLANE_OFFSET, ADR-026 P12
+  cardinal gap coverage validation). **+3 회귀**.
+- **2026-05-29 γ** (본 PR) — Status Proposed → Accepted + §8 결재 cycle
+  log + §9 Lessons (7 lessons) + LOCKED #69 entry + README catalog
+  Status 갱신 + **+2 회귀** (canonical SSOT drift guard + catalog drift).
+- **합계**: **+16 회귀** (절대 #[ignore] 금지 16/16 준수, target +15
+  over-delivered by +1 via β-1 edge cases).
 
-## 9. Lessons (TBD — γ closure 시 작성)
+## 9. Lessons (γ closure 2026-05-29)
 
-본 섹션은 γ closure (Status Proposed → Accepted) 시 작성. ADR-167 §9
-Lessons 답습 + ADR-168 의 *layered architecture (detection vs snap)
-+ Phase 3 telemetry gate* 가치 명시.
+ADR-152 / ADR-164 / ADR-166 / ADR-167 §9 Lessons 답습 + ADR-168 의
+*layered architecture + production callsite Q3=a + Phase 3 telemetry
+opt-in* 가치 명시. 5-step variant 5번째 1-day single-day reproducibility
+— engine-level (axia-geo + axia-core integration) architectural refactor
+의 자연 답습 패턴.
 
-후보 lessons (β implementation 완료 시 확정):
-- audit-first canonical 18번째 적용 (ADR-026 P12 cardinal gap)
-- 5-step variant 5번째 reproducibility
-- Layered architecture (ADR-167 detection + ADR-168 snap) 의 자연
-  hierarchy 가치
-- Telemetry-driven validation gate (β-3) 의 architectural quality value
-- Tessellation chord substitute 의 minimum-risk algorithm 가치
-- ADR-026 P12 보존 (cardinal SSOT) + non-cardinal 보강 의 backward-compat
-- ADR-031 Phase D 자산 재사용 의 architectural reuse 가치
+### L1 — audit-first canonical 18번째 적용 + β-2 callsite count 정정
+
+- **18번째 (α spec)**: ADR-026 P12 cardinal SSOT gap inventory. 매트릭스
+  audit 명시 — cardinal axis (X/Y/Z) 만 강제 0, non-cardinal slanted/
+  tilted plane 보정 없음. silent "different plane" DCEL judgment bug
+  risk evidence.
+- **β-2 entry audit 정정**: spec mentioned 4 callsites (rect/circle/
+  polygon/line), actual production has **3** (polygon = circle with N
+  segments). silent fix + 명시 commit documentation.
+
+**Lock-in (canonical for audit-first robustness)**: audit-first 의
+가치는 *spec 작성 시점* + *β 진입 시점* 모두 동작. Spec count
+mismatch 도 audit-first 의 자연 finding — silent fix + documentation.
+
+### L2 — 5-step variant 5번째 1-day single-day reproducibility
+
+ADR-152 (Sprint 4 첫째) + ADR-164 + ADR-166 + ADR-167 + ADR-168 = 5
+1-day closures. audit-first canonical 의 50% time reduction evidence
+지속 누적. **engine-level (axia-core + axia-geo 통합) refactor 도
+1-day cadence 가능 evidence**.
+
+**Lock-in**: 향후 architectural refactor ADR 의 default cadence —
+α (sub-day) → β-1/2/3 (sub-day each) → γ closure (sub-day). 사용자
+결재 cycle 의 1-day pattern 확립.
+
+### L3 — Layered architecture (detection vs snap) 의 자연 hierarchy 가치
+
+ADR-167 EPS_PLANE_* (detection, 1e-4 / 1.5e-3) + ADR-168 PLANE_SNAP_*
+(correction, 1e-3 / 1e-4) **stricter snap 위에 looser detection** —
+post-snap chord 가 자동 detection 통과. 두 ADR 의 자연 hierarchy.
+
+**Lock-in (canonical for tolerance hierarchies)**: 다층 tolerance
+시스템은 *detection > snap > spatial-hash* 의 자연 ordering. 각 layer
+별 별도 ADR 분리 (single ADR 에 통합 회피).
+
+### L4 — Production callsite Q3=a (face creation only) 의 minimum-risk 가치
+
+Q3=a face creation only scope (3 callsites) vs Q3=b/c (Boolean / Offset
+/ Push-Pull / All-tools). **minimum risk + 사용자 facing 즉시 가치**
+balance evidence. Phase 3 telemetry 가 future expansion (Q3=b/c) 의
+의사결정 anchor.
+
+**Lock-in**: 위험성 큰 architectural refactor 의 callsite scope —
+*첫 face definition 시점* (face creation) 이 가장 안전한 entry. 후속
+ops (Boolean/Offset/Push-Pull) 는 telemetry-driven 별도 ADR.
+
+### L5 — Phase 3 telemetry opt-in pattern (production overhead 0)
+
+`SnapMetricsAggregate` 의 opt-in 디자인 — production scene.rs UNCHANGED,
+E2E session wrapper 가 lifecycle 관리. Mesh struct 미수정 (no
+serialization risk).
+
+**Lock-in (canonical for telemetry primitives)**: telemetry / observability
+는 *opt-in* default. production overhead 0 강제. Mesh-level field
+추가 회피 (serialization 영향). caller-managed lifecycle.
+
+### L6 — Tessellation chord substitute algorithm (Q1=a) 의 minimum-risk 가치
+
+Q1=a chord substitute vs Q1=b Newton refinement vs Q1=c polyline
+projection. **Newton 의 multi-week atomic 회피** + **ADR-031 Phase D
+자산 자연 재사용** (tessellate_face_surface API 의 자연 연장). 가장
+단순 algorithm + 1-day closure 양립.
+
+**Lock-in**: 새 architectural ADR 의 algorithm 선택 — *existing
+infrastructure 자산 재사용 우선*. 새 algorithm 도입 시 multi-week atomic
+risk + maintenance cost ↑.
+
+### L7 — ADR-026 P12 preservation pattern (backward-compat)
+
+ADR-168 이 ADR-026 P12 cardinal SSOT 를 **보존** (non-cardinal 만 보강).
+WasmBridge cardinal snap defense layer 2 UNCHANGED. 사용자 cardinal
+sketch (XY ground / XZ wall / YZ wall) 동작 영향 0.
+
+**Lock-in (canonical for SSOT preservation under amendment)**: 기존
+LOCKED 정책 (예: ADR-026 P12) 위에 새 architectural layer 추가 시
+*backward-compat 보존 + scope 명시 보강* 패턴. silent override 회피.
