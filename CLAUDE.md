@@ -5270,6 +5270,98 @@ ADR-169 §10 Lessons 정합 (audit-first canonical 19번째 적용 evidence):
 - #4 SSOT / #5 사용자 편의 / #6 Preventive / #11 Latency Budget
 - #14 WHAT (결과 invariant 보존) / #15 split contract / #16 WHEN (trigger 정책 보존)
 
+### 71. ADR-170 — Phase 1 closure: Tool layer normalizeDrawInput SSOT (2026-05-30) ✅
+
+**Canonical anchor**: LOCKED #70 Phase 1-4 sequence anchor 의 **Phase 1 closure**.
+ADR-170 5-step closure (α + β-1 + β-2 + β-3 + γ) = 5-step variant **7번째
+reproducibility** (ADR-152/164/166/167/168/169 답습). Phase 2 (ADR-171
+Engine `absorb_boundary_input` SSOT, 2주, +70) 의 sole prerequisite.
+
+**5 PRs sequence (2026-05-29 ~ 2026-05-30)**:
+- PR #254 α spec — 5-step routine canonical 명시 + Q1~Q5 lock-in 결재
+- PR #256 β-1 — `normalizeDrawInput` API + 5-step routine 구현 (+19 회귀)
+- PR #258 β-2 — `ToolContext.normalizeDrawInput?` SSOT exposure (+5 회귀)
+- PR #259 β-3 — BoundaryTool migration (+5 회귀)
+- PR #260 γ closure — Status Accepted + §9 Lessons + LOCKED #71 candidate (+0)
+
+**합계 +29 회귀** (절대 #[ignore] 금지 29/29). α §6 +50 예상 vs 실측 +29
+차이 (+21) = γ deferred (7 Draw tools per-tool adoption + Playwright E2E)
+→ ADR-171 본격 진입 시 자연 흡수.
+
+#### 불변 lock-in (canonical for ADR-171~173)
+
+- **L-71-1** `ToolManager.normalizeDrawInput(rawPoint, context)` SSOT 강제
+  — single chokepoint for 7 Draw + SelectTool + BoundaryTool
+- **L-71-2** 5-step routine canonical 강제:
+  - Step 1 Cardinal axis force (LOCKED #63 + #7)
+  - Step 2 Face plane projection (LOCKED #69 ADR-168, PR #248 흡수)
+  - Step 3 Vertex_at silent dedup (LOCKED #5)
+  - Step 4 10mm short-circuit (axia-sketch pattern 1)
+  - Step 5 Plane lock validation (LOCKED #67 ADR-166)
+- **L-71-3** 5 SSOT 통합 consume (LOCKED #5/7/63/67/69) — *새 SSOT 도입 0*
+- **L-71-4** 9 tools API surface 통합 (7 Draw + SelectTool + BoundaryTool)
+- **L-71-5** `NormalizedDrawInput` typed envelope 강제 (skipReason silent
+  skip 차단, 메타-원칙 #16 정합)
+- **L-71-6** Backward compat additive (`normalizeDrawInput?` optional,
+  graceful fallback) — L-170-6
+- **L-71-7** Engine 변경 0 (Phase 2 ADR-171 본격 시 SSOT chain 통합)
+- **L-71-8** `MIN_DRAW_LENGTH_MM = 10.0` constant 강제 (axia-sketch
+  pattern 1, mm 단위 short-circuit threshold)
+- **L-71-9** `SAME_PLANE_COS_THRESHOLD = 0.9999` anti-parallel safe 강제
+  (ADR-166 soft lock semantic)
+- **L-71-10** 메타-원칙 #14 WHAT + #16 WHEN layer 보존 강제 — *behavior
+  delta 0* (architectural reorganization only)
+- **L-71-11** Phase 1 closure → Phase 2 (ADR-171) entry trigger
+
+#### Lessons (canonical for future Phase ADRs, 9개)
+
+ADR-170 §9 Lessons 정합 (5-step variant 7번째 reproducibility evidence):
+
+- **L1** Single chokepoint SSOT 의 architectural value 정량 증명 (5 SSOT 통합)
+- **L2** Backward compat additive (L-170-6) 의 매트릭스 정합 (graceful fallback)
+- **L3** Scope clarification 의 honest documentation 가치 (β-2 vs β-3 vs γ)
+- **L4** 5-step variant 7번째 reproducibility (template 정착 evidence)
+- **L5** sub-step deferral 의 architectural correctness (γ deferred items)
+- **L6** β-2 ↔ β-3 의 SSOT vs caller 분리 (interface boundary 명확화)
+- **L7** Phase 1-4 sequence anchor 의 Phase 1 정착 evidence
+- **L8** 메타-원칙 #14 WHAT + #16 WHEN layer 보존 강제 evidence
+- **L9** Tool migration 의 "behavior delta 0" architectural value
+
+#### Phase 2 (ADR-171) entry trigger anchor
+
+| Phase | ADR | Title | 기간 | 회귀 |
+|---|---|---|---|---|
+| **1 ✅** | **ADR-170** | **Tool layer normalizeDrawInput SSOT** | **same-day** | **+29 실측** |
+| 2 | ADR-171 | Engine `absorb_boundary_input` SSOT | 2주 | +70 |
+| 3 | ADR-172 | DCEL `register_boundary_element` Edge Register canonical | 2-3주 | +90 |
+| 4 | ADR-173 | User vision realization + 12 시연 PASS | 1주 | +30 |
+
+Phase 1 closure 후 자연 Phase 2 진입 가능 (LOCKED #70 정합).
+
+#### Cross-link
+
+- **LOCKED #5** spatial-hash 1.5μm (Step 3 vertex dedup)
+- **LOCKED #7** ADR-026 P12 cardinal SSOT (Step 1 cardinal force)
+- **LOCKED #14** 메타-원칙 #14 WHAT (보존 강제)
+- **LOCKED #43** priority sequence ALL CLOSED (foundation)
+- **LOCKED #44** Complete Meaning per Merge (5-step variant 정합)
+- **LOCKED #63** z=0 invariant (Step 1)
+- **LOCKED #66** STATUS-POLICY (canonical Status field)
+- **LOCKED #67** ADR-166 plane lock (Step 5)
+- **LOCKED #68** ADR-167 EPS_PLANE (foundation)
+- **LOCKED #69** ADR-168 PLANE_SNAP (Step 2 source)
+- **LOCKED #70** ADR-169 Phase 1-4 anchor (direct precursor)
+- **ADR-026 P12** cardinal SSOT / **ADR-088** curve_owner_id (SelectTool defer)
+- **ADR-101 Amendment 9** HARD flag (Phase 3 prep)
+- **ADR-139** Boundary tool only (BoundaryTool migrate 정합)
+- **ADR-140** surface-aware getDrawPlane (Step 2 face plane source)
+- **ADR-146** SnapManager inferencing (snap pipeline 보존)
+- **ADR-148** BoundaryTool point-localized (β-3 migration target)
+- **ADR-152/164/166/167/168/169** 5-step variant 1~6번째 precursors
+- **ADR-166** plane lock (Step 5) / **ADR-167** EPS_PLANE / **ADR-168** drift snap
+- **ADR-169** Phase 0 audit (sole precondition)
+- **ADR-171/172/173** Phase 2-4 (별도 ADR + 별도 atomic PR)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
