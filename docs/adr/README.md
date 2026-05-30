@@ -253,6 +253,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [168](./168-face-plane-drift-snap.md) | Face plane drift snap — ADR-167 자연 후속 | Accepted | Track 5 |
 | [169](./169-boundary-routine-unification-audit.md) | Boundary-Routine Unification Audit (Phase 0, D-Then-C 결재 anchor) — 사용자 비전 trigger | Accepted | Track 6 |
 | [170](./170-tool-layer-normalize-draw-input-ssot.md) | Tool Layer normalizeDrawInput SSOT (Phase 1, ADR-169 후속) | Accepted | Track 6 |
+| [171](./171-engine-absorb-boundary-input-ssot.md) | Engine absorb_boundary_input SSOT (Phase 2, ADR-170 후속) | Proposed | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
