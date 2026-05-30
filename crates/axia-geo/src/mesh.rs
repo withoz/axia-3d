@@ -631,6 +631,50 @@ impl Mesh {
             .ok_or_else(|| anyhow::anyhow!("Vertex {:?} not found", id))
     }
 
+    /// ADR-171 β-1 — Read-only spatial-hash vertex lookup (no mutation).
+    ///
+    /// Read-only mirror of [`Mesh::add_vertex`]'s dedup scan: returns the
+    /// existing active `VertId` within LOCKED #5 dedup tolerance
+    /// (`SPATIAL_HASH_CELL * 1.5 = 1.5μm`) of `pos`, or `None` if no
+    /// coincident vertex exists.
+    ///
+    /// Thin read-only accessor (like [`Mesh::vertex_pos`] / [`Mesh::find_edge`]).
+    /// The absorb LOGIC (Phase 2 SSOT) lives entirely in
+    /// `operations/boundary_input.rs` (L-171-9) — this is only the
+    /// spatial-hash query primitive it consumes (Step 2 vertex dedup).
+    ///
+    /// Used by `absorb_boundary_input` to detect existing vertices BEFORE
+    /// any mutation (Pattern 8 read-only).
+    pub fn find_existing_vertex(&self, pos: DVec3) -> Option<VertId> {
+        let key = spatial_key(pos);
+        let dedup_tol = SPATIAL_HASH_CELL * 1.5;
+        let dedup_tol_sq = dedup_tol * dedup_tol;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let neighbor_key = (key.0 + dx, key.1 + dy, key.2 + dz);
+                    if let Some(ids) = self.spatial_hash.get(&neighbor_key) {
+                        for &vid in ids {
+                            if let Some(vert) = self.verts.get(vid) {
+                                if !vert.is_active() {
+                                    continue;
+                                }
+                                if vert.coincident(pos) {
+                                    return Some(vid);
+                                }
+                                let d_sq = (vert.pos() - pos).length_squared();
+                                if d_sq < dedup_tol_sq {
+                                    return Some(vid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// ADR-061 Phase P-narrow Step 2 — Cache-coherent vertex move.
     ///
     /// Sets `vid`'s position to `new_pos` and invalidates downstream
