@@ -124,7 +124,53 @@ pub fn boundary_from_point(
     plane: Plane,
     search_radius: f64,
 ) -> Result<FaceId, BoundaryError> {
+    // ─── ADR-171 β-2: absorb_boundary_input SSOT (Phase 2) ───────────────
+    // Engine-internal robustness — project drift point onto the plane
+    // BEFORE Validation #1 (robust 흡수, 사용자 정책 2026-05-30). Covers
+    // ALL call paths (MCP / import / script / 내부호출) that bypass the
+    // Tool layer (ADR-170 Phase 1).
+    //
+    // Behavior:
+    //   - Point within MAX_DRIFT_MM of plane → projected onto plane (NEW:
+    //     previously the 1.5μm-1mm drift gap returned PointNotOnPlane).
+    //   - Point beyond MAX_DRIFT_MM → DriftBeyondTolerance → PointNotOnPlane
+    //     (preserves the far-off rejection — 10mm test 정합).
+    let canonical_plane = crate::plane::Plane {
+        normal: plane.normal,
+        offset: plane.dist,
+    };
+    let point = match crate::operations::boundary_input::absorb_boundary_input(
+        mesh,
+        crate::operations::boundary_input::BoundaryInput::Point {
+            point,
+            plane: canonical_plane,
+        },
+        Some(canonical_plane),
+    ) {
+        Ok(normalized) => {
+            if let crate::operations::boundary_input::BoundaryInput::Point {
+                point: projected,
+                ..
+            } = normalized.input
+            {
+                projected
+            } else {
+                point // unreachable — defensive
+            }
+        }
+        Err(crate::operations::boundary_input::AbsorbReason::DriftBeyondTolerance {
+            distance,
+        }) => {
+            // Beyond absorb tolerance — preserve original rejection semantics.
+            return Err(BoundaryError::PointNotOnPlane {
+                distance_mm: distance,
+            });
+        }
+        Err(_) => point, // other reasons N/A to single Point — defensive
+    };
+
     // Validation #1 — point 가 plane 에 평면적 (LOCKED #5 ε=1.5μm).
+    // (post-absorb: projected point is on-plane within numerical precision.)
     let signed_dist = plane.normal.dot(point) - plane.dist;
     let distance_mm = signed_dist.abs();
     if distance_mm > POINT_ON_PLANE_TOL_MM {
@@ -477,6 +523,47 @@ mod tests {
                 assert!((search_radius_mm - 1000.0).abs() < 1e-9);
             }
             other => panic!("expected NoOrphanEdgesInRadius, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn adr171_beta2_drift_gap_point_projected_passes_validation_1() {
+        // ADR-171 β-2 — point at z=0.5mm is in the (1.5μm, 1mm) drift gap.
+        // BEFORE absorb: PointNotOnPlane. AFTER absorb: projected onto plane
+        // → passes Validation #1 → fails Validation #2 (empty mesh, no
+        // orphan edges). Proves the absorb projection (robust 흡수).
+        let mut mesh = Mesh::new();
+        let plane = make_plane_z0();
+        let point = DVec3::new(0.0, 0.0, 0.5); // 0.5mm off-plane (within 1mm)
+        let result = boundary_from_point(&mut mesh, point, plane, 1000.0);
+        match result {
+            // Validation #1 now passes (projected); Validation #2 fails.
+            Err(BoundaryError::NoOrphanEdgesInRadius { .. }) => {}
+            other => panic!(
+                "expected NoOrphanEdgesInRadius (absorb projected the drift), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn adr171_beta2_far_off_plane_still_rejected() {
+        // ADR-171 β-2 — point 10mm off-plane is BEYOND MAX_DRIFT_MM (1.0).
+        // absorb returns DriftBeyondTolerance → PointNotOnPlane (preserves
+        // far-off rejection semantics, 메타-원칙 #15 contract).
+        let mut mesh = Mesh::new();
+        let plane = make_plane_z0();
+        let point = DVec3::new(0.0, 0.0, 10.0);
+        let result = boundary_from_point(&mut mesh, point, plane, 1000.0);
+        match result {
+            Err(BoundaryError::PointNotOnPlane { distance_mm }) => {
+                assert!(
+                    (distance_mm - 10.0).abs() < 1e-6,
+                    "expected ~10mm, got {}",
+                    distance_mm
+                );
+            }
+            other => panic!("expected PointNotOnPlane, got {:?}", other),
         }
     }
 

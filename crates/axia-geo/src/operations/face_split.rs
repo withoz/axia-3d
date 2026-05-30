@@ -2576,6 +2576,37 @@ mod tests {
         assert_eq!(m.face_count(), 2);
     }
 
+    /// ADR-171 β-2 — Architectural finding lock-in: `split_face_by_line`
+    /// ALREADY absorbs drift via its Step 0 projection (face_split.rs:335).
+    ///
+    /// Phase 2 audit (β-2) found that 3/4 boundary functions already
+    /// implement the absorb pattern per-function with intentionally-tuned
+    /// tolerances:
+    ///   - `split_face_by_line` — Step 0 projects endpoints to the face plane
+    ///     (this test), bound = face_diagonal.
+    ///   - `auto_intersect_coplanar` — returns Ok(None) for non-coplanar with
+    ///     intentionally-strict COPLANARITY_OFFSET_TOL (1.5e-6, ADR-101 #41).
+    ///   - `boundary_from_point` — was the ONLY hard-rejecter; β-2 added absorb.
+    ///
+    /// This regression locks in the drift-tolerant split behavior (메타-원칙
+    /// #15 same contract). A line with y-drift (off the y=0 face plane) is
+    /// projected and splits correctly.
+    #[test]
+    fn adr171_beta2_split_by_line_already_absorbs_drift() {
+        let mut m = Mesh::new();
+        let (fid, _) = make_square(&mut m); // square on XZ plane (y=0)
+
+        // Line with 0.3mm y-drift (off the y=0 face plane). Step 0 projection
+        // absorbs it — the split still succeeds.
+        let line_start = DVec3::new(2.0, 0.3, 0.0);
+        let line_end = DVec3::new(2.0, 0.3, 4.0);
+        let result = split_face_by_line(&mut m, fid, line_start, line_end)
+            .expect("drift line should split (Step 0 absorbs drift)");
+
+        assert_eq!(result.new_faces.len(), 2, "drift line splits into 2 faces");
+        assert_eq!(m.face_count(), 2);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // Geometric Validity Guards (ADR-003) for split_face_by_line
     // ═══════════════════════════════════════════════════════════════════
