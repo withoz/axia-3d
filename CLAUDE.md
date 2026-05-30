@@ -5362,6 +5362,106 @@ Phase 1 closure 후 자연 Phase 2 진입 가능 (LOCKED #70 정합).
 - **ADR-169** Phase 0 audit (sole precondition)
 - **ADR-171/172/173** Phase 2-4 (별도 ADR + 별도 atomic PR)
 
+### 72. ADR-171 — Phase 2 closure: Engine absorb_boundary_input SSOT + already-robust finding (2026-05-30) ✅
+
+**Canonical anchor**: LOCKED #70 Phase 1-4 sequence anchor 의 **Phase 2
+closure**. ADR-171 4-step closure (α + β-1 + β-2 + γ) = 5-step variant
+**8번째 reproducibility** (β-3 fold). Phase 3 (ADR-172 register_boundary_
+element Edge Register, 2-3주, +90) entry ready.
+
+**4 PRs sequence (2026-05-30, same-day)**:
+- PR #262 α spec — 4-step routine canonical + Q1~Q5 lock-in 결재
+- PR #263 β-1 — `operations/boundary_input.rs` SSOT pure helper (+16 회귀)
+- PR #264 β-2 — boundary_from_point absorb 통합 + architectural finding (+3 회귀)
+- PR #265 γ closure — Status Accepted + §9 Lessons + LOCKED #72 candidate (+0)
+
+**합계 +19 회귀** (axia-geo 1518 → 1537, 절대 #[ignore] 금지 19/19).
+α §6 estimate +70 vs 실측 +19 — β-2 architectural finding 으로 genuine
+통합 work 축소.
+
+#### 핵심 architectural finding (canonical)
+
+> **엔진이 spec 가정보다 이미 robust** — 4 함수 중 3/4 이미 per-function
+> absorb 패턴 내장.
+
+| 함수 | 기존 absorb 패턴 | β-2 조치 |
+|---|---|---|
+| split_face_by_line | ✅ Step 0 drift projection (face_diag bound) | 회귀 lock-in |
+| auto_intersect_coplanar | ✅ Ok(None) non-coplanar (1.5e-6 strict, ADR-101 #41) | 보존 (loosen 금지) |
+| split_face_by_chain | ✅ VertId (이미 dedup) | N/A |
+| **boundary_from_point** | ❌ PointNotOnPlane hard-reject | **absorb 통합** ✅ |
+
+#### 불변 lock-in (canonical for Phase 3)
+
+- **L-72-1** operations/boundary_input.rs SSOT 강제 (BoundaryInput enum +
+  AbsorbReason + absorb_boundary_input 4-step pure helper + check_coplanar)
+- **L-72-2** 4-step routine canonical (Step 1 drift projection LOCKED #68/69 /
+  Step 2 vertex dedup LOCKED #5 / Step 3 10mm short-circuit / Step 4 HARD prep)
+- **L-72-3** boundary_from_point drift absorb 강제 (PointNotOnPlane hard-reject
+  → projection 흡수, 1.5μm~1mm drift gap 해소)
+- **L-72-4** **architectural finding 강제** — 3/4 함수 (split_face_by_line /
+  auto_intersect_coplanar / split_face_by_chain) 이미 per-function absorb
+  패턴. **강제 SSOT 통합 금지** (auto_intersect 의 COPLANARITY_OFFSET_TOL
+  1.5e-6 strict = ADR-101 LOCKED #41 보존)
+- **L-72-5** Read-only helper 강제 (`&Mesh`, Pattern 8 — cyclic 의존 회피)
+- **L-72-6** mesh.rs find_existing_vertex 는 read-only accessor only (absorb
+  LOGIC 은 100% operations/boundary_input.rs, L-171-9)
+- **L-72-7** NURBS kernel carve-out 강제 (curves/ + surfaces/ 미접촉, L-171-8)
+- **L-72-8** Backward compat additive (4 함수 signature UNCHANGED)
+- **L-72-9** AbsorbReason typed envelope 강제 (bail! 아닌 graceful,
+  메타-원칙 #16 정합)
+- **L-72-10** 메타-원칙 #14 WHAT + #15 split contract + #16 WHEN 보존 강제
+- **L-72-11** Phase 2 closure → Phase 3 (ADR-172) entry trigger
+
+#### Lessons (canonical for future audit-first engine ADRs, 6개)
+
+ADR-171 §9 Lessons 정합:
+
+- **L1** Engine already-robust finding (audit-first canonical, Pattern 3 —
+  test/integration 진입 시 architectural reality 가 spec 가정과 다름,
+  ADR-116/125 답습)
+- **L2** Truth over estimate (회귀 count 정직 — estimate +70 vs 실측 +19,
+  억지로 부풀리지 않음)
+- **L3** Intentional per-function tolerance 보존 (강제 SSOT 금지 — auto_
+  intersect 1.5e-6 = ADR-101 #41)
+- **L4** Genuine gap = hard-reject 함수만 (graceful no-op 은 이미 absorb)
+- **L5** SSOT 인프라 확보의 독립 가치 (boundary_input.rs — caller 수 무관,
+  canonical 패턴 확립이 가치, ADR-167 EPS_PLANE 답습)
+- **L6** Phase 2 실질 완결 (β-3 fold — sub-step 수는 의미 단위에 따라
+  자연 축소, LOCKED #44 Complete Meaning per Merge 정합)
+
+#### Phase 3 (ADR-172) entry trigger anchor
+
+| Phase | ADR | Title | 기간 | 회귀 |
+|---|---|---|---|---|
+| 1 ✅ | ADR-170 | Tool layer normalizeDrawInput SSOT | same-day | +29 |
+| **2 ✅** | **ADR-171** | **Engine absorb_boundary_input SSOT** | **same-day** | **+19 실측** |
+| 3 | ADR-172 | DCEL `register_boundary_element` Edge Register canonical | 2-3주 | +90 |
+| 4 | ADR-173 | User vision realization + 12 시연 PASS | 1주 | +30 |
+
+Phase 2 closure 후 자연 Phase 3 진입 가능 (LOCKED #70 정합). Phase 3 가
+axia-sketch pattern 5 ("선만 등록, 면은 알아서") 의 본격 구현 — boundary_
+input.rs SSOT (L-72-1) 즉시 활용.
+
+#### Cross-link
+
+- **LOCKED #5** spatial-hash 1.5μm (Step 2 vertex dedup)
+- **LOCKED #41** ADR-101 (auto_intersect 1.5e-6 strict tolerance 보존, L-72-4)
+- **LOCKED #44** Complete Meaning per Merge (β-3 fold 정합)
+- **LOCKED #66** STATUS-POLICY (canonical Status field)
+- **LOCKED #68** ADR-167 EPS_PLANE (Step 1 detection)
+- **LOCKED #69** ADR-168 PLANE_SNAP (Step 1 correction)
+- **LOCKED #70** ADR-169 Phase 1-4 anchor (direct precursor)
+- **LOCKED #71** ADR-170 Phase 1 closure (direct precursor)
+- **ADR-101 Amendment 9** HARD flag (Step 4 prep, Phase 3 본격)
+- **ADR-116/125** audit-first finding 답습 (L1)
+- **ADR-152** 5-step variant (Engine + 검증, UI 없음)
+- **ADR-167** EPS_PLANE SSOT 인프라 가치 (L5)
+- **ADR-172/173** Phase 3-4 (별도 ADR + 별도 atomic PR)
+- **메타-원칙 #4** SSOT / **#6** Preventive / **#11** Latency / **#14/#15/#16**
+- **Pattern 3** audit-first canonical / **Pattern 7** B hybrid / **Pattern 8**
+  read-only vs mutate
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
