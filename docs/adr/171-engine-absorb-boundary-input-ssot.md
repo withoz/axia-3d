@@ -1,7 +1,7 @@
 # ADR-171 — Phase 2 Engine `absorb_boundary_input` SSOT
 
-**Status**: Proposed (α spec, 2026-05-30)
-**Date**: 2026-05-30
+**Status**: Accepted (γ closure 2026-05-30 — 5-step variant 8번째 reproducibility, β-2 architectural finding "3/4 already-robust")
+**Date**: 2026-05-30 (α / β-1 / β-2 / γ — same-day closure)
 **Author**: WYKO + Claude
 **Trigger**: ADR-170 γ closure (LOCKED #71) + 사용자 결재 "Phase 2 진입
 승인" (2026-05-30). Phase 1-4 sequence 둘째.
@@ -314,29 +314,123 @@ dedup 8% root cause 모든 경로 흡수.
 
 ---
 
-## 8. Acceptance Log (예고)
+## 8. Acceptance Log
 
-### 8.1 α (본 PR)
+### 8.1 α (PR #262, merged 2026-05-30)
 - spec only — 4-step routine canonical 명시
 - Q1~Q5 lock-in default 5/5
 - L-171-1 ~ L-171-11 Lock-ins
 - 5-step roadmap (α/β-1/β-2/β-3/γ) — 8번째 reproducibility
 
-### 8.2 β-1 (별도 PR)
+### 8.2 β-1 (PR #263, merged 2026-05-30)
 - operations/boundary_input.rs 신설 + absorb_boundary_input pure helper
-- 회귀 자산 +20 (4-step × variant 입력 타입)
+- BoundaryInput enum + AbsorbReason + NormalizedBoundaryInput + check_coplanar
+- mesh.rs find_existing_vertex 읽기 accessor (read-only mirror)
+- 회귀 자산 **+16** (axia-geo 1518 → 1534, 4-step × variant 입력 타입)
 
-### 8.3 β-2 (별도 PR)
-- 4 함수 call site 통합
-- 회귀 자산 +30 (4 함수 × 정합 + cross-cut bail 흡수)
+### 8.3 β-2 (PR #264, merged 2026-05-30)
+- **Architectural finding (audit-first canonical)**: 4 함수 중 3/4 가
+  *이미* absorb 패턴 내장 (intentional per-function tolerances). genuine
+  gap = boundary_from_point 1개.
+- boundary_from_point absorb 통합 (drift projection — PointNotOnPlane
+  hard-reject → robust 흡수)
+- split_face_by_line / auto_intersect_coplanar 의 기존 absorb 패턴 lock-in
+- 회귀 자산 **+3** (axia-geo 1534 → 1537, boundary +2 + face_split finding +1)
+- **estimate +30 vs 실측 +3** — audit 가 already-robust 발견 (truth over estimate)
 
-### 8.4 β-3 (별도 PR)
-- WASM telemetry export + regression sweep
-- 회귀 자산 +15 (telemetry + cargo full)
+### 8.4 β-3 (FOLDED into γ — β-2 finding 정합)
+- **WASM telemetry export 보류** — β-2 finding (3/4 already-robust) 으로
+  telemetry 가치 저하. 통합된 함수 1개 (boundary_from_point) 는 기존
+  boundary 회귀로 충분 cover. SnapMetricsAggregate-style 계측은 future
+  (실측 trigger 시).
+- regression sweep (cargo full 1537/1537) 은 β-2 에서 완료.
 
-### 8.5 γ (별도 PR)
-- closure docs — Status Accepted + §9 Lessons + LOCKED entry candidate + README
-- Playwright E2E (MCP/import 경로 absorb evidence)
-- 회귀 자산 +5
+### 8.5 γ (본 PR)
+- closure docs — Status Accepted + §9 Lessons (architectural finding canonical)
+  + LOCKED #72 candidate + README
+- Playwright E2E **defer** — boundary_from_point 통합은 cargo 회귀로 충분
+  cover (E2E 의 MCP/import path absorb 는 future, Phase 3 register API 와
+  함께 자연 통합)
+- 회귀 자산 +0 (docs closure)
 
-**합계 예상**: +70 회귀 (ADR-169 §6 Phase 2 +70 정합).
+**합계 실측**: **+19 회귀** (β-1 +16 + β-2 +3, axia-geo 1518 → 1537).
+estimate +70 vs 실측 +19 — β-2 architectural finding (3/4 already-robust)
+으로 genuine 통합 work 축소. Phase 2 의 architectural value 는 "엔진이
+이미 robust 했다 + boundary_from_point gap 해소 + SSOT 인프라 (boundary_
+input.rs) 확보" 로 달성.
+
+---
+
+## 9. Lessons (canonical for future audit-first engine ADRs)
+
+### L1 — Engine already-robust finding (audit-first canonical, Pattern 3)
+
+β-2 진입 audit 결과: 4 함수 중 3/4 가 이미 per-function absorb 패턴 내장.
+genuine gap 은 boundary_from_point 1개. **엔진이 spec 가정보다 robust**.
+이건 ADR-116 γ verification finding / ADR-125 audit pivot 답습 —
+**"test/integration 진입 시 architectural reality 가 spec 가정과 다름"**
+canonical 패턴. 향후 engine SSOT ADR 진입 시 *기존 함수의 ad-hoc 패턴
+inventory* 가 β 진입 전 audit 필수.
+
+### L2 — Truth over estimate (회귀 count 정직)
+
+β-2 estimate +30 vs 실측 +3. audit finding 으로 genuine work 축소 →
+*억지로 부풀리지 않음*. ADR-116 L2 ("test failure → architectural finding
+documentation") 답습. 회귀 count 는 *진실* 이 estimate 보다 우선 (LOCKED
+#66 audit-first canonical).
+
+### L3 — Intentional per-function tolerance 보존 (강제 SSOT 금지)
+
+auto_intersect_coplanar 의 COPLANARITY_OFFSET_TOL (1.5e-6) 은 ADR-101
+LOCKED #41 의 의도적 strict 값. absorb 의 PLANE_SNAP_OFFSET (1e-4) 로
+강제 통합 시 loosen → LOCKED #41 위반. **SSOT 통합은 tolerance alignment
+가 안전할 때만** — 강제 통합 금지. 향후 SSOT ADR 가이드.
+
+### L4 — Genuine gap = hard-reject 함수만 (graceful 은 이미 absorb)
+
+3/4 함수가 graceful no-op (Ok(None) / Step 0 projection) 으로 *이미*
+absorb 패턴. boundary_from_point 만 hard-reject (PointNotOnPlane). **"거부
+하는 함수" 가 genuine absorb target, "graceful 한 함수" 는 이미 robust**.
+향후 engine robustness audit 의 분류 기준.
+
+### L5 — SSOT 인프라 확보의 독립 가치 (boundary_input.rs)
+
+β-1 의 operations/boundary_input.rs 는 통합 함수 수와 무관하게 *인프라*
+로서 가치 — 향후 새 boundary 함수 (Phase 3 register_boundary_element) 가
+즉시 활용. SSOT 모듈의 가치는 "현재 caller 수" 가 아닌 "canonical 패턴
+확립". ADR-167 EPS_PLANE SSOT 답습.
+
+### L6 — Phase 2 의 실질 완결 (β-3 fold)
+
+β-2 finding 으로 Phase 2 의 genuine work 가 β-2 에서 사실상 완결 →
+β-3 (telemetry) fold into γ. **estimate 의 sub-step 수는 고정 아님** —
+audit finding 에 따라 자연 축소 가능 (LOCKED #44 Complete Meaning —
+의미 단위가 sub-step 수보다 우선).
+
+---
+
+## 10. LOCKED #72 candidate (사용자 결재 별도)
+
+**Proposed LOCKED entry** (사용자 결재 후 CLAUDE.md 등재):
+
+> **LOCKED #72 — ADR-171 Phase 2 closure (Engine absorb SSOT + already-robust finding)**
+>
+> Phase 2 (α + β-1 + β-2 + γ) closure. ADR-169 Phase 1-4 sequence 둘째.
+>
+> **불변 lock-in**:
+> - operations/boundary_input.rs SSOT (BoundaryInput / AbsorbReason /
+>   absorb_boundary_input 4-step pure helper)
+> - boundary_from_point drift absorb (PointNotOnPlane hard-reject →
+>   projection 흡수, 1.5μm~1mm drift gap 해소)
+> - **architectural finding**: 3/4 함수 (split_face_by_line / auto_intersect_
+>   coplanar / split_face_by_chain) 이미 per-function absorb 패턴 내장 —
+>   강제 SSOT 통합 금지 (auto_intersect 의 1.5e-6 strict tolerance =
+>   ADR-101 LOCKED #41 보존)
+> - NURBS kernel carve-out (curves/ + surfaces/ 미접촉, L-171-8)
+> - 메타-원칙 #14 WHAT + #15 split contract + #16 WHEN 보존
+>
+> **회귀 자산**: +19 (β-1 +16 + β-2 +3, axia-geo 1518 → 1537, 절대
+> #[ignore] 금지 19/19).
+
+본 LOCKED entry 는 γ closure PR (본 PR) 의 별도 사용자 결재 후 CLAUDE.md
+등재.
