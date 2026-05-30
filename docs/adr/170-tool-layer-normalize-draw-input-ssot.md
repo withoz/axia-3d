@@ -1,7 +1,7 @@
 # ADR-170 — Phase 1 Tool Layer `normalizeDrawInput` SSOT
 
-**Status**: Proposed (α spec, 2026-05-29)
-**Date**: 2026-05-29
+**Status**: Accepted (γ closure 2026-05-30 — 5-step variant 7번째 reproducibility, β-1/β-2/β-3 closure)
+**Date**: 2026-05-29 (α / β-1 / β-2) ~ 2026-05-30 (β-3 / γ)
 **Author**: WYKO + Claude
 **Trigger**: ADR-169 γ closure (2026-05-29). Phase 1-4 sequence 첫째.
 **Audit precondition**: ADR-169 β-1/β-2/β-3 cross-validation 정합:
@@ -293,29 +293,153 @@ target). 75% cumulative with Phase 2.
 
 ---
 
-## 8. Acceptance Log (예고)
+## 8. Acceptance Log
 
-### 8.1 α (본 PR)
+### 8.1 α (PR #254, merged 2026-05-29)
 - spec only — 5-step routine canonical 명시
-- Q1~Q5 lock-in default 5/5
+- Q1~Q5 lock-in default 5/5 결재
 - L-170-1 ~ L-170-10 Lock-ins
 - 5-step roadmap (α/β-1/β-2/β-3/γ) — 7번째 reproducibility
 
-### 8.2 β-1 (별도 PR)
+### 8.2 β-1 (PR #256, merged 2026-05-29)
 - `normalizeDrawInput` API + 5-step routine 구현
-- 회귀 자산 +20 (5-step × 4 corner case)
+  - Step 1 cardinal force (LOCKED #63/#7)
+  - Step 2 face plane projection (LOCKED #69 ADR-168, PR #248 흡수)
+  - Step 3 vertex_at silent dedup (LOCKED #5)
+  - Step 4 10mm short-circuit (axia-sketch pattern 1)
+  - Step 5 plane lock validation (LOCKED #67 ADR-166)
+- `NormalizedDrawInput` typed envelope + `NormalizeContext` interface
+- `MIN_DRAW_LENGTH_MM = 10.0` + `SAME_PLANE_COS_THRESHOLD = 0.9999`
+- 회귀 자산 **+19** (절대 #[ignore] 금지 19/19)
 
-### 8.3 β-2 (별도 PR)
-- 7 Draw 도구 migrate
-- 회귀 자산 +15 (7 도구 × 정합)
+### 8.3 β-2 (PR #258, merged 2026-05-29)
+- `ITool.ts` ToolContext 에 `normalizeDrawInput?` optional method 추가
+- `ToolManagerRefactored.ts` `ctx.normalizeDrawInput` delegate binding
+- Canonical JSDoc migration recipe (Korean Toast pattern)
+- 9 tools API surface 통합 (7 Draw + SelectTool + BoundaryTool)
+- 회귀 자산 **+5** (절대 #[ignore] 금지 5/5)
+- Scope clarification: β-2 = API exposure / γ = per-tool adoption
 
-### 8.4 β-3 (별도 PR)
-- SelectTool + BoundaryTool migrate + ContextMenu 통합
-- 회귀 자산 +5
+### 8.4 β-3 (PR #259, merged 2026-05-30)
+- BoundaryTool.onMouseDown 가 ctx.normalizeDrawInput? 경유 → 5-step routine
+- skipReason='DegenerateBelowEpsilon' → Toast.warning + skip dispatch
+- Graceful fallback (L-170-6) — 미노출 시 raw point 직접 사용
+- SelectTool scope clarification — picking 위주, 3D point normalize 무관 (defer)
+- 회귀 자산 **+5** (절대 #[ignore] 금지 5/5)
 
-### 8.5 γ (별도 PR)
-- closure docs — Status Accepted + §9 Lessons + LOCKED entry candidate + README
-- Playwright E2E (S1/S2/S4/S7 baseline + S3/S5/S8 gap evidence)
-- 회귀 자산 +5
+### 8.5 γ closure (본 PR, 2026-05-30)
+- Status: Proposed → Accepted
+- §9 Lessons 9개 (canonical for future Phase ADRs)
+- §10 LOCKED #71 candidate (Phase 1 closure anchor)
+- README catalog Status update
 
-**합계 예상**: +50 회귀 (ADR-169 §6 +50 추정 부분 cover, refined β-3 cumulative).
+**실측 합계**: +29 (β-1 +19 + β-2 +5 + β-3 +5 + γ +0 docs).
+
+**γ deferred (deferred to ADR-171+)**:
+- 7 Draw tools per-tool adoption (DrawLineTool / RECT / CIRCLE / Polygon /
+  Bezier / Arc / Freehand) — get3DPoint Layer 6 이미 cardinal force 적용,
+  per-tool migration 은 behavior delta 0 (architectural cleanup only). ADR-171
+  Phase 2 본격 시 normalizeDrawInput call site 통합 자연 진행.
+- Playwright E2E — ADR-171 본격 시 12 시연 게이트와 함께 (Phase 4 ADR-173 scope).
+
+α §6 예상 +50 vs 실측 +29 차이는 γ deferred 항목 (+21) 으로 설명 가능 →
+ADR-171 본격 진입 시 자연 흡수.
+
+---
+
+## 9. Lessons (canonical for future Phase ADRs)
+
+본 ADR 의 5-step variant **7번째 reproducibility** evidence (ADR-152/
+164/166/167/168/169 의 6번째 다음). 5개월 누적 5-step pattern 의 7번째
+적용으로 **canonical reproducibility 정착**.
+
+### L1 — Single chokepoint SSOT 의 architectural value 정량 증명
+
+`ToolManager.normalizeDrawInput` 가 5개 SSOT (LOCKED #5/7/63/67/69) 를
+하나의 진입점으로 통합. β-2 β-3 가 ToolContext 노출 + BoundaryTool 직접
+호출로 검증. *새 SSOT 도입 0* — 기존 자산 architectural reorganization.
+
+### L2 — Backward compat additive (L-170-6) 의 매트릭스 정합
+
+`normalizeDrawInput?` optional + graceful fallback (`?? { point }`) 패턴
+이 7 도구 점진 migration 의 *안전 전제 조건*. β-2 가 노출만, β-3 가
+첫 caller, γ deferred 는 향후 per-tool atomic. *회귀 위험 0* 강제.
+
+### L3 — Scope clarification 의 honest documentation 가치
+
+β-2 PR 본문 명시: "API exposure / per-tool adoption is γ". β-3 PR 본문
+명시: "BoundaryTool only / SelectTool deferred". γ 본 PR 명시: "7 Draw
+tools deferred to ADR-171". **silent scope creep 회피** — 각 sub-step 의
+*honest scope* 명시가 LOCKED #44 Complete Meaning per Merge 의 canonical.
+
+### L4 — 5-step variant 7번째 reproducibility (template 정착 evidence)
+
+ADR-152/164/166/167/168/169/170 = 7 consecutive 5-step variant 적용.
+α (spec) → β-1 (engine API) → β-2 (bridge/context exposure) → β-3
+(integration) → γ (closure docs). 향후 architectural ADR 진입 시
+*template 우선 선정* canonical.
+
+### L5 — sub-step deferral 의 architectural correctness
+
+γ 가 "7 Draw tools per-tool adoption" 을 ADR-171 본격 진입에 deferred
+는 *architectural correctness* — get3DPoint Layer 6 이 이미 cardinal
+force 적용 → per-tool migration 은 behavior delta 0. ADR-171 Phase 2
+Engine `absorb_boundary_input` 본격 시 자연 통합. *낚시성 work 회피*.
+
+### L6 — β-2 ↔ β-3 의 SSOT vs caller 분리
+
+β-2 = SSOT API exposure (ToolContext.normalizeDrawInput?). β-3 = first
+caller (BoundaryTool). 두 step 의 분리가 *interface boundary 명확화* +
+caller 별 graceful adoption 강제. 향후 SSOT ADR 진입 시 답습 권장.
+
+### L7 — Phase 1-4 sequence anchor 의 Phase 1 정착 evidence
+
+ADR-169 LOCKED #70 의 Phase 1 (ADR-170, +50 target) closure 가 실측
++29 — **β/γ scope split 정확화** (β-3 BoundaryTool + γ deferred per-tool
+adoption). Phase 2 ADR-171 (+70 target) 본격 진입 시 deferred 항목 자연
+흡수.
+
+### L8 — 메타-원칙 #14 WHAT + #16 WHEN layer 보존 강제 evidence
+
+본 ADR 은 *routine layer (HOW)* 정착. ADR-139 의 WHEN layer (Boundary
+tool only) + 메타-원칙 #14 의 WHAT layer (결과 invariant) 보존. *결과
+behavior delta = 0* — architectural reorganization only.
+
+### L9 — Tool migration 의 "behavior delta 0" architectural value
+
+BoundaryTool migration (β-3) 의 user-facing behavior 변화 0 (cardinal
+force 는 이미 get3DPoint Layer 6 적용). SSOT routing 추가 자체가
+*architectural value* — 향후 Phase 2 (Engine absorb) + Phase 3 (DCEL
+register) 진입 시 single chokepoint 가 캐스케이드 정합 자연 강제.
+
+---
+
+## 10. LOCKED #71 candidate (사용자 결재 별도)
+
+**Proposed LOCKED entry** (사용자 결재 후 CLAUDE.md 등재):
+
+> **LOCKED #71 — ADR-170 Phase 1 closure (Tool layer normalizeDrawInput SSOT)**
+>
+> ADR-169 Phase 1-4 의 첫째 Phase (Phase 1 Tool layer) closure.
+> ADR-170 5-step closure (α + β-1 + β-2 + β-3 + γ, same-day reproducibility
+> 7번째). Phase 2 (ADR-171 Engine `absorb_boundary_input` SSOT, 2주, +70)
+> 의 sole prerequisite.
+>
+> **불변 lock-in**:
+> - `ToolManager.normalizeDrawInput(rawPoint, context)` SSOT 강제 (L-170-1)
+> - 5-step routine canonical (cardinal / project / dedup / short-circuit / plane lock)
+> - 5 SSOT 통합 consume (LOCKED #5/7/63/67/69) — 새 SSOT 도입 0
+> - 9 tools API surface 통합 (7 Draw + SelectTool + BoundaryTool)
+> - Backward compat additive (`normalizeDrawInput?` optional, graceful fallback)
+> - Engine 변경 0 (Phase 2 ADR-171 별도)
+> - 메타-원칙 #14 WHAT + #16 WHEN layer 보존 강제 — behavior delta 0
+>
+> **회귀 자산**: γ (본 ADR) +0, Phase 1 누적 +29 (β-1 +19 + β-2 +5 +
+> β-3 +5 + γ +0, 절대 #[ignore] 금지 29/29).
+>
+> **Phase 2 자연 흡수**: γ deferred 7 Draw tools per-tool adoption +
+> Playwright E2E 가 ADR-171 본격 진입 시 SSOT chain (Tool layer →
+> Engine layer) 통합으로 자연 진행.
+
+본 LOCKED entry 는 γ closure PR (본 PR) 의 별도 사용자 결재 후 CLAUDE.md
+에 등재. ADR-170 자체는 본 PR 으로 closure.
