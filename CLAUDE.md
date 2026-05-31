@@ -5462,6 +5462,106 @@ input.rs SSOT (L-72-1) 즉시 활용.
 - **Pattern 3** audit-first canonical / **Pattern 7** B hybrid / **Pattern 8**
   read-only vs mutate
 
+### 73. ADR-172 — Phase 3 closure: Edge crossing-split mechanism already exists + demo-verified (2026-05-31) ✅
+
+**Canonical anchor**: LOCKED #70 Phase 1-4 sequence anchor 의 **Phase 3
+closure** — 사용자 비전의 핵심. Pattern 12 finding (mechanism already
+exists) + 실제 브라우저 demo 증명. Phase 4 (ADR-173, 12 시연 게이트)
+entry ready.
+
+**3 PRs sequence (2026-05-30 ~ 2026-05-31)**:
+- PR #267 α spec — register_boundary_element 5-step + Q1~Q5 (Q1 자동 split 결재)
+- PR #268 β-1 — **Pattern 12 finding** (crossing-split 이미 구현) + 1 회귀
+- PR #270 γ closure — demo-verified + 결정적 회귀 + Status Accepted + LOCKED #73
+
+**합계 +2 회귀** (axia-core, 절대 #[ignore] 금지 2/2). estimate +90 vs
+실측 +2 — Pattern 12 (mechanism already exists).
+
+#### 핵심 architectural finding (canonical, Pattern 12 deepest 적용)
+
+> **사용자 비전 "선만 그려, 케이크는 알아서 나뉜다" mechanism 이 이미
+> DrawLine 경로에 완전 구현 + battle-tested.**
+
+| 자산 | 위치 | 기능 |
+|---|---|---|
+| Mesh::find_line_crossings | mesh.rs:1370 | 교차 검출 (coplanar + AABB + interior) |
+| Mesh::find_vertices_on_line | mesh.rs | 기존 vertex on-line |
+| Mesh::find_collinear_endpoint_splits | mesh.rs | 공선 overlap split |
+| Scene::exec_draw_line | scene.rs:3930+ | 전체 파이프라인 (Step 0~4 + mark_edge_hard) |
+
+α spec premise ("add_edge 가 교차 split 안 함") 은 *low-level primitive*
+만 본 것 — *high-level DrawLine 경로* 는 이미 crossing-split + face split.
+
+#### Demo verification (Claude Preview MCP, 2026-05-31, 사용자 결재 A)
+
+실제 브라우저 end-to-end 증명:
+- 2 crossing DrawLine → 5 verts (교차점 자동 생성)
+- 4 DrawLine 닫힌 사각형 → 1 face 자동 합성
+- **사각형 가로지르는 선 1개 → 1 face → 2 faces ("케이크가 나뉘었다")**
+
+#### 불변 lock-in (canonical for Phase 4)
+
+- **L-73-1** Pattern 12 finding 강제 — crossing-split mechanism 이 이미
+  DrawLine 경로에 완전 구현 (find_line_crossings + exec_draw_line +
+  split_edge + mark_edge_hard)
+- **L-73-2** register_boundary_element 신규 SSOT **보류** — mechanism 작동,
+  scene.rs 파이프라인 중복 금지 (battle-tested 회귀 자산 보존)
+- **L-73-3** SSOT consolidation 은 non-DrawLine caller (MCP/import) 의
+  실제 trigger 발생 시 future ADR (현재 DrawLine 만 필요)
+- **L-73-4** Demo-verified 강제 — 2 crossing line → 5 verts / square +
+  cross line → 2 faces (test + 브라우저 demo 양쪽 lock-in)
+- **L-73-5** 결정적 회귀 보존: adr172_beta1_two_crossing_drawlines_auto_split
+  + adr172_gamma_line_across_face_splits_into_two
+- **L-73-6** mark_edge_hard (HARD flag, ADR-101 A9, 메타-원칙 #15) — 기존
+  exec_draw_line 적용 보존
+- **L-73-7** 메타-원칙 #5 (명확한 교차 자동 split) + #14 (면은 닫힌
+  경계로부터) + #16 (face emission gate — ADR-139 정합) 보존 강제
+- **L-73-8** Phase 3 closure → Phase 4 (ADR-173 12 시연 게이트) entry trigger
+
+#### Lessons (canonical for future audit-first phase ADRs, 5개)
+
+ADR-172 §9 Lessons 정합:
+
+- **L1** Mechanism-already-exists finding (Pattern 12 deepest 적용 —
+  ADR-171 β-2 의 *더 강한* 형태, 전체 mechanism 이미 작동. high-level
+  호출 경로 inventory 필수)
+- **L2** Demo verification 의 architectural 가치 (ADR-087 K-ζ canonical —
+  test 만으로는 "사용자가 보는 결과" 미증명)
+- **L3** 신규 SSOT 보류의 architectural correctness (truth over completion —
+  ADR-171 L2 + ADR-125 audit pivot 답습)
+- **L4** estimate +90 vs 실측 +2 (Pattern 12 정량 evidence — premise 무효화
+  시 실측 축소 정상, LOCKED #44)
+- **L5** Phase 4 자연 통합 (12 시연 게이트 overlap)
+
+#### Phase 4 (ADR-173) entry trigger anchor
+
+| Phase | ADR | Title | 회귀 |
+|---|---|---|---|
+| 1 ✅ | ADR-170 | Tool layer normalizeDrawInput SSOT | +29 |
+| 2 ✅ | ADR-171 | Engine absorb_boundary_input SSOT | +19 |
+| **3 ✅** | **ADR-172** | **DCEL Edge Register (mechanism already exists)** | **+2** |
+| 4 | ADR-173 | User vision realization + 12 시연 게이트 PASS | +30 |
+
+Phase 3 demo (2 crossing line / square+cross → 2 faces) 가 Phase 4 와 자연
+overlap — Phase 4 는 본 demo 를 12 scenario full sweep 으로 확장.
+
+#### Cross-link
+
+- **LOCKED #44** Complete Meaning per Merge (estimate +90 vs 실측 +2)
+- **LOCKED #64** ADR-139 Boundary tool only (face emission gate, L-73-7)
+- **LOCKED #70** ADR-169 Phase 1-4 anchor (direct precursor)
+- **LOCKED #71/72** ADR-170/171 Phase 1/2 closure (direct precursors)
+- **ADR-087 K-ζ** 사용자 시연 게이트 canonical (L2)
+- **ADR-101 Amendment 9** HARD flag (mark_edge_hard, L-73-6)
+- **ADR-116/125** audit-first finding 답습 (L1/L3)
+- **ADR-139** Boundary tool only (face emission gate)
+- **ADR-148** boundary_from_point (face emission SSOT — 유지)
+- **ADR-171** Phase 2 (Pattern 12 source)
+- **ADR-173** Phase 4 (별도 ADR + 별도 atomic PR)
+- **메타-원칙 #5/#14/#15/#16** + **Pattern 12** engine already-robust
+  (deepest 적용)
+- **axia-sketch pattern 3/5** (이미 우리 엔진 구현 확인)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
