@@ -1452,6 +1452,132 @@ impl Mesh {
         crossings
     }
 
+    /// ADR-174 β-1 — segment 가 transverse 하게 가로지르는 Circle self-loop
+    /// (Path B closed-curve, ADR-089) face 들을 반환 (read-only).
+    ///
+    /// `exec_draw_line` 의 `find_line_crossings` *직전* pre-pass 가 이 face 들을
+    /// `polygonize_closed_curve_face` 로 변환하면, self-loop edge (두 endpoint 가
+    /// 동일 anchor → `d2 = 0` → `find_line_crossings` 가 "평행" 으로 skip) 가
+    /// N 개 regular polygon edge 로 바뀌어 ADR-172 battle-tested 직선
+    /// crossing-split 파이프라인이 자연 처리한다.
+    ///
+    /// 판정 (Q2=(a) 정밀 line-circle test, ADR-174 L-174-3):
+    /// 1. face 가 1-vert self-loop boundary + `AnalyticCurve::Circle` (Path B disk)
+    /// 2. AABB pre-filter — circle AABB ∩ segment AABB (R8 latency budget)
+    /// 3. coplanarity — segment 양 endpoint 가 disk plane 위 (within coplanar_tol)
+    /// 4. line × circle 가 segment 내부 2 점 교차 (full secant, closed-form
+    ///    quadratic — curves/ 미접촉, L-174-9 NURBS kernel carve-out 정합)
+    ///
+    /// 미포함 (R9 graceful — "분할 안 함" = "secant 아님"): tangent (1 점) /
+    /// disk 밖 (0 점) / endpoint-inside-disk (1 교차). Bezier/BSpline/NURBS
+    /// self-loop 도 미포함 (L-174-4 — `polygonize_closed_curve_face` 가 어차피
+    /// `None`). anchor 가 segment 위에 우연 일치해도 검출은 무관 (R1 — 2 교차를
+    /// 모두 closed-form 으로 계산).
+    pub fn closed_curve_faces_crossed_by_segment(
+        &self,
+        start: DVec3,
+        end: DVec3,
+    ) -> Vec<FaceId> {
+        let dir = end - start;
+        let seg_len = dir.length();
+        if seg_len < 1e-9 {
+            return Vec::new();
+        }
+        let coplanar_tol = (seg_len * 1e-4).max(1e-3);
+
+        // Segment AABB (padded) for the pre-filter.
+        let pad = coplanar_tol.max(SPATIAL_HASH_CELL * 1.5);
+        let smin = start.min(end) - DVec3::splat(pad);
+        let smax = start.max(end) + DVec3::splat(pad);
+
+        let mut out: Vec<FaceId> = Vec::new();
+        for (face_id, face) in self.faces.iter() {
+            if !face.is_active() {
+                continue;
+            }
+            let outer_start = face.outer().start;
+            if outer_start.is_null() {
+                continue;
+            }
+            // 1-vert self-loop boundary? (Path B closed-curve disk)
+            match self.collect_loop_verts(outer_start) {
+                Ok(v) if v.len() == 1 => {}
+                _ => continue,
+            }
+            let edge_id = self.hes[outer_start].edge();
+            let edge = match self.edges.get(edge_id) {
+                Some(e) if e.is_active() && e.is_self_loop() => e,
+                _ => continue,
+            };
+            // Circle-only (L-174-4). Bezier/BSpline/NURBS self-loop → skip.
+            let (center, radius, normal, basis_u) = match edge.curve() {
+                Some(crate::curves::AnalyticCurve::Circle {
+                    center, radius, normal, basis_u,
+                }) => (*center, *radius, *normal, *basis_u),
+                _ => continue,
+            };
+            if !(radius > 0.0) || !center.is_finite() {
+                continue;
+            }
+
+            // 2. AABB pre-filter — circle's axis-aligned bound (center ± radius).
+            let cmin = center - DVec3::splat(radius);
+            let cmax = center + DVec3::splat(radius);
+            if cmax.x < smin.x || cmin.x > smax.x
+                || cmax.y < smin.y || cmin.y > smax.y
+                || cmax.z < smin.z || cmin.z > smax.z
+            {
+                continue;
+            }
+
+            // 3. Coplanarity — both endpoints within tol of the disk plane.
+            let n = normal.normalize_or_zero();
+            if n == DVec3::ZERO {
+                continue;
+            }
+            if (start - center).dot(n).abs() > coplanar_tol
+                || (end - center).dot(n).abs() > coplanar_tol
+            {
+                continue;
+            }
+
+            // 4. line × circle — project onto the disk's (u, v) plane basis and
+            //    solve |L(t)|² = r² (closed-form quadratic, curves/ 미접촉).
+            let u = basis_u.normalize_or_zero();
+            if u == DVec3::ZERO {
+                continue;
+            }
+            let v = n.cross(u);
+            let sx = (start - center).dot(u);
+            let sy = (start - center).dot(v);
+            let ex = (end - center).dot(u);
+            let ey = (end - center).dot(v);
+            let dx = ex - sx;
+            let dy = ey - sy;
+            let a = dx * dx + dy * dy;
+            if a < 1e-18 {
+                continue;
+            }
+            let b = 2.0 * (sx * dx + sy * dy);
+            let c = sx * sx + sy * sy - radius * radius;
+            let disc = b * b - 4.0 * a * c;
+            if disc <= 1e-12 {
+                // Tangent (double root) or no real intersection → not a secant.
+                continue;
+            }
+            let sq = disc.sqrt();
+            let t1 = (-b - sq) / (2.0 * a);
+            let t2 = (-b + sq) / (2.0 * a);
+            // Full secant: both crossings strictly within the segment (0, 1).
+            let eps = 1e-6;
+            let inside = |t: f64| t > eps && t < 1.0 - eps;
+            if inside(t1) && inside(t2) {
+                out.push(face_id);
+            }
+        }
+        out
+    }
+
     /// Phase B (2026-04-24) — collinear (parallel + overlapping) edge detection.
     ///
     /// `find_line_crossings` handles transverse crossings but skips parallel
@@ -7490,6 +7616,92 @@ mod tests {
     // ════════════════════════════════════════════════════════════════════════
 
     use crate::curves::{AnalyticCurve, CurveOps};
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ADR-174 β-1 — closed_curve_faces_crossed_by_segment (secant detection)
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// Path B circle disk (1 anchor at rim + 1 self-loop Circle edge + 1 face).
+    fn adr174_path_b_circle(mesh: &mut Mesh, cx: f64, cy: f64, radius: f64) -> FaceId {
+        let mat = MaterialId::new(0);
+        let center = DVec3::new(cx, cy, 0.0);
+        let basis_u = DVec3::X;
+        // anchor on the rim at angle 0 (center + radius·basis_u), NOT the center.
+        let anchor = mesh.add_vertex(center + basis_u * radius);
+        let circle = AnalyticCurve::Circle { center, radius, normal: DVec3::Z, basis_u };
+        mesh.add_face_closed_curve(anchor, circle, mat).expect("path B circle face")
+    }
+
+    #[test]
+    fn adr174_beta1_secant_detects_circle_face() {
+        // Demo scenario: r=100 @ origin, diameter (-120,0,0)→(120,0,0) crosses
+        // the rim at x=±100. anchor @ (100,0,0) is coincident with the right
+        // crossing (R1) — detection must still find the face.
+        let mut mesh = Mesh::new();
+        let fid = adr174_path_b_circle(&mut mesh, 0.0, 0.0, 100.0);
+        let hit = mesh.closed_curve_faces_crossed_by_segment(
+            DVec3::new(-120.0, 0.0, 0.0), DVec3::new(120.0, 0.0, 0.0));
+        assert_eq!(hit, vec![fid], "diameter secant must detect the circle disk");
+    }
+
+    #[test]
+    fn adr174_beta1_secant_detects_independent_of_anchor() {
+        // R1: anchor @ (100,0,0) is NOT on a vertical secant x=0; detection
+        // must still succeed (crossings computed closed-form, anchor-agnostic).
+        let mut mesh = Mesh::new();
+        let fid = adr174_path_b_circle(&mut mesh, 0.0, 0.0, 100.0);
+        let hit = mesh.closed_curve_faces_crossed_by_segment(
+            DVec3::new(0.0, -120.0, 0.0), DVec3::new(0.0, 120.0, 0.0));
+        assert_eq!(hit, vec![fid]);
+    }
+
+    #[test]
+    fn adr174_beta1_tangent_not_detected() {
+        // R9: line tangent to the rim (y = radius) → double root → not a secant.
+        let mut mesh = Mesh::new();
+        adr174_path_b_circle(&mut mesh, 0.0, 0.0, 100.0);
+        let hit = mesh.closed_curve_faces_crossed_by_segment(
+            DVec3::new(-120.0, 100.0, 0.0), DVec3::new(120.0, 100.0, 0.0));
+        assert!(hit.is_empty(), "tangent line must not be treated as a secant");
+    }
+
+    #[test]
+    fn adr174_beta1_segment_outside_disk_not_detected() {
+        // R9: line entirely outside the disk (y = 500) → no real intersection.
+        let mut mesh = Mesh::new();
+        adr174_path_b_circle(&mut mesh, 0.0, 0.0, 100.0);
+        let hit = mesh.closed_curve_faces_crossed_by_segment(
+            DVec3::new(-120.0, 500.0, 0.0), DVec3::new(120.0, 500.0, 0.0));
+        assert!(hit.is_empty());
+    }
+
+    #[test]
+    fn adr174_beta1_non_coplanar_not_detected() {
+        // Secant geometry in XY but offset off the disk plane (z=50) → the line
+        // does not lie on the disk → excluded (Q2 coplanarity guard).
+        let mut mesh = Mesh::new();
+        adr174_path_b_circle(&mut mesh, 0.0, 0.0, 100.0);
+        let hit = mesh.closed_curve_faces_crossed_by_segment(
+            DVec3::new(-120.0, 0.0, 50.0), DVec3::new(120.0, 0.0, 50.0));
+        assert!(hit.is_empty(), "out-of-plane line must not split the disk");
+    }
+
+    #[test]
+    fn adr174_beta1_polygon_face_not_detected() {
+        // Only Circle self-loop faces qualify; a regular polygon face that a
+        // line crosses is handled by the existing straight pipeline (ADR-172),
+        // not this pre-pass (L-174-4 regression guard).
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let v0 = mesh.add_vertex(DVec3::new(-50.0, -50.0, 0.0));
+        let v1 = mesh.add_vertex(DVec3::new(50.0, -50.0, 0.0));
+        let v2 = mesh.add_vertex(DVec3::new(50.0, 50.0, 0.0));
+        let v3 = mesh.add_vertex(DVec3::new(-50.0, 50.0, 0.0));
+        mesh.add_face(&[v0, v1, v2, v3], mat).expect("rect face");
+        let hit = mesh.closed_curve_faces_crossed_by_segment(
+            DVec3::new(-80.0, 0.0, 0.0), DVec3::new(80.0, 0.0, 0.0));
+        assert!(hit.is_empty(), "polygon faces are not closed-curve self-loop faces");
+    }
 
     #[test]
     fn add_edge_with_curve_creates_new_edge_with_curve() {
