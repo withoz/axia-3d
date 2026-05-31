@@ -9950,6 +9950,71 @@ mod tests {
             "[2 crossing baseline] {} violations", report.violations.len());
     }
 
+    /// ADR-172 β-1 — Architectural finding lock-in: the edge crossing-split
+    /// pipeline ("선만 그려, 케이크는 알아서 나뉜다") ALREADY EXISTS in the
+    /// DrawLine path (exec_draw_line → find_line_crossings + split_edge +
+    /// draw_line + mark_edge_hard).
+    ///
+    /// Phase 3 audit (β-1, Pattern 12 답습) found that the user-vision
+    /// edge-crossing-split mechanism is already implemented and battle-tested
+    /// in scene.rs. `Mesh::find_line_crossings` (mesh.rs:1370) provides
+    /// transverse crossing detection; `exec_draw_line` wires it into the
+    /// full split + register + HARD-flag pipeline.
+    ///
+    /// This regression locks in the mechanism: two crossing DrawLines (a "+"
+    /// shape) auto-split at the crossing point, creating a shared vertex and
+    /// 4 sub-edges. This is the axia-sketch pattern 3+5 equivalent, already
+    /// functional. (메타-원칙 #5 명확한 교차 자동 split — ADR-172 Q1=(a).)
+    #[test]
+    fn adr172_beta1_two_crossing_drawlines_auto_split() {
+        let mut scene = Scene::new();
+
+        // Line 1 — horizontal through origin.
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-10.0, 0.0, 0.0),
+            end: DVec3::new(10.0, 0.0, 0.0),
+            surface_normal: None,
+        });
+        let verts_after_1 = scene.mesh.vert_count();
+        let edges_after_1 = scene.mesh.edge_count();
+        assert_eq!(verts_after_1, 2, "line 1 = 2 endpoints");
+        assert_eq!(edges_after_1, 1, "line 1 = 1 edge");
+
+        // Line 2 — vertical through origin, CROSSES line 1 at (0,0,0).
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(0.0, -10.0, 0.0),
+            end: DVec3::new(0.0, 10.0, 0.0),
+            surface_normal: None,
+        });
+
+        // Crossing auto-split: a shared vertex is created at the crossing
+        // point (origin), and both lines are split into sub-edges.
+        // Expected: 5 verts (4 endpoints + 1 crossing vertex). The crossing
+        // vertex is THE proof the mechanism works ("선이 교차 → 점 생성").
+        assert_eq!(
+            scene.mesh.vert_count(),
+            5,
+            "crossing creates a shared vertex at origin (4 endpoints + 1 crossing)"
+        );
+        // edge_count counts slots incl. inactive (split_edge deactivates the
+        // original, ADR-019 B2). After split: original line1 inactive + 2
+        // line1 halves + 2 line2 halves = 5 slots, ≥4 active sub-edges.
+        assert!(
+            scene.mesh.edge_count() >= 4,
+            "crossing splits both lines into sub-edges (got {} slots)",
+            scene.mesh.edge_count()
+        );
+
+        // Topology is manifold-correct (the crossing vertex connects all
+        // sub-edges) — the mechanism produces valid DCEL topology.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(
+            report.violations.is_empty(),
+            "[crossing drawlines] {} violations",
+            report.violations.len()
+        );
+    }
+
     /// Bisect — 20 small overlapping inners only (no large, no crossing).
     #[test]
     fn test_user_stress_bisect_inners_only() {
