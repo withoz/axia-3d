@@ -1,7 +1,7 @@
 # ADR-172 — Phase 3 DCEL `register_boundary_element` Edge Register Canonical
 
-**Status**: Proposed (α spec, 2026-05-30)
-**Date**: 2026-05-30
+**Status**: Accepted (γ closure 2026-05-31 — Pattern 12 finding "mechanism already exists" + demo-verified, register SSOT deferred)
+**Date**: 2026-05-30 (α) ~ 2026-05-31 (β-1 / γ)
 **Author**: WYKO + Claude
 **Trigger**: ADR-171 γ closure (LOCKED #72) + 사용자 결재 "Phase 3 진입"
 (2026-05-30). Phase 1-4 sequence 셋째 — 사용자 비전의 핵심.
@@ -293,27 +293,112 @@ register_boundary_element 가 face 를 emit?
 
 ---
 
-## 8. Acceptance Log (예고)
+## 8. Acceptance Log
 
-### 8.1 α (본 PR)
-- spec only — register_boundary_element 5-step + Q1~Q5 (특히 Q1 자동 split 결재)
-- L-172-1 ~ L-172-13 Lock-ins
-- 6-step roadmap (α/β-1/β-2/β-3/β-4/γ)
+### 8.1 α (PR #267, merged 2026-05-30)
+- spec only — register_boundary_element 5-step + Q1~Q5 (Q1 자동 split 결재)
+- L-172-1 ~ L-172-13 Lock-ins + 6-step roadmap
 
-### 8.2 β-1 (별도 PR)
-- detect_edge_crossings read-only helper + 회귀 +15
+### 8.2 β-1 (PR #268, merged 2026-05-31)
+- **Pattern 12 finding (decisive)**: 사용자 비전 mechanism (edge crossing-
+  split) 이 *이미* DrawLine 경로에 완전 구현 + battle-tested
+  (`find_line_crossings` + `exec_draw_line` 파이프라인).
+- α premise ("add_edge 가 교차 split 안 함") 은 *low-level primitive* 만
+  본 것 — *high-level DrawLine 경로* 는 이미 crossing-split.
+- 회귀 자산 **+1** (adr172_beta1_two_crossing_drawlines_auto_split —
+  2 crossing DrawLine → 5 verts + manifold)
 
-### 8.3 β-2 (별도 PR)
-- register_boundary_element mutate API (5-step, Line/Polyline) + 회귀 +20
+### 8.3 β-2 / β-3 / β-4 (DEFERRED — Pattern 12 finding 정합)
+- **register_boundary_element 신규 SSOT 보류** — β-1 finding + γ demo 로
+  mechanism 이 *이미 완전 작동* 확인. 신규 SSOT 는 scene.rs 파이프라인
+  *중복* 위험 (battle-tested 회귀 자산 위협). genuine value 부재.
+- SSOT consolidation (scene.rs → axia-geo 재사용 API) 은 *non-DrawLine
+  caller (MCP/import) 의 실제 trigger* 발생 시 future ADR (현재 DrawLine
+  만 필요).
 
-### 8.4 β-3 (별도 PR)
-- apply_crossing_splits 본체 (HARD flag) + 회귀 +25
+### 8.4 γ (본 PR)
+- **Demo verification (Claude Preview MCP, 2026-05-31, 사용자 결재 A)**:
+  실제 브라우저에서 사용자 비전 end-to-end 증명:
+  * 2 crossing DrawLine → 5 verts (교차점 자동 생성) ✅
+  * 4 DrawLine 닫힌 사각형 → 1 face 자동 합성 ✅
+  * **사각형 가로지르는 선 1개 → 1 face → 2 faces ("케이크가 나뉘었다")** ✅
+- 결정적 회귀 자산 **+1** (adr172_gamma_line_across_face_splits_into_two —
+  사각형 + 가로선 → 2 faces, demo-verified lock-in)
+- Status Accepted + §9 Lessons + LOCKED #73 candidate + README
 
-### 8.5 β-4 (별도 PR)
-- WASM bridge + TS wrapper + 회귀 +15
+**회귀 누적 (Phase 3 실측)**: β-1 +1 + γ +1 = **+2** (axia-core).
+estimate +90 vs 실측 +2 — **Pattern 12 (mechanism already exists)** 로
+genuine 구현 work 부재. Phase 3 의 architectural value 는 "사용자 비전이
+이미 완전 작동 + demo 증명 + 회귀 lock-in" 으로 달성.
 
-### 8.6 γ (별도 PR)
-- closure docs + Playwright E2E (선 교차 → split → Boundary → 면) + 회귀 +15
+---
 
-**합계 예상**: +90 회귀 (ADR-169 §6 Phase 3 정합). estimate — ADR-171
-Pattern 12 (audit finding) 처럼 실측은 audit 후 조정 가능.
+## 9. Lessons (canonical for future audit-first phase ADRs)
+
+### L1 — Mechanism-already-exists finding (Pattern 12 deepest 적용)
+
+β-1 진입 audit 가 사용자 비전 mechanism (edge crossing-split) 이 *이미
+완전 구현 + battle-tested* 발견. ADR-171 β-2 (3/4 already-robust) 의
+*더 강한* 형태 — 여기선 *전체 mechanism* 이 이미 작동. spec premise 가
+low-level primitive (add_edge) 만 보고 high-level 경로 (exec_draw_line)
+의 기존 capability 를 놓침. **향후 SSOT/feature ADR 진입 시 high-level
+호출 경로의 기존 동작 inventory 필수**.
+
+### L2 — Demo verification 의 architectural 가치 (ADR-087 K-ζ canonical)
+
+회귀 test (β-1) 는 mechanism 작동을 증명하지만, **실제 브라우저 demo**
+(Claude Preview MCP) 가 사용자 비전 end-to-end 를 결정적으로 증명. "사각형
+가로선 → 2 faces" 는 test + demo 양쪽으로 lock-in. ADR-087 K-ζ (사용자 시연
+게이트) 의 가치 재확인 — test 만으로는 "사용자가 보는 결과" 미증명.
+
+### L3 — 신규 SSOT 보류의 architectural correctness (truth over completion)
+
+α spec 이 register_boundary_element 신규 SSOT 제안했으나 finding 후 보류.
+*억지 구현* 은 battle-tested scene.rs 파이프라인 중복 → 회귀 위협 + value
+부재. ADR-171 L2 (truth over estimate) + ADR-125 (audit pivot, 부정 결정
+명시) 답습. **mechanism 이 작동하면 SSOT 강제 통합 금지** — non-caller
+trigger 발생 시 future.
+
+### L4 — estimate +90 vs 실측 +2 (Pattern 12 정량 evidence)
+
+Phase 3 estimate +90 (가장 큰 phase) vs 실측 +2. mechanism 이 이미 작동
+하므로 genuine work 부재. **estimate 는 spec premise 기반 — audit finding
+이 premise 를 무효화하면 실측 대폭 축소 정상** (LOCKED #44 Complete Meaning
+— 의미 단위가 회귀 count 보다 우선).
+
+### L5 — Phase 4 자연 통합 (12 시연 게이트)
+
+Phase 3 demo (2 crossing line / square+cross → 2 faces) 가 Phase 4 (ADR-173,
+12 시연 게이트) 와 자연 overlap. Phase 4 는 본 demo 를 확장 (12 scenario
+full sweep). Phase 3 closure → Phase 4 entry 자연 transition.
+
+---
+
+## 10. LOCKED #73 candidate (사용자 결재 별도)
+
+**Proposed LOCKED entry** (사용자 결재 후 CLAUDE.md 등재):
+
+> **LOCKED #73 — ADR-172 Phase 3 closure (Edge crossing-split mechanism
+> already exists + demo-verified)**
+>
+> Phase 3 (α + β-1 + γ) closure. ADR-169 Phase 1-4 sequence 셋째.
+>
+> **불변 lock-in**:
+> - **Pattern 12 finding**: 사용자 비전 mechanism ("선만 그려, 케이크는
+>   알아서 나뉜다") 이 *이미* DrawLine 경로 (exec_draw_line + find_line_
+>   crossings + split_edge + mark_edge_hard) 에 완전 구현 + battle-tested
+> - register_boundary_element 신규 SSOT **보류** (mechanism 작동 — scene.rs
+>   파이프라인 중복 금지). SSOT consolidation 은 non-DrawLine caller
+>   (MCP/import) trigger 시 future ADR
+> - Demo-verified (Claude Preview MCP): 2 crossing line → 5 verts /
+>   square + cross line → 2 faces
+> - 결정적 회귀: adr172_beta1_two_crossing_drawlines_auto_split +
+>   adr172_gamma_line_across_face_splits_into_two
+> - 메타-원칙 #5 (명확한 교차 자동 split) + #14 (면은 닫힌 경계로부터) +
+>   #16 (face emission gate — ADR-139 정합)
+>
+> **회귀 자산**: +2 (axia-core, 절대 #[ignore] 금지 2/2). estimate +90 vs
+> 실측 +2 (Pattern 12 — mechanism already exists).
+
+본 LOCKED entry 는 γ closure PR (본 PR) 의 별도 사용자 결재 후 CLAUDE.md
+등재.

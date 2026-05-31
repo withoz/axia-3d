@@ -10015,6 +10015,77 @@ mod tests {
         );
     }
 
+    /// ADR-172 γ — DEFINITIVE user-vision lock-in: "선만 그려, 케이크는
+    /// 알아서 나뉜다" — drawing a line ACROSS an existing face splits it
+    /// into two faces, fully via the DrawLine path (no separate Boundary
+    /// click needed for the in-face split).
+    ///
+    /// Demo-verified in the live browser (Claude Preview MCP, 2026-05-31):
+    ///   - 4 DrawLines forming a closed square → 1 face auto-synthesized
+    ///   - 1 DrawLine across the interior (endpoints on left+right edges)
+    ///     → crossing-split the 2 edges + split_face_by_line → 2 faces
+    ///
+    /// This is the strongest proof that Phase 3's user-vision mechanism is
+    /// already fully functional (Pattern 12 finding — no register_boundary_
+    /// element SSOT needed). 메타-원칙 #5 (명확한 교차 자동 split) +
+    /// 메타-원칙 #14 (면은 닫힌 경계로부터 유도된다).
+    #[test]
+    fn adr172_gamma_line_across_face_splits_into_two() {
+        let mut scene = Scene::new();
+        let n = DVec3::Z; // z=0 ground plane, normal +Z
+
+        // ═══ "선만 그려" — 4 lines forming a closed square (200×200) ═══
+        // Corners: A(-100,-100) B(100,-100) C(100,100) D(-100,100).
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-100.0, -100.0, 0.0),
+            end: DVec3::new(100.0, -100.0, 0.0),
+            surface_normal: Some(n),
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(100.0, -100.0, 0.0),
+            end: DVec3::new(100.0, 100.0, 0.0),
+            surface_normal: Some(n),
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(100.0, 100.0, 0.0),
+            end: DVec3::new(-100.0, 100.0, 0.0),
+            surface_normal: Some(n),
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-100.0, 100.0, 0.0),
+            end: DVec3::new(-100.0, -100.0, 0.0),
+            surface_normal: Some(n),
+        });
+        let faces_after_square = scene.mesh.face_count();
+        assert_eq!(
+            faces_after_square, 1,
+            "closed square (4 lines) auto-synthesizes 1 face"
+        );
+
+        // ═══ "케이크는 알아서 나뉜다" — line ACROSS the square interior ═══
+        // Endpoints land on the left edge (-100,0) and right edge (100,0).
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-100.0, 0.0, 0.0),
+            end: DVec3::new(100.0, 0.0, 0.0),
+            surface_normal: Some(n),
+        });
+
+        // The crossing line splits the square into 2 faces (top + bottom).
+        assert_eq!(
+            scene.mesh.face_count(),
+            2,
+            "line across the square splits 1 face into 2 (케이크가 나뉘었다)"
+        );
+
+        // Topology remains manifold-correct.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(
+            report.violations.is_empty(),
+            "[line-across-face split] {} violations",
+            report.violations.len()
+        );
+    }
+
     /// Bisect — 20 small overlapping inners only (no large, no crossing).
     #[test]
     fn test_user_stress_bisect_inners_only() {
