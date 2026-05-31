@@ -5562,6 +5562,84 @@ overlap — Phase 4 는 본 demo 를 12 scenario full sweep 으로 확장.
   (deepest 적용)
 - **axia-sketch pattern 3/5** (이미 우리 엔진 구현 확인)
 
+### 74. ADR-173 — Phase 4 closure + 🎉 Phase 1-4 sequence COMPLETE (12 시연 게이트 demo-verified, 2026-05-31) ✅
+
+**Canonical anchor**: LOCKED #70 Phase 1-4 sequence anchor 의 **Phase 4
+closure** = **ADR-169 D-Then-C sequence 완결**. 사용자 비전 "선만 그려,
+케이크는 알아서 나뉜다" 의 12 시연 게이트 demo-verified.
+
+**3 PRs sequence (2026-05-31, same-day)**:
+- PR #273 α spec — 12 게이트 정의 + Q1~Q5
+- PR #274 β — 12 scenario full demo + 매트릭스 확정 + S2 입체면 회귀 +1
+- PR #275 γ closure — Status Accepted + §9 Lessons + LOCKED #74 + COMPLETE
+
+**합계 +1 회귀** (axia-geo 1537→1538). estimate +10 vs 실측 +1 — Pattern 12
+(verification 중심 + 기존 회귀 자산 재활용).
+
+#### 12 시연 게이트 매트릭스 (canonical, demo-verified)
+
+| | 평면 | 입체면 | 곡면 |
+|---|---|---|---|
+| DrawLine | S1 ✅ | S2 ✅ | S3 ⚠ |
+| RECT | S4 ✅ | S5 ✅ | S6 ⚠* |
+| CIRCLE | S7 ✅ | S8 ✅ | S9 ⚠* |
+| Bezier | S10 ✅ | S11 ✅ | S12 ⚠* |
+
+**8/12 full PASS** (평면 4/4 + 입체면 4/4) / **4/12 Documented-Limitation**
+(곡면) / **미예측 FAIL 0**.
+
+#### 불변 lock-in
+
+- **L-74-1** 12 시연 게이트 demo-verified (Claude Preview MCP, eval
+  authoritative) — 8/12 PASS / 4/12 곡면 Limitation / 미예측 FAIL 0 강제
+- **L-74-2** 사용자 비전 핵심 (평면 + 입체면) demo-verified + 회귀 lock-in
+- **L-74-3** S2 입체면 회귀 보존 (adr173_gate_s2_drawline_on_solid_box_face_
+  splits — 사용자 원래 pain point PR #247/248 해소)
+- **L-74-4** 곡면 한계 (S3/S6/S9/S12) future ADR 분리 보존 (curve-edge
+  crossing-split, 2026-05-31 spawned)
+- **L-74-5** Demo-driven gate canonical (ADR-087 K-ζ deepest 적용)
+- **L-74-6** **Phase 1-4 sequence COMPLETE** — ADR-169(#70)→170(#71)→
+  171(#72)→172(#73)→173(#74), 절대 회귀 보존
+- **L-74-7** 메타-원칙 #5/#14/#16 보존 강제
+
+#### 🎉 Phase 1-4 sequence COMPLETE (ADR-169 D-Then-C 완결)
+
+| Phase | ADR | Title | LOCKED | 회귀 |
+|---|---|---|---|---|
+| 0 | ADR-169 | Boundary-Routine Audit (D-Then-C anchor) | #70 | +0 |
+| 1 | ADR-170 | Tool layer normalizeDrawInput SSOT | #71 | +29 |
+| 2 | ADR-171 | Engine absorb_boundary_input SSOT (3/4 already-robust) | #72 | +19 |
+| 3 | ADR-172 | DCEL Edge Register (mechanism already exists, demo-verified) | #73 | +2 |
+| 4 | ADR-173 | 12 시연 게이트 + COMPLETE | #74 | +1 |
+| **합계** | **5 ADR** | | **#70~74** | **+51** |
+
+사용자 비전 "선만 그려, 케이크는 알아서 나뉜다" D-Then-C (audit →
+implementation) 완결. estimate 6-8주 / +200~300 회귀 vs **실측 same-week
+period / +51 회귀** — Pattern 12 (engine already-robust, mechanism already
+exists) 가 genuine work 대폭 축소.
+
+#### Lessons (canonical, 5개)
+
+ADR-173 §9 정합:
+- **L1** Full matrix demo 의 honest 분류 (PASS / Documented-Limitation,
+  truth over "전부 작동")
+- **L2** Verification phase 회귀 재활용 (estimate +10 vs 실측 +1)
+- **L3** 곡면 한계 architectural 명료성 (future ADR 분리)
+- **L4** Phase 1-4 sequence 완결의 architectural 가치
+- **L5** Demo-driven gate (ADR-087 K-ζ deepest 적용)
+
+#### Cross-link
+
+- **LOCKED #44** Complete Meaning per Merge (estimate vs 실측 정합)
+- **LOCKED #64** ADR-139 Boundary tool only (face emission gate)
+- **LOCKED #70** ADR-169 Phase 1-4 anchor (D-Then-C C 완결)
+- **LOCKED #71/72/73** ADR-170/171/172 Phase 1/2/3 (sequence precursors)
+- **ADR-087 K-ζ** 사용자 시연 게이트 canonical (L5)
+- **ADR-169 β-3** user demo evidence matrix (12 scenario source)
+- **곡선 면 분할 future ADR** (curve-edge crossing-split, spawned task)
+- **메타-원칙 #5/#14/#16** + **Pattern 12** engine already-robust (deepest)
+- **axia-sketch pattern 3/5** (이미 우리 엔진 구현, demo-verified)
+
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
 1. 사용자에게 **명시적 확인** 요청 ("이 불변 정책을 변경하시겠습니까?")
