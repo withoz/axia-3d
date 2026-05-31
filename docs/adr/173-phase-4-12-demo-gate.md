@@ -1,6 +1,6 @@
 # ADR-173 — Phase 4 User Vision Realization + 12 시연 게이트
 
-**Status**: Proposed (α spec, 2026-05-31)
+**Status**: Accepted (γ closure 2026-05-31 — 12 게이트 8/12 PASS demo-verified, Phase 1-4 sequence COMPLETE)
 **Date**: 2026-05-31
 **Author**: WYKO + Claude
 **Trigger**: ADR-172 γ closure (LOCKED #73) + 사용자 결재 "ADR-173 12 시연
@@ -195,17 +195,93 @@ implementation) 완결.
 
 ---
 
-## 8. Acceptance Log (예고)
+## 8. Acceptance Log
 
-### 8.1 α (본 PR)
+### 8.1 α (PR #273, merged 2026-05-31)
 - spec only — 12 게이트 정의 + Q1~Q5 + 3-step roadmap
 
-### 8.2 β (별도 PR)
-- 12 scenario full demo (Claude Preview MCP) + 게이트 매트릭스 확정
-- PASS scenario 회귀 lock-in + demo evidence doc
+### 8.2 β (PR #274, merged 2026-05-31)
+- 12 scenario full demo (Claude Preview MCP) — 게이트 매트릭스 확정:
+  **8/12 full PASS** (평면 4/4 + 입체면 4/4) / **4/12 Documented-Limitation**
+  (곡면 4/4) / **미예측 FAIL 0**
+- S2 입체면 회귀 자산 **+1** (adr173_gate_s2_drawline_on_solid_box_face_
+  splits — box top face split 6→7, axia-geo 1537 → 1538)
+- demo evidence doc (`docs/audits/2026-05-31-adr-173-12-gate-matrix.md`)
 
-### 8.3 γ (별도 PR)
-- closure — Status Accepted + §9 Lessons + LOCKED #74 + README +
-  **Phase 1-4 sequence COMPLETE 선언**
+### 8.3 γ (본 PR)
+- Status Accepted + §9 Lessons + LOCKED #74 + README
+- **Phase 1-4 sequence COMPLETE 선언**
 
-**합계 예상**: +10 회귀 (verification 중심, Pattern 12 — mechanism 작동).
+**회귀 누적 (Phase 4)**: β +1 (axia-geo 1537 → 1538). estimate +10 vs
+실측 +1 — Pattern 12 (mechanism 작동, verification 중심 + 기존 회귀 자산
+재활용).
+
+---
+
+## 9. Lessons (canonical for verification-phase ADRs)
+
+### L1 — Full matrix demo 의 honest 분류 (PASS / Documented-Limitation)
+
+12 게이트 full sweep 가 8/12 PASS + 4/12 곡면 Documented-Limitation 으로
+*투명하게* 분류. 미예측 FAIL 0 (모든 한계 audit 예측). **게이트 = "전부
+작동" 강요가 아닌 "작동 + 예측된 한계 명시"** — ADR-171 truth over
+estimate 답습.
+
+### L2 — Verification phase 의 회귀 재활용 (estimate +10 vs 실측 +1)
+
+Phase 4 estimate +10 vs 실측 +1. 대부분 scenario 가 *기존 회귀 자산*
+(ADR-172 adr172_*, DrawRect/Circle/Bezier 다수) 로 이미 cover. 신규 lock-in
+은 S2 입체면 1개만 genuine new. **verification phase 는 기존 자산 inventory
+우선** (Pattern 12 정합).
+
+### L3 — 곡면 한계의 architectural 명료성
+
+곡면 (cylinder side) split 미지원 이 4 scenario 일관 (S3/S6/S9/S12). 닫힌
+도형은 *자체 평면 면* 생성하나 곡면 host 와 무관 (floating planar). Root
+cause 명확 (find_line_crossings 직선 전용 + curve-surface conforming 미구현).
+Future ADR (curve-edge crossing-split) 로 깔끔히 분리.
+
+### L4 — Phase 1-4 sequence 완결의 architectural 가치
+
+D-Then-C (ADR-169 audit → ADR-170~173 implementation) 의 완결. 사용자 비전
+("선만 그려, 케이크는 알아서 나뉜다") 가 평면 + 입체면 8/8 PASS 로 demo
+증명 + 회귀 lock-in. 5 ADR (169~173) / 5 LOCKED (#70~74) / 6-8주 estimate
+→ 실측 same-week (Pattern 12 mechanism already exists 가 genuine work 축소).
+
+### L5 — Demo-driven gate 의 ADR-087 K-ζ canonical 정합
+
+12 게이트가 test 가 아닌 *실제 브라우저 demo* 로 봉인. ADR-087 K-ζ (사용자
+시연 게이트) 의 deepest 적용 — "사용자가 보는 결과" 를 직접 증명. 향후
+user-vision realization ADR 는 demo-driven gate 답습 권장.
+
+---
+
+## 10. LOCKED #74 candidate (사용자 결재 별도)
+
+**Proposed LOCKED entry** (사용자 결재 후 CLAUDE.md 등재):
+
+> **LOCKED #74 — ADR-173 Phase 4 closure + Phase 1-4 sequence COMPLETE
+> (12 시연 게이트 demo-verified)**
+>
+> Phase 4 (α + β + γ) closure → **ADR-169 D-Then-C sequence 완결**.
+>
+> **불변 lock-in**:
+> - 12 시연 게이트 (4 도구 × 3 surface) — 8/12 full PASS (평면 4/4 +
+>   입체면 4/4) / 4/12 Documented-Limitation (곡면 4/4) / 미예측 FAIL 0
+> - 사용자 비전 "선만 그려, 케이크는 알아서 나뉜다" 핵심 (평면 + 입체면)
+>   demo-verified + 회귀 lock-in
+> - S2 입체면 회귀: adr173_gate_s2_drawline_on_solid_box_face_splits (사용자
+>   원래 pain point PR #247/248 해소)
+> - 곡면 한계 (S3/S6/S9/S12) = future ADR (curve-edge crossing-split,
+>   2026-05-31 spawned)
+> - **Phase 1-4 sequence COMPLETE**: ADR-169(#70) audit → ADR-170(#71)
+>   Tool SSOT → ADR-171(#72) Engine absorb → ADR-172(#73) Edge Register →
+>   ADR-173(#74) 12 게이트
+> - 메타-원칙 #5/#14/#16 + ADR-087 K-ζ demo gate canonical
+>
+> **회귀 누적 (Phase 1-4)**: +29 (P1) + 19 (P2) + 2 (P3) + 1 (P4) =
+> **+51** (절대 #[ignore] 금지). estimate 6-8주/+200~300 vs 실측 same-week
+> /+51 (Pattern 12 — mechanism already exists).
+
+본 LOCKED entry 는 γ closure PR (본 PR) 의 별도 사용자 결재 후 CLAUDE.md
+등재.
