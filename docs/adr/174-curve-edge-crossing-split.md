@@ -1,8 +1,9 @@
 # ADR-174 — Curve-Edge Crossing-Split (직선 × self-loop Circle 경계)
 
-**Status**: Proposed (α spec — 결재 confirmed: Q1=A / Q3=Circle self-loop /
-Q7=ADR-174 신규. 사용자 "추천 진행 + 추후 문제점 사전 검토" → §2.4 추가.)
-**Date**: 2026-05-31 (α)
+**Status**: Accepted (γ closure 2026-06-01 — Approach A demo-verified
+(real browser faces 1→2 via drawCircleAsCurve + drawLineAsShape) + β-1~β-3
++14 회귀 + polygonize root-cause fix. LOCKED #75.)
+**Date**: 2026-05-31 (α) ~ 2026-06-01 (γ)
 **Author**: WYKO + Claude
 **Trigger**: ADR-173 γ closure (LOCKED #74) §10 — "곡면 한계 (S3/S6/S9/S12) =
 future ADR (curve-edge crossing-split, 2026-05-31 spawned)". ADR-172 Phase 3

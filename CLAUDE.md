@@ -6710,6 +6710,44 @@ missing face, shadow rendering, stacked-inner) 를 ADR-015 신설 + 코드
 - 바닥면 RECT 가 정확히 z=0 에 위치 — 후속 z-search/sort 안정.
 - Trade-off: outer 의 hole 영역 자동 인식 안 됨 (push/pull 시 명시 처리).
 
+### 75. ADR-174 — Curve-Edge Crossing-Split (직선 × Circle 면, demo-verified, 2026-06-01) ✅
+
+**Canonical anchor**: ADR-173 §10 (L-74-4) 가 spawn 한 곡면 한계 후속 —
+직선이 Path B kernel-native Circle (ADR-089) 면을 가로지르면 **2조각 분할**.
+ADR-172 직선 crossing-split 의 곡선 *경계* 확장.
+
+**문제**: `find_line_crossings` 가 self-loop 곡선 edge (양 endpoint 동일
+anchor → d2=0) 를 "평행" 으로 skip → secant crossing 미검출 → 면 1→1.
+
+**3 PR sequence (2026-05-31 ~ 06-01)**:
+- PR #277 α + β-1 + β-2 — spec + 검출 helper + pre-pass wiring + polygonize fix
+- (본 PR) β-3 + γ — secant robustness 회귀 + closure + demo
+
+**불변 lock-in**:
+- **L-75-1** Approach A (polygonize dispatch) — `find_line_crossings` 직전
+  pre-pass 가 secant 가 가로지르는 Circle self-loop face 를 선제
+  `polygonize_closed_curve_face` (ADR-105 helper) → ADR-172 battle-tested
+  직선 파이프라인 자연 처리 → 2 half-disk face. Pattern 12.
+- **L-75-2** 정밀 line-circle 2-교차 closed-form (AABB pre-filter, curves/
+  미접촉 — NURBS kernel carve-out 정합)
+- **L-75-3** polygonize **reused-anchor root-cause fix** — anchor 가 첫
+  tessellation point 로 재사용된 뒤 deactivate 되어 active face loop 에
+  inactive vertex 가 박히던 잠복 버그 해소 (메타-원칙 #6). ADR-105 도 견고.
+- **L-75-4** edge 자동 split (위상 correctness, #5/#16) + face emission gate
+  보존 (ADR-139) + HARD flag (ADR-101 A9, 직선 chord)
+- **L-75-5** Circle self-loop 한정. Arc-edge 정확도 / Bezier·BSpline·NURBS /
+  곡면 surface drawing (S3/S6/S9) = 별도 트랙. Approach B (true 2-arc) =
+  future ADR (L-174-12)
+- **L-75-6** Demo-verified (Claude Preview, real browser): drawCircleAsCurve
+  + drawLineAsShape → faces 1→2 (ADR-087 K-ζ)
+
+**회귀 누적**: axia-geo +7 (1545) / axia-core +7 (323), 합계 **+14**, 절대
+#[ignore] 금지 14/14. 상세 `docs/adr/174-curve-edge-crossing-split.md`.
+
+**Cross-link**: ADR-089 (Path B Circle) / ADR-105 (polygonize dispatch
+mirror) / ADR-172 (직선 pipeline, Pattern 12) / ADR-173 §10 (spawn anchor) /
+ADR-101 A9 / 메타-원칙 #5/#6/#14/#15/#16. LOCKED #43/#64/#70~74.
+
 ## 향후 과제
 
 ### Major Initiative: 자체 NURBS Kernel (Phases A~E 완료, F 완료, G 진행 중)
