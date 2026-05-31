@@ -3986,6 +3986,26 @@ impl Scene {
             self.transactions.set_before_snapshot(self.scene_snapshot());
         }
 
+        // ── Step 0 (pre): ADR-174 β-2 — curve-edge crossing-split pre-pass ──
+        //   직선이 Circle self-loop (Path B closed-curve, ADR-089) face 를
+        //   transverse 하게 가로지르면, find_line_crossings 가 self-loop edge
+        //   (양 endpoint 동일 anchor → d2=0 → "평행") 를 skip 해서 crossing 을
+        //   놓친다 (faces 1→1). 그런 face 를 *선제* polygonize → self-loop 가 N
+        //   regular edge 로 바뀌어 아래 직선 crossing-split 파이프라인 (ADR-172)
+        //   이 자연 처리 → faces 1→2 ("곡선 면도 선 그으면 나뉜다").
+        //   Approach A (polygonize dispatch). 검출은 read-only
+        //   `closed_curve_faces_crossed_by_segment` (β-1). 미교차/비-Circle 시
+        //   호출 0건 → 기존 동작 0 변화 (L-174-8 additive).
+        for face_id in self.mesh.closed_curve_faces_crossed_by_segment(start, end) {
+            let mat = match self.mesh.faces.get(face_id) {
+                Some(f) => f.material(),
+                None => continue,
+            };
+            // polygonize 실패(비-Circle / degenerate tessellation)는 무시 —
+            // 기존 동작 보존 (graceful).
+            let _ = self.mesh.polygonize_closed_curve_face(face_id, mat);
+        }
+
         // ── Step 0: Phase B — Collinear endpoint split ──
         //   If the new line's START or END point lies inside the interior of
         //   an existing COLLINEAR edge (same direction, overlapping
@@ -10083,6 +10103,73 @@ mod tests {
             report.violations.is_empty(),
             "[line-across-face split] {} violations",
             report.violations.len()
+        );
+    }
+
+    /// ADR-174 β-2 — 직선이 Path B Circle disk 를 가로지르면 2 face 로 분할
+    /// (ADR-172 γ 의 곡선 경계 mirror). demo evidence (2026-05-31):
+    /// drawCircleAsCurve(r=100) + drawLineAsShape(-120..120) → 이전 faces 1→1
+    /// (self-loop edge skip). β-2 pre-pass polygonize 후 → faces 1→2.
+    #[test]
+    fn adr174_beta2_line_across_circle_disk_splits_into_two() {
+        let mut scene = Scene::new();
+
+        // ═══ Path B Circle disk (1 anchor + 1 self-loop Circle edge + 1 face) ═══
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 100.0,
+        });
+        assert_eq!(
+            scene.mesh.face_count(), 1,
+            "DrawCircleAsCurve → 1 closed-curve disk face (Path B)"
+        );
+
+        // ═══ "곡선 면도 선 그으면 나뉜다" — diameter secant crossing rim at x=±100 ═══
+        // 양 endpoint (±120) 은 disk 밖 — self-loop edge 라 find_line_crossings 가
+        // 옛날엔 crossing 을 놓쳤음. β-2 pre-pass 가 disk 를 polygonize → 분할.
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-120.0, 0.0, 0.0),
+            end: DVec3::new(120.0, 0.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+
+        assert_eq!(
+            scene.mesh.face_count(), 2,
+            "diameter line across the Circle disk splits 1 face into 2 \
+             (곡선 경계 crossing-split — ADR-174 Approach A)"
+        );
+
+        // Topology remains manifold-correct.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(
+            report.violations.is_empty(),
+            "[circle-disk split] {} violations",
+            report.violations.len()
+        );
+    }
+
+    /// ADR-174 β-2 regression guard — 직선이 Circle disk 를 *가로지르지 않으면*
+    /// (disk 밖 통과) 분할 0, kernel-native self-loop 표현 보존 (L-174-8 additive).
+    #[test]
+    fn adr174_beta2_line_outside_circle_disk_no_split() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 100.0,
+        });
+        assert_eq!(scene.mesh.face_count(), 1);
+
+        // Line entirely outside the disk (y = 500) — must NOT polygonize/split.
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-120.0, 500.0, 0.0),
+            end: DVec3::new(120.0, 500.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        assert_eq!(
+            scene.mesh.face_count(), 1,
+            "non-crossing line leaves the Circle disk intact (no pre-pass polygonize)"
         );
     }
 
