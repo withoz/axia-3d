@@ -255,6 +255,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [170](./170-tool-layer-normalize-draw-input-ssot.md) | Tool Layer normalizeDrawInput SSOT (Phase 1, ADR-169 후속) | Accepted | Track 6 |
 | [171](./171-engine-absorb-boundary-input-ssot.md) | Engine absorb_boundary_input SSOT (Phase 2, ADR-170 후속) | Accepted | Track 6 |
 | [172](./172-dcel-register-boundary-element.md) | DCEL Edge Register (Phase 3) — crossing-split already exists, demo-verified | Accepted | Track 6 |
+| [173](./173-phase-4-12-demo-gate.md) | Phase 4 — 12 시연 게이트 + Phase 1-4 sequence COMPLETE | Proposed | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
