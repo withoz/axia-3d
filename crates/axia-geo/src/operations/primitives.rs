@@ -683,6 +683,68 @@ mod tests {
         assert!(report.is_valid(), "cylinder: {}", report.summary());
     }
 
+    /// ADR-173 β — Phase 4 12 시연 게이트 lock-in: DrawLine × 입체면 (S2).
+    ///
+    /// Demo-verified (Claude Preview MCP, 2026-05-31): a line drawn ACROSS
+    /// a solid box's top face splits it into 2 sub-faces (faces 6 → 7).
+    /// This is the user's original pain point (PR #247/248 "입체면에 라인을
+    /// 생성할 수 없습니다") fully resolved.
+    ///
+    /// 12-gate matrix: 평면 4/4 ✅ + 입체면 4/4 ✅ = 8/8 core PASS.
+    /// 곡면 (S3/S6/S9/S12) = Documented-Limitation (curve-surface split,
+    /// future ADR — curve-edge crossing-split spawned 2026-05-31).
+    /// 메타-원칙 #14 (면은 닫힌 경계로부터) + ADR-170/171 absorb (face plane).
+    #[test]
+    fn adr173_gate_s2_drawline_on_solid_box_face_splits() {
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+
+        // 입체 박스 (200³, center origin → top face at z=100).
+        let faces = mesh.create_box(DVec3::ZERO, 200.0, 200.0, 200.0, mat).unwrap();
+        assert_eq!(faces.len(), 6, "box has 6 faces");
+        let faces_before = mesh.face_count();
+
+        // top face (+Z normal) 찾기.
+        let top = faces
+            .iter()
+            .copied()
+            .find(|&f| {
+                let n = mesh.faces[f].normal();
+                (n.z - 1.0).abs() < 0.01
+            })
+            .expect("box has a +Z top face");
+
+        // top face 위에 가로지르는 선 → 2 sub-face 분할.
+        // top face is a 200×200 square at z=100, spanning x,y ∈ [-100,100].
+        let result = crate::operations::face_split::split_face_by_line(
+            &mut mesh,
+            top,
+            DVec3::new(-100.0, 0.0, 100.0),
+            DVec3::new(100.0, 0.0, 100.0),
+        )
+        .expect("DrawLine on solid box top face splits (S2 입체면)");
+
+        assert_eq!(result.new_faces.len(), 2, "top face splits into 2 sub-faces");
+        assert_eq!(
+            mesh.face_count(),
+            faces_before + 1,
+            "box 6 faces → 7 (top split into 2)"
+        );
+
+        // manifold-correct (genuine corruption I1~I4 = 0).
+        let report = mesh.verify_face_invariants();
+        let corruption: Vec<&String> = report
+            .violations
+            .iter()
+            .filter(|v| !v.contains("(non-manifold)"))
+            .collect();
+        assert!(
+            corruption.is_empty(),
+            "[S2 box face split] genuine corruption: {:?}",
+            corruption
+        );
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // ADR-093 + 사용자 통찰 (2026-05-16) — primitive surface owner-id grouping.
     //
