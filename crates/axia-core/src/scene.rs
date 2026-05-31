@@ -10173,6 +10173,95 @@ mod tests {
         );
     }
 
+    // ── ADR-174 β-3 — secant robustness edge cases ──────────────────────────
+
+    /// β-3 — off-center horizontal secant (y=50) crosses r=100 disk at x≈±86.6.
+    /// No anchor coincidence (anchor @ (100,0)); both crossings land mid-edge.
+    #[test]
+    fn adr174_beta3_off_center_secant_splits() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO, normal: DVec3::Z, radius: 100.0,
+        });
+        assert_eq!(scene.mesh.face_count(), 1);
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-120.0, 50.0, 0.0),
+            end: DVec3::new(120.0, 50.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        assert_eq!(scene.mesh.face_count(), 2, "off-center secant splits the disk");
+        assert!(scene.mesh.verify_face_invariants().violations.is_empty(),
+            "off-center secant split manifold-correct");
+    }
+
+    /// β-3 — diagonal secant through center (anchor @ (100,0) not on the line).
+    #[test]
+    fn adr174_beta3_diagonal_secant_splits() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO, normal: DVec3::Z, radius: 100.0,
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-120.0, -120.0, 0.0),
+            end: DVec3::new(120.0, 120.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        assert_eq!(scene.mesh.face_count(), 2, "diagonal secant splits the disk");
+        assert!(scene.mesh.verify_face_invariants().violations.is_empty());
+    }
+
+    /// β-3 — circle not at origin; secant must still split (center-agnostic).
+    #[test]
+    fn adr174_beta3_translated_circle_secant_splits() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(200.0, 200.0, 0.0), normal: DVec3::Z, radius: 80.0,
+        });
+        assert_eq!(scene.mesh.face_count(), 1);
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(60.0, 230.0, 0.0),
+            end: DVec3::new(340.0, 230.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        assert_eq!(scene.mesh.face_count(), 2, "translated-circle secant splits");
+        assert!(scene.mesh.verify_face_invariants().violations.is_empty());
+    }
+
+    /// β-3 — one secant crossing two separate disks → both split (2 → 4 faces).
+    #[test]
+    fn adr174_beta3_one_line_splits_two_circles() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(-150.0, 0.0, 0.0), normal: DVec3::Z, radius: 50.0,
+        });
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(150.0, 0.0, 0.0), normal: DVec3::Z, radius: 50.0,
+        });
+        assert_eq!(scene.mesh.face_count(), 2);
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-250.0, 10.0, 0.0),
+            end: DVec3::new(250.0, 10.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        assert_eq!(scene.mesh.face_count(), 4, "one secant splits both disks (2→4)");
+        assert!(scene.mesh.verify_face_invariants().violations.is_empty());
+    }
+
+    /// β-3 — tangent to the rim (y = radius) → not a secant → no split (graceful).
+    #[test]
+    fn adr174_beta3_tangent_line_no_split() {
+        let mut scene = Scene::new();
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::ZERO, normal: DVec3::Z, radius: 100.0,
+        });
+        scene.execute(Command::DrawLine {
+            start: DVec3::new(-120.0, 100.0, 0.0),
+            end: DVec3::new(120.0, 100.0, 0.0),
+            surface_normal: Some(DVec3::Z),
+        });
+        assert_eq!(scene.mesh.face_count(), 1, "tangent line does not split (graceful)");
+    }
+
     /// Bisect — 20 small overlapping inners only (no large, no crossing).
     #[test]
     fn test_user_stress_bisect_inners_only() {
