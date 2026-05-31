@@ -4126,7 +4126,19 @@ impl Mesh {
         {
             let _ = self.remove_edge_and_halfedges(self_loop_edge_id);
         }
-        if self.verts.contains(anchor_vid) && self.verts[anchor_vid].is_active() {
+        // ADR-174 β-2 root-cause fix — do NOT deactivate the anchor when it
+        // was reused as a polygon vertex. `add_vertex` (step 1, spatial-hash
+        // dedup) reuses the anchor for the first tessellation point (always:
+        // tessellation starts at the anchor's angle), so `anchor_vid` is in
+        // `tess_verts` and step 4 (`add_face`) re-wires it into the new
+        // polygon loop. Deactivating it here would leave an INACTIVE vertex on
+        // an active face boundary → active-only scans (`find_vertices_on_line`,
+        // etc.) silently skip it, breaking the downstream secant crossing-split
+        // (the on-line anchor never becomes a break point → no face split).
+        if self.verts.contains(anchor_vid)
+            && self.verts[anchor_vid].is_active()
+            && !tess_verts.contains(&anchor_vid)
+        {
             if self.verts[anchor_vid].outgoing().is_none() {
                 self.verts[anchor_vid].set_active(false);
             }
@@ -7701,6 +7713,40 @@ mod tests {
         let hit = mesh.closed_curve_faces_crossed_by_segment(
             DVec3::new(-80.0, 0.0, 0.0), DVec3::new(80.0, 0.0, 0.0));
         assert!(hit.is_empty(), "polygon faces are not closed-curve self-loop faces");
+    }
+
+    #[test]
+    fn adr174_polygonize_reused_anchor_stays_active() {
+        // ADR-174 β-2 root-cause guard — polygonize reuses the anchor vertex
+        // for the first tessellation point (tessellation starts at the
+        // anchor's angle). It must NOT be deactivated as "isolated" in step 3,
+        // because step 4 re-wires it into the new polygon loop. An inactive
+        // vertex on an active face boundary is silently skipped by active-only
+        // scans (find_vertices_on_line) → breaks the secant crossing-split.
+        let mut mesh = Mesh::new();
+        let mat = MaterialId::new(0);
+        let center = DVec3::new(0.0, 0.0, 0.0);
+        let anchor = mesh.add_vertex(center + DVec3::X * 50.0);
+        let circle = AnalyticCurve::Circle {
+            center, radius: 50.0, normal: DVec3::Z, basis_u: DVec3::X,
+        };
+        let fid = mesh.add_face_closed_curve(anchor, circle, mat)
+            .expect("path B circle face");
+        let new_fid = mesh
+            .polygonize_closed_curve_face(fid, mat)
+            .expect("polygonize ok")
+            .expect("circle face polygonizes to a polygon");
+        let loop_verts = mesh
+            .collect_loop_verts(mesh.faces[new_fid].outer().start)
+            .expect("polygon loop");
+        assert!(loop_verts.len() >= 8, "polygon should have many verts, got {}", loop_verts.len());
+        for v in &loop_verts {
+            assert!(
+                mesh.verts[*v].is_active(),
+                "polygon boundary vertex {:?} must be active (ADR-174 reused-anchor fix)",
+                v,
+            );
+        }
     }
 
     #[test]
