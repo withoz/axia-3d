@@ -4518,6 +4518,15 @@ use of an object detected") root cause:
 
 ### 64. ADR-139 — Boundary-only Face Synthesis (B-α α spec closure, 2026-05-18)
 
+> ⚠ **Production default amended by ADR-176 (2026-06-01, 사용자 결재
+> "둘 다 고침")**. `auto_intersect_on_draw` + `auto_face_synthesis_on_draw`
+> 의 **production default 가 OFF → ON** 으로 전환 (engine default 는 OFF
+> 유지, 회귀 자산 보존). 근거: Phase 1-4 (ADR-169~173) absorb 견고화 완료.
+> 메타-원칙 #16 (휴리스틱 antipattern) 자체 + Boundary tool 명시 trigger 는
+> **불변 보존** — production default 만 변경. Demo-verified: 멀티-RECT
+> 스트레스 invariant 0 violations. 자세히는 LOCKED #76 +
+> `docs/adr/176-auto-behaviors-production-default-on.md`.
+
 **Canonical anchor (사용자 통찰, 2026-05-18)**:
 > "현재 자동 cycle detection + auto-punching 접근이 cascading 이슈 만들고
 >  있습니다 (P5.UX.39-45가 모두 이전 자동화의 부작용 처리). CAD 표준
@@ -5717,6 +5726,97 @@ fallback). vitest 131 → **134 PASS** (0 regression, 절대 #[ignore] 금지 3/
 - **ADR-087 K-ζ** 사용자 시연 게이트 canonical (demo-verified)
 - **메타-원칙 #4** SSOT / **#5** 사용자 편의 / **#10** ADR 불변 (LOCKED #63
   amendment via 사용자 결재)
+- **LOCKED #44** Complete Meaning per Merge (single atomic PR)
+
+### 76. ADR-176 — Auto-Behaviors Production Default ON (ADR-139 amendment, 2026-06-01) ✅
+
+**Canonical anchor (사용자 보고 + 결재, 2026-06-01)**:
+> "우리엔진의 루틴이 바뀌어서 모두 작동을 하지 않습니다" + "겹침/포함 자동
+> 분할이 안 됨" → 결재 "둘 다 고침 (추천) — 자동 동작 기본 ON".
+
+사용자 비전 **"선만 그려, 케이크는 알아서 나뉜다"** (axia-sketch parity) 가
+기본 제품에서 작동 안 함 — ADR-139 (LOCKED #64) 가 두 자동 동작 flag 를 기본
+OFF 로 전환했기 때문. ADR-176 이 **production default 를 ON 으로** amend.
+
+#### 시점 통찰 — 모순이 아니라 견고화 완료
+
+- **2026-05-18** ADR-139 — 파이프라인 비견고 → 자동 동작 OFF (메타-원칙 #16)
+- **2026-05-29~31** ADR-169~173 (Phase 1-4) — absorb SSOT + crossing-split 견고화
+- **2026-06-01** ADR-176 — 견고해졌으니 자동 동작 다시 ON
+
+ADR-139 은 "*견고해질 때까지* 끈다"였고, Phase 1-4 가 견고하게 만들었으므로
+이제 켜는 것이 정합. **메타-원칙 #16 자체는 불변** — production default 만 변경.
+
+#### 핵심 변경 — Path B canonical 패턴 (ADR-049 P-5e-α)
+
+```
+Engine default (scene.rs:400/402)  : OFF  (회귀 자산 300+ 보존, Scene::new() 불변)
+Production default (TS Settings)    : ON   (main.ts wiring init push)
+Explicit OFF preference            : 보존 (localStorage 'false' → OFF)
+```
+
+`AutoIntersectSettings.ts` + `AutoFaceSynthesisSettings.ts` 의 `let current
+= true` (이전 false) + `if (saved === 'false') current = false`. Engine 변경 0.
+
+#### Lock-ins (L-76-1 ~ L-76-7)
+
+- **L-76-1** Production default ON, engine default OFF (ADR-049 P-5e-α canonical)
+- **L-76-2** Explicit `localStorage 'false'` OFF preference 보존
+- **L-76-3** 메타-원칙 #16 (휴리스틱 antipattern) 자체 불변 — production default 만 변경
+- **L-76-4** Phase 1-4 (ADR-169~173) 견고화가 활성 근거
+- **L-76-5** Boundary tool (ADR-139 B-γ) 명시 trigger 보존 (additive)
+- **L-76-6** invariant 0 violations 강제 (demo-verified 안전 신호)
+- **L-76-7** 절대 #[ignore] 금지
+
+#### Demo verification (Claude Preview MCP, 2026-06-01)
+
+| 시나리오 | 결과 |
+|---|---|
+| auto-intersect / auto-face-synth default | **ON / ON** ✅ |
+| 겹침 RECT 2개 → sub-faces | delta **3** ✅ "케이크 나뉨" |
+| 포함 (big+small) → ring+hole | delta 2 ✅ |
+| 멀티-RECT 스트레스 (4겹 staggered) | **9 sub-faces, invariant 0 violations** ✅ |
+
+→ Phase 1-4 견고화로 ADR-139 이 우려한 cascading 손상 없음.
+
+#### 진단 회고 — "rect 원점 버그"는 테스트 인자 실수
+
+진단 중 발견한 "rect 원점 → 0 face" 는 **engine 버그 아님** — TS
+`drawRectAsShape` 시그니처가 `(cx,cy,cz, nx,ny,nz, ux,uy,uz, w, h)` 인데
+corners 로 잘못 호출(width=0)한 것. Rust 테스트 + raw WASM + 올바른 browser
+호출 3중으로 **엔진/auto_intersect 완전 정확** 확인. **교훈: WASM 바인딩
+시그니처 검증 우선** (ground truth 는 Rust 테스트).
+
+#### 회귀 매트릭스
+
+axia-core scene::tests **+2** (`adr176_rect_as_shape_origin_corner_auto_
+intersect_on` / `adr176_two_rects_as_shape_partial_overlap_auto_split`).
+323 → **325 PASS**. tsc 0 errors. Playwright: auto-spec explicit opt-in/out
+→ 영향 0. 절대 #[ignore] 금지 2/2.
+
+#### 사용자 facing 변화
+
+- 겹치는 도형 그리면 → 자동 3분할 (케이크 나뉨)
+- 작은 도형을 큰 도형 안에 → 자동 ring+hole
+- 닫힌 line cycle → 자동 면 + sliver mop-up
+- `localStorage 'axia:auto-intersect-on-draw' = 'false'` (또는 auto-face-
+  synthesis) 명시 시 legacy OFF 보존
+
+#### Out of scope (별도 ADR)
+
+- #3 입체면 face-drawing robustness (start-off-face → z=0 lock) — ADR-177 (가칭)
+- Settings UI 의 auto-toggle 가시성 — future
+
+#### Cross-link
+
+- **LOCKED #64** ADR-139 (auto trigger 폐기 — 본 ADR 이 production default amend)
+- **LOCKED #70~74** ADR-169~173 (Phase 1-4 견고화 — 활성 근거)
+- **LOCKED #41** ADR-101 (coplanar overlap auto-split 로직)
+- **ADR-049 P-5e-α** (engine OFF + production ON canonical) / **ADR-094 B-η**
+  (Path B production default ON 패턴 source)
+- **메타-원칙 #5** 사용자 편의 / **#6** Preventive (invariant) / **#10** ADR
+  불변 (ADR-139 amendment via 결재) / **#16** 자동화 antipattern (불변 보존)
+- **ADR-087 K-ζ** 사용자 시연 게이트 canonical
 - **LOCKED #44** Complete Meaning per Merge (single atomic PR)
 
 ### 변경 시 필수 절차
