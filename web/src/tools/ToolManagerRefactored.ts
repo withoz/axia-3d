@@ -2887,7 +2887,54 @@ export class ToolManager {
       return ray.ray.intersectPlane(this.getWorkPlane(), target);
     }
 
-    // Default: ground plane intersect + cardinal axis force.
+    // ════════════════════════════════════════════════════════════════════
+    // ADR-175 — Face-hit drawing plane (LOCKED #63 amendment, 사용자 결재 2026-06-01)
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // 결재: "입체면에 도형그리기" — 면을 클릭하면 그 면 위에 직접 그려져야.
+    //
+    // LOCKED #63 (2026-05-18) 이 face hit 우회 + z=0 강제 한 것은 *drift
+    // 방지* 목적 ("다른 face 의 z 좌표 → drift 전파") 이었음. ADR-170/171
+    // absorb 파이프라인 (face plane projection + drift snap) 이 그 drift 를
+    // 해결하므로, 이제 입체면 직접 그리기를 안전하게 재활성화.
+    //
+    // - **face hit** → 그 면 plane 위의 점 반환 (getDrawPlane ADR-140 과 일치)
+    // - **no face hit** (빈 공간) → z=0 ground 강제 (LOCKED #63 보존)
+    //
+    // 이로써 get3DPoint (DrawLine) 가 getDrawPlane (DrawRect/Circle) 와
+    // *동일하게* face-aware. 메타-원칙 #4 (SSOT) + #5 (명확한 의도 자동).
+    const faceHit = this.viewport.pick(e.clientX, e.clientY);
+    if (faceHit && faceHit.faceIndex != null && faceHit.point) {
+      const fid = this.getFaceId(faceHit.faceIndex);
+      if (fid >= 0) {
+        const [nx, ny, nz] = this.bridge.getFaceNormal(fid);
+        if (Number.isFinite(nx) && Number.isFinite(ny) && Number.isFinite(nz)) {
+          const faceNormal = new THREE.Vector3(nx, ny, nz);
+          if (faceNormal.lengthSq() > 0.5) {
+            faceNormal.normalize();
+            // Intersect the cursor ray with the face's analytic plane
+            // (anchored at the raycast hit point on the face). This gives
+            // the exact in-plane point the cursor is over — even as the
+            // cursor moves across the face for the 2nd+ click.
+            const faceRay = this.getRay(e);
+            const facePlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+              faceNormal,
+              faceHit.point,
+            );
+            const faceTarget = new THREE.Vector3();
+            const facePt = faceRay.ray.intersectPlane(facePlane, faceTarget);
+            if (facePt && Number.isFinite(facePt.x) && Number.isFinite(facePt.y) && Number.isFinite(facePt.z)) {
+              return facePt;
+            }
+            // Degenerate ray (parallel to plane / NaN) — fall back to the
+            // raycast hit point, which is already on the face surface.
+            return faceHit.point.clone();
+          }
+        }
+      }
+    }
+
+    // Default: ground plane intersect + cardinal axis force (no face hit).
     const ray = this.getRay(e);
     const groundPlane = this.getWorkPlane();
     const target = new THREE.Vector3();
