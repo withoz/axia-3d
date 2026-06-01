@@ -378,6 +378,40 @@ impl Mesh {
             }
         }
 
+        // ADR-183 (사용자 결재 2026-06-01) — Outward base cap.
+        //
+        // 사용자 보고: rect → Push/Pull 박스의 일부 면이 BackSide(파랑)로
+        // 렌더 + 그 면에 다시 못 그림. 진단(엔진 verify_outward_normals):
+        // extrude 후 BOTTOM cap 의 normal 이 INWARD. create_box 는 0 inward
+        // 인데 push-pull 만 1 inward 였음.
+        //
+        // 원인: profile_face 는 그릴 때의 normal(+profile_normal)을 유지하는데,
+        // dist>0 으로 위로 extrude 하면 profile 이 *바닥*이 되어 outward 는
+        // -profile_normal 이어야 함. extrude_planar_box 는 top/side 만 새로
+        // 만들고 profile_face 를 그대로 bottom 으로 두어 winding 을 안 뒤집었음.
+        //
+        // 수정: 바닥이 되는 cap 의 winding 을 flip (cached normal 부호 반전 +
+        // loop 역순) + Plane surface 재합성(newell winding-aware → outward).
+        //   dist > 0 → profile_face 가 바닥, dist < 0 → top_face 가 바닥.
+        // reverse_loop 는 edge degree 보존 → manifold(is_closed_solid) 유지,
+        // 공유 edge 의 twin 방향이 일관화됨 (orientation-consistent solid).
+        let bottom_cap = if dist > 0.0 { profile_face } else { top_face };
+        self.flip_face(bottom_cap)?;
+        {
+            let bstart = self.faces[bottom_cap].outer().start;
+            if !bstart.is_null() {
+                let bverts = self.collect_loop_verts(bstart)?;
+                let bpos: Vec<DVec3> = bverts
+                    .iter()
+                    .filter_map(|v| self.vertex_pos(*v).ok())
+                    .collect();
+                if bpos.len() >= 3 {
+                    let outward_surface = synthesize_plane_surface(&bpos);
+                    self.faces[bottom_cap].set_surface(Some(outward_surface));
+                }
+            }
+        }
+
         // ADR-067 Step 1 auto-merge — preserve.
         // The legacy push_pull's `adr_067_step1_auto_merge_result` works
         // on a `PushPullResult`. We don't need to invoke it here because
@@ -2738,6 +2772,74 @@ mod tests {
         assert_eq!(result.all_solid_faces.len(), 6);
         // mesh.face_count() should grow by 5 (1 top + 4 sides; profile preserved).
         assert_eq!(mesh.face_count(), face_count_before + 5);
+    }
+
+    #[test]
+    fn adr183_create_solid_extrude_up_all_normals_outward() {
+        // 사용자 결재 2026-06-01 — push-pull(extrude) 박스의 base 면이 inward
+        // 였던 회귀 차단. create_box 와 동일하게 0 inward 이어야 함.
+        let mut mesh = Mesh::new();
+        let profile = build_unit_square_plane_face(&mut mesh);
+        mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 3.0 }, // up (+Z)
+            MaterialId::new(0),
+        )
+        .expect("create_solid OK");
+
+        let report = mesh.verify_outward_normals();
+        assert!(report.is_closed_solid, "extruded box must be a closed solid");
+        assert_eq!(
+            report.inward_count, 0,
+            "ADR-183: all 6 faces of an extruded box must point OUTWARD \
+             (inward faces: {:?})",
+            report.inward_faces
+        );
+    }
+
+    #[test]
+    fn adr183_create_solid_extrude_down_all_normals_outward() {
+        // dist < 0 (recess down) — top_face 가 바닥이 되는 경우도 outward.
+        let mut mesh = Mesh::new();
+        let profile = build_unit_square_plane_face(&mut mesh);
+        mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: -3.0 }, // down (-Z)
+            MaterialId::new(0),
+        )
+        .expect("create_solid OK");
+
+        let report = mesh.verify_outward_normals();
+        assert!(report.is_closed_solid, "recessed box must be a closed solid");
+        assert_eq!(
+            report.inward_count, 0,
+            "ADR-183: all 6 faces of a downward-extruded box must point OUTWARD \
+             (inward faces: {:?})",
+            report.inward_faces
+        );
+    }
+
+    #[test]
+    fn adr183_create_solid_extrude_box_stays_closed_manifold() {
+        // flip_face 가 manifold(닫힌 solid + non-manifold edge 0)를 깨지 않음.
+        let mut mesh = Mesh::new();
+        let profile = build_unit_square_plane_face(&mut mesh);
+        mesh.create_solid(
+            profile,
+            CreateSolidMode::Extrude { distance: 2.0 },
+            MaterialId::new(0),
+        )
+        .expect("create_solid OK");
+
+        let active: Vec<FaceId> = mesh
+            .faces
+            .iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        let info = mesh.face_set_manifold_info(&active);
+        assert!(info.is_closed_solid, "box must remain a closed solid after ADR-183 flip");
+        assert_eq!(info.non_manifold_edge_count, 0, "no non-manifold edges after flip");
     }
 
     #[test]

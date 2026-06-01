@@ -1,6 +1,15 @@
 # ADR-166 — Active Sketch Plane Session Lock (사용자 작업지시 trigger)
 
 **Status**: Accepted (γ closure 2026-05-29 — 5-step variant 3번째 reproducibility, 1-day single-day closure)
+
+> ⚠ **Scope amended by ADR-182** (2026-06-01, 사용자 결재). 본 ADR 의 lock 은
+> "cross-tool 영구 유지" 였으나, ADR-182 가 **in-progress multi-click only** 로
+> scope 축소 — 새 draw 첫 클릭(tool idle)에 lock 자동 해제 → 커서 아래 입체면
+> 재검출 (axia-sketch D102 답습). 진행 중 multi-click 의 corner 일관성 + 명시
+> unlock path + sticky coexist + badge 등 나머지 lock-in 은 **불변**. cross-draw
+> 평면 연속성은 ADR-164 sticky 가 담당. 근거: `docs/adr/182-plane-lock-
+> inprogress-scope.md` §1·§4.
+
 **Date**: 2026-05-28 (α) / 2026-05-29 (β-1 / β-2 / β-3 / γ closure)
 **Author**: WYKO + Claude
 **Trigger**: 사용자 작업지시 (2026-05-28, canonical):

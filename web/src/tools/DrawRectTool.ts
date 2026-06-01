@@ -445,9 +445,19 @@ export class DrawRectTool implements ITool {
    */
   private forceCardinalAxis(pt: THREE.Vector3, plane: CardinalPlane): void {
     if (!plane.forceCardinal) return;
-    if (plane.zeroAxis === 'x') pt.x = plane.zeroValue;
-    else if (plane.zeroAxis === 'y') pt.y = plane.zeroValue;
-    else pt.z = plane.zeroValue;
+    // ADR-184 (사용자 결재 2026-06-01, "-y 면에 안그려짐") — `zeroValue` 는
+    // **부호 있는 평면 거리** (`normal·p`), face 의 실제 좌표가 아니다. cardinal
+    // 축에서 normal 성분은 ±1 이므로 실제 좌표 = `zeroValue / sign(normal[axis])`.
+    //
+    // 부호 보정 없이 `pt[axis] = zeroValue` 로 강제하면, **음의 cardinal normal**
+    // 면 (-X/-Y/-Z) 에서 좌표 부호가 뒤집힌다. 예: -Y 면 (y=-100) 은
+    // zeroValue = (-1)×(-100) = +100 → pt.y 가 +100 으로 강제되어 rect 가
+    // 반대편 +Y 면에 그려졌다. DrawCircle 은 실제 점 좌표(circleCenter[axis])를
+    // 써서 이 버그가 없었음 (사용자 관찰: "서클은 양면 다 됨"). 본 수정으로
+    // 동일 원리(실제 좌표) 회복 → -X/-Y/-Z 면도 정상.
+    if (plane.zeroAxis === 'x') pt.x = plane.zeroValue / (Math.sign(plane.normal.x) || 1);
+    else if (plane.zeroAxis === 'y') pt.y = plane.zeroValue / (Math.sign(plane.normal.y) || 1);
+    else pt.z = plane.zeroValue / (Math.sign(plane.normal.z) || 1);
   }
 
   // ═══════════════════════════════════════════════════════════════════

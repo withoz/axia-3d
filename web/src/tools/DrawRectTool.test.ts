@@ -251,4 +251,70 @@ describe('DrawRectTool', () => {
       expect(pt.z).toBeCloseTo(200);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-184 — Negative cardinal normal faces (-X/-Y/-Z) draw on the correct face
+  // 사용자 결재 2026-06-01: "-y 면에 안그려짐" — 음의 normal 면에서 rect 가
+  //   반대편(+) 면으로 점프하던 forceCardinalAxis 부호 버그 차단.
+  //   (사용자 관찰: "서클은 양면 다 됨, 사각형은 한쪽만" — Circle 은 실제 좌표
+  //   사용, Rect 는 부호 거리 zeroValue 를 좌표로 잘못 강제했음.)
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-184 negative cardinal normal faces', () => {
+    function mkPlane(normal: THREE.Vector3, zeroAxis: string, zeroValue: number) {
+      return {
+        normal, right: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 0, 1),
+        zeroAxis, zeroValue, isSketch: false, forceCardinal: true, isFace: true,
+      };
+    }
+
+    it('forceCardinalAxis: -Y face (zeroValue +100, normal -Y) → pt.y = -100 (NOT +100)', () => {
+      // The -Y face lives at y=-100; its signed offset normal·p = (-1)(-100)=+100.
+      const plane = mkPlane(new THREE.Vector3(0, -1, 0), 'y', 100);
+      const pt = new THREE.Vector3(40, 999, 60);
+      (tool as any).forceCardinalAxis(pt, plane);
+      expect(pt.y).toBeCloseTo(-100);   // recovered coordinate, NOT the +100 offset
+    });
+
+    it('forceCardinalAxis: -X face → pt.x = -100', () => {
+      const plane = mkPlane(new THREE.Vector3(-1, 0, 0), 'x', 100);
+      const pt = new THREE.Vector3(999, 5, 5);
+      (tool as any).forceCardinalAxis(pt, plane);
+      expect(pt.x).toBeCloseTo(-100);
+    });
+
+    it('forceCardinalAxis: -Z face → pt.z = -50', () => {
+      const plane = mkPlane(new THREE.Vector3(0, 0, -1), 'z', 50);
+      const pt = new THREE.Vector3(5, 5, 999);
+      (tool as any).forceCardinalAxis(pt, plane);
+      expect(pt.z).toBeCloseTo(-50);
+    });
+
+    it('forceCardinalAxis: +Y face (positive normal) still → pt.y = +100 (regression)', () => {
+      const plane = mkPlane(new THREE.Vector3(0, 1, 0), 'y', 100);
+      const pt = new THREE.Vector3(40, 999, 60);
+      (tool as any).forceCardinalAxis(pt, plane);
+      expect(pt.y).toBeCloseTo(100);
+    });
+
+    it('forceCardinalAxis: ground z=0 (zeroValue 0) → pt.z = 0 (LOCKED #63)', () => {
+      const plane = mkPlane(new THREE.Vector3(0, 0, 1), 'z', 0);
+      const pt = new THREE.Vector3(10, 20, 0.37);
+      (tool as any).forceCardinalAxis(pt, plane);
+      expect(pt.z).toBe(0);
+    });
+
+    it('projectClickToCardinalPlane on -Y face → 2nd corner lands at y=-100 (end-to-end)', () => {
+      const plane = mkPlane(new THREE.Vector3(0, -1, 0), 'y', 100);
+      // getRay must exist to pass the guard; the coplanar pick path ignores its result.
+      ctx.getRay = vi.fn().mockReturnValue({
+        ray: { intersectPlane: (_p: unknown, t: THREE.Vector3) => { t.set(9999, 0, 0); return t; } },
+      });
+      // cursor over the -Y face: pick hit at y=-100, coplanar (|normal·hit - zeroValue| = 0).
+      ctx.viewport.pick = vi.fn().mockReturnValue({ point: new THREE.Vector3(40, -100, 130) });
+      const pt = (tool as any).projectClickToCardinalPlane({ clientX: 1, clientY: 1 }, null, plane);
+      expect(pt.y).toBeCloseTo(-100);   // on the -Y face, NOT the +Y face (+100)
+      expect(pt.x).toBeCloseTo(40);
+      expect(pt.z).toBeCloseTo(130);
+    });
+  });
 });

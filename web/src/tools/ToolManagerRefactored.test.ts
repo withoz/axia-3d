@@ -1437,6 +1437,8 @@ describe('ToolManager', () => {
         source: 'first_click',
       });
       expect(tm.isPlaneLocked()).toBe(true);
+      // ADR-182 — lock honored only during in-progress multi-click (busy).
+      vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
 
       // (2) Simulate face hit on DIFFERENT plane (YZ wall — normal +X)
       viewport.pick.mockReturnValue({
@@ -1473,6 +1475,8 @@ describe('ToolManager', () => {
         source: 'first_click',
       });
       expect(tm.isPlaneLocked()).toBe(true);
+      // ADR-182 — lock honored only during in-progress multi-click (busy).
+      vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
 
       // (2) Simulate face hit on SAME plane (also XY ground — normal +Z)
       viewport.pick.mockReturnValue({
@@ -1508,6 +1512,8 @@ describe('ToolManager', () => {
         up: new THREE.Vector3(0, 1, 0),
         source: 'first_click',
       });
+      // ADR-182 — lock honored only during in-progress multi-click (busy).
+      vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);
 
       // (2) Face hit with ANTI-PARALLEL normal (flipped face winding)
       viewport.pick.mockReturnValue({
@@ -1585,6 +1591,117 @@ describe('ToolManager', () => {
       // Repeat — still safe
       expect(() => tm.unlockPlane()).not.toThrow();
       expect(() => tm.unlockPlane()).not.toThrow();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // ADR-182 — Plane lock scope = in-progress multi-click only
+  //   (axia-sketch D102 답습, 사용자 결재 2026-06-01)
+  //   "입체면을 자동으로 못찾는것이 문제" → 매 새 draw 가 커서 아래 면을
+  //   다시 찾도록 lock scope 를 진행 중 multi-click 으로 한정.
+  //   LOCKED #67 ADR-166 amendment (cross-tool 영구 → in-progress only).
+  // ────────────────────────────────────────────────────────────────────
+  describe('ADR-182 lock scope = in-progress only', () => {
+    function mockMouseEvent(): MouseEvent {
+      return { clientX: 100, clientY: 100 } as MouseEvent;
+    }
+
+    beforeEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tm as any).faceMap = new Uint32Array([7]);
+    });
+
+    it('adr182_idle_drawtool_bypasses_lock_fresh_face_pick — 새 draw(idle)는 lock 무시, 면 재검출', async () => {
+      const THREE = await import('three');
+      tm.setTool('rect');               // draw tool, idle (isBusy false)
+      // Lock to XZ wall (normal +Y) — a STALE lock from a previous draw.
+      tm.lockPlane({
+        origin: new THREE.Vector3(10, 20, 30),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(0, 0, 1),
+        source: 'first_click',
+      });
+      expect(tm.isToolBusy()).toBe(false);   // idle = new draw start
+      // Cursor over a DIFFERENT face (XY ground, normal +Z).
+      viewport.pick.mockReturnValue({ faceIndex: 0, point: new THREE.Vector3(5, 5, 0) });
+      bridge.faceSurfaceKind.mockReturnValue(1);
+      bridge.getFaceNormal.mockReturnValue([0, 0, 1]);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // ADR-182: idle → lock BYPASSED → fresh face pick (the face under cursor).
+      expect(plane.onFace).toBe(true);              // face hit, NOT lock branch
+      expect(plane.normal.z).toBeCloseTo(1, 5);     // the FACE (+Z), not the stale lock (+Y)
+    });
+
+    it('adr182_busy_drawtool_honors_lock — 진행 중 multi-click(busy)은 lock 유지', async () => {
+      const THREE = await import('three');
+      tm.lockPlane({
+        origin: new THREE.Vector3(10, 20, 30),
+        normal: new THREE.Vector3(0, 1, 0),  // XZ wall
+        up: new THREE.Vector3(0, 0, 1),
+        source: 'first_click',
+      });
+      vi.spyOn(tm, 'isToolBusy').mockReturnValue(true);   // in-progress
+      viewport.pick.mockReturnValue(null);               // empty space (no face)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const plane = (tm as any).getDrawPlane(mockMouseEvent());
+
+      // busy → lock honored → lock plane (normal +Y), onFace false (lock branch).
+      expect(plane.onFace).toBe(false);
+      expect(plane.normal.y).toBeCloseTo(1, 5);
+      expect(plane.origin?.x).toBe(10);                  // lock origin
+    });
+
+    it('adr182_mousedown_idle_drawtool_releases_lock — 새 draw 첫 클릭에 lock 해제 (D102)', async () => {
+      const THREE = await import('three');
+      tm.setTool('rect');
+      tm.lockPlane({
+        origin: new THREE.Vector3(10, 20, 30),
+        normal: new THREE.Vector3(0, 1, 0),
+        up: new THREE.Vector3(0, 0, 1),
+        source: 'first_click',
+      });
+      expect(tm.isPlaneLocked()).toBe(true);
+      // Prevent the full first-click flow from running (isolate ADR-182 logic).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      vi.spyOn(tm as any, 'get3DPoint').mockReturnValue(null);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rectTool = (tm as any).tools.get('rect');
+      rectTool.onMouseDown = vi.fn();   // isolate ADR-182 logic (no full first-click flow)
+      const unlockSpy = vi.spyOn(tm, 'unlockPlane');
+
+      const canvas = viewport.renderer.domElement as HTMLCanvasElement;
+      canvas.dispatchEvent(new MouseEvent('mousedown', { button: 0, clientX: 100, clientY: 100, bubbles: true }));
+
+      // ADR-182: draw tool idle + locked → unlockPlane at new-draw-start.
+      expect(unlockSpy).toHaveBeenCalled();
+    });
+
+    it('adr182_mousedown_nondraw_tool_keeps_lock — select 등 비-draw 도구는 lock 유지', async () => {
+      const THREE = await import('three');
+      tm.setTool('select');           // NOT a DRAW_PLANE_TOOL
+      tm.lockPlane({
+        origin: new THREE.Vector3(0, 0, 0),
+        normal: new THREE.Vector3(0, 0, 1),
+        up: new THREE.Vector3(0, 1, 0),
+        source: 'first_click',
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      vi.spyOn(tm as any, 'get3DPoint').mockReturnValue(null);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const selTool = (tm as any).tools.get('select');
+      if (selTool) selTool.onMouseDown = vi.fn();
+      const unlockSpy = vi.spyOn(tm, 'unlockPlane');
+
+      const canvas = viewport.renderer.domElement as HTMLCanvasElement;
+      canvas.dispatchEvent(new MouseEvent('mousedown', { button: 0, clientX: 100, clientY: 100, bubbles: true }));
+
+      // Non-draw tool → ADR-182 unlock does NOT fire (lock preserved).
+      expect(unlockSpy).not.toHaveBeenCalled();
+      expect(tm.isPlaneLocked()).toBe(true);
     });
   });
 
