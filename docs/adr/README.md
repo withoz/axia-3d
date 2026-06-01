@@ -259,7 +259,8 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [174](./174-curve-edge-crossing-split.md) | Curve-Edge Crossing-Split (직선 × Circle 면) — ADR-173 §10 spawned, Approach A polygonize dispatch, demo-verified | Accepted | Track 6 |
 | [175](./175-face-hit-drawing-plane.md) | Face-Hit Drawing Plane (LOCKED #63 amendment) — get3DPoint face-aware, 입체면 직접 그리기, demo-verified (box face line 6→7) | Accepted | Track 6 |
 | [176](./176-auto-behaviors-production-default-on.md) | Auto-Behaviors Production Default ON (ADR-139 amendment) — auto-intersect + auto-face-synthesis 기본 ON, "선만 그려 케이크 나뉜다", invariant 0 violations | Accepted | Track 6 |
-| [177](./177-curved-surface-kernel-native-ops.md) | Curved-Surface Kernel-Native Ops (E3 α spec) — ground-truth audit (push-pull/Boolean 이미 kernel-native), 진짜 gap = surface offset on closed-curve + Revolve/Sweep NURBS | Proposed | Track 6 |
+| [177](./177-curved-surface-kernel-native-ops.md) | Curved-Surface Kernel-Native Ops (E3 α spec) — ground-truth audit (push-pull/Boolean 이미 kernel-native), 진짜 gap = surface offset on closed-curve + Revolve/Sweep NURBS | Accepted | Track 6 |
+| [178](./178-rect-face-aware-drawing-plane.md) | DrawRect Face-Aware Drawing Plane (ADR-175 extension, LOCKED #63 amendment 2) — RECT 입체면 위 작성, demo-verified (box top z=200) | Accepted | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
