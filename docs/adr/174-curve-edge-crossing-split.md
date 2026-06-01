@@ -1,8 +1,9 @@
 # ADR-174 — Curve-Edge Crossing-Split (직선 × self-loop Circle 경계)
 
-**Status**: Proposed (α spec — 결재 confirmed: Q1=A / Q3=Circle self-loop /
-Q7=ADR-174 신규. 사용자 "추천 진행 + 추후 문제점 사전 검토" → §2.4 추가.)
-**Date**: 2026-05-31 (α)
+**Status**: Accepted (γ closure 2026-06-01 — Approach A demo-verified
+(real browser faces 1→2 via drawCircleAsCurve + drawLineAsShape) + β-1~β-3
++14 회귀 + polygonize root-cause fix. LOCKED #75.)
+**Date**: 2026-05-31 (α) ~ 2026-06-01 (γ)
 **Author**: WYKO + Claude
 **Trigger**: ADR-173 γ closure (LOCKED #74) §10 — "곡면 한계 (S3/S6/S9/S12) =
 future ADR (curve-edge crossing-split, 2026-05-31 spawned)". ADR-172 Phase 3
@@ -368,48 +369,98 @@ R-β 가 이미 동일 trade-off accept — **MVP accept + polish 별도** 가 h
 
 ## 8. Acceptance Log
 
-### 8.1 α (본 PR)
-- spec only — Q1=(a) Approach A / Q2=(a) / Q3=Circle self-loop / Q4~Q7 (a)
-  결재 + §2.4 사전 검토 (R0~R11, blocker 0) + L-174-1~12 + 6-step roadmap.
-- **세션 발견**: worktree 가 ADR-110 (stale) → `origin/main` (ADR-173,
-  `69ddc83`) sync. ADR-105 helper 가 ADR-101 로 개명 (`polygonize_closed_
-  curve_face`) 확인 → spec 정정 (R0). cargo 1.94.1 / rustc 1.94.1 확인 (β
-  build 가능).
-- 코드 변경 0. ADR-101 H-B (docs-first) + ADR-172 α 답습.
+### 8.1 α (PR #277, merged 2026-05-31) — commit 8cae810
+- spec only — Q1=(a) Approach A / Q2~Q7 (a) 결재 + §2.4 사전 검토 (R0~R11,
+  blocker 0) + L-174-1~12 + 6-step roadmap.
+- 세션 발견: worktree 가 ADR-110 (stale) → origin/main (ADR-173, 69ddc83)
+  sync. ADR-105 helper 가 ADR-101 로 개명 (polygonize_closed_curve_face) 확인
+  → spec 정정 (R0). 코드 변경 0 (docs-first).
+
+### 8.2 β-1 (PR #277) — commit d819b6c
+- `closed_curve_faces_crossed_by_segment` read-only helper (line-circle
+  closed-form 2-교차 + AABB pre-filter + coplanarity, curves/ 미접촉).
+- 회귀 +6 (axia-geo mesh::tests). axia-geo 1538 → 1544.
+
+### 8.3 β-2 (PR #277) — commit bc48b57
+- `exec_draw_line` pre-pass wiring (find_line_crossings 직전 polygonize
+  dispatch). drawLineAsShape → exec_draw_line_as_shape → exec_draw_line
+  위임 확인 (데모 경로 cover).
+- **Root-cause fix** (`polygonize_closed_curve_face`): anchor 가 첫
+  tessellation point 로 재사용된 뒤 step 3 에서 "isolated" deactivate →
+  active face loop 에 inactive vertex → find_vertices_on_line skip → 수평
+  diameter 분할 실패. fix: anchor ∈ tess_verts 면 deactivate 안 함 (메타-원칙
+  #6). ADR-105 chord-inside 경로엔 무해, secant 경로에서 표면화.
+- 회귀 +3 (axia-geo +1 polygonize lock / axia-core +2). axia-geo 1545,
+  axia-core 318.
+
+### 8.4 β-3 (PR #278) — commit 4903bf5
+- secant robustness 회귀 (production 코드 변경 0): off-center / diagonal /
+  translated / 2-circles → 4 faces / tangent no-op. 모두 manifold 0 violation.
+- 회귀 +5 (axia-core). axia-core 318 → 323.
+
+### 8.5 γ (PR #278) — closure + demo
+- **Demo-verified (Claude Preview MCP, real browser, 2026-06-01)**:
+  drawCircleAsCurve → faceCount 1, drawLineAsShape(-120..120) → faceCount
+  **2** (verdict PASS, stats 25v/27e/2f). syncMesh 후 분할 disk 렌더 확인.
+- R4 관찰: 정상 줌에서 rim 매끈, 극단 확대 시에만 polygon facet (chord_tol
+  radius·1% → MVP-accept 실증).
+- Setup 교훈: worktree web/node_modules 부재 → npm install --ignore-scripts
+  (로컬 file: dep @axia/action-catalog tsc lifecycle 우회). action-catalog
+  dist 미빌드로 일부 lazy UI 패널 Vite overlay — 엔진/그리기 경로 무관.
+- β-4 (HARD flag): 직선 cutting chord 가 exec_draw_line 의 mark_edge_hard 로
+  HARD (ADR-101 A9) — 기존 ADR-172 직선 split 동일 경로, 신규 코드 0.
+- Status Accepted + §9 Lessons + LOCKED #75 (사용자 결재 2026-06-01).
+- 회귀 누적 (β-1~β-3): axia-geo +7 (1545), axia-core +7 (323). 합계 **+14**,
+  절대 #[ignore] 금지 14/14.
 
 ---
 
 ## 9. Lessons
 
-(γ closure 시 — polygonize 재사용 비용 vs approach B 신규 비용 / R4 render
-fidelity 의 MVP-accept 판단 / 곡선 경계 ↔ 곡면 surface 구분 / stale worktree
-sync 의 audit 가치.)
+### L1 — Pattern 12 재사용 (ADR-105 helper + ADR-172 pipeline)
+Approach A 는 신규 알고리즘 1개 (line-circle closed-form) 만 추가하고 나머지는
+검증된 자산 재사용 → β-3 가 production 코드 변경 0. ADR-172 L1 답습.
+
+### L2 — 사전 검토 + demo-gate 양쪽이 root-cause 발견 (메타-원칙 #6 / ADR-087 K-ζ)
+β-2 시연 테스트가 polygonize 의 잠복 버그 (reused-anchor deactivate) 를 표면화.
+test + demo 양쪽 게이트의 가치 재확인. ADR-105 도 함께 견고해짐.
+
+### L3 — R4 render fidelity 의 MVP-accept 실증
+실브라우저에서 split rim 이 정상 줌 매끈 (1% chord tol). Approach B (true 2-arc)
+fidelity 는 극단 확대 / 정밀 arc downstream op trigger 시에만 가치 → future.
+
+### L4 — stale worktree sync + 환경 setup 의 audit 가치
+worktree ADR-110 stale → origin/main sync 로 R0 (helper 개명) 발견. 환경
+(node_modules / lifecycle script) 도 audit 대상. 향후 worktree 진입 시
+origin/main sync 우선.
+
+### L5 — 곡선 *경계* ≠ 곡면 *surface*
+본 ADR 은 planar disk 의 곡선 *경계* (self-loop Circle edge) 한정. 곡면 surface
+위 drawing (S3/S6/S9) 은 non-planar split 로 별개 트랙 — ADR-169 Type 3 정합.
 
 ---
 
-## 10. LOCKED candidate (γ closure 시 사용자 별도 결재)
+## 10. LOCKED #75 (사용자 결재 완료 2026-06-01)
 
 > **LOCKED #75 — ADR-174 Curve-Edge Crossing-Split closure (직선 × self-loop
 > Circle 경계 → polygonize dispatch)**
 >
 > ADR-173 §10 spawned future ADR closure. ADR-172 직선 crossing-split 의
-> 곡선 경계 확장.
+> 곡선 경계 확장. **demo-verified**.
 >
 > **불변 lock-in**:
-> - Approach A (polygonize dispatch) — `find_line_crossings` 직전 pre-pass
->   가 secant 가 가로지르는 Circle self-loop face 를 선제 polygonize
->   (`polygonize_closed_curve_face` 재사용) → ADR-172 battle-tested 직선
+> - Approach A (polygonize dispatch) — find_line_crossings 직전 pre-pass 가
+>   secant 가 가로지르는 Circle self-loop face 를 선제 polygonize
+>   (polygonize_closed_curve_face 재사용) → ADR-172 battle-tested 직선
 >   파이프라인 자연 처리 → 2 half-disk face
 > - 정밀 line-circle 2-교차 test (실제 secant face 만, AABB pre-filter,
->   curves/ 미접촉)
+>   curves/ 미접촉 — NURBS kernel carve-out 정합)
+> - polygonize reused-anchor root-cause fix (메타-원칙 #6)
 > - edge 자동 split (위상 correctness, #5/#16) + face emission gate 보존
->   (ADR-139) + HARD flag (ADR-101 A9)
-> - Circle self-loop 한정 (Arc-edge 정확도 / Bezier·BSpline·NURBS / 곡면
->   surface drawing = 별도 트랙)
-> - Approach B (true 2-arc kernel-native split) = future ADR (L-174-12)
-> - Demo-verified (Claude Preview MCP): drawCircleAsCurve + drawLineAsShape
->   가로지름 → faces 1→2
+>   (ADR-139) + HARD flag (ADR-101 A9 — 직선 chord)
+> - Circle self-loop 한정. Arc-edge / Bezier·BSpline·NURBS / 곡면 surface =
+>   별도 트랙. Approach B (true 2-arc) = future ADR (L-174-12)
+> - Demo-verified (Claude Preview, real browser 2026-06-01): drawCircleAsCurve
+>   + drawLineAsShape → faces 1→2
 >
-> **회귀 자산**: (γ 실측 — 절대 #[ignore] 금지)
-
-본 LOCKED entry 는 γ closure PR 의 별도 사용자 결재 후 CLAUDE.md 등재.
+> **회귀 자산**: +14 (axia-geo +7 / axia-core +7, 절대 #[ignore] 금지 14/14).
