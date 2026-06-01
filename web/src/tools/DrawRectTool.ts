@@ -47,6 +47,12 @@ const MAX_DRAW_DISTANCE = 200000;
 /** Min RECT width/height (mm) to accept commit — 0.001 mm to allow precision work. */
 const MIN_RECT_DIMENSION = 0.001;
 
+/** ADR-179 — coplanarity tolerance (mm) for "the cursor's picked face hit lies
+ *  on the locked drawing plane". Faces are ≥ mm apart, so 1mm cleanly accepts
+ *  the same plane and rejects a different (off-plane) face the cursor drifts
+ *  over → precise on-face point vs grazing ray∩plane blowup. */
+const COPLANAR_PICK_TOL = 1.0;
+
 type ZeroAxis = 'x' | 'y' | 'z';
 
 interface CardinalPlane {
@@ -387,6 +393,28 @@ export class DrawRectTool implements ITool {
       return null;
     }
     const ray = this.ctx.getRay(e);
+
+    // ADR-179 precision — if the cursor is over a face *coplanar* with the
+    // locked plane, use the exact raycast hit point. On grazing planes (a face
+    // viewed at a shallow angle), ray∩plane shoots the projected point far away
+    // (사용자 시연: RECT 미리보기 9,893mm 폭발). The face pick gives the precise
+    // in-plane point. Off-plane cursors (different face / empty space) fall
+    // through to ray∩plane below → infinite-plane extension (사용자 결재 보존).
+    if (typeof this.ctx.viewport?.pick === 'function') {
+      const fhit = this.ctx.viewport.pick(e.clientX, e.clientY);
+      if (fhit && fhit.point) {
+        const d = plane.normal.x * fhit.point.x
+                + plane.normal.y * fhit.point.y
+                + plane.normal.z * fhit.point.z - plane.zeroValue;
+        if (Math.abs(d) < COPLANAR_PICK_TOL) {
+          const pt = fhit.point.clone();
+          this.forceCardinalAxis(pt, plane);
+          if (this.rectStart && pt.distanceTo(this.rectStart) > MAX_DRAW_DISTANCE) return null;
+          return pt;
+        }
+      }
+    }
+
     const three = new THREE.Plane(plane.normal, -plane.zeroValue);
     const target = new THREE.Vector3();
     const hit = ray.ray.intersectPlane(three, target);
@@ -465,9 +493,13 @@ export class DrawRectTool implements ITool {
     });
     this.rectPreview = new THREE.Mesh(geo, mat);
 
-    const defaultNormal = new THREE.Vector3(0, 0, 1);
-    const quat = new THREE.Quaternion().setFromUnitVectors(defaultNormal, n);
-    this.rectPreview.quaternion.copy(quat);
+    // ADR-179 fix — orient the filled preview with the EXPLICIT in-plane basis
+    // (right=X, up=Y, normal=Z). `setFromUnitVectors(+Z, n)` left the in-plane
+    // twist arbitrary → the fill's width/height axes did not match the
+    // outline's plane.right/plane.up → preview/outline mismatch (사용자 시연:
+    // amber 채움이 외곽선과 다른 방향). makeBasis ties both to the same basis.
+    const basis = new THREE.Matrix4().makeBasis(this.plane.right, this.plane.up, n);
+    this.rectPreview.quaternion.setFromRotationMatrix(basis);
     const offset = center.clone().addScaledVector(n, 0.5);
     this.rectPreview.position.copy(offset);
     this.rectPreview.renderOrder = 998;

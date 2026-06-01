@@ -1,6 +1,7 @@
-# ADR-179 — DrawRect On-Face Preview Clarity (ADR-178 follow-up)
+# ADR-179 — DrawRect On-Face Preview (Clarity + Correctness + Precision)
 
-**Status**: Accepted (demo-verified 2026-06-01 — on-face preview amber #ffaa33)
+**Status**: Accepted (demo-verified 2026-06-01 — amber #ffaa33 + makeBasis 방향
+일치 + face-pick precision)
 **Date**: 2026-06-01
 **Author**: WYKO + Claude
 **Trigger**: 사용자 시연 (2026-06-01, 스크린샷): RECT 가 입체면이 아닌 다른
@@ -46,6 +47,27 @@ plane 위에 그리는 중임을 인지하도록.
 (ground/sketch 는 falsy). 프리뷰는 매 mousemove 갱신 (기존), 색상만 plane.isFace
 로 분기.
 
+### 2.2 추가 fix — 미리보기 방향 일치 (makeBasis)
+
+사용자 시연 (스크린샷): amber 채움이 외곽선과 **다른 방향** (채움 가로 띠 ↔
+외곽선 세로). 원인 — 채움 PlaneGeometry 가 `setFromUnitVectors(+Z, n)` 로
+배향 → in-plane twist 가 *임의* → 채움의 width/height 축이 outline 의
+`plane.right`/`plane.up` 과 불일치 (cardinal wall 에서 90° swap).
+
+**Fix**: `Matrix4.makeBasis(plane.right, plane.up, n)` + `setFromRotationMatrix`
+— 채움의 local X→right, Y→up, Z→normal 으로 고정 → outline 과 정확히 일치.
+
+### 2.3 추가 fix — 둘째 코너 정밀화 (face-pick precision)
+
+사용자 시연: RECT 미리보기 치수 **9,893mm 폭발** (박스 200mm 의 ~50배). 원인 —
+grazing plane (면을 얕은 각도로 봄) 에서 둘째 코너 `ray∩plane` projection 이
+멀리 튐.
+
+**Fix**: `projectClickToCardinalPlane` 가 cursor 아래 face 를 pick 해서, 그
+hit point 가 locked plane 과 **coplanar** (|normal·hit − zeroValue| <
+`COPLANAR_PICK_TOL` 1mm) 면 그 **정확한 hit point** 사용 (grazing 회피). off-
+plane (다른 면 / 빈 공간) 이면 `ray∩plane` 으로 fall-through (무한 연장 보존).
+
 ---
 
 ## 3. Lock-ins
@@ -54,8 +76,11 @@ plane 위에 그리는 중임을 인지하도록.
 - **L-179-2** on-face 프리뷰 = amber (#ffaa33 fill / #ff8800 outline)
 - **L-179-3** ground/sketch 프리뷰 = blue (기존 보존)
 - **L-179-4** `isFace` flag = `resolveFacePlane` only (SSOT)
-- **L-179-5** Engine 변경 0 (TS only, 프리뷰 시각만)
-- **L-179-6** 절대 #[ignore] 금지
+- **L-179-5** 미리보기 채움 배향 = `makeBasis(right, up, normal)` (outline 과 일치)
+- **L-179-6** 둘째 코너 = coplanar face pick hit (정밀) → else `ray∩plane` (연장)
+- **L-179-7** `COPLANAR_PICK_TOL` = 1mm (다른 면 거부 / 같은 면 수용)
+- **L-179-8** Engine 변경 0 (TS only)
+- **L-179-9** 절대 #[ignore] 금지
 
 ---
 
@@ -65,18 +90,22 @@ plane 위에 그리는 중임을 인지하도록.
 |---|---|
 | 박스 윗면 rect 시작 → plane.isFace | **true** ✅ |
 | 프리뷰 fill 색상 | **#ffaa33 (amber)** ✅ |
+| 미리보기 채움 방향 (preview localX vs plane.right) | **일치 ✅ (FILL MATCHES OUTLINE)** |
+| +X wall 둘째 코너 on-wall → rect 치수 | **80mm × 80mm** ✅ (이전 9,893mm 폭발) |
 
-→ 면 위에 그릴 때 amber 프리뷰로 명확. 바닥은 blue 유지.
+→ amber 프리뷰 + 채움/외곽선 방향 일치 + 면 위 정밀 (grazing 폭발 해소).
 
 ---
 
 ## 5. 회귀 자산 (절대 #[ignore] 금지)
 
-DrawRectTool.test.ts (+1):
+DrawRectTool.test.ts (+3):
 - `ADR-179 — cardinal ground plane has no isFace flag (blue preview)`
+- `ADR-179 — 2nd corner on coplanar face → exact pick hit (no grazing blowup)`
+- `ADR-179 — 2nd corner over off-plane face → falls through to ray∩plane`
 - (ADR-178 `face hit → ...` 테스트에 `isFace=true` assert 추가)
 
-vitest: 14 → **15 PASS** (DrawRectTool), tsc 0 errors.
+vitest: 14 → **17 PASS** (DrawRectTool), tsc 0 errors.
 
 ---
 
