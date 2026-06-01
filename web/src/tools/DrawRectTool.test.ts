@@ -135,7 +135,47 @@ describe('DrawRectTool', () => {
       expect(plane.forceCardinal).toBe(true);        // cardinal-aligned face
       expect(plane.zeroAxis).toBe('z');
       expect(plane.normal.z).toBeCloseTo(1);
+      expect(plane.isFace).toBe(true);               // ADR-179 — on-face preview flag
       expect(ctx.bridge.getFaceNormal).toHaveBeenCalledWith(7);
+    });
+
+    it('ADR-179 — cardinal ground plane has no isFace flag (blue preview)', () => {
+      ctx.viewport = { ...ctx.viewport, viewMode: 'top' };
+      const plane = (tool as any).resolveCardinalPlane();
+      expect(plane.isFace).toBeFalsy();   // ground → not a face → blue preview
+    });
+
+    it('ADR-179 — 2nd corner on coplanar face → exact pick hit (no grazing blowup)', () => {
+      const plane = {
+        normal: new THREE.Vector3(0, 0, 1), right: new THREE.Vector3(1, 0, 0),
+        up: new THREE.Vector3(0, 1, 0), zeroAxis: 'z', zeroValue: 200,
+        isSketch: false, forceCardinal: true, isFace: true,
+      };
+      // ray∩plane would shoot far (grazing); pick hit is the precise in-plane point.
+      ctx.getRay = vi.fn().mockReturnValue({
+        ray: { intersectPlane: (_p: unknown, t: THREE.Vector3) => { t.set(9999, 0, 200); return t; } },
+      });
+      ctx.viewport.pick = vi.fn().mockReturnValue({ point: new THREE.Vector3(40, 40, 200) });
+      const pt = (tool as any).projectClickToCardinalPlane({ clientX: 1, clientY: 1 }, null, plane);
+      expect(pt.x).toBeCloseTo(40);   // exact pick hit, NOT 9999 grazing
+      expect(pt.y).toBeCloseTo(40);
+      expect(pt.z).toBeCloseTo(200);
+    });
+
+    it('ADR-179 — 2nd corner over off-plane face → falls through to ray∩plane (extension)', () => {
+      const plane = {
+        normal: new THREE.Vector3(0, 0, 1), right: new THREE.Vector3(1, 0, 0),
+        up: new THREE.Vector3(0, 1, 0), zeroAxis: 'z', zeroValue: 200,
+        isSketch: false, forceCardinal: true, isFace: true,
+      };
+      ctx.getRay = vi.fn().mockReturnValue({
+        ray: { intersectPlane: (_p: unknown, t: THREE.Vector3) => { t.set(300, 0, 200); return t; } },
+      });
+      // pick hits a DIFFERENT face (z=0, not coplanar with z=200) → rejected.
+      ctx.viewport.pick = vi.fn().mockReturnValue({ point: new THREE.Vector3(0, 0, 0) });
+      const pt = (tool as any).projectClickToCardinalPlane({ clientX: 1, clientY: 1 }, null, plane);
+      expect(pt.x).toBeCloseTo(300);   // ray∩plane extension, off-plane pick rejected
+      expect(pt.z).toBeCloseTo(200);
     });
 
     it('no face hit → returns null (→ cardinal ground fallback, LOCKED #63 preserved)', () => {

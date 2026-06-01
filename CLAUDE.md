@@ -5895,8 +5895,25 @@ API — facesCentroid 로 정확 검증한 것이 교훈.)
 DrawRectTool.test.ts **+5** (face hit / no hit / slanted / sketch / degenerate).
 9 → **14 PASS**, tsc 0 errors. 절대 #[ignore] 금지 5/5.
 
+#### Follow-up — ADR-179 (on-face 프리뷰 clarity + correctness + precision, 2026-06-01)
+
+사용자 시연 후속 (스크린샷 3 증상): 사용자 결재 **"무한 plane 연장 유지 +
+프리뷰 개선"** → ADR-179 3 fix:
+1. **Clarity** — 면 위 그릴 때 프리뷰 **amber (#ffaa33)** (ground=blue).
+   `CardinalPlane.isFace` flag (`resolveFacePlane` only).
+2. **Correctness** — 채움/외곽선 방향 불일치 (채움이 `setFromUnitVectors`
+   임의 twist) → `makeBasis(right, up, normal)` 로 outline 과 정확 일치.
+3. **Precision** — 둘째 코너 grazing plane ray∩plane 폭발 (9,893mm) →
+   coplanar face pick hit 사용 (`COPLANAR_PICK_TOL` 1mm), off-plane 은
+   ray∩plane 연장 (무한 연장 보존).
+
+무한 연장 동작 보존 (SketchUp parity). DrawRectTool.test +3 (14→17). Engine
+변경 0. Demo-verified: FILL MATCHES OUTLINE + 80mm×80mm (이전 9893mm).
+`docs/adr/179-rect-onface-preview-clarity.md`.
+
 #### Cross-link
 
+- **ADR-179** (on-face 프리뷰 명확화 — 직계 follow-up)
 - **ADR-175** (LOCKED #75) — get3DPoint face-aware (DrawLine) — 직계 패턴
 - **LOCKED #63** PR #101 (z=0 invariant — 본 ADR 이 2번째 amendment)
 - **ADR-140** surface-aware getDrawPlane (다른 Draw 도구 face-aware source)
