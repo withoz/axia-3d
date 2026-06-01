@@ -15184,6 +15184,53 @@ mod tests {
             after_b);
     }
 
+    /// ADR-176 (2026-06-01) — single RECT (corner at world origin) with
+    /// auto_intersect_on_draw ON. Empty scene + single rect → atomic path
+    /// → exactly 1 active face (intersect_faces_inner is a no-op when there
+    /// are no other faces). Regression lock for the "rect at origin" path
+    /// when auto-intersect is the production default (ADR-176 default ON).
+    #[test]
+    fn adr176_rect_as_shape_origin_corner_auto_intersect_on() {
+        let mut scene = Scene::new();
+        scene.auto_intersect_on_draw = true;
+        // corner at (0,0): center (100,100), width=height=200.
+        scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(100.0, 100.0, 0.0),
+            normal: DVec3::Z,
+            up: DVec3::Y,
+            width: 200.0,
+            height: 200.0,
+        });
+        let active = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(active, 1,
+            "single rect (corner at origin) + auto_intersect ON → 1 face, got {}", active);
+    }
+
+    /// ADR-176 (2026-06-01) — two partially-overlapping RECTs (AsShape)
+    /// with auto_intersect_on_draw ON (production default). Expect
+    /// 3 sub-faces (rect_a_only / lens / rect_b_only) per ADR-101 P7.
+    /// Regression lock: the "선만 그려, 케이크는 알아서 나뉜다" auto-split
+    /// behavior that ADR-176 enables by default.
+    #[test]
+    fn adr176_two_rects_as_shape_partial_overlap_auto_split() {
+        let mut scene = Scene::new();
+        scene.auto_intersect_on_draw = true;
+        // rect1: (0,0)-(200,200), center (100,100)
+        scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(100.0, 100.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y, width: 200.0, height: 200.0,
+        });
+        let a = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        // rect2: (100,100)-(300,300), center (200,200) — partial overlap
+        scene.execute(Command::DrawRectAsShape {
+            center: DVec3::new(200.0, 200.0, 0.0),
+            normal: DVec3::Z, up: DVec3::Y, width: 200.0, height: 200.0,
+        });
+        let b = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(a, 1, "after rect1: 1 active face, got {}", a);
+        assert_eq!(b, 3, "two overlapping rects (AsShape) + auto_intersect → 3 sub-faces, got {}", b);
+    }
+
     /// ADR-101 §B-4b — Path B Circle × Path B Circle (DrawCircleAsCurve)
     /// partial overlap → 3 sub-faces automatically. B-4 MVP scope guard
     /// REMOVED by B-4b's non-destructive pre-check.
