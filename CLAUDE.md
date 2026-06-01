@@ -4918,6 +4918,15 @@ governance 회복.
 
 ### 67. ADR-166 — Active Sketch Plane Session Lock (γ closure, 2026-05-29) ✅
 
+> ⚠ **Scope amended by ADR-182** (2026-06-01, 사용자 결재 "axia-sketch D102
+> 패턴 답습 ... 새 draw 시작 시엔 면을 다시 찾도록 ... 로 승인합니다"). 본
+> lock 의 "cross-tool 영구 유지" → **in-progress multi-click only** 로 scope
+> 축소. 새 draw 첫 클릭(tool idle)에 lock 자동 해제 → 커서 아래 입체면 재검출
+> (axia-sketch Auto-Plane Pick D80/D85 + D102). 진행 중 multi-click corner
+> 일관성 + 명시 unlock path + sticky coexist + 🔒 badge 는 **불변 보존**.
+> cross-draw 평면 연속성은 ADR-164 sticky 담당. 자세히는 LOCKED #68 다음
+> 신설 예정 entry + `docs/adr/182-plane-lock-inprogress-scope.md`.
+
 **Canonical anchor (사용자 작업지시, 2026-05-28)**:
 > "도형을 만들때 같은 plane에 그릴 확률을 높이는 방향으로 개선
 > Sticky plane lock — 첫 도형 first_click 시점에 active_sketch_plane

@@ -263,6 +263,10 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [178](./178-rect-face-aware-drawing-plane.md) | DrawRect Face-Aware Drawing Plane (ADR-175 extension, LOCKED #63 amendment 2) — RECT 입체면 위 작성, demo-verified (box top z=200) | Accepted | Track 6 |
 | [179](./179-rect-onface-preview-clarity.md) | DrawRect On-Face Preview Clarity (ADR-178 follow-up) — 면 위 그리기 amber 프리뷰, 무한 plane 연장 유지 + 가시성 개선 | Accepted | Track 6 |
 | [180](./180-precision-policy-verification.md) | Engine Precision Policy Verification (mm/f64, EPS 0.1μm cell / 0.15μm dedup) — 명시·검증 + 회귀 lock + stale 주석 정정 | Accepted | Track 6 |
+| [181](./181-drawrect-getdrawplane-ssot.md) | DrawRect getDrawPlane SSOT Unification — "서클은 되는데 rect는 안됨" 진단: DrawRect 의 divergent resolveFacePlane → DrawCircle 과 동일한 getDrawPlane SSOT 로 통일 (sticky/lock/surface-aware 상속, LOCKED #63 z=0 보존), demo-verified | Accepted | Track 6 |
+| [182](./182-plane-lock-inprogress-scope.md) | Plane Lock Scope = In-Progress Only (axia-sketch D102) — "입체면을 자동으로 못찾는것이 문제" 진단 (axia-sketch 비교): ADR-166 cross-tool 영구 lock → in-progress multi-click 으로 scope 축소, 매 새 draw 가 커서 아래 면 재검출. LOCKED #67 amendment, demo-verified | Accepted | Track 6 |
+| [183](./183-pushpull-outward-base-normal.md) | Push/Pull Outward Base Cap Normal — "rect→push-pull 박스 면이 파랑 + 못 그림" 진단(verify_outward_normals): extrude base cap normal 이 inward 였음. extrude_planar_box 에서 bottom cap winding flip + surface 재합성 → 0 inward (create_box 동등), demo-verified | Accepted | Track 6 |
+| [184](./184-drawrect-negative-cardinal-normal.md) | DrawRect Negative Cardinal Normal Faces — "-y 면에 안그려짐 / 서클은 양면 다 됨" 진단: forceCardinalAxis 가 zeroValue(부호 거리)를 좌표로 잘못 강제 → -X/-Y/-Z 면 rect 가 반대편(+) 면 점프. zeroValue/sign(normal) 부호 정정 (Circle 원리), demo-verified | Accepted | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 

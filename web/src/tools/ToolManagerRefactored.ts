@@ -3274,7 +3274,16 @@ export class ToolManager {
     //
     // ADR-167 L-167-10 anti-parallel handling 답습 — flipped face
     // winding (cos < 0) 도 |dot| 기준으로 same plane 판정.
-    if (this._planeLock) {
+    //
+    // ADR-182 (axia-sketch D102 답습, 사용자 결재 2026-06-01) — Lock scope
+    // 를 **in-progress multi-click** 으로 한정. Draw 도구가 idle 일 때
+    // (= 새 draw 첫 클릭 직전 / hover) 는 lock 을 무시하고 fresh face pick
+    // (아래 viewport.pick face hit logic). 이로써 매 새 draw 가 커서 아래
+    // 입체면을 *다시* 찾는다 (axia-sketch Auto-Plane Pick D80/D85 동등).
+    // 물리적 lock 해제는 mousedown 핸들러(new-draw-start)가 담당 → 새
+    // first_click 이 fresh lock 을 set 하도록. ADR-166 "cross-tool 유지" 는
+    // 진행 중 multi-click 의 corner 일관성으로 scope 축소 (LOCKED #67 amend).
+    if (this._planeLock && this.isToolBusy()) {
       const lockHit = this.viewport.pick(e.clientX, e.clientY);
       let lockOverriddenByFaceHit = false;
       if (lockHit && lockHit.faceIndex != null) {
@@ -4034,6 +4043,18 @@ export class ToolManager {
     // observed in user demo).
     canvas.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || e.altKey) return;
+      // ADR-182 (axia-sketch D102, 사용자 결재 2026-06-01) — On a NEW draw's
+      // first click (draw tool idle), physically release the cross-tool plane
+      // lock so getDrawPlane re-picks the face under the cursor and the tool's
+      // first_click re-locks the FRESH plane. The lock then persists only
+      // through the in-progress multi-click sequence (ADR-166 scope narrowed).
+      // Mirrors axia-sketch main.rs: `if Pressed && !active_in_progress() &&
+      // locked_plane.is_some() → unlock` (auto-plane-pick D80/D85 precondition).
+      if (this._planeLock
+          && ToolManager.DRAW_PLANE_TOOLS.has(this._currentTool)
+          && !this.isToolBusy()) {
+        this.unlockPlane();
+      }
       const rawPt = this.get3DPoint(e);
       const tool = this.tools.get(this._currentTool);
       if (tool?.onMouseDown) {

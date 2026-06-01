@@ -1,39 +1,42 @@
 /**
- * Draw Rectangle Tool — Cardinal Ground Plane STRICT (LOCKED #7 + #43)
+ * Draw Rectangle Tool — Face-aware drawing plane via getDrawPlane SSOT
+ * (ADR-181), with cardinal ground z=0 invariant preserved (LOCKED #63/#7/#43).
  *
- * 사용자 결재 (2026-05-18, rewrite):
- * > "rect 명령 제거하고 새로 만듭니다. 무조건 z=0에서 그려져야 합니다."
+ * 사용자 결재 흐름:
+ * > (2026-05-18) "rect 명령 제거하고 새로 만듭니다. 무조건 z=0에서
+ * >  그려져야 합니다." → PR #101 cardinal-strict rewrite.
+ * > (2026-06-01) "rect는 입체면에 작성이 안됌" → ADR-178 face-aware.
+ * > (2026-06-01) "보이는 면에 커서를 가져가면 도형을 그려야 합니다. 서클은
+ * >  되는데 rect는 안됩니다. 서클과 차이점을 검토하세요." → ADR-181:
+ * >  DrawCircle 과 동일한 `getDrawPlane` SSOT 로 통일.
  *
- * Invariant (canonical, ADR-046 P31 #4 정합):
- *   - **모든 vertex 의 cardinal axis 좌표 = exactly 0** (z=0 / y=0 / x=0)
- *   - View mode 기반 cardinal ground plane 결정:
- *       3d/top/bottom → normal=+Z, **z=0 강제** (LOCKED #43 ADR-103 Z-up)
- *       front/back    → normal=+Y, y=0 강제
- *       right/left    → normal=+X, x=0 강제
- *   - **face hit / ray-plane drift / snap drift 모두 무시** — cardinal
- *     projection 으로 0 강제 assign (수학적 truth = ground plane)
- *   - Sketch mode (user explicit): sketch plane 의 normal 이 cardinal 이면
- *     동일 projection, 아니면 sketch plane projection (사용자 explicit
- *     의도 보존)
+ * Plane resolution (ADR-181 — `resolvePlane`, DrawCircleTool 과 동일 SSOT):
+ *   - `ctx.getDrawPlane(e)` 단일 진실 원천 (메타-원칙 #4):
+ *       face hit (ADR-140 surface-aware) → 그 face 의 plane (onFace:true)
+ *       plane lock (ADR-166) auto-unlock-on-different-plane
+ *       sticky fallback (ADR-164) — pick 순간 miss 에도 직전 plane 유지
+ *       sketch plane (user explicit)
+ *       view-mode default (3d/top/bottom→Z=0 / front/back→Y=0 / right/left→X=0)
  *
- * 폐기된 동작 (legacy DrawRectTool 의 결함 source):
- *   - face hit 시 onFace=true 의 plane 사용 → 다른 RECT 의 z drift 전파
- *   - ray-plane intersect 의 drift 가 cardinal snap (|z| < 1e-3) 통과
- *     못 하면 drift 누적
- *   - snap 결과의 다른 vertex z 가 그대로 사용됨
+ * **LOCKED #63 z=0 invariant 보존**:
+ *   - face / sketch / plane-lock 가 *아닌* cardinal 기본 평면 (빈 ground /
+ *     wall-view default) → cardinal-axis 좌표 = exactly 0 강제 (drift 차단).
+ *   - 즉 빈 공간 그리기는 여전히 정확히 z=0 (또는 y=0 / x=0).
  *
- * 위 invariant 에 의해:
- *   - 어떤 mouse 위치에서 click 해도 vertex.z = exactly 0
- *   - 어떤 view 에서 click 해도 cardinal axis 좌표 = exactly 0
- *   - 다른 face 위 click 도 ground plane 으로 강제 projection
+ * 왜 DrawRect 만 깨졌었나 (ADR-181 진단):
+ *   - DrawCircle/Polygon/Arc/Bezier/Freehand 는 이미 getDrawPlane 사용 →
+ *     보이는 면에 그려짐. DrawRect 만 PR #101 rewrite 에서 자체 cardinal
+ *     경로로 갈라졌고, ADR-178 의 `resolveFacePlane` 은 getDrawPlane 의
+ *     sticky / lock / surface-aware robustness 가 전무 → pick 살짝 빗나가면
+ *     null → ground 로 떨어짐. 본 도구는 그 정합을 회복.
  *
  * Anchor:
- *   - LOCKED #7 ADR-026 P12 (cardinal snap SSOT — defense layer 2,
- *     bridge 단 1e-3 tol)
+ *   - 메타-원칙 #4 (SSOT — getDrawPlane 단일 진실 원천)
+ *   - LOCKED #7 ADR-026 P12 (cardinal snap SSOT — defense layer 2, 1e-3 tol)
  *   - LOCKED #43 ADR-103 (Z-up + XY ground = Z=0 plane)
- *   - 메타-원칙 #14 (면은 닫힌 경계로부터 유도된다 — 그 경계는 정확한
- *     평면 위)
- *   - ADR-087 K-ζ canonical (legacy deletion + rewrite pattern)
+ *   - LOCKED #63 (z=0 invariant — !onFace 일 때 보존)
+ *   - ADR-140 (surface-aware getDrawPlane) / ADR-164 (sticky) / ADR-166 (lock)
+ *   - 메타-원칙 #14 (면은 닫힌 경계로부터 유도된다 — 그 경계는 정확한 평면 위)
  */
 
 import * as THREE from 'three';
@@ -104,10 +107,11 @@ export class DrawRectTool implements ITool {
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
     if (!this.rectStart) {
-      // ═══ First click: lock plane (face-aware, ADR-178) + project start ═══
-      // ADR-178: solid face 위 클릭 → 그 face plane (LOCKED #63 amendment).
-      // 빈 공간 → cardinal ground (z=0 강제 보존).
-      const plane = this.resolveFacePlane(e) ?? this.resolveCardinalPlane();
+      // ═══ First click: lock plane (face-aware, ADR-181 SSOT) + project start ═══
+      // ADR-181: DrawCircle 와 동일하게 canonical `ctx.getDrawPlane(e)` 사용
+      //   (face hit + plane lock + sticky fallback + sketch + ADR-140
+      //   surface-aware). 빈 공간 → cardinal ground (z=0 강제 보존, !onFace).
+      const plane = this.resolvePlane(e, point);
       const start = this.projectClickToCardinalPlane(e, point, plane);
       if (!start) return;
       this.plane = plane;
@@ -308,56 +312,63 @@ export class DrawRectTool implements ITool {
   }
 
   /**
-   * ADR-178 — Face-aware drawing plane (LOCKED #63 amendment, 사용자 결재
-   * 2026-06-01: "rect는 입체면에 작성이 안됌").
+   * ADR-181 — Unified face-aware drawing plane via the canonical
+   * `ctx.getDrawPlane(e)` SSOT (메타-원칙 #4), **exactly like DrawCircleTool**.
    *
-   * ADR-175 가 get3DPoint (DrawLine) 을 face-aware 로 만든 것처럼, DrawRect
-   * 도 첫 클릭이 solid face 위면 그 face 의 plane 에 그려지도록. LOCKED #63
-   * 의 z=0 강제는 *빈 공간* 에서만 (resolveCardinalPlane fallback) 보존.
-   * drift 안전성은 ADR-170/171/168 absorb 인프라가 보장.
+   * 사용자 결재 2026-06-01:
+   * > "보이는 면에 커서를 가져가면 도형을 그려야 합니다. 서클은 되는데
+   * >  rect는 안됩니다. 서클과 차이점을 검토하세요."
    *
-   * 다른 Draw 도구 (Circle/Polygon/Arc/Bezier/Freehand) 는 이미 getDrawPlane
-   * (ADR-140) 으로 face-aware — DrawRect 만 PR #101 에서 cardinal 강제로
-   * 재작성되며 누락됐음. 본 메서드가 그 정합을 회복.
+   * 진단 (Claude Preview ground-truth): DrawCircle 은 `ctx.getDrawPlane(e)` 를
+   * 쓴다 — 이 캐논 경로는 face hit (ADR-140 surface-aware) + plane lock
+   * auto-unlock (ADR-166) + **sticky fallback** (ADR-164) + sketch 를 모두
+   * 처리한다. DrawRect 의 (ADR-178) `resolveFacePlane` 은 그 robustness 가
+   * *전무* 했다 — `viewport.pick` 이 살짝 빗나가면 (실제 마우스의 가장자리/
+   * 경사각/순간 miss) `null` 을 반환해 `resolveCardinalPlane` (= ground z=0)
+   * 으로 떨어졌고, 그래서 "면이 아닌 다른 위치에 생성" 됐다. DrawCircle 은
+   * 같은 pick miss 에도 sticky fallback 으로 면 plane 을 유지한다.
    *
-   * @returns face 위면 그 face 의 CardinalPlane, 아니면 null (→ ground fallback)
+   * 본 메서드가 그 divergence 를 제거한다 — DrawRect 가 DrawCircle 과 *동일한*
+   * face-aware 견고성을 얻는다.
+   *
+   * **LOCKED #63 z=0 invariant 보존**: face / sketch / plane-lock 가 *아닌*
+   * cardinal 기본 평면 (빈 ground / wall-view default) 은 zeroValue = 0 강제.
    */
-  private resolveFacePlane(e: MouseEvent): CardinalPlane | null {
-    // Sketch mode (user explicit) takes precedence — handled by resolveCardinalPlane.
-    if (this.ctx.getSketchInfo?.()) return null;
-    if (typeof this.ctx.viewport?.pick !== 'function') return null;
+  private resolvePlane(e: MouseEvent, point: THREE.Vector3 | null): CardinalPlane {
+    const dp = this.ctx.getDrawPlane(e);
+    const normal = dp.normal.clone().normalize();
+    const up = dp.up.clone().normalize();
+    const right = (dp.right
+      ? dp.right.clone()
+      : new THREE.Vector3().crossVectors(up, normal)).normalize();
+    const onFace = dp.onFace === true;
+    const isSketch = !!this.ctx.getSketchInfo?.();
 
-    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
-    if (!hit || hit.faceIndex == null || !hit.point) return null;
-    const fid = this.ctx.getFaceId?.(hit.faceIndex);
-    if (fid == null || fid < 0) return null;
-
-    const [nx, ny, nz] = this.ctx.bridge.getFaceNormal(fid);
-    if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) return null;
-    const normal = new THREE.Vector3(nx, ny, nz);
-    if (normal.lengthSq() < 0.5) return null;
-    normal.normalize();
-
-    const hitPoint = hit.point.clone();
-    // Signed plane offset: normal·p (consistent with projectClickToCardinalPlane).
-    const zeroValue = normal.dot(hitPoint);
-
-    // Cardinal-aligned face → force the dominant axis (drift defense).
-    // Non-cardinal (slanted) face → trust the ray→plane projection (no force).
+    // Dominant cardinal axis (drift defense for axis-aligned planes).
+    // Non-cardinal (slanted / tangent) plane → trust ray→plane (no force).
     let zeroAxis: ZeroAxis = 'z';
     let forceCardinal = false;
     if (Math.abs(normal.x) > 0.999) { zeroAxis = 'x'; forceCardinal = true; }
     else if (Math.abs(normal.y) > 0.999) { zeroAxis = 'y'; forceCardinal = true; }
     else if (Math.abs(normal.z) > 0.999) { zeroAxis = 'z'; forceCardinal = true; }
 
-    // Orthonormal in-plane basis (right/up ⊥ normal).
-    const fallbackUp = Math.abs(normal.y) < 0.99
-      ? new THREE.Vector3(0, 1, 0)
-      : new THREE.Vector3(1, 0, 0);
-    const right = new THREE.Vector3().crossVectors(fallbackUp, normal).normalize();
-    const up = new THREE.Vector3().crossVectors(normal, right).normalize();
+    // Plane offset (zeroValue along normal):
+    //   · face / sketch / plane-lock → normal · referencePoint (plane's offset)
+    //   · cardinal ground/wall-view default → 0 (LOCKED #63 z=0 invariant)
+    // dp.origin is set for plane-lock (ADR-166) and surface-aware (ADR-140);
+    // else the actual 3D click point carries the offset. Fall back to a fresh
+    // face pick when `point` is null but a face is under the cursor.
+    let ref: THREE.Vector3 | null = dp.origin ?? point ?? null;
+    if (!ref && onFace && typeof this.ctx.viewport?.pick === 'function') {
+      const h = this.ctx.viewport.pick(e.clientX, e.clientY);
+      if (h && h.point) ref = h.point;
+    }
+    let zeroValue = 0;
+    if ((onFace || isSketch || dp.origin != null) && ref) {
+      zeroValue = normal.dot(ref);
+    }
 
-    return { normal, up, right, zeroAxis, zeroValue, isSketch: false, forceCardinal, isFace: true };
+    return { normal, up, right, zeroAxis, zeroValue, isSketch, forceCardinal, isFace: onFace };
   }
 
   /**
@@ -434,9 +445,19 @@ export class DrawRectTool implements ITool {
    */
   private forceCardinalAxis(pt: THREE.Vector3, plane: CardinalPlane): void {
     if (!plane.forceCardinal) return;
-    if (plane.zeroAxis === 'x') pt.x = plane.zeroValue;
-    else if (plane.zeroAxis === 'y') pt.y = plane.zeroValue;
-    else pt.z = plane.zeroValue;
+    // ADR-184 (사용자 결재 2026-06-01, "-y 면에 안그려짐") — `zeroValue` 는
+    // **부호 있는 평면 거리** (`normal·p`), face 의 실제 좌표가 아니다. cardinal
+    // 축에서 normal 성분은 ±1 이므로 실제 좌표 = `zeroValue / sign(normal[axis])`.
+    //
+    // 부호 보정 없이 `pt[axis] = zeroValue` 로 강제하면, **음의 cardinal normal**
+    // 면 (-X/-Y/-Z) 에서 좌표 부호가 뒤집힌다. 예: -Y 면 (y=-100) 은
+    // zeroValue = (-1)×(-100) = +100 → pt.y 가 +100 으로 강제되어 rect 가
+    // 반대편 +Y 면에 그려졌다. DrawCircle 은 실제 점 좌표(circleCenter[axis])를
+    // 써서 이 버그가 없었음 (사용자 관찰: "서클은 양면 다 됨"). 본 수정으로
+    // 동일 원리(실제 좌표) 회복 → -X/-Y/-Z 면도 정상.
+    if (plane.zeroAxis === 'x') pt.x = plane.zeroValue / (Math.sign(plane.normal.x) || 1);
+    else if (plane.zeroAxis === 'y') pt.y = plane.zeroValue / (Math.sign(plane.normal.y) || 1);
+    else pt.z = plane.zeroValue / (Math.sign(plane.normal.z) || 1);
   }
 
   // ═══════════════════════════════════════════════════════════════════

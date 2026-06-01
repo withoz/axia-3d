@@ -2,6 +2,14 @@
 
 **Status**: Accepted (demo-verified 2026-06-01 — RECT on box top face → z=200,
 facesCentroid confirmed)
+
+> ⚠ **Mechanism superseded by ADR-181** (2026-06-01). 본 ADR 의 *face-aware
+> 의도* (RECT 가 입체면 위에 그려짐) 는 **불변 유지**. 그러나 그 구현
+> (`resolveFacePlane` 의 자체 `viewport.pick`) 은 ADR-181 에서 폐기 —
+> DrawCircle 과 동일한 `ctx.getDrawPlane(e)` SSOT (메타-원칙 #4) 로 통일.
+> 이유: `resolveFacePlane` 은 sticky / lock / surface-aware robustness 가
+> 없어, 실제 마우스의 pick-miss 시 null → ground 로 떨어졌음 (사용자 결재
+> "서클은 되는데 rect는 안됩니다"). 자세한 근거는 ADR-181 §1 참조.
 **Date**: 2026-06-01
 **Author**: WYKO + Claude
 **Trigger**: 사용자 보고 (2026-06-01): **"rect는 입체면에 작성이 안됌"**
