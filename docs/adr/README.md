@@ -263,6 +263,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [178](./178-rect-face-aware-drawing-plane.md) | DrawRect Face-Aware Drawing Plane (ADR-175 extension, LOCKED #63 amendment 2) — RECT 입체면 위 작성, demo-verified (box top z=200) | Accepted | Track 6 |
 | [179](./179-rect-onface-preview-clarity.md) | DrawRect On-Face Preview Clarity (ADR-178 follow-up) — 면 위 그리기 amber 프리뷰, 무한 plane 연장 유지 + 가시성 개선 | Accepted | Track 6 |
 | [180](./180-precision-policy-verification.md) | Engine Precision Policy Verification (mm/f64, EPS 0.1μm cell / 0.15μm dedup) — 명시·검증 + 회귀 lock + stale 주석 정정 | Accepted | Track 6 |
+| [181](./181-drawrect-getdrawplane-ssot.md) | DrawRect getDrawPlane SSOT Unification — "서클은 되는데 rect는 안됨" 진단: DrawRect 의 divergent resolveFacePlane → DrawCircle 과 동일한 getDrawPlane SSOT 로 통일 (sticky/lock/surface-aware 상속, LOCKED #63 z=0 보존), demo-verified | Accepted | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 

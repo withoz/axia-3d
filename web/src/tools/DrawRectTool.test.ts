@@ -115,37 +115,110 @@ describe('DrawRectTool', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // ADR-178 — Face-aware drawing plane (LOCKED #63 amendment)
-  // 사용자 결재 2026-06-01: "rect는 입체면에 작성이 안됌"
+  // ADR-181 — Unified face-aware drawing plane via getDrawPlane SSOT
+  // 사용자 결재 2026-06-01: "서클은 되는데 rect는 안됩니다. 서클과 차이점을
+  //   검토하세요." → DrawRect 가 DrawCircle 과 동일한 getDrawPlane 사용.
   // ════════════════════════════════════════════════════════════════════════
-  describe('ADR-178 face-aware drawing plane', () => {
+  describe('ADR-181 getDrawPlane SSOT (face-aware, like DrawCircleTool)', () => {
     const mkEvent = () => ({ clientX: 100, clientY: 100 } as MouseEvent);
 
     it('face hit (cardinal +Z at z=200) → face plane, zeroValue=200 (NOT ground 0)', () => {
-      ctx.viewport.pick = vi.fn().mockReturnValue({
-        faceIndex: 7,
-        point: new THREE.Vector3(-60, -60, 200),
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3(1, 0, 0), onFace: true,
       });
-      ctx.getFaceId = vi.fn().mockReturnValue(7);
-      ctx.bridge.getFaceNormal = vi.fn().mockReturnValue([0, 0, 1]);
-
-      const plane = (tool as any).resolveFacePlane(mkEvent());
-      expect(plane).not.toBeNull();
+      const point = new THREE.Vector3(-60, -60, 200);
+      const plane = (tool as any).resolvePlane(mkEvent(), point);
       expect(plane.zeroValue).toBeCloseTo(200);     // on the box top, NOT z=0 ground
       expect(plane.forceCardinal).toBe(true);        // cardinal-aligned face
       expect(plane.zeroAxis).toBe('z');
       expect(plane.normal.z).toBeCloseTo(1);
-      expect(plane.isFace).toBe(true);               // ADR-179 — on-face preview flag
-      expect(ctx.bridge.getFaceNormal).toHaveBeenCalledWith(7);
+      expect(plane.isFace).toBe(true);               // on-face preview flag (amber)
     });
 
-    it('ADR-179 — cardinal ground plane has no isFace flag (blue preview)', () => {
+    it('cardinal +X wall face → zeroValue=100, zeroAxis=x, isFace=true', () => {
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 0, 1),
+        right: new THREE.Vector3(0, 1, 0), onFace: true,
+      });
+      const plane = (tool as any).resolvePlane(mkEvent(), new THREE.Vector3(100, 5, 5));
+      expect(plane.zeroValue).toBeCloseTo(100);
+      expect(plane.zeroAxis).toBe('x');
+      expect(plane.forceCardinal).toBe(true);
+      expect(plane.isFace).toBe(true);
+    });
+
+    it('LOCKED #63 — ground (no face) forces z=0 despite drifted click point', () => {
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3(1, 0, 0), onFace: false,   // empty ground
+      });
+      // click point drifted to z=0.37 — must be forced to exactly 0.
+      const plane = (tool as any).resolvePlane(mkEvent(), new THREE.Vector3(10, 20, 0.37));
+      expect(plane.zeroValue).toBe(0);          // LOCKED #63 z=0 invariant
+      expect(plane.forceCardinal).toBe(true);
+      expect(plane.isFace).toBe(false);          // ground → blue preview
+    });
+
+    it('plane-lock (dp.origin set, onFace false) → zeroValue from origin', () => {
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 0, 1),
+        right: new THREE.Vector3(0, 1, 0), onFace: false,
+        origin: new THREE.Vector3(100, 0, 0),   // ADR-166 lock / ADR-140 surface
+      });
+      const plane = (tool as any).resolvePlane(mkEvent(), new THREE.Vector3(100, 7, 7));
+      expect(plane.zeroValue).toBeCloseTo(100);  // from origin, NOT forced to 0
+      expect(plane.zeroAxis).toBe('x');
+    });
+
+    it('sketch mode → offset preserved (NOT forced to 0)', () => {
+      ctx.getSketchInfo = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1), origin: new THREE.Vector3(0, 0, 50),
+      });
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3(1, 0, 0), onFace: false,
+      });
+      const plane = (tool as any).resolvePlane(mkEvent(), new THREE.Vector3(10, 20, 50));
+      expect(plane.isSketch).toBe(true);
+      expect(plane.zeroValue).toBeCloseTo(50);   // sketch offset preserved
+    });
+
+    it('slanted (non-cardinal) face → forceCardinal false (trusts ray projection)', () => {
+      const n = new THREE.Vector3(0.7, 0, 0.7).normalize();
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: n, up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), n).normalize(),
+        onFace: true,
+      });
+      const plane = (tool as any).resolvePlane(mkEvent(), new THREE.Vector3(10, 5, 3));
+      expect(plane.forceCardinal).toBe(false);   // no cardinal axis force
+      expect(plane.isFace).toBe(true);
+    });
+
+    it('null point but face under cursor → falls back to viewport.pick for offset', () => {
+      ctx.getDrawPlane = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0),
+        right: new THREE.Vector3(1, 0, 0), onFace: true,
+      });
+      ctx.viewport.pick = vi.fn().mockReturnValue({ point: new THREE.Vector3(0, 0, 200) });
+      const plane = (tool as any).resolvePlane(mkEvent(), null);
+      expect(plane.zeroValue).toBeCloseTo(200);  // recovered from pick
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-179 — projection precision (resolveCardinalPlane + projectClickToCardinalPlane)
+  //   — methods unchanged by ADR-181, retained.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-179 projection precision (retained under ADR-181)', () => {
+    it('cardinal ground plane has no isFace flag (blue preview)', () => {
       ctx.viewport = { ...ctx.viewport, viewMode: 'top' };
       const plane = (tool as any).resolveCardinalPlane();
       expect(plane.isFace).toBeFalsy();   // ground → not a face → blue preview
     });
 
-    it('ADR-179 — 2nd corner on coplanar face → exact pick hit (no grazing blowup)', () => {
+    it('2nd corner on coplanar face → exact pick hit (no grazing blowup)', () => {
       const plane = {
         normal: new THREE.Vector3(0, 0, 1), right: new THREE.Vector3(1, 0, 0),
         up: new THREE.Vector3(0, 1, 0), zeroAxis: 'z', zeroValue: 200,
@@ -162,7 +235,7 @@ describe('DrawRectTool', () => {
       expect(pt.z).toBeCloseTo(200);
     });
 
-    it('ADR-179 — 2nd corner over off-plane face → falls through to ray∩plane (extension)', () => {
+    it('2nd corner over off-plane face → falls through to ray∩plane (extension)', () => {
       const plane = {
         normal: new THREE.Vector3(0, 0, 1), right: new THREE.Vector3(1, 0, 0),
         up: new THREE.Vector3(0, 1, 0), zeroAxis: 'z', zeroValue: 200,
@@ -176,50 +249,6 @@ describe('DrawRectTool', () => {
       const pt = (tool as any).projectClickToCardinalPlane({ clientX: 1, clientY: 1 }, null, plane);
       expect(pt.x).toBeCloseTo(300);   // ray∩plane extension, off-plane pick rejected
       expect(pt.z).toBeCloseTo(200);
-    });
-
-    it('no face hit → returns null (→ cardinal ground fallback, LOCKED #63 preserved)', () => {
-      ctx.viewport.pick = vi.fn().mockReturnValue(null);
-      const plane = (tool as any).resolveFacePlane(mkEvent());
-      expect(plane).toBeNull();
-    });
-
-    it('slanted (non-cardinal) face → forceCardinal false (trusts ray projection)', () => {
-      ctx.viewport.pick = vi.fn().mockReturnValue({
-        faceIndex: 3,
-        point: new THREE.Vector3(10, 5, 3),
-      });
-      ctx.getFaceId = vi.fn().mockReturnValue(3);
-      const n = new THREE.Vector3(0.7, 0, 0.7).normalize();
-      ctx.bridge.getFaceNormal = vi.fn().mockReturnValue([n.x, n.y, n.z]);
-
-      const plane = (tool as any).resolveFacePlane(mkEvent());
-      expect(plane).not.toBeNull();
-      expect(plane.forceCardinal).toBe(false);       // no cardinal axis force
-    });
-
-    it('sketch mode → returns null (sketch plane precedence preserved)', () => {
-      ctx.getSketchInfo = vi.fn().mockReturnValue({
-        normal: new THREE.Vector3(0, 0, 1),
-        origin: new THREE.Vector3(),
-      });
-      ctx.viewport.pick = vi.fn().mockReturnValue({
-        faceIndex: 7,
-        point: new THREE.Vector3(0, 0, 200),
-      });
-      const plane = (tool as any).resolveFacePlane(mkEvent());
-      expect(plane).toBeNull();
-    });
-
-    it('degenerate face normal → returns null (no crash, → ground fallback)', () => {
-      ctx.viewport.pick = vi.fn().mockReturnValue({
-        faceIndex: 7,
-        point: new THREE.Vector3(0, 0, 200),
-      });
-      ctx.getFaceId = vi.fn().mockReturnValue(7);
-      ctx.bridge.getFaceNormal = vi.fn().mockReturnValue([0, 0, 0]); // degenerate
-      const plane = (tool as any).resolveFacePlane(mkEvent());
-      expect(plane).toBeNull();
     });
   });
 });
