@@ -5895,8 +5895,18 @@ API — facesCentroid 로 정확 검증한 것이 교훈.)
 DrawRectTool.test.ts **+5** (face hit / no hit / slanted / sketch / degenerate).
 9 → **14 PASS**, tsc 0 errors. 절대 #[ignore] 금지 5/5.
 
+#### Follow-up — ADR-179 (on-face 프리뷰 명확화, 2026-06-01)
+
+사용자 시연 후속: RECT 둘째 코너가 면 밖으로 가면 무한 plane 위로 연장돼
+떠 보임 (plane 은 정확 — usability). 사용자 결재 **"무한 plane 연장 유지 +
+프리뷰 개선"** → ADR-179: 면 위에 그릴 때 프리뷰 **amber (#ffaa33)** 로 표시
+(`CardinalPlane.isFace` flag, `resolveFacePlane` only). 바닥은 blue 유지. 무한
+연장 동작 보존 (SketchUp parity). DrawRectTool.test +1 (14→15). Engine 변경 0.
+`docs/adr/179-rect-onface-preview-clarity.md`.
+
 #### Cross-link
 
+- **ADR-179** (on-face 프리뷰 명확화 — 직계 follow-up)
 - **ADR-175** (LOCKED #75) — get3DPoint face-aware (DrawLine) — 직계 패턴
 - **LOCKED #63** PR #101 (z=0 invariant — 본 ADR 이 2번째 amendment)
 - **ADR-140** surface-aware getDrawPlane (다른 Draw 도구 face-aware source)

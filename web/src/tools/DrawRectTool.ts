@@ -61,6 +61,12 @@ interface CardinalPlane {
   /** True if from sketch session (user explicit); false if cardinal/face. */
   isSketch: boolean;
   /**
+   * ADR-179 — true when this plane was resolved from a solid-face hit
+   * (resolveFacePlane). Drives the on-face preview color so the user can
+   * tell at a glance they are drawing on a face plane (vs ground).
+   */
+  isFace?: boolean;
+  /**
    * ADR-178 — when true, the cardinal-axis coord is force-assigned to
    * `zeroValue` (drift defense for axis-aligned planes: ground + cardinal
    * faces). When false (non-cardinal/slanted face plane), the ray→plane
@@ -345,7 +351,7 @@ export class DrawRectTool implements ITool {
     const right = new THREE.Vector3().crossVectors(fallbackUp, normal).normalize();
     const up = new THREE.Vector3().crossVectors(normal, right).normalize();
 
-    return { normal, up, right, zeroAxis, zeroValue, isSketch: false, forceCardinal };
+    return { normal, up, right, zeroAxis, zeroValue, isSketch: false, forceCardinal, isFace: true };
   }
 
   /**
@@ -438,12 +444,22 @@ export class DrawRectTool implements ITool {
     const center = this.computeCenter(start, end, this.plane);
     const n = this.plane.normal;
 
+    // ADR-179 — on-face preview clarity. When drawing on a solid face the
+    // preview is amber + more opaque so the user can tell at a glance the
+    // rect is being placed on a face plane (vs blue on the ground). The
+    // rect still extends onto the face's infinite plane (사용자 결재
+    // "무한 plane 연장 유지") — this only makes *where* it lands legible.
+    const onFace = this.plane.isFace === true;
+    const fillColor = onFace ? 0xffaa33 : 0x4488ff;
+    const fillOpacity = onFace ? 0.4 : 0.3;
+    const lineColor = onFace ? 0xff8800 : 0x2266dd;
+
     // ── Filled preview ──
     const geo = new THREE.PlaneGeometry(absW, absH);
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x4488ff,
+      color: fillColor,
       transparent: true,
-      opacity: 0.3,
+      opacity: fillOpacity,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
@@ -470,7 +486,7 @@ export class DrawRectTool implements ITool {
       center.clone().addScaledVector(r, -hw).addScaledVector(u,  hh).addScaledVector(n, 0.5),
     ];
     const lineGeo = new THREE.BufferGeometry().setFromPoints(corners);
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x2266dd, linewidth: 1 });
+    const lineMat = new THREE.LineBasicMaterial({ color: lineColor, linewidth: 1 });
     this.rectOutline = new THREE.LineLoop(lineGeo, lineMat);
     this.rectOutline.renderOrder = 999;
     this.ctx.viewport.scene.add(this.rectOutline);

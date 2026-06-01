@@ -135,7 +135,14 @@ describe('DrawRectTool', () => {
       expect(plane.forceCardinal).toBe(true);        // cardinal-aligned face
       expect(plane.zeroAxis).toBe('z');
       expect(plane.normal.z).toBeCloseTo(1);
+      expect(plane.isFace).toBe(true);               // ADR-179 — on-face preview flag
       expect(ctx.bridge.getFaceNormal).toHaveBeenCalledWith(7);
+    });
+
+    it('ADR-179 — cardinal ground plane has no isFace flag (blue preview)', () => {
+      ctx.viewport = { ...ctx.viewport, viewMode: 'top' };
+      const plane = (tool as any).resolveCardinalPlane();
+      expect(plane.isFace).toBeFalsy();   // ground → not a face → blue preview
     });
 
     it('no face hit → returns null (→ cardinal ground fallback, LOCKED #63 preserved)', () => {
