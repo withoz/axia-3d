@@ -85,6 +85,15 @@
   Scenario B1 amendment (2026-05-27)** — 기존 1.5μm 에서 10× precision
   강화 (SPATIAL_HASH_CELL: 1e-3 → 1e-4 mm). 산업 표준 mm 단위 3-4
   decimal place 정합. ExactVec3 보고서 §B1 권장.
+- **ADR-180 명시·검증 (2026-06-01, 사용자 결재)**: 정밀도 정책을 회귀로
+  lock — 단위 = mm, 좌표 = f64 (`DVec3` 24 bytes), `SPATIAL_HASH_CELL`
+  = 1e-4 mm (**0.1μm** cell), dedup = cell × 1.5 = **0.15μm**,
+  `VERTEX_TOLERANCE` = 1e-7 mm. 회귀 `adr180_precision_policy_*` 2개
+  (bracket: 0.14μm dedup / 0.16μm distinct). stale "1.5μm" 주석 정정
+  (mesh.rs:505/506/638 등 — 코드는 정확했으나 ADR-147 이전 값 표기
+  드리프트). 사용자 facing UI imprecision (RECT 미리보기 폭발/불일치)은
+  **TS-layer 별개** (엔진 f64/EPS 무관). 자세히는
+  `docs/adr/180-precision-policy-verification.md`.
 - UI Snap (osnap) 이 정렬 책임 — 입력 단계에서 해소.
 - `add_vertex_with_snap` 같은 mesh-level 허용오차 함수 추가 금지.
 - **Future**: ExactVec3 자료형 (B2/B3) — AxiA Phase 0~3 안정성 확인
