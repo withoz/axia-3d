@@ -502,10 +502,12 @@ impl Mesh {
     /// Uses spatial hashing for O(1) average-case coincidence lookup.
     pub fn add_vertex(&mut self, pos: DVec3) -> VertId {
         let key = spatial_key(pos);
-        // 공간 해시 3×3×3 = 최대 3 셀(=3μm) 반경 내 후보.
-        // 실제 dedup 판정은 SPATIAL_HASH_CELL × 1.5 (1.5μm) 이내로 — f32 drift(~0.1μm)와
-        // snap 오차(μm급)를 흡수. VERTEX_TOLERANCE(1e-7)는 그대로 두지만 add_vertex
-        // dedup 단계에선 실용적 기준 적용.
+        // 공간 해시 3×3×3 = 최대 3 셀(= 0.3μm) 반경 내 후보.
+        // 실제 dedup 판정은 SPATIAL_HASH_CELL × 1.5 = 1.5e-4 mm (0.15μm) 이내로 —
+        // f32 drift(~0.1μm)와 snap 오차(sub-μm급)를 흡수. VERTEX_TOLERANCE(1e-7)는
+        // 그대로 두지만 add_vertex dedup 단계에선 실용적 기준 적용.
+        // (ADR-147 Scenario B1: SPATIAL_HASH_CELL 1e-3 → 1e-4, dedup 1.5μm → 0.15μm.
+        //  ADR-180 명시·검증 — precision_policy 회귀로 lock.)
         let dedup_tol = SPATIAL_HASH_CELL * 1.5;
         let dedup_tol_sq = dedup_tol * dedup_tol;
         for dx in -1..=1 {
@@ -635,8 +637,8 @@ impl Mesh {
     ///
     /// Read-only mirror of [`Mesh::add_vertex`]'s dedup scan: returns the
     /// existing active `VertId` within LOCKED #5 dedup tolerance
-    /// (`SPATIAL_HASH_CELL * 1.5 = 1.5μm`) of `pos`, or `None` if no
-    /// coincident vertex exists.
+    /// (`SPATIAL_HASH_CELL * 1.5 = 1.5e-4 mm = 0.15μm`, ADR-147 / ADR-180)
+    /// of `pos`, or `None` if no coincident vertex exists.
     ///
     /// Thin read-only accessor (like [`Mesh::vertex_pos`] / [`Mesh::find_edge`]).
     /// The absorb LOGIC (Phase 2 SSOT) lives entirely in
@@ -10856,8 +10858,50 @@ mod tests {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // ADR-180 — 엔진 정밀도 정책 명시·검증 (mm/f64, EPS 0.1μm cell / 0.15μm dedup).
+    //
+    // 사용자 결재 (2026-06-01): "단위 + EPS mm/f64, EPS 1e-4mm (0.1μm)
+    // 명시·검증". 본 회귀가 정밀도 정책의 canonical lock — 코드가 바뀌면
+    // 즉시 fail. (ADR-147 Scenario B1 amendment 가 SPATIAL_HASH_CELL 을
+    // 1e-3 → 1e-4 (0.1μm) 로, dedup 을 1.5μm → 0.15μm 로 강화.)
+    // ════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn adr180_precision_policy_units_mm_f64_eps() {
+        // 단위 = mm, 좌표 타입 = f64 (DVec3). VERTEX_TOLERANCE = 1e-7 mm.
+        assert_eq!(crate::tolerances::VERTEX_TOLERANCE, 1e-7,
+            "ADR-180: VERTEX_TOLERANCE = 1e-7 mm (정밀 coincidence)");
+        // DVec3 는 f64 — 컴파일 타임 보장 (size_of::<DVec3>() == 24 = 3×f64).
+        assert_eq!(core::mem::size_of::<DVec3>(), 24,
+            "ADR-180: DVec3 = 3×f64 (mm 좌표, 24 bytes)");
+    }
+
+    #[test]
+    fn adr180_precision_policy_dedup_tolerance_is_015um() {
+        // dedup tolerance = SPATIAL_HASH_CELL × 1.5 = 1.5e-4 mm = 0.15μm.
+        // 0.14μm 떨어진 두 점 → dedup (same VertId).
+        // 0.16μm 떨어진 두 점 → NO dedup (different VertId).
+        // 이 bracket 이 dedup tolerance 를 정확히 0.15μm 로 고정 (ADR-147/ADR-180).
+        let mut mesh = Mesh::new();
+        let base = DVec3::new(5.0, 0.0, 0.0);
+
+        // within 0.15μm (0.14μm = 1.4e-4 mm) → dedup
+        let a = mesh.add_vertex(base);
+        let b = mesh.add_vertex(base + DVec3::new(1.4e-4, 0.0, 0.0));
+        assert_eq!(a, b,
+            "ADR-180: 0.14μm < 0.15μm dedup tolerance → same VertId");
+
+        // beyond 0.15μm (0.16μm = 1.6e-4 mm) → distinct
+        let mut mesh2 = Mesh::new();
+        let c = mesh2.add_vertex(base);
+        let d = mesh2.add_vertex(base + DVec3::new(1.6e-4, 0.0, 0.0));
+        assert_ne!(c, d,
+            "ADR-180: 0.16μm > 0.15μm dedup tolerance → distinct VertId");
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // ADR-089 Phase 2 (A-ε) — Spatial-hash dedup adapt for self-loop.
-    // LOCKED #5 (1.5μm spatial-hash dedup) 정합 검증.
+    // LOCKED #5 (0.15μm spatial-hash dedup, ADR-147) 정합 검증.
     //
     // Self-loop edge 의 anchor vertex 가 spatial-hash 를 정상 통과하는지,
     // 그리고 dedup 결과 (same position → same vertex) 가 self-loop 의미
@@ -10869,7 +10913,7 @@ mod tests {
     #[test]
     fn adr089_a_epsilon_anchor_position_dedup_via_spatial_hash() {
         // 같은 위치에 add_vertex 두 번 호출 → spatial-hash dedup → 같은
-        // VertId 반환 (LOCKED #5 1.5μm). self-loop edge 의 anchor 도
+        // VertId 반환 (LOCKED #5 0.15μm). self-loop edge 의 anchor 도
         // 동일 dedup.
         let mut mesh = Mesh::new();
         let pos = DVec3::new(5.0, 0.0, 0.0);
@@ -10888,16 +10932,16 @@ mod tests {
     }
 
     #[test]
-    fn adr089_a_epsilon_anchor_within_15um_deduplicates() {
-        // LOCKED #5 — 1.5μm spatial-hash cell. 두 anchor 가 1.5μm 안에
-        // 있으면 dedup. self-loop edge 정상 동작.
+    fn adr089_a_epsilon_anchor_within_dedup_tol_deduplicates() {
+        // LOCKED #5 — 0.15μm spatial-hash dedup (ADR-147). 두 anchor 가
+        // 0.15μm 안에 있으면 dedup. self-loop edge 정상 동작.
         let mut mesh = Mesh::new();
         let pos1 = DVec3::new(5.0, 0.0, 0.0);
-        let pos2 = DVec3::new(5.0 + 1e-7, 0.0, 0.0);  // 0.1μm < 1.5μm
+        let pos2 = DVec3::new(5.0 + 1e-7, 0.0, 0.0);  // 1e-7 mm ≪ 0.15μm dedup
         let v1 = mesh.add_vertex(pos1);
         let v2 = mesh.add_vertex(pos2);
         assert_eq!(v1, v2,
-            "ADR-089 A-ε: positions within 1.5μm dedup to same VertId");
+            "ADR-089 A-ε: positions within 0.15μm dedup to same VertId");
 
         let circle = crate::curves::AnalyticCurve::Circle {
             center: DVec3::ZERO, radius: 5.0, normal: DVec3::Z, basis_u: DVec3::X,
