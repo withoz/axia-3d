@@ -53,12 +53,20 @@ interface CardinalPlane {
   normal: THREE.Vector3;
   up: THREE.Vector3;
   right: THREE.Vector3;
-  /** Which axis coord is force-assigned to 0. */
+  /** Which axis coord is force-assigned to `zeroValue`. */
   zeroAxis: ZeroAxis;
-  /** 0-coord plane offset (sketch mode may be nonzero; cardinal ground = 0). */
+  /** Signed plane offset along `normal` (`normal·p`). Cardinal ground = 0,
+   *  cardinal face at z=200 = 200, slanted face = normal·hitPoint. */
   zeroValue: number;
-  /** True if from sketch session (user explicit); false if cardinal ground. */
+  /** True if from sketch session (user explicit); false if cardinal/face. */
   isSketch: boolean;
+  /**
+   * ADR-178 — when true, the cardinal-axis coord is force-assigned to
+   * `zeroValue` (drift defense for axis-aligned planes: ground + cardinal
+   * faces). When false (non-cardinal/slanted face plane), the ray→plane
+   * projection is trusted as-is (no axis force).
+   */
+  forceCardinal: boolean;
 }
 
 export class DrawRectTool implements ITool {
@@ -84,8 +92,10 @@ export class DrawRectTool implements ITool {
 
   onMouseDown(e: MouseEvent, point: THREE.Vector3 | null): void {
     if (!this.rectStart) {
-      // ═══ First click: lock cardinal plane + force start point to z=0 ═══
-      const plane = this.resolveCardinalPlane();
+      // ═══ First click: lock plane (face-aware, ADR-178) + project start ═══
+      // ADR-178: solid face 위 클릭 → 그 face plane (LOCKED #63 amendment).
+      // 빈 공간 → cardinal ground (z=0 강제 보존).
+      const plane = this.resolveFacePlane(e) ?? this.resolveCardinalPlane();
       const start = this.projectClickToCardinalPlane(e, point, plane);
       if (!start) return;
       this.plane = plane;
@@ -244,7 +254,7 @@ export class DrawRectTool implements ITool {
       const fallbackUp = Math.abs(normal.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
       const right = new THREE.Vector3().crossVectors(fallbackUp, normal).normalize();
       const up = new THREE.Vector3().crossVectors(normal, right).normalize();
-      return { normal, up, right, zeroAxis, zeroValue, isSketch: true };
+      return { normal, up, right, zeroAxis, zeroValue, isSketch: true, forceCardinal: true };
     }
 
     const vm = this.ctx.viewport.viewMode;
@@ -258,6 +268,7 @@ export class DrawRectTool implements ITool {
           zeroAxis: 'y',
           zeroValue: 0,
           isSketch: false,
+          forceCardinal: true,
         };
       case 'right':
       case 'left':
@@ -268,6 +279,7 @@ export class DrawRectTool implements ITool {
           zeroAxis: 'x',
           zeroValue: 0,
           isSketch: false,
+          forceCardinal: true,
         };
       default:
         // 3d / top / bottom → XY ground (Z=0) per LOCKED #43 ADR-103 Z-up
@@ -278,8 +290,62 @@ export class DrawRectTool implements ITool {
           zeroAxis: 'z',
           zeroValue: 0,
           isSketch: false,
+          forceCardinal: true,
         };
     }
+  }
+
+  /**
+   * ADR-178 — Face-aware drawing plane (LOCKED #63 amendment, 사용자 결재
+   * 2026-06-01: "rect는 입체면에 작성이 안됌").
+   *
+   * ADR-175 가 get3DPoint (DrawLine) 을 face-aware 로 만든 것처럼, DrawRect
+   * 도 첫 클릭이 solid face 위면 그 face 의 plane 에 그려지도록. LOCKED #63
+   * 의 z=0 강제는 *빈 공간* 에서만 (resolveCardinalPlane fallback) 보존.
+   * drift 안전성은 ADR-170/171/168 absorb 인프라가 보장.
+   *
+   * 다른 Draw 도구 (Circle/Polygon/Arc/Bezier/Freehand) 는 이미 getDrawPlane
+   * (ADR-140) 으로 face-aware — DrawRect 만 PR #101 에서 cardinal 강제로
+   * 재작성되며 누락됐음. 본 메서드가 그 정합을 회복.
+   *
+   * @returns face 위면 그 face 의 CardinalPlane, 아니면 null (→ ground fallback)
+   */
+  private resolveFacePlane(e: MouseEvent): CardinalPlane | null {
+    // Sketch mode (user explicit) takes precedence — handled by resolveCardinalPlane.
+    if (this.ctx.getSketchInfo?.()) return null;
+    if (typeof this.ctx.viewport?.pick !== 'function') return null;
+
+    const hit = this.ctx.viewport.pick(e.clientX, e.clientY);
+    if (!hit || hit.faceIndex == null || !hit.point) return null;
+    const fid = this.ctx.getFaceId?.(hit.faceIndex);
+    if (fid == null || fid < 0) return null;
+
+    const [nx, ny, nz] = this.ctx.bridge.getFaceNormal(fid);
+    if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) return null;
+    const normal = new THREE.Vector3(nx, ny, nz);
+    if (normal.lengthSq() < 0.5) return null;
+    normal.normalize();
+
+    const hitPoint = hit.point.clone();
+    // Signed plane offset: normal·p (consistent with projectClickToCardinalPlane).
+    const zeroValue = normal.dot(hitPoint);
+
+    // Cardinal-aligned face → force the dominant axis (drift defense).
+    // Non-cardinal (slanted) face → trust the ray→plane projection (no force).
+    let zeroAxis: ZeroAxis = 'z';
+    let forceCardinal = false;
+    if (Math.abs(normal.x) > 0.999) { zeroAxis = 'x'; forceCardinal = true; }
+    else if (Math.abs(normal.y) > 0.999) { zeroAxis = 'y'; forceCardinal = true; }
+    else if (Math.abs(normal.z) > 0.999) { zeroAxis = 'z'; forceCardinal = true; }
+
+    // Orthonormal in-plane basis (right/up ⊥ normal).
+    const fallbackUp = Math.abs(normal.y) < 0.99
+      ? new THREE.Vector3(0, 1, 0)
+      : new THREE.Vector3(1, 0, 0);
+    const right = new THREE.Vector3().crossVectors(fallbackUp, normal).normalize();
+    const up = new THREE.Vector3().crossVectors(normal, right).normalize();
+
+    return { normal, up, right, zeroAxis, zeroValue, isSketch: false, forceCardinal };
   }
 
   /**
@@ -327,8 +393,13 @@ export class DrawRectTool implements ITool {
     return target;
   }
 
-  /** In-place force point's cardinal-axis coord to plane.zeroValue (exact). */
+  /**
+   * In-place force point's cardinal-axis coord to plane.zeroValue (exact).
+   * ADR-178: skipped for non-cardinal (slanted) face planes — the ray→plane
+   * projection is already exact, and forcing a single axis would corrupt it.
+   */
   private forceCardinalAxis(pt: THREE.Vector3, plane: CardinalPlane): void {
+    if (!plane.forceCardinal) return;
     if (plane.zeroAxis === 'x') pt.x = plane.zeroValue;
     else if (plane.zeroAxis === 'y') pt.y = plane.zeroValue;
     else pt.z = plane.zeroValue;

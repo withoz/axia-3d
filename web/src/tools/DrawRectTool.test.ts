@@ -113,4 +113,73 @@ describe('DrawRectTool', () => {
       expect(ctx.bridge.drawRect).not.toHaveBeenCalled();
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ADR-178 — Face-aware drawing plane (LOCKED #63 amendment)
+  // 사용자 결재 2026-06-01: "rect는 입체면에 작성이 안됌"
+  // ════════════════════════════════════════════════════════════════════════
+  describe('ADR-178 face-aware drawing plane', () => {
+    const mkEvent = () => ({ clientX: 100, clientY: 100 } as MouseEvent);
+
+    it('face hit (cardinal +Z at z=200) → face plane, zeroValue=200 (NOT ground 0)', () => {
+      ctx.viewport.pick = vi.fn().mockReturnValue({
+        faceIndex: 7,
+        point: new THREE.Vector3(-60, -60, 200),
+      });
+      ctx.getFaceId = vi.fn().mockReturnValue(7);
+      ctx.bridge.getFaceNormal = vi.fn().mockReturnValue([0, 0, 1]);
+
+      const plane = (tool as any).resolveFacePlane(mkEvent());
+      expect(plane).not.toBeNull();
+      expect(plane.zeroValue).toBeCloseTo(200);     // on the box top, NOT z=0 ground
+      expect(plane.forceCardinal).toBe(true);        // cardinal-aligned face
+      expect(plane.zeroAxis).toBe('z');
+      expect(plane.normal.z).toBeCloseTo(1);
+      expect(ctx.bridge.getFaceNormal).toHaveBeenCalledWith(7);
+    });
+
+    it('no face hit → returns null (→ cardinal ground fallback, LOCKED #63 preserved)', () => {
+      ctx.viewport.pick = vi.fn().mockReturnValue(null);
+      const plane = (tool as any).resolveFacePlane(mkEvent());
+      expect(plane).toBeNull();
+    });
+
+    it('slanted (non-cardinal) face → forceCardinal false (trusts ray projection)', () => {
+      ctx.viewport.pick = vi.fn().mockReturnValue({
+        faceIndex: 3,
+        point: new THREE.Vector3(10, 5, 3),
+      });
+      ctx.getFaceId = vi.fn().mockReturnValue(3);
+      const n = new THREE.Vector3(0.7, 0, 0.7).normalize();
+      ctx.bridge.getFaceNormal = vi.fn().mockReturnValue([n.x, n.y, n.z]);
+
+      const plane = (tool as any).resolveFacePlane(mkEvent());
+      expect(plane).not.toBeNull();
+      expect(plane.forceCardinal).toBe(false);       // no cardinal axis force
+    });
+
+    it('sketch mode → returns null (sketch plane precedence preserved)', () => {
+      ctx.getSketchInfo = vi.fn().mockReturnValue({
+        normal: new THREE.Vector3(0, 0, 1),
+        origin: new THREE.Vector3(),
+      });
+      ctx.viewport.pick = vi.fn().mockReturnValue({
+        faceIndex: 7,
+        point: new THREE.Vector3(0, 0, 200),
+      });
+      const plane = (tool as any).resolveFacePlane(mkEvent());
+      expect(plane).toBeNull();
+    });
+
+    it('degenerate face normal → returns null (no crash, → ground fallback)', () => {
+      ctx.viewport.pick = vi.fn().mockReturnValue({
+        faceIndex: 7,
+        point: new THREE.Vector3(0, 0, 200),
+      });
+      ctx.getFaceId = vi.fn().mockReturnValue(7);
+      ctx.bridge.getFaceNormal = vi.fn().mockReturnValue([0, 0, 0]); // degenerate
+      const plane = (tool as any).resolveFacePlane(mkEvent());
+      expect(plane).toBeNull();
+    });
+  });
 });

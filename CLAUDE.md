@@ -4398,6 +4398,15 @@ pub fn lod_chord_tol(camera_distance: f64) -> f64 {
 > motivation (face hit drift 전파) 은 ADR-170/171/168 absorb 인프라가 해소.
 > Demo-verified (실제 UI 마우스: 박스 윗면 가로선 → faces 6→7 분할 / 빈 공간
 > → z=0 보존). 자세히는 LOCKED #75 + `docs/adr/175-face-hit-drawing-plane.md`.
+>
+> ⚠ **Amended by ADR-178 (2026-06-01, 사용자 보고 "rect는 입체면에 작성이
+> 안됌")**. ADR-175 가 DrawLine(get3DPoint)만 고쳤으나 **DrawRectTool 은
+> PR #101 에서 cardinal 강제(resolveCardinalPlane)로 재작성된 채** 누락됨.
+> ADR-178 이 `resolveFacePlane` 추가 — RECT 첫 클릭이 입체면이면 그 face
+> plane(cardinal/slanted 모두) 에 그려짐. 빈 공간은 z=0 보존. 이제 모든 Draw
+> 도구 (Line/Rect/Circle/Polygon/Arc/Bezier/Freehand) 가 일관 face-aware.
+> Demo-verified (박스 윗면 RECT → facesCentroid z=200). 자세히는 LOCKED #77 +
+> `docs/adr/178-rect-face-aware-drawing-plane.md`.
 
 **Canonical anchor (사용자 결재, 2026-05-18, 누적 4건)**:
 > "rect 명령 제거하고 새로 만듭니다. 무조건 z=0에서 그려져야 합니다."
@@ -5818,6 +5827,73 @@ intersect_on` / `adr176_two_rects_as_shape_partial_overlap_auto_split`).
   불변 (ADR-139 amendment via 결재) / **#16** 자동화 antipattern (불변 보존)
 - **ADR-087 K-ζ** 사용자 시연 게이트 canonical
 - **LOCKED #44** Complete Meaning per Merge (single atomic PR)
+
+### 77. ADR-178 — DrawRect Face-Aware Drawing Plane (LOCKED #63 amendment 2, 2026-06-01) ✅
+
+**Canonical anchor (사용자 보고, 2026-06-01)**:
+> "rect는 입체면에 작성이 안됌"
+
+ADR-175 가 DrawLine(`get3DPoint`)을 face-aware 로 만들었으나, **DrawRectTool 은
+PR #101 (LOCKED #63)에서 `resolveCardinalPlane()` cardinal 강제로 재작성된 채**
+face-awareness 가 누락됨. ADR-178 이 RECT 로 확장.
+
+#### Root cause — DrawRect 만 cardinal 강제 (audit 발견)
+
+| Draw 도구 | plane 경로 | face-aware? |
+|---|---|---|
+| Line | get3DPoint (ADR-175) | ✅ |
+| Circle / Polygon / Arc / Bezier / Freehand | getDrawPlane (ADR-140) | ✅ |
+| **Rect** | **resolveCardinalPlane (PR #101)** | ❌ → ADR-178 fix |
+
+#### 핵심 변경 — `resolveFacePlane`
+
+```
+onMouseDown 첫 클릭:
+  plane = resolveFacePlane(e) ?? resolveCardinalPlane()
+```
+- 입체면(cardinal) 클릭 → `zeroValue = normal·hitPoint` (z=200 등), forceCardinal=true
+- 입체면(slanted) → forceCardinal=false (ray projection 신뢰)
+- 빈 공간 → null → cardinal ground (z=0 보존)
+- sketch mode → null (sketch plane 우선)
+- `forceCardinalAxis` 에 `if (!forceCardinal) return` — slanted face 강제 skip
+
+#### Lock-ins (L-77-1 ~ L-77-9)
+
+- **L-77-1** DrawRect face-aware (face hit → face plane, no hit → z=0)
+- **L-77-2** 모든 Draw 도구 일관 face-aware (메타-원칙 #4 SSOT)
+- **L-77-3** LOCKED #63 z=0 강제는 빈 공간에서만 보존
+- **L-77-4** cardinal vs slanted face 구분 (`forceCardinal` flag)
+- **L-77-5** drift 안전성 = ADR-170/171/168 absorb 인프라
+- **L-77-6** sketch mode 우선 (변경 0)
+- **L-77-7** Engine 변경 0 (TS only)
+- **L-77-8** 기존 cardinal/sketch 동작 보존 (additive, forceCardinal 기본 true)
+- **L-77-9** 절대 #[ignore] 금지
+
+#### Demo verification (Claude Preview, 실제 마우스)
+
+| 검증 | 결과 |
+|---|---|
+| pick 박스 윗면 | faceIndex 7, normal [0,0,1] ✅ |
+| resolveFacePlane zeroValue | normal·hitPoint = **200** ✅ |
+| RECT face centroid (facesCentroid, 신뢰) | **z=200** ✅ (박스 윗면 위) |
+| invariants | valid=true, 0 violations ✅ |
+
+→ 사용자 "rect는 입체면에 작성이 안됌" 완전 해소. (getFaceVertices 는 broken
+API — facesCentroid 로 정확 검증한 것이 교훈.)
+
+#### 회귀 매트릭스
+
+DrawRectTool.test.ts **+5** (face hit / no hit / slanted / sketch / degenerate).
+9 → **14 PASS**, tsc 0 errors. 절대 #[ignore] 금지 5/5.
+
+#### Cross-link
+
+- **ADR-175** (LOCKED #75) — get3DPoint face-aware (DrawLine) — 직계 패턴
+- **LOCKED #63** PR #101 (z=0 invariant — 본 ADR 이 2번째 amendment)
+- **ADR-140** surface-aware getDrawPlane (다른 Draw 도구 face-aware source)
+- **ADR-170/171/168** absorb 인프라 (drift 해소) / **ADR-176** auto-behaviors ON
+- **메타-원칙 #4** SSOT / **#5** 사용자 편의 / **#10** ADR 불변 (LOCKED #63 amendment)
+- **ADR-087 K-ζ** 사용자 시연 게이트 / **LOCKED #44** Complete Meaning per Merge
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:
