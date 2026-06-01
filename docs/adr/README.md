@@ -257,6 +257,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [172](./172-dcel-register-boundary-element.md) | DCEL Edge Register (Phase 3) — crossing-split already exists, demo-verified | Accepted | Track 6 |
 | [173](./173-phase-4-12-demo-gate.md) | Phase 4 — 12 시연 게이트 (8/12 PASS) + Phase 1-4 sequence COMPLETE 🎉 | Accepted | Track 6 |
 | [174](./174-curve-edge-crossing-split.md) | Curve-Edge Crossing-Split (직선 × Circle 면) — ADR-173 §10 spawned, Approach A polygonize dispatch, demo-verified | Accepted | Track 6 |
+| [175](./175-face-hit-drawing-plane.md) | Face-Hit Drawing Plane (LOCKED #63 amendment) — get3DPoint face-aware, 입체면 직접 그리기, demo-verified (box face line 6→7) | Accepted | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 

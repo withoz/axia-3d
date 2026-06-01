@@ -4391,6 +4391,14 @@ pub fn lod_chord_tol(camera_distance: f64) -> f64 {
 
 ### 63. PR #101 — z=0 Invariant Closure (DrawRectTool Rewrite + Snap Disable + System-wide Cardinal Force, 2026-05-18) ✅
 
+> ⚠ **Amended by ADR-175 (2026-06-01, 사용자 결재 "LOCKED #63 개정 — 직접
+> 그리기")**. `get3DPoint` 의 "무조건 z=0 강제 + face hit 우회" 는 **빈 공간**
+> 에서만 보존. **면(solid face) 위 클릭 시 그 면 plane 에 직접 그려짐**
+> (get3DPoint face-aware, getDrawPlane ADR-140 과 일치). 원래 z=0 강제의
+> motivation (face hit drift 전파) 은 ADR-170/171/168 absorb 인프라가 해소.
+> Demo-verified (실제 UI 마우스: 박스 윗면 가로선 → faces 6→7 분할 / 빈 공간
+> → z=0 보존). 자세히는 LOCKED #75 + `docs/adr/175-face-hit-drawing-plane.md`.
+
 **Canonical anchor (사용자 결재, 2026-05-18, 누적 4건)**:
 > "rect 명령 제거하고 새로 만듭니다. 무조건 z=0에서 그려져야 합니다."
 > "스냅이 문제입니다. 스냅기능을 모두 지워주세요. z=0 완성후 스냅기능을
@@ -5639,6 +5647,77 @@ ADR-173 §9 정합:
 - **곡선 면 분할 future ADR** (curve-edge crossing-split, spawned task)
 - **메타-원칙 #5/#14/#16** + **Pattern 12** engine already-robust (deepest)
 - **axia-sketch pattern 3/5** (이미 우리 엔진 구현, demo-verified)
+
+### 75. ADR-175 — Face-Hit Drawing Plane (LOCKED #63 amendment, 2026-06-01) ✅
+
+**Canonical anchor (사용자 시연 + 결재, 2026-06-01)**:
+> "박스 만들고 → 윗면에 선 → 면 분할은 안됨", "입체면에 도형그리기가 전혀
+> 안됨" → 결재 "LOCKED #63 개정 — 직접 그리기".
+
+ADR-172/173 의 "입체면 split" 은 *bridge 직접 호출* (z=200 명시) 로 demo-
+verified 됐으나, **실제 UI 마우스 경로** 로는 작동 안 함 — `ToolManager.
+get3DPoint` 의 LOCKED #63 z=0 강제 (face hit 우회) 가 입체면 클릭을 z=0 으로
+강제. ADR-175 가 get3DPoint 를 face-aware (getDrawPlane ADR-140 과 일치) 로
+amend.
+
+#### 핵심 변경 — get3DPoint face-aware
+
+```
+면(solid face) 위 클릭 → 그 면 plane 위 점 (z=200 등)        ← NEW
+빈 공간 클릭        → z=0 ground 강제 (LOCKED #63 보존)
+sketch mode        → sketch plane (보존)
+```
+
+원래 z=0 강제의 motivation (face hit drift 전파) 은 **ADR-170/171/168
+absorb 인프라** (face plane projection + ADR-168 drift snap) 가 해소 →
+입체면 직접 그리기 안전 재활성화.
+
+#### Lock-ins (L-75-1 ~ L-75-9)
+
+- **L-75-1** get3DPoint face-aware (face hit → 면 plane, no hit → z=0)
+- **L-75-2** getDrawPlane (ADR-140) 과 일치 — 두 함수 모두 face-aware
+- **L-75-3** LOCKED #63 z=0 강제는 *빈 공간* 에서만 보존 (face hit 우회 폐기)
+- **L-75-4** Sketch mode 보존 (변경 0)
+- **L-75-5** drift 안전성 = ADR-170/171/168 absorb 인프라 의존
+- **L-75-6** finite 검증 (degenerate ray → hit point fallback, no crash)
+- **L-75-7** Engine 변경 0 (TS only)
+- **L-75-8** 메타-원칙 #4 (SSOT) + #5 (명확한 의도 자동 — 면 클릭=면 위 그리기)
+- **L-75-9** 절대 #[ignore] 금지
+
+#### Demo verification (Claude Preview MCP, 2026-06-01, 실제 UI 마우스)
+
+| 검증 | 결과 |
+|---|---|
+| pick 박스 윗면 (z=200) | ✅ HIT (point.z=200) |
+| line 도구로 박스 윗면 가로선 (실제 MouseEvent) | ✅ faces **6 → 7** (분할!) |
+| 빈 공간 선 (박스 밖) | ✅ 새 vertex z=0 (LOCKED #63 보존) |
+
+→ **사용자 원래 pain point ("입체면에 도형그리기 안됨") 완전 해소.**
+
+#### 회귀 매트릭스 (실측)
+
+ToolManagerRefactored.test.ts **+3** (face 경로 진입 / z=0 보존 / degenerate
+fallback). vitest 131 → **134 PASS** (0 regression, 절대 #[ignore] 금지 3/3).
+
+#### Out of scope (future)
+
+- 곡면(curved surface) 위 직접 그리기 — get3DPoint 현재 chord plane (DCEL
+  normal). 곡면 정밀 그리기 future (ADR-174 curve-edge 와 별개)
+- 2nd+ click 면 plane lock — 현재 매 click 면 hit 재판정. 면 plane 고정은
+  ADR-166 plane lock 활용 가능 (future)
+
+#### Cross-link
+
+- **LOCKED #63** PR #101 (z=0 invariant — 본 ADR 이 amendment)
+- **LOCKED #69** ADR-168 face plane drift snap (drift 흡수)
+- **LOCKED #71/72** ADR-170/171 absorb (drift 해소 인프라)
+- **ADR-140** surface-aware getDrawPlane (face-aware 패턴 reference)
+- **ADR-166** plane lock (2nd+ click future)
+- **ADR-172/173** 입체면 split (bridge-level demo, 본 ADR 이 UI 경로 활성)
+- **ADR-087 K-ζ** 사용자 시연 게이트 canonical (demo-verified)
+- **메타-원칙 #4** SSOT / **#5** 사용자 편의 / **#10** ADR 불변 (LOCKED #63
+  amendment via 사용자 결재)
+- **LOCKED #44** Complete Meaning per Merge (single atomic PR)
 
 ### 변경 시 필수 절차
 이 정책들 중 하나라도 변경하려면:

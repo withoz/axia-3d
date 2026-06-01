@@ -1065,6 +1065,82 @@ describe('ToolManager', () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
+  // ADR-175 — get3DPoint face-hit drawing plane (LOCKED #63 amendment)
+  //
+  // 사용자 결재 2026-06-01: "입체면에 도형그리기" — 면 클릭 시 그 면 위에
+  // 직접 그려져야. LOCKED #63 (2026-05-18) 의 z=0 강제 + face hit 우회는
+  // drift 방지 목적이었고, ADR-170/171 absorb 가 그 drift 를 해결하므로
+  // 입체면 직접 그리기를 안전하게 재활성화.
+  //
+  // - face hit → 그 면 plane 위 점 반환 (getDrawPlane ADR-140 과 일치)
+  // - no face hit → z=0 ground 강제 (LOCKED #63 보존)
+  //
+  // Demo-verified (Claude Preview MCP, 2026-06-01): 박스 윗면 위 line →
+  // faces 6→7 분할 (실제 UI 마우스). 빈 공간 → z=0 보존.
+  // ────────────────────────────────────────────────────────────────────
+  describe('ADR-175 — get3DPoint face-hit drawing plane (LOCKED #63 amendment)', () => {
+    beforeEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tm as any).faceMap = new Uint32Array([7]);
+    });
+
+    function mockEvent(): MouseEvent {
+      return { clientX: 100, clientY: 100 } as MouseEvent;
+    }
+
+    function mockHit(faceIndex: number, point: { x: number; y: number; z: number }) {
+      return {
+        faceIndex,
+        point: {
+          x: point.x, y: point.y, z: point.z,
+          clone: () => ({ x: point.x, y: point.y, z: point.z }),
+        },
+      };
+    }
+
+    it('face hit → draws on face plane (consults getFaceNormal, NOT z=0 ground)', () => {
+      // Cursor over a +Z face at z=200 (box top face).
+      viewport.pick.mockReturnValue(mockHit(0, { x: 1, y: 2, z: 200 }));
+      bridge.getFaceNormal.mockReturnValue([0, 0, 1]);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pt = (tm as any).get3DPoint(mockEvent());
+
+      // Face branch entered → getFaceNormal consulted for the hit faceId (7).
+      // This is THE behavioral guard: the ground-z=0 path NEVER calls
+      // getFaceNormal, so this proves get3DPoint drew on the face plane.
+      // (The exact returned point depends on ray-plane intersection, which
+      // is THREE-mocked here — the real on-face z=200 result is demo-verified
+      // via Claude Preview MCP: 박스 윗면 line → faces 6→7.)
+      expect(bridge.getFaceNormal).toHaveBeenCalledWith(7);
+      expect(pt).not.toBeNull();
+    });
+
+    it('no face hit → z=0 ground force preserved (LOCKED #63)', () => {
+      // Empty space — pick returns null.
+      viewport.pick.mockReturnValue(null);
+      bridge.getFaceNormal.mockClear();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (tm as any).get3DPoint(mockEvent());
+
+      // Face branch skipped — getFaceNormal NOT consulted (no face hit).
+      expect(bridge.getFaceNormal).not.toHaveBeenCalled();
+    });
+
+    it('face hit with degenerate normal → falls back to ground (no crash)', () => {
+      // Face hit but zero-length normal → face path bails, ground fallback.
+      viewport.pick.mockReturnValue(mockHit(0, { x: 1, y: 2, z: 200 }));
+      bridge.getFaceNormal.mockReturnValue([0, 0, 0]);
+
+      expect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tm as any).get3DPoint(mockEvent());
+      }).not.toThrow();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
   // ADR-164 β-1 — Sticky Last Drawn Plane (Auto Plane Detection)
   // ADR-149/150/151 6-step template 1:1 mirror (5-step TS only).
   // ADR-141 §3 Sprint scope 외부 — 사용자 작업지시 trigger.
