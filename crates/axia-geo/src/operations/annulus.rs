@@ -36,6 +36,7 @@
 //! - LOCKED #44 (Complete Meaning per Merge — sub-step atomic)
 //! - LOCKED #66 (ADR-164 Sunset Policy — Status canonical)
 
+use crate::entities::LoopRef;
 use crate::mesh::Mesh;
 use crate::FaceId;
 use glam::DVec3;
@@ -243,6 +244,126 @@ pub fn promote_circles_to_annulus(
     Ok(())
 }
 
+/// ADR-185 — Circle containment → **ring + inner disk** (면분할).
+///
+/// `promote_circles_to_annulus` 와 달리 inner disk 를 **보존**한다. outer face
+/// 를 ring 으로 (inner circle = hole) 만들되, inner face 는 disk 로 유지 →
+/// 두 face (ring + disk). 사용자 "원 안에 원을 그려서 면분할" 의미.
+///
+/// 차이: annulus 는 inner 의 outer-loop HE (CCW) 를 reparent + inner deactivate
+/// → ring + 빈 hole. ring+disk 는 inner edge 의 **twin HE** (CW, ring 측) 를
+/// outer 의 hole 로 사용 → inner disk 의 HE (CCW) 와 분리, inner 유지. edge 는
+/// 2 face-bearing HE (disk + ring) → manifold.
+pub fn split_face_by_inner_circle(
+    mesh: &mut Mesh,
+    outer_face: FaceId,
+    inner_face: FaceId,
+) -> Result<(), AnnulusError> {
+    // === Validation 1: outer + inner active ===
+    let outer = mesh.faces.get(outer_face).ok_or(AnnulusError::InactiveFace {
+        face_id: outer_face.raw(),
+        role: "outer",
+    })?;
+    if !outer.is_active() {
+        return Err(AnnulusError::InactiveFace { face_id: outer_face.raw(), role: "outer" });
+    }
+    let inner = mesh.faces.get(inner_face).ok_or(AnnulusError::InactiveFace {
+        face_id: inner_face.raw(),
+        role: "inner",
+    })?;
+    if !inner.is_active() {
+        return Err(AnnulusError::InactiveFace { face_id: inner_face.raw(), role: "inner" });
+    }
+
+    // === Validation 2: 둘 다 Circle face ===
+    let outer_circle = extract_circle(mesh, outer_face).ok_or(AnnulusError::NotCircleFace {
+        face_id: outer_face.raw(),
+        role: "outer",
+    })?;
+    let inner_circle = extract_circle(mesh, inner_face).ok_or(AnnulusError::NotCircleFace {
+        face_id: inner_face.raw(),
+        role: "inner",
+    })?;
+
+    // === Validation 3: coplanar ===
+    let n_outer = outer_circle.normal.normalize_or_zero();
+    let n_inner = inner_circle.normal.normalize_or_zero();
+    if (1.0 - n_outer.dot(n_inner).abs()) > NORMAL_PARITY_TOL {
+        return Err(AnnulusError::NotCoplanar {
+            outer_normal: n_outer,
+            inner_normal: n_inner,
+            plane_distance: f64::INFINITY,
+        });
+    }
+    let plane_distance = (inner_circle.center - outer_circle.center).dot(n_outer).abs();
+    if plane_distance > crate::plane::EPS_PLANE_OFFSET {
+        return Err(AnnulusError::NotCoplanar {
+            outer_normal: n_outer,
+            inner_normal: n_inner,
+            plane_distance,
+        });
+    }
+
+    // === Validation 4: inner ⊂ outer ===
+    let center_distance = (inner_circle.center - outer_circle.center).length();
+    if center_distance + inner_circle.radius > outer_circle.radius {
+        return Err(AnnulusError::InnerNotContained {
+            center_distance,
+            inner_radius: inner_circle.radius,
+            outer_radius: outer_circle.radius,
+        });
+    }
+
+    // === Ring + disk promote (inner disk 보존) ===
+    // inner 의 outer-loop HE (HE1, CCW disk boundary).
+    let he1 = mesh.faces[inner_face].outer().start;
+    // twin HE (HE2, CW ring-side) via radial chain.
+    let he2 = mesh.hes[he1].next_rad();
+    if he2 == he1 || !mesh.hes.contains(he2) {
+        // 2-manifold circle edge 면 twin 항상 존재 — 방어적 silent reject.
+        return Err(AnnulusError::NotCircleFace { face_id: inner_face.raw(), role: "inner" });
+    }
+    // twin → outer face 의 hole 로 reparent.
+    mesh.hes[he2].set_face(outer_face);
+    mesh.hes[he2].set_outer(false);
+    mesh.faces[outer_face].add_inner(LoopRef { start: he2, is_outer: false });
+    // inner disk 는 active 유지 (HE1 그대로 inner face boundary).
+    Ok(())
+}
+
+/// ADR-185 — 두 face 가 coplanar Circle 이고 한쪽이 다른쪽을 완전 포함하면
+/// `(outer, inner)` 반환. partial overlap / disjoint / non-circle → `None`.
+///
+/// auto-draw 파이프라인의 containment 감지용 (Scene `intersect_faces_inner`
+/// 의 `Ok(None)` 분기에서 사용 — auto_intersect_coplanar 가 partial overlap
+/// 만 처리하므로 containment 는 본 helper + `split_face_by_inner_circle`).
+pub fn detect_circle_containment(
+    mesh: &Mesh,
+    fid_a: FaceId,
+    fid_b: FaceId,
+) -> Option<(FaceId, FaceId)> {
+    let ca = extract_circle(mesh, fid_a)?;
+    let cb = extract_circle(mesh, fid_b)?;
+    // coplanar (normal parallel + same plane).
+    let na = ca.normal.normalize_or_zero();
+    let nb = cb.normal.normalize_or_zero();
+    if (1.0 - na.dot(nb).abs()) > NORMAL_PARITY_TOL {
+        return None;
+    }
+    if (cb.center - ca.center).dot(na).abs() > crate::plane::EPS_PLANE_OFFSET {
+        return None;
+    }
+    // containment: d + r_inner <= r_outer.
+    let d = (cb.center - ca.center).length();
+    if d + cb.radius <= ca.radius {
+        Some((fid_a, fid_b)) // a = outer, b = inner
+    } else if d + ca.radius <= cb.radius {
+        Some((fid_b, fid_a)) // b = outer, a = inner
+    } else {
+        None // partial overlap or disjoint
+    }
+}
+
 /// Helper: face 가 closed-curve Circle face 인지 확인 + Circle 메타데이터 반환.
 ///
 /// Circle face = outer loop 가 1 self-loop edge with
@@ -331,6 +452,45 @@ mod tests {
             "Post-promote: outer has 1 inner loop (annulus hole)");
         assert!(!mesh.faces[inner].is_active(),
             "Post-promote: inner face is deactivated");
+    }
+
+    #[test]
+    fn adr185_split_keeps_inner_disk_ring_plus_disk() {
+        // ADR-185 — 원 안에 원 → ring + disk (면분할). annulus 와 달리 inner
+        // disk 보존.
+        let mut mesh = Mesh::new();
+        let outer = build_circle_face(&mut mesh, DVec3::ZERO, 10.0, DVec3::Z);
+        let inner = build_circle_face(&mut mesh, DVec3::ZERO, 5.0, DVec3::Z);
+
+        let result = split_face_by_inner_circle(&mut mesh, outer, inner);
+        assert!(result.is_ok(), "expected Ok; got {:?}", result);
+
+        // outer = ring (1 inner loop hole), inner = disk STILL ACTIVE.
+        assert_eq!(mesh.faces[outer].inners().len(), 1, "outer has 1 hole (ring)");
+        assert!(mesh.faces[outer].is_active(), "outer ring active");
+        assert!(
+            mesh.faces[inner].is_active(),
+            "ADR-185: inner DISK kept active (vs annulus deactivates)"
+        );
+        // manifold preserved (edge has 2 face-bearing HEs: disk + ring hole).
+        let report = mesh.verify_face_invariants();
+        assert_eq!(
+            report.violations.len(),
+            0,
+            "ADR-185: ring+disk manifold-safe; violations: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn adr185_split_rejects_not_contained() {
+        // inner 가 outer 밖이면 reject (silent skip 용).
+        let mut mesh = Mesh::new();
+        let outer = build_circle_face(&mut mesh, DVec3::ZERO, 5.0, DVec3::Z);
+        let inner = build_circle_face(&mut mesh, DVec3::new(20.0, 0.0, 0.0), 5.0, DVec3::Z);
+        let result = split_face_by_inner_circle(&mut mesh, outer, inner);
+        assert!(matches!(result, Err(AnnulusError::InnerNotContained { .. })),
+            "expected InnerNotContained; got {:?}", result);
     }
 
     #[test]

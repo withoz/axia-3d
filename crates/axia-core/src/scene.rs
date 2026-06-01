@@ -1949,6 +1949,8 @@ impl Scene {
         //   L-B4-5 XIA inheritance per ADR-101 L-B1-4a (deterministic
         //          min-FaceId for lens).
         let mut b4_split_count = 0usize;
+        // ADR-185 — containment (원 안에 원) ring+disk 면분할 카운트.
+        let mut annulus_count = 0usize;
         for &fid in face_ids {
             if !self.mesh.faces.contains(fid) || !self.mesh.faces[fid].is_active() {
                 continue;
@@ -1981,6 +1983,29 @@ impl Scene {
                 // Amendment 7). Path B circles are first-class inputs —
                 // disjoint pairs leave them intact, partial-overlap pairs
                 // get auto-split.
+
+                // ADR-185 — Containment (원 안에 원, coplanar Circle) check
+                // FIRST. auto_intersect_coplanar polygonizes Path B Circle
+                // faces (Circle metadata 파괴) before returning Ok(None) for
+                // containment, so detect_circle_containment (Circle 메타데이터
+                // 필요) 는 그 전에 실행해야 한다. Containment → ring + disk
+                // 면분할 (outer→ring hole, inner→disk 유지, 둘 다 active +
+                // XIA 보존, 새 face 0). 사용자 "원 안에 원 → 면분할".
+                if let Some((outer_c, inner_c)) =
+                    axia_geo::operations::annulus::detect_circle_containment(
+                        &self.mesh, fid, other_fid,
+                    )
+                {
+                    if axia_geo::operations::annulus::split_face_by_inner_circle(
+                        &mut self.mesh, outer_c, inner_c,
+                    )
+                    .is_ok()
+                    {
+                        annulus_count += 1;
+                        break; // first match per fid
+                    }
+                    // split 실패 시 fall through (auto_intersect_coplanar 시도).
+                }
 
                 // Snapshot XIA links BEFORE the call — auto_intersect_
                 // coplanar removes the originals.
@@ -2030,14 +2055,14 @@ impl Scene {
                         b4_split_count += 3;
                         break; // L-B4-3 first match per fid
                     }
-                    Ok(None) => continue, // no partial overlap (disjoint / containment)
+                    Ok(None) => continue, // no partial overlap (disjoint / containment handled above)
                     Err(_) => continue,   // L-B4-4 silent skip (non-coplanar / non-convex)
                 }
             }
         }
 
         // 모든 활성 face 수 반환 (호출자 디버그용)
-        Ok(result_faces.len() + b4_split_count)
+        Ok(result_faces.len() + b4_split_count + annulus_count)
     }
 
     /// Compute the set of boundary edges for a XIA (from its face_ids).
@@ -15229,6 +15254,51 @@ mod tests {
         let b = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
         assert_eq!(a, 1, "after rect1: 1 active face, got {}", a);
         assert_eq!(b, 3, "two overlapping rects (AsShape) + auto_intersect → 3 sub-faces, got {}", b);
+    }
+
+    /// ADR-185 — 원 안에 원 (containment, coplanar Circle) → ring + disk
+    /// 자동 면분할. partial overlap (ADR-101) 과 별개의 containment 경로.
+    #[test]
+    fn adr185_concentric_circles_auto_ring_plus_disk() {
+        let mut scene = Scene::new();
+        scene.auto_intersect_on_draw = true;
+        // outer circle r=10 (Path B kernel-native).
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 10.0,
+        });
+        let after_outer = scene.mesh.faces.iter().filter(|(_, f)| f.is_active()).count();
+        assert_eq!(after_outer, 1, "outer circle: 1 face");
+
+        // inner circle r=4 concentric → fully contained.
+        scene.execute(Command::DrawCircleAsCurve {
+            center: DVec3::new(0.0, 0.0, 0.0),
+            normal: DVec3::Z,
+            radius: 4.0,
+        });
+        // ADR-185: containment → ring (outer + hole) + disk (inner). 2 active faces.
+        let active: Vec<_> = scene
+            .mesh
+            .faces
+            .iter()
+            .filter(|(_, f)| f.is_active())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(active.len(), 2, "containment → ring + disk (2 faces), got {}", active.len());
+        // exactly one face is a ring (1 inner loop hole), the other is the disk.
+        let ring_count = active
+            .iter()
+            .filter(|&&id| scene.mesh.faces[id].inners().len() == 1)
+            .count();
+        assert_eq!(ring_count, 1, "exactly 1 ring (outer with hole)");
+        // manifold preserved.
+        let report = scene.mesh.verify_face_invariants();
+        assert!(
+            report.is_valid(),
+            "ADR-185 ring+disk manifold: {:?}",
+            report.violations
+        );
     }
 
     /// ADR-101 §B-4b — Path B Circle × Path B Circle (DrawCircleAsCurve)

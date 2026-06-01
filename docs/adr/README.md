@@ -267,6 +267,7 @@ facing critical hotfix (defer 부적합). 회귀 +Sprint 외 누적.
 | [182](./182-plane-lock-inprogress-scope.md) | Plane Lock Scope = In-Progress Only (axia-sketch D102) — "입체면을 자동으로 못찾는것이 문제" 진단 (axia-sketch 비교): ADR-166 cross-tool 영구 lock → in-progress multi-click 으로 scope 축소, 매 새 draw 가 커서 아래 면 재검출. LOCKED #67 amendment, demo-verified | Accepted | Track 6 |
 | [183](./183-pushpull-outward-base-normal.md) | Push/Pull Outward Base Cap Normal — "rect→push-pull 박스 면이 파랑 + 못 그림" 진단(verify_outward_normals): extrude base cap normal 이 inward 였음. extrude_planar_box 에서 bottom cap winding flip + surface 재합성 → 0 inward (create_box 동등), demo-verified | Accepted | Track 6 |
 | [184](./184-drawrect-negative-cardinal-normal.md) | DrawRect Negative Cardinal Normal Faces — "-y 면에 안그려짐 / 서클은 양면 다 됨" 진단: forceCardinalAxis 가 zeroValue(부호 거리)를 좌표로 잘못 강제 → -X/-Y/-Z 면 rect 가 반대편(+) 면 점프. zeroValue/sign(normal) 부호 정정 (Circle 원리), demo-verified | Accepted | Track 6 |
+| [185](./185-circle-containment-auto-ring-disk.md) | Circle Containment Auto Ring+Disk — "원 안에 원 → 면분할" 자동: detect_circle_containment + split_face_by_inner_circle (inner disk 보존, twin HE) → outer ring + inner disk. auto_intersect_on_draw fold (no new flag), 메타-원칙 #16 결재된 예외 (ADR-176 precedent), demo-verified | Accepted | Track 6 |
 
 ### 13. Master Roadmap (#141~#161 reserve, 2026-05-22)
 
